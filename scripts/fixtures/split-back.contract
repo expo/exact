@@ -1,0 +1,154 @@
+// LLP 1127: a list whose rows push is UIKit's split, and collapsed (an
+// iPhone's width) UIKit nests the detail's stack in the list's
+// (SplitIOSTests). The list is a grouped list, UIKit's sidebar list beside
+// the detail (D7). A book's row pushes the book, and a row chosen beside a
+// book replaces it, as the list-detail pattern's rows do; the book pushes
+// its notes, a sheet and a full-screen cover. `renew` writes the book's
+// route anew under its key, and `swap` replaces the notes with another visit.
+// A collapsed split animates as a pushed stack: a page's own entrance and
+// exit (`Slides`), a photo's zoom from its `navigationSource`, and Next's
+// `replace` of the book with a page as UIKit's push. A row that only counts,
+// and a book pushed within the detail, leave the base's row selected. The
+// page has no header and keeps UIKit's bar; a bare page has none (D7). The
+// book's and the photo's headers have an item, and a book's and the notes'
+// Back is their `id="back"` control. Plain makes the root say
+// `navigationSplit="none"`, and the stack pushes as one that does not split.
+// Page's row is current while a page shows; one row's press pushes book c,
+// another's replaces the book with book d, and another's shows book c alone.
+routes nav
+  library "/"
+    book "/book/:id"
+    notes "/notes/:id"
+    share "/share/:id"
+    cover "/cover/:id"
+    page "/page/:id"
+    photo "/photo/:id"
+    bare "/bare/:id"
+
+keyframes enter-end
+  from opacity=0 translate="10% 0"
+keyframes leave-end
+  to opacity=0 translate="10% 0"
+
+style Slides
+  ::view-transition-new
+    animation="enter-end 250ms ease-out both"
+  ::view-transition-old
+    animation="leave-end 200ms ease-in both"
+
+component App
+  state renewals = 0
+  state counted = 0
+  state plain = false
+  action follow(url: string)
+    nav = top(nav).name == "book" and url.startsWith("/book/") ? replace(nav, url) : go(nav, url)
+  action back
+    nav = back(nav)
+  action openNotes(id: string)
+    nav = push(nav, path("notes", id))
+  action openShare(id: string)
+    nav = push(nav, path("share", id))
+  action openCover(id: string)
+    nav = push(nav, path("cover", id))
+  action renew
+    renewals = renewals + 1
+  action swap
+    nav = push(back(nav), path("notes", "z"))
+  action openPhoto(id: string)
+    nav = push(nav, path("photo", id))
+  action next
+    nav = replace(nav, path("page", "n"))
+  action count
+    counted = counted + 1
+  action pushOnly
+    plain = true
+  action pushBook(id: string)
+    nav = push(nav, path("book", id))
+  action replaceBook(id: string)
+    nav = replace(nav, path("book", id))
+  action showBook(id: string)
+    nav = push(go(nav, "/"), path("book", id))
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow testId="app" width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        if e.name == "library"
+          column navigationKey=`${e.id}` navigationSplit=(plain ? "none" : "") position="absolute" inset=0 display="flex" flex-direction="column"
+            header
+              text "Library" role="heading" aria-level=1
+            list testId="books" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
+              section
+                for id in ["a", "b"] key=id
+                  link href=path("book", id) testId=`row-${id}`
+                    text `Book ${id}`
+                    image "symbol:forward-chevron"
+                link href=path("page", "p") testId="row-page" aria-current=(top(nav).name == "page" ? "page" : "false")
+                  text "Page"
+                  image "symbol:forward-chevron"
+                link href=path("photo", "q") id="art-q" testId="row-photo"
+                  text "Photo"
+                  image "symbol:forward-chevron"
+                button press=count testId="row-count"
+                  text "Count"
+                button press=pushOnly testId="row-plain"
+                  text "Plain"
+                button press=pushBook("c") testId="row-press"
+                  text "Book c"
+                button press=replaceBook("d") testId="row-replace"
+                  text "Book d"
+                button press=showBook("c") testId="row-show"
+                  text "Book c alone"
+                link href=path("bare", "x") testId="row-bare"
+                  text "Bare"
+                  image "symbol:forward-chevron"
+        if e.name == "book"
+          for r in [renewals] key=r
+            column navigationKey=`${e.id}` position="absolute" inset=0 display="flex" flex-direction="column" testId=`book-${e.params.id}`
+              header
+                text `Book ${e.params.id}` role="heading" aria-level=2
+                button press=renew testId=`bar-renew-${e.params.id}`
+                  text "Renew"
+              button press=openNotes(e.params.id) testId=`notes-${e.params.id}`
+                text "Notes"
+              button press=openShare(e.params.id) testId=`share-${e.params.id}`
+                text "Share"
+              button press=openCover(e.params.id) testId=`cover-${e.params.id}`
+                text "Cover"
+              button press=renew testId=`renew-${e.params.id}`
+                text "Renew"
+              button press=next testId=`next-${e.params.id}`
+                text "Next"
+              button press=openPhoto(e.params.id) testId=`photo-${e.params.id}`
+                text "Photo"
+              button press=pushBook("b") testId=`push-b-${e.params.id}`
+                text "Book b"
+              button id="back" press=back testId=`back-${e.params.id}`
+                text "Back"
+              view id=`art-${e.params.id}` width=40 height=40 background-color="-exact-fill"
+        if e.name == "notes"
+          column navigationKey=`${e.id}` position="absolute" inset=0 testId="notes-page"
+            text "Notes on the book"
+            button press=swap testId=`swap-${e.params.id}`
+              text "Swap"
+            button id="back" press=back testId=`back-notes-${e.params.id}`
+              text "Back"
+        if e.name == "share"
+          column navigationKey=`${e.id}` navigationPresentation="modal" position="absolute" inset=0 testId="share-page"
+            text "Share the book"
+        if e.name == "cover"
+          column navigationKey=`${e.id}` navigationPresentation="fullscreen" position="absolute" inset=0 testId="cover-page"
+            text "The book's cover"
+        if e.name == "page"
+          column navigationKey=`${e.id}` class=Slides position="absolute" inset=0 testId="page-page"
+            text "A page"
+        if e.name == "bare"
+          column navigationKey=`${e.id}` navigationBar="none" position="absolute" inset=0 testId="bare-page"
+            text "A bare page"
+        if e.name == "photo"
+          column navigationKey=`${e.id}` navigationSource=`art-${e.params.id}` position="absolute" inset=0 testId="photo-page"
+            header
+              text "Photo" role="heading" aria-level=2
+              button press=count testId=`bar-photo-${e.params.id}`
+                text "Count"
+            button press=openNotes(e.params.id) testId=`photo-notes-${e.params.id}`
+              text "Notes"
+            text "A photo"

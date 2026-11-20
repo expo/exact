@@ -142,3 +142,60 @@ fn a_blocks_tactic_reaches_the_trial_and_the_layout_through_the_abi() {
 
 #[path = "abi_owner_update_tests.rs"]
 mod owner_update;
+
+#[test]
+fn a_split_says_how_each_block_shows_against_its_stacks_top() {
+    use exact_kernel::BlockShown;
+    let plan = contract::compile(
+        "component Page\n  view\n    column\n      box testId=\"route\" width=480 height=300\n      box testId=\"loose\" width=10 height=10\n",
+    )
+    .unwrap()
+    .encode();
+    let mut bridge = Bridge::new();
+    bridge.boot(&plan, StorageModule::default(), Hooks::none(), 800.0, 600.0);
+    let k = bridge.host.as_ref().unwrap().runner().kernel();
+    let id = |test_id: &str| k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap().id;
+    let (route, loose) = (id("route"), id("loose"));
+    let send = |bridge: &mut Bridge<StorageModule>, words: Vec<u32>| {
+        let bytes: Vec<_> = words.into_iter().flat_map(u32::to_le_bytes).collect();
+        bridge.input_write(&bytes);
+        let len = bridge.covers(bytes.len());
+        let batch = std::str::from_utf8(bridge.output_bytes(len as usize)).unwrap();
+        assert!(batch.contains("\"error\":null"), "{batch}");
+    };
+    // A block first, as a split's column gives its route one
+    let size = |v: f32| v.to_bits();
+    send(
+        &mut bridge,
+        vec![
+            route,
+            4,
+            size(400.0),
+            size(200.0),
+            size(0.0),
+            size(0.0),
+            228,
+        ],
+    );
+    let shown = |bridge: &Bridge<StorageModule>, view| {
+        bridge
+            .host
+            .as_ref()
+            .unwrap()
+            .runner()
+            .kernel()
+            .host_block_shown(view)
+    };
+    assert_eq!(shown(&bridge, route), BlockShown::InStack);
+    for (float, expected) in [
+        (1.0_f32, BlockShown::Beside),
+        (2.0, BlockShown::Under),
+        (0.0, BlockShown::InStack),
+    ] {
+        send(&mut bridge, vec![route, 23, size(float), 0, 0, 0]);
+        assert_eq!(shown(&bridge, route), expected, "{float}");
+    }
+    // A box with no block shows in its page, whatever is said of it
+    send(&mut bridge, vec![loose, 23, size(1.0), 0, 0, 0]);
+    assert_eq!(shown(&bridge, loose), BlockShown::InStack);
+}

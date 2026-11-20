@@ -37,8 +37,7 @@ final class RouteNavigationBar: UINavigationBar {
         let onControl = sequence(first: hit, next: { $0 === self ? nil : $0.superview }).contains { $0 is UIControl || $0 is UISearchBar }
         if onControl { return hit }
         if authoredControl(at: point) != nil { return nil }
-        guard let route = (delegate as? UINavigationController)?.topViewController as? RouteController,
-              RouteGeometry.transparentBar(route.node) else { return hit }
+        guard let route = shownRoute, RouteGeometry.transparentBar(route.node) else { return hit }
         if let scroll = route.contentScrollView(for: .top), scroll.contentOffset.y + scroll.adjustedContentInset.top > 0.5 { return hit }
         let item = route.navigationItem
         // Follow UINavigationBar's appearance fallback order; a hatch can
@@ -72,11 +71,17 @@ final class RouteNavigationBar: UINavigationBar {
         return hasLabel(self) ? hit : nil
     }
 
+    /// The route whose item the bar shows: its stack's top, or the top of a
+    /// stack nested in it (a collapsed split's detail column, LLP 1127 D7).
+    private var shownRoute: RouteController? {
+        let top = (delegate as? UINavigationController)?.topViewController
+        return top as? RouteController ?? (top as? UINavigationController)?.topViewController as? RouteController
+    }
+
     /// The shown authored control of the top route's header under `point`,
     /// in the bar's coordinates.
     func authoredControl(at point: CGPoint) -> NodeView? {
-        guard let route = (delegate as? UINavigationController)?.topViewController as? RouteController,
-              let ids = route.projectedSource?.authored, let views = route.host?.presenter.views else { return nil }
+        guard let route = shownRoute, let ids = route.projectedSource?.authored, let views = route.host?.presenter.views else { return nil }
         return ids.lazy.compactMap { views[$0] }.first { node in
             node.window != nil && node.window === self.window && node.bounds.contains(node.convert(point, from: self))
                 && !sequence(first: node as UIView, next: \.superview).contains { $0.isHidden || $0.alpha < 0.01 }
@@ -544,7 +549,7 @@ extension NavigationHost {
     /// title's subtitle.
     func retheme() {
         var seen = Set<ObjectIdentifier>()
-        for nav in [primaryNavigation].compactMap({ $0 }) + presentedNavigations + tabStacks.values.compactMap({ $0 as? UINavigationController })
+        for nav in [primaryNavigation, split?.detail].compactMap({ $0 }) + presentedNavigations + tabStacks.values.compactMap({ $0 as? UINavigationController })
         where seen.insert(ObjectIdentifier(nav)).inserted { titleInk(nav) }
         for c in controllers.values {
             c.titleView?.retheme()
@@ -627,12 +632,14 @@ extension NavigationHost {
         let presented = isPresented(nav)
         // Count UIKit's list before a tab's root under More: More pushes the root over it, with a Back to it
         let front = nav?.stackFront.count ?? 0
+        // A split's detail column counts as pushed, its first route included (LLP 1127 D7)
+        let detail = nav != nil && nav === split?.detail
         for (index, c) in routes.enumerated() {
             // The bar is each route's (LLP 1115.000 D5.2, D5.3): its header,
             // the system Back alone on a pushed route with none of its own
             // (no header, a hidden one, one that is not a bar's), or no bar
             // where the route says so or has nothing to go back to.
-            c.pushed = index + front > 0
+            c.pushed = index + front > 0 || detail
             let transparent = RouteGeometry.transparentBar(c.node)
             let (shape, bar) = barShape(of: c, in: nav)
             let shows = bar != .hidden
@@ -644,7 +651,7 @@ extension NavigationHost {
                 }
             }
             // Let a root under More go back: UIKit's Back returns to More's list
-            let canGoBack = (index > 0 ? canInvokeBack : front > 0) && shape?.authoredBack != true
+            let canGoBack = (index > 0 || detail ? canInvokeBack : front > 0) && shape?.authoredBack != true
             let scroller = contentScroller(of: c), scroll = contentScrollView(of: c)
             let dataset = c.node.props["dataset"]
             func barSource(_ key: (HeaderShape.Item) -> String) -> BarSource {

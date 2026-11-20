@@ -28,7 +28,9 @@ extension NavigationHost {
             more.popViewController(animated: !ExactEnv.agentFreezes)
             return ""
         }
-        guard (navigation?.viewControllers.count ?? 0) > 1 else { return nil }
+        // From a split's base expanded, where no Back shows, it clears the selection (LLP 1127 D4)
+        let depth = modalNavigation == nil ? split?.shown.count : nil
+        guard (depth ?? navigation?.viewControllers.count ?? 0) > 1 else { return nil }
         guard back != nil else { return backRefusal }
         goBack()
         return ""
