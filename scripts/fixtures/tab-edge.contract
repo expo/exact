@@ -104,6 +104,9 @@ component TabEdge
           column testId="side" width="5rem" flex-shrink=0 margin=(sidebarSetOff ? 12 : 0) background-color="#fedcba"
             button press=showSidebar testId="side-button"
               text "Side"
+          // A flat box over the sidebar's trailing edge and the panels' leading edge, after the sidebar in the tree,
+          // with no width of its own in the row (LLP 1068 §6.1)
+          column width=8 margin-left=-4 margin-right=-4 flex-shrink=0 background-color="#00aa00"
         column flex=1 min-height=0 position="relative" testId="panels-holder"
           for t in nav.tabs key = t.name
             column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0

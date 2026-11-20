@@ -13,109 +13,145 @@
 import UIKit
 import ExactKit
 
-/// The layer just after the tab container that holds the nodes lifted over it. It takes no
-/// touch itself, and tests no bounds: a lifted node's overflow takes touches, as a node's does.
-final class PanelSiblingsLayer: UIView, HoldsLiftedNodes {
-    weak var siblings: PanelSiblings?
-
-    // Its nodes that read after the routes, by their own frames rather than their stands' (LLP 1083.000 D4: paint and
-    // reading order stay apart)
-    override var accessibilityElements: [Any]? {
-        get { super.accessibilityElements ?? siblings?.readAfter() }
-        set { super.accessibilityElements = newValue }
+extension NavigationHost {
+    /// The nodes below the root that hold panels, and the panels.
+    var panelHolders: Set<UInt32> {
+        guard let root = container else { return [] }
+        var ids = Set(tabPanels)
+        for panel in tabPanels {
+            var at = presenter.logicalParent(of: panel)
+            while let id = at, id != root.id, ids.insert(id).inserted { at = presenter.logicalParent(of: id) }
+        }
+        return ids
     }
 
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard !isHidden, isUserInteractionEnabled else { return nil }
-        for child in NodeView.hitOrder(subviews) {
-            if let hit = child.hitTest(convert(point, to: child), with: event) { return hit }
-        }
-        return nil
-    }
-}
-
-/// One parent's lifted nodes on one side of the panels in its paint order, in the parent's
-/// content coordinates: the stand takes the clip the parent's children are under, or else the
-/// parent's bounds, and from the parent's place on the page its position, 2-D transform, opacity
-/// and visibility.
-final class PanelSiblingsStand: UIView, HoldsLiftedNodes {
-    weak var parent: NodeView?
-    let after: Bool
-    /// The tint and its adjustment the stand was given, which UIKit reads back dimmed behind an alert
-    private var carriedAccent: UIColor?, carriedAdjustment = UIView.TintAdjustmentMode.automatic
-    /// Its place in the layer: its parent's entry in a depth-first walk of the tree for the
-    /// nodes before the panels, its parent's exit for those after them.
-    var key: Int
-    init(parent: NodeView, after: Bool, key: Int) {
-        self.parent = parent; self.after = after; self.key = key
-        super.init(frame: .zero)
-    }
-    required init?(coder: NSCoder) { nil }
-
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        // Not for alpha: CSS opacity does not change hit testing (`NodeView.hitTest`)
-        guard !isHidden, isUserInteractionEnabled, !clipsToBounds || bounds.contains(point) else { return nil }
-        for child in NodeView.hitOrder(subviews) {
-            if let hit = child.hitTest(convert(point, to: child), with: event) { return hit }
-        }
-        return nil
+    func holdsPanel(_ node: NodeView) -> Bool {
+        tabPanels.contains(node.id) || tabPanels.contains { presenter.views[$0]?.isDescendant(of: node) == true }
     }
 
-    /// In the layer, at the parent's place: the exact 2-D affine map of every view between the
-    /// parent's content view and the layer, from where the content's origin and a step along
-    /// each axis land.
-    func place(in host: UIView, mount: UIView) {
-        guard let parent else { return }
-        // The clip the parent's children are under, the nearest view from their content view up to the node that
-        // clips (the content view, a clip box, the node); with none, the parent's bounds
-        let content = parent.container
-        let clipper = sequence(first: content as UIView, next: { $0 === parent ? nil : $0.superview }).first { $0.clipsToBounds }
-        var b = clipper.map { $0.convert($0.bounds, to: content) } ?? content.bounds
-        // A one-axis clip (`clip` beside `visible`, CSS Overflow 3 §3.1) holds the clipped axis only, so on the other
-        // the stand spans the layer, which covers the mount (and its content where the mount scrolls), rather than
-        // measuring what its nodes paint, which a hover or a press can outgrow between placements; a map with no inverse
-        // (a zero scale) clips to the box
-        if let clipper, clipper === parent.clipBox {
-            let span = host.convert(host.bounds, to: content), finite = [span.minX, span.minY, span.width, span.height].allSatisfy(\.isFinite)
-            let overflowX = parent.style["overflow_x"]?.string ?? "visible", overflowY = parent.style["overflow_y"]?.string ?? "visible"
-            if finite, overflowX == "clip", overflowY == "visible" { b = CGRect(x: b.minX, y: span.minY, width: b.width, height: span.height) }
-            if finite, overflowY == "clip", overflowX == "visible" { b = CGRect(x: span.minX, y: b.minY, width: span.width, height: b.height) }
+    /// One walk of the root's children and, within each child that holds panels, down to the
+    /// routes (LLP 1083.000 D4). It answers the rows below the panels that stay in CSS flow
+    /// while UIKit's container fills the page and the tab bar is hidden, whose highest top
+    /// bounds the routes' bottom safe area (`bottom`; `rows` are those that are the root's own
+    /// children, which `clearBesideRoutes` raises over the container). Below the root it
+    /// answers the nodes that paint over the container (`lifts`): those their parent paints
+    /// after the children that hold the panels where a route's box meets them, those beside the
+    /// routes (`PanelSiblings.beside`), and those rows, each by the box it paints over
+    /// (`paintedBox`). Inside a shown panel, its routes are those children. A node lifted
+    /// already is among its parent's children as last placed (`PanelSiblings.placedIDs`); a flat
+    /// leaf that would lift is answered in `promote`, to be given a view first.
+    func panelSiblings(in area: CGRect, routes: [CGRect], drawn: [CGRect], skipping owned: Set<UInt32>, hidden: Bool? = nil)
+        -> (bottom: CGFloat, rows: [NodeView], lifts: [PanelSiblings.Lift], promote: [UInt32]) {
+        guard !ExactEnv.authoredChrome, let root = container, tabOwner != nil, !routes.isEmpty else { return (0, [], [], []) }
+        var barHidden = false
+        if let tabs = tabController, tabOwner === tabs {
+            if #available(iOS 18.0, tvOS 18.0, *) { barHidden = hidden ?? tabs.isTabBarHidden } else { barHidden = hidden ?? tabs.tabBar.isHidden }
         }
-        let o = content.convert(b.origin, to: host)
-        let x = content.convert(CGPoint(x: b.minX + 1, y: b.minY), to: host)
-        let y = content.convert(CGPoint(x: b.minX, y: b.minY + 1), to: host)
-        let map = CGAffineTransform(a: x.x - o.x, b: x.y - o.y, c: y.x - o.x, d: y.y - o.y, tx: 0, ty: 0)
-        if bounds != b { bounds = b }
-        if transform != map { transform = map }
-        let center = content.convert(CGPoint(x: b.midX, y: b.midY), to: host)
-        if self.center != center { self.center = center }
-        var alpha: CGFloat = 1, hidden = false, unread = false, inert = false
-        // The nearest `color-scheme` the chain sets, which UIKit carries down a view's own ancestors
-        var scheme = UIUserInterfaceStyle.unspecified
-        var at: UIView? = content
-        while let view = at, view !== mount {
-            alpha *= view.alpha
-            hidden = hidden || view.isHidden
-            unread = unread || view.accessibilityElementsHidden
-            inert = inert || !view.isUserInteractionEnabled
-            if scheme == .unspecified { scheme = view.overrideUserInterfaceStyle }
-            at = view.superview
+        let panels = tabPanels.compactMap { presenter.views[$0] }
+        // The panels whose routes are shown: a hidden tab's panel is hidden and inert on the web
+        let shown = Set(primaryRoutes.filter { $0.viewIfLoaded?.window != nil }.compactMap { logicalParent(of: $0.node)?.id })
+        var bottom: CGFloat = 0, rows: [NodeView] = [], lifts: [PanelSiblings.Lift] = [], promote: [UInt32] = []
+        var tick = 0
+        func isRoute(_ node: NodeView) -> Bool { node.props["navigationKey"] != nil }
+        /// A child of `parent` as its order has it: its view, or a flat leaf's id and box in
+        /// `parent`.
+        enum Child { case view(NodeView), leaf(UInt32, CGRect) }
+        func visit(_ parent: NodeView?, _ children: [Child]) {
+            let enter = tick
+            tick += 1
+            var level: [(node: NodeView, after: Bool, readsAfter: Bool)] = []
+            defer {
+                let exit = tick
+                tick += 1
+                if let parent { lifts += level.map { .init(node: $0.node, parent: parent, enter: enter, exit: exit, after: $0.after, readsAfter: $0.readsAfter) } }
+            }
+            let inPanel = parent.map { p in panels.contains { $0 === p } } ?? false
+            let holders = children.indices.filter { i in
+                guard case let .view(child) = children[i] else { return false }
+                return inPanel ? isRoute(child) : panels.contains { $0 === child || $0.isDescendant(of: child) }
+            }
+            guard let firstHolder = holders.first else { return }
+            let views = { (i: Int) -> NodeView? in if case let .view(v) = children[i] { return v } else { return nil } }
+            let end = holders.compactMap(views).map { $0.convert($0.bounds, to: root).maxY }.max() ?? 0
+            // The parent's paint order (LLP 1083.000 §2.4): rank, then tree order; a flat leaf
+            // is rank 0
+            let rank = { (i: Int) -> Int64 in views(i)?.paintRank ?? 0 }
+            let painted = holders.map { (rank($0), $0) }
+            let firstPainted = painted.min { $0 < $1 }!, lastPainted = painted.max { $0 < $1 }!
+            for i in children.indices where !holders.contains(i) {
+                let box: CGRect, inFlow: Bool
+                switch children[i] {
+                case let .view(child):
+                    guard !owned.contains(child.id), !isRoute(child), !child.isHidden else { continue }
+                    box = paintedBox(child, in: root)
+                    inFlow = RouteGeometry.inFlow(child)
+                case let .leaf(_, layout):
+                    guard let parent else { continue }
+                    box = parent.container.convert(layout, to: root)
+                    inFlow = true
+                }
+                guard !box.isEmpty, box.intersects(area) else { continue }
+                var below = false
+                if barHidden, !inPanel, inFlow, box.minY >= end - 0.5, routes.contains(where: { $0.minX < box.maxX && $0.maxX > box.minX }) {
+                    bottom = max(bottom, area.maxY - box.minY)
+                    below = true
+                }
+                guard let parent else {
+                    if below, let child = views(i) { rows.append(child) }
+                    continue
+                }
+                let key = (rank(i), i)
+                let over = key > lastPainted && routes.contains(where: { $0.intersects(box) })
+                guard over || below || PanelSiblings.beside(box, routes, drawn: drawn) else { continue }
+                switch children[i] {
+                case let .view(child):
+                    // In its parent's view, or in one of its parent's stands (lifted, or put
+                    // back there by a flight's landing)
+                    guard child.superview === parent.container || siblings.parent(of: child) === parent, !heldElsewhere(child, under: parent) else { continue }
+                    level.append((child, key > firstPainted, i > firstHolder))
+                case let .leaf(id, _):
+                    promote.append(id)
+                }
+            }
+            for i in holders {
+                guard let branch = views(i) else { continue }
+                if panels.contains(where: { $0 === branch }) {
+                    guard shown.contains(branch.id) else { continue }
+                } else if owned.contains(branch.id) || inPanel { continue }
+                visit(branch, siblings.placedIDs(of: branch).compactMap { id in
+                    presenter.views[id].map(Child.view) ?? presenter.flats.paintedBox(of: id).flatMap { $0.isEmpty ? nil : .leaf(id, $0) }
+                })
+            }
         }
-        if overrideUserInterfaceStyle != scheme { overrideUserInterfaceStyle = scheme }
-        // The parent's `accent-color` and `-exact-tint-adjustment`, as authored: UIKit's `tintColor` and
-        // `tintAdjustmentMode` read dimmed while an alert dims the views behind it, which a copy would keep after it
-        let tint = parent.ownAccent, adjustment = parent.authoredTintAdjustment
-        if carriedAccent !== tint { carriedAccent = tint; tintColor = tint }
-        if carriedAdjustment != adjustment { carriedAdjustment = adjustment; tintAdjustmentMode = adjustment }
-        if self.alpha != alpha { self.alpha = alpha }
-        if isHidden != hidden { isHidden = hidden }
-        if accessibilityElementsHidden != unread { accessibilityElementsHidden = unread }
-        if isUserInteractionEnabled == inert { isUserInteractionEnabled = !inert }
-        if clipsToBounds != (clipper != nil) { clipsToBounds = clipper != nil }
-        let corners = (clipper ?? content).layer
-        if layer.cornerRadius != corners.cornerRadius { layer.cornerRadius = corners.cornerRadius }
-        if layer.maskedCorners != corners.maskedCorners { layer.maskedCorners = corners.maskedCorners }
-        if layer.cornerCurve != corners.cornerCurve { layer.cornerCurve = corners.cornerCurve }
+        visit(nil, PanelSiblings.nodes(in: ownerMount(root)).map(Child.view))
+        return (bottom, rows, lifts, promote)
+    }
+
+    /// The box `node` paints over, in `root`'s coordinates: its own, or, where it has no area,
+    /// as CSS paints a box's overflow, the boxes of its children that are views and of its flat
+    /// leaves, each measured so in turn, together within each view from their content view up
+    /// to the node that clips (a clip box holds what a one-axis clip shows). A node with a
+    /// `clip-path` keeps its own box, so what a shape shows outside an empty box is not
+    /// counted. Empty where it paints nothing.
+    func paintedBox(_ node: NodeView, in root: UIView) -> CGRect {
+        let own = node.convert(node.bounds, to: root)
+        guard own.isEmpty, node.clipPath == nil else { return own }
+        let content = node.container
+        let views = PanelSiblings.nodes(in: content).filter { !$0.isHidden }.map { paintedBox($0, in: root) }
+        let leaves = (presenter.flats.children(of: node.id) ?? []).compactMap { presenter.flats.paintedBox(of: $0) }.filter { !$0.isEmpty }.map { content.convert($0, to: root) }
+        let painted = (views.filter { !$0.isEmpty } + leaves).reduce(CGRect.null) { $0.union($1) }
+        return sequence(first: content as UIView, next: { $0 === node ? nil : $0.superview })
+            .filter(\.clipsToBounds).reduce(painted) { $0.intersection($1.convert($1.bounds, to: root)) }
+    }
+
+    /// Whether another host holds `node`'s view now: a flight, the top layer, a context
+    /// menu's preview, an arrangement.
+    private func heldElsewhere(_ node: NodeView, under parent: NodeView) -> Bool {
+        if presenter.menus.lifted(node) || presenter.flightHost.isFlying(node) { return true }
+        #if os(iOS)
+        if #available(iOS 27.1, *), presenter.arrangements.owns(node, under: parent) { return true }
+        #endif
+        return false
     }
 }
 
@@ -141,7 +177,8 @@ final class PanelSiblings: LiftedNodes {
     private var stands: [Key: PanelSiblingsStand] = [:]
     private var lifted: [UInt32: Lifted] = [:]
     /// The ids each node that holds panels, and each panel, was last given (flat leaves
-    /// included): a lifted node's place among its siblings, which its parent's view no longer shows.
+    /// included): a lifted node's place among its siblings, which its parent's view no longer
+    /// shows.
     private var records: [UInt32: [UInt32]] = [:]
 
     var isEmpty: Bool { lifted.isEmpty }
@@ -207,14 +244,15 @@ final class PanelSiblings: LiftedNodes {
         records = records.filter { record in holders.contains(record.key) || lifted.values.contains { $0.parent?.id == record.key } }
     }
 
-    /// Lift `wanted` and put back what was lifted and no longer is, then order and place the stands.
+    /// Lift `wanted` and put back what was lifted and no longer is, then order and place the
+    /// stands.
     func apply(_ wanted: [Lift], in mount: UIView, after owner: UIView) {
         NodeView.containerMoves += 1
         defer { NodeView.containerMoves -= 1 }
         let ids = Set(wanted.map(\.node.id))
         for (id, entry) in lifted where !ids.contains(id) && entry.node.map({ holds($0) }) != true { lifted[id] = nil }
-        // What the stands hold and the walk no longer wants goes back, tracked or not (a flight's landing);
-        // an exit ghost plays its exit where it is
+        // What the stands hold and the walk no longer wants goes back, tracked or not (a
+        // flight's landing); an exit ghost plays its exit where it is
         for stand in stands.values {
             for node in Self.nodes(in: stand) where !ids.contains(node.id) && !presenter.isLeaving(node) {
                 if let parent = stand.parent { putBack(node, into: parent) } else { node.removeFromSuperview() }
@@ -238,6 +276,8 @@ final class PanelSiblings: LiftedNodes {
         order()
         place(in: mount)
         if stands.isEmpty { dropLayer() }
+        // Lay the flat boxes of the parents that took nodes back among their views again: the batch's flush has run
+        presenter.flats.flush()
     }
 
     /// Every node in a stand back in its parent, as the tabs retire, whether or not it is
@@ -251,6 +291,7 @@ final class PanelSiblings: LiftedNodes {
         stands = [:]
         dropLayer()
         records = [:]
+        presenter.flats.flush()
     }
 
     /// The stands at their parents' places, at the end of a batch.
@@ -321,7 +362,9 @@ final class PanelSiblings: LiftedNodes {
 
     /// The stands nested as the tree nests their parents, in a depth-first walk's order: a
     /// parent's nodes before the panels at its entry, those after them at its exit, so an outer
-    /// parent's earlier nodes come first and its later ones last. In each stand, its parent's order.
+    /// parent's earlier nodes come first and its later ones last. In each stand, its parent's
+    /// order, around an exit ghost or a flight's slot, which keeps its index as a ghost does in its
+    /// parent (LLP 1083.000 §4 item 3).
     private func order() {
         guard let layer else { return }
         let sorted = stands.values.sorted { $0.key < $1.key }
@@ -329,9 +372,12 @@ final class PanelSiblings: LiftedNodes {
         for stand in sorted {
             guard let parent = stand.parent else { continue }
             let place = index(of: parent)
-            let nodes = Self.nodes(in: stand)
-            let wanted = nodes.sorted { (place[$0.id] ?? Int.max) < (place[$1.id] ?? Int.max) }
-            for (i, node) in wanted.enumerated() where stand.subviews.firstIndex(of: node) != i { stand.insertSubview(node, at: i) }
+            // Order the nodes the parent's order names around what it does not, an exit ghost or a flight's slot
+            let named = Dictionary(uniqueKeysWithValues: Self.nodes(in: stand).compactMap { node in place[node.id].map { (ObjectIdentifier(node), $0) } })
+            let views = stand.subviews
+            var live = views.filter { named[ObjectIdentifier($0)] != nil }.sorted { named[ObjectIdentifier($0)]! < named[ObjectIdentifier($1)]! }.makeIterator()
+            let wanted = views.map { named[ObjectIdentifier($0)] == nil ? $0 : live.next()! }
+            for (i, view) in wanted.enumerated() where stand.subviews.firstIndex(of: view) != i { stand.insertSubview(view, at: i) }
         }
     }
 
@@ -345,7 +391,8 @@ final class PanelSiblings: LiftedNodes {
     private func putBack(_ node: NodeView, into parent: NodeView) {
         let content = parent.container
         let ids = placedIDs(of: parent)
-        // Its siblings by id among the nodes in the parent's view, where an exit ghost's nodes stay after the presenter releases them
+        // Its siblings by id among the nodes in the parent's view, where an exit ghost's nodes
+        // stay after the presenter releases them
         let there = Dictionary(Self.nodes(in: content).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let next = ids.firstIndex(of: node.id).flatMap { i in ids[(i + 1)...].lazy.compactMap { there[$0] }.first }
         if let next { content.insertSubview(node, belowSubview: next) }
@@ -418,141 +465,114 @@ final class PanelSiblings: LiftedNodes {
     }
 }
 
-extension NavigationHost {
-    /// The nodes below the root that hold panels, and the panels.
-    var panelHolders: Set<UInt32> {
-        guard let root = container else { return [] }
-        var ids = Set(tabPanels)
-        for panel in tabPanels {
-            var at = presenter.logicalParent(of: panel)
-            while let id = at, id != root.id, ids.insert(id).inserted { at = presenter.logicalParent(of: id) }
+/// One parent's lifted nodes on one side of the panels in its paint order, in the parent's
+/// content coordinates: the stand takes the clip the parent's children are under, or else the
+/// parent's bounds, and from the parent's place on the page its position, 2-D transform, opacity
+/// and visibility.
+final class PanelSiblingsStand: UIView, HoldsLiftedNodes {
+    weak var parent: NodeView?
+    let after: Bool
+    /// The tint and its adjustment the stand was given, which UIKit reads back dimmed behind an
+    /// alert
+    private var carriedAccent: UIColor?, carriedAdjustment = UIView.TintAdjustmentMode.automatic
+    /// Its place in the layer: its parent's entry in a depth-first walk of the tree for the
+    /// nodes before the panels, its parent's exit for those after them.
+    var key: Int
+    init(parent: NodeView, after: Bool, key: Int) {
+        self.parent = parent; self.after = after; self.key = key
+        super.init(frame: .zero)
+    }
+    required init?(coder: NSCoder) { nil }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        // Not for alpha: CSS opacity does not change hit testing (`NodeView.hitTest`)
+        guard !isHidden, isUserInteractionEnabled, !clipsToBounds || bounds.contains(point) else { return nil }
+        for child in NodeView.hitOrder(subviews) {
+            if let hit = child.hitTest(convert(point, to: child), with: event) { return hit }
         }
-        return ids
+        return nil
     }
 
-    func holdsPanel(_ node: NodeView) -> Bool {
-        tabPanels.contains(node.id) || tabPanels.contains { presenter.views[$0]?.isDescendant(of: node) == true }
-    }
-
-    /// One walk of the root's children and, within each child that holds panels, down to the
-    /// routes (LLP 1083.000 D4). It answers the rows below the panels that stay in CSS flow
-    /// while UIKit's container fills the page and the tab bar is hidden, whose highest top
-    /// bounds the routes' bottom safe area (`bottom`; `rows` are those that are the root's own
-    /// children, which `clearBesideRoutes` raises over the container). Below the root it
-    /// answers the nodes that paint over the container (`lifts`): those their parent paints
-    /// after the children that hold the panels where a route's box meets them, those beside the
-    /// routes (`PanelSiblings.beside`), and those rows, each by the box it paints over
-    /// (`paintedBox`). Inside a shown panel, its routes are those children. A node lifted
-    /// already is among its parent's children as last placed (`PanelSiblings.placedIDs`); a flat
-    /// leaf that would lift is answered in `promote`, to be given a view first.
-    func panelSiblings(in area: CGRect, routes: [CGRect], drawn: [CGRect], skipping owned: Set<UInt32>, hidden: Bool? = nil)
-        -> (bottom: CGFloat, rows: [NodeView], lifts: [PanelSiblings.Lift], promote: [UInt32]) {
-        guard !ExactEnv.authoredChrome, let root = container, tabOwner != nil, !routes.isEmpty else { return (0, [], [], []) }
-        var barHidden = false
-        if let tabs = tabController, tabOwner === tabs {
-            if #available(iOS 18.0, tvOS 18.0, *) { barHidden = hidden ?? tabs.isTabBarHidden } else { barHidden = hidden ?? tabs.tabBar.isHidden }
+    /// In the layer, at the parent's place: the exact 2-D affine map of every view between the
+    /// parent's content view and the layer, from where the content's origin and a step along
+    /// each axis land.
+    func place(in host: UIView, mount: UIView) {
+        guard let parent else { return }
+        // The clip the parent's children are under, the nearest view from their content view up
+        // to the node that clips (the content view, a clip box, the node); with none, the
+        // parent's bounds
+        let content = parent.container
+        let clipper = sequence(first: content as UIView, next: { $0 === parent ? nil : $0.superview }).first { $0.clipsToBounds }
+        var b = clipper.map { $0.convert($0.bounds, to: content) } ?? content.bounds
+        // A one-axis clip (`clip` beside `visible`, CSS Overflow 3 §3.1) holds the clipped axis
+        // only, so on the other the stand spans the layer, which covers the mount (and its
+        // content where the mount scrolls), rather than measuring what its nodes paint, which a
+        // hover or a press can outgrow between placements; a map with no inverse (a zero scale)
+        // clips to the box
+        if let clipper, clipper === parent.clipBox {
+            let span = host.convert(host.bounds, to: content), finite = [span.minX, span.minY, span.width, span.height].allSatisfy(\.isFinite)
+            let overflowX = parent.style["overflow_x"]?.string ?? "visible", overflowY = parent.style["overflow_y"]?.string ?? "visible"
+            if finite, overflowX == "clip", overflowY == "visible" { b = CGRect(x: b.minX, y: span.minY, width: b.width, height: span.height) }
+            if finite, overflowY == "clip", overflowX == "visible" { b = CGRect(x: span.minX, y: b.minY, width: span.width, height: b.height) }
         }
-        let panels = tabPanels.compactMap { presenter.views[$0] }
-        // The panels whose routes are shown: a hidden tab's panel is hidden and inert on the web
-        let shown = Set(primaryRoutes.filter { $0.viewIfLoaded?.window != nil }.compactMap { logicalParent(of: $0.node)?.id })
-        var bottom: CGFloat = 0, rows: [NodeView] = [], lifts: [PanelSiblings.Lift] = [], promote: [UInt32] = []
-        var tick = 0
-        func isRoute(_ node: NodeView) -> Bool { node.props["navigationKey"] != nil }
-        /// A child of `parent` as its order has it: its view, or a flat leaf's id and box in `parent`.
-        enum Child { case view(NodeView), leaf(UInt32, CGRect) }
-        func visit(_ parent: NodeView?, _ children: [Child]) {
-            let enter = tick
-            tick += 1
-            var level: [(node: NodeView, after: Bool, readsAfter: Bool)] = []
-            defer {
-                let exit = tick
-                tick += 1
-                if let parent { lifts += level.map { .init(node: $0.node, parent: parent, enter: enter, exit: exit, after: $0.after, readsAfter: $0.readsAfter) } }
-            }
-            let inPanel = parent.map { p in panels.contains { $0 === p } } ?? false
-            let holders = children.indices.filter { i in
-                guard case let .view(child) = children[i] else { return false }
-                return inPanel ? isRoute(child) : panels.contains { $0 === child || $0.isDescendant(of: child) }
-            }
-            guard let firstHolder = holders.first else { return }
-            let views = { (i: Int) -> NodeView? in if case let .view(v) = children[i] { return v } else { return nil } }
-            let end = holders.compactMap(views).map { $0.convert($0.bounds, to: root).maxY }.max() ?? 0
-            // The parent's paint order (LLP 1083.000 §2.4): rank, then tree order; a flat leaf is rank 0
-            let rank = { (i: Int) -> Int64 in views(i)?.paintRank ?? 0 }
-            let painted = holders.map { (rank($0), $0) }
-            let firstPainted = painted.min { $0 < $1 }!, lastPainted = painted.max { $0 < $1 }!
-            for i in children.indices where !holders.contains(i) {
-                let box: CGRect, inFlow: Bool
-                switch children[i] {
-                case let .view(child):
-                    guard !owned.contains(child.id), !isRoute(child), !child.isHidden else { continue }
-                    box = paintedBox(child, in: root)
-                    inFlow = RouteGeometry.inFlow(child)
-                case let .leaf(_, layout):
-                    guard let parent else { continue }
-                    box = parent.container.convert(layout, to: root)
-                    inFlow = true
-                }
-                guard !box.isEmpty, box.intersects(area) else { continue }
-                var below = false
-                if barHidden, !inPanel, inFlow, box.minY >= end - 0.5, routes.contains(where: { $0.minX < box.maxX && $0.maxX > box.minX }) {
-                    bottom = max(bottom, area.maxY - box.minY)
-                    below = true
-                }
-                guard let parent else {
-                    if below, let child = views(i) { rows.append(child) }
-                    continue
-                }
-                let key = (rank(i), i)
-                let over = key > lastPainted && routes.contains(where: { $0.intersects(box) })
-                guard over || below || PanelSiblings.beside(box, routes, drawn: drawn) else { continue }
-                switch children[i] {
-                case let .view(child):
-                    // In its parent's view, or in one of its parent's stands (lifted, or put back there by a flight's landing)
-                    guard child.superview === parent.container || siblings.parent(of: child) === parent, !heldElsewhere(child, under: parent) else { continue }
-                    level.append((child, key > firstPainted, i > firstHolder))
-                case let .leaf(id, _):
-                    promote.append(id)
-                }
-            }
-            for i in holders {
-                guard let branch = views(i) else { continue }
-                if panels.contains(where: { $0 === branch }) {
-                    guard shown.contains(branch.id) else { continue }
-                } else if owned.contains(branch.id) || inPanel { continue }
-                visit(branch, siblings.placedIDs(of: branch).compactMap { id in
-                    presenter.views[id].map(Child.view) ?? presenter.flats.paintedBox(of: id).flatMap { $0.isEmpty ? nil : .leaf(id, $0) }
-                })
-            }
+        let o = content.convert(b.origin, to: host)
+        let x = content.convert(CGPoint(x: b.minX + 1, y: b.minY), to: host)
+        let y = content.convert(CGPoint(x: b.minX, y: b.minY + 1), to: host)
+        let map = CGAffineTransform(a: x.x - o.x, b: x.y - o.y, c: y.x - o.x, d: y.y - o.y, tx: 0, ty: 0)
+        if bounds != b { bounds = b }
+        if transform != map { transform = map }
+        let center = content.convert(CGPoint(x: b.midX, y: b.midY), to: host)
+        if self.center != center { self.center = center }
+        var alpha: CGFloat = 1, hidden = false, unread = false, inert = false
+        // The nearest `color-scheme` the chain sets, which UIKit carries down a view's own
+        // ancestors
+        var scheme = UIUserInterfaceStyle.unspecified
+        var at: UIView? = content
+        while let view = at, view !== mount {
+            alpha *= view.alpha
+            hidden = hidden || view.isHidden
+            unread = unread || view.accessibilityElementsHidden
+            inert = inert || !view.isUserInteractionEnabled
+            if scheme == .unspecified { scheme = view.overrideUserInterfaceStyle }
+            at = view.superview
         }
-        visit(nil, PanelSiblings.nodes(in: ownerMount(root)).map(Child.view))
-        return (bottom, rows, lifts, promote)
+        if overrideUserInterfaceStyle != scheme { overrideUserInterfaceStyle = scheme }
+        // The parent's `accent-color` and `-exact-tint-adjustment`, as authored: UIKit's
+        // `tintColor` and `tintAdjustmentMode` read dimmed while an alert dims the views behind
+        // it, which a copy would keep after it
+        let tint = parent.ownAccent, adjustment = parent.authoredTintAdjustment
+        if carriedAccent !== tint { carriedAccent = tint; tintColor = tint }
+        if carriedAdjustment != adjustment { carriedAdjustment = adjustment; tintAdjustmentMode = adjustment }
+        if self.alpha != alpha { self.alpha = alpha }
+        if isHidden != hidden { isHidden = hidden }
+        if accessibilityElementsHidden != unread { accessibilityElementsHidden = unread }
+        if isUserInteractionEnabled == inert { isUserInteractionEnabled = !inert }
+        if clipsToBounds != (clipper != nil) { clipsToBounds = clipper != nil }
+        let corners = (clipper ?? content).layer
+        if layer.cornerRadius != corners.cornerRadius { layer.cornerRadius = corners.cornerRadius }
+        if layer.maskedCorners != corners.maskedCorners { layer.maskedCorners = corners.maskedCorners }
+        if layer.cornerCurve != corners.cornerCurve { layer.cornerCurve = corners.cornerCurve }
+    }
+}
+
+/// The layer just after the tab container that holds the nodes lifted over it. It takes no
+/// touch itself, and tests no bounds: a lifted node's overflow takes touches, as a node's does.
+final class PanelSiblingsLayer: UIView, HoldsLiftedNodes {
+    weak var siblings: PanelSiblings?
+
+    // Its nodes that read after the routes, by their own frames rather than their stands' (LLP
+    // 1083.000 D4: paint and reading order stay apart)
+    override var accessibilityElements: [Any]? {
+        get { super.accessibilityElements ?? siblings?.readAfter() }
+        set { super.accessibilityElements = newValue }
     }
 
-    /// The box `node` paints over, in `root`'s coordinates: its own, or, where it has no area, as CSS
-    /// paints a box's overflow, the boxes of its children that are views and of its flat leaves, each
-    /// measured so in turn, together within each view from their content view up to the node that
-    /// clips (a clip box holds what a one-axis clip shows). A node with a `clip-path` keeps its own
-    /// box, so what a shape shows outside an empty box is not counted. Empty where it paints nothing.
-    func paintedBox(_ node: NodeView, in root: UIView) -> CGRect {
-        let own = node.convert(node.bounds, to: root)
-        guard own.isEmpty, node.clipPath == nil else { return own }
-        let content = node.container
-        let views = PanelSiblings.nodes(in: content).filter { !$0.isHidden }.map { paintedBox($0, in: root) }
-        let leaves = (presenter.flats.children(of: node.id) ?? []).compactMap { presenter.flats.paintedBox(of: $0) }.filter { !$0.isEmpty }.map { content.convert($0, to: root) }
-        let painted = (views.filter { !$0.isEmpty } + leaves).reduce(CGRect.null) { $0.union($1) }
-        return sequence(first: content as UIView, next: { $0 === node ? nil : $0.superview })
-            .filter(\.clipsToBounds).reduce(painted) { $0.intersection($1.convert($1.bounds, to: root)) }
-    }
-
-    /// Whether another host holds `node`'s view now: a flight, the top layer, a context
-    /// menu's preview, an arrangement.
-    private func heldElsewhere(_ node: NodeView, under parent: NodeView) -> Bool {
-        if presenter.menus.lifted(node) || presenter.flightHost.isFlying(node) { return true }
-        #if os(iOS)
-        if #available(iOS 27.1, *), presenter.arrangements.owns(node, under: parent) { return true }
-        #endif
-        return false
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard !isHidden, isUserInteractionEnabled else { return nil }
+        for child in NodeView.hitOrder(subviews) {
+            if let hit = child.hitTest(convert(point, to: child), with: event) { return hit }
+        }
+        return nil
     }
 }
 #endif

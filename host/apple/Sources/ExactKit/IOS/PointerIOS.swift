@@ -709,8 +709,9 @@ extension NodeView {
                 if node === target { break }
             }
             // Focus stays in the content the touch hit. In particular, a
-            // press bubbling out of a dialog cannot blur the page's field.
-            // A node lifted over the tab container stays in its parent's content (LLP 1083.000 D4).
+            // press bubbling out of a dialog cannot blur the page's field. A
+            // node lifted over the tab container stays in its parent's
+            // content (LLP 1083.000 D4).
             if bubbled, presenter.listenerParent(of: view) !== presenter.layoutParent(of: view) {
                 view.endEditing(true)
                 return handoff
