@@ -168,11 +168,100 @@ impl Drop for Visual {
         }
     }
 }
+/// How many frames may be in flight (`SetMaximumFrameLatency`), chosen as
+/// frames go: one, and two only while frames miss their refresh.
+///
+/// At one, a frame starts at the refresh that took the last, which is the
+/// least delay to the screen. But a frame that misses its refresh holds the
+/// next one back until the refresh after, and the rate halves. At two, the
+/// next frame is prepared while the last waits its turn, so a slow frame
+/// costs only its own time; when frames are on time, though, the queue
+/// stays full and everything shows later.
+///
+/// On a 120 Hz display (Radeon 8060S), a frame that takes 6 ms shows 120
+/// times a second at either limit, 18 ms after it starts at one and 26 ms
+/// at two. A frame that takes 8 ms shows 60 times a second at one and 115
+/// at two.
+struct Pace {
+    limit: u32,
+    /// When the frame in hand was granted its place.
+    started: Option<Instant>,
+    /// When the place not yet granted was first asked for.
+    asked: Option<Instant>,
+    /// Frames in a row that missed their refresh (at one), or that were
+    /// held back with a frame to spare (at two).
+    run: u32,
+    /// At two: one is not tried before this, and how long that wait was.
+    retry: Option<(Instant, Duration)>,
+    /// When one was last tried.
+    tried: Option<Instant>,
+}
+
+impl Default for Pace {
+    fn default() -> Self {
+        Self {
+            limit: 1,
+            started: None,
+            asked: None,
+            run: 0,
+            retry: None,
+            tried: None,
+        }
+    }
+}
+
+impl Pace {
+    /// Misses in a row before two frames may be in flight.
+    const MISSES: u32 = 2;
+    /// Frames in a row held back at two before one is tried again.
+    const SPARE: u32 = 30;
+    /// The first wait before one is tried again, doubled up to the longest
+    /// each time the try misses at once.
+    const RETRY: Duration = Duration::from_secs(1);
+    const LONGEST_RETRY: Duration = Duration::from_secs(16);
+
+    /// A place asked for at `asked` and granted at `now`, on a display that
+    /// refreshes every `period`: the limit to change to, if it changes.
+    fn granted(&mut self, asked: Instant, now: Instant, period: Duration) -> Option<u32> {
+        let waited = now.saturating_duration_since(asked) > period / 8;
+        let since = self.started.replace(now).map(|s| now.duration_since(s));
+        let counts = match self.limit {
+            // Held back past the refresh after its own start: the last missed.
+            1 => waited && since.is_some_and(|since| since > period * 3 / 2),
+            // Held back with two in flight: frames outrun the display.
+            _ => waited,
+        };
+        self.run = if counts { self.run + 1 } else { 0 };
+        if self.limit == 1 && self.run >= Self::MISSES {
+            let again = self
+                .tried
+                .is_some_and(|t| now.duration_since(t) < Self::RETRY);
+            let wait = match self.retry {
+                Some((_, last)) if again => (last * 2).min(Self::LONGEST_RETRY),
+                _ => Self::RETRY,
+            };
+            self.retry = Some((now + wait, wait));
+            self.limit = 2;
+        } else if self.limit == 2
+            && self.run >= Self::SPARE
+            && self.retry.is_none_or(|(at, _)| now >= at)
+        {
+            self.tried = Some(now);
+            self.limit = 1;
+        } else {
+            return None;
+        }
+        self.run = 0;
+        Some(self.limit)
+    }
+}
+
 pub(super) struct Composition {
     swap: IDXGISwapChain2,
     scene: Rc<Visual>,
     latency: HANDLE,
     acquired: bool,
+    pace: Pace,
     size: [u32; 2],
     _window: Window,
     pub creation_ms: f64,
@@ -270,6 +359,7 @@ impl Composition {
                 scene,
                 latency,
                 acquired: false,
+                pace: Pace::default(),
                 size,
                 _window: window,
                 creation_ms: start.elapsed().as_secs_f64() * 1000.,
@@ -308,9 +398,16 @@ impl Composition {
             }
             if !self.acquired {
                 let started = Instant::now();
+                let asked = *self.pace.asked.get_or_insert(started);
                 self.acquired = latency_ready(WaitForSingleObject(self.latency, timeout_ms))?;
                 if !self.acquired {
                     self.capacity_wait = Some(started.elapsed());
+                } else {
+                    self.pace.asked = None;
+                    let period = self.refresh_period();
+                    if let Some(limit) = self.pace.granted(asked, Instant::now(), period) {
+                        self.swap.SetMaximumFrameLatency(limit)?;
+                    }
                 }
             }
             record_capacity(&mut self.refused_checks, self.acquired);
@@ -356,6 +453,7 @@ impl Composition {
             let old = std::mem::replace(&mut self.latency, HANDLE::default());
             let _ = CloseHandle(old);
             self.swap.SetMaximumFrameLatency(1)?;
+            self.pace = Pace::default();
             self.latency = self.swap.GetFrameLatencyWaitableObject();
             if self.latency.is_invalid() {
                 return Err(Error::Device(
@@ -964,6 +1062,67 @@ mod tests {
                 [color[0], color[1], color[2], 255]
             );
         }
+    }
+
+    #[test]
+    fn two_frames_are_in_flight_only_while_frames_miss_their_refresh() {
+        let period = Duration::from_micros(8333);
+        let mut pace = Pace::default();
+        let mut now = Instant::now();
+        // A frame granted its place `since` after the last, having waited `waited` for it.
+        let mut frame = |pace: &mut Pace, waited: Duration, since: Duration| {
+            now += since;
+            (pace.granted(now - waited, now, period), now)
+        };
+        let on_time = |pace: &mut Pace,
+                       frame: &mut dyn FnMut(
+            &mut Pace,
+            Duration,
+            Duration,
+        ) -> (Option<u32>, Instant)| { frame(pace, period / 2, period) };
+        for _ in 0..100 {
+            assert_eq!(on_time(&mut pace, &mut frame).0, None);
+        }
+        // One miss, and a frame after a pause, change nothing.
+        assert_eq!(frame(&mut pace, period, period * 2).0, None);
+        assert_eq!(on_time(&mut pace, &mut frame).0, None);
+        assert_eq!(frame(&mut pace, Duration::ZERO, period * 40).0, None);
+        // Two misses in a row: the next frame no longer waits for the last.
+        assert_eq!(frame(&mut pace, period, period * 2).0, None);
+        let (limit, missed) = frame(&mut pace, period, period * 2);
+        assert_eq!(limit, Some(2));
+        // Frames slower than the display are never held back, and it stays.
+        for _ in 0..400 {
+            assert_eq!(frame(&mut pace, Duration::ZERO, period * 9 / 8).0, None);
+        }
+        // Frames with time to spare are held back: one is tried again.
+        let mut held = 0;
+        let tried = loop {
+            held += 1;
+            if let (Some(limit), at) = on_time(&mut pace, &mut frame) {
+                assert_eq!(limit, 1);
+                break at;
+            }
+        };
+        assert_eq!(held, Pace::SPARE);
+        assert!(tried - missed >= Pace::RETRY);
+        // The try misses at once, so the next waits twice as long.
+        assert_eq!(frame(&mut pace, period, period * 2).0, None);
+        let (limit, missed) = frame(&mut pace, period, period * 2);
+        assert_eq!(limit, Some(2));
+        let tried = loop {
+            if let (Some(_), at) = on_time(&mut pace, &mut frame) {
+                break at;
+            }
+        };
+        assert!(tried - missed >= Pace::RETRY * 2);
+        // A try that holds starts the waits over.
+        for _ in 0..200 {
+            assert_eq!(on_time(&mut pace, &mut frame).0, None);
+        }
+        assert_eq!(frame(&mut pace, period, period * 2).0, None);
+        assert_eq!(frame(&mut pace, period, period * 2).0, Some(2));
+        assert_eq!(pace.retry.unwrap().1, Pace::RETRY);
     }
 
     #[test]

@@ -12,7 +12,7 @@ const recorded = {
     clock: 'agent', pixels: [1280, 720],
     tickMs: ring(0.19999999925494194, 1),
     encodeMs: ring(0.6000000014901161, 7, 0.19999999925494194, 0.2714285712156977),
-    frameMs: ring(null, 0),
+    frameMs: ring(16.7),
     catchUp: { overloadFrames: 0, clampFrames: 0, clampMs: 0, idleFrames: 0, idleMs: 0 },
   },
   renderHooks: {
@@ -293,13 +293,26 @@ test('draw pairing runs on then off and refuses mismatched units or bytes', asyn
   expect(order).toEqual(['on', 'off', 'on', 'off', 'on', 'off']);
 });
 
+test('a run that measured nothing fails instead of printing a row', async () => {
+  const idle = double();
+  const state = idle.state;
+  idle.state = async reset => ({ ...await state(reset), perf: { ...recorded.perf, frameMs: ring(null, 0) } });
+  await expect(readBench(idle, options('radius=40'), 'abc')).rejects.toThrow('Window 1 drew no frame');
+  const blind = double();
+  blind.state = async () => null;
+  await expect(readBench(blind, options('radius=40'), 'abc')).rejects.toThrow('never reported its switches');
+});
+
 test('validates hosts, metadata and switch values before opening a host', async () => {
   expect(() => options('radius=12')).toThrow('radius');
   expect(() => options('light=-1')).toThrow('light');
   expect(() => options('budget=count:0')).toThrow('budget');
-  expect(() => parseOptions(['linux'], true)).toThrow('web (Chrome WebGPU), macos (Metal) or ios');
+  expect(() => parseOptions(['linux'], true)).toThrow('or web-android (Chrome on it)');
   expect(() => parseOptions(['ios', '--device=d', '--os=o', '--refresh-hz=120'], false)).toThrow('--phone');
   expect(parseOptions(['ios', '--device=d', '--os=o', '--refresh-hz=120', '--phone=pad'], false).phone).toBe('pad');
+  for (const host of ['android', 'web-android'])
+    expect(parseOptions([host, '--device=d', '--os=o', '--refresh-hz=90'], false).host).toBe(host);
+  expect(() => parseOptions(['android'], true)).toThrow('web only');
   expect(() => parseOptions(['macos'], true)).toThrow('web only');
   expect(() => parseOptions(['web'], false)).toThrow('--refresh-hz');
   await expect(readBench(double({ ignoredSwitch: 'radius' }), options('radius=8'), 'abc'))

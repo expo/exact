@@ -158,11 +158,23 @@ check('section labels do not open a split or own its detail', () => inChrome(asy
     const route = document.getElementById('nav');
     route.innerHTML = '<div data-exact-list data-t="list"><section><header><a href="/in/header">Edit</a></header><div id="card"></div><footer><button data-exact-router-press="true">More</button></footer></section></div>';
     const find = () => compareList(route, null)[0];
-    const labelsOnly = find();
-    document.getElementById('card').innerHTML = '<a data-t="person" href="/in/person">Person</a>';
-    return [labelsOnly, find()];
+    const section = route.querySelector('section'), card = document.getElementById('card');
+    const list = section.parentElement, cases = [];
+    for (const marker of [null, 'data-exact-list-item', 'data-listitemkey']) {
+      if (marker) {
+        const item = document.createElement('div');
+        item.setAttribute(marker, '');
+        list.replaceChildren(item);
+        item.append(section);
+      }
+      card.replaceChildren();
+      const labelsOnly = find();
+      card.innerHTML = '<section><header><a data-t="person" href="/in/person">Person</a></header></section>';
+      cases.push([labelsOnly, find()]);
+    }
+    return cases;
   })()`);
-  expect(rows).toEqual([null, { list: 'list', rows: [['person', null, '/in/person']] }]);
+  for (const result of rows) expect(result).toEqual([null, { list: 'list', rows: [['person', null, '/in/person']] }]);
 }));
 
 check('seeded random routes: the search answers what the walk answered, at a phone width and a desktop width', () => inChrome(async (evaluate, size) => {

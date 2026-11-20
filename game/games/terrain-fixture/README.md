@@ -38,14 +38,17 @@ sections.
 
 ## Decision workload
 
-Run `bun game/games/terrain-fixture/bench.mjs --help` for the web, macOS and
-iOS commands. Display runs require the device, OS and refresh rate; an iOS run
-also takes `--phone=<name or identifier>` of a paired device and draws at the
-device's size. The web build uses the `web` profile and the native ones
-`host-dev`. `BENCH_HEADLESS=1` runs the web transport without a display and
+Run `bun game/games/terrain-fixture/bench.mjs --help` for the web, macOS, iOS
+and Android commands. Display runs require the device, OS and refresh rate; an
+iOS run also takes `--phone=<name or identifier>` of a paired device. `android`
+is the release APK on the adb device and `web-android` is that device's Chrome,
+which must be in front: the page is served from this machine through `adb
+reverse` in a tab the run opens and closes. A device draws at its own size. The
+web builds use the `web` profile, the Android app `release`, and the other
+native ones `host-dev`. `BENCH_HEADLESS=1` runs the web transport without a display and
 marks the row headless.
 
-The web row's browser is the one the drivers launch, or the one `CHROME` names,
+The desktop `web` row's browser is the one the drivers launch, or the one `CHROME` names,
 started without Chromium's testing configuration of experiments
 (`--disable-field-trial-config`) and recorded in the row. With that
 configuration, Chrome for Testing 159 gave this page a main frame on one

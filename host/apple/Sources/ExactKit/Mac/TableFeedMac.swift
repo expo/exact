@@ -58,7 +58,8 @@ private final class TableSeparatorRowView: NSTableRowView {
 final class TableRowCell: NSTableCellView {
     private(set) weak var feed: TableFeed?
     private(set) weak var row: NodeView?
-    /// Where layout has the row, in the list's document.
+    private(set) weak var sectionParent: NodeView?
+    /// The row's frame in its authored parent, which can be a section or its card.
     private(set) var kernel = NSRect.zero
     /// The row, or something in it, moved since its text's start was read.
     var textMoved = true
@@ -101,9 +102,11 @@ final class TableRowCell: NSTableCellView {
     func adopt(_ node: NodeView) {
         if row !== node { sendHome(); textMoved = true }
         row = node
+        sectionParent = feed?.sectionParent(of: node)
+        if sectionParent != nil { node.hideGroupedSeparator(true) }
         syncSelectionPaint()
         if node.superview !== self {
-            // Where the presenter has it: layout's frame, in the document.
+            // Save layout's frame before the cell places the row.
             // A row can come from another cell (its item moved, or the
             // runner rebound it to this one's, LLP 1078): that cell lets it
             // go, and the selected item's ink it took there goes with it.
@@ -133,7 +136,7 @@ final class TableRowCell: NSTableCellView {
     /// The row where layout has it, in this cell's space.
     func place() {
         guard let row, let feed, row.superview === self, let origin = feed.documentOrigin(of: self) else { return }
-        let wanted = kernel.offsetBy(dx: -origin.x, dy: -origin.y)
+        let wanted = feed.documentFrame(kernel, of: row).offsetBy(dx: -origin.x, dy: -origin.y)
         if row.frame != wanted { row.frame = wanted; textMoved = true }
         guard textMoved else { return }
         textMoved = false
@@ -149,16 +152,18 @@ final class TableRowCell: NSTableCellView {
     /// or one whose item moved goes from cell to cell), or in the document
     /// when the table has no cell for it.
     func sendHome() {
-        defer { row = nil }
+        defer { row = nil; sectionParent = nil }
         guard let row, row.superview === self else { return }
-        guard let feed, let home = feed.home, feed.holds(row) else { row.removeFromSuperview(); return }
+        guard let feed, let home = sectionParent?.container ?? feed.home,
+              feed.holds(row) || sectionParent != nil && feed.live(row) else { row.removeFromSuperview(); return }
         let inked = backgroundStyle == .emphasized
-        if feed.detaches(row) {
+        if feed.holds(row) && feed.detaches(row) {
             row.removeFromSuperview()
         } else {
             home.addSubview(row)
             feed.moved(home: true)
             row.rowDisclosure(hidden: false)
+            if sectionParent != nil { row.hideGroupedSeparator(false) }
         }
         row.frame = kernel
         if inked { row.rowEmphasisChanged(false) }
@@ -308,6 +313,11 @@ package final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDeleg
     /// `children` op named them: each with a box in the flow is a row, and
     /// the feed mounts them all (`TableHost.owns`).
     package var children: [NodeView]? { didSet { dirty = true } }
+    let sections: Bool
+    private var sectionChildren: [UInt32: [NodeView]] = [:]
+    private var parents: [UInt32: NodeView] = [:]
+    private var shells: [NodeView] = []
+    private var groupRows = IndexSet()
     /// How tall the table has a row that is not mounted: the commonest
     /// height among the mounted rows when the table was last loaded, or the
     /// runner's own estimate (its extent shared among its items) while none
@@ -348,8 +358,9 @@ package final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDeleg
     private(set) var moves = 0, noted = 0, crossed = 0, homed = 0
     private static let column = NSUserInterfaceItemIdentifier("exact.row")
 
-    init(_ list: NodeView, presenter: Presenter, style: NSTableView.Style) {
+    init(_ list: NodeView, presenter: Presenter, style: NSTableView.Style, sections: Bool = false) {
         self.id = list.id
+        self.sections = sections
         self.list = list
         self.presenter = presenter
         super.init()
@@ -383,13 +394,14 @@ package final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDeleg
 
     /// The list's mounted children in their order, wherever each is (a
     /// cell, the document): the Tab loop walks them (KeyViewLoopMac.swift).
-    var mounted: [NodeView] { children?.filter { presenter?.views[$0.id] === $0 } ?? rows.map(\.node) }
+    var mounted: [NodeView] { sections ? rows.map(\.node) : children?.filter { presenter?.views[$0.id] === $0 } ?? rows.map(\.node) }
     /// Where the presenter keeps the list's rows: its document, or the
     /// list itself when it is no scroller of its own.
     var home: NSView? { list.map { $0.scroll?.documentView ?? $0.container } }
     /// What the list shows of that: its port.
     private var port: NSRect { list?.scroll?.contentView.bounds ?? home?.bounds ?? .zero }
-    func holds(_ node: NodeView) -> Bool { presenter?.views[node.id] === node && held.contains(node.id) }
+    fileprivate func live(_ node: NodeView) -> Bool { presenter?.views[node.id] === node }
+    func holds(_ node: NodeView) -> Bool { live(node) && held.contains(node.id) }
     fileprivate func moved(across: Bool = false, home: Bool = false) { moves += 1; if across { crossed += 1 }; if home { homed += 1 } }
     /// Rows a cell let go during this sync, for its fill to place (`TableRowCell.sendHome`).
     private var detached = Set<ObjectIdentifier>()
@@ -479,6 +491,57 @@ package final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDeleg
     }
     private func kernel(_ node: NodeView) -> NSRect { (node.superview as? TableRowCell)?.kernel ?? node.frame }
 
+    func sectionParent(of node: NodeView) -> NodeView? { parents[node.id] }
+
+    fileprivate func documentFrame(_ frame: NSRect, of node: NodeView) -> NSRect {
+        guard let parent = parents[node.id], let home else { return frame }
+        return home.convert(frame, from: parent.container)
+    }
+
+    func updateSection(_ id: UInt32, children: [NodeView]) {
+        guard sectionChildren[id] != nil else { return }
+        sectionChildren[id] = children
+        dirty = true
+    }
+
+    /// Keep the authored order while AppKit holds a header or body row in a cell.
+    /// A grouped form puts its body in one card. A plain section holds its rows directly.
+    private func sectionRows(_ presenter: Presenter, listChildren: [NodeView]) -> [NodeView] {
+        var next: [NodeView] = [], nextParents: [UInt32: NodeView] = [:]
+        var parts: [UInt32: [NodeView]] = [:], nextShells: [NodeView] = []
+        func children(of node: NodeView) -> [NodeView] {
+            let children = sectionChildren[node.id] ?? node.childNodes
+            parts[node.id] = children
+            return children.filter { presenter.views[$0.id] === $0 }
+        }
+        func append(_ node: NodeView, in parent: NodeView) {
+            nextParents[node.id] = parent
+            next.append(node)
+        }
+        for section in listChildren {
+            guard section.props["semanticTag"] == "section" else { next.append(section); continue }
+            nextShells.append(section)
+            let parts = children(of: section)
+            guard !section.hiddenByHost, section.style["display"]?.string != "none" else { continue }
+            for part in parts {
+                switch part.props["semanticTag"] {
+                case "footer": continue
+                case "header": append(part, in: section)
+                default:
+                    if list?.props["listStyle"] != nil {
+                        if !part.isHidden { for row in children(of: part) { append(row, in: part) } }
+                    } else { append(part, in: section) }
+                }
+            }
+        }
+        for shell in shells where parts[shell.id] == nil { shell.sectionInTable = false }
+        for shell in nextShells { shell.sectionInTable = true }
+        shells = nextShells
+        sectionChildren = parts
+        parents = nextParents
+        return next
+    }
+
     /// The items and the mounted rows as the runner has them (a list it
     /// windows), or as the list's children are (any other: every child with
     /// a box in the flow is a row, and all of them are mounted).
@@ -510,7 +573,9 @@ package final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDeleg
         // some for a positioned box and for a scroller in the flow (a row
         // that swipes). So a ranked child is a row where it stands in the
         // flow: after the row before it and before the next plain box.
-        let boxes = (children ?? []).filter { presenter.views[$0.id] === $0 && !$0.isHidden }.map { ($0, kernel($0)) }.filter { $0.1.height > 0 }
+        let listChildren = children ?? []
+        let candidates = sections ? sectionRows(presenter, listChildren: listChildren) : listChildren
+        let boxes = candidates.filter { presenter.views[$0.id] === $0 && !$0.isHidden }.map { ($0, documentFrame(kernel($0), of: $0)) }.filter { $0.1.height > 0 }
         var before = [CGFloat](repeating: .greatestFiniteMagnitude, count: boxes.count + 1)
         for i in boxes.indices.reversed() { before[i] = boxes[i].0.rank == 0 ? boxes[i].1.minY : before[i + 1] }
         var end = list?.contentBox().minY ?? 0
@@ -518,6 +583,11 @@ package final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDeleg
             if node.rank != 0, frame.minY < end - 0.5 || frame.maxY > before[i + 1] + 0.5 { continue }
             next.append(Row(index: next.count, node: node, root: node.id, kernel: frame))
             end = frame.maxY
+        }
+        if sections {
+            var shape = Hasher()
+            for row in next { shape.combine(row.node.id); shape.combine(row.kernel) }
+            return (next.count, next, [UInt64(bitPattern: Int64(shape.finalize()))])
         }
         return (next.count, next, [UInt64(next.count)])
     }
@@ -568,7 +638,11 @@ package final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDeleg
             for row in next { seen[row.height, default: 0] += 1 }
             return seen.max { $0.value < $1.value || ($0.value == $1.value && $0.key > $1.key) }.map { ($0.key, $0.value) }
         }
-        var recount = items != count
+        let groups = sections ? IndexSet(next.compactMap { row in
+            row.node.props["semanticTag"] == "header" && parents[row.node.id]?.props["semanticTag"] == "section" ? row.index : nil
+        }) : IndexSet()
+        var recount = items != count || groupRows != groups
+        groupRows = groups
         if recount {
             // The items changed: every row is asked again.
             count = items
@@ -774,24 +848,32 @@ package final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDeleg
         guard let home else { return }
         var kept = false
         func keep(_ node: NodeView) {
-            guard !(node.superview is TableRowCell), node.superview !== home else { return }
+            let destination = parents[node.id]?.container ?? home
+            guard !(node.superview is TableRowCell), node.superview !== destination else { return }
             node.prepareToMount()
-            home.addSubview(node)
+            destination.addSubview(node)
             moves += 1; homed += 1
             if detached.remove(ObjectIdentifier(node)) != nil { node.rowDisclosure(hidden: false) }
             kept = true
         }
         let all = children?.filter { presenter?.views[$0.id] === $0 } ?? rows.map(\.node)
         all.forEach(keep)
+        if sections { for row in rows { keep(row.node) } }
         // In the document they are in their order, as the presenter keeps its own.
         if kept { presenter?.orderChildren(all, in: home) }
     }
 
     package func numberOfRows(in tableView: NSTableView) -> Int { count }
+    package func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool { groupRows.contains(row) }
     private func separates(at index: Int) -> Bool {
         guard index >= 0, index < count else { return false }
         // An estimated, unmounted row has no authored intent to read yet.
         guard let row = row(at: index) else { return index + 1 < count }
+        if sections {
+            guard !groupRows.contains(index), let next = self.row(at: index + 1), !groupRows.contains(next.index),
+                  parents[row.node.id] === parents[next.node.id] else { return false }
+            return presenter?.tables.separates(row.node, before: next.node) ?? false
+        }
         return presenter?.tables.separates(row.node, in: id) ?? false
     }
     private func separatorAppearanceSource(at index: Int) -> NodeView? {
@@ -833,7 +915,7 @@ package final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDeleg
     // MARK: Selection and the row's press
 
     /// The node a row's click presses: its authored root's `rowPress`.
-    func pressing(_ row: Row) -> NodeView? { presenter?.views[row.root]?.rowPress }
+    func pressing(_ row: Row) -> NodeView? { groupRows.contains(row.index) ? nil : presenter?.views[row.root]?.rowPress }
     /// A row is selected, by a click or a key, when it presses and is not
     /// disabled. Any other row is a row of text, as in SwiftUI's list with
     /// no selection. A row that is not mounted may be reached by a key (the
@@ -968,7 +1050,11 @@ package final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDeleg
     /// The table leaves the list: every row back in the document.
     func remove() {
         table.enumerateAvailableRowViews { view, _ in (view.view(atColumn: 0) as? TableRowCell)?.sendHome() }
-        if let home { for row in rows where row.node.superview == nil && holds(row.node) { home.addSubview(row.node) } }
+        if let home { for row in rows where row.node.superview == nil && holds(row.node) { (parents[row.node.id]?.container ?? home).addSubview(row.node) } }
+        for (id, children) in sectionChildren {
+            if let parent = presenter?.views[id] { presenter?.orderChildren(children, in: parent.container) }
+        }
+        for shell in shells { shell.sectionInTable = false }
         table.dataSource = nil
         table.delegate = nil
         table.removeFromSuperview()

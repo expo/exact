@@ -298,7 +298,9 @@ const linked = (href) => href?.startsWith("/") && !href.startsWith("//") && rout
 /** Outermost press owners; unlike candidate discovery, this walk crosses a navigationKey. */
 function listRows(list) {
   const rows = [], walk = (parent) => {
-    const section = parent.localName === "section" && parent.parentElement === list;
+    const container = parent.parentElement;
+    const section = parent.localName === "section" && (container === list ||
+      container?.parentElement === list && container.matches("[data-exact-list-item], [data-listitemkey]"));
     for (const el of parent.children) {
       if (section && (el.localName === "header" || el.localName === "footer") || excluded(el)) {
         continue;

@@ -68,9 +68,17 @@ package final class TableHost {
     private var said: [UInt32: String] = [:]
     init(_ presenter: Presenter) { self.presenter = presenter }
 
+    private var splitList: UInt32?
+    package func setSplitList(_ id: UInt32?) {
+        guard id != splitList else { return }
+        splitList = id
+        decide()
+    }
+
     /// Why `list` is not a table; nil when it is one.
-    private func refusal(_ list: NodeView) -> String? {
+    private func refusal(_ list: NodeView, splitSections: Bool) -> String? {
         guard presenter != nil, list.kind == "list" else { return "it is no list" }
+        if splitSections && !list.handlers.contains("reorderdrop") { return nil }
         if list.props["listStyle"] != nil { return "appearance=\"auto\": the grouped form, painted (LLP 1115.002 D6)" }
         if list.style["appearance"]?.string == "none" { return "appearance=\"none\": the author's rows" }
         guard list.props["listRows"] == "true" else { return "Contract leaves its authored rows (LLP 1115.000 D16)" }
@@ -90,12 +98,19 @@ package final class TableHost {
         guard let presenter else { return }
         for (id, feed) in feeds where presenter.views[id] == nil || presenter.listViews[id] == nil { feeds[id] = nil; said[id] = nil; feed.remove() }
         for (id, list) in presenter.listViews {
-            let why = painted ? "" : refusal(list)
+            let sections = id == splitList && !presenter.collections.owns(id) && (list.props["listStyle"] != nil ||
+                rowChildren[id]?.contains { presenter.views[$0]?.props["semanticTag"] == "section" } == true)
+            let why = painted ? "" : refusal(list, splitSections: sections)
+            if let feed = feeds[id], feed.sections != sections {
+                feeds[id] = nil
+                feed.remove()
+                presenter.keyViewLoopStale = true
+            }
             if let why {
                 if let feed = feeds.removeValue(forKey: id) { feed.remove(); presenter.keyViewLoopStale = true }
                 if !why.isEmpty, said[id] != why { said[id] = why; presenter.session?.log("table: list #\(id) keeps painted rows: \(why)") }
             } else if feeds[id] == nil {
-                feeds[id] = TableFeed(list, presenter: presenter, style: .inset)
+                feeds[id] = TableFeed(list, presenter: presenter, style: .inset, sections: sections)
                 presenter.keyViewLoopStale = true
                 if said[id] != "" { said[id] = ""; presenter.session?.log("table: list #\(id) is an NSTableView") }
             }
@@ -112,6 +127,7 @@ package final class TableHost {
     /// document, and a child that is no row in the document.
     func owns(_ node: NodeView, in list: UInt32) -> Bool {
         guard let feed = feeds[list] else { return node.superview is TableRowCell }
+        if feed.sections && node.props["semanticTag"] == "section" { return false }
         guard node.superview == nil || feed.children != nil else { return node.superview is TableRowCell }
         guard feed.expects(node) else { return false }
         feed.dirty = true
@@ -120,6 +136,7 @@ package final class TableHost {
     }
     /// The list's logical children, including a windowed list's spacers.
     func children(_ list: UInt32, _ want: [NodeView]) {
+        if let splitList { feeds[splitList]?.updateSection(list, children: want) }
         if presenter?.listViews[list] != nil {
             rowChildren[list] = want.map(\.id)
             var next: [UInt32: UInt32] = [:]
@@ -146,8 +163,11 @@ package final class TableHost {
     /// The wrapper is the row; only its authored child's edge intent is read.
     /// Logical siblings include the children AppKit does not make table rows.
     func separates(_ row: NodeView, in list: UInt32) -> Bool {
-        guard let nextID = nextRow[list]?[row.id], let next = presenter?.views[nextID],
-              row.props["accessibilityElementsHidden"] != "true", !row.wrote("box_shadow") else { return false }
+        guard let nextID = nextRow[list]?[row.id], let next = presenter?.views[nextID] else { return false }
+        return separates(row, before: next)
+    }
+    func separates(_ row: NodeView, before next: NodeView) -> Bool {
+        guard row.props["accessibilityElementsHidden"] != "true", !row.wrote("box_shadow") else { return false }
         func owns(_ node: NodeView?, _ edge: String) -> Bool {
             node.map { $0.wrote("border_width_" + edge) || $0.wrote("border_style_" + edge) } ?? false
         }

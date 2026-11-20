@@ -335,21 +335,41 @@ final class TabEdgeIOSTests: XCTestCase {
         XCTAssertEqual(owner.additionalSafeAreaInsets, inset)
     }
 
-    /// Rows above and below the panels while the native bars show: neither is beside the routes, so neither
-    /// lifts over the container, and the tab bar keeps its touches (LLP 1083.000 D4).
-    func testRowsAboveAndBelowThePanelsLeaveTheNativeBarsInPlace() throws {
+    /// Rows above and below the panels while the native bars show (LLP 1083.000 D4). The row above is beside the
+    /// routes: it paints over the container, its content clears the status bar, and the container's top safe area
+    /// reaches where the routes begin, so the navigation bar, and the route's content and cover, start below it. The
+    /// row below is not beside them while the tab bar shows: it stays under the bar, which keeps its touches.
+    func testARowAboveThePanelsTakesTheBarsBelowItAndARowBelowStaysUnderTheTabBar() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "the screen's pixels need a window the system draws") }
         let session = try fixture(wholeScreen: true), navigation = session.presenter.navigationHost
         try tap("tab-grid", route: "grid")
         try press("show-rows", route: "grid")
         let top = try node("top-row"), mini = try node("mini-player"), win = try XCTUnwrap(window)
-        waitFor("the rows are laid out") { top.window != nil && mini.window != nil && top.bounds.height > 0 && mini.bounds.height > 0 }
+        waitFor("the row above the panels is lifted over the container") { navigation.siblings.holds(top) && top.bounds.height > 0 }
+        let nav = try XCTUnwrap(navigation.primaryNavigation)
+        waitFor("the navigation bar starts below the row") { abs(self.box(nav.navigationBar).minY - self.box(top).maxY) < 0.5 }
+        let row = box(top), bar = box(nav.navigationBar)
+        XCTAssertEqual(try pixel(at: CGPoint(x: row.midX, y: row.maxY - 4)), [18, 52, 86], "the row paints over the container")
+        XCTAssertGreaterThanOrEqual(row.height, 44 + win.safeAreaInsets.top - row.minY - 0.5, "its content clears the status bar")
+        XCTAssertGreaterThanOrEqual(box(try node("grid-1")).minY, bar.maxY - 0.5, "the route's content starts below the bar")
+        let route = try node("route-grid")
+        if case .edges(let edges)? = navigation.covers[route.id] {
+            XCTAssertLessThanOrEqual(edges.top, bar.maxY - box(route).minY + 0.5, "the route's cover reaches no further than the bar")
+        }
         navigation.reportCovers()
-        XCTAssertFalse(navigation.siblings.holds(top), "the row above the panels stays in its column")
-        XCTAssertFalse(navigation.siblings.holds(mini), "the row below them too")
-        let bar = try XCTUnwrap(navigation.tabController).tabBar
-        let point = bar.convert(CGPoint(x: bar.bounds.midX, y: bar.bounds.midY), to: win)
-        XCTAssertTrue(win.hitTest(point, with: nil)?.isDescendant(of: bar) == true, "the tab bar keeps its touches")
+        XCTAssertFalse(navigation.siblings.holds(mini), "the row below the panels stays in its column")
+        let tabBar = try XCTUnwrap(navigation.tabController).tabBar
+        let point = tabBar.convert(CGPoint(x: tabBar.bounds.midX, y: tabBar.bounds.midY), to: win)
+        XCTAssertTrue(win.hitTest(point, with: nil)?.isDescendant(of: tabBar) == true, "the tab bar keeps its touches")
+    }
+
+    /// A route offset in its block clears the part of each edge's inset its own box reaches: one below a row above the
+    /// panels, past a sidebar, is covered at the top for the bar alone and at its leading edge for nothing (LLP
+    /// 1083.000 D4).
+    func testARouteOffsetPastARowAndASidebarIsCoveredOnlyForWhatItsBoxDoesNotClear() {
+        let safe = NavigationHost.routeSafe(UIEdgeInsets(top: 160, left: 80, bottom: 34, right: 0),
+                                            box: CGRect(x: 80, y: 106, width: 322, height: 768), in: CGRect(x: 0, y: 0, width: 402, height: 874))
+        XCTAssertEqual(safe, UIEdgeInsets(top: 54, left: 0, bottom: 34, right: 0))
     }
 
     /// A drawer nested after the panels and positioned over the routes, which its column paints after the

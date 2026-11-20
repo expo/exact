@@ -99,6 +99,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// CSS removes it with its subtree, or its texts paint at its 0×0 frame's
     /// origin (recipes F19). Reading says whether it is hidden, for either reason.
     private var hostHidden = false
+    var sectionInTable = false { didSet { if sectionInTable != oldValue { isHidden = hostHidden } } }
     /// Whether the host hid this view, whatever CSS's `display` says: what a
     /// projection or a placement saves and restores, since `isHidden` also
     /// reads `display: none` (review B1: restoring that wrote CSS's bit into
@@ -112,7 +113,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
             // projection that means it hides again on its next pass.
             let css = style["display"]?.string == "none"
             if !(newValue && css && !hostHidden && super.isHidden) { hostHidden = newValue }
-            super.isHidden = hostHidden || css
+            super.isHidden = hostHidden || css || sectionInTable
             if shadowStand != nil { followShadowStand() }
         }
     }

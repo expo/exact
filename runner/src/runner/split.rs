@@ -259,8 +259,15 @@ impl<D: DataSource> Runner<D> {
                 .parent
                 .and_then(|p| self.kernel.node(p))
                 .is_some_and(|section| {
-                    section.parent == Some(list)
-                        && section.props.str(PropId::SemanticTag) == Some("section")
+                    section.props.str(PropId::SemanticTag) == Some("section")
+                        && (section.parent == Some(list)
+                            || section
+                                .parent
+                                .and_then(|p| self.kernel.node(p))
+                                .is_some_and(|item| {
+                                    item.parent == Some(list)
+                                        && item.props.str(PropId::ListItemKey).is_some()
+                                }))
                 })
     }
 

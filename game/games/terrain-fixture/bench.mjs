@@ -19,8 +19,8 @@ const valid = (key, value) => choices[key]?.includes(value) ??
     : whole(value));
 
 export function parseOptions([host, ...args], headless = process.env.BENCH_HEADLESS === '1') {
-  if (!['web', 'macos', 'ios'].includes(host))
-    throw new Error('Specify web (Chrome WebGPU), macos (Metal) or ios (a paired device, with --phone=…).');
+  if (!['web', 'macos', 'ios', 'android', 'web-android'].includes(host))
+    throw new Error('Specify web (Chrome WebGPU), macos (Metal), ios (a paired device, with --phone=…), android (the adb device) or web-android (Chrome on it).');
   if (headless && host !== 'web')
     throw new Error('BENCH_HEADLESS=1 is available for web only.');
   const timings = { '--warmup-ms': 20000, '--window-ms': 60000, '--timeout-ms': 60000, '--poll-ms': 50 };
@@ -192,17 +192,22 @@ export async function readBench(session, config, commit) {
   for (let index = 0; index < 3; index++) {
     const before = await state(true);
     const windowStart = session.now();
-    const finishBrowserWindow = host === 'web' ? await session.startBrowserWindow(windowMs) : null;
+    const finishBrowserWindow = host.startsWith('web') ? await session.startBrowserWindow(windowMs) : null;
     await session.wait(windowMs);
     last = await state();
     const durationMs = session.now() - windowStart;
     const browser = await finishBrowserWindow?.();
-    windows.push(reading(before, last, durationMs, browser, host === 'web' ? refreshHz : null));
+    windows.push(reading(before, last, durationMs, browser, host.startsWith('web') ? refreshHz : null));
   }
+  if (observedSwitches == null) throw new Error('The canvas never reported its switches: nothing was measured');
+  const empty = windows.findIndex(window => !(window.frameMs?.count > 0));
+  if (empty >= 0) throw new Error(`Window ${empty + 1} drew no frame`);
   const terrain = game(last);
+  const pixels = await session.pixels?.() ?? last?.perf?.pixels ?? null;
   return {
-    commit, host, switches, observedSwitches, profile: host === 'web' ? 'web' : 'host-dev',
-    resolution, pixels: await session.pixels?.() ?? last?.perf?.pixels ?? null,
+    commit, host, switches, observedSwitches, profile: { web: 'web', 'web-android': 'web', android: 'release' }[host] ?? 'host-dev',
+    // A device draws at its own size.
+    resolution: ['web', 'macos'].includes(host) ? resolution : pixels, pixels,
     device, os, refreshHz, headless, calibration: 'uncalibrated', warmupMs, windowMs,
     mountSampling: 'poll', pollMs, firstPicture: drawing ? firstPicture ?? timeout : null,
     fullWindow: fullWindow ?? timeout, paired: false,
@@ -264,7 +269,7 @@ export function tableRow(row) {
   const tasks = display(w => w.longTasks && `${w.longTasks.count}/${fixed(w.longTasks.durationMs)}`);
   const periods = display(w => fixed(w.displayPeriodsPerFrame));
   const switches = Object.entries(row.switches).map(([name, value]) => `${name}=${value}`).join(', ');
-  const cells = [row.commit, row.host, row.profile, row.resolution.join('×'), show(row.device), show(row.os),
+  const cells = [row.commit, row.host, row.profile, (row.pixels ?? row.resolution)?.join('×') ?? '—', show(row.device), show(row.os),
     show(row.refreshHz), switches, show(row.lane), row.pollMs, mount(row.firstPicture), mount(row.fullWindow),
     show(row.peakGpuBufferBytes), show(row.peakCpuBytes), perWindow('tickMs'), perWindow('prepareMs'),
     perWindow('encodeMs'), perWindow('frameMs'), raf, tasks, periods, row.calibration, row.headless ? 'headless' : 'display'];
@@ -279,30 +284,38 @@ async function run(config) {
   const root = resolve(app, '../../..');
   const dist = resolve(app, 'target', 'bench-dist');
   const commit = (await Bun.$`git -C ${root} rev-parse HEAD`.quiet()).text().trim();
+  const web = config.host.startsWith('web');
   const env = {
     ...process.env, EXACT_UPDATE_TRUST: 'development',
-    EXACT_GAME_PROOF_PROFILE: config.host === 'web' ? 'release' : 'gpu-dev',
+    EXACT_GAME_PROOF_PROFILE: web ? 'release' : 'gpu-dev',
     EXACT_APP_DIR: app, EXACT_WEB_DIST: dist, EXACT_SCALE: '1',
   };
   const deviceFlags = config.host === 'ios' ? ['--device', '--phone', config.phone] : [];
-  const build = spawn(process.execPath, [resolve(app, 'proof.mjs'), config.host, ...deviceFlags, '--build-only'],
-    { cwd: root, env, stdio: ['ignore', 2, 2] });
+  // The proof has no Android host: the phone's row is the release APK on the Canvas reader.
+  const android = config.host === 'android';
+  if (android) for (const name of ['EXACT_ANDROID_BIN', 'EXACT_PLAN', 'EXACT_DEV_PLAN']) delete env[name];
+  const build = spawn(process.execPath, android
+    ? [resolve(root, 'scripts/agent-android.mjs'), 'build', 'terrain-fixture', '--apk', '--release']
+    : [resolve(app, 'proof.mjs'), web ? 'web' : config.host, ...deviceFlags, '--build-only'],
+  { cwd: root, env, stdio: ['ignore', 2, 2] });
   const status = await new Promise((done, fail) => {
     build.once('error', fail);
     build.once('exit', done);
   });
   // A build-only proof ends unverified, with status 3.
-  if (status !== 3) throw new Error('Build exited ' + status);
+  if (status !== (android ? 0 : 3)) throw new Error('Build exited ' + status);
 
   const read = async options => {
-    const transport = config.host === 'web'
-      ? await openWeb(dist, pollUntil, options)
-      : await openNative(config.host, app, env, config.phone);
+    const transport = web
+      ? await openWeb(dist, pollUntil, { ...options, phone: config.host === 'web-android' })
+      : await openNative(config.host, app, env, config.phone, pollUntil);
     // A loaded machine stretches the frames of a browser or an app it runs; a device's are its own.
-    const loaded = () => config.host === 'ios' ? null : Math.round(loadavg()[0] * 10) / 10;
+    const loaded = () => ['ios', 'android', 'web-android'].includes(config.host) ? null : Math.round(loadavg()[0] * 10) / 10;
     const before = loaded();
     try {
       const row = await readBench({ ...transport, now: () => performance.now(), wait: sleep }, options, commit);
+      if (await transport.hidden?.())
+        row.inconclusive.push({ quantity: 'row', condition: 'the page was hidden during the run' });
       row.browser = transport.browser ?? null;
       row.machineLoad = before == null ? null : { before, after: loaded(), cores: cpus().length };
       // With more runnable threads than cores, a frame waits for a core.
@@ -325,7 +338,7 @@ async function run(config) {
   }
 }
 
-async function openNative(host, app, env, phone) {
+async function openNative(host, app, env, phone, poll) {
   const [{ open }, { displayReady, focus }] = await Promise.all([
     import('../../../scripts/agent-session.mjs'), import('../../bench/exact.mjs'),
   ]);
@@ -334,7 +347,8 @@ async function openNative(host, app, env, phone) {
   let pid, id, pixels;
   // A device draws at its own size; the Mac app takes the bench's.
   const session = await open({
-    host, app, timing: 'platform', ...(mac ? { size: resolution } : { device: true, phone }),
+    host, app, timing: 'platform',
+    ...(mac ? { size: resolution } : host === 'android' ? { reader: true } : { device: true, phone }),
     env: { ...env, EXACT_AGENT: 'live' }, onProcess: child => { pid = child.pid; },
   });
   try {
@@ -344,7 +358,10 @@ async function openNative(host, app, env, phone) {
     throw error;
   }
   return {
-    set: (name, value) => session.type(name, value),
+    async set(name, value) {
+      await session.type(name, value);
+      if (host === 'android') await lowerPhoneKeyboard(poll);
+    },
     play: () => session.tap('play'),
     async state(reset) {
       id ??= (await session.find('world', false, false))?.id;
@@ -356,6 +373,79 @@ async function openNative(host, app, env, phone) {
     pixels: () => pixels ?? null,
     close: session.close,
   };
+}
+
+const phoneFocus = adb => /mCurrentFocus=\S+ \S+ (\S+)\//.exec(adb('shell', 'dumpsys', 'window'))?.[1];
+
+async function phoneAdb() {
+  const { spawnSync } = await import('node:child_process');
+  const { androidSdk } = await import('../../../scripts/android-abi.mjs');
+  return (...args) => {
+    const done = spawnSync(resolve(androidSdk(process.env), 'platform-tools/adb'), args, { encoding: 'utf8' });
+    if (done.status !== 0) throw new Error(`adb ${args.join(' ')}: ${(done.stderr || done.stdout).trim()}`);
+    return done.stdout.trim();
+  };
+}
+
+/** Typing a switch raises the phone's keyboard over the button that shows the terrain. Back lowers it,
+ * and is sent only while the fixture is the focused app: to another app it is a navigation. */
+async function lowerPhoneKeyboard(poll) {
+  const adb = await phoneAdb();
+  const shown = () => {
+    const count = adb('shell', 'dumpsys input_method | grep -c mInputShown=true || true');
+    if (!/^\d+$/.test(count)) throw new Error('Could not read the phone keyboard state: ' + count);
+    return count !== '0';
+  };
+  if (!shown()) return;
+  const focus = phoneFocus(adb);
+  if (!focus?.includes('terrain_fixture')) throw new Error(`The fixture is not in front on the phone (${focus})`);
+  adb('shell', 'input', 'keyevent', 'KEYCODE_BACK');
+  if (!await poll(async () => !shown(), Boolean, { bound: 5000, interval: 100 }))
+    throw new Error('The keyboard stayed up on the phone');
+}
+
+/** A new tab of the adb device's Chrome on `url`, a loopback server of this machine that the phone
+ * reaches through `adb reverse`. Closing it closes the tab and removes both adb rules. */
+async function phoneTab(url, cdp) {
+  const adb = await phoneAdb();
+  // Chrome draws a tab only while it is in front.
+  const focus = phoneFocus(adb);
+  if (focus !== 'com.android.chrome') throw new Error(`Chrome is not in front on the phone (${focus})`);
+  const site = 'tcp:' + url.port;
+  // Another run's rule for this port is not this run's to replace or remove.
+  if (adb('reverse', '--list').split('\n').some(rule => rule.split(/\s+/)[1] === site))
+    throw new Error(`The phone already reverses ${site}`);
+  adb('reverse', site, site);
+  let devtools, id;
+  const close = async () => {
+    try {
+      const closed = id && await fetch(`http://127.0.0.1:${devtools}/json/close/${id}`);
+      if (closed && !closed.ok) throw new Error('Chrome on the phone did not close the tab: ' + closed.status);
+    } finally {
+      try {
+        if (devtools) adb('forward', '--remove', 'tcp:' + devtools);
+      } finally {
+        adb('reverse', '--remove', site);
+      }
+    }
+  };
+  try {
+    devtools = adb('forward', 'tcp:0', 'localabstract:chrome_devtools_remote');
+    // Chrome on Android answers /json/new with an error; the browser's own target opens a tab.
+    const list = name => fetch(`http://127.0.0.1:${devtools}/json/${name}`).then(reply => reply.json());
+    const browser = await cdp((await list('version')).webSocketDebuggerUrl);
+    try {
+      id = (await browser.call('Target.createTarget', { url: url.href })).targetId;
+    } finally {
+      browser.close();
+    }
+    const page = (await list('list')).find(tab => tab.id === id);
+    if (!page) throw new Error('Chrome on the phone did not list the tab it opened');
+    return { ...page, close };
+  } catch (error) {
+    await close();
+    throw error;
+  }
 }
 
 export async function waitForBenchPage(client, poll, timeoutMs, pollMs = 50) {
@@ -372,7 +462,7 @@ export async function waitForBenchPage(client, poll, timeoutMs, pollMs = 50) {
       }
       return await client.eval('!!document.querySelector(\'[data-testid="play"]\')');
     } catch (error) {
-      if (!/execution context|find context|find node with given id|No document/i.test(error.message)) throw error;
+      if (!/execution context|find context|node with given id|No document/i.test(error.message)) throw error;
       hasContext = false;
       return false;
     }
@@ -418,22 +508,26 @@ export function sampleBrowserWindow(durationMs, page = globalThis) {
   }, durationMs));
 }
 
-async function openWeb(dist, poll, { headless, timeoutMs, pollMs }) {
+async function openWeb(dist, poll, { headless, timeoutMs, pollMs, phone }) {
   const [{ spawn }, { mkdtemp, rm }, { tmpdir }, { extname }, { chromium }, { cdp, displayReady, stop, track }] =
     await Promise.all([import('node:child_process'), import('node:fs/promises'), import('node:os'),
       import('node:path'), import('../../../scripts/agent-launch.mjs'), import('../../bench/exact.mjs')]);
   // BENCH_HEADLESS=1 checks the script without a display: its row is never a reading.
-  if (!headless) displayReady();
-  const { executable, unavailable } = chromium({ needs: ['gpu', 'perf'] });
+  if (!headless && !phone) displayReady();
+  const { executable, unavailable } = phone ? {} : chromium({ needs: ['gpu', 'perf'] });
   if (unavailable) throw new Error(unavailable);
-  const profile = await mkdtemp(resolve(tmpdir(), 'terrain-bench-'));
+  const profile = phone ? null : await mkdtemp(resolve(tmpdir(), 'terrain-bench-'));
   const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm' };
-  let server, client, child;
+  let server, client, child, tab;
   const close = async () => {
     client?.close();
-    server?.stop(true);
-    await stop(child);
-    await rm(profile, { recursive: true, force: true });
+    try {
+      await tab?.close();
+    } finally {
+      server?.stop(true);
+      await stop(child);
+      if (profile) await rm(profile, { recursive: true, force: true });
+    }
   };
   try {
     server = Bun.serve({
@@ -450,7 +544,8 @@ async function openWeb(dist, poll, { headless, timeoutMs, pollMs }) {
         } });
       },
     });
-    child = track(spawn(executable, ['--user-data-dir=' + profile, '--no-first-run', '--no-default-browser-check',
+    if (phone) tab = await phoneTab(server.url, cdp);
+    else child = track(spawn(executable, ['--user-data-dir=' + profile, '--no-first-run', '--no-default-browser-check',
       '--remote-debugging-port=0', '--window-size=1280,720', '--enable-unsafe-webgpu',
       // Chrome for Testing turns on every experiment in Chromium's testing configuration. One of them
       // sends this page a main frame on one display frame in two to four while it uploads sections:
@@ -459,8 +554,8 @@ async function openWeb(dist, poll, { headless, timeoutMs, pollMs }) {
       ...(headless ? ['--headless=new'] : []), server.url.href],
     { stdio: 'ignore' }));
     let launchError;
-    child.once('error', error => { launchError = error; });
-    const page = await poll(async () => {
+    child?.once('error', error => { launchError = error; });
+    const page = tab ?? await poll(async () => {
       if (launchError) throw launchError;
       if (child.exitCode != null) throw new Error('Chrome exited ' + child.exitCode);
       const file = await Bun.file(resolve(profile, 'DevToolsActivePort')).text().catch(() => null);
@@ -473,9 +568,15 @@ async function openWeb(dist, poll, { headless, timeoutMs, pollMs }) {
     client = await cdp(page.webSocketDebuggerUrl);
     const { product } = await client.call('Browser.getVersion');
     await client.call('Page.bringToFront');
-    await client.call('Emulation.setDeviceMetricsOverride', { width: resolution[0], height: resolution[1], deviceScaleFactor: 1, mobile: false });
+    // A phone's page draws at the phone's size.
+    if (!phone) await client.call('Emulation.setDeviceMetricsOverride', { width: resolution[0], height: resolution[1], deviceScaleFactor: 1, mobile: false });
     const evaluate = (fn, ...args) => client.eval(`(${fn})(${args.map(value => JSON.stringify(value)).join(',')})`);
     await waitForBenchPage(client, poll, timeoutMs, pollMs);
+    // A hidden page stops drawing. Count each time this one is, from here to the row's end.
+    await evaluate(() => {
+      globalThis.benchHidden = document.hidden ? 1 : 0;
+      document.addEventListener('visibilitychange', () => { if (document.hidden) globalThis.benchHidden++; });
+    });
     return {
       browser: product,
       async set(name, value) {
@@ -519,6 +620,7 @@ async function openWeb(dist, poll, { headless, timeoutMs, pollMs }) {
         const canvas = document.querySelector('canvas');
         return canvas ? [canvas.width, canvas.height] : null;
       }),
+      hidden: () => evaluate(() => globalThis.benchHidden),
       close,
     };
   } catch (error) {
@@ -529,7 +631,7 @@ async function openWeb(dist, poll, { headless, timeoutMs, pollMs }) {
 
 if (import.meta.main) {
   if (process.argv.includes('--help')) {
-    console.log('bun game/games/terrain-fixture/bench.mjs web|macos|ios --device=… --os=… --refresh-hz=… [--phone=…] [switch=value ...] [--pair draw] [--warmup-ms=20000] [--window-ms=60000] [--timeout-ms=60000] [--poll-ms=50]');
+    console.log('bun game/games/terrain-fixture/bench.mjs web|macos|ios|android|web-android --device=… --os=… --refresh-hz=… [--phone=…] [switch=value ...] [--pair draw] [--warmup-ms=20000] [--window-ms=60000] [--timeout-ms=60000] [--poll-ms=50]');
     console.log('BENCH_HEADLESS=1 allows a web sanity run without display metadata.');
   } else {
     await run(parseOptions(process.argv.slice(2))).catch(error => {
