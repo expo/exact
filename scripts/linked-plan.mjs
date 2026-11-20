@@ -443,7 +443,7 @@ export function recordRustBake(env, outputs = [], workspace) {
     ...(workspace ? {link:androidLinkDigest(output, baker.cwd)} : {}),
     env: Object.fromEntries(said('rerun-if-env-changed').map(name => [name, runEnv[name] ?? null])),
     // Cargo's bootstrap predates this call: never certify inputs changed since its read.
-    paths, digest:inputDigest(paths, dir, runEnv, {since:baker.started, outputs}), missing: paths.filter(path => !existsSync(path)), watchedDirectories:packageDirectories(paths, watchOutputs(dir, runEnv, outputs)) };
+    paths, digest:inputDigest(paths, dir, runEnv, {since:baker.since ?? baker.started, outputs}), missing: paths.filter(path => !existsSync(path)), watchedDirectories:packageDirectories(paths, watchOutputs(dir, runEnv, outputs)) };
   writeFileSync(`${at}.${process.pid}.tmp`, JSON.stringify(record));
   renameSync(`${at}.${process.pid}.tmp`, at);
 }

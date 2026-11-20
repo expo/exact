@@ -394,12 +394,20 @@ pub fn take_linked(files: &[&str]) -> Result<bool, String> {
         .unwrap_or_default();
     if let Some(object) = previous.as_object_mut() {
         object.remove("started");
+        object.remove("since");
     }
     if previous != registration
         || !baked.join("compat.json").exists()
         || files.iter().any(|file| !baked.join(file).exists())
     {
-        registration["started"] = serde_json::json!(file_clock(&baked)?);
+        // `started` orders this bootstrap against the driver's records, whose
+        // `at` is the system clock's; `since` is the file clock's, for the
+        // change times of the inputs it read.
+        registration["since"] = serde_json::json!(file_clock(&baked)?);
+        registration["started"] = serde_json::json!(std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_millis());
         let result = Command::new(&executable)
             .env("EXACT_RUST_BAKE", "1")
             .env("EXACT_BAKED", &baked)
