@@ -78,9 +78,13 @@ for (const p of pages) {
   writeFileSync(join(DIST, p.path === '/' ? 'index.md' : `${p.path.slice(1)}.md`), `${frontmatter(p)}> ## Documentation index\n> Fetch the complete documentation index at: ${ORIGIN}/llms.txt\n> Use this file to discover all available pages before exploring further.\n\n${body}`);
 }
 
-// Exact's mark (assets/brand/exact-mark.svg) as the favicon, in place of the build's placeholder square.
-copyFileSync(resolve(SITE, '../../assets/brand/exact-mark.svg'), join(DIST, 'favicon.svg'));
-const FAVICON = '<link rel="icon" href="/favicon.svg" type="image/svg+xml">';
+// The favicons (assets/favicons) in place of the build's placeholder square, and favicon.ico at the root, where a browser looks by default.
+copyFileSync(join(SITE, 'assets/favicons/favicon.ico'), join(DIST, 'favicon.ico'));
+const FAVICON = [
+  '<link rel="icon" href="/assets/favicons/favicon.svg" type="image/svg+xml">',
+  ...[48, 32, 16].map(s => `<link rel="icon" href="/assets/favicons/favicon-${s}x${s}.png" type="image/png" sizes="${s}x${s}">`),
+  '<link rel="apple-touch-icon" href="/assets/favicons/apple-touch-icon.png">',
+].join('');
 
 // apply stored preferences before first paint; sidebar overrides expire when the runtime has mounted.
 // the keys are persisted state's (host/web-js/persist.js); theme follows `setScheme`.

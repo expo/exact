@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" role="img" aria-labelledby="title">
+  <title id="title">Exact</title>
+  <rect width="400" height="400" fill="#252525" />
+  <rect x="0.5" y="0.5" width="399" height="399" fill="none" stroke="#fff" stroke-opacity="0.2" />
+  <path d="M228.284 264V234.39H245.966V237.414H231.644V247.116H245V250.14H231.644V260.976H245.966V264H228.284ZM247.946 264L256.052 252.702L248.534 242.37H252.524L256.136 247.704C256.892 248.838 257.396 249.636 257.984 250.644H258.11C258.656 249.72 259.202 248.838 259.958 247.704L263.57 242.37H267.518L260.042 252.702L268.148 264H264.2L260.084 258.036C259.37 256.986 258.698 256.02 258.11 254.97H257.984C257.396 256.02 256.724 256.986 256.01 258.036L251.894 264H247.946Z" fill="#fff" />
+  <g fill="none" stroke="#fff" stroke-width="1.5">
+    <rect x="104" y="104" width="192" height="192" />
+    <rect x="104" y="104" width="96" height="192" />
+    <rect x="200" y="104" width="96" height="96" />
+    <rect x="200" y="104" width="48" height="96" />
+    <rect x="248" y="104" width="48" height="48" />
+  </g>
+</svg>
