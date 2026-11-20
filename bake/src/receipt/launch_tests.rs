@@ -215,3 +215,190 @@ component App
         json!(null)
     );
 }
+
+#[test]
+fn a_ground_something_may_paint_over_is_left_to_the_platform() {
+    let graph = |source: &str| {
+        let plan = contract::compile(source).unwrap_or_else(|e| panic!("{e}\n{source}"));
+        artifact_graph(&plan, &json!({}), &[], false, "aarch64-apple-ios-sim").unwrap()
+    };
+    // An app root of white with `root` written on it and `child` (lines
+    // indented as its children) in it
+    let app = |root: &str, child: &str| {
+        graph(&format!(
+            "keyframes glow\n  from background-color=\"#000000\"\n  to background-color=\"#ffffff\"\ncomponent App\n  state big = true\n  view\n    column width=\"100%\" height=\"100%\" background-color=\"#ffffff\" {root}\n      {child}\n      text \"Hi\"\n"
+        ))["launchGround"]
+            .clone()
+    };
+    const BLACK: &str = "background-color=\"#000000\"";
+    // A node that may fill the screen with a colour or pixels of its own,
+    // through every box between it and the screen, or an effect on the ground
+    for (root, child) in [
+        ("", format!("column position=\"absolute\" inset=0 {BLACK}")),
+        ("", format!("column position=\"absolute\" top=0 bottom=0 left=0 width=\"100%\" {BLACK}")),
+        ("", format!("column position=\"relative\" flex=1\n        column position=\"absolute\" inset=0 {BLACK}")),
+        ("", format!("column flex=1 {BLACK}")),
+        ("", format!("column flex=1\n        column flex=1 {BLACK}")),
+        ("", "column flex=1\n        list appearance=\"auto\" listStyle=\"inset-grouped\" flex=1 min-height=0\n          section\n            row\n              text \"One\"".into()),
+        ("", format!("column height=\"100%\" {BLACK}")),
+        ("", format!("column min-height=\"100vh\" {BLACK}")),
+        ("", format!("column flex-basis=\"100%\" {BLACK}")),
+        ("", format!("scroll flex=1\n        column min-height=\"100%\" {BLACK}")),
+        ("", format!("column width=(big ? \"100%\" : \"50%\") height=(big ? \"100%\" : \"50%\") {BLACK}")),
+        ("flex-direction=\"row\"", format!("column width=\"100%\" {BLACK}")),
+        ("", "canvas width=\"100%\" height=\"100%\"".into()),
+        ("display=\"grid\"", format!("column {BLACK}")),
+        ("", format!("column height=\"calc(100vh - 44px)\" {BLACK}")),
+        ("", format!("column height=0 flex-grow=1 {BLACK}")),
+        ("", format!("scroll flex=1\n        for i in [1, 2, 3] key=i\n          row height=44 {BLACK}")),
+        ("", "column flex=1 background-color=\"#ffffff\" filter=\"invert(1)\"".into()),
+        ("padding-left=16", format!("column flex=1 {BLACK}")),
+        ("padding=16", format!("column flex=1 margin=-16 {BLACK}")),
+        ("filter=\"invert(1)\"", "text \"a\"".into()),
+        ("opacity=0.5", "text \"a\"".into()),
+        ("visibility=\"hidden\"", "text \"a\"".into()),
+        ("display=\"none\"", "text \"a\"".into()),
+        ("animation=\"glow 5s linear both\"", "text \"a\"".into()),
+        ("mask-image=\"linear-gradient(#000000, transparent)\"", "text \"a\"".into()),
+        ("clip-path=\"circle(10px)\"", "text \"a\"".into()),
+    ] {
+        assert_eq!(app(root, &child), json!(null), "{root} {child}");
+    }
+    // One that stops short of the screen's edges, or paints the ground's own
+    // colour, leaves the ground: a padded parent, a size in points, a box that
+    // takes its content's height, one centred, one on two edges
+    let white = json!({"light": "#ffffff", "dark": "#ffffff"});
+    for (root, child) in [
+        ("", format!("column position=\"relative\" height=100\n        column position=\"absolute\" inset=0 {BLACK}")),
+        ("padding=16", format!("column flex=1 {BLACK}")),
+        ("padding=16", format!("column flex=1 margin=8 {BLACK}")),
+        ("padding=\"1rem\"", format!("column flex=1 {BLACK}")),
+        ("", format!("scroll flex=1\n        svg width=\"100%\" height=220")),
+        ("", format!("scroll flex=1\n        column margin=16 {BLACK}")),
+        ("", format!("column width=\"100%\" height=240 {BLACK}")),
+        ("", format!("row padding=8 {BLACK}\n        text \"Tab\"")),
+        ("", format!("button width=\"100%\" {BLACK}\n        text \"Go\"")),
+        ("align-items=\"center\"", format!("column flex=1 {BLACK}")),
+        ("flex-direction=\"row\"", format!("column width=280 {BLACK}")),
+        ("", format!("column position=\"absolute\" left=16 right=16 bottom=24 {BLACK}")),
+        ("", format!("column position=\"absolute\" right=16 bottom=16 width=56 height=56 {BLACK}")),
+        ("", format!("column position=\"absolute\" left=0 top=0 bottom=0 width=56 {BLACK}")),
+        ("", "column flex=1 background-color=\"#ffffff\"".into()),
+        ("", "column flex=1 background-color=\"transparent\"".into()),
+        ("opacity=1", "text \"a\"".into()),
+    ] {
+        assert_eq!(app(root, &child), white, "{root} {child}");
+    }
+    // A colour written as the ground's under another scheme is not the ground
+    assert_eq!(
+        graph("component App\n  view\n    column width=\"100%\" height=\"100%\" background-color=\"light-dark(#ffffff, #000000)\"\n      column flex=1 background-color=\"light-dark(#ffffff, #000000)\" color-scheme=\"dark\"\n        text \"Hi\"\n")
+            ["launchGround"],
+        json!(null)
+    );
+    // Routes: a presentation of "" or a computed one is a page on its own
+    // ground; an effect on the navigation root or a box outside every route
+    // reaches every screen; a box of another route, a sheet's, does not
+    const STACK: &str = "routes nav
+  home \"/\"
+  camera \"/camera\"
+component App
+  view
+    main navigationKey=`${top(nav).id}` navigationBack=\"back\" background-color=\"#ffffff\" ROOT
+      for e in stack(nav) key=e.id
+        if e.name == \"camera\"
+          column navigationKey=`${e.id}` navigationPresentation=\"fullscreen\" position=\"absolute\" inset=0
+            column position=\"absolute\" inset=0 background-color=\"#ff0000\"
+        else
+          column navigationKey=`${e.id}` PRESENTATION position=\"absolute\" inset=0 ROUTE
+            text \"Home\"
+      SHARED
+";
+    let stack = |root: &str, presentation: &str, route: &str, shared: &str| {
+        graph(
+            &STACK
+                .replace("ROOT", root)
+                .replace("PRESENTATION", presentation)
+                .replace("ROUTE", route)
+                .replace("SHARED", shared),
+        )["launchGround"]
+            .clone()
+    };
+    let black = json!({"light": "#000000", "dark": "#000000"});
+    assert_eq!(stack("", "", BLACK, ""), black);
+    assert_eq!(stack("", "navigationPresentation=\"\"", BLACK, ""), black);
+    assert_eq!(
+        stack(
+            "",
+            "navigationPresentation=(e.id == 0 ? \"\" : \"modal\")",
+            BLACK,
+            ""
+        ),
+        black
+    );
+    assert_eq!(stack("filter=\"invert(1)\"", "", BLACK, ""), json!(null));
+    assert_eq!(
+        stack(
+            "",
+            "",
+            BLACK,
+            "column position=\"absolute\" inset=0 background-color=\"#ff0000\""
+        ),
+        json!(null)
+    );
+    assert_eq!(
+        stack("", "", BLACK, "row position=\"absolute\" left=0 right=0 bottom=0 height=49 background-color=\"#ff0000\""),
+        black
+    );
+    // A route's scheme wins over the root's; a pictured root under a route of
+    // no colour of its own is no ground
+    assert_eq!(
+        stack(
+            "color-scheme=\"light\"",
+            "",
+            "background-color=\"light-dark(#ffffff, #000000)\" color-scheme=\"dark\"",
+            ""
+        ),
+        black
+    );
+    assert_eq!(stack("", "", "", ""), white);
+    assert_eq!(
+        stack(
+            "background-image=\"linear-gradient(#000000, #ffffff)\"",
+            "",
+            "",
+            ""
+        ),
+        json!(null)
+    );
+    // The grouped grey needs every route to scroll a grouped list
+    let grouped = |settings: &str| {
+        graph(&format!(
+            "routes nav
+  home \"/\"
+  settings \"/settings\"
+component App
+  view
+    main navigationKey=`${{top(nav).id}}` navigationBack=\"back\"
+      for e in stack(nav) key=e.id
+        if e.name == \"settings\"
+          column navigationKey=`${{e.id}}` navigationScroll=\"s\" position=\"absolute\" inset=0
+            list id=\"s\" appearance=\"auto\" listStyle=\"inset-grouped\" flex=1 min-height=0
+              section
+                row
+                  text \"One\"
+        else
+          column navigationKey=`${{e.id}}` navigationScroll=\"h\" position=\"absolute\" inset=0
+            {settings}
+"
+        ))["launchBackground"]
+            .clone()
+    };
+    assert_eq!(
+        grouped("list id=\"h\" appearance=\"auto\" listStyle=\"inset-grouped\" flex=1 min-height=0\n              section\n                row\n                  text \"Two\""),
+        json!("grouped")
+    );
+    assert_eq!(
+        grouped("scroll id=\"h\" flex=1 min-height=0\n              text \"Home\""),
+        json!("system")
+    );
+}

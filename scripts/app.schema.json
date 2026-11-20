@@ -338,7 +338,7 @@
     },
     "background_color": {
       "$ref": "#/$defs/launchColour",
-      "description": "The first-frame background in every colour scheme, unless color_scheme_light or color_scheme_dark names another for one (LLP 1163 D2): the web page's, the iOS launch screen's and the Android launch window's (its starting window from Android 12). Name none unless the launch must differ from what Exact shows. A scheme named none for is the app's own background on iOS where the build can read it and every route it can open on agrees (each route's background-color, else its root's: a colour or a theme's colour), else systemBackground, or the grouped background where the first route scrolls a grouped list; on Android the theme's surface, on the web the page's own colour."
+      "description": "The first-frame background in every colour scheme, unless color_scheme_light or color_scheme_dark names another for one (LLP 1163 D2): the web page's, the iOS launch screen's and the Android launch window's (its starting window from Android 12). Name none unless the launch must differ from what Exact shows. A scheme named none for is the app's own background on iOS where the build can read it, every route it can open on agrees (each route's background-color, else its root's: a colour or a theme's colour) and nothing may paint over it to the screen's edges, else systemBackground, or the grouped background where every route scrolls a grouped list or writes -exact-grouped-background; on Android the theme's surface, on the web the page's own colour, as a native app starts there."
     },
     "lang": {
       "description": "The W3C manifest's language: a BCP 47 tag for the page's <html lang> and the web manifest. Absent is en.",

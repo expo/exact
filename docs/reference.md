@@ -1341,11 +1341,16 @@ per colour scheme (LLP 1163 D2):
 
 A scheme's own member wins over the top-level one, which holds in every scheme.
 Name none unless the launch must differ from what Exact shows: on iOS the app's
-own background where the build can read it and every route it can open on
-agrees (each route's `background-color`, else its root's, written as a colour or
-a theme's colour), else `systemBackground` (its grouped background under a first
-route that scrolls a grouped list); on Android the theme's surface; on the web
-the page's own colour. A colour is `#RGB`, `#RRGGBB`, `#RRGGBBAA`, or Display P3 as
+own background where the build can read it, every route it can open on agrees
+(each route's `background-color`, else its root's, written as a colour or a
+theme's colour) and nothing may paint over it out to the screen's edges, else
+`systemBackground` (its grouped background where every route scrolls a grouped
+list or writes `-exact-grouped-background`); on Android the theme's surface; on
+the web the page's own colour, as a native app starts there. Name the colour
+where the launch must match a background of the app's own on Android or the
+web, or on iOS where something the build cannot see covers it, such as boxes
+sized in points that fill the screen or a scheme the app restores at launch.
+A colour is `#RGB`, `#RRGGBB`, `#RRGGBBAA`, or Display P3 as
 `color(display-p3 r g b)` (`/ a` for alpha), which iOS and the web's first paint
 show in Display P3 and Android takes clipped to sRGB. A fixed
 `userInterfaceStyle` shows its side in both on iOS and the web; Android follows

@@ -4,7 +4,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writ
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { appleAssets, appleAssetCatalogInventory, appleRefusals, composerFallback, rasterIconAssets, iosAssets, iosExecutableRefusal, launchScreen, nativeResourceMappings, plistFile, RESERVED_RESOURCE_ROOTS } from './assets.mjs';
+import { appleAssets, appleAssetCatalogInventory, appleAssetsKey, appleRefusals, composerFallback, rasterIconAssets, iosAssets, iosExecutableRefusal, launchScreen, nativeResourceMappings, plistFile, RESERVED_RESOURCE_ROOTS } from './assets.mjs';
 import { pngPixels } from './image.mjs';
 import { encodePng } from '../../scripts/png.mjs';
 import { alternateIcons } from '../../scripts/app-icons.mjs';
@@ -95,6 +95,12 @@ test('each scheme\'s launch colour is the manifest\'s, else the app\'s own groun
     assert.deepEqual(color({ background_color: '#ffffff', color_scheme_dark: { background_color: 'color(display-p3 0.5 0.25 0)' } }),
       { light: rgb('#ffffff'), dark: { 'display-p3': [0.5, 0.25, 0, 1] } });
     assert.throws(() => color({ background_color: 'color(display-p3 1.5 0 0)' }), /background_color is "color\(display-p3 1\.5 0 0\)", which is not a colour app\.json takes/);
+    // A ground the bake writes in Display P3, as it writes one beyond sRGB
+    assert.deepEqual(color({}, { light: 'color(display-p3 1.0000 0.0000 0.0000)', dark: '#000000' }), { light: { 'display-p3': [1, 0, 0, 1] }, dark: rgb('#000000') });
+    // A changed ground writes the launch screen again
+    const key = (ground) => appleAssetsKey({ dir, name: 'fixture', manifest: {} }, { ground });
+    assert.notEqual(key(ground), key(null));
+    assert.notEqual(key(ground), key({ ...ground, dark: '#000000' }));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
