@@ -416,16 +416,16 @@ pub(super) fn root_slot(
     } else {
         init
     };
+    // A late slot's value is its initializer's as the boot starts (rt.js `late`)
+    let init = if r.late { format!("()=>{init}") } else { init };
     if dev_reload {
-        let _ = write!(
-            body,
-            "const s_{i}=$devSig({quoted},{init},{ty},{});",
-            type_json(plan, r.ty)
-        );
+        let make = if r.late { "$devLate" } else { "$devSig" };
+        let declared = type_json(plan, r.ty);
+        let _ = write!(body, "const s_{i}={make}({quoted},{init},{ty},{declared});");
     } else {
-        let sig = uses.rt("sig");
+        let make = uses.rt(if r.late { "late" } else { "sig" });
         let name = string_name(plan, r);
-        let _ = write!(body, "const s_{i}={sig}({init},{ty}{name});");
+        let _ = write!(body, "const s_{i}={make}({init},{ty}{name});");
     }
     if r.persist {
         let _ = write!(body, "$keep(s_{i},{quoted},{});", type_json(plan, r.ty));

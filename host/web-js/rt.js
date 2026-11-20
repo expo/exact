@@ -247,6 +247,30 @@ export function sig(v, t, name) {
   g.n = n;
   return g;
 }
+// Each late slot's node and initializer, in the order the app's body made them
+const Late = [];
+/** A child's state used outside every region (LLP 1017 P4c): its signal now, for what is declared after it, and its
+ * value from `init` when the boot's commit starts (`startLate`). */
+export function late(init, t, name) {
+  const n = node(null, undefined);
+  n.t = t;
+  n.name = name;
+  const g = () => read(n);
+  g.n = n;
+  Late.push([n, init]);
+  return g;
+}
+/** Each late slot's first value, in order, as the boot's commit starts (mount). The runner starts them after the boot's
+ * settlement (`init_late_slots`); here the root's derives and resources settle as an initializer reads them, so it
+ * reads what that settlement gives, and what it asks lands with the commit's asks. A boot that builds afresh in a
+ * second commit starts them again, and a reader the first commit made sees the new value. */
+export function startLate() {
+  for (const [n, init] of Late) {
+    const v = init();
+    if (n.t && !conforms(v, n.t)) throw new Error(`a slot's initial value does not conform to its type: ${v}`);
+    write(n, v);
+  }
+}
 /** A string past MAX_STRING's UTF-8 bytes (runner `too_long`): one test, TextEncoder's U+FFFD for a lone surrogate
  * (LLP 1090 D6). */
 const long = s =>

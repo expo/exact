@@ -29,6 +29,7 @@ import {
   presentArm,
   presentRows,
   Why,
+  startLate,
 } from './rt.js';
 import { canonical } from './route-pattern.js';
 import { clock, agentMode } from './clock.js';
@@ -561,6 +562,7 @@ export function mount(f) {
   Booting = true;
   let booted = commit(
     () => {
+      startLate();
       scope(() => f(root));
       for (const p of AdoptedLists) {
         let n = at(p);
@@ -584,6 +586,7 @@ export function mount(f) {
     say(`adoption abandoned ${Why}`);
     root.textContent = '';
     booted = commit(() => {
+      startLate();
       scope(() => f(root));
       built = true;
     }, 'boot');

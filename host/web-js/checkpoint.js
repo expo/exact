@@ -1,5 +1,5 @@
 import { viewChildren, viewParent, inertAncestor } from './navigation.js';
-import { After, PropHooks, Resources, carryRouter, clock, data, inflight, journal, launchLocation, res, settled, sig } from './rt.js';
+import { After, PropHooks, Resources, carryRouter, clock, data, inflight, journal, late, launchLocation, res, settled, sig } from './rt.js';
 import { offerAll, restartAutofocus } from './focus.js';
 
 // A render's checkpoint answers (LLP 1048.000 D6), as
@@ -87,6 +87,15 @@ export function devSignal(name, initial, type, declared, router = false) {
   const value = kept && (router || shape(kept[1], declared)) ? (router ? carryRouter(decode(kept[2]), launchLocation()) : decode(kept[2])) : initial;
   const out = sig(value, type, type === "s" ? name : undefined); out.n.devName = name; out.n.devType = declared;
   if (name.includes('@')) { Panels.live.add(out); Panels.used.add(name); }
+  return out;
+}
+/** A child's state used outside every region (rt.js `late`): what the last reload carried, else its initializer's
+ * value as the boot starts. */
+export function devLate(name, init, type, declared) {
+  const kept = dev()?.slots?.find(s => s[0] === name);
+  if (kept && shape(kept[1], declared)) return devSignal(name, decode(kept[2]), type, declared);
+  Slots.set(name, { type: declared, router: false });
+  const out = late(init, type, type === "s" ? name : undefined); out.n.devName = name; out.n.devType = declared;
   return out;
 }
 /** A tab panel's state, `slot@panel`, made when the panel is built (emit's `owned`; LLP 1075.003 §9.14): the capture

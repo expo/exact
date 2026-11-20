@@ -427,8 +427,10 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
     for i in early_mutations {
         body.push_str(&mutations::declaration(plan, i, &mut em.uses));
     }
-    // A child's state used outside every region: initialized as the root
-    // instance renders, after the derives and resources (LLP 1017 P4c).
+    // A child's state used outside every region: declared after the
+    // root's derives and resources and before the child's resources and
+    // mutations, which name it, and started as the boot's commit starts
+    // (rt.js `startLate`, LLP 1017 P4c).
     for (i, r) in plan.slots.iter().enumerate() {
         if r.late {
             root_slot(plan, i, &top, dev_reload, &mut em.uses, &mut body)?;
@@ -772,7 +774,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             format!("import{{{}}}from\"./budget.js\";", budget.join(","))
         },
         if roots { "import{navigation as $navigation}from\"./navigation.js\";" } else { "" },
-        if dev_reload { "import{devResource as $devRes,devSignal as $devSig}from\"./checkpoint.js\";" } else { "" },
+        if dev_reload { "import{devResource as $devRes,devSignal as $devSig,devLate as $devLate}from\"./checkpoint.js\";" } else { "" },
         // Loaded pieces, imported only where the plan uses them.
         [
             (!commands.is_empty(), commands_import.as_str()),

@@ -469,6 +469,30 @@ test('a dev reload\'s carried answer that read the store is not asked again at b
   } finally { await browser.close(); server.stop(true); }
 }, 30000);
 
+// A child's state used outside every region has no value until the boot's commit starts it (rt.js `late`, LLP 1017.000
+// P4c); on a development page a value the last reload carried wins, and the initializer does not run (checkpoint.js
+// `devLate`, as the runner's `init_slot`).
+test('a late slot starts as the boot\'s commit starts, and a reload\'s carried value wins over its initializer', async () => {
+  const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    const boot = await page.evaluate(async () => {
+      const cp = document.createElement('script');
+      cp.type = 'application/vnd.exact.dev-checkpoint';
+      cp.textContent = JSON.stringify({ time: 0, answers: [], slots: [['kept', 'string', 'carried']] });
+      document.head.append(cp);
+      const rt = await import('/host/web-js/rt.js'), { devLate } = await import('/host/web-js/checkpoint.js');
+      const ran = [];
+      const kept = devLate('kept', () => { ran.push('kept'); return 'initial'; }, 's', 'string');
+      const fresh = rt.late(() => { ran.push('fresh'); return 'started'; }, 's', 'fresh');
+      const before = [kept(), fresh() ?? 'unstarted'];
+      rt.mount(root => rt.hd(root, { headTitle: () => kept() + ' ' + fresh() }));
+      return { before, after: [kept(), fresh()], ran };
+    });
+    expect(boot).toEqual({ before: ['carried', 'unstarted'], after: ['carried', 'started'], ran: ['fresh'] });
+  } finally { await browser.close(); server.stop(true); }
+}, 30000);
+
 test('resource observations keep request provenance through switching, failure, rollback and recovery', async () => {
   for (const development of [true, false]) {
     const server = runtimeServer(development);
