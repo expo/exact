@@ -29,6 +29,15 @@ export const GENERATION = /^[0-9a-f]{32}$/;
 export const KEEP = { newest: 3, ageMs: 15 * 60_000, bytes: 2 * 2 ** 30 };
 const PREFIX = '/.exact/gen/';
 const realDirectory = (path) => { try { return lstatSync(path).isDirectory(); } catch { return false; } };
+/** Which tree is at `dir` now, by its root's device and inode (as 64-bit numbers), or null for none. A swap renames
+ * trees into place, so a build that leaves and comes back byte for byte is another tree under the same generation,
+ * which is a digest of the build's files: a read is one build's when both are the same before and after it
+ * (render.mjs `inGeneration`). It takes two trees for one where a file system gives a freed inode's number to a later
+ * tree (ext4 and XFS do; APFS does not), and on a file system whose numbers change without a rename every read looks
+ * like a swap and is asked again until the read's bound runs out (a second, or the design tool's four attempts). */
+export const treeAt = (dir) => {
+  try { const st = statSync(dir, { bigint: true }); return `${st.dev}:${st.ino}`; } catch { return null; }
+};
 const realFile = (path) => { try { return lstatSync(path).isFile(); } catch { return false; } };
 const generationsOf = (dist) => `${dist}.gen`, leasesOf = (dist) => `${dist}.leases`, reapedOf = (dist) => `${dist}.gen.reaped`;
 
@@ -200,21 +209,22 @@ export function generationPath(pathname, base = '/') {
 const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
 /** Whether a swap holds `dist.lock` now (build-lock.mjs: a lock a killed build left counts for nothing). */
 const swapping = (dist) => lockHeld(`${dist}.lock`);
-/** A file of generation `id` of `dist` for a request path, read whole from that build: the current one when it is
- * still `id` after the read, else the kept tree (asked again, for up to a second, while a swap holds `dist.lock`:
- * its rename lands under it, and while a read of the current build fails with its generation unchanged, as across a
- * byte-identical swap); 'gone' for a generation reaped, 'busy' when either lasts past that second, null for no such
- * file or an id that names nothing. With `miss`, no such file is the build's page for a miss where it has one
- * (`buildTreeFile`). */
+/** A file of generation `id` of `dist` for a request path, read whole from that build: the current one when the same
+ * tree, still `id`, is in place after the read, else the kept tree (asked again, for up to a second, while a swap
+ * holds `dist.lock`: its rename lands under it, and while a read of the current build fails or is of another tree with
+ * its generation unchanged, as across a byte-identical swap); 'gone' for a generation reaped, 'busy' when either lasts
+ * past that second, null for no such file or an id that names nothing. With `miss`, no such file is the build's page
+ * for a miss where it has one (`buildTreeFile`). */
 export async function generationFile(dist, id, pathname, accept = '', { miss = false } = {}) {
   for (const end = Date.now() + 1000; ;) {
+    const tree = treeAt(dist);
     if (generationOf(dist) === id) {
       const found = await buildTreeFileAsync(dist, pathname, accept, { miss });
       if (found?.status === 503) return 'busy'; // (its route table unreadable: serve.mjs `buildTreeFile`)
       let body = null;
       try { body = found && readFileSync(found.path); } catch { /* moved */ }
       const now = generationOf(dist);
-      if (now === id && (!found || body)) return found ? { ...found, body, id } : null;
+      if (now === id && treeAt(dist) === tree && (!found || body)) return found ? { ...found, body, id } : null;
       if (now !== id) continue;
       if (Date.now() > end) return 'busy';
       await sleep(10);
@@ -268,16 +278,19 @@ export async function servedFile(dist, pathname, accept = '', { base = buildBase
     if (found === 'gone') return { status: 410, id };
     if (found === 'busy') return { status: 503 };
   } else {
-    // Read whole from one build: its generation the same before and after. Between a swap's two renames (no one-step
-    // exchange) there is no dist, and `.previous` answers with no generation: asked again until the swap is done.
+    // Read whole from one build: the same tree, and so the same generation, before and after. Between a swap's two
+    // renames (no one-step exchange) there is no dist, and `.previous` answers with no generation: asked again until
+    // the swap is done.
     for (const end = Date.now() + 1000; found === undefined; ) {
-      const id = generationOf(dist), at = await buildTreeFileAsync(dist, pathname.slice(base.length - 1) || '/', accept, { miss: true });
+      const tree = treeAt(dist), id = generationOf(dist);
+      const at = await buildTreeFileAsync(dist, pathname.slice(base.length - 1) || '/', accept, { miss: true });
       if (at?.status === 503) return { status: 503 };
       let body = null;
       try { body = at && readFileSync(at.path); } catch { /* moved */ }
       // (No dist and no swap under way: no build yet, or one a killed swap left as `.previous`, served as before.)
       const settled = realDirectory(dist) || !swapping(dist);
-      if (generationOf(dist) === id && settled && (!at || body)) found = at ? { ...at, body, id } : null;
+      const same = generationOf(dist) === id && treeAt(dist) === tree;
+      if (same && settled && (!at || body)) found = at ? { ...at, body, id } : null;
       else if (Date.now() > end) return { status: 503 };
       else await sleep(10);
     }

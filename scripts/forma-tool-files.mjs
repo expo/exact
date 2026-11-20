@@ -5,7 +5,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
 // Where `bun exact.mjs forma tool` builds the design tool (its port's build), and the wire serves it from.
 import { TOOL_DIST } from './forma-tool-port.mjs';
-import { generationFile, generationOf, generationPath, withGenerationBase } from '../host/web/generations.mjs';
+import { generationFile, generationOf, generationPath, treeAt, withGenerationBase } from '../host/web/generations.mjs';
 export { TOOL_DIST };
 const TOOL_TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.png': 'image/png', '.plan': 'application/octet-stream' };
 
@@ -59,14 +59,15 @@ export async function serveToolFiles(req, res, url, toolDir = TOOL_DIST, headers
   try { if (statSync(file).isDirectory()) file = resolve(file, 'index.html'); } catch { /* below */ }
   let bytes, generation, whole = false;
   try {
-    // Through no link out of the build, nor to a dot file in it; read whole from one build (its generation the same
-    // before and after the read, else read again).
+    // Through no link out of the build, nor to a dot file in it; read whole from one build (its tree and generation
+    // the same before and after the read, else read again).
     for (let attempt = 0; attempt < 4; attempt++) {
+      const tree = treeAt(toolDir);
       generation = generationOf(toolDir);
       const root = realpathSync(toolDir), real = realpathSync(file);
       if (!real.startsWith(root + sep) || relative(root, real).split(sep).some(s => s.startsWith('.'))) return notFound(res);
       bytes = readFileSync(real);
-      if (generationOf(toolDir) === generation) { whole = true; break; }
+      if (generationOf(toolDir) === generation && treeAt(toolDir) === tree) { whole = true; break; }
     }
   } catch {
     if (!existsSync(resolve(toolDir, 'index.html'))) return json(res, 404, { message: 'the design tool is not built: run `bun exact.mjs forma tool`' });

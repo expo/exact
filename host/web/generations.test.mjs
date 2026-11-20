@@ -13,6 +13,7 @@ import { buildTreeFile, replaceBuild, serveBuildTree } from './serve.mjs';
 import { GENERATION, foreignBeside, generationFile, generationOf, generationPath, leaseGeneration, leasedGenerations, reapGenerations, servedFile } from './generations.mjs';
 import { sitePages } from '../web-js/render.mjs';
 import { BESIDE, STAGE, beside } from './beside.mjs';
+import { serveToolFiles } from '../../scripts/forma-tool-files.mjs';
 import { fileURLToPath } from 'node:url';
 
 /** A JS-target build naming `k` in every file: its document (base `/`) and the shell beside it, its module, a lazy
@@ -133,6 +134,56 @@ test('a read that fails between the renames of a byte-identical rebuild is read 
     const page = await sitePages(dist, reading())(id, '/', () => undefined);
     expect([swapped, generationOf(dist)]).toEqual([true, id]);
     expect(page.html).toContain('build 1');
+  } finally { read?.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+});
+
+// A generation is a digest of a build's files, so the same generation before and after a read does not say the read
+// was of one tree: builds that go from A to B and back to a byte-identical A meanwhile leave it A. The tree's identity,
+// its root's device and inode, does say so. `leaveAndComeBack` makes build 2 land at the first read of the build's
+// `app.js`, reads build 2's bytes, and makes build 1 land again; the clock stands still, so that no retry's second
+// runs out however long the swaps or the first lookup take. It returns what to restore.
+function leaveAndComeBack(root, dist, stage) {
+  const original = fs.readFileSync, state = { swapped: false };
+  const clock = spyOn(Date, 'now').mockReturnValue(Date.now());
+  // (a server reads the tree's resolved path: `/private/var` for `/var` on macOS)
+  const read = spyOn(fs, 'readFileSync').mockImplementation((path, ...rest) => {
+    if (!state.swapped && String(path).endsWith(join('dist', 'app.js'))) {
+      state.swapped = true;
+      replaceBuild(stage(2), dist);
+      const bytes = original(path, ...rest);
+      replaceBuild(build(join(root, 'again'), 1), dist);
+      return bytes;
+    }
+    return original(path, ...rest);
+  });
+  return { state, mockRestore: () => { read.mockRestore(); clock.mockRestore(); } };
+}
+
+test.each([
+  ['the current build', (dist) => servedFile(dist, '/app.js')],
+  ['a generation in place', (dist, id) => generationFile(dist, id, '/app.js')],
+])('a read made while builds leave and come back is read again from the tree in place (%s)', async (_label, serve) => {
+  const { root, dist, stage } = workspace();
+  let read;
+  try {
+    replaceBuild(stage(1), dist);
+    const id = generationOf(dist);
+    read = leaveAndComeBack(root, dist, stage);
+    const served = await serve(dist, id);
+    expect([read.state.swapped, generationOf(dist), served.id, text(served)]).toEqual([true, id, id, 'build 1']);
+  } finally { read?.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('the design tool\'s file read while builds leave and come back is read again from the tree in place', async () => {
+  const { root, dist, stage } = workspace();
+  let read;
+  try {
+    replaceBuild(stage(1), dist);
+    read = leaveAndComeBack(root, dist, stage);
+    const sent = { status: null, body: null };
+    const res = { headersSent: false, writeHead: (status) => { sent.status = status; return res; }, end: (body) => { sent.body = body == null ? null : Buffer.from(body).toString(); } };
+    await serveToolFiles({ method: 'GET' }, res, new URL('http://localhost/__forma/tool/app.js'), dist);
+    expect([read.state.swapped, sent.status, sent.body]).toEqual([true, 200, 'build 1']);
   } finally { read?.mockRestore(); rmSync(root, { recursive: true, force: true }); }
 });
 

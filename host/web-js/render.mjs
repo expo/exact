@@ -11,7 +11,7 @@
 //   bun host/web-js/render.mjs <dist> --serve [--port 8830]        the site, as `serve` serves it (host/web/serve.mjs)
 import { parseFaults } from '../web/faults.js';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import vm from 'node:vm';
 import { brotliCompressSync, createBrotliCompress, constants } from 'node:zlib';
@@ -20,7 +20,7 @@ import { cachingFetch, directives, FRESH } from './http-cache.mjs';
 import { canonical, matchPattern, mountedHref, withBase } from './route-pattern.js';
 import { select, tokens } from './page-style.mjs';
 import { buildPageFiles, pageRoute, writeCrawlerFiles } from '../web/crawl.mjs';
-import { buildBase, generationOf, withGenerationBase } from '../web/generations.mjs';
+import { buildBase, generationOf, treeAt, withGenerationBase } from '../web/generations.mjs';
 import { lockHeld } from '../web/build-lock.mjs';
 
 const DEADLINE = 3000;
@@ -544,20 +544,22 @@ export function pageServer(dist, render = renderer(dist), log = console.log) {
  * whose `render=request` and `cached` routes are then served their shell. */
 export function sitePages(dist, { pageServer: makeServer = (read, id) => pageServer(dist, renderer(dist, { read, generation: id })) } = {}) {
   const swapping = () => lockHeld(dist + '.lock');
-  const identity = tree => { try { const st = statSync(tree); return st.dev + ':' + st.ino; } catch { return null; } };
   const treeOf = id => generationOf(dist) === id ? dist : resolve(dist + '.gen', id);
   // `op(tree)` on generation `id`'s tree: its answer when that tree was the generation's from before it to after it.
   // Synchronous, as the renderer's reads are; the wait is only for a swap's renames.
   const inGeneration = (id, op) => {
     if (!id) return op(dist);
     for (const end = Date.now() + 1000; ;) {
-      const tree = treeOf(id), before = identity(tree);
+      const tree = treeOf(id), before = treeAt(tree);
       let value, error = null;
       try { value = op(tree); } catch (e) { error = e; }
-      if (before && generationOf(tree) === id && identity(tree) === before) { if (error) throw error; return value; }
-      // Moved, or replaced by the same bytes: asked again where it is now. A swap moves a generation once.
-      if (treeOf(id) !== tree || (generationOf(tree) === id && identity(tree) !== before)) continue;
-      if (!swapping()) throw Object.assign(new Error(`build generation ${id} is no longer kept`), { gone: true });
+      if (before && generationOf(tree) === id && treeAt(tree) === before) { if (error) throw error; return value; }
+      // Moved: asked again where it is now, at once (a swap moves a generation once)
+      if (treeOf(id) !== tree) continue;
+      // Replaced by the same bytes: asked again within the second, as generations.mjs `generationFile` asks
+      const replaced = generationOf(tree) === id && treeAt(tree) !== before;
+      if (!replaced && !swapping())
+        throw Object.assign(new Error(`build generation ${id} is no longer kept`), { gone: true });
       if (Date.now() >= end) throw Object.assign(new Error('the build is being replaced'), { busy: true });
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
     }
