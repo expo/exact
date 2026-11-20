@@ -1000,8 +1000,16 @@ fn styled(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> N
         };
     }
     let content = cell::texts(children.iter().filter(|c| !hidden(c)).collect(), false);
-    let stack = matches!(content.as_slice(), [Node::Element { tag, children, .. }]
-        if tag == "column" && standard_text_lines(children));
+    let subtitle_column = match content.as_slice() {
+        [Node::Element {
+            tag,
+            attrs,
+            children,
+            ..
+        }] if tag == "column" && standard_text_lines(children) => Some(attrs.as_slice()),
+        _ => None,
+    };
+    let stack = subtitle_column.is_some();
     let lines = !stack
         && !attrs.iter().any(|a| {
             matches!(
@@ -1012,7 +1020,7 @@ fn styled(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> N
     // A label beside a field: the row wraps, so where both do not fit (the
     // accessibility text sizes) the field goes under the label, as in a
     // SwiftUI `Form`, rather than squeezing the label to nothing.
-    let row_padding = cell::row_padding(attrs, children, class, span);
+    let row_padding = cell::row_padding(attrs, subtitle_column, class, span);
     let field = field_beside_label(children);
     let mut sheet = vec![
         s("display", "flex", span),

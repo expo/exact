@@ -10,7 +10,8 @@ can reach past its border box with `-exact-safe-area-reach="top bottom"`.
 Use `-exact-safe-area-extend` on an image or box to mirror its picture onto
 selected edges.
 
-Use `var(--exact-layout-margins-inset-<edge>)` for UIKit’s margins, and
+Use `var(--exact-layout-margins-inset-<edge>)` for layout margins. A box reads its own unless it and the boxes above it
+set `-exact-preserves-superview-layout-margins="true"`. Use
 `var(--exact-viewport-segment-<field>-<x>-<y>)` for a fold segment in the route’s content coordinates.
 
 See [Navigation stack](navigation-stack.md) and [Foldables](foldables.md).

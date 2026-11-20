@@ -141,10 +141,7 @@ mod tests {
         assert_eq!(owner_spelling("env(keyboard-inset-height)"), None);
         assert_eq!(owner_spelling("env(titlebar-area-x)"), None);
         // A fallback is kept, a function in it whole.
-        assert_eq!(
-            owner_spelling("env(safe-area-inset-top, 0px)"),
-            None
-        );
+        assert_eq!(owner_spelling("env(safe-area-inset-top, 0px)"), None);
         assert_eq!(
             owner_spelling("calc(env(viewport-segment-width 0 0, calc(50% - 1px)) + 2px)")
                 .as_deref(),
