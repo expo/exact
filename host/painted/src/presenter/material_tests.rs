@@ -1305,6 +1305,12 @@ const LABELS: &str = r##"component App
         text "Bookmark all"
       button buttonStyle="tinted" disabled=true testId="tonal-off"
         text "Bookmark all"
+      button buttonStyle="filled" testId="filled-icon"
+        image "symbol:add"
+        text "Bookmark all"
+      button buttonStyle="plain" testId="text-icon"
+        image "symbol:add"
+        text "Bookmark all"
 "##;
 
 /// A labelled button is Material's for its emphasis (LLP 1115.001 D9): a
@@ -1352,6 +1358,10 @@ fn materials_labelled_buttons_take_their_emphasis() {
     assert_eq!(inside(&mut p, "text"), page, "no container");
     let text = rect(&mut p, "text");
     assert_eq!(text.2, outlined.2 - 24.0, "TextButtonContentPadding");
+    // An 18 dp icon 8 dp from the title; 16 dp beside it, or 12 and 16 for
+    // a text button (`…WithIconContentPadding`).
+    assert_eq!(rect(&mut p, "filled-icon").2, outlined.2 + 18.0);
+    assert_eq!(rect(&mut p, "text-icon").2, text.2 + 30.0);
     let accent = crate::paint::control::accents(None, false).0;
     let frame = (*p.frame()).clone();
     let at = |v: f32| (v * 2.4375) as u32;
