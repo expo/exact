@@ -125,6 +125,9 @@ package class ScrollView: UIScrollView {
     /// Records that its offset is kept under `inset`, as D14's writer keeps it, so the reaction to
     /// the writer's insets keeps nothing again.
     package func kept(under inset: UIEdgeInsets) { keptInset = inset }
+    /// Keeps `restsAtEnd` as it was across a change of its bounds' height by `growth` that moves no
+    /// inset, as reach makes (`setReach`), until D14's writer keeps the offset under its insets.
+    package func boundsGrew(by growth: CGFloat) { keptInset.bottom += growth }
     package override var accessibilityElements: [Any]? {
         get {
             super.accessibilityElements ?? scrollingNode?.presenter?.navigation.lifted?.accessibilityElements(of: self)
@@ -398,6 +401,7 @@ extension NodeView {
         }
         guard extras?.nativeScrollView !== view else { return }
         if pageBand != .zero { setPageBand(.zero) } // the scroll view leaving gives its band back (LLP 1130 D3)
+        if reach != .zero { setReach(.zero) } // and its reach (LLP 1123 D13)
         more.nativeScrollView = view
         more.nativeScrollDelegate = view?.delegate
         if scrollView == nil { presenter?.scrollers.remove(id) }
@@ -430,7 +434,7 @@ extension NodeView {
         guard hiddenScroll == nil else { return }
         let authored = extras?.pendingScrollTransfer != true && (pendingScrollTop != nil || pendingScrollLeft != nil)
         if pendingScrollTop == nil { pendingScrollTop = Double(view.contentOffset.y + scrollTopInset(view)) }
-        if pendingScrollLeft == nil { pendingScrollLeft = Double(view.contentOffset.x) }
+        if pendingScrollLeft == nil { pendingScrollLeft = Double(view.contentOffset.x + scrollLeftInset(view)) }
         more.pendingScrollTransfer = !authored
         presenter?.pendingScrolls.insert(id)
     }
@@ -445,7 +449,7 @@ extension NodeView {
         // UIKit may have pending row geometry and its own offset adjustment.
         // Snapshot both from the same layout before preserving the reader.
         if groupedOwner { scrollView?.layoutIfNeeded() }
-        beforeLayoutScroll = scrollView.map { ($0.contentOffset, scrollTopInset($0)) }
+        beforeLayoutScroll = scrollView.map { ($0.contentOffset, scrollTopInset($0), scrollLeftInset($0)) }
         followedScroll = nil
         readingAnchors.removeAll(keepingCapacity: true)
         scrollAnchor = nil
@@ -595,7 +599,7 @@ extension NodeView {
         if pendingScrollTop != nil { retainedScrollTop = nil }
         guard hasScrollLayoutBox else {
             if hiddenScroll == nil {
-                hiddenScroll = beforeLayoutScroll.map { CGPoint(x: $0.offset.x, y: $0.offset.y + $0.topInset) } ?? .zero
+                hiddenScroll = beforeLayoutScroll.map { CGPoint(x: $0.offset.x + $0.leftInset, y: $0.offset.y + $0.topInset) } ?? .zero
             }
             return
         }
@@ -623,7 +627,8 @@ extension NodeView {
             // CSS ends where a large title rests collapsed.
             let slack = titleSlack && scrollOrigin > 0 ? max(0, i.top - scrollCollapsed) : 0
             let y = top.map { CGFloat($0) - inset == sv.contentOffset.y ? sv.contentOffset.y : min(max(CGFloat($0) - inset, -i.top), max(-i.top, sv.contentSize.height + i.bottom - sv.bounds.height - slack)) } ?? sv.contentOffset.y
-            let x = left.map { CGFloat($0) == sv.contentOffset.x ? sv.contentOffset.x : min(max(CGFloat($0), -i.left), max(-i.left, sv.contentSize.width + i.right - sv.bounds.width)) } ?? sv.contentOffset.x
+            let leftInset = scrollLeftInset(sv)
+            let x = left.map { CGFloat($0) - leftInset == sv.contentOffset.x ? sv.contentOffset.x : min(max(CGFloat($0) - leftInset, -i.left), max(-i.left, sv.contentSize.width + i.right - sv.bounds.width)) } ?? sv.contentOffset.x
             // On the pixel grid inside the range, so the content it scrolls
             // stays on it and UIKit does not clamp it off (`PixelGridIOS.swift`).
             let s = presenter?.gridScale ?? 1

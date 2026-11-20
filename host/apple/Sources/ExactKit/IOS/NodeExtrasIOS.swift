@@ -173,7 +173,7 @@ final class NodeExtras {
     var lastScrollEvent: [Double] = []
     var dispatchingScrollEvent: Bool = false
     var scrollEnd: ScrollEnd?
-    var beforeLayoutScroll: (offset: CGPoint, topInset: CGFloat)?
+    var beforeLayoutScroll: (offset: CGPoint, topInset: CGFloat, leftInset: CGFloat)?
     /// Logical coordinates survive hiding and physical backend replacement.
     var hiddenScroll: CGPoint?
     var followedScroll: (top: CGFloat, end: Bool, start: Bool)?
@@ -217,6 +217,9 @@ final class NodeExtras {
     var pageBand = UIEdgeInsets.zero
     /// The part of the band its scroll view's `contentInset` holds (LLP 1131 D2).
     package var bandInset = UIEdgeInsets.zero
+    /// How far D13's reach outsets its scroll view past its box on each edge, as the kernel's
+    /// terms give it (LLP 1123 D13); D14's writer holds the insets that go with it.
+    var reach = UIEdgeInsets.zero
     /// The bottom inset a keyboard toolbar gives its scroll view (`KeyboardToolbarIOS.swift`).
     var keyboardInset: CGFloat = 0
     /// A control bar over a scroller's content (LLP 1131 D3, D4): the scroller's paint rank, which it is placed
@@ -458,7 +461,7 @@ extension NodeView {
     var lastScrollEvent: [Double] { get { extras?.lastScrollEvent ?? [] } set { if !newValue.isEmpty || extras != nil { more.lastScrollEvent = newValue } } }
     var dispatchingScrollEvent: Bool { get { extras?.dispatchingScrollEvent ?? false } set { if newValue || extras != nil { more.dispatchingScrollEvent = newValue } } }
     var scrollEnd: ScrollEnd? { get { extras?.scrollEnd } set { if newValue != nil || extras != nil { more.scrollEnd = newValue } } }
-    var beforeLayoutScroll: (offset: CGPoint, topInset: CGFloat)? { get { extras?.beforeLayoutScroll } set { if newValue != nil || extras != nil { more.beforeLayoutScroll = newValue } } }
+    var beforeLayoutScroll: (offset: CGPoint, topInset: CGFloat, leftInset: CGFloat)? { get { extras?.beforeLayoutScroll } set { if newValue != nil || extras != nil { more.beforeLayoutScroll = newValue } } }
     var hiddenScroll: CGPoint? { get { extras?.hiddenScroll } set { if newValue != nil || extras != nil { more.hiddenScroll = newValue } } }
     var followedScroll: (top: CGFloat, end: Bool, start: Bool)? { get { extras?.followedScroll } set { if newValue != nil || extras != nil { more.followedScroll = newValue } } }
     var followingEndAnimated: Bool { get { extras?.followingEndAnimated ?? false } set { if newValue || extras != nil { more.followingEndAnimated = newValue } } }
@@ -510,6 +513,19 @@ extension NodeView {
     }
     /// Its page band (`NodeExtras.pageBand`), zero for most.
     package var pageBand: UIEdgeInsets { extras?.pageBand ?? .zero }
+    /// Its reach (`NodeExtras.reach`), zero until activation applies the kernel's.
+    package var reach: UIEdgeInsets { extras?.reach ?? .zero }
+    /// How far its scroll view lies past its box on each edge: its page band's top and bottom, or
+    /// its reach, whichever is larger, the page band reaching no side.
+    package var scrollOutset: UIEdgeInsets {
+        let band = pageBand, reach = reach
+        return UIEdgeInsets(top: max(band.top, reach.top), left: reach.left, bottom: max(band.bottom, reach.bottom), right: reach.right)
+    }
+    /// Where CSS's `scrollLeft` 0 is in UIKit's offsets: past the scroller's left inset when UIKit
+    /// insets it, or past native content room, as `scrollTopInset` is for `scrollTop`.
+    package func scrollLeftInset(_ sv: UIScrollView) -> CGFloat {
+        sv.contentInsetAdjustmentBehavior != .never ? sv.adjustedContentInset.left : extras?.nativeScrollContentInsets.left ?? 0
+    }
     package var bandInset: UIEdgeInsets { extras?.bandInset ?? .zero }
     var bandOver: Int64? { get { extras?.bandOver } set { if newValue != nil || extras != nil { more.bandOver = newValue } } }
     var edgeInteraction: AnyObject? { get { extras?.edgeInteraction } set { if newValue != nil || extras != nil { more.edgeInteraction = newValue } } }
@@ -529,8 +545,11 @@ extension NodeView {
         return x ? point.x >= box.minX + widths[3] && point.x <= box.maxX - widths[1]
             : point.y >= box.minY + widths[0] && point.y <= box.maxY - widths[2]
     }
-    /// Its scroll view's frame: its bounds, and the band past them.
-    package var scrollFrame: CGRect { bounds.inset(by: UIEdgeInsets(top: -pageBand.top, left: 0, bottom: -pageBand.bottom, right: 0)) }
+    /// Its scroll view's frame: its bounds, and the band or reach past them.
+    package var scrollFrame: CGRect {
+        let o = scrollOutset
+        return bounds.inset(by: UIEdgeInsets(top: -o.top, left: -o.left, bottom: -o.bottom, right: -o.right))
+    }
     /// Native padding and footer space are content, unlike a bar or keyboard.
     package func scrollPortInsets(_ sv: UIScrollView) -> UIEdgeInsets {
         let inset = sv.adjustedContentInset, content = extras?.nativeScrollContentInsets ?? .zero
@@ -553,8 +572,14 @@ extension NodeView {
     /// collection view's does, not by the whole keyboard.
     package func scrollFloor(_ sv: UIScrollView) -> CGFloat {
         let keyboard = extras?.keyboardInset ?? 0
-        guard case .inset(let top, let bottom)? = presenter?.navigation.covers[id] else { return max(0, sv.bounds.height - pageBand.top - pageBand.bottom - keyboard) }
-        return max(0, sv.bounds.height - top - bottom - pageBand.top - pageBand.bottom - keyboard)
+        let o = scrollOutset
+        guard case .inset(let top, let bottom)? = presenter?.navigation.covers[id] else { return max(0, sv.bounds.height - o.top - o.bottom - keyboard) }
+        return max(0, sv.bounds.height - top - bottom - o.top - o.bottom - keyboard)
+    }
+    /// The least content width UIKit takes: the box's width, the scroll view's less its side reach.
+    package func scrollFloorWidth(_ sv: UIScrollView) -> CGFloat {
+        let o = scrollOutset
+        return max(0, sv.bounds.width - o.left - o.right)
     }
 }
 extension UIColor {

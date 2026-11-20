@@ -375,7 +375,7 @@ package final class ArrangementHost {
             let saved = pendingTops.removeValue(forKey: id)
             if hiddenPanes.contains(id), let node {
                 let top = node.pendingScrollTop.map { CGFloat($0) } ?? saved ?? (scroll.contentOffset.y + node.scrollTopInset(scroll))
-                node.hiddenScroll = CGPoint(x: scroll.contentOffset.x, y: top)
+                node.hiddenScroll = CGPoint(x: scroll.contentOffset.x + node.scrollLeftInset(scroll), y: top)
             }
             if let node, presenter.navigation.routeSurfaces.values.contains(where: { $0.collapseScroll === node || $0.edgeScroll === node }) { continue }
             let top = scroll.contentOffset.y + (node?.scrollTopInset(scroll) ?? scroll.adjustedContentInset.top)

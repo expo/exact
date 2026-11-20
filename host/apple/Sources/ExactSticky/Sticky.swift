@@ -130,10 +130,11 @@ final class StickyHost: StickyHosting {
         guard v.superview === presenter.root else { return .zero }
         let page = presenter.viewport.contentView.bounds.origin
         #else
-        // CSS's scrollTop: past the inset UIKit gives it under a bar, or a
-        // page band (LLP 1130 D3), so `top: 0` sticks at the bar's bottom, as
-        // under a web page's header in flow and as UIKit pins a header.
-        if let sv = v.scrollView { return CGPoint(x: sv.contentOffset.x, y: sv.contentOffset.y + v.scrollTopInset(sv)) }
+        // CSS's scrollLeft and scrollTop: past the insets UIKit gives it under
+        // a bar, a page band (LLP 1130 D3) or a side band, so `top: 0` sticks
+        // at the bar's bottom, as under a web page's header in flow and as
+        // UIKit pins a header.
+        if let sv = v.scrollView { return CGPoint(x: sv.contentOffset.x + v.scrollLeftInset(sv), y: sv.contentOffset.y + v.scrollTopInset(sv)) }
         // A block its host scrolls (a dialog in its sheet's scroller): how far
         // the scroller's port has moved past the block's top.
         if let sv = v.superview as? UIScrollView {

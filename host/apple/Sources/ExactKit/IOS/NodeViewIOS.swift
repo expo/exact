@@ -735,7 +735,8 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         // The kernel's authored frames already include this content room.
         // Keep the physical UI inset basis, but do not count native padding twice.
         let room = extras?.nativeScrollContentInsets ?? .zero
-        presenter.onScrolled?(id, Double(scrollView.contentOffset.x + room.left), Double(scrollView.contentOffset.y + room.top + pageBand.top))
+        let outset = scrollOutset
+        presenter.onScrolled?(id, Double(scrollView.contentOffset.x + room.left + outset.left), Double(scrollView.contentOffset.y + room.top + outset.top))
         presenter.stickies.scrolled(id); presenter.collections.changed(id, user: true, sequenceAdvanced: true)
         #if os(iOS)
         if swipeOwner, scrollView.isTracking { presenter.swipeActions.paintedScrolled(self) }
@@ -762,13 +763,13 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     func sendScrollEvent() {
         guard handlers.contains("scroll"), let sv = scrollView,
               presenter?.views[id] === self, hasScrollLayoutBox else { return }
-        let point = sv.contentOffset, top = scrollTopInset(sv)
+        let left = scrollLeftInset(sv), top = scrollTopInset(sv), point = CGPoint(x: sv.contentOffset.x + left, y: sv.contentOffset.y)
         // CSS's extents (`ScrollEvent`): the port inside UI insets (native
         // padding and footer room remain content), and the
         // port plus the range UIKit clamps a settled offset to, so at the
         // end `scrollHeight - scrollTop - clientHeight` is 0 (chat F4).
         let inset = sv.adjustedContentInset, port = scrollPort(sv).size
-        let range = CGSize(width: max(0, sv.contentSize.width + inset.right - sv.bounds.width),
+        let range = CGSize(width: max(0, sv.contentSize.width + inset.right - sv.bounds.width + left),
                            height: max(0, sv.contentSize.height + inset.bottom - sv.bounds.height + top))
         // A zoomable scroller adds its zoom (LLP 1057.001.000 D2).
         let zoom = extras?.zoom, event = ([point.x, point.y + top, port.width + range.width, port.height + range.height, port.width, port.height]
@@ -867,11 +868,12 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
             // CSS visible overflow remains hit-testable. A row in a horizontal
             // scroll can paint children beyond its own width; rejecting the
             // parent box first made those visible choices impossible to tap.
-            // A scroller's scroll view reaching into the page's bands takes them too (LLP 1130 D3).
-            let band = scrollView == nil ? .zero : pageBand
+            // A scroller's scroll view drawn past its box, into the page's bands or by reach, takes
+            // touches there too (LLP 1130 D3, LLP 1123 D13).
+            let outset = scrollView == nil ? .zero : scrollOutset
             let box = surface?.frame ?? bounds
-            let outsideX = point.x < box.minX || point.x > box.maxX
-            let outsideY = point.y < box.minY - band.top || point.y > box.maxY + band.bottom
+            let outsideX = point.x < box.minX - outset.left || point.x > box.maxX + outset.right
+            let outsideY = point.y < box.minY - outset.top || point.y > box.maxY + outset.bottom
             if outsideX && (style["overflow_x"]?.string ?? "visible") != "visible" { return nil }
             if outsideY && (style["overflow_y"]?.string ?? "visible") != "visible" { return nil }
             let passesThrough = style["pointer_events"]?.string == "none" || cssVisibilityHidden && !inlineRunShows(at: point)
@@ -1283,6 +1285,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         if scrolls { syncClipBox(false) }
         if scrolls && scroll == nil && !scrollWaits && !groupedOwner {
             if pageBand != .zero, extras?.nativeScrollView != nil { setPageBand(.zero) } // the list leaving keeps its scrollTop
+            if reach != .zero, extras?.nativeScrollView != nil { setReach(.zero) }
             let sv = ScrollView(frame: bounds)
             sv.backgroundColor = .clear
             sv.contentInsetAdjustmentBehavior = .never
@@ -1295,7 +1298,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
                 for child in children { sv.addSubview(child) }
             }
             scroll = sv
-            if pageBand != .zero || bandInset != .zero { more.pageBand = .zero; more.bandInset = .zero } // a new scroll view reaches no band until asked (LLP 1130 D3)
+            if pageBand != .zero || bandInset != .zero || reach != .zero { more.pageBand = .zero; more.bandInset = .zero; more.reach = .zero } // a new scroll view reaches no band, and has no reach, until asked (LLP 1130 D3, LLP 1123 D13)
             scrollWritten = nil
             updateRefresh()
             presenter?.navigation.scrollBackendChanged(self)
@@ -1310,7 +1313,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
                 if presenter?.navigation.container === self { presenter?.navigation.fitOwner() }
                 sv.removeFromSuperview()
             }
-            if pageBand != .zero || bandInset != .zero { more.pageBand = .zero; more.bandInset = .zero }
+            if pageBand != .zero || bandInset != .zero || reach != .zero { more.pageBand = .zero; more.bandInset = .zero; more.reach = .zero }
         }
         scroll?.scrollsX = (ox == "scroll" || ox == "auto")
         scroll?.scrollsY = (oy == "scroll" || oy == "auto")
@@ -1355,14 +1358,16 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         // Ending where its last edge is drawn, from this box's place on the
         // pixel grid, so the furthest offset is a whole pixel and reaches it (`PixelGridIOS.swift`).
         let s = presenter?.gridScale ?? 1, o = grid?.origin ?? .zero, content = zoomExtent ?? self.content
-        let size = CGSize(width: sv.scrollsX ? max(PixelGrid.length(content.width, from: o, vertical: false, scale: s), sv.bounds.width) : sv.bounds.width,
-                          height: sv.scrollsY ? max(PixelGrid.length(content.height, from: o, vertical: true, scale: s), scrollFloor(sv)) : sv.bounds.height)
+        // The box: the scroll view less what it is drawn past the box
+        let outset = scrollOutset, box = CGSize(width: scrollFloorWidth(sv), height: max(0, sv.bounds.height - outset.top - outset.bottom))
+        let size = CGSize(width: sv.scrollsX ? max(PixelGrid.length(content.width, from: o, vertical: false, scale: s), box.width) : box.width,
+                          height: sv.scrollsY ? max(PixelGrid.length(content.height, from: o, vertical: true, scale: s), scrollFloor(sv)) : box.height)
         if sv.contentSize != size { sv.contentSize = size }
         // Forced bounce on a carousel's computed y traps Mac wheel input; one travels a quarter of its width or lays a
         // row (itself, or a child wider than the port), and a page a few points too wide keeps its bounce.
-        let travel = size.width - sv.bounds.width
+        let travel = size.width - box.width
         let row = { (v: NodeView) in v.style["display"]?.string == "flex" || v.style["flex_direction"] != nil ? !(v.style["flex_direction"]?.string ?? "row").hasPrefix("column") : false }
-        let carousel = travel > 0.5 && (travel > sv.bounds.width / 4 || row(self) || sv.subviews.contains { ($0 as? NodeView).map { $0.frame.width > sv.bounds.width + 0.5 && row($0) } ?? false })
+        let carousel = travel > 0.5 && (travel > box.width / 4 || row(self) || sv.subviews.contains { ($0 as? NodeView).map { $0.frame.width > box.width + 0.5 && row($0) } ?? false })
         // One that fits inside an author's scroller that scrolls down leaves
         // the drag to it, as a nested UIScrollView does (an `EmptyState` in a
         // page's `scroll`). The presenter's viewport is no author's.
