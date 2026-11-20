@@ -1068,6 +1068,46 @@ test('web builds expose their version inputs in the view and delivery state', as
   } finally { await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true }); }
 }, 60000);
 
+// A resource idle at boot adopts nothing compiled, so it shows its placeholder, not its build-time answer, as the runner
+// does (LLP 1161.002 D4); at a boot from a rendered page it keeps the page's answer (§7). Both ask nothing. Woken while
+// its source is not ready, a root resource shows its build-time answer, as the runner adopts a compiled value then; an
+// instance, which the runner adopts nothing for after the boot, shows its placeholder.
+test('a resource idle at boot shows its placeholder over a build-time answer, and keeps a page\'s', async () => {
+  const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    const boot = await page.evaluate(async () => {
+      const cp = document.createElement('script');
+      cp.type = 'application/vnd.exact.checkpoint';
+      cp.textContent = JSON.stringify({ location: '/', answers: [['kept', 'echo', [], 'page answer']] });
+      document.head.append(cp);
+      const rt = await import('/host/web-js/rt.js');
+      // the source is not ready: nothing is asked
+      const requests = [];
+      rt.data.answer = (source, args) => {
+        requests.push([source, args]);
+        return undefined;
+      };
+      // the gate a persisted state closes at boot, opened later
+      const open = rt.sig(false);
+      const gated = () => Object.assign(() => [], { gate: () => open() });
+      const built = rt.res('built', 'echo', gated(), 'build-time', [], 's', 'waiting');
+      const kept = rt.res('kept', 'echo', gated(), 'build-time', [], 's', 'waiting');
+      // an instance, named by its path before it is first read, as each.js `own` names it
+      const instance = rt.res('instance', 'echo', gated(), 'build-time', [], 's', 'waiting');
+      instance.r.path = 'Book#1';
+      rt.mount(root => rt.hd(root, { headTitle: () => built() + kept() + instance() }));
+      const atBoot = { shown: [built(), kept(), instance()], asked: requests.length };
+      rt.commit(() => rt.W(open, true));
+      return { atBoot, woken: [built(), built.p(), instance(), instance.p()] };
+    });
+    expect(boot).toEqual({
+      atBoot: { shown: ['waiting', 'page answer', 'waiting'], asked: 0 },
+      woken: ['build-time', false, 'waiting', true],
+    });
+  } finally { await browser.close(); server.stop(true); }
+}, 30000);
+
 // A build-time answer stands in until an answer lands, one asked at newer arguments included, and is journaled so at
 // the ask and when the answer lands (LLP 1102 §3.17, the runner's `revalidated`), a store reader's too, which names no
 // arguments; a placeholder is no build-time answer, so a store reader that shows one says neither line: one with

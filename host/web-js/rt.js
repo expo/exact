@@ -979,7 +979,7 @@ export const Store = {
 // A release build's DEVELOPMENT_STORE is null: it inspects nothing, and its bundle drops the inspection's code.
 export const Inspections = DEVELOPMENT_STORE
   ? resourceInspection(true, () => clock.now)
-  : { track() {}, begin() {}, placeholder() {}, take() {}, fail() {} };
+  : { track() {}, begin() {}, placeholder() {}, stoodIn() {}, take() {}, fail() {} };
 // Requests in flight, for the agent's `clock settle`.
 export const inflight = { n: 0 };
 // A development build's only: the dev page's hold asks for it so, as a bundled page serves no rt.js; not on `exact`,

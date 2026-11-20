@@ -41,7 +41,7 @@ import {
   Origin,
   Invocation,
 } from './rt.js';
-import { checkpoint, READER, keptAnswer } from './mount.js';
+import { booting, checkpoint, READER, keptAnswer } from './mount.js';
 /** Resource instances, including list members; list aggregates have no entry. */
 export const Resources = [];
 let ResourceIndex = 0;
@@ -248,10 +248,16 @@ export function res(
     r.value = v;
     Inspections.placeholder(r);
   };
-  // `id`: the call arguments, `with` aside (`current`, LLP 1161.001); `asleep`: a closed `when`, the value kept and no
-  // answer, a request let go but an upload's (LLP 1161.002 D2)
+  // `id`: the call arguments, `with` aside (`current`, LLP 1161.001); `asleep`: a closed `when`, the value kept (but a
+  // build-time one at boot, D4) and no answer, a request let go but an upload's (LLP 1161.002 D2)
   const id = a => a?.slice(0, Math.max(0, a.length - r.context)),
     asleep = () => {
+      // Show the placeholder over a build-time answer while the runtime boots: a resource idle at boot adopts nothing
+      // compiled (LLP 1161.002 D4); a page's answer stays (§7).
+      if (booting() && r.stand === 'build') {
+        r.value = r.settled = undefined;
+        r.stand = null;
+      }
       r.asleep = r.slept = true;
       r.forced = r.rev = r.reconciling = false;
       if (!r.ticket?.upload) release();
@@ -510,6 +516,17 @@ export function res(
         // Not ready (Rust loads after first paint): the bake's answer stands, not pending, asked at `ready` as at
         // data_ready (review B3); another compiled value stands, stale, forced then (LLP 1027 D4). That ask's refusal
         // fails it, not the commit; a commit refused otherwise is followed by one failing it.
+        // Show the build-time answer again for a root resource the boot passed over: the runner adopts a compiled
+        // value while its source is not ready, but for an instance (one with a `path`, each.js `own`) after the boot.
+        // Showing its placeholder with no answer taken, it is still the one the boot passed over, as a source once
+        // ready is never not ready again.
+        if (r.path === undefined && !kept && !carried && initial !== undefined && r.stand === null && r.placeholder) {
+          r.value = initial;
+          r.settled = initialArgs;
+          r.stand = 'build';
+          r.placeholder = false;
+          Inspections.stoodIn(r);
+        }
         const shown = baked && eq(a, r.settled);
         r.launch = !forced && waited !== false;
         if (!shown) {

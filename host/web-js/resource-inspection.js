@@ -39,6 +39,8 @@ export function resourceInspection(enabled, now) {
     // `asks`: how often its source was asked, which `perf` reports (LLP 1146 D3); kept off `inspection`, which a refused commit puts back.
     begin(r) { if (r.inspection) { r.inspection.request = ++serial; r.asks = (r.asks ?? 0) + 1; } },
     placeholder(r) { if (r.inspection) r.inspection.placeholder = true; },
+    // a build-time answer shown again in its placeholder's place (resources.js)
+    stoodIn(r) { if (r.inspection) r.inspection.placeholder = false; },
     take(r, generation = r.inspection?.request) {
       if (r.inspection) Object.assign(r.inspection, { successful: generation, displayed: generation, fallback: false, placeholder: false });
     },
