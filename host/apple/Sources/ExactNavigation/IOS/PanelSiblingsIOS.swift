@@ -209,13 +209,15 @@ final class PanelSiblings: LiftedNodes {
 
     /// Whether `box` is beside the routes: no route's box meets it where CSS lays the routes out
     /// (`routes`), so the web shows it, and the routes' views (`drawn`), which UIKit may size to
-    /// the page, do not cover it, or cover it only to their side, where the container's safe area
-    /// clears them of it (`NavigationHost.sideReach`). A row above or below routes drawn over the
-    /// whole page is not beside them: the native bars span the page there and keep their place
-    /// over it.
+    /// the page, do not cover it, or cover it only where the container's safe area clears them of
+    /// it: to their side, or above them all (`NavigationHost.reach`). A row below routes drawn
+    /// over the whole page is not beside them: the tab bar spans the page there and keeps its
+    /// place over it.
     static func beside(_ box: CGRect, _ routes: [CGRect], drawn: [CGRect]) -> Bool {
         guard !routes.contains(where: { $0.intersects(box) }) else { return false }
+        let top = routes.map(\.minY).min() ?? .infinity
         return !drawn.contains { $0.intersects(box) } || routes.contains { $0.minY < box.maxY && $0.maxY > box.minY }
+            || box.maxY <= top + 0.5
     }
 
     func recordedIDs(of parent: NodeView) -> [UInt32]? { records[parent.id] }
