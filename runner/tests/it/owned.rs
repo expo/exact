@@ -4,7 +4,8 @@
 use exact_kernel::Kernel;
 use exact_plan::Value;
 use exact_runner::{
-    agent, Answer, DataError, DataSource, Event, Outcome, Request, Response, Runner, Store,
+    agent, Answer, Checkpoint, DataError, DataSource, Event, Outcome, Request, Response, Runner,
+    Store,
 };
 
 /// `subjectWorks(s)` answers later, with `s` as its one work; `isbn(x)`
@@ -522,6 +523,58 @@ fn an_instance_under_a_gate_closed_at_boot_sleeps_on_its_page_s_answer() {
     // Waking asks it, once (LLP 1161.002 D3)
     r.act("resume", vec![]).unwrap();
     assert_eq!(r.data().asks, ["subjectWorks(1)"]);
+}
+
+/// An instance that a boot from a rendered page asks again is asked as the
+/// launch's own ask, and the launch's no more once the boot stands: when its
+/// gate closes and opens again, its wake is forced (LLP 1161.002 D3), as a
+/// declared resource's is.
+#[test]
+fn an_instance_asked_again_at_boot_wakes_forced_after_it() {
+    let source = BOOKS
+        .replace(
+            "component App\n",
+            "component App\n  state on = true\n  action pause\n    on = false\n  action resume\n    on = true\n",
+        )
+        .replace("Book(id=e.params.id)", "Book(id=e.params.id, on=on)")
+        .replace("    id: string\n", "    id: string\n    on: bool\n")
+        .replace("subjectWorks(id) as", "subjectWorks(id) when on as");
+    let plan = contract::compile(&source).unwrap();
+    let mut rendered = Runner::boot(
+        plan.clone(),
+        Works::default(),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/book/1",
+    )
+    .unwrap();
+    assert_eq!(land(&mut rendered), 1);
+    let checkpoint = Checkpoint {
+        open: vec![0],
+        ..rendered.document_checkpoint("/book/1")
+    };
+    assert_eq!(checkpoint.answers.len(), 1, "{:?}", checkpoint.answers);
+    let mut r = Runner::boot_checkpoint(
+        plan,
+        Works::default(),
+        Kernel::with_monospace(),
+        &checkpoint,
+        Vec::new(),
+        Default::default(),
+        Default::default(),
+        "/book/1",
+    )
+    .unwrap();
+    assert_eq!(text(&r, "book-1").as_deref(), Some("1: 1"));
+    let asked = r.take_requests();
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    assert!(!asked[0].forced, "the launch's own ask");
+    r.fulfill(asked[0].ticket, ok()).unwrap();
+    r.act("pause", vec![]).unwrap();
+    r.act("resume", vec![]).unwrap();
+    let woken = r.take_requests();
+    assert_eq!(woken.len(), 1, "{woken:?}");
+    assert!(woken[0].forced, "a wake asks forced");
 }
 
 /// The agent's `state` names a child's resources and lists each instance's
