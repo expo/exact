@@ -5,9 +5,6 @@
   "id": "com.exact.carousel",
   "start_url": "/",
   "display": "standalone",
-  "theme_color": "#ffffff",
-  "background_color": "#ffffff",
-  "color_scheme_dark": { "background_color": "#000000" },
   "app": {
     "id": "com.exact.carousel",
     "name": "Carousel"

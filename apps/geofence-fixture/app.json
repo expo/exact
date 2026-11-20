@@ -5,7 +5,6 @@
   "id": "com.exact.geofencefixture",
   "start_url": "/",
   "display": "standalone",
-  "theme_color": "#ffffff",
   "app": {
     "id": "com.exact.geofencefixture",
     "name": "Geofence Fixture"

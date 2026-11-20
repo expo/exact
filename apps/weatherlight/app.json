@@ -2,7 +2,7 @@
   "$schema": "../../scripts/app.schema.json",
   "name": "Weatherlight", "short_name": "Weatherlight", "id": "com.exact.weatherlight",
   "start_url": "/", "display": "standalone",
-  "theme_color": "#102839", "background_color": "#f4f5f2",
+  "theme_color": "#102839",
   "app": { "id": "com.exact.weatherlight", "name": "Weatherlight" },
   "host": {
     "ios": { "minimumOS": "17.0", "deviceFamily": ["iphone", "ipad"] },

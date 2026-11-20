@@ -6,9 +6,6 @@
   "start_url": "/",
   "display": "standalone",
   "audio_session": "playback",
-  "theme_color": "#ffffff",
-  "background_color": "#ffffff",
-  "color_scheme_dark": { "background_color": "#000000" },
   "app": {
     "id": "com.exact.recorder",
     "name": "Recorder"
