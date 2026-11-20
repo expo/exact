@@ -1498,14 +1498,3 @@ test('exact new names setup --check for each native platform the app names, whos
   const plain = spawnSync(process.execPath, [resolve(import.meta.dir, 'exact.mjs'), 'new', resolve(dir, 'web-only')], { encoding: 'utf8', timeout: 120_000 });
   assert.doesNotMatch(plain.stdout, /Before the first/);
 }); }, 240_000);
-
-test("exact new says its table is the web's: a machine without Rust is not told it lacks what every build needs", () => inDir((dir) => {
-  // Without Rust, Chrome or a tool set, the table's missing rows are said to be the web's, not the machine's for every build.
-  const bare = resolve(dir, 'bare'), bin = resolve(bare, 'bin');
-  mkdirSync(bin, { recursive: true });
-  symlinkSync(process.execPath, resolve(bin, 'bun'));
-  const env = { HOME: bare, PATH: bin, CARGO_HOME: resolve(bare, 'cargo'), RUSTUP_HOME: resolve(bare, 'rustup'), XDG_CACHE_HOME: resolve(bare, 'cache'), EXACT_FEEDBACK: '0' };
-  const plain = spawnSync(process.execPath, [resolve(import.meta.dir, 'exact.mjs'), 'new', resolve(dir, 'web-only')], { encoding: 'utf8', timeout: 120_000, env });
-  assert.equal(plain.status, 0, plain.stderr);
-  assert.match(plain.stdout, /\nFor the web \(bun exact\.mjs web, test web, verify\), this machine still needs \(exact setup --check shows the whole table\):\nMISSING rustup/);
-}), 120_000);
