@@ -17,10 +17,13 @@
 //! `TapIndicationDelay`), so a touch that a scroller takes within it shows
 //! none; one that lifts sooner shows at its lift.
 //!
-//! A ripple is painted per frame from the host's clock. With animations
-//! removed (`prefers-reduced-motion`, as Android's "Remove animations"
-//! ends an animator at once) and on the agent's clock, a press is the wave
-//! at rest, `p = 0.5`, and a release takes it away.
+//! A ripple is painted per frame from the host's clock. Where the reader
+//! plays the host's layers (Android), a moving one is instead a layer it
+//! plays (LLP 1172.023.002): the wave at full progress, recorded once, and
+//! its opacity, offset and scale as tracks, so it asks for no frames.
+//! With animations removed (`prefers-reduced-motion`, as Android's "Remove
+//! animations" ends an animator at once) and on the agent's clock, a press
+//! is the wave at rest, `p = 0.5`, and a release takes it away.
 use super::{gradient::GradientPaint, Backend, Painter, Rect4, Shape};
 use exact_kernel::gradient::Geometry;
 use exact_kernel::{Color, NodeKey, NodeRef, NodeType, ViewId};
@@ -39,6 +42,8 @@ const EXTRA_RADIUS: f32 = 10.0;
 const MARK_LAYER: f32 = 40.0;
 /// `RippleShader.setRadius`: the shader's radius is the ripple's times this.
 const SPREAD: f32 = 2.3;
+/// The longest step between a played ripple's samples, ms.
+const SAMPLE_MS: f64 = 15.0;
 
 /// One press's ripple.
 #[derive(Clone, Copy, Debug)]
@@ -50,6 +55,10 @@ pub(crate) struct Ripple {
     released: Option<f64>,
     /// The paint drew it on its node.
     drawn: bool,
+    /// The reader plays it: it asks for no frames.
+    played: bool,
+    /// The paint recorded its layer.
+    layered: bool,
 }
 
 impl Ripple {
@@ -61,6 +70,8 @@ impl Ripple {
             start: now,
             released: None,
             drawn: false,
+            played: false,
+            layered: false,
         }
     }
 
@@ -125,6 +136,10 @@ pub(crate) struct Ripples {
     /// The latest input's time: the host's clock moves only with frames,
     /// and an idle page's is as old as its last one.
     input: f64,
+    /// The reader plays ripples: it plays the host's layers.
+    pub(crate) reader: bool,
+    /// Each played ripple's tracks, by its node.
+    tracks: HashMap<NodeKey, Vec<u32>>,
 }
 
 /// What a ripple draws at an instant, in the coordinates of its box.
@@ -262,6 +277,7 @@ impl Ripples {
     /// A new tree: none of the old one's presses shows.
     pub(crate) fn clear(&mut self) {
         self.live.clear();
+        self.tracks.clear();
     }
 
     /// The ripple on `node`: the one pressed on that node, not on another
@@ -279,7 +295,9 @@ impl Ripples {
 
     /// Whether a ripple moves at `now` (`still`: none does).
     pub(crate) fn moving(&self, now: f64, still: bool) -> bool {
-        self.live.values().any(|(_, r)| r.moving(now, still))
+        self.live
+            .values()
+            .any(|(_, r)| !r.played && r.moving(now, still))
     }
 
     /// When the last ripple comes to rest or goes, ms.
@@ -294,8 +312,24 @@ impl Ripples {
     /// draw, whose node left the tree or no longer shows, as the platform's
     /// ripple goes with its view.
     pub(super) fn painted(&mut self, now: f64, still: bool) {
-        self.live
-            .retain(|_, (_, r)| !r.gone(now, still) && std::mem::take(&mut r.drawn));
+        let reader = self.reader;
+        self.live.retain(|_, (_, r)| {
+            // One whose layer this paint did not record (a recorder keeps
+            // none inside a projective plane) is painted per frame again.
+            if reader {
+                r.played = std::mem::take(&mut r.layered);
+            }
+            !r.gone(now, still) && std::mem::take(&mut r.drawn)
+        });
+        let live = &self.live;
+        self.tracks
+            .retain(|key, _| live.values().any(|(k, _)| k == key));
+    }
+
+    /// The tracks of the ripple the reader plays on `key`.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn tracks(&self, key: NodeKey) -> Option<&Vec<u32>> {
+        self.tracks.get(&key)
     }
 }
 
@@ -382,8 +416,18 @@ impl Painter {
             return;
         }
         let (now, still) = (self.numerals.now, self.numerals.still);
-        let wave = match self.ripples.on(node) {
-            Some(r) if centred => Ripple { at: None, ..*r }.wave(shape.rect, now, still),
+        let live = (self.ripples.on(node)).map(|r| match centred {
+            true => Ripple { at: None, ..*r },
+            false => *r,
+        });
+        let reader = self.ripples.reader && !still;
+        if let Some(r) = live.filter(|r| reader && !r.gone(now, still)) {
+            if self.ripple_played(node, shape, ink, ts, r) {
+                self.row_refuse();
+                return;
+            }
+        }
+        let wave = match live {
             Some(r) => r.wave(shape.rect, now, still),
             None if self.held_press == Some(node.id) => {
                 Ripple::new(None, now - ENTER_MS).wave(shape.rect, now, still)
@@ -396,6 +440,65 @@ impl Painter {
         // A ripple moves: its row is drawn by the walk, never from a recording.
         self.row_refuse();
         fill(self.backend.as_mut(), shape, ink, wave, ts);
+    }
+
+    /// The ripple `r` on `node` as a layer the reader plays (LLP
+    /// 1172.023.002): its wave at full progress, recorded once under
+    /// `shape`'s clip, and the opacity, offset and scale that make it the
+    /// wave at each instant, sampled. False where the backend keeps no layer.
+    fn ripple_played(
+        &mut self,
+        node: &NodeRef<'_>,
+        shape: &Shape,
+        ink: [u8; 4],
+        ts: Transform,
+        r: Ripple,
+    ) -> bool {
+        let (x, y, w, h) = shape.rect;
+        let middle = (x + w / 2.0, y + h / 2.0);
+        let bound = wave(shape.rect, middle, 1.0).radius;
+        let base = [0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0];
+        // The clip stays outside the layer, so it does not scale with it.
+        self.backend.push_clip(shape, ts);
+        let layer = crate::host::lower::ripple_layer(node.key);
+        let taken = self.backend.layer_begin(layer, ts, middle, (0., 0.), base);
+        if taken {
+            let reach = 1.5 * bound;
+            let (side, corner) = (2.0 * reach, [reach; 4]);
+            let circle = Shape::new((middle.0 - reach, middle.1 - reach, side, side), corner);
+            let full = Wave {
+                center: middle,
+                radius: bound,
+                alpha: 1.0,
+            };
+            fill(self.backend.as_mut(), &circle, ink, full, ts);
+            self.backend.layer_end();
+        }
+        self.backend.pop_clip();
+        if !taken {
+            return false;
+        }
+        // Lifted after the enter: the wave rests until the lift, as the first
+        // sample holds, so only the exit is sampled.
+        let from = r.released.filter(|at| *at >= ENTER_MS).unwrap_or(0.0);
+        let end = r.released.map_or(ENTER_MS, |at| at.max(ENTER_MS) + EXIT_MS);
+        let span = end - from;
+        let n = (span / SAMPLE_MS).ceil() as usize;
+        let samples: Vec<[f32; 4]> = (0..=n)
+            .map(|i| {
+                let at = r.start + from + span * i as f64 / n as f64;
+                let v = r.wave(shape.rect, at, false);
+                let (dx, dy) = (v.center.0 - middle.0, v.center.1 - middle.1);
+                [v.alpha, dx, dy, v.radius / bound]
+            })
+            .collect();
+        let start = (r.start + from) / 1000.0;
+        let words = crate::host::lower::ripple_words(start, span / 1000.0, &samples);
+        self.ripples.tracks.insert(node.key, words);
+        if let Some((_, live)) = self.ripples.live.get_mut(&node.id) {
+            (live.drawn, live.layered) = (true, true);
+        }
+        true
     }
 }
 

@@ -6,15 +6,9 @@ use exact_plan::{BindingKind, Plan};
 use exact_web::host::template::{attributes_by_data, tags_by_data};
 use std::collections::BTreeSet;
 
-/// What data can give the plan's elements beside what the compiled module
-/// writes, as page-style.mjs tokens (`t:h2`, `a:data-exact-switch`). The
-/// module writes a node's tag and attributes from its literal rows, and a
-/// sample where a bound prop `decides_tag`; the Rust renderer writes them from
-/// the data's: where a prop decides the tag (or a text's heading role or
-/// level, the kernel's `Props::heading`), each tag it can give (exact_web
-/// `tags_by_data`); where any prop or style is bound, each attribute
-/// `props_of` can derive for the node's type (`attributes_by_data`). The
-/// build counts each as written (writers.mjs, LLP 1047.003 D1).
+/// Page-style tokens for every tag a bound prop can select and every attribute
+/// the web host can derive from a bound row. The build keeps their CSS whether
+/// the Bun renderer or the Rust renderer writes the page (LLP 1047.003 D1).
 pub fn bound_tokens(plan: &Plan) -> BTreeSet<String> {
     let mut tokens = BTreeSet::new();
     for node in plan.nodes.iter() {

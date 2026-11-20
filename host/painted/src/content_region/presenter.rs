@@ -174,6 +174,8 @@ impl<D: DataSource> Presenter<D> {
         self.sync_media(&mut dirty);
         self.brush.numerals.now = self.host.now();
         self.brush.numerals.still = self.host.runner().viewport().preferences.reduced_motion;
+        // A geometry paint records no layer, and leaves a played ripple played.
+        self.brush.ripples.reader = self.host.lowering && target != FrameTarget::Geometry;
         self.brush.rows_dirty(self.host.kernel(), dirty);
         self.sync_stage();
         let stage = self.stage_paint();

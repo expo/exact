@@ -387,13 +387,13 @@ internal class Player(private val fonts: Map<Int, Font>) {
         return fills == 1
     }
 
-    /** Whether [from, to) is one filled shape (a rect, op 2, or a path, op 3) and matrices: one draw, which cannot
-     * overlap itself. */
+    /** Whether [from, to) is one filled shape (a rect, op 2, or a path, op 3), its shader (op 43) and matrices: one
+     * draw, which cannot overlap itself. */
     fun singleShape(b: IntBuffer, from: Int, to: Int): Boolean {
         var fills = 0
         var i = from
         while (i < to) {
-            when (b.get(i)) { 1, 48 -> {}; 2, 3 -> fills++; else -> return false }
+            when (b.get(i)) { 1, 43, 48 -> {}; 2, 3 -> fills++; else -> return false }
             i = walker.end(b, i)
         }
         return fills == 1

@@ -679,6 +679,13 @@ impl<D: DataSource + Default + 'static> App<D> {
         }
         if painting && handed {
             self.presents.drew(p, direct, self.started);
+            // Service work can make the next picture dirty before the idle lookup.
+            self.tooltip.update(
+                p,
+                window,
+                (self.pointer_inside && self.focused && self.buttons == 0).then_some(self.pointer),
+                false,
+            );
         }
         // A keyboard command can change the cursor while the mouse is still.
         // Re-resolve the painted hit after the frame, including unmounts and HUDs.

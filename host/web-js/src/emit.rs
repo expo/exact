@@ -1048,14 +1048,6 @@ impl Em<'_> {
         let text = content
             .map(|t| scope.operand(serde_json::to_string(&t).unwrap()))
             .unwrap_or("0".into());
-        // An SVG node's element is in SVG's namespace (element.rs's tag).
-        let h = self
-            .uses
-            .rt(if format!("{node_type:?}").starts_with("Svg") {
-                "hs"
-            } else {
-                "h"
-            });
         let status_owner = self.answers.status_owner(i);
         let e = match &mut self.next_local_element {
             Some(next) if !status_owner => {
@@ -1066,10 +1058,54 @@ impl Em<'_> {
             _ => format!("e{i}"),
         };
         let style_class = scope.operand(class.clone());
-        let _ = write!(
-            self.out,
-            "const {e}={h}({parent},\"{element}\",{style_class},{attrs_js},{text});"
-        );
+        let mut heading = [None, None];
+        if node_type == NodeType::Text
+            && matches!(element, "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
+            && answers::role_can(plan, i, &["heading"])
+        {
+            for (k, b) in row.bindings.iter().map(|b| plan.binding(b)).enumerate() {
+                if b.kind != BindingKind::Prop {
+                    continue;
+                }
+                let (slot, name) = match PropId::from_wire(b.id) {
+                    Some(PropId::AccessibilityRole) => (0, "Role"),
+                    Some(PropId::AccessibilityHeadingLevel) => (1, "Level"),
+                    _ => continue,
+                };
+                if style::literal(plan, plan.code(b.expr)).is_some() {
+                    continue;
+                }
+                // A trap belongs to this binding instance even before it has a DOM element.
+                let f = self.binding_value(i, "{}", &b, scope)?;
+                let f = self.counted(i, k, f);
+                let read = format!("{e}{name}");
+                let memo = self.uses.rt("bindingMemo");
+                let _ = write!(self.out, "const {read}={memo}({f});");
+                heading[slot] = Some((k, read));
+            }
+        }
+        if heading.iter().any(Option::is_some) {
+            let [role, level] = heading
+                .each_ref()
+                .map(|row| row.as_ref().map_or("0", |(_, read)| read.as_str()));
+            let make = self.uses.rt("headingText");
+            let _ = write!(
+                self.out,
+                "const {e}={make}({parent},{style_class},{attrs_js},{text},{role},{level});"
+            );
+        } else {
+            let h = self
+                .uses
+                .rt(if format!("{node_type:?}").starts_with("Svg") {
+                    "hs"
+                } else {
+                    "h"
+                });
+            let _ = write!(
+                self.out,
+                "const {e}={h}({parent},\"{element}\",{style_class},{attrs_js},{text});"
+            );
+        }
         // Its children go in the zoom's layer.
         let zoomable = exact_runner::uses::zoomable(plan, NodesId(i));
         let parent_of_children = if zoomable {
@@ -1176,11 +1212,16 @@ impl Em<'_> {
                     continue;
                 }
             }
-            let f = self
-                .bound(i, &e, &b, scope)
-                .map_err(|x| format!("node {i}: {x}"))?;
             let at = self.out.len();
-            let f = self.counted(i, k, f);
+            let f = if let Some((_, read)) = heading.iter().flatten().find(|(index, _)| *index == k)
+            {
+                self.status_read(i, &e, &b, read.clone())
+            } else {
+                let f = self
+                    .bound(i, &e, &b, scope)
+                    .map_err(|x| format!("node {i}: {x}"))?;
+                self.counted(i, k, f)
+            };
             self.paint_binding(node_type, &b, &e, &f);
             match b.kind {
                 BindingKind::Prop if markdown && b.id == PropId::Text as u16 => {

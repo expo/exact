@@ -110,6 +110,16 @@ class PlayerTest {
         }
     }
 
+    /** A shader and the shape it paints (op 43 before op 2) are one draw: a played gradient, a press's ripple, is
+     * scaled as it is drawn, with no offscreen layer. */
+    @Test fun aShadedShapeIsOneShape() {
+        val shaded = identity + intArrayOf(43, 0, 2, Color.BLUE) + rect(0)
+        val two = shaded + intArrayOf(2, Color.BLUE) + rect(40)
+        val player = Player(emptyMap())
+        assertTrue(player.singleShape(IntBuffer.wrap(shaded), 0, shaded.size))
+        assertFalse(player.singleShape(IntBuffer.wrap(two), 0, two.size))
+    }
+
     /** A layer whose drawing the reader cannot bound (a picture's slot, a scroller's rows) is the window's size, not
      * the view's clip: an edge box's background in it reaches past the view into the bars' bands. */
     @Test fun anUnboundedLayerReachesTheWindow() {
