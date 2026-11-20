@@ -312,11 +312,11 @@ component App
         column navigationKey=`${e.id}` navigationScroll=`page-${e.id}` navigationBar="none" position="absolute" inset=0 overflow-x="clip"
           padding-top="clamp(0px, (960px - 100vw) * 1000, 57px)" padding-left=(sidebar ? "calc(234px - clamp(0px, (960px - 100vw) * 1000, 234px))" : "calc(48px - clamp(0px, (960px - 100vw) * 1000, 48px))") -exact-layout-transition="220ms ease"
           if e.name == "notfound"
-            head title=page.title description=page.description status=404
+            head title=page.title description=page.description image=site.shareImage status=404
             if destination != ""
               view intersect=redirect height=1 testId="redirect"
           else
-            head title=page.title description=page.description
+            head title=page.title description=page.description image=site.shareImage
           scroll id=`page-${e.id}` flex=1 min-width=0 -exact-layout-transition="220ms ease" background-color="var(--color-background-default)"
             margin="calc(8px - clamp(0px, (960px - 100vw) * 1000, 9px))" border="1px solid var(--color-border-secondary)" border-radius="var(--radius-xl)"
             Article(page=page, nav=site, missing=(e.name == "notfound"), failed=failed(page), retry=retryPage, url=top(nav).url, moved=moved.to, suggestions=moved.suggestions, from=from, opened=opened, toggle=toggle, pick=pick, seen=seen, active=active, copyMarkdown=copyMarkdown, copied=copied, copyLink=copyLink, linked=linked, voted=voted, vote=vote, roomy=roomy, year=site.year, theme=theme, chooseTheme=chooseTheme)
