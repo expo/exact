@@ -398,7 +398,7 @@ export const classifications = [
     ["painted:host/painted/src/media_session.rs", "handled"],
     ["painted:host/painted/src/paint_motion.rs", "Host::inheritors_of Host::presented_path"],
     ["painted:host/painted/src/presenter.rs",
-      "Presenter::boxes Presenter::compat Presenter::damage_rects Presenter::dirty Presenter::executor_fd Presenter::focus Presenter::hit Presenter::host " +
+      "Presenter::boxes Presenter::compat Presenter::damage_rects Presenter::dirty Presenter::executor_fd Presenter::focus Presenter::hit Presenter::hit_last_paint Presenter::host " +
       "Presenter::hosts Presenter::image_fd Presenter::images Presenter::node_count Presenter::page Presenter::paragraph Presenter::pending Presenter::rect_of " +
       "Presenter::repaint Presenter::scroll_of Presenter::text Presenter::viewport Presenter::wants_display_frames Presenter::wheel"],
     ["painted:host/painted/src/presenter/access.rs", "Presenter::access_reset Presenter::access_told Presenter::access_tree Presenter::reader_access"],

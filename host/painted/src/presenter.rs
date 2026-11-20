@@ -1217,6 +1217,15 @@ impl<D: DataSource> Presenter<D> {
         self.hit_with_visibility(x, y, PaintHit::Published)
     }
 
+    /// Hit-test the most recent painted geometry without requesting a paint.
+    #[cfg(windows)]
+    pub fn hit_last_paint(&self, x: f32, y: f32) -> Option<ViewId> {
+        if !self.hit_allowed(x, y) {
+            return None;
+        }
+        self.hit_in_boxes(x, y, PaintHit::Published)
+    }
+
     /// Ordinary mouse releases use current CSS eligibility even before the
     /// next display flip. Retained regions keep their picture's hit policy.
     pub(super) fn hit_after_pointerdown(&mut self, x: f32, y: f32) -> Option<ViewId> {
@@ -1224,11 +1233,19 @@ impl<D: DataSource> Presenter<D> {
     }
 
     fn hit_with_visibility(&mut self, x: f32, y: f32, mode: PaintHit) -> Option<ViewId> {
-        // Under an open surface of the top layer the page is inert.
-        if !self.display.contains(x, y) || (self.top_open() && self.alert.is_none()) {
+        if !self.hit_allowed(x, y) {
             return None;
         }
         self.boxes();
+        self.hit_in_boxes(x, y, mode)
+    }
+
+    fn hit_allowed(&self, x: f32, y: f32) -> bool {
+        // Under an open surface of the top layer the page is inert.
+        self.display.contains(x, y) && (!self.top_open() || self.alert.is_some())
+    }
+
+    fn hit_in_boxes(&self, x: f32, y: f32, mode: PaintHit) -> Option<ViewId> {
         self.painted_hit(&self.boxes, x, y, mode)
             .map(|id| self.inline_hit(id, x, y).unwrap_or(id))
     }
