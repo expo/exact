@@ -9,9 +9,9 @@
 // exercises keyboard clearance; its tabs can keep their authored appearance.
 // The shared column can also hold a sidebar before the panels and a drawer
 // positioned over them, a box with no area over them whose button shows
-// outside it, and the grid's panel a button beside its routes, which iOS
-// lifts over its tab container; the column can set an accent and keep its
-// tint from greying.
+// outside it, a button that straddles its bottom edge while it clips only x,
+// and the grid's panel a button beside its routes, which iOS lifts over its
+// tab container; the column can set an accent and keep its tint from greying.
 routes nav
   tab scrolls "/"
     scrollsPushed "/scrolls/pushed"
@@ -35,6 +35,7 @@ component TabEdge
   state sidebar = false
   state fab = false
   state wrappedFab = false
+  state edgeButton = false
   state fadingBar = false
   state inertColumn = false
   state trailingSidebar = false
@@ -58,6 +59,8 @@ component TabEdge
     fab = true
   action showWrappedFab
     wrappedFab = true
+  action showEdgeButton
+    edgeButton = true
   action fadeBar
     fadingBar = true
   action insetSelectionBar
@@ -85,8 +88,10 @@ component TabEdge
       height="100%"
       display="flex"
       flex-direction="column"
-      // The panels and a selection row can share a column of their own.
+      // The panels and a selection row can share a column of their own. Its bound overflow makes it a
+      // containing block, so it is positioned in every case.
       column flex=1 min-height=0 flex-direction=(sidebar ? (trailingSidebar ? "row-reverse" : "row") : "column") testId="panels-column" inert=inertColumn
+        overflow-x=(edgeButton ? "clip" : "visible")
         accent-color=(accented ? "#ff8800" : "auto") -exact-tint-adjustment=(keptTint ? "normal" : "auto")
         if extraRows
           row testId="top-row" height=44 flex-shrink=0 background-color="#123456"
@@ -130,6 +135,8 @@ component TabEdge
                         text "Add"
                       button press=showWrappedFab testId="show-wrapped-fab"
                         text "Wrapped"
+                      button press=showEdgeButton testId="show-edge-button"
+                        text "Edge"
                       button press=fadeBar testId="fade-bar"
                         text "Fade bar"
                       button press=makeColumnInert testId="inert-column"
@@ -228,6 +235,16 @@ component TabEdge
             right=0
             width="3.5rem"
             background-color="#ff0000"
+            text "+"
+        // A button over the routes that straddles the column's bottom edge, while the column clips only x
+        if edgeButton
+          button press=showEdgeButton testId="edge-button"
+            position="absolute"
+            left=100
+            bottom=-28
+            width="3.5rem"
+            height="3.5rem"
+            background-color="#ff00ff"
             text "+"
         // A box with no area over the routes, after the panels, whose button shows outside it
         if wrappedFab

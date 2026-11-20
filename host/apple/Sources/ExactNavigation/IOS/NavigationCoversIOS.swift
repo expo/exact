@@ -85,7 +85,7 @@ extension NavigationHost {
             if right, !left { reach.right = max(reach.right, area.maxX - box.minX) }
         }
         for case let child as NodeView in ownerMount(root).subviews {
-            let box = paintedBox(child, in: root)
+            let box = child.isHidden ? .null : paintedBox(child, in: root)
             let below = rows.contains { $0 === child }
             let clears = !ExactEnv.authoredChrome && !routes.isEmpty && !owned.contains(child.id) && !box.isEmpty
                 && box.intersects(area) && (below || PanelSiblings.beside(box, routes, drawn: drawn))

@@ -710,11 +710,12 @@ extension NodeView {
             }
             // Focus stays in the content the touch hit. In particular, a
             // press bubbling out of a dialog cannot blur the page's field.
-            if bubbled, presenter.listenerParent(of: view) !== view.superview {
+            // A node lifted over the tab container stays in its parent's content (LLP 1083.000 D4).
+            if bubbled, presenter.listenerParent(of: view) !== presenter.layoutParent(of: view) {
                 view.endEditing(true)
                 return handoff
             }
-            at = view.superview
+            at = presenter.layoutParent(of: view)
         }
         guard presenter.hasKeyboardEditor else { return handoff }
         // A button keeps the keyboard and its field, as a `UIButton` leaves

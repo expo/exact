@@ -5,9 +5,10 @@
 // them, in a child of the root that holds them, is inside a view under the container. UIKit
 // paints a view over another only as a later sibling or inside one, so such a node is lifted
 // out of its parent into `PanelSiblingsLayer`, the container's sibling, into a stand that
-// takes the parent's bounds and its place on the page: the kernel's frames, in the parent's
-// coordinates, apply there unchanged. The walks that follow the authored tree go from a lifted
-// node to its parent (`LiftedNodes.parent`), and Tab and VoiceOver read it on its side of the routes.
+// takes the clip the parent's children are under, or else its bounds, and its place on the
+// page: the kernel's frames, in the parent's coordinates, apply there unchanged. The walks
+// that follow the authored tree go from a lifted node to its parent (`LiftedNodes.parent`),
+// and Tab and VoiceOver read it on its side of the routes.
 #if os(iOS) || os(tvOS)
 import UIKit
 import ExactKit
@@ -15,6 +16,15 @@ import ExactKit
 /// The layer just after the tab container that holds the nodes lifted over it. It takes no
 /// touch itself, and tests no bounds: a lifted node's overflow takes touches, as a node's does.
 final class PanelSiblingsLayer: UIView, HoldsLiftedNodes {
+    weak var siblings: PanelSiblings?
+
+    // Its nodes that read after the routes, by their own frames rather than their stands' (LLP 1083.000 D4: paint and
+    // reading order stay apart)
+    override var accessibilityElements: [Any]? {
+        get { super.accessibilityElements ?? siblings?.readAfter() }
+        set { super.accessibilityElements = newValue }
+    }
+
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard !isHidden, isUserInteractionEnabled else { return nil }
         for child in NodeView.hitOrder(subviews) {
@@ -42,12 +52,6 @@ final class PanelSiblingsStand: UIView, HoldsLiftedNodes {
     }
     required init?(coder: NSCoder) { nil }
 
-    // A lifted node with no area whose children show outside it is read through, as in its parent's view
-    override var accessibilityElements: [Any]? {
-        get { super.accessibilityElements ?? NodeView.emptyBoxAccessibility(in: self) }
-        set { super.accessibilityElements = newValue }
-    }
-
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         // Not for alpha: CSS opacity does not change hit testing (`NodeView.hitTest`)
         guard !isHidden, isUserInteractionEnabled, !clipsToBounds || bounds.contains(point) else { return nil }
@@ -63,22 +67,20 @@ final class PanelSiblingsStand: UIView, HoldsLiftedNodes {
     func place(in host: UIView, mount: UIView) {
         guard let parent else { return }
         // The clip the parent's children are under, the nearest view from their content view up to the node that
-        // clips (the content view, a clip box, the node). With none, the parent's bounds, a point wide and tall at
-        // least where it has no area: UIKit's accessibility leaves out a view whose bounds are empty with everything
-        // under it (`NodeView.emptyBoxAccessibility`).
+        // clips (the content view, a clip box, the node); with none, the parent's bounds
         let content = parent.container
         let clipper = sequence(first: content as UIView, next: { $0 === parent ? nil : $0.superview }).first { $0.clipsToBounds }
-        var own = clipper.map { $0.convert($0.bounds, to: content) } ?? content.bounds
+        var b = clipper.map { $0.convert($0.bounds, to: content) } ?? content.bounds
         // A one-axis clip (`clip` beside `visible`, CSS Overflow 3 §3.1) holds the clipped axis only, so on the other
-        // the stand spans the layer, which covers the mount; its clip box's bounds reach only its own subviews. A map
-        // with no inverse (a zero scale) leaves the clip box's extent.
+        // the stand spans the layer, which covers the mount (and its content where the mount scrolls), rather than
+        // measuring what its nodes paint, which a hover or a press can outgrow between placements; a map with no inverse
+        // (a zero scale) clips to the box
         if let clipper, clipper === parent.clipBox {
             let span = host.convert(host.bounds, to: content), finite = [span.minX, span.minY, span.width, span.height].allSatisfy(\.isFinite)
             let overflowX = parent.style["overflow_x"]?.string ?? "visible", overflowY = parent.style["overflow_y"]?.string ?? "visible"
-            if finite, overflowX == "clip", overflowY == "visible" { own = CGRect(x: own.minX, y: span.minY, width: own.width, height: span.height) }
-            if finite, overflowY == "clip", overflowX == "visible" { own = CGRect(x: span.minX, y: own.minY, width: span.width, height: own.height) }
+            if finite, overflowX == "clip", overflowY == "visible" { b = CGRect(x: b.minX, y: span.minY, width: b.width, height: span.height) }
+            if finite, overflowY == "clip", overflowX == "visible" { b = CGRect(x: span.minX, y: b.minY, width: span.width, height: b.height) }
         }
-        let b = own.isEmpty && clipper == nil ? CGRect(origin: own.origin, size: CGSize(width: max(own.width, 1), height: max(own.height, 1))) : own
         let o = content.convert(b.origin, to: host)
         let x = content.convert(CGPoint(x: b.minX + 1, y: b.minY), to: host)
         let y = content.convert(CGPoint(x: b.minX, y: b.minY + 1), to: host)
@@ -171,8 +173,10 @@ final class PanelSiblings: LiftedNodes {
     /// Whether `box` is beside the routes: no route's box meets it where CSS lays the routes out
     /// (`routes`), so the web shows it, and the routes' views (`drawn`), which UIKit may size to
     /// the page, do not cover it, or cover it only to their side, where the container's safe area
-    /// clears them of it (a column). A row above or below routes drawn over the whole page is not
-    /// beside them: the native bars span the page there and keep their place over it.
+    /// clears them of it (a column that reaches the container's top edge and exactly one side;
+    /// another insets nothing, so it covers the route there). A row above or below routes drawn over the
+    /// whole page is not beside them: the native bars span the page there and keep their place
+    /// over it.
     static func beside(_ box: CGRect, _ routes: [CGRect], drawn: [CGRect]) -> Bool {
         guard !routes.contains(where: { $0.intersects(box) }) else { return false }
         return !drawn.contains { $0.intersects(box) } || routes.contains { $0.minY < box.maxY && $0.maxY > box.minY }
@@ -259,7 +263,9 @@ final class PanelSiblings: LiftedNodes {
     /// The stands at their parents' places, after a batch moved them.
     func place(in mount: UIView) {
         guard let layer, layer.superview === mount else { return }
-        let frame = CGRect(origin: .zero, size: mount.bounds.size)
+        // The mount's extent: its content's too where it scrolls (a scrolling navigation root)
+        let content = (mount as? UIScrollView)?.contentSize ?? .zero
+        let frame = CGRect(origin: .zero, size: CGSize(width: max(mount.bounds.width, content.width), height: max(mount.bounds.height, content.height)))
         if layer.frame != frame { layer.frame = frame }
         for stand in stands.values { stand.place(in: layer, mount: mount) }
     }
@@ -270,6 +276,7 @@ final class PanelSiblings: LiftedNodes {
         guard owner.superview === mount else { return }
         let layer = self.layer ?? PanelSiblingsLayer()
         if self.layer == nil {
+            layer.siblings = self
             self.layer = layer
             #if os(iOS)
             relay = MountRelay(presenter, mount: layer)
@@ -391,15 +398,24 @@ final class PanelSiblings: LiftedNodes {
     /// leaves the mount's own list.
     private func accessibilityElements(of mount: UIView, owner: UIView?) -> [Any]? {
         guard let layer, layer.superview === mount, let owner, owner.superview === mount else { return nil }
-        let shown = { (node: NodeView) in node.superview.map { !$0.isHidden && !$0.accessibilityElementsHidden } ?? false }
-        let (before, after) = reading()
-        let read = before.filter(shown)
+        let read = reading().before.filter(Self.shown)
         guard !read.isEmpty else { return nil }
         var views: [UIView] = []
         for view in mount.subviews {
-            if view === layer { views += after.filter(shown) } else if view === owner { views += read + [owner] } else { views.append(view) }
+            if view === owner { views += read + [owner] } else { views.append(view) }
         }
         return NodeView.accessibilityOrder(views)
+    }
+
+    /// The layer's accessibility children: the lifted nodes that read after the routes, in UIKit's
+    /// order by their own frames (one with no area read through to its children), so the stands'
+    /// frames, which take their parents' clips, do not order them. The mount lists those before the
+    /// routes ahead of the container, and the layer after it.
+    func readAfter() -> [Any] { NodeView.accessibilityOrder(reading().after.filter(Self.shown)) }
+
+    /// Whether a lifted node's stand shows it to VoiceOver.
+    private static func shown(_ node: NodeView) -> Bool {
+        node.superview.map { !$0.isHidden && !$0.accessibilityElementsHidden } ?? false
     }
 }
 

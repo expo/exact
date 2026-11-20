@@ -166,9 +166,9 @@ final class TabEdgeIOSTests: XCTestCase {
         try replacementBar(wrapped: true)
     }
 
-    /// A bar nested beside the panels, in the column that holds them, comes after them in tree order, both
-    /// positioned: it paints over the native container that stands in for them, and takes its touches, as CSS
-    /// paints positioned boxes in tree order (LLP 1083.000).
+    /// A bar nested beside the panels, in the column that holds them, after them in tree order, both
+    /// positioned: an in-flow row below the panels while the tab bar is hidden, it paints over the native
+    /// container that stands in for them and takes its touches (LLP 1083.000 D4).
     func testABarNestedBesideThePanelsPaintsOverTheContainerAndTakesItsTouches() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "the screen's pixels need a window the system draws") }
         try nestedBar(positioned: true)
@@ -205,7 +205,8 @@ final class TabEdgeIOSTests: XCTestCase {
 
     /// A sidebar nested before the panels, in the column that holds them, which no route's box meets: it paints
     /// over the container and takes its touches, grows the container's leading safe area as a sidebar among the
-    /// root's children does, and Tab and VoiceOver reach it before the routes, as the tree orders it (LLP 1083.000 D4).
+    /// root's children does, Tab reaches it before the routes, as the tree orders it, and the mount lists it
+    /// ahead of the container (LLP 1083.000 D4).
     func testASidebarNestedBeforeThePanelsPaintsOverTheContainerAndReadsFirst() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "the screen's pixels need a window the system draws") }
         let session = try fixture(wholeScreen: true), navigation = session.presenter.navigationHost
@@ -226,12 +227,12 @@ final class TabEdgeIOSTests: XCTestCase {
         var stops = 0
         while presenter.focusedNode !== first, stops < 12, presenter.moveFocus(backward: false) { stops += 1 }
         XCTAssertTrue(presenter.focusedNode === first, "and the route's after it")
-        // VoiceOver: the sidebar is read ahead of the container
+        // VoiceOver: the mount lists the sidebar ahead of the container
         let mount = navigation.ownerMount(try XCTUnwrap(navigation.container))
         let elements = try XCTUnwrap(mount.accessibilityElements, "the mount lists its children while a lifted node reads first")
         let sideAt = try XCTUnwrap(elements.firstIndex { ($0 as? UIView).map { $0 === side || $0.isDescendant(of: side) } ?? false })
         let ownerAt = try XCTUnwrap(elements.firstIndex { ($0 as? UIView) === owner.view })
-        XCTAssertLessThan(sideAt, ownerAt, "the sidebar reads before the routes")
+        XCTAssertLessThan(sideAt, ownerAt, "the mount lists the sidebar ahead of the container")
     }
 
     /// A lifted node keeps its column's `accent-color` and `-exact-tint-adjustment`, which UIKit carries down
@@ -325,7 +326,7 @@ final class TabEdgeIOSTests: XCTestCase {
 
     /// A box with no area positioned over the routes, after the panels, whose button shows outside it: it is
     /// decided by the box its button paints over, so it lifts with the button, which paints over the container
-    /// and takes its touches, and its stand reads the button through it, as a node's view reads such a box
+    /// and takes its touches, and the layer reads the button through it, as a node's view reads such a box
     /// (LLP 1083.000 D4).
     func testABoxWithNoAreaOverTheRoutesLiftsWithTheButtonItHolds() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "the screen's pixels need a window the system draws") }
@@ -339,8 +340,41 @@ final class TabEdgeIOSTests: XCTestCase {
         let hit = try XCTUnwrap(win.hitTest(point, with: nil))
         XCTAssertTrue(hit === button || hit.isDescendant(of: button), "the button takes its touches, not \(hit)")
         XCTAssertEqual(try pixel(at: point), [0, 0, 255], "the button paints over the container")
-        let stand = try XCTUnwrap(wrapper.superview)
-        XCTAssertTrue((stand.accessibilityElements ?? []).contains { ($0 as AnyObject) === button }, "the stand reads the button")
+        let layer = try XCTUnwrap(navigation.siblings.layer), mount = try XCTUnwrap(layer.superview)
+        XCTAssertNil(mount.accessibilityElements, "the mount leaves its children to UIKit, the layer among them")
+        XCTAssertEqual((layer.accessibilityElements ?? []).filter { ($0 as AnyObject) === button }.count, 1, "the layer reads the button once")
+    }
+
+    /// A button over the routes that straddles the bottom edge of its column, which clips only its x axis
+    /// (`overflow-x: clip`): lifted, its stand keeps the column's clip box's extent on x and spans the layer on
+    /// y, also once the box has measured its reach without the button, so the button shows and takes its
+    /// touches past the box, cut only where the column clips it (LLP 1083.000 D4).
+    func testALiftedButtonUnderAOneAxisClipShowsPastItsColumnOnTheOtherAxis() throws {
+        guard #available(iOS 18.0, *) else { throw XCTSkip("setTabBarHidden is iOS 18") }
+        let session = try fixture(wholeScreen: true), navigation = session.presenter.navigationHost
+        try tap("tab-grid", route: "grid")
+        // Select mode puts its bar below the column, which then ends above the screen's bottom
+        try press("select-grid", route: "grid")
+        let bar = try node("selection-bar")
+        waitFor("the bar is shown") { bar.window != nil && bar.bounds.height > 0 }
+        try press("show-edge-button", route: "grid")
+        let button = try node("edge-button"), column = try node("panels-column")
+        waitFor("the button is lifted over the container") { button.window != nil && navigation.siblings.holds(button) }
+        let clipBox = try XCTUnwrap(column.clipBox, "the column clips one axis in a clip box"), stand = try XCTUnwrap(button.superview)
+        // The box measures its reach again, as a move of what it holds makes it, now without the lifted button
+        column.syncShadowClip()
+        navigation.siblings.place()
+        XCTAssertGreaterThan(button.frame.maxY, clipBox.bounds.maxY + 0.5, "the button straddles the box's bottom, past its reach")
+        XCTAssertTrue(stand.clipsToBounds, "the stand clips as the box does")
+        XCTAssertEqual(stand.bounds.minX, clipBox.bounds.minX, accuracy: 0.5, "on x, the box's extent")
+        XCTAssertEqual(stand.bounds.width, clipBox.bounds.width, accuracy: 0.5)
+        let layer = try XCTUnwrap(navigation.siblings.layer), span = layer.convert(layer.bounds, to: column.container)
+        XCTAssertEqual(stand.bounds.minY, span.minY, accuracy: 0.5, "on y, the layer's extent")
+        XCTAssertEqual(stand.bounds.maxY, span.maxY, accuracy: 0.5)
+        let touch = CGPoint(x: button.frame.midX, y: button.frame.maxY - 4)
+        XCTAssertGreaterThan(touch.y, clipBox.bounds.maxY, "the touch is past the box")
+        let hit = try XCTUnwrap(stand.hitTest(touch, with: nil), "a touch on the button past the box")
+        XCTAssertTrue(hit === button || hit.isDescendant(of: button), "the button takes it, not \(hit)")
     }
 
     /// A button beside a tab's routes, in its panel, which the panel paints after them: it paints over the

@@ -636,7 +636,7 @@
       ]
     },
     "treeWalks": {
-      "ceiling": 615,
+      "ceiling": 613,
       "sites": [
         "host/apple/Sources/ExactCollections/Collection.swift: guard let parent = (node as? PlatformView)?.superview else { return nil }",
         "host/apple/Sources/ExactCollections/Collection.swift: parent = current.superview",
@@ -978,9 +978,7 @@
         "host/apple/Sources/ExactKit/IOS/PlacedAccessibilityIOS.swift: let owner = sequence(first: superview, next: { $0?.superview }).lazy.compactMap({ $0 as? NodeView }).first,",
         "host/apple/Sources/ExactKit/IOS/PointerIOS.swift: || (view.superview as? UIVisualEffectView)?.contentView === view {",
         "host/apple/Sources/ExactKit/IOS/PointerIOS.swift: at = cur.superview",
-        "host/apple/Sources/ExactKit/IOS/PointerIOS.swift: at = view.superview",
         "host/apple/Sources/ExactKit/IOS/PointerIOS.swift: for child in view.subviews { cancel(child) }",
-        "host/apple/Sources/ExactKit/IOS/PointerIOS.swift: if bubbled, presenter.listenerParent(of: view) !== view.superview {",
         "host/apple/Sources/ExactKit/IOS/PointerIOS.swift: if let presenter, let parent = presenter.listenerParent(of: self), parent !== superview { responder = parent }",
         "host/apple/Sources/ExactKit/IOS/PointerIOS.swift: if let scroll = responder as? ScrollView, let owner = scroll.superview as? NodeView, owner.scroll === scroll { return owner }",
         "host/apple/Sources/ExactKit/IOS/PointerIOS.swift: return sequence(first: paragraph as UIView, next: { paragraph.presenter?.pointerParent(of: $0) ?? $0.superview })",
