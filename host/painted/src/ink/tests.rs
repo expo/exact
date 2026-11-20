@@ -439,3 +439,36 @@ fn fractional_clip_intersections_survive_retained_replay_and_shadows() {
         }
     }
 }
+
+/// A shape clip takes one intermediate draw for each parent clip it cannot
+/// share a draw with, and its mask covers the target's last pixel.
+#[test]
+fn a_shape_clip_draws_only_the_masks_its_parents_need() {
+    let Some(mut ink) = open() else { return };
+    let identity = Transform::identity();
+    let scissor = Shape::rect((0., 0., 64., 64.));
+    let round = Shape::new((1., 1., 80., 80.), [8.; 4]);
+    let ellipse = Shape::elliptical((1., 1., 80., 80.), [(9., 6.); 4]);
+    let clip = Shape::elliptical((2., 2., 80., 80.), [(7., 5.); 4]);
+    for (parents, draws) in [
+        (&[&scissor][..], 0),
+        (&[&round, &round][..], 1),
+        (&[&ellipse][..], 2),
+    ] {
+        ink.page([0; 4]);
+        ink.begin(64., 64., 1.);
+        for parent in parents {
+            ink.push_clip(parent, identity);
+        }
+        let before = ink.pool.used();
+        ink.push_clip(&clip, identity);
+        assert_eq!(ink.pool.used() - before, draws);
+        let fill = Shape::rect((-8., -8., 96., 96.));
+        ink.fill(&fill, [255; 4], identity);
+        for _ in 0..=parents.len() {
+            ink.pop_clip();
+        }
+        let pixels = ink.finish().unwrap();
+        assert_eq!(pixels.data()[(63 * 64 + 63) * 4 + 3], 255);
+    }
+}

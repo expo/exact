@@ -42,9 +42,11 @@ impl Ink {
                 false
             }
         });
+        // Outset, so the fill's own antialiased corners fall outside the target.
+        let cover = [-2., -2., rect[2] + 4., rect[3] + 4.];
         encoder
             .push(
-                Instance::new(Kind::RoundedRect, Brush::Solid, rect),
+                Instance::new(Kind::RoundedRect, Brush::Solid, cover),
                 Bindings::default(),
             )
             .map_err(|_| Error::Invalid("parent clip mask".into()))?;
