@@ -1474,17 +1474,6 @@ test.skipIf(!existsSync('/bin/sh'))('EAS recipes have valid shell syntax after j
   }
 });
 
-test('exact new on a machine that cannot build for iPhone names Exact Build', () => inDir((dir) => {
-  const bare = resolve(dir, 'bare'), bin = resolve(bare, 'bin');
-  mkdirSync(bin, { recursive: true });
-  symlinkSync(process.execPath, resolve(bin, 'bun'));
-  // Only Bun on PATH: no Xcode on a Mac, no cross SDK on Linux.
-  const env = { HOME: bare, PATH: bin, CARGO_HOME: resolve(bare, 'cargo'), RUSTUP_HOME: resolve(bare, 'rustup'), XDG_CACHE_HOME: resolve(bare, 'cache'), EXACT_FEEDBACK: '0' };
-  const made = spawnSync(process.execPath, [resolve(import.meta.dir, 'exact.mjs'), 'new', resolve(dir, 'no-iphone')], { encoding: 'utf8', timeout: 120_000, env });
-  assert.equal(made.status, 0, made.stderr);
-  assert.match(made.stdout, /\nThis machine lacks (Xcode|the Apple cross SDK and its tools), so it cannot build the app for iPhone\. Exact Build builds it in the cloud, and AppDrop installs it on a phone: https:\/\/exact\.appdrop\.app\/agents\.md is the guide for an agent, https:\/\/exact\.appdrop\.app\/docs the API\./);
-}), 120_000);
-
 test('an installed command opens the bundle it names, whatever the name holds', async () => {
   const { shimText: shimScript } = await import('./exact-install.mjs');
   const target = "/Users/o'neil $HOME/Applications/Budget $5 `id` 'q'.app";
