@@ -300,6 +300,21 @@ pub fn ahead(manifest: &contract::Manifest) -> Result<Vec<Capability>, String> {
         .collect()
 }
 
+/// The file system's time now, in milliseconds since the epoch: a stamp's,
+/// written in `dir`. File change times come from a coarser clock than the
+/// system's and can trail it by a tick, so a bake dated by the system clock
+/// could take an input it changed for one older than its read.
+fn file_clock(dir: &std::path::Path) -> Result<u128, String> {
+    let stamp = dir.join(".started");
+    std::fs::write(&stamp, b"").map_err(|e| e.to_string())?;
+    let modified = std::fs::metadata(&stamp).and_then(|info| info.modified());
+    std::fs::remove_file(&stamp).map_err(|e| e.to_string())?;
+    let since = modified
+        .map_err(|e| e.to_string())?
+        .duration_since(std::time::UNIX_EPOCH);
+    Ok(since.map_err(|e| e.to_string())?.as_millis())
+}
+
 /// Take the Rust sources of a linked Apple or Android bake. The build
 /// script calls this before baking and returns when it answers true.
 /// `files` names generated Rust inputs; a bake must preserve their times
@@ -384,10 +399,7 @@ pub fn take_linked(files: &[&str]) -> Result<bool, String> {
         || !baked.join("compat.json").exists()
         || files.iter().any(|file| !baked.join(file).exists())
     {
-        registration["started"] = serde_json::json!(std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| e.to_string())?
-            .as_millis());
+        registration["started"] = serde_json::json!(file_clock(&baked)?);
         let result = Command::new(&executable)
             .env("EXACT_RUST_BAKE", "1")
             .env("EXACT_BAKED", &baked)
@@ -748,6 +760,31 @@ mod tests {
         std::fs::create_dir_all(dir.join("modules/apple")).unwrap();
         std::fs::write(dir.join("modules/apple/Hatches.swift"), "").unwrap();
         assert!(linked("assets/a.png").has(Capability::NativeViews));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A Rust bake is dated on the clock its inputs' change times read, so an
+    /// input changed after its start never reads as older than it. The
+    /// system clock does not promise that: file times can trail it by a tick.
+    #[test]
+    fn a_rust_bake_is_dated_on_the_clock_change_times_read() {
+        let dir = std::env::temp_dir().join(format!("exact-file-clock-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("input");
+        for _ in 0..50 {
+            let started = super::file_clock(&dir).unwrap();
+            std::fs::write(&input, b"edited").unwrap();
+            let changed = std::fs::metadata(&input).unwrap().modified().unwrap();
+            let changed = changed
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            assert!(
+                changed >= started,
+                "an input changed at {changed} reads as older than a bake started at {started}"
+            );
+        }
+        assert!(!dir.join(".started").exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

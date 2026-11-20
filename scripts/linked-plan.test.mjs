@@ -1,6 +1,6 @@
 // Package and linked-bake freshness (scripts/linked-plan.mjs, scripts/cargo-dep-info.mjs and agent-launch.mjs
 // `receiptChanges`): what a watched package directory, an optional design and a linked bake's inputs make stale.
-import { afterEach, beforeEach, test, expect } from 'bun:test';
+import { afterEach, beforeEach, test, expect, setSystemTime } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
@@ -584,8 +584,11 @@ test.skipIf(process.platform === 'win32').each(['known', 'discovered', 'bootstra
       recordRustBake(env);
       const bake = () => bakeOutside({dir, name:'fixture'}, 'macos', 'target', env);
       if (stage === 'bootstrap') {
-        // The bootstrap read FIRST, then an editor restored older bytes before Cargo returned.
-        writeFileSync(registry, JSON.stringify({executable, cwd:dir, env:{}, started:statSync(source).ctimeMs}));
+        // The bootstrap read FIRST, then an editor restored older bytes before Cargo returned. bake/src/link.rs dates
+        // the bootstrap by a stamp it writes in the bake directory, on the clock change times read.
+        const stamp = resolve(baked, '.started'); writeFileSync(stamp, '');
+        writeFileSync(registry, JSON.stringify({executable, cwd:dir, env:{}, started:Math.floor(statSync(stamp).mtimeMs)}));
+        rmSync(stamp);
         if (kind === 'removed') rmSync(source);
         else { writeFileSync(source, 'RESTORED'); utimesSync(source, new Date(0), new Date(0)); }
         rmSync(resolve(baked, 'inputs.json'));
@@ -593,7 +596,11 @@ test.skipIf(process.platform === 'win32').each(['known', 'discovered', 'bootstra
       } else {
         writeFileSync(source, 'SECOND'); writeFileSync(trigger, '');
         if (stage === 'discovered') rmSync(resolve(baked, 'inputs.json'));
-        bake(); expect(readFileSync(resolve(baked, 'app.plan'), 'utf8')).toBe('SECOND');
+        // File change times can trail Date.now() by a clock tick. A lead far longer than one makes the baker's edit
+        // seem to precede its run every time, not only when the tick falls there.
+        setSystemTime(new Date(Date.now() + 60_000));
+        try { bake(); } finally { setSystemTime(); }
+        expect(readFileSync(resolve(baked, 'app.plan'), 'utf8')).toBe('SECOND');
       }
       bake(); expect(readFileSync(resolve(baked, 'app.plan'), 'utf8')).toBe(kind === 'removed' ? 'ABSENT' : 'RESTORED');
       const record = readFileSync(resolve(baked, 'inputs.json'), 'utf8');
