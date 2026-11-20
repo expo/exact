@@ -172,13 +172,15 @@ final class CollectionFillIOSTests: XCTestCase {
                 [15, 16, 17, 18, 19, 20], [19, 20, 21, 22, 23, 24, 25], [15, 16, 17, 18, 19, 20],
                 [10, 11, 12, 13, 14, 15, 16], [6, 7, 8, 9, 10, 11, 12], [2, 3, 4, 5, 6, 7, 8], [0, 1, 2, 3]]
             XCTAssertEqual(settledRows, Array(repeating: base, count: 4).flatMap { $0 }, "rest windows recorded on T2")
-            XCTAssertEqual([reports, owner, retirements, flushed, landings],
-                asynchronous ? [356, 356, 0, 276, 100] : [136, 136, 0, 136, 0],
-                "the travelling-fling counts measured on base are unchanged")
-            XCTAssertLessThanOrEqual(reports, 600)
+            XCTAssertEqual(owner, reports, "each encoded report reaches the runner once")
+            XCTAssertEqual(retirements, 0, "these flings stay inside the retirement band")
+            XCTAssertEqual(landings > 0, asynchronous)
+            XCTAssertLessThanOrEqual(landings, asynchronous ? 100 : 0)
+            // Acknowledging row measurements needs no second report with the same viewport and pins.
+            let budget = asynchronous ? 276 : 136
+            XCTAssertLessThanOrEqual(reports, budget)
+            XCTAssertLessThanOrEqual(flushed, budget)
             XCTAssertLessThanOrEqual(reports + posted, 600, "include every posted job, even jobs unrelated to travel")
-            XCTAssertLessThanOrEqual(owner, 600)
-            XCTAssertLessThanOrEqual(flushed, 400)
             if asynchronous { XCTAssertEqual(rests[0], rests[1], "every resting window equals synchronous fills") }
         }
     }

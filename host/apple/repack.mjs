@@ -39,7 +39,7 @@ import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appleArtifacts, appClip, COMPATIBLE_SDK, compiledTargets, designCompatible, distributionKeys, entitlements, infoPlist, receipt, shippedReceipt, writeUsageStrings, copyAppleStaticTrees } from './build.mjs';
 import { modulePlist } from './plist.mjs';
-import { awaitBuildOutput, bakeOutput, bakeWatchEnv, developmentBuildEnv, appleExecutableName, gpuModules, HOST_DEV, resolveApp, verifyBakeFiles } from '../../scripts/app.mjs';
+import { awaitBuildOutput, bakedBackendOrigin, bakeOutput, bakeWatchEnv, developmentBuildEnv, appleExecutableName, gpuModules, HOST_DEV, resolveApp, verifyBakeFiles } from '../../scripts/app.mjs';
 import { HOST_MACOS, withHostDeployment } from '../../scripts/filesystem.mjs';
 import { prepareRustBundle, nativeSource } from '../../scripts/rust.mjs';
 import { bakeOutside, linkedInputs } from '../../scripts/linked-plan.mjs';
@@ -115,6 +115,16 @@ export const packagedKinds = (args, app) => {
   const kinds = extensionKinds(args);
   if (!notificationService(app)) kinds.delete('notifications');
   return kinds;
+};
+
+/** A repack's receipt `build`: the base's native build (its Cargo products and binary inputs), with `own` (what the
+ * repack writes again) and what the bake in `baked` read and selected (its TypeScript sources, settings and backend
+ * origin, its linked inputs), as app.mjs records them for a full build. A whole receipt names this bake's linked plan,
+ * not the base's. */
+export const repackedBuild = (base, baked, app, own) => {
+  const { settings: _s, typescriptSources: _t, linkedInputs: _l, ...native } = base ?? {};
+  return { ...native, ...own, backendOrigin: bakedBackendOrigin(baked), ...bakedSettings(baked, app.dir),
+    ...('linkedPlan' in (base ?? {}) ? { linkedPlan: baked, linkedInputs: linkedInputs(baked) } : {}) };
 };
 
 export async function repack(args) {
@@ -304,15 +314,10 @@ export async function repack(args) {
       // ExactCore's signature covers the sections just refitted.
       tool('codesign', ['--force', '--sign', '-', '--timestamp=none', resolve(bundle, 'Frameworks/ExactCore.framework')], { stdio: 'ignore' });
     }
-    // The base receipt's native build (its Cargo products and binary inputs), with this bake's compat and graph.
     // The receipt is whole or shipped (shippedReceipt: no linkedPlan, the binary by its digest alone) where this SDK's
-    // full build makes it so (bundle.mjs: every archive shipped, or only a production one), as the base's is. A whole
-    // one names this bake's linked plan, not the base's.
+    // full build makes it so (bundle.mjs: every archive shipped, or only a production one), as the base's is.
     const whole = 'linkedPlan' in (baseReceipt.build ?? {}) || Array.isArray(baseReceipt.build?.binary?.inputs);
-    // What the bake read (its TypeScript sources and settings, its linked inputs) is this bake's, as app.mjs records it.
-    const { settings: _s, typescriptSources: _t, linkedInputs: _l, ...baseNative } = baseReceipt.build ?? {};
-    const build = { ...baseNative, compat, graph, assets: { key: assetsKey, keys: assetKeys, stamp: swiftc }, ...bakedSettings(baked, app.dir),
-      ...(whole && 'linkedPlan' in (baseReceipt.build ?? {}) ? { linkedPlan: baked, linkedInputs: linkedInputs(baked) } : {}) };
+    const build = repackedBuild(baseReceipt.build, baked, app, { compat, graph, assets: { key: assetsKey, keys: assetKeys, stamp: swiftc } });
     mark('entitlements');
     const written = receipt(app, { compatibilityId: compat.id, build, composition: baseReceipt.composition, platform: 'ios', target: TARGET, sdk, identity: '-', profile: null, entitlements: readFileSync(ent, 'utf8'), gpu: null, development: null, repackedFrom: baseCompat.id });
     writeFileSync(resolve(bundle, 'receipt.json'), whole ? written : shippedReceipt(written));

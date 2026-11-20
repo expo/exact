@@ -275,7 +275,9 @@ final class AccessibilityTreeIOSTests: XCTestCase {
     /// Two buttons (one named, one an image with no name) and a column.
     private func fixture() throws -> Presenter {
         let p = Presenter()
-        window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        let frame = CGRect(x: 0, y: 0, width: 400, height: 400)
+        window = hostedWindowScene().map { UIWindow(windowScene: $0) } ?? UIWindow(frame: frame)
+        window.frame = frame
         p.viewport.frame = window.bounds
         window.addSubview(p.viewport)
         window.makeKeyAndVisible()
@@ -418,6 +420,7 @@ final class AccessibilityTreeIOSTests: XCTestCase {
     }
 
     func testElementsAreUIKitsAnswersJoinedToTheirViews() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit computes an element's accessibility frame only in a window a scene holds") }
         let p = try fixture()
         let ax = p.axElements(roots: [p.viewport])
         XCTAssertEqual(ax["source"] as? String, "uikit")
@@ -515,13 +518,19 @@ final class AccessibilityTreeIOSTests: XCTestCase {
         XCTAssertEqual(leak["outsideModal"] as? Bool, true)
         XCTAssertEqual(leak["via"] as? String, "none")
         XCTAssertEqual(element(ax, "inside")?["outsideModal"] as? Bool, false, "inside the modal view")
-        // A modal view UIKit owns is reported, and its sibling rule is not guessed.
+        // A modal view UIKit owns, which covers the window as a presentation's dimming view does, is reported, and its
+        // sibling rule is not guessed.
         box.accessibilityViewIsModal = false
-        let dimming = UIView()
+        let dimming = UIView(frame: p.viewport.bounds)
         dimming.accessibilityViewIsModal = true
         p.viewport.addSubview(dimming)
         let kit = p.axElements(roots: [p.viewport])
         XCTAssertNotNil(element(kit, "named"))
+        let kitModal = try XCTUnwrap(kit["modal"] as? [String: Any])
+        XCTAssertEqual(kitModal["present"] as? Bool, true)
+        XCTAssertTrue(kitModal["id"] is NSNull, "a modal view that is no node of the session's")
+        let limits = (kit["coverage"] as? [String: Any])?["excluded"] as? [[String: Any]] ?? []
+        XCTAssertTrue(limits.contains { ($0["reason"] as? String)?.hasPrefix("a modal view UIKit owns") == true }, "the sibling rule is reported as not reproduced")
         XCTAssertEqual((kit["coverage"] as? [String: Any])?["complete"] as? Bool, false)
     }
 

@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { faultRequest as rawFaultRequest, preferGroups } from './agent-prefer.mjs';
 import { open } from './agent.mjs';
 import { duringOp } from './agent-drag.mjs';
+import { dragExpectation } from './agent-drag-out.mjs';
 import { equalJson } from '../host/web-js/declared-values.js';
 import { compareBox, samplePoints } from './agent-compare.mjs';
 import { perfDelta } from './agent-inspect.mjs';
@@ -1167,6 +1168,11 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
           case 'expect-state': {
             const state = await s.state(undefined, undefined, false, false, { reveal: true });
             const f = stateExpectation(state, st);
+            if (f) await fail(`${at}: ${f.message}`);
+            break;
+          }
+          case 'expect-drag': {
+            const f = dragExpectation(targetNode((await s.tree()).nodes, st.target), st);
             if (f) await fail(`${at}: ${f.message}`);
             break;
           }

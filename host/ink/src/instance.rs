@@ -322,6 +322,11 @@ impl Encoder {
         result
     }
 
+    /// Whether the effective clip is only a hardware scissor.
+    pub fn is_scissor_only(&self) -> bool {
+        !self.state.needs_layer && self.state.rounded[0].is_none() && self.state.coverage.is_none()
+    }
+
     pub fn scissor(&self) -> Scissor {
         self.state.scissor
     }

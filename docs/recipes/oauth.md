@@ -2,9 +2,9 @@
 
 `@exact/oauth` handles PKCE, tokens, refresh and sign-out. Install:
 `EXACT_APP_DIR=$PWD bun <exact2>/scripts/exact.mjs add oauth`.
-Provider setup: `bun exact.mjs docs sign-in providers`.
+Setup and tests with a local issuer: `bun exact.mjs docs sign-in providers`.
 
-Web tokens are origin-readable. [Cookie sessions](web-sessions.md) need your server.
+Web tokens are origin-readable. [Cookie sessions](web-sessions.md) need a server.
 
 ```ts
 import { oauth } from '@exact/oauth';
@@ -62,6 +62,6 @@ component Account
 With `openid`, `signIn(store, { nonce })` sends and checks an app nonce.
 [Grant and host the callback](../contract-for-agents.md#web-sign-in-callback) before deploying.
 
-For an HTTPS-only backend, declare `auth.callback https://app.example/auth/return`.
+For HTTPS, grant `auth.callback https://app.example/auth/return`.
 Apple needs `webcredentials`; Android uses Auth Tab or a verified App Link.
-Setup: [HTTPS callbacks](../contract-for-agents.md#https-callbacks).
+See [HTTPS callbacks](../contract-for-agents.md#https-callbacks).

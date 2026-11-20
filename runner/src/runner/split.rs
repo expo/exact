@@ -63,6 +63,8 @@ pub struct StackSplit {
     /// The list whose row pushes; `None` where only `navigationSplit` asked
     /// for the split.
     pub list: Option<ViewId>,
+    /// The first visible row whose outer press owner has a non-false `aria-current`.
+    pub current: Option<ViewId>,
     /// The list column's width as `navigationSplit` names it, in CSS px.
     pub width: Option<f32>,
     /// Each route above the root in its stack whose location a row of the
@@ -73,6 +75,14 @@ pub struct StackSplit {
     /// route keeps the location it had, as `replace` keeps a visit's id
     /// (LLP 1127 D3).
     pub locations: Vec<(ViewId, String)>,
+}
+
+#[derive(Default)]
+struct ListRows {
+    actionable: bool,
+    pushes: bool,
+    current: Option<ViewId>,
+    links: Vec<(ViewId, String)>,
 }
 
 impl<D: DataSource> Runner<D> {
@@ -102,21 +112,22 @@ impl<D: DataSource> Runner<D> {
         if found.is_none() && width.is_none() {
             return None;
         }
-        let (list, links) = match found {
-            Some((list, links)) => (Some(list), links),
-            None => (None, Vec::new()),
+        let (list, found_rows) = match found {
+            Some((list, rows)) => (Some(list), rows),
+            None => (None, ListRows::default()),
         };
         let locations = self.pane_locations(route);
         // A route whose location a row's link names is that row's detail.
         let rows = locations
             .iter()
             .filter_map(|(route, url)| {
-                let (row, _) = links.iter().find(|(_, href)| href == url)?;
+                let (row, _) = found_rows.links.iter().find(|(_, href)| href == url)?;
                 Some((*route, *row))
             })
             .collect();
         Some(StackSplit {
             list,
+            current: found_rows.current,
             width,
             rows,
             locations,
@@ -202,11 +213,7 @@ impl<D: DataSource> Runner<D> {
 
     /// The first list under `route`, in tree order, with a row that pushes,
     /// and that list's rows that are links to the app's routes.
-    fn pushing_list(
-        &self,
-        route: ViewId,
-        retained: Option<ViewId>,
-    ) -> Option<(ViewId, Vec<(ViewId, String)>)> {
+    fn pushing_list(&self, route: ViewId, retained: Option<ViewId>) -> Option<(ViewId, ListRows)> {
         let mut empty = None;
         let mut stack: Vec<ViewId> = self.kernel.node(route)?.children();
         stack.reverse();
@@ -224,13 +231,13 @@ impl<D: DataSource> Runner<D> {
                 continue;
             }
             if node.node_type == NodeType::List && !sideways(&node) {
-                let (mut pushes, mut actionable, mut links) = (false, false, Vec::new());
-                self.row_presses(id, &mut pushes, &mut actionable, &mut links);
-                if pushes {
-                    return Some((id, links));
+                let mut rows = ListRows::default();
+                self.row_presses(id, id, &mut rows);
+                if rows.pushes {
+                    return Some((id, rows));
                 }
-                if retained == Some(id) && !actionable {
-                    empty = Some((id, links));
+                if retained == Some(id) && !rows.actionable {
+                    empty = Some((id, rows));
                 }
                 continue;
             }
@@ -239,15 +246,25 @@ impl<D: DataSource> Runner<D> {
         empty
     }
 
-    /// Under `at`, each outermost node a press reaches: whether any pushes,
-    /// and those that are links to the app's routes, with their locations.
-    fn row_presses(
-        &self,
-        at: ViewId,
-        pushes: &mut bool,
-        actionable: &mut bool,
-        links: &mut Vec<(ViewId, String)>,
-    ) {
+    /// A section's header or footer can contain a navigation command. Only its
+    /// body supplies rows to the list (LLP 1115.002 §4).
+    fn outside_split_rows(&self, list: ViewId, node: &exact_kernel::NodeRef<'_>) -> bool {
+        node.style.display == Display::None
+            || node.props.str(PropId::Popover).is_some()
+            || node.props.str(PropId::NavigationSplit) == Some("placeholder")
+            || matches!(
+                node.props.str(PropId::SemanticTag),
+                Some("header" | "footer")
+            ) && node
+                .parent
+                .and_then(|p| self.kernel.node(p))
+                .is_some_and(|section| {
+                    section.parent == Some(list)
+                        && section.props.str(PropId::SemanticTag) == Some("section")
+                })
+    }
+
+    fn row_presses(&self, list: ViewId, at: ViewId, rows: &mut ListRows) {
         let Some(node) = self.kernel.node(at) else {
             return;
         };
@@ -255,32 +272,57 @@ impl<D: DataSource> Runner<D> {
             let Some(row) = self.kernel.node(child) else {
                 continue;
             };
-            if row.style.display == Display::None
-                || row.props.str(PropId::Popover).is_some()
-                || row.props.str(PropId::NavigationSplit) == Some("placeholder")
-            {
+            if self.outside_split_rows(list, &row) {
                 continue;
             }
             let press = self.press_writes_router(child);
             let href = row.props.str(PropId::Href).filter(|h| !h.is_empty());
             match (press, href) {
-                // A node that hears `press` is pressed, whatever it links to.
-                (Some(writes), _) => {
-                    *actionable = true;
-                    *pushes |= writes;
-                }
+                (Some(writes), _) => rows.pushes |= writes,
                 (None, Some(href)) => {
-                    *actionable = true;
                     if href.starts_with('/') && !href.starts_with("//") && self.route_matches(href)
                     {
-                        *pushes = true;
-                        // As a visit stores it, to compare with one.
-                        links.push((child, exact_route::canonical(href)));
+                        rows.pushes = true;
+                        rows.links.push((child, exact_route::canonical(href)));
                     }
                 }
-                (None, None) => self.row_presses(child, pushes, actionable, links),
+                (None, None) => {
+                    self.row_presses(list, child, rows);
+                    continue;
+                }
+            }
+            rows.actionable = true;
+            if rows.current.is_none()
+                && row
+                    .props
+                    .str(PropId::AccessibilityCurrent)
+                    .is_some_and(|c| !matches!(c, "" | "false"))
+            {
+                rows.current = Some(child);
             }
         }
+    }
+
+    /// The outer press owner of a split row hit at `target`. A nested
+    /// control takes its own press without selecting the enclosing row.
+    pub fn split_row_owner(&self, list: ViewId, mut target: ViewId) -> Option<ViewId> {
+        let mut press = None;
+        while target != list {
+            let node = self.kernel.node(target)?;
+            if self.outside_split_rows(list, &node) {
+                return None;
+            }
+            if self.press_writes_router(target).is_some()
+                || node.props.str(PropId::Href).is_some_and(|h| !h.is_empty())
+            {
+                if press.is_some() {
+                    return None;
+                }
+                press = Some(target);
+            }
+            target = node.parent?;
+        }
+        press
     }
 
     /// For a view that hears `press`, whether the action it runs writes the

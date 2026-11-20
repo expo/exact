@@ -568,7 +568,7 @@ impl StyleValue<'_> {
         if style.refuses_percent() && value.has_percent() {
             return Err(StyleValueError::WrongKind {
                 style,
-                expected: "a length or auto: CSS takes no percentage here, nor one inside calc(), min(), max() or clamp()",
+                expected: calc::without_percent(style),
             });
         }
         // An inset override resolves where the subtree's insets are made, which

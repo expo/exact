@@ -520,6 +520,23 @@ pub enum Step {
         /// Where.
         span: Span,
     },
+    /// `expect drag "<testId>" none | has "<type>" [== "<value>"] [name
+    /// "<name>"] | missing "<type>"`: what the node's drag carries, as its
+    /// admitted props declare it on every host (LLP 1094.000 D10).
+    ExpectDrag {
+        /// The node, by `testId`.
+        target: String,
+        /// The type `has` or `missing` names; none for `none`.
+        kind: Option<String>,
+        /// `has` rather than `missing`.
+        present: bool,
+        /// The string `has … ==` compares.
+        value: Option<String>,
+        /// The file's own name `has … name` compares.
+        name: Option<String>,
+        /// Where.
+        span: Span,
+    },
     /// `expect wakelock held|released`: the displayed elements requesting
     /// the lock, not whether the OS granted it (LLP 1125 D11).
     ExpectWakelock {

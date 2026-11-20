@@ -24,21 +24,21 @@ extension NavigationHost {
     /// child of the root beside the routes, which they therefore paint nothing
     /// over (`PanelSiblings.beside`: no shown route's box meets it, and no
     /// route's view covers it except to its side), paints over the container;
-    /// one a route's box meets keeps CSS's order under it. A child with no
-    /// area is decided by the box its children paint over, within what clips
-    /// them, and one with a `clip-path` by its own (`paintedBox`).
-    /// The tab panels and a tablist replaced by the native bar are the
-    /// container's own. Such a child that reaches the container's top edge
-    /// and one side (a column) grows the container's safe area on that side
-    /// by its width, so UIKit lays the bars' contents out clear of it, as a
-    /// hand-built screen insets its bars from a view beside them; the routes
-    /// clear only the part of that inset their own boxes reach
-    /// (`reportCovers`). With the tab bar hidden, an in-flow row below the
-    /// panels bounds the bottom too, whether the root's child or nested beside
-    /// them. A node nested beside the panels that paints over the container is
-    /// lifted into a layer just after it (`panelSiblings`, LLP 1083.000 D4),
-    /// and one that reaches the top edge and one side grows the safe area as a
-    /// root child does.
+    /// one a route's box meets keeps CSS's order under it. A child with no area
+    /// is decided by the box its children paint over, within what clips them,
+    /// and one with a `clip-path` by its own (`paintedBox`). The tab panels and
+    /// a tablist replaced by the native bar are the container's own. Such a
+    /// child wholly to one side of the routes grows the container's safe area
+    /// on that side up to where CSS lays the routes out (`sideReach`), so UIKit
+    /// lays the bars' contents out clear of it, as a hand-built screen insets
+    /// its bars from a view beside them, and a tab's route, which UIKit draws
+    /// over the page from the container's origin, is covered only for the part
+    /// of that inset its own box does not clear (`reportCovers`). With the tab
+    /// bar hidden, an in-flow row below the panels bounds the bottom too,
+    /// whether the root's child or nested beside them. A node nested beside the
+    /// panels that paints over the container is lifted into a layer just after
+    /// it (`panelSiblings`, LLP 1083.000 D4), and grows the safe area as a root
+    /// child does.
     func clearBesideRoutes(tabBarHidden: Bool? = nil) {
         guard let owner = primaryOwner, let root = container, let holder = owner.viewIfLoaded,
               holder.superview === ownerMount(root) else { return }
@@ -76,13 +76,13 @@ extension NavigationHost {
         // With no route in the window, under a full-screen cover, the last decision stands, as the covers do;
         // More's list, inside the container, shows no route for a node to be beside, so it lifts nothing
         if !routes.isEmpty || moreList { siblings.apply(lifts, in: ownerMount(root), after: holder) }
-        // A lifted column beside the routes; one over them, an overlay, insets nothing, as CSS moves nothing for it
+        // A lifted node beside the routes; one over them, an overlay, insets nothing, as CSS moves nothing for it
         for lift in lifts {
             let box = paintedBox(lift.node, in: root)
-            guard box.minY <= area.minY + 0.5, PanelSiblings.beside(box, routes, drawn: drawn) else { continue }
-            let left = box.minX <= area.minX + 0.5, right = box.maxX >= area.maxX - 0.5
-            if left, !right { reach.left = max(reach.left, box.maxX - area.minX) }
-            if right, !left { reach.right = max(reach.right, area.maxX - box.minX) }
+            guard PanelSiblings.beside(box, routes, drawn: drawn) else { continue }
+            let side = Self.sideReach(box, beside: routes, in: area)
+            reach.left = max(reach.left, side.left)
+            reach.right = max(reach.right, side.right)
         }
         for case let child as NodeView in ownerMount(root).subviews {
             let box = child.isHidden ? .null : paintedBox(child, in: root)
@@ -93,13 +93,17 @@ extension NavigationHost {
                 child.clearsNavigation = clears
                 changed = true
             }
-            guard clears, box.minY <= area.minY + 0.5 else { continue }
-            let left = box.minX <= area.minX + 0.5, right = box.maxX >= area.maxX - 0.5
-            if left, !right { reach.left = max(reach.left, box.maxX - area.minX) }
-            if right, !left { reach.right = max(reach.right, area.maxX - box.minX) }
+            guard clears else { continue }
+            let side = Self.sideReach(box, beside: routes, in: area)
+            reach.left = max(reach.left, side.left)
+            reach.right = max(reach.right, side.right)
         }
-        // UIKit already supplies the indicator and any inset inherited from an outer container.
-        reach.bottom = max(0, bottom - max(0, holder.safeAreaInsets.bottom - before.bottom))
+        // Add only what the container's own safe area leaves: UIKit's (the indicator, a landscape notch, an outer
+        // container's inset) and what an app's hatch added count toward the reach
+        let own = holder.safeAreaInsets
+        reach.left = max(0, reach.left - max(0, own.left - before.left))
+        reach.right = max(0, reach.right - max(0, own.right - before.right))
+        reach.bottom = max(0, bottom - max(0, own.bottom - before.bottom))
         if changed { PaintOrder.changed(ownerMount(root)) }
         // Exact's part only: what an app's hatch set on its container stays
         let now = owner.additionalSafeAreaInsets
@@ -108,6 +112,15 @@ extension NavigationHost {
         besideInsets = reach
         besideOwner = owner
         if now != wanted { owner.additionalSafeAreaInsets = wanted }
+    }
+
+    /// How far a box beside the routes asks the container's left and right safe area to reach: on a side of the
+    /// routes it lies wholly to, up to where CSS lays the routes out, as the web starts their content and headers
+    /// there. A route offset from the container's edge with nothing beside it asks nothing: UIKit's bars span the
+    /// page with their items at its edges, as a hand-built screen's do around a readable-width column.
+    static func sideReach(_ box: CGRect, beside routes: [CGRect], in area: CGRect) -> (left: CGFloat, right: CGFloat) {
+        guard let start = routes.map(\.minX).min(), let end = routes.map(\.maxX).max() else { return (0, 0) }
+        return (box.maxX <= start + 0.5 ? max(0, start - area.minX) : 0, box.minX >= end - 0.5 ? max(0, area.maxX - end) : 0)
     }
 
     /// What a route's padding clears of its controller's safe area (`safe`),

@@ -96,6 +96,7 @@ mod theme;
 mod timers;
 mod tips;
 mod tools;
+mod transfer;
 mod type_tokens;
 mod values;
 pub mod var_tokens;
@@ -1475,6 +1476,7 @@ impl<'a> Lowerer<'a> {
                 self.handler(tag, event, control, a, scope, locals, handlers)?;
             }
             tags::AttrTarget::MediaMetadata => self.media_metadata(a, scope, locals, bindings)?,
+            tags::AttrTarget::DataTransfer => self.data_transfer(a, scope, locals, bindings)?,
         }
         Ok(())
     }

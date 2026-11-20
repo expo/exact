@@ -1,16 +1,30 @@
 //! A field's caret and selection use the same visual lines as its text.
 use super::{field::PaintedField, Shape};
 use exact_runner::FieldSelection;
+use std::ops::Range;
 use tiny_skia::Transform;
 
 const HIGHLIGHT: [[u8; 4]; 2] = [[0xb4, 0xd5, 0xfe, 0xff], [0x3f, 0x63, 0x8b, 0xff]];
 
 impl super::Painter {
-    pub(super) fn field_highlight(&mut self, field: &PaintedField, selection: FieldSelection) {
+    pub(super) fn field_highlight(
+        &mut self,
+        field: &PaintedField,
+        selection: FieldSelection,
+        clip_y: Range<f32>,
+    ) {
         if selection.start == selection.end {
             return;
         }
-        for rect in field.geometry.highlight(selection.start, selection.end) {
+        // The selection and clip can each cover part of the same device pixel.
+        let visible = field.transform.invert().map(|inverse| {
+            let margin = (inverse.ky.abs() + inverse.sy.abs()) / self.scale;
+            clip_y.start - margin..clip_y.end + margin
+        });
+        for rect in field
+            .geometry
+            .highlight(selection.start, selection.end, visible)
+        {
             self.backend.fill(
                 &Shape::rect(field.place(rect)),
                 HIGHLIGHT[usize::from(self.dark)],

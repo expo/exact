@@ -111,9 +111,13 @@ fn review_timer_error_does_not_accept_an_invalidated_press_or_swipe() {
         }
         assert_eq!(p.focus, Some(composer));
         assert_eq!(actions::selected(&p), Value::str(""));
+        let runner = p.host.runner();
+        assert_eq!(runner.resource("failure"), Some(&Value::Number(0.)));
         assert!(
-            p.host.runner().journal().any(|line| line.contains("Shape")),
-            "timer error stays reported"
+            runner.failed_resources().iter().any(|(name, why)| {
+                *name == "failure" && why.contains("answered outside its shape")
+            }),
+            "the app can still read the resource failure after input"
         );
     }
 }

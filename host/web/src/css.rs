@@ -588,10 +588,35 @@ fn css_text_in(
             // @ref LLP 1123 D4 — no host chrome covers a page the browser
             // lays out: nothing is cleared, so there is nothing to turn off.
             (StyleId::SafeArea | StyleId::SafeAreaIgnore | StyleId::SafeAreaIgnoreAlign, _) => {}
-            // @ref LLP 1123 D8, D11, D12 — not CSS, and not written yet: a page's
-            // margins, reservations and bars wait for the web's owners (D17)
+            // @ref LLP 1123 D8, D11 to D14 — not CSS, and not written yet: a page's
+            // margins, reservations, bars, reach and scroll insets wait for the
+            // web's owners (D17)
             (
-                StyleId::SafeAreaBar
+                StyleId::ScrollContentInsetTop
+                | StyleId::ScrollContentInsetRight
+                | StyleId::ScrollContentInsetBottom
+                | StyleId::ScrollContentInsetLeft
+                | StyleId::ScrollVerticalIndicatorInsetsTop
+                | StyleId::ScrollVerticalIndicatorInsetsRight
+                | StyleId::ScrollVerticalIndicatorInsetsBottom
+                | StyleId::ScrollVerticalIndicatorInsetsLeft
+                | StyleId::ScrollHorizontalIndicatorInsetsTop
+                | StyleId::ScrollHorizontalIndicatorInsetsRight
+                | StyleId::ScrollHorizontalIndicatorInsetsBottom
+                | StyleId::ScrollHorizontalIndicatorInsetsLeft
+                | StyleId::SafeAreaExtendBoundsTop
+                | StyleId::SafeAreaExtendBoundsRight
+                | StyleId::SafeAreaExtendBoundsBottom
+                | StyleId::SafeAreaExtendBoundsLeft
+                | StyleId::ScrollInsetAdjustment
+                | StyleId::ScrollIndicatorAdjustment
+                | StyleId::ScrollEdgeEffectSoft
+                | StyleId::ScrollEdgeEffectHard
+                | StyleId::ScrollEdgeEffectHidden
+                | StyleId::SafeAreaReach
+                | StyleId::SafeAreaReachEdges
+                | StyleId::SafeAreaExtend
+                | StyleId::SafeAreaBar
                 | StyleId::LayoutMarginTop
                 | StyleId::LayoutMarginRight
                 | StyleId::LayoutMarginBottom

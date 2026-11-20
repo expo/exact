@@ -767,8 +767,8 @@ only its selected arm. Conditions require booleans.
 Named arguments are accepted only by the corresponding constructs: component
 uses, a native module's sources and sends (the only place a dotted name,
 `apple.desiredAccuracy=`, is one), record construction/copy, localization (`t`), placeholders (`empty`),
-canvas `surface=` bindings, and specialized host commands (`share`,
-`scrollIntoView`). Ordinary function calls are positional. Arrow expressions are admitted
+canvas `surface=` bindings, `dataTransfer=DataTransfer(…)` (LLP 1094.000),
+and specialized host commands (`share`, `scrollIntoView`). Ordinary function calls are positional. Arrow expressions are admitted
 as the callbacks to `map` and `filter`, with at most item and index parameters;
 they are not first-class values or event handlers.
 
@@ -874,6 +874,8 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
                   [ "at" NUMBER ] [ "gain" NUMBER ] [ "ends" NUMBER ]
                   [ "playbackRate" NUMBER ] [ "pan" [ "-" ] NUMBER ] [ "by" IDENT ] NL
               | "expect" "wakelock" ( "held" | "released" ) NL
+              | "expect" "drag" STRING ( "none" | "has" STRING [ "==" STRING ] [ "name" STRING ] | "missing" STRING ) NL
+                                                     (* what the node's drag carries, as `tree` shows it (LLP 1094.000) *)
               | "expect" "midi" ( "sent" | "missing" ) STRING HEX { HEX } [ "at" NUMBER ] NL
               | "expect" "mediasession" ( IDENT "==" ( STRING | "none" )
                   | ( "has" | "missing" ) STRING ) NL ;
@@ -1803,8 +1805,8 @@ makes no network requests.
   on the web, Markdown shown as it reads, with the syntax hidden away from the
   caret; on macOS and iOS, the platform's text view with the syntax dimmed and
   each link's `](destination)` hidden, as the web hides it. Linux, Windows and
-  Android edit it as a plain textarea of the source, and `format` changes
-  nothing there. Without `markup` the same source is a plain textarea: the
+  Android edit the source as plain text. `setSelectionRange` selects source
+  offsets. `format` and `setRangeText` report a refusal in the app log. Without `markup` the same source is a plain textarea: the
   source mode.
 - A thematic break (`---`) is drawn in the colour of the text around it,
   dimmed, so that it reads on a dark ground as on a light one: on the web a
@@ -2445,6 +2447,19 @@ brings a drag of those files over the target and leaves it there (for a
 screenshot); `tap <target> drop <path…>` drops it, and `tap <target>
 dragleave` takes it away undropped.
 
+`draggable` is HTML's attribute: a node a person can lift and drop into
+another app, a boolean that may be bound, on a box, a `link`, a `button` or
+an `image` (LLP 1094.000). `dataTransfer=DataTransfer(text=, url=, files=[…])`
+declares what the drag carries, by `DataTransfer`'s names: `text` as
+`text/plain`, `url` (absolute `http:` or `https:`) as `text/uri-list`, and
+each file as itself, a shipped `assets/` file or an `app:/` path behind
+`fs.read`. Each needs the other. The data is declared on the node, not set in
+a `dragstart` listener, because every platform takes a drag's items as it
+begins; `dragstart`, `drag` and `dragend` are refused for now
+(`lower-handler-later`). The runner admits each file and `url` for the host
+and journals a refusal (`drag: refused: …`); `expect drag` asserts what a node
+carries ([recipe](recipes/drag-out.md)). No host lifts it to the system yet.
+
 `beforeunload` is DOM's: the window is about to close or the app to quit
 (macOS: its close button, File ▸ Close Window, ⌘Q; the web: leaving the page).
 Every element that declares it hears it; an action that calls `preventDefault()`
@@ -2700,7 +2715,8 @@ handler of a press that focuses the field stays once the press ends, as in
 Chrome (an address bar selects its URL as a click focuses it); a press that
 drags or double-clicks keeps what it selected.
 
-On **web (JS and wasm), macOS, iOS and Linux**, `setRangeText(id, text)` replaces the
+On **web (JS and wasm), macOS, iOS, Linux, Windows and Android**,
+`setRangeText(id, text)` on a plain text field replaces the
 current selection; `setRangeText(id, text, start, end[, selectionMode])`
 replaces the given UTF-16 range. `selectionMode` is `preserve` by default,
 or `select`, `start`, `end`, following HTML. It does not focus the field or
@@ -2713,8 +2729,9 @@ app's own is, clearing only that field's undo history. On the web it is HTML's,
 which Chrome makes no undo step, and Linux keeps no field undo history. Invalid
 ranges, modes, unsupported input types and missing ids log a refusal without editing. On the Markdown
 editor (web, macOS and iOS) the offsets are the source's and each call is one
-undo step ([Markdown](#markdown-markup-format-select)); Linux refuses it there.
-Windows, Android and terminal do not support this command yet.
+undo step ([Markdown](#markdown-markup-format-select)). Linux, Windows and
+Android refuse range replacement in Markdown textareas. The terminal host
+refuses the command for every field.
 
 **Deliberate deviation (Charlie, 2026-10-12):** unlike the DOM method,
 Exact fires one noncancelable `input` after a successful replacement, even

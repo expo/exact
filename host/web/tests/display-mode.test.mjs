@@ -183,6 +183,11 @@ test('viewport media changes update resources, rendered text and packed facts', 
     // A posture-only change must notify the app even when the viewport never resizes
     await cdp.send('Emulation.setDevicePostureOverride', { posture: { type: 'folded' } });
     await foldPage.waitForFunction(() => document.querySelector('[data-testid="posture"]')?.textContent === 'folded');
+    // The agent's substitute reaches the app once the agent announces it (LLP 1078 D6): its copy of the navigation
+    // module is not the page's, and the facts re-answer on the announcement alone
+    const preferred = await foldPage.evaluate(() => exact.agentSettled({ op: 'prefer', fold: { cols: 3, rows: 1, gap: 0 } }));
+    expect(preferred.fold?.['horizontal-viewport-segments']).toBe(3);
+    await foldPage.waitForFunction(() => document.querySelector('[data-testid="segments"]')?.textContent === '3/1', null, { timeout: 10000 });
   } finally {
     await browser?.close();
     server?.stop(true);

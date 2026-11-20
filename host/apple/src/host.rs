@@ -561,18 +561,29 @@ impl<D: DataSource> Host<D> {
         }
         // A display presents its pictures: `presented` waits for the first's.
         let was = exact_runner::page::set_awaits_present(start_on_frame);
-        let runner = Runner::boot_with_delivery_linked(
-            links.runner,
-            links.modules,
-            plan,
-            data,
-            kernel,
-            carried,
-            snapshot,
-            facts,
-            viewport,
-            launch,
-        );
+        let platform = if cfg!(target_os = "macos") {
+            exact_runner::page::Platform::Macos
+        } else if cfg!(target_os = "tvos") {
+            exact_runner::page::Platform::Tvos
+        } else if cfg!(target_os = "watchos") {
+            exact_runner::page::Platform::Watchos
+        } else {
+            exact_runner::page::Platform::Ios
+        };
+        let runner = platform.boot(|| {
+            Runner::boot_with_delivery_linked(
+                links.runner,
+                links.modules,
+                plan,
+                data,
+                kernel,
+                carried,
+                snapshot,
+                facts,
+                viewport,
+                launch,
+            )
+        });
         exact_runner::page::set_awaits_present(was);
         let mut runner = runner.map_err(HostError::Runner)?;
         runner.read_only_store(crate::watch_sync::read_only_names());

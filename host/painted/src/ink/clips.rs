@@ -30,25 +30,31 @@ impl Ink {
         let bounds = mask.map_or(bounds, |mask| {
             bounds.intersect(Scissor::from_rect(mask.rect))
         });
+        // Keep the texels next to the mask bounds for linear filtering.
+        let [x, y, width, height] = bounds.rect();
+        let sample_bounds = Scissor::from_rect([x - 1., y - 1., width + 2., height + 2.]);
         let mut encoder = self.encoder.fork();
+        let mask_in_first_draw = mask.is_some_and(|mask| {
+            if encoder.push_clip(Clip::Coverage(mask_clip(mask))).is_ok() {
+                true
+            } else {
+                encoder.pop_clip();
+                false
+            }
+        });
+        // Outset, so the fill's own antialiased corners fall outside the target.
+        let cover = [-2., -2., rect[2] + 4., rect[3] + 4.];
         encoder
             .push(
-                Instance::new(Kind::RoundedRect, Brush::Solid, rect),
+                Instance::new(Kind::RoundedRect, Brush::Solid, cover),
                 Bindings::default(),
             )
             .map_err(|_| Error::Invalid("parent clip mask".into()))?;
-        let parent = self.pool.take(&mut self.device)?;
-        self.device
-            .render(&encoder.finish(), parent, Some([0.; 4]))?;
-        exact_ink::counters::add(exact_ink::counters::Counter::ClipMasks, 1);
-        let texture = if let Some(mask) = mask {
+        let parent = self.render_mask(encoder, sample_bounds)?;
+        let texture = if let Some(mask) = mask.filter(|_| !mask_in_first_draw) {
             let mut encoder = Encoder::new(self.size[0], self.size[1]);
             let mut instance = Instance::new(Kind::Layer, Brush::Image, rect);
-            instance.set_mask(CoverageClip {
-                texture: mask.entry.texture,
-                rect: mask.rect,
-                uv: mask.entry.uv,
-            });
+            instance.set_mask(mask_clip(mask));
             encoder
                 .push(
                     instance,
@@ -59,11 +65,7 @@ impl Ink {
                     },
                 )
                 .map_err(|_| Error::Invalid("clip intersection".into()))?;
-            let target = self.pool.take(&mut self.device)?;
-            self.device
-                .render(&encoder.finish(), target, Some([0.; 4]))?;
-            exact_ink::counters::add(exact_ink::counters::Counter::ClipMasks, 1);
-            target
+            self.render_mask(encoder, sample_bounds)?
         } else {
             parent
         };
@@ -77,6 +79,17 @@ impl Ink {
                 bounds.height as f32 / self.size[1] as f32,
             ],
         })
+    }
+
+    fn render_mask(&mut self, encoder: Encoder, bounds: Scissor) -> Result<TextureId> {
+        let mut frame = encoder.finish();
+        for batch in &mut frame.batches {
+            batch.scissor = batch.scissor.intersect(bounds);
+        }
+        let target = self.pool.take(&mut self.device)?;
+        self.device.render(&frame, target, Some([0.; 4]))?;
+        exact_ink::counters::add(exact_ink::counters::Counter::ClipMasks, 1);
+        Ok(target)
     }
 
     pub(super) fn open_clip_group(&mut self, mask: Coverage) -> Result<()> {
@@ -158,7 +171,12 @@ impl Ink {
             None => None,
         };
         if let Some(mask) = coverage {
-            self.open_clip_group(mask)?;
+            // Keep the same clip slots available to children as the flattened mask.
+            if self.encoder.is_scissor_only() && dev.kx == 0. && dev.ky == 0. {
+                self.encoder.push_combined_clip(mask_clip(mask));
+            } else {
+                self.open_clip_group(mask)?;
+            }
             self.clips.push(());
         } else {
             self.encoder
@@ -219,4 +237,12 @@ fn simple(shape: &Shape, dev: Transform, size: [u32; 2]) -> Option<Clip> {
         rect: [edges[0], edges[1], edges[2] - edges[0], edges[3] - edges[1]],
         radii,
     }))
+}
+
+pub(super) fn mask_clip(mask: Coverage) -> CoverageClip {
+    CoverageClip {
+        texture: mask.entry.texture,
+        rect: mask.rect,
+        uv: mask.entry.uv,
+    }
 }

@@ -54,6 +54,7 @@ public enum ExactEnv {
     /// Whether the agent's world is settled between calls: native animation
     /// applies at once. False under `platform` timing.
     public static let agentFreezes = agentMode && agentTiming != "platform"
+    static let postsLiveWork = !agentFreezes && environment["EXACT_FILL_SYNC"] != "1"
     public static let smoke = environment["EXACT_SMOKE"] == "1"
     /// Milliseconds since the process's `main`: the wall clock for startup stamps.
     public static let t0 = CACurrentMediaTime()
@@ -404,6 +405,7 @@ public final class ExactSession {
     var clockDue: Double?
     /// An advance of a deadline already due is running (`advanceIfDue`)
     var advancingDue = false
+    var postsTimerAdvances = ExactEnv.postsLiveWork
     lazy var taskTimers = NativeTaskTimers(now: { [weak self] in self?.now() ?? 0 }, ready: { [weak self] in self?.deliverNativeTimer() })
     lazy var timerAdmissions = TimerAdmissions(session: self)
     /// The agent's clock (milliseconds) when the driver owns time; nil runs
@@ -461,9 +463,8 @@ public final class ExactSession {
     // main instead, and runs after the slice lands, in order.
     private(set) var fillInFlight = false { didSet { releaseWaitingFirings() } }
     typealias IdleWork = (views: Int?, work: () -> Void, cancelled: (() -> Void)?, cause: AnyObject?)
-    /// The work waiting, in the order asked (work asked while a slice lands, while work waits or while it runs joins the
-    /// end, so nothing runs ahead of work asked before it), and whether a drain of it runs (`runWaitingWork`)
-    var afterFill: [IdleWork] = [], draining = false
+    /// Work waiting for a slice or a batch to finish, in request order. A stale slice releases its work next turn.
+    var afterFill: [IdleWork] = [], draining = false, idleScheduled = false
     /// A slice's batch is applying, ahead of the work that waited for it
     var fillLanding = false
     private(set) var viewsEpoch = 0
@@ -520,7 +521,7 @@ public final class ExactSession {
     /// Read when a session wires itself; tests set it to drive the
     /// asynchronous path on macOS.
     #if os(iOS) || os(tvOS)
-    nonisolated(unsafe) static var asyncFills = !ExactEnv.agentFreezes && ExactEnv.environment["EXACT_FILL_SYNC"] != "1"
+    nonisolated(unsafe) static var asyncFills = ExactEnv.postsLiveWork
     #else
     nonisolated(unsafe) static var asyncFills = false
     #endif
@@ -667,11 +668,14 @@ public final class ExactSession {
         // A reply the slices released (`afterFill`) may have left a deadline
         // due: it advances once they have landed, unless a batch waits on them.
         // Sizes measured as they applied are reported as it ends, whether its last batch applied or was skipped (`reportMeasured`).
-        defer { landing = false; if !applying { reportMeasured() }; workEnded(); if !holdingReports { advanceIfDue() } }
+        defer { landing = false; runWaitingWork(); if !applying { reportMeasured() }; workEnded(); if !holdingReports { advanceIfDue() } }
         while true {
-            while let first = published.earliest, first < limit, let next = published.next() { takePublished(next) }
-            guard let index = nextLanding(before: limit) else { break }
-            land(pending.remove(at: index))
+            let first = min(published.earliest ?? limit, limit)
+            if let index = nextLanding(before: first) {
+                land(pending.remove(at: index))
+            } else if first < limit, let next = published.next() {
+                takePublished(next)
+            } else { break }
         }
         // What was made after the batch being applied lands after it, in a turn of its own.
         if published.claimDrain() { DispatchQueue.main.async { [weak self] in self?.landPublished() } }
@@ -733,7 +737,7 @@ public final class ExactSession {
         fillLanding = false
         if state != .destroyed { presenter.collections.landed(view, at: ProcessInfo.processInfo.systemUptime) }
         guard stale else { return runWaitingWork() }
-        DispatchQueue.main.async { [weak self] in self?.runWaitingWork() }
+        scheduleWaitingWork()
     }
 
     /// Land every session's slice in flight.
@@ -1101,6 +1105,7 @@ public final class ExactSession {
         }
         // What the pass did that a scroll moves (`scrolledWithoutPass`).
         if scrolled { presenter.scrolledWithoutPass() }
+        runWaitingWork()
         drainReports()
         workEnded()
         advanceIfDue()
@@ -1108,7 +1113,7 @@ public final class ExactSession {
 
     /// Reports laid-out control sizes after earlier owner batches land (LLP 1034 T4); an in-flight slice leaves the report to its landing.
     func reportMeasured() {
-        guard !holdingReports, !(applying || landing || fillInFlight) || !(ownerInFlight || hasPublished()) else { return }
+        guard !holdingReports, !landing, !(applying || fillInFlight) || !(ownerInFlight || hasPublished()) else { return }
         presenter.controls.reportMeasured()
     }
 
@@ -1158,6 +1163,7 @@ public final class ExactSession {
             guard !drained else { return }
             drained = true; insideApply = false
             if !landing, !pending.isEmpty { landFill() }
+            runWaitingWork()
             if transaction { CATransaction.commit() }
         }
         defer { drain() }

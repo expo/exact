@@ -60,6 +60,8 @@ package struct OwnerUpdateIOS: Equatable {
 
     /// The owner view's raw `safeAreaInsets`; `nil` while it is out of a window (D3, D9).
     package var band: UIEdgeInsets?
+    /// Exact's writes to the owner's controller and their effects, in recorded order (D11).
+    package var contributions: [ContributionsIOS.Entry] = []
     /// The owner's containment ancestry, its controller first (D9, "The native chain").
     package var chain: [ChainEntry] = []
     package var relations: [Related] = []
@@ -70,9 +72,28 @@ package struct OwnerUpdateIOS: Equatable {
 
     /// The update of the owner whose controller is `controller` and whose view is `view` (its
     /// surface), in a session shown by `session`. `controller` manages `view`: for a route shown
-    /// in a boot surface, the controller that surface belongs to.
+    /// in a boot surface, the controller that surface belongs to. Exact's writes to the controller
+    /// are applied first, so the band and their effects describe the same native layout (D11); it
+    /// is not to be called from a callback those writes raise: each trigger of a sample, D2's
+    /// layout, trait, keyboard and hinge triggers among them, reaches it through
+    /// `SafeAreaSteps.react`, so one raised during the writes runs after them.
     package static func sample(controller: UIViewController, view: UIView, session: UIView?) -> OwnerUpdateIOS {
         var update = OwnerUpdateIOS()
+        // The reactions the ledger's writes raise wait until the band is read, so none runs between
+        // measuring the effects and reading what they describe
+        SafeAreaSteps.stepping { update = read(controller: controller, view: view, session: session) }
+        return update
+    }
+
+    private static func read(controller: UIViewController, view: UIView, session: UIView?) -> OwnerUpdateIOS {
+        var update = OwnerUpdateIOS()
+        if let ledger = ContributionsIOS.existing(on: controller) {
+            // Assert, in debug builds, that no sample comes from a callback the ledger's writes raise,
+            // which would read its effects half measured; a reaction they held reads them settled
+            assert(!ledger.writing, "an owner sampled during its ledger's writes")
+            ledger.apply()
+            update.contributions = ledger.entries
+        }
         update.band = view.window == nil ? nil : view.safeAreaInsets
         for c in sequence(first: controller, next: \.parent) {
             var kinds: UInt8 = 0
@@ -119,8 +140,8 @@ package struct OwnerUpdateIOS: Equatable {
 
     /// The update in the kernel's wire form (`OwnerUpdate::encode`): each field in order, an
     /// optional one after a presence byte, a list after its `u32` length, little-endian;
-    /// insets top, right, bottom, left. Exact's contributions are none and the keyboard
-    /// absent: their executors sample them.
+    /// insets top, right, bottom, left. A contribution is its node, its operation and its
+    /// effect. The keyboard is absent: its executor samples it.
     package func encode() -> Data {
         var out = Data()
         func u8(_ v: UInt8) { out.append(v) }
@@ -134,7 +155,12 @@ package struct OwnerUpdateIOS: Equatable {
         }
         func target(_ t: Target) { out.append(Self.encode(target: t)) }
         optional(band, edges)
-        u32(0)
+        u32(UInt32(contributions.count))
+        for c in contributions {
+            u32(c.identity.node)
+            u8(c.identity.operation.rawValue)
+            edges(c.effect)
+        }
         u32(UInt32(chain.count))
         for entry in chain {
             target(entry.target)

@@ -193,7 +193,7 @@ record_variants! {
         ExpectText { target, value, span }, ExpectState { name, comparison, value, span },
         ExpectSound { src, present, at, gain, ends, playback_rate, pan, by, span },
         ExpectMediaSession { field, value, span }, ExpectMediaSessionAction { action, present, span },
-        Midi { step, span }, ExpectWakelock { held, span },
+        Midi { step, span }, ExpectWakelock { held, span }, ExpectDrag { target, kind, present, value, name, span },
         Perf { steps, span }, ExpectPerf { subject, target, at_most, value, span }, ExpectNoFailures { span },
     }
 }
@@ -354,6 +354,7 @@ impl Step {
             | Step::ExpectText { span, .. }
             | Step::ExpectState { span, .. }
             | Step::ExpectWakelock { span, .. }
+            | Step::ExpectDrag { span, .. }
             | Step::ExpectSound { span, .. }
             | Step::Midi { span, .. }
             | Step::ExpectMediaSession { span, .. }

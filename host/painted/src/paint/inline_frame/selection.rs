@@ -131,7 +131,7 @@ impl PaintedInline {
                 start = end;
             }
             Shaped {
-                geom: Geometry::new(p, &value, false, 0., 0.),
+                geom: Geometry::new(p, &value, false, 0., 0., None),
                 value: value.into(),
                 authored: source.authored.clone(),
                 runs,
@@ -188,7 +188,7 @@ impl PaintedInline {
         let bottoms = self.captured.paragraph.line_bottoms();
         shaped
             .geom
-            .highlight(range.start, range.end)
+            .highlight(range.start, range.end, None)
             .into_iter()
             .filter_map(|r| {
                 let line = bottoms.partition_point(|&bottom| bottom <= r.1);

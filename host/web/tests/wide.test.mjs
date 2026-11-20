@@ -58,7 +58,8 @@ const page = (body, routePaths = [], waitForActivation = false) => style + `<div
   window.ready = true;
 </script>`;
 
-/** The page (`html`) in headless Chrome at `w`×800: `test(evaluate, size)`, `size(w)` resizing the viewport. */
+/** The page (`html`) in headless Chrome at `w`×800: `test(evaluate, size, click, call, reopen)`, `size(w)` resizing the
+ * viewport and `reopen()` loading the page again. */
 async function inChrome(html, test, w = 1280) {
   const server = createServer((req, res) => {
     if (req.url === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(html); return; }
@@ -83,9 +84,10 @@ async function inChrome(html, test, w = 1280) {
       await call('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
       await call('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
     };
+    const url = `http://127.0.0.1:${server.address().port}/`, reopen = () => readyPage(cdp, sessionId, url);
     await size(w);
-    await readyPage(cdp, sessionId, `http://127.0.0.1:${server.address().port}/`);
-    await test(evaluate, size, click, call);
+    await reopen();
+    await test(evaluate, size, click, call, reopen);
   } finally {
     await suite.close();
     server.close();
@@ -255,6 +257,89 @@ check('navigationSplit opts a stack out, or names the width of a list the rule d
     expect(await evaluate(`[shown('r1'), box('r1'), box('r2'), back('r2')]`)).toEqual([true, [0, 0, 280, 800], [280, 0, 1000, 800], false]);
   });
 }, 60000);
+
+check('a list and its detail split at the fold, whatever the window\'s width or the list\'s', async () => {
+  // LLP 1078 D6: Chromium's own fold (a display feature) makes two viewport segments, here the iPhone Duo's at 130°
+  // (LLP 1078: 0–455.5 and 495.5–951, a 40-point band), in whole pixels
+  const stack = ({ extra = '', dir = 'ltr', inner = '', rows = true, nav = 'width:100%' } = {}) => `<main id="nav" navigationKey="1" navigationBack="back" dir="${dir}" style="${nav};height:100%;position:relative">${list('r1', 1, rows, extra, inner)}${detail('r2', 2)}</main>`;
+  const folded = (call, width, offset, maskLength, orientation = 'vertical') => call('Emulation.setDeviceMetricsOverride', { width, height: 800, deviceScaleFactor: 1, mobile: false, displayFeature: { orientation, offset, maskLength } })
+    .then(() => call('Runtime.evaluate', { expression: 'new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))', awaitPromise: true }));
+  const pick = `{ const row = document.getElementById('r1-bo'); row.addEventListener('click', () => push('2', '/people/bo'), {once:true}); row.click(); }`;
+  const split = `document.getElementById('r1').getAttribute('data-exact-split')`;
+  await inChrome(page(stack()), async (evaluate, size, click, call, reopen) => {
+    // The list is the leading segment, and the platform's placeholder and then the detail are the trailing one
+    await folded(call, 951, 456, 40);
+    expect(await evaluate(`[${split}, box('r1'), placeholder('nav')?.[1]]`)).toEqual(['list', [0, 0, 456, 800], 496]);
+    await evaluate(pick);
+    expect(await evaluate(`[shown('r1'), shown('r2'), box('r2'), back('r2')]`)).toEqual([true, true, [496, 0, 455, 800], false]);
+    // Narrower than the wide rule's 900, a window across a fold still splits there
+    await folded(call, 700, 330, 40);
+    expect(await evaluate(`[box('r1'), box('r2')]`)).toEqual([[0, 0, 330, 800], [370, 0, 330, 800]]);
+    // A horizontal fold keeps the wide rule, as UIKit's detail spans the Duo's tall inner display
+    await folded(call, 951, 380, 40, 'horizontal');
+    expect(await evaluate(`[box('r1'), box('r2')]`)).toEqual([[0, 0, 320, 800], [320, 0, 631, 800]]);
+    // The fold gone: the wide rule again, then a phone's pushed stack
+    await size(1280);
+    expect(await evaluate(`[box('r1'), box('r2')]`)).toEqual([[0, 0, 320, 800], [320, 0, 960, 800]]);
+    await size(390);
+    expect(await evaluate(`[shown('r1'), box('r2')]`)).toEqual([false, [0, 0, 390, 800]]);
+    // A page that opens folded hears the unfold, which keeps the window's size and so fires no resize
+    await folded(call, 951, 456, 40);
+    await reopen();
+    expect(await evaluate(`window.resizes = 0; addEventListener('resize', () => resizes++); [innerWidth, box('r1')]`)).toEqual([951, [0, 0, 456, 800]]);
+    await call('Emulation.setDeviceMetricsOverride', { width: 951, height: 800, deviceScaleFactor: 1, mobile: false });
+    expect(await evaluate(`new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('the unfold was not projected: ' + box('r1'))), 10000);
+      (function check() { if (box('r1')[2] === 320) { clearTimeout(timer); resolve(resizes); } else requestAnimationFrame(check); })();
+    })`)).toBe(0);
+  });
+  // The fold wins over a named width, which also splits rows the rule does not find; `none` still opts out
+  await inChrome(page(stack({ extra: 'navigationSplit="280"', rows: false })), async (evaluate, size, click, call) => {
+    await folded(call, 951, 456, 40);
+    expect(await evaluate(`[${split}, box('r1')]`)).toEqual(['list', [0, 0, 456, 800]]);
+  });
+  await inChrome(page(stack({ extra: 'navigationSplit="none"' })), async (evaluate, size, click, call) => {
+    await folded(call, 951, 456, 40);
+    expect(await evaluate(`[${split}, placeholder('nav')]`)).toEqual([null, null]);
+  });
+  // A stack beside a rail, or within one segment, keeps the wide rule, which pushes across this fold, rather than
+  // split into a sliver; a stack inset by a border still splits at the fold
+  for (const nav of ['width:auto;margin-left:240px', 'width:400px']) {
+    await inChrome(page(stack({ nav })), async (evaluate, size, click, call) => {
+      await folded(call, 951, 456, 40);
+      expect(await evaluate(`[${split}, placeholder('nav')]`)).toEqual([null, null]);
+    });
+  }
+  await inChrome(page(stack({ nav: 'width:100%;box-sizing:border-box;border:1px solid' })), async (evaluate, size, click, call) => {
+    await folded(call, 951, 456, 40);
+    await evaluate(pick);
+    expect(await evaluate(`[box('r1'), box('r2')]`)).toEqual([[1, 1, 455, 798], [496, 1, 454, 798]]);
+  });
+  // Right to left, the list is the segment at the inline start, on the right
+  await inChrome(page(stack({ dir: 'rtl' })), async (evaluate, size, click, call) => {
+    await folded(call, 951, 456, 40);
+    await evaluate(pick);
+    expect(await evaluate(`[box('r1'), box('r2')]`)).toEqual([[496, 0, 455, 800], [0, 0, 456, 800]]);
+  });
+  // The agent's substitute, set from another copy of the module as the JS target's agent is, moves the split when the
+  // agent announces it, and only then
+  await inChrome(page(stack()), async (evaluate) => {
+    const prefer = (fold) => evaluate(`import('./agent-navigation.js').then(({ preferFold, FOLD_EVENT }) => { preferFold(${JSON.stringify(fold)}); return FOLD_EVENT; })`);
+    const event = await prefer({ cols: 2, rows: 1, gap: 40 });
+    expect(await evaluate(`box('r1')`)).toEqual([0, 0, 320, 800]);
+    await evaluate(`dispatchEvent(new Event(${JSON.stringify(event)}))`);
+    expect(await evaluate(`box('r1')`)).toEqual([0, 0, 456, 800]);
+    await prefer(null);
+    await evaluate(`dispatchEvent(new Event(${JSON.stringify(event)}))`);
+    expect(await evaluate(`box('r1')`)).toEqual([0, 0, 320, 800]);
+  }, 951);
+  // The author's placeholder is the trailing segment, a pixel early, inside the band, as the previous test's OWED note says
+  const own = '<div navigationSplit="placeholder" id="own" style="display:none"><span>Pick a person</span></div>';
+  await inChrome(page(stack({ inner: own })), async (evaluate, size, click, call) => {
+    await folded(call, 951, 456, 40);
+    expect(await evaluate(`box('own')`)).toEqual([495, 0, 455, 800]);
+  });
+}, 120000);
 
 // Stage 6d's projection inputs. These DOM fixtures test navigation.js, not
 // whether either compiler emits the facts; compiled-plan coverage is separate.

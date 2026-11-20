@@ -116,8 +116,8 @@ impl Em<'_> {
         if !self.paint || kind.is_svg_element() || kind.is_metadata() {
             return;
         }
-        if let Some((name, value)) = crate::paint::binding(self.plan, kind, b, || {
-            self.uses.share('t', crate::paint::transitions())
+        if let Some((name, value)) = crate::paint::binding(self.plan, kind, b, |parser| {
+            parser.emit(self.plan, &mut self.uses)
         }) {
             let f = if b.kind == BindingKind::Style && b.id == StyleId::BackdropFilter as u16 {
                 format!("()=>{}(({f})(),false)", self.uses.rt("backdropValue"))
@@ -492,7 +492,7 @@ impl Em<'_> {
                 Some(style::composed_transition_map(press, shift)),
             ),
             StyleId::LayoutTransition => {
-                let parser = self.uses.share('t', crate::paint::transitions());
+                let parser = crate::paint::Parser::Transition.emit(plan, &mut self.uses);
                 let (say, view) = (self.uses.rt("say"), self.uses.rt("viewId"));
                 one("--exact-layout-transition", Some(crate::presence::layout_transition_map(&parser, &format!("{view}({e})"), &say)))
             }
@@ -689,7 +689,7 @@ impl Em<'_> {
         }
         // Probe the new region value while presence can still measure the old box.
         if id == StyleId::LayoutTransition {
-            let parser = self.uses.share('t', crate::paint::transitions());
+            let parser = crate::paint::Parser::Transition.emit(plan, &mut self.uses);
             let lt = self.uses.rt("lt");
             let _ = write!(self.out, "{lt}({e},{parser},{f});");
         }

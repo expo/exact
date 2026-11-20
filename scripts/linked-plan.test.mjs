@@ -1,6 +1,6 @@
 // Package and linked-bake freshness (scripts/linked-plan.mjs, scripts/cargo-dep-info.mjs and agent-launch.mjs
 // `receiptChanges`): what a watched package directory, an optional design and a linked bake's inputs make stale.
-import { afterEach, beforeEach, test, expect } from 'bun:test';
+import { afterEach, beforeEach, test, expect, setSystemTime } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
@@ -435,14 +435,14 @@ echo "cargo::rustc-env=THEME=$THEME"
 
 test('Android splits complete bakes and preserves authored build script outputs', async () => {
   const {androidLinkable, buildAndroidBake} = await import('./linked-plan.mjs');
-  const {authoredCrate, copiedBuildScripts} = await import('./app-shells.mjs');
+  const {authoredCrates, copiedBuildScripts} = await import('./app-shells.mjs');
   const dir = mkdtempSync(resolve(import.meta.dir, '../target/android-build-script-'));
   try {
     const src_path = resolve(dir, 'build.rs'), entry = resolve(dir, 'lib.rs');
     const pkg = {targets:[{kind:['custom-build'], src_path}, {kind:['cdylib'], src_path:entry}]};
     const [, standard] = copiedBuildScripts().android;
     writeFileSync(src_path, standard);
-    const stock = authoredCrate(dir, 'android', 'test', 'Test')['android/src/lib.rs'];
+    const stock = authoredCrates(dir, {}, 'test', ['android']).android['src/lib.rs'];
     writeFileSync(entry, stock + 'const PLAN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/app.plan"));\n');
     expect(androidLinkable(pkg)).toBe(false);
     writeFileSync(entry, stock);
@@ -584,8 +584,12 @@ test.skipIf(process.platform === 'win32').each(['known', 'discovered', 'bootstra
       recordRustBake(env);
       const bake = () => bakeOutside({dir, name:'fixture'}, 'macos', 'target', env);
       if (stage === 'bootstrap') {
-        // The bootstrap read FIRST, then an editor restored older bytes before Cargo returned.
-        writeFileSync(registry, JSON.stringify({executable, cwd:dir, env:{}, started:statSync(source).ctimeMs}));
+        // The bootstrap read FIRST, then an editor restored older bytes before Cargo returned. bake/src/link.rs
+        // registers its start on the system clock, which file change times can trail by a tick (here far ahead), and
+        // `since`, a stamp's time in the bake directory, on the clock they read.
+        const stamp = resolve(baked, '.started'); writeFileSync(stamp, '');
+        writeFileSync(registry, JSON.stringify({executable, cwd:dir, env:{}, started:Date.now() + 60_000, since:Math.floor(statSync(stamp).mtimeMs)}));
+        rmSync(stamp);
         if (kind === 'removed') rmSync(source);
         else { writeFileSync(source, 'RESTORED'); utimesSync(source, new Date(0), new Date(0)); }
         rmSync(resolve(baked, 'inputs.json'));
@@ -593,13 +597,49 @@ test.skipIf(process.platform === 'win32').each(['known', 'discovered', 'bootstra
       } else {
         writeFileSync(source, 'SECOND'); writeFileSync(trigger, '');
         if (stage === 'discovered') rmSync(resolve(baked, 'inputs.json'));
-        bake(); expect(readFileSync(resolve(baked, 'app.plan'), 'utf8')).toBe('SECOND');
+        // File change times can trail Date.now() by a clock tick. A lead far longer than one makes the baker's edit
+        // seem to precede its run every time, not only when the tick falls there.
+        setSystemTime(new Date(Date.now() + 60_000));
+        try { bake(); } finally { setSystemTime(); }
+        expect(readFileSync(resolve(baked, 'app.plan'), 'utf8')).toBe('SECOND');
       }
       bake(); expect(readFileSync(resolve(baked, 'app.plan'), 'utf8')).toBe(kind === 'removed' ? 'ABSENT' : 'RESTORED');
       const record = readFileSync(resolve(baked, 'inputs.json'), 'utf8');
       bake(); expect(readFileSync(resolve(baked, 'inputs.json'), 'utf8')).toBe(record);
     } finally { rmSync(dir, {recursive:true, force:true}); }
   });
+
+test.skipIf(process.platform === 'win32')('a later Cargo bootstrap with the same plan records its own watches over an earlier linked bake\'s', async () => {
+  const {bakeOutside, recordRustBake} = await import('./linked-plan.mjs');
+  const dir = mkdtempSync(resolve(import.meta.dir, '../target/linked-order-'));
+  try {
+    const baked = resolve(dir, 'bakes/macos-target.baked'), executable = resolve(dir, 'baker');
+    const read = resolve(dir, 'read'), added = resolve(dir, 'added');
+    mkdirSync(baked, {recursive:true}); mkdirSync(resolve(dir, 'data'));
+    writeFileSync(resolve(dir, 'data/Cargo.toml'), ''); writeFileSync(read, 'same'); writeFileSync(added, 'same');
+    writeFileSync(executable, `#!/bin/sh\nset -e\nprintf SAME > "$OUT_DIR/app.plan"\necho baked >> "$OUT_DIR/runs"\necho 'cargo:rerun-if-changed=${read}'\n`, {mode:0o755});
+    writeFileSync(resolve(baked, 'app.plan'), 'SAME'); writeFileSync(resolve(baked, 'compat.json'), '{}');
+    const registry = resolve(baked, 'rust-baker.json'), output = resolve(baked, 'rust-output.txt');
+    writeFileSync(registry, JSON.stringify({executable, cwd:dir, env:{}, started:0}));
+    writeFileSync(output, `cargo:rerun-if-changed=${read}\n`);
+    const env = {EXACT_BAKED:baked, EXACT_BAKE_OUTPUT:resolve(dir, 'bakes')};
+    const bake = () => bakeOutside({dir, name:'fixture'}, 'macos', 'target', env);
+    // The system clock leads file change times, by far more than a tick: the order of the driver's bake and Cargo's
+    // later bootstrap is the system clock's, as link.rs registers `started`; `since` is a stamp's file time.
+    const lead = Date.now() + 60_000;
+    setSystemTime(new Date(lead));
+    try { bake(); } finally { setSystemTime(); }
+    expect(readFileSync(resolve(baked, 'runs'), 'utf8')).toBe('baked\n');
+    const stamp = resolve(baked, '.started'); writeFileSync(stamp, '');
+    writeFileSync(registry, JSON.stringify({executable, cwd:dir, env:{}, started:lead + 1000, since:Math.floor(statSync(stamp).mtimeMs)}));
+    rmSync(stamp);
+    writeFileSync(output, `cargo:rerun-if-changed=${added}\n`);
+    recordRustBake(env);
+    expect(JSON.parse(readFileSync(resolve(baked, 'inputs.json'), 'utf8')).paths).toEqual([added]);
+    writeFileSync(added, 'edited'); bake();
+    expect(readFileSync(resolve(baked, 'runs'), 'utf8')).toBe('baked\nbaked\n');
+  } finally { rmSync(dir, {recursive:true, force:true}); }
+});
 
 test.skipIf(process.platform === 'win32')('external directory watches record source membership and links, excluding build outputs', async () => {
   const {pendingBuildInputs} = await import('./app.mjs');

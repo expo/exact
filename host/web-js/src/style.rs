@@ -1053,6 +1053,53 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
         | StyleId::ScrollEdgeEffect
         | StyleId::HoverEffect
         | StyleId::SmartInvert => vec![],
+        // @ref LLP 1123 D4, D8, D11 to D14 — not CSS, and not written yet, as on the web
+        // host: a page's ignored regions, insets, margins, reach and scroll insets
+        // wait for the web's owners (D17).
+        StyleId::ScrollContentInsetTop
+        | StyleId::ScrollContentInsetRight
+        | StyleId::ScrollContentInsetBottom
+        | StyleId::ScrollContentInsetLeft
+        | StyleId::ScrollVerticalIndicatorInsetsTop
+        | StyleId::ScrollVerticalIndicatorInsetsRight
+        | StyleId::ScrollVerticalIndicatorInsetsBottom
+        | StyleId::ScrollVerticalIndicatorInsetsLeft
+        | StyleId::ScrollHorizontalIndicatorInsetsTop
+        | StyleId::ScrollHorizontalIndicatorInsetsRight
+        | StyleId::ScrollHorizontalIndicatorInsetsBottom
+        | StyleId::ScrollHorizontalIndicatorInsetsLeft
+        | StyleId::SafeAreaExtendBoundsTop
+        | StyleId::SafeAreaExtendBoundsRight
+        | StyleId::SafeAreaExtendBoundsBottom
+        | StyleId::SafeAreaExtendBoundsLeft
+        | StyleId::ScrollInsetAdjustment
+        | StyleId::ScrollIndicatorAdjustment
+        | StyleId::ScrollEdgeEffectSoft
+        | StyleId::ScrollEdgeEffectHard
+        | StyleId::ScrollEdgeEffectHidden
+        | StyleId::SafeAreaReach
+        | StyleId::SafeAreaReachEdges
+        | StyleId::SafeAreaExtend
+        | StyleId::SafeAreaIgnore
+        | StyleId::SafeAreaIgnoreAlign
+        | StyleId::SafeAreaBar
+        | StyleId::LayoutMarginTop
+        | StyleId::LayoutMarginRight
+        | StyleId::LayoutMarginBottom
+        | StyleId::LayoutMarginLeft
+        | StyleId::LayoutMarginLeading
+        | StyleId::LayoutMarginTrailing
+        | StyleId::LayoutMarginsPreserved
+        | StyleId::LayoutMarginsFromSafeArea
+        | StyleId::LayoutMarginsMinimum
+        | StyleId::AdditionalSafeAreaTop
+        | StyleId::AdditionalSafeAreaRight
+        | StyleId::AdditionalSafeAreaBottom
+        | StyleId::AdditionalSafeAreaLeft
+        | StyleId::SafeAreaPaddingTop
+        | StyleId::SafeAreaPaddingRight
+        | StyleId::SafeAreaPaddingBottom
+        | StyleId::SafeAreaPaddingLeft => vec![],
         // @ref LLP 1055 D13 — tree.js `css` gives the list's hold rule this value as an attribute.
         StyleId::AnimationTrigger => vec![with(
             "--exact-animation-trigger",

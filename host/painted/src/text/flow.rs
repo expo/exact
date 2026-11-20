@@ -332,7 +332,7 @@ impl TextEngine {
         }) {
             p.source.clone()
         } else {
-            self.source(key)
+            self.source(key, None)
         };
         if let Some(p) = previous.filter(|p| {
             Rc::ptr_eq(&p.source, &source)

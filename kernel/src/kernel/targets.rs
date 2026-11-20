@@ -94,7 +94,7 @@ impl Kernel {
     /// its identity, generation and raw insets, `None` while unavailable.
     /// Its readers of a target whose insets changed are derived again;
     /// returns whether any was (a layout is owed then). A report is refused
-    /// whole: nonfinite or negative insets, a target at a generation older
+    /// whole: nonfinite insets, a target at a generation older
     /// than an earlier report gave it, a chain entry of kind `owner` or
     /// `parent` (entries 1 and 2 by position) or of a kind bit past the
     /// kinds, a relation twice, or a chain past 255.

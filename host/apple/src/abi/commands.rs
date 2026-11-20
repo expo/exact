@@ -528,10 +528,10 @@ impl<D: DataSource> Bridge<D> {
     /// Whether the stack whose root route is `view` splits (`exact_stack_split`;
     /// `Runner::stack_split`, LLP 1115.002 D4), as JSON in the output buffer:
     /// `{"list":view|null,"width":number|null,"rows":[[route,row]...],
-    /// "locations":[[route,url]...],"pressWrites":bool|null}`, the list whose
+    /// "locations":[[route,url]...],"current":view|null,"pressWrites":bool|null}`, the list whose
     /// row pushes, the list column's width where `navigationSplit` names one,
     /// each route above the root that is a row's detail with that row, each
-    /// route above the root with its location, and whether the press of
+    /// route above the root with its location, the current row, and whether the press of
     /// `pressed` (a view being pressed, or 0) writes the router; `null` for a
     /// stack that pushes. Not a batch: nothing changes.
     pub fn stack_split(&mut self, view: u32, retained: u32, pressed: u32) -> u32 {
@@ -561,11 +561,12 @@ impl<D: DataSource> Bridge<D> {
                     })
                     .collect();
                 format!(
-                    "{{\"list\":{},\"width\":{},\"rows\":[{}],\"locations\":[{}],\"pressWrites\":{}}}",
+                    "{{\"list\":{},\"width\":{},\"rows\":[{}],\"locations\":[{}],\"current\":{},\"pressWrites\":{}}}",
                     split.list.map_or("null".into(), |v| v.to_string()),
                     split.width.map_or("null".into(), |w| w.to_string()),
                     rows.join(","),
                     locations.join(","),
+                    split.current.map_or("null".into(), |v| v.to_string()),
                     writes.map_or("null".into(), |w| w.to_string())
                 )
             });

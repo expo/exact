@@ -81,10 +81,10 @@ package final class Frames: NSObject {
                 let now = s.now()
                 s.followOffset()
                 // Frame work that changes nothing shown skips the presenter's pass.
-                // Posted where fills are (LLP 1072.000), one at a time: a
+                // Posted one at a time (LLP 1072.000): a
                 // frame with one in flight skips its own, never caught up.
                 let due = tasks || s.timerDue.map({ now >= $0 }) ?? true
-                if ExactSession.asyncFills {
+                if s.postsTimerAdvances {
                     if due, !s.advanceInFlight {
                         if tasks, arrival != 0 {
                             s.frameHealth.sending(FrameHealth.advance, start: link.timestamp, deadline: link.targetTimestamp)
@@ -99,7 +99,7 @@ package final class Frames: NSObject {
             // Motion samples at the frame's target, and starts there what
             // waits for it (LLP 1003.001 D5); the agent's clock has no frames.
             if motion || canvas2d {
-                if arrival != 0, ExactSession.asyncFills, !s.tickInFlight {
+                if arrival != 0, postsMotionTick, !s.tickInFlight {
                     s.frameHealth.sending(FrameHealth.tick, start: link.timestamp, deadline: link.targetTimestamp)
                 }
                 switch submitMotionTick(now: s.now(), frame: s.clock == nil ? frameNow : nil) {
@@ -147,12 +147,14 @@ package final class Frames: NSObject {
 
     enum MotionTick { case sent, held, applied }
 
-    /// The motion handoff follows the app's owner policy independently of other frame work.
+    // A display callback must not wait on the owner for a tick behind a timer advance.
+    private var postsMotionTick: Bool { ExactSession.asyncFills || session?.advanceInFlight == true }
+
     @discardableResult
     func submitMotionTick(now: Double, frame: Double?) -> MotionTick {
         guard let s = session else { return .applied }
-        if ExactSession.asyncFills {
-            guard !s.tickInFlight else { return .held }
+        guard !s.tickInFlight else { return .held }
+        if postsMotionTick {
             s.sendTick(now: now, frame: frame, presentOnly: presentOnly)
             return .sent
         }

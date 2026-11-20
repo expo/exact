@@ -64,7 +64,9 @@ fn a_metered_body_declares_one_counter_and_join_steps_at_its_call() {
     );
     assert!(labels.contains("x_join("), "{labels}");
     assert!(
-        js.contains("tg(e2,2,\"text\",()=>{let $s=0;"),
+        js.split("tg(").skip(1).any(|call| call
+            .split_once(',')
+            .is_some_and(|(_, args)| args.starts_with("2,\"text\",()=>{let $s=0;"))),
         "a metered binding is evaluated by its guard: {js}"
     );
 }

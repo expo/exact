@@ -17,17 +17,19 @@
  * @ref LLP 1174 D1 D3 D4 D5
  */
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { createHash, createPrivateKey, createPublicKey, sign, verify } from 'node:crypto';
+import { parseArgs } from 'node:util';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compilerPaths, cargoInputPaths, crateDir, depInfoOf, freshCompiler } from './cargo-dep-info.mjs';
 export { freshCompiler } from './cargo-dep-info.mjs';
 import { cargoEnvironment, cargoOnPath } from './cargo-check.mjs';
-import { builtFilesystemHelper, offlineMiss } from './filesystem.mjs';
+import { builtFilesystemHelper, filesystemLock, offlineMiss } from './filesystem.mjs';
 import { digest, lockClosure, seen, workspaceManifest } from './kept.mjs';
 import { EXE, within } from './paths.mjs';
+import { canonicalBytes } from './deploy-signing.mjs';
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -75,11 +77,11 @@ function sets(env = process.env) {
 
 /** Where product `name` of a set differs from this checkout: the first input whose bytes are not its own, or the
  * closure or workspace manifest; null when it matches. */
-function differs(product) {
-  for (const [file, bytes] of product.inputs) if (digest(resolve(ROOT, file)) !== bytes) return file;
+function differs(product, root = ROOT) {
+  for (const [file, bytes] of product.inputs) if (digest(resolve(root, file)) !== bytes) return file;
   try {
-    if (JSON.stringify(lockClosure(ROOT, product.crate)) !== JSON.stringify(product.closure)) return `Cargo.lock (${product.crate}'s closure)`;
-    if (sha(JSON.stringify(workspaceManifest(ROOT))) !== product.workspace) return 'Cargo.toml (the workspace manifest)';
+    if (JSON.stringify(lockClosure(root, product.crate)) !== JSON.stringify(product.closure)) return `Cargo.lock (${product.crate}'s closure)`;
+    if (sha(JSON.stringify(workspaceManifest(root))) !== product.workspace) return 'Cargo.toml (the workspace manifest)';
   } catch (error) { return error.message; }
   return null;
 }
@@ -186,11 +188,11 @@ function recordMetadata() {
 
 /** The Cargo metadata the set the web compiler is taken from recorded for `WEB_CRATES` (null when its inputs differ
  * here), in this checkout's paths: what the web build reads in place of asking Cargo (D5). */
-export function setMetadata(set) {
+export function setMetadata(set, root = ROOT) {
   const recorded = set?.manifest.metadata;
-  if (!recorded || recorded.inputs.some(([file, bytes]) => digest(resolve(ROOT, file)) !== bytes)) return null;
-  const metadata = JSON.parse(JSON.stringify(recorded.record).replaceAll('<root>', JSON.stringify(ROOT).slice(1, -1)));
-  return { ...metadata, workspace_root: ROOT, target_directory: resolve(ROOT, 'target') };
+  if (!recorded || recorded.inputs.some(([file, bytes]) => digest(resolve(root, file)) !== bytes)) return null;
+  const metadata = JSON.parse(JSON.stringify(recorded.record).replaceAll('<root>', JSON.stringify(root).slice(1, -1)));
+  return { ...metadata, workspace_root: root, target_directory: resolve(root, 'target') };
 }
 
 /** The nearest directory at or above `file`, inside the checkout, holding a `Cargo.toml`. */
@@ -306,21 +308,252 @@ async function keep() {
   for (const { dir: old } of sets().slice(4)) rmSync(old, { recursive: true, force: true });
   console.log(`tools: kept the set for ${short(commit)} in ${entry.replace(homedir(), '~')}`);
   for (const [name, product] of Object.entries(products)) console.log(`  ${name}: ${(product.size / 1e6).toFixed(1)} MB, ${product.inputs.length} inputs`);
+  return { dir: entry, manifest };
+}
+
+/** Authenticate before using any path or input named by a remote manifest (LLP 1174 D4.2). */
+export function readToolManifest(bytes, id, triple, publicKey) {
+  if (sha(bytes) !== id) throw new Error('tool manifest digest differs from its lookup');
+  const manifest = JSON.parse(bytes.toString('utf8'));
+  if (manifest.kind !== 'exact-tool-set' || manifest.version !== 1 || manifest.triple !== triple || manifest.source !== 'fetched')
+    throw new Error(`tool manifest is not a version 1 set for ${triple}`);
+  const signature = Buffer.from(manifest.signature ?? '', 'base64');
+  if (publicKey.asymmetricKeyType !== 'ed25519' || signature.length !== 64 || !verify(null, canonicalBytes(manifest), publicKey, signature))
+    throw new Error('tool manifest signature does not match the producer key');
+  return manifest;
+}
+
+/** Run the stripped compilers and inventory their output with the helper that ships beside them. */
+function runProducts({ dir, manifest }, root) {
+  const work = mkdtempSync(resolve(tmpdir(), 'exact-tools-run-'));
+  const run = (name, args, input) => {
+    const path = resolve(dir, manifest.products[name].file);
+    const result = spawnSync(path, args, { cwd: work, env: { ...process.env, EXACT_ROOT: root }, encoding: 'utf8', input });
+    if (result.error || result.status !== 0) throw new Error(`${name} failed on the producer: ${result.error?.message ?? result.stderr}`);
+    return result.stdout;
+  };
+  try {
+    writeFileSync(resolve(work, 'app.contract'), 'component App\n  view\n    text "Hello"\n');
+    run('contract', ['build', 'app.contract', '-o', 'app.plan']);
+    run('exact-web-js', ['js', 'app.plan', '-o', 'web']);
+    const inventory = JSON.parse(run('exact-filesystem', [], JSON.stringify({ op: 'inventory', root: resolve(work, 'web') }) + '\n'));
+    if (!(inventory.value?.['app.js']?.bytes > 0)) throw new Error('the compilers and filesystem helper did not produce and inventory app.js');
+    for (const name of ['markdown.wasm', 'motion.wasm', 'markup-editor.wasm', 'textflow.wasm']) {
+      const product = manifest.products[name];
+      if (!product) throw new Error(`missing ${name} in the built tool set`);
+      new WebAssembly.Module(readFileSync(resolve(dir, product.file)));
+    }
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+}
+
+/** Make every product and its signed manifest available before publishing either lookup. */
+export async function publishToolSet(origin, set, privateKey, newer = []) {
+  const { blobPath, streamPath } = await import('./origin.mjs');
+  if (privateKey.asymmetricKeyType !== 'ed25519') throw new Error('the tools producer needs an Ed25519 private key');
+  const { manifest, dir } = set;
+  const { commit } = manifest;
+  if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(commit)) throw new Error('tool lookup needs a full Git commit');
+  if (manifest.source !== 'built' || manifest.triple !== hostTriple()) throw new Error('only a set built on this producer can be published');
+  const stream = { channel: 'tools', compatibilityId: manifest.triple }, base = streamPath(stream);
+  const remote = { ...manifest, kind: 'exact-tool-set', source: 'fetched' };
+  remote.signature = sign(null, canonicalBytes(remote), privateKey).toString('base64');
+  const bytes = Buffer.from(JSON.stringify(remote)), id = sha(bytes);
+  for (const [name, product] of Object.entries(manifest.products)) {
+    if (basename(product.file) !== product.file || !within(dir, resolve(dir, product.file))) throw new Error(`invalid product file for ${name}`);
+    const body = readFileSync(resolve(dir, product.file));
+    if (body.length !== product.size || sha(body) !== product.sha256) throw new Error(`${name} differs from the built tool set`);
+    await origin.put(blobPath(product.sha256), body, { immutable: true });
+  }
+  await origin.put(`${base}/manifests/${id}.json`, bytes, { immutable: true });
+  await recordCommit(origin, stream, base, commit, id, newer);
+  return id;
+}
+
+function manifestId(value) {
+  if (typeof value !== 'string' || !/^[0-9a-f]{64}$/.test(value)) throw new Error('invalid tool manifest digest in lookup');
+  return value;
+}
+
+function recentSets(bytes) {
+  if (bytes === null) return [];
+  const list = JSON.parse(bytes.toString('utf8'));
+  if (!Array.isArray(list)) throw new Error('recent tool lookup must be an array');
+  return list.map(manifestId);
+}
+
+async function recordCommit(origin, stream, base, commit, id, newer) {
+  await origin.withLock(stream, async () => {
+    const path = `${base}/recent.json`;
+    const recent = recentSets(await origin.get(path));
+    // Backfill can finish after a newer set. Keep the eight most recent
+    // distinct input states in main's order, including a tip that reverts.
+    const ordered = new Set();
+    for (const revision of newer) {
+      const mapped = await origin.get(`${base}/commits/${revision}.json`);
+      if (mapped !== null) ordered.add(manifestId(JSON.parse(mapped.toString('utf8'))));
+      if (ordered.size === 8) break;
+    }
+    ordered.add(id);
+    for (const previous of recent) ordered.add(previous);
+    await origin.put(`${base}/commits/${commit}.json`, Buffer.from(JSON.stringify(id)));
+    await origin.put(path, Buffer.from(JSON.stringify([...ordered].slice(0, 8))));
+  });
+}
+
+function gitAt(tree, ...args) {
+  const r = spawnSync('git', ['-C', tree, ...args], { encoding: 'utf8', maxBuffer: 32 << 20 });
+  if (r.status !== 0) throw new Error(`git ${args[0]}: ${r.error?.message ?? r.stderr.trim()}`);
+  return r.stdout.trim();
+}
+
+function cleanRevision(tree) {
+  if (gitAt(tree, 'status', '--porcelain', '--untracked-files=normal')) throw new Error(`publish needs a clean producer checkout: ${tree}`);
+  return gitAt(tree, 'rev-parse', 'HEAD');
+}
+
+function matchesRevision(manifest, tree) {
+  return Object.values(manifest.products).every(product => !differs(product, tree)) && !!setMetadata({ manifest }, tree);
+}
+
+async function buildIn(tree, commit) {
+  if (tree === ROOT) return keep();
+  const env = { ...process.env, CARGO_TARGET_DIR: resolve(tree, 'target'), EXACT_ROOT: tree };
+  for (const args of [['install', '--frozen-lockfile'], ['scripts/tools.mjs', 'keep']]) {
+    const run = spawnSync(process.execPath, args, { cwd: tree, stdio: 'inherit', env });
+    if (run.status !== 0) throw new Error(`bun ${args.join(' ')} failed for ${short(commit)}`);
+  }
+  const set = sets().find(({ manifest }) => manifest.source === 'built' && manifest.commit === commit && manifest.triple === hostTriple() && matchesRevision(manifest, tree));
+  if (!set) throw new Error(`keep produced no tool set for ${short(commit)}`);
+  return set;
+}
+
+async function publishRevision(tree, origin, privateKey, commit, newer = []) {
+  const { streamPath } = await import('./origin.mjs');
+  const triple = hostTriple(), stream = { channel: 'tools', compatibilityId: triple }, base = streamPath(stream);
+  const checkRevision = () => {
+    if (cleanRevision(tree) !== commit) throw new Error('producer checkout changed during publication');
+  };
+  checkRevision();
+  const exact = await origin.get(`${base}/commits/${commit}.json`);
+  const recent = recentSets(await origin.get(`${base}/recent.json`));
+  const candidates = new Set(exact === null ? recent : [manifestId(JSON.parse(exact.toString('utf8'))), ...recent]);
+  const publicKey = createPublicKey(privateKey);
+  for (const id of candidates) {
+    const bytes = await origin.get(`${base}/manifests/${id}.json`);
+    if (!bytes) throw new Error(`missing published tool manifest ${id}`);
+    const manifest = readToolManifest(bytes, id, triple, publicKey);
+    if (!matchesRevision(manifest, tree)) continue;
+    checkRevision();
+    await recordCommit(origin, stream, base, commit, id, newer);
+    console.log(`tools: ${short(commit)} matches published set ${id}`);
+    return;
+  }
+  const set = await buildIn(tree, commit);
+  if (set.manifest.commit !== commit) throw new Error('producer checkout changed during build');
+  runProducts(set, tree);
+  checkRevision();
+  const id = await publishToolSet(origin, set, privateKey, newer);
+  console.log(`tools: published ${triple} set ${id} for ${short(commit)}`);
+}
+
+/** One poll of the private producer worktree. Persist skipped commits before
+ * checking one out. A build interrupted after publication can reuse its signed set. */
+export async function publishWatchedTip(tree, stateFile, tip, publishOne, retryAt, now = Date.now) {
+  let state = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, 'utf8')) : { tip: null, pending: [] };
+  const save = () => {
+    writeFileSync(stateFile + '.tmp', JSON.stringify(state));
+    renameSync(stateFile + '.tmp', stateFile);
+  };
+  if (tip !== state.tip) {
+    const range = state.tip ? gitAt(tree, 'rev-list', '--first-parent', '--boundary', `${state.tip}..${tip}`).split('\n') : [tip];
+    let prior = state.pending;
+    if (state.tip && !range.includes('-' + state.tip)) {
+      const history = new Set(gitAt(tree, 'rev-list', '--first-parent', tip).split('\n'));
+      prior = prior.filter(commit => history.has(commit));
+    }
+    state = { tip, pending: [...new Set([tip, ...range.filter(c => c && !c.startsWith('-')), ...prior])] };
+    save();
+  }
+  const readyAt = now();
+  const commit = state.pending.find(c => (retryAt.get(c) ?? 0) <= readyAt);
+  if (!commit) return null;
+  if (gitAt(tree, 'rev-parse', '--abbrev-ref', 'HEAD') !== 'HEAD') throw new Error(`tools watch needs a detached worktree: ${tree}`);
+  if (cleanRevision(tree) !== commit) gitAt(tree, 'switch', '--detach', commit);
+  const newer = commit === tip ? [] : gitAt(tree, 'rev-list', '--first-parent', `${commit}..${tip}`).split('\n');
+  try { await publishOne(commit, newer); }
+  catch (error) {
+    retryAt.set(commit, now() + 60_000);
+    return { commit, error };
+  }
+  retryAt.delete(commit);
+  state.pending = state.pending.filter(c => c !== commit);
+  save();
+  return { commit };
+}
+
+async function watchProducer(tree, origin, privateKey) {
+  if (existsSync(tree)) {
+    if (realpathSync(tree) !== realpathSync(gitAt(tree, 'rev-parse', '--show-toplevel'))) throw new Error(`tools watch needs the root of a worktree: ${tree}`);
+    if (gitAt(tree, 'rev-parse', '--path-format=absolute', '--git-common-dir') !== gitAt(ROOT, 'rev-parse', '--path-format=absolute', '--git-common-dir'))
+      throw new Error(`${tree} is not a worktree of ${ROOT}`);
+  } else {
+    gitAt(ROOT, 'worktree', 'add', '--detach', tree, 'HEAD');
+  }
+  const admin = gitAt(tree, 'rev-parse', '--absolute-git-dir');
+  if (admin === gitAt(ROOT, 'rev-parse', '--absolute-git-dir') || admin === gitAt(tree, 'rev-parse', '--path-format=absolute', '--git-common-dir'))
+    throw new Error('tools watch needs its own linked worktree');
+  if (gitAt(tree, 'rev-parse', '--abbrev-ref', 'HEAD') !== 'HEAD') throw new Error(`tools watch needs a detached worktree: ${tree}`);
+  const key = sha(JSON.stringify([origin.dir, hostTriple()]));
+  const state = resolve(admin, `tools-${key}.json`), retryAt = new Map();
+  for (;;) {
+    try {
+      const attempt = await filesystemLock(admin, 'tools-watch/.lock', async () => {
+        gitAt(tree, 'fetch', '--quiet', 'origin', '+refs/heads/main:refs/remotes/origin/main');
+        const tip = gitAt(tree, 'rev-parse', 'refs/remotes/origin/main');
+        return publishWatchedTip(tree, state, tip, (commit, newer) => publishRevision(tree, origin, privateKey, commit, newer), retryAt);
+      });
+      if (attempt?.error) console.error(`tools watch: ${short(attempt.commit)}: ${attempt.error.message}`);
+      if (attempt) continue;
+    } catch (error) { console.error(`tools watch: ${error.message}`); }
+    await Bun.sleep(60_000);
+  }
+}
+
+async function publish(args) {
+  const { values } = parseArgs({ args, options: { origin: { type: 'string' }, key: { type: 'string' }, watch: { type: 'boolean' }, worktree: { type: 'string' } } });
+  if (!values.origin || !values.key) throw new Error('publish needs --origin <directory> and --key <producer.pem>');
+  if (values.worktree && !values.watch) throw new Error('--worktree belongs to publish --watch');
+  if (hostTriple() !== 'aarch64-apple-darwin') throw new Error('publish builds and runs the native tool set on the Apple Silicon producer');
+  if (/^[a-z][a-z\d+.-]*:\/\//i.test(values.origin)) throw new Error('--origin needs a local directory');
+  const { DirectoryOrigin } = await import('./origin.mjs');
+  const origin = new DirectoryOrigin(values.origin), privateKey = createPrivateKey(readFileSync(values.key));
+  if (privateKey.asymmetricKeyType !== 'ed25519') throw new Error('the tools producer needs an Ed25519 private key');
+  if (values.watch) {
+    const tree = resolve(values.worktree ?? resolve(ROOT, '..', basename(ROOT) + '-tools-producer'));
+    await watchProducer(tree, origin, privateKey);
+  } else await publishRevision(ROOT, origin, privateKey, cleanRevision(ROOT));
 }
 
 const USAGE = `usage: bun scripts/tools.mjs keep
+       bun scripts/tools.mjs publish --origin <directory> --key <producer.pem> [--watch [--worktree <directory>]]
 
 keep  build this checkout's tool set (the Contract compiler, the web compiler, the
       filesystem helper and the web's four leaf modules) from its committed sources, and keep it in
       ~/.cache/exact/tools/${hostTriple()}/, where a checkout with the same input bytes
-      takes it in place of building with Rust (LLP 1174).`;
+      takes it in place of building with Rust (LLP 1174).
+publish  sign and publish this revision’s tool set, or record its commit against a matching published set.
+         --watch follows origin/main in a dedicated detached worktree, publishing the tip first
+         and filling skipped commits newest first. The default worktree is a sibling named
+         <checkout>-tools-producer. An existing worktree must be clean and detached.`;
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const [verb] = process.argv.slice(2);
+  const [verb, ...args] = process.argv.slice(2);
   // Not awaited at the top level: this module is in an import cycle with filesystem.mjs, and with a top-level await
   // a dynamic import of a module in that cycle waits for this module's evaluation, so `keep` never finishes.
-  if (verb === 'keep') {
-    keep().catch((error) => { console.error(`tools: ${error.message}`); process.exit(1); });
+  if (verb === 'keep' || verb === 'publish') {
+    (verb === 'keep' ? keep() : publish(args)).catch((error) => { console.error(`tools: ${error.message}`); process.exit(1); });
   } else {
     console.log(USAGE);
     process.exit(verb === '--help' || verb === '-h' ? 0 : 2);

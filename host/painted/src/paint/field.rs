@@ -60,6 +60,7 @@ impl PaintedField {
     ) -> (f32, f32) {
         let content = Self::editor_size(kernel, node);
         let stamp = node.paragraph_stamp();
+        let prior = previous.map(|field| field.paragraph.as_ref());
         let previous = previous.filter(|f| {
             f.stamp
                 .as_ref()
@@ -94,7 +95,7 @@ impl PaintedField {
                 &spec
             }
         };
-        text.paragraph(spec, Some(content.0))
+        text.edited_field(spec, Some(content.0), prior)
             .textarea_scroll_max(value, content)
     }
 
@@ -119,6 +120,9 @@ impl PaintedField {
         decorations: Option<Rc<FieldDecorations>>,
         previous: Option<&PaintedField>,
     ) -> Self {
+        if let Some(previous) = previous.filter(|_| multiline) {
+            paragraph.reuse_field_ink(&previous.paragraph);
+        }
         let left = |width| line_left(spec.align, spec.direction, content.2, width);
         let empty_x = left(0.);
         let first_x = left(spec.text_indent)
@@ -164,6 +168,11 @@ impl PaintedField {
                     masked,
                     geometry_x.0,
                     geometry_x.1,
+                    previous
+                        .filter(|old| {
+                            multiline && old.multiline && !old.masked && !old.value.is_empty()
+                        })
+                        .map(|old| (old.paragraph.as_ref(), old.geometry.as_ref())),
                 ))
             });
         let (scroll_max, right_caret_inset) = if multiline {
@@ -223,7 +232,11 @@ impl PaintedField {
         if let Some(decorations) = &self.decorations {
             spec = decorations.project(spec, value).spec;
         }
-        let paragraph = text.paragraph(&spec, self.multiline.then_some(self.content.2));
+        let paragraph = text.edited_field(
+            &spec,
+            self.multiline.then_some(self.content.2),
+            self.multiline.then_some(self.paragraph.as_ref()),
+        );
         let mut field = Self::new(
             paragraph,
             value,
@@ -475,6 +488,10 @@ impl Painter {
             (node.id, 0),
             &spec,
             multiline.then_some(content.2),
+            self.field_text
+                .get(&node.id)
+                .filter(|_| multiline)
+                .map(|f| f.paragraph.as_ref()),
         );
         walk.text.insert(node.key, paragraph.clone());
         let mut oy = content.1
@@ -655,7 +672,8 @@ impl Painter {
         // native editor underlines that clause without a selection background.
         if let Some(s) = selection.filter(|_| !cfg!(target_os = "windows") || composition.is_none())
         {
-            self.field_highlight(&field, s);
+            let top = padding.rect.1 - oy;
+            self.field_highlight(&field, s, top..top + padding.rect.3);
         }
         if !placeholder {
             let painted = material::FieldText::painted(&paragraph, (ox, oy), ts);

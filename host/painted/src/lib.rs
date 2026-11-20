@@ -132,6 +132,15 @@ pub(crate) fn traced<T>(_name: &'static core::ffi::CStr, f: impl FnOnce() -> T) 
     f()
 }
 
+pub(crate) const PLATFORM: exact_runner::page::Platform = if cfg!(target_os = "android") {
+    exact_runner::page::Platform::Android
+} else if cfg!(target_os = "windows") {
+    exact_runner::page::Platform::Windows
+} else {
+    // The headless Linux host can also run on macOS.
+    exact_runner::page::Platform::Linux
+};
+
 /// A Contract source compiled and encoded once per test binary: the tests boot fresh presenters
 /// from a few constant sources many times, and a compile depends on nothing but its source.
 #[cfg(test)]

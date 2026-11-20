@@ -1149,7 +1149,7 @@ impl Parser {
                         return self.err(
                             "syntax-expected-step",
                             format!(
-                                "`expect` reads `tree`, `text`, `state`, `disabled`, `enabled`, `focused`, `layout`, `refusal`, `sound`, `midi`, `wakelock`, `mediasession`, `perf`, or `no failures`, found {}",
+                                "`expect` reads `tree`, `text`, `state`, `disabled`, `enabled`, `focused`, `layout`, `refusal`, `sound`, `midi`, `wakelock`, `mediasession`, `drag`, `perf`, or `no failures`, found {}",
                                 describe(&other)
                             ),
                         )
@@ -1254,6 +1254,7 @@ impl Parser {
                     "sound" => self.expect_sound(span)?,
                     "midi" => self.expect_midi(span)?,
                     "mediasession" => self.expect_media_session(span)?,
+                    "drag" => self.expect_drag(span)?,
                     "perf" => self.expect_perf(span)?,
                     "no" => {
                         self.expect_word("failures")?;
@@ -1271,7 +1272,7 @@ impl Parser {
                         };
                         return self.err(
                             "syntax-expected-step",
-                            format!("`expect` reads `tree`, `text`, `state`, `disabled`, `enabled`, `focused`, `layout`, `refusal`, `sound`, `midi`, `wakelock`, `mediasession`, `perf`, or `no failures`, not `{other}`{hint}"),
+                            format!("`expect` reads `tree`, `text`, `state`, `disabled`, `enabled`, `focused`, `layout`, `refusal`, `sound`, `midi`, `wakelock`, `mediasession`, `drag`, `perf`, or `no failures`, not `{other}`{hint}"),
                         );
                     }
                 }

@@ -1836,16 +1836,24 @@ fixture does next: `{"action": "expire-access", "profile": "spec"}`, and
 returns once the app's token request is held, and `release-token` lets it
 go), `deny-authorize`; `fixture.ts`'s `control` lists them all.
 
+The fixture app can exercise a signed-in screen with a fixed backend answer.
+`authorize` completes the nonce-bound code exchange. `reload` reopens the
+app with the session saved in this test's scratch store.
+
 ```contract-test
-test "signs in, shows the person, and is still signed in after a relaunch"
-  request POST "/control" {"action": "reset"}
+test "loads an authenticated screen from a saved OIDC session"
+  answer fetch "http://127.0.0.1:4400/p/spec/api/me" with 200 {"name":"Offline reader"}
+  request POST "/control" {"action":"reset"}
+  clock data
   tap "sign-in"
   authorize
   clock data
-  expect text "name" == "Ada Lovelace"
+  expect text "status" == "Signed in"
+  expect text "name" == "Offline reader"
   reload
   clock data
   expect text "status" == "Signed in"
+  expect text "name" == "Offline reader"
 ```
 
 #### HTTPS callbacks
@@ -5429,6 +5437,14 @@ screen is never `high`, nor is any iOS or Android device natively. A game's rend
 read it to offer a quality setting. A native host answers its GPU module's tier
 once the module loads (`high` before it). Under the agent it is `high` from launch, and
 `prefer gpu-tier low` substitutes it and remakes each world's renderer at its rung.
+`exactPage().platform` identifies the host from the first frame. Declare
+`platform: string` or an enum over the following values in the page resource's shape.
+The native hosts report
+`ios`, `macos`, `tvos`, `watchos`, `android`, `linux` or `windows`.
+A browser or server-rendered web page reports `web`, a terminal app reports
+`terminal`, and a runner booted without a host reports `headless`. A browser
+on an Android phone therefore reports `web`.
+
 `exactPage` answers `visibilityState`, `frozen`, `onLine`, `canShare`,
 `canShareFiles` and `canSharePictures` (whether `share(files=…)` takes
 `app:/` files and an element's `"#id"`; the web never takes a picture),
@@ -6943,7 +6959,7 @@ long press or a double tap selects a word of text its author made selectable
 selected (under `--touch platform`, `tap <id> drag 0 0 press 900` is a real
 long press).
 
-For a plain text field on the **web, macOS, iOS and Linux**, `setRangeText(id, text[, start,
+For a plain text field on the **web, macOS, iOS, Linux, Windows and Android**, `setRangeText(id, text[, start,
 end[, selectionMode]])` replaces its selection or a UTF-16 range. Selection
 is preserved by default (`select`, `start`, `end` are the other modes).
 Exact deliberately fires one `input` so its action can update the bound
@@ -6953,7 +6969,10 @@ type also covers hatch replacements and browser spelling
 corrections, so it does not uniquely identify this command. `select` follows
 input only when the selection changes. URL inputs trim surrounding ASCII
 whitespace. Markdown editors on web and Apple use source offsets and add one
-undo step. Windows, Android and terminal do not support it yet. Field
+undo step. On Linux, Windows and Android, range replacement requires a plain
+field. To edit and preview Markdown there, bind a plain textarea and a
+`text markup="markdown"` reader to the same string. The terminal host
+refuses `setRangeText`. Field
 `selectionchange` reports caret moves through `InputEvent`, and
 `beforeinput` reports the proposed edit's `inputType` and optional `data`.
 Call `preventDefault()` to reject a cancelable edit; composition events

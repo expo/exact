@@ -265,3 +265,40 @@ fn a_registrations_wire_form_is_the_one_hosts_write() {
     assert_eq!(encode_registration("map", Some(&target)), w);
     assert_eq!(encode_registration("map", None), [3, b'm', b'a', b'p', 0]);
 }
+
+#[test]
+fn a_negative_raw_band_is_taken_and_its_incoming_band_is_at_least_0() {
+    // A window root of 62 under Exact's −102 reads −40; less the effect, the owner's incoming band
+    // is the window's 62
+    let mut k = owner(390.0, 844.0, create(3..=3));
+    lay_out(&mut k);
+    let update = OwnerUpdate {
+        band: Some([-40.0, 0.0, 34.0, 0.0]),
+        contributions: vec![Contribution {
+            node: 2,
+            operation: Operation::AdditionalInsets,
+            effect: [-102.0, 0.0, 0.0, 0.0],
+        }],
+        ..OwnerUpdate::default()
+    };
+    assert!(k.update_owner(2, update).is_ok());
+    let slot = slot(&k, 2);
+    assert_eq!(
+        k.arena.observations.band(slot),
+        Some([62.0, 0.0, 34.0, 0.0])
+    );
+}
+
+#[test]
+fn a_negative_raw_band_with_no_contribution_is_an_incoming_band_of_0() {
+    // An app's own −102 on a 62-point window root: raw −40, and nothing of it is Exact's
+    let mut k = owner(390.0, 844.0, create(3..=3));
+    lay_out(&mut k);
+    let update = OwnerUpdate {
+        band: Some([-40.0, 0.0, 34.0, 0.0]),
+        ..OwnerUpdate::default()
+    };
+    assert!(k.update_owner(2, update).is_ok());
+    let slot = slot(&k, 2);
+    assert_eq!(k.arena.observations.band(slot), Some([0.0, 0.0, 34.0, 0.0]));
+}

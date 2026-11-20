@@ -1,0 +1,25 @@
+// A drag out of the app (LLP 1094.000): a card's link that carries its
+// photo, a row that carries a title and a page's address and that a state
+// turns off, and an `app:/` export, which the runner admits where the grants
+// cover it and the host can carry it.
+shape Card
+  id: string
+  title: string
+
+component App
+  state editing = false
+  state cards = [Card(id="1016", title="Mount Fuji"), Card(id="1017", title="Rainbow Mountain")]
+  action toggle
+    editing = not editing
+  view
+    column padding=16 gap=8
+      button press=toggle testId="edit"
+        text (editing ? "Done" : "Edit")
+      for c in cards key=c.id
+        link href=`/card/${c.id}` draggable=true dataTransfer=DataTransfer(files=[`assets/${c.id}.jpg`]) testId=`card-${c.id}` aria-label=c.title
+          image `assets/${c.id}.jpg` width=120 height=80 object-fit="cover" aria-hidden=true
+          text c.title
+      row draggable=(not editing) dataTransfer=DataTransfer(text="Mount Fuji", url="https://example.com/landmarks/1016") testId="row"
+        text "Mount Fuji"
+      column draggable=true dataTransfer=DataTransfer(text="Export", files=["app:/data/export.pdf"]) testId="export"
+        text "Export"
