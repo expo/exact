@@ -40,25 +40,26 @@ package enum LiftTarget {
         return (UIBezierPath(cgPath: cut), node.ownFill.flatMap { $0.alpha > 0 ? UIColor(cgColor: $0) : nil } ?? .clear)
     }
 
-    /// The view UIKit highlights, lifts and returns a preview over: the view of
-    /// the controller that holds `view` (its route's, a sheet's, or the root
-    /// controller's in an app with no routes), which the bars stay above.
-    /// UIKit's own is the view's superview, and an ancestor that clips, such as
-    /// a strip that scrolls sideways, then cuts the preview, its corners and its
-    /// shadow as it grows (as it cuts a collection view's cell). The superview
-    /// where no controller holds it; nil outside a window.
+    /// The view of the controller that holds `view` (its route's, a sheet's, or
+    /// the root controller's in an app with no routes), above every box that
+    /// clips in it and below the bars. The superview where no controller holds
+    /// it; nil outside a window.
     static func container(of view: UIView) -> UIView? {
         guard view.window != nil, let parent = view.superview else { return nil }
         return sequence(first: parent, next: { $0.superview }).first(where: { $0.next is UIViewController }) ?? parent
     }
 
-    /// Where a pull-down's preview stands: the invoker's parent, as UIKit's
-    /// own for a stock button's menu, so what UIKit draws there (the stand-in
-    /// it keeps for about a second after the menu has gone) scrolls with its
-    /// content. A pull-down's preview does not grow (the menu grows in UIKit's
-    /// own layer), so a box that clips cuts it only where the invoker is
-    /// already cut: then `container(of:)`, above it.
-    static func pullDownContainer(of view: UIView) -> UIView? {
+    /// Where a node's own preview stands as UIKit highlights, lifts and returns
+    /// it, and where UIKit keeps a pull-down's stand-in for about a second after
+    /// its menu has gone: the node's parent, as UIKit's own target, so the
+    /// preview moves with its content. A press that turns into a scroll then
+    /// returns the node where it now is: from a target over `container(of:)`,
+    /// UIKit's return held the node where the press found it while the page
+    /// scrolled (measured, iOS 27.1). UIKit lifts the preview into a layer of its
+    /// own, so a box that clips does not cut it as it grows (measured: a card
+    /// grows past the edges of a strip as tall as itself), only where the node
+    /// is already cut: then `container(of:)`, above it, so the whole node lifts.
+    static func standing(of view: UIView) -> UIView? {
         guard let parent = view.superview, let root = container(of: view) else { return nil }
         for ancestor in sequence(first: parent, next: { $0.superview }) {
             if ancestor === root { break }
@@ -68,13 +69,13 @@ package enum LiftTarget {
         return parent
     }
 
-    /// Where UIKit highlights, lifts and returns `view` itself: over
-    /// `container(of:)`, centered on the view, with the view's transform, as
+    /// Where UIKit highlights, lifts and returns `view` itself: in
+    /// `standing(of:)`, centered on the view, with the view's transform, as
     /// UIKit's own target for a view carries it (`UITargetedPreview(view:parameters:)`),
     /// and each ancestor's scale and rotation; converting the center takes the
     /// translations.
-    package static func target(_ view: UIView, pullDown: Bool = false) -> UIPreviewTarget? {
-        guard let container = pullDown ? pullDownContainer(of: view) : container(of: view), let parent = view.superview else { return nil }
+    package static func target(_ view: UIView, detached: Bool = false) -> UIPreviewTarget? {
+        guard let container = detached ? container(of: view) : standing(of: view), let parent = view.superview else { return nil }
         var transform = view.transform
         for ancestor in sequence(first: parent, next: { $0.superview }) {
             if ancestor === container { break }
@@ -89,8 +90,8 @@ package enum LiftTarget {
     /// `view` as its own preview, clipped to its corners, over nothing (a
     /// glass face is see-through); nil (UIKit's default) once it has left
     /// the window or is hidden.
-    static func preview(of view: UIView, pullDown: Bool = false) -> UITargetedPreview? {
-        guard !view.isHidden, let target = target(view, pullDown: pullDown) else { return nil }
+    static func preview(of view: UIView) -> UITargetedPreview? {
+        guard !view.isHidden, let target = target(view) else { return nil }
         let parameters = UIPreviewParameters()
         parameters.visiblePath = rounded(view)
         parameters.backgroundColor = .clear

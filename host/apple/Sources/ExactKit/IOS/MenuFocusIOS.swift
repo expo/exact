@@ -200,11 +200,11 @@ final class MenuButton: InvokerButton {
     // An invoker hidden or out of the window (unmounted while its menu
     // showed) has no preview: UIKit's default, nil outside a window.
     override func contextMenuInteraction(_ interaction: UIContextMenuInteraction, previewForHighlightingMenuWithConfiguration configuration: UIContextMenuConfiguration) -> UITargetedPreview? {
-        if let preview = invoker.flatMap({ LiftTarget.preview(of: $0, pullDown: true) }) { lendFill(); return preview }
+        if let preview = invoker.flatMap({ LiftTarget.preview(of: $0) }) { lendFill(); return preview }
         return window == nil ? nil : super.contextMenuInteraction(interaction, previewForHighlightingMenuWithConfiguration: configuration)
     }
     override func contextMenuInteraction(_ interaction: UIContextMenuInteraction, previewForDismissingMenuWithConfiguration configuration: UIContextMenuConfiguration) -> UITargetedPreview? {
-        if let preview = invoker.flatMap({ LiftTarget.preview(of: $0, pullDown: true) }) { return preview }
+        if let preview = invoker.flatMap({ LiftTarget.preview(of: $0) }) { return preview }
         return window == nil ? nil : super.contextMenuInteraction(interaction, previewForDismissingMenuWithConfiguration: configuration)
     }
     override func contextMenuInteraction(_ interaction: UIContextMenuInteraction, willDisplayMenuFor configuration: UIContextMenuConfiguration, animator: UIContextMenuInteractionAnimating?) {

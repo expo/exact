@@ -222,7 +222,7 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
     /// context menu's preview of a node, which a node with both lifts once
     /// (D4).
     static func preview(of view: NodeView) -> UITargetedDragPreview? {
-        guard !view.isHidden, let target = LiftTarget.target(view) else { return nil }
+        guard !view.isHidden, let target = LiftTarget.target(view, detached: true) else { return nil }
         let parameters = UIDragPreviewParameters()
         if let lift = LiftTarget.clipLift(view) {
             parameters.visiblePath = lift.outline

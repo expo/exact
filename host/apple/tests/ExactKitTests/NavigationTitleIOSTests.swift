@@ -90,7 +90,10 @@ extension NavigationBasicsIOSTests {
         let path = try XCTUnwrap(lifted.parameters.visiblePath)
         XCTAssertEqual(path.bounds, view.avatar.bounds)
         XCTAssertFalse(path.contains(CGPoint(x: 1, y: 1)), "in the avatar's round outline")
-        XCTAssertEqual(lifted.target.transform.a, 0.6, accuracy: 0.001, "the title's scale and the avatar's")
+        // The preview stands at the avatar's scale on screen, the title's and its own, in whichever view holds it
+        func scale(_ v: UIView) -> CGFloat { v.convert(CGRect(x: 0, y: 0, width: 100, height: 0), to: nil).width / 100 }
+        XCTAssertEqual(lifted.target.transform.a * scale(lifted.target.container), scale(view.avatar), accuracy: 0.001)
+        XCTAssertEqual(scale(view.avatar), 0.6, accuracy: 0.001, "the title's scale and the avatar's")
         view.center.x += 11
         let returned = try XCTUnwrap(menus.contextMenuInteraction(interaction, configuration: configuration,
             dismissalPreviewForItemWithIdentifier: configuration.identifier))
