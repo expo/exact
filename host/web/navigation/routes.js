@@ -1,5 +1,5 @@
 import { viewChildren, unwrapListItem, viewParent } from "./lists.js";
-import { fold, launched, onFold, launchLocation, launchVisits } from "./environment.js";
+import { fold, foldColumns, launched, onFold, launchLocation, launchVisits } from "./environment.js";
 import { agentParameters } from "./agent-parameters.js";
 import { inertAncestor } from "./layers.js";
 import { popoverObservation } from "./popover.js";
@@ -376,9 +376,11 @@ export function splitOf([route]) {
       rows: []
     };
   }
-  const said = route?.getAttribute("navigationSplit"), explicit = Number(said);
+  const said = route?.getAttribute("navigationSplit"), explicit = Number(said), named = Number.isFinite(explicit) && explicit > 0;
   const found = route && said !== "none" && !sheet(route) ? pushingList(route) : null;
-  const width = route && said !== "none" && !sheet(route) && wide() && /^(absolute|fixed)$/.test(getComputedStyle(route).position) ? Number.isFinite(explicit) && explicit > 0 ? explicit : found ? 320 : 0 : 0;
+  const placed = route && said !== "none" && !sheet(route) && /^(absolute|fixed)$/.test(getComputedStyle(route).position);
+  const atFold = placed && (found || named) ? foldColumns(route) : null;
+  const width = atFold ? atFold.list : placed && wide() ? named ? explicit : found ? 320 : 0 : 0;
   if (route) {
     if (found && (width || splitLists.has(route))) {
       splitLists.set(route, found.list);
@@ -388,6 +390,8 @@ export function splitOf([route]) {
   }
   return {
     width,
+    // Where the detail starts: after the fold's gap at the fold, else beside the list
+    detail: atFold?.detail ?? width,
     list: found?.list,
     rows: found?.rows ?? []
   };
@@ -1355,6 +1359,7 @@ export const navigation = {
             column ? route.setAttribute("data-exact-split", column) : route.removeAttribute("data-exact-split");
           }
           route.style.setProperty("--exact-split", column ? `${split}px` : "");
+          route.style.setProperty("--exact-split-detail", column ? `${found.detail}px` : "");
           sheetFrame(routes, index, shownIn, inUse, selected);
           appBarBack(nav, routes, index, split > 0, active || covered, headers[index]);
           clearBar(route);
@@ -1387,7 +1392,9 @@ export const navigation = {
         box?.toggleAttribute("data-exact-split-empty", empty && !own);
         if (empty) {
           box.style.setProperty("--exact-split", `${split}px`);
-          own && routes[0].style.setProperty("--exact-split-pane", `${(routes[0].offsetParent ?? box).clientWidth - split}px`);
+          box.style.setProperty("--exact-split-detail", `${found.detail}px`);
+          own && routes[0].style.setProperty("--exact-split-gap", `${found.detail - split}px`);
+          own && routes[0].style.setProperty("--exact-split-pane", `${(routes[0].offsetParent ?? box).clientWidth - found.detail}px`);
         }
       }
     }

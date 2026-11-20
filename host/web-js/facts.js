@@ -61,9 +61,10 @@ export function viewport(readers) {
   onFold(changed);
   viewportChanged = changed;
   shareReporter();
-  // The agent's `prefer` fold group (LLP 1078 D7): an empty one re-reads the browser, a filled one is the substitute.
+  // The agent's `prefer` fold group (LLP 1078 D7): an empty one re-reads the browser, a filled one is the substitute,
+  // re-answered when the agent announces it (`FOLD_EVENT`, which `onFold` hears) once its whole `prefer` is applied.
   // Its `display-mode` is always the substitute (LLP 1039 D7).
-  (globalThis.exact ??= {}).fold = { prefer: (f) => { const env = preferFold(f && Object.keys(f).length ? f : null); changed(); return env; }, env: foldEnv };
+  (globalThis.exact ??= {}).fold = { prefer: (f) => preferFold(f && Object.keys(f).length ? f : null), env: foldEnv };
   globalThis.exact.displayMode = { prefer: (mode) => { preferDisplayMode(mode); changed(); } };
 }
 
