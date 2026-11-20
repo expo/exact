@@ -110,6 +110,23 @@ class PlayerTest {
         }
     }
 
+    /** A layer whose drawing the reader cannot bound (a picture's slot, a scroller's rows) is the window's size, not
+     * the view's clip: an edge box's background in it reaches past the view into the bars' bands. */
+    @Test fun anUnboundedLayerReachesTheWindow() {
+        val fill = intArrayOf(2, Color.BLUE, 0, f(-20), f(80), f(40)) + IntArray(8)
+        val ops = identity + intArrayOf(7, 0.5f.toRawBits(), 23, 1) + fill + fill + intArrayOf(6)
+        var bounds: RectF? = null
+        val canvas = object : Canvas(Bitmap.createBitmap(80, 80, Bitmap.Config.ARGB_8888)) {
+            override fun saveLayerAlpha(rect: RectF?, alpha: Int): Int {
+                bounds = rect?.let(::RectF)
+                return super.saveLayerAlpha(rect, alpha)
+            }
+        }
+        Player(emptyMap()).apply { width = 80; height = 80; window.set(0f, -20f, 80f, 100f) }
+            .replay(canvas, IntBuffer.wrap(ops), 0, ops.size)
+        assertEquals(RectF(-1f, -21f, 81f, 101f), bounds)
+    }
+
     /** SVG's `stroke-miterlimit`, op 13's word after the join: a 28° corner, whose miter is 4.1 widths long, is
      * bevelled at the initial limit of 4 and mitered at 10, as the other painters draw it. */
     @Test fun aStrokeTakesItsMiterLimit() {
