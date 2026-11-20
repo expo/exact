@@ -308,8 +308,8 @@ pub struct SymbolPath<'a> {
     pub d: &'a str,
     /// Filled, else stroked (a role's outline).
     pub filled: bool,
-    /// Filled even-odd (a `-fill` role's silhouette, or an icon whose SVG
-    /// says so, stage 14 C2), else nonzero.
+    /// Filled even-odd (a `-fill` role's silhouette in the table's own
+    /// paths, or an icon whose SVG says so, stage 14 C2), else nonzero.
     pub even_odd: bool,
     /// Its viewBox, `min-x min-y width height`: a role's is `0 0 24 24`,
     /// Material's `0 -960 960 960`.

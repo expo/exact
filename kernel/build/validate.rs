@@ -378,7 +378,7 @@ fn drawn_path(d: &str) -> bool {
     let taken = |i: usize| commands.get(i + 1).map_or(numbers, |&(_, n)| n) - commands[i].1;
     let draws = |i: usize| {
         let c = commands[i].0;
-        !"MmZz".contains(c) || "Mm".contains(c) && taken(i) > 2
+        !"MmZz".contains(c) || "Mm".contains(c) && taken(i) >= 4
     };
     commands.first().is_some_and(|&(c, _)| "Mm".contains(c))
         && (0..commands.len()).all(|i| "Zz".contains(commands[i].0) || taken(i) > 0)
