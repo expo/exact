@@ -939,7 +939,8 @@ writes. The app reloads widget timelines after a successful write readable by a 
 Refresh has a 900 ms deadline starting when it begins, including boot. Each JS
 turn gets the time remaining to that deadline, rather than the app's 100 ms
 per-call budget. This leaves 100 ms below LLP 1126 D8's one-second
-line for completion and teardown. Failure or timeout uses the last good timeline
+line for completion and teardown. A store write during a refresh restarts it under
+the new store while the deadline allows. Failure or timeout uses the last good timeline
 cached in the App Group for this kind, generation and configuration, only while the app's store
 has not changed since it was cached (a store write, such as an account switch,
 expires it), or else an “Open app” placeholder,

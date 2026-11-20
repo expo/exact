@@ -154,11 +154,11 @@ struct ExactTimelineProvider: TimelineProvider {
             // Kinds share this queue: each refresh's 900 ms, boot included,
             // starts when it leaves the queue, not while another kind runs.
             let deadline = DispatchTime.now() + .milliseconds(900)
-            let timeline: Timeline<ExactWidgetEntry> = autoreleasepool {
+            let (timeline, revision): (Timeline<ExactWidgetEntry>, WidgetTimelineCache) = autoreleasepool {
                 let plan = try? Data(contentsOf: root.appendingPathComponent("plans/\(kind).plan"))
                 do {
                     guard let plan else { throw TimelineFailure(description: "entry plan unavailable") }
-                    let bytes = try cache.resolve {
+                    let (bytes, revision) = try cache.resolveAcrossWrites(while: { DispatchTime.now() < deadline }) {
                         guard DispatchTime.now() < deadline else { throw TimelineFailure(description: "refresh deadline expired") }
                         let refresh = try HeadlessSession(plan: plan, entry: kind, size: size, facts: inputs, assetRoot: root)
                         defer { refresh.close() }
@@ -171,16 +171,16 @@ struct ExactTimelineProvider: TimelineProvider {
                     #if EXACT_INSPECT
                     measurement("getTimeline", start: start.uptimeNanoseconds, details: "kind=\(kind) entries=\(entries.count) bytes=\(plan.count)")
                     #endif
-                    return Timeline(entries: entries, policy: .after(max(date.addingTimeInterval(900), entries.last!.date.addingTimeInterval(1))))
+                    return (Timeline(entries: entries, policy: .after(max(date.addingTimeInterval(900), entries.last!.date.addingTimeInterval(1)))), revision)
                 } catch {
                     #if EXACT_INSPECT
                     measurement("getTimeline refused", start: start.uptimeNanoseconds, details: "kind=\(kind)")
                     #endif
                     widgetLog.error("getTimeline refused: \(String(describing: error), privacy: .private)")
-                    return fallback
+                    return (fallback, cache)
                 }
             }
-            WidgetRefresh.waiters.finish(cache, timeline, fallback: fallback)
+            WidgetRefresh.waiters.finish(cache, timeline, revision: revision, fallback: fallback)
         }
     }
 }
