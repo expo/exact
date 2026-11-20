@@ -73,12 +73,15 @@ impl<D: DataSource> Bridge<D> {
     /// target native code registered for the session (D9, "Registration"):
     /// a u32 byte length, then the registration as
     /// `exact_kernel::encode_registration` writes it, refused as an update is.
+    /// Kind 23 says how a split shows a block's route against its stack's
+    /// top (LLP 1127 D8): its first f32 1 beside it, 2 under a pane over
+    /// it, 0 in its stack.
     pub fn covers(&mut self, len: usize) -> u32 {
         let bytes = self.input.get(..len).unwrap_or(&[]);
         let out = if let Ok(records) = records(bytes) {
             let (mut covers, mut margins, mut lists, mut restyles) =
                 (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-            let mut locals = Vec::new();
+            let (mut locals, mut shown) = (Vec::new(), Vec::new());
             let mut owners = BlockChanges::default();
             for r in records {
                 match owners.push(r) {
@@ -110,6 +113,14 @@ impl<D: DataSource> Bridge<D> {
                         Some([edge(8), edge(12), edge(16), edge(20)]),
                     )),
                     18 | 20 => locals.push(((kind == 18).then_some(view), None)),
+                    23 => shown.push((
+                        view,
+                        match edge(8) {
+                            1.0 => exact_kernel::BlockShown::Beside,
+                            2.0 => exact_kernel::BlockShown::Under,
+                            _ => exact_kernel::BlockShown::InStack,
+                        },
+                    )),
                     10 => lists.push((view, Some([edge(8), edge(12)]))),
                     11 => lists.push((view, None)),
                     1 => {
@@ -137,6 +148,7 @@ impl<D: DataSource> Bridge<D> {
                     &lists,
                     &restyles,
                     &locals,
+                    &shown,
                     owners.reports,
                 )
             })

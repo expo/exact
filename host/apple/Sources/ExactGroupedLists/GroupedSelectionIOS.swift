@@ -1,5 +1,6 @@
-// @ref LLP 1115.000 D11.3 — which rows of a grouped list are selected: a
-// tapped row while its press runs and under the screen it pushed.
+// @ref LLP 1115.000 D11.3, LLP 1127 D7 — which rows of a grouped list are
+// selected: a tapped row while its press runs and under the screen it pushed,
+// and in a split's sidebar the row whose detail shows (GroupedSidebarIOS.swift).
 #if os(iOS) || os(tvOS)
 import ExactKit
 import UIKit
@@ -53,7 +54,11 @@ extension GroupedListView {
         // the bound `checked` (LLP 1115.000 D13.2).
         if let row = rows[id], let target = radio(row) { host.presenter.checkRadio(target) }
         guard rows[id]?.pressable == true else { return letGo() }
-        host.presenter.press(id)
+        host.presenter.navigation.listPress(id, in: owner) { host.presenter.press(id) }
+        // A sidebar's pressed row keeps UIKit's selection until the press's
+        // batches are applied: then the detail's row is the selected one
+        // again, whatever the press did (opened its detail, a sheet, or nothing)
+        if sidebar { return host.presenter.afterBatch { [weak self] in self?.selectDetailRow() } }
         if let screen, let stack = screen.navigationController, stack.viewControllers.contains(screen), stack.topViewController !== screen { return }
         letGo()
     }
@@ -63,6 +68,9 @@ extension GroupedListView {
     /// swipe let go of early leaves the row selected under the screen that
     /// stayed. With no transition, at once.
     func deselect(alongside coordinator: UIViewControllerTransitionCoordinator?) {
+        // A sidebar beside its detail keeps its row (LLP 1127 D3), as its list's
+        // screen appears with the split expanding or the list coming over the detail
+        if host.presenter.navigation.showsAsSidebar(owner) { return }
         let paths = collection.indexPathsForSelectedItems ?? []
         guard !paths.isEmpty else { return }
         guard let coordinator, !ExactEnv.agentFreezes else {

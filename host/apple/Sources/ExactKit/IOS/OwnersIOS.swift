@@ -208,6 +208,9 @@ package final class OwnerBlocks {
     /// What the runtime was last told, by route: its block, and its
     /// placement unless it is presented.
     private(set) var told: [UInt32: (block: HostBlock, placement: BlockPlacement?)] = [:]
+    /// How the routes were last told they show against their stacks' tops,
+    /// where not in their stack (`NavigationHosting.routesShown`).
+    private(set) var toldShown: [UInt32: BlockShown] = [:]
     private var resetting = false, revealOwed = false
     private var viewChanges = 0
     /// Each block's rectangle in its root's coordinates (`BatchOp.blockRect`),
@@ -324,7 +327,7 @@ package final class OwnerBlocks {
             DispatchQueue.main.async { [weak self] in self?.publish() }
             return
         }
-        let records = takeChanges()
+        let records = takeChanges(shown: true)
         if !records.isEmpty {
             session.applyUnlessEmpty(session.runtime.blocks(records), scrolled: true)
         }
@@ -332,8 +335,11 @@ package final class OwnerBlocks {
     }
 
     /// Sample after UIKit has established containing bounds. A pending fill keeps
-    /// its deferred report, which samples again when that fill lands.
-    func takeChanges() -> Data {
+    /// its deferred report, which samples again when that fill lands. `shown`:
+    /// with how routes show against their stacks' tops (claim kind 23), which
+    /// `exact_host_covers` takes and `exact_view` refuses; without, a change
+    /// of it is told at the next publication.
+    func takeChanges(shown withShown: Bool = false) -> Data {
         guard !resetting, !presenter.resetting, !presenter.applying,
               !Owner.shared.isServingMain, let session = presenter.session,
               session.state != .destroyed, !session.fillInFlight else { return Data() }
@@ -363,8 +369,24 @@ package final class OwnerBlocks {
         }
         // A block taken back forgets its placement with it
         blocks += told.keys.filter { now[$0] == nil && presenter.views[$0] != nil }.map { ($0, nil) }
+        // How a route shows is told of its block only: one given again starts
+        // in its stack in the kernel, so how it shows is told again (LLP 1127 D8)
+        for id in Array(toldShown.keys) where now[id] == nil { toldShown[id] = nil }
         told = now
-        return Runtime.blockRecords(blocks, placements: placements)
+        guard withShown else {
+            if !shownChanges().isEmpty { publish() }
+            return Runtime.blockRecords(blocks, placements: placements)
+        }
+        let shown = shownChanges()
+        toldShown = presenter.navigation.routesShown.filter { told[$0.key] != nil }
+        return Runtime.blockRecords(blocks, placements: placements, shown: shown)
+    }
+
+    /// How the routes with a block show against their stacks' tops, where
+    /// that changed since it was last told (`NavigationHosting.routesShown`).
+    private func shownChanges() -> [(UInt32, BlockShown)] {
+        let shown = presenter.navigation.routesShown.filter { told[$0.key] != nil }
+        return Set(toldShown.keys).union(shown.keys).filter { toldShown[$0] != shown[$0] }.map { ($0, shown[$0] ?? .inStack) }
     }
 
     private func revealIfOwed() {
@@ -404,6 +426,7 @@ package final class OwnerBlocks {
         teardown()
         resetting = false
         told = [:]
+        toldShown = [:]
         blockRects = [:]
         revealOwed = false
     }

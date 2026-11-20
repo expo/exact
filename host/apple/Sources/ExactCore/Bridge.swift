@@ -1245,4 +1245,6 @@ package final class BatchSequence: @unchecked Sendable {
     private let lock = NSLock()
     private var last: UInt64 = 0
     package func next() -> UInt64 { lock.withLock { last += 1; return last } }
+    /// The newest number given, zero before the first.
+    package var newest: UInt64 { lock.withLock { last } }
 }

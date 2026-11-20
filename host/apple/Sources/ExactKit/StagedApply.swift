@@ -359,6 +359,9 @@ final class Teardown {
 }
 
 extension ExactSession {
+    /// Whether a batch the runtime made still waits to apply: a stage being prepared or one behind it.
+    package var batchesWaiting: Bool { stage != nil || !pending.isEmpty }
+
     /// Begins preparing a large batch (LLP 1072 T13): true when `batch` is
     /// staged, or was prepared and published here. Under the agent's clock
     /// and `EXACT_FILL_SYNC` the same preparation runs to its end at once
