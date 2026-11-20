@@ -3,8 +3,10 @@ use exact_game_render::{FrameView, FrameWork, HookGpu, Hooks, Needs, RenderError
 use exact_gpu::wgpu::{self, util::DeviceExt};
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use terrain_fixture_logic::{height, Blend, WorkloadSettings, SIDE};
 
+mod jobs;
 mod mesh;
 mod workload;
 
@@ -18,6 +20,8 @@ pub mod shaders {
 pub struct Passes {
     settings: WorkloadSettings,
     workload: Workload<Candidate>,
+    jobs: Option<jobs::TerrainJobs>,
+    job_error: Option<String>,
     pending_reason: OnceCell<String>,
     report: OnceCell<String>,
     observed: (u64, bool),
@@ -47,7 +51,28 @@ impl Water {
 
 struct Section {
     buffer: Option<Buffer>,
-    input: Option<Box<[u8]>>,
+    input: Option<PaddedInput>,
+}
+
+enum PaddedInput {
+    Owned(Box<[u8]>),
+    Shared(Arc<Vec<u8>>),
+}
+
+impl PaddedInput {
+    fn cells(&self) -> &[u8] {
+        match self {
+            Self::Owned(cells) => cells,
+            Self::Shared(cells) => cells,
+        }
+    }
+
+    fn shared(&self) -> Option<Arc<Vec<u8>>> {
+        match self {
+            Self::Owned(_) => None,
+            Self::Shared(cells) => Some(cells.clone()),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -228,8 +253,8 @@ impl Passes {
         hz: u32,
         time: &HookTime,
     ) -> bool {
-        // A presentation rebuild also resets the clock's histories.
-        if tick < self.observed.0 || settings != self.settings {
+        let rebuilt = tick < self.observed.0 || settings != self.settings;
+        if rebuilt {
             self.reset(settings);
         }
         let tick_changed = tick != self.observed.0;
@@ -238,7 +263,7 @@ impl Passes {
             && self
                 .workload
                 .advance(settings, tick, hz, !time.seekable, time.interval_ms);
-        tick_changed || advanced
+        rebuilt || tick_changed || advanced
     }
 
     fn pipeline_pending(&self) -> bool {
@@ -247,6 +272,12 @@ impl Passes {
 
     fn reset(&mut self, settings: WorkloadSettings) {
         self.workload.reset();
+        if settings.jobs {
+            self.jobs.get_or_insert_with(jobs::TerrainJobs::new).clear();
+        } else {
+            self.jobs = None;
+        }
+        self.job_error = None;
         self.sections.clear();
         self.section_buffers.clear();
         if self.settings == settings {
@@ -271,8 +302,10 @@ impl Passes {
         if let Some(section) = self.sections.remove(&origin) {
             let removed = self.release_section_buffer(section.buffer);
             self.workload.gpu_bytes(removed, 0);
-            self.workload
-                .cpu_bytes(section.input.map_or(0, |input| input.len() as u64), 0);
+            self.workload.cpu_bytes(
+                section.input.map_or(0, |input| input.cells().len() as u64),
+                0,
+            );
         }
         if let Some(quads) = self.water.tiles.remove(&origin) {
             self.workload
@@ -288,16 +321,15 @@ impl Passes {
         })
     }
 
-    fn section(&mut self, gpu: &HookGpu<'_>, job: Job) {
+    fn section(&mut self, gpu: Option<&HookGpu<'_>>, job: Job) {
         let input = self
             .settings
             .compare
             .then(|| mesh::padded_input(job.origin, height, job.changed));
         if job.kind == SectionWork::Compare {
-            let equal = self
-                .sections
-                .get(&job.origin)
-                .is_some_and(|section| section.input == input);
+            let equal = self.sections.get(&job.origin).is_some_and(|section| {
+                section.input.as_ref().map(PaddedInput::cells) == input.as_deref()
+            });
             self.workload.compared(job, equal, self.settings.blend);
             return;
         }
@@ -317,18 +349,30 @@ impl Passes {
         }
     }
 
-    fn install(&mut self, gpu: &HookGpu<'_>, job: Job, candidate: Candidate) {
+    fn install(&mut self, gpu: Option<&HookGpu<'_>>, job: Job, candidate: Candidate) {
         if !self.workload.install(job, self.settings) {
+            if self.settings.jobs {
+                self.workload.retry_job(job);
+            }
             return;
         }
+        if self.settings.jobs {
+            self.workload.refresh_after_kept_mesh(job);
+        }
+        self.install_buffers(gpu, job, candidate);
+    }
+
+    fn install_buffers(&mut self, gpu: Option<&HookGpu<'_>>, job: Job, candidate: Candidate) {
         let Candidate { mut mesh, input } = candidate;
         let origin @ [x, y, z] = job.origin;
         let (old_cpu, removed) = self.sections.remove(&origin).map_or((0, 0), |old| {
-            let cpu = old.input.map_or(0, |input| input.len() as u64);
+            let cpu = old.input.map_or(0, |input| input.cells().len() as u64);
             (cpu, self.release_section_buffer(old.buffer))
         });
         let mut added = 0;
-        let buffer = Buffer::pack(&mut mesh).map(|(bytes, index_offset, indices)| {
+        let has_mesh = !mesh.indices.is_empty();
+        let buffer = gpu.and_then(|gpu| {
+            let (bytes, index_offset, indices) = Buffer::pack(&mut mesh)?;
             let (buffer, allocated) = self.section_buffers.upload(
                 self.settings.pool,
                 bytes,
@@ -337,14 +381,21 @@ impl Passes {
                 |buffer, bytes| gpu.queue.write_buffer(buffer, 0, bytes),
             );
             added = allocated;
-            Buffer {
+            Some(Buffer {
                 buffer,
                 index_offset,
                 indices,
-            }
+            })
         });
         let cpu = input.as_ref().map_or(0, |input| input.len() as u64);
-        if buffer.is_some() || input.is_some() {
+        if has_mesh || input.is_some() {
+            let input = input.map(|cells| {
+                if self.settings.jobs {
+                    PaddedInput::Shared(Arc::new(cells.into_vec()))
+                } else {
+                    PaddedInput::Owned(cells)
+                }
+            });
             self.sections.insert(origin, Section { buffer, input });
         }
         self.workload.gpu_bytes(removed, added);
@@ -365,61 +416,74 @@ impl Passes {
 
     fn prepare_work(
         &mut self,
-        gpu: &HookGpu<'_>,
-        view: &FrameView<'_>,
+        gpu: Option<&HookGpu<'_>>,
+        time: &HookTime,
         tick: u64,
         hz: u32,
+        camera: [f32; 3],
     ) -> bool {
-        let mut budget = FrameBudget::new(self.settings.budget, view.time.allowance);
-        let camera = view.frame.camera_position.to_array();
+        let mut budget = FrameBudget::new(self.settings.budget, time.allowance);
         self.water.dirty = self.water.needs_upload(camera);
         let mut worked = false;
         while let Some(unit) =
             self.workload
                 .next(&mut budget, self.settings, tick, hz, self.water.dirty)
         {
-            worked = true;
             let small = unit.small();
-            match unit {
-                Unit::Retire(origin) => {
-                    self.retire(origin);
-                    self.workload.retired();
-                }
-                Unit::Edit { tick, index } => self.workload.edit(self.settings, tick, index, hz),
-                Unit::Section(job) => self.section(gpu, job),
-                Unit::Install(job, candidate) => {
-                    self.workload.cpu_bytes(candidate.cpu_bytes(), 0);
-                    self.install(gpu, job, candidate);
-                }
-                Unit::DropStaged(candidate) => self.workload.cpu_bytes(candidate.cpu_bytes(), 0),
-                Unit::Blend => {
-                    self.prepare_water(gpu, camera);
-                    self.workload.blended();
-                }
-            }
+            self.run_unit(gpu, unit, hz, camera);
+            worked = true;
             budget.spent(small, || {
-                view.time.deadline.is_some_and(|deadline| deadline.passed())
+                time.deadline.is_some_and(|deadline| deadline.passed())
             });
         }
-        if !self.water.dirty && !self.workload.retiring() {
-            worked |= self.workload.blend_current();
-        }
-        worked
+        worked | self.finish_blended_refills()
     }
 
-    fn prepare_water(&mut self, gpu: &HookGpu<'_>, camera: [f32; 3]) {
-        let mut quads: Vec<_> = self.water.tiles.values().flatten().copied().collect();
-        mesh::sort_water(&mut quads, camera);
-        let removed = Buffer::bytes(self.water.buffer.as_ref());
-        self.water.buffer = Buffer::upload(
-            gpu,
-            mesh::water(&quads, self.settings.vertex),
-            &mut self.work,
-            self.water.buffer.take(),
-            wgpu::BufferUsages::COPY_DST,
-        );
-        self.workload
-            .gpu_bytes(removed, Buffer::bytes(self.water.buffer.as_ref()));
+    fn run_unit(
+        &mut self,
+        gpu: Option<&HookGpu<'_>>,
+        unit: Unit<Candidate>,
+        hz: u32,
+        camera: [f32; 3],
+    ) {
+        match unit {
+            Unit::Retire(origin) => {
+                self.retire(origin);
+                self.workload.retired();
+            }
+            Unit::Edit { tick, index } => self.workload.edit(self.settings, tick, index, hz),
+            Unit::Section(job) => self.section(gpu, job),
+            Unit::Install(job, candidate) => {
+                self.workload.cpu_bytes(candidate.cpu_bytes(), 0);
+                self.install(gpu, job, candidate);
+            }
+            Unit::DropStaged(candidate) => self.workload.cpu_bytes(candidate.cpu_bytes(), 0),
+            Unit::Blend => {
+                self.prepare_water(gpu, camera);
+                self.workload.blended();
+            }
+        }
+    }
+
+    fn finish_blended_refills(&mut self) -> bool {
+        !self.water.dirty && !self.workload.retiring() && self.workload.blend_current()
+    }
+
+    fn prepare_water(&mut self, gpu: Option<&HookGpu<'_>>, camera: [f32; 3]) {
+        if let Some(gpu) = gpu {
+            let mut quads: Vec<_> = self.water.tiles.values().flatten().copied().collect();
+            mesh::sort_water(&mut quads, camera);
+            let removed = Buffer::bytes(self.water.buffer.as_ref());
+            self.water.buffer = Buffer::upload(
+                gpu,
+                mesh::water(&quads, self.settings.vertex),
+                &mut self.work,
+                self.water.buffer.take(),
+                wgpu::BufferUsages::COPY_DST,
+            );
+            self.workload
+                .gpu_bytes(removed, Buffer::bytes(self.water.buffer.as_ref()));
+        }
         self.water.uploaded = self.water.tiles.keys().copied().collect();
         self.water.dirty = false;
         self.water.camera = Some(camera);
@@ -484,7 +548,18 @@ impl Hooks for Passes {
             .features()
             .contains(wgpu::Features::TIMESTAMP_QUERY);
         let thermal_changed = self.workload.thermal(view.time.thermal_state.keyword());
-        let worked = view.time.allowance > 0 && self.prepare_work(gpu, view, tick, hz);
+        let worked = if settings.jobs {
+            self.prepare_jobs(gpu, view, tick, hz)
+        } else {
+            view.time.allowance > 0
+                && self.prepare_work(
+                    Some(gpu),
+                    &view.time,
+                    tick,
+                    hz,
+                    view.frame.camera_position.to_array(),
+                )
+        };
         if self.observed.1 != timestamp_queries || thermal_changed || changed || worked {
             self.observed.1 = timestamp_queries;
             self.report.take();
@@ -501,6 +576,9 @@ impl Hooks for Passes {
         } else {
             Needs::NONE
         };
+        if self.job_error.is_some() {
+            return needs;
+        }
         if self.pipeline_pending() {
             needs = needs | Needs::PENDING;
         } else if self.workload.pending(self.settings) > 0
@@ -538,9 +616,14 @@ impl Hooks for Passes {
         }))
     }
 
+    fn jobs(&self) -> Option<exact_game_render::JobsReport> {
+        self.jobs.as_ref().map(jobs::TerrainJobs::report)
+    }
+
     fn error(&self) -> Option<&str> {
-        self.pipeline
-            .error()
+        self.job_error
+            .as_deref()
+            .or_else(|| self.pipeline.error())
             .or_else(|| self.water.pipeline.error())
     }
 
@@ -804,11 +887,9 @@ mod tests {
         let settings = WorkloadSettings::default();
         let mut passes = Passes::default();
         let frame = |passes: &mut Passes, settings: WorkloadSettings, tick, reset| {
-            let time = HookTime {
-                allowance: 64,
-                reset,
-                ..HookTime::default()
-            };
+            let mut time = HookTime::default();
+            time.allowance = 64;
+            time.reset = reset;
             passes.begin_work(settings, tick, 60, &time);
             let mut budget = FrameBudget::new(settings.budget, time.allowance);
             while let Some(Unit::Section(job)) =

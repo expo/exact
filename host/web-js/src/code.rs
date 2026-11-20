@@ -33,9 +33,11 @@ pub struct Scope {
     /// (item, index, bound).
     pub frames: Vec<Frame>,
     /// Arm-owned derives are lexical bindings. Their local names are independent of the plan row.
-    pub local_derives: std::rc::Rc<BTreeMap<usize, String>>,
+    pub local_derives: std::rc::Rc<BTreeMap<usize, (String, usize)>>,
     /// Emit root getters, handlers and literals as operands a shared body can take as arguments.
     pub capture: bool,
+    /// Sites after variable-length slot content have no fixed offset from the enclosing mount.
+    pub capture_sites: bool,
     /// Whether this is an action body (writes and commands are allowed).
     pub action: bool,
     /// A shared at-read body accepts its reader's budget.
@@ -72,11 +74,17 @@ impl Scope {
     }
 
     pub fn derive(&self, i: usize) -> String {
-        self.local_derives
-            .get(&i)
-            .cloned()
-            .unwrap_or_else(|| self.operand(format!("d_{i}")))
+        match self.local_derives.get(&i) {
+            Some((name, depth)) if self.capture => lexical_operand(name, *depth),
+            Some((name, _)) => name.clone(),
+            None => self.operand(format!("d_{i}")),
+        }
     }
+}
+
+/// A nested mount may take this binding as an argument up to its declaring scope.
+pub(crate) fn lexical_operand(name: &str, depth: usize) -> String {
+    format!("\0l{depth}:{name}\0")
 }
 
 /// Signals and settled derives ignore arguments. An at-read derive charges

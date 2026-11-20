@@ -327,3 +327,98 @@ fn a_ripple_on_a_removed_node_owes_no_frames() {
     );
     assert!(!p.needs_animation_frame(), "its ripple owes none");
 }
+
+/// A backend that keeps layers on a host whose reader plays none (the
+/// GPU's, Ink's): the ripple is painted per frame, not a layer left at
+/// full progress.
+#[test]
+fn a_host_that_does_not_lower_paints_the_ripple() {
+    if !material_process() {
+        return;
+    }
+    let mut p = boot(false);
+    p.brush
+        .replace_backend(Box::new(crate::canvas::Recorder::new()));
+    let card = rect(&mut p, "card");
+    let key = p.host().kernel().find_by_test_id("card")[0];
+    p.clock(1000.);
+    p.pointer_down(card.0 + 20., card.1 + 60., 1000.).unwrap();
+    p.frame();
+    assert!(p.brush.ripples.tracks(key).is_none(), "no layer");
+    assert!(p.needs_animation_frame(), "painted per frame");
+}
+
+/// Where the reader plays the host's layers, a moving ripple is a layer it
+/// plays from tracks (LLP 1172.023.002): it asks for no frames, and its
+/// release after a long hold sends only the exit.
+#[test]
+fn the_reader_plays_a_moving_ripple() {
+    if !material_process() {
+        return;
+    }
+    let mut p = boot(false);
+    p.brush
+        .replace_backend(Box::new(crate::canvas::Recorder::new()));
+    p.host_mut().lowering = true;
+    let card = rect(&mut p, "card");
+    let at = (card.0 + 20., card.1 + 60.);
+    let k = p.host().kernel();
+    let key = k.find_by_test_id("card")[0];
+    p.clock(1000.);
+    p.pointer_down(at.0, at.1, 1000.).unwrap();
+    p.frame();
+    let held = p.brush.ripples.tracks(key).cloned().expect("its tracks");
+    assert!(!p.needs_animation_frame(), "the reader plays it");
+    // A track is 11 words and 3 a sample, its value the second: opacity,
+    // then the offset's x and y, then the scale.
+    let value = |words: &[u32], track: usize, sample: usize| {
+        let stride = 11 + 3 * words[10] as usize;
+        f32::from_bits(words[track * stride + 11 + 3 * sample + 1])
+    };
+    let from = [value(&held, 1, 0), value(&held, 2, 0)];
+    let touch = [20. - card.2 / 2., 60. - card.3 / 2.];
+    assert_eq!(from, touch, "it starts at the touch, from the middle");
+    p.clock(11_000.);
+    p.pointer_up(at.0, at.1, 11_000.).unwrap();
+    p.frame();
+    let released = p.brush.ripples.tracks(key).cloned().expect("its tracks");
+    assert_ne!(released, held, "the release sends the exit");
+    assert!(released.len() < held.len(), "only the exit is sampled");
+    let rest = [0, 1, 2, 3].map(|track| value(&released, track, 0));
+    assert_eq!(rest, [1. - 0.1 / 0.6, 0., 0., 0.5], "from the wave at rest");
+    assert!(!p.needs_animation_frame());
+}
+
+/// A release that puts the pressed card in a projective plane, where the
+/// recorder keeps no layer: the ripple is painted per frame from there, so
+/// it asks for the frames that end it.
+#[test]
+fn a_ripple_that_loses_its_layer_is_painted_again() {
+    if !material_process() {
+        return;
+    }
+    let mut p = boot_app(
+        r##"component App
+  state turned = false
+  action turn
+    turned = true
+  view
+    column width=400 height=600 background-color="#ffffff" perspective=400
+      column press=turn rotate=(turned ? "x 30deg" : "none") background-color="#ffffff" color="#000000" width=300 height=120 testId="card"
+"##,
+        false,
+    );
+    p.brush
+        .replace_backend(Box::new(crate::canvas::Recorder::new()));
+    p.host_mut().lowering = true;
+    let card = rect(&mut p, "card");
+    let at = (card.0 + 20., card.1 + 60.);
+    p.clock(1000.);
+    p.pointer_down(at.0, at.1, 1000.).unwrap();
+    p.frame();
+    assert!(!p.needs_animation_frame(), "the reader plays it");
+    p.clock(1100.);
+    p.pointer_up(at.0, at.1, 1100.).unwrap();
+    p.frame();
+    assert!(p.needs_animation_frame(), "the walk paints its exit");
+}

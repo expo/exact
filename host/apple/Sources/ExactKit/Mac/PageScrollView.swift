@@ -30,6 +30,8 @@ package final class PageScrollView: NSScrollView {
         let documentFrame: NSRect
         let clipSize: NSSize
         let frameSize: NSSize
+        let magnification: CGFloat
+        let backingScale: CGFloat?
         let style: NSScroller.Style
         let border: NSBorderType
         let vertical: Bool
@@ -100,9 +102,24 @@ package final class PageScrollView: NSScrollView {
         guard !prefittingDocument, let document = documentView,
               document.frame.origin == .zero, document.bounds.size == document.frame.size else { return }
         documentFit = DocumentFit(document: ObjectIdentifier(document), documentFrame: document.frame,
-            clipSize: contentView.bounds.size, frameSize: frame.size, style: scrollerStyle,
+            clipSize: contentView.bounds.size, frameSize: frame.size, magnification: magnification,
+            backingScale: window?.backingScaleFactor, style: scrollerStyle,
             border: borderType, vertical: hasVerticalScroller, horizontal: hasHorizontalScroller,
             autohides: autohidesScrollers)
+    }
+
+    /// A completed fit applies only to the document and viewport geometry it measured.
+    var hasCurrentDocumentFit: Bool {
+        guard let fit = documentFit, let document = documentView else { return false }
+        return ObjectIdentifier(document) == fit.document && document.frame == fit.documentFrame
+            && document.bounds.size == document.frame.size && frame.size == fit.frameSize
+            && bounds.size == frame.size && contentView.bounds.size == fit.clipSize
+            && magnification == fit.magnification && window?.backingScaleFactor == fit.backingScale
+            && scrollerStyle == fit.style && borderType == fit.border
+            && hasVerticalScroller == fit.vertical && hasHorizontalScroller == fit.horizontal
+            && autohidesScrollers == fit.autohides && !automaticallyAdjustsContentInsets
+            && contentInsets.top == 0 && contentInsets.left == 0
+            && contentInsets.bottom == 0 && contentInsets.right == 0
     }
 
     package override func setFrameSize(_ newSize: NSSize) {
@@ -120,17 +137,9 @@ package final class PageScrollView: NSScrollView {
     /// Keep overflowing axes and authored root frames untouched; ordinary layout
     /// can still introduce real overflow and its necessary viewport correction.
     private func prefitDocument(for newSize: NSSize) {
-        let accepted = documentFit
-        documentFit = nil
-        guard permitsDocumentPrefit?() == true, let fit = accepted, let document = documentView,
-              ObjectIdentifier(document) == fit.document, document.frame == fit.documentFrame,
-              document.bounds.size == document.frame.size, frame.size == fit.frameSize,
-              bounds.size == frame.size, contentView.bounds.size == fit.clipSize,
-              scrollerStyle == fit.style, borderType == fit.border,
-              hasVerticalScroller == fit.vertical, hasHorizontalScroller == fit.horizontal,
-              autohidesScrollers == fit.autohides, !automaticallyAdjustsContentInsets,
-              contentInsets.top == 0, contentInsets.left == 0,
-              contentInsets.bottom == 0, contentInsets.right == 0,
+        let fit = hasCurrentDocumentFit ? documentFit : nil
+        invalidateDocumentFit()
+        guard permitsDocumentPrefit?() == true, let fit, let document = documentView,
               newSize.width.isFinite, newSize.height.isFinite,
               newSize.width > 0, newSize.height > 0 else { return }
         // The clip is in CSS px, the frame in points: the change over the page zoom.

@@ -131,3 +131,49 @@ component App
     } finally { await browser?.close(); server.stop(true); }
   });
 }, 180000);
+
+test('data selects the heading tag at creation and its ARIA attributes stay live', async () => {
+  const source = `routes nav
+  home "/" render=build
+
+component App
+  state level = 3
+  action change
+    level = 5
+  view
+    main
+      button "Change" press=change testId="change"
+      text "Fixed" testId="fixed" role="heading" aria-level=level
+      text "Default" testId="default" role=(level == 3 ? "heading" : "note")
+      text "Level only" testId="plain" aria-level=level
+      text "Note" testId="note" role=(level == 3 ? "note" : "heading") aria-level=level
+      text
+        text "Inline" testId="inline" role="heading" aria-level=level
+      for depth in [1, 2, 3, 4, 5, 6, 7] key=depth
+        text "Section" testId="section" role="heading" aria-level=depth
+      if level == 5
+        text "New" testId="new" role="heading" aria-level=level
+`;
+  const sectionTags = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'div'];
+  for (const renderer of ['js', 'rust']) await renderedPages(source, async (_, html, dist) => {
+    const tags = id => [...html('').matchAll(/<([a-z\d]+)\b([^>]*)>/g)]
+      .filter(([, , attrs]) => attrs.includes(`data-testid="${id}"`)).map(([, tag]) => tag);
+    expect(['fixed', 'default', 'plain', 'note', 'inline', 'section'].map(tags))
+      .toEqual([['h3'], ['h2'], ['div'], ['div'], ['span'], sectionTags]);
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(req) {
+      const path = new URL(req.url).pathname;
+      return new Response(Bun.file(resolve(dist, path === '/' ? 'index.html' : path.slice(1))));
+    } });
+    let browser;
+    try {
+      browser = await open({ host: 'web', url: server.url.href });
+      const read = expr => browser.carrier.evaluate(expr);
+      expect(await read("globalThis.exact.journal.some(l => l.endsWith('adopted the document'))")).toBe(true);
+      await read("globalThis.initialHeading = document.querySelector('[data-testid=fixed]'); true");
+      await browser.tap('change');
+      expect(await read(`[initialHeading === document.querySelector('[data-testid=fixed]'), initialHeading.localName,
+        initialHeading.getAttribute('aria-level'), document.querySelector('[data-testid=default]').getAttribute('role'),
+        document.querySelector('[data-testid=new]').localName]`)).toEqual([true, 'h3', '5', 'note', 'h5']);
+    } finally { await browser?.close(); server.stop(true); }
+  }, {}, {}, renderer);
+}, 180000);

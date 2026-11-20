@@ -503,6 +503,19 @@ impl ShapedSource {
             BaseDirection::Auto
         };
         let mut text_bytes = 0;
+        // A glyph stores its paragraph-wide run index. Reuse a line only when its
+        // local text ranges still name the same runs with the same shaping inputs.
+        let mut end = 0;
+        let prior_runs: Vec<_> = old
+            .into_iter()
+            .flat_map(|s| s.spec.runs.iter())
+            .zip(&spec.runs)
+            .map(|(old, new)| {
+                let start = end;
+                end += old.text.len();
+                (start..end, cache::same_run_style(old, new))
+            })
+            .collect();
         let pieces = hard_lines(&spec);
         let mut edges = run_edges(&spec, &pieces);
         let mut lines = Vec::with_capacity(pieces.len());
@@ -512,6 +525,13 @@ impl ShapedSource {
                 s.matching_line(h, count, |i, line| {
                     // Indentation and balancing give the first line its own shaping inputs.
                     text == line.text
+                        && runs.iter().all(|(range, index)| {
+                            prior_runs.get(*index).is_some_and(|(old, same)| {
+                                *same
+                                    && old.start <= line.start + range.start
+                                    && line.start + range.end <= old.end
+                            })
+                        })
                         && (h == 0) == (i == 0)
                         && !(h == 0 && spec.text_wrap_style == exact_kernel::TextWrapStyle::Balance)
                 })
@@ -1133,7 +1153,7 @@ impl ShapedSource {
             && width.is_some()
             && spec.line_clamp == 0
             && !ellipsis
-            && matches!(spec.runs.as_slice(), [r] if r.inline.is_none() && r.edges.is_empty());
+            && super::field::text_runs(spec);
         let (mut lines, _) = self.break_lines(
             width,
             ellipsis,

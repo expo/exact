@@ -13,10 +13,9 @@ impl Em<'_> {
         if !self
             .repeated_nodes
             .get(node as usize)
-            .copied()
-            .unwrap_or(false)
+            .is_some_and(|shape| shape.repeated || shape.slot.is_some())
         {
-            return self.node(node, parent, scope);
+            return self.node(node, parent, scope).map(|_| ());
         }
         let saved = std::mem::take(&mut self.out);
         let outer = self.next_local_element.replace(0);
@@ -24,16 +23,60 @@ impl Em<'_> {
             capture: true,
             ..scope.clone()
         };
-        self.node(node, "p", &scope)?;
+        let slot = self.node(node, "p", &scope)?;
         self.next_local_element = outer;
         let body = std::mem::replace(&mut self.out, saved);
+        // Keeping both calls in the enclosing template lets repeated arms share
+        // their captures and relocate their diagnostic sites together.
+        let body = if let Some(slot) = slot {
+            let frame = self.mount_templates.slot_frame(body);
+            format!("{frame}{slot}")
+        } else {
+            body
+        };
         let mount = self.mount_templates.mount("p", body, Some(parent), None);
         self.out.push_str(&mount);
         Ok(())
     }
 
-    pub(super) fn site_number(&self, n: u32) -> String {
-        if self.next_local_element.is_some() {
+    pub(super) fn mount_children(
+        &mut self,
+        node: u32,
+        parent: &str,
+        scope: &Scope,
+        same_scope: bool,
+    ) -> Result<Option<String>, String> {
+        let children = self.sites.of_node(node);
+        let slot = self
+            .repeated_nodes
+            .get(node as usize)
+            .and_then(|shape| shape.slot.clone());
+        let Some(slot) = slot.filter(|_| same_scope && scope.capture) else {
+            self.children(children, parent, scope)?;
+            return Ok(None);
+        };
+        self.children(&children[..slot.start], parent, scope)?;
+        let saved = std::mem::take(&mut self.out);
+        let outer = self.next_local_element.replace(0);
+        self.children(&children[slot.clone()], "p", scope)?;
+        self.next_local_element = outer;
+        let body = std::mem::replace(&mut self.out, saved);
+        let callback = self.mount_templates.mount("p", body, None, None);
+        write!(self.out, "\0slot:{parent}\0").unwrap();
+        if slot.end < children.len() {
+            let tail = Scope {
+                capture_sites: true,
+                ..scope.clone()
+            };
+            self.children(&children[slot.end..], parent, &tail)?;
+        }
+        Ok(Some(callback))
+    }
+
+    pub(super) fn site_number(&self, scope: &Scope, n: u32) -> String {
+        if scope.capture_sites {
+            scope.operand(n.to_string())
+        } else if self.next_local_element.is_some() {
             format!("\0s{n}\0")
         } else {
             n.to_string()
@@ -51,7 +94,7 @@ impl Em<'_> {
             return code::evaluation(scope, format!("site {n} {what}"), instance);
         }
         let suffix = serde_json::to_string(&format!(" {what}")).unwrap();
-        let label = format!(r#""site "+({})+{suffix}"#, self.site_number(n));
+        let label = format!(r#""site "+({})+{suffix}"#, self.site_number(scope, n));
         Scope {
             evaluation: Some((label, instance)),
             ..scope.clone()

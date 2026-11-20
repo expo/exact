@@ -527,6 +527,16 @@ mod tests {
       text `${clicks}`
       textarea testId="editor" value=body input=edit width=260 height=120 font-size=14
 "##;
+        let coloured = format!("decoration accent color=\"#db1141\"\n{source}").replace(
+            "value=body input=edit",
+            "value=body input=edit decorations=TextDecorations(value=body,spans=[TextDecorationSpan(name=\"accent\",start=0,end=5)])",
+        );
+        for source in [source, &coloured] {
+            exercise_field_geometry(source);
+        }
+    }
+
+    fn exercise_field_geometry(source: &str) {
         let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(source),
             (),

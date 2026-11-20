@@ -5,12 +5,12 @@ import { resolve } from 'node:path';
 const resolution = [1280, 720];
 const defaults = {
   radius: 'smoke', move: 'stand', light: '0', edits: '0', inflight: 'discard',
-  compare: 'off', vertex: '12', blend: 'off', budget: 'deadline', draw: 'on', pool: 'off',
+  compare: 'off', vertex: '12', blend: 'off', budget: 'deadline', draw: 'on', pool: 'off', jobs: 'off',
 };
 const choices = {
   radius: ['smoke', '8', '40'], move: ['stand', 'walk', 'fly'], inflight: ['discard', 'keep'],
   compare: ['off', 'on'], vertex: ['12', '64'], blend: ['off', 'window', 'background', 'surface'],
-  draw: ['on', 'off'], pool: ['off', 'on'],
+  draw: ['on', 'off'], pool: ['off', 'on'], jobs: ['off', 'on'],
 };
 const whole = number => /^\d+$/.test(number) && Number(number) <= 0xffffffff;
 const valid = (key, value) => choices[key]?.includes(value) ??
@@ -110,7 +110,7 @@ function reading(before, end, durationMs, browser, refreshHz) {
     longTasks: browser?.longTasks ?? null,
     displayPeriodsPerFrame: refreshHz != null && Number.isFinite(frameP50) ? frameP50 / (1000 / refreshHz) : null,
     drawMs: hooks ? { opaque: hooks.cpuMs?.opaque, background: hooks.cpuMs?.background, surface: hooks.cpuMs?.surface } : null,
-    budget: hooks?.budget ?? null, catchUp: perf?.catchUp ?? null,
+    budget: hooks?.budget ?? null, jobs: hooks?.jobs ?? null, catchUp: perf?.catchUp ?? null,
     uploadBytes: hooks?.frame?.uploadBytes ?? null, draws: hooks?.frame?.draws ?? null,
     itemsDrawn: hooks?.frame?.itemsDrawn ?? null,
     gpuMs: end?.gpuMs ?? null, timestampQueries: finish?.timestampQueries ?? null,
@@ -212,6 +212,7 @@ export async function readBench(session, config, commit) {
     sectionBuffers: terrain?.sectionBuffers ?? null,
     cpuBytes: terrain?.cpuBytes ?? null, peakCpuBytes: terrain?.peakCpuBytes ?? null,
     lightCells: terrain?.lightCells ?? null,
+    lane: last?.renderHooks?.jobs?.lane ?? null,
     inconclusive: inconclusive(windows, headless), windows,
   };
 }
@@ -264,7 +265,7 @@ export function tableRow(row) {
   const periods = display(w => fixed(w.displayPeriodsPerFrame));
   const switches = Object.entries(row.switches).map(([name, value]) => `${name}=${value}`).join(', ');
   const cells = [row.commit, row.host, row.profile, row.resolution.join('×'), show(row.device), show(row.os),
-    show(row.refreshHz), switches, row.pollMs, mount(row.firstPicture), mount(row.fullWindow),
+    show(row.refreshHz), switches, show(row.lane), row.pollMs, mount(row.firstPicture), mount(row.fullWindow),
     show(row.peakGpuBufferBytes), show(row.peakCpuBytes), perWindow('tickMs'), perWindow('prepareMs'),
     perWindow('encodeMs'), perWindow('frameMs'), raf, tasks, periods, row.calibration, row.headless ? 'headless' : 'display'];
   return `| ${cells.map(cell => String(cell).replaceAll('|', '\\|')).join(' | ')} |`;

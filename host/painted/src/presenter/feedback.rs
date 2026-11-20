@@ -111,6 +111,18 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
+    /// A layer's own tracks, not a node's plays: an indicator's, which
+    /// change only with the device's motion setting, or a ripple's, which
+    /// change with its press (LLP 1172.023.002).
+    #[cfg(target_os = "android")]
+    pub(crate) fn own_tracks(&self, layer: u64) -> Option<Vec<u32>> {
+        if crate::host::lower::is_spinner(layer) {
+            return Some(self.host.spinner_tracks());
+        }
+        let node = crate::host::lower::ripple_node(layer)?;
+        Some(self.brush.ripples.tracks(node).cloned().unwrap_or_default())
+    }
+
     /// The contact was cancelled (a scroller took it): its ripple, if it
     /// has not shown yet, never does.
     pub(super) fn cancel_ripple(&mut self) {

@@ -311,3 +311,83 @@ fn negative_z_bounds_and_hits_follow_the_presented_turn() {
         read(&r, &scrolled, -50., 50., &[]);
     }
 }
+
+/// LLP 1127 D8: a split's list column, which its host shows beside the
+/// stack's top, takes a point in its column though the detail's block spans
+/// it (the detail's view on iOS 26, its content padded clear of the list),
+/// and the detail takes a point past the column.
+#[test]
+fn a_route_shown_beside_the_top_takes_the_point_in_its_column() {
+    let source = r#"component App
+  view
+    box id="root" navigationKey="detail" navigationBack="back" width=1000 height=400
+      box navigationKey="list" id="list" position="absolute" left=0 top=0 right=0 bottom=0
+        box id="row" width=300 height=40
+      box navigationKey="detail" id="detail" position="absolute" left=0 top=0 right=0 bottom=0 padding-left=320
+        box id="body" width=200 height=40
+      box id="toast" position="absolute" left=0 top=60 width=150 height=40
+      box id="tip" position="absolute" left=0 top=0 width=40 height=40
+"#;
+    let mut r = Runner::boot(
+        contract::compile(source).unwrap(),
+        (),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let root = view_of(r.kernel(), "root").unwrap();
+    let mut scrolled = Scrolled::default();
+    // The tip is a block its host places that is no route, as a popover is
+    for (id, width) in [("list", 320.0), ("detail", 1000.0), ("tip", 40.0)] {
+        let view = view_of(r.kernel(), id).unwrap();
+        r.kernel_mut()
+            .set_host_block(
+                view,
+                Some(HostBlock {
+                    tactic: Default::default(),
+                    width: BlockAxis::Is(width),
+                    height: BlockAxis::Is(400.0),
+                }),
+            )
+            .unwrap();
+        scrolled.place(
+            r.kernel(),
+            view,
+            Some(([0.0, 0.0, f64::from(width), 400.0], root, None)),
+        );
+    }
+    let top = r.roots()[0];
+    r.kernel_mut()
+        .compute_layout(top, Offer::definite(1000.0, 400.0))
+        .unwrap();
+    let list = view_of(r.kernel(), "list").unwrap();
+    assert!(
+        r.kernel_mut()
+            .set_host_block_shown(list, exact_kernel::BlockShown::Beside),
+        "the list's block is shown beside the detail"
+    );
+    let env = GeometryEnv::new(r.kernel(), &scrolled, &KERNEL, &[]);
+    let at = |x: f64, y: f64| {
+        env.read(
+            r.plan(),
+            Stdlib::ElementFromPoint,
+            &[Value::Number(x), Value::Number(y)],
+        )
+    };
+    assert_eq!(
+        at(100.0, 20.0),
+        Some(Value::some(Value::str("row"))),
+        "in the list's column"
+    );
+    assert_eq!(
+        at(400.0, 20.0),
+        Some(Value::some(Value::str("body"))),
+        "past it, the detail"
+    );
+    assert_eq!(
+        at(100.0, 80.0),
+        Some(Value::some(Value::str("toast"))),
+        "an overlay after the routes stays in front of the list, a placed block after it or not"
+    );
+}

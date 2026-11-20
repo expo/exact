@@ -52,7 +52,7 @@ import { grantAdvice } from './grant-advice.mjs';
 import { checkoutPath, linkCheckout } from './paths.mjs';
 import { installedFileDependencies } from './file-dependencies.mjs';
 import { addOutside, installIn, outsideSpecifier } from './package-manager.mjs';
-import { builtContract, contractTool, launch, toolEnv } from './tools.mjs';
+import { builtContract, compilerCargo, contractTool, launch, rustMissing } from './tools.mjs';
 export { grantAdvice, grantLines } from './grant-advice.mjs';
 const { cargoEnvironment, appleExecutableName, HERMES_INSTALLER, hermesBundle, hermesTarget, pathFrom, readManifest, resolveApp, WEB_TOOLCHAIN, webToolchainEnv } = await import('./app.mjs');
 const { applyPattern, createApp, createGame, patternList, rustApp, UNCACHED_CRATES, wireSnapback } = await import('../game/new.mjs');
@@ -630,20 +630,12 @@ export function printReport(rows, {onlyMissing = false} = {}) {
     console.log(`${mark} ${row.name}: ${row.have} (SDK ${row.want})${row.need ? ` — for ${row.need}` : ''}${row.ok ? '' : `\n          ${row.fix}`}`);
   }
 }
-/** Cargo with the pinned toolchain, in this checkout's own target, on the Contract compiler: `run` or `build`. */
-function compilerCargo(verb, env = process.env) {
-  const pin = Bun.TOML.parse(readFileSync(resolve(ROOT, 'rust-toolchain.toml'), 'utf8')).toolchain.channel;
-  const clean = cargoEnvironment(env);
-  delete clean.RUSTUP_TOOLCHAIN;
-  delete clean.CARGO_TARGET_DIR;
-  return { pin, args: [`+${pin}`, verb, '-q', '--manifest-path', resolve(ROOT, 'Cargo.toml'), '-p', 'contract'], env: toolEnv(clean) };
-}
 const COMPILER = resolve(ROOT, 'target/debug', process.platform === 'win32' ? 'contract.exe' : 'contract');
 /** `exact new` starts the compiler's build apart from this shell, so the builder's first `contract vocab` or
  * `contract build` does not wait the minute a cold one takes (a port's first lookup, 67 s). A fresh one is a no-op. */
 function prebuildCompiler() {
-  const { args, env } = compilerCargo('build');
-  const child = spawn('cargo', args, { detached: true, stdio: 'ignore', env });
+  const { pre, env } = compilerCargo('build');
+  const child = spawn('cargo', pre, { detached: true, stdio: 'ignore', env });
   child.on('error', () => {});
   child.unref();
   if (!existsSync(COMPILER)) console.log(`\nBuilding the Contract compiler in the background (pid ${child.pid}), so \`contract\` answers at once when you need it.`);
@@ -658,12 +650,12 @@ export async function contract(args, env = process.env) {
   // A build of an app's `app.contract` refreshes the types its `app.ts` imports (LLP 1116.001 D4.5); of unsaved text
   // (`--stdin`), whose types no file holds, neither refreshes them nor type-checks app.ts.
   const input = args[0] === 'build' && !args.includes('--stdin') ? args.slice(1).find((arg, i, rest) => !arg.startsWith('-') && rest[i - 1] !== '-o') : null;
-  const cargo = compilerCargo('run', env), tool = await contractTool({ cmd: 'cargo', pre: [...cargo.args, '--'], env: cargo.env }, { env, json, file: input ?? '' });
+  const tool = contractTool({ env, json, file: input ?? '' });
   if (!tool || !prepareContractGame(args)) return 1;
   const result = spawnSync(tool.cmd, [...tool.pre, ...args], {stdio: ['inherit', json ? 'pipe' : 'inherit', 'inherit'], env: tool.env, encoding: 'utf8', maxBuffer: 1 << 26});
   if (result.error) throw new Error(`${tool.cmd}: ${result.error.message}${tool.cmd === 'cargo' ? ' (install rustup from https://rustup.rs)' : ''}`);
   // Cargo's own failures exit 101; one that is not rustup's refuses `+<pin>` before the compiler runs.
-  if (result.status === 101 && tool.cmd === 'cargo') { const fault = cargoProxyFault(cargo.pin, cargo.env); if (fault) console.error(`exact contract: ${fault}`); }
+  if (result.status === 101 && tool.cmd === 'cargo') { const fault = cargoProxyFault(tool.pin, tool.env); if (fault) console.error(`exact contract: ${fault}`); }
   if (result.status === 0 && input && basename(input) === 'app.contract') {
     const dir = dirname(resolve(input));
     refreshTypes(dir, tool.cmd === 'cargo' ? launch(COMPILER) : tool, {quiet: json});
@@ -754,10 +746,12 @@ export function checkWarnings(report, dir) {
  * only when they changed: when a source's signature did (LLP 1116.001 D4.5). The web build and
  * the native development bake write the same file the same way, so a builder never runs the
  * step. Reports a rewrite in one line on stderr, so `--json` stays the build's reply;
- * returns whether it wrote. `tool` (`launch`): by default this checkout's debug build, or a tool set's. */
-export function refreshTypes(dir, tool = builtContract(), {quiet = false} = {}) {
+ * returns whether it wrote. The default compiler is the one `exact contract` would run. */
+export function refreshTypes(dir, tool, {quiet = false} = {}) {
   const ts = resolve(dir, 'app.ts'), out = resolve(dir, 'app.contract.d.ts');
-  if (!existsSync(ts) || !tool || !existsSync(tool.cmd)) return false;
+  if (!existsSync(ts)) return false;
+  if (tool === undefined) tool = contractTool();
+  if (!tool) return false;
   const types = spawnSync(tool.cmd, [...tool.pre, 'types', resolve(dir, 'app.contract')], {encoding: 'utf8', maxBuffer: 1 << 26, env: tool.env});
   if (types.status !== 0) return false;
   const text = types.stdout;
@@ -796,7 +790,8 @@ async function newApp(path, {update = false, without = null, with: platforms = [
   // A game's cache note is what to do next, so it comes after the compiler's line and the table.
   const note = created.indexOf(`\n${UNCACHED_CRATES}`);
   console.log(note < 0 ? created : created.slice(0, note));
-  if (!noRust) prebuildCompiler();
+  const canBuildTools = !noRust && !rustMissing();
+  if (canBuildTools && !builtContract()) prebuildCompiler();
   // A Rust app's generated workspace, written now so that cargo and an editor work in data/ before the first build
   // (LLP 1153.003 D1.7); its lock stays exact2's until data/ needs a version exact2's lacks. The first line and
   // app-cli's note on the GPU module; the app stands either way, so a failure says what to run.
@@ -821,7 +816,7 @@ async function newApp(path, {update = false, without = null, with: platforms = [
   const shown = shellPath(resolve(ROOT, 'scripts/exact.mjs'));
   for (const platform of game ? [] : platforms ?? []) console.log(`Before the first ${platform} build: bun ${shown} setup --check --platform ${platform} names what it lacks (the Xcode or SDK it needs among them).`);
   if (note >= 0) console.log(created.slice(note));
-  if (noRust) console.log('\nWithout Rust, this machine cannot check or build the app locally: `bun exact.mjs contract build app.contract` and every local build or dev loop compile exact2\'s tools first. A build service builds it as it is; to check here, install rustup (https://rustup.rs).');
+  if (!canBuildTools) console.log('\nA matching prebuilt tool set lets you run `bun exact.mjs contract build app.contract` and build a Contract and TypeScript app for the web. Native builds and apps with Rust code need Rust locally or a build service.');
 }
 
 const USAGE = `exact — run an Exact app from the command line (macOS)

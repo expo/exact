@@ -126,8 +126,15 @@ impl Deadline {
 }
 
 /// Host clock and lifecycle facts, separate from saved game time.
+///
+/// ```compile_fail,E0616
+/// use exact_game_render::HookTime;
+/// let _ = HookTime::default().serial;
+/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct HookTime {
+    /// Identifies this prepare call within the canvas, including held frames.
+    pub(crate) serial: u64,
     /// Bounded units this call to prepare may complete.
     pub allowance: u32,
     /// The preparation deadline for a live canvas with a known frame period.
@@ -160,6 +167,7 @@ pub struct HookTime {
 impl Default for HookTime {
     fn default() -> Self {
         Self {
+            serial: 0,
             allowance: 0,
             deadline: None,
             dt: 0.,
@@ -210,6 +218,19 @@ impl FrameView<'_> {
 }
 
 /// Borrowed GPU access for preparing resources; the engine owns command submission.
+///
+/// ```compile_fail,E0451
+/// use exact_game_render::HookGpu;
+/// fn rebuild<'a>(gpu: &HookGpu<'a>) -> HookGpu<'a> {
+///     HookGpu {
+///         materials: None,
+///         device: gpu.device,
+///         queue: gpu.queue,
+///         frame_binding: gpu.frame_binding,
+///         frame_layout: gpu.frame_layout,
+///     }
+/// }
+/// ```
 pub struct HookGpu<'a> {
     /// Optional model material support, present for an assets-enabled game.
     pub materials: Option<MaterialGpu<'a>>,
@@ -221,6 +242,28 @@ pub struct HookGpu<'a> {
     pub frame_binding: &'a wgpu::BindGroup,
     /// Reflected layout of frame_binding.
     pub frame_layout: &'a wgpu::BindGroupLayout,
+    _prepare: PrepareGpu,
+}
+
+struct PrepareGpu;
+
+impl<'a> HookGpu<'a> {
+    pub(crate) fn new(
+        materials: Option<MaterialGpu<'a>>,
+        device: &'a wgpu::Device,
+        queue: &'a wgpu::Queue,
+        frame_binding: &'a wgpu::BindGroup,
+        frame_layout: &'a wgpu::BindGroupLayout,
+    ) -> Self {
+        Self {
+            materials,
+            device,
+            queue,
+            frame_binding,
+            frame_layout,
+            _prepare: PrepareGpu,
+        }
+    }
 }
 
 /// Immutable pre-surface inputs. Linear depth is positive view-space Z; zero is sky.
@@ -315,6 +358,10 @@ pub trait Hooks: Default {
     }
     /// A JSON object of the game's own presentation counters, read with `state`. Diagnostics only.
     fn report(&self) -> Option<&str> {
+        None
+    }
+    /// Presentation job gauges and cumulative counts, read with `state`.
+    fn jobs(&self) -> Option<crate::JobsReport> {
         None
     }
     /// Last rejected shader/pipeline update, even if a previous set still draws.
@@ -487,6 +534,7 @@ mod pose_tests {
 
 #[derive(Default)]
 pub(crate) struct HookClock {
+    serial: u64,
     last: Option<(f64, bool)>,
     generation: Option<u64>,
     pub budget: Option<Box<budget::Budget>>,
@@ -515,7 +563,9 @@ impl HookClock {
         };
         self.last = Some((frame.now_ms, frame.seekable));
         self.generation = Some(generation);
+        self.serial = self.serial.wrapping_add(1);
         HookTime {
+            serial: self.serial,
             allowance: 0,
             deadline: None,
             dt,
@@ -532,10 +582,11 @@ impl HookClock {
         }
     }
     /// A look frame's time (LLP 1127.000): `frame` held, no time passing, and
-    /// the clock untouched, so the next live frame's delta is the one it would
-    /// have had without the look.
-    pub fn held(&self, frame: &exact_gpu::Frame, generation: u64, paused: bool) -> HookTime {
+    /// the same timing history for the next live frame.
+    pub fn held(&mut self, frame: &exact_gpu::Frame, generation: u64, paused: bool) -> HookTime {
+        self.serial = self.serial.wrapping_add(1);
         HookTime {
+            serial: self.serial,
             dt: 0.,
             reset: self.last.is_none() || self.generation != Some(generation),
             paused,

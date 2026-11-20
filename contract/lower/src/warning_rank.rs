@@ -74,11 +74,10 @@ pub fn information(id: &str) -> bool {
     id == "forma-unreachable" || id == "style-undrawn"
 }
 
-/// The first [`crate::MAX_WARNINGS`] of `out` by rank, source order kept
-/// within one.
-pub(crate) fn keep_first(out: &mut Vec<LowerError>) {
+/// Keep up to `limit` ranked warnings, preserving source order within a rank.
+pub(crate) fn keep_first(out: &mut Vec<LowerError>, limit: usize) {
     out.sort_by_key(|w| rank(w.id, &w.message));
-    out.truncate(crate::MAX_WARNINGS);
+    out.truncate(limit);
 }
 
 /// A `lower-colour-one-scheme` line for one site: a literal colour or a

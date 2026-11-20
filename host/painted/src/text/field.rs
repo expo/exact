@@ -73,12 +73,19 @@ pub(super) enum WidthUse<'a> {
     Field(Option<&'a Paragraph>),
 }
 
+pub(super) fn text_runs(spec: &Spec) -> bool {
+    spec.runs
+        .iter()
+        .all(|r| r.inline.is_none() && r.edges.is_empty())
+}
+
 impl<'a> WidthUse<'a> {
     fn field(engine: &TextEngine, spec: &Spec, previous: Option<&'a Paragraph>) -> Self {
         Self::Field(previous.filter(|p| {
             Rc::ptr_eq(&engine.catalog, &p.source.catalog)
-                && matches!(spec.runs.as_slice(), [r] if r.inline.is_none() && r.edges.is_empty())
-                && super::cache::same_style(spec, &p.source.spec)
+                && text_runs(spec)
+                && text_runs(&p.source.spec)
+                && super::cache::same_paragraph_style(spec, &p.source.spec)
         }))
     }
 
@@ -227,12 +234,11 @@ impl Geometry {
     ) -> Self {
         let data = &paragraph.source.data;
         let mut retained = HashMap::new();
-        if let Some((old, geometry)) = previous.filter(|(p, _)| {
-            !masked
-                && p.source.data.strut_font == data.strut_font
-                && p.source.data.run_metrics == data.run_metrics
-        }) {
-            // Both paragraphs are alive. Only a shared nonempty slice has the same address and length.
+        if let Some((old, geometry)) =
+            previous.filter(|(p, _)| !masked && p.source.data.strut_font == data.strut_font)
+        {
+            // A shared glyph block has the same runs and font metrics on this line.
+            // Both paragraphs are alive, so a nonempty slice identifies the block.
             for (run, line) in old.layout_runs().zip(&geometry.lines) {
                 if !run.glyphs.is_empty() {
                     retained.insert((run.glyphs.as_ptr(), run.glyphs.len()), &line.spans);

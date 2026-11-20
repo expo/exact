@@ -100,6 +100,72 @@ they ended in total (`overMs`). That total includes time lost before
 `prepare` began. `perf_reset`, a restore and a restart clear both counters.
 The budget report is `null` when the hook leaves `ALLOWANCE` at zero.
 
+### Jobs
+
+Use `exact_game_render::Jobs<J>` for bounded presentation work (LLP 1182.000 D9).
+A `Job` is a function of the data moved into it by `submit`. Keep GPU handles
+out of jobs and install results in `Hooks::prepare`. `take` requires the
+`HookGpu` from that `prepare` and borrows it and the `FrameView` for the
+lifetime of the iterator.
+
+- Declare `Hooks::ALLOWANCE > 0`. The allowance belongs to the hook for that
+  `prepare`. Takes from one `Jobs` share it. A hook with two queues divides
+  the allowance between them itself.
+- `take_per_frame` and the deadline bound delivered results. A late frame
+  can deliver its first current result past the deadline. Results invalidated
+  since they completed are dropped along the way without using a unit.
+  After the first delivery, the deadline is checked between results and
+  stale drops (LLP 1182.000 D6).
+- Each step of `take` yields the ready `Done { key, generation, result }`
+  with the highest priority, breaking ties by submission order.
+- `submit(key, generation, priority, job)` supersedes earlier work for the
+  key. `Full(job)` returns the job for retry. The byte limits are thresholds.
+  An empty input queue admits one oversized job. A result's size is known
+  when it completes, so running jobs can finish above the completed threshold.
+  `Job::bytes` measures queued input and `Job::output_bytes` measures completed
+  output. A value of zero for `running` or `take_per_frame` means one.
+- `cancel(key)` invalidates that key. `clear()` invalidates every key and
+  drops waiting results. A running job can poll `Cancel::is_set()` to stop
+  early. Its output is discarded when it returns after `cancel` or `clear`.
+  Clear and advance the hook's generation when a restore or restart
+  invalidates job inputs. The default device-loss reset
+  drops the queue, cancelling and joining its workers.
+  Drop waits for running jobs, so jobs should poll `Cancel::is_set()` or finish quickly.
+- A job returns `JobError` by value. A native worker that unwinds reports
+  `job panicked` for that job. A hook waiting for work should clear
+  `PENDING` or expose the failure through `error()`. `pending()` counts
+  queued, running and completed work still held by the lane.
+
+Each `Jobs` owns its pool. A hook with two queues has two pools. A live
+`take` starts the native pool if work is queued. With an empty queue, the first
+later `submit` starts the pool. Take before submitting in `prepare` so the queue
+knows the current clock mode. Submit only on an advancing frame. A pool uses
+up to four threads at the platform's default priority, leaving two logical
+CPUs when possible. If no worker can start, the queue runs inline.
+
+WebAssembly and the agent's clock run jobs inline as the iterator advances.
+A held frame takes no result and runs no job inline. A pool that was working
+when the agent took the clock keeps working until the first advance. That
+advance's `take` waits for running jobs and delivers results in the same
+order with the queued work regardless of the pool's progress. The reported
+lane stays the one selected by the last advancing frame. A hook
+waiting on jobs under the agent's clock reports `PENDING | STARVED`. Advance
+the clock until the hook is ready.
+
+A hook that is `PENDING` for jobs keeps its canvas drawing and ticking where a
+canvas with nothing pending would rest, as any pending hook does. In a game
+that rests, input sent after that lands on a different tick.
+
+Return `Some(jobs.report())` from `Hooks::jobs` to populate
+`state.world.renderHooks.jobs`. The report holds `queued`, `queuedBytes`,
+`running`, `done`, `stale`, `failed` and `lane` (`"pool"` or `"inline"`).
+`done` counts successful results taken, `stale` counts results discarded
+after replacement, cancellation or clear, and `failed` counts error results
+taken. `perf_reset` clears those three counters. Use `+` to report several
+queues from one hook. Hooks without a report return `null`.
+
+### Render stages
+
 Stages are compute before shadows, opaque, `background` after sky for blended
 geometry that draws without sampling the scene, `surface` for geometry that
 samples the scene copy, and optional HDR post before bloom/tone. Geometry uses

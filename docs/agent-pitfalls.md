@@ -194,7 +194,11 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   (`lower-width-padding`) when the width and the padding are literal; a computed width or
   padding, and `height="100%"` with padding, it does not. Fix: `box-sizing="border-box"`
   on the box, or drop `width`: a box in a block or a `column` already fills the width.
-  Look at a screenshot on each host. (Fresh-agent README trial, 2026-10-04.)
+  On iOS the host pads a route's root clear of the iPhone Duo's side strip and of a
+  split's list beside its detail (LLP 1123 D3, LLP 1127 D9), so a route's root with
+  `width="100%"` runs past the screen by that much: place it with `position="absolute"
+  inset=0`, as the patterns' routes are. Look at a screenshot on each host.
+  (Fresh-agent README trial, 2026-10-04.)
 
 - **A list of buttons is ragged: each is only as wide as its text.** A `button`
   directly in a `scroll` or another block container shrinks to fit, so a row's

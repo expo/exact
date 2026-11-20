@@ -9,6 +9,14 @@ vendor/ibex/third_party/wpt/urltestdata.json is web-platform-tests'
 url/resources/urltestdata.json, Copyright (c) web-platform-tests contributors,
 under the 3-Clause BSD License; the licence is beside it (LICENSE.md).
 
+The Android symbol shapes in kernel/tables/schema.json (`symbolGlyphs`, set
+`material`) are Google's Material Symbols (https://fonts.google.com/icons,
+https://github.com/google/material-design-icons), under the Apache License 2.0
+(kernel/tables/LICENSE-material-symbols). Each is the published 24 px Outlined path (filled
+for a `-fill` role), unchanged, except the 15-second skips, which Material does not publish:
+each is Material's 10-second skip with the 5 of its 5-second skip moved 80 units right, in
+place of the 0.
+
 packages/model-viewer adapts occlusion-viewer by Ming Kao at b63cff7
 (https://github.com/koolkao/occlusion-viewer), Copyright (c) 2026 Ming Kao,
 under the MIT License; its notice is LICENSE-occlusion-viewer in that package.

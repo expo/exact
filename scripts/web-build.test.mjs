@@ -475,7 +475,19 @@ test('a large built app.js warns with where its size came from', async () => {
   expect(sizeWarning('app-x.js', APP_JS_WARN_BYTES)).toBe('');
   expect(sizeWarning('app-x.js', 339_489, 'own plan code by component: App: 3895 B (1 instance)')).toBe('');
   const said = sizeWarning('app-x.js', 29_045_555, 'own plan code by component (shared bodies counted per use): Pane: 81200 B (27 instances)');
-  expect(said).toStartWith("warning: app-x.js is 27.7 MiB: a component's body is compiled in at each place it is used");
-  expect(said).toEndWith('; own plan code by component (shared bodies counted per use): Pane: 81200 B (27 instances)');
-  expect(sizeWarning('app-x.js', APP_JS_WARN_BYTES + 1)).toEndWith('used hundreds of times');
+  expect(said).toStartWith('warning: app-x.js is 27.7 MiB.');
+  expect(said).toContain('Add --sizes');
+  expect(said).toEndWith('own plan code by component (shared bodies counted per use): Pane: 81200 B (27 instances)');
+  expect(sizeWarning('app-x.js', APP_JS_WARN_BYTES + 1)).toContain('Add --sizes');
+});
+
+test('the launch size report counts UTF-8 spans and leaves unmapped code unassigned', async () => {
+  const { entrySizeReport } = await import('../host/web-js/module.mjs');
+  const out = mkdtempSync(resolve(tmpdir(), 'exact-module-sizes-'));
+  try {
+    mkdirSync(resolve(out, '.gen'));
+    const map = { sources: ['.gen/app.js', '.gen/rt.js'], mappings: ';AAAA,ECAA,E;A' };
+    const report = entrySizeReport({ code: '// banner\né😀!END\nunmapped', fileName: 'app.js', map }, realpathSync(out));
+    expect(report.split('\n').slice(2)).toEqual(['  22 B  (unmapped)', '  6 B  app.js', '  1 B  rt.js']);
+  } finally { rmSync(out, { recursive: true, force: true }); }
 });
