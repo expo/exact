@@ -405,12 +405,14 @@ impl Directory {
         })
     }
     pub fn names(&self) -> io::Result<Vec<String>> {
-        self.names_limited(false)
+        let mut names = Vec::new();
+        let mut used = 0;
+        self.visit_names(|leaf| super::fs::push_name(&mut names, &mut used, leaf))?;
+        names.sort();
+        Ok(names)
     }
-    pub fn names_batch(&self) -> io::Result<Vec<String>> {
-        self.names_limited(true)
-    }
-    fn names_limited(&self, batch: bool) -> io::Result<Vec<String>> {
+
+    pub fn visit_names(&self, mut visit: impl FnMut(String) -> io::Result<()>) -> io::Result<()> {
         // An empty NT relative name reopens the owned object, creating an
         // independent enumeration cursor without looking up its old pathname.
         let cursor = open_encoded(
@@ -423,8 +425,6 @@ impl Directory {
             self.2,
         )?;
         let mut storage = vec![0u64; 8192];
-        let mut names = Vec::new();
-        let mut used = 0;
         let mut class = FileIdBothDirectoryRestartInfo;
         loop {
             // SAFETY: storage is aligned and holds 65536 writable bytes.
@@ -468,15 +468,7 @@ impl Directory {
                 let leaf = String::from_utf16(units).map_err(|_| refuse("non-Unicode filename"))?;
                 if leaf != "." && leaf != ".." {
                     name(&leaf)?;
-                    if batch {
-                        names.push(leaf);
-                        if names.len() == 256 {
-                            names.sort();
-                            return Ok(names);
-                        }
-                    } else {
-                        super::fs::push_name(&mut names, &mut used, leaf)?;
-                    }
+                    visit(leaf)?;
                 }
                 if entry.NextEntryOffset == 0 {
                     break;
@@ -488,15 +480,37 @@ impl Directory {
                 offset += next;
             }
         }
-        names.sort();
-        Ok(names)
+        Ok(())
     }
     pub fn unlink(&self, leaf: &str) -> io::Result<()> {
         let file = open(self, leaf, DELETE, FILE_OPEN, false)?;
-        let info = FILE_DISPOSITION_INFORMATION { DeleteFile: true };
         let mut status = IO_STATUS_BLOCK::default();
-        // SAFETY: all structures are live and correctly sized; only this owned
-        // file object is marked for deletion, with no further path resolution.
+        let flags = FILE_DISPOSITION_INFORMATION_EX {
+            Flags: FILE_DISPOSITION_DELETE | FILE_DISPOSITION_POSIX_SEMANTICS,
+        };
+        // A reader that shares deletion may keep reading through its handle after this name disappears.
+        // SAFETY: the buffers live through this synchronous call on the opened entry.
+        let result = unsafe {
+            NtSetInformationFile(
+                file.as_raw_handle(),
+                &mut status,
+                (&flags as *const FILE_DISPOSITION_INFORMATION_EX).cast(),
+                size_of::<FILE_DISPOSITION_INFORMATION_EX>() as u32,
+                FileDispositionInformationEx,
+            )
+        };
+        if !matches!(
+            result,
+            STATUS_INVALID_INFO_CLASS
+                | STATUS_INVALID_PARAMETER
+                | STATUS_NOT_SUPPORTED
+                | STATUS_INVALID_DEVICE_REQUEST
+        ) {
+            return checked(result);
+        }
+        // Filesystems without POSIX disposition delete when the last open handle closes.
+        let info = FILE_DISPOSITION_INFORMATION { DeleteFile: true };
+        // SAFETY: the handle and both buffers remain live through the synchronous fallback.
         checked(unsafe {
             NtSetInformationFile(
                 file.as_raw_handle(),

@@ -736,8 +736,12 @@ fn substitute(entry: &Value, interface: &Value) -> Result<String, String> {
             continue;
         };
         let ok = fields.as_object().is_some_and(|f| {
-            f.values()
-                .all(|c| matches!(c.as_str(), Some("net.fetch" | "fs.read" | "fs.write")))
+            f.iter().all(|(path, capability)| {
+                matches!(
+                    capability.as_str(),
+                    Some("net.fetch" | "fs.read" | "fs.write")
+                ) && admits_string(interface, ty["type"].as_str().unwrap_or_default(), path)
+            })
         });
         check(
             ok,
@@ -1406,6 +1410,19 @@ fn type_expr(ty: &str, span: Span) -> Result<TypeExpr, String> {
         _ => return Err(format!("`{ty}` is not a declaration's type")),
     };
     Ok(TypeExpr::Named(named.to_owned(), span))
+}
+
+/// A grant selector names a string field, crossing a list of records at each `[].`.
+fn admits_string(interface: &Value, ty: &str, path: &str) -> bool {
+    let shape = &interface["shapes"][bare(ty).0];
+    if let Some((list, tail)) = path.split_once("[].") {
+        return shape[list]
+            .as_str()
+            .is_some_and(|inner| bare(inner).1 && admits_string(interface, inner, tail));
+    }
+    shape[path]
+        .as_str()
+        .is_some_and(|leaf| bare(leaf) == ("string", false))
 }
 
 /// Whether a value of `ty` carries bytes in every form: `bytes` itself, or

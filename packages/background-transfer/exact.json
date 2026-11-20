@@ -9,11 +9,19 @@
       "name": "string",
       "value": "string"
     },
+    "BackgroundFetchFormPart": {
+      "name": "string",
+      "value": "option<string>",
+      "from": "option<string>",
+      "filename": "option<string>",
+      "contentType": "option<string>"
+    },
     "BackgroundFetchRequest": {
       "url": "string",
       "method": "option<string>",
       "headers": "option<BackgroundFetchHeader[]>",
       "bodyFrom": "option<string>",
+      "form": "option<BackgroundFetchFormPart[]>",
       "saveTo": "option<string>"
     },
     "BackgroundFetchRecord": {
@@ -53,7 +61,7 @@
         "id": "string",
         "requests": {
           "type": "BackgroundFetchRequest[]",
-          "admit": { "url": "net.fetch", "bodyFrom": "fs.read", "saveTo": "fs.write" }
+          "admit": { "url": "net.fetch", "bodyFrom": "fs.read", "form[].from": "fs.read", "saveTo": "fs.write" }
         },
         "title": "option<string>",
         "downloadTotal": "option<number>"

@@ -194,6 +194,21 @@ pub(super) fn passes(arena: &NodeArena, s: u32, space: &Space, depth: f32) -> bo
     }
 }
 
+/// D14's keyboard term for the scroller `s`, whose bottom edge its reach
+/// moves `reach` points down: under `resizes-visual`, where it takes the
+/// docked keyboard that reaches it, the keyboard's overlap with its reached
+/// box, measured up from the space's bottom as the occupancy is (D7); else 0.
+pub(super) fn taken(arena: &NodeArena, s: u32, space: &Space, reach: f32) -> f32 {
+    if arena.observations.keyboards.policy != Some(KeyboardPolicy::ResizesVisual) {
+        return 0.0;
+    }
+    let depth = docked_depth(arena, space);
+    if depth <= 0.0 || passes(arena, s, space, depth) || !past_scrollers(arena, s, space, depth) {
+        return 0.0;
+    }
+    super::area::depth([0.0, depth], space.edges(arena, s)[2] - reach)
+}
+
 /// Whether the scroller `s` passes a docked keyboard in `space` to its
 /// content, which the solve keeps so as to measure that content again when
 /// it changes (`check_scrollers`).

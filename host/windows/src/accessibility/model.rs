@@ -63,9 +63,14 @@ pub(super) fn map_node(
         role::DEFINITION => Role::Definition,
         role::LIST => Role::List,
         role::LIST_ITEM => Role::ListItem,
+        role::DIALOG => Role::Dialog,
+        role::ALERT_DIALOG => Role::AlertDialog,
         _ => Role::GenericContainer,
     };
     let mut node = Node::new(role);
+    if source.flags & flag::MODAL != 0 {
+        node.set_modal();
+    }
     let [x, y, width, height] = source.rect;
     node.set_bounds(Rect::new(
         (x + origin.0).into(),

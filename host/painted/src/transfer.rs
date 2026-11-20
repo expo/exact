@@ -179,8 +179,12 @@ pub fn dispatch(v: &Value, ceiling: &str) -> Result<Value, &'static str> {
                 v["body"].as_bool() == Some(true),
             )
             .map_err(refusal)?;
+            let form = v.get("form").filter(|f| !f.is_null());
+            if let Some(form) = form {
+                files::parts(form)?;
+            }
             let url = carrier(v, ceiling)?
-                .keep(string(v, "key")?, string(v, "url")?, &headers)
+                .keep_with_form(string(v, "key")?, string(v, "url")?, &headers, form)
                 .map_err(refusal)?;
             Ok(json!({"url": url, "method": method}))
         }

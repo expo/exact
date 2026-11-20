@@ -143,7 +143,7 @@ impl<D: DataSource> Bridge<D> {
                 keyboard,
                 &owners.blocks,
                 &owners.placements,
-                owners.updates,
+                owners.reports,
                 observed,
             )
         });

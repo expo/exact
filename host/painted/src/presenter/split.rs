@@ -1,7 +1,7 @@
 //! @ref LLP 1115.004 D16 — Windows list/details.
 //! @ref LLP 1115.002 D4 — the root list stays in the page; details have pane blocks.
 use super::*;
-use exact_kernel::{BlockAxis, Display, HostBlock, HostCover, Kernel, NodeKey};
+use exact_kernel::{BlockAxis, HostBlock, HostCover, Kernel, NodeKey};
 use exact_runner::{instance::InstanceStep, Runner};
 use std::collections::BTreeSet;
 
@@ -143,53 +143,6 @@ fn within(kernel: &Kernel, mut id: ViewId, ancestor: ViewId) -> bool {
         id = parent;
     }
 }
-fn owner<D: DataSource>(runner: &Runner<D>, list: ViewId, mut id: ViewId) -> Option<ViewId> {
-    let mut press = None;
-    while id != list {
-        let node = runner.kernel().node(id)?;
-        if runner.press_writes_router(id).is_some() || node.props.str(PropId::Href).is_some() {
-            // The nearest owner is what receives this press. An owner above it
-            // makes it a nested control, not the list's row.
-            if press.is_some() {
-                return None;
-            }
-            press = Some(id);
-        }
-        id = node.parent?;
-    }
-    press
-}
-
-/// The first row under `at` the app says is current (ARIA reads `""` as
-/// `false`), its rows found as `Runner::stack_split` finds them.
-fn current_row<D: DataSource>(runner: &Runner<D>, at: ViewId) -> Option<ViewId> {
-    for child in runner.kernel().node(at)?.children() {
-        let Some(row) = runner.kernel().node(child) else {
-            continue;
-        };
-        if row.style.display == Display::None
-            || row.props.str(PropId::Popover).is_some()
-            || row.props.str(PropId::NavigationSplit) == Some("placeholder")
-        {
-            continue;
-        }
-        let href = row.props.str(PropId::Href).filter(|h| !h.is_empty());
-        let current = row
-            .props
-            .str(PropId::AccessibilityCurrent)
-            .is_some_and(|c| !matches!(c, "" | "false"));
-        match (runner.press_writes_router(child), href) {
-            (Some(_), _) | (None, Some(_)) if current => return Some(child),
-            (None, None) => {
-                if let Some(row) = current_row(runner, child) {
-                    return Some(row);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
 
 impl<D: DataSource> Presenter<D> {
     pub(crate) fn capture_split_row(&mut self, target: ViewId) -> Option<Press> {
@@ -207,7 +160,7 @@ impl<D: DataSource> Presenter<D> {
             .retained_list(self.host.runner(), root);
         let rule = self.host.runner().stack_split(root, retained)?;
         let list = rule.list?;
-        let row = owner(self.host.runner(), list, target)?;
+        let row = self.host.runner().split_row_owner(list, target)?;
         if self.host.runner().press_writes_router(row) != Some(true) {
             return None;
         }
@@ -365,10 +318,7 @@ impl<D: DataSource> Presenter<D> {
                 // row pushed or links a route in the column.
                 let pushed =
                     base.is_some_and(|id| linked(id).is_some() || actions.contains_key(&id));
-                current_row(
-                    self.host.runner(),
-                    rule.list.filter(|_| detail.is_some() && !pushed)?,
-                )
+                rule.current.filter(|_| detail.is_some() && !pushed)
             });
         let placeholder = detail
             .is_none()
@@ -397,7 +347,7 @@ impl<D: DataSource> Presenter<D> {
                     )
                 )
             }) {
-                if owner(self.host.runner(), list, id).is_some() {
+                if self.host.runner().split_row_owner(list, id).is_some() {
                     chevrons.insert(id);
                 }
             }
@@ -474,7 +424,7 @@ impl<D: DataSource> Presenter<D> {
                     .row
                     .and_then(|key| kernel.node_by_key(key))
                     .is_some_and(|row| {
-                        owner(runner, list.id, row.id) == Some(row.id)
+                        runner.split_row_owner(list.id, row.id) == Some(row.id)
                             && runner.press_writes_router(row.id) == Some(true)
                     });
                 route.then_some((id, row))

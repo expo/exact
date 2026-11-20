@@ -169,8 +169,8 @@ function box(el, node) {
   } else {
     // SVG has no offset box. An unmeasurable candidate falls back to another
     // viable anchor, its recorded ancestor, or the numeric scroll offset.
-    const at = layoutPosition(node), origin = layoutPosition(el), rect = el.getBoundingClientRect();
-    if (!at || !origin || !rect.width || !rect.height) return null;
+    const at = layoutPosition(node), origin = layoutPosition(el);
+    if (!at || !origin || !el.clientWidth || !el.clientHeight) return null;
     let left = at.left - origin.left - (page ? 0 : el.clientLeft), top = at.top - origin.top - (page ? 0 : el.clientTop);
     for (let n = node.parentElement; n; n = n.parentElement) {
       left -= n.scrollLeft; top -= n.scrollTop;

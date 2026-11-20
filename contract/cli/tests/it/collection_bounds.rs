@@ -299,10 +299,7 @@ fn scroll_margins_take_signed_lengths_and_refuse_percentages() {
             let result = contract::compile(&source(value));
             assert!(result.is_err(), "{name}={value} compiled");
             let error = result.unwrap_err().to_string();
-            assert!(
-                error.contains("CSS takes no percentage"),
-                "{name}={value}: {error}"
-            );
+            assert!(error.contains("no percentage"), "{name}={value}: {error}");
         }
     }
 }

@@ -17,7 +17,6 @@ jobs:
       (github.event.action == 'unlabeled' && github.event.label.name == 'docs-preview'))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    environment: docs
     # Nothing but another cleanup of the same pull request shares this group: in a group shared with the publish,
     # a waiting cleanup would be dropped for a newer job. A publish that outlasts this deletes its own preview
     # (docs-preview-publish.yml, "Check the pull request again").

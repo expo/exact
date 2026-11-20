@@ -1127,7 +1127,14 @@ impl Backend for Gpu {
     fn slot_again(&mut self, row: u32, id: exact_kernel::ViewId) -> bool {
         self.replace_slot(row, id)
     }
-    fn layer_begin(&mut self, key: u64, ts: Transform, pivot: (f32, f32), base: [f32; 7]) -> bool {
+    fn layer_begin(
+        &mut self,
+        key: u64,
+        ts: Transform,
+        pivot: (f32, f32),
+        _reference: (f32, f32),
+        base: [f32; 7],
+    ) -> bool {
         self.record_layer(key, ts, pivot, base);
         true
     }

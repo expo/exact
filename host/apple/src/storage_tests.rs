@@ -129,6 +129,7 @@ fn a_fresh_drive_empties_its_tree_before_the_boot_reads_and_never_after() {
             .env("EXACT_AGENT", "1")
             .env("EXACT_AGENT_STORAGE", "fresh")
             .env("EXACT_AGENT_STORAGE_FRESH", "1")
+            .env("EXACT_AGENT_STORED", r#"[["runText","\"2:15\""]]"#)
             .env_remove("EXACT_STORE")
             .output()
             .unwrap();
@@ -152,9 +153,10 @@ fn a_fresh_drive_empties_its_tree_before_the_boot_reads_and_never_after() {
     std::fs::write(root.join("data").join("left.txt"), "stale").unwrap();
     let (bindings, unbound) = endow_bound(grants, app, true);
     assert!(unbound.is_none(), "{unbound:?}");
-    assert!(
-        snapshot_of(bindings.as_ref()).is_empty(),
-        "the boot reads an empty store"
+    assert_eq!(
+        snapshot_of(bindings.as_ref()),
+        vec![("exact.state.runText".into(), br#""2:15""#.to_vec())],
+        "only the test's stored setting survives the fresh launch"
     );
     assert!(
         !root.join("data").join("left.txt").exists(),

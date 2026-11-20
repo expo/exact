@@ -184,6 +184,53 @@ fn credentials_are_kept_only_in_the_supplied_store_and_removed_on_retirement() {
 }
 
 #[test]
+fn a_restarted_form_upload_uses_the_boundary_kept_with_its_fields() {
+    let (carrier, seen, store) = script(
+        vec![reply(201, None), reply(201, None)],
+        "net.fetch https://a.test",
+    );
+    let key = "transfer.1.0";
+    let form = serde_json::json!([{"name":"policy","value":"private policy"}]);
+    for headers in [
+        vec![("cOnTeNt-TyPe".into(), "multipart/form-data".into())],
+        vec![("H".into(), "x".repeat(METADATA_BYTES))],
+    ] {
+        assert_eq!(
+            carrier.keep_with_form(key, "https://a.test", &headers, Some(&form)),
+            Err(Refusal::InvalidRequest)
+        );
+        assert!(store.get(key).unwrap().is_none());
+    }
+    carrier
+        .keep_with_form(key, "https://a.test", &[], Some(&form))
+        .unwrap();
+    let (boundary, kept) = carrier.form(key).unwrap();
+    assert_eq!(kept, form);
+    let restarted = Carrier::new(carrier.fetch.clone(), store.clone());
+    assert_eq!(restarted.form(key).unwrap().0, boundary);
+    let files = Files::new();
+    let wire = format!("--{boundary}\r\nContent-Disposition: form-data; name=\"policy\"\r\n\r\nprivate policy\r\n--{boundary}--\r\n");
+    for _ in 0..2 {
+        restarted
+            .run(
+                files.transfer(Some(files.file("upload", wire.as_bytes())), None),
+                &AbortSignal::default(),
+                quiet(),
+            )
+            .unwrap();
+    }
+    for request in seen.lock().unwrap().iter() {
+        assert_eq!(
+            request.headers.get("content-type").unwrap(),
+            format!("multipart/form-data; boundary={boundary}")
+        );
+        assert_eq!(request.body, wire.as_bytes());
+    }
+    restarted.forget(key).unwrap();
+    assert!(store.get(key).unwrap().is_none());
+}
+
+#[test]
 fn admission_and_request_validation_precede_storage_and_network() {
     let (carrier, seen, store) = script(vec![], "net.fetch https://a.test");
     for url in [

@@ -48,6 +48,14 @@ const server = Bun.serve({ port: 0, hostname: '127.0.0.1', idleTimeout: 0, async
     heard[id] = Object.fromEntries(url.searchParams);
     return new Response('ok');
   }
+  if (url.pathname === '/form') {
+    const body = await req.arrayBuffer();
+    const parts = await new Response(body, { headers: req.headers }).formData();
+    const file = parts.get('file');
+    sent[id] = { method: req.method, bytes: body.byteLength, names: [...parts.keys()], tags: parts.getAll('tag'),
+      filename: file.name, type: file.type, file: [...new Uint8Array(await file.arrayBuffer())] };
+    return new Response(`kept ${id}`, { status: 201 });
+  }
   sent[id] = { path: url.pathname, method: req.method, body: await req.text(), token: url.searchParams.get('token'), authorization: req.headers.get('authorization') };
   if (url.pathname === '/upload') return new Response(`kept ${id}`, { status: 201, headers: { 'Content-Type': 'text/plain' } });
   if (url.pathname === '/file' && url.searchParams.get('hold')) await wait(120_000);
@@ -100,6 +108,17 @@ for (const host of hosts.length ? hosts : ['macos']) {
       const ids = await until(s, 'ids', (t) => t === '', 10_000);
       check(where, 'the handler retired it: no id is listed', ids === '', ids);
 
+      await s.tap('multipart-p1');
+      const p1 = await until(s, 'noted', (t) => t.startsWith('p1'), 60_000);
+      const wire = sent.p1;
+      check(where, 'multipart streams fields and the app file in order and counts their framing', p1.startsWith('p1 success') &&
+        wire?.method === 'POST' && wire.names.join() === 'tag,file,tag' && wire.tags.join('|') === 'private policy|' &&
+        wire.filename === 'clip.bin' && wire.type === 'application/octet-stream' && wire.file.join() === '0,255,13,10' &&
+        Number(heard.p1?.uploadTotal) === wire.bytes && Number(heard.p1?.uploaded) === wire.bytes, JSON.stringify(wire));
+      await s.tap('denied-p2');
+      const p2 = await until(s, 'started', (t) => t !== 'started', 20_000);
+      check(where, 'each multipart file needs its own read grant', p2 === 'NotAllowedError' && !sent.p2, p2);
+
       await s.tap('download-d1');
       const d1 = await until(s, 'noted', (t) => t.startsWith('d1'), 60_000);
       check(where, 'a download lands in its saveTo file', d1 === 'd1 success success  200 file d1' && heard.d1?.path === 'app:/data/saved/d1.txt' && heard.d1?.downloaded === '7',
@@ -147,7 +166,7 @@ for (const host of hosts.length ? hosts : ['macos']) {
         `${k1} ${JSON.stringify(heard.k1)}`);
 
       const journal = (await s.logs({ all: true })).lines;
-      check(where, 'the journal never shows the credential', !journal.some((l) => l.includes('secret')), journal.filter((l) => l.includes('secret')).join('\n'));
+      check(where, 'the journal never shows the credential', !journal.some((l) => /secret|private policy/.test(l)), journal.filter((l) => l.includes('secret')).join('\n'));
       if (failed()) console.log(journal.filter((l) => /transfer|wake|grant|fs|refused/.test(l)).join('\n'));
     } finally {
       await s.close();

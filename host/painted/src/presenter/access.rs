@@ -129,28 +129,10 @@ pub mod role {
     pub const LIST: i32 = 32;
     /// An item of a static list (`role="listitem"`, `li`).
     pub const LIST_ITEM: i32 = 33;
-}
-
-/// A table's, list's, or description list's element as its role (HTML-AAM): a
-/// node that holds what it heads or holds, named by its author, if at all.
-fn structure_role(node: &NodeRef<'_>) -> Option<i32> {
-    if node.node_type != exact_kernel::NodeType::View {
-        return None;
-    }
-    Some(match node.props.str(PropId::SemanticTag)? {
-        "table" => role::TABLE,
-        "caption" => role::CAPTION,
-        "tr" => role::ROW,
-        "td" => role::CELL,
-        "th" if node.props.str(PropId::Scope) == Some("row") => role::ROW_HEADER,
-        "th" => role::COLUMN_HEADER,
-        "dl" => role::DESCRIPTION_LIST,
-        "dt" => role::TERM,
-        "dd" => role::DEFINITION,
-        "ul" | "ol" => role::LIST,
-        "li" => role::LIST_ITEM,
-        _ => return None,
-    })
+    /// A dialog identified by its author.
+    pub const DIALOG: i32 = 34;
+    /// A dialog requiring a response to an alert.
+    pub const ALERT_DIALOG: i32 = 35;
 }
 
 /// A node's flags.
@@ -186,6 +168,8 @@ pub mod flag {
     /// A range takes a value set to it ([`act::SET`]): a native range. A
     /// drawn one only steps, by its author's keys.
     pub const SETTABLE: i32 = 1 << 14;
+    /// The dialog makes the rest of the page inert.
+    pub const MODAL: i32 = 1 << 15;
 }
 
 /// What changed of a node since the last statement.
@@ -586,10 +570,6 @@ impl<D: DataSource> Presenter<D> {
         }
         if node.node_type == NodeType::Text {
             return self.access_inline_words(node);
-        }
-        let face = self.host.kernel().press_face(node.id);
-        if let Some(title) = face.and_then(|face| face.title.or(face.label)) {
-            return title;
         }
         let words = self.access_words(node, false);
         match node.props.str(PropId::Title) {

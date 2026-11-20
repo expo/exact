@@ -210,9 +210,13 @@ class BackgroundTransferModule internal constructor(context: ExtensionContext, m
             val public = port(base("validate", authority, origin).put("url", r.getString("url"))).getString("url")
             val save = r.optString("saveTo").takeIf { it.isNotEmpty() && it != "null" }
             if (save != null) port(base("checkSave", authority, origin).put("path", save))
-            val from = r.optString("bodyFrom").takeIf { it.isNotEmpty() && it != "null" }
-            Registrations.Request(public, (if (r.isNull("method")) "GET" else r.getString("method")).uppercase(java.util.Locale.ROOT),
-                saveTo = save, bodyFrom = from)
+            val from = if (r.isNull("bodyFrom")) null else r.getString("bodyFrom")
+            val form = !r.isNull("form")
+            require(!form || (from == null && r.getJSONArray("form").length() <= 256))
+            val method = if (r.isNull("method")) {
+                if (from != null || form) "POST" else "GET"
+            } else r.getString("method").uppercase(java.util.Locale.ROOT)
+            Registrations.Request(public, method, saveTo = save, bodyFrom = from, form = form)
         }
         val key = Key(namespace, id, UUID.randomUUID().toString())
         val conditions = transfers.conditions

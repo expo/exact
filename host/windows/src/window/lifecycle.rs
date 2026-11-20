@@ -147,6 +147,10 @@ impl<D: DataSource + Default + 'static> App<D> {
             page.hidden = true;
             page.persisted = true;
         });
+        self.surface = None;
+        if let Some(p) = &mut self.presenter {
+            p.suspend_window_painter(self.config.painter());
+        }
     }
 
     /// The app's bare `focus()`, or a later launch: the window shown if it

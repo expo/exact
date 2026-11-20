@@ -34,6 +34,8 @@ pub enum AttrTarget {
     /// `metadata=MediaMetadata(…)` on `audio` or `video`: four string props,
     /// one a field (LLP 1098 D1).
     MediaMetadata,
+    /// `dataTransfer=DataTransfer(…)`: a drag's data props (LLP 1094.000 D1).
+    DataTransfer,
 }
 /// A tag's node type, its fixed rows, and how positional arguments land.
 #[derive(Debug, Clone, PartialEq)]
@@ -527,6 +529,9 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "drop" => AttrTarget::Handler("drop"),
         "dragenter" => AttrTarget::Handler("dragenter"),
         "dragleave" => AttrTarget::Handler("dragleave"),
+        // @ref LLP 1094.000 D1 — a drag out of the app, and what it carries.
+        "draggable" => AttrTarget::Prop(p("draggable")),
+        "dataTransfer" => AttrTarget::DataTransfer,
         // A press on an inline atom (LLP 1045.000 D7).
         "atompress" => AttrTarget::Handler("atompress"),
         "copy" => AttrTarget::Handler("copy"),

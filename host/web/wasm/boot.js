@@ -601,6 +601,7 @@ export async function main() {
   // Every data executor activates after the baked first pixel.
   // Restore granted secrets and persisted states before the baked frame (LLP 1018 D6, LLP 1116 D5).
   if (agentKeepsStore) {
+    if (agentMode) globalThis.__exactSeedStored?.("exact.state.");
     const kept = [];
     try {
       for (let i = 0; i < localStorage.length; i++) {

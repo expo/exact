@@ -516,6 +516,14 @@ macro_rules! canvas_jni {
                 ints(env, &words)
             }
 
+            #[no_mangle]
+            pub unsafe extern "system" fn Java_dev_exact_canvas_Native_readerSelection(
+                env: *mut JNIEnv, _class: jclass, action: jint, x: jfloat, y: jfloat,
+            ) -> jstring {
+                with(|h| h.reader_selection(action, x, y)).flatten()
+                    .map_or(std::ptr::null_mut(), |reply| $crate::canvas::field::java(env, &reply))
+            }
+
             /// What the reader is told of the text fields it hosts (LLP
             /// 1115.001 D8), when that is not what this last returned
             /// (else null): `Presenter::reader_fields` has the words.

@@ -27,16 +27,24 @@ pub(super) const LAYER_FREE: u32 = 32;
 /// the reader samples tracks on the engine's clock.
 pub(crate) const CLOCK: u32 = 33;
 
+/// Inputs to the scalar tracks sent to the Android layer player. CSS permits implicit
+/// keyframes at the underlying value and percentages of the current transform box.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct Basis {
+    pub(super) base: [f32; 7],
+    pub(super) reference: (f32, f32),
+}
+
 thread_local! {
     /// The layers alive after the last finished recording: id, node, base.
-    pub(crate) static ALIVE: RefCell<Vec<(u32, u64, [f32; 7])>> = const { RefCell::new(Vec::new()) };
+    pub(crate) static ALIVE: RefCell<Vec<(u32, u64, Basis)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The recorder's layer state.
 #[derive(Default)]
 pub(super) struct Layers {
     ids: HashMap<u64, u32>,
-    info: HashMap<u32, (u64, [f32; 7])>,
+    info: HashMap<u32, (u64, Basis)>,
     next: u32,
     /// Each layer's header and drawing as last sent.
     sent: HashMap<u32, Vec<u32>>,
@@ -139,6 +147,7 @@ impl Recorder {
         key: u64,
         ts: Transform,
         pivot: (f32, f32),
+        reference: (f32, f32),
         base: [f32; 7],
     ) {
         // The clips around the layer stay where they are while the reader
@@ -154,7 +163,7 @@ impl Recorder {
             l.next += 1;
             l.next
         });
-        l.info.insert(id, (key, base));
+        l.info.insert(id, (key, Basis { base, reference }));
         if self.row.is_some() {
             l.row.push(id);
         } else {
@@ -269,6 +278,7 @@ mod tests {
             42,
             Transform::identity(),
             (10.0, 10.0),
+            (0., 0.),
             [0., 0., 1., 0., 1., 0., 0.]
         ));
         r.fill(
@@ -502,6 +512,7 @@ component App
                     42,
                     Transform::identity(),
                     (10.0, 9.0),
+                    (0., 0.),
                     [0., 0., 1., 0., 1., 0., 0.]
                 ));
             }

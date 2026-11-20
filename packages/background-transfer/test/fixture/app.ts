@@ -8,7 +8,7 @@ export const grants = [`net.fetch ${origin}`, 'fs.read app:/data', 'fs.write app
 
 const nameOf = (e: unknown) => { const { name, message } = e as { name?: string; message?: string }; return name === 'Error' ? `Error: ${message}` : name ?? String(e); };
 const text = (s: string) => new TextEncoder().encode(s);
-// A request's unsaid fields are null: a shape's `option<…>` field is present.
+// Existing callers may also spell out the nullable request fields.
 const request = (r: { url: string; method?: string; headers?: { name: string; value: string }[]; bodyFrom?: string; saveTo?: string }) =>
   ({ method: null, headers: null, bodyFrom: null, saveTo: null, ...r });
 
@@ -21,6 +21,16 @@ const sources: Sources = {
         await storage.fs.mkdir('app:/data/out').catch((e: { code?: string }) => { if (e?.code !== 'EEXIST') throw e; });
         await storage.fs.atomicWriteFile(`app:/data/out/${id}.txt`, text(`hello ${id}`));
         await backgroundFetch({ id: String(id), requests: [request({ url: at('/upload'), method: 'POST', headers: [{ name: 'Authorization', value: 'Bearer secret' }], bodyFrom: `app:/data/out/${id}.txt` })] });
+      } else if (kind === 'multipart') {
+        const file = 'app:/data/clip.bin';
+        await storage.fs.atomicWriteFile(file, new Uint8Array([0, 255, 13, 10]));
+        await backgroundFetch({ id: String(id), requests: [{ url: at('/form'), form: [
+          { name: 'tag', value: 'private policy' }, { name: 'file', from: file }, { name: 'tag', value: '' },
+        ] }] });
+      } else if (kind === 'denied-part') {
+        await backgroundFetch({ id: String(id), requests: [{ url: at('/form'), form: [
+          { name: 'tag', value: '' }, { name: 'file', from: 'app:/cache/ungranted.bin' },
+        ] }] });
       } else if (kind === 'download') {
         await backgroundFetch({ id: String(id), requests: [request({ url: at('/file'), saveTo: `app:/data/saved/${id}.txt` })], downloadTotal: 1_000_000 });
       } else if (kind === 'missing') {

@@ -55,6 +55,8 @@ import CExact
 struct StackSplit: Equatable {
     /// The list whose row pushes; nil where only `navigationSplit` asked.
     let list: UInt32?
+    /// The first visible row the app marks current.
+    let current: UInt32?
     /// The list column's width as `navigationSplit` names it.
     let width: Double?
     /// Each route above the root that is a row's detail, by the route's id,
@@ -66,7 +68,8 @@ struct StackSplit: Equatable {
     /// where none was asked about.
     let pressWrites: Bool?
 
-    init(list: UInt32?, width: Double?, rows: [UInt32: UInt32], locations: [UInt32: String] = [:], pressWrites: Bool? = nil) {
+    init(list: UInt32?, width: Double?, rows: [UInt32: UInt32], locations: [UInt32: String] = [:], current: UInt32? = nil, pressWrites: Bool? = nil) {
+        self.current = current
         (self.list, self.width, self.rows, self.locations, self.pressWrites) = (list, width, rows, locations, pressWrites)
     }
 
@@ -79,7 +82,7 @@ struct StackSplit: Equatable {
         }
         self.init(list: (o["list"] as? Int).map { UInt32($0) }, width: (o["width"] as? NSNumber)?.doubleValue,
                   rows: Dictionary(pairs, uniquingKeysWith: { first, _ in first }),
-                  locations: Dictionary(located, uniquingKeysWith: { first, _ in first }), pressWrites: o["pressWrites"] as? Bool)
+                  locations: Dictionary(located, uniquingKeysWith: { first, _ in first }), current: (o["current"] as? Int).map { UInt32($0) }, pressWrites: o["pressWrites"] as? Bool)
     }
 }
 
@@ -281,20 +284,6 @@ final class SplitHost {
         return answer
     }
 
-    /// The same outer press owners the split rule walks, in authored order.
-    /// Table cells hold their rows apart from the list's native children.
-    private func currentRow(in list: NodeView) -> UInt32? {
-        let children = presenter.tables.feeds[list.id].map { $0.children ?? $0.rows.map(\.node) }
-            ?? list.childNodes
-        for row in children where presenter.views[row.id] === row && row.style["display"]?.string != "none"
-            && row.props["popover"] == nil && row.props["navigationSplit"] != "placeholder" {
-            if row.handlers.contains("press") || row.props["href"]?.isEmpty == false {
-                if let current = row.props["accessibilityCurrent"], !["", "false"].contains(current) { return row.id }
-            } else if let current = currentRow(in: row) { return current }
-        }
-        return nil
-    }
-
     /// Each batch, inside the navigation's pass, which gates the routes by
     /// the answer: what the selected stack of the first root shows.
     /// `routes` is that stack and `selected` the route its root shows.
@@ -326,7 +315,7 @@ final class SplitHost {
         seen.formUnion(pane.map(\.id))
         let base = top >= 1 ? stride(from: top, through: 1, by: -1).first { rowOf[routes[$0].id] != nil } ?? 1 : 1
         let owner = top >= 1 ? rowOf[routes[base].id] : nil
-        let current = detail != nil && owner?.row == nil ? rule.list.flatMap { presenter.views[$0] }.flatMap { currentRow(in: $0) } : nil
+        let current = detail != nil && owner?.row == nil ? rule.current : nil
         shown = Shown(root: root, list: list, table: rule.list, width: rule.width.map { CGFloat($0) }, routes: pane, detail: detail,
                       base: base, row: owner?.row ?? current)
         if !wanted {
@@ -467,6 +456,8 @@ final class SplitHost {
         var view: NodeView? = node
         while let row = view, row !== list {
             let parent = above(row)
+            let sectionPart = grouped ? parent : row
+            if section(above(sectionPart)), ["header", "footer"].contains(sectionPart?.props["semanticTag"] ?? "") { return nil }
             if grouped ? section(above(parent)) : parent === list || section(parent) { return row }
             view = parent
         }

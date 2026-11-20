@@ -120,6 +120,28 @@ mod tests {
     }
 
     #[test]
+    fn scrolled_selection_keeps_the_visible_parts_of_the_full_range() {
+        let value = "אב 😀 a line long enough to wrap in the field\n\n".repeat(16);
+        let (mut p, id) = fixture("textarea", &value);
+        p.frame();
+        let geometry = &p.brush.field_text[&id].geometry;
+        let len = value.encode_utf16().count() as u32;
+        for (start, end) in [(0, len), (3, len - 5)] {
+            let all = geometry.highlight(start, end, None);
+            let bottom = all.last().unwrap().1;
+            for top in [-100., 0., 57.5, bottom - 24., bottom + 200.] {
+                let clip = top..top + 48.;
+                let expected: Vec<_> = all
+                    .iter()
+                    .copied()
+                    .filter(|r| r.1 + r.3 >= clip.start && r.1 <= clip.end)
+                    .collect();
+                assert_eq!(geometry.highlight(start, end, Some(clip)), expected);
+            }
+        }
+    }
+
+    #[test]
     fn multiline_caret_reveals_scrolls_and_hits_the_visible_text() {
         let value = (1..=12)
             .map(|n| format!("line {n}"))
@@ -532,12 +554,23 @@ mod tests {
             "unchanged textarea must reuse its cached Geometry across unrelated redraws"
         );
         p.set_focus(Some(editor), 10.);
-        p.type_text(editor, "x").unwrap();
+        p.mark_field(
+            editor,
+            &p.field_text(editor),
+            FieldSelection::caret(0),
+            false,
+        );
+        p.key(Some('x'), false, 11.);
+        assert!(p.field_text(editor).starts_with("xline one"));
         p.frame();
         let third = p.brush.field_text[&editor].geometry.clone();
         assert!(
             !std::rc::Rc::ptr_eq(&first, &third),
-            "editing the textarea must rebuild Geometry"
+            "the edited row changes the field geometry"
         );
+        assert!(!third.shares_spans(0, &first, 0));
+        for row in 1..4 {
+            assert!(third.shares_spans(row, &first, row), "unchanged row {row}");
+        }
     }
 }

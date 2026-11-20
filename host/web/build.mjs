@@ -226,6 +226,16 @@ export function webSourceRoots(app, js, render = 'rust') {
   return [...[...roots].filter(source), ...[...files].filter(source).map(file => ({ file })), ...[...excluded].filter(source).map(exclude => ({ exclude }))];
 }
 
+/** Cargo targets omitted from a web build prune directory scans and recursive watches. */
+export function partitionWebRoots(roots) {
+  const active = [], excluded = [];
+  for (const root of roots) {
+    if (root.exclude) excluded.push(resolve(root.exclude));
+    else active.push(root);
+  }
+  return { active, skipTarget: path => excluded.some(dir => within(dir, path)) };
+}
+
 /** A receipt's `sources` (serve.mjs `appSources`): the app's files as the build ends, or null when one came or went
  * while it built (`atStart`), so that `serve` builds it again. */
 function sourcesBuilt(app, dist, atStart) {

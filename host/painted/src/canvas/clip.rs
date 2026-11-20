@@ -653,7 +653,7 @@ mod direct_tests {
                 4 => r.push_clip(&Shape::new(full.rect, [10.; 4]), ts),
                 5 => r.group_begin(7, (0., 0.)),
                 6 => {
-                    r.layer_begin(7, ts, (0., 0.), [0., 0., 1., 0., 1., 0., 0.]);
+                    r.layer_begin(7, ts, (0., 0.), (0., 0.), [0., 0., 1., 0., 1., 0., 0.]);
                 }
                 _ => (),
             }

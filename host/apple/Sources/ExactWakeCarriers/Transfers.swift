@@ -56,6 +56,7 @@ public enum TransferCarrier {
     }
 
     private static var records: [String: Record] = [:]
+    private static var preparing: Set<String> = []
     private static var sessions: [Bool: URLSession] = [:]
     /// The completion handler of a relaunch for each session's events.
     private static var relaunched: [String: () -> Void] = [:]
@@ -93,17 +94,25 @@ public enum TransferCarrier {
         guard !installed else { return }
         installed = true
         for name in (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? [] {
+            if name.hasPrefix(".start-") {
+                try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
+                continue
+            }
             let file = directory.appendingPathComponent(name).appendingPathComponent("record.json")
             if let data = try? Data(contentsOf: file), let r = try? JSONDecoder().decode(Record.self, from: data) { records[r.id] = r }
         }
         NotificationCenter.default.addObserver(forName: Notification.Name("exact.transfers"), object: nil, queue: nil) { note in
             guard let box = note.object as? NSMutableDictionary else { return }
-            let run = { box["reply"] = handle(box as? [String: Any] ?? [:]) }
-            if Thread.isMainThread { run() } else { DispatchQueue.main.sync(execute: run) }
+            let args = box as? [String: Any] ?? [:]
+            box["reply"] = args["op"] as? String == "start" ? handle(args) : onMain { handle(args) }
         }
         if records.values.contains(where: { !$0.ended }) {
             DispatchQueue.main.async { for d in Set(records.values.filter { !$0.ended }.map(\.discretionary)) { _ = session(d) } }
         }
+    }
+
+    private static func onMain<T>(_ work: () -> T) -> T {
+        Thread.isMainThread ? work() : DispatchQueue.main.sync(execute: work)
     }
 
     private static func session(_ discretionary: Bool) -> URLSession {
@@ -141,7 +150,7 @@ public enum TransferCarrier {
         switch box["op"] as? String {
         case "start":
             let total = (box["downloadTotal"] as? NSNumber)?.int64Value
-            return start(package, id, box["requests"] as? [[String: Any]] ?? [], discretionary: box["discretionary"] as? Bool ?? false, downloadTotal: total)
+            return start(package, id, box["requests"] as? [[String: Any]] ?? [], discretionary: box["discretionary"] as? Bool ?? false, downloadTotal: total, roots: box["roots"] as? [String: URL] ?? [:])
         case "abort":
             guard let r = records[id], r.package == package, !r.ended else { return false }
             session(r.discretionary).getAllTasks { tasks in
@@ -159,30 +168,39 @@ public enum TransferCarrier {
         }
     }
 
-    /// Each request `{url, method, headers, bodyFrom, saveTo}`; `bodyFrom` a
-    /// file, copied into the record's folder first, since a background
-    /// session uploads only from a file. Nil, or the error's name. The new
-    /// record and its bodies are written to a folder of their own, which
-    /// takes the previous registration's place only once all of them are
-    /// there: a refused restart leaves that registration's record and files
-    /// as they were.
-    private static func start(_ package: String, _ id: String, _ requests: [[String: Any]], discretionary: Bool, downloadTotal: Int64? = nil) -> String? {
-        guard !id.isEmpty, !requests.isEmpty, records[id].map({ $0.ended }) ?? true else { return "TypeError" }
-        var planned: [(request: URLRequest, item: Item)] = []
+    /// Reserve the id on the main queue while the caller prepares immutable upload files.
+    private static func start(_ package: String, _ id: String, _ requests: [[String: Any]], discretionary: Bool, downloadTotal: Int64?, roots: [String: URL]) -> String? {
+        guard !id.isEmpty, !requests.isEmpty, onMain({
+            (records[id].map { $0.ended } ?? true) && preparing.insert(id).inserted
+        }) else { return "TypeError" }
+        defer { _ = onMain { preparing.remove(id) } }
+        var planned: [(request: URLRequest, item: Item, boundary: String?)] = []
         for (index, r) in requests.enumerated() {
             guard let text = r["url"] as? String, let url = URL(string: text), ["http", "https"].contains(url.scheme ?? "") else { return "TypeError" }
             var request = URLRequest(url: url)
-            request.httpMethod = r["method"] as? String ?? (r["bodyFrom"] == nil ? "GET" : "POST")
+            let form = r["form"] != nil, body = r["bodyFrom"] != nil
+            request.httpMethod = r["method"] as? String ?? (body || form ? "POST" : "GET")
+            if body || form {
+                guard !(body && form), !["GET", "HEAD"].contains(request.httpMethod?.uppercased() ?? "") else { return "TypeError" }
+            }
             for (k, v) in r["headers"] as? [String: String] ?? [:] { request.setValue(v, forHTTPHeaderField: k) }
+            let boundary = form ? "exact-" + UUID().uuidString : nil
+            if let boundary {
+                guard request.value(forHTTPHeaderField: "Content-Type") == nil,
+                      let parts = r["form"] as? [[String: Any]], parts.count <= 256,
+                      let metadata = try? JSONSerialization.data(withJSONObject: parts, options: .withoutEscapingSlashes),
+                      metadata.count <= 64 * 1024 else { return "TypeError" }
+                request.setValue("multipart/form-data; boundary=" + boundary, forHTTPHeaderField: "Content-Type")
+            }
             var shown = URLComponents(url: url, resolvingAgainstBaseURL: false)
             shown?.user = nil
             shown?.password = nil
             shown?.query = nil
             shown?.fragment = nil
             guard let shownURL = shown?.string else { return "TypeError" }
-            var item = Item(index: index, method: request.httpMethod ?? "GET", url: shownURL, upload: r["bodyFrom"] != nil)
+            var item = Item(index: index, method: request.httpMethod ?? "GET", url: shownURL, upload: body || form)
             item.saveTo = r["saveTo"] as? String
-            planned.append((request, item))
+            planned.append((request, item, boundary))
         }
         // Beside the registrations' folders, under a name none has: `safe`
         // escapes a dot.
@@ -191,11 +209,18 @@ public enum TransferCarrier {
         try? files.removeItem(at: staging)
         do { try files.createDirectory(at: staging, withIntermediateDirectories: true) } catch { return "UnknownError" }
         for (index, r) in requests.enumerated() {
-            guard let from = r["bodyFrom"] as? String else { continue }
+            guard planned[index].item.upload else { continue }
             let copy = staging.appendingPathComponent("upload-\(index)")
-            do { try files.copyItem(at: URL(fileURLWithPath: from), to: copy) } catch {
+            do {
+                if let parts = r["form"] as? [[String: Any]],
+                   let boundary = planned[index].boundary {
+                    try writeForm(parts, boundary: boundary, roots: roots, to: copy)
+                } else if let from = r["bodyFrom"] as? String {
+                    try files.copyItem(at: URL(fileURLWithPath: from), to: copy)
+                } else { throw InvalidForm() }
+            } catch {
                 try? files.removeItem(at: staging)
-                return "NotAllowedError"
+                return error is InvalidForm ? "TypeError" : "NotAllowedError"
             }
             planned[index].item.size = try? files.attributesOfItem(atPath: copy.path)[.size] as? Int64
         }
@@ -203,19 +228,68 @@ public enum TransferCarrier {
         record.downloadTotal = downloadTotal
         do {
             try JSONEncoder().encode(record).write(to: staging.appendingPathComponent("record.json"))
-            if files.fileExists(atPath: folder(id).path) { _ = try files.replaceItemAt(folder(id), withItemAt: staging) } else { try files.moveItem(at: staging, to: folder(id)) }
         } catch {
             try? files.removeItem(at: staging)
             return "UnknownError"
         }
-        records[id] = record
-        let s = session(discretionary)
-        for (request, item) in planned {
-            let task = item.upload ? s.uploadTask(with: request, fromFile: folder(id).appendingPathComponent("upload-\(item.index)")) : s.downloadTask(with: request)
-            task.taskDescription = "\(id) \(item.index)"
-            task.resume()
+        return onMain {
+            do {
+                if files.fileExists(atPath: folder(id).path) { _ = try files.replaceItemAt(folder(id), withItemAt: staging) } else { try files.moveItem(at: staging, to: folder(id)) }
+            } catch {
+                try? files.removeItem(at: staging)
+                return "UnknownError"
+            }
+            records[id] = record
+            let s = session(discretionary)
+            for (request, item, _) in planned {
+                let task = item.upload ? s.uploadTask(with: request, fromFile: folder(id).appendingPathComponent("upload-\(item.index)")) : s.downloadTask(with: request)
+                task.taskDescription = "\(id) \(item.index)"
+                task.resume()
+            }
+            return nil
         }
-        return nil
+    }
+
+    private struct InvalidForm: Error {}
+
+    static func writeForm(_ parts: [[String: Any]], boundary: String, roots: [String: URL], to file: URL) throws {
+        func lines(_ s: String) -> String {
+            s.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n").replacingOccurrences(of: "\n", with: "\r\n")
+        }
+        func quoted(_ s: String) -> String {
+            lines(s).replacingOccurrences(of: "\r", with: "%0D").replacingOccurrences(of: "\n", with: "%0A").replacingOccurrences(of: "\"", with: "%22")
+        }
+        try Data().write(to: file, options: .withoutOverwriting)
+        let output = try FileHandle(forWritingTo: file)
+        defer { try? output.close() }
+        func write(_ s: String) throws { try output.write(contentsOf: Data(s.utf8)) }
+        for part in parts {
+            func string(_ key: String) throws -> String? {
+                guard let value = part[key], !(value is NSNull) else { return nil }
+                guard let s = value as? String else { throw InvalidForm() }
+                return s
+            }
+            guard let name = try string("name") else { throw InvalidForm() }
+            let value = try string("value"), from = try string("from")
+            let filename = try string("filename"), type = try string("contentType")
+            try write("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(quoted(name))\"")
+            if let value, from == nil, filename == nil, type == nil {
+                try write("\r\n\r\n\(lines(value))\r\n")
+            } else if let from, value == nil {
+                let mime = type.flatMap { $0.isEmpty ? nil : $0 } ?? "application/octet-stream"
+                guard mime.utf8.allSatisfy({ (32...126).contains($0) }) else { throw InvalidForm() }
+                let last = (from as NSString).lastPathComponent
+                try write("; filename=\"\(quoted(filename ?? last))\"\r\nContent-Type: \(mime)\r\n\r\n")
+                guard let input = AppFileWalk.open(from, roots: roots) else { throw CocoaError(.fileReadNoPermission) }
+                defer { try? input.close() }
+                while let chunk = try input.read(upToCount: 64 * 1024), !chunk.isEmpty {
+                    try output.write(contentsOf: chunk)
+                }
+                try write("\r\n")
+            } else { throw InvalidForm() }
+        }
+        try write("--\(boundary)--\r\n")
+        try output.synchronize()
     }
 
     /// What a package reads of a record: never a header, a query or a

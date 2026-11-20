@@ -40,7 +40,7 @@ function replacementRecordsServer() {
   return Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
     const js = text => new Response(text, { headers: { 'content-type': 'text/javascript' } });
-    if (path === '/rt.js') return js('export const After = [], PropHooks = {}, Resources = [], inflight = { n: 1 }, clock = {}, data = {}, journal = []; export const settled = () => { for (const f of After) f(); }; export const carryRouter = null, launchLocation = null, res = null, sig = null;');
+    if (path === '/rt.js') return js('export const After = [], PropHooks = {}, Resources = [], inflight = { n: 1 }, clock = {}, data = {}, journal = []; export const settled = () => { for (const f of After) f(); }; export const carryRouter = null, late = null, launchLocation = null, res = null, sig = null;');
     if (path === '/navigation.js') return js(hostFixtureFile(new URL('../web/navigation.js', import.meta.url)));
     if (['/checkpoint.js', '/focus.js'].includes(path)) return js(Bun.file(new URL('.' + path, import.meta.url)));
     return new Response('<!doctype html><main id="exact-root" style="min-height:2000px"></main>', { headers: { 'content-type': 'text/html' } });
@@ -420,7 +420,7 @@ test.each(['plain', 'focused', 'smooth'])('replacement records keep nested scrol
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
     const js = text => new Response(text, { headers: { 'content-type': 'text/javascript' } });
-    if (path === '/rt.js') return js('export const After = [], PropHooks = {}, Resources = [], inflight = { n: 0 }, clock = {}, data = {}, journal = []; export const settled = () => {}; export const carryRouter = null, launchLocation = null, res = null, sig = null;');
+    if (path === '/rt.js') return js('export const After = [], PropHooks = {}, Resources = [], inflight = { n: 0 }, clock = {}, data = {}, journal = []; export const settled = () => {}; export const carryRouter = null, late = null, launchLocation = null, res = null, sig = null;');
     if (path === '/navigation.js') return js(hostFixtureFile(new URL('../web/navigation.js', import.meta.url)));
     if (['/checkpoint.js', '/focus.js'].includes(path)) return js(Bun.file(new URL('.' + path, import.meta.url)));
     return new Response('<main id="exact-root"></main>', { headers: { 'content-type': 'text/html' } });
@@ -776,6 +776,7 @@ test('replacement records end when the document leaves during restoration', asyn
 
 test.each([
   ['self', 'html', 'scale(2)'], ['ancestor', 'html', 'scale(2)'], ['self', 'svg', 'scale(2)'],
+  ['self', 'html', 'scale(0)'], ['ancestor', 'html', 'scale(0)'],
   ['self', 'html', 'scaleY(-1)'], ['self', 'html', 'rotate(180deg)'],
   ['ancestor', 'html', 'scaleY(-1)'], ['ancestor', 'html', 'rotate(180deg)'],
   ['self', 'svg', 'scaleY(-1)'], ['self', 'svg', 'rotate(180deg)'],

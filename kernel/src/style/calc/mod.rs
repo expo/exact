@@ -18,7 +18,8 @@ mod wire;
 
 pub use parse::nonnegative_row;
 pub(crate) use parse::{
-    grid, is_env, length_percentage, names_math, parse, refusal, signed, substitutes, Refused,
+    grid, is_env, length_percentage, names_math, parse, refusal, signed, substitutes,
+    without_percent, Refused,
 };
 
 use super::env::{self, Edge, Env, Region, SegmentVar, Side, TitleBarVar};

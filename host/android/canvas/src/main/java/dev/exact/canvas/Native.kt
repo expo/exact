@@ -112,6 +112,7 @@ object Native {
      * and down its snapport's length as float bits, a count, and per snap area the least and greatest offsets it rests
      * at as float bits and 1 for `scroll-snap-stop: always`, in pixels; flag bit 3: a virtualized list, whose areas past
      * these [snapsAround] tells. */
+    @JvmStatic external fun readerSelection(action: Int, x: Float, y: Float): String?
     @JvmStatic external fun under(x: Float, y: Float): IntArray
     /** Virtualized list [id]'s snap areas up and down ([vertical]) or sideways, for a release at offset [release] whose
      * rest is projected near [projected] (pixels): a count, then per area its least and greatest offsets as float bits

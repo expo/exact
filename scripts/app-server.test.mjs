@@ -8,11 +8,11 @@ import { resolve, toNamespacedPath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appServer, serverChoice, serverUrl } from './app-server.mjs';
 
-// Discovery consumes the module list recorded by a build; these unit fixtures supply that list.
+// Rust records Windows source paths in the extended-length form.
 function sourceRecord(dir, modules = ['app.ts']) {
   const path = resolve(dir,'.exact/typescript-inputs.json');
   mkdirSync(resolve(path,'..'),{recursive:true});
-  writeFileSync(path,JSON.stringify({modules:modules.map(file=>[file,resolve(dir,file)]),types:[],edges:modules.slice(1).map(file=>['app.ts','./'+file,'import',file])}));
+  writeFileSync(path,JSON.stringify({modules:modules.map(file=>[file,toNamespacedPath(resolve(dir,file))]),types:[],edges:modules.slice(1).map(file=>['app.ts','./'+file,'import',file])}));
 }
 
 // LLP 1116.006 D3: the server an app calls, found where the rest pattern and the builders put it.

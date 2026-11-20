@@ -72,6 +72,13 @@ steps! {
 /// One step of a `test`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Step {
+    /// Bring a mounted node into view without pressing it.
+    Scroll {
+        /// The target's testId.
+        target: String,
+        /// Where.
+        span: Span,
+    },
     /// `tap "testId"`, or one of the driver's other forms of it
     /// (`modifiers "Shift"` for a press with keys held).
     Tap {
@@ -235,6 +242,15 @@ pub enum Step {
     Fresh {
         /// The seed file, as written.
         seed: Option<String>,
+        /// Where.
+        span: Span,
+    },
+    /// A persisted state in the test's initial store (LLP 1116 D5).
+    Stored {
+        /// The state name, including names used by earlier builds.
+        name: String,
+        /// The value as JSON text.
+        value: String,
         /// Where.
         span: Span,
     },
@@ -501,6 +517,23 @@ pub enum Step {
         pan: Option<f64>,
         /// How it ended: `end`, `group`, `cut`, `stop` or `cancelled` (D4).
         by: Option<String>,
+        /// Where.
+        span: Span,
+    },
+    /// `expect drag "<testId>" none | has "<type>" [== "<value>"] [name
+    /// "<name>"] | missing "<type>"`: what the node's drag carries, as its
+    /// admitted props declare it on every host (LLP 1094.000 D10).
+    ExpectDrag {
+        /// The node, by `testId`.
+        target: String,
+        /// The type `has` or `missing` names; none for `none`.
+        kind: Option<String>,
+        /// `has` rather than `missing`.
+        present: bool,
+        /// The string `has … ==` compares.
+        value: Option<String>,
+        /// The file's own name `has … name` compares.
+        name: Option<String>,
         /// Where.
         span: Span,
     },

@@ -79,7 +79,7 @@ internal open class Registrations(root: File) {
     }
 
     /** An admitted request: its URL carries no credentials. */
-    data class Request(val url: String, val method: String, val saveTo: String? = null, val bodyFrom: String? = null)
+    data class Request(val url: String, val method: String, val saveTo: String? = null, val bodyFrom: String? = null, val form: Boolean = false)
 
     /** What a start gives its registration beside the lifecycle's record. [roots] are the session's `data`, `cache` and `temporary`. */
     class Admission(val title: String, val source: String, val origin: String, val requests: List<Request>,
@@ -151,7 +151,7 @@ internal open class Registrations(root: File) {
      * Copy the upload bodies beside the record: staged outside the monitor and committed inside it.
      * A body a dead process committed is kept. False when [cancelled] or the record is gone.
      */
-    fun snapshot(key: Key, cancelled: () -> Boolean, copy: (JSONObject, String, File) -> Unit): Boolean {
+    fun snapshot(key: Key, cancelled: () -> Boolean, copy: (JSONObject, JSONObject, File) -> Unit): Boolean {
         val record = get(key) ?: return false
         val dir = directory(key)
         val staging = File(dir.parentFile, ".snapshot-${key.generation}")
@@ -167,7 +167,7 @@ internal open class Registrations(root: File) {
                 val kept = File(dir, "$i.upload")
                 val file = if (Files.exists(kept.toPath(), NOFOLLOW_LINKS)) kept else File(staging, "$i.upload").also {
                     Files.createFile(it.toPath())
-                    copy(record, request.getString("bodyFrom"), it)
+                    copy(record, request, it)
                 }
                 regularPath(file)
                 request.put("uploadTotal", file.length())
@@ -275,7 +275,7 @@ internal open class Registrations(root: File) {
         for ((index, request) in admission.requests.withIndex()) entries.put(JSONObject().put("url", request.url)
             .put("method", request.method).put("credentialKey", "exact.transfer.${r.key.generation}.$index").put("uploadTotal", 0L)
             .put("saveTo", request.saveTo ?: JSONObject.NULL).put("bodyFrom", request.bodyFrom ?: JSONObject.NULL)
-            .put("body", request.bodyFrom != null))
+            .put("body", request.bodyFrom != null || request.form))
         check(r.requests == entries.length() && r.done == 0)
         val record = JSONObject().put("id", r.key.id).put("generation", r.key.generation).put("title", admission.title)
             .put("source", admission.source).put("origin", admission.origin).put("requests", entries)

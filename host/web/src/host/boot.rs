@@ -96,19 +96,22 @@ impl<D: DataSource> Host<D> {
         let delivery = compat.map_or_else(Default::default, |json| {
             exact_runner::Delivery::default().with_compat(json)
         });
-        let mut runner = Runner::boot_with_delivery_linked(
-            crate::link::runner_links(),
-            exact_runner::ModuleLinks::ALL,
-            plan,
-            data,
-            kernel,
-            carried,
-            snapshot,
-            delivery,
-            viewport,
-            launch,
-        )
-        .map_err(HostError::Runner)?;
+        let mut runner = exact_runner::page::Platform::Web
+            .boot(|| {
+                Runner::boot_with_delivery_linked(
+                    crate::link::runner_links(),
+                    exact_runner::ModuleLinks::ALL,
+                    plan,
+                    data,
+                    kernel,
+                    carried,
+                    snapshot,
+                    delivery,
+                    viewport,
+                    launch,
+                )
+            })
+            .map_err(HostError::Runner)?;
         runner.measure_unless_production(compat, false); // LLP 1079 D1: the browser lays out
         runner.admit_live(compat);
         Host::open(links, runner, launch, Batch::new(), Default::default())

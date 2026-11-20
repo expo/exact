@@ -379,6 +379,44 @@ fn set_range_text_command_preserves_selection_and_reports_one_input() {
 }
 
 #[test]
+fn markdown_toolbar_commands_explain_why_the_source_stayed_the_same() {
+    let plan = crate::test_plan(
+        r#"component Editor
+  state body = "**note**"
+  action edit(value: string)
+    body = value
+  action toolbar
+    setSelectionRange("source", 2, 6)
+    format("source", "bold")
+    setRangeText("source", "rewrite")
+  view
+    column
+      textarea id="source" testId="source" markup="markdown" value=body input=edit
+      button "Format" testId="toolbar" press=toolbar
+"#,
+    );
+    let (mut p, _) = Presenter::boot_with_fixture_fonts(
+        &plan,
+        (),
+        (400., 600.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    p.tap(id(&p, "toolbar")).unwrap();
+    p.run_commands(<()>::default);
+    let source = id(&p, "source");
+    assert_eq!(p.field_text(source), "**note**");
+    let selection = p.field_selection(source);
+    assert_eq!((selection.start, selection.end), (2, 6));
+    for command in ["format", "setRangeText"] {
+        let why = format!("{command} \"source\" refused: this host edits Markdown as plain source");
+        assert!(p.host().runner().journal().any(|line| line.contains(&why)));
+    }
+}
+
+#[test]
 fn set_range_text_modes_utf16_sanitization_and_refusals() {
     let mut p = boot();
     let editor = id(&p, "editor");

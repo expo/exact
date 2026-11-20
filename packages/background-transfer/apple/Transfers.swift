@@ -42,7 +42,7 @@ public final class BackgroundTransferModule: NSObject, ExactPackage {
         DispatchQueue.main.async { [self] in
             let id = args["id"] as? String ?? ""
             switch name {
-            case "backgroundFetch": reply(start(id, args))
+            case "backgroundFetch": start(id, args, reply: reply)
             case "backgroundFetchRegistration": reply(["exact:answer": registration(id) ?? NSNull()])
             case "backgroundFetchIds": reply(["exact:answer": context.transfers.ids])
             case "abortBackgroundFetch": reply(["exact:answer": context.transfers.abort(id: id)])
@@ -63,12 +63,11 @@ public final class BackgroundTransferModule: NSObject, ExactPackage {
         context.changed("\(Self.name).backgroundFetchIds")
     }
 
-    /// The registration started, or the error's name.
-    private func start(_ id: String, _ args: [String: Any]) -> [String: Any] {
-        guard !id.isEmpty, let list = args["requests"] as? [[String: Any]], !list.isEmpty else { return ["error": "TypeError"] }
+    private func start(_ id: String, _ args: [String: Any], reply: @escaping ([String: Any]) -> Void) {
+        guard !id.isEmpty, let list = args["requests"] as? [[String: Any]], !list.isEmpty else { return reply(["error": "TypeError"]) }
         var requests: [[String: Any]] = []
         for r in list {
-            guard let url = r["url"] as? String else { return ["error": "TypeError"] }
+            guard let url = r["url"] as? String else { return reply(["error": "TypeError"]) }
             var out: [String: Any] = ["url": url]
             if let method = r["method"] as? String { out["method"] = method }
             var headers: [String: String] = [:]
@@ -77,22 +76,33 @@ public final class BackgroundTransferModule: NSObject, ExactPackage {
             }
             out["headers"] = headers
             if let from = r["bodyFrom"] as? String {
-                guard let file = context.file(from) else { return ["error": "NotAllowedError"] }
+                guard let file = context.file(from) else { return reply(["error": "NotAllowedError"]) }
                 out["bodyFrom"] = file.path
             }
+            if let form = r["form"], !(form is NSNull) {
+                guard let parts = form as? [[String: Any]] else { return reply(["error": "TypeError"]) }
+                out["form"] = parts
+            }
             if let to = r["saveTo"] as? String {
-                guard let file = context.file(to) else { return ["error": "NotAllowedError"] }
-                // A body replaces a file, never a folder (`place`).
-                guard !Self.isFolder(file) else { return ["error": "TypeError"] }
+                guard context.file(to) != nil else {
+                    let directory = context.directory(to).map(Self.isFolder) ?? false
+                    return reply(["error": directory ? "TypeError" : "NotAllowedError"])
+                }
                 out["saveTo"] = to
             }
             requests.append(out)
         }
         let ceiling = (args["downloadTotal"] as? NSNumber).map { $0.int64Value }
-        if let error = context.transfers.start(id: id, requests: requests, downloadTotal: ceiling) { return ["error": error] }
-        context.log("background-transfer: \(id) started, \(requests.count) request\(requests.count == 1 ? "" : "s")")
-        changed()
-        return registration(id) ?? [:]
+        let carrier = context.transfers, planned = requests
+        DispatchQueue.global(qos: .utility).async {
+            let error = carrier.start(id: id, requests: planned, downloadTotal: ceiling)
+            DispatchQueue.main.async { [self] in
+                if let error { return reply(["error": error]) }
+                context.log("background-transfer: \(id) started, \(planned.count) request\(planned.count == 1 ? "" : "s")")
+                changed()
+                reply(registration(id) ?? [:])
+            }
+        }
     }
 
     /// Where a registration's unsaid response bodies go.

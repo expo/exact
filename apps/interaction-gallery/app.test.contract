@@ -1,6 +1,8 @@
 // A dismissed viewer and a thrown card finish 150 ms after the release, on the
 // root's gated tasks. A release dismisses or throws past 120 points or 800
-// points a second: a 200-point drag passes the first, and 40 points held
+// points a second: a 200-point drag down the viewer passes the first, and so
+// does a 180-point throw from the deck's centre, which stays on the narrowest
+// phone's screen (the folded iPhone Duo's, 382 points wide); 40 points held
 // 300 ms before the lift passes neither.
 
 test "a drag down at Fit closes the viewer once the photo has left"
@@ -27,20 +29,20 @@ test "a short drag springs back and the viewer stays"
 
 test "a thrown card deals the next by itself, to either side"
   expect text "deck-face" == "Card 1"
-  tap "deck-handle" drag 200 0
+  tap "deck-handle" drag 180 0
   expect text "deck-face" == "Card 1"
   clock +150
   expect text "deck-face" == "Card 2"
   expect text "deck-next" == "Card 3"
   expect state thrown == false
-  tap "deck-handle" drag -200 0
+  tap "deck-handle" drag -180 0
   clock +150
   expect text "deck-face" == "Card 3"
 
 test "Deal again deals, and a throw it follows deals no second card"
   tap "deck-deal"
   expect text "deck-face" == "Card 2"
-  tap "deck-handle" drag 200 0
+  tap "deck-handle" drag 180 0
   tap "deck-deal"
   expect text "deck-face" == "Card 3"
   clock +1000
@@ -59,3 +61,8 @@ test "Back after a dismiss closes once, and the next viewer stays open"
   clock data
   expect state gallery.viewerOpen == true
   expect tree has "viewer-handle"
+
+test "a study's card carries its photograph for a drag out of the app"
+  clock data
+  expect drag "open-photo-00000" has "image/png" name "north-shore.png"
+  expect drag "open-photo-00000" missing "text/plain"

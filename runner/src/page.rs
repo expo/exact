@@ -23,6 +23,7 @@ use exact_plan::Value;
 pub const SOURCE: &str = "exactPage";
 /// Fields an app may declare, filled by name.
 pub const FIELDS: &[&str] = &[
+    "platform",
     "visibilityState",
     "frozen",
     "onLine",
@@ -39,7 +40,68 @@ pub const FIELDS: &[&str] = &[
     "presented",
 ];
 
+/// The executor that owns the page. A renderer producing a web document runs
+/// as Web even when its process is native.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Platform {
+    /// The Android reader.
+    Android,
+    /// An iOS app, including one running in a simulator.
+    Ios,
+    /// The Linux painted host, including its headless driver.
+    Linux,
+    /// An AppKit app.
+    Macos,
+    /// The terminal presenter on any operating system.
+    Terminal,
+    /// An Apple TV app.
+    Tvos,
+    /// A web page, including its server render.
+    Web,
+    /// The Windows painted host.
+    Windows,
+    /// A watchOS app.
+    Watchos,
+    /// A bare runner, as used by the Contract bake.
+    Headless,
+}
+
+impl Platform {
+    /// The Contract value of `exactPage().platform`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Android => "android",
+            Self::Ios => "ios",
+            Self::Linux => "linux",
+            Self::Macos => "macos",
+            Self::Terminal => "terminal",
+            Self::Tvos => "tvos",
+            Self::Web => "web",
+            Self::Windows => "windows",
+            Self::Watchos => "watchos",
+            Self::Headless => "headless",
+        }
+    }
+
+    /// Supply the executor before the runner evaluates its first resource.
+    pub fn boot<T>(self, boot: impl FnOnce() -> T) -> T {
+        struct Restore(Platform);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                BOOT_PLATFORM.set(self.0);
+            }
+        }
+        let _restore = Restore(BOOT_PLATFORM.replace(self));
+        boot()
+    }
+
+    pub(crate) fn at_boot() -> Self {
+        BOOT_PLATFORM.get()
+    }
+}
+
 std::thread_local! {
+    static BOOT_PLATFORM: std::cell::Cell<Platform> = const { std::cell::Cell::new(Platform::Headless) };
     static AWAITS_PRESENT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 

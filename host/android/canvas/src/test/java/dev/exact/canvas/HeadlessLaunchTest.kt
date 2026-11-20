@@ -153,10 +153,13 @@ class HeadlessLaunchTest {
     @Test fun aDriverLaunchTransfersItsEnvironmentBeforeBoot() {
         val app = RuntimeEnvironment.getApplication()
         app.applicationInfo.metaData = Bundle().apply { putBoolean("dev.exact.development", true) }
+        val stored = """[["pace","\"2:15\""]]"""
         activity(Intent(Intent.ACTION_MAIN).putExtra("x_agent", "1")
-            .putExtra("x_agent_storage", "a=b é").putExtra("x_agent_epoch", "1234"))
+            .putExtra("x_agent_storage", "a=b é").putExtra("x_agent_stored", stored)
+            .putExtra("x_agent_epoch", "1234"))
         assertEquals("1", Host.environment["EXACT_AGENT"])
         assertEquals("a=b é", Host.environment["EXACT_AGENT_STORAGE"])
+        assertEquals(stored, Host.environment["EXACT_AGENT_STORED"])
         assertEquals("1234", Host.environment["EXACT_AGENT_EPOCH"])
         assertTrue(Host.turns.indexOf("environment") in 0 until Host.turns.indexOf("start"))
     }

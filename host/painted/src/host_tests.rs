@@ -333,13 +333,15 @@ fn named_agent_storage_keeps_a_secret_across_a_relaunch() {
         .join("secrets")
         .join("platformer.best");
     assert!(file.is_file(), "{}", file.display());
+    std::env::set_var("EXACT_AGENT_STORED", r#"[["runText","\"2:15\""]]"#);
     // A carried reload does not wipe, even while a fresh flag is set.
     std::env::set_var("EXACT_AGENT_STORAGE_FRESH", "1");
     assert!(store_snapshot(app, true).is_empty());
     assert!(file.is_file(), "a carried reload leaves the scratch files");
-    assert!(
-        store_snapshot(app, false).is_empty(),
-        "a fresh launch reads nothing"
+    assert_eq!(
+        store_snapshot(app, false),
+        vec![("exact.state.runText".into(), br#""2:15""#.to_vec())],
+        "the fresh launch reads only the authored setting"
     );
     assert!(!file.exists());
     // A commit after that boot outlives the activation's storage

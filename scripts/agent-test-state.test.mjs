@@ -43,14 +43,14 @@ engineTest.chromium('authored state comparisons resolve literals and paths and r
   x: number
   y: number
 component App
-  state picks = ["a", "b"]
+  state picks = ["a", "b"] persist
   state grid = [[1, -2], [], [3]]
   state empty: number[] = []
   state picked = some(["a", "b"])
   state point = Point(x=1, y=-2)
   state locked = [Point(x=1, y=-2), Point(x=2, y=3)]
   state pinned = [Point(x=1, y=-2), Point(x=2, y=3)]
-  state shown = "hint"
+  state shown = "hint" persist
   state n = 2
   state minimum = 1
   state maximum = 3
@@ -70,6 +70,7 @@ component App
       button "Reconcile" testId="reconcile" press=reconcile
 `);
     writeFileSync(file, `test "equal literals"
+  expect state shown == "hint"
   expect state picks == ["a", "b"]
   expect state grid == [[1, -2], [], [3,],]
   expect state empty == []
@@ -109,6 +110,16 @@ test "relation mismatches"
   expect state n >= state maximum
   expect state n <= state minimum
   expect state maximum in state empty
+test "an upgrade starts from stored settings"
+  stored shown "2:15"
+  stored picks [true]
+  expect state shown == "2:15"
+  expect state picks == ["a", "b"]
+  tap "advance"
+  reload
+  expect state shown == "advanced"
+test "the next install owns its store"
+  expect state shown == "hint"
 `);
     const compiler = join(process.env.CARGO_TARGET_DIR ?? join(root, 'target'), 'debug', 'contract');
     const compile = spawnSync(compiler, ['build', app, '-o', plan], { cwd: root, encoding: 'utf8' });
@@ -117,7 +128,8 @@ test "relation mismatches"
     expect(build.status, build.stderr).toBe(0);
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const r = await runTests({ host: 'web', file, app: 'ui-gallery', url: `http://127.0.0.1:${server.address().port}/` });
-    expect([r.passed, r.failed]).toEqual([2, 2]);
+    expect(r.results.slice(4).map(t => t.failures)).toEqual([[], []]);
+    expect([r.passed, r.failed]).toEqual([4, 2]);
     expect(r.results[0].failures).toEqual([]);
     const messages = r.results[1].failures.map(f => f.slice(f.indexOf(': ', f.indexOf(':') + 1) + 2));
     expect(messages).toEqual([

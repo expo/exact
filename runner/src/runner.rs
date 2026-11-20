@@ -16,6 +16,7 @@ pub use retirement::{ModuleIdentity, ModuleInstance};
 mod background;
 mod commit;
 mod console;
+mod drag_files;
 pub use console::Console;
 mod completion;
 mod control;
@@ -606,6 +607,7 @@ pub struct Runner<D: DataSource> {
     // @ref LLP 1123 D6 — the geometry facts' answers and their bound.
     geometry: geometry_facts::Facts,
     // @ref LLP 1069.000 D2 — visibility, connectivity, the share sheet.
+    platform: crate::page::Platform,
     page: crate::page::Page,
     presented: crate::page::Presented, // `exactPage().presented` (LLP 1069.000 D2)
     window_name: String,               // the page's `name` (LLP 1030.004 D2)
@@ -996,6 +998,7 @@ impl<D: DataSource> Runner<D> {
             live_times: Default::default(),
             text_axes: seams::TextAxesState(seams.text_axes.state()),
             place: launched_place.clone().unwrap_or_default(),
+            platform: crate::page::Platform::at_boot(),
             window_name: crate::time::launch_window_name(),
             host_direction: crate::time::launch_direction(),
             surface_records: Default::default(),

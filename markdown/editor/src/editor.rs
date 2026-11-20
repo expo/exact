@@ -1028,6 +1028,10 @@ impl Editor {
             };
             Some((moved(open)?, moved(close)?))
         };
+        // Joining lines changes delimiter flanking. A surviving inline pair may become literal
+        // Markdown even though the edit removed none of its contents.
+        let join = matches!(reps, [(a, b, inserted)] if inserted.is_empty()
+            && matches!(self.source.get(*a as usize..*b as usize), Some([10] | [13] | [13, 10])));
         let (mut text, first) = splice(&self.source, reps);
         let mut sim = Sim {
             result: Vec::new(),
@@ -1068,6 +1072,10 @@ impl Editor {
                         text.get(i as usize)
                             .is_some_and(|&c| c < 128 && ORPHANS.contains(&(c as u8)))
                             && !proj.is_hidden(i)
+                            && !(join
+                                && pairs.iter().any(|(o, c)| {
+                                    (o.start..o.end).contains(&i) || (c.start..c.end).contains(&i)
+                                }))
                     })
                     .collect();
             }

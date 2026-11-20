@@ -24,7 +24,7 @@ import { generationFile, generationPath, servedFile } from '../web/generations.m
 import { besidePattern } from '../web/beside.mjs';
 import { agentParameters } from '../web/navigation/agent-parameters.js';
 import { cargoContractReads, changedContractReads, contractReadReceipt } from '../../scripts/web-build.mjs';
-import { webSourceRoots } from '../web/build.mjs';
+import { partitionWebRoots, webSourceRoots } from '../web/build.mjs';
 import { shaderWatchRoots } from '../../scripts/app.mjs';
 import { within } from '../../scripts/paths.mjs';
 import { localInstaller } from '../web/local-install.mjs';
@@ -763,7 +763,7 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
     if (stopping) return;
     const path = resolve(base, name ?? '');
     // A compiler input remains watched in dot directories and node_modules.
-    if (name && skip.test(name) && !compilerInput(path)
+    if (name && (skip.test(name) || skipCargoTarget(path)) && !compilerInput(path)
       && !(base === app.dir && (backendFile(name) || settingsFile(name)))) return;
     // `.exact/` is an input only for `backend-origin`: the loop's own design
     // server makes the directory for its lock, which is none. An event for
@@ -817,9 +817,13 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   // Compiler source trees and recorded files, wherever installed or linked.
   const packages = new Set();
   const compilerSources = new Set();
+  let skipCargoTarget = () => false;
   // A source, or a directory holding one (its event names the directory).
   const compilerInput = path => compilerSources.has(path) || [...compilerSources].some(s => s.startsWith(path + sep));
-  const watchPackages = ({ trees = [], shallow = [], sources = [], roots = [] } = {}) => {
+  const watchPackages = ({ trees = [], shallow = [], sources = [], roots } = {}) => {
+    // A successful build replaces the input set. A failed build can still
+    // report new reads whose next edit will repair it.
+    if (roots) compilerSources.clear();
     for (const source of sources) compilerSources.add(resolve(source));
     for (const dir of trees) {
       if (packages.has(dir) || !existsSync(dir)) continue;
@@ -852,8 +856,11 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
         notify(event, name);
       }));
     };
+    if (!roots) return;
+    const { active, skipTarget } = partitionWebRoots(roots);
+    skipCargoTarget = skipTarget;
     const declared = declaredSources(app.dir);
-    for (const input of roots) {
+    for (const input of active) {
       const file = input.file, dir = file ? dirname(file) : input, source = declared(dir);
       watchCargo(dir, dir, file);
       if (source && source !== dir) watchCargo(dir, source, file);

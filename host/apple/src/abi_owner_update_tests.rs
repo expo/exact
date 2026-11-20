@@ -1,7 +1,9 @@
-//! A content owner's update at the Apple doors (LLP 1123 D2): beside its block in one call of
-//! `exact_host_covers` or `exact_view`, every update checked before the call changes anything.
+//! A content owner's update and a registered target at the Apple doors (LLP 1123 D2, D9):
+//! beside the blocks in one call of `exact_host_covers` or `exact_view`, every one checked
+//! before the call changes anything.
 use super::*;
 use exact_kernel::style::env::{Rect, SegmentGrid};
+use exact_kernel::style::targets::NativeTarget;
 use exact_kernel::{Keyboard, OwnerUpdate};
 
 /// A page whose route holds two readers: `column` pads by the second column's left edge, 7
@@ -252,4 +254,101 @@ fn an_update_for_a_view_that_is_gone_refuses_only_itself() {
     );
     assert!(batch.contains("UnknownView"), "{batch}");
     assert_eq!(read(&bridge, route, readers).1, Some(300.0));
+}
+
+/// `name`'s registration of `target`, or its disposal, as kind 22 frames it.
+fn registration(name: &str, target: Option<&NativeTarget>) -> Vec<u8> {
+    let bytes = exact_kernel::encode_registration(name, target);
+    let mut out: Vec<u8> = [0, 22, bytes.len() as u32]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    out.extend(bytes);
+    out
+}
+
+/// A page whose `reader` pads by the registered target `map`'s top inset, 7 while it is
+/// unavailable, and that reader's top padding.
+fn registered_page() -> (Bridge<StorageModule>, u32) {
+    let plan = contract::compile(
+        "component Page\n  view\n    column\n      box testId=\"reader\" padding-top=\"var(--exact-target-map-safe-area-inset-top, 7px)\"\n",
+    )
+    .unwrap()
+    .encode();
+    let mut bridge = Bridge::new();
+    bridge.boot(&plan, StorageModule::default(), Hooks::none(), 390.0, 844.0);
+    let k = bridge.host.as_ref().unwrap().runner().kernel();
+    let reader = k.node_by_key(k.find_by_test_id("reader")[0]).unwrap().id;
+    (bridge, reader)
+}
+
+fn top_padding(bridge: &Bridge<StorageModule>, id: u32) -> f32 {
+    let k = bridge.host.as_ref().unwrap().runner().kernel();
+    k.resolved_padding(k.node(id).unwrap().key).unwrap().1
+}
+
+fn map(id: u64, generation: u64) -> NativeTarget {
+    NativeTarget {
+        id,
+        generation,
+        insets: Some([30.0, 0.0, 0.0, 0.0]),
+    }
+}
+
+#[test]
+fn a_registration_rides_the_covers_door_and_its_disposal_takes_it_back() {
+    let (mut bridge, reader) = registered_page();
+    let batch = covers(&mut bridge, &registration("map", Some(&map(9, 1))));
+    assert!(batch.contains("\"error\":null"), "{batch}");
+    assert_eq!(top_padding(&bridge, reader), 30.0);
+    covers(&mut bridge, &registration("map", None));
+    assert_eq!(top_padding(&bridge, reader), 7.0);
+}
+
+#[test]
+fn a_refused_registration_refuses_the_whole_call() {
+    let (mut bridge, reader) = registered_page();
+    // A name D9 does not take, beside a good registration
+    let bytes = [
+        registration("map", Some(&map(9, 1))),
+        registration("Map", Some(&map(8, 1))),
+    ];
+    let refused = covers(&mut bridge, &bytes.concat());
+    assert!(
+        refused.contains("nothing in the call was applied"),
+        "{refused}"
+    );
+    assert_eq!(top_padding(&bridge, reader), 7.0);
+    // Two for one name, and one that does not decode
+    let twice = [
+        registration("map", Some(&map(9, 1))),
+        registration("map", None),
+    ]
+    .concat();
+    assert!(covers(&mut bridge, &twice).contains("two for `map`"));
+    let truncated = registration("map", Some(&map(9, 1)));
+    let mut short = truncated[..truncated.len() - 1].to_vec();
+    short[8..12].copy_from_slice(&((truncated.len() - 13) as u32).to_le_bytes());
+    assert!(covers(&mut bridge, &short).contains("registered target is truncated"));
+    // An older generation than the name's last, after it is registered
+    covers(&mut bridge, &registration("map", Some(&map(9, 2))));
+    let stale = covers(&mut bridge, &registration("map", Some(&map(9, 1))));
+    assert!(stale.contains("nothing in the call was applied"), "{stale}");
+    assert_eq!(top_padding(&bridge, reader), 30.0);
+}
+
+#[test]
+fn a_registration_rides_exact_views_trailer() {
+    let (mut bridge, reader) = registered_page();
+    let mut wire: Vec<u8> = [64u32]
+        .into_iter()
+        .chain([0; 9])
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    wire.extend(registration("map", Some(&map(9, 1))));
+    let len = bridge.input_write(&wire);
+    let len = bridge.view(len);
+    let batch = String::from_utf8_lossy(bridge.output_bytes(len as usize)).into_owned();
+    assert!(batch.contains("\"error\":null"), "{batch}");
+    assert_eq!(top_padding(&bridge, reader), 30.0);
 }

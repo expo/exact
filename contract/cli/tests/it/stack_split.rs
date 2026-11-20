@@ -130,6 +130,43 @@ fn a_list_whose_rows_link_to_a_route_splits_and_names_each_rows_detail() {
     assert_eq!(r.stack_split(view(&r, "star-a"), None), None);
 }
 
+#[test]
+fn section_labels_do_not_open_a_split_or_own_its_detail() {
+    let labels = r#"              section
+                header
+                  button press=open("a") aria-current="page" testId="edit"
+                    text "Edit"
+                row
+                  text "No selection"
+                footer
+                  text "Help""#;
+    for appearance in ["", r#"appearance="auto""#] {
+        let source = app("", appearance, labels);
+        let r = boot(&source);
+        let list = view(&r, "rows");
+        assert_eq!(r.stack_split(view(&r, "home"), None), None);
+        assert_eq!(r.split_row_owner(list, view(&r, "edit")), None);
+        assert_eq!(
+            r.stack_split(view(&r, "home"), Some(list)).unwrap().current,
+            None
+        );
+
+        let source = source.replace(
+            "                row\n                  text \"No selection\"",
+            r#"                link href="/item/a" testId="person" aria-current="page"
+                  text "Person""#,
+        );
+        let mut r = boot(&source);
+        let root = r.kernel().roots()[0];
+        r.dispatch(root, Event::Navigate("/item/a".into())).unwrap();
+        let person = view(&r, "person");
+        let found = split(&r).unwrap();
+        assert_eq!(found.current, Some(person));
+        assert_eq!(found.rows, vec![(view(&r, "item-a"), person)]);
+        assert_eq!(r.split_row_owner(found.list.unwrap(), person), Some(person));
+    }
+}
+
 /// A row's link is compared as its visit stores it: canonical, without its
 /// fragment.
 #[test]

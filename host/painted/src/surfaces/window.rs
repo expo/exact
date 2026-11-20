@@ -30,6 +30,20 @@ pub(super) struct Layers {
 }
 
 impl Surfaces {
+    pub(crate) fn detach_painter_window(&mut self) {
+        if let Some(abi) = self
+            .window_artifact
+            .take()
+            .and_then(|name| self.abis.get(&name))
+        {
+            unsafe { abi.symbol::<unsafe extern "C" fn()>(b"gpu_window_detach")() };
+        }
+        self.window_layers = None;
+        self.direct_window = None;
+        self.startup_device = None;
+        self.window_owner = None;
+    }
+
     fn window_canvas(&self) -> Option<u32> {
         if self.canvases.len() != 1 {
             return None;

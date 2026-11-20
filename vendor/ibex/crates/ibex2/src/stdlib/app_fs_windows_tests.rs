@@ -253,3 +253,81 @@ fn sqlite_admission_refuses_reparse_databases_and_every_sidecar() {
         assert!(resolve_sqlite(&grants, Some(&f.dirs), &format!("app:/data/db{index}")).is_err());
     }
 }
+
+#[test]
+fn removing_a_folder_detaches_a_file_while_its_reader_keeps_reading() {
+    use std::io::Read;
+    let f = Fixture::new();
+    let folder = f.path.join("tmp/freeze");
+    fs::create_dir(&folder).unwrap();
+    fs::write(folder.join("screen.png"), b"pixels").unwrap();
+    let mut reader = fs::File::open(folder.join("screen.png")).unwrap();
+    f.call(FsOp::Remove, "app:/tmp/freeze", None, None).unwrap();
+    assert!(!folder.exists());
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"pixels");
+}
+
+#[test]
+fn removing_a_folder_with_a_locked_file_still_removes_its_other_entries() {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+    let f = Fixture::new();
+    let folder = f.path.join("tmp/freeze");
+    fs::create_dir(&folder).unwrap();
+    let locked = folder.join("000.png");
+    fs::write(&locked, b"held").unwrap();
+    let reader = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(&locked)
+        .unwrap();
+    for i in 1..=260 {
+        fs::write(folder.join(format!("{i:03}.png")), b"other").unwrap();
+    }
+    let error = f
+        .call(FsOp::Remove, "app:/tmp/freeze", None, None)
+        .unwrap_err();
+    assert!(error.to_string().contains("os error 32"), "{error}");
+    let left: Vec<_> = folder
+        .read_dir()
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(left, [locked]);
+    drop(reader);
+    f.call(FsOp::Remove, "app:/tmp/freeze", None, None).unwrap();
+    assert!(!folder.exists());
+}
+
+#[test]
+fn removing_a_folder_retries_a_reader_that_finishes_during_the_removal() {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::time::{Duration, Instant};
+    use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+    let f = Fixture::new();
+    let folder = f.path.join("tmp/freeze");
+    fs::create_dir(&folder).unwrap();
+    let locked = folder.join("a.png");
+    let other = folder.join("b.png");
+    fs::write(&locked, b"held").unwrap();
+    fs::write(&other, b"other").unwrap();
+    let reader = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(locked)
+        .unwrap();
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            // Release after removal has reached this directory, even on a slow machine.
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while other.exists() && Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+            drop(reader);
+        });
+        f.call(FsOp::Remove, "app:/tmp/freeze", None, None).unwrap();
+    });
+    assert!(!folder.exists());
+}

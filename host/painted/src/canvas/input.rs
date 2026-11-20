@@ -32,6 +32,19 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.p.hold_collections(false);
     }
 
+    /// Selection commands use the reader's pixel coordinates and return visible handle
+    /// geometry, or the selected text for a clipboard or share action.
+    #[cfg(target_os = "android")]
+    pub fn reader_selection(&mut self, action: i32, x: f32, y: f32) -> Option<String> {
+        let reply = self
+            .p
+            .reader_select(action, x / self.scale, y / self.scale, self.scale)?;
+        Some(match reply {
+            serde_json::Value::String(text) => text,
+            geometry => geometry.to_string(),
+        })
+    }
+
     /// A touch (0 down, 1 up, 2 move, 3 cancel) at pixels, by Android's
     /// tool type `tool`: a mouse (3) is a mouse, a stylus or its eraser (2,
     /// 4) a pen, and anything else a finger. Action 4 is no new touch: the

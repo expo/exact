@@ -78,6 +78,20 @@ export async function assertWebDistApp(dist, app) {
       `web dist is not a complete build for selected app ${app.id}; stale receipt ${resolve(dist, '.exact-build.json')}; run ${ownWebBuild(app, dist) ?? `EXACT_APP_DIR=${shellQuote(app.dir)} EXACT_WEB_DIST=${shellQuote(resolve(dist))} bun host/web/build.mjs ${app.crate('web')}`}`,
     );
 }
+/** Install the first launch's settings in the namespace the app actually opens. */
+export function storedScript(env, origin) {
+  if (env?.EXACT_AGENT_STORAGE_FRESH !== '1' || !env.EXACT_AGENT_STORED) return '';
+  const entries = JSON.parse(env.EXACT_AGENT_STORED);
+  const install = (origin, entries) => {
+    if (window !== window.top || location.origin !== origin) return;
+    globalThis.__exactSeedStored = prefix => {
+      for (const [name, json] of entries) localStorage.setItem(prefix + name, json);
+      delete globalThis.__exactSeedStored;
+    };
+  };
+  return `(${install})(${JSON.stringify(origin)},${JSON.stringify(entries)})`;
+}
+
 export const openWeb = async options => {
   const { browser, reuse, url, facts, mediaClock = 'wall', lineHeight = null } = options,
     selected = resolveApp(options.app);
@@ -87,7 +101,7 @@ export const openWeb = async options => {
     ).backendPreflight(selected, resolve(options.webDist ?? defaultWebDist(selected)));
   if (browser === 'chrome' && reuse) {
     if (
-      reuse.browser === 'chrome' &&
+      !options.env?.EXACT_AGENT_STORED && reuse.browser === 'chrome' &&
       JSON.stringify(reuse.launchFacts) === JSON.stringify(facts) &&
       (reuse.mediaClock ?? 'wall') === mediaClock &&
       (reuse.lineHeight ?? null) === lineHeight
@@ -453,6 +467,8 @@ async function openWebUnlocked({
       storage,
       env,
     });
+    const stored = storedScript(env, page.origin);
+    const seedScript = stored && await call('Page.addScriptToEvaluateOnNewDocument', { source: stored });
     let faultScript, faultHeader = '';
     const { frameTree } = await call('Page.getFrameTree');
     cdp.listeners.push(msg => {
@@ -501,6 +517,10 @@ async function openWebUnlocked({
       if (Date.now() - t > 30000) throw new Error('the page never booted; ' + hostLines.join('\n'));
       await sleep(15);
       boot = await evaluate("document.getElementById('exact-root')?.dataset.bootMs ?? null").catch(() => null);
+    }
+    if (seedScript) {
+      await call('Page.removeScriptToEvaluateOnNewDocument', { identifier: seedScript.identifier });
+      if (await evaluate('!!globalThis.__exactSeedStored')) throw new Error('stored: the web build did not load the initial persisted state');
     }
     await evaluate('exact.ready'); // First pixel precedes deferred module readiness.
     if (plan && !js) {

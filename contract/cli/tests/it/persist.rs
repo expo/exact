@@ -337,3 +337,32 @@ component App
     }
     assert!(r.take_store_writes().is_empty());
 }
+
+#[test]
+fn stored_launch_lines_override_by_name_and_keep_json_text() {
+    let src = r#"stored units "F"
+stored retired [-0, null, false]
+test "upgrade"
+  stored units "°C"
+  expect state tipPercent == 18
+"#;
+    let tests = contract::tests(src).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&contract::tests_json(&tests)).unwrap();
+    let steps = json[0]["steps"].as_array().unwrap();
+    let stored: std::collections::BTreeMap<_, _> = steps
+        .iter()
+        .filter(|s| s["op"] == "stored")
+        .map(|s| (s["name"].as_str().unwrap(), s["json"].as_str().unwrap()))
+        .collect();
+    assert_eq!(steps.len(), 3);
+    assert_eq!(stored["units"], r#""°C""#);
+    assert_eq!(stored["retired"], "[-0,null,false]");
+    for src in [
+        "stored a 1\nstored a 2\n",
+        "test \"late\"\n  tap \"next\"\n  stored a 1\n",
+        "stored exact.secret.token 1\n",
+        "stored a missing\n",
+    ] {
+        assert!(contract::tests(src).is_err(), "{src}");
+    }
+}

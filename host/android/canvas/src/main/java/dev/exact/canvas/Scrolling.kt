@@ -10,8 +10,8 @@ import android.view.VelocityTracker
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
+import android.view.ViewGroupOverlay
 import android.widget.EdgeEffect
-import android.widget.FrameLayout
 import android.widget.OverScroller
 import kotlin.math.abs
 import kotlin.math.max
@@ -49,7 +49,7 @@ internal class Scrolling(private val view: ExactView) {
         var flags = 0
             set(value) {
                 field = value
-                if (barless) { bar?.let { (it.parent as? ViewGroup)?.removeView(it) }; bar = null }
+                if (barless) clearBar()
             }
         /** What exact2 calls its revision: a move sent under an older one is dropped there. */
         var rev = 0
@@ -68,6 +68,19 @@ internal class Scrolling(private val view: ExactView) {
         /** Its edges' effects: top, bottom, left, right. */
         val edges = arrayOfNulls<EdgeEffect>(4)
         var bar: Indicator? = null
+        var overlay: ViewGroupOverlay? = null
+
+        fun clearBar() {
+            val old = bar ?: return
+            bar = null
+            overlay?.remove(old)
+        }
+
+        fun clearPull() {
+            val old = pull ?: return
+            pull = null
+            overlay?.remove(old)
+        }
         /** Its snap, as the last touch's answer told it ([Native.under]): whether a rest must be a snap position, and
          * sideways ([0]) and up and down ([1]) the snapport's length (0: it does not snap that way), each snap area's
          * least and greatest offsets, and whether a snap may not pass over it (`scroll-snap-stop: always`). */
@@ -356,7 +369,7 @@ internal class Scrolling(private val view: ExactView) {
     fun stopped() {
         settleSheet(0f)
         // A pull to refresh goes, and stops turning ([Refresh.onDetachedFromWindow]).
-        for (s in scrollers.values) s.pull?.let { (it.parent as? ViewGroup)?.removeView(it); s.pull = null }
+        for (s in scrollers.values) { s.clearPull(); s.clearBar() }
         for (o in owing) for (e in o.events) e.recycle()
         owing.clear()
         if (mode == DRAGGING) lifted(0f, false)
@@ -423,7 +436,7 @@ internal class Scrolling(private val view: ExactView) {
             }
         }
         // The indicators of scrollers this touch is not over go: they have faded, or are about to.
-        for (s in scrollers.values) if (links.none { it.s === s }) s.bar?.let { (it.parent as? ViewGroup)?.removeView(it); s.bar = null }
+        for (s in scrollers.values) if (links.none { it.s === s }) s.clearBar()
         chain = links
         answered = true
         // The innermost zoomable scroller under the down has its own gestures; a drag of it is its pan while it is
@@ -528,11 +541,13 @@ internal class Scrolling(private val view: ExactView) {
     private fun refresh(rest: Float): Boolean {
         if (sideways) return false
         val s = pulling ?: active.firstOrNull { it.refreshes }?.takeIf { !it.refreshing && it.pull == null } ?: return false
+        val parent = view.parent as? ViewGroup ?: return false
         pulling = s
         pulled -= rest
         val r = s.pull ?: Refresh(view.context).also { r ->
             s.pull = r
-            (view.parent as? ViewGroup)?.addView(r, FrameLayout.LayoutParams(s.port.width().roundToInt(), s.port.height().roundToInt()))
+            attach(s, parent, r)
+            size(r, s.port.width().roundToInt(), s.port.height().roundToInt())
         }
         r.translationX = view.left + s.port.left
         r.translationY = view.top + s.port.top
@@ -555,7 +570,7 @@ internal class Scrolling(private val view: ExactView) {
     /** [s]'s pull to refresh goes back up, and away. */
     private fun unpull(s: Scroller) {
         val r = s.pull ?: return
-        r.hide { (r.parent as? ViewGroup)?.removeView(r); if (s.pull === r) s.pull = null }
+        r.hide { if (s.pull === r) s.clearPull() }
     }
 
     /**
@@ -653,8 +668,7 @@ internal class Scrolling(private val view: ExactView) {
         for (s in scrollers.values.filter { s -> s.told && (0 until count).none { w[it * 9] == s.id } }) {
             scrollers.remove(s.id)
             sent.removeAll { it.s === s }
-            s.bar?.let { (it.parent as? ViewGroup)?.removeView(it) }
-            s.pull?.let { (it.parent as? ViewGroup)?.removeView(it) }; s.pull = null
+            s.clearBar(); s.clearPull()
             if (pulling === s) { pulling = null; pulled = 0f }
             if (mode == FLINGING && s in active) { halt(); mode = IDLE }
         }
@@ -966,14 +980,29 @@ internal class Scrolling(private val view: ExactView) {
         fun wake() { awakenScrollBars() }
     }
 
+    // A frame can retire a scroller during the root's display-list traversal. Decorations
+    // belong to its visual overlay, whose children are drawn after the root's ordinary children.
+    private fun attach(s: Scroller, parent: ViewGroup, decoration: View) {
+        val overlay = parent.overlay
+        s.overlay = overlay
+        overlay.add(decoration)
+    }
+
+    private fun size(v: View, width: Int, height: Int) {
+        if (v.width == width && v.height == height) return
+        v.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY))
+        v.layout(0, 0, width, height)
+    }
+
     /** [s] moved: its indicator shows where it is. */
     private fun indicate(s: Scroller) {
         if (s.barless) return
         val parent = view.parent as? ViewGroup ?: return
         val w = s.port.width().roundToInt(); val h = s.port.height().roundToInt()
         if (w <= 0 || h <= 0) return
-        val b = s.bar ?: Indicator(view.context).also { s.bar = it; parent.addView(it, FrameLayout.LayoutParams(w, h)) }
-        if (b.layoutParams.width != w || b.layoutParams.height != h) b.layoutParams = FrameLayout.LayoutParams(w, h)
+        val b = s.bar ?: Indicator(view.context).also { s.bar = it; attach(s, parent, it) }
+        size(b, w, h)
         place(b, s)
         b.rangeX = if (s.flags and 1 != 0) (s.maxX + w).roundToInt() else 0
         b.rangeY = if (s.flags and 2 != 0) (s.maxY + h).roundToInt() else 0

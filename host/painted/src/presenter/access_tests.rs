@@ -755,14 +755,14 @@ fn an_open_surface_is_the_whole_tree_and_the_page_under_it_is_not_in_it() {
             (role::HEADING, "Remove Book?"),
             (role::BUTTON, "Cancel"),
             (role::BUTTON, "Remove"),
+            (role::ALERT_DIALOG, "Remove Book?"),
         ]
     );
-    assert_eq!(
-        alert.nodes[0].role,
-        role::HEADING,
-        "the headline is read first"
-    );
-    assert!(alert.nodes.iter().all(|n| n.parent == 0));
+    let (dialog, contents) = alert.nodes.split_first().unwrap();
+    assert_eq!((dialog.role, dialog.parent), (role::ALERT_DIALOG, 0));
+    assert_ne!(dialog.flags & flag::MODAL, 0);
+    assert_eq!(contents[0].role, role::HEADING);
+    assert!(contents.iter().all(|n| n.parent == dialog.id));
     // Cancel closes it, and the page is the tree again.
     let cancel = named(&alert.nodes, "Cancel").id;
     assert!(p.access_act(cancel, act::CLICK, 0.0, 0.0));
@@ -1086,6 +1086,23 @@ fn a_title_describes_or_names() {
     assert_eq!(hint("Save"), "Saves the file");
     assert_eq!(hint("Undo (Ctrl+Z)"), "");
     assert_eq!(hint("Redo"), "");
+}
+
+#[test]
+fn button_name_includes_nested_text_in_reading_order() {
+    let source = r#"component App
+  view
+    button
+      column
+        text "Increase text size"
+        text "Writing"
+        text "Layout hint" aria-hidden=true
+      text "Shortcut"
+"#;
+    let mut p = boot(source, (320., 600.), 0);
+    let nodes = read(&mut p);
+    let button = nodes.iter().find(|n| n.role == role::BUTTON).unwrap();
+    assert_eq!(button.name, "Increase text size Writing Shortcut");
 }
 
 /// A Markdown text is read as its reader draws it (LLP 1045,

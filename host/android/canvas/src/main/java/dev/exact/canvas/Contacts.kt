@@ -54,7 +54,20 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
                         }
                     }
                 }
-            } else view.forward(4, downX, downY, tool, -1L)
+            } else if (contextPending) {
+                view.forward(4, downX, downY, tool, -1L)
+            } else {
+                val token = serial
+                waiting = true
+                view.textSelection.begin(downX, downY) { took ->
+                    if (token == serial && !stopped) {
+                        if (took) { endEngine(); scrolling.yieldToHosted() }
+                        else view.forward(4, downX, downY, tool, -1L)
+                        waiting = false
+                        drain()
+                    }
+                }
+            }
         }
     }
 
@@ -85,6 +98,7 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
 
     fun stop() {
         stopped = true; serial++; waiting = false
+        view.textSelection.stop()
         hold(null)
         for (e in pending) e.recycle()
         pending.clear(); dropCandidate(); module.clear(); releaseInterception()

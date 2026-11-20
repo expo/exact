@@ -321,13 +321,16 @@ mod inotify {
                         unsafe { std::ptr::read_unaligned(buffer.as_ptr().add(at).cast()) };
                     let name = &buffer[at + header..at + header + event.len as usize];
                     let name = &name[..name.iter().position(|b| *b == 0).unwrap_or(name.len())];
-                    if let Some(folder) = folders.get(&event.wd) {
-                        changed.push(if name.is_empty() {
-                            folder.clone()
-                        } else {
-                            folder.join(std::ffi::OsStr::from_bytes(name))
-                        });
-                    }
+                    at += header + event.len as usize;
+                    // Removing a watch queues IN_IGNORED even when we removed it ourselves.
+                    let Some(folder) = folders.get(&event.wd) else {
+                        continue;
+                    };
+                    changed.push(if name.is_empty() {
+                        folder.clone()
+                    } else {
+                        folder.join(std::ffi::OsStr::from_bytes(name))
+                    });
                     // The kernel removed the watch: its folder was deleted or its
                     // filesystem unmounted (inotify(7), IN_IGNORED). Forgotten, a
                     // folder made again at the path is watched anew.
@@ -343,7 +346,6 @@ mod inotify {
                     {
                         shared.stale.store(true, Ordering::Relaxed);
                     }
-                    at += header + event.len as usize;
                 }
             }
             for path in changed {

@@ -41,6 +41,31 @@ fn tap(p: &mut Presenter<()>, name: &str) {
     p.frame();
 }
 
+#[test]
+fn an_open_dialog_names_and_contains_its_controls() {
+    let source = r#"component App
+  view
+    column
+      button "Open" testId="open" commandfor="box" command="show-modal"
+      dialog id="box" aria-label="Options"
+        text "Pick an option"
+        button "Done" commandfor="box" command="close"
+"#;
+    let mut p = boot(source, Kind::Dialog);
+    tap(&mut p, "open");
+    let nodes = p.access_tree().0;
+    let dialog = nodes
+        .iter()
+        .find(|n| n.role == crate::presenter::access::role::DIALOG)
+        .unwrap();
+    assert_eq!(dialog.name, "Options");
+    assert_ne!(dialog.flags & crate::presenter::access::flag::MODAL, 0);
+    assert!(nodes
+        .iter()
+        .any(|n| n.parent == dialog.id && n.name == "Done"));
+    assert!(nodes.iter().all(|n| n.name != "Open"));
+}
+
 const RADIOS: &str = r#"component App
   state pageInputs = 0
   state pageChanges = 0

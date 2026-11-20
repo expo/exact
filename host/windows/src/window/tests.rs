@@ -88,26 +88,26 @@ fn only_direct_ink_devices_prepare_asynchronously() {
     }
 }
 
+fn present<D: DataSource>(p: &mut Presenter<D>, window: &exact_ink::device::d3d11::Window) {
+    let limit = Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(p.window_frame(window.clone()).unwrap().is_none());
+        if p.last_frame_succeeded() && !p.dirty() {
+            break;
+        }
+        assert!(Instant::now() < limit, "window frame was not presented");
+        // A full swap chain defers this frame to the carrier's retry deadline.
+        let due = p
+            .painter_retry_deadline()
+            .expect("deferred present retries");
+        std::thread::sleep(due.min(limit).saturating_duration_since(Instant::now()));
+    }
+}
+
 #[test]
 #[ignore = "native Windows desktop, system caret blink enabled, EXACT_INK_DEVICE=d3d11"]
 #[allow(deprecated)]
 fn direct_window_blinks_without_a_softbuffer_surface() {
-    fn present(p: &mut Presenter<()>, window: &exact_ink::device::d3d11::Window) {
-        let limit = Instant::now() + Duration::from_secs(5);
-        loop {
-            assert!(p.window_frame(window.clone()).unwrap().is_none());
-            if p.last_frame_succeeded() && !p.dirty() {
-                break;
-            }
-            assert!(Instant::now() < limit, "caret frame was not presented");
-            // A full swap chain defers this frame to the carrier's retry deadline.
-            let due = p
-                .painter_retry_deadline()
-                .expect("deferred present retries");
-            std::thread::sleep(due.min(limit).saturating_duration_since(Instant::now()));
-        }
-    }
-
     let events = EventLoop::<crate::accessibility::Event>::with_user_event()
         .with_any_thread(true)
         .build()
@@ -220,6 +220,118 @@ fn direct_window_blinks_without_a_softbuffer_surface() {
     present(state.presenter.as_mut().unwrap(), &owned);
 }
 #[test]
+#[ignore = "native Windows desktop with DirectComposition"]
+#[allow(deprecated)]
+fn hiding_a_resident_window_releases_its_painter_and_preserves_its_canvas_and_editor() {
+    use exact_painted::presenter::PainterChoice;
+    use exact_runner::{exact_canvas, DataError, Value};
+
+    #[derive(Default)]
+    struct Picture;
+    impl DataSource for Picture {
+        fn query(&mut self, name: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::UnknownSource(name.into()))
+        }
+        fn canvas_surfaces(&self) -> Vec<(String, usize)> {
+            vec![("picture".into(), 0)]
+        }
+        fn draw_2d(
+            &mut self,
+            _: &str,
+            _: &[Value],
+            ctx: &exact_canvas::Context2d,
+            frame: &exact_canvas::Frame,
+        ) -> Result<bool, exact_canvas::DrawError> {
+            let mut image = ctx
+                .create_image_data_with_sw_and_sh(frame.width, frame.height)
+                .unwrap();
+            for pixel in image.data.as_chunks_mut::<4>().0 {
+                *pixel = [24, 48, 96, 255];
+            }
+            ctx.put_image_data(&image, 0., 0.).unwrap();
+            Ok(false)
+        }
+    }
+
+    let size = [240u32, 120u32];
+    let events = EventLoop::<crate::accessibility::Event>::with_user_event()
+        .with_any_thread(true)
+        .build()
+        .unwrap();
+    let window = Rc::new(
+        events
+            .create_window(
+                Window::default_attributes()
+                    .with_title("Resident canvas test")
+                    .with_no_redirection_bitmap(true)
+                    .with_inner_size(winit::dpi::PhysicalSize::new(size[0], size[1])),
+            )
+            .unwrap(),
+    );
+    let owned = exact_ink::device::d3d11::Window::from_owner(window.clone()).unwrap();
+    let plan = contract::compile(
+        r#"component App
+  view
+    main position="absolute" inset=0
+      canvas surface=picture() position="absolute" inset=0 width="100%" height="100%"
+      input testId="field" width=120 height=40
+"#,
+    )
+    .unwrap()
+    .encode();
+    let (mut p, warning) = Presenter::boot_with(
+        &plan,
+        Picture,
+        (size[0] as f32, size[1] as f32),
+        1.,
+        Default::default(),
+        PainterChoice::Ink,
+    )
+    .unwrap();
+    assert!(warning.is_none(), "{warning:?}");
+    assert!(p.attach_painter_window(owned.clone(), size).unwrap());
+    let k = p.host().kernel();
+    let field = k.node_by_key(k.find_by_test_id("field")[0]).unwrap().id;
+    p.type_text(field, "resident").unwrap();
+    p.reader_access(1., true);
+    let editor_id = p.access_told().iter().find(|n| n.view == field).unwrap().id;
+    let selection = exact_runner::FieldSelection {
+        start: 1,
+        end: 4,
+        direction: exact_runner::SelectionDirection::Backward,
+    };
+    assert!(p.access_select(editor_id, selection, 0.));
+    let mut app = test_app(events.create_proxy(), &plan, p);
+    app.window = Some(window);
+    app.keep_running = true;
+    let verify = |p: &mut Presenter<Picture>| {
+        let editor = p
+            .access_tree()
+            .0
+            .into_iter()
+            .find(|n| n.view == field)
+            .unwrap();
+        assert_eq!(editor.value, "resident");
+        assert_eq!(p.access_selection(editor_id), Some(selection));
+        let pixels = p.frame();
+        let offset = ((size[1] - 8) * size[0] + size[0] - 8) as usize * 4;
+        assert_eq!(&pixels.data()[offset..offset + 4], &[24, 48, 96, 255]);
+    };
+    let p = app.presenter.as_mut().unwrap();
+    present(p, &owned);
+    verify(p);
+    for _ in 0..2 {
+        app.hide_by_app();
+        assert_eq!(app.presenter.as_ref().unwrap().painter.name, "cpu");
+        app.bring_forward();
+        let p = app.presenter.as_mut().unwrap();
+        present(p, &owned);
+        assert_eq!(p.painter.name, "ink");
+        verify(p);
+    }
+}
+
+#[test]
 fn text_without_a_physical_key_reaches_the_editor() {
     use winit::keyboard::{Key, KeyCode, NamedKey, NativeKey, NativeKeyCode, PhysicalKey};
     let packet = PhysicalKey::Unidentified(NativeKeyCode::Windows(0));
@@ -281,7 +393,6 @@ fn early_redraws_preserve_cadence_and_stalls_resume_without_catch_up() {
 }
 
 fn windowless_app(proxy: EventLoopProxy<crate::accessibility::Event>, plan: &[u8]) -> App<()> {
-    let started = Instant::now();
     let (p, _) = Presenter::boot_with(
         plan,
         (),
@@ -291,6 +402,15 @@ fn windowless_app(proxy: EventLoopProxy<crate::accessibility::Event>, plan: &[u8
         exact_painted::presenter::PainterChoice::Cpu,
     )
     .unwrap();
+    test_app(proxy, plan, p)
+}
+
+fn test_app<D: DataSource>(
+    proxy: EventLoopProxy<crate::accessibility::Event>,
+    plan: &[u8],
+    p: Presenter<D>,
+) -> App<D> {
+    let started = Instant::now();
     App {
         service_causes: 0,
         proxy,

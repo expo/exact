@@ -926,7 +926,14 @@ impl Backend for Ink {
         exact_ink::device::apple::trace_mark(c"image slot again", || id as f64);
         self.replace_slot(row, id)
     }
-    fn layer_begin(&mut self, key: u64, ts: Transform, pivot: (f32, f32), base: [f32; 7]) -> bool {
+    fn layer_begin(
+        &mut self,
+        key: u64,
+        ts: Transform,
+        pivot: (f32, f32),
+        _reference: (f32, f32),
+        base: [f32; 7],
+    ) -> bool {
         self.observe_transform(ts);
         // Transforming a rasterized group would move the stationary outer clips.
         // @ref LLP 1149 D4: let the walk apply motion before clipping.

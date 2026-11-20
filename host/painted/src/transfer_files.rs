@@ -25,40 +25,48 @@ pub(super) fn dispatch(v: &Value, ceiling: &str) -> Result<Value, &'static str> 
         string(v, "temporary")?,
     )
     .map_err(error)?;
+    let op = string(v, "op")?;
+    let source = grants(string(v, "authority")?)?;
+    let current = grants(ceiling)?;
+    if op == "snapshot" {
+        let mut output = private_file(string(v, "file")?, true)?;
+        if output.metadata().map_err(|_| "UnknownError")?.len() != 0 {
+            return Err("TypeError");
+        }
+        let open = |path: &str| {
+            if !path.starts_with("app:/") {
+                return Err("NotAllowedError");
+            }
+            admit(&current, &Operation::FsRead { path: path.into() }).map_err(error)?;
+            roots.open_file(&source, path).map_err(error)
+        };
+        if let Some(path) = v["path"].as_str() {
+            std::io::copy(&mut open(path)?, &mut output).map_err(|_| "UnknownError")?;
+        } else {
+            let (boundary, form) = super::carrier(v, ceiling)?
+                .form(string(v, "key")?)
+                .map_err(super::refusal)?;
+            write_form(&boundary, &parts(&form)?, &mut output, open)?;
+        }
+        output.sync_all().map_err(|_| "UnknownError")?;
+        return Ok(json!({"size": output.metadata().map_err(|_| "UnknownError")?.len()}));
+    }
     let path = string(v, "path")?;
     if !path.starts_with("app:/") {
         return Err("NotAllowedError");
     }
-    let op = string(v, "op")?;
-    let source = grants(string(v, "authority")?)?;
-    let current = grants(ceiling)?;
     // Only a registration's kept responses get implicit write custody: a file
     // to place, the whole directory to remove.
     let kept = v["kept"].as_bool() == Some(true);
     if kept && !kept_path(path, op == "removePlaced") {
         return Err("NotAllowedError");
     }
-    let access = if op == "snapshot" {
-        Operation::FsRead { path: path.into() }
-    } else {
-        Operation::FsWrite { path: path.into() }
-    };
-    if !kept || op == "snapshot" {
+    let access = Operation::FsWrite { path: path.into() };
+    if !kept {
         admit(&source, &access).map_err(error)?;
         admit(&current, &access).map_err(error)?;
     }
     let granted = if kept { write_grant(path)? } else { source };
-    if op == "snapshot" {
-        let mut input = roots.open_file(&granted, path).map_err(error)?;
-        let mut output = private_file(string(v, "file")?, true)?;
-        if output.metadata().map_err(|_| "UnknownError")?.len() != 0 {
-            return Err("TypeError");
-        }
-        let count = std::io::copy(&mut input, &mut output).map_err(|_| "UnknownError")?;
-        output.flush().map_err(|_| "UnknownError")?;
-        output.sync_all().map_err(|_| "UnknownError")?;
-        return Ok(json!({"size": count}));
-    }
     if op == "removePlaced" && !kept {
         return Err("NotAllowedError");
     }
@@ -80,6 +88,69 @@ pub(super) fn dispatch(v: &Value, ceiling: &str) -> Result<Value, &'static str> 
         .publish_file(&granted, path, std::path::Path::new(string(v, "file")?))
         .map_err(error)?;
     Ok(json!({"bodyLost": !present}))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct Part<'a> {
+    name: &'a str,
+    value: Option<&'a str>,
+    from: Option<&'a str>,
+    filename: Option<&'a str>,
+    content_type: Option<&'a str>,
+}
+
+pub(super) fn parts(form: &Value) -> Result<Vec<Part<'_>>, &'static str> {
+    use serde::Deserialize;
+    let list = form
+        .as_array()
+        .filter(|parts| parts.len() <= 256)
+        .ok_or("TypeError")?;
+    list.iter()
+        .map(|entry| {
+            let part = Part::deserialize(entry).map_err(|_| "TypeError")?;
+            if part.from.is_some() == part.value.is_some()
+                || (part.from.is_none() && (part.filename.is_some() || part.content_type.is_some()))
+                || part
+                    .content_type
+                    .is_some_and(|s| !s.bytes().all(|b| (0x20..=0x7e).contains(&b)))
+            {
+                return Err("TypeError");
+            }
+            Ok(part)
+        })
+        .collect()
+}
+
+fn write_form(
+    boundary: &str,
+    parts: &[Part<'_>],
+    output: &mut impl Write,
+    open: impl Fn(&str) -> Result<std::fs::File, &'static str>,
+) -> Result<(), &'static str> {
+    use ibex2::stdlib::multipart::{normalized_newlines, part_header};
+    let mut header = Vec::new();
+    for part in parts {
+        let file = part.from.map(|path| {
+            (
+                part.filename
+                    .unwrap_or_else(|| path.rsplit('/').next().unwrap_or(path)),
+                part.content_type.unwrap_or_default(),
+            )
+        });
+        header.clear();
+        part_header(&mut header, boundary, part.name, file).map_err(|_| "TypeError")?;
+        output.write_all(&header).map_err(|_| "UnknownError")?;
+        if let Some(path) = part.from {
+            std::io::copy(&mut open(path)?, output).map_err(|_| "UnknownError")?;
+        } else {
+            output
+                .write_all(&normalized_newlines(part.value.unwrap_or_default()))
+                .map_err(|_| "UnknownError")?;
+        }
+        output.write_all(b"\r\n").map_err(|_| "UnknownError")?;
+    }
+    write!(output, "--{boundary}--\r\n").map_err(|_| "UnknownError")
 }
 
 fn write_grant(path: &str) -> Result<GrantSet, &'static str> {
@@ -146,6 +217,45 @@ mod tests {
         }
     }
     const GRANTS: &str = "fs.read app:/data\nfs.write app:/data";
+
+    #[test]
+    fn ordered_parts_match_form_data_with_binary_bytes_and_escaped_names() {
+        use ibex2::stdlib::multipart::{EncodedMultipart, FormData};
+        let files = Files::new();
+        let binary = [0, 255, 13, 10];
+        let source = files.0.join("data/clip.bin");
+        fs::write(&source, binary).unwrap();
+        let form = json!([{"name":"tag","value":"one\ntwo"}, {"name":"q\"\n雪","from":"app:/data/clip.bin"}, {"name":"tag","value":""}]);
+        let mut wire = Vec::new();
+        write_form(
+            "fixed-boundary",
+            &parts(&form).unwrap(),
+            &mut wire,
+            |path| {
+                assert_eq!(path, "app:/data/clip.bin");
+                Ok(fs::File::open(&source).unwrap())
+            },
+        )
+        .unwrap();
+        let mut reference = FormData::new();
+        reference.append_text("tag", "one\ntwo");
+        reference.append_file("q\"\n雪", binary.to_vec(), "clip.bin", "");
+        reference.append_text("tag", "");
+        assert_eq!(
+            wire,
+            EncodedMultipart::with_boundary(&reference, "fixed-boundary")
+                .unwrap()
+                .as_bytes()
+        );
+        for invalid in [
+            json!({"name":"x"}),
+            json!({"name":"x","from":"a","value":""}),
+            json!({"name":"x","value":"","filename":""}),
+            json!({"name":"x","from":"a","contentType":"text/plain\n"}),
+        ] {
+            assert!(parts(&json!([invalid])).is_err());
+        }
+    }
 
     #[test]
     fn save_replaces_a_file_but_preserves_directories_and_symlink_targets() {

@@ -662,7 +662,8 @@ public final class ExactTransfers {
     private let callFn: (String, [String: Any]) -> Any?
     public init(_ call: @escaping (String, [String: Any]) -> Any?) { callFn = call }
     /// Start registration `id`: each request `{url, method, headers,
-    /// bodyFrom, saveTo}`, `bodyFrom` a file path the host copies first,
+    /// bodyFrom, form, saveTo}`. The host copies `bodyFrom` or streams the ordered
+    /// `form` parts into the upload snapshot. Each file part names an `app:/` file in `from`.
     /// `saveTo` kept as given; past `downloadTotal` bytes received it fails.
     /// Nil, or the error's name (`TypeError` for an id in flight or a bad
     /// request). The host posts `exact.transfers.changed` `{package, id}` as

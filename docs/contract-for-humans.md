@@ -1718,6 +1718,14 @@ component Responsive
         text "Compact layout"
 ```
 
+`exactPage().platform` identifies the host from the first frame. Declare
+`platform: string` or an enum over the following values in the page resource's shape.
+The native hosts report
+`ios`, `macos`, `tvos`, `watchos`, `android`, `linux` or `windows`.
+A browser or server-rendered web page reports `web`, a terminal app reports
+`terminal`, and a runner booted without a host reports `headless`. A browser
+on an Android phone therefore reports `web`.
+
 `exactPage` answers the page's facts by the web's names: `visibilityState`
 (`"visible"` or `"hidden"`), `onLine`, `canShare`, `canOpenFiles`, and
 `hasFocus`, which is `document.hasFocus()`: true while the app's window has the

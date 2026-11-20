@@ -148,6 +148,38 @@ impl OwnerUpdate {
     }
 }
 
+/// A registered target (D9, "Registration") as the hosts' wire form
+/// carries it: its name's length (`u8`) and its bytes, then the target after
+/// a presence byte, none where the registration is disposed of. Why `bytes`
+/// are refused, where they are.
+pub fn decode_registration(bytes: &[u8]) -> Result<(String, Option<NativeTarget>), &'static str> {
+    let mut r = Reader::new(bytes);
+    let read = |r: &mut Reader<'_>| {
+        let len = usize::from(r.u8().ok()?);
+        let name = (0..len).map(|_| r.u8().ok()).collect::<Option<Vec<u8>>>()?;
+        let name = String::from_utf8(name).ok()?;
+        let target = match present(r)? {
+            true => Some(target_in(r)?),
+            false => None,
+        };
+        Some((name, target))
+    };
+    match (read(&mut r), r.is_empty()) {
+        (Some(registration), true) => Ok(registration),
+        _ => Err("a registered target is truncated, malformed or followed by bytes; encode it as `encode_registration` does"),
+    }
+}
+
+/// `name`'s registration of `target`, or its disposal (`None`), in the form
+/// [`decode_registration`] reads.
+pub fn encode_registration(name: &str, target: Option<&NativeTarget>) -> Vec<u8> {
+    let mut w = Writer::new();
+    w.u8(name.len().min(255) as u8);
+    name.bytes().take(255).for_each(|b| w.u8(b));
+    optional(&mut w, target, target_out);
+    w.into_vec()
+}
+
 fn read(r: &mut Reader<'_>) -> Option<OwnerUpdate> {
     let band = optional_four(r)?;
     let mut contributions = Vec::new();

@@ -571,22 +571,22 @@ impl<D: DataSource> Runner<D> {
             };
             for (i, record) in records.into_iter().enumerate() {
                 for (field, capability) in fields.as_object().into_iter().flatten() {
-                    let (Some(given), Some(capability)) =
-                        (record[field].as_str(), capability.as_str())
-                    else {
-                        continue;
-                    };
-                    let grants = self.data.grants();
-                    let at = format!("{option}[{i}].{field}");
-                    if capability == "net.fetch" {
-                        if let Some(why) = fetch_refusal(self.links.grants, grants, &at, given) {
-                            return Err(why);
+                    let capability = capability.as_str().unwrap_or_default();
+                    let at = format!("{option}[{i}]");
+                    admit_field(record, field, &at, &|at, given| {
+                        if capability == "net.fetch" {
+                            if let Some(why) =
+                                fetch_refusal(self.links.grants, self.data.grants(), at, given)
+                            {
+                                return Err(why);
+                            }
+                        } else if !crate::save_file::plain_app_path(given)
+                            || !self.covers(capability, given)
+                        {
+                            return Err(format!("grant-missing ({at}={given} needs {capability})"));
                         }
-                    } else if !crate::save_file::plain_app_path(given)
-                        || !self.covers(capability, given)
-                    {
-                        return Err(format!("grant-missing ({at}={given} needs {capability})"));
-                    }
+                        Ok(())
+                    })?;
                 }
             }
         }
@@ -656,6 +656,24 @@ impl<D: DataSource> Runner<D> {
     }
 }
 
+fn admit_field(
+    record: &Json,
+    field: &str,
+    at: &str,
+    admit: &impl Fn(&str, &str) -> Result<(), String>,
+) -> Result<(), String> {
+    if let Some((list, tail)) = field.split_once("[].") {
+        if let Some(parts) = record[list].as_array() {
+            for (i, part) in parts.iter().enumerate() {
+                admit_field(part, tail, &format!("{at}.{list}[{i}]"), admit)?;
+            }
+        }
+    } else if let Some(value) = record[field].as_str() {
+        admit(&format!("{at}.{field}"), value)?;
+    }
+    Ok(())
+}
+
 /// Why a record's URL at `at` is refused under `grants`, naming it without
 /// its userinfo, query or fragment: it has a user name or password, which a
 /// browser's `Request` refuses too
@@ -703,6 +721,19 @@ mod tests {
     /// [`super::fetch_refusal`] in an archive that links I/O.
     fn fetch_refusal(grants: &str, at: &str, given: &str) -> Option<String> {
         super::fetch_refusal(Some(&crate::grants::LINKED), grants, at, given)
+    }
+
+    #[test]
+    fn nested_grants_check_each_file_in_order() {
+        let request = serde_json::json!({"form": [{"name":"x","value":"private"}, {"from":"app:/data/ok"}, {"from":"app:/cache/no"}]});
+        let result = super::admit_field(&request, "form[].from", "requests[1]", &|at, path| {
+            if path == "app:/data/ok" {
+                Ok(())
+            } else {
+                Err(at.to_owned())
+            }
+        });
+        assert_eq!(result, Err("requests[1].form[2].from".into()));
     }
 
     #[test]

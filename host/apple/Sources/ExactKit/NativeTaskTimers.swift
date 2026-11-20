@@ -129,7 +129,7 @@ extension ExactSession {
         guard state != .destroyed, clock == nil, !ExactEnv.agentFreezes, !applying, !ownerInFlight,
               let timer = taskTimers.take() else { return }
         followOffset()
-        if ExactSession.asyncFills {
+        if postsTimerAdvances {
             advanceInFlight = true
             runtime.fireNativeTimerAsync(timer.row, now: timer.cutoff) { [weak self] completion in
                 self?.publish(.advance, completion)

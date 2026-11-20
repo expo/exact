@@ -405,7 +405,8 @@ internal class Transfers(
             val kept = requests.getJSONObject(i)
             call(request(record, "keep").put("key", kept.getString("credentialKey")).put("url", written.getJSONObject(i).getString("url"))
                 .put("method", kept.getString("method")).put("body", kept.getBoolean("body"))
-                .put("headers", written.getJSONObject(i).optJSONArray("headers") ?: JSONArray()))
+                .put("headers", written.getJSONObject(i).optJSONArray("headers") ?: JSONArray())
+                .put("form", written.getJSONObject(i).optJSONArray("form")))
         }
         true
     } catch (e: Exception) {
@@ -416,8 +417,14 @@ internal class Transfers(
     private fun copy(key: Key): Boolean {
         val cancelled = synchronized(store) { copies[key] } ?: return false
         return try {
-            store.snapshot(key, cancelled::get) { record, path, file -> call(request(record, "snapshot").put("path", path).put("file", file.path)) }
-        } catch (_: Exception) { false } finally { synchronized(store) { copies.remove(key, cancelled) } }
+            store.snapshot(key, cancelled::get) { record, entry, file ->
+                call(request(record, "snapshot").put("path", entry.opt("bodyFrom"))
+                    .put("key", entry.getString("credentialKey")).put("file", file.path))
+            }
+        } catch (e: Exception) {
+            synchronized(store) { refusals[key] = (e as? Refused)?.code ?: "UnknownError" }
+            false
+        } finally { synchronized(store) { copies.remove(key, cancelled) } }
     }
 
     private fun transmit(effect: Transmit): Event {

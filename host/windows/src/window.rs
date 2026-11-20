@@ -642,9 +642,20 @@ impl<D: DataSource + Default + 'static> App<D> {
         let (handed, direct) = (frame.is_some() || direct_present_ms > 0., frame.is_none());
         let present = Instant::now();
         if let Some(frame) = frame {
-            let surface = surface
-                .as_mut()
-                .ok_or("direct painter returned an unpresented frame")?;
+            let surface = match &mut *surface {
+                Some(existing) => existing,
+                None if self.direct => {
+                    return Err("direct painter returned an unpresented frame".into())
+                }
+                slot => {
+                    let context =
+                        softbuffer::Context::new(window.clone()).map_err(|e| e.to_string())?;
+                    slot.insert(
+                        softbuffer::Surface::new(&context, window.clone())
+                            .map_err(|e| e.to_string())?,
+                    )
+                }
+            };
             surface.resize(width, height).map_err(|e| e.to_string())?;
             let mut buffer = surface.buffer_mut().map_err(|e| e.to_string())?;
             if buffer.len() != frame.data().len() / 4 {
@@ -956,7 +967,6 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
             }
         }
         boot_phase("native-hooks-ready");
-        let mut direct = self.direct;
         exact_runner::page::set_awaits_present(true);
         let booted = app::boot_window_presenter::<D>(
             &mut self.config,
@@ -975,7 +985,7 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
                             p.attach_painter_window(owned, [size.width, size.height])
                         });
                     match attached {
-                        Ok(attached) => direct = attached,
+                        Ok(attached) => self.direct = attached,
                         Err(e) => {
                             self.fail(events, e);
                             return;
@@ -1030,22 +1040,6 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
             Err(e) => {
                 self.fail(events, e);
                 return;
-            }
-        }
-        if !direct {
-            let context = match softbuffer::Context::new(window.clone()) {
-                Ok(c) => c,
-                Err(e) => {
-                    self.fail(events, e);
-                    return;
-                }
-            };
-            match softbuffer::Surface::new(&context, window.clone()) {
-                Ok(surface) => self.surface = Some(surface),
-                Err(e) => {
-                    self.fail(events, e);
-                    return;
-                }
             }
         }
         boot_phase("before-show");

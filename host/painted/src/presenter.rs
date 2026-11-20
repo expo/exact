@@ -75,6 +75,8 @@ mod pan_release;
 mod picker;
 mod pointer;
 mod present;
+#[cfg(any(target_os = "android", test))]
+mod reader_selection;
 mod replacement;
 pub use present::Carried;
 use replacement::Waiting;
@@ -287,6 +289,8 @@ pub struct Presenter<D: DataSource> {
     pub(crate) fields: BTreeMap<ViewId, field::FieldMark>,
     field_history: history::Histories,
     field_drag: Option<field_pointer::Drag>,
+    #[cfg(any(target_os = "android", test))]
+    reader_selection: Option<reader_selection::Selection>,
     /// A contact that went down on a range (`range.rs`).
     range_drag: Option<range::Drag>,
     ime: Option<ime::Composition>,
@@ -628,6 +632,8 @@ impl<D: DataSource> Presenter<D> {
             fields: BTreeMap::new(),
             field_history: Default::default(),
             field_drag: None,
+            #[cfg(any(target_os = "android", test))]
+            reader_selection: None,
             range_drag: None,
             ime: None,
             ime_epoch: 0,

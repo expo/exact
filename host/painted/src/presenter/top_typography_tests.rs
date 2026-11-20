@@ -343,8 +343,12 @@ fn short_rtl_alert_texts_have_accessibility_bounds_at_the_right() {
     tap(&mut p, "ask").unwrap();
     let width = p.surface().unwrap().size.0;
     let (nodes, _, _) = p.access_tree();
-    for name in ["عنوان", "نعم\nلا"] {
-        let text = nodes.iter().find(|n| n.name == name).unwrap();
+    use crate::presenter::access::role;
+    for (name, role) in [("عنوان", role::HEADING), ("نعم\nلا", role::TEXT)] {
+        let text = nodes
+            .iter()
+            .find(|n| n.role == role && n.name == name)
+            .unwrap();
         assert!(text.rect[0] > width / 2., "{name}: {:?}", text.rect);
         assert!(
             (text.rect[0] + text.rect[2] - (width - 24.)).abs() < 1.,

@@ -124,8 +124,8 @@ class RegistrationsTest {
         val record = create(upload = true)
         val reader = Executors.newSingleThreadExecutor()
         try {
-            assertTrue(store.snapshot(record.key, { false }) { kept, path, file ->
-                assertEquals("app:/data/video", path)
+            assertTrue(store.snapshot(record.key, { false }) { kept, request, file ->
+                assertEquals("app:/data/video", request.getString("bodyFrom"))
                 assertEquals("net.fetch https://example.test", kept.getString("source"))
                 // A reader is not kept waiting by the copy.
                 assertNotNull(reader.submit<JSONObject?> { store.get(record.key) }.get(2, TimeUnit.SECONDS))

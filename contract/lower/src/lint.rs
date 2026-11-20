@@ -342,6 +342,9 @@ pub(crate) fn unknown_attr(tag: &str, a: &Attr) -> LowerError {
     if let Some(declared) = host_name_declared(a) {
         return declared;
     }
+    if matches!(a.name.as_str(), "dragstart" | "drag" | "dragend") {
+        return crate::transfer::handler_later(a);
+    }
     let hint = match tags::renamed(&a.name) {
         None if crate::fields::part_hint(&a.name).is_some() => {
             crate::fields::part_hint(&a.name).unwrap_or_default()

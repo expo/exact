@@ -196,6 +196,12 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     /** The last stream applied changed only nodes the view's drawing references: no need to draw the view again. */
     private var quiet = false
 
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        val parent = parent as? View ?: return
+        main.window.set(-left.toFloat(), -top.toFloat(), (parent.width - left).toFloat(), (parent.height - top).toFloat())
+        relayer.window.set(main.window)
+    }
+
     /** The view's size is never told to exact2 (LLP 1115.001 D3.3): the activity tells it the window and its insets,
      * the presenter places the page in it, and the view is laid out there ([ExactActivity.chrome]). */
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -261,6 +267,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private val scrolling = Scrolling(this)
     internal val fingers = Fingers(this)
 
+    internal val textSelection = TextSelection(this)
     private val contacts = Contacts(this, scrolling)
     internal fun hold(e: MotionEvent?) = contacts.hold(e)
     internal fun cancelContact(x: Float, y: Float, tool: Int) = contacts.scrollClaimed(x, y, tool)
@@ -269,7 +276,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     override fun onTouchEvent(e: MotionEvent): Boolean {
         // Where the platform delivers the touch, before [Contacts] gives it to a scroll, a field or a hosted view.
         if (e.actionMasked == MotionEvent.ACTION_DOWN) touching(true)
-        val taken = contacts.touch(e)
+        val taken = textSelection.touch(e) || contacts.touch(e)
         if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL) touching(false)
         return taken
     }
@@ -411,6 +418,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         android.os.Trace.beginSection("exact replay")
         ops?.let { main.replay(canvas, it, 0, it.limit()) }
         shared.draw(canvas)
+        textSelection.draw(canvas)
         android.os.Trace.endSection()
         presents.drew()
         // The first frame after startup counts even with no page ops (an empty page, or only bars).
@@ -536,7 +544,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         // the hosted fields with their scrollers' rows.
         if (any) { placeFeed(); scrolling.place(); fields?.place() }
         // A view lent to another element by these streams (a paint, or a move's `placeFeed`) is asked at its new place.
-        if (any) Formas.placed()
+        if (any) { Formas.placed(); textSelection.refresh() }
         if (coverTrace && painted) traceNewRows()
         moved = !painted
         quiet = painted && allQuiet && move == null
@@ -927,6 +935,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         scrolling.place()
         fields?.place()
         Formas.placed()
+        textSelection.refresh()
         return true
     }
 

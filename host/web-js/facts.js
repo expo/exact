@@ -61,9 +61,10 @@ export function viewport(readers) {
   onFold(changed);
   viewportChanged = changed;
   shareReporter();
-  // The agent's `prefer` fold group (LLP 1078 D7): an empty one re-reads the browser, a filled one is the substitute.
+  // The agent's `prefer` fold group (LLP 1078 D7): an empty one re-reads the browser, a filled one is the substitute,
+  // re-answered when the agent announces it (`FOLD_EVENT`, which `onFold` hears) once its whole `prefer` is applied.
   // Its `display-mode` is always the substitute (LLP 1039 D7).
-  (globalThis.exact ??= {}).fold = { prefer: (f) => { const env = preferFold(f && Object.keys(f).length ? f : null); changed(); return env; }, env: foldEnv };
+  (globalThis.exact ??= {}).fold = { prefer: (f) => preferFold(f && Object.keys(f).length ? f : null), env: foldEnv };
   globalThis.exact.displayMode = { prefer: (mode) => { preferDisplayMode(mode); changed(); } };
 }
 
@@ -80,7 +81,7 @@ function shareReporter() {
   if (!facts) return;
   (globalThis.exact ??= {}).page = { prefer: p => { facts.prefer(p); pageChanged(); if (p?.["gpu-tier"] || p?.["screen-reader"]) viewportChanged(); return facts.read(); }, read: () => facts.read() };
 }
-const pageFields = f => ({ visibilityState: f["visibility-state"], frozen: f.frozen, onLine: f.online, canShare: f["can-share"], canShareFiles: f["can-share-files"], canSharePictures: f["can-share-pictures"], canOpenFiles: f["can-open-files"], hasFocus: f["has-focus"], navigationType: f["navigation-type"], persisted: f.persisted, restores: f.restores, iframePartition: f["iframe-partition"] === true, name: windowName(), presented: f.presented === true });
+const pageFields = f => ({ platform: "web", visibilityState: f["visibility-state"], frozen: f.frozen, onLine: f.online, canShare: f["can-share"], canShareFiles: f["can-share-files"], canSharePictures: f["can-share-pictures"], canOpenFiles: f["can-open-files"], hasFocus: f["has-focus"], navigationType: f["navigation-type"], persisted: f.persisted, restores: f.restores, iframePartition: f["iframe-partition"] === true, name: windowName(), presented: f.presented === true });
 // `window.name`, an empty one set to `main` the first time it is read, so the tab the person opened is `main` and one a
 // link's `target` opened keeps its name (LLP 1030.004 D2). A render has no window: `main`.
 const windowName = () => typeof window === "object" && typeof window.name === "string" ? (window.name ||= "main") : "main";

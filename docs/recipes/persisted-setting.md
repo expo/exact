@@ -28,16 +28,19 @@ component App
           text "°F"
 ```
 
-The test, in `app.test.contract`. Each test starts from an empty store, as a
-fresh install does; `reload` relaunches on the store the test has so far:
+Each test in `app.test.contract` gets its own store. A leading `stored` line
+puts a JSON value in it before the first frame, so you can test an upgrade from
+an earlier build. On `reload` the app reads whatever the test has saved.
 
 ```contract-test
-test "the settings survive a relaunch"
-  tap "tip-20"
-  tap "unit-f"
-  reload
-  expect state tipPercent == 20
+test "an upgrade keeps the earlier choice"
+  stored units "F"
   expect state units == "F"
+  tap "unit-c"
+  tap "tip-20"
+  reload
+  expect state units == "C"
+  expect state tipPercent == 20
 
 test "a fresh install starts from the declared values"
   expect state tipPercent == 18

@@ -73,6 +73,33 @@ fn device() -> Option<Gpu> {
 }
 
 #[test]
+fn a_shader_diagnostic_reaches_the_thread_that_compiled_it() {
+    let Some(gpu) = device() else { return };
+    let device = &gpu.device;
+    let author = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let background_error = std::thread::scope(|threads| {
+        let (ready, background_ready) = std::sync::mpsc::channel();
+        let (compiled, shader_compiled) = std::sync::mpsc::channel();
+        let background = threads.spawn(move || {
+            let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            ready.send(()).unwrap();
+            shader_compiled.recv().unwrap();
+            exact_gpu::block_on(scope.pop())
+        });
+        background_ready.recv().unwrap();
+        let _ = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("unfinished shader"),
+            source: wgpu::ShaderSource::Wgsl("fn unfinished(".into()),
+        });
+        compiled.send(()).unwrap();
+        background.join().unwrap()
+    });
+    let author_error = exact_gpu::block_on(author.pop());
+    assert!(matches!(author_error, Some(wgpu::Error::Validation { .. })));
+    assert!(background_error.is_none(), "{background_error:?}");
+}
+
+#[test]
 fn a_package_can_allocate_a_storage_buffer_over_256_mib() {
     let requirements = [exact_gpu::grants::Requirements {
         package: "compute-grid",

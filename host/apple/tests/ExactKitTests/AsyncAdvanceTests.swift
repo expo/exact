@@ -22,14 +22,6 @@ final class AsyncAdvanceTests: XCTestCase {
     #else
     private var windows: [NSWindow] = []
     #endif
-    private var wasAsync = false
-
-    override func setUp() {
-        super.setUp()
-        wasAsync = ExactSession.asyncFills
-        // Read when a session wires itself; the Mac keeps advances synchronous in the app.
-        ExactSession.asyncFills = true
-    }
 
     override func tearDown() {
         sessions.forEach { $0.destroy() }
@@ -40,7 +32,6 @@ final class AsyncAdvanceTests: XCTestCase {
         windows.forEach { $0.close() }
         #endif
         windows = []
-        ExactSession.asyncFills = wasAsync
         super.tearDown()
     }
 
@@ -182,6 +173,24 @@ final class AsyncAdvanceTests: XCTestCase {
         XCTAssertGreaterThan(next, seen)
         XCTAssertLessThanOrEqual(next, seen + 40)
         XCTAssertEqual((next - due).truncatingRemainder(dividingBy: 40), 0, accuracy: 0.001, "on the phase of the beat it was scheduled for")
+    }
+
+    func testADueTimeLabelAdvancesAfterTheBatchThatFoundItsDeadline() throws {
+        let session = try booted()
+        session.presenter.onPress?(try XCTUnwrap(id(session, "show-time")))
+        session.drainFill()
+        let label = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] as? String == "elapsed" })
+        let before = label.accessibleText
+        let due = try XCTUnwrap(session.timerDue)
+        // Let the label fall due while this main-thread turn still owns the screen.
+        Thread.sleep(forTimeInterval: max(0, due + 1 - session.now()) / 1000)
+        session.applyUnlessEmpty(Batch(ops: [], timers: true, motion: false, clock: nil, error: nil, timerDueMs: due))
+        XCTAssertTrue(session.advanceInFlight, "the batch posted the clock advance")
+        XCTAssertEqual(label.accessibleText, before)
+        session.frames.submitMotionTick(now: session.now(), frame: session.now())
+        XCTAssertTrue(session.tickInFlight, "a display callback posts its tick behind the advance")
+        session.drainFill()
+        XCTAssertNotEqual(label.accessibleText, before, "the owner's update reached the label")
     }
 
     /// A task's native wake is posted to the owner; it does not run while main

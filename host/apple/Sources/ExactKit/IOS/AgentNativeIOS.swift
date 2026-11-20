@@ -278,6 +278,10 @@ extension Presenter {
         if sub === documentMount { return ("document mount", nil) }
         if sub === root { return ("document", nil) }
         if session?.view?.inspectionOwned.contains(where: { $0 === sub }) == true { return ("probe", nil) }
+        #if os(iOS)
+        // The readable width's measuring view, in the session view or an owner's view (LLP 1123 D8)
+        if ReadableWidthIOS.view(in: parent) === sub { return ("probe", nil) }
+        #endif
         if surfaces(includingRetiring: true).contains(where: { $0.owned.contains { $0 === sub } }) { return ("modal", nil) }
         // A controller's root view: navigation stacks, tabs, a modal's
         // covered owner. Its interior is UIKit's; nodes in it are matched.

@@ -498,9 +498,10 @@ extension ExactExtensions {
                 let body: [String: Any] = ["package": name, "key": key, "request": request ?? NSNull()]
                 NotificationCenter.default.post(name: Notification.Name("exact.wakes.request"), object: body as NSDictionary)
             },
-            transfers: ExactTransfers { op, args in
+            transfers: ExactTransfers { [roots = ["data": module.data, "cache": module.cache, "tmp": module.temporary]] op, args in
                 let box = NSMutableDictionary(dictionary: args)
                 box["op"] = op
+                box["roots"] = roots
                 box["package"] = name
                 NotificationCenter.default.post(name: Notification.Name("exact.transfers"), object: box)
                 return box["reply"]

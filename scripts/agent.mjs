@@ -154,13 +154,11 @@ export async function main(argv, injected = {}) {
   }
   if (flags.live) {
     if (!['macos', 'mac', 'ios', 'android'].includes(host) || flags.test)
-      throw new Error('--live requires a macOS, iOS simulator or Android reader drive without --test');
+      throw new Error('--live requires a macOS, iOS or Android reader drive without --test');
     if (host === 'android') {
       if (flags.reader === false) throw new Error('android --live requires the reader APK. Remove --headless.');
       flags.reader = true;
     }
-    // The iPhone carrier forces agent mode.
-    if (flags.device) throw new Error('--live drives the iOS simulator, not a phone');
     if (flags.timing && flags.timing !== 'platform')
       throw new Error('--live keeps the platform clock; --timing agent is incompatible');
     flags.timing = 'platform';
