@@ -31,9 +31,9 @@ final class GallerySplit: UISplitViewController, UISplitViewControllerDelegate {
 
     /// The sidebar's navigation bar height with its title inline while the split is expanded, else 0: the least
     /// height of the page's range bar, so the two columns' headers end level once both are scrolled. It holds
-    /// whether or not the sidebar shows, so hiding the sidebar, showing it or dragging it in moves nothing. It is
-    /// measured only while the sidebar is in a window, so it is 0 until a sidebar hidden since launch first shows,
-    /// and a size change while the sidebar is hidden takes effect when it next shows.
+    /// whether or not the sidebar shows, so hiding the sidebar, showing it or dragging it in moves nothing, but for
+    /// two cases: it is measured only while the sidebar is in a window, so it is 0 until a sidebar hidden since
+    /// launch first shows, and a size change while the sidebar is hidden takes effect when it next shows.
     private(set) var sidebarBarHeight: CGFloat = 0
     /// Called on the main thread when `sidebarBarHeight` changes
     var sidebarBarHeightChanged: (() -> Void)?
