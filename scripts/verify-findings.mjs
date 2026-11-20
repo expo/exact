@@ -315,30 +315,36 @@ export function largeRemedy(f, { inRow = false } = {}) {
 /** LLP 1163 D2: a note, never a finding, where the launch screen is not the first screen's colour in a scheme. Each
  * scheme's launch colour is the manifest's for it (`schemeColours`: the scheme's own member, else the top-level
  * `background_color`, which holds in every scheme; a fixed `userInterfaceStyle` shows its side, but on Android, which
- * follows the device), and each host fades from it to the first frame. A named colour is the author's word, so a
- * difference may be meant: the lines say so. `grounds` is the first screen's ground by the scheme the system asked for
- * (`firstGrounds`), read from 8-bit sRGB captures, null where unread. Lines, none where nothing is named or nothing
- * differs. */
-export function launchNotes(manifest, grounds, host = 'ios') {
+ * follows the device), else on iOS the app's own background as the build read it (`read`, the bake's `launchGround`,
+ * null where it read none), and each host fades from it to the first frame. A named colour is the author's word, so a
+ * difference may be meant: the lines say so. A read one may differ where something the build cannot see covers the
+ * background. `grounds` is the first screen's ground by the scheme the system asked for (`firstGrounds`), read from
+ * 8-bit sRGB captures, null where unread. Lines, none where no colour is named or read, or none differs. */
+export function launchNotes(manifest, grounds, host = 'ios', read = null) {
   const style = host === 'android' ? null : manifest.userInterfaceStyle, named = schemeColours(manifest, 'background_color', style);
   const side = (scheme) => (style === 'light' || style === 'dark' ? style : scheme);
+  const shown = (scheme) => named[scheme] ?? (host === 'ios' ? read?.[side(scheme)] ?? null : null);
   const colour = (scheme) => {
-    const parsed = named[scheme] && parseColour(named[scheme], `the ${scheme} launch colour`);
+    const parsed = shown(scheme) && parseColour(shown(scheme), `the ${scheme} launch colour`);
     return parsed && parsed.alpha === 1 ? parsed : null;
   };
   // A Display P3 colour beyond sRGB is its clip in a capture, which is sRGB
   const differ = ['light', 'dark'].filter((scheme) => colour(scheme) && grounds[scheme] && !nearHex(colour(scheme).hex, grounds[scheme]));
   if (!differ.length) return [];
-  const source = (scheme) => manifest[`color_scheme_${side(scheme)}`]?.background_color ? `color_scheme_${side(scheme)}.background_color`
+  const source = (scheme) => !named[scheme] ? 'the app\'s own background as the build read it'
+    : manifest[`color_scheme_${side(scheme)}`]?.background_color ? `color_scheme_${side(scheme)}.background_color`
     : `background_color${side(scheme) === 'dark' ? ', which holds in dark mode too unless color_scheme_dark.background_color names another' : ''}`;
-  // Each scheme the manifest names takes the first screen's colour where it was read; one it leaves to Exact stays so
-  const want = { light: named.light && (grounds.light ?? named.light), dark: named.dark && (grounds.dark ?? named.dark) };
+  // A named scheme takes the first screen's colour where it was read, as the remedy replaces every background_color; a
+  // read one is named only where it differs, and one left to the platform stays so
+  const want = Object.fromEntries(['light', 'dark'].map((s) => [s, named[s] ? grounds[s] ?? named[s] : differ.includes(s) ? grounds[s] : null]));
   const members = want.light && want.dark
     ? [`"background_color": "${want.light}"`, ...(want.dark !== want.light ? [`"color_scheme_dark": { "background_color": "${want.dark}" }`] : [])]
     : [`"color_scheme_${want.light ? 'light' : 'dark'}": { "background_color": "${want.light ?? want.dark}" }`];
   return [`launch: a note, not a problem, not counted: the launch screen is not the first screen's colour in ${differ.map((s) => `${s} mode`).join(' and ')}`,
-    ...differ.map((scheme) => `  ${scheme} mode: the launch screen is ${named[scheme]} (${source(scheme)}) and the first screen's ground is ${grounds[scheme]}, so the app fades from one to the other as it opens`),
-    `  that is fine where it is meant; to open on the first screen's colour instead, put these in app.json in place of every background_color it names: ${members.join(', ')}`];
+    ...differ.map((scheme) => `  ${scheme} mode: the launch screen is ${shown(scheme)} (${source(scheme)}) and the first screen's ground is ${grounds[scheme]}, so the app fades from one to the other as it opens`),
+    differ.some((scheme) => named[scheme])
+      ? `  that is fine where it is meant; to open on the first screen's colour instead, put these in app.json in place of every background_color it names: ${members.join(', ')}`
+      : `  something the build cannot see may cover it; to open on the first screen's colour, put these in app.json: ${members.join(', ')}`];
 }
 
 /** The first screen's ground in each scheme the system asked for (`launchNotes`): `edgeGround` of the first capture of

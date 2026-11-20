@@ -20,10 +20,10 @@
 // Native relaunch opens at the launch location (on iOS, the manifest's `start_url` by default), so verify
 // compares end-route reloads only on the web. A refusal the host journaled during the run
 // (`logs`: 'swipeContent … is refused: …') is shown first in the report (LLP 1116.010 D5). One capture of each screen is kept in
-// .exact/verify/ for milestones (four of the first screen: each width and scheme); where app.json names a launch colour
-// that is not the first screen's ground, read from those captures, the report says so in a note that counts for nothing
-// (LLP 1163 D2; verify-findings.mjs `launchNotes`). It prints one short report
-// ending "verify: clean" or "verify: N problems" (`--json`: one object). Exit 1 when the build, a test, a launch
+// .exact/verify/ for milestones (four of the first screen: each width and scheme); where app.json names a launch colour,
+// or on iOS the build read one from the app's own background, that is not the first screen's ground, read from those
+// captures, the report says so in a note that counts for nothing (LLP 1163 D2; verify-findings.mjs `launchNotes`). It
+// prints one short report ending "verify: clean" or "verify: N problems" (`--json`: one object). Exit 1 when the build, a test, a launch
 // or the relaunch fails; check's findings, the accessibility tree's, the relaunch's, those at the largest text size and the compiler's warnings
 // (`contract build`'s, whether or not this run built) are counted in the last line but fail it only under `--strict`, since check reads the screen
 // by heuristics and some of either only advise; a warning that is information (`forma-unreachable`) is said, not
@@ -664,6 +664,21 @@ export async function scrollKey(app, { udid, server = null } = {}) {
     probe: PROBE.map((p) => fileDigest(resolve(ROOT, p))) }));
 }
 
+/** The app's own background as its iOS simulator build read it for the launch screen (the bake's `launchGround`,
+ * `{ light, dark }`), from the bake output the build wrote (`bakeOutput`, which a run points at its own private
+ * build). Null where the build read none or there is none, and where the plan's sources changed since it was built
+ * (`state`, agent-build.mjs `nativeBuild`): the drive then runs the new plan on that build, whose launch screen is the
+ * old one's until it is built again. */
+export async function builtGround(app, state = null) {
+  const [{ bakeOutput, developmentBuildEnv }, { iosSimulatorTarget }, { nativeBuild }] = await Promise.all([import('./app.mjs'), import('../host/apple/link.mjs'), import('./agent-build.mjs')]);
+  state ??= nativeBuild('ios', app);
+  if (state.missing || state.changed?.length) return null;
+  try {
+    const build = resolve(bakeOutput(app, developmentBuildEnv()), `ios-${iosSimulatorTarget().target}.build.json`);
+    return JSON.parse(readFileSync(build, 'utf8')).graph?.launchGround ?? null;
+  } catch { return null; }
+}
+
 /** Whether the measurement `last` (`{ key, load }`) stands for this run, whose key is `key` and whose load is `now`:
  * the same key, and timing judged then or not judgeable now either. */
 export const reusable = (last, key, now) => !!key && last?.key === key && (timingJudged(last.load) || !timingJudged(now));
@@ -1201,7 +1216,7 @@ async function deviceMain(argv, emitJSON, declined, ended) {
   if (copyTo) for (const p of large.flatMap((l) => l.shots ?? [])) if (existsSync(p)) copyFileSync(p, resolve(copyTo, basename(p)));
   const fixed = await fixedType(app.dir, host);
   // LLP 1163 D2: where the launch colour is not the first screen's, on the hosts that show one before the first frame
-  const launchNote = ['ios', 'android', 'web'].includes(host) ? launchNotes(app.manifest, firstGrounds(firsts.flat()), host) : [];
+  const launchNote = ['ios', 'android', 'web'].includes(host) ? launchNotes(app.manifest, firstGrounds(firsts.flat()), host, host === 'ios' ? await builtGround(app) : null) : [];
   const findingsFile = resolve(shots, `${host}-findings.txt`), listed = relative(process.cwd(), findingsFile);
   const r = report({ host, built, compiler, server: serverSaid, tested, checks, ax: axReads, relaunched, refused: refusedList, reloads, large, fixed, scrolled, desktop, launch: launchNote, shots: kept, copied: copyTo && resolve(copyTo), own, accept: ACCEPT, ms: Date.now() - started, listed: listed.startsWith('..') ? findingsFile : listed, strict: args.includes('--strict') });
   if (r.full.length) writeFileSync(findingsFile, r.full.join('\n') + '\n'); else rmSync(findingsFile, { force: true });

@@ -1,6 +1,10 @@
 import { test, expect } from 'bun:test';
 import { edgeGround, launchNotes } from './verify-findings.mjs';
-import { report } from './verify.mjs';
+import { builtGround, report } from './verify.mjs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
+import { iosSimulatorTarget } from '../host/apple/link.mjs';
 
 test('a screen\'s ground is the one colour both of its sides show, else unread', () => {
   // A 40×40 capture of `ground` with a box of content in the middle and, where given, a sidebar down its left
@@ -54,6 +58,40 @@ test('a named launch colour that is not the first screen\'s ground is a note tha
   expect(launchNotes({ background_color: '#ffffff80' }, { light: '#000000', dark: '#000000' })).toEqual([]);
 });
 
+
+test('on iOS a colour the build read from the app\'s background is noted where the first screen shows another', async () => {
+  const read = { light: '#ffffff', dark: '#ffffff' };
+  // Nothing named: the launch is the read colour, and the first screen shows another in dark mode
+  expect(launchNotes({}, { light: '#ffffff', dark: '#1c1c1e' }, 'ios', read).slice(1)).toEqual([
+    '  dark mode: the launch screen is #ffffff (the app\'s own background as the build read it) and the first screen\'s ground is #1c1c1e, so the app fades from one to the other as it opens',
+    '  something the build cannot see may cover it; to open on the first screen\'s colour, put these in app.json: "color_scheme_dark": { "background_color": "#1c1c1e" }',
+  ]);
+  // A Display P3 colour the build read is its clip in the capture, and the remedy leaves a read scheme that matches
+  const p3 = { light: 'color(display-p3 1.0000 0.0000 0.0000)', dark: '#000000' };
+  expect(launchNotes({}, { light: '#ff0000', dark: '#000000' }, 'ios', p3)).toEqual([]);
+  expect(launchNotes({}, { light: '#ff0000', dark: '#101010' }, 'ios', p3).at(-1)).toEndWith('put these in app.json: "color_scheme_dark": { "background_color": "#101010" }');
+  expect(launchNotes({}, { light: null, dark: '#101010' }, 'ios', read).at(-1)).toEndWith('put these in app.json: "color_scheme_dark": { "background_color": "#101010" }');
+  // A named colour wins over the read one; a fixed style shows its side; only iOS reads one
+  expect(launchNotes({ background_color: '#1c1c1e' }, { light: '#1c1c1e', dark: '#1c1c1e' }, 'ios', read)).toEqual([]);
+  expect(launchNotes({ userInterfaceStyle: 'dark' }, { light: '#000000', dark: '#000000' }, 'ios', { light: '#ffffff', dark: '#000000' })).toEqual([]);
+  expect(launchNotes({}, { light: '#ffffff', dark: '#1c1c1e' }, 'android', read)).toEqual([]);
+  expect(launchNotes({}, { light: '#ffffff', dark: '#1c1c1e' }, 'ios', null)).toEqual([]);
+  // The read colour is the one the simulator build's bake saved beside it, null with none
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-verify-ground-')), saved = process.env.EXACT_BAKE_OUTPUT;
+  try {
+    process.env.EXACT_BAKE_OUTPUT = dir;
+    const app = { id: 'com.example.probe', dir, target: dir }, current = { missing: false, changed: [] };
+    expect(await builtGround(app, current)).toBeNull();
+    writeFileSync(resolve(dir, `ios-${iosSimulatorTarget().target}.build.json`), JSON.stringify({ graph: { launchBackground: 'system', launchGround: read } }));
+    expect(await builtGround(app, current)).toEqual(read);
+    // A build older than the plan the drive runs, or none, shows another launch screen than the plan's
+    expect(await builtGround(app, { missing: false, changed: ['app.contract'] })).toBeNull();
+    expect(await builtGround(app, { missing: true, changed: [] })).toBeNull();
+  } finally {
+    if (saved === undefined) delete process.env.EXACT_BAKE_OUTPUT; else process.env.EXACT_BAKE_OUTPUT = saved;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('the note is said and counts for nothing, under --strict too', () => {
   const launch = launchNotes({ background_color: '#ffffff' }, { light: '#ffffff', dark: '#000000' });
