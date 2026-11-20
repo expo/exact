@@ -1,9 +1,11 @@
 import {test, expect} from 'bun:test';
 import {spawnSync} from 'node:child_process';
-import {existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {resolve} from 'node:path';
-import {androidJavaEnv, androidSdk, androidSdkPackages} from './agent-android.mjs';
+import {basename, resolve} from 'node:path';
+import {androidJavaEnv, androidSdk, androidSdkPackages, loadAlignment} from './agent-android.mjs';
+import {ANDROID_TARGET, androidBakeLibraryName, androidToolchainEnv, stageAndroidBake} from './android-abi.mjs';
 
 test('only development-trust APKs at the dev profile request shrink-only packaging', async () => {
   const {developmentApkArgs} = await import('./agent-android.mjs');
@@ -13,8 +15,78 @@ test('only development-trust APKs at the dev profile request shrink-only packagi
   expect(developmentApkArgs(true, 'host-dev', true)).toEqual([]);
 });
 
+test('an APK carries each GPU library the bake built, by the name Cargo gave it, unstripped (#306)', async () => {
+  const { bakeGpuLibraries, stageGpuLibraries } = await import('./agent-android.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-apk-gpu-'));
+  try {
+    const app = { hasGpu: true, manifest: { gpu: { modules: { extra: ['extra'] } } } };
+    // The module's [lib] name is also the preferred name of the data image.
+    const products = ['libfiddl_gpu.so', 'libExactBaked.so'].map((file) => resolve(dir, file));
+    let asked, image, packagedImage;
+    const bake = (...args) => {
+      asked = args;
+      for (const product of products) expect(args[3].prepareGpu(product)).toBe(product);
+      image = args[3].androidPayload();
+      args[3].capture({});
+    };
+    const libraries = bakeGpuLibraries(app, {
+      profile: 'host-dev', env: { A: '1' }, androidPayload: true,
+      capture: (_, name) => { packagedImage = name; },
+    }, bake);
+    expect(libraries).toEqual(products);
+    expect(asked.slice(0, 3)).toEqual([app, 'android', 'aarch64-linux-android']);
+    expect(asked[3]).toMatchObject({ profile: 'host-dev', env: { A: '1' }, kind: 'android' });
+    expect(image).toBe('libexactbaked_1.so');
+    expect(packagedImage).toBe(image);
+    for (const library of libraries) writeFileSync(library, library);
+    const jniLibs = resolve(dir, 'jniLibs/arm64-v8a');
+    mkdirSync(jniLibs, { recursive: true });
+    expect(stageGpuLibraries(libraries, jniLibs)).toEqual(['-PgpuModules=libfiddl_gpu.so,libExactBaked.so']);
+    for (const library of libraries) expect(readFileSync(resolve(jniLibs, basename(library)), 'utf8')).toBe(library);
+    expect(stageGpuLibraries([], jniLibs)).toEqual([]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 const releaseJavaEnv = androidJavaEnv(process.env);
 const releaseSdk = androidSdk(process.env);
+test.skipIf(!process.env.ANDROID_NDK_HOME && !existsSync(resolve(releaseSdk, 'ndk')))('a development APK data image maps each edited blob at 16-byte alignment', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-android-data-'));
+  try {
+    mkdirSync(resolve(dir, 'plans'));
+    const blobs = {'app.plan': 'initial contract', 'compat.json': '{"inputs":{"hermesBytecode":99}}',
+      'app.hbc': 'initial module', 'plans/Some-Widget.plan': 'widget plan'};
+    const gpuName = 'libExactBaked.so';
+    const gpu = resolve(dir, gpuName);
+    const link = () => stageAndroidBake(dir, dir, androidToolchainEnv(), ANDROID_TARGET, [{ kind: 'Some-Widget' }],
+      androidBakeLibraryName(existsSync(gpu) ? [gpuName] : []));
+    const stage = () => {
+      blobs['app.module.json'] = JSON.stringify({ module: { file: 'app.hbc', bytes: blobs['app.hbc'].length,
+        sha256: createHash('sha256').update(blobs['app.hbc']).digest('hex') } });
+      for (const [file, bytes] of Object.entries(blobs)) writeFileSync(resolve(dir, file), bytes);
+      return link();
+    };
+    stage();
+    writeFileSync(gpu, 'gpu library');
+    blobs['app.plan'] = 'edited contract';
+    blobs['app.hbc'] = 'edited module';
+    const path = stage(), image = readFileSync(path);
+    expect(readFileSync(gpu, 'utf8')).toBe('gpu library');
+    expect(loadAlignment(path)).toBeGreaterThanOrEqual(16384);
+    for (const bytes of Object.values(blobs)) {
+      const at = image.indexOf(bytes);
+      expect(at).toBeGreaterThanOrEqual(16);
+      expect(at % 16).toBe(0);
+      expect(image.readBigUInt64LE(at - 16)).toBe(BigInt(bytes.length));
+    }
+    expect(image.includes('initial contract')).toBe(false);
+    expect(image.includes('initial module')).toBe(false);
+    rmSync(resolve(dir, 'app.hbc'));
+    expect(link).toThrow('app.hbc');
+    rmSync(resolve(dir, 'app.module.json'));
+    expect(link).toThrow('app.module.json');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 for (const [id, minimumOS, development = false] of [[undefined, '12'], [undefined, '12', true], ['com.example.android_app', '11'], ['com.example.android_app', '12']]) test.skipIf(process.platform !== 'darwin' || !releaseJavaEnv ||
   !androidSdkPackages().every(pkg => existsSync(resolve(releaseSdk, pkg.path))))(`Android release metadata and signing reach Gradle with ${id ?? 'the default package'} on Android ${minimumOS}, development=${development}`, async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-android-release-'));
@@ -147,3 +219,31 @@ test.skipIf(process.platform !== 'darwin' || !releaseJavaEnv ||
     expect(strict.status, strict.stdout + strict.stderr).toBe(0);
   } finally { rmSync(dir, {recursive:true, force:true}); }
 }, 400000);
+
+test('an APK with a separate bake detects a Contract edit after baking', async () => {
+  const { apkChanges } = await import('./agent-stdio.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-apk-bake-inputs-'));
+  try {
+    const apk = resolve(dir, 'app-release.apk'), library = resolve(dir, 'canvas.so');
+    const contract = resolve(dir, 'view.contract'), product = resolve(dir, 'gpu.so'), rust = resolve(dir, 'host.rs');
+    const surfaces = resolve(dir, 'surfaces.json');
+    const bakeStarted = new Date(10_000), afterBake = new Date(20_000), started = new Date(30_000);
+    for (const file of [contract, product, rust, surfaces]) writeFileSync(file, 'input');
+    utimesSync(rust, bakeStarted, bakeStarted);
+    utimesSync(contract, bakeStarted, bakeStarted);
+    utimesSync(product, afterBake, afterBake);
+    utimesSync(surfaces, afterBake, afterBake);
+    writeFileSync(resolve(dir, 'canvas.d'), `${library}: ${rust}\n`);
+    writeFileSync(resolve(dir, 'exact-build.json'), JSON.stringify({
+      bakeStarted, started, libraries: [library], workspace: dir, sources: [],
+      bakes: [{ paths: [contract, product, surfaces], missing: [], watchedDirectories: [],
+        products: [product, surfaces].map(path => ({path, sha256:createHash('sha256').update('input').digest('hex')})) }],
+    }));
+    expect(apkChanges({ target: resolve(dir, 'target') }, apk)).toEqual([]);
+    utimesSync(contract, afterBake, afterBake);
+    writeFileSync(surfaces, 'changed');
+    utimesSync(surfaces, afterBake, afterBake);
+    const changes = apkChanges({ target: resolve(dir, 'target') }, apk);
+    expect(changes.map(path => basename(path)).sort()).toEqual(['surfaces.json', 'view.contract']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

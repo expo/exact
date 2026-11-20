@@ -598,10 +598,10 @@ macro_rules! host {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.scrolled(page, view, left, top), |_| ())
         }
 
-        /// The presenter's synchronous viewport union for an inline run.
+        /// The presenter's inline, text range and textarea scroll geometry.
         #[no_mangle]
-        pub extern "C" fn exact_set_inline_geometry(rt: u32, read: Option<$crate::geometry::InlineFrameFn>, range: Option<$crate::geometry::RangeFrameFn>, ctx: *mut ::std::ffi::c_void) {
-            $crate::abi::with_entry(&EXACT_RUNTIMES, rt, |e| e.bridge.set_inline_geometry(read, range, ctx));
+        pub extern "C" fn exact_set_text_geometry(rt: u32, read: Option<$crate::geometry::InlineFrameFn>, range: Option<$crate::geometry::RangeFrameFn>, metrics: Option<$crate::geometry::ScrollMetricsFn>, ctx: *mut ::std::ffi::c_void) {
+            $crate::abi::with_entry(&EXACT_RUNTIMES, rt, |e| e.bridge.set_inline_geometry(read, range, metrics, ctx));
         }
 
         /// The open top-layer nodes before a native action read. No batch.

@@ -341,6 +341,7 @@ impl Resolver<'_, '_> {
             key: shape.key,
             opacity: 1.0,
             transform: Some(Transform {
+                reference: (0., 0.),
                 origin: (0.0, 0.0),
                 translate: (0.0, 0.0),
                 rotate: 0.0,

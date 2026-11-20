@@ -33,6 +33,7 @@ pub(crate) fn piece(event: EventKind) -> Option<&'static str> {
         EventKind::Transformgeometry => Some("onTGeom"),
         EventKind::Transformrelease => Some("onTRelease"),
         EventKind::Reorderdrop => Some("onDrop"),
+        EventKind::Reordertargetchange => Some("onReorderTarget"),
         EventKind::Resize => Some("onResize"),
         EventKind::Intersect => Some("onIntersect"),
         _ => None,

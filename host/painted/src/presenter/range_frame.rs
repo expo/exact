@@ -1,6 +1,5 @@
 //! Inline `frame` and textarea `rangeFrame` from the acknowledged picture.
-//! Publication travels with the boxes; action reads never consult newer paint
-//! or reconstruct ownership from the live kernel.
+//! Scroll extents use the current layout so a resize action sees its new dimensions.
 use super::*;
 use crate::paint::{field::PaintedField, inline_frame::PaintedInline};
 use exact_runner::geometry::{GeometryAnswer, InlineGeometry};
@@ -13,6 +12,7 @@ use std::rc::Rc;
 /// Perspective-projected fields are retained but never read.
 #[derive(Debug, Default)]
 pub(crate) struct Painted {
+    text: RefCell<std::rc::Weak<RefCell<TextEngine>>>,
     fields: RefCell<HashMap<ViewId, (Rc<PaintedField>, bool)>>,
     inline: RefCell<HashMap<ViewId, Rc<PaintedInline>>>,
     session: Cell<u64>,
@@ -33,7 +33,55 @@ impl std::fmt::Debug for PaintedField {
 }
 
 impl InlineGeometry for Painted {
+    fn scroll_metrics(
+        &self,
+        kernel: &exact_kernel::Kernel,
+        view: ViewId,
+        (x, y): (f64, f64),
+    ) -> Option<[f64; 6]> {
+        let node = kernel.node(view)?;
+        if !crate::paint::paints(kernel, view, None) {
+            return None;
+        }
+        let text = self.text.borrow().upgrade()?;
+        let fields = self.fields.borrow();
+        let (mx, my) = if crate::fields::hosts(&node) {
+            let shell = crate::fields::hosting()?;
+            let (width, height) = PaintedField::editor_size(kernel, &node);
+            let style = node.text_style();
+            let face = crate::fields::face(&mut text.borrow_mut(), &style, true, shell.scale);
+            let value = node.props.str(exact_kernel::PropId::Value).unwrap_or("");
+            let shown = if value.is_empty() {
+                node.props
+                    .str(exact_kernel::PropId::Placeholder)
+                    .unwrap_or("")
+            } else {
+                value
+            };
+            let [w, h, _] = shell
+                .metrics
+                .measure(&face, shown, Some(width * shell.scale));
+            (
+                (w / shell.scale - width).max(0.),
+                (h / shell.scale - height).max(0.),
+            )
+        } else {
+            PaintedField::textarea_scroll_size(
+                fields.get(&view).map(|(f, _)| f.as_ref()),
+                &mut text.borrow_mut(),
+                kernel,
+                &node,
+            )
+        };
+        let (w, h) = (f64::from(node.frame.width), f64::from(node.frame.height));
+        let (mx, my) = (f64::from(mx), f64::from(my));
+        Some([x.clamp(0., mx), y.clamp(0., my), w + mx, h + my, w, h])
+    }
+
     fn frame(&self, view: ViewId) -> GeometryAnswer {
+        if cfg!(target_os = "android") {
+            return GeometryAnswer::UNAVAILABLE;
+        }
         let inline = self.inline.borrow();
         let Some((x, y, width, height)) = inline.get(&view).and_then(|p| p.frame(view)) else {
             return GeometryAnswer::UNAVAILABLE;
@@ -49,6 +97,9 @@ impl InlineGeometry for Painted {
     }
 
     fn range_frame(&self, view: ViewId, start: u32, end: u32) -> GeometryAnswer {
+        if cfg!(target_os = "android") {
+            return GeometryAnswer::UNAVAILABLE;
+        }
         let fields = self.fields.borrow();
         let Some((x, y, width, height)) = fields
             .get(&view)
@@ -72,19 +123,16 @@ impl InlineGeometry for Painted {
 thread_local! { static PUBLICATION_BOX_VISITS: Cell<usize> = const { Cell::new(0) }; }
 
 impl<D: DataSource> Presenter<D> {
-    /// Hand a new runner the reader, which reads nothing it has not
-    /// painted. Android's fields are the platform's own, so it has none.
+    /// A new runner starts without the previous session’s published frames.
     pub(crate) fn read_ranges(&mut self) {
         let ranges = &self.ranges;
         ranges.session.set(ranges.session.get() + 1);
         ranges.fields.borrow_mut().clear();
         ranges.inline.borrow_mut().clear();
-        let read: Option<Rc<dyn InlineGeometry>> = if cfg!(target_os = "android") {
-            None
-        } else {
-            Some(self.ranges.clone())
-        };
-        self.host.runner_mut().set_inline_geometry(read);
+        *ranges.text.borrow_mut() = Rc::downgrade(&self.text);
+        self.host
+            .runner_mut()
+            .set_inline_geometry(Some(ranges.clone()));
     }
 
     /// The text beside the boxes now shown, when they are this

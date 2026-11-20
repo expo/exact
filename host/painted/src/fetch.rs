@@ -144,6 +144,9 @@ pub(crate) struct Poller {
     url: String,
     compat: String,
     pub identity: Option<String>,
+    /// The last completed plan poll, independent of idle turns between replies.
+    #[cfg(target_os = "android")]
+    pub status: LoopStatus,
     /// A generation the host holds (preparing its module, or waiting on
     /// requests) or could not run: the poll does not download it again.
     pub held: Option<String>,
@@ -173,6 +176,17 @@ pub(crate) struct Poller {
     pub lines_said: usize,
 }
 
+/// The development reader displays this through the chrome word.
+#[cfg(target_os = "android")]
+#[derive(Clone, Copy)]
+pub(crate) enum LoopStatus {
+    Connecting = 1,
+    Following,
+    Unavailable,
+    Preparing,
+    Failed,
+}
+
 /// What a worker calls when its answer is in.
 pub(crate) type Waker = std::sync::Arc<dyn Fn() + Send + Sync>;
 
@@ -199,6 +213,12 @@ impl Poller {
         Self {
             url,
             compat,
+            #[cfg(target_os = "android")]
+            status: if identity.is_some() {
+                LoopStatus::Following
+            } else {
+                LoopStatus::Connecting
+            },
             identity,
             held: None,
             due: now,
@@ -307,6 +327,15 @@ impl Poller {
             match worker.try_recv() {
                 Ok((outcome, design)) => {
                     self.worker = None;
+                    #[cfg(target_os = "android")]
+                    {
+                        self.status = match &outcome {
+                            Ok(_) => LoopStatus::Following,
+                            Err(e) if e.starts_with(LOOP_PREPARING) => LoopStatus::Preparing,
+                            Err(e) if e.starts_with(LOOP_FAILED) => LoopStatus::Failed,
+                            Err(_) => LoopStatus::Unavailable,
+                        };
+                    }
                     if outcome.is_ok() {
                         self.said = None;
                     }

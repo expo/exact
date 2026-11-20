@@ -237,3 +237,101 @@ fn malformed_saved_samples_are_refused() {
         assert!(error.contains(field), "{field}: {error}");
     }
 }
+
+struct Streamed;
+impl Game for Streamed {
+    const ID: &'static str = "streamed-samples";
+    const STREAMED: &'static [&'static str] = Samples::ASSETS;
+    type Args = ();
+    fn setup(w: &mut World, args: &()) {
+        Samples::setup(w, args);
+    }
+    fn tick(w: &mut World, input: &Input, args: &()) {
+        Samples::tick(w, input, args);
+    }
+}
+
+fn catalog(pad_seed: i16) -> std::collections::BTreeMap<String, crate::asset::SoundInfo> {
+    [("blip.sound", blip()), ("pad.sound", pad(pad_seed))]
+        .into_iter()
+        .map(|(name, bytes)| {
+            let data: SoundData = bin::from_slice(&bytes).unwrap();
+            (name.to_owned(), data.info())
+        })
+        .collect()
+}
+
+#[test]
+fn streamed_pcm_delivery_order_and_failure_do_not_enter_simulation_or_saves() {
+    use crate::asset::SOUND_CATALOG;
+    let start = |seed| {
+        let mut sim = Sim::<Streamed>::new(()).unwrap();
+        assert!(sim.is_loading());
+        assert_eq!(sim.take_assets(), [SOUND_CATALOG]);
+        sim.asset(SOUND_CATALOG, Some(&bin::to_vec(&catalog(seed))))
+            .unwrap();
+        assert!(!sim.is_loading());
+        assert!(sim.device_assets_ready());
+        assert_eq!(sim.take_assets(), ["blip.sound", "pad.sound"]);
+        sim.world_mut().play("blip").start();
+        sim.world_mut().play("pad").start();
+        sim
+    };
+    let mut silent = start(0);
+    let mut audible = start(0);
+    audible.asset("pad.sound", Some(&pad(0))).unwrap();
+    audible.asset("blip.sound", Some(&blip())).unwrap();
+    assert!(audible.world().sound_asset("pad.sound").is_none());
+    assert!(audible.presentation_sound("pad.sound").is_some());
+    assert!(silent
+        .asset("pad.sound", Some(&pad(4)))
+        .unwrap_err()
+        .contains("differs from its baked catalog"));
+    assert!(silent.presentation_sound("pad.sound").is_none());
+    assert!(silent.asset_failures().next().is_none());
+    assert!(silent
+        .world()
+        .assets
+        .state_json()
+        .contains("differs from its baked catalog"));
+    for sim in [&mut silent, &mut audible] {
+        sim.run(750.);
+        assert_eq!(sim.world().resource::<Voices>().voices.len(), 1);
+    }
+    assert_eq!(silent.world().hash(), audible.world().hash());
+    assert_eq!(silent.save().unwrap(), audible.save().unwrap());
+    let save = audible.save().unwrap();
+    let mut restored = start(0);
+    restored.restore(&save).unwrap();
+    assert_eq!(restored.world().hash(), silent.world().hash());
+    assert!(start(7)
+        .restore(&save)
+        .unwrap_err()
+        .to_string()
+        .contains(SOUND_CATALOG));
+}
+
+#[test]
+fn malformed_streamed_catalogs_hold_setup_and_report_the_reason() {
+    use crate::asset::SOUND_CATALOG;
+    for reason in ["exactly", "format", "budget"] {
+        let mut entries = catalog(0);
+        match reason {
+            "exactly" => {
+                entries.remove("pad.sound");
+            }
+            "format" => {
+                entries.get_mut("pad.sound").unwrap().channels = 0;
+            }
+            _ => {
+                entries.get_mut("pad.sound").unwrap().frames = u32::MAX;
+            }
+        }
+        let mut sim = Sim::<Streamed>::new(()).unwrap();
+        let err = sim
+            .asset(SOUND_CATALOG, Some(&bin::to_vec(&entries)))
+            .unwrap_err();
+        assert!(err.contains(reason), "{err}");
+        assert!(sim.is_loading());
+    }
+}

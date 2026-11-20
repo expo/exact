@@ -46,6 +46,7 @@ import exact.backgroundtransfer.Lifecycle.Transmit
 import exact.backgroundtransfer.Lifecycle.WakeEnded
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -55,7 +56,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal interface Platform {
     val conditions: Conditions
     /** Evidence of a force-stop since the last [acknowledge]. */
-    fun stopped(): Boolean
+    fun stopped(registrations: Set<Key> = emptySet()): Boolean
     /** Whether the device rebooted or the package was updated since [namespace]'s last [acknowledge]. */
     fun restarted(namespace: Namespace): Boolean
     /** The registrations of [namespace] whose user-initiated job the platform holds, pending or running. */
@@ -142,6 +143,8 @@ internal class Transfers(
     private val copies = HashMap<Key, AtomicBoolean>()
     /** What the retirements calls made of each key are told when its cleanup has ended. */
     private val retiring = HashMap<Key, ArrayList<(Boolean) -> Unit>>()
+    /** Accessed on the serial session executor. A reload keeps registrations made by this drive. */
+    private val emptied = HashSet<Namespace>()
     /** The recoveries not yet told how they ended ([recover]), each with its namespaces. */
     private val recovering = ArrayList<Pair<Set<Namespace>, (Boolean) -> Unit>>()
     private val operations by lazy { Executors.newCachedThreadPool { work -> Thread(work, "exact-transfer-operation") } }
@@ -178,7 +181,20 @@ internal class Transfers(
      */
     fun enter(namespace: Namespace): Step? {
         if (synchronized(store) { namespace in process.crossed || orphaned > 0 }) return null
-        return take(Enter(namespace, platform.stopped(), platform.restarted(namespace), platform.held(namespace), platform.conditions))
+        return take(entry(namespace))
+    }
+
+    private fun entry(namespace: Namespace, fresh: Boolean = false) =
+        Enter(namespace, platform.stopped(synchronized(store) { durable.records.keys }), platform.restarted(namespace), platform.held(namespace), platform.conditions, fresh)
+
+    /** Called on the session executor. Cleanup runs on the control and operation executors, outside the store monitor. */
+    fun emptyScratch(namespace: Namespace) {
+        require(namespace.agent)
+        if (namespace in emptied) return
+        val pending = ArrayList<CompletableFuture<Boolean>>()
+        check(take(entry(namespace, fresh = true), emptying = pending)?.accepted == true)
+        check(pending.map { it.join() }.all { it }) { "Could not remove the drive's transfer registrations" }
+        emptied += namespace
     }
 
     /**
@@ -218,7 +234,8 @@ internal class Transfers(
      * started under; null is answered for one from before the last failure, and for an [Enter]
      * that [enter] would not make.
      */
-    private fun take(event: Event, from: Int? = null, operation: Boolean = false, removed: ((Boolean) -> Unit)? = null): Step? {
+    private fun take(event: Event, from: Int? = null, operation: Boolean = false, removed: ((Boolean) -> Unit)? = null,
+                     emptying: MutableList<CompletableFuture<Boolean>>? = null): Step? {
         var failure: Exception? = null
         var owed: Owed? = null
         val recoveries = ArrayList<() -> Unit>()
@@ -241,6 +258,12 @@ internal class Transfers(
                 process = step.process
                 queue.addAll(step.effects)
                 if (removed != null && event is Retire && step.accepted) retiring.getOrPut(event.key, ::ArrayList) += removed
+                if (emptying != null) for (key in durable.records.keys) {
+                    if (key.namespace != event.namespace) continue
+                    val done = CompletableFuture<Boolean>()
+                    retiring.getOrPut(key, ::ArrayList) += { done.complete(it) }
+                    emptying += done
+                }
             } catch (e: Exception) {
                 failure = e
                 owed = collapse()
@@ -382,7 +405,8 @@ internal class Transfers(
             val kept = requests.getJSONObject(i)
             call(request(record, "keep").put("key", kept.getString("credentialKey")).put("url", written.getJSONObject(i).getString("url"))
                 .put("method", kept.getString("method")).put("body", kept.getBoolean("body"))
-                .put("headers", written.getJSONObject(i).optJSONArray("headers") ?: JSONArray()))
+                .put("headers", written.getJSONObject(i).optJSONArray("headers") ?: JSONArray())
+                .put("form", written.getJSONObject(i).optJSONArray("form")))
         }
         true
     } catch (e: Exception) {
@@ -393,8 +417,14 @@ internal class Transfers(
     private fun copy(key: Key): Boolean {
         val cancelled = synchronized(store) { copies[key] } ?: return false
         return try {
-            store.snapshot(key, cancelled::get) { record, path, file -> call(request(record, "snapshot").put("path", path).put("file", file.path)) }
-        } catch (_: Exception) { false } finally { synchronized(store) { copies.remove(key, cancelled) } }
+            store.snapshot(key, cancelled::get) { record, entry, file ->
+                call(request(record, "snapshot").put("path", entry.opt("bodyFrom"))
+                    .put("key", entry.getString("credentialKey")).put("file", file.path))
+            }
+        } catch (e: Exception) {
+            synchronized(store) { refusals[key] = (e as? Refused)?.code ?: "UnknownError" }
+            false
+        } finally { synchronized(store) { copies.remove(key, cancelled) } }
     }
 
     private fun transmit(effect: Transmit): Event {

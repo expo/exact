@@ -4,19 +4,20 @@
  * archive untouched. TypeScript apps use exact-js-bake; Rust apps register
  * their own compiled build-script executable through exact_bake::take_linked.
  *
- * A bake runs again when a watched path or variable changes, or its tool
- * changes. The link carries the plan, compatibility document and bytecode
- * through exact_apple::baked.
+ * Android development APKs reuse the registered baker and link the data
+ * into a separate ELF image. A bake runs again when a watched path,
+ * variable or tool changes.
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bakeTarget, cargoEnvironment, developmentBuildEnv } from './app.mjs';
 import { oneScheme, webOnly } from './app-cli.mjs';
-import { appleCargo } from './cargo-check.mjs';
-import { cargoInputPaths, packageDirectories, watchedDigest } from './cargo-dep-info.mjs';
+import { copiedAndroidEntries, copiedBuildScripts } from './app-shells.mjs';
+import { appleCargo, cargoBuildEnv } from './cargo-check.mjs';
+import { cargoInputPaths, cargoLibraryTarget, packageDirectories, watchedDigest } from './cargo-dep-info.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const TOOL_TARGET = process.env.CARGO_TARGET_DIR ? resolve(process.env.CARGO_TARGET_DIR) : resolve(ROOT, 'target');
@@ -105,6 +106,25 @@ export function linkable(app, pkg) {
   return false;
 }
 
+/** A stock authored script needs the matching library entry. Custom scripts
+ * opt in at entry so that a handoff can return before their remaining work. */
+export function androidLinkable(pkg, generated = false) {
+  const script = pkg.targets.find(t => t.kind.includes('custom-build'));
+  if (!script || generated) return !!script;
+  const read = path => readFileSync(path, 'utf8').replaceAll('\r\n', '\n');
+  const source = read(script.src_path);
+  if (/^\s*if (?:exact_bake::host|exact_js_bake)::take_android_linked\(/m.test(source)) return true;
+  const entry = cargoLibraryTarget(pkg);
+  const body = text => text.replace(/^(?:\/\/![^\n]*\n|\n)*/, '');
+  const short = `fn main() {
+    exact_js_bake::build_android(std::path::Path::new(".."))
+        .unwrap_or_else(|e| panic!("Android bake: {e}"));
+}`;
+  if (!entry || !(copiedBuildScripts().android.includes(source) || body(source).trim() === short)) return false;
+  const library = body(read(entry.src_path));
+  return copiedAndroidEntries().some(stock => body(stock) === library);
+}
+
 /** The files of a linked bake the archive compiles (js/bake/src/linked.rs `COMPILED`). */
 export const COMPILED_BAKE = ['module.rs', 'logic.rs', 'linked.rs', 'host.rs'];
 
@@ -170,31 +190,60 @@ function inputDigests(paths, dir, env, {since = Infinity, known = new Set(), out
 const digestOf = inputs => [...inputs.values()].includes(null) ? null : createHash('sha256').update(JSON.stringify([...inputs])).digest('hex');
 const inputDigest = (paths, dir, env, options) => digestOf(inputDigests(paths, dir, env, options));
 
-/** The digest of a bake's plan and compat.json together, or null when either is missing. */
-function pairOf(dir) {
-  try { return createHash('sha256').update(readFileSync(resolve(dir, 'app.plan'))).update(readFileSync(resolve(dir, 'compat.json'))).digest('hex'); } catch { return null; }
+/** The payload files required by the Android bake's compatibility and module receipts. */
+export function androidBakeBlobs(dir) {
+  const compat = JSON.parse(readFileSync(resolve(dir, 'compat.json'), 'utf8'));
+  const blobs = ['app.plan', 'compat.json'];
+  if (compat.inputs.hermesBytecode != null) {
+    const {module} = JSON.parse(readFileSync(resolve(dir, 'app.module.json'), 'utf8'));
+    const hbc = readFileSync(resolve(dir, 'app.hbc'));
+    if (module?.file !== 'app.hbc' || module.bytes !== hbc.length ||
+        module.sha256 !== createHash('sha256').update(hbc).digest('hex')) {
+      throw new Error(`${dir}: app.hbc differs from its module receipt`);
+    }
+    blobs.push('app.hbc', 'app.module.json');
+  }
+  return blobs;
 }
 
-/** Whether the bake `record` describes is the one its inputs would make now,
- * and the plan and compat.json beside it are the pair it made. */
-function fresh(record, dir, env, tool, outputs) {
-  if (record?.version !== 2 || record.tool !== tool || !record.pair || record.pair !== pairOf(dir)) return false;
+/** The digest of the bake's linked files, or null for incomplete output. */
+function pairOf(dir, android) {
+  try {
+    const files = android ? androidBakeBlobs(dir) : ['app.plan', 'compat.json'];
+    const hash = createHash('sha256');
+    for (const file of files) hash.update(readFileSync(resolve(dir, file)));
+    return hash.digest('hex');
+  } catch { return null; }
+}
+
+/** The file system's time now, as change times read it: a stamp's, written in `dir`. File times come from a coarser
+ * clock than Date.now() and can trail it by a tick, so an input the bake changes would otherwise seem to precede it. */
+function fileClock(dir) {
+  const stamp = resolve(dir, `.started.${process.pid}`);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(stamp, '');
+  try { return statSync(stamp).ctimeMs; } finally { rmSync(stamp, { force: true }); }
+}
+
+/** Whether the linked output and its inputs still match the bake's record. */
+function fresh(record, dir, env, tool, outputs, android) {
+  if (record?.version !== 2 || record.tool !== tool || !record.pair || record.pair !== pairOf(dir, android)) return false;
   if (Object.entries(record.env).some(([name, value]) => (env[name] ?? null) !== value)) return false;
   return record.digest != null && record.digest === inputDigest(record.paths, dir, env, {outputs});
 }
 
 /** Bakes `app` for `platform` and `target` into its linked bake directory,
- * unless the bake there is fresh; the directory. A bake that fails throws
+ * unless the bake there is fresh. A bake that fails throws
  * what it said, as the build script's failure ends a build. `prepareRust`
  * refreshes the compiled baker through Cargo before it reads new inputs;
  * `cargoArgs`, the app's profile arguments, build a TypeScript app's tool
  * (`appleBakeTool`).
- * The caller holds the app's build claim (host/apple/build.mjs `appleBuildLock`), the one
- * writer of the directory. */
-export function bakeOutside(app, platform, target, env, prepareRust, { cargoArgs, outputs = [], toolBuilt = false } = {}) {
-  const dir = linkedBakeDir(env, platform, target), at = resolve(dir, 'inputs.json');
+ * The caller holds the app's build claim as the directory's sole writer. */
+export function bakeOutside(app, platform, target, env, prepareRust, { cargoArgs, outputs = [], toolBuilt = false, workspace, dir = linkedBakeDir(env, platform, target) } = {}) {
+  const at = resolve(dir, 'inputs.json');
   let executable, args = [app.dir, '--cargo', platform, target, dir], cwd = app.dir, runEnv = cargoEnvironment(env);
-  const rust = existsSync(resolve(app.dir, 'data/Cargo.toml'));
+  const android = platform === 'android';
+  const rust = android || existsSync(resolve(app.dir, 'data/Cargo.toml'));
   if (rust) {
     prepareRust?.(dir);
     // Cargo registers the app's own compiled build script on its first run.
@@ -204,6 +253,7 @@ export function bakeOutside(app, platform, target, env, prepareRust, { cargoArgs
     const baker = JSON.parse(readFileSync(registry, 'utf8'));
     if (!existsSync(baker.executable)) return dir;
     executable = baker.executable; args = []; cwd = baker.cwd;
+    if (android && workspace) runEnv = cargoBuildEnv(workspace, runEnv);
     runEnv = { ...runEnv, ...baker.env, OUT_DIR: dir, EXACT_BAKED: dir, EXACT_RUST_BAKE: '1' };
   } else {
     // `toolBuilt`: the caller knows this checkout's tool is built (a read-only compiled SDK), so Cargo's check is skipped.
@@ -214,11 +264,13 @@ export function bakeOutside(app, platform, target, env, prepareRust, { cargoArgs
   // one line where the first was, as `contract build` says them (18 of them every euxy build).
   const warn = (warnings) => { for (const line of bakeWarnings(app.name, warnings ?? [])) console.error(line); };
   let record = null; try { record = JSON.parse(readFileSync(at, 'utf8')); } catch { /* none yet */ }
-  if (fresh(record, dir, runEnv, tool, outputs)) { warn(record.warnings); return dir; }
-  const watched = record?.paths ?? (rust ? cargoInputPaths(readFileSync(resolve(dir, 'rust-output.txt'), 'utf8'), cwd) : []);
+  if (fresh(record, dir, runEnv, tool, outputs, android)) { warn(record.warnings); return dir; }
+  const cargoOutput = resolve(dir, 'rust-output.txt');
+  const previousOutput = rust && !record?.paths ? readFileSync(cargoOutput, 'utf8') : '';
+  const watched = record?.paths ?? cargoInputPaths(previousOutput, cwd);
   const before = inputDigests(watched, dir, runEnv, {outputs});
   rmSync(at, { force: true });
-  const started = Date.now();
+  const started = Date.now(), since = fileClock(dir);
   const r = spawnSync(executable, args, { cwd, env: runEnv, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   const lines = (r.stdout ?? '').split('\n'), said = (key) => lines.map(line => new RegExp(`^cargo::?${key}=(.*)$`).exec(line)?.[1]).filter(value => value !== undefined);
   warn(said('warning'));
@@ -227,36 +279,171 @@ export function bakeOutside(app, platform, target, env, prepareRust, { cargoArgs
     error.stack = error.message; error.contract = true;
     throw error;
   }
-  if (rust) writeFileSync(resolve(dir, 'rust-output.txt'), r.stdout ?? '');
+  if (rust) writeFileSync(cargoOutput, r.stdout ?? '');
   const paths = cargoInputPaths(r.stdout ?? '', cwd);
   // New watches have no pre-bake digest. Their change times must precede the read;
   // known watches compare bytes so touching an unchanged input does not invalidate it.
-  const after = inputDigests(paths, dir, runEnv, {since:started, known:new Set(watched), outputs});
+  const after = inputDigests(paths, dir, runEnv, {since, known:new Set(watched), outputs});
   const stable = [...after].every(([path, digest]) => !before.has(path) || before.get(path) === digest);
-  record = { version: 2, at: started, tool, pair: pairOf(dir), warnings: said('warning'), env: Object.fromEntries(said('rerun-if-env-changed').map(name => [name, runEnv[name] ?? null])), paths, digest:stable ? digestOf(after) : null, missing: paths.filter(path => !existsSync(path)), watchedDirectories:packageDirectories(paths, watchOutputs(dir, runEnv, outputs)) };
+  record = { version: 2, at: started, tool, pair: pairOf(dir, android), warnings: said('warning'), env: Object.fromEntries(said('rerun-if-env-changed').map(name => [name, runEnv[name] ?? null])), paths, digest:stable ? digestOf(after) : null, missing: paths.filter(path => !existsSync(path)), watchedDirectories:packageDirectories(paths, watchOutputs(dir, runEnv, outputs)) };
   mkdirSync(dir, { recursive: true });
   writeFileSync(`${at}.${process.pid}.tmp`, JSON.stringify(record));
   renameSync(`${at}.${process.pid}.tmp`, at);
   return dir;
 }
 
+const androidRegistry = dir => resolve(dir, 'rust-baker.json');
+const androidUnitDir = (root, out) => resolve(root, createHash('sha256').update(out).digest('hex'));
+
+function androidLinkDigest(output, cwd) {
+  const directives = output.split(/\r?\n/).flatMap(line => {
+    const match = /^cargo::?([^:=]+)=(.*)$/.exec(line);
+    if (!match || ['rerun-if-changed', 'rerun-if-env-changed', 'warning'].includes(match[1])) return [];
+    const [, name, value] = match;
+    return [[name === 'rustc-cdylib-link-arg' ? 'rustc-link-arg-cdylib' : name, value]];
+  });
+  const args = directives.filter(([name]) => name.startsWith('rustc-link-arg'))
+    .flatMap(([name, value]) => {
+      const arg = name === 'rustc-link-arg-bin' ? value.slice(value.indexOf('=') + 1) : value;
+      return arg.startsWith('-Wl,') ? arg.slice(4).split(',') : [arg];
+    });
+  const dirs = directives.filter(([name, value]) => name === 'rustc-link-search' && (!value.includes('=') || /^(native|all)=/.test(value)))
+    .map(([, value]) => value.replace(/^(native|all)=/, ''));
+  const libraries = directives.filter(([name]) => name === 'rustc-link-lib').flatMap(([, value]) => {
+    const equals = value.indexOf('=');
+    const name = value.slice(equals + 1).split(':')[0];
+    const modifiers = equals < 0 ? undefined : value.slice(0, equals).split(':')[1];
+    if (modifiers?.split(',').includes('+verbatim')) return [name];
+    return [`lib${name}.a`, `lib${name}.so`];
+  });
+  const paths = [
+    ...args.filter(arg => !arg.startsWith('-') && /\.(o|a|so|obj|lib)$/.test(arg)).map(arg => resolve(cwd, arg)),
+    ...dirs.flatMap(dir => libraries.map(name => resolve(cwd, dir, name))),
+  ];
+  return createHash('sha256').update(JSON.stringify([directives, watchedDigest([...new Set(paths)].sort(), [])])).digest('hex');
+}
+
+function refreshAndroidUnit(app, dir, target, env, workspace, outputs, watch) {
+  const {out, files, executable, cwd} = JSON.parse(readFileSync(androidRegistry(dir), 'utf8'));
+  if (!existsSync(executable) || !existsSync(out)) return null;
+  const output = resolve(dir, 'rust-output.txt'), inputs = resolve(dir, 'inputs.json');
+  let previous;
+  try { previous = JSON.parse(readFileSync(inputs, 'utf8')).link; }
+  catch { /* without a saved digest, force a relink */ }
+  bakeOutside(app, 'android', target, env, undefined, {workspace, outputs, dir});
+  const record = JSON.parse(readFileSync(inputs, 'utf8'));
+  const link = androidLinkDigest(readFileSync(output, 'utf8'), cwd);
+  let changed = previous !== link;
+  if (changed) {
+    // Cargo must relink changed objects and replay changed directives.
+    writeFileSync(watch, '');
+  }
+  if (record.link !== link) {
+    writeFileSync(`${inputs}.${process.pid}.tmp`, JSON.stringify({...record, link}));
+    renameSync(`${inputs}.${process.pid}.tmp`, inputs);
+  }
+  // Cargo tracks these include! inputs through rustc. A build-script watch
+  // would dirty the next build after the script itself wrote them.
+  for (const file of files) {
+    const bytes = readFileSync(resolve(dir, file)), dest = resolve(out, file);
+    if (existsSync(dest) && bytes.equals(readFileSync(dest))) continue;
+    const next = `${dest}.${process.pid}.tmp`;
+    writeFileSync(next, bytes);
+    renameSync(next, dest);
+    changed = true;
+  }
+  return changed;
+}
+
+/** Only the unit Cargo reports may supply the APK's bake. With one cached
+ * unit, prepare it before Cargo so changed Rust needs just one invocation. */
+export function buildAndroidBake(app, pkg, target, env, workspace, outputs, library, build) {
+  const effective = cargoBuildEnv(workspace, cargoEnvironment(env));
+  if (effective.EXACT_RUST_BUNDLE || effective.EXACT_UPDATE_TRUST === 'production' ||
+      !androidLinkable(pkg, app.generated || !!app.manifest.game)) return {result:build(env)};
+  const root = linkedBakeDir(env, 'android', target), watch = resolve(root, '.cargo-watch');
+  mkdirSync(root, {recursive:true});
+  // Cargo watches a file created before its run, so deleting the bake invalidates
+  // the script without making a bake's own writes trigger another compile.
+  if (!existsSync(watch)) writeFileSync(watch, '');
+  const cached = new Map(readdirSync(root).map(name => resolve(root, name)).filter(dir => existsSync(androidRegistry(dir)))
+    .map(dir => [dir, readFileSync(androidRegistry(dir), 'utf8')]));
+  const candidate = cached.size === 1 ? cached.keys().next().value : null;
+  const cargoEnv = {...env, EXACT_BAKED:root, EXACT_ANDROID_BAKE_LIBRARY:library};
+  let prepared, rejected;
+  const refresh = dir => {
+    const changed = refreshAndroidUnit(app, dir, target, cargoEnv, workspace, outputs, watch);
+    if (changed !== null) prepared = dir;
+    return changed;
+  };
+  if (candidate) try { refresh(candidate); } catch (error) {
+    if (!error.contract) throw error;
+    // Cargo can replace a baker after its Rust inputs change.
+    rejected = error;
+  }
+  const unitDir = result => {
+    const unit = (result.stdout ?? '').split('\n').filter(line => line.startsWith('{')).map(JSON.parse)
+      .find(message => message.reason === 'build-script-executed' && message.package_id === pkg.id);
+    return unit && androidUnitDir(root, unit.out_dir);
+  };
+  const run = recover => {
+    const result = build(cargoEnv, recover), dir = unitDir(result);
+    if (!dir) throw new Error('Cargo did not report the Android bake unit');
+    return {result, dir};
+  };
+  // Cargo can encounter a stale include! in a unit we could not refresh
+  // before the build. The failed run still names the unit that needs a bake.
+  let built = run(result => {
+    const dir = unitDir(result);
+    return dir && dir !== prepared && (dir !== candidate || !rejected) && cached.has(dir) &&
+      readFileSync(androidRegistry(dir), 'utf8') === cached.get(dir) && refresh(dir);
+  });
+  if (built.result.status !== 0) built = run();
+  if (!existsSync(androidRegistry(built.dir))) {
+    // Cargo has an output for this unit but its separate registration was deleted.
+    writeFileSync(watch, '');
+    built = run();
+  }
+  let registration = readFileSync(androidRegistry(built.dir), 'utf8');
+  if (registration === cached.get(built.dir)) {
+    if (built.dir === candidate && rejected) throw rejected;
+    if (built.dir !== prepared && refresh(built.dir)) {
+      const compiled = run();
+      if (compiled.dir !== built.dir) throw new Error('Cargo changed the Android bake unit during compilation');
+      built = compiled;
+      registration = readFileSync(androidRegistry(built.dir), 'utf8');
+    }
+  }
+  // A changed registration identifies a bake Cargo ran with this build's environment.
+  if (registration !== cached.get(built.dir)) {
+    recordRustBake({...cargoEnv, EXACT_BAKED:built.dir}, outputs, workspace);
+  }
+  return built;
+}
+
 /** Publish the watches of a Rust bake bootstrapped or refreshed by Cargo.
  * A first build must have this record before its driver checks freshness. */
-export function recordRustBake(env, outputs = []) {
+export function recordRustBake(env, outputs = [], workspace) {
   const dir = env.EXACT_BAKED;
-  if (!dir || !existsSync(resolve(dir, 'rust-baker.json'))) return;
+  if (!dir) return;
+  if (!existsSync(resolve(dir, 'rust-baker.json'))) {
+    if (workspace) throw new Error(`${dir}: Cargo did not register the Android baker`);
+    return;
+  }
   const baker = JSON.parse(readFileSync(resolve(dir, 'rust-baker.json'), 'utf8'));
-  const at = resolve(dir, 'inputs.json'), tool = `${baker.executable} ${statSync(baker.executable).mtimeMs}`, pair = pairOf(dir);
+  const at = resolve(dir, 'inputs.json'), tool = `${baker.executable} ${statSync(baker.executable).mtimeMs}`, pair = pairOf(dir, !!workspace);
   let previous; try { previous = JSON.parse(readFileSync(at, 'utf8')); } catch { /* bootstrap */ }
   if (previous?.version === 2 && previous.tool === tool && previous.pair === pair && previous.at >= baker.started) return;
-  const runEnv = { ...cargoEnvironment(env), ...baker.env, OUT_DIR: dir, EXACT_BAKED: dir, EXACT_RUST_BAKE: '1' };
-  const lines = readFileSync(resolve(dir, 'rust-output.txt'), 'utf8').split('\n');
+  const cargoEnv = cargoEnvironment(env);
+  const runEnv = { ...(workspace ? cargoBuildEnv(workspace, cargoEnv) : cargoEnv), ...baker.env, OUT_DIR: dir, EXACT_BAKED: dir, EXACT_RUST_BAKE: '1' };
+  const output = readFileSync(resolve(dir, 'rust-output.txt'), 'utf8'), lines = output.split('\n');
   const said = key => lines.map(line => new RegExp(`^cargo::?${key}=(.*)$`).exec(line)?.[1]).filter(value => value !== undefined);
-  const paths = cargoInputPaths(lines.join('\n'), baker.cwd);
+  const paths = cargoInputPaths(output, baker.cwd);
   const record = { version: 2, at: baker.started, tool, pair, warnings: said('warning'),
+    ...(workspace ? {link:androidLinkDigest(output, baker.cwd)} : {}),
     env: Object.fromEntries(said('rerun-if-env-changed').map(name => [name, runEnv[name] ?? null])),
     // Cargo's bootstrap predates this call: never certify inputs changed since its read.
-    paths, digest:inputDigest(paths, dir, runEnv, {since:baker.started, outputs}), missing: paths.filter(path => !existsSync(path)), watchedDirectories:packageDirectories(paths, watchOutputs(dir, runEnv, outputs)) };
+    paths, digest:inputDigest(paths, dir, runEnv, {since:baker.since ?? baker.started, outputs}), missing: paths.filter(path => !existsSync(path)), watchedDirectories:packageDirectories(paths, watchOutputs(dir, runEnv, outputs)) };
   writeFileSync(`${at}.${process.pid}.tmp`, JSON.stringify(record));
   renameSync(`${at}.${process.pid}.tmp`, at);
 }

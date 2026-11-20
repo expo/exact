@@ -327,6 +327,9 @@ export function onReorder(e) {
   onEnd(() => motion(m => m.gone(id)));
   motion(m => m.reorderHandle(e));
 }
+export function onReorderTarget(e, f) {
+  e.$reordertargetchange = f;
+}
 export function onDrop(e, f) {
   e.$reorderdrop = f;
   motion(() => {});
@@ -397,6 +400,7 @@ function geoRead(op, id) {
 }
 export const x_frame = id => geoRead(0, id),
   x_measure = id => geoRead(1, id);
+export const x_scrollMetrics = id => Geo?.scrollMetrics(liveById(id)) ?? null;
 export const x_rangeFrame = (id, start, end) => {
   const out = new Float64Array(4),
     bits = Geo ? Geo.range(liveById(id), start, end, out) : 0;

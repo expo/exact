@@ -491,6 +491,7 @@ fn validate(schema: &Schema) {
                             | "list<number>"
                             | "option<string>"
                             | "option<number>"
+                            | "option<ScrollMetrics>"
                     ),
                 "format: stdlib `{}` type `{t}`",
                 f.name

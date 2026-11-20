@@ -32,7 +32,7 @@ pub(crate) const KEPT: &str = "exact.kept";
 
 /// The kv scope persisted states live in where they are not the app's
 /// `UserDefaults` (LLP 1116 D5, [`Prefs`]).
-const STATE: &str = "exact.state";
+use exact_data::storage::PERSISTED_SCOPE as STATE;
 
 /// Where persisted states live (LLP 1116 D5): the app's `UserDefaults`
 /// domain, or — in agent mode (a nameless drive's memory, a named drive's

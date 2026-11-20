@@ -1,7 +1,6 @@
 # Recipe: a GPU module (a canvas drawn in Rust)
 
-For a package, `bun exact.mjs add <package>` then `canvas surface=name(…)`. For limits and
-features, see [device requirements](../reference.md#gpu-device-requirements).
+For WGSL alone, see [fragment shaders](gpu-shader.md). See also [device requirements](../reference.md#gpu-device-requirements).
 
 A `canvas surface=name(…)` that no data module draws uses `gpu/` beside `app.json`,
 loaded after first pixel. Implement `exact_gpu::Surface`; see `apps/caltrain/gpu`.

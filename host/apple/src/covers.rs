@@ -10,6 +10,7 @@
 //! size a person dragged a box's `resize` grip to (`Runner::resize_box`).
 
 use super::Host;
+use exact_kernel::style::targets::NativeTarget;
 use exact_kernel::{
     BlockMeasure, GroupedMargins, HostBlock, HostCover, KernelError, LayoutError, ViewId,
 };
@@ -26,12 +27,32 @@ pub enum Restyle {
     Size([Option<f32>; 2]),
 }
 
+/// What a call reports of content owners and native targets beside its
+/// blocks (LLP 1123 D2, D9).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct OwnerReports {
+    /// Content owners' updates, each by its root's view.
+    pub updates: Vec<(ViewId, exact_kernel::OwnerUpdate)>,
+    /// Targets native code registered by name, `None` disposing of one
+    /// (D9, "Registration").
+    pub registrations: Vec<(String, Option<NativeTarget>)>,
+}
+
 impl<D: DataSource> Host<D> {
     /// Several boxes' covers (`None` clears one) under one layout. A refusal
     /// for one view (it is gone) leaves the others set and is the batch's
     /// error.
     pub fn set_covers(&mut self, covers: &[(ViewId, Option<HostCover>)]) -> String {
-        self.set_claims(covers, &[], &[], &[], &[], &[], &[], Vec::new())
+        self.set_claims(
+            covers,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            OwnerReports::default(),
+        )
     }
 
     /// What UIKit covers of list `view`'s port at its start and end
@@ -60,7 +81,16 @@ impl<D: DataSource> Host<D> {
     /// layout: each root's frame comes back in its block's space, with the
     /// block's used size.
     pub fn set_blocks(&mut self, blocks: &[(ViewId, Option<HostBlock>)]) -> String {
-        self.set_claims(&[], blocks, &[], &[], &[], &[], &[], Vec::new())
+        self.set_claims(
+            &[],
+            blocks,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            OwnerReports::default(),
+        )
     }
 
     /// Covers, containing blocks and the blocks' placements under one
@@ -68,11 +98,12 @@ impl<D: DataSource> Host<D> {
     /// back is laid out and drawn in this batch. And content owners' local
     /// insets (`None` for the session root's; LLP 1123 D9), which change
     /// only the lengths that read them. And content owners' updates (LLP
-    /// 1123 D2), each applied after its block: every update is checked
-    /// before the call changes anything, and one the kernel refuses, or two
-    /// for one owner, refuses the call; an update whose block the kernel
-    /// refuses is not applied, and one whose view is gone is not applied and
-    /// is the batch's error (`Host::blocks_into`).
+    /// 1123 D2), each applied after its block, and registered targets (D9):
+    /// every one is checked before the call changes anything, and one the
+    /// kernel refuses, or two for one owner or one name, refuses the call; an
+    /// update whose block the kernel refuses is not applied, and one whose
+    /// view is gone is not applied and is the batch's error
+    /// (`Host::blocks_into`).
     #[allow(clippy::too_many_arguments)]
     pub fn set_claims(
         &mut self,
@@ -83,9 +114,9 @@ impl<D: DataSource> Host<D> {
         list_margins: &[(ViewId, Option<[f32; 2]>)],
         restyles: &[(ViewId, Restyle)],
         locals: &[(Option<ViewId>, Option<[f32; 4]>)],
-        updates: Vec<(ViewId, exact_kernel::OwnerUpdate)>,
+        owners: OwnerReports,
     ) -> String {
-        if let Some(why) = self.refused_update(&updates) {
+        if let Some(why) = self.refused_report(&owners) {
             return self.finish(crate::batch::Batch::new(), Some(why));
         }
         self.presence.unauthored = true;
@@ -133,7 +164,7 @@ impl<D: DataSource> Host<D> {
                 error.get_or_insert(format!("cover: {e:?}"));
             }
         }
-        let (blocked, owed) = self.blocks_into(blocks, placements, updates);
+        let (blocked, owed) = self.blocks_into(blocks, placements, owners);
         error = error.or(blocked);
         needs_layout |= owed;
         for &(view, list) in margins {
@@ -160,18 +191,18 @@ impl<D: DataSource> Host<D> {
         }
         self.finish(batch, error)
     }
-    /// Set `blocks` and `placements`, then the content owners' `updates`
-    /// (LLP 1123 D2), before the caller's single layout, so a keyboard is
-    /// held against the bounds its block gives; an update whose view's block
-    /// the kernel refuses is not applied. A layout an update owes is a host's
-    /// fact, as a block's is: a box it moves takes its place without a
-    /// transition. Returns the first refusal, and whether an update owes a
-    /// layout.
+    /// Set `blocks` and `placements`, then the registered targets and the
+    /// content owners' updates (LLP 1123 D2, D9), before the caller's single
+    /// layout, so a keyboard is held against the bounds its block gives; an
+    /// update whose view's block the kernel refuses is not applied. A layout
+    /// a report owes is a host's fact, as a block's is: a box it moves takes
+    /// its place without a transition. Returns the first refusal, and
+    /// whether a report owes a layout.
     pub(super) fn blocks_into(
         &mut self,
         blocks: &[(ViewId, Option<HostBlock>)],
         placements: &[(ViewId, Option<exact_runner::BlockPlacement>)],
-        updates: Vec<(ViewId, exact_kernel::OwnerUpdate)>,
+        owners: OwnerReports,
     ) -> (Option<String>, bool) {
         let mut error = None;
         if !blocks.is_empty() {
@@ -195,7 +226,18 @@ impl<D: DataSource> Host<D> {
         }
         self.runner.place_blocks(placements);
         let mut owed = false;
-        for (view, update) in updates.into_iter().filter(|(v, _)| !refused.contains(v)) {
+        for (name, target) in owners.registrations {
+            match self
+                .runner
+                .kernel_mut()
+                .set_registered_target(&name, target)
+            {
+                Ok(o) => owed |= o,
+                Err(e) => drop(error.get_or_insert(format!("registered target: {e:?}"))),
+            }
+        }
+        let updates = owners.updates.into_iter();
+        for (view, update) in updates.filter(|(v, _)| !refused.contains(v)) {
             match self.runner.kernel_mut().update_owner(view, update) {
                 Ok(o) => owed |= o,
                 Err(e) => drop(error.get_or_insert(format!("owner update: {e:?}"))),
@@ -208,18 +250,17 @@ impl<D: DataSource> Host<D> {
         (error, owed)
     }
 
-    /// Why a call carrying `updates` is refused before it changes anything,
-    /// if it is: an update the kernel refuses (`Kernel::check_owner_update`),
-    /// or two for one owner, since the first changes the generations the
+    /// Why a call carrying `owners` is refused before it changes anything,
+    /// if it is: an update or a registration the kernel refuses
+    /// (`Kernel::check_owner_update`, `Kernel::check_registered_target`), or
+    /// two for one owner or one name, since the first changes what the
     /// second is checked against. An update for a view that is gone is
     /// passed over here, as a block for one is: it has no owner to leave half
     /// updated, and `blocks_into` reports it beside what the call applies.
-    pub(super) fn refused_update(
-        &self,
-        updates: &[(ViewId, exact_kernel::OwnerUpdate)],
-    ) -> Option<String> {
+    pub(super) fn refused_report(&self, owners: &OwnerReports) -> Option<String> {
         let kernel = self.runner.kernel();
-        updates.iter().enumerate().find_map(|(i, (view, update))| {
+        let updates = &owners.updates;
+        let update = updates.iter().enumerate().find_map(|(i, (view, update))| {
             if updates[..i].iter().any(|(v, _)| v == view) {
                 return Some(format!(
                     "owner update: two for view {view} in one call; send one per owner"
@@ -231,6 +272,25 @@ impl<D: DataSource> Host<D> {
                     "owner update: {e:?}; nothing in the call was applied"
                 )),
             }
+        });
+        let registered = &owners.registrations;
+        update.or_else(|| {
+            registered
+                .iter()
+                .enumerate()
+                .find_map(|(i, (name, target))| {
+                    if registered[..i].iter().any(|(n, _)| n == name) {
+                        return Some(format!(
+                            "registered target: two for `{name}` in one call; send one per name"
+                        ));
+                    }
+                    let refused = kernel
+                        .check_registered_target(name, target.as_ref())
+                        .err()?;
+                    Some(format!(
+                        "registered target: {refused:?}; nothing in the call was applied"
+                    ))
+                })
         })
     }
 }

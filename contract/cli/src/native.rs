@@ -127,7 +127,7 @@ pub fn write_desktop_hatches(
     target: &str,
     out: &Path,
 ) -> Result<(), String> {
-    if !matches!(platform, "linux" | "windows") {
+    if !matches!(platform, "linux" | "windows") || android_payload() {
         return Ok(());
     }
     // Absolute, since `include!` resolves a relative path against OUT_DIR.
@@ -175,6 +175,21 @@ fn watched_rust_hatches(
     Ok(text)
 }
 
+/// Whether this Android bake writes data for the APK's separate image.
+pub fn android_payload() -> bool {
+    std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android")
+        && std::env::var_os("EXACT_BAKED").is_some()
+        && std::env::var_os("EXACT_RUST_BAKE").is_some()
+}
+
+// The separately run bake must leave Cargo's source inputs alone when only the data changed.
+fn android_source(path: &Path, text: &str) -> Result<(), String> {
+    if std::fs::read(path).ok().as_deref() != Some(text.as_bytes()) {
+        std::fs::write(path, text).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// What an app's Android crate (the Canvas host's library) writes beside
 /// its plan (LLP 1115.001.000 D2, D4): `hatches.rs`, which defines
 /// `exact_hatches()`, the install `canvas_jni!` hands the host (the app's
@@ -182,7 +197,8 @@ fn watched_rust_hatches(
 /// reader's Kotlin ones told beside them; the reader's alone when the app
 /// has no Rust ones; none when it gives `android` no word); and what
 /// [`android_reach`] writes, the widgets' `widgets.rs` ([`widgets`]), and
-/// `launch.rs`, the launch modules called once before boot.
+/// `launch.rs`, the launch modules called once before boot, and `baked.rs`,
+/// the Canvas host's plan and compatibility accessors.
 pub fn android_entry(
     app_root: &Path,
     manifest: &Manifest,
@@ -190,11 +206,25 @@ pub fn android_entry(
     out_dir: &Path,
 ) -> Result<(), String> {
     let install = "Option<::exact_painted::hatches::Install>";
-    std::fs::write(
-        out_dir.join("launch.rs"),
-        crate::logic::painted_launch_parts(app_root, manifest, "android")?,
-    )
-    .map_err(|e| e.to_string())?;
+    android_source(
+        &out_dir.join("launch.rs"),
+        &crate::logic::painted_launch_parts(app_root, manifest, "android")?,
+    )?;
+    let (plan_bytes, compat_text) = if android_payload() {
+        (
+            r#"::exact_painted::android_baked!("exact_app_plan")"#,
+            r#"std::str::from_utf8(::exact_painted::android_baked!("exact_compat_json")).expect("baked compat.json is UTF-8")"#,
+        )
+    } else {
+        (
+            r#"include_bytes!(concat!(env!("OUT_DIR"), "/app.plan"))"#,
+            r#"include_str!(concat!(env!("OUT_DIR"), "/compat.json"))"#,
+        )
+    };
+    android_source(
+        &out_dir.join("baked.rs"),
+        &format!("fn exact_plan() -> &'static [u8] {{ {plan_bytes} }}\nfn exact_compat() -> &'static str {{ {compat_text} }}\n"),
+    )?;
     let text = match watched_rust_hatches(app_root, manifest, "android")? {
         Some(rust) => format!(
             "{rust}fn exact_hatches() -> {install} {{\n    Some(::exact_painted::hatches::install_with_reader::<hatches::ExactHatches>(HatchKey::WORDS))\n}}\n"
@@ -210,7 +240,7 @@ pub fn android_entry(
             }
         }
     };
-    std::fs::write(out_dir.join("hatches.rs"), text).map_err(|e| e.to_string())?;
+    android_source(&out_dir.join("hatches.rs"), &text)?;
     widgets::write(app_root, manifest, out_dir)?;
     android_reach(app_root, plan, out_dir)
 }
@@ -227,11 +257,11 @@ pub fn android_reach(
     let transfer = if plan.package_extensions().get("background-transfer")
         == Some(&"@exact/background-transfer")
     {
-        "exact_painted::android_transfer_jni!();\n"
+        "exact_painted::android_transfer_jni!(exact_compat());\n"
     } else {
         ""
     };
-    std::fs::write(out_dir.join("transfers.rs"), transfer).map_err(|e| e.to_string())?;
+    android_source(&out_dir.join("transfers.rs"), transfer)?;
     let uses = android_uses(plan);
     std::fs::write(out_dir.join("uses.txt"), uses.join("\n")).map_err(|e| e.to_string())?;
     // The grant ceiling of the compatibility id the build script wrote

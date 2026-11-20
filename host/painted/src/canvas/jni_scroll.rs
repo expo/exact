@@ -35,6 +35,27 @@ macro_rules! canvas_jni_scroll {
             ints(env, &words)
         }
 
+        /// The sheet shared by a native list drag moved or settled.
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_sheetDrag(
+            _env: *mut $crate::canvas::jni_sys::JNIEnv,
+            _class: $crate::canvas::jni_sys::jclass,
+            index: $crate::canvas::jni_sys::jint,
+            generation: $crate::canvas::jni_sys::jint,
+            top: $crate::canvas::jni_sys::jfloat,
+            ended: $crate::canvas::jni_sys::jboolean,
+            velocity: $crate::canvas::jni_sys::jfloat,
+        ) {
+            with(|h| {
+                h.sheet_drag(
+                    index as u32,
+                    generation as u32,
+                    top,
+                    (ended != 0).then_some(velocity),
+                )
+            });
+        }
+
         /// The reader's pull to refresh of scroller `id` was let go past its
         /// threshold (`CanvasHost::refresh`).
         #[no_mangle]

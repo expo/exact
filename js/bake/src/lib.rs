@@ -19,7 +19,7 @@ mod resident;
 mod seed;
 #[cfg(test)]
 mod sources_tests;
-pub use android::build_android;
+pub use android::{build_android, build_android_with, take_android_linked};
 pub use resident::Producer;
 pub use seed::Seed;
 use seed::Seeded;
@@ -69,9 +69,11 @@ impl std::error::Error for BakeError {}
 pub fn build(app: &Path, platform: &str) -> Result<(), BakeError> {
     println!("cargo:rerun-if-env-changed=EXACT_BAKED");
     println!("cargo:rerun-if-env-changed=EXACT_WEB_TYPES");
-    library::link(app, platform, std::env::var_os("EXACT_BAKED").is_some()).map_err(BakeError)?;
+    let baked =
+        std::env::var_os("EXACT_BAKED").filter(|_| std::env::var_os("EXACT_RUST_BAKE").is_none());
+    library::link(app, platform, baked.is_some()).map_err(BakeError)?;
     icon::link();
-    match std::env::var_os("EXACT_BAKED") {
+    match baked {
         Some(baked) => std::env::var_os("OUT_DIR")
             .ok_or_else(|| "build requires OUT_DIR".to_string())
             .and_then(|out| take_baked(Path::new(&baked), Path::new(&out))),
@@ -163,17 +165,15 @@ fn embedded_entry(mode: &str, inputs: &serde_json::Value, linked: bool) -> Resul
     contract::rust_entry_composed("ExactEmbeddedData", "embedded_data()", mode, inputs, app)
 }
 
-/// `module.rs`'s first constants: the app, its grants and, but in a linked
-/// bake, the module's hash (`REVISION`, which the web's entry passes on); on
-/// a native platform the bytecode, embedded, or in a linked bake the
-/// section the link adds, so that an edit to the module's code leaves the
-/// file as it was; and there, when a package fills the native slot, its
-/// shim and the factory `embedded_data` attaches (LLP 1154 D3).
+/// The module's identity, revision and bytecode accessors. A linked bake
+/// reads the grants and bytecode from the mapped data. A package filling the
+/// native slot supplies the factory `embedded_data` attaches (LLP 1154 D3).
 fn module_constants(
     meta: &serde_json::Value,
     rust_updates: bool,
     platform: &str,
     linked: bool,
+    android_payload: bool,
     native: Option<&contract::native::NativeSlot>,
     preloads: &serde_json::Value,
 ) -> Result<String, String> {
@@ -184,6 +184,8 @@ fn module_constants(
     // writes is the same for apps that differ only there.
     let mut metadata = if linked {
         linked::LINKED_IDENTITY.to_string()
+    } else if android_payload {
+        format!("pub const APP: &str = {app:?};\n{}", linked::ANDROID_GRANTS)
     } else {
         format!("pub const APP: &str = {app:?};\npub const GRANTS: &str = {grants:?};\n")
     };
@@ -196,7 +198,7 @@ fn module_constants(
             contract::preload_expression(preloads)
         ));
     }
-    if !linked {
+    if !linked && !android_payload {
         let hash = meta["module"]["sha256"]
             .as_str()
             .ok_or("missing module hash")?;
@@ -204,7 +206,9 @@ fn module_constants(
     }
     metadata.push_str(&format!("pub const RUST_UPDATES: bool = {rust_updates};\n"));
     if platform != "web" {
-        metadata.push_str(if linked {
+        metadata.push_str(if android_payload {
+            linked::ANDROID_BYTECODE
+        } else if linked {
             LINKED_BYTECODE
         } else {
             APP_BYTECODE
@@ -310,7 +314,8 @@ fn build_sources(
         "exact_apple"
     };
     // What an Apple archive links, as its compatibility inputs name it (LLP 1047.001 D2).
-    let linked = (platform != "web").then(|| exact_bake::apple_link(&compat, host));
+    let linked = (platform != "web" && !contract::native::android_payload())
+        .then(|| exact_bake::apple_link(&compat, host));
     let compat_json = if outside && platform != "web" {
         with_module_identity(&compat.to_json(), &meta)?
     } else {
@@ -326,6 +331,7 @@ fn build_sources(
         rust_updates,
         platform,
         outside,
+        contract::native::android_payload(),
         native.slot.as_ref(),
         &compat.inputs["preload"],
     )?;
@@ -335,17 +341,11 @@ fn build_sources(
             manifest.windows_window()?
         ));
     }
-    // The module's Canvas 2D roster (LLP 1056 D1), known before it loads; a
-    // linked bake's is in its compat.json, as its identity is.
-    if outside && platform != "web" {
-        metadata.push_str(linked::LINKED_SURFACES);
-    } else {
-        metadata.push_str("#[allow(dead_code)]\npub const CANVAS_SURFACES: &[(&str, usize)] = &[");
-        for (name, arity) in meta["surfaces"].as_object().into_iter().flatten() {
-            metadata.push_str(&format!("({name:?}, {}), ", arity.as_u64().unwrap_or(0)));
-        }
-        metadata.push_str("];\n");
-    }
+    metadata.push_str(&linked::canvas_surfaces(
+        &meta,
+        outside && platform != "web",
+        contract::native::android_payload(),
+    ));
     // Where each module runs (LLP 1027.002 §6), typed for the executor crate
     // this platform links; the compatibility id already carries the same.
     let placement_type = if platform == "web" {

@@ -1,13 +1,16 @@
 //! Compile and bake `app.contract` into `OUT_DIR/app.plan`, with the
 //! compatibility id beside it (as the Linux crate computes it: the Canvas
 //! host is that host's presenter) and what `contract::native::android_entry`
-//! writes, for `exact_painted::canvas_jni!` to embed.
+//! writes, for `exact_painted::canvas_jni!`.
 
 use contract::DataSource;
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("android") {
+        return;
+    }
+    if exact_bake::host::take_android_linked(&[]).unwrap_or_else(|e| panic!("Android bake: {e}")) {
         return;
     }
     contract::rerun_if_changed(std::path::Path::new("../app.contract"));

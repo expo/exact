@@ -7,7 +7,7 @@ import { appleMetadataProblem } from '../host/apple/plist.mjs';
 import { appleImplementations } from '../js/bake/src/typescript.mjs';
 import { webHostFiles, hostModuleSources, MODULE_PRELUDE } from '../host/web-js/glue.mjs';
 export { webHostFiles } from '../host/web-js/glue.mjs';
-import { compilerPaths, unitDepInfo, cargoBakeInputs, bakeSourceInputs, pendingSourceInputs, inputProducts, inputHashes, sourcePath, packageDirectories, directoryInputNames, buildInputCollector, binarySourceInputs, swiftTargetInputs, watchOutput } from './cargo-dep-info.mjs';
+import { compilerPaths, unitDepInfo, cargoBakeInputs, cargoLibraryTarget, bakeSourceInputs, pendingSourceInputs, inputProducts, inputHashes, sourcePath, packageDirectories, directoryInputNames, buildInputCollector, binarySourceInputs, swiftTargetInputs, watchOutput } from './cargo-dep-info.mjs';
 import { notificationServiceBuildInventory, notificationServiceInputChanges, notificationServiceSourceRoot } from './notification-service.mjs';
 export { compilerPaths, unitDepInfo } from './cargo-dep-info.mjs';
 import { LIBRARY_CACHE, directDependencies, prepareLibrary } from './package-libraries.mjs';
@@ -44,13 +44,12 @@ import { SHELL_SOURCES } from '../host/web/look.mjs';
 import { createHash } from 'node:crypto';
 import { refuse } from './deploy-signing.mjs';
 import { nativeSource, prepareRustBundle } from './rust.mjs';
-import { bakeOutside, compiledBakeDir, linkable, linkedInputs, recordRustBake } from './linked-plan.mjs';
-import { throwContractErrors } from './contract-diagnosis.mjs';
+import { bakeOutside, buildAndroidBake, compiledBakeDir, linkable, linkedInputs, recordRustBake } from './linked-plan.mjs';
 import { filesystem, installedModules, OFFLINE_MISSING, removePrivateTree, withHostDeployment } from './filesystem.mjs';
 import { installedFileDependencies } from './file-dependencies.mjs';
 import { startSweep } from './sweep.mjs';
 import { WEB_TOOLCHAIN, WEB_STD, WEB_SIZE, WEB_RUSTFLAGS, webToolchainEnv, cargoEnvironment,
-  androidCargo, appCrates, appleCargo, authoredWorkspace, cargoDiagnosticsCommand, cargoOnPath, claimTargetCrates,
+  appCrates, authoredWorkspace, buildCommand, cargoOnPath, claimTargetCrates,
   wholeProgram, declaredWorkspace, knownWorkspace, refuseLoose, rememberWorkspace, shellsDir, targetRustflags } from './cargo-check.mjs';
 export { WEB_TOOLCHAIN, WEB_STD, WEB_SIZE, webToolchainEnv, cargoEnvironment, cargoOnPath, wholeProgram } from './cargo-check.mjs';
 import { appCrateName, gpuModules, packageGpuInputs, packageGpuManifest, gpuView, joinMetadata, joinsGpu, settleShells } from './app-shells.mjs';
@@ -826,24 +825,6 @@ const under = (root, path) => {
   return child === '' || (!isAbsolute(child) && child !== '..' && !child.startsWith('..' + sep));
 };
 const orderedBuild = (rows) => rows.sort((a, b) => Buffer.compare(Buffer.from(canonicalBuild(a)), Buffer.from(canonicalBuild(b))));
-function buildCommand(command, args, app, env, stderr = 'pipe') {
-  if (command === 'cargo') env = cargoEnvironment(env);
-  let result = spawnSync(...cargoDiagnosticsCommand(...androidCargo(...appleCargo(command, args, { cwd: app.workspace, env, stdio: ['ignore','pipe',stderr], encoding: 'utf8', maxBuffer: 128 * 1024 * 1024 }))));
-  // An offline Cargo that lacks a source it needs (a new workspace, a new lock entry) fetches the lock's
-  // sources once and tries again, instead of failing on the first missing crate (LLP 1054 O2).
-  if (command === 'cargo' && result.status !== 0 && OFFLINE_MISSING.test(result.stderr ?? '')) {
-    console.error(`${app.name}: Cargo's sources are not all fetched; fetching the locked ones (cargo fetch --locked) and trying again`);
-    const fetched = spawnSync('cargo', ['fetch', '--locked'], { cwd: app.workspace, env, stdio: ['ignore', 'inherit', 'inherit'] });
-    if (fetched.status === 0) result = spawnSync(...cargoDiagnosticsCommand(...androidCargo(...appleCargo(command, args, { cwd: app.workspace, env, stdio: ['ignore','pipe',stderr], encoding: 'utf8', maxBuffer: 128 * 1024 * 1024 }))));
-  }
-  if (result.error || result.status !== 0) {
-    if (command === 'cargo') throwContractErrors(app, args, result, ROOT);
-    // Said short: the profiles' `--config` pairs and a JSON build's artifact lines bury the diagnostics above.
-    const said = args.filter((arg, i) => arg !== '--config' && args[i - 1] !== '--config').join(' '), out = (result.stdout ?? '').split('\n').filter(line => !line.includes('"reason":')).join('\n').slice(-4000);
-    throw new Error(`${command} ${said} failed: ${result.error?.message ?? result.stderr ?? `exit ${result.signal ?? result.status} (see diagnostics above)`}${out.trim() ? `\n${out}` : ''}`);
-  }
-  return result;
-}
 /** A build script's call into the bake: a Contract that does not compile
  * ends the process with its diagnostics as the last thing printed, with no
  * stack after them (LLP 1054 L9); any other failure is thrown on. */
@@ -992,6 +973,13 @@ function buildGraph(app, target, kind, env, gpu, platform) {
 const buildOutputs = (app, graph, env) => [app.target, graph.metadata.target_directory, graph.metadata.build_directory,
   env.CARGO_BUILD_BUILD_DIR, env.EXACT_BAKE_OUTPUT, env.EXACT_WINDOWS_OUTPUT, env.EXACT_WEB_DIST ?? webDist(app),
   ...['dist', 'web-dist', 'dist-windows', 'artifacts'].map(name => resolve(app.dir, name))].filter(Boolean).map(path => resolve(path));
+
+/** The backend origin the bake in `baked` selected (its app.module.json), or null for a bake with no TypeScript module. */
+export function bakedBackendOrigin(baked) {
+  const moduleReceipt = resolve(baked, 'app.module.json');
+  return existsSync(moduleReceipt) ? JSON.parse(readFileSync(moduleReceipt, 'utf8')).backendOrigin : null;
+}
+
 function completeBuild(app, platform, target, graph, messages, roots, env, prepared = new Map(), generatedInputs = {products:[], watchedDirectories:[]}, privacyManifests = []) {
   const scripts = messages.filter((m) => m.reason === 'build-script-executed' && graph.roles.has(m.package_id));
   const targetDirs = [app.target, graph.metadata.build_directory].map(dir => resolve(dir, target));
@@ -1002,8 +990,7 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
   const baked = existsSync(resolve(rootOutput, 'compat.json')) ? rootOutput : env.EXACT_BAKED /* a bake before Cargo keeps the plan and its receipts apart (linked-plan.mjs) */, compat = JSON.parse(readFileSync(resolve(baked, 'compat.json'), 'utf8'));
   if (compat.target !== target || compat.inputs.platform !== platform || compat.inputs.app !== app.id) throw new Error('actual bake receipt names another target, platform or app');
   const bundleGraph = JSON.parse(readFileSync(resolve(baked, 'artifacts.json'), 'utf8'));
-  const moduleReceipt = resolve(baked, 'app.module.json');
-  const backendOrigin = existsSync(moduleReceipt) ? JSON.parse(readFileSync(moduleReceipt, 'utf8')).backendOrigin : null;
+  const backendOrigin = bakedBackendOrigin(baked);
   // Recreate packaging outputs from Cargo's actual bake, even on a cache hit.
   // A build script must never watch its own receipt: writing it dirties every next build.
   const stem = `${platform}-${target}`;
@@ -1180,7 +1167,7 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
     .concat(generatedInputs.products);
   hashes.save();
   const sourceRecord = platform === 'windows' ? {sourceInputs:bakeSourceInputs(app, sourceInputs, watchOutputs)} : {};
-  return {version:1,backendOrigin,...sourceRecord,watchedDirectories:[...packageDirectories([...sourceInputs],watchOutputs), ...generatedInputs.watchedDirectories],...(env.EXACT_RUST_BUNDLE?{rust:resolve(baked,'rust')}:{}),...(optionalInputs.size?{optionalInputs:[...optionalInputs].sort()}:{}),...(baked!==rootOutput?{linkedPlan:baked,linkedInputs:linkedInputs(baked)}:{}),...bakedSettings(baked,app.dir),trust:env.EXACT_UPDATE_TRUST??'development',compat,graph:bundleGraph,binary:{sourceInputs:sourceInputsRecord,...(privacyManifests.length ? {privacyManifests} : {}),...(assetCatalogApp ? {assetCatalogApp} : {}),...(nativeResources.length ? {nativeResourceApp:{dir:app.dir,manifest:app.manifest,platform}} : {}),sha256:buildHash(canonicalBuild(fingerprint)),...fingerprint,inventories,inputs:files,watchOutputs,links:[...links.values()],directories:[...directories.values()],missing:[...absent.values()]},products};
+  return {version:1,backendOrigin,...sourceRecord,watchedDirectories:[...packageDirectories([...sourceInputs],watchOutputs), ...generatedInputs.watchedDirectories],...(platform==='android'?{androidOut:baked}:{}),...(env.EXACT_RUST_BUNDLE?{rust:resolve(baked,'rust')}:{}),...(optionalInputs.size?{optionalInputs:[...optionalInputs].sort()}:{}),...(baked!==rootOutput?{linkedPlan:baked,linkedInputs:linkedInputs(baked)}:{}),...bakedSettings(baked,app.dir),trust:env.EXACT_UPDATE_TRUST??'development',compat,graph:bundleGraph,binary:{sourceInputs:sourceInputsRecord,...(privacyManifests.length ? {privacyManifests} : {}),...(assetCatalogApp ? {assetCatalogApp} : {}),...(nativeResources.length ? {nativeResourceApp:{dir:app.dir,manifest:app.manifest,platform}} : {}),sha256:buildHash(canonicalBuild(fingerprint)),...fingerprint,inventories,inputs:files,watchOutputs,links:[...links.values()],directories:[...directories.values()],missing:[...absent.values()]},products};
 }
 // The permanent companion inode owns exclusion; the JSON claim is only its diagnostic record.
 export function claimBuildOutput(app, path) {
@@ -1230,11 +1217,9 @@ export function claimLive(text) {
   if (ps.status !== 0 || !Number.isFinite(started)) return true; // running, and `ps` cannot say since when: never guess
   return !(started > Date.parse(claim.started) + 1000); // `lstart` has whole seconds: a holder started after its claim is a reused pid
 }
-/** Cargo library filenames use the selected target name, with hyphens
- * normalized to underscores, even when the package has another name. */
-export const cargoLibraryTarget = (pkg) => pkg.targets.find(t => t.kind.some(k => ['cdylib','staticlib','rlib','lib'].includes(k)));
-export const appleCargoClaims = (app, target, units) => [...new Set(units.map(unit =>
-  resolve(app.target, '.apple-cargo-locks', target, `lib${unit.name.replace(/-/g, '_')}.lock`)))].sort();
+export { cargoLibraryTarget } from './cargo-dep-info.mjs';
+export const cargoProductClaims = (app, target, units) => [...new Set(units.map(unit =>
+  resolve(app.target, target.endsWith('-linux-android') ? '.android-cargo-locks' : '.apple-cargo-locks', target, `lib${unit.name.replace(/-/g, '_')}.lock`)))].sort();
 
 /** What an app's bake watches besides its sources (its asset roots that exist, whether a backend origin is chosen, which of the settings files `.env.local` and `.env` exist); unset, a missing one stays an input where the app holds its build output, and every build reruns the script and relinks (bake/src/receipt/watch.rs). Every baking build passes it. `app`: its `dir`, `manifest`. */
 export const bakeWatchEnv = app => ({ EXACT_ASSET_ROOTS: ['assets', 'deck', ...(app.manifest.game ? [] : ['gpu/shaders'])].filter(root => (root === 'assets' && app.manifest.game && (app.manifest.game.assets === true || existsSync(resolve(app.dir, 'art')))) || existsSync(resolve(app.dir, root))).join(','), EXACT_BACKEND_SELECTION: existsSync(resolve(app.dir, '.exact/backend-origin')) ? 'present' : 'absent', EXACT_ENV_FILES: ['.env.local', '.env'].filter(file => existsSync(resolve(app.dir, file))).join(',') });
@@ -1276,7 +1261,7 @@ export function buildBake(app, platform, target, options = {}) {
   });
   const releases = [];
   try {
-    if (apple || ['web', 'windows'].includes(platform)) for (const path of appleCargoClaims(app, target, selected.map(({unit}) => unit))) {
+    if (apple || kind === 'android' || ['web', 'windows'].includes(platform)) for (const path of cargoProductClaims(app, target, selected.map(({unit}) => unit))) {
       releases.push(awaitBuildOutput(app, path, owner => console.error(`waiting for the ${platform} build of ${owner}`)));
     }
   for(const {pkg,unit} of selected) {
@@ -1293,21 +1278,24 @@ export function buildBake(app, platform, target, options = {}) {
     const archive=apple&&pkg.id===graph.root.id, at=graph.workspaces.get(pkg.id)??(gpuPackage(pkg)?gpuView(app):app);
     const whole=wholeProgram(kind,options.profile??'release');
     const args=[archive?'rustc':options.check?'check':'build',...(archive?['--crate-type','staticlib']:[]),...cargoReproducibilityFlags(at),...injectedProfiles(at),...whole,...(sized||watch?WEB_STD:[]),...(target==='wasm32-unknown-unknown'?wasmRemapFlags(at,sized?WEB_TOOLCHAIN:null):[]),'-p',pkg.name,'--target',target,'--profile',profile,...(['linux','windows'].includes(kind)&&pkg.id===graph.root.id?['--bin',unit.name]:['--lib']),...(gpuPackage(pkg)?['--config',`profile.${profile}.strip=false`]:[]),'--message-format=json-render-diagnostics'];
-    // Refresh Rust bakers through an rlib before they read a coordinated
-    // Rust/manifest edit. Generated inputs also predate the first archive.
+    const outputs = buildOutputs(app,graph,env);
+    delete env.EXACT_BAKED;
     if (archive && options.link && !env.EXACT_RUST_BUNDLE && linkable(app,pkg)) {
-      env.EXACT_BAKED = bakeOutside(app,platform,target,env,dir => {
-        buildCommand('cargo',['build',...args.slice(3)],app,{...env,EXACT_BAKED:dir},'inherit');
-      },{cargoArgs:[...whole,'--profile',profile],outputs:buildOutputs(app,graph,env)});
-    } else delete env.EXACT_BAKED;
+      env.EXACT_BAKED = bakeOutside(app,platform,target,env,dir =>
+        buildCommand('cargo',['build',...args.slice(3)],at,{...env,EXACT_BAKED:dir},'inherit'),
+      {cargoArgs:[...whole,'--profile',profile],outputs});
+    }
+    const android = kind === 'android' && pkg.id === graph.root.id && options.androidPayload;
+    if (android && app.manifest.game) generatedInputs = inputProducts(['app.json', 'keys.json', 'surfaces.json'].map(file => resolve(app.dir, '.shells', file)), app.dir, outputs);
     const recordInputs = pkg.id === graph.root.id ? cargoBakeInputs(pkg,target,profile,env,platform === 'windows' ? app : null) : () => {};
-    // Cargo compiles a TypeScript app's linked bake from a content-addressed copy (linked-plan.mjs compiledBakeDir), so an identity, grants or Canvas roster change leaves its archive fresh; a Rust data crate's bake registers its build script in its own directory and keeps it.
     const shared = archive && env.EXACT_BAKED && !existsSync(resolve(app.dir,'data/Cargo.toml')) && env.CARGO_TARGET_DIR ? compiledBakeDir(env.EXACT_BAKED, resolve(env.CARGO_TARGET_DIR,'bake-compiled')) : null;
-    const result=buildCommand('cargo',args,at,shared?{...env,EXACT_BAKED:shared}:env,'inherit');
+    const {result, dir} = android ? buildAndroidBake(app,pkg,target,env,at.workspace,outputs,options.androidPayload(),(cargoEnv,recover) => buildCommand('cargo',args,at,cargoEnv,'inherit',recover)) :
+      {result:buildCommand('cargo',args,at,shared?{...env,EXACT_BAKED:shared}:env,'inherit')};
     const cargo = { workspace: at.workspace, metadata: graph.cargoGraphs.get(at.workspace) };
     const output=result.stdout.split('\n').filter(Boolean).map(line => ({...JSON.parse(line), cargo}));messages.push(...output);roots.push({package:pkg.id,name:unit.name});
     recordInputs(output);
-    if (archive && env.EXACT_BAKED) recordRustBake(env, buildOutputs(app,graph,env));
+    if (dir) env.EXACT_BAKED = dir;
+    else if (env.EXACT_BAKED) recordRustBake(env, outputs);
     // Generated host inputs can postdate the build's start; bind their bytes before host compilation.
     if (apple && app.manifest.game && pkg.id === graph.surface?.id) generatedInputs = inputProducts([
       graph.root.manifest_path, ...graph.root.targets.map(t => t.src_path),

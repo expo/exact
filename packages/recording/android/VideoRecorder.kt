@@ -28,7 +28,8 @@ private class VideoSlot { var busy = false }
 /** One output on the track's camera session. CameraX decides whether it fits beside preview and analysis. */
 internal class VideoTake(
     override val id: String, private val path: String, private val file: File,
-    private val context: ExtensionContext, private val maxDuration: Double, private val changed: () -> Unit
+    private val context: ExtensionContext, private val maxDuration: Double, private val changed: () -> Unit,
+    private val track: dev.exact.canvas.TrackEntry? = null
 ) : MediaTake, TrackConsumer {
     override var state = "recording"
         private set
@@ -47,10 +48,13 @@ internal class VideoTake(
     private var recording: Recording? = null
     private val waiting = ArrayList<(JSONObject) -> Unit>()
     private var finishing = false
+    private var agentVideo: AgentVideo? = null
+    private var encodedClip = false
 
     private val duration: Double get() = recorded + if (state == "recording") maxOf(0.0, context.now() - since) else 0.0
 
     fun arm() {
+        if (context.agent && agentVideo == null && track != null) agentVideo = AgentVideo(context.tracks, track, context::now)
         limit?.invoke()
         if (context.agent && maxDuration > 0 && state == "recording") {
             limit = context.after(maxOf(0.0, maxDuration - duration)) { finish("max-duration", null) {} }
@@ -112,6 +116,7 @@ internal class VideoTake(
 
     override fun pause(why: String) {
         if (state != "recording") return
+        agentVideo?.pause(context.now())
         recorded = duration
         state = "paused"
         reason = why
@@ -125,6 +130,7 @@ internal class VideoTake(
         state = "recording"
         reason = null
         since = context.now()
+        agentVideo?.resume(since)
         recording?.resume()
         arm()
         changed()
@@ -145,11 +151,25 @@ internal class VideoTake(
         this.failure = failure
         limit?.invoke(); limit = null
         if (context.agent) {
-            try {
-                file.parentFile?.mkdirs()
-                dev.exact.canvas.Files.write(file, android.util.Base64.decode(AGENT_VIDEO, android.util.Base64.DEFAULT))
-            } catch (e: Exception) { this.failure = "the file was not written: ${e.message}" }
-            complete()
+            val parts = agentVideo?.finish(context.now())
+            agentVideo = null
+            val bytes = { android.util.Base64.decode(AGENT_VIDEO, android.util.Base64.DEFAULT) }
+            if (parts != null && failure == null) {
+                encodedClip = true
+                Thread({
+                    val error = try { writeAgentVideo(file, parts, bytes); null } catch (e: Exception) { e.message ?: e.toString() }
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        this.failure = error
+                        complete()
+                    }
+                }, "exact-agent-video").start()
+            } else {
+                if (failure == null) try {
+                    file.parentFile?.mkdirs()
+                    dev.exact.canvas.Files.write(file, bytes())
+                } catch (e: Exception) { this.failure = "the file was not written: ${e.message}" }
+                complete()
+            }
         } else if (recording != null) recording?.stop() else {
             if (failure == null) failureCode = "NotReadableError"
             this.failure = failure ?: "the camera supplied no video"
@@ -164,7 +184,7 @@ internal class VideoTake(
         reason = reason ?: "track-ended"
         limit?.invoke(); limit = null
         val take = if (failure == null) try {
-            val metadata = if (context.agent) JSONObject().put("duration", 300).put("width", 16).put("height", 16).put("frameRate", 10)
+            val metadata = if (context.agent && !encodedClip) JSONObject().put("duration", 300).put("width", 16).put("height", 16).put("frameRate", 10)
             else metadata(file)
             metadata.put("path", path).put("mimeType", "video/mp4").put("size", file.length()).also { result = it }
         } catch (e: Exception) {

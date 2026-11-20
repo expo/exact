@@ -65,12 +65,15 @@ internal object Headless {
  * or [Headless]. */
 internal object Setup {
     /** Write exact2's environment as the application alone decides it. Returns the application's meta-data. */
-    fun environment(app: Context): Bundle? {
+    fun environment(app: Context, intent: android.content.Intent? = null): Bundle? {
         android.system.Os.setenv("XDG_CACHE_HOME", app.cacheDir.absolutePath, true)
         // Rust's `temp_dir` is TMPDIR, else /data/local/tmp, which an app cannot write. API 29 sets none, and a
         // drive with no scratch store keeps its `app:/` files under it (`exact_painted::picker`).
         android.system.Os.setenv("TMPDIR", app.cacheDir.absolutePath, false)
         val meta = app.packageManager.getApplicationInfo(app.packageName, android.content.pm.PackageManager.GET_META_DATA).metaData
+        if (meta?.getBoolean("dev.exact.development", false) == true) {
+            DevLoop.atLaunch(app, intent)?.let { android.system.Os.setenv("EXACT_DEV_PLAN", it, true) }
+        }
         // The `protocol_handlers` this APK registers (LLP 1038 D8): exact2 puts a URL of one's scheme at its template's
         // `%s`, at launch and while the app runs, as the Apple hosts do with `ExactProtocolHandlers`.
         meta?.getString("dev.exact.protocol_handlers")?.let { android.system.Os.setenv("EXACT_PROTOCOL_HANDLERS", it, true) }

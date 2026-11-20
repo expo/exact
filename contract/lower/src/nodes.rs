@@ -334,6 +334,7 @@ impl Lowerer<'_> {
         });
         let expanded = row_list.as_deref().unwrap_or(expanded);
         media::check_session(tag, expanded)?;
+        crate::transfer::check_node(tag, parent_tag, expanded)?;
         crate::frames::check(tag, positional, expanded)?;
         let audio = media::audio_rows(tag, expanded, *span)?;
         let expanded = audio.as_deref().unwrap_or(expanded);

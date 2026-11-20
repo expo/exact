@@ -597,16 +597,26 @@ impl World {
         for (name, sound) in definitions {
             let mut sound = sound.into();
             if let Sound::Sample(sample) = &mut sound {
-                let asset = self.sound_asset(&sample.asset).unwrap_or_else(|| {
-                    panic!(
-                        "sound `{}`: asset `{}` has not arrived; declare it in Game::ASSETS",
-                        name.as_ref(),
-                        sample.asset
-                    )
-                });
-                sample.frames = u64::from(asset.frames);
-                sample.rate = asset.rate;
-                sample.channels = asset.channels;
+                let format = self
+                    .assets
+                    .sound_catalog
+                    .as_deref()
+                    .and_then(|c| c.get(&sample.asset))
+                    .map(|asset| (asset.frames, asset.rate, asset.channels))
+                    .or_else(|| {
+                        self.sound_asset(&sample.asset)
+                            .map(|asset| (asset.frames, asset.rate, asset.channels))
+                    })
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "sound `{}`: asset `{}` has not arrived; declare it in Game::ASSETS",
+                            name.as_ref(),
+                            sample.asset
+                        )
+                    });
+                sample.frames = u64::from(format.0);
+                sample.rate = format.1;
+                sample.channels = format.2;
             }
             self.resource_mut::<Sounds>().add(name.as_ref(), sound);
         }

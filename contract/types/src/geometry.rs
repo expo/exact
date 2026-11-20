@@ -17,6 +17,19 @@ use exact_plan::Stdlib;
 /// the border box, then whether it is provisional or unavailable.
 pub(super) fn declare(shapes: &mut Shapes) {
     shapes.map.insert(
+        "ScrollMetrics".into(),
+        [
+            "scrollLeft",
+            "scrollTop",
+            "scrollWidth",
+            "scrollHeight",
+            "clientWidth",
+            "clientHeight",
+        ]
+        .map(|name| (name.into(), Ty::Number))
+        .into(),
+    );
+    shapes.map.insert(
         "Geometry".into(),
         vec![
             ("x".into(), Ty::Number),
@@ -40,6 +53,7 @@ pub(super) fn check_call(
         f,
         Stdlib::Frame
             | Stdlib::RangeFrame
+            | Stdlib::ScrollMetrics
             | Stdlib::Measure
             | Stdlib::ElementFromPoint
             | Stdlib::ElementsFromPoint

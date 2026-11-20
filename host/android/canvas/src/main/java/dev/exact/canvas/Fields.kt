@@ -40,6 +40,12 @@ import kotlin.math.roundToInt
  */
 internal class FieldText(context: Context) : EditText(unadjusted(context)) {
     var selected: ((Int, Int) -> Unit)? = null
+    var scrolled: ((Int, Int) -> Unit)? = null
+
+    override fun onScrollChanged(x: Int, y: Int, oldX: Int, oldY: Int) {
+        super.onScrollChanged(x, y, oldX, oldY)
+        scrolled?.invoke(x, y)
+    }
     /** `x_log_fields=1`: what the keyboard asks of the field's input connection, to the log. Its composition is
      * between it and the field, and shows nowhere else. */
     var heard: ((String) -> Unit)? = null
@@ -322,6 +328,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
     /** What the field tells: its edits and its selection (as they settle, [flush]), the focus it takes or loses, its
      * action key and a hardware keyboard's Enter and Tab. */
     private fun listen(f: Field) {
+        f.text.scrolled = { x, y -> if (f.multiline && fields[f.id] === f) Exact.fieldScrolled(f.id, f.generation, x, y) }
         val text = f.text
         text.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}

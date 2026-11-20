@@ -101,3 +101,70 @@ fn stamped_binds_before_the_first_draw_keep_the_framed_world() {
         assert!(pixels.at(120, 180)[0] > 128, "the die is in the middle");
     }
 }
+
+#[test]
+fn the_native_live_surface_draws_and_ticks_while_audio_is_still_in_flight() {
+    use exact_game::asset::{SoundInfo, SOUND_CATALOG};
+    struct Streaming;
+    impl Game for Streaming {
+        const ID: &'static str = "first-frame-streamed-audio";
+        const STREAMED: &'static [&'static str] = &["music.sound"];
+        type Args = ();
+        fn setup(w: &mut World, args: &()) {
+            Framed::setup(w, args);
+            w.sounds([(
+                "music",
+                exact_game::audio::Sample::new("music.sound").looped(),
+            )]);
+            w.play("music").start();
+        }
+        fn first_frame(w: &mut World, input: &Input, args: &()) {
+            Framed::first_frame(w, input, args);
+        }
+        fn tick(_: &mut World, _: &Input, _: &()) {}
+    }
+    let Some(gpu) = gpu() else { return };
+    let mut surface = WorldSurface::<Streaming>::default();
+    surface.clock(false);
+    surface.bind(&[], None).unwrap();
+    assert_eq!(surface.assets().requests, [SOUND_CATALOG]);
+    let music = SoundInfo {
+        rate: 48_000,
+        channels: 2,
+        frames: 3_000_000,
+        digest: 1,
+    };
+    let catalog = std::collections::BTreeMap::from([("music.sound".to_owned(), music)]);
+    surface.asset(SOUND_CATALOG, Ok(&exact_game::bin::to_vec(&catalog)));
+    assert_eq!(surface.assets().requests, ["music.sound"]);
+    let frame = Frame {
+        width: 240.,
+        height: 360.,
+        scale: 1.,
+        now_ms: 0.,
+        seekable: false,
+        period_ms: 16.667,
+        children_generation: 0,
+        shader_generation: 0,
+        headroom: 1.,
+    };
+    let (pixels, _) = fixture::render(&gpu, &mut surface, &frame).unwrap();
+    assert!(pixels.at(120, 180)[0] > 128);
+    assert!(
+        surface.ready_reasons().is_empty(),
+        "{:?}",
+        surface.ready_reasons()
+    );
+    fixture::render(
+        &gpu,
+        &mut surface,
+        &Frame {
+            now_ms: 50.,
+            ..frame
+        },
+    )
+    .unwrap();
+    let sim = surface.sim().unwrap();
+    assert!(sim.world().tick() > 0);
+    assert!(sim.presentation_sound("music.sound").is_none());
+}

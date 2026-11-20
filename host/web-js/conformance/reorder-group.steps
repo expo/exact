@@ -28,7 +28,11 @@ clock settle
 tap now
 # The keys: lift, one list right, one row down, drop.
 key grip-c5 Space
+expect slots.target == "todo"
 key grip-c5 ArrowRight
+expect slots.target == "doing"
 key grip-c5 ArrowDown
+expect slots.target == "doing"
 key grip-c5 Enter
 clock settle
+expect slots.target == ""

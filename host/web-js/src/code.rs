@@ -32,6 +32,12 @@ pub struct Scope {
     /// JavaScript getters for the enclosing region frames, innermost last:
     /// (item, index, bound).
     pub frames: Vec<Frame>,
+    /// Arm-owned derives are lexical bindings. Their local names are independent of the plan row.
+    pub local_derives: std::rc::Rc<BTreeMap<usize, (String, usize)>>,
+    /// Emit root getters, handlers and literals as operands a shared body can take as arguments.
+    pub capture: bool,
+    /// Sites after variable-length slot content have no fixed offset from the enclosing mount.
+    pub capture_sites: bool,
     /// Whether this is an action body (writes and commands are allowed).
     pub action: bool,
     /// A shared at-read body accepts its reader's budget.
@@ -45,6 +51,54 @@ pub struct Scope {
     /// plan has a child's resource (LLP 1035.005.004 D8): each region
     /// crossed, with its arm or its row's key.
     pub path: Option<String>,
+}
+
+impl Scope {
+    pub fn operand(&self, js: String) -> String {
+        if self.capture {
+            format!("\0v:{js}\0")
+        } else {
+            js
+        }
+    }
+
+    fn row_member(&self, rows: &str, name: String) -> String {
+        if self.capture {
+            format!(
+                "{rows}[{}]",
+                self.operand(serde_json::to_string(&name).unwrap())
+            )
+        } else {
+            format!("{rows}.{name}")
+        }
+    }
+
+    pub fn derive(&self, i: usize) -> String {
+        match self.local_derives.get(&i) {
+            Some((name, depth)) if self.capture => lexical_operand(name, *depth),
+            Some((name, _)) => name.clone(),
+            None => self.operand(format!("d_{i}")),
+        }
+    }
+}
+
+/// A nested mount may take this binding as an argument up to its declaring scope.
+pub(crate) fn lexical_operand(name: &str, depth: usize) -> String {
+    format!("\0l{depth}:{name}\0")
+}
+
+/// Signals and settled derives ignore arguments. An at-read derive charges
+/// its caller's budget and reports the instruction that read it.
+pub(crate) fn getter_args(capture: bool, shared: bool, pc: Option<&str>) -> String {
+    if capture {
+        let op = if shared { 'b' } else { 'g' };
+        format!("\0{op}:{}\0", pc.unwrap_or(""))
+    } else if let Some(pc) = pc {
+        let budget = if shared { "$budget" } else { "undefined" };
+        format!("({budget},{pc})")
+    } else {
+        "()".into()
+    }
 }
 
 /// One region frame's getters.
@@ -279,7 +333,10 @@ pub fn evaluated(f: String, scope: &Scope, before: usize, uses: &mut Uses) -> St
 /// A scope whose label is only constructed if this evaluation traps.
 pub fn evaluation(scope: &Scope, label: String, instance: bool) -> Scope {
     Scope {
-        evaluation: Some((serde_json::to_string(&label).unwrap(), instance)),
+        evaluation: Some((
+            scope.operand(serde_json::to_string(&label).unwrap()),
+            instance,
+        )),
         ..scope.clone()
     }
 }
@@ -344,22 +401,22 @@ impl Translator<'_> {
     /// instance in force (LLP 1035.005.004 D1).
     fn resource(&self, i: u64) -> Result<String, String> {
         if self.plan.resources[i as usize].owner.is_none() {
-            return Ok(format!("r_{i}"));
+            return Ok(self.scope.operand(format!("r_{i}")));
         }
         let rows = (self.scope.rows.as_ref())
             .ok_or("a child's resource read with no instance in force")?;
-        Ok(format!("{rows}.r{i}"))
+        Ok(self.scope.row_member(rows, format!("r{i}")))
     }
 
     /// Mutation `i`'s object: the root's `m_<i>`, or a child's, the
     /// instance's in force (LLP 1035.005.004 D6).
     fn mutation(&self, i: u64) -> Result<String, String> {
         if self.plan.mutations[i as usize].owner.is_none() {
-            return Ok(format!("m_{i}"));
+            return Ok(self.scope.operand(format!("m_{i}")));
         }
         let rows = (self.scope.rows.as_ref())
             .ok_or("a child's mutation used with no instance in force")?;
-        Ok(format!("{rows}.m{i}"))
+        Ok(self.scope.row_member(rows, format!("m{i}")))
     }
 
     fn push(&mut self, e: String) {
@@ -481,8 +538,11 @@ impl Translator<'_> {
                 depth_at.push((target, me.stack.len(), me.locals));
             };
             match x.op {
-                Opcode::Number => self.push(number(x.number)),
-                Opcode::Bool => self.push(if x.args[0] != 0 { "!0" } else { "!1" }.into()),
+                Opcode::Number => self.push(self.scope.operand(number(x.number))),
+                Opcode::Bool => self.push(
+                    self.scope
+                        .operand(if x.args[0] != 0 { "!0" } else { "!1" }.into()),
+                ),
                 Opcode::Str => {
                     let s = self.plan.str(exact_plan::StrId(x.args[0] as u32));
                     let s = serde_json::to_string(s).unwrap();
@@ -492,35 +552,34 @@ impl Translator<'_> {
                     } else {
                         s
                     };
-                    self.push(s)
+                    self.push(self.scope.operand(s))
                 }
                 Opcode::None | Opcode::Unit => self.push("null".into()),
                 Opcode::Some | Opcode::Unwrap => {}
                 Opcode::LoadSlot => {
                     let slot = &self.plan.slots[x.args[0] as usize];
-                    if slot.owner.is_some() {
+                    let getter = if slot.owner.is_some() {
                         let rows = self
                             .scope
                             .rows
                             .clone()
                             .ok_or("a row slot read with no row in force")?;
-                        self.push(format!("{rows}[{}]()", x.args[0]))
+                        format!("{rows}[{}]", self.scope.operand(x.args[0].to_string()))
                     } else {
-                        self.push(format!("s_{}()", x.args[0]))
-                    }
+                        self.scope.operand(format!("s_{}", x.args[0]))
+                    };
+                    let args = getter_args(self.scope.capture, self.shared, None);
+                    self.push(format!("{getter}{args}"))
                 }
                 Opcode::LoadDerive => {
-                    if self.plan.unsettled_body(x.args[0] as u32).is_some() {
+                    let pc = if self.plan.unsettled_body(x.args[0] as u32).is_some() {
                         self.uses.budget("$enter");
-                        self.push(format!(
-                            "d_{}({},{})",
-                            x.args[0],
-                            if self.shared { "$budget" } else { "undefined" },
-                            x.pc
-                        ));
+                        Some(x.pc.to_string())
                     } else {
-                        self.push(format!("d_{}()", x.args[0]));
-                    }
+                        None
+                    };
+                    let args = getter_args(self.scope.capture, self.shared, pc.as_deref());
+                    self.push(format!("{}{args}", self.scope.derive(x.args[0] as usize)));
                 }
                 Opcode::LoadResource => {
                     let r = self.resource(x.args[0])?;
@@ -734,9 +793,9 @@ impl Translator<'_> {
                             .rows
                             .clone()
                             .ok_or("a row slot write with no row in force")?;
-                        format!("{rows}[{}]", x.args[0])
+                        format!("{rows}[{}]", self.scope.operand(x.args[0].to_string()))
                     } else {
-                        format!("s_{}", x.args[0])
+                        self.scope.operand(format!("s_{}", x.args[0]))
                     };
                     self.out.push_str(&format!("{w}({target},{v});"));
                 }
@@ -949,6 +1008,11 @@ pub fn number(n: f64) -> String {
 /// Whether a translated expression is a primitive literal, so `===` is the
 /// VM's equality for it.
 fn primitive(e: &str) -> bool {
+    let e = e
+        .strip_prefix("\0v:")
+        .and_then(|operand| operand.strip_suffix('\0'))
+        .filter(|operand| !operand.contains('\0'))
+        .unwrap_or(e);
     e.starts_with('"')
         || e.starts_with("$$s")
         || e == "!0"

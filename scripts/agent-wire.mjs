@@ -1,6 +1,8 @@
 // The native carriers' wire, shared by the stdio, simulator and phone
 // carriers of `agent.mjs`: JSON lines over a duplex, and why an app that
 // stopped answering stopped.
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { crashSummary } from '../host/apple/devices.mjs';
 import { MalformedOperation } from './agent-keys.mjs';
 
@@ -38,7 +40,7 @@ export const AWAY = 'the app left the foreground (a share extension or another a
  * pending requests at once and every later one until the app is back, and the replies they were owed are dropped when
  * they come. */
 export function jsonLines(readable, writable, hostLines) {
-  const waiting = [];
+  const waiting = [], scene = new EventTarget();
   let failure = null, away = false, owed = 0;
   // A large reply (a `state` carrying a 16 MiB surface record) arrives in
   // many chunks: hold them and look for the newline in each new chunk only.
@@ -54,6 +56,7 @@ export function jsonLines(readable, writable, hostLines) {
       if (line.startsWith('{"pushed":')) {
         away = line.includes('"background"');
         if (away) { owed += waiting.length; for (const w of waiting.splice(0)) w.reject(new Error(AWAY)); }
+        scene.dispatchEvent(new Event('change'));
         hostLines.push(`app: ${away ? 'left the foreground' : 'back in the foreground'}`);
         continue;
       }
@@ -67,13 +70,52 @@ export function jsonLines(readable, writable, hostLines) {
   const next = () => failure ? Promise.reject(failure) : new Promise((resolve, reject) => waiting.push({ resolve, reject }));
   return {
     next,
+    get failure() { return failure; },
+    async waitForScene(background, ms, onTimeout) {
+      // The notification may have arrived while the OS launch command was running.
+      let changed;
+      try {
+        if (!failure && away !== background) {
+          const seen = new Promise(resolve => {
+            changed = () => { if (failure || away === background) resolve(); };
+            scene.addEventListener('change', changed);
+          });
+          await waitAtMost(seen, ms, onTimeout);
+        }
+        if (failure) throw failure;
+        return away === background;
+      } finally { if (changed) scene.removeEventListener('change', changed); }
+    },
     ask: (req) => {
       if (away && !failure) return Promise.reject(new Error(AWAY));
       const p = next(); if (!failure) writable.write(JSON.stringify(req) + '\n'); return p.then(MalformedOperation.reply);
     },
-    fail: (why) => { failure ??= new Error(why); for (const w of waiting.splice(0)) w.reject(failure); },
+    fail: (why) => { failure ??= new Error(why); for (const w of waiting.splice(0)) w.reject(failure); scene.dispatchEvent(new Event('change')); },
   };
 }
+/** Switch iOS away and back outside the app. The app cannot answer a request while suspended. */
+export async function backgroundIOS(lines, ms, app, activate) {
+  const wait = background => lines.waitForScene(background, 20000, () => {
+    throw new Error(`background: the original app did not report ${background ? 'leaving' : 'returning to'} the foreground within 20 s`);
+  });
+  try {
+    await activate('com.apple.Preferences');
+    await wait(true);
+    if (await lines.waitForScene(false, ms)) throw new Error('background: the app returned before the requested interval ended');
+  } finally {
+    // An ordinary activation after process death would start a different session.
+    if (lines.failure) throw lines.failure;
+    await activate(app);
+    await wait(false);
+  }
+  return { backgroundMs: ms, foreground: true };
+}
+
+/** Activate an installed bundle without terminating its running process. */
+export function activateIOS(args, bundle) {
+  return promisify(execFile)('xcrun', [...args, bundle], { timeout: 20000 });
+}
+
 /** Why a native app stopped answering, for the error that ends the run: its pid alive or gone, how it exited, any crash report since launch, and the last 20 lines it wrote — not all of them since the last `logs`. */
 export function hangup({ what, pid = null, exit = null, reports = [], hostLines = [] }) {
   const alive = pid == null ? null : (() => { try { process.kill(pid, 0); return true; } catch { return false; } })();

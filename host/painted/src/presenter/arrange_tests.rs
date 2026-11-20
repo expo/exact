@@ -593,7 +593,7 @@ fn slot<D: DataSource>(p: &Presenter<D>, name: &str) -> String {
         .unwrap()
         .to_owned()
 }
-/// Lift `card` and carry it to `to`, a point; the ghost's centre follows.
+/// Lift `card` by its grip and move the contact to `to`.
 fn carry(p: &mut Presenter<Board>, card: &str, to: (f32, f32), now: f64) {
     let (x, y) = centre(p, &format!("grip-{card}"));
     p.pointer_down(x, y, now).unwrap();
@@ -604,6 +604,23 @@ fn carry(p: &mut Presenter<Board>, card: &str, to: (f32, f32), now: f64) {
 fn phase(p: &Presenter<Board>) -> Option<exact_runner::ReorderPhase> {
     let s = p.group.as_ref()?;
     p.host.runner().reorder_frame(s.token).map(|f| f.phase)
+}
+
+#[test]
+fn an_edge_grip_can_drop_on_a_narrow_list_inside_the_screen() {
+    let source = BOARD.replace(
+        "width=120 height=180",
+        "width=(col == \"a\" ? 40 : 120) height=180",
+    );
+    let mut p = board_source(&source);
+    let (list_x, list_y) = centre(&mut p, "list-a");
+    let r = p.rect_of(id(&p, "grip-b1")).unwrap();
+    let grab = (r.0 + 5., r.1 + r.3 / 2.);
+    p.pointer_down(grab.0, grab.1, 0.).unwrap();
+    p.pointer_move(grab.0 - 12., grab.1, 10.).unwrap();
+    p.pointer_move(list_x, list_y, 20.).unwrap();
+    p.pointer_up(list_x, list_y, 30.).unwrap();
+    assert!(slot(&p, "log").starts_with("b1>a@"));
 }
 
 #[test]
@@ -946,7 +963,6 @@ fn a_held_drop_waits_ignores_escape_then_lands_when_the_answer_shows() {
         .node_by_key(p.host.kernel().find_by_test_id("list-c")[0])
         .unwrap()
         .id;
-    let r = p.rect_of(c).unwrap();
     let board = p
         .host
         .kernel()
@@ -954,10 +970,10 @@ fn a_held_drop_waits_ignores_escape_then_lands_when_the_answer_shows() {
         .unwrap()
         .id;
     // Bring c into view first.
-    p.scroll.insert(board, (100., 0.));
+    p.scroll.insert(board, (60., 0.));
     p.publish_scroll();
     p.frame();
-    let r = (r.0 - 100., r.1, r.2, r.3);
+    let r = p.rect_of(c).unwrap();
     carry(&mut p, "b1", (r.0 + 30., r.1 + 20.), 0.);
     assert!(p.pointer_up(r.0 + 30., r.1 + 20., 30.).unwrap());
     assert_eq!(slot(&p, "log"), "b1>c@");
@@ -986,17 +1002,16 @@ fn a_new_lift_waits_out_a_hold_but_ends_a_landing() {
         .node_by_key(p.host.kernel().find_by_test_id("list-c")[0])
         .unwrap()
         .id;
-    let r = p.rect_of(c).unwrap();
     let board = p
         .host
         .kernel()
         .node_by_key(p.host.kernel().find_by_test_id("board")[0])
         .unwrap()
         .id;
-    p.scroll.insert(board, (100., 0.));
+    p.scroll.insert(board, (60., 0.));
     p.publish_scroll();
     p.frame();
-    let r = (r.0 - 100., r.1, r.2, r.3);
+    let r = p.rect_of(c).unwrap();
     carry(&mut p, "b1", (r.0 + 30., r.1 + 20.), 0.);
     assert!(p.pointer_up(r.0 + 30., r.1 + 20., 30.).unwrap());
     assert_eq!(phase(&p), Some(exact_runner::ReorderPhase::Holding));
@@ -1059,7 +1074,7 @@ fn a_hold_that_never_answers_times_out_and_the_ghost_returns_home() {
         .node_by_key(p.host.kernel().find_by_test_id("list-c")[0])
         .unwrap()
         .id;
-    p.scroll.insert(board, (100., 0.));
+    p.scroll.insert(board, (60., 0.));
     p.publish_scroll();
     p.frame();
     let r = p.rect_of(c).unwrap();

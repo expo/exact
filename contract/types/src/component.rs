@@ -625,6 +625,7 @@ pub(crate) fn handler_attr(name: &str) -> bool {
             | "transformgeometry"
             | "transformrelease"
             | "reorderdrop"
+            | "reordertargetchange"
             | "loadedmetadata"
             | "durationchange"
             | "fullscreenchange"
@@ -825,7 +826,7 @@ fn refine_params_from_view(
                                 vec![Ty::String]
                             }
                             "timeupdate" | "durationchange" => vec![Ty::Number],
-                            "hover" | "fullscreenchange" => vec![Ty::Bool],
+                            "hover" | "fullscreenchange" | "reordertargetchange" => vec![Ty::Bool],
                             "select" if field => vec![Ty::Record("InputEvent".into())],
                             "select" => vec![Ty::Record("MarkdownSelection".into())],
                             // A drag's numbers and a drop's keys, as

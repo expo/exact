@@ -523,6 +523,18 @@ impl<D: DataSource> Presenter<D> {
         Ok(())
     }
 
+    /// Release the hidden window's device. The next visible frame reopens the configured painter.
+    #[cfg(windows)]
+    pub fn suspend_window_painter(&mut self, choice: PainterChoice) {
+        self.surfaces.detach_painter_window();
+        if self.deferred_painter.is_none() {
+            self.brush.replace_backend(Box::new(Raster::new()));
+            self.painter = cpu_info();
+            self.choice = PainterChoice::Cpu;
+            self.deferred_painter = Some(PainterBoot::selected(choice));
+        }
+    }
+
     /// Open the deferred painter before the carrier attaches and draws with it.
     #[cfg(any(windows, test))]
     pub(crate) fn redraw_window<T>(

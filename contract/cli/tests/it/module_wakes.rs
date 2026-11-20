@@ -1228,6 +1228,6 @@ fn android_transfer_entry_follows_the_imported_package() {
         let plan = app.compile().unwrap_or_else(|e| panic!("{e:?}"));
         contract::native::android_reach(&app.0, &plan, &out).unwrap();
         assert_eq!(std::fs::read_to_string(out.join("transfers.rs")).unwrap(),
-            if selected { "exact_painted::android_transfer_jni!();\n" } else { "" });
+            if selected { "exact_painted::android_transfer_jni!(exact_compat());\n" } else { "" });
     }
 }

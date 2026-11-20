@@ -22,12 +22,26 @@ export const HOST_MACOS = '14.0';
 /** The free space a cold native build or setup wants, in GB: test links, captures and the prerequisites' builds ran
  * authors' disks out below it (LLP 1156.000 D3). Advice, never a refusal: a build that fits in less is not stopped. */
 export const ROOM_GB = 20;
-/** The free space of the volume `path` is on, and the sentence a warning says: the places a build writes that can be
- * deleted at the cost of the next build's time, with their sizes when `places` names them. null when it cannot be read. */
-export function freeSpace(path, places = [resolve(homedir(), '.cache/exact')]) {
-  let gb; try { const s = statfsSync(path); gb = Math.floor(Number(s.bavail) * Number(s.bsize) / 1e9); } catch { return null; }
-  const sized = places.filter(existsSync).map(place => { const du = spawnSync('du', ['-sk', place], { encoding: 'utf8' }); const kb = Number(du.stdout?.split('\t')[0]); return Number.isFinite(kb) ? `${place} (${(kb / 1e6).toFixed(1)} GB)` : place; });
-  return { gb, text: `${gb} GB free where it builds, under the ${ROOM_GB} GB a cold native build can take${sized.length ? `; deleting ${sized.join(', ')} frees room and costs only the next build's time` : ''}` };
+/** Measure the build volume. Only its regenerable machine cache can free space on it (LLP 1156.000 D3). */
+export function freeSpace(path) {
+  let gb, volume;
+  try {
+    const s = statfsSync(path);
+    gb = Math.floor(Number(s.bavail) * Number(s.bsize) / 1e9);
+    volume = statSync(path).dev;
+  } catch { return null; }
+  const cache = resolve(homedir(), '.cache/exact');
+  let text = `${gb} GB free on the build volume. A cold native build can take ${ROOM_GB} GB.`;
+  if (gb >= ROOM_GB) return { gb, text };
+  let cacheVolume;
+  try { cacheVolume = statSync(cache).dev; } catch { return { gb, text }; }
+  if (cacheVolume === volume) {
+    const du = spawnSync('du', ['-sk', cache], { encoding: 'utf8' });
+    const kb = Number.parseInt(du.stdout, 10);
+    const size = du.status === 0 && Number.isFinite(kb) ? ` (${(kb * 1024 / 1e9).toFixed(1)} GB)` : '';
+    text += ` Deleting ${cache}${size} frees space. Exact rebuilds this cache on demand.`;
+  }
+  return { gb, text };
 }
 
 // With a deployment target of 12.0 or later, ld-27037.1 (Xcode 27.1) links with chained fixups and can

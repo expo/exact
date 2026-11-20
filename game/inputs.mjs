@@ -66,10 +66,10 @@ export function proofInputFiles(root, app, inventory, ignoredDirectories = new S
 }
 
 // The level baker records Game::LEVEL; paired filenames alone do not establish
-// ownership. The tuning carrier has a reserved name; art outputs have a manifest.
+// ownership. The tuning and sound catalogs have reserved names. Art outputs have a manifest.
 export function generatedInputFiles(app) {
-  const files = [resolve(app, 'assets/exact-tables.json')].filter(existsSync);
   const assets = resolve(app, 'assets');
+  const files = ['exact-tables.json', 'exact-streamed-sounds.bin'].map(name => resolve(assets, name)).filter(existsSync);
   const level = resolve(app, '.shells/level.json');
   if (existsSync(level)) {
     const name = JSON.parse(readFileSync(level, 'utf8'));

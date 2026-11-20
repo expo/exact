@@ -56,6 +56,23 @@ impl<D: DataSource> Runner<D> {
         self.reorder_session.as_deref_mut()?.downcast_mut()
     }
 
+    pub(super) fn sync_reorder_target(&mut self) {
+        let next = self
+            .session()
+            .filter(|s| s.group.is_some() && s.phase == ReorderPhase::Active)
+            .map(|s| s.target);
+        if next == self.reorder_target {
+            return;
+        }
+        let previous = std::mem::replace(&mut self.reorder_target, next);
+        if let Some(list) = previous {
+            self.queue_reorder_target(list, false);
+        }
+        if let Some(list) = next {
+            self.queue_reorder_target(list, true);
+        }
+    }
+
     /// A list's non-empty `reorderGroup` (D1).
     pub(super) fn reorder_group(&self, list: NodeKey) -> Option<String> {
         let node = self.kernel.node_by_key(list)?;
@@ -300,6 +317,7 @@ impl<D: DataSource> Runner<D> {
             s.before = ident(&before);
             s.place = place;
         }
+        self.sync_reorder_target();
         let view = self.kernel.node_by_key(target).unwrap().id;
         self.dropping_from = Some(source);
         let result = self.dispatch(view, Event::ReorderDrop { item, before });

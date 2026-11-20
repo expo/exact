@@ -531,6 +531,12 @@ export async function main() {
         return 1;
       },
       read: (op, view, out) => host.geometry?.read(op, views.get(view), new Float64Array(host.memory.buffer, out, 4)) ?? 0,
+      scroll_metrics: (view, out) => {
+        const values = host.geometry?.scrollMetrics(views.get(view));
+        if (!values) return 0;
+        new Float64Array(host.memory.buffer, out, 6).set(values);
+        return 1;
+      },
       range: (view, start, end, out) => host.geometry?.range(views.get(view), start, end, new Float64Array(host.memory.buffer, out, 4)) ?? 0,
       point: (x, y) => {
         const el = host.geometry?.point(x, y)?.closest("[data-view]"), id = el && root.contains(el) ? Number(el.dataset.view) : NaN;
@@ -595,6 +601,7 @@ export async function main() {
   // Every data executor activates after the baked first pixel.
   // Restore granted secrets and persisted states before the baked frame (LLP 1018 D6, LLP 1116 D5).
   if (agentKeepsStore) {
+    if (agentMode) globalThis.__exactSeedStored?.("exact.state.");
     const kept = [];
     try {
       for (let i = 0; i < localStorage.length; i++) {

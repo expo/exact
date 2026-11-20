@@ -235,3 +235,33 @@ fn a_baked_material_keeps_its_gltf_name_and_its_index() {
     assert_eq!(used, [0, 1, 2], "indices select, whatever the names");
     fs::remove_dir_all(game).unwrap();
 }
+
+#[test]
+fn disk_and_memory_bakes_supply_the_same_streamed_sound_identity() {
+    struct Stream;
+    impl Game for Stream {
+        const ID: &'static str = "streamed-art";
+        const STREAMED: &'static [&'static str] = &["hum.sound"];
+        type Args = ();
+        fn setup(w: &mut World, _: &()) {
+            w.sounds([("hum", audio::Sample::new("hum.sound"))]);
+        }
+        fn tick(_: &mut World, _: &Input, _: &()) {}
+    }
+    let game = temp("streamed");
+    fs::write(game.join("art/hum.wav"), wav(700)).unwrap();
+    let art = exact_game_bake::art(&game).unwrap();
+    let memory = exact_game_bake::sim_from_art::<Stream>((), &art).unwrap();
+    exact_game_bake::bake_art(&game).unwrap();
+    exact_game_bake::bake_game_sounds::<Stream>(&game).unwrap();
+    let root = game.join("assets");
+    let catalog = fs::read(root.join(asset::SOUND_CATALOG)).unwrap();
+    assert!(catalog.len() < 128);
+    let mut disk = Sim::<Stream>::new(()).unwrap();
+    disk.asset(asset::SOUND_CATALOG, Some(&catalog)).unwrap();
+    disk.restore(&memory.save().unwrap()).unwrap();
+    assert!(disk.presentation_sound("hum.sound").is_none());
+    assert_eq!(disk.world().hash(), memory.world().hash());
+    exact_game_bake::bake_game_sounds::<Hum>(&game).unwrap();
+    assert!(!root.join(asset::SOUND_CATALOG).exists());
+}

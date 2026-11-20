@@ -465,12 +465,8 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
                     ),
                 );
             }
-            self.presentation.sync(
-                sim.world(),
-                sim.generation(),
-                !G::paused(sim.args()),
-                frame.seekable,
-            );
+            self.presentation
+                .sync_sim(sim, !G::paused(sim.args()), frame.seekable);
             self.dirty = true;
             return self.error.is_none();
         }
@@ -603,12 +599,8 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
                 first,
             ),
         );
-        self.presentation.sync(
-            sim.world(),
-            sim.generation(),
-            !G::paused(sim.args()),
-            frame.seekable,
-        );
+        self.presentation
+            .sync_sim(sim, !G::paused(sim.args()), frame.seekable);
         let mut gap = self.perf.record_gap(sim.take_live_gap(), picture);
         gap.idle_ms += rest_ms;
         crate::perf::warn_catch_up(self.perf.record_ticks::<G>(frame, ticks, gap));
@@ -909,7 +901,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         let gap = self.perf.record_gap(sim.take_live_gap(), picture);
         crate::perf::warn_catch_up(self.perf.record_overload::<G>(frame.period_ms, ticks, gap));
         self.presentation
-            .sync(sim.world(), sim.generation(), !G::paused(sim.args()), false);
+            .sync_sim(sim, !G::paused(sim.args()), false);
     }
 
     /// The module submitted the frame `render_frame` encoded: map its

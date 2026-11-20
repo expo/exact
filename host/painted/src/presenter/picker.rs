@@ -828,6 +828,32 @@ impl<D: DataSource> Presenter<D> {
         );
     }
 
+    /// Deliver a file opened by the desktop through the app's declared
+    /// `open-file` change handler (LLP 1069.010 D1).
+    pub fn open_document(&mut self, path: String) -> Result<(), String> {
+        let runner = self.host.runner();
+        let mut fields = runner
+            .kernel()
+            .find_by_test_id("open-file")
+            .into_iter()
+            .filter_map(|key| runner.kernel().node_by_key(key))
+            .filter(|node| {
+                runner
+                    .handlers_of(node.id)
+                    .contains(&exact_plan::EventKind::Change)
+            });
+        let view = match (fields.next(), fields.next()) {
+            (Some(node), None) => node.id,
+            (None, _) => return Err("open-file: no field with a change handler".into()),
+            _ => return Err("open-file: more than one field has a change handler".into()),
+        };
+        let event = Event::Change(ControlValue::Text(path));
+        let error = self.host.dispatch_at(view, event, self.host.now());
+        self.dirty = true;
+        let update = self.after_commit();
+        error.or(update).map_or(Ok(()), Err)
+    }
+
     pub(super) fn deliver_picker(&mut self, view: ViewId, event: Event) {
         if self.host.kernel().node(view).is_none() {
             return;
@@ -841,6 +867,64 @@ impl<D: DataSource> Presenter<D> {
         if let Some(e) = self.after_commit() {
             eprintln!("exact: {e}");
         }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn a_document_open_targets_only_a_live_change_handler_and_respects_the_read_grant() {
+    struct Reader(&'static str);
+    impl DataSource for Reader {
+        fn query(
+            &mut self,
+            source: &str,
+            args: &[exact_plan::Value],
+        ) -> Result<exact_plan::Value, exact_runner::DataError> {
+            ().query(source, args)
+        }
+        fn grants(&self) -> &'static str {
+            self.0
+        }
+    }
+    let plan = crate::test_plan(
+        r#"component App
+  state value = ""
+  action open(path: string)
+    value = path
+  view
+    column
+      head title=value
+      text "A label" testId="open-file"
+      if value == ""
+        input testId="open-file" change=open
+"#,
+    );
+    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    for grants in ["", "fs.read doc:/"] {
+        let (mut p, _) = Presenter::boot_with_fixture_fonts(
+            &plan,
+            Reader(grants),
+            (200., 100.),
+            1.,
+            Default::default(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        p.open_document(file.to_str().unwrap().into()).unwrap();
+        let value = p.host.runner().head().title.unwrap();
+        if grants.is_empty() {
+            assert_eq!(value, file.to_str().unwrap());
+        } else {
+            assert!(
+                value.starts_with("doc:/") && value.ends_with("/Cargo.toml"),
+                "{value}"
+            );
+            assert!(exact_data::documents::resolve(&value, 0).is_ok());
+        }
+        assert!(
+            p.open_document(file.to_str().unwrap().into()).is_err(),
+            "the handler unmounted"
+        );
     }
 }
 

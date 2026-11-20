@@ -279,6 +279,13 @@ impl Lowerer<'_> {
         scope: &Scope,
     ) -> Result<(), LowerError> {
         let Some(group) = attrs.iter().find(|a| a.name == "reorderGroup") else {
+            if let Some(event) = attrs.iter().find(|a| a.name == "reordertargetchange") {
+                return err(
+                    "lower-reorder-group",
+                    "`reordertargetchange` needs a list with a `reorderGroup`",
+                    event.span,
+                );
+            }
             return Ok(());
         };
         let has = |name: &str| attrs.iter().any(|a| a.name == name);

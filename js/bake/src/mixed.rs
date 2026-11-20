@@ -94,7 +94,7 @@ pub fn build_beside<D: DataSource>(
         })
     };
     if platform == "android" {
-        return android::android(app, |app| bake(app, "linux"));
+        return android::build_android_with(app, |app| bake(app, "linux"));
     }
     bake(app, platform)
 }

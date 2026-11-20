@@ -206,3 +206,39 @@ fn a_looping_sample_attached_to_an_entity_is_spatial_and_keeps_world_phase() {
         "one metre to the right, at the definition's gain"
     );
 }
+
+#[test]
+fn late_pcm_joins_an_active_loop_and_skips_an_expired_one_shot() {
+    struct Streaming;
+    impl Game for Streaming {
+        const ID: &'static str = "streaming-player";
+        const STREAMED: &'static [&'static str] = &["tone.sound"];
+        type Args = ();
+        fn setup(w: &mut World, _: &()) {
+            w.sounds([
+                ("loop", Sample::new("tone.sound").looped()),
+                ("once", Sample::new("tone.sound")),
+            ]);
+        }
+        fn tick(w: &mut World, _: &Input, _: &()) {
+            audio::step(w);
+        }
+    }
+    let sound = SoundData::encode(8000, 1, &vec![1200; 8000]).unwrap();
+    let catalog = std::collections::BTreeMap::from([("tone.sound".to_owned(), sound.info())]);
+    let mut sim = Sim::<Streaming>::new(()).unwrap();
+    sim.asset(
+        exact_game::asset::SOUND_CATALOG,
+        Some(&bin::to_vec(&catalog)),
+    )
+    .unwrap();
+    sim.world_mut().play("loop").start();
+    sim.world_mut().play("once").start();
+    let mut player = Player::new(RecordingOutput::default(), 48_000);
+    sim.run(1250.);
+    player.sync(&sim, None, Default::default());
+    assert!(player.output.calls.is_empty());
+    sim.asset("tone.sound", Some(&bin::to_vec(&sound))).unwrap();
+    player.sync(&sim, None, Default::default());
+    assert_eq!(starts(&player), [(0, 8000, 1, 8000, true, 2000, 1.)]);
+}

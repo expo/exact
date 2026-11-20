@@ -1442,6 +1442,14 @@ impl<P: crate::Executor> crate::Executor for ModelExecutor<P> {
     fn sync(&mut self, world: &exact_game::World, generation: u64, playing: bool, seekable: bool) {
         self.inner.sync(world, generation, playing, seekable);
     }
+    fn sync_sim<G: exact_game::Game>(
+        &mut self,
+        sim: &exact_game::Sim<G>,
+        playing: bool,
+        seekable: bool,
+    ) {
+        self.inner.sync_sim(sim, playing, seekable);
+    }
     fn before_restore(&mut self, world: &exact_game::World, mode: exact_gpu::Restore) {
         self.definitions = (mode == exact_gpu::Restore::Carry)
             .then(|| exact_game::animation::Definitions::capture(world));

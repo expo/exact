@@ -1,5 +1,5 @@
 //! The Canvas host's JNI, once for every app (LLP 1076): an app's library is
-//! its plan, its data source and `exact_painted::canvas_jni!(Data)`, which
+//! its data source and `exact_painted::canvas_jni!(Data)`, which
 //! defines `dev.exact.canvas.Native`'s methods (the reader's class,
 //! `host/android/canvas`) over a [`super::CanvasHost`] that lives on the
 //! thread that called `start`.
@@ -34,8 +34,8 @@ mod jni_start;
 mod pad;
 
 /// Define the JNI for an app over `CanvasHost<$data>` with the plan and
-/// compat the app's build script writes to `OUT_DIR` (`app.plan`,
-/// `compat.json`). `hatches = …` is the app's [`crate::hatches::Install`]
+/// compat the app's build script makes available through `OUT_DIR/baked.rs`.
+/// `hatches = …` is the app's [`crate::hatches::Install`]
 /// when it has hatches (`hatches::install_with_reader`, so the reader's
 /// Kotlin ones hear them too). `updates = …` is the update store's opener
 /// (`exact_painted_update::open`) when the bake has a store; the reader
@@ -47,8 +47,6 @@ macro_rules! canvas_jni {
         static EXACT_ALLOCATOR: $crate::canvas::jni::Allocator = $crate::canvas::jni::Allocator;
 
         $crate::canvas_jni_tls!();
-        include!(concat!(env!("OUT_DIR"), "/transfers.rs"));
-
         mod exact_canvas_jni {
             #![allow(clippy::missing_safety_doc, unsafe_code)]
             use std::cell::RefCell;
@@ -58,9 +56,9 @@ macro_rules! canvas_jni {
                 JNIEnv, JNI_FALSE, JNI_TRUE,
             };
 
-            const PLAN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/app.plan"));
-            const COMPAT: &str = include_str!(concat!(env!("OUT_DIR"), "/compat.json"));
+            include!(concat!(env!("OUT_DIR"), "/baked.rs"));
             include!(concat!(env!("OUT_DIR"), "/launch.rs"));
+            include!(concat!(env!("OUT_DIR"), "/transfers.rs"));
 
             #[no_mangle]
             pub unsafe extern "system" fn Java_dev_exact_canvas_Native_environment(
@@ -84,7 +82,7 @@ macro_rules! canvas_jni {
                 use std::hash::{Hash, Hasher};
                 let mut key = std::collections::hash_map::DefaultHasher::new();
                 // The baked plan includes the GPU artifact’s content digest.
-                PLAN.hash(&mut key);
+                exact_plan().hash(&mut key);
                 std::env::set_var("EXACT_GPU_CACHE_KEY", format!("{:016x}", key.finish()));
             }
 
@@ -518,6 +516,14 @@ macro_rules! canvas_jni {
                 ints(env, &words)
             }
 
+            #[no_mangle]
+            pub unsafe extern "system" fn Java_dev_exact_canvas_Native_readerSelection(
+                env: *mut JNIEnv, _class: jclass, action: jint, x: jfloat, y: jfloat,
+            ) -> jstring {
+                with(|h| h.reader_selection(action, x, y)).flatten()
+                    .map_or(std::ptr::null_mut(), |reply| $crate::canvas::field::java(env, &reply))
+            }
+
             /// What the reader is told of the text fields it hosts (LLP
             /// 1115.001 D8), when that is not what this last returned
             /// (else null): `Presenter::reader_fields` has the words.
@@ -596,6 +602,14 @@ macro_rules! canvas_jni {
                 with(|h| {
                     h.field_composing(id as u32, generation as u32, composing == JNI_TRUE, &value)
                 });
+            }
+
+            /// The hosted editor's own scroll offset, in display pixels.
+            #[no_mangle]
+            pub extern "system" fn Java_dev_exact_canvas_Native_fieldScrolled(
+                _env: *mut JNIEnv, _class: jclass, id: jint, generation: jint, x: jint, y: jint,
+            ) {
+                with(|h| h.field_scrolled(id as u32, generation as u32, x, y));
             }
 
             /// The reader's field `id` moved its selection with no edit.

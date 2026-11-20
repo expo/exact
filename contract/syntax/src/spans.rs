@@ -183,17 +183,17 @@ macro_rules! record_variants {
 }
 record_variants! {
     Step {
-        Tap { target, form, modifiers, span }, Drag { target, dx, dy, to, from, mouse, into, press, over, hold, during, span },
+        Scroll { target, span }, Tap { target, form, modifiers, span }, Drag { target, dx, dy, to, from, mouse, into, press, over, hold, during, span },
         Size { width, height, span }, At { location, span }, Epoch { value, span }, TimeZone { zone, span },
-        Locale { tag, span }, Prefer { name, value, span }, Seed { seed, span }, Fresh { seed, span }, BeforeData { span }, FailFetch { prefix, times, span }, AnswerFetch { prefix, response, span }, PassFetch { prefix, span }, Request { method, path, body, persona, status, span }, Type { target, text, append, span }, Key { target, key, phase, duration, span },
+        Locale { tag, span }, Prefer { name, value, span }, Seed { seed, span }, Stored { name, value, span }, Fresh { seed, span }, BeforeData { span }, FailFetch { prefix, times, span }, AnswerFetch { prefix, response, span }, PassFetch { prefix, span }, Request { method, path, body, persona, status, span }, Type { target, text, append, span }, Key { target, key, phase, duration, span },
         DropStream { prefix, span }, Pick { target, paths, span }, Authorize { cancel, span }, Presence { answer, span }, Clipboard { target, edit, text, span },
-        Clock { arg, span }, Reload { span }, Close { span }, Back { span }, Resize { width, height, span }, Screenshot { path, span }, ExpectRefusal { target, span }, ExpectTree { target, present, span }, ExpectDisabled { target, disabled, span }, ExpectFocused { target, span },
+        Clock { arg, span }, Background { ms, span }, Reload { span }, Close { span }, Back { span }, Resize { width, height, span }, Screenshot { path, span }, ExpectRefusal { target, span }, ExpectTree { target, present, span }, ExpectDisabled { target, disabled, span }, ExpectFocused { target, span },
         ExpectSample { target, x, y, color, tolerance, span }, ExpectScreenshot { target, reference, span },
         ExpectLayout { target, dimension, comparison, value, tolerance, span },
         ExpectText { target, value, span }, ExpectState { name, comparison, value, span },
         ExpectSound { src, present, at, gain, ends, playback_rate, pan, by, span },
         ExpectMediaSession { field, value, span }, ExpectMediaSessionAction { action, present, span },
-        Midi { step, span }, ExpectWakelock { held, span },
+        Midi { step, span }, ExpectWakelock { held, span }, ExpectDrag { target, kind, present, value, name, span },
         Perf { steps, span }, ExpectPerf { subject, target, at_most, value, span }, ExpectNoFailures { span },
     }
 }
@@ -313,7 +313,8 @@ impl Step {
     /// Where: the step's line.
     pub fn span(&self) -> Span {
         match self {
-            Step::Tap { span, .. }
+            Step::Scroll { span, .. }
+            | Step::Tap { span, .. }
             | Step::Drag { span, .. }
             | Step::Size { span, .. }
             | Step::At { span, .. }
@@ -322,6 +323,7 @@ impl Step {
             | Step::Locale { span, .. }
             | Step::Prefer { span, .. }
             | Step::Seed { span, .. }
+            | Step::Stored { span, .. }
             | Step::Fresh { span, .. }
             | Step::BeforeData { span }
             | Step::FailFetch { span, .. }
@@ -336,6 +338,7 @@ impl Step {
             | Step::Presence { span, .. }
             | Step::Clipboard { span, .. }
             | Step::Clock { span, .. }
+            | Step::Background { span, .. }
             | Step::Reload { span, .. }
             | Step::Close { span }
             | Step::Back { span }
@@ -351,6 +354,7 @@ impl Step {
             | Step::ExpectText { span, .. }
             | Step::ExpectState { span, .. }
             | Step::ExpectWakelock { span, .. }
+            | Step::ExpectDrag { span, .. }
             | Step::ExpectSound { span, .. }
             | Step::Midi { span, .. }
             | Step::ExpectMediaSession { span, .. }

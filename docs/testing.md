@@ -130,6 +130,12 @@ test or drive to investigate; it does not add another blocking check.
   observing an event needs a new hook, the hook is small and read-only (for
   example `Module::storage_in_flight`).
 
+On iOS, `background 1000` in a drive or an authored test opens Settings,
+waits one second after the app reports leaving the foreground, and brings
+the same app back. The next step runs after its foreground notification.
+This exercises UIKit's scene callbacks on the system clock. A drive on the
+virtual clock retains its virtual time.
+
 ## Structure and isolation
 
 - **Spread independent cases across the CPU cores.** When a test checks many

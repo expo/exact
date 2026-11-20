@@ -10,6 +10,9 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("android") {
         return;
     }
+    if exact_bake::host::take_android_linked(&[]).unwrap_or_else(|e| panic!("Android bake: {e}")) {
+        return;
+    }
     contract::rerun_if_changed(std::path::Path::new("../app.contract"));
     let plan = match contract::compile_path(std::path::Path::new("../app.contract")) {
         Ok(p) => p,

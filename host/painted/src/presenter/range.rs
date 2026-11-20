@@ -202,9 +202,7 @@ impl<D: DataSource> Presenter<D> {
         }
         let range = exact_kernel::Range::of(node.props);
         let rtl = crate::paint::control::range_mirrored(&node);
-        let span = range.max - range.min;
-        let step = range.step.unwrap_or(span / 100.0);
-        let big = step.max(span / 10.0);
+        let (step, big) = range.keyboard_steps();
         let Some(now) = self.range_value(id) else {
             return false;
         };

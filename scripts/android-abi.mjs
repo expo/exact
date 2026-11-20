@@ -1,9 +1,11 @@
 // Android's APK ABIs and their NDK toolchains. Hermes overrides are target-specific.
+import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, resolve } from 'node:path';
 import { cargoEnvironment, hermesBundle } from './app.mjs';
 import { ANDROID_MIN_API as API, hermesAndroidBundle } from './hermes-android.mjs';
+import { androidBakeBlobs } from './linked-plan.mjs';
 
 export const ANDROID_TARGET = 'aarch64-linux-android';
 export const ANDROID_ABIS = { 'arm64-v8a': ANDROID_TARGET, x86_64: 'x86_64-linux-android' };
@@ -55,4 +57,32 @@ export function androidHermesDir(env = process.env, local = hermesAndroidBundle(
     if (error.message !== `hermes-lean-sys has no pinned bundle for ${target}`) throw error;
     return null;
   }
+}
+
+/** The Canvas build and the APK use the same free name beside the GPU libraries. */
+export function androidBakeLibraryName(libraries) {
+  const used = new Set(libraries.map(library => library.toLowerCase()));
+  let name = 'libexactbaked.so';
+  for (let index = 1; used.has(name); index++) name = `libexactbaked_${index}.so`;
+  return name;
+}
+
+/** Link the baked data into a read-only image the APK's native linker can map. */
+export function stageAndroidBake(out, jniLibs, toolchain, target, widgets, name) {
+  const blobs = [
+    ...androidBakeBlobs(out).map(file => ['exact_' + file.replaceAll('.', '_'), file]),
+    ...widgets.map(({ kind }) => ['exact_widget_' + kind, `plans/${kind}.plan`]),
+  ];
+  const assembly = ['.section .rodata,"a",%progbits', ...blobs.flatMap(([symbol, file], i) => [
+    '.balign 16', `.globl "${symbol}"`, `"${symbol}":`, `.quad .Lend${i} - .Lstart${i}, 0`,
+    `.Lstart${i}:`, `.incbin "${file}"`, `.Lend${i}:`,
+  ])].join('\n') + '\n';
+  const library = resolve(jniLibs, name);
+  const wrapper = toolchain[`CC_${target.replaceAll('-', '_')}`];
+  const clang = resolve(wrapper, '..', process.platform === 'win32' ? 'clang.exe' : 'clang');
+  const args = [`--target=${target}${API}`, '-shared', '-nostdlib', '-Wl,-z,max-page-size=16384',
+    `-Wl,-soname,${name}`, '-x', 'assembler', '-', '-o', library];
+  const built = spawnSync(clang, args, { cwd: out, input: assembly, encoding: 'utf8' });
+  if (built.status !== 0) throw new Error(`Android bake data link failed: ${built.error?.message ?? built.stderr.trim()}`);
+  return library;
 }

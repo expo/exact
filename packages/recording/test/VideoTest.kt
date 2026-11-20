@@ -52,6 +52,25 @@ import org.robolectric.util.ReflectionHelpers.ClassParameter.from
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], manifest = Config.NONE, shadows = [VideoTest.Host::class])
 class VideoTest {
+    @Test fun aTakeKeepsTrackTimeAcrossPausesAndClipChanges() {
+        val tracks = dev.exact.canvas.Tracks()
+        val entry = dev.exact.canvas.TrackEntry("track", "video").apply { startedAt = 500.0 }
+        var now = 550.0
+        val movie = AgentVideo(tracks, entry) { now }
+        val clip = dev.exact.canvas.CameraClip { error("capturing the timeline must not encode on the UI thread") }
+        now = 600.0
+        tracks.cameraClip = clip
+        movie.pause(650.0)
+        movie.resume(900.0)
+        now = 1025.0
+        tracks.cameraClip = null
+        val parts = requireNotNull(movie.finish(1050.0))
+        org.junit.Assert.assertEquals(listOf(null, clip, clip, null), parts.map { it.clip })
+        org.junit.Assert.assertEquals(listOf(50000L, 100000L, 400000L, 525000L), parts.map { it.from })
+        org.junit.Assert.assertEquals(listOf(50000L, 50000L, 125000L, 25000L), parts.map { it.length })
+        org.junit.Assert.assertNull(AgentVideo(tracks, entry) { now }.finish(1100.0))
+    }
+
     @Implements(Recorder::class, isInAndroidSdk = false)
     class Encoder {
         @Implementation fun start(pending: PendingRecording): Recording {

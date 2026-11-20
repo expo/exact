@@ -20,8 +20,11 @@ const APP = [
   'component App',
   '  state widths = []',
   '  state hidden = 0',
+  '  state extents: number[] = []',
   '  action measure(w: number, h: number)',
   '    widths = [frame("tab-a").width, frame("tab-b").width]',
+  '  action fieldSize(w: number, h: number)',
+  '    extents = match scrollMetrics("editor") { case some(m) => [m.scrollWidth, m.clientWidth, m.scrollLeft], case none => [] }',
   '  action unseen(w: number, h: number)',
   '    hidden = hidden + 1',
   '  view',
@@ -29,6 +32,7 @@ const APP = [
   '      row testId="tabs" resize=measure gap=8',
   '        text "Following" id="tab-a" testId="tab-a"',
   '        text "Discover" id="tab-b" testId="tab-b"',
+  '      textarea id="editor" resize=fieldSize value="' + 'M'.repeat(83) + '" white-space="pre" width="100%" appearance="none" font-size=14 font-family="monospace"',
   '      // No box: no first report comes, and a settle does not wait for one.',
   '      box testId="unseen" display="none" resize=unseen',
   '',
@@ -108,6 +112,7 @@ test("an agent's settle waits for a view's first size, however late its report c
     // Reports held until 300 ms into the settle: it waits for them (on main it answered first, widths []).
     server = serve(dir);
     const page = await browser.newPage();
+    await page.setViewportSize({ width: 370, height: 700 });
     await page.addInitScript(heldReports);
     await page.addInitScript(watchObserve);
     await page.goto(`${server.url.href}?agent=1`);
@@ -120,6 +125,13 @@ test("an agent's settle waits for a view's first size, however late its report c
     expect(held.slots.widths.every((w) => w > 10)).toBe(true);
     // The box with no layout, never reported and with no bound to end its wait, held nothing.
     expect(held.slots.hidden).toBe(0);
+    expect(held.slots.extents[0]).toBeGreaterThan(held.slots.extents[1]);
+    expect(held.slots.extents[2]).toBe(0);
+    await page.setViewportSize({ width: 1180, height: 700 });
+    await page.waitForFunction(async () => {
+      const { extents } = (await globalThis.exact.agentSettled({ op: 'state' })).slots;
+      return extents[1] > 1000 && extents[0] === extents[1] && extents[2] === 0;
+    });
     await page.close();
     server.stop(true);
     // The page's geometry served only 300 ms into the settle (frames answer unavailable until it loads): the first

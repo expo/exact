@@ -7,7 +7,7 @@ mod files;
 mod geometry;
 mod import;
 use files::write_changed;
-pub use files::{bake_game_level, bake_game_tables, check_size};
+pub use files::{bake_game_level, bake_game_sounds, bake_game_tables, check_size};
 mod sound;
 pub use sound::sound;
 mod textures;
@@ -517,6 +517,25 @@ pub fn game_art(
 ) -> Result<std::collections::BTreeMap<String, Vec<u8>>, String> {
     let game = game_dir(manifest_dir)?;
     art(&game).map_err(|e| format!("{}: {e}", game.join("art").display()))
+}
+
+/// Load an in-memory art bake using the game's declared startup metadata.
+pub fn sim_from_art<G: exact_game::Game>(
+    args: G::Args,
+    art: &std::collections::BTreeMap<String, Vec<u8>>,
+) -> Result<exact_game::Sim<G>, String> {
+    let read = |name: &str| {
+        art.get(name).cloned().ok_or_else(|| format!(
+        "`{name}` is not a payload of this game's art/ (a model `x.model` comes from art/x.glb or art/x.gltf)"
+    ))
+    };
+    let catalog = files::sound_catalog::<G>(read)?;
+    exact_game::Sim::with_assets(args, |name| {
+        if name == exact_game::asset::SOUND_CATALOG {
+            return catalog.clone().ok_or_else(|| format!("missing {name}"));
+        }
+        read(name)
+    })
 }
 
 fn art_outputs(art: &Path) -> Result<std::collections::BTreeMap<String, Vec<u8>>, String> {

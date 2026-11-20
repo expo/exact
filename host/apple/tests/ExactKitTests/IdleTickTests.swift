@@ -148,6 +148,21 @@ final class IdleTickTests: XCTestCase {
         session.onLandForTests = nil
     }
 
+    func testReadyMotionStartAndStopBothReachTheFrameDriver() {
+        let session = ExactApp.shared.makeSession(label: "published-motion")
+        defer { session.destroy() }
+        var motion: [Bool] = []
+        session.onLandForTests = { [unowned session] _, _ in motion.append(session.frames.motion) }
+        for moving in [true, false] {
+            let batch = Batch(ops: [], timers: false, motion: moving, clock: nil, error: nil)
+            session.noticesInFlight += 1
+            session.publish(.notice, RuntimeCompletion(lease: session.runtime.completionLease, batch: batch))
+        }
+        session.landFill()
+        XCTAssertEqual(motion, [true, false])
+        XCTAssertFalse(session.frames.motion)
+    }
+
     /// A published batch (a reply's, a frame's tick's) that shows nothing new
     /// does not hold settled or TTI (LLP 1132 D5); one that changes a view or
     /// asks for a canvas image holds them until it lands. A slice in flight

@@ -17,10 +17,11 @@ mock.module('./rt-link.js', () => ({ rt: { clock, journal: [], commit(action, wh
 mock.module('./navigation.js', () => import('../web/navigation.js'));
 const { install } = await import('./reorder.js');
 
-test('grouped hold starts at the packet release time after an idle page', () => {
+test('grouped hold starts at release and clears the receiving list', async () => {
   const binding = { handle: 1, list: 2, wrapper: 3, root: 4, rowEpoch: 5 };
   const geometry = { list: 2, revision: 1, scrollSequence: 1, scrollTop: 0, portWidth: 100, portHeight: 100, rowWidth: 100, totalExtent: 20 };
-  const list = { hasAttribute: () => false, $reorderdrop() {}, dataset: { reordergroup: 'cards' }, id: 'cards', isConnected: true };
+  const targets = [];
+  const list = { hasAttribute: () => false, $reorderdrop() {}, $reordertargetchange(on) { targets.push(on); }, dataset: { reordergroup: 'cards' }, id: 'cards', isConnected: true };
   const grip = { hasAttribute: () => false, parentElement: list, dataset: { reorderfor: 'cards' }, isConnected: true, closest: () => null, getClientRects: () => [1] };
   class Collection {}
   const c = new Collection();
@@ -40,6 +41,8 @@ test('grouped hold starts at the packet release time after an idle page', () => 
     expect(reorder.dropGroup(token, geometry, 3000)).toBe(true);
     expect(reorder.session().deadline).toBe(4000);
     expect(clock.timers.at(-1).due).toBe(4000);
+    await Promise.resolve();
+    expect(targets).toEqual([true, false]);
   } finally {
     clock.timers.splice(timers);
     clock.now = previous;

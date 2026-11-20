@@ -373,7 +373,7 @@ fn check_tasks(c: &Component) -> Vec<AnalyzeError> {
 
 /// The handler attributes (the web's events, LLP 1005 §3): `press`,
 /// `change`, `input`, `hover`, `focus`, `blur`, `key`, `submit`, `load`, `message`.
-pub const HANDLERS: [&str; 86] = [
+pub const HANDLERS: [&str; 87] = [
     "press",
     "change",
     "input",
@@ -499,6 +499,7 @@ pub const HANDLERS: [&str; 86] = [
     "transformgeometry",
     "transformrelease",
     "reorderdrop",
+    "reordertargetchange",
     "reachstart",
     "reachend",
     // The element resize event, ResizeObserver's: an action given to
@@ -534,7 +535,7 @@ pub fn handler_payload(attr: &str) -> Option<&'static str> {
         | "error"
         | "pictureinpictureerror" => Some("string"),
         "timeupdate" | "durationchange" => Some("number"),
-        "hover" | "fullscreenchange" => Some("bool"),
+        "hover" | "fullscreenchange" | "reordertargetchange" => Some("bool"),
         "select" => Some("MarkdownSelection"),
         _ => None,
     }

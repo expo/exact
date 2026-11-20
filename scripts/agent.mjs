@@ -154,13 +154,11 @@ export async function main(argv, injected = {}) {
   }
   if (flags.live) {
     if (!['macos', 'mac', 'ios', 'android'].includes(host) || flags.test)
-      throw new Error('--live requires a macOS, iOS simulator or Android reader drive without --test');
+      throw new Error('--live requires a macOS, iOS or Android reader drive without --test');
     if (host === 'android') {
       if (flags.reader === false) throw new Error('android --live requires the reader APK. Remove --headless.');
       flags.reader = true;
     }
-    // The iPhone carrier forces agent mode.
-    if (flags.device) throw new Error('--live drives the iOS simulator, not a phone');
     if (flags.timing && flags.timing !== 'platform')
       throw new Error('--live keeps the platform clock; --timing agent is incompatible');
     flags.timing = 'platform';
@@ -322,6 +320,7 @@ export async function main(argv, injected = {}) {
             "post [<surface>] <text> (one word or one quoted string: a message the world reads from Input::messages next tick, as the page's postMessage(text, surface) sends it; no surface, the page's one world)",
             'tap @N|@<id> <choice>',
             'type @N|@<id> <value>',
+            'background <milliseconds> (iOS: leave the app for real time, then resume the same session)',
             "clock <ms|+ms|+ms real [until <path>]|settle|data|held [<target>…] [<n>s]|until state <path> == <literal> within <ms> (real time, the clock frozen, until state <path> reads the JSON literal; a miss fails naming the last value: a stream's state after its first message)>",
             'sample <x> <y> […]',
             'resize <w>x<h>',
@@ -538,6 +537,10 @@ export async function main(argv, injected = {}) {
           r = target === null && !opts.midi ? await s.pointer(phase, opts) : await s.tap(target, opts);
         }
         break;
+      case 'background':
+        if (args.length !== 1 || !/^\d+$/.test(args[0])) throw new MalformedOperation('background <milliseconds>');
+        r = await s.background(Number(args[0]));
+        break;
       case 'clock':
         r = await s.clock(trimmed.slice(5).trim() || 'settle');
         break;
@@ -604,7 +607,7 @@ export async function main(argv, injected = {}) {
         );
       default:
         throw new MalformedOperation(
-          `unknown op: ${op} (tree, layout, state, logs, check, screenshot, sample, tap, type, post, pick, reload, clock, resize, close, back, prefer, call, perf, fail fetch, pass fetch)`,
+          `unknown op: ${op} (tree, layout, state, logs, check, screenshot, sample, tap, type, post, pick, reload, clock, background, resize, close, back, prefer, call, perf, fail fetch, pass fetch)`,
         );
     }
     return [op, r, how];

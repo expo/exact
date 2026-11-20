@@ -642,19 +642,21 @@ impl<D: DataSource> crate::Host<D> {
             exact_runner::Delivery::default().with_compat(json)
         });
         let boot = || {
-            Runner::boot_checkpoint_linked(
-                crate::link::runner_links(),
-                exact_runner::ModuleLinks::ALL,
-                plan,
-                data,
-                crate::host::browser_kernel(),
-                &checkpoint,
-                sequence,
-                snapshot,
-                delivery,
-                viewport,
-                launch,
-            )
+            exact_runner::page::Platform::Web.boot(|| {
+                Runner::boot_checkpoint_linked(
+                    crate::link::runner_links(),
+                    exact_runner::ModuleLinks::ALL,
+                    plan,
+                    data,
+                    crate::host::browser_kernel(),
+                    &checkpoint,
+                    sequence,
+                    snapshot,
+                    delivery,
+                    viewport,
+                    launch,
+                )
+            })
         };
         // A checkpoint on its renderer's clock is no clock the page's date
         // is against: told after the boot. A drive's starts at zero.

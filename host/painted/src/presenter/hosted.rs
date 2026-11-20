@@ -481,6 +481,13 @@ impl<D: DataSource> Presenter<D> {
             && self.hosts_field(id)
     }
 
+    /// Keep the platform editor’s offset for action reads at rest.
+    pub fn reader_field_scrolled(&mut self, id: ViewId, generation: u32, (x, y): (f64, f64)) {
+        if self.hosted_live(id, generation) {
+            self.host.runner_mut().scrolled(Some(id), x, y);
+        }
+    }
+
     /// The reader's field took the focus (a finger tapped it), or lost it
     /// with nothing else of the page taking it: the presenter's focus
     /// follows, with the `blur`, `change` and `focus` that move makes.

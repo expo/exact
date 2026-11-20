@@ -1,6 +1,6 @@
 // Package and linked-bake freshness (scripts/linked-plan.mjs, scripts/cargo-dep-info.mjs and agent-launch.mjs
 // `receiptChanges`): what a watched package directory, an optional design and a linked bake's inputs make stale.
-import { afterEach, beforeEach, test, expect } from 'bun:test';
+import { afterEach, beforeEach, test, expect, setSystemTime } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
@@ -288,6 +288,185 @@ test.skipIf(process.platform === 'win32')('a linked bake reuses an absent packag
   } finally { rmSync(dir, {recursive:true, force:true}); }
 });
 
+test.skipIf(process.platform === 'win32').each([
+  'environment', 'deleted launch module', 'native object', 'legacy cdylib object',
+  'failed bake', 'verbatim archive', 'Cargo clean',
+])('a separate Android bake follows the Cargo unit (%s)', async change => {
+  const {buildAndroidBake, linkedBakeDir} = await import('./linked-plan.mjs');
+  const dir = mkdtempSync(resolve(import.meta.dir, '../target/android-linked-env-'));
+  try {
+    const env = {EXACT_BAKE_OUTPUT:resolve(dir, 'bakes'), CARGO_HOME:resolve(dir, 'cargo-home'), THEME:'light'};
+    const root = linkedBakeDir(env, 'android', 'target');
+    const workspace = resolve(dir, 'workspace'), executable = resolve(dir, 'baker');
+    const source = resolve(dir, 'app.contract'), config = resolve(workspace, '.cargo/config.toml');
+    const launch = resolve(dir, 'launch.rs'), object = resolve(dir, 'native object.o'), archive = resolve(dir, 'helper.a');
+    const objectDirective = {'native object':'rustc-link-arg', 'failed bake':'rustc-link-arg',
+      'legacy cdylib object':'rustc-cdylib-link-arg'}[change];
+    mkdirSync(dirname(config), {recursive:true});
+    writeFileSync(config, '[env]\nEXACT_TYPESCRIPT_PLACEMENT = "worker"\n');
+    writeFileSync(source, 'original');
+    if (change === 'deleted launch module') writeFileSync(launch, 'fn launch() {}');
+    writeFileSync(executable, `#!/bin/sh
+test -n "$CARGO_PKG_VERSION" || exit 1
+printf '%s %s: ' "$CARGO_PKG_VERSION" "$EXACT_TYPESCRIPT_PLACEMENT" > "$OUT_DIR/app.plan"
+/bin/cat '${source}' >> "$OUT_DIR/app.plan"
+printf '{"inputs":{}}' > "$OUT_DIR/compat.json"
+printf '%s' "$EXACT_TYPESCRIPT_PLACEMENT" > "$OUT_DIR/module.rs"
+if test -f '${launch}'; then
+  printf '\n%s' '${launch}' >> "$OUT_DIR/module.rs"
+fi
+${objectDirective ? `case "$(/bin/cat '${source}')" in
+  original) printf original > '${object}' ;;
+  *) printf edited > '${object}' ;;
+esac
+echo 'cargo:${objectDirective}=${object}'
+if test "$(/bin/cat '${source}')" = invalid; then
+  echo 'invalid contract' >&2
+  exit 1
+fi` : ''}
+if test '${change}' = 'verbatim archive'; then
+  /bin/cp '${source}' '${archive}'
+  echo 'cargo:rustc-link-search=native=${dir}'
+  echo 'cargo:rustc-link-lib=static:+verbatim=helper.a'
+fi
+echo 'cargo:rerun-if-changed=${source}'
+echo 'cargo:rerun-if-changed=${launch}'
+echo 'cargo:rerun-if-env-changed=EXACT_TYPESCRIPT_PLACEMENT'
+echo 'cargo:rerun-if-env-changed=THEME'
+echo "cargo::rustc-env=THEME=$THEME"
+`, {mode:0o755});
+    const app = {dir, name:'fixture', generated:true, manifest:{}};
+    const pkg = {id:'fixture', targets:[{kind:['custom-build']}]};
+    let cargoRuns = 0, bootstraps = 0, compiled;
+    const bake = (slot, version, placement) => {
+      const out = resolve(dir, slot, 'out'), baked = resolve(root, createHash('sha256').update(out).digest('hex'));
+      const registry = resolve(baked, 'rust-baker.json'), watch = resolve(root, '.cargo-watch');
+      const build = (cargoEnv, recover) => {
+        cargoRuns++;
+        expect(cargoEnv.EXACT_BAKED).toBe(root);
+        expect(existsSync(watch)).toBe(true);
+        if (!existsSync(registry)) {
+          bootstraps++;
+          for (const directory of [baked, out]) mkdirSync(directory, {recursive:true});
+          const registration = {executable, cwd:dir, env:{CARGO_PKG_VERSION:version}, out, files:['module.rs'], started:Date.now()};
+          const run = spawnSync(executable, [], {env:{...registration.env, EXACT_TYPESCRIPT_PLACEMENT:placement, OUT_DIR:baked, THEME:env.THEME}});
+          expect(run.status).toBe(0);
+          writeFileSync(registry, JSON.stringify(registration));
+          writeFileSync(resolve(baked, 'rust-output.txt'), run.stdout);
+        }
+        const module = resolve(out, 'module.rs');
+        if (!existsSync(module)) {
+          mkdirSync(out, {recursive:true});
+          writeFileSync(module, readFileSync(resolve(baked, 'module.rs')));
+        }
+        compiled = readFileSync(module, 'utf8');
+        const result = {status:0, stdout:JSON.stringify({reason:'build-script-executed', package_id:pkg.id, out_dir:out})};
+        if (compiled.includes(launch) && !existsSync(launch)) {
+          result.status = 1;
+          if (!recover?.(result)) throw new Error('rustc could not read the removed launch module');
+        }
+        return result;
+      };
+      const selected = buildAndroidBake(app, pkg, 'target', env, workspace, [], 'libexactbaked.so', build);
+      expect(selected.dir).toBe(baked);
+      return readFileSync(resolve(selected.dir, 'app.plan'), 'utf8');
+    };
+    expect(bake('A', '1.0.0', 'worker')).toBe('1.0.0 worker: original');
+    if (objectDirective || change === 'verbatim archive') {
+      const watch = resolve(root, '.cargo-watch'), old = new Date(10_000);
+      utimesSync(watch, old, old);
+      if (change === 'failed bake') {
+        writeFileSync(source, 'invalid');
+        expect(() => bake('A', '1.0.0', 'worker')).toThrow('invalid contract');
+        expect(readFileSync(object, 'utf8')).toBe('edited');
+        expect(statSync(watch).mtimeMs).toBe(old.getTime());
+      }
+      writeFileSync(source, 'edited');
+      expect(bake('A', '1.0.0', 'worker')).toBe('1.0.0 worker: edited');
+      expect(readFileSync(objectDirective ? object : archive, 'utf8')).toBe('edited');
+      expect(statSync(watch).mtimeMs).toBeGreaterThan(old.getTime());
+      return;
+    }
+    if (change === 'Cargo clean') {
+      rmSync(resolve(dir, 'A'), {recursive:true});
+      writeFileSync(source, 'edited');
+      expect(bake('A', '1.0.0', 'worker')).toBe('1.0.0 worker: edited');
+      expect(cargoRuns).toBe(2);
+      expect(bootstraps).toBe(1);
+      return;
+    }
+    if (change === 'deleted launch module') {
+      expect(bake('B', '2.0.0', 'worker')).toBe('2.0.0 worker: original');
+      rmSync(launch);
+      expect(bake('B', '2.0.0', 'worker')).toBe('2.0.0 worker: original');
+      expect(compiled).toBe('worker');
+      expect(cargoRuns).toBe(4);
+      return;
+    }
+    const module = resolve(dir, 'A/out/module.rs'), old = new Date(10_000);
+    expect(readFileSync(module, 'utf8')).toBe('worker');
+    utimesSync(module, old, old);
+    writeFileSync(source, 'edited');
+    expect(bake('A', '1.0.0', 'worker')).toBe('1.0.0 worker: edited');
+    expect(statSync(module).mtimeMs).toBe(old.getTime());
+    expect(cargoRuns).toBe(2);
+    expect(bake('B', '2.0.0', 'worker')).toBe('2.0.0 worker: edited');
+    const bakedB = resolve(root, createHash('sha256').update(resolve(dir, 'B/out')).digest('hex'));
+    rmSync(resolve(bakedB, 'inputs.json'));
+    // The cached bake still has the original placement and source.
+    writeFileSync(config, 'include = ["placement.toml"]\n');
+    writeFileSync(resolve(dirname(config), 'placement.toml'), '[env]\nEXACT_TYPESCRIPT_PLACEMENT = { value = "main", force = true }\n');
+    env.EXACT_TYPESCRIPT_PLACEMENT = 'worker';
+    expect(bake('B', '2.0.0', 'main')).toBe('2.0.0 main: edited');
+    expect(compiled).toBe('main');
+    expect(readFileSync(module, 'utf8')).toBe('worker');
+    const beforeTheme = cargoRuns;
+    env.THEME = 'dark';
+    expect(bake('B', '2.0.0', 'main')).toBe('2.0.0 main: edited');
+    expect(readFileSync(resolve(bakedB, 'rust-output.txt'), 'utf8')).toContain('cargo::rustc-env=THEME=dark');
+    expect(cargoRuns).toBe(beforeTheme + 2);
+    expect(bake('A', '1.0.0', 'main')).toBe('1.0.0 main: edited');
+    expect(compiled).toBe('main');
+    rmSync(root, {recursive:true});
+    expect(bake('A', '1.0.0', 'main')).toBe('1.0.0 main: edited');
+    expect(bootstraps).toBe(3);
+  } finally { rmSync(dir, {recursive:true, force:true}); }
+});
+
+test('Android splits complete bakes and preserves authored build script outputs', async () => {
+  const {androidLinkable, buildAndroidBake} = await import('./linked-plan.mjs');
+  const {authoredCrates, copiedBuildScripts} = await import('./app-shells.mjs');
+  const dir = mkdtempSync(resolve(import.meta.dir, '../target/android-build-script-'));
+  try {
+    const src_path = resolve(dir, 'build.rs'), entry = resolve(dir, 'lib.rs');
+    const pkg = {targets:[{kind:['custom-build'], src_path}, {kind:['cdylib'], src_path:entry}]};
+    const [, standard] = copiedBuildScripts().android;
+    writeFileSync(src_path, standard);
+    const stock = authoredCrates(dir, {}, 'test', ['android']).android['src/lib.rs'];
+    writeFileSync(entry, stock + 'const PLAN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/app.plan"));\n');
+    expect(androidLinkable(pkg)).toBe(false);
+    writeFileSync(entry, stock);
+    expect(androidLinkable(pkg)).toBe(true);
+    writeFileSync(src_path, standard.replaceAll('\n', '\r\n'));
+    writeFileSync(entry, stock.replaceAll('\n', '\r\n'));
+    expect(androidLinkable(pkg)).toBe(true);
+    writeFileSync(entry, stock.replace('.placed(TYPESCRIPT_PLACEMENT)', '.with_native(exact_native)\n            .placed(TYPESCRIPT_PLACEMENT)'));
+    expect(androidLinkable(pkg)).toBe(true);
+    writeFileSync(src_path, standard.replace(/}\n$/, '    let plan = std::fs::read(std::env::var("OUT_DIR").unwrap() + "/app.plan").unwrap();\n}\n'));
+    expect(androidLinkable(pkg)).toBe(false);
+    const custom = readFileSync(src_path, 'utf8').replace('fn main() {', `fn main() {
+    if exact_js_bake::take_android_linked().unwrap() {
+        return;
+    }`);
+    writeFileSync(src_path, custom);
+    expect(androidLinkable(pkg)).toBe(true);
+    const env = {EXACT_BAKE_OUTPUT:resolve(dir, 'bakes'), CARGO_HOME:resolve(dir, 'cargo-home')};
+    const app = {dir, name:'fixture', manifest:{}};
+    const build = cargoEnv => cargoEnv.EXACT_BAKED;
+    expect(buildAndroidBake(app, pkg, 'target', {...env, EXACT_RUST_BUNDLE:resolve(dir, 'rust')}, dir, [], 'libexactbaked.so', build).dir).toBeUndefined();
+  } finally { rmSync(dir, {recursive:true, force:true}); }
+});
+
 test.skipIf(process.platform === 'win32').each(['file', 'directory', 'file link', 'directory link', 'inner directory link'])('a linked bake compares restored %s contents and reuses unchanged inputs', async kind => {
   const {bakeOutside, recordRustBake} = await import('./linked-plan.mjs');
   const scratch = resolve(import.meta.dir, '../target');
@@ -405,8 +584,12 @@ test.skipIf(process.platform === 'win32').each(['known', 'discovered', 'bootstra
       recordRustBake(env);
       const bake = () => bakeOutside({dir, name:'fixture'}, 'macos', 'target', env);
       if (stage === 'bootstrap') {
-        // The bootstrap read FIRST, then an editor restored older bytes before Cargo returned.
-        writeFileSync(registry, JSON.stringify({executable, cwd:dir, env:{}, started:statSync(source).ctimeMs}));
+        // The bootstrap read FIRST, then an editor restored older bytes before Cargo returned. bake/src/link.rs
+        // registers its start on the system clock, which file change times can trail by a tick (here far ahead), and
+        // `since`, a stamp's time in the bake directory, on the clock they read.
+        const stamp = resolve(baked, '.started'); writeFileSync(stamp, '');
+        writeFileSync(registry, JSON.stringify({executable, cwd:dir, env:{}, started:Date.now() + 60_000, since:Math.floor(statSync(stamp).mtimeMs)}));
+        rmSync(stamp);
         if (kind === 'removed') rmSync(source);
         else { writeFileSync(source, 'RESTORED'); utimesSync(source, new Date(0), new Date(0)); }
         rmSync(resolve(baked, 'inputs.json'));
@@ -414,13 +597,49 @@ test.skipIf(process.platform === 'win32').each(['known', 'discovered', 'bootstra
       } else {
         writeFileSync(source, 'SECOND'); writeFileSync(trigger, '');
         if (stage === 'discovered') rmSync(resolve(baked, 'inputs.json'));
-        bake(); expect(readFileSync(resolve(baked, 'app.plan'), 'utf8')).toBe('SECOND');
+        // File change times can trail Date.now() by a clock tick. A lead far longer than one makes the baker's edit
+        // seem to precede its run every time, not only when the tick falls there.
+        setSystemTime(new Date(Date.now() + 60_000));
+        try { bake(); } finally { setSystemTime(); }
+        expect(readFileSync(resolve(baked, 'app.plan'), 'utf8')).toBe('SECOND');
       }
       bake(); expect(readFileSync(resolve(baked, 'app.plan'), 'utf8')).toBe(kind === 'removed' ? 'ABSENT' : 'RESTORED');
       const record = readFileSync(resolve(baked, 'inputs.json'), 'utf8');
       bake(); expect(readFileSync(resolve(baked, 'inputs.json'), 'utf8')).toBe(record);
     } finally { rmSync(dir, {recursive:true, force:true}); }
   });
+
+test.skipIf(process.platform === 'win32')('a later Cargo bootstrap with the same plan records its own watches over an earlier linked bake\'s', async () => {
+  const {bakeOutside, recordRustBake} = await import('./linked-plan.mjs');
+  const dir = mkdtempSync(resolve(import.meta.dir, '../target/linked-order-'));
+  try {
+    const baked = resolve(dir, 'bakes/macos-target.baked'), executable = resolve(dir, 'baker');
+    const read = resolve(dir, 'read'), added = resolve(dir, 'added');
+    mkdirSync(baked, {recursive:true}); mkdirSync(resolve(dir, 'data'));
+    writeFileSync(resolve(dir, 'data/Cargo.toml'), ''); writeFileSync(read, 'same'); writeFileSync(added, 'same');
+    writeFileSync(executable, `#!/bin/sh\nset -e\nprintf SAME > "$OUT_DIR/app.plan"\necho baked >> "$OUT_DIR/runs"\necho 'cargo:rerun-if-changed=${read}'\n`, {mode:0o755});
+    writeFileSync(resolve(baked, 'app.plan'), 'SAME'); writeFileSync(resolve(baked, 'compat.json'), '{}');
+    const registry = resolve(baked, 'rust-baker.json'), output = resolve(baked, 'rust-output.txt');
+    writeFileSync(registry, JSON.stringify({executable, cwd:dir, env:{}, started:0}));
+    writeFileSync(output, `cargo:rerun-if-changed=${read}\n`);
+    const env = {EXACT_BAKED:baked, EXACT_BAKE_OUTPUT:resolve(dir, 'bakes')};
+    const bake = () => bakeOutside({dir, name:'fixture'}, 'macos', 'target', env);
+    // The system clock leads file change times, by far more than a tick: the order of the driver's bake and Cargo's
+    // later bootstrap is the system clock's, as link.rs registers `started`; `since` is a stamp's file time.
+    const lead = Date.now() + 60_000;
+    setSystemTime(new Date(lead));
+    try { bake(); } finally { setSystemTime(); }
+    expect(readFileSync(resolve(baked, 'runs'), 'utf8')).toBe('baked\n');
+    const stamp = resolve(baked, '.started'); writeFileSync(stamp, '');
+    writeFileSync(registry, JSON.stringify({executable, cwd:dir, env:{}, started:lead + 1000, since:Math.floor(statSync(stamp).mtimeMs)}));
+    rmSync(stamp);
+    writeFileSync(output, `cargo:rerun-if-changed=${added}\n`);
+    recordRustBake(env);
+    expect(JSON.parse(readFileSync(resolve(baked, 'inputs.json'), 'utf8')).paths).toEqual([added]);
+    writeFileSync(added, 'edited'); bake();
+    expect(readFileSync(resolve(baked, 'runs'), 'utf8')).toBe('baked\nbaked\n');
+  } finally { rmSync(dir, {recursive:true, force:true}); }
+});
 
 test.skipIf(process.platform === 'win32')('external directory watches record source membership and links, excluding build outputs', async () => {
   const {pendingBuildInputs} = await import('./app.mjs');

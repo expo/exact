@@ -166,6 +166,7 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         picture = next; clipPath = video; clip = decoded
         if (decoded != null) say("clip $video (${decoded.duration} ms, sha256 ${decoded.sha256})")
         for (v in views.values) if (v.picture != null) v.sub?.let { show(v, it, null) }
+        context.tracks.cameraClip = decoded
     }
 
     override fun clock() {
@@ -173,12 +174,13 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         for (v in views.values) if (v.picture != null) v.sub?.let { show(v, it, null) }
     }
 
-    private fun clipFrame(track: String): Bitmap? = clip?.frame(context.now() - starts.getOrPut(track) {
+    private fun clipFrame(track: String): Bitmap? = clip?.sample(context.now() - starts.getOrPut(track) {
         context.tracks.lookup(track)?.startedAt ?: context.now()
-    })
+    })?.bitmap
 
     override fun destroy(done: () -> Unit) {
         for (v in views.values) { blank(v); v.sub?.leave?.invoke() }
+        if (context.tracks.cameraClip === clip) context.tracks.cameraClip = null
         views.clear(); starts.clear(); clip = null
         done()
     }

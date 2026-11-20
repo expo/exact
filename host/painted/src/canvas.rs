@@ -928,12 +928,19 @@ impl Backend for Recorder {
         self.slot_reopen(row, id)
     }
 
-    fn layer_begin(&mut self, key: u64, ts: Transform, pivot: (f32, f32), base: [f32; 7]) -> bool {
+    fn layer_begin(
+        &mut self,
+        key: u64,
+        ts: Transform,
+        pivot: (f32, f32),
+        reference: (f32, f32),
+        base: [f32; 7],
+    ) -> bool {
         // Retained layers animate in page coordinates, outside any projective plane.
         if !self.planes.is_empty() {
             return false;
         }
-        self.layer_open(key, ts, pivot, base);
+        self.layer_open(key, ts, pivot, reference, base);
         true
     }
 
@@ -1101,7 +1108,7 @@ pub struct CanvasHost<D: DataSource> {
     /// live layer's keyframes as last sent (`TRACKS`).
     origin_ns: i64,
     clock_sent: bool,
-    tracks: HashMap<u32, Vec<u32>>,
+    tracks: HashMap<u32, (layer::Basis, Vec<u32>)>,
     /// The scroller [`CanvasHost::scroll`] moves, and a finger last did.
     feed: Option<ViewId>,
     /// Whether the windows' lead is back after the first frame (and after
@@ -1297,35 +1304,30 @@ impl<D: DataSource + Default> CanvasHost<D> {
         let epoch = self.p.host().lowered_epoch();
         let since = self.tracks_epoch;
         self.tracks_epoch = epoch;
-        for (id, key, base) in alive {
-            // An indicator's tracks change only with the device's motion
-            // setting: sent with its layer, and again when that changes.
-            if crate::host::lower::is_spinner(key) {
-                let words = self.p.host().spinner_tracks();
-                if self.tracks.get(&id) != Some(&words) {
-                    ops.extend([layer::TRACKS, id, words.len() as u32]);
-                    ops.extend(&words);
-                    self.tracks.insert(id, words);
+        for (id, key, basis) in alive {
+            let cached = self.tracks.get(&id);
+            let words = if crate::host::lower::is_spinner(key) {
+                self.p.host().spinner_tracks()
+            } else {
+                let key = exact_kernel::motion::node_key(key);
+                if cached.is_some_and(|(old, _)| *old == basis)
+                    && (epoch == since || !self.p.host().lowered_changed_after(key, since))
+                {
+                    continue;
                 }
-                continue;
-            }
-            let key = exact_kernel::motion::node_key(key);
-            if self.tracks.contains_key(&id)
-                && (epoch == since || !self.p.host().lowered_changed_after(key, since))
-            {
-                continue;
-            }
-            let mut p = crate::paint::Presented::IDENTITY;
-            p.translate = (base[0], base[1]);
-            p.scale = base[2];
-            p.rotate = base[3];
-            p.opacity = base[4];
-            let words = self.p.host().layer_tracks(key, &p);
-            if self.tracks.get(&id) != Some(&words) {
+                let base = basis.base;
+                let mut p = crate::paint::Presented::IDENTITY;
+                p.translate = (base[0], base[1]);
+                p.scale = base[2];
+                p.rotate = base[3];
+                p.opacity = base[4];
+                self.p.host().layer_tracks(key, &p, basis.reference)
+            };
+            if cached.is_none_or(|(_, old)| *old != words) {
                 ops.extend([layer::TRACKS, id, words.len() as u32]);
                 ops.extend(&words);
-                self.tracks.insert(id, words);
             }
+            self.tracks.insert(id, (basis, words));
         }
     }
 

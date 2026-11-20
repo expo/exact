@@ -38,7 +38,7 @@ export const classifications = [
     "runner/src/runner/viewport.rs and page.rs settle facts of the live session, and geometry_facts.rs answers the geometry facts from its layout, counting their answers and a chain's commits; these entries carry no app/account operation identity. painted presenter/zoom.rs sync_zoom retains zoom state only for matching live node keys; settle_zoom reconciles authored values with the current gesture.", [
     ["apple:host/apple/src/abi/exports.rs",
       "exact_control_text_changed exact_insets exact_orientation_applied exact_resize exact_scrolled exact_segments exact_set_button_measure exact_set_console " +
-      "exact_set_control_text exact_set_display_scale exact_set_fonts exact_set_inline_boxes exact_set_inline_geometry exact_set_lines exact_set_measure exact_set_mode " +
+      "exact_set_control_text exact_set_display_scale exact_set_fonts exact_set_inline_boxes exact_set_text_geometry exact_set_lines exact_set_measure exact_set_mode " +
       "exact_set_page exact_set_place exact_set_preferences exact_set_root_font_size exact_set_symbol_measure exact_set_time exact_set_time_format exact_set_wake " +
       "exact_surface_record exact_text_scale_changed exact_timeline_scrolled exact_top_layer exact_transform_motion"],
     ["painted:host/painted/src/agent.rs", "prefer prefer_fold retell_offset"],
@@ -94,7 +94,7 @@ export const classifications = [
     ["runner:runner/src/runner/page.rs", "Runner::page Runner::reads_page_field Runner::set_page"],
     ["runner:runner/src/runner/resize.rs", "Runner::resize_delivered Runner::resize_due Runner::resize_settled"],
     ["runner:runner/src/native_geometry.rs", "chain geometry is_geometry project query templates unsettled"],
-    ["runner:runner/src/runner/geometry_facts.rs", "Runner::deliver_geometry#chain:1 Runner::deliver_geometry#generation:1"],
+    ["runner:runner/src/runner/geometry_facts.rs", "Runner::deliver_geometry#chain:1"],
     ["runner:runner/src/runner/root_font.rs", "Runner::display_scale Runner::host_root_font_size Runner::root_font_size Runner::set_bold_text Runner::set_display_scale Runner::set_root_font_size"],
     ["runner:runner/src/runner/shown.rs", "Runner::place_blocks Runner::top_layer Runner::top_layer_backdrop Runner::top_layer_frames"],
     ["runner:runner/src/runner/surface_record.rs", "Runner::set_surface_record Runner::surface_refusals"],
@@ -110,18 +110,19 @@ export const classifications = [
     "runner/src/runner/event.rs dispatches through a mounted view and its action binding; no independent operation identity is supplied. runner/advance.rs dispatch_at and advance/inputs.rs dispatch_at_with_receipt deliver input at the host clock after due timers. painted presenter/zoom.rs targets live zoomable nodes for pinch, wheel and double tap; canvas/scroll.rs and jni_scroll.rs forward shell gestures. contact.rs press_lifted validates the live activation target.", [
     ["apple:host/apple/src/abi/exports.rs", "exact_dispatch"],
     ["painted:host/painted/src/canvas/access.rs", "CanvasHost::access CanvasHost::access_act CanvasHost::access_off"],
-    ["painted:host/painted/src/canvas/field.rs", "CanvasHost::field_action CanvasHost::field_composing CanvasHost::field_edited CanvasHost::field_focused CanvasHost::field_input CanvasHost::field_selected"],
-    ["painted:host/painted/src/canvas/input.rs", "CanvasHost::finger CanvasHost::scroll CanvasHost::touch CanvasHost::touching"],
+    ["painted:host/painted/src/canvas/field.rs", "CanvasHost::field_action CanvasHost::field_composing CanvasHost::field_edited CanvasHost::field_focused CanvasHost::field_input CanvasHost::field_scrolled CanvasHost::field_selected"],
+    ["painted:host/painted/src/canvas/input.rs", "CanvasHost::finger CanvasHost::reader_selection CanvasHost::scroll CanvasHost::touch CanvasHost::touching"],
     ["painted:host/painted/src/canvas/jni.rs",
+      "Java_dev_exact_canvas_Native_readerSelection " +
       "Java_dev_exact_canvas_Native_accessAct Java_dev_exact_canvas_Native_fieldAction Java_dev_exact_canvas_Native_fieldComposing " +
       "Java_dev_exact_canvas_Native_fieldEdited Java_dev_exact_canvas_Native_fieldFocused Java_dev_exact_canvas_Native_fieldInput " +
-      "Java_dev_exact_canvas_Native_fieldSelected Java_dev_exact_canvas_Native_finger Java_dev_exact_canvas_Native_scroll Java_dev_exact_canvas_Native_touch " +
+      "Java_dev_exact_canvas_Native_fieldScrolled Java_dev_exact_canvas_Native_fieldSelected Java_dev_exact_canvas_Native_finger Java_dev_exact_canvas_Native_scroll Java_dev_exact_canvas_Native_touch " +
       "Java_dev_exact_canvas_Native_touching"],
     ["painted:host/painted/src/canvas/jni_keys.rs", "Java_dev_exact_canvas_Native_key Java_dev_exact_canvas_Native_namedKey"],
     ["painted:host/painted/src/canvas/jni_pad.rs", "Java_dev_exact_canvas_Native_pad"],
-    ["painted:host/painted/src/canvas/jni_scroll.rs", "Java_dev_exact_canvas_Native_scrollDrag"],
+    ["painted:host/painted/src/canvas/jni_scroll.rs", "Java_dev_exact_canvas_Native_scrollDrag Java_dev_exact_canvas_Native_sheetDrag"],
     ["painted:host/painted/src/canvas/keys.rs", "CanvasHost::back CanvasHost::back_progress CanvasHost::key CanvasHost::named_key CanvasHost::open CanvasHost::pad"],
-    ["painted:host/painted/src/canvas/scroll.rs", "CanvasHost::drag_began CanvasHost::drag_ended CanvasHost::fling_ended CanvasHost::refresh CanvasHost::scrolled CanvasHost::scrollers CanvasHost::snaps_around CanvasHost::under"],
+    ["painted:host/painted/src/canvas/scroll.rs", "CanvasHost::drag_began CanvasHost::drag_ended CanvasHost::fling_ended CanvasHost::refresh CanvasHost::scrolled CanvasHost::scrollers CanvasHost::sheet_drag CanvasHost::snaps_around CanvasHost::under"],
     ["painted:host/painted/src/height_binding.rs", "Host::dispatch_height_held"],
     ["painted:host/painted/src/holds.rs", "Host::dispatch_held Host::dispatch_retained"],
     ["painted:host/painted/src/host.rs", "Host::boot_decoded Host::dispatch_at Host::dispatch_now"],
@@ -139,6 +140,8 @@ export const classifications = [
     ["painted:host/painted/src/presenter/desktop_access.rs",
       "Presenter::access_focus Presenter::access_focus_node Presenter::access_origin Presenter::access_select Presenter::access_selection Presenter::access_text " +
       "Presenter::access_view"],
+    ["painted:host/painted/src/presenter/reader_selection.rs",
+      "Presenter::reader_select Presenter::replace_selection Presenter::selection_policy Presenter::selection_reports"],
     ["painted:host/painted/src/presenter/edit_menu.rs", "Presenter::edit_menu_action Presenter::edit_menu_at Presenter::edit_menu_key Presenter::edit_menu_valid Presenter::field_menu_default Presenter::open_edit_menu"],
     ["painted:host/painted/src/presenter/events.rs",
       "Presenter::clear_removed_focus Presenter::cursor_at Presenter::focus_place Presenter::follow_pointer Presenter::hold_modifier Presenter::hover " +
@@ -147,9 +150,10 @@ export const classifications = [
     ["painted:host/painted/src/presenter/hatch.rs", "Presenter::hatch_act"],
     ["painted:host/painted/src/presenter/hosted.rs",
       "Presenter::field_look Presenter::reader_field_action Presenter::reader_field_composing Presenter::reader_field_edited Presenter::reader_field_focused " +
-      "Presenter::reader_field_input Presenter::reader_field_selected"],
+      "Presenter::reader_field_input Presenter::reader_field_scrolled Presenter::reader_field_selected"],
     ["painted:host/painted/src/presenter/ime.rs", "Presenter::ime_begin Presenter::ime_commit Presenter::ime_end Presenter::ime_preedit Presenter::ime_target Presenter::ime_unconverted"],
     ["painted:host/painted/src/presenter/links.rs", "Presenter::follow Presenter::open_location"],
+    ["painted:host/painted/src/presenter/picker.rs", "Presenter::open_document"],
     ["painted:host/painted/src/presenter/pan_release.rs", "Presenter::release_pan"],
     ["painted:host/painted/src/presenter/pointer.rs", "Presenter::pointer_dispatch"],
     ["painted:host/painted/src/presenter/radio.rs", "Presenter::activate_radio"],
@@ -161,7 +165,7 @@ export const classifications = [
       "Presenter::scroll_to Presenter::scrollers_at"],
     ["painted:host/painted/src/presenter/shortcuts.rs", "Presenter::press_shortcut"],
     ["painted:host/painted/src/presenter/snap.rs", "Presenter::reader_snaps Presenter::reader_snaps_around Presenter::snap"],
-    ["painted:host/painted/src/presenter/stage/touch.rs", "Presenter::dismiss_sheet"],
+    ["painted:host/painted/src/presenter/stage/touch.rs", "Presenter::dismiss_sheet Presenter::nested_sheet_bounds Presenter::reader_sheet_drag"],
     ["painted:host/painted/src/presenter/top.rs", "Presenter::choose Presenter::dispatch_toggles"],
     ["painted:host/painted/src/presenter/top/input.rs", "Presenter::surface_event"],
     ["painted:host/painted/src/presenter/top/invoke.rs", "Presenter::long_press"],
@@ -398,7 +402,7 @@ export const classifications = [
     ["painted:host/painted/src/media_session.rs", "handled"],
     ["painted:host/painted/src/paint_motion.rs", "Host::inheritors_of Host::presented_path"],
     ["painted:host/painted/src/presenter.rs",
-      "Presenter::boxes Presenter::compat Presenter::damage_rects Presenter::dirty Presenter::executor_fd Presenter::focus Presenter::hit Presenter::hit_last_paint Presenter::host " +
+      "Presenter::boxes Presenter::compat Presenter::damage_rects Presenter::dirty Presenter::executor_fd Presenter::focus Presenter::hit Presenter::host " +
       "Presenter::hosts Presenter::image_fd Presenter::images Presenter::node_count Presenter::page Presenter::paragraph Presenter::pending Presenter::rect_of " +
       "Presenter::repaint Presenter::scroll_of Presenter::text Presenter::viewport Presenter::wants_display_frames Presenter::wheel"],
     ["painted:host/painted/src/presenter/access.rs", "Presenter::access_reset Presenter::access_told Presenter::access_tree Presenter::reader_access"],
@@ -424,7 +428,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/media.rs", "Presenter::media_json"],
     ["painted:host/painted/src/presenter/painter.rs",
       "Presenter::apple_painter_can_draw Presenter::apple_painter_retry_deadline Presenter::apple_painter_starting Presenter::apple_window_frame " +
-      "Presenter::attach_apple_layer Presenter::attach_painter_window Presenter::displayed_process_ms"],
+      "Presenter::attach_apple_layer Presenter::attach_painter_window Presenter::displayed_process_ms Presenter::suspend_window_painter"],
     ["painted:host/painted/src/presenter/pointer.rs", "Presenter::pointer_node"],
     ["painted:host/painted/src/presenter/preferences.rs", "Presenter::dark"],
     ["painted:host/painted/src/presenter/remote.rs", "Presenter::container Presenter::remote"],
@@ -433,7 +437,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/scroll_end.rs", "Presenter::tracks_scroll_end"],
     ["painted:host/painted/src/presenter/scrollbar.rs", "Presenter::refresh_scrollbar_preferences"],
     ["painted:host/painted/src/presenter/shortcuts.rs", "Presenter::shortcut_buttons"],
-    ["painted:host/painted/src/presenter/split.rs", "current_row owner Presenter::associate_split_row Presenter::read_split Presenter::split_press Presenter::validate_split_rows State::retained_list"],
+    ["painted:host/painted/src/presenter/split.rs", "Presenter::associate_split_row Presenter::read_split Presenter::split_press Presenter::validate_split_rows State::retained_list"],
     ["painted:host/painted/src/presenter/stage.rs", "Presenter::motion_off"],
     ["painted:host/painted/src/presenter/status_bar.rs", "Presenter::resolve_status_bar Presenter::status_bar"],
     ["painted:host/painted/src/presenter/swipe.rs", "Presenter::swipe_candidate Presenter::swipe_ways"],
@@ -548,7 +552,7 @@ export const classifications = [
     ["runner:runner/src/runner/router.rs",
       "Runner::host_back Runner::host_back_to Runner::host_forward Runner::host_go Runner::host_launch Runner::location_ahead Runner::location_behind Runner::location_beneath " +
       "Runner::resource_args Runner::resource_is_placeholder Runner::route_matches Runner::route_one_location Runner::take_router_change Runner::visit_location"],
-    ["runner:runner/src/runner/split.rs", "Runner::press_writes_router Runner::show_split_placeholder Runner::stack_split"],
+    ["runner:runner/src/runner/split.rs", "Runner::press_writes_router Runner::show_split_placeholder Runner::split_row_owner Runner::stack_split"],
     ["runner:runner/src/runner/tabs.rs", "Runner::build_every_tab Runner::build_tabs Runner::panels_need_navigation Runner::unopened_tabs"],
     ["web:host/web/src/abi.rs", "exact_build_locations exact_host_back exact_host_go exact_location_of exact_route_match exact_set_launch"],
   ]),
@@ -600,7 +604,7 @@ export const classifications = [
     ["painted:host/painted/src/screen_capture.rs", "fixtures sizes"],
     ["painted:host/painted/src/paint_motion.rs", "Host::paint_color Host::paint_over Host::present_paint"],
     ["painted:host/painted/src/presenter/painter.rs", "Presenter::poll_apple_painter Presenter::repeat_apple_frame"],
-    ["painted:host/painted/src/press.rs", "Host::look_motion Host::retire_presses"],
+    ["painted:host/painted/src/press.rs", "Host::look_motion Host::press_feedback Host::retire_presses"],
     ["painted:host/painted/src/surfaces.rs", "Presenter::retier_surfaces Presenter::surface_lifecycle Presenter::sync_surfaces"],
     ["painted:host/painted/src/surfaces/window.rs", "Presenter::collect_painter_retirement Presenter::reset_painter_present_deadline"],
     ["web-js:host/web-js/motion/src/abi.rs", "m_gesture m_in m_out m_scratch m_translate"],
@@ -694,6 +698,7 @@ export const classifications = [
     ["render:host/render/src/requests.rs", "render_with_at"],
     ["render:host/render/src/serve.rs", "document expire_renders Server::addr Server::bind Server::run Server::stopper Stopper::stop"],
     ["render:host/render/src/source.rs", "Anonymous::new"],
+    ["runner:runner/src/page.rs", "Platform::boot"],
     ["runner:runner/src/runner.rs", "Runner::auth_mut Runner::boot Runner::data Runner::kernel_mut Runner::set_full_evaluation Runner::set_row_reuse"],
     ["runner:runner/src/runner/carry.rs", "Runner::boot_carrying Runner::carry Runner::reboot_sequence Carried::with_validated_answers"],
     ["runner:runner/src/runner/checkpoint.rs", "Runner::boot_checkpoint Runner::boot_checkpoint_linked"],
@@ -844,7 +849,7 @@ export const classifications = [
     "The named host/painted source configures or constructs the current host, platform services or render backend. These entries create no independent durable completion owner.", [
     ["painted:host/painted/src/android_hint.rs", "colocate fast_thread input session"],
     ["painted:host/painted/src/android.rs",
-      "background_priority console fast_cores fast_set Handle::send Handle::stop log redirect_stdio release_library_pages release_library_pages_after " +
+      "background_priority baked baked_canvas_surfaces baked_grants console fast_cores fast_set Handle::send Handle::stop log redirect_stdio release_library_pages release_library_pages_after " +
       "release_module_pages_too section_begin section_end start trace"],
     ["painted:host/painted/src/app.rs",
       "boot_presenter boot_presenter_with_metal boot_window_presenter Config::from_env Config::from_env_static Config::headless " +
@@ -966,6 +971,7 @@ export const classifications = [
       "Cache::identity_owned Cache::insert Cache::intrinsic Cache::invalidate_families Cache::maintain Cache::prepare_handoff Cache::release_handoff Cache::residency " +
       "Cache::retiring Cache::set_intrinsic Cache::set_source Cache::source Cache::spec Cache::superseding Cache::trim deferring_eviction"],
     ["painted:host/painted/src/text/catalog_recipe.rs", "Recipe::attach Recipe::catalog Recipe::fonts"],
+    ["painted:host/painted/src/text/field_lines.rs", "Glyphs::is_empty Glyphs::len"],
     ["painted:host/painted/src/text/flow.rs", "FlowLayout::capacity_bytes Paragraph::flow_incomplete Paragraph::flow_line_height Paragraph::fragments TextEngine::paragraph_flow"],
     ["painted:host/painted/src/text/fonts.rs", "Described::info Registry::add Registry::source"],
     ["painted:host/painted/src/text/ink.rs", "Cache::bytes Cache::from_index Cache::matches Cache::prepare Cache::reset Index::build Index::glyphs Index::viewport Index::visit"],
@@ -1148,7 +1154,7 @@ export const classifications = [
     "The named painted adapter reads or updates the current Presenter through the runner or its Host forwarding API. runner/src/runner/event.rs dispatches through a mounted view and its action binding; no independent operation identity is supplied. contact.rs feedback_contains checks the live node's tracking shape for contact_press, pointer_moved feedback and pointer_lift activation.", [
     ["painted:host/painted/src/presenter/access.rs",
       "Presenter::access_bar_info Presenter::access_bottom Presenter::access_control Presenter::access_emit Presenter::access_hint Presenter::access_inline_words " +
-      "Presenter::access_key Presenter::access_label Presenter::access_name Presenter::access_top Presenter::access_words"],
+      "Presenter::access_key Presenter::access_label Presenter::access_top Presenter::access_words"],
     ["painted:host/painted/src/presenter/access/menu.rs", "Presenter::access_choose Presenter::access_menu Presenter::access_menu_focus"],
     ["painted:host/painted/src/presenter/access/surface.rs", "Presenter::surface_menu_flags Presenter::surface_scroll_label"],
     ["painted:host/painted/src/presenter/access/walk.rs", "Presenter::access_walk Presenter::access_walk_contents"],
@@ -1384,6 +1390,7 @@ export const classifications = [
   group("request lifecycle", ["one-shot", "subscription", "durable operation"], "pending ticket, queued turn or held executor request", "UI-owned",
     "The named public runner-crate source is the request lifecycle API or its value/admission helper. runner/src/runner/admission.rs and in_flight.rs tie admission, aborts and retirement to pending tickets. Retained effectful work is separately represented by module_work.rs.", [
     ["runner:runner/src/commands.rs", "request"],
+    ["runner:runner/src/page.rs", "Platform::name"],
     ["runner:runner/src/process.rs", "declared_name ProcessOp::declared ProcessOp::name ProcessOp::size Request::is_process Request::process summary"],
     ["runner:runner/src/request_http.rs", "CacheMode::name CacheMode::parse Redirect::name Redirect::parse Request::prefetch Request::prefetch_refusal Request::preload Request::preload_refusal"],
     ["runner:runner/src/request_preload.rs", "Launch::new LaunchRequest::new Preload::fill"],

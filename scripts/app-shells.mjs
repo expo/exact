@@ -492,6 +492,10 @@ export function authoredCrates(dir, manifest, name, kinds) {
 export const copiedBuildScripts = () => Object.fromEntries(Object.values(PLATFORMS).concat('web').filter((kind, i, all) => all.indexOf(kind) === i)
   .map(kind => [kind, ['../../..', '..'].map(app => crateFiles(kind, { name: 'app', title: 'App', app, dep: () => '' })['build.rs'])]));
 
+/** The Canvas entry a generated TypeScript crate can bring to an authored workspace. */
+export const copiedAndroidEntries = () => [false, true].flatMap(updates => [false, true].flatMap(preload =>
+  [false, true].map(native => crateFiles('android', {title: 'App', dep: () => '', updates, preload, native})['src/lib.rs'])));
+
 const titleOf = name => name.split('-').map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
 const stampOf = (shells) => { try { return JSON.parse(readFileSync(resolve(shells, '.stamp.json'), 'utf8')); } catch { return null; } };
 

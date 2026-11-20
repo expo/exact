@@ -150,7 +150,7 @@ internal class LifecycleAdapter(private val sim: Sim, private val root: File) : 
     }
 
     override val conditions: Conditions get() = sim.conditions
-    override fun stopped() = sim.w.seen
+    override fun stopped(registrations: Set<Key>) = sim.w.seen
     override fun restarted(namespace: Namespace) = namespace in sim.w.restarted
     override fun held(namespace: Namespace) = sim.w.jobs.filter { it.second == Job.UserJob }.map { it.first }.toSet()
     override fun schedule(key: Key, job: Job, record: JSONObject, answer: (Boolean) -> Unit) =

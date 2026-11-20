@@ -637,8 +637,9 @@ is idle: nothing is asked, a request in flight is let go (an upload's goes on),
 nothing. It keeps the value it showed, which is no longer an answer: `current` is
 false. When `cond` turns true the resource is asked again, forced, even at the
 arguments it had, and is current once that answer lands. A resource idle at boot
-shows its placeholder. A resource over a list takes no `when`
-(`syntax-resource-for-when`).
+shows its placeholder, or an answer the boot starts with: a rendered page's for it,
+or one a native host kept; `current` is false either way. A resource over a list
+takes no `when` (`syntax-resource-for-when`).
 
 A resource over a list, `resource r = source(x) for x in list as shape S`,
 asks its source once for each element (LLP 1017.000 P4c, amended
@@ -766,8 +767,8 @@ only its selected arm. Conditions require booleans.
 Named arguments are accepted only by the corresponding constructs: component
 uses, a native module's sources and sends (the only place a dotted name,
 `apple.desiredAccuracy=`, is one), record construction/copy, localization (`t`), placeholders (`empty`),
-canvas `surface=` bindings, and specialized host commands (`share`,
-`scrollIntoView`). Ordinary function calls are positional. Arrow expressions are admitted
+canvas `surface=` bindings, `dataTransfer=DataTransfer(…)` (LLP 1094.000),
+and specialized host commands (`share`, `scrollIntoView`). Ordinary function calls are positional. Arrow expressions are admitted
 as the callbacks to `map` and `filter`, with at most item and index parameters;
 they are not first-class values or event handlers.
 
@@ -806,6 +807,7 @@ launch        = "size" NUMBER "x" NUMBER NL          (* written 1200x800 *)
               | "at" STRING NL                       (* the location it opens at, "/item/7#moves" *)
               | "locale" STRING NL                   (* a BCP 47 tag, "fr-FR" *)
               | "seed" NUMBER NL                     (* 0 through 2^32 - 1 *)
+              | "stored" IDENT json NL                (* initial JSON for a persisted state in this test *)
               | "fresh" [ STRING ] NL                (* the Snapback dev server emptied first, seeded from the file *)
               | "before" "data" NL                   (* the first step does not wait for data *)
               | "prefer" IDENT { "." IDENT } ( IDENT | STRING ) NL
@@ -831,6 +833,7 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
               | "authorize" [ "cancel" ] NL           (* the held sign-in, against the app's server (oauth recipe) *)
               | "presence" ( "allow" | "cancel" | "fail" | "lockout" | "invalidated" ) NL
                                                      (* answer the pending user-presence prompt, as tap @presence *)
+              | "background" NUMBER NL  (* whole milliseconds on iOS *)
               | "clock" ( "settle" | "data" | "+" NUMBER [ "real" ] | NUMBER ) NL
               | "clock" "held" { IDENT } [ NUMBER ( "s" | "ms" ) ] NL
                                                      (* real time, the clock frozen, until held requests reply *)
@@ -871,6 +874,8 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
                   [ "at" NUMBER ] [ "gain" NUMBER ] [ "ends" NUMBER ]
                   [ "playbackRate" NUMBER ] [ "pan" [ "-" ] NUMBER ] [ "by" IDENT ] NL
               | "expect" "wakelock" ( "held" | "released" ) NL
+              | "expect" "drag" STRING ( "none" | "has" STRING [ "==" STRING ] [ "name" STRING ] | "missing" STRING ) NL
+                                                     (* what the node's drag carries, as `tree` shows it (LLP 1094.000) *)
               | "expect" "midi" ( "sent" | "missing" ) STRING HEX { HEX } [ "at" NUMBER ] NL
               | "expect" "mediasession" ( IDENT "==" ( STRING | "none" )
                   | ( "has" | "missing" ) STRING ) NL ;
@@ -1182,7 +1187,9 @@ report unsupported. Scope these tests with `on web`.
 `tap "id" dblclick` and `contextmenu` are the driver's forms of the same names
 (no Linux carrier double-clicks). `tap "list" into "key"` brings a virtualized
 list's row into view by its key, so a row outside the rendered window can be
-tapped by its own id on the next step. `type "id" "text"` sets the field's
+tapped by its own id on the next step. For a mounted target, `scroll "id"`
+brings its middle into view through the enclosing scrollers without pressing it.
+A plain `tap "id"` already asks the host to reveal its target before pressing it. `type "id" "text"` sets the field's
 value, as Playwright's `fill`; `append` adds the text after the value the tree
 shows (a prefilled reply). `type "id" key "Name"` presses the key (on iOS,
 ArrowRight or ArrowLeft at an `input type="range"` that shows its `UISlider`
@@ -1374,6 +1381,7 @@ says. Every roster function has a row and an example, and each example written
 | `sharedFiles(entry, name)` | `SharedFiles`: `{files: Picked[], dropped, pending}`, the files a received share carried, by the token in the entry's `name` parameter; `pending` counts those still being copied, and a token the host did not set this launch answers no files (LLP 1133.024 D3; [`share_target`](reference.md#shares-from-other-apps-share_target)) | `sharedFiles(top(nav), "files").files.length` is the count of shared files that have landed |
 | `t("key", name=value, …)` | Localized string; validates tables/placeholders | `t("greeting", name=user.name)` is the `greeting` string of the app's locale with `{name}` filled |
 | `frame(id)` | `Geometry`, actions only; last layout where the viewer sees it, as `getBoundingClientRect`: in the viewport, every scroll offset and transform applied | `frame("card").height`, in an action, is the card's height as drawn |
+| `scrollMetrics(id)` | `option<ScrollMetrics>`, actions only. A mounted textarea reports `scrollLeft`, `scrollTop`, `scrollWidth`, `scrollHeight`, `clientWidth` and `clientHeight` in CSS pixels. A missing or hidden field answers `none`. | In a textarea’s `resize` action, compare `scrollWidth` with `clientWidth` to detect horizontal overflow before the first scroll. |
 | `rangeFrame(id, start, end)` | `Geometry`, actions only; a textarea's UTF-16 range as `Range.getBoundingClientRect()` (on a `text markup="markdown"`, the union of the atom pills the range meets, [inline atoms](#inline-atoms-atom-atoms-atomfaces-atompress)): collapsed, the caret's rectangle; unavailable past the text, while composing, or with no host reader ([decorations](#plain-textarea-decorations), LLP 1114.007) | `rangeFrame("composer", caret, caret)`, in an action, is where a mention popover goes |
 | `measure("id")` | `Geometry`, actions only; literal id, the border box as if `height` were `auto`, other styles kept (padding, border, `min-height`, `max-height`, insets): 0 for a bare box whose children are all absolutely positioned (a navigation root); `frame` is the laid-out box | `measure("note").height`, in an action, is the note's natural height |
 | `elementFromPoint(x, y)` | `option<string>`, actions only; the `id` of the front-most of `frame`'s boxes at the viewport point, or of its nearest ancestor with one (DOM's `elementFromPoint(x, y)?.closest("[id]")?.id`): a box reaches as far as its `-exact-hit-slop`, ancestors' overflow clips apply, `pointer-events: none` and hidden boxes are passed over. The front modal's host-reported backdrop also hits where it accepts input, beneath later top-layer content | `elementFromPoint(x, y)`, in a pointer action, is `some("card-3")` over that card |
@@ -1797,8 +1805,8 @@ makes no network requests.
   on the web, Markdown shown as it reads, with the syntax hidden away from the
   caret; on macOS and iOS, the platform's text view with the syntax dimmed and
   each link's `](destination)` hidden, as the web hides it. Linux, Windows and
-  Android edit it as a plain textarea of the source, and `format` changes
-  nothing there. Without `markup` the same source is a plain textarea: the
+  Android edit the source as plain text. `setSelectionRange` selects source
+  offsets. `format` and `setRangeText` report a refusal in the app log. Without `markup` the same source is a plain textarea: the
   source mode.
 - A thematic break (`---`) is drawn in the colour of the text around it,
   dimmed, so that it reads on a dark ground as on a light one: on the web a
@@ -2439,6 +2447,19 @@ brings a drag of those files over the target and leaves it there (for a
 screenshot); `tap <target> drop <path…>` drops it, and `tap <target>
 dragleave` takes it away undropped.
 
+`draggable` is HTML's attribute: a node a person can lift and drop into
+another app, a boolean that may be bound, on a box, a `link`, a `button` or
+an `image` (LLP 1094.000). `dataTransfer=DataTransfer(text=, url=, files=[…])`
+declares what the drag carries, by `DataTransfer`'s names: `text` as
+`text/plain`, `url` (absolute `http:` or `https:`) as `text/uri-list`, and
+each file as itself, a shipped `assets/` file or an `app:/` path behind
+`fs.read`. Each needs the other. The data is declared on the node, not set in
+a `dragstart` listener, because every platform takes a drag's items as it
+begins; `dragstart`, `drag` and `dragend` are refused for now
+(`lower-handler-later`). The runner admits each file and `url` for the host
+and journals a refusal (`drag: refused: …`); `expect drag` asserts what a node
+carries ([recipe](recipes/drag-out.md)). No host lifts it to the system yet.
+
 `beforeunload` is DOM's: the window is about to close or the app to quit
 (macOS: its close button, File ▸ Close Window, ⌘Q; the web: leaving the page).
 Every element that declares it hears it; an action that calls `preventDefault()`
@@ -2541,9 +2562,11 @@ Nothing selected
 there is `text: ""` with `start == end == 0` and `rects: []`; it fires while a drag moves,
 once per change. The web and macOS select text; iOS selects text its author
 made selectable (`user-select="text"`), by a long press, a double tap and the
-selection's handles; Linux has no text selection on a `text`, so it never
-fires there. In a `user-select="all"` element one click (on iOS a long press
-or a double tap) selects the whole element, and a selection that reaches
+selection's handles. On Android a long press selects a word in an opted-in
+paragraph. Dragging its handles changes the selected range and Select all
+takes the paragraph's selectable text. Linux has no text selection on a
+`text`, so it never fires there. In a `user-select="all"` element one click (a long press on Android or iOS,
+or a double tap on iOS) selects the whole element, and a selection that reaches
 into it takes all of it.
 
 On web and macOS, `removeAllRanges()` clears the reader's selection. Each
@@ -2555,8 +2578,8 @@ CSS whitespace collapsing. `backward` puts the anchor at the end,
 as `Selection.setBaseAndExtent` does. The command replaces the page's previous
 selection and fires `selectionchange` for changed parts without focusing a
 field. An unchanged part does not fire again. These two commands on reader
-text remain unsupported on iOS and Linux; iOS selection events carry an empty
-rectangle list.
+text are available on web and macOS. On iOS and Android selection events carry
+an empty rectangle list.
 
 Rectangles are snapshots at that event, not live layout facts. On the web they
 are the paragraph's selected `Range.getClientRects()`; macOS uses the same
@@ -2692,7 +2715,8 @@ handler of a press that focuses the field stays once the press ends, as in
 Chrome (an address bar selects its URL as a click focuses it); a press that
 drags or double-clicks keeps what it selected.
 
-On **web (JS and wasm), macOS, iOS and Linux**, `setRangeText(id, text)` replaces the
+On **web (JS and wasm), macOS, iOS, Linux, Windows and Android**,
+`setRangeText(id, text)` on a plain text field replaces the
 current selection; `setRangeText(id, text, start, end[, selectionMode])`
 replaces the given UTF-16 range. `selectionMode` is `preserve` by default,
 or `select`, `start`, `end`, following HTML. It does not focus the field or
@@ -2705,8 +2729,9 @@ app's own is, clearing only that field's undo history. On the web it is HTML's,
 which Chrome makes no undo step, and Linux keeps no field undo history. Invalid
 ranges, modes, unsupported input types and missing ids log a refusal without editing. On the Markdown
 editor (web, macOS and iOS) the offsets are the source's and each call is one
-undo step ([Markdown](#markdown-markup-format-select)); Linux refuses it there.
-Windows, Android and terminal do not support this command yet.
+undo step ([Markdown](#markdown-markup-format-select)). Linux, Windows and
+Android refuse range replacement in Markdown textareas. The terminal host
+refuses the command for every field.
 
 **Deliberate deviation (Charlie, 2026-10-12):** unlike the DOM method,
 Exact fires one noncancelable `input` after a successful replacement, even

@@ -185,6 +185,7 @@ struct Sheet {
     /// A full-screen route presented above it covers it: it is drawn
     /// beneath that route, as it was, and takes no touch.
     covered: bool,
+    reader_dragging: bool,
 }
 
 /// A sheet whose route has gone, sliding out of the window.
@@ -529,6 +530,12 @@ impl<D: DataSource> Presenter<D> {
                     sheet.shown = keys[last];
                     sheet.covered = covered;
                     sheet.measured = measured;
+                    if sheet.reader_dragging
+                        && (covered || last + 1 != keys.len() || sheet.said != said)
+                    {
+                        sheet.reader_dragging = false;
+                        sheet.top = Glide::still(h - sheet.heights[sheet.at]);
+                    }
                     if sheet.said != said {
                         let was = (sheet.said.3)
                             .filter(|fit| (sheet.heights[sheet.at] - fit).abs() < 0.5);
@@ -557,6 +564,7 @@ impl<D: DataSource> Presenter<D> {
                         top,
                         said,
                         measured,
+                        reader_dragging: false,
                         covered,
                     });
                 }

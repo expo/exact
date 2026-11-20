@@ -32,7 +32,7 @@
 #include <stdint.h>
 
 /* The ABI's version: part of the compatibility id (LLP 1030 D3a). */
-#define EXACT_ABI_VERSION 19
+#define EXACT_ABI_VERSION 20
 
 #ifdef __cplusplus
 extern "C" {
@@ -670,7 +670,10 @@ void exact_scrolled(ExactRuntime rt, uint32_t page, uint32_t view, double left, 
 typedef struct { double x, y, width, height; uint32_t available; } ExactInlineFrame;
 typedef ExactInlineFrame (*ExactInlineFrameFn)(void *ctx, uint32_t view);
 typedef ExactInlineFrame (*ExactRangeFrameFn)(void *ctx, uint32_t view, uint32_t start, uint32_t end);
-void exact_set_inline_geometry(ExactRuntime rt, ExactInlineFrameFn read, ExactRangeFrameFn range, void *ctx);
+/* Writes scrollLeft, scrollTop, scrollWidth, scrollHeight, clientWidth and
+ * clientHeight in CSS pixels. Returns zero when the textarea is unavailable. */
+typedef uint32_t (*ExactScrollMetricsFn)(void *ctx, uint32_t view, double *six);
+void exact_set_text_geometry(ExactRuntime rt, ExactInlineFrameFn read, ExactRangeFrameFn range, ExactScrollMetricsFn metrics, void *ctx);
 /* A textarea's decorations (LLP 1114.007): UTF-8 JSON {record, current, styles} in,
  * {provisional, spans, styles} out, valid until the next call on this thread; null when
  * the request does not parse. */
@@ -1092,10 +1095,10 @@ uint32_t exact_role_keys(ExactRuntime rt, uint32_t view, uint32_t focused, size_
 /* Whether the stack whose root route is `view` shows that route as a list beside
  * its detail, by the runner's rule (LLP 1115.002 D4), JSON in the output buffer,
  * not a batch: {"list":view|null,"width":number|null,"rows":[[route,row]...],
- * "locations":[[route,url]...],"pressWrites":bool|null}, the list whose row pushes,
+ * "locations":[[route,url]...],"current":view|null,"pressWrites":bool|null}, the list whose row pushes,
  * the list column's width where `navigationSplit` names one, each route above the
  * root that is a row's detail with that row, each route above the root with its
- * location, and whether the press of `pressed` writes the router; null for a stack
+ * location, the current row, and whether the press of `pressed` writes the router; null for a stack
  * that pushes. */
 /* `retained` is a previous list to keep while empty and still eligible, or 0;
  * `pressed` is a view being pressed, or 0. */

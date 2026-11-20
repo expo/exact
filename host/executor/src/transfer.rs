@@ -135,9 +135,39 @@ impl Carrier {
         url: &str,
         headers: &[(String, String)],
     ) -> Result<String, Refusal> {
-        let (request, public) = credentials(url, headers)?;
+        self.keep_with_form(key, url, headers, None)
+    }
+
+    /// Keep the multipart recipe with its URL and headers for recovery during snapshot preparation.
+    pub fn keep_with_form(
+        &self,
+        key: &str,
+        url: &str,
+        headers: &[(String, String)],
+        form: Option<&serde_json::Value>,
+    ) -> Result<String, Refusal> {
+        let mut headers = headers.to_vec();
+        let mut value = serde_json::json!({ "url": url });
+        if let Some(parts) = form {
+            if headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+            {
+                return Err(Refusal::InvalidRequest);
+            }
+            let boundary =
+                ibex2::stdlib::multipart::generate_boundary().map_err(|_| Refusal::Storage)?;
+            headers.push((
+                "Content-Type".into(),
+                format!("multipart/form-data; boundary={boundary}"),
+            ));
+            value["boundary"] = boundary.into();
+            value["form"] = parts.clone();
+        }
+        let (request, public) = credentials(url, &headers)?;
         self.fetch.admit(&request.url).map_err(refusal)?;
-        let value = serde_json::json!({ "url": url, "headers": headers }).to_string();
+        value["headers"] = serde_json::json!(headers);
+        let value = value.to_string();
         if value.len() > METADATA_BYTES {
             return Err(Refusal::InvalidRequest);
         }
@@ -145,6 +175,22 @@ impl Carrier {
             .set(key, &value)
             .map_err(|_| Refusal::Storage)?;
         Ok(public)
+    }
+
+    /// The boundary and ordered parts that belong to this generation's private snapshot.
+    pub fn form(&self, key: &str) -> Result<(String, serde_json::Value), Refusal> {
+        let value = self
+            .secrets
+            .get(key)
+            .map_err(|_| Refusal::Storage)?
+            .ok_or(Refusal::Storage)?;
+        let mut value: serde_json::Value =
+            serde_json::from_str(&value).map_err(|_| Refusal::Storage)?;
+        let boundary = value["boundary"]
+            .as_str()
+            .ok_or(Refusal::Storage)?
+            .to_owned();
+        Ok((boundary, value["form"].take()))
     }
 
     /// Called on retirement, after the caller has invalidated this generation.

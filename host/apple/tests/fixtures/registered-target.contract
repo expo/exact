@@ -1,0 +1,9 @@
+// NativeTargetIOSTests: four boxes, each padding one edge by the registered target `map`'s inset on that edge,
+// 7 while it is unavailable, so a box's height or width is that one inset.
+component RegisteredTarget
+  view
+    column
+      box testId="top" align-self="flex-start" padding-top="var(--exact-target-map-safe-area-inset-top, 7px)"
+      box testId="right" align-self="flex-start" padding-right="var(--exact-target-map-safe-area-inset-right, 7px)"
+      box testId="bottom" align-self="flex-start" padding-bottom="var(--exact-target-map-safe-area-inset-bottom, 7px)"
+      box testId="left" align-self="flex-start" padding-left="var(--exact-target-map-safe-area-inset-left, 7px)"

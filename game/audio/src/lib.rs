@@ -298,6 +298,30 @@ struct Wanted {
     /// A sample's resident PCM; synths render into the cache.
     sample: Option<Pcm>,
 }
+/// The mixer reads voice timing from the world and PCM from the host's simulation.
+pub trait AudioScene {
+    fn world(&self) -> &World;
+    fn sample(&self, name: &str) -> Option<&exact_game::asset::SoundAsset>;
+}
+
+impl AudioScene for World {
+    fn world(&self) -> &World {
+        self
+    }
+    fn sample(&self, name: &str) -> Option<&exact_game::asset::SoundAsset> {
+        self.sound_asset(name)
+    }
+}
+
+impl<G: exact_game::Game> AudioScene for exact_game::Sim<G> {
+    fn world(&self) -> &World {
+        self.world()
+    }
+    fn sample(&self, name: &str) -> Option<&exact_game::asset::SoundAsset> {
+        self.presentation_sound(name)
+    }
+}
+
 /// Synthesized PCM cache and identities belong to the executor, never to the world.
 /// Sampled PCM stays the world's allocation; outputs share it.
 pub struct Player<O: Output> {
@@ -342,7 +366,13 @@ impl<O: Output> Player<O> {
     }
     /// Stable priority: loops first, then louder (max stereo gain), then newer
     /// start boundary, then larger stable identity. Stops precede all starts.
-    pub fn sync(&mut self, world: &World, listener: Option<Listener>, transport: Transport) {
+    pub fn sync(
+        &mut self,
+        scene: &impl AudioScene,
+        listener: Option<Listener>,
+        transport: Transport,
+    ) {
+        let world = scene.world();
         self.output.flush();
         let effective = Transport {
             playing: transport.playing && self.output.ready(),
@@ -491,7 +521,7 @@ impl<O: Output> Player<O> {
             // Each source plays at its own rate; outputs resample to the device.
             (w.rate, w.frames, w.sample) = match &*w.definition {
                 Sound::Synth(synth) => (rate, synth::sample_count(synth, rate), None),
-                Sound::Sample(sample) => match world.sound_asset(&sample.asset) {
+                Sound::Sample(sample) => match scene.sample(&sample.asset) {
                     Some(asset) => (
                         asset.rate,
                         asset.frames as usize,

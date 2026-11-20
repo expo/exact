@@ -19,7 +19,7 @@ use contract_syntax::{Expr, Span};
 use std::collections::BTreeSet;
 
 /// The geometry reads that take an element's `id` as their first argument.
-const READS: [&str; 3] = ["frame", "rangeFrame", "measure"];
+const READS: [&str; 4] = ["frame", "rangeFrame", "measure", "scrollMetrics"];
 
 /// Each geometry read whose literal id no element of the view has.
 pub(super) fn unnamed(checking: &Checking<'_>, out: &mut Vec<LowerError>) {

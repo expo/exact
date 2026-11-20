@@ -34,6 +34,20 @@ impl Shape<'_> {
     };
 }
 
+/// Take the generated Rust for a development APK whose bake runs before Cargo.
+/// `files` names extra Rust sources the app's entry includes.
+pub fn take_android_linked(files: &[&str]) -> Result<bool, String> {
+    let mut sources = vec![
+        "baked.rs",
+        "hatches.rs",
+        "launch.rs",
+        "transfers.rs",
+        "widgets.rs",
+    ];
+    sources.extend_from_slice(files);
+    crate::take_linked(&sources)
+}
+
 /// The entry and its pieces, before `entry.rs` is written: what a game's shared Apple shell compares.
 pub struct Entry<'a> {
     /// The platform baked: `apple` resolved to `macos` or `ios`.
@@ -76,6 +90,11 @@ pub fn bake<D: DataSource>(
     // The Android shell is a cdylib only on Android (`exact_painted::canvas_jni!`); off it the library is empty.
     if platform == "android" && env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("android") {
         fs::write(out.join("entry.rs"), "").unwrap();
+        return;
+    }
+    if platform == "android"
+        && take_android_linked(&["entry.rs"]).unwrap_or_else(|e| panic!("Android bake: {e}"))
+    {
         return;
     }
     let app = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join(app_dir);
@@ -162,11 +181,11 @@ pub fn bake<D: DataSource>(
         r#"const PLAN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/app.plan"));
 const COMPAT: &str = include_str!(concat!(env!("OUT_DIR"), "/compat.json"));"#
     };
-    fs::write(
-        out.join("entry.rs"),
-        format!("\n{embedded}\n{source}\n{linked}\n{host}\n"),
-    )
-    .unwrap();
+    let entry_path = out.join("entry.rs");
+    let entry = format!("\n{embedded}\n{source}\n{linked}\n{host}\n");
+    if fs::read(&entry_path).ok().as_deref() != Some(entry.as_bytes()) {
+        fs::write(entry_path, entry).unwrap();
+    }
 }
 
 /// A generated host crate's bake (LLP 1153.003 D2), its build script's one line: the app one level up from
@@ -253,7 +272,7 @@ include!(concat!(env!("OUT_DIR"), "/hatches.rs"));"#
             )
         }
         "macos" | "ios" => apple_host("PLAN", "COMPAT"),
-        // canvas_jni! embeds OUT_DIR's plan and compat itself. An app's library with a store takes the update
+        // An app's library with a store takes the update
         // store's opener, which its crate links at deploy.store.android "A" (LLP 1030.006 D3).
         "android" if shape.composed => {
             let updates = if compat.inputs["store"]["L"] == "0" {

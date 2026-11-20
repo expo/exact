@@ -13,7 +13,10 @@ use std::{
     io::{self, Write},
     os::windows::io::AsRawHandle,
 };
-use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
+use windows_sys::Win32::{
+    Foundation::{ERROR_DIR_NOT_EMPTY, ERROR_SHARING_VIOLATION},
+    Storage::FileSystem::GetFinalPathNameByHandleW,
+};
 
 pub(super) fn error(e: impl std::fmt::Display) -> HostError {
     HostError::Failed(format!("filesystem: {e}"))
@@ -68,21 +71,40 @@ impl Target {
     }
 }
 fn remove(parent: &Directory, leaf: &str) -> io::Result<()> {
-    let kind = match parent.kind(leaf) {
-        Ok(kind) => kind,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e),
-    };
-    if kind.directory {
+    let mut waits = [2, 4, 8, 16, 32].into_iter();
+    loop {
+        match remove_pass(parent, leaf) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e)
+                if matches!(
+                    e.raw_os_error().map(|n| n as u32),
+                    Some(ERROR_SHARING_VIOLATION | ERROR_DIR_NOT_EMPTY)
+                ) =>
+            {
+                let Some(ms) = waits.next() else {
+                    return Err(e);
+                };
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+            }
+            result => return result,
+        }
+    }
+}
+
+fn remove_pass(parent: &Directory, leaf: &str) -> io::Result<()> {
+    if parent.kind(leaf)?.directory {
         let child = parent.child(leaf, false)?;
-        loop {
-            let names = child.names_batch()?;
-            if names.is_empty() {
-                break;
+        let mut first_error = None;
+        child.visit_names(|name| {
+            if let Err(e) = remove_pass(&child, &name) {
+                if e.kind() != io::ErrorKind::NotFound {
+                    first_error.get_or_insert(e);
+                }
             }
-            for name in names {
-                remove(&child, &name)?;
-            }
+            Ok(())
+        })?;
+        if let Some(error) = first_error {
+            return Err(error);
         }
     }
     parent.unlink(leaf)

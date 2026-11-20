@@ -47,6 +47,12 @@ pub(crate) fn rows(name: &str) -> &'static [StyleId] {
         "-exact-safe-area-ignore" => &[SafeAreaIgnore, SafeAreaIgnoreAlign],
         // @ref LLP 1123 D12 — one row, its grammar checked here.
         "-exact-safe-area-bar" => &[SafeAreaBar],
+        // @ref LLP 1123 D13 — whether reach is automatic, then its edges; and the
+        // extension, one row, its grammar checked here.
+        "-exact-safe-area-reach" => &[SafeAreaReach, SafeAreaReachEdges],
+        "-exact-safe-area-extend" => &[SafeAreaExtend],
+        // @ref LLP 1123 D14 — the edges that are soft, then those that are hard.
+        "-exact-scroll-edge-effect-style" => &[ScrollEdgeEffectSoft, ScrollEdgeEffectHard],
         _ => unreachable!("known shorthand"),
     }
 }
@@ -70,6 +76,15 @@ pub(crate) fn component(value: &Expr, name: &str, index: usize) -> Result<Expr, 
         }
         Expr::Str(text, span) if name == "-exact-safe-area-bar" => {
             out = Expr::Str(safe_area_bar(text, *span)?, *span);
+        }
+        Expr::Str(text, span) if name == "-exact-scroll-edge-effect-style" => {
+            out = Expr::Str(scroll_edge_effect_style(text, *span)?[index].clone(), *span);
+        }
+        Expr::Str(text, span) if name == "-exact-safe-area-reach" => {
+            out = Expr::Str(safe_area_reach(text, *span)?[index].clone(), *span);
+        }
+        Expr::Str(text, span) if name == "-exact-safe-area-extend" => {
+            out = Expr::Str(safe_area_extend(text, *span)?, *span);
         }
         Expr::Str(text, span) if name.ends_with("-timeline") => {
             out = Expr::Str(timeline(name, text, *span)?[index].clone(), *span);
@@ -522,6 +537,118 @@ fn safe_area_bar(text: &str, span: Span) -> Result<String, LowerError> {
             span,
         ),
     }
+}
+
+/// Whether `words` are an `<edges>` set (LLP 1123 D13, D14): at least one of
+/// `top`, `right`, `bottom`, `left`, `start` and `end`, each once.
+fn edge_set(words: &[&str]) -> bool {
+    let edge = ["top", "right", "bottom", "left", "start", "end"];
+    !words.is_empty()
+        && words.iter().all(|w| edge.contains(w))
+        && words
+            .iter()
+            .enumerate()
+            .all(|(i, w)| !words[..i].contains(w))
+}
+
+/// `unset` for each of a shorthand's `rows`, where the value is that alone.
+fn unset<const N: usize>(text: &str) -> Option<[String; N]> {
+    (text.trim() == "unset").then(|| std::array::from_fn(|_| "unset".to_string()))
+}
+
+/// `-exact-scroll-edge-effect-style: [<edges> [automatic | soft | hard]]#` as its
+/// two rows (LLP 1123 D14), the soft edges and the hard ones, as UIKit holds a
+/// style for each edge: each item's edges in its style's row, an edge in
+/// neither automatic, each edge named once across the list.
+fn scroll_edge_effect_style(text: &str, span: Span) -> Result<[String; 2], LowerError> {
+    if let Some(rows) = unset(text) {
+        return Ok(rows);
+    }
+    let refuse = || {
+        err(
+            "lower-attr-value",
+            "`-exact-scroll-edge-effect-style` is a list of edges, each named once across it, each item ending in a style, `automatic`, `soft` or `hard`: e.g. `top bottom soft` or `top soft, bottom hard`",
+            span,
+        )
+    };
+    let (mut soft, mut hard, mut automatic, mut named) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for item in text.split(',') {
+        let words: Vec<&str> = item.split_ascii_whitespace().collect();
+        let Some((style, edges)) = words.split_last() else {
+            return refuse();
+        };
+        if !edge_set(edges) || edges.iter().any(|e| named.contains(e)) {
+            return refuse();
+        }
+        named.extend_from_slice(edges);
+        match *style {
+            "soft" => soft.extend_from_slice(edges),
+            "hard" => hard.extend_from_slice(edges),
+            "automatic" => automatic.extend_from_slice(edges),
+            _ => return refuse(),
+        }
+    }
+    // Refuse `automatic` on `start` or `end` beside a style on `left` or `right`: the rows hold an
+    // automatic edge as one in neither set, so it could not take the edge from the physical name
+    let has = |edges: &[&str], names: [&str; 2]| edges.iter().any(|e| names.contains(e));
+    if has(&automatic, ["start", "end"])
+        && (has(&soft, ["left", "right"]) || has(&hard, ["left", "right"]))
+    {
+        return err(
+            "lower-attr-value",
+            "`-exact-scroll-edge-effect-style` cannot hold `automatic` on `start` or `end` beside `soft` or `hard` on `left` or `right`: name the automatic edge `left` or `right`, or the styled one `start` or `end`",
+            span,
+        );
+    }
+    let set = |edges: &[&str]| {
+        if edges.is_empty() {
+            "none".to_string()
+        } else {
+            edges.join(" ")
+        }
+    };
+    Ok([set(&soft), set(&hard)])
+}
+
+/// `-exact-safe-area-reach: auto | none | <edges>` as its two rows (LLP 1123
+/// D13): `auto`, or `edges` with the edges named, none for `none`.
+fn safe_area_reach(text: &str, span: Span) -> Result<[String; 2], LowerError> {
+    if let Some(rows) = unset(text) {
+        return Ok(rows);
+    }
+    let words: Vec<&str> = text.split_ascii_whitespace().collect();
+    match words.as_slice() {
+        ["auto"] => Ok(["auto".into(), "none".into()]),
+        ["none"] => Ok(["edges".into(), "none".into()]),
+        edges if edge_set(edges) => Ok(["edges".into(), edges.join(" ")]),
+        _ => err(
+            "lower-attr-value",
+            "`-exact-safe-area-reach` is `auto`, `none`, or the edges it reaches on, each once: e.g. `top bottom`",
+            span,
+        ),
+    }
+}
+
+/// `-exact-safe-area-extend: none | <edges> [manual]` (LLP 1123 D13): the
+/// edges, each once, then `manual` if wanted; `manual` needs an edge.
+fn safe_area_extend(text: &str, span: Span) -> Result<String, LowerError> {
+    if text.trim() == "unset" {
+        return Ok("unset".into());
+    }
+    let words: Vec<&str> = text.split_ascii_whitespace().collect();
+    let edges = match words.split_last() {
+        Some((&"manual", edges)) => edges,
+        _ => words.as_slice(),
+    };
+    if words == ["none"] || edge_set(edges) {
+        return Ok(words.join(" "));
+    }
+    err(
+        "lower-attr-value",
+        "`-exact-safe-area-extend` is `none`, or the edges it extends on, each once, then `manual` if wanted: e.g. `bottom` or `top bottom manual`",
+        span,
+    )
 }
 
 fn text_box(name: &str, text: &str, span: Span) -> Result<[String; 2], LowerError> {

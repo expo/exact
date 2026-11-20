@@ -48,6 +48,17 @@ impl<D: DataSource + Default> CanvasHost<D> {
             .reader_snaps_around(id, vertical, release, projected, self.scale)
     }
 
+    /// The native drag's sheet position and release velocity, in window pixels.
+    pub fn sheet_drag(&mut self, index: u32, generation: u32, top: f32, release: Option<f32>) {
+        let now = self.now();
+        self.p.reader_sheet_drag(
+            exact_kernel::NodeKey { index, generation },
+            top / self.scale,
+            release.map(|velocity| velocity / self.scale),
+            now,
+        );
+    }
+
     /// The reader moved scroller `id` by (`dx`, `dy`) pixels, knowing
     /// revision `rev` of it. Its rows mount after the frame, as a driver's
     /// scroll leaves them.

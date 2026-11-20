@@ -68,7 +68,7 @@ internal class FakePlatform : Platform {
     val acknowledged = CopyOnWriteArrayList<Namespace>()
     /** The runs asked for foreground execution. */
     val promoted = CopyOnWriteArrayList<Int>()
-    override fun stopped() = stopped
+    override fun stopped(registrations: Set<Key>) = stopped
     override fun restarted(namespace: Namespace) = false
     override fun held(namespace: Namespace) = jobs.filter { it.second == Job.UserJob }.map { it.first }.toSet()
     override fun schedule(key: Key, job: Job, record: JSONObject, answer: (Boolean) -> Unit) {

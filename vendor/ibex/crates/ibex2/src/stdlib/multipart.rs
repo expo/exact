@@ -291,7 +291,8 @@ fn validate_boundary(boundary: &str) -> Result<(), MultipartError> {
     valid.then_some(()).ok_or(MultipartError::InvalidBoundary)
 }
 
-fn normalized_newlines(value: &str) -> Vec<u8> {
+/// Encode a text field with the CRLF line endings used on the wire.
+pub fn normalized_newlines(value: &str) -> Vec<u8> {
     let source = value.as_bytes();
     let mut result = Vec::with_capacity(source.len());
     let mut index = 0;
@@ -388,19 +389,39 @@ fn encoded_len<'a>(
     Ok(length)
 }
 
+/// Append one part's delimiter and headers before its text or streamed file bytes.
+pub fn part_header(
+    output: &mut Vec<u8>,
+    boundary: &str,
+    name: &str,
+    file: Option<(&str, &str)>,
+) -> Result<(), MultipartError> {
+    validate_boundary(boundary)?;
+    output.extend_from_slice(b"--");
+    output.extend_from_slice(boundary.as_bytes());
+    output.extend_from_slice(b"\r\nContent-Disposition: form-data; name=\"");
+    output.extend_from_slice(&escaped_parameter(name));
+    if let Some((filename, content_type)) = file {
+        output.extend_from_slice(b"\"; filename=\"");
+        output.extend_from_slice(&escaped_parameter(filename));
+        output.extend_from_slice(b"\"\r\nContent-Type: ");
+        output.extend_from_slice(file_content_type(content_type)?.as_bytes());
+    } else {
+        output.push(b'"');
+    }
+    output.extend_from_slice(b"\r\n\r\n");
+    Ok(())
+}
+
 fn write_form<'a>(
     output: &mut Vec<u8>,
     entries: impl IntoIterator<Item = EntryRef<'a>>,
     boundary: &str,
 ) -> Result<(), MultipartError> {
     for entry in entries {
-        output.extend_from_slice(b"--");
-        output.extend_from_slice(boundary.as_bytes());
-        output.extend_from_slice(b"\r\nContent-Disposition: form-data; name=\"");
-        output.extend_from_slice(&escaped_parameter(entry.name));
         match entry.value {
             ValueRef::Text(value) => {
-                output.extend_from_slice(b"\"\r\n\r\n");
+                part_header(output, boundary, entry.name, None)?;
                 output.extend_from_slice(&normalized_newlines(value));
             }
             ValueRef::File {
@@ -408,11 +429,7 @@ fn write_form<'a>(
                 filename,
                 content_type,
             } => {
-                output.extend_from_slice(b"\"; filename=\"");
-                output.extend_from_slice(&escaped_parameter(filename));
-                output.extend_from_slice(b"\"\r\nContent-Type: ");
-                output.extend_from_slice(file_content_type(content_type)?.as_bytes());
-                output.extend_from_slice(b"\r\n\r\n");
+                part_header(output, boundary, entry.name, Some((filename, content_type)))?;
                 output.extend_from_slice(bytes);
             }
         }

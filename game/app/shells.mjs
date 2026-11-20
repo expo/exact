@@ -291,6 +291,7 @@ fn main() {
     let app = std::env::args_os().nth(1).expect("game directory");
     bake_files::bake_game_level::<Logic>(&app).expect("bake level");
     bake_files::bake_game_tables::<Logic>(&app).expect("bake tuning tables");
+    bake_files::bake_game_sounds::<Logic>(&app).expect("bake streamed sound metadata");
 }
 `, false);
   let dataDir;
@@ -396,6 +397,7 @@ fn main() {
     publish("../keys.json", serde_json::json!({name: keys}));
 ${bakeArt ? `    exact_game_bake::bake_art(${JSON.stringify(relative(shell, appDir))}).expect("bake art");\n` : ''}    bake_files::bake_game_level::<Logic>(${JSON.stringify(relative(shell, appDir))}).expect("bake level");
     bake_files::bake_game_tables::<Logic>(${JSON.stringify(relative(shell, appDir))}).expect("bake tuning tables");
+    bake_files::bake_game_sounds::<Logic>(${JSON.stringify(relative(shell, appDir))}).expect("bake streamed sound metadata");
     println!("cargo:rerun-if-changed={}", level_bake_path());
     println!("cargo:rerun-if-changed=build.rs");
 }

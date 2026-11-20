@@ -618,13 +618,10 @@ impl<D: DataSource> Runner<D> {
                         // arguments it wants, while the boot holds the page's
                         // answers, as a declared resource does (LLP
                         // 1035.005.004 D8). Its ask is dropped: a closed gate
-                        // asks nothing, nor marks the launch's ask.
+                        // asks nothing.
                         let paged = (want.as_ref())
                             .filter(|_| states[i].is_none())
                             .and_then(|w| self.seed_member(i, &w.args, &mut Vec::new()));
-                        if paged.is_some() {
-                            self.launch.retain(|l| *l != i);
-                        }
                         let state = match states[i].take().or(paged) {
                             Some(s) => s.sleeping(),
                             None => {

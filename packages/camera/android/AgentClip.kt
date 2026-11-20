@@ -8,18 +8,19 @@ import android.media.MediaMetadataRetriever
 import java.io.File
 import java.security.MessageDigest
 
-internal class AgentClip(val frames: List<Frame>, val duration: Double, val sha256: String) {
+internal class AgentClip(val frames: List<Frame>, val duration: Double, val sha256: String) : dev.exact.canvas.CameraClip {
     data class Frame(val at: Double, val bitmap: Bitmap)
 
-    fun frame(elapsed: Double): Bitmap {
-        val at = elapsed.coerceAtLeast(0.0) % duration
+    override fun sample(trackElapsed: Double): dev.exact.canvas.CameraFrame {
+        val at = trackElapsed.coerceAtLeast(0.0) % duration
         var lo = 0
         var hi = frames.size
         while (lo + 1 < hi) {
             val mid = (lo + hi) / 2
             if (frames[mid].at <= at) lo = mid else hi = mid
         }
-        return frames[lo].bitmap
+        val end = frames.getOrNull(lo + 1)?.at ?: duration
+        return dev.exact.canvas.CameraFrame(frames[lo].bitmap, end - at)
     }
 
     companion object {

@@ -4,7 +4,7 @@ use serde_json::json;
 #[test]
 fn an_absent_preload_preserves_the_baked_module_bytes() {
     let meta = json!({"appId":"test.preload", "grants":"", "module":{"sha256":"hash"}});
-    assert_eq!(module_constants(&meta, false, "web", false, None, &serde_json::Value::Null).unwrap(), "pub const APP: &str = \"test.preload\";\npub const GRANTS: &str = \"\";\npub const REVISION: &str = \"hash\";\npub const RUST_UPDATES: bool = false;\n");
+    assert_eq!(module_constants(&meta, false, "web", false, false, None, &serde_json::Value::Null).unwrap(), "pub const APP: &str = \"test.preload\";\npub const GRANTS: &str = \"\";\npub const REVISION: &str = \"hash\";\npub const RUST_UPDATES: bool = false;\n");
     let stage = Scratch::new(&std::env::temp_dir()).unwrap();
     let mut manifest = json!({"name":"Preload", "app":{"id":"test.preload", "name":"Preload"}});
     let bake = |manifest: &serde_json::Value| {
@@ -28,8 +28,17 @@ fn an_absent_preload_preserves_the_baked_module_bytes() {
     assert!(empty_bake.inputs.get("preload").is_none());
     let empty = json!([]);
     assert_eq!(
-        module_constants(&meta, false, "web", false, None, &empty).unwrap(),
-        module_constants(&meta, false, "web", false, None, &serde_json::Value::Null).unwrap()
+        module_constants(&meta, false, "web", false, false, None, &empty).unwrap(),
+        module_constants(
+            &meta,
+            false,
+            "web",
+            false,
+            false,
+            None,
+            &serde_json::Value::Null
+        )
+        .unwrap()
     );
 }
 
@@ -138,6 +147,7 @@ fn baked_preloads_reach_typescript_rust_and_mixed_accessors_without_an_engine() 
                 false,
                 platform,
                 linked,
+                false,
                 None,
                 &compat.inputs["preload"],
             )

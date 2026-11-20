@@ -84,6 +84,7 @@ pub(super) fn read(plan: &Plan, ins: &Instruction) -> Option<String> {
                         | Stdlib::T
                         | Stdlib::Frame
                         | Stdlib::RangeFrame
+                        | Stdlib::ScrollMetrics
                         | Stdlib::Measure
                         | Stdlib::ElementFromPoint
                         | Stdlib::ElementsFromPoint

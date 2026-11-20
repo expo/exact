@@ -6,13 +6,13 @@ import { homedir } from 'node:os';
 import { basename, dirname, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appleRunBinary, appleArtifacts, assertAppleIdentity } from '../host/apple/build.mjs';
-import { phone, phoneBridge, phoneStartupFailure, forwardedEnv, crashReports, displayPictureReply } from '../host/apple/devices.mjs';
+import { phone, phoneBridge, phoneStartupFailure, phoneLaunch, crashReports, displayPictureReply } from '../host/apple/devices.mjs';
 import { resolveApp, executableName, linuxBinary, bakeOutput, bakeTarget } from './app.mjs';
 import { linuxRebuild, macSandboxed, nativeBuild, ownVerb, planOverride, rebuildCommand, refuseBuild } from './agent-build.mjs';
-import { refuseStale, refuseBackendOrigin, refuseBinaryBackend, proofProductChanges, unchecked, packagedBuildChanges, depInfoChanges, depInfoNewer, newerThan, shown, bakedSettingChanges } from './agent-launch.mjs';
+import { refuseStale, refuseBackendOrigin, refuseBinaryBackend, proofProductChanges, unchecked, packagedBuildChanges, depInfoChanges, depInfoNewer, newerThan, shown, bakedSettingChanges, watchedNewer } from './agent-launch.mjs';
 import { androidBinary, androidDeploy, apkRecord } from './agent-android.mjs';
 import { nativeKey, mouseContact } from './agent-keys.mjs';
-import { jsonLines, hangup, waitAtMost, bootRefusal, REPLY_MS } from './agent-wire.mjs';
+import { activateIOS, backgroundIOS, jsonLines, hangup, waitAtMost, bootRefusal, REPLY_MS } from './agent-wire.mjs';
 import { platformWheel } from './agent-wheel.mjs';
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
@@ -32,13 +32,21 @@ export function androidRebuild(a, reader) {
   return ownVerb(a, reader ? `android${abis}` : 'android --headless') ?? `bun scripts/agent-android.mjs build ${a.name}${reader ? ` --apk${abis}` : ''}`;
 }
 /** What changed since the APK was built, by the record its build left (agent-android.mjs `apkRecord`): each library's
- * inputs by its Cargo dep-info (the Rust, and the plan's and the module's sources the bake watched), the Kotlin by
- * time, and the icons by digest, so a deleted icon is a change too. */
+ * Cargo inputs and separate bake inputs, the Kotlin by time, and the icons by digest. */
 export function apkChanges(a, apk) {
   const record = apkRecord(a, apk);
   if (!record?.libraries?.length) return [`${apk} (no complete ABI build record beside it: build it again)`];
   const since = Date.parse(record.started), digest = (file) => { try { return createHash('sha256').update(readFileSync(file)).digest('hex'); } catch { return null; } };
-  return [...new Set(record.libraries.flatMap(library => depInfoNewer(since, library, library.replace(/\.so$/, '.d'), record.workspace))),
+  const baked = (record.bakes ?? []).flatMap(({ paths, missing, watchedDirectories, products }) => {
+    const bound = new Map(products.map(({path, sha256}) => [path, sha256]));
+    return [
+      ...watchedNewer(Date.parse(record.bakeStarted), paths.filter(path => !missing.includes(path) && !bound.has(path)),
+        watchedDirectories, bound, [a.target]),
+      ...[...bound].filter(([path, sha256]) => digest(path) !== sha256).map(([path]) => shown(path)),
+      ...missing.filter(existsSync).map(shown),
+    ];
+  });
+  return [...new Set([...baked, ...record.libraries.flatMap(library => depInfoNewer(since, library, library.replace(/\.so$/, '.d'), record.workspace))]),
     ...newerThan(since, record.sources.filter((root) => !root.sha256)),
     ...record.sources.filter((root) => root.sha256 && digest(root.file) !== root.sha256).map((root) => shown(root.file))];
 }
@@ -155,7 +163,7 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
   const launched = Date.now(); let closing = false;
   const child = device
     ? spawn('xcrun', ['devicectl', 'device', 'process', 'launch', '--quiet', '--console', '--terminate-existing', '--device', ph.udid,
-        '--environment-variables', JSON.stringify({ ...forwardedEnv(), ...(size ? { EXACT_WINDOW_WIDTH: env.EXACT_WINDOW_WIDTH, EXACT_WINDOW_HEIGHT: env.EXACT_WINDOW_HEIGHT } : {}), ...extra, EXACT_AGENT: '1', ...bridge.env }), a.id], { stdio: ['pipe', 'pipe', 'pipe'] })
+        '--environment-variables', JSON.stringify(phoneLaunch({ ...(size ? { EXACT_WINDOW_WIDTH: env.EXACT_WINDOW_WIDTH, EXACT_WINDOW_HEIGHT: env.EXACT_WINDOW_HEIGHT } : {}), ...extra, ...bridge.env })), a.id], { stdio: ['pipe', 'pipe', 'pipe'] })
     : droid ? droid.spawn(env.EXACT_LAUNCH_URL ? [env.EXACT_LAUNCH_URL] : []) : spawn(bin, portable && env.EXACT_LAUNCH_URL ? [env.EXACT_LAUNCH_URL] : documents, { env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide:true });
   onProcess?.(child);
   const hostLines = [];
@@ -227,6 +235,7 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
     };
     return {
       host, reader: android && bin.endsWith('.apk'), boot: ready.boot, hostLines, gpuMs: () => null, sessions: ready.sessions ?? null, state, plan,
+      background: device ? ms => backgroundIOS(lines, ms, a.id, bundle => activateIOS(['devicectl', 'device', 'process', 'launch', '--device', ph.udid], bundle)) : undefined,
       ask, reveal: (id) => ask({ op: 'reveal', id }),
       async input(id, kind, opts) {
         if (kind === 'key') {

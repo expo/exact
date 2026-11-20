@@ -75,12 +75,13 @@ impl Em<'_> {
                 Input::Slot(i) if self.plan.slots[i].owner.is_none() => format!("s_{i}()"),
                 Input::Slot(i) if scope.row_slots.contains(&i) => {
                     format!(
-                        "{}[{i}]()",
-                        scope.rows.as_ref().ok_or("missing outer row slots")?
+                        "{}[{}]()",
+                        scope.rows.as_ref().ok_or("missing outer row slots")?,
+                        scope.operand(i.to_string())
                     )
                 }
                 Input::Slot(_) => continue,
-                Input::Derive(i) => format!("d_{i}()"),
+                Input::Derive(i) => format!("{}()", scope.derive(i)),
                 Input::Resource(i) => format!("r_{i}()"),
                 Input::PendingResource(i) => format!("r_{i}.p()"),
                 Input::PendingMutation(i) if self.plan.mutations[i].owner.is_none() => {

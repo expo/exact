@@ -1,7 +1,7 @@
 // Dropping across lists on the web (LLP 1094 D5–D9): a grip whose list has
 // a `reorderGroup`, for `arrangeController` (motion-glue.js). The page draws
-// the lifted row as a ghost in the top layer; the ghost's centre picks the
-// grouped list it is over and the gap there (`reorder-preview-into`); the
+// the lifted row as a ghost in the top layer. The pointer picks the grouped
+// list and the ghost's centre picks the gap there (`reorder-preview-into`); the
 // drop goes to that list and may hold until the move shows; then the ghost
 // springs onto the row (or fades when the row is gone) and the session
 // finishes. A grip with no `press`, `key`, `pan` or `pointerdown` of its own
@@ -62,17 +62,16 @@ export function groupController({ views, collections, request, applyBatch, now, 
   const contact = d => d.keys ? centre(d) : [d.grab[0] + d.ghost.dx, d.grab[1] + d.ghost.dy];
   const inside = (el, [x, y]) => { const r = el.getBoundingClientRect(); return x >= r.left && x < r.right && y >= r.top && y < r.bottom; };
 
-  // The grouped list whose port holds the ghost's centre (D7), its mapping
-  // at that centre; none over a header, a gutter or the quick-add.
+  // The pointer picks the list. The row's centre gives its insertion height there (D7).
   function over(d) {
-    const c = centre(d);
+    const c = centre(d), point = contact(d);
     for (const el of lists(d.group)) {
       const m = collections.reorderMapping(viewOf(el), c[1]);
-      if (m && inside(m.port, c)) return { view: viewOf(el), el, m };
+      if (m && inside(m.port, point)) return { view: viewOf(el), el, m };
     }
     return null;
   }
-  // One sample: only a centre inside a grouped port moves the gap (D5).
+  // Outside every grouped port the last certified gap stands.
   function sample(d) {
     if (cur !== d || d.phase !== 'active') return;
     const t = over(d);

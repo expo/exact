@@ -25,7 +25,7 @@ pub unsafe fn call(env: *mut JNIEnv, request: jbyteArray, compat: &str) -> jbyte
 /// Emit only the imported package's entry point, without a core Cargo feature.
 #[macro_export]
 macro_rules! android_transfer_jni {
-    () => {
+    ($compat:expr) => {
         #[allow(unsafe_code, clippy::missing_safety_doc)]
         #[no_mangle]
         pub unsafe extern "system" fn Java_exact_backgroundtransfer_NativeTransfer_call(
@@ -33,11 +33,7 @@ macro_rules! android_transfer_jni {
             _class: $crate::canvas::jni_sys::jclass,
             request: $crate::canvas::jni_sys::jbyteArray,
         ) -> $crate::canvas::jni_sys::jbyteArray {
-            $crate::transfer::call(
-                env,
-                request,
-                include_str!(concat!(env!("OUT_DIR"), "/compat.json")),
-            )
+            $crate::transfer::call(env, request, $compat)
         }
     };
 }

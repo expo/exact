@@ -32,6 +32,21 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
+    #[cfg(target_os = "android")]
+    pub(crate) fn development_status(&self) -> i32 {
+        use crate::fetch::LoopStatus;
+        let Some(dev) = &self.dev else { return 0 };
+        match (dev.status, dev.held.as_ref()) {
+            (LoopStatus::Following, Some(_))
+                if matches!(self.waiting, Some(Waiting::Generation(..))) =>
+            {
+                LoopStatus::Preparing as i32
+            }
+            (LoopStatus::Following, Some(_)) => LoopStatus::Failed as i32,
+            (status, _) => status as i32,
+        }
+    }
+
     /// Connect the existing development URL loop; polling starts after first
     /// pixel. A generation the loop it replaces brought, held, goes with it.
     pub fn set_development(&mut self, url: Option<String>, identity: Option<String>) {

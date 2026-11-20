@@ -82,7 +82,11 @@ const small = `<!doctype html>
   const views = new Map([[2, port], [3, wrap], [4, grip]]);
   const mapping = () => ({ port, revision: 1, scrollSequence: 1, scrollTop: port.scrollTop, portWidth: 200, portHeight: 24, rowWidth: 200, totalExtent: 520, contentY: 0 });
   const collections = { reorderMapping: () => mapping(), retainInteraction: () => 1, releaseRetainedInteraction() {}, releaseInteraction() {}, reorderContact() {} };
-  const ctrl = groupController({ views, collections, request: () => ({ accepted: true, token: 1 }), applyBatch() {}, now: () => performance.now(),
+  window.targets = [];
+  const ctrl = groupController({ views, collections, request: req => {
+    if (req.op === 'reorder-preview-into') window.targets.push(req.targetView);
+    return { accepted: true, token: 1 };
+  }, applyBatch() {}, now: () => performance.now(),
     ready: () => true, inert: () => false, root: document.getElementById('exact-root'), gripOf: () => grip });
   const b = { el: grip, row: wrap, list: 2, runtime: 0, handleKey: 4, listKey: 2, wrapperKey: 3, rootKey: 1, rowEpoch: 1 };
   grip.addEventListener('pointerdown', e => ctrl.down(b, e, { group: 'g', keys: false }));
@@ -118,6 +122,7 @@ check('a centre past a short port\'s edge scrolls toward that edge', async () =>
     })`);
     await mouse('mouseReleased', g[0], g[1] + 12);
     expect(scrolled).toBeGreaterThan(0); // down, toward the centre's edge
+    expect(await evaluate('targets.includes(2)')).toBe(true); // the finger was still inside the list
   } finally {
     await suite.close();
     server.close();

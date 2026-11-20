@@ -578,6 +578,9 @@ macro_rules! module {
             fn sync(&mut self, world: &$crate::exact_game::World, generation: u64, playing: bool, seekable: bool) {
                 self.0.sync(world, generation, playing, seekable);
             }
+            fn sync_sim<G: $crate::exact_game::Game>(&mut self, sim: &$crate::exact_game::Sim<G>, playing: bool, seekable: bool) {
+                self.0.sync(sim, sim.generation(), playing, seekable);
+            }
             fn before_restore(&mut self, world: &$crate::exact_game::World, mode: $crate::exact_gpu::Restore) {
                 self.1 = if mode == $crate::exact_gpu::Restore::Carry { world.try_resource::<$crate::exact_game::audio::Sounds>().map(|s| s.clone()) } else { None };
             }

@@ -31,6 +31,20 @@ final class FieldDecorationsIOSTests: XCTestCase {
         return (p, node, field)
     }
 
+    func testScrollMetricsFollowTheTextareaBeforeItScrolls() throws {
+        let value = Array(repeating: "many lines to scroll", count: 70).joined(separator: "\n")
+        let (p, node, _) = try presenter(value, spans: [])
+        let narrow = try XCTUnwrap(p.textareaScrollMetrics(2))
+        XCTAssertGreaterThan(narrow[3], narrow[5])
+        XCTAssertEqual(narrow[0], 0)
+        p.apply(wireBatch([["op": "frame", "id": 2, "x": 0, "y": 0, "w": 350, "h": 140]]))
+        let wide = try XCTUnwrap(p.textareaScrollMetrics(2))
+        XCTAssertGreaterThan(wide[4], narrow[4])
+        XCTAssertGreaterThan(wide[5], narrow[5])
+        node.isHidden = true
+        XCTAssertNil(p.textareaScrollMetrics(2))
+    }
+
     func testSpansAreRenderingAttributesAndTheStorageIsUntouched() throws {
         let value = "hi @alice end"
         let (p, node, field) = try presenter(value, spans: [("mention", 3, 9)])

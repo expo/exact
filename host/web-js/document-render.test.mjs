@@ -394,6 +394,7 @@ test('JavaScript-rendered page uses server facts without a reader’s device', a
   home "/" render=build
 
 shape Page
+  platform: string
   visibilityState: string
   onLine: bool
   canShare: bool
@@ -407,10 +408,10 @@ component PageFacts
   resource page = exactPage() as shape Page
   view
     main
-      head title=\`\${page.visibilityState}/\${page.onLine}/\${page.canShare}/\${page.canShareFiles}/\${page.canSharePictures}/\${page.canOpenFiles}/\${page.hasFocus}/\${page.navigationType}\`
+      head title=\`\${page.platform}/\${page.visibilityState}/\${page.onLine}/\${page.canShare}/\${page.canShareFiles}/\${page.canSharePictures}/\${page.canOpenFiles}/\${page.hasFocus}/\${page.navigationType}\`
       text "Page facts"
 `, page => {
-    expect(page('')[0]).toBe('visible/true/false/false/false/false/true/navigate');
+    expect(page('')[0]).toBe('web/visible/true/false/false/false/false/true/navigate');
   });
 }, 30000);
 

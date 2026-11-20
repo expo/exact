@@ -244,6 +244,7 @@ impl<D: DataSource> Runner<D> {
                 ops.extend(o);
             }
         }
+        self.sync_reorder_target();
         self.apply(ops).map(Some)
     }
     pub(super) fn reorder_collection(&self, key: NodeKey) -> Option<&Collection> {
@@ -283,6 +284,7 @@ impl<D: DataSource> Runner<D> {
         &mut self,
         ops: Vec<Op>,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
+        self.sync_reorder_target();
         if ops.is_empty() {
             Ok(None)
         } else {

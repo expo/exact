@@ -61,11 +61,14 @@ class ScrollTouchTest {
     class Host {
         companion object {
             @JvmStatic @Implementation fun __staticInitializer__() {}
+            val sheetPositions = ArrayList<Pair<Float, Boolean>>()
+            @JvmStatic @Implementation fun sheetDrag(id: Int, generation: Int, top: Float, ended: Boolean, velocity: Float) { sheetPositions.add(top to ended) }
             val fieldInputs = ArrayList<Int>()
             @JvmStatic @Implementation fun fieldInput(id: Int, generation: Int, kind: Int) { fieldInputs.add(kind) }
             @JvmStatic @Implementation fun fieldAction(id: Int, generation: Int, action: Int) {}
             @JvmStatic @Implementation fun fieldEdited(id: Int, generation: Int, seq: Int, value: String, start: Int, end: Int) {}
             @JvmStatic @Implementation fun fieldFocused(id: Int, generation: Int, focused: Boolean) {}
+            @JvmStatic @Implementation fun fieldScrolled(id: Int, generation: Int, x: Int, y: Int) {}
             @JvmStatic @Implementation fun fieldSelected(id: Int, generation: Int, start: Int, end: Int) {}
             /** What exact2's thread was told of scrolling, in order: each move, and each drag's start and end. */
             val told = ArrayList<String>()
@@ -159,6 +162,26 @@ class ScrollTouchTest {
         text.onCreateInputConnection(android.view.inputmethod.EditorInfo())!!.deleteSurroundingText(1, 0)
         assertTrue(Host.fieldInputs.isNotEmpty())
         assertTrue(Host.fieldInputs.all { it == 0 })
+    }
+
+    @Test fun oneDragRaisesTheSheetScrollsTheListAndHandsBackTheUnusedTravel() {
+        for (soon in listOf(true, false)) {
+            setUp()
+            Host.sheetPositions.clear()
+            val words = reply(scroller(1, 0f)).also { it[0] = 32 or 6 } +
+                intArrayOf(7, 1, 100f.toRawBits(), 0f.toRawBits(), 400f.toRawBits())
+            down(400f)
+            if (soon) answer(words)
+            move(250f)
+            if (soon) assertEquals(50f - slop, thread.moved.getValue(1), 0.01f)
+            move(340f)
+            up(340f)
+            if (!soon) answer(words)
+            assertEquals(0f, Host.sheetPositions.first().first, 0.01f)
+            assertEquals(40f + slop, Host.sheetPositions.last().first, 0.01f)
+            assertTrue(Host.sheetPositions.last().second)
+            assertEquals(0f, thread.moved.getValue(1), 0.01f)
+        }
     }
 
     @Test fun aNestedSheetClaimsOnlyItsFingerDirectionAndLeavesTheListsFling() {
@@ -426,7 +449,11 @@ class ScrollTouchTest {
     // Pull to refresh: a scroller that hears `refresh` (flag bit 4), refreshing while bit 5 is set.
 
     private val main get() = org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper())
-    private fun pull(): Refresh? = (view.parent as FrameLayout).let { p -> (0 until p.childCount).map { p.getChildAt(it) } }.filterIsInstance<Refresh>().singleOrNull()
+    private fun pull(): Refresh? {
+        val scrollers = Scrolling::class.java.getDeclaredField("scrollers").apply { isAccessible = true }
+        return (scrollers.get(view.scrolling()) as Map<*, *>).values.filterIsInstance<Scrolling.Scroller>()
+            .mapNotNull { it.pull }.singleOrNull()
+    }
     private fun refreshable(refreshing: Boolean = false) = scroller(1, 0f).also { it[1] = 2 or 16 or (if (refreshing) 32 else 0) }
     private fun statement(refreshing: Boolean) =
         view.scrolling().told(intArrayOf(1, 2 or 16 or (if (refreshing) 32 else 0), 0, 0, 0, 0, 0, 0, 500f.toBits()))

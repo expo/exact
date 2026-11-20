@@ -9,7 +9,8 @@
 //! the window down, which is the route's Back. Where a scroller is under
 //! the finger, a sheet with several detents takes upward drags below its
 //! tallest and downward drags at a non-refreshing list's start. At its
-//! tallest, a new upward drag scrolls the list. Android's reader cancels the
+//! tallest, Android passes the rest of the same drag to the list. Reversing
+//! scrolls the list to its start before lowering the sheet. The reader cancels the
 //! contact, and the drag with it, where a module view under the finger
 //! asked to keep its touch (`Under::sheet` in `scrollers.rs`).
 //!
@@ -211,7 +212,6 @@ impl<D: DataSource> Presenter<D> {
 
     /// Which finger directions move the sheet rather than its nested list:
     /// upward below the tallest detent, downward at a non-refreshing list's start.
-    /// Ownership stays fixed for the contact; unconsumed movement is not handed off.
     pub(in crate::presenter) fn sheet_drag_directions(&self, chain: &[Scroller]) -> (bool, bool) {
         let Some(sheet) = self.front_sheets().last() else {
             return (false, false);
@@ -235,6 +235,42 @@ impl<D: DataSource> Presenter<D> {
                         .contains(&EventKind::Refresh)
             }),
         )
+    }
+
+    pub(in crate::presenter) fn nested_sheet_bounds(&self) -> Option<(NodeKey, [f32; 3])> {
+        let sheet = self.front_sheets().last()?;
+        if sheet.heights.len() < 2 {
+            return None;
+        }
+        let h = self.viewport.1;
+        let node = self.host.kernel().node_by_key(sheet.modal)?;
+        let lowest = if node.props.str(PropId::Closedby) == Some("none") {
+            h - sheet.heights.first()?
+        } else {
+            h
+        };
+        Some((
+            sheet.modal,
+            [self.sheet_top_now(sheet), h - sheet.heights.last()?, lowest],
+        ))
+    }
+
+    /// A native nested drag moves only the sheet hit on down, even if its route is replaced.
+    pub fn reader_sheet_drag(&mut self, modal: NodeKey, top: f32, release: Option<f32>, now: f64) {
+        let Some((front, [_, highest, lowest])) = self.nested_sheet_bounds() else {
+            return;
+        };
+        if modal != front || !top.is_finite() {
+            return;
+        }
+        let top = top.clamp(highest, lowest);
+        if let Some(velocity) = release {
+            self.settle_sheet(modal, top, velocity, now);
+        } else if let Some(sheet) = self.stage.sheets.iter_mut().find(|s| s.modal == modal) {
+            sheet.top = Glide::still(top);
+            sheet.reader_dragging = true;
+            self.dirty = true;
+        }
     }
 
     /// A contact down: one on a scrim is the stage's; one on a sheet may
@@ -456,6 +492,7 @@ impl<D: DataSource> Presenter<D> {
         let Some(sheet) = self.stage.sheets.iter_mut().find(|s| s.modal == modal) else {
             return;
         };
+        sheet.reader_dragging = false;
         let mut rests: Vec<f32> = sheet.heights.iter().map(|d| h - d).collect();
         if closes {
             rests.push(h);
@@ -503,6 +540,10 @@ impl<D: DataSource> Presenter<D> {
     pub(in crate::presenter) fn stage_follows_finger(&self) -> bool {
         matches!(self.stage.gesture, Some(Gesture::Drag { moving: true, .. }))
             || self.stage.preview.is_some()
+            || self
+                .front_sheets()
+                .last()
+                .is_some_and(|s| s.reader_dragging)
     }
 
     /// The person dismissed the sheet `modal` opened (a press on its scrim,

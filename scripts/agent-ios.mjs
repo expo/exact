@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { openTouches, realDoubleTap, realPinch, realTap, springboard, withAccessibilityRuntime } from '../host/apple/touches.mjs';
 import { nativeKey } from './agent-keys.mjs';
-import { jsonLines, hangup, waitAtMost, bootRefusal, simulatorConsole, REPLY_MS } from './agent-wire.mjs';
+import { activateIOS, backgroundIOS, jsonLines, hangup, waitAtMost, bootRefusal, simulatorConsole, REPLY_MS } from './agent-wire.mjs';
 import { bundleId, install } from '../host/apple/build.mjs';
 import { simulatorAssetRoot, simulatorPlanPath } from '../host/apple/assets.mjs';
 import {
@@ -264,6 +264,7 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
       crashes,
       udid: dev.udid,
       installNote: kept?.note,
+      background: ms => backgroundIOS(lines, ms, id, bundle => activateIOS(['simctl', 'launch', dev.udid], bundle)),
       springboard: request =>
         springboard(touches, request, name => {
           if (socket.destroyed || launch.done)

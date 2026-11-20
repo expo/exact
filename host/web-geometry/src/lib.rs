@@ -22,7 +22,24 @@ pub static PAGE: GeometryLinks = GeometryLinks::new(
     page_points,
     page_shown,
 )
-.with_range_frame(page_range_frame);
+.with_range_frame(page_range_frame)
+.with_scroll_metrics(page_scroll_metrics);
+
+#[cfg(target_arch = "wasm32")]
+fn page_scroll_metrics(_: &Kernel, _: &Scrolled, view: ViewId) -> Option<[f64; 6]> {
+    #[link(wasm_import_module = "exact_geometry")]
+    extern "C" {
+        fn scroll_metrics(view: u32, out: *mut f64) -> u32;
+    }
+    let mut out = [0.; 6];
+    // SAFETY: the synchronous page reader writes six f64 values into this buffer.
+    (unsafe { scroll_metrics(view, out.as_mut_ptr()) } != 0).then_some(out)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn page_scroll_metrics(_: &Kernel, _: &Scrolled, _: ViewId) -> Option<[f64; 6]> {
+    None
+}
 
 #[cfg(target_arch = "wasm32")]
 fn page_range_frame(

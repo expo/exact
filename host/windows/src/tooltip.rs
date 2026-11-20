@@ -8,19 +8,31 @@ use exact_runner::DataSource;
 
 type Tip = (NodeKey, String);
 
-fn title_at<D: DataSource>(p: &mut Presenter<D>, point: (f32, f32), moved: bool) -> Option<Tip> {
-    let mut at = if moved {
-        let dirty = p.dirty();
-        let hit = p.hit(point.0, point.1);
-        // A geometry query does not present the CPU window's pending picture.
-        if dirty {
-            p.repaint();
-        }
-        hit
-    } else {
-        // Let the window paint update geometry under a resting pointer.
-        p.hit_last_paint(point.0, point.1)
-    };
+#[cfg_attr(test, derive(Debug, PartialEq))]
+enum TipChange {
+    Keep,
+    Set(Option<Tip>),
+}
+
+fn tip_change<D: DataSource>(
+    p: &mut Presenter<D>,
+    point: Option<(f32, f32)>,
+    moved: bool,
+) -> TipChange {
+    if !moved && point.is_some() && p.dirty() {
+        // The live tree may describe a different picture.
+        return TipChange::Keep;
+    }
+    TipChange::Set(point.and_then(|point| title_at(p, point)))
+}
+
+fn title_at<D: DataSource>(p: &mut Presenter<D>, point: (f32, f32)) -> Option<Tip> {
+    let dirty = p.dirty();
+    let mut at = p.hit(point.0, point.1);
+    // A geometry query does not present the CPU window's pending picture.
+    if dirty {
+        p.repaint();
+    }
     while let Some(id) = at {
         let node = p.host().kernel().node(id)?;
         if let Some(title) = node.props.str(PropId::Title) {
@@ -143,7 +155,9 @@ impl Tooltip {
         let point = point.filter(|_| {
             !(moved && crate::touch::from_touch_or_pen(unsafe { GetMessageExtraInfo() }))
         });
-        let tip = point.and_then(|point| title_at(p, point, moved));
+        let TipChange::Set(tip) = tip_change(p, point, moved) else {
+            return;
+        };
         let Ok(handle) = window.window_handle() else {
             return;
         };
@@ -225,7 +239,7 @@ mod tests {
     #[test]
     fn a_title_query_keeps_a_cpu_timer_update_pending() {
         crate::on_desktop_stack(|| {
-            for title in ["", r#" title=(label == "Before" ? "Hint" : "Renamed")"#] {
+            for title in [" title=\"Hint\"", ""] {
                 let plan = contract::compile(&format!(
                     r#"component App
   state label = "Before"
@@ -235,8 +249,10 @@ mod tests {
     after(100, change)
   view
     column width=200
-      text label width=200 height=(label == "Before" ? 48 : 16) flex-shrink=0{title}
-      text "Second" title="Second hint" width=200 height=48 flex-shrink=0
+      column width=200 height=(label == "Before" ? 48 : 16) flex-shrink=0{title}
+        if label == "Before"
+          text "Busy" width=200 height=48 flex-shrink=0
+      text label title="Second hint" width=200 height=48 flex-shrink=0
 "#
                 ))
                 .unwrap()
@@ -253,18 +269,29 @@ mod tests {
                 assert!(error.is_none(), "{error:?}");
                 let before = p.frame();
                 assert!(!p.dirty());
+                let point = Some((10., 10.));
+                let below = Some((10., 32.));
+                let removed = p.hit(10., 10.).expect("the child is under the pointer");
+                let parent = p.host().kernel().node(removed).unwrap().parent.unwrap();
+                let key = p.host().kernel().node(parent).unwrap().key;
+                let expected = || TipChange::Set((!title.is_empty()).then(|| (key, "Hint".into())));
+                assert_eq!(tip_change(&mut p, point, false), expected());
+                assert_eq!(tip_change(&mut p, below, false), expected());
                 assert!(p.advance(100.).is_none());
-                assert!(p.dirty(), "the timer changed displayed text");
-                let point = (10., 32.);
-                let title_text = |tip: Option<Tip>| tip.map(|(_, text)| text);
-                let first = (!title.is_empty()).then(|| "Renamed".to_owned());
-                assert_eq!(
-                    title_text(title_at(&mut p, point, false)),
-                    first,
-                    "a resting pointer uses the old bounds and the live title"
-                );
-                assert_eq!(title_text(title_at(&mut p, (10., 10.), true)), first);
-                assert_eq!(title_at(&mut p, point, true).unwrap().1, "Second hint");
+                assert!(p.host().kernel().node(removed).is_none());
+                assert!(p.dirty(), "the timer removed the child");
+                assert_eq!(tip_change(&mut p, point, false), TipChange::Keep);
+                assert_eq!(tip_change(&mut p, None, false), TipChange::Set(None));
+                let second =
+                    |tip| matches!(tip, TipChange::Set(Some((_, text))) if text == "Second hint");
+                if title.is_empty() {
+                    assert!(
+                        second(tip_change(&mut p, below, true)),
+                        "a real move resolves the current geometry"
+                    );
+                } else {
+                    assert_eq!(tip_change(&mut p, below, false), TipChange::Keep);
+                }
                 assert!(
                     p.dirty(),
                     "tooltip lookup must leave the new picture pending"
@@ -272,11 +299,9 @@ mod tests {
                 let after = p.frame();
                 assert_ne!(before.data(), after.data());
                 assert!(!p.dirty());
-                assert_eq!(title_at(&mut p, point, false).unwrap().1, "Second hint");
-                assert!(
-                    !p.dirty(),
-                    "an unchanged tooltip must not request another frame"
-                );
+                assert_eq!(tip_change(&mut p, point, false), expected());
+                assert!(second(tip_change(&mut p, below, false)));
+                assert!(!p.dirty(), "a clean lookup must not request another frame");
             }
         });
     }
@@ -409,7 +434,7 @@ mod tests {
                 let id = p.host().kernel().node_by_key(key).unwrap().id;
                 let (x, y, w, h) = p.rect_of(id).unwrap();
                 assert_eq!(
-                    title_at(&mut p, (x + w / 2., y + h / 2.), true).map(|(_, text)| text),
+                    title_at(&mut p, (x + w / 2., y + h / 2.)).map(|(_, text)| text),
                     expected.map(str::to_owned),
                     "{name}"
                 );
@@ -420,10 +445,10 @@ mod tests {
             p.frame();
             let (x, y, w, h) = p.rect_of(id).unwrap();
             assert_eq!(
-                title_at(&mut p, (x + w / 2., y + h / 2.), true).unwrap().1,
+                title_at(&mut p, (x + w / 2., y + h / 2.)).unwrap().1,
                 "Changed title"
             );
-            assert!(title_at(&mut p, (500., 500.), true).is_none());
+            assert!(title_at(&mut p, (500., 500.)).is_none());
         });
     }
 }

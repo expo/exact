@@ -606,6 +606,31 @@ fn formatting_selected_lines_preserves_their_blocks() {
 }
 
 #[test]
+fn joining_lines_preserves_delimiters_that_become_literal() {
+    for (source, joined) in [
+        ("A **bold word.**\nabc.", "A **bold word.**abc."),
+        ("😀x\n**!bold**", "😀x**!bold**"),
+        ("A *word.*\nabc.", "A *word.*abc."),
+    ] {
+        let at = source.split_once('\n').unwrap().0.encode_utf16().count() as u32;
+        for (input, caret) in [(Input::Backward, at + 1), (Input::Forward, at)] {
+            let mut p = Page::open(source);
+            p.caret(caret);
+            let before = p.e.selection();
+            p.input(input, "");
+            assert_eq!(p.source(), joined, "{input:?}");
+            assert_eq!(p.e.visible_text(), joined);
+            assert_eq!(p.e.selection(), (at, at));
+            p.tool("undo");
+            assert_eq!(p.source(), source);
+            assert_eq!(p.e.selection(), before);
+            p.tool("redo");
+            assert_eq!(p.source(), joined);
+        }
+    }
+}
+
+#[test]
 fn emptying_a_bold_word_removes_its_markers() {
     let mut p = Page::open("a **b** c");
     for _ in 0..3 {

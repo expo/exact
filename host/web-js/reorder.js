@@ -316,7 +316,18 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
   // The source's token and owner for the whole gesture, a target and a phase
   // (LLP 1094 D4); a drop may hold until the move shows (D8).
   const HOLD_MS = 1000;
-  let Session = null;
+  let Session = null, announcedTarget = null;
+  function syncTarget() {
+    const next = Session?.phase === "active" ? Session.target : null;
+    if (announcedTarget === next) return;
+    const previous = announcedTarget;
+    announcedTarget = next;
+    for (const [list, targeted] of [[previous, false], [next, true]]) {
+      if (list?.el.$reordertargetchange) queueMicrotask(() => {
+        if (Lists.get(list.view) === list) commit(() => list.el.$reordertargetchange(targeted), "action");
+      });
+    }
+  }
   const groupOf = c => c?.el?.dataset.reordergroup || null;
   const groupLists = group => [...Lists.values()].filter(c => groupOf(c) === group && c.el.isConnected)
     .sort((a, b) => a.el.compareDocumentPosition(b.el) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
@@ -334,6 +345,7 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
     if (s.target !== s.source) s.target.closeIncoming(instant);
     for (const c of s.touched) if (Lists.get(c.view) === c) c.setHidden(s.ghost && c.index.pos.has(s.item) ? s.item : null);
     s.phase = dropped || ending ? "settling" : "cancelling"; s.ending = ending ?? null; s.deadline = null;
+    syncTarget();
     if (s.timer) { const i = clock.timers.indexOf(s.timer); if (i >= 0) clock.timers.splice(i, 1); s.timer = null; }
   }
   function holdOutcome(s) {
@@ -350,11 +362,11 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
   function reconcileGroup() {
     const s = Session;
     if (!s || !s.group) return;
-    if (!Lists.has(s.source.view)) { Session = null; return; }
+    if (!Lists.has(s.source.view)) { Session = null; syncTarget(); return; }
     if (s.phase === "holding") { const ending = holdOutcome(s); if (ending) endSession(s, ending, true); return; }
     if (s.phase !== "active") return;
     if (!hasReorder(s.token)) { endSession(s, null, false); return; }
-    if (s.target !== s.source && Lists.get(s.target.view) !== s.target) { s.source.setOutgoing(false); s.target = s.source; }
+    if (s.target !== s.source && Lists.get(s.target.view) !== s.target) { s.source.setOutgoing(false); s.target = s.source; syncTarget(); }
   }
   function dispatchDrop(target, args, session = null) {
     const owner = ReorderOwner, token = owner.preview.token;
@@ -410,7 +422,7 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
       if (!ReorderOwner.finishPreview(token)) return false;
       ReorderOwner = null;
       // Every row a grouped session hid shows again, and a gap left open closes (D6).
-      if (Session?.token === token) { for (const c of Session.touched) if (Lists.get(c.view) === c) { c.closeIncoming(false); c.setHidden(null); } Session = null; }
+      if (Session?.token === token) { for (const c of Session.touched) if (Lists.get(c.view) === c) { c.closeIncoming(false); c.setHidden(null); } Session = null; syncTarget(); }
       settled();
       return true;
     },
@@ -427,6 +439,7 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
       if (ghost) c.setHidden(item);
       Session = { token: started.token, source: c, target: c, group, phase: "active", ending: null, deadline: null, item, key: item.slice(2),
         before: null, place: null, ghost, touched: new Set([c]), warned: false, timer: null };
+      syncTarget();
       return started;
     },
     grouped: token => !!grouped(token),
@@ -453,7 +466,7 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
         ok = t.moveIncoming(geometry, y);
         if (!ok) t.incoming = null; else leaveTarget(s, current);
       }
-      if (ok) { s.target = t; s.touched.add(t); } else if (t !== current) current.uncertify();
+      if (ok) { s.target = t; s.touched.add(t); syncTarget(); } else if (t !== current) current.uncertify();
       return ok ? "accepted" : "needs";
     },
     /** `reorder_step` (D9): a row up or down, or the same index in the previous or next grouped list. */
@@ -472,7 +485,7 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
         if (!t) return false;
         if (t === s.source) { t.setOutgoing(false); t.stepTo(slot[0]); current.closeIncoming(false); }
         else { t.openIncoming(s.item, s.source.preview.height); t.stepTo(slot[0]); leaveTarget(s, current); }
-        s.target = t; s.touched.add(t);
+        s.target = t; s.touched.add(t); syncTarget();
       }
       // The gap kept in view, `nearest` (scrollIntoView, list.js).
       const near = t.stepNeighbour();
@@ -492,6 +505,7 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
       const pending = s.source.pendingDrops?.get(token);
       if (pending) pending.deadline = clock.now + HOLD_MS;
       s.phase = "holding"; s.deadline = clock.now + HOLD_MS;
+      syncTarget();
       every(HOLD_MS, () => { if (Session === s && s.phase === "holding") return commit(() => { say("reorderdrop: the move did not show within 1 s"); endSession(s, "timeout", false); }, "reorderdrop hold"); return true; }, true);
       s.timer = clock.timers.at(-1);
       dispatchDrop(t, [item, before, [listId(s.source), listId(t)]], s);
@@ -510,7 +524,7 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
   };
   // A preview whose binding is gone ends (runner reconcile_reorder).
   After.push(() => {
-    if (ReorderOwner && !Lists.has(ReorderOwner.view)) { ReorderOwner = null; Session = null; return; }
+    if (ReorderOwner && !Lists.has(ReorderOwner.view)) { ReorderOwner = null; Session = null; syncTarget(); return; }
     if (Session?.group) return; // the motion piece's flush asks first (`reconcileGroup`)
     const p = ReorderOwner?.preview;
     if (p && !p.terminal && p.pinOwned && !hasReorder(p.token)) ReorderOwner.endPreview();

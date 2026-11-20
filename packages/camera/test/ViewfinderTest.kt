@@ -149,7 +149,7 @@ class ViewfinderTest {
         val observed = ArrayList<Bitmap?>()
         val stop = track.observePicture { observed += track.picture }
         for ((time, index) in times.zip(expected)) {
-            val frame = clip.frame(time - start)
+            val frame = clip.sample(time - start).bitmap
             assertSame(images[index], frame)
             track.picture = frame
         }

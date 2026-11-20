@@ -12,13 +12,23 @@ private typealias PlatformFont = UIFont
 #endif
 
 extension Runtime {
-    func setInlineGeometry(_ read: @escaping (UInt32) -> CGRect?, range: @escaping (UInt32, UInt32, UInt32) -> CGRect?) {
+    func setInlineGeometry(_ read: @escaping (UInt32) -> CGRect?, range: @escaping (UInt32, UInt32, UInt32) -> CGRect?,
+                          metrics: @escaping (UInt32) -> [Double]?) {
         inlineFrame = read
         rangeFrame = range
+        scrollMetrics = metrics
         let ctx = UInt(bitPattern: Unmanaged.passUnretained(self).toOpaque())
         on {
-            exact_set_inline_geometry(rt, Self.readInlineFrame, Self.readRangeFrame, UnsafeMutableRawPointer(bitPattern: ctx))
+            exact_set_text_geometry(rt, Self.readInlineFrame, Self.readRangeFrame, Self.readScrollMetrics, UnsafeMutableRawPointer(bitPattern: ctx))
         }
+    }
+
+    private static let readScrollMetrics: ExactScrollMetricsFn = { ctx, id, out in
+        guard let ctx, let out else { return 0 }
+        let runtime = Unmanaged<Runtime>.fromOpaque(ctx).takeUnretainedValue()
+        guard let values = Owner.shared.callMain({ runtime.scrollMetrics?(id) }), values.count == 6 else { return 0 }
+        for (i, value) in values.enumerated() { out[i] = value }
+        return 1
     }
 
     private static let readRangeFrame: ExactRangeFrameFn = { ctx, id, start, end in
@@ -41,6 +51,28 @@ extension Runtime {
 }
 
 extension Presenter {
+    func textareaScrollMetrics(_ id: UInt32) -> [Double]? {
+        guard let node = views[id], let field = node.textArea, field.window != nil, !node.cssVisibilityHidden else { return nil }
+        var ancestor: PlatformView? = field
+        while let view = ancestor {
+            if view.isHidden { return nil }
+            ancestor = view.superview
+        }
+        #if os(macOS)
+        guard let scroll = node.textAreaScroll, let document = scroll.documentView else { return nil }
+        scroll.layoutSubtreeIfNeeded()
+        let point = scroll.contentView.bounds.origin, port = scroll.contentView.bounds.size, size = document.frame.size
+        #else
+        field.layoutIfNeeded()
+        let inset = field.adjustedContentInset
+        let point = CGPoint(x: field.contentOffset.x + inset.left, y: field.contentOffset.y + inset.top)
+        let port = CGSize(width: max(0, field.bounds.width - inset.left - inset.right),
+                          height: max(0, field.bounds.height - inset.top - inset.bottom))
+        let size = field.contentSize
+        #endif
+        return [point.x, point.y, max(port.width, size.width), max(port.height, size.height), port.width, port.height].map(Double.init)
+    }
+
     /// `rangeFrame` (LLP 1114.007): a textarea's UTF-16 range as TextKit
     /// last laid it out, a plain one's or a Markdown one's source alike, in
     /// viewport points; collapsed, the caret's rectangle. Nil past the

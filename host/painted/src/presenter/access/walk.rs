@@ -1,5 +1,27 @@
 use super::*;
 
+/// A table's, list's, or description list's element as its role (HTML-AAM): a
+/// node that holds what it heads or holds, named by its author, if at all.
+fn structure_role(node: &NodeRef<'_>) -> Option<i32> {
+    if node.node_type != exact_kernel::NodeType::View {
+        return None;
+    }
+    Some(match node.props.str(PropId::SemanticTag)? {
+        "table" => role::TABLE,
+        "caption" => role::CAPTION,
+        "tr" => role::ROW,
+        "td" => role::CELL,
+        "th" if node.props.str(PropId::Scope) == Some("row") => role::ROW_HEADER,
+        "th" => role::COLUMN_HEADER,
+        "dl" => role::DESCRIPTION_LIST,
+        "dt" => role::TERM,
+        "dd" => role::DEFINITION,
+        "ul" | "ol" => role::LIST,
+        "li" => role::LIST_ITEM,
+        _ => return None,
+    })
+}
+
 /// A labelled empty item still belongs to the list. Keep its real bounds so
 /// keyboard and screen-reader navigation can find it without adding a hit area.
 pub(super) fn empty_item_bounds(
@@ -258,9 +280,33 @@ impl<D: DataSource> Presenter<D> {
             let scroller = (may.then(|| self.scroller(id, &b.limits)).flatten())
                 .filter(|s| s.axes.0 || s.axes.1);
             let label = self.access_label(&node);
+            let dialog = match aria {
+                Some("dialog") => Some(role::DIALOG),
+                Some("alertdialog") => Some(role::ALERT_DIALOG),
+                None if node.props.str(PropId::SemanticTag) == Some("dialog") => Some(role::DIALOG),
+                _ => None,
+            };
+            if let Some(role) = dialog {
+                let modal = self.alert_inert() && self.alert_root() == Some(id);
+                let flags = if modal { flag::MODAL } else { 0 };
+                let name = label
+                    .clone()
+                    .or_else(|| node.props.str(PropId::Title).map(str::to_owned))
+                    .unwrap_or_default();
+                if let Some(parent) =
+                    self.access_emit(b, &scope, &node, role, flags, [0.; 3], || {
+                        Some((name, String::new()))
+                    })
+                {
+                    scope.parent = parent;
+                }
+            }
             if let Some(s) = scroller {
                 let (flags, range) = Self::access_scroll(&s);
-                let words = (label.unwrap_or_default(), String::new());
+                let words = (
+                    label.filter(|_| dialog.is_none()).unwrap_or_default(),
+                    String::new(),
+                );
                 let painted = b.boxes.get(&id).cloned();
                 let Some(own) =
                     self.access_emit(b, &scope, &node, role::SCROLLER, flags, range, || {
@@ -300,12 +346,8 @@ impl<D: DataSource> Presenter<D> {
                 {
                     scope.parent = own;
                 }
-            } else if Self::access_live(&node) != 0
-                || (label.is_some()
-                    && matches!(
-                        aria,
-                        Some("group" | "radiogroup" | "region" | "dialog" | "alertdialog")
-                    ))
+            } else if (dialog.is_none() && Self::access_live(&node) != 0)
+                || (label.is_some() && matches!(aria, Some("group" | "radiogroup" | "region")))
             {
                 let words = (label.unwrap_or_default(), String::new());
                 if let Some(own) =

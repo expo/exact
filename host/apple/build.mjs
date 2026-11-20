@@ -55,7 +55,7 @@ import { closeSync, copyFileSync, cpSync, existsSync, linkSync, mkdirSync, mkdte
 import { armArgs, armKey, armOutput, evictArms, keepRoster, keptRoster, rosterRoutes, snapshotSources, moduleFrameworks, probeDigest } from './arms.mjs';
 import { HOST_MACOS, freeSpace, ROOM_GB } from '../../scripts/filesystem.mjs';
 import { documentTypes, exportedTypes, importedTypes, openingLinks, webPageTypes, browserEntitlements } from './documents.mjs';
-import { appClip, associatedDomains as claimedDomains, appleExecutableName, HOST_DEV, PINNED_RUST, checkModuleRoster, moduleDirectory, copyShaders, appleCargoClaims, awaitBuildOutput, cargoLibraryTarget, claimBuildOutput, appSourceKey, bakeOutput, buildBake, contractLast, bakeTarget, developmentBuildEnv, developmentURLScheme, gpuModules, hermesBundle, injectedProfiles, resolveApp, verifyBakeFiles } from '../../scripts/app.mjs';
+import { appClip, associatedDomains as claimedDomains, appleExecutableName, HOST_DEV, PINNED_RUST, checkModuleRoster, moduleDirectory, copyShaders, cargoProductClaims, awaitBuildOutput, cargoLibraryTarget, claimBuildOutput, appSourceKey, bakeOutput, buildBake, contractLast, bakeTarget, developmentBuildEnv, developmentURLScheme, gpuModules, hermesBundle, injectedProfiles, resolveApp, verifyBakeFiles } from '../../scripts/app.mjs';
 import { copyStaticTreeIfPresent, listAssets } from '../web/serve.mjs';
 import { startSweep } from '../../scripts/sweep.mjs';
 import { thinTextures } from '../../scripts/texture-families.mjs';
@@ -623,7 +623,7 @@ async function main(args, lockHeld = false) {
   if (hermesEarly && !hermesEarly.installed) refused.push((await import('../../scripts/exact.mjs')).hermesRefusal(hermesEarly, process.env));
   if (refused.length) { console.error(refused.join('\n')); process.exitCode = 1; return; }
   if (ios && !device && !ipa && !args.includes('--no-install') && !args.includes('--prebuild')) chooseSimulator(args.includes('--sim') ? args[args.indexOf('--sim') + 1] : undefined, { tv, app: app.id, dir: app.dir, hint: '--sim <udid|name> (or EXACT_SIM)' }); // refused before anything compiles, not after (LLP 1156.000 D5)
-  if (!existsSync(resolve(app.target, 'apple-swift'))) { const room = freeSpace(app.dir, [app.target, resolve(process.env.HOME ?? '', '.cache/exact')]); if (room && room.gb < ROOM_GB) console.warn(`host/apple: a first build here; ${room.text}`); } // a cold build (LLP 1156.000 D3)
+  if (!existsSync(resolve(app.target, 'apple-swift'))) { const room = freeSpace(app.dir); if (room && room.gb < ROOM_GB) console.warn(`host/apple: a first build here; ${room.text}`); } // a cold build (LLP 1156.000 D3)
   // A build of this app already running (a --prebuild's) is waited for, as test and agent wait for it, and a background
   // build's failure is said by the next build (scripts/agent-build.mjs `waitForBuild`, `reportPrebuild`).
   const running = !lockHeld && !args.includes('--prebuild') && existsSync(appleArtifacts(app).lock);
@@ -1421,7 +1421,7 @@ async function test(args) {
     const package_ = JSON.parse(metadata.stdout).packages.find(p => p.name === crate);
     const unit = package_ && cargoLibraryTarget(package_);
     if (!unit) throw new Error(`Cargo has no library target for ${crate}`);
-    cargoRelease = claimBuildOutput(app, appleCargoClaims(app, ios ? iosTarget : 'host', [unit])[0]);
+    cargoRelease = claimBuildOutput(app, cargoProductClaims(app, ios ? iosTarget : 'host', [unit])[0]);
     // The development profile, as an app's build: `release` put the whole graph through LTO for a test run.
     run('cargo', ['rustc', '--crate-type', 'staticlib', ...injectedProfiles(app), '--profile', HOST_DEV, '-p', crate, '--lib', ...(ios ? ['--target', iosTarget] : [])], { cwd: app.workspace, env: cargoEnv });
     const libDir = ios ? resolve(app.target, iosTarget, HOST_DEV) : resolve(app.target, HOST_DEV);

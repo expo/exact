@@ -112,6 +112,7 @@ object Native {
      * and down its snapport's length as float bits, a count, and per snap area the least and greatest offsets it rests
      * at as float bits and 1 for `scroll-snap-stop: always`, in pixels; flag bit 3: a virtualized list, whose areas past
      * these [snapsAround] tells. */
+    @JvmStatic external fun readerSelection(action: Int, x: Float, y: Float): String?
     @JvmStatic external fun under(x: Float, y: Float): IntArray
     /** Virtualized list [id]'s snap areas up and down ([vertical]) or sideways, for a release at offset [release] whose
      * rest is projected near [projected] (pixels): a count, then per area its least and greatest offsets as float bits
@@ -142,6 +143,7 @@ object Native {
      * field its own text; once it ends, the value the app then shows (LLP 1115.000 §5, ruling 6). */
     @JvmStatic external fun fieldComposing(id: Int, generation: Int, composing: Boolean, value: String)
     /** Hosted field [id] moved its selection with no edit. */
+    @JvmStatic external fun fieldScrolled(id: Int, generation: Int, x: Int, y: Int)
     @JvmStatic external fun fieldSelected(id: Int, generation: Int, start: Int, end: Int)
     /** Hosted field [id] had its action key pressed, or Enter or Tab on a hardware keyboard. [action] is what the
      * key said it does: 0 Enter with no action, 2 done, 3 go, 4 next, 5 previous, 6 search, 7 send, 16 Tab, 17
@@ -161,6 +163,7 @@ object Native {
      * `scrolldragend`): at ([vx], [vy]) px/s, positive as its offset grows, and, with [rest], to come to rest at
      * ([restX], [restY]) px; [flings] when it threw a fling. From the start until the lift, or the fling's end
      * ([flingEnded]), the scroller's moves owe no `scrollend`. */
+    @JvmStatic external fun sheetDrag(index: Int, generation: Int, top: Float, ended: Boolean, velocity: Float)
     @JvmStatic external fun scrollDrag(id: Int, ended: Boolean, vx: Float, vy: Float, rest: Boolean, restX: Float, restY: Float, flings: Boolean)
     /** A pull to refresh of scroller [id] was let go of past its threshold: its `refresh` ([Refresh]). */
     @JvmStatic external fun refresh(id: Int)

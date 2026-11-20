@@ -62,6 +62,10 @@ fn steps_json(steps: &[Step], s: &mut String) {
 fn step_json(step: &Step, s: &mut String) {
     let line = step.span().line;
     match step {
+        Step::Scroll { target, .. } => {
+            s.push_str("{\"op\":\"scroll\",\"target\":");
+            q(target, s);
+        }
         Step::Tap {
             target,
             form,
@@ -186,6 +190,12 @@ fn step_json(step: &Step, s: &mut String) {
         }
         Step::Seed { seed, .. } => {
             s.push_str(&format!("{{\"op\":\"seed\",\"value\":{seed}"));
+        }
+        Step::Stored { name, value, .. } => {
+            s.push_str("{\"op\":\"stored\",\"name\":");
+            q(name, s);
+            s.push_str(",\"json\":");
+            q(value, s);
         }
         Step::Fresh { seed, .. } => {
             s.push_str("{\"op\":\"fresh\",\"seed\":");
@@ -312,6 +322,9 @@ fn step_json(step: &Step, s: &mut String) {
             s.push_str(",\"text\":");
             q(text, s);
         }
+        Step::Background { ms, .. } => {
+            s.push_str(&format!("{{\"op\":\"background\",\"ms\":{ms}"));
+        }
         Step::Clock { arg, .. } => {
             s.push_str("{\"op\":\"clock\",\"arg\":");
             q(arg, s);
@@ -401,6 +414,24 @@ fn step_json(step: &Step, s: &mut String) {
         }
         Step::ExpectWakelock { held, .. } => {
             s.push_str(&format!("{{\"op\":\"expect-wakelock\",\"held\":{held}"));
+        }
+        Step::ExpectDrag {
+            target,
+            kind,
+            present,
+            value,
+            name,
+            ..
+        } => {
+            s.push_str("{\"op\":\"expect-drag\",\"target\":");
+            q(target, s);
+            s.push_str(&format!(",\"present\":{present}"));
+            for (key, field) in [("kind", kind), ("value", value), ("name", name)] {
+                if let Some(text) = field {
+                    s.push_str(&format!(",\"{key}\":"));
+                    q(text, s);
+                }
+            }
         }
         Step::ExpectSound {
             src,
@@ -723,4 +754,19 @@ fn state_literal(value: &Expr, s: &mut String) {
         Expr::None(_) => s.push_str("null"),
         _ => unreachable!("state expectations contain only literals"),
     }
+}
+
+#[cfg(test)]
+#[test]
+fn an_ios_background_interval_is_a_real_time_test_step() {
+    let parsed = crate::tests("test \"resume\" on ios\n  background 1250\n").unwrap();
+    let json: serde_json::Value = serde_json::from_str(&crate::tests_json(&parsed)).unwrap();
+    assert_eq!(
+        json[0]["steps"][0],
+        serde_json::json!({"op":"background", "ms":1250, "line":2})
+    );
+    for ms in ["", "-1", "0.5", "2147483648"] {
+        assert!(crate::tests(&format!("test \"t\"\n  background {ms}\n")).is_err());
+    }
+    assert!(crate::tests("test \"t\"\n  perf\n    background 100\n").is_err());
 }

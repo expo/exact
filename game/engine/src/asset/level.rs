@@ -85,6 +85,12 @@ pub(crate) fn names<G: crate::Game>() -> impl Iterator<Item = &'static str> {
                 .map(|level| level.name),
         )
         .chain((!G::TABLES.is_empty()).then_some(super::TABLE_ASSET))
+        .chain(
+            G::STREAMED
+                .iter()
+                .any(|n| n.ends_with(".sound"))
+                .then_some(super::SOUND_CATALOG),
+        )
 }
 
 pub(crate) fn validate_declaration<G: crate::Game>() -> Result<(), String> {
@@ -106,11 +112,14 @@ pub(crate) fn validate_declaration<G: crate::Game>() -> Result<(), String> {
             ));
         }
     }
-    for name in names::<G>().chain(G::STREAMED.iter().copied()) {
+    for name in G::ASSETS
+        .iter()
+        .chain(G::STREAMED)
+        .copied()
+        .chain(G::LEVEL.map(|level| level.name))
+    {
         if !super::asset_name(name)
-            || !(if name == super::TABLE_ASSET && !G::TABLES.is_empty() {
-                true
-            } else if G::LEVEL.is_some_and(|level| level.name == name) {
+            || !(if G::LEVEL.is_some_and(|level| level.name == name) {
                 name.ends_with(".level.json")
             } else {
                 name.ends_with(".model") || name.ends_with(".tex") || name.ends_with(".sound")
@@ -121,13 +130,13 @@ pub(crate) fn validate_declaration<G: crate::Game>() -> Result<(), String> {
             ));
         }
     }
+    let required: std::collections::BTreeSet<_> = names::<G>().collect();
+    let mut streamed = std::collections::BTreeSet::new();
     for name in G::STREAMED {
-        if name.ends_with(".sound") {
-            return Err(format!(
-                "streamed asset `{name}`: sounds are not streamed yet; declare it in Game::ASSETS"
-            ));
+        if !streamed.insert(name) {
+            return Err(format!("duplicate streamed asset `{name}`"));
         }
-        if names::<G>().any(|declared| declared == *name) {
+        if required.contains(name) {
             return Err(format!(
                 "asset `{name}` is in both Game::ASSETS and Game::STREAMED; setup either waits for it or does not"
             ));

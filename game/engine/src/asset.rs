@@ -6,7 +6,12 @@ use crate::Data;
 #[path = "../../../gpu/src/asset_name.rs"]
 mod names;
 pub use names::asset_name;
-use std::{collections::BTreeSet, mem::ManuallyDrop, rc::Rc, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    mem::ManuallyDrop,
+    rc::Rc,
+    sync::Arc,
+};
 
 mod generated;
 pub(crate) mod level;
@@ -14,7 +19,7 @@ mod map;
 mod sound;
 pub use level::{Level, LevelValue};
 pub(crate) mod table;
-pub use sound::{SoundAsset, SoundData, SOUND_BYTE_BUDGET, SOUND_RATES};
+pub use sound::{SoundAsset, SoundData, SoundInfo, SOUND_BYTE_BUDGET, SOUND_CATALOG, SOUND_RATES};
 pub use table::{validate_tables, Curve, Table, TableInput, TableValue, TABLE_ASSET};
 /// Renderer-neutral pose records and rig geometry.
 pub mod pose;
@@ -777,6 +782,7 @@ pub(crate) struct Assets {
     pub levels: map::AssetMap<Arc<LevelValue>>,
     pub tables: Option<Arc<table::TableStore>>,
     pub sounds: map::AssetMap<Arc<SoundAsset>>,
+    pub sound_catalog: Option<Arc<BTreeMap<String, SoundInfo>>>,
     pub states: map::AssetMap<AssetState>,
     pub declared: BTreeSet<String>,
     pub required: BTreeSet<String>,
@@ -817,6 +823,7 @@ impl std::ops::Deref for AssetStore {
             levels: map::AssetMap::EMPTY,
             tables: None,
             sounds: map::AssetMap::EMPTY,
+            sound_catalog: None,
             states: map::AssetMap::EMPTY,
             declared: BTreeSet::new(),
             required: BTreeSet::new(),
@@ -1078,6 +1085,8 @@ pub enum Content {
     Tables(String),
     /// Baked 16-bit PCM; decoded in primitive and model modules alike.
     Sound(SoundData),
+    /// Formats and identities of the audio payloads the game streams after setup.
+    SoundCatalog(BTreeMap<String, SoundInfo>),
 }
 impl Content {
     pub fn decode<const MODELS: bool>(name: &str, bytes: &[u8]) -> Result<Self, String> {
@@ -1087,7 +1096,11 @@ impl Content {
         if bytes.len() > 64 * 1024 * 1024 {
             return Err("exceeds 64 MiB".into());
         }
-        if name == TABLE_ASSET {
+        if name == SOUND_CATALOG {
+            Ok(Self::SoundCatalog(
+                crate::bin::from_slice(bytes).map_err(|e| e.to_string())?,
+            ))
+        } else if name == TABLE_ASSET {
             Ok(Self::Tables(
                 std::str::from_utf8(bytes)
                     .map_err(|e| e.to_string())?
@@ -1121,7 +1134,10 @@ impl Content {
 pub fn delivers_without_models<G: crate::Game>() -> bool {
     !G::TABLES.is_empty()
         || G::LEVEL.is_some()
-        || G::ASSETS.iter().any(|name| name.ends_with(".sound"))
+        || G::ASSETS
+            .iter()
+            .chain(G::STREAMED)
+            .any(|name| name.ends_with(".sound"))
 }
 impl<G: crate::Game> crate::Sim<G> {
     /// Headless model decoder. Primitive surfaces never link this adapter.

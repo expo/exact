@@ -797,6 +797,7 @@ internal object Exact {
         field { Native.fieldEdited(id, generation, seq, value, start, end) }
     fun fieldComposing(id: Int, generation: Int, composing: Boolean, value: String) =
         field { Native.fieldComposing(id, generation, composing, value) }
+    fun fieldScrolled(id: Int, generation: Int, x: Int, y: Int) = field { Native.fieldScrolled(id, generation, x, y) }
     fun fieldSelected(id: Int, generation: Int, start: Int, end: Int) = field { Native.fieldSelected(id, generation, start, end) }
     fun fieldAction(id: Int, generation: Int, action: Int) = field { Native.fieldAction(id, generation, action) }
     fun fieldInput(id: Int, generation: Int, kind: Int) = field { Native.fieldInput(id, generation, kind) }

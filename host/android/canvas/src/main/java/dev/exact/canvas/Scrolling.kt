@@ -10,8 +10,8 @@ import android.view.VelocityTracker
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
+import android.view.ViewGroupOverlay
 import android.widget.EdgeEffect
-import android.widget.FrameLayout
 import android.widget.OverScroller
 import kotlin.math.abs
 import kotlin.math.max
@@ -49,7 +49,7 @@ internal class Scrolling(private val view: ExactView) {
         var flags = 0
             set(value) {
                 field = value
-                if (barless) { bar?.let { (it.parent as? ViewGroup)?.removeView(it) }; bar = null }
+                if (barless) clearBar()
             }
         /** What exact2 calls its revision: a move sent under an older one is dropped there. */
         var rev = 0
@@ -68,6 +68,19 @@ internal class Scrolling(private val view: ExactView) {
         /** Its edges' effects: top, bottom, left, right. */
         val edges = arrayOfNulls<EdgeEffect>(4)
         var bar: Indicator? = null
+        var overlay: ViewGroupOverlay? = null
+
+        fun clearBar() {
+            val old = bar ?: return
+            bar = null
+            overlay?.remove(old)
+        }
+
+        fun clearPull() {
+            val old = pull ?: return
+            pull = null
+            overlay?.remove(old)
+        }
         /** Its snap, as the last touch's answer told it ([Native.under]): whether a rest must be a snap position, and
          * sideways ([0]) and up and down ([1]) the snapport's length (0: it does not snap that way), each snap area's
          * least and greatest offsets, and whether a snap may not pass over it (`scroll-snap-stop: always`). */
@@ -126,6 +139,11 @@ internal class Scrolling(private val view: ExactView) {
     /** What exact2 said is under the touch, once it has. */
     private var chain: List<Link> = emptyList()
     private var claims = 0
+    private class Sheet(val id: Int, val generation: Int, var top: Float, val highest: Float, val lowest: Float) {
+        var moved = false
+    }
+    private var sheet: Sheet? = null
+
     private var answered = false
     /** The drag's or the fling's axis, and the scrollers it moves, innermost first. */
     private var sideways = false
@@ -177,6 +195,7 @@ internal class Scrolling(private val view: ExactView) {
      */
     fun touch(e: MotionEvent, disallowIntercept: Boolean = false): Boolean {
         if (e.actionMasked == MotionEvent.ACTION_DOWN) {
+            settleSheet(0f)
             val ended = early.any { it.actionMasked == MotionEvent.ACTION_UP || it.actionMasked == MotionEvent.ACTION_CANCEL }
             val first = down
             if (mode == WATCHING && !answered && ended && first != null) {
@@ -271,6 +290,7 @@ internal class Scrolling(private val view: ExactView) {
 
     /** This sequence no longer belongs to scrolling; unrelated refreshes and edge effects stay visible. */
     fun yieldToHosted() {
+        settleSheet(0f)
         zooming.stopped()
         if (mode == WATCHING || mode == DRAGGING) mode = IDLE
         forget()
@@ -347,8 +367,9 @@ internal class Scrolling(private val view: ExactView) {
      * so neither does a lift that came before it: nothing scrolls or flings in a window that is not shown.
      */
     fun stopped() {
+        settleSheet(0f)
         // A pull to refresh goes, and stops turning ([Refresh.onDetachedFromWindow]).
-        for (s in scrollers.values) s.pull?.let { (it.parent as? ViewGroup)?.removeView(it); s.pull = null }
+        for (s in scrollers.values) { s.clearPull(); s.clearBar() }
         for (o in owing) for (e in o.events) e.recycle()
         owing.clear()
         if (mode == DRAGGING) lifted(0f, false)
@@ -395,7 +416,10 @@ internal class Scrolling(private val view: ExactView) {
             i += 11
         }
         // After the module's thirteen words, each scroller's snap.
-        var at = 3 + 11 * w[1] + 13
+        sheet = if (claims and 32 != 0 && end + 5 <= w.size)
+            Sheet(w[end], w[end + 1], f(w[end + 2]), f(w[end + 3]), f(w[end + 4])) else null
+        claims = claims and 31
+        var at = end + (if (sheet != null) 5 else 0) + 13
         for (link in links) {
             if (at >= w.size) break
             val s = link.s
@@ -412,7 +436,7 @@ internal class Scrolling(private val view: ExactView) {
             }
         }
         // The indicators of scrollers this touch is not over go: they have faded, or are about to.
-        for (s in scrollers.values) if (links.none { it.s === s }) s.bar?.let { (it.parent as? ViewGroup)?.removeView(it); s.bar = null }
+        for (s in scrollers.values) if (links.none { it.s === s }) s.clearBar()
         chain = links
         answered = true
         // The innermost zoomable scroller under the down has its own gestures; a drag of it is its pan while it is
@@ -434,7 +458,8 @@ internal class Scrolling(private val view: ExactView) {
         if (view.fieldKeeps()) return
         val across = ax > ay
         val sheetDirection = if (y < downY) 8 else 16
-        if (claims and (if (across) 1 else 2 or sheetDirection) != 0) { mode = THEIRS; return }
+        val shared = !across && sheet != null
+        if (!shared && claims and (if (across) 1 else 2 or sheetDirection) != 0) { mode = THEIRS; return }
         val takes = { side: Boolean -> chain.any { if (side) it.x else it.y } }
         val other = (if (across) ay else ax) > slop && claims and (if (across) 2 or sheetDirection else 1) == 0
         sideways = when {
@@ -453,9 +478,35 @@ internal class Scrolling(private val view: ExactView) {
         keyed = false
     }
 
+    /** Upward travel raises the sheet first. Downward travel reaches it after the list returns to its start. */
+    private fun moveSheet(delta: Float): Float {
+        val s = sheet ?: return 0f
+        val top = (s.top - delta).coerceIn(s.highest, s.lowest)
+        val consumed = s.top - top
+        if (consumed != 0f) {
+            s.top = top; s.moved = true
+            tell { Native.sheetDrag(s.id, s.generation, top, false, 0f) }
+            view.tick()
+        }
+        return consumed
+    }
+
+    private fun settleSheet(velocity: Float): Boolean {
+        val s = sheet ?: return false
+        sheet = null
+        if (!s.moved) return false
+        val listTakesRelease = s.top <= s.highest && (velocity > 0f || active.any { it.at(false) > 0f })
+        val fingerVelocity = if (listTakesRelease) 0f else -velocity
+        tell { Native.sheetDrag(s.id, s.generation, s.top, true, fingerVelocity) }
+        view.tick()
+        return s.top > s.highest && (velocity > 0f || active.all { it.at(false) <= 0f })
+    }
+
     /** The finger moved [delta] px along the drag's axis (toward the end positive), at ([x], [y]). */
     private fun drag(delta: Float, x: Float, y: Float) {
         var d = delta
+        if (!sideways && d > 0f) d -= moveSheet(d)
+        if (d == 0f) return
         // A pull to refresh, and a stretched edge, take the finger's way back before anything scrolls.
         pulling?.let { s ->
             if (d <= 0f) return@let
@@ -466,7 +517,8 @@ internal class Scrolling(private val view: ExactView) {
         val edged = edged()
         if (edged != null) d -= relax(edged, d, x, y)
         mover = null
-        val rest = if (d != 0f) move(d) else 0f
+        var rest = if (d != 0f) move(d) else 0f
+        if (!sideways && rest < 0f && active.none { it.flags and 16 != 0 }) rest -= moveSheet(rest)
         if (!keyed) {
             // What the drag does to the keyboard is the first scroller's it moves, or, while none can, the one whose
             // edge it stretches.
@@ -489,11 +541,13 @@ internal class Scrolling(private val view: ExactView) {
     private fun refresh(rest: Float): Boolean {
         if (sideways) return false
         val s = pulling ?: active.firstOrNull { it.refreshes }?.takeIf { !it.refreshing && it.pull == null } ?: return false
+        val parent = view.parent as? ViewGroup ?: return false
         pulling = s
         pulled -= rest
         val r = s.pull ?: Refresh(view.context).also { r ->
             s.pull = r
-            (view.parent as? ViewGroup)?.addView(r, FrameLayout.LayoutParams(s.port.width().roundToInt(), s.port.height().roundToInt()))
+            attach(s, parent, r)
+            size(r, s.port.width().roundToInt(), s.port.height().roundToInt())
         }
         r.translationX = view.left + s.port.left
         r.translationY = view.top + s.port.top
@@ -516,7 +570,7 @@ internal class Scrolling(private val view: ExactView) {
     /** [s]'s pull to refresh goes back up, and away. */
     private fun unpull(s: Scroller) {
         val r = s.pull ?: return
-        r.hide { (r.parent as? ViewGroup)?.removeView(r); if (s.pull === r) s.pull = null }
+        r.hide { if (s.pull === r) s.clearPull() }
     }
 
     /**
@@ -614,8 +668,7 @@ internal class Scrolling(private val view: ExactView) {
         for (s in scrollers.values.filter { s -> s.told && (0 until count).none { w[it * 9] == s.id } }) {
             scrollers.remove(s.id)
             sent.removeAll { it.s === s }
-            s.bar?.let { (it.parent as? ViewGroup)?.removeView(it) }
-            s.pull?.let { (it.parent as? ViewGroup)?.removeView(it) }; s.pull = null
+            s.clearBar(); s.clearPull()
             if (pulling === s) { pulling = null; pulled = 0f }
             if (mode == FLINGING && s in active) { halt(); mode = IDLE }
         }
@@ -642,6 +695,7 @@ internal class Scrolling(private val view: ExactView) {
             t.computeCurrentVelocity(1000, maxFling.toFloat())
             v = -(if (sideways) t.getXVelocity(pointer) else t.getYVelocity(pointer))
         }
+        if (settleSheet(v)) v = 0f
         dismissal.lifted(if (sideways) 0f else -v)
         pulling?.let { s -> lifted(v, false); mode = IDLE; pulled(s, lifted); return }
         val edged = edged()
@@ -926,14 +980,29 @@ internal class Scrolling(private val view: ExactView) {
         fun wake() { awakenScrollBars() }
     }
 
+    // A frame can retire a scroller during the root's display-list traversal. Decorations
+    // belong to its visual overlay, whose children are drawn after the root's ordinary children.
+    private fun attach(s: Scroller, parent: ViewGroup, decoration: View) {
+        val overlay = parent.overlay
+        s.overlay = overlay
+        overlay.add(decoration)
+    }
+
+    private fun size(v: View, width: Int, height: Int) {
+        if (v.width == width && v.height == height) return
+        v.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY))
+        v.layout(0, 0, width, height)
+    }
+
     /** [s] moved: its indicator shows where it is. */
     private fun indicate(s: Scroller) {
         if (s.barless) return
         val parent = view.parent as? ViewGroup ?: return
         val w = s.port.width().roundToInt(); val h = s.port.height().roundToInt()
         if (w <= 0 || h <= 0) return
-        val b = s.bar ?: Indicator(view.context).also { s.bar = it; parent.addView(it, FrameLayout.LayoutParams(w, h)) }
-        if (b.layoutParams.width != w || b.layoutParams.height != h) b.layoutParams = FrameLayout.LayoutParams(w, h)
+        val b = s.bar ?: Indicator(view.context).also { s.bar = it; attach(s, parent, it) }
+        size(b, w, h)
         place(b, s)
         b.rangeX = if (s.flags and 1 != 0) (s.maxX + w).roundToInt() else 0
         b.rangeY = if (s.flags and 2 != 0) (s.maxY + h).roundToInt() else 0

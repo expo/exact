@@ -470,7 +470,7 @@ import {mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync,
 import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {resolveApp, bakeOutput, claimBuildOutput, cargoLibraryTarget, appleCargoClaims} from './scripts/app.mjs';
+import {resolveApp, bakeOutput, claimBuildOutput, cargoLibraryTarget, cargoProductClaims} from './scripts/app.mjs';
 import {appleArtifacts, appleBuildLock, placeAppleArtifact, assertAppleIdentity, captureAppleProduct} from './host/apple/build.mjs';
 const run = mkdtempSync(resolve(tmpdir(), 'exact-apple-ownership-'));
 try {
@@ -514,9 +514,9 @@ try {
     assert.equal(metadata.status,0,metadata.stderr);
     return cargoLibraryTarget(JSON.parse(metadata.stdout).packages[0]);
   });
-  const firstClaims = appleCargoClaims(a,'host',[libraries[0]]);
-  assert.deepEqual(firstClaims,appleCargoClaims(b,'host',[libraries[1]]));
-  assert.equal(appleCargoClaims(a,'host',[...libraries,{name:'alpha-beta-apple'}]).length,1);
+  const firstClaims = cargoProductClaims(a,'host',[libraries[0]]);
+  assert.deepEqual(firstClaims,cargoProductClaims(b,'host',[libraries[1]]));
+  assert.equal(cargoProductClaims(a,'host',[...libraries,{name:'alpha-beta-apple'}]).length,1);
   const buildLibrary = app => {
     const built = spawnSync('cargo',['build','--manifest-path',resolve(app.dir,'Cargo.toml'),'--message-format=json'],{encoding:'utf8',env:{...process.env}});
     assert.equal(built.status,0,built.stderr);
@@ -525,7 +525,7 @@ try {
   const releaseLibrary = claimBuildOutput(a,firstClaims[0]);
   const library = buildLibrary(a), bytesBefore = readFileSync(library);
   const aliasContender = spawnSync(process.execPath,['--input-type=module','-e',
-    `import {claimBuildOutput,appleCargoClaims} from './scripts/app.mjs'; const app=${JSON.stringify(b)}; claimBuildOutput(app,appleCargoClaims(app,'host',${JSON.stringify([libraries[1]])})[0]);`],{encoding:'utf8',env:{...process.env}});
+    `import {claimBuildOutput,cargoProductClaims} from './scripts/app.mjs'; const app=${JSON.stringify(b)}; claimBuildOutput(app,cargoProductClaims(app,'host',${JSON.stringify([libraries[1]])})[0]);`],{encoding:'utf8',env:{...process.env}});
   assert.notEqual(aliasContender.status,0); assert.match(aliasContender.stderr,/Apple build busy/);
   assert.deepEqual(readFileSync(library),bytesBefore); releaseLibrary();
   const releaseOther = claimBuildOutput(b,firstClaims[0]);

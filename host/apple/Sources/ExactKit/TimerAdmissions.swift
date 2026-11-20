@@ -141,7 +141,7 @@ final class TimerAdmissions {
         }
         if pending != nil || observe().eligible || s.timerDue.map({ $0 <= cutoff }) == true {
             // Post native UI admission without waiting on layout; Exact's own frame work keeps its ordering barrier
-            if ExactSession.asyncFills, !frame, !idle, s.frames.link == nil {
+            if s.postsTimerAdvances, !frame, !idle, s.frames.link == nil {
                 pending = (cutoff, update)
                 s.advanceInFlight = true
                 let token = generation, lease = s.runtime.completionLease

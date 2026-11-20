@@ -195,6 +195,11 @@ function createGeometry(root) {
     // The painted caret as `caretProbe` finds it, for the tests that hold it
     // to Chrome's own carets on lines with text.
     caretAt(el, offset) { return caretProbe(el, offset); },
+    scrollMetrics(el) {
+      if (!el?.isConnected || !root.contains(el) || (el.localName !== 'textarea' && !el.exactMarkup)
+        || !el.getClientRects().length || getComputedStyle(el).visibility === 'hidden') return null;
+      return [el.scrollLeft, el.scrollTop, el.scrollWidth, el.scrollHeight, el.clientWidth, el.clientHeight];
+    },
     // `rangeFrame` (LLP 1114.007): a plain textarea's range through
     // `createValueRange` (OpaqueRange), the Markdown editor's through its own
     // source mapping; a collapsed range is the caret's rectangle. Offsets are

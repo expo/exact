@@ -61,9 +61,10 @@ fn each_instance_makes_and_refreshes_its_own_request() {
         js.contains(".r0=own(r_0,()=>res(\"works#1\",\"subjectWorks\""),
         "{js}"
     );
-    assert!(js.contains("R($r.r0)"), "{js}");
+    assert!(js.contains(r#"R($r["r0"])"#), "{js}");
     assert!(js.contains("\"/0=\"+rowPath($k)"), "{js}");
     assert!(js.contains("+\"/1:0\""), "{js}");
+    assert_eq!(js.matches("const $q").count(), 2, "{js}");
 }
 
 /// A launch instance takes the bake's answer only while the boot builds it
@@ -164,18 +165,24 @@ fn each_instance_makes_its_own_mutations() {
     assert!(js.contains("const m_0=ownedMut(\"detected#1\")"), "{js}");
     assert!(js.contains("const m_1=ownedMut(\"saved#1\")"), "{js}");
     assert!(!js.contains("m_0.then"), "{js}");
+    let (before, _) = js.split_once(".m0=ownMut(").unwrap();
+    let owner = before.rsplit_once(';').unwrap().1;
     // Its `then` takes the instance and reads the captured `id` there.
     assert!(
-        js.contains(".m0=ownMut(m_0,n=>mut(n,$a1[2],[],\"{[s}\"),()=>a_2($a1,"),
+        js.contains(&format!(
+            ".m0=ownMut(m_0,n=>mut(n,{owner}[2],[],\"{{[s}}\"),()=>a_2({owner},"
+        )),
         "{js}"
     );
     // The queue refreshes the instance's own notes.
     assert!(
-        js.contains(".m1=ownMut(m_1,n=>mut(n,$a1[3],[$a1.r0],\"{[s}\",1),0)"),
+        js.contains(&format!(
+            "{owner}.m1=ownMut(m_1,n=>mut(n,{owner}[3],[{owner}.r0],\"{{[s}}\",1),0)"
+        )),
         "{js}"
     );
-    assert!(js.contains("M($r.m0,\"detect\""), "{js}");
-    assert!(js.contains("$a1.m0.p()"), "{js}");
+    assert!(js.contains(r#"M($r["m0"],"detect""#), "{js}");
+    assert!(js.contains(&format!(r#"{owner}["m0"].p()"#)), "{js}");
 }
 
 /// A use outside every region answers into a late root slot: its mutation is

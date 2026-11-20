@@ -713,8 +713,16 @@ fn a_linked_bake_gives_the_archive_what_rust_compiles() {
 #[test]
 fn a_linked_module_leaves_its_bytecode_to_the_link() {
     let meta = serde_json::json!({"appId": "a", "grants": "", "module": {"sha256": "beef"}});
-    let linked =
-        super::module_constants(&meta, false, "ios", true, None, &serde_json::Value::Null).unwrap();
+    let linked = super::module_constants(
+        &meta,
+        false,
+        "ios",
+        true,
+        false,
+        None,
+        &serde_json::Value::Null,
+    )
+    .unwrap();
     assert!(
         !linked.contains("beef") && !linked.contains("app.hbc"),
         "{linked}"
@@ -723,12 +731,80 @@ fn a_linked_module_leaves_its_bytecode_to_the_link() {
         linked.contains("::exact_apple::baked::bytecode()"),
         "{linked}"
     );
-    let embedded =
-        super::module_constants(&meta, false, "ios", false, None, &serde_json::Value::Null)
-            .unwrap();
+    let embedded = super::module_constants(
+        &meta,
+        false,
+        "ios",
+        false,
+        false,
+        None,
+        &serde_json::Value::Null,
+    )
+    .unwrap();
     assert!(
         embedded.contains("REVISION: &str = \"beef\"") && embedded.contains("/app.hbc"),
         "{embedded}"
+    );
+}
+
+#[test]
+fn android_image_grants_do_not_change_generated_rust() {
+    let meta =
+        |grants| serde_json::json!({"appId": "a", "module": {"sha256": "beef"}, "grants": grants});
+    let generate = |grants, android_payload| {
+        super::module_constants(
+            &meta(grants),
+            false,
+            "linux",
+            false,
+            android_payload,
+            None,
+            &serde_json::Value::Null,
+        )
+        .unwrap()
+    };
+    let before = "net.fetch https://one.example";
+    let after = "net.fetch https://two.example";
+    assert_eq!(generate(before, true), generate(after, true));
+    assert_ne!(generate(before, false), generate(after, false));
+}
+
+#[test]
+fn android_image_surface_roster_does_not_change_generated_rust() {
+    let generate = |arity, android| {
+        let meta = serde_json::json!({"surfaces": {"spark": arity}});
+        super::linked::canvas_surfaces(&meta, false, android)
+    };
+    assert_eq!(generate(1, true), generate(2, true));
+    assert!(generate(2, true).contains("baked_canvas_surfaces"));
+    assert_ne!(generate(1, false), generate(2, false));
+}
+
+#[test]
+fn android_image_module_uses_symbols_accepted_by_rust_2018() {
+    let meta = serde_json::json!({
+        "appId": "a", "grants": "", "module": {"sha256": "beef"}, "surfaces": {"spark": 1},
+    });
+    let mut module = super::module_constants(
+        &meta,
+        false,
+        "android",
+        false,
+        true,
+        None,
+        &serde_json::Value::Null,
+    )
+    .unwrap();
+    module.push_str(&super::linked::canvas_surfaces(&meta, false, true));
+    assert_eq!(
+        module.matches(r#"android_baked!("exact_app_hbc")"#).count(),
+        1
+    );
+    assert_eq!(
+        module
+            .matches(r#"android_baked!("exact_app_module_json")"#)
+            .count(),
+        2
     );
 }
 
@@ -819,6 +895,7 @@ fn a_package_declaring_native_writes_the_factory_and_a_second_refuses() {
         false,
         "linux",
         false,
+        false,
         Some(&slot),
         &serde_json::Value::Null,
     )
@@ -833,6 +910,7 @@ fn a_package_declaring_native_writes_the_factory_and_a_second_refuses() {
         &meta,
         false,
         "web",
+        false,
         false,
         Some(&slot),
         &serde_json::Value::Null,

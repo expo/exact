@@ -110,6 +110,16 @@ pub trait InlineGeometry: std::fmt::Debug {
     /// The last presented run, or `UNAVAILABLE` when it is not mounted.
     fn frame(&self, view: ViewId) -> GeometryAnswer;
 
+    /// A textarea’s CSSOM offsets, scroll size and client size, in CSS pixels.
+    fn scroll_metrics(
+        &self,
+        _kernel: &Kernel,
+        _view: ViewId,
+        _offset: (f64, f64),
+    ) -> Option<[f64; 6]> {
+        None
+    }
+
     /// `rangeFrame`: a text field's UTF-16 range `start..end` as its field
     /// last drew it, in viewport coordinates (LLP 1114.007): a collapsed
     /// range is the caret's rectangle, a wider one the union of its line
@@ -422,6 +432,7 @@ impl Scrolled {
 /// geometry carries none of it (LLP 1047 D3).
 #[derive(Clone, Copy)]
 pub struct GeometryLinks {
+    scroll_metrics: fn(&Kernel, &Scrolled, ViewId) -> Option<[f64; 6]>,
     range_frame: fn(&Kernel, &Scrolled, ViewId, u32, u32) -> GeometryAnswer,
     frame: fn(&Kernel, &Scrolled, ViewId) -> GeometryAnswer,
     measure: fn(&mut Kernel, &Scrolled, ViewId) -> GeometryAnswer,
@@ -447,6 +458,14 @@ impl GeometryLinks {
         shown: fn(&Kernel, &Scrolled, ViewId, bool) -> bool,
     ) -> GeometryLinks {
         GeometryLinks {
+            scroll_metrics: |kernel, scrolled, view| {
+                let key = kernel.node(view)?.key;
+                kernel.laid_out_frame(key)?;
+                scrolled
+                    .inline
+                    .as_ref()?
+                    .scroll_metrics(kernel, view, scrolled.offset(key))
+            },
             range_frame: kernel_range_frame,
             frame,
             measure,
@@ -465,6 +484,15 @@ impl GeometryLinks {
         range_frame: fn(&Kernel, &Scrolled, ViewId, u32, u32) -> GeometryAnswer,
     ) -> Self {
         self.range_frame = range_frame;
+        self
+    }
+
+    /// A page that owns layout can read the textarea directly.
+    pub const fn with_scroll_metrics(
+        mut self,
+        read: fn(&Kernel, &Scrolled, ViewId) -> Option<[f64; 6]>,
+    ) -> Self {
+        self.scroll_metrics = read;
         self
     }
 
@@ -879,6 +907,18 @@ fn read(env: &GeometryEnv<'_>, plan: &Plan, f: Stdlib, args: &[Value]) -> Option
         ));
     }
     let id = args.first()?.as_str()?;
+    if f == Stdlib::ScrollMetrics {
+        let metrics = view_of(env.kernel, id)
+            .and_then(|view| env.kernel.node(view))
+            .filter(|node| {
+                node.node_type == exact_kernel::NodeType::TextInput
+                    && node.props.str(exact_kernel::PropId::SemanticTag) == Some("textarea")
+            })
+            .and_then(|node| (env.links.scroll_metrics)(env.kernel, env.scrolled, node.id));
+        return Some(metrics.map_or(Value::NONE, |values| {
+            Value::some(Value::record(values.map(Value::Number).into()))
+        }));
+    }
     if f == Stdlib::RangeFrame {
         let (start, end) = (args.get(1)?.as_number()?, args.get(2)?.as_number()?);
         let answer = view_of(env.kernel, id).map_or(GeometryAnswer::UNAVAILABLE, |view| {

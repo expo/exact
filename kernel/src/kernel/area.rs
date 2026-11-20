@@ -28,11 +28,22 @@ pub(super) fn depth([outer, inner]: [f32; 2], at: f32) -> f32 {
 /// depth, and a bar observes only the bars before it (D12). A box's own
 /// reservations are not among them.
 pub(super) fn area(arena: &NodeArena, slot: u32, space: &Space, band: [f32; 4]) -> [[f32; 2]; 4] {
+    area_reserving(arena, slot, space, band).0
+}
+
+/// [`area`], with whether an ancestor's reservations or bars lie in it on
+/// each edge (D14's `reserved` term).
+pub(super) fn area_reserving(
+    arena: &NodeArena,
+    slot: u32,
+    space: &Space,
+    band: [f32; 4],
+) -> ([[f32; 2]; 4], [bool; 4]) {
     let from = |open: [bool; 4]| -> [[f32; 2]; 4] {
         std::array::from_fn(|e| [0.0, if open[e] { band[e] } else { 0.0 }])
     };
     if arena.reserving.is_empty() && arena.observations.bars.styled.is_empty() {
-        return from(open_edges(arena, slot, space, band));
+        return (from(open_edges(arena, slot, space, band)), [false; 4]);
     }
     let mut reserving = Vec::new();
     let mut open = [true; 4];
@@ -58,7 +69,7 @@ pub(super) fn area(arena: &NodeArena, slot: u32, space: &Space, band: [f32; 4]) 
         }
         above = (space.root != Some(s)).then(|| arena.parent(s)).flatten();
     }
-    let mut sides = from(open);
+    let (mut sides, mut reserved) = (from(open), [false; 4]);
     for (s, r, bars, open) in reserving.into_iter().rev() {
         let edges = match space.owner == Some(s) {
             true => [0.0; 4],
@@ -97,10 +108,11 @@ pub(super) fn area(arena: &NodeArena, slot: u32, space: &Space, band: [f32; 4]) 
                     false => inside[e],
                 };
                 sides[e] = [outer, edges[e] + inner];
+                reserved[e] = true;
             }
         }
     }
-    sides
+    (sides, reserved)
 }
 
 /// The band a box observes and where it lies.
@@ -143,7 +155,7 @@ impl Space {
 }
 
 /// `slot`'s border widths as last published, top right bottom left.
-fn border(arena: &NodeArena, slot: u32) -> [f32; 4] {
+pub(super) fn border(arena: &NodeArena, slot: u32) -> [f32; 4] {
     // A published inset's sides are left, top, right, bottom
     let [left, top, right, bottom] = arena.inset(slot).unwrap_or_default().border;
     [top, right, bottom, left]
@@ -282,6 +294,15 @@ pub(crate) fn scroll_view(arena: &NodeArena, slot: u32) -> bool {
 /// Whether `slot` scrolls sideways and vertically, each axis as
 /// [`scroll_view`] reads it.
 pub(crate) fn scroll_axes(arena: &NodeArena, slot: u32) -> (bool, bool) {
+    let (x, y) = overflow(arena, slot);
+    let scrolls = |o| matches!(o, Overflow::Auto | Overflow::Scroll);
+    (scrolls(x), scrolls(y))
+}
+
+/// `slot`'s effective overflow, x then y: `auto` on the block axis of a node
+/// that scrolls by default and says no `overflow-y`, each axis computed
+/// beside the other (CSS Overflow 3 §3.1).
+pub(crate) fn overflow(arena: &NodeArena, slot: u32) -> (Overflow, Overflow) {
     let s = arena.style(slot);
     let default = !s.mask.has(StyleId::OverflowY) && arena.node_type(slot).scrolls_by_default();
     let y = if default {
@@ -289,9 +310,5 @@ pub(crate) fn scroll_axes(arena: &NodeArena, slot: u32) -> (bool, bool) {
     } else {
         s.overflow_y
     };
-    let scrolls = |o| matches!(o, Overflow::Auto | Overflow::Scroll);
-    (
-        scrolls(s.overflow_x.computed(y)),
-        scrolls(y.computed(s.overflow_x)),
-    )
+    (s.overflow_x.computed(y), y.computed(s.overflow_x))
 }

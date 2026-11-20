@@ -48,6 +48,11 @@ fn payload(event: &str, control: Option<&str>) -> Vec<(&'static str, &'static st
         ("heightrelease", _) => numbers(&["height", "velocity"]),
         ("transformgeometry", _) => numbers(&["bw", "bh", "pw", "ph"]),
         ("transformrelease", _) => numbers(&["x", "y", "scale", "vx", "vy", "vscale"]),
+        ("reordertargetchange", _) => one(
+            "targeted",
+            "bool",
+            "whether this list is the current reorder destination",
+        ),
         ("reorderdrop", _) => vec![("item", "string", ""), ("before", "option<string>", "")],
         _ => Vec::new(),
     }

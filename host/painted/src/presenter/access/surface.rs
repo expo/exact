@@ -132,7 +132,7 @@ impl<D: DataSource> Presenter<D> {
         let ancestors = previous
             .map(|p| p.content.ancestors.clone())
             .unwrap_or_else(|| self.status_menu_ancestors());
-        let has_container = select || shown.scroll.is_some();
+        let has_container = select || shown.scroll.is_some() || shown.kind == SurfaceKind::Alert;
         let metadata = previous
             .map(|p| p.content.metadata.clone())
             .unwrap_or_default();
@@ -275,11 +275,27 @@ fn build_surface(
             info(row.node),
         );
     }
+    let alert = shown.kind == SurfaceKind::Alert;
+    let mut name = if alert || scroll.is_some() {
+        scroll_label()
+    } else {
+        String::new()
+    };
+    if alert {
+        ancestor = b.bar_node(
+            shown.node,
+            ancestor,
+            role::ALERT_DIALOG,
+            flag::MODAL,
+            std::mem::take(&mut name),
+            whole,
+            info(shown.node),
+        );
+    }
     let parent = if let Some((offset, max)) = scroll {
         let id = b.unique(info(shown.node).id);
         let flags = if offset > 0. { flag::BACKWARD } else { 0 }
             | if offset < max { flag::FORWARD } else { 0 };
-        let name = scroll_label();
         b.out.push(Node {
             id,
             parent: ancestor,

@@ -128,6 +128,7 @@ fn call_value(
         // a plan that reads geometry it doesn't link (LLP 1047 D6).
         Stdlib::Frame
         | Stdlib::RangeFrame
+        | Stdlib::ScrollMetrics
         | Stdlib::Measure
         | Stdlib::ElementFromPoint
         | Stdlib::ElementsFromPoint

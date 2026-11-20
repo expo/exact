@@ -1,4 +1,4 @@
-//! What an app's Android library embeds for its home-screen widgets (LLP
+//! What an Android APK carries for its home-screen widgets (LLP
 //! 1126.003 D9): `widgets.rs`, which defines `exact_widgets!(data)`, and the
 //! entry plans it names.
 //!
@@ -60,10 +60,11 @@ pub(super) fn write(app_root: &Path, manifest: &Manifest, out_dir: &Path) -> Res
             .iter()
             .map(|k| format!("({k:?}, {:?})", format!("plans/{k}.plan")))
             .collect();
+        let separate = super::android_payload();
         format!(
-            "macro_rules! exact_widgets {{\n    ($data:expr) => {{\n        ::exact_painted::widgets_jni!(data = $data, module = {module}, entries = [{}]);\n    }};\n}}\n",
+            "macro_rules! exact_widgets {{\n    ($data:expr) => {{\n        ::exact_painted::widgets_jni!(data = $data, module = {module}, separate = {separate}, entries = [{}]);\n    }};\n}}\n",
             entries.join(", ")
         )
     };
-    std::fs::write(out_dir.join("widgets.rs"), text).map_err(|e| e.to_string())
+    super::android_source(&out_dir.join("widgets.rs"), &text)
 }

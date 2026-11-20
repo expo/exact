@@ -211,7 +211,9 @@ impl<D: DataSource> Lists<D> for LinkedLists {
         r.reorder_json_linked()
     }
     fn reconcile_reorder(&self, r: &mut Runner<D>) -> Result<Vec<Op>, RunnerError> {
-        r.reconcile_reorder_linked()
+        let ops = r.reconcile_reorder_linked()?;
+        r.sync_reorder_target();
+        Ok(ops)
     }
     fn reorder_deadline(&self, r: &Runner<D>) -> Option<f64> {
         r.reorder_deadline_linked()

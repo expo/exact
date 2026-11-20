@@ -1254,3 +1254,11 @@ reads it and gives the app the other two, so `storage.d.ts` leaves it out.
 exact2's web worker answers alike. `src/tests.rs` covers each statement
 kind, and exact2's `exact-js` `topics` test what announces. Replay on a
 refresh.
+
+## Windows recursive removal
+
+On filesystems that support POSIX disposition, a reader can keep its open
+handle while `fs.rm` removes the file's name and its parent directory.
+A recursive removal visits the other entries even when one is locked. It
+retries a sharing violation or a nonempty directory for five short intervals
+before returning the Windows error (expo/exact#1096).

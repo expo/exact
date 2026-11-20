@@ -47,6 +47,20 @@ final class FieldDecorationsTests: XCTestCase {
         return found
     }
 
+    func testScrollMetricsFollowTheTextareaBeforeItScrolls() throws {
+        let value = Array(repeating: "many lines to scroll", count: 70).joined(separator: "\n")
+        let (p, node, _) = try fixture(value, record: record(value, []))
+        let narrow = try XCTUnwrap(p.textareaScrollMetrics(2))
+        XCTAssertGreaterThan(narrow[3], narrow[5])
+        XCTAssertEqual(narrow[0], 0)
+        p.apply(wireBatch([["op": "frame", "id": 2, "x": 0, "y": 0, "w": 350, "h": 240]]))
+        let wide = try XCTUnwrap(p.textareaScrollMetrics(2))
+        XCTAssertGreaterThan(wide[4], narrow[4])
+        XCTAssertGreaterThan(wide[5], narrow[5])
+        node.isHidden = true
+        XCTAssertNil(p.textareaScrollMetrics(2))
+    }
+
     /// A range's box is its text's (the font's content area at the
     /// baseline TextKit lays the line on), not the line's, which a tall
     /// line height grows: the grammar's, as Chrome and Linux answer

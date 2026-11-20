@@ -63,6 +63,18 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.force = true;
     }
 
+    /// The hosted field scrolled on the UI thread.
+    pub fn field_scrolled(&mut self, id: u32, generation: u32, x: i32, y: i32) {
+        self.p.reader_field_scrolled(
+            id,
+            generation,
+            (
+                f64::from(x) / f64::from(self.scale),
+                f64::from(y) / f64::from(self.scale),
+            ),
+        );
+    }
+
     /// The reader's field `id` moved its selection.
     pub fn field_selected(&mut self, id: u32, generation: u32, selection: (u32, u32)) {
         let now = self.now();

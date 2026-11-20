@@ -64,6 +64,21 @@ final class ReorderGroupMacTests: XCTestCase {
             eventNumber: 1, clickCount: 1, pressure: 1)!
     }
 
+    func testThePointerChoosesTheDestinationWhenTheGhostStillCoversTheSource() throws {
+        let calls = ReorderGroupRecorder()
+        let (presenter, _) = fixture(calls)
+        let grip = try XCTUnwrap(presenter.views[3])
+        let destination = try XCTUnwrap(presenter.views[5])
+        let start = grip.convert(NSPoint(x: grip.bounds.maxX - 10, y: grip.bounds.midY), to: nil)
+        let point = destination.convert(NSPoint(x: 5, y: destination.bounds.midY), to: nil)
+        let hold = try XCTUnwrap(ReorderGroupHold(grip, point: start, ghost: true))
+        XCTAssertTrue(hold.move(point))
+        let ghost = try XCTUnwrap(hold.ghost)
+        XCTAssertLessThan(ghost.frame.midX, destination.convert(destination.bounds, to: nil).minX)
+        XCTAssertEqual(calls.log.last, "into 5")
+        hold.cancel()
+    }
+
     func testStateReadsOnlyAGroupedOp() {
         let op: [String: Any] = ["op": "reorder", "group": true, "token": "18446744073709551615", "list": 1, "wrapper": 2,
             "phase": "settling", "ending": "timeout", "target": 5, "row": 6, "dispatched": true]
@@ -88,7 +103,7 @@ final class ReorderGroupMacTests: XCTestCase {
         let hold = try XCTUnwrap(p.reorderHost!.group)
         let ghost = try XCTUnwrap(hold.ghost)
         XCTAssertTrue(ghost.view.superview != nil, "the ghost is in the window's top layer")
-        // Over the second list: its port takes the ghost's centre.
+        // The pointer crosses into the second list.
         NSApp.sendEvent(event(.leftMouseDragged, text, down: 10, right: 220))
         XCTAssertEqual(calls.log.last, "into 5")
         NSApp.sendEvent(event(.leftMouseUp, text, down: 10, right: 220))

@@ -26,6 +26,7 @@ pub(crate) mod decorations;
 mod edges_tests;
 mod fallback;
 pub(crate) mod field;
+use field::WidthUse;
 #[cfg(test)]
 pub(crate) mod fixtures;
 mod flow;
@@ -826,21 +827,6 @@ impl TextEngine {
         self.paragraph_for(spec, width, key)
     }
 
-    /// [`TextEngine::paragraph`] for a text that replaces the one `owner`
-    /// (a field's node and which of its texts) showed before: the replaced
-    /// one is not kept ([`cache::Cache::superseding`]).
-    pub(crate) fn paragraph_replacing(
-        &mut self,
-        owner: (u32, u8),
-        spec: &Spec,
-        width: Option<f32>,
-    ) -> Rc<Paragraph> {
-        let key = self.paragraphs.identity(spec);
-        let p = self.paragraph_for(spec, width, key);
-        self.paragraphs.superseding(owner, key);
-        p
-    }
-
     fn identified_spec(
         &mut self,
         stamp: &ParagraphStamp,
@@ -891,36 +877,53 @@ impl TextEngine {
         width: Option<f32>,
         key: (u64, u64),
     ) -> Rc<Paragraph> {
+        self.layout_paragraph(width, key, WidthUse::Paint)
+    }
+
+    fn layout_paragraph(
+        &mut self,
+        width: Option<f32>,
+        key: (u64, u64),
+        usage: WidthUse,
+    ) -> Rc<Paragraph> {
         if let Some(p) = self.paragraphs.get(key, width.into()) {
             return p;
         }
         self.paragraphs.before_shape(key);
-        let source = self.source(key);
-        let p = Rc::new(self.layout_source(&source, width, true));
+        let source = self.source(key, usage.previous().map(|p| p.source.as_ref()));
+        let p = Rc::new(self.layout_source(&source, width, usage));
         self.hold(&source, &p);
         self.paragraphs.insert(key, width.into(), &p);
         p
     }
 
-    fn source(&mut self, key: (u64, u64)) -> Rc<ShapedSource> {
+    fn source(&mut self, key: (u64, u64), previous: Option<&ShapedSource>) -> Rc<ShapedSource> {
         if let Some(source) = self.paragraphs.source(key) {
             exact_ink::counters::add(exact_ink::counters::Counter::ShapeHits, 1);
             return source;
         }
         let spec = self.paragraphs.spec(key).expect("current identity");
-        let source = self.build_source(spec);
+        let source = self.build_source(spec, previous);
         self.paragraphs.set_source(key, source.clone());
         source
     }
 
-    fn build_source(&mut self, spec: Arc<Spec>) -> Rc<ShapedSource> {
+    fn build_source(
+        &mut self,
+        spec: Arc<Spec>,
+        previous: Option<&ShapedSource>,
+    ) -> Rc<ShapedSource> {
         #[cfg(target_os = "macos")]
         let _trace = exact_ink::device::apple::Trace::new(c"text shape");
         exact_ink::counters::add(exact_ink::counters::Counter::ShapeMisses, 1);
         self.shape_calls += 1;
         #[cfg(test)]
         identified_tests::shaped(&spec);
-        Rc::new(ShapedSource::new(self.catalog.clone(), spec))
+        Rc::new(ShapedSource::replacing(
+            self.catalog.clone(),
+            spec,
+            previous,
+        ))
     }
 
     /// Keep `p`'s measured lines for this frame's paint; another width of
@@ -949,13 +952,12 @@ impl TextEngine {
         }
     }
 
-    /// A width of `source`; `hold` keeps the lines it broke for this
-    /// frame's paint ([`Self::hold`]).
+    /// A width of `source`. A paint keeps the measured lines for its frame.
     fn layout_source(
         &mut self,
         source: &Rc<ShapedSource>,
         width: Option<f32>,
-        hold: bool,
+        usage: WidthUse,
     ) -> Paragraph {
         #[cfg(target_os = "macos")]
         let _trace = exact_ink::device::apple::Trace::new(c"text width layout");
@@ -964,17 +966,13 @@ impl TextEngine {
             callback();
         }
         self.layout_calls += 1;
-        if hold {
-            source.layout_held(width)
-        } else {
-            source.layout(width)
-        }
+        source.layout_as(width, false, usage)
     }
 
     #[cfg(test)]
     fn layout(&mut self, spec: &Spec, width: Option<f32>) -> Paragraph {
-        let source = self.build_source(Arc::new(spec.clone()));
-        self.layout_source(&source, width, false)
+        let source = self.build_source(Arc::new(spec.clone()), None);
+        self.layout_source(&source, width, WidthUse::Measure)
     }
 
     // Intrinsic questions retain the shared source and scalar answers only.
@@ -986,9 +984,9 @@ impl TextEngine {
         }
         self.paragraphs.release_handoff(key.1);
         self.paragraphs.before_shape(key);
-        let source = self.source(key);
+        let source = self.source(key, None);
         let width = minimum.then(|| source.min_content().ceil());
-        let mut metrics = paragraph_metrics(&self.layout_source(&source, width, false));
+        let mut metrics = paragraph_metrics(&self.layout_source(&source, width, WidthUse::Measure));
         // Min-content is the widest unbreakable run, not the widest line at that
         // width: a preserved trailing space counts toward a line but not toward
         // min-content, as in Chrome.

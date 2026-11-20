@@ -196,6 +196,7 @@ impl Ty {
             "list<string>" => Ty::List(Box::new(Ty::String)),
             "list<number>" => Ty::List(Box::new(Ty::Number)),
             "option<string>" => Ty::Option(Box::new(Ty::String)),
+            "option<ScrollMetrics>" => Ty::Option(Box::new(Ty::Record("ScrollMetrics".into()))),
             "option<number>" => Ty::Option(Box::new(Ty::Number)),
             _ => Ty::Unknown,
         }

@@ -40,12 +40,11 @@ pub trait Game: 'static {
     const NAME: &'static str = "world";
     /// Stable save identity, independent of the shared surface name.
     const ID: &'static str;
-    /// Models and textures required before setup. Later mesh references load on sight.
+    /// Models, textures and sounds required before setup. Later mesh references load on sight.
     const ASSETS: &'static [&'static str] = &[];
-    /// Models and textures fetched from the start but not awaited: setup and the
-    /// first frames run without them and they draw as they land. Like any
-    /// undeclared asset, simulation cannot read them (`World::model` is None), so
-    /// load order never reaches the hash; once loaded they stay resident.
+    /// Models and textures draw as they arrive. Streamed sounds supply their
+    /// duration and format before setup and become audible as their PCM arrives.
+    /// Simulation cannot observe delivery order. Loaded payloads stay resident.
     const STREAMED: &'static [&'static str] = &[];
     /// Models the renderer prepares for after its first frame, each with how
     /// many instances of it may draw at once: the dice of a throw, an
@@ -382,21 +381,33 @@ impl<G: Game> Sim<G> {
         let mut world = World::new(G::HZ, 0);
         world.assets = assets;
         world.assets.restart_generated();
-        if !G::ASSETS.is_empty() || G::LEVEL.is_some() || !G::TABLES.is_empty() {
-            for name in crate::asset::level::names::<G>() {
-                if !world.assets.declared.contains(name) {
-                    world.assets.declared.insert(name.into());
-                }
-                if !world.assets.required.contains(name) {
-                    world.assets.required.insert(name.into());
-                }
-                if !world.assets.models.contains_key(name) {
-                    world.assets.request(name);
-                }
+        for name in G::STREAMED
+            .iter()
+            .copied()
+            .filter(|name| !name.ends_with(".sound"))
+        {
+            world.assets.request(name);
+        }
+        for name in crate::asset::level::names::<G>() {
+            if !world.assets.declared.contains(name) {
+                world.assets.declared.insert(name.into());
+            }
+            if !world.assets.required.contains(name) {
+                world.assets.required.insert(name.into());
+            }
+            if !world.assets.models.contains_key(name) {
+                world.assets.request(name);
             }
         }
         if !world.assets.ready() {
             return world;
+        }
+        for name in G::STREAMED
+            .iter()
+            .copied()
+            .filter(|name| name.ends_with(".sound"))
+        {
+            world.assets.request(name);
         }
         Self::register(&mut world, args);
         world.setup_tables();

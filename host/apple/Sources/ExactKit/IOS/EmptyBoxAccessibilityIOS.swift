@@ -21,7 +21,7 @@ extension NodeView {
     }
 
     /// `holder`'s list when it holds such a box; nil leaves it to UIKit.
-    package static func emptyBoxAccessibility(in holder: UIView) -> [Any]? {
+    static func emptyBoxAccessibility(in holder: UIView) -> [Any]? {
         guard holder.subviews.contains(where: { ($0 as? NodeView)?.passesAccessibilityThrough == true }) else { return nil }
         return ordered(holder.subviews)
     }
@@ -38,7 +38,8 @@ extension NodeView {
     }
 
     /// `views` in UIKit's reading order, as a list of accessibility children
-    /// (a navigation root's mount, with the nodes lifted over its tab container).
+    /// (a navigation root's mount, and the layer of nodes lifted over its tab
+    /// container).
     package static func accessibilityOrder(_ views: [UIView]) -> [Any] { ordered(views) }
 
     /// UIKit's order for a container's children, as XCTest's snapshot of

@@ -300,7 +300,39 @@ pub fn ahead(manifest: &contract::Manifest) -> Result<Vec<Capability>, String> {
         .collect()
 }
 
-/// Take the Rust sources of an Apple bake made before Cargo. The build
+/// The file system's time now, in milliseconds since the epoch: a stamp's,
+/// written in `dir`. File change times come from a coarser clock than the
+/// system's and can trail it by a tick, so a bake dated by the system clock
+/// could take an input it changed for one older than its read.
+fn file_clock(dir: &std::path::Path) -> Result<u128, String> {
+    let stamp = dir.join(".started");
+    std::fs::write(&stamp, b"").map_err(|e| e.to_string())?;
+    let modified = std::fs::metadata(&stamp).and_then(|info| info.modified());
+    std::fs::remove_file(&stamp).map_err(|e| e.to_string())?;
+    let since = modified
+        .map_err(|e| e.to_string())?
+        .duration_since(std::time::UNIX_EPOCH);
+    Ok(since.map_err(|e| e.to_string())?.as_millis())
+}
+
+/// Whether Cargo's bootstrap bakes again: `registration` differs from the one
+/// in `baked` apart from when that ran (`started`, `since`), or the bake it
+/// left there is incomplete.
+fn bootstraps(baked: &std::path::Path, registration: &serde_json::Value, files: &[&str]) -> bool {
+    let mut previous: serde_json::Value = std::fs::read(baked.join("rust-baker.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    if let Some(object) = previous.as_object_mut() {
+        object.remove("started");
+        object.remove("since");
+    }
+    previous != *registration
+        || !baked.join("compat.json").exists()
+        || files.iter().any(|file| !baked.join(file).exists())
+}
+
+/// Take the Rust sources of a linked Apple or Android bake. The build
 /// script calls this before baking and returns when it answers true.
 /// `files` names generated Rust inputs; a bake must preserve their times
 /// when their bytes do not change. Without EXACT_BAKED, bake normally.
@@ -312,7 +344,7 @@ pub fn take_linked(files: &[&str]) -> Result<bool, String> {
     use sha2::{Digest, Sha256};
     use std::{env, fs, path::PathBuf, process::Command};
     println!("cargo:rerun-if-env-changed=EXACT_BAKED");
-    let Some(baked) = env::var_os("EXACT_BAKED").map(PathBuf::from) else {
+    let Some(mut baked) = env::var_os("EXACT_BAKED").map(PathBuf::from) else {
         return Ok(false);
     };
     if env::var_os("EXACT_RUST_BAKE").is_some() {
@@ -320,10 +352,43 @@ pub fn take_linked(files: &[&str]) -> Result<bool, String> {
     }
     let out = PathBuf::from(env::var_os("OUT_DIR").ok_or("build requires OUT_DIR")?);
     let executable = env::current_exe().map_err(|e| e.to_string())?;
+    let android = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android");
+    if android {
+        println!(
+            "cargo:rerun-if-changed={}",
+            baked.join(".cargo-watch").display()
+        );
+        let out_path = out.to_str().ok_or("Cargo OUT_DIR is not UTF-8")?;
+        baked = baked.join(format!("{:x}", Sha256::digest(out_path.as_bytes())));
+    }
+    let loader_path = if cfg!(windows) {
+        "PATH"
+    } else if cfg!(target_os = "macos") {
+        "DYLD_FALLBACK_LIBRARY_PATH"
+    } else {
+        "LD_LIBRARY_PATH"
+    };
     let variables: std::collections::BTreeMap<_, _> = env::vars()
         .filter(|(key, _)| {
             key.starts_with("CARGO_CFG_")
                 || key.starts_with("CARGO_FEATURE_")
+                || (android
+                    && (key == loader_path
+                        || key.starts_with("CARGO_PKG_")
+                        || key.starts_with("DEP_")
+                        || matches!(
+                            key.as_str(),
+                            "CARGO"
+                                | "CARGO_MANIFEST_PATH"
+                                | "CARGO_MANIFEST_LINKS"
+                                | "CARGO_ENCODED_RUSTFLAGS"
+                                | "NUM_JOBS"
+                                | "RUSTC"
+                                | "RUSTDOC"
+                                | "RUSTC_WRAPPER"
+                                | "RUSTC_WORKSPACE_WRAPPER"
+                                | "RUSTC_LINKER"
+                        )))
                 || matches!(
                     key.as_str(),
                     "TARGET" | "HOST" | "PROFILE" | "OPT_LEVEL" | "DEBUG" | "CARGO_MANIFEST_DIR"
@@ -334,25 +399,24 @@ pub fn take_linked(files: &[&str]) -> Result<bool, String> {
         "executable": executable, "cwd": env::current_dir().map_err(|e| e.to_string())?,
         "env": variables, "sha256": format!("{:x}", Sha256::digest(fs::read(&executable).map_err(|e| e.to_string())?)),
     });
+    if android {
+        registration["out"] = serde_json::json!(out);
+        registration["files"] = serde_json::json!(files);
+    }
     fs::create_dir_all(&baked).map_err(|e| e.to_string())?;
     let registry = baked.join("rust-baker.json");
-    let mut previous: serde_json::Value = fs::read(&registry)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default();
-    if let Some(object) = previous.as_object_mut() {
-        object.remove("started");
-    }
-    if previous != registration
-        || !baked.join("compat.json").exists()
-        || files.iter().any(|file| !baked.join(file).exists())
-    {
+    if bootstraps(&baked, &registration, files) {
+        // `started` orders this bootstrap against the driver's records, whose
+        // `at` is the system clock's; `since` is the file clock's, for the
+        // change times of the inputs it read.
+        registration["since"] = serde_json::json!(file_clock(&baked)?);
         registration["started"] = serde_json::json!(std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|e| e.to_string())?
             .as_millis());
         let result = Command::new(&executable)
             .env("EXACT_RUST_BAKE", "1")
+            .env("EXACT_BAKED", &baked)
             .env("OUT_DIR", &baked)
             .output()
             .map_err(|e| e.to_string())?;
@@ -367,13 +431,26 @@ pub fn take_linked(files: &[&str]) -> Result<bool, String> {
         .map_err(|e| e.to_string())?
         .lines()
     {
-        if line.starts_with("cargo:warning=") || line.starts_with("cargo::warning=") {
+        let Some((name, _)) = line
+            .strip_prefix("cargo::")
+            .or_else(|| line.strip_prefix("cargo:"))
+            .and_then(|line| line.split_once('='))
+        else {
+            continue;
+        };
+        // The separate Android bake owns its input watches. Cargo still owns
+        // the compiler and linker directives emitted by the build script.
+        if name == "warning"
+            || (android && !matches!(name, "rerun-if-changed" | "rerun-if-env-changed"))
+        {
             println!("{line}");
         }
     }
     for file in files {
         let from = baked.join(file);
-        println!("cargo:rerun-if-changed={}", from.display());
+        if !android {
+            println!("cargo:rerun-if-changed={}", from.display());
+        }
         let bytes = fs::read(from).map_err(|e| e.to_string())?;
         let to = out.join(file);
         if fs::read(&to).ok().as_deref() != Some(&bytes) {
@@ -697,6 +774,53 @@ mod tests {
         std::fs::create_dir_all(dir.join("modules/apple")).unwrap();
         std::fs::write(dir.join("modules/apple/Hatches.swift"), "").unwrap();
         assert!(linked("assets/a.png").has(Capability::NativeViews));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A Rust bake is dated on the clock its inputs' change times read, so an
+    /// input changed after its start never reads as older than it. The
+    /// system clock does not promise that: file times can trail it by a tick.
+    #[test]
+    fn a_rust_bake_is_dated_on_the_clock_change_times_read() {
+        let dir = std::env::temp_dir().join(format!("exact-file-clock-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("input");
+        for _ in 0..50 {
+            let started = super::file_clock(&dir).unwrap();
+            std::fs::write(&input, b"edited").unwrap();
+            let changed = std::fs::metadata(&input).unwrap().modified().unwrap();
+            let changed = changed
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            assert!(
+                changed >= started,
+                "an input changed at {changed} reads as older than a bake started at {started}"
+            );
+        }
+        assert!(!dir.join(".started").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A registration that differs only in when its bootstrap ran, both its
+    /// system-clock `started` and its file-clock `since`, does not bake again.
+    #[test]
+    fn a_registration_bootstraps_again_only_when_more_than_its_times_change() {
+        let dir = std::env::temp_dir().join(format!("exact-bootstraps-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let registration =
+            serde_json::json!({ "executable": "/b", "cwd": "/a", "env": {}, "sha256": "x" });
+        let mut registered = registration.clone();
+        registered["started"] = serde_json::json!(1);
+        registered["since"] = serde_json::json!(2);
+        std::fs::write(dir.join("rust-baker.json"), registered.to_string()).unwrap();
+        std::fs::write(dir.join("compat.json"), "{}").unwrap();
+        assert!(!super::bootstraps(&dir, &registration, &[]));
+        let mut rebuilt = registration.clone();
+        rebuilt["sha256"] = serde_json::json!("y");
+        assert!(super::bootstraps(&dir, &rebuilt, &[]));
+        std::fs::remove_file(dir.join("compat.json")).unwrap();
+        assert!(super::bootstraps(&dir, &registration, &[]));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

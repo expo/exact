@@ -5,21 +5,30 @@
 use crate::{build, BakeError};
 use std::path::{Path, PathBuf};
 
+/// Hand off generated Rust from a separate Android bake. An authored build
+/// script that uses this at entry returns immediately when it answers true.
+pub fn take_android_linked() -> Result<bool, BakeError> {
+    exact_bake::host::take_android_linked(&["module.rs", "logic.rs"]).map_err(BakeError)
+}
+
 /// Bake `app` for the Canvas host into `OUT_DIR`, as `build(app, "linux")`
 /// does, then write the hatches' install and the plan's uses and permissions
 /// beside it (`contract::native::android_entry`). Off Android the crate is
 /// empty and nothing is baked.
 pub fn build_android(app: &Path) -> Result<(), BakeError> {
-    android(app, |app| build(app, "linux"))
+    build_android_with(app, |app| build(app, "linux"))
 }
 
-/// Off Android, nothing; on it, `bake` (a Linux bake of the app at the canonical path it is given), then what
-/// `build_android` writes beside the plan.
-pub(crate) fn android(
+/// Bake a TypeScript app with its own composer for the Canvas host. The
+/// callback makes the Linux bake at the supplied app path.
+pub fn build_android_with(
     app: &Path,
     bake: impl FnOnce(&Path) -> Result<(), BakeError>,
 ) -> Result<(), BakeError> {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("android") {
+        return Ok(());
+    }
+    if take_android_linked()? {
         return Ok(());
     }
     // `android_entry` writes paths that `include!` reads from OUT_DIR.

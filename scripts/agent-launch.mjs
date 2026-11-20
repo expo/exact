@@ -25,7 +25,7 @@ import { androidDevice } from './agent-android.mjs';
 import { bakeOutput, gpuModules, linuxBinary, moduleDirectory, pendingBuildInputs, readBuilds, resolveApp, windowsFile, shaderWatchRoots, webDist } from './app.mjs';
 import { directoryInputSnapshot, outputRoots, packageTests, watchedTree, watchOutput } from './cargo-dep-info.mjs';
 import { HOST_CRATES } from './cargo-check.mjs';
-import { webSourceRoots } from '../host/web/build.mjs';
+import { partitionWebRoots, webSourceRoots } from '../host/web/build.mjs';
 import { changedContractReads } from './web-build.mjs';
 import { CONFIG_JSON, DECLARATIONS, MODULE_FILE } from './module-graph.mjs';
 import { appModules, appSourceInputs } from './app-imports.mjs';
@@ -1155,9 +1155,7 @@ export function receiptChanges(receipt, app, { hashed = false, launch, retained 
 /** What a web build of `app` reads, modified after `since` (every file by default):
  * the app's own files and the build's Cargo dependency roots, as shown paths. */
 export function webInputs(app, js, since = -Infinity, roots = webSourceRoots(app, js), sourceInputs) {
-  const excluded = roots.filter(root => root?.exclude).map(root => resolve(root.exclude));
-  const skipTarget = path => excluded.some(item => within(item, path));
-  const active = roots.filter(root => !root?.exclude);
+  const { active, skipTarget } = partitionWebRoots(roots);
   // Each package is a root of its own; an enclosing package does not consume its other nested crates.
   const dependencies = () => newerThan(since, active, path => existsSync(resolve(path, 'Cargo.toml')) || skipTarget(path));
   if (app.manifest?.game) {

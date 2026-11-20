@@ -267,6 +267,24 @@ function binding(name, declaration, implementations, dom=()=>[], members={}, tar
   const shapes={...declaration.shapes};
   for (const i of implementations) Object.assign(shapes,i.shapes ?? {});
   const written=new Set(); /* a member's types: its interface's shapes, which data code writes (LLP 1133.014 D10 item 1) */ for (const m of Object.values(members).flat()) for (const [shape,fields] of Object.entries(m.shapes)) if (!shapes[shape]) { shapes[shape]=fields; written.add(shape); }
+  const pathless=(t)=>t && typeof t==='object' ? (t.type==='path' ? (t.optional ? 'option<string>' : 'string') : t.type) : t;
+  const unwrapped=(t)=>String(pathless(t) ?? '').trim().replace(/^option<(.*)>$/,'$1').replace(/\[\]$/,'').replace(/^option<(.*)>$/,'$1');
+  const shapesIn = (types) => {
+    const used = new Set();
+    function visit(type) {
+      const name = unwrapped(type);
+      if (!shapes[name] || used.has(name)) return;
+      used.add(name);
+      Object.values(shapes[name]).forEach(visit);
+    }
+    types.forEach(visit);
+    return used;
+  };
+  const entries = declaration.names ?? [];
+  const outputs = shapesIn(entries.flatMap(e => [e.answers?.else ?? e.answers, ...(e.args ?? [])]));
+  for (const shape of shapesIn(entries.flatMap(e => Object.values(e.options ?? {})))) {
+    if (!outputs.has(shape)) written.add(shape);
+  }
   // A shape keyed by string (`{"record": {key: type}}`) is a class, as the web's `ClipboardItem` is (LLP 1133.006 D8 item 1).
   const keyed=(t)=>{ const f=shapes[String(t ?? '').trim().replace(/\[\]$/,'')]; return f && Object.keys(f).length===1 && f.record && typeof f.record==='object' ? f.record : null; };
   for (const [shape,fields] of Object.entries(shapes)) {
@@ -284,11 +302,9 @@ function binding(name, declaration, implementations, dom=()=>[], members={}, tar
   const dictionaries=new Set(types.flatMap(jsonNames).filter(n=>!shapes[n]));
   if (dictionaries.size) lines.push(...dom([...dictionaries]));
   // A path option is a string; a bounded one (`{"type", "min", …}`) is its `type`.
-  const pathless=(t)=>t && typeof t==='object' ? (t.type==='path' ? (t.optional ? 'option<string>' : 'string') : t.type) : t;
   const optional=(t)=>{ t=pathless(t); const m=/^option<(.*)>$/.exec(String(t).trim()); return m ? ['?',moduleType(m[1])] : ['',moduleType(t)]; };
   // Bytes cross the seam as `{"base64": …}` (LLP 1133.035 D2): a binding whose names carry any encodes its
   // arguments' bytes, and decodes the answers of the names whose answers carry them.
-  const unwrapped=(t)=>String(pathless(t) ?? '').trim().replace(/^option<(.*)>$/,'$1').replace(/\[\]$/,'').replace(/^option<(.*)>$/,'$1');
   const carries=(t,either,seen=new Set())=>{ const n=unwrapped(t); if (n==='bytes' || (either && n==='string|bytes')) return true;
     const fields=shapes[n]; if (!fields || seen.has(n)) return false; seen.add(n); return Object.values(fields).some(f=>carries(f,either,seen)); };
   const answersOf=(e)=>e.answers && typeof e.answers==='object' ? e.answers.else : e.answers;

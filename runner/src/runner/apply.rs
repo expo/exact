@@ -12,6 +12,7 @@ impl<D: DataSource> Runner<D> {
             prefix.append(&mut ops);
             ops = prefix;
         }
+        self.admit_drag_files(&mut ops);
         let change = self.router_change()?;
         let live_undo = self.prepare_live_times(&mut ops);
         let axes = self.prepare_text_axes(&ops);

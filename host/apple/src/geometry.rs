@@ -24,14 +24,28 @@ pub type InlineFrameFn = extern "C" fn(*mut c_void, u32) -> InlineFrame;
 /// A live field's source range, in UTF-16 units and viewport coordinates.
 pub type RangeFrameFn = extern "C" fn(*mut c_void, u32, u32, u32) -> InlineFrame;
 
+/// Writes the textarea's two offsets, scroll size and client size. Returns one if available.
+pub type ScrollMetricsFn = extern "C" fn(*mut c_void, u32, *mut f64) -> u32;
+
 #[derive(Debug)]
 pub(crate) struct InlineGeometry {
     pub read: InlineFrameFn,
     pub range: Option<RangeFrameFn>,
+    pub metrics: Option<ScrollMetricsFn>,
     pub ctx: *mut c_void,
 }
 
 impl exact_runner::geometry::InlineGeometry for InlineGeometry {
+    fn scroll_metrics(
+        &self,
+        _: &exact_kernel::Kernel,
+        view: u32,
+        _: (f64, f64),
+    ) -> Option<[f64; 6]> {
+        let mut out = [0.; 6];
+        (self.metrics?(self.ctx, view, out.as_mut_ptr()) != 0).then_some(out)
+    }
+
     fn frame(&self, view: u32) -> GeometryAnswer {
         let r = (self.read)(self.ctx, view);
         GeometryAnswer {

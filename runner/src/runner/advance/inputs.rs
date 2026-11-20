@@ -18,6 +18,7 @@ pub(super) struct Held {
 enum Input {
     Event(ViewId, Event, Option<Box<dyn FnOnce(bool) + Send>>),
     Forward(ViewId),
+    ReorderTarget(exact_kernel::NodeKey, bool),
 }
 
 impl<D: DataSource> Runner<D> {
@@ -51,6 +52,26 @@ impl<D: DataSource> Runner<D> {
         let mut a = self.run_held(self.seek_cutoff(at), false, true);
         a.now_ms = self.now_ms;
         a
+    }
+
+    /// Target handlers run after the gesture operation publishes its preview.
+    pub(in crate::runner) fn queue_reorder_target(
+        &mut self,
+        list: exact_kernel::NodeKey,
+        on: bool,
+    ) {
+        let Some(node) = self.kernel.node_by_key(list) else {
+            return;
+        };
+        if self
+            .handlers_of(node.id)
+            .contains(&exact_plan::EventKind::Reordertargetchange)
+        {
+            self.clock.held.push_back(Held {
+                input: Input::ReorderTarget(list, on),
+                at: self.now_ms,
+            });
+        }
     }
 
     /// When the first held input arrived.
@@ -103,6 +124,11 @@ impl<D: DataSource> Runner<D> {
                     result.map(Some)
                 }
                 Input::Forward(root) => self.host_forward(root),
+                Input::ReorderTarget(list, on) => {
+                    let view = self.kernel.node_by_key(list).map(|n| n.id);
+                    view.map(|id| self.dispatch(id, Event::ReorderTargetChange(on)))
+                        .transpose()
+                }
             };
             match ran {
                 Ok(receipt) => a.receipts.extend(receipt.map(|receipt| Timed {

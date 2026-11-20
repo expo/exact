@@ -24,6 +24,45 @@ impl From<ExactLinkedBytecode> for ::exact_js::Bytecode {
 }
 "#;
 
+pub(crate) const ANDROID_BYTECODE: &str = r#"#[allow(dead_code)]
+pub const APP_BYTECODE: ExactLinkedBytecode = ExactLinkedBytecode;
+#[doc(hidden)]
+pub struct ExactLinkedBytecode;
+impl From<ExactLinkedBytecode> for ::exact_js::Bytecode {
+    fn from(_: ExactLinkedBytecode) -> Self {
+        ::exact_js::Bytecode::Linked(::exact_painted::android_baked!("exact_app_hbc"))
+    }
+}
+"#;
+
+pub(crate) const ANDROID_GRANTS: &str = r#"#[allow(dead_code)]
+pub const GRANTS: ExactLinkedGrants = ExactLinkedGrants;
+#[doc(hidden)]
+pub struct ExactLinkedGrants;
+impl std::ops::Deref for ExactLinkedGrants {
+    type Target = str;
+    fn deref(&self) -> &str {
+        ::exact_painted::android::baked_grants(::exact_painted::android_baked!("exact_app_module_json"))
+    }
+}
+impl From<ExactLinkedGrants> for String {
+    fn from(grants: ExactLinkedGrants) -> Self {
+        (*grants).to_owned()
+    }
+}
+"#;
+
+const ANDROID_SURFACES: &str = r#"#[allow(dead_code)]
+pub const CANVAS_SURFACES: ExactLinkedSurfaces = ExactLinkedSurfaces;
+#[doc(hidden)]
+pub struct ExactLinkedSurfaces;
+impl AsRef<[(&'static str, usize)]> for ExactLinkedSurfaces {
+    fn as_ref(&self) -> &[(&'static str, usize)] {
+        ::exact_painted::android::baked_canvas_surfaces(::exact_painted::android_baked!("exact_app_module_json"))
+    }
+}
+"#;
+
 /// The app's identity and grants from the compat.json the link added
 /// (`exact_apple::baked::identity`): `APP` and `GRANTS` read as `&str`
 /// (`Deref`, `Display`) and convert `Into<String>` as the constants did.
@@ -39,9 +78,26 @@ pub(crate) const LINKED_APP: &str = "::exact_apple::baked::identity().app";
 
 /// The module's Canvas 2D roster from the same compat.json; it is
 /// `AsRef<[(&str, usize)]>`, as `with_canvas_surfaces` takes it.
-pub(crate) const LINKED_SURFACES: &str = r#"#[allow(dead_code)]
+const LINKED_SURFACES: &str = r#"#[allow(dead_code)]
 pub const CANVAS_SURFACES: ::exact_apple::baked::LinkedSurfaces = ::exact_apple::baked::LinkedSurfaces;
 "#;
+
+/// The Canvas 2D roster (LLP 1056 D1), available before the module loads.
+pub(crate) fn canvas_surfaces(meta: &serde_json::Value, apple: bool, android: bool) -> String {
+    if android {
+        return ANDROID_SURFACES.to_owned();
+    }
+    if apple {
+        return LINKED_SURFACES.to_owned();
+    }
+    let mut source =
+        String::from("#[allow(dead_code)]\npub const CANVAS_SURFACES: &[(&str, usize)] = &[");
+    for (name, arity) in meta["surfaces"].as_object().into_iter().flatten() {
+        source.push_str(&format!("({name:?}, {}), ", arity.as_u64().unwrap_or(0)));
+    }
+    source.push_str("];\n");
+    source
+}
 
 /// The entry's plan and compatibility document, embedded from OUT_DIR.
 pub(crate) const EMBEDDED: &str = r#"#[allow(dead_code)]

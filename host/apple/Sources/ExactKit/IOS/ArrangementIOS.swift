@@ -25,7 +25,7 @@ final class ArrangementPaneController: UIViewController {
     }
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
-        changed()
+        SafeAreaSteps.react(self) { [weak self] in self?.changed() }
     }
 
     private final class PaneView: UIView {

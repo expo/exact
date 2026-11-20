@@ -1,8 +1,8 @@
 // Dropping across lists on the Apple hosts (LLP 1094 D5–D9). A grip whose
 // list shares a `reorderGroup` lifts as a ghost in the window's top layer —
 // a snapshot of its row, which the runner then hides — and the ghost follows
-// the contact by the grip's offset. The ghost's centre picks the target: the
-// grouped list whose port holds it; its content y goes to Rust
+// the contact by the grip's offset. The contact picks the grouped list.
+// The ghost's centre gives its insertion height in that list
 // (`exact_reorder_move_into`). Outside every port nothing is sent, so the last
 // certified gap stands. The lists, then their scroll ancestors, scroll when
 // the centre is near an edge. A drop may hold until its move shows; then the
@@ -175,8 +175,7 @@ package final class ReorderGroupHold {
     }
     package var active: Bool { state.phase == "active" }
 
-    /// The contact moved to `point` (window coordinates): the ghost follows
-    /// by the grip's offset, and its centre picks the target and the gap.
+    /// The contact picks the list in window coordinates. The ghost follows by the grip's offset.
     @discardableResult package func move(_ point: CGPoint) -> Bool {
         guard active, live, let presenter else { return false }
         if presenter.session?.isApplyingPresentation == true {
@@ -196,11 +195,11 @@ package final class ReorderGroupHold {
         return CGPoint(x: ghost.frame.midX, y: ghost.frame.midY)
     }
 
-    /// The grouped list whose port holds the centre (D7), with its facts.
+    /// The grouped list under the contact (D7), with its scroll geometry.
     private func target() -> (list: UInt32, port: ReorderPort)? {
         guard let presenter else { return nil }
         for (id, node) in presenter.views where node.props["reorderGroup"] == group {
-            if let port = ReorderPort(list: node, presenter: presenter), port.rect.contains(centre) { return (id, port) }
+            if let port = ReorderPort(list: node, presenter: presenter), port.rect.contains(point) { return (id, port) }
         }
         return nil
     }

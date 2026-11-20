@@ -47,7 +47,7 @@ pub(super) struct Access {
     adapter: Adapter,
     active: bool,
     nodes: BTreeMap<NodeId, Node>,
-    runs: BTreeMap<NodeId, (i32, Vec<u32>)>,
+    runs: BTreeMap<NodeId, FieldRuns>,
     focus: NodeId,
     embedded: BTreeMap<u32, (NodeId, u32)>,
 }
@@ -155,15 +155,13 @@ impl Access {
                         }
                     }
                     (Action::SetTextSelection, Some(ActionData::SetTextSelection(selection))) => {
-                        let position = |at: accesskit::TextPosition| {
-                            let (owner, offsets) = self.runs.get(&at.node)?;
-                            (*owner == id)
-                                .then(|| offsets.get(at.character_index).copied())
-                                .flatten()
+                        let Some(runs) = self.runs.get(&request.target_node) else {
+                            return;
                         };
-                        if let (Some(anchor), Some(focus)) =
-                            (position(selection.anchor), position(selection.focus))
-                        {
+                        if let (Some(anchor), Some(focus)) = (
+                            runs.offset(id, selection.anchor),
+                            runs.offset(id, selection.focus),
+                        ) {
                             p.access_select(
                                 id,
                                 FieldSelection {
@@ -215,6 +213,7 @@ impl Access {
         root.set_children(children_by_parent.remove(&0).unwrap_or_default());
         next.insert(ROOT, root);
         let mut runs = BTreeMap::new();
+        let mut changed = Vec::new();
         for source in sources {
             let mut source = source.clone();
             if let Some(value) = p.access_text(source.id) {
@@ -227,6 +226,13 @@ impl Access {
                 props.is_some_and(|props| props.str(PropId::SemanticTag) == Some("textarea"));
             let readonly = props.is_some_and(|props| props.bool(PropId::Editable) == Some(false));
             let mut node = map_node(&source, origin, password, multiline, readonly);
+            if source.role == role::SLIDER {
+                if let Some(props) = props.filter(|p| p.str(PropId::Type) == Some("range")) {
+                    let (small, large) = exact_kernel::Range::of(props).keyboard_steps();
+                    node.set_numeric_value_step(small);
+                    node.set_numeric_value_jump(large);
+                }
+            }
             if source.role == role::HEADING {
                 set_heading_level(&mut node, props.and_then(|props| props.heading()));
             }
@@ -242,57 +248,37 @@ impl Access {
             }
             node.set_children(children_by_parent.remove(&source.id).unwrap_or_default());
             if matches!(source.role, role::EDIT | role::FIELD) && !password && !native {
-                let mut offset = 0;
-                let mut lines: Vec<_> = source.value.split_inclusive('\n').collect();
-                if source.value.is_empty() || source.value.ends_with('\n') {
-                    lines.push("");
-                }
-                let mut children = Vec::new();
-                for (index, line) in lines.into_iter().enumerate() {
-                    let run_id = NodeId((id.0 << 32) | (index as u64 + 1));
-                    let mut run = Node::new(Role::TextRun);
-                    run.set_value(line);
-                    let (lengths, offsets) = text_offsets(line, offset);
-                    offset = *offsets.last().unwrap();
-                    run.set_character_lengths(lengths);
-                    runs.insert(run_id, (source.id, offsets));
-                    children.push(run_id);
-                    next.insert(run_id, run);
-                }
+                let previous = self
+                    .nodes
+                    .get(&id)
+                    .and_then(Node::value)
+                    .zip(self.runs.remove(&id));
+                let field = FieldRuns::update(id, &source.value, previous, &mut changed);
                 if let Some(selection) = p.access_selection(source.id) {
-                    let position = |offset| {
-                        let id = children
-                            .iter()
-                            .rev()
-                            .find(|id| runs[id].1[0] <= offset)
-                            .unwrap();
-                        let offsets = &runs[id].1;
-                        accesskit::TextPosition {
-                            node: *id,
-                            character_index: offsets
-                                .partition_point(|n| *n < offset)
-                                .min(offsets.len() - 1),
-                        }
-                    };
                     let (anchor, focus) = if selection.direction == SelectionDirection::Backward {
                         (selection.end, selection.start)
                     } else {
                         (selection.start, selection.end)
                     };
                     node.set_text_selection(accesskit::TextSelection {
-                        anchor: position(anchor),
-                        focus: position(focus),
+                        anchor: field.position(id, anchor),
+                        focus: field.position(id, focus),
                     });
                 }
-                node.set_children(children);
+                node.set_children(
+                    (0..field.lines.len())
+                        .map(|i| FieldRuns::id(id, i))
+                        .collect::<Vec<_>>(),
+                );
+                runs.insert(id, field);
             }
             next.insert(id, node);
         }
-        let changed = next
-            .iter()
-            .filter(|(id, node)| self.nodes.get(id) != Some(node))
-            .map(|(id, node)| (*id, node.clone()))
-            .collect::<Vec<_>>();
+        changed.extend(
+            next.iter()
+                .filter(|(id, node)| self.nodes.get(id) != Some(node))
+                .map(|(id, node)| (*id, node.clone())),
+        );
         if !changed.is_empty() || focus != self.focus {
             self.adapter.update_if_active(|| TreeUpdate {
                 nodes: changed,
@@ -360,23 +346,98 @@ impl Access {
     }
 }
 
+/// AccessKit indexes a grapheme within a hard line. The editor indexes UTF-16 units in the whole value.
+struct FieldRuns {
+    lines: Vec<FieldLine>,
+}
+
+struct FieldLine {
+    start: u32,
+    offsets: Vec<u32>,
+}
+
+impl FieldRuns {
+    fn id(field: NodeId, line: usize) -> NodeId {
+        NodeId((field.0 << 32) | (line as u64 + 1))
+    }
+
+    fn update(
+        field: NodeId,
+        text: &str,
+        previous: Option<(&str, Self)>,
+        changed: &mut Vec<(NodeId, Node)>,
+    ) -> Self {
+        fn hard_lines(text: &str) -> impl Iterator<Item = &str> {
+            text.split_inclusive('\n')
+                .chain((text.is_empty() || text.ends_with('\n')).then_some(""))
+        }
+        let mut previous = match previous {
+            Some((before, runs)) if before == text => return runs,
+            previous => previous
+                .into_iter()
+                .flat_map(|(before, runs)| hard_lines(before).zip(runs.lines)),
+        };
+        let mut lines = Vec::new();
+        let mut start = 0;
+        for line in hard_lines(text) {
+            let offsets = match previous.next() {
+                Some((old, run)) if old == line => run.offsets,
+                _ => {
+                    let (lengths, offsets) = text_offsets(line, 0);
+                    let mut run = Node::new(Role::TextRun);
+                    run.set_value(line);
+                    run.set_character_lengths(lengths);
+                    changed.push((Self::id(field, lines.len()), run));
+                    offsets
+                }
+            };
+            let end = start + offsets.last().unwrap();
+            lines.push(FieldLine { start, offsets });
+            start = end;
+        }
+        Self { lines }
+    }
+
+    fn position(&self, field: NodeId, offset: u32) -> accesskit::TextPosition {
+        let line = self
+            .lines
+            .partition_point(|line| line.start <= offset)
+            .saturating_sub(1);
+        let FieldLine { start, offsets } = &self.lines[line];
+        accesskit::TextPosition {
+            node: Self::id(field, line),
+            character_index: offsets
+                .partition_point(|n| *n < offset - start)
+                .min(offsets.len() - 1),
+        }
+    }
+
+    fn offset(&self, field: i32, at: accesskit::TextPosition) -> Option<u32> {
+        if at.node.0 >> 32 != field as u64 {
+            return None;
+        }
+        let line = (at.node.0 as u32).checked_sub(1)?;
+        let line = self.lines.get(line as usize)?;
+        Some(line.start + line.offsets.get(at.character_index)?)
+    }
+}
+
 fn text_offsets(text: &str, mut offset: u32) -> (Vec<u8>, Vec<u32>) {
     let mut lengths = Vec::new();
     let mut offsets = vec![offset];
     for grapheme in text.graphemes(true) {
         // AccessKit's byte count is u8; an unbounded combining sequence must be split.
-        let pieces: Vec<&str> = if grapheme.len() <= u8::MAX as usize {
-            vec![grapheme]
-        } else {
-            grapheme
-                .char_indices()
-                .map(|(at, ch)| &grapheme[at..at + ch.len_utf8()])
-                .collect()
-        };
-        for piece in pieces {
+        let mut push = |piece: &str| {
             lengths.push(piece.len() as u8);
             offset += piece.encode_utf16().count() as u32;
             offsets.push(offset);
+        };
+        if grapheme.len() <= u8::MAX as usize {
+            push(grapheme);
+        } else {
+            for (at, ch) in grapheme.char_indices() {
+                push(&grapheme[at..at + ch.len_utf8()]);
+            }
         }
     }
     (lengths, offsets)
@@ -450,6 +511,30 @@ impl MenuAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_field_reuses_unchanged_text_runs_as_utf16_positions_move() {
+        let id = NodeId(42);
+        let old = "a\r\n🦀e\u{301}\n";
+        let new = "start\r\n🦀e\u{301}\n";
+        let mut changed = Vec::new();
+        let runs = FieldRuns::update(id, old, None, &mut changed);
+        assert_eq!(changed.len(), 3);
+        let kept = runs.lines[1].offsets.as_ptr();
+        changed.clear();
+        let runs = FieldRuns::update(id, old, Some((old, runs)), &mut changed);
+        assert!(changed.is_empty());
+        let runs = FieldRuns::update(id, new, Some((old, runs)), &mut changed);
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].0, FieldRuns::id(id, 0));
+        assert_eq!(runs.lines[1].offsets.as_ptr(), kept);
+        for offset in [0, 7, 9, 11, 12] {
+            let position = runs.position(id, offset);
+            assert_eq!(runs.offset(42, position), Some(offset));
+            assert_eq!(runs.offset(43, position), None);
+        }
+        assert_eq!(runs.position(id, 12).node, FieldRuns::id(id, 2));
+    }
+
     #[test]
     fn accessibility_text_offsets_preserve_graphemes_utf16_and_crlf() {
         let (lengths, offsets) = text_offsets("a🦀e\u{301}\r\n", 5);

@@ -54,7 +54,20 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
                         }
                     }
                 }
-            } else view.forward(4, downX, downY, tool, -1L)
+            } else if (contextPending) {
+                view.forward(4, downX, downY, tool, -1L)
+            } else {
+                val token = serial
+                waiting = true
+                view.textSelection.begin(downX, downY) { took ->
+                    if (token == serial && !stopped) {
+                        if (took) { endEngine(); scrolling.yieldToHosted() }
+                        else view.forward(4, downX, downY, tool, -1L)
+                        waiting = false
+                        drain()
+                    }
+                }
+            }
         }
     }
 
@@ -85,6 +98,7 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
 
     fun stop() {
         stopped = true; serial++; waiting = false
+        view.textSelection.stop()
         hold(null)
         for (e in pending) e.recycle()
         pending.clear(); dropCandidate(); module.clear(); releaseInterception()
@@ -151,8 +165,9 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
                     }
                     if (engine) hold(first)
                     scrolling.under(scrollToken, words)
-                    claims = words.getOrElse(0) { 0 }
-                    val at = 3 + 11 * words.getOrElse(1) { 0 }
+                    val flags = words.getOrElse(0) { 0 }
+                    claims = flags and 31
+                    val at = 3 + 11 * words.getOrElse(1) { 0 } + (if (flags and 32 != 0) 5 else 0)
                     longPresses = words.getOrElse(at + 7) { 0 }
                     contextPending = words.getOrElse(at + 12) { 0 } != 0
                     if (!field && words.size >= at + 13) {

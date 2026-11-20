@@ -16,6 +16,7 @@ use crate::WindowsOutput as Device;
     target_os = "tvos"
 ))]
 use crate::{Listener, Output, Player, Transport};
+#[cfg(test)]
 use exact_game::World;
 
 /// Lazy audio owner for the renderer's dependency-free presentation hook.
@@ -169,7 +170,13 @@ impl SurfacePlayer {
         }
     }
 
-    pub fn sync(&mut self, world: &World, generation: u64, playing: bool, seekable: bool) {
+    pub fn sync(
+        &mut self,
+        scene: &impl crate::AudioScene,
+        generation: u64,
+        playing: bool,
+        seekable: bool,
+    ) {
         self.clock(seekable);
         #[cfg(any(
             windows,
@@ -196,8 +203,8 @@ impl SurfacePlayer {
                     }
                     self.unlocked = ready;
                     player.sync(
-                        world,
-                        Listener::from_world(world),
+                        scene,
+                        Listener::from_world(scene.world()),
                         Transport {
                             generation: generation.wrapping_add(self.epoch),
                             playing,
@@ -206,7 +213,7 @@ impl SurfacePlayer {
                 }
             }
         }
-        let _ = (world, generation, playing, self.unlocked, self.epoch);
+        let _ = (scene, generation, playing, self.unlocked, self.epoch);
     }
     /// The output's state, for a HUD: `running` while it plays, `suspended`
     /// while the canvas is hidden or the output waits for a gesture, and

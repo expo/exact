@@ -107,7 +107,7 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
             if (!context.agent && type != "video/mp4") return error("NotSupportedError")
             val path = pathFor(args.optString("path"), "video/mp4") ?: return error("NotSupportedError")
             val file = context.file(path) ?: return error("NotSupportedError")
-            val r = VideoTake("recorder-${context.session}-${++next}", path, file, context, args.optDouble("maxDuration", 0.0), ::announce)
+            val r = VideoTake("recorder-${context.session}-${++next}", path, file, context, args.optDouble("maxDuration", 0.0), ::announce, context.tracks.lookup(videos.single()))
             try {
                 r.leave = context.tracks.subscribe(videos.single(), r, true, context.origin)
                 r.arm()

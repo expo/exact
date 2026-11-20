@@ -1922,7 +1922,20 @@ browser as the oracle, the same shape layout already has. In exchange, not in v1
   `PointerEvent`'s `clientX`/`clientY`. Consumers: the two kanban builds
   (F4). Unblocks moving cards on a board without a hand-built drag. Take:
   none offered. Still out: reorder on row and nested lists (LLP 1094 §7),
-  drags into or out of the app, multi-item drags, grids, a gesture arena.
+  drags into the app, multi-item drags, grids, a gesture arena; drags out
+  of the app are LLP 1094.000's, below.
+  **Expanded (LLP 1094.000; Charlie's waiver, no take; James Ide,
+  2026-11-20: "Drags across apps are needed" and "We have a waiver"):** a
+  node as a drag source to the system, `draggable` with
+  `dataTransfer=DataTransfer(text=, url=, files=)`, a shipped or `app:/`
+  file carried as it is, on iOS and iPadOS, then macOS, the web and
+  Android. Consumer: the Landscapes template, whose cards
+  Apple's Landmarks sample marks `.draggable`. Unblocks dropping a
+  landmark's picture into another app or the other pane of a split screen.
+  Take: none offered. Still out: drags into the app beyond the file `drop`,
+  the `dragstart` and `dragend` events, an element's picture in a drag, a
+  drag that gathers several nodes, drags from a grouped list's rows, and a
+  gesture arena.
   **Expanded (Charlie's panel on expo/exact#666, unanimous, 2026-11-15; LLP
   1057.001.000):** a zoomable scroll container, `-exact-min-zoom` and
   `-exact-max-zoom` on a scroller with one child and its `scrollZoom`, zoomed

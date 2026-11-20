@@ -80,6 +80,8 @@ internal class Player(private val fonts: Map<Int, Font>) {
     var holder: ((Int) -> android.graphics.RenderNode?)? = null
     var width = 0
     var height = 0
+    /** The window in the stream's pixels: an edge box's background reaches past the view into its bars' bands. */
+    val window = RectF()
     /** The scale an animated layer's node is drawn at beyond the stream's matrices ([Layers]): part of a pixelated
      * image's enlargement. */
     var layerScale = 1f
@@ -397,12 +399,13 @@ internal class Player(private val fonts: Map<Int, Font>) {
         return fills == 1
     }
 
-    /** What [from, to) draws, in the canvas's coordinates now (for saveLayer), or null when unknown. */
+    /** What [from, to) draws, in the canvas's coordinates now (for saveLayer): the [window] when unknown, since a
+     * null bound is the view's clip, which cuts off the bands. */
     private fun layerBounds(b: IntBuffer, from: Int, to: Int): RectF? {
-        if (to < 0) return null
         // The stream's matrices are absolute device pixels, moved by the shift: measured there, mapped back.
         layerMatrix.set(current); layerMatrix.postTranslate(shiftX, shiftY)
-        if (!measurer.measure(b, from, to, layerRect, layerMatrix) || layerRect.isEmpty) return null
+        if (to < 0 || !measurer.measure(b, from, to, layerRect, layerMatrix)) layerRect.set(window)
+        if (layerRect.isEmpty) return null
         layerRect.offset(-shiftX, -shiftY)
         if (!current.invert(layerMatrix)) return null
         layerMatrix.mapRect(layerRect)

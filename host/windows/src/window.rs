@@ -94,6 +94,7 @@ struct App<D: DataSource> {
     hidden: bool,
     /// The app's one instance, which later launches reach.
     instance: Option<crate::instance::Instance>,
+    cold_documents: Vec<String>,
     tray: Option<tray::Tray>,
     presents: presents::Presents,
 }
@@ -270,10 +271,12 @@ pub(super) fn run<D: DataSource + Default + 'static>(
         crate::displays::install_headless();
         return crate::clipboard::run_headless::<D>(&mut config, started);
     }
-    let instance = match lifecycle::claim(frame_limit.is_some(), compat, name) {
+    let args = crate::instance::arguments();
+    let instance = match lifecycle::claim(frame_limit.is_some(), compat, name, &args) {
         Ok(instance) => instance,
         Err(code) => return code,
     };
+    let cold_documents = lifecycle::cold_documents(&mut config, compat, &args);
     boot_phase("config-ready");
     if std::env::var_os("EXACT_SIZE").is_none() {
         config.size = (opening.width, opening.height);
@@ -375,6 +378,7 @@ pub(super) fn run<D: DataSource + Default + 'static>(
         keep_running: opening.keep_running,
         hidden,
         instance,
+        cold_documents,
         tray: None,
         presents: Default::default(),
     };
@@ -638,9 +642,20 @@ impl<D: DataSource + Default + 'static> App<D> {
         let (handed, direct) = (frame.is_some() || direct_present_ms > 0., frame.is_none());
         let present = Instant::now();
         if let Some(frame) = frame {
-            let surface = surface
-                .as_mut()
-                .ok_or("direct painter returned an unpresented frame")?;
+            let surface = match &mut *surface {
+                Some(existing) => existing,
+                None if self.direct => {
+                    return Err("direct painter returned an unpresented frame".into())
+                }
+                slot => {
+                    let context =
+                        softbuffer::Context::new(window.clone()).map_err(|e| e.to_string())?;
+                    slot.insert(
+                        softbuffer::Surface::new(&context, window.clone())
+                            .map_err(|e| e.to_string())?,
+                    )
+                }
+            };
             surface.resize(width, height).map_err(|e| e.to_string())?;
             let mut buffer = surface.buffer_mut().map_err(|e| e.to_string())?;
             if buffer.len() != frame.data().len() / 4 {
@@ -664,6 +679,13 @@ impl<D: DataSource + Default + 'static> App<D> {
         }
         if painting && handed {
             self.presents.drew(p, direct, self.started);
+            // Service work can make the next picture dirty before the idle lookup.
+            self.tooltip.update(
+                p,
+                window,
+                (self.pointer_inside && self.focused && self.buttons == 0).then_some(self.pointer),
+                false,
+            );
         }
         // A keyboard command can change the cursor while the mouse is still.
         // Re-resolve the painted hit after the frame, including unmounts and HUDs.
@@ -952,7 +974,6 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
             }
         }
         boot_phase("native-hooks-ready");
-        let mut direct = self.direct;
         exact_runner::page::set_awaits_present(true);
         let booted = app::boot_window_presenter::<D>(
             &mut self.config,
@@ -971,7 +992,7 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
                             p.attach_painter_window(owned, [size.width, size.height])
                         });
                     match attached {
-                        Ok(attached) => direct = attached,
+                        Ok(attached) => self.direct = attached,
                         Err(e) => {
                             self.fail(events, e);
                             return;
@@ -1026,22 +1047,6 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
             Err(e) => {
                 self.fail(events, e);
                 return;
-            }
-        }
-        if !direct {
-            let context = match softbuffer::Context::new(window.clone()) {
-                Ok(c) => c,
-                Err(e) => {
-                    self.fail(events, e);
-                    return;
-                }
-            };
-            match softbuffer::Surface::new(&context, window.clone()) {
-                Ok(surface) => self.surface = Some(surface),
-                Err(e) => {
-                    self.fail(events, e);
-                    return;
-                }
             }
         }
         boot_phase("before-show");

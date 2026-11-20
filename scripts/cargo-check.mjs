@@ -2,7 +2,8 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameS
 import { spawn, spawnSync } from '../host/apple/toolchain.mjs';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { withHostDeployment } from './filesystem.mjs';
+import { OFFLINE_MISSING, withHostDeployment } from './filesystem.mjs';
+import { throwContractErrors } from './contract-diagnosis.mjs';
 import { delimiter, dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
@@ -127,6 +128,27 @@ export function cargoDiagnosticFilter(write) {
 export function cargoDiagnosticsCommand(command, args, options) {
   return command === 'cargo' && options.stdio?.[2] === 'inherit'
     ? [process.execPath, ['--no-env-file', fileURLToPath(import.meta.url), ...args], options] : [command, args, options];
+}
+
+/** Run a build in the app's workspace. A recovery gets the failed Cargo output before diagnostics are reported. */
+export function buildCommand(command, args, app, env, stderr = 'pipe', recover) {
+  if (command === 'cargo') env = cargoEnvironment(env);
+  const options = { cwd: app.workspace, env, stdio: ['ignore', 'pipe', stderr], encoding: 'utf8', maxBuffer: 128 * 1024 * 1024 };
+  const run = () => spawnSync(...cargoDiagnosticsCommand(...androidCargo(...appleCargo(command, args, options))));
+  let result = run();
+  // Cargo fetches locked sources once when an offline build needs them (LLP 1054 O2).
+  if (command === 'cargo' && result.status !== 0 && OFFLINE_MISSING.test(result.stderr ?? '')) {
+    console.error(`${app.name}: Cargo's sources are not all fetched; fetching the locked ones (cargo fetch --locked) and trying again`);
+    const fetched = spawnSync('cargo', ['fetch', '--locked'], { cwd: app.workspace, env, stdio: ['ignore', 'inherit', 'inherit'] });
+    if (fetched.status === 0) result = run();
+  }
+  if (result.error || (result.status !== 0 && !recover?.(result))) {
+    if (command === 'cargo') throwContractErrors(app, args, result, ROOT);
+    const said = args.filter((arg, i) => arg !== '--config' && args[i - 1] !== '--config').join(' ');
+    const out = (result.stdout ?? '').split('\n').filter(line => !line.includes('"reason":')).join('\n').slice(-4000);
+    throw new Error(`${command} ${said} failed: ${result.error?.message ?? result.stderr ?? `exit ${result.signal ?? result.status} (see diagnostics above)`}${out.trim() ? `\n${out}` : ''}`);
+  }
+  return result;
 }
 
 async function streamCargo(args) {
@@ -331,19 +353,48 @@ export function authoredWorkspace(dir) {
  * from the root down to `cwd`, `config` before `config.toml` in each
  * (https://doc.rust-lang.org/cargo/reference/config.html#hierarchical-structure). Each `{ path, configuration }`;
  * an invalid one is refused, saying it could not `purpose`. */
-function cargoConfigurations(cwd, env, purpose) {
+function cargoConfigurations(cwd, env, purpose, includes = false) {
   const directories = [];
   for (let at = resolve(cwd); ; at = dirname(at)) {
     directories.push(at);
     if (at === dirname(at)) break;
   }
   const home = env.CARGO_HOME ?? resolve(homedir(), '.cargo');
+  function read(path, stack) {
+    const real = realpathSync(path);
+    if (stack.includes(real)) throw new Error(`Cargo configuration includes itself: ${path}`);
+    let configuration;
+    try { configuration = Bun.TOML.parse(readFileSync(path, 'utf8')); }
+    catch { throw new Error(`Cannot ${purpose} because Cargo configuration ${path} is unreadable or invalid. Fix its TOML before building.`); }
+    const included = includes ? (configuration.include ?? []).flatMap(item => {
+      const file = resolve(dirname(path), typeof item === 'string' ? item : item.path);
+      return item.optional && !existsSync(file) ? [] : read(file, [...stack, real]);
+    }) : [];
+    return [...included, { path, configuration }];
+  }
   return [...new Set([home, ...directories.reverse().map(at => resolve(at, '.cargo'))])].flatMap(directory => {
     const path = ['config', 'config.toml'].map(name => resolve(directory, name)).find(existsSync);
-    if (!path) return [];
-    try { return [{ path, configuration: Bun.TOML.parse(readFileSync(path, 'utf8')) }]; }
-    catch { throw new Error(`Cannot ${purpose} because Cargo configuration ${path} is unreadable or invalid. Fix its TOML before building.`); }
+    return path ? read(path, []) : [];
   });
+}
+
+/** The environment Cargo gives build scripts, including its config's [env] table. */
+export function cargoBuildEnv(cwd, env) {
+  const entries = new Map();
+  for (const {path, configuration} of cargoConfigurations(cwd, env, 'read the build environment', true)) {
+    for (const [name, entry] of Object.entries(configuration.env ?? {})) {
+      const previous = entries.get(name);
+      entries.set(name, typeof entry === 'string' ? {value:entry, path}
+        : {...previous, ...entry, path:entry.value === undefined ? previous?.path : path});
+    }
+  }
+  const result = {...env};
+  for (const [name, {value, force, relative, path}] of entries) {
+    if (force || result[name] === undefined) {
+      result[name] = relative ? resolve(dirname(path), '..', value) : value;
+    }
+  }
+  return result;
 }
 
 /** The `--config` that gives `target` the rustflags `flags` beside those its Cargo configuration gives it. A TOML array

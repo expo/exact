@@ -146,8 +146,12 @@ fn boot(mode: Mode) -> Runner<Board> {
 }
 
 fn boot_with(board: Board) -> Runner<Board> {
+    boot_source(board, BOARD)
+}
+
+fn boot_source(board: Board, source: &str) -> Runner<Board> {
     let mut r = Runner::boot(
-        contract::compile(BOARD).unwrap_or_else(|e| panic!("{e}")),
+        contract::compile(source).unwrap_or_else(|e| panic!("{e}")),
         board,
         Kernel::with_monospace(),
         Default::default(),
@@ -798,4 +802,30 @@ fn a_hold_on_a_live_clock_starts_when_the_drop_arrives() {
     r.set_live_clock(Some(Box::new(|| 5000.)));
     assert!(drop_on(&mut r, token, "list-c"));
     assert_eq!(r.timer_due_ms(), Some(6000.));
+}
+
+#[test]
+fn the_target_changes_once_per_crossing_and_clears_on_drop_or_cancel() {
+    let source = BOARD
+        .replace("  state log", "  state targets = \"\"\n  state log")
+        .replace("  action dropCard", "  action highlight(col: string, targeted: bool)\n    targets = `${targets}${col}${targeted ? \"+\" : \"-\"} `\n  action dropCard")
+        .replace("reorderdrop=dropCard(col)", "reorderdrop=dropCard(col) reordertargetchange=highlight(col)");
+    for drop in [true, false] {
+        let mut r = boot_source(Board::new(Mode::Later), &source);
+        let token = lift(&mut r, "a1", false);
+        r.advance(0.).unwrap();
+        assert_eq!(text(&r, "targets"), "a+ ");
+        into(&mut r, token, "list-b", 0.);
+        into(&mut r, token, "list-b", 5.);
+        r.reorder_step(token, ReorderStep::NextList).unwrap();
+        r.advance(0.).unwrap();
+        assert_eq!(text(&r, "targets"), "a+ a- b+ b- c+ ");
+        if drop {
+            assert!(drop_on(&mut r, token, "list-c"));
+        } else {
+            r.cancel_reorder(token).unwrap();
+        }
+        r.advance(0.).unwrap();
+        assert_eq!(text(&r, "targets"), "a+ a- b+ b- c+ c- ");
+    }
 }

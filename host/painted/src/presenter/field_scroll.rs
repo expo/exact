@@ -120,6 +120,28 @@ mod tests {
     }
 
     #[test]
+    fn scrolled_selection_keeps_the_visible_parts_of_the_full_range() {
+        let value = "אב 😀 a line long enough to wrap in the field\n\n".repeat(16);
+        let (mut p, id) = fixture("textarea", &value);
+        p.frame();
+        let geometry = &p.brush.field_text[&id].geometry;
+        let len = value.encode_utf16().count() as u32;
+        for (start, end) in [(0, len), (3, len - 5)] {
+            let all = geometry.highlight(start, end, None);
+            let bottom = all.last().unwrap().1;
+            for top in [-100., 0., 57.5, bottom - 24., bottom + 200.] {
+                let clip = top..top + 48.;
+                let expected: Vec<_> = all
+                    .iter()
+                    .copied()
+                    .filter(|r| r.1 + r.3 >= clip.start && r.1 <= clip.end)
+                    .collect();
+                assert_eq!(geometry.highlight(start, end, Some(clip)), expected);
+            }
+        }
+    }
+
+    #[test]
     fn multiline_caret_reveals_scrolls_and_hits_the_visible_text() {
         let value = (1..=12)
             .map(|n| format!("line {n}"))
@@ -390,6 +412,45 @@ mod tests {
     }
 
     #[test]
+    fn a_scrolled_textarea_paints_the_first_glyph_inside_its_horizontal_padding() {
+        let source = r##"component App
+  view
+    textarea id="editor" value="M\n0123456789012345678901234567890123456789" width=200 height=90 box-sizing="border-box" appearance="none" border="none" padding="16px 28px" color="#000000" background-color="#ffffff" font-size=16 line-height=1.6 white-space="pre"
+"##;
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
+            &crate::test_plan(source),
+            (),
+            (240., 120.),
+            1.,
+            PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        let first_line = |p: &mut Presenter<()>| {
+            let frame = p.frame();
+            (0..180)
+                .filter(|&x| (16..42).any(|y| frame.pixel(x, y).unwrap().red() < 128))
+                .collect::<Vec<_>>()
+        };
+        let at_start = first_line(&mut p);
+        assert!(at_start.first().is_some_and(|&x| x >= 28));
+        for dx in [23., -23.] {
+            p.scroll_element_by(&[
+                exact_plan::Value::str("editor"),
+                exact_plan::Value::Number(dx),
+                exact_plan::Value::Number(0.),
+            ]);
+            let expected = if dx > 0. {
+                at_start.iter().map(|x| x - 23).collect()
+            } else {
+                at_start.clone()
+            };
+            assert_eq!(first_line(&mut p), expected, "scroll by {dx}");
+        }
+    }
+
+    #[test]
     fn first_click_on_horizontally_scrolled_textarea_hits_visible_text_not_old_caret() {
         let source = r##"component App
   state body = "LEFT EDGE | abcdefghijklmnopqrstuvwxyz | ABCDEFGHIJKLMNOPQRSTUVWXYZ | RIGHT EDGE"
@@ -493,12 +554,23 @@ mod tests {
             "unchanged textarea must reuse its cached Geometry across unrelated redraws"
         );
         p.set_focus(Some(editor), 10.);
-        p.type_text(editor, "x").unwrap();
+        p.mark_field(
+            editor,
+            &p.field_text(editor),
+            FieldSelection::caret(0),
+            false,
+        );
+        p.key(Some('x'), false, 11.);
+        assert!(p.field_text(editor).starts_with("xline one"));
         p.frame();
         let third = p.brush.field_text[&editor].geometry.clone();
         assert!(
             !std::rc::Rc::ptr_eq(&first, &third),
-            "editing the textarea must rebuild Geometry"
+            "the edited row changes the field geometry"
         );
+        assert!(!third.shares_spans(0, &first, 0));
+        for row in 1..4 {
+            assert!(third.shares_spans(row, &first, row), "unchanged row {row}");
+        }
     }
 }

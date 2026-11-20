@@ -11,9 +11,6 @@ impl<G: Game> Sim<G> {
         if self.setup_pending && !self.assets_pending() {
             return Vec::new();
         }
-        for name in G::STREAMED {
-            self.world.assets.request(name);
-        }
         let revision = self.world.revision::<crate::Mesh>();
         let sprites_changed =
             crate::sprite::texture_names_changed(&self.world, &mut self.asset_sprite_names);
@@ -86,12 +83,12 @@ impl<G: Game> Sim<G> {
             .map(|(n, _)| n.clone())
             .collect();
         // What setup and the first frame wait for goes first; streamed names last.
-        names.sort_by_key(|n| {
-            (
-                G::STREAMED.contains(&n.as_str()),
-                !assets.required.contains(n),
-            )
-        });
+        if names.len() > 1 {
+            let streamed: std::collections::BTreeSet<_> = G::STREAMED.iter().copied().collect();
+            names.sort_by_cached_key(|n| {
+                (streamed.contains(n.as_str()), !assets.required.contains(n))
+            });
+        }
         assets.requested.extend(names.iter().cloned());
         names
     }
@@ -171,6 +168,7 @@ impl<G: Game> Sim<G> {
         let assets = &self.world.assets;
         assets.states.get(name) != Some(&crate::asset::AssetState::Loaded)
             || name == crate::asset::TABLE_ASSET
+            || name == crate::asset::SOUND_CATALOG
             || name.ends_with(".level.json")
             || name.ends_with(".sound")
             || assets.prepared.contains(name)
@@ -399,12 +397,20 @@ impl<G: Game> Sim<G> {
         self.world.assets.redelivery.remove(name);
         let result = result.and_then(|content| match content {
             Content::Level(text) => self.deliver_level(name, text).map(|()| None),
+            Content::SoundCatalog(catalog) => {
+                self.deliver_sound_catalog(name, catalog).map(|()| None)
+            }
             Content::Sound(sound) => self.deliver_sound(name, sound).map(|()| None),
             other => Ok(Some(other)),
         });
         match result {
             Ok(None) => {}
-            Ok(Some(Content::Level(_) | Content::Sound(_) | Content::Tables(_))) => unreachable!(),
+            Ok(Some(
+                Content::Level(_)
+                | Content::Sound(_)
+                | Content::SoundCatalog(_)
+                | Content::Tables(_),
+            )) => unreachable!(),
             Ok(Some(Content::Texture(texture))) => {
                 self.world
                     .assets

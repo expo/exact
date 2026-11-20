@@ -1,6 +1,7 @@
 package exact.backgroundtransfer
 
 import android.app.ActivityManager
+import android.app.AlarmManager
 import android.app.ApplicationStartInfo
 import android.app.Notification
 import android.app.NotificationManager
@@ -98,8 +99,8 @@ class JobsTest {
      * by default, unless [threaded]: then as in the app.
      */
     private fun process(namespace: Namespace? = Fixture.app, threaded: Boolean = false, control: Executor = Fixture.inline,
-                        store: Registrations = Registrations(File(root, "private"))): Transfers {
-        jobs = Jobs(app)
+                        store: Registrations = Registrations(File(root, "private")), platform: Jobs = Jobs(app)): Transfers {
+        jobs = platform
         transfers = if (threaded) Transfers(store, transport::exchange, jobs, host, Executors.newSingleThreadExecutor().also { threads += it })
             else Transfers(store, transport::exchange, jobs, host, control, Fixture.inline { transfers })
         Jobs.installed = transfers
@@ -124,7 +125,7 @@ class JobsTest {
     private fun worker(key: Key) = TestWorkerBuilder<TransferWorker>(app, Executor { it.run() }, Data.Builder()
         .putString("namespace", key.namespace.name).putBoolean("agent", key.namespace.agent).putString("id", key.id)
         .putString("generation", key.generation).build()).build()
-    private fun custody() = PendingIntent.getService(app, 0, Intent(app, TransferJob::class.java).setAction("exact.transfer.custody"),
+    private fun custody() = PendingIntent.getBroadcast(app, 0, Intent(app, TransferBoot::class.java).setAction("exact.transfer.custody"),
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_NO_CREATE)
     private fun params(job: JobInfo, userInitiated: Boolean = true, stop: Int = JobParameters.STOP_REASON_UNDEFINED): JobParameters =
         Shadow.newInstanceOf(JobParameters::class.java).also {
@@ -300,6 +301,8 @@ class JobsTest {
         assertFalse("nothing was kept", jobs.stopped())
         assertNull("reading keeps nothing", custody())
         jobs.acknowledge(Fixture.app)
+        val alarm = shadowOf(app.getSystemService(AlarmManager::class.java)).scheduledAlarms.single { it.operation == custody() }
+        assertEquals(AlarmManager.ELAPSED_REALTIME, alarm.type)
         assertFalse(jobs.stopped())
         custody()!!.cancel()
         assertTrue(jobs.stopped())
@@ -310,6 +313,21 @@ class JobsTest {
         custody()!!.cancel()
         Settings.Global.putInt(app.contentResolver, "boot_count", 11)
         assertFalse(jobs.stopped())
+    }
+
+    @Test fun aLostTokenWithASurvivingUserJobRecoversTheTransfer() {
+        process(drive)
+        val key = start(person = true, namespace = drive)
+        assertEquals(setOf(key), jobs.held(drive))
+        custody()!!.cancel()
+        // Robolectric keeps jobs on each namespaced scheduler object. Keep its scheduler through the simulated death.
+        process(null, platform = jobs)
+        assertFalse(jobs.stopped(setOf(key)))
+        // The app namespace enters first. A job in the drive is evidence for the whole package.
+        transfers.enter(Fixture.app)
+        transfers.enter(drive)
+        assertEquals(setOf(key), jobs.held(drive))
+        assertEquals(Phase.Ready, record(key).phase)
     }
 
     @Test @Config(sdk = [35]) fun fromApi35AForceStopIsReadFromTheStartHistory() {

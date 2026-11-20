@@ -43,6 +43,24 @@ package final class FlippedView: NSView {
 }
 
 extension Presenter {
+    /// A sampled transform below a scroller or a two-axis clip cannot reach
+    /// the page. Moving the clipping box itself can change the page's extent.
+    func preservesDocumentFit(_ batch: Batch) -> Bool {
+        guard !applying, revealing == nil, preparing == nil, flightHost.isEmpty,
+              !batch.ops.isEmpty, batch.rootTabs == nil, !batch.controls, !batch.layoutProvisional else { return false }
+        return batch.ops.allSatisfy { op in
+            guard op.op == .present else { return false }
+            if op.property == "opacity" { return true }
+            guard ["translate", "scale", "rotate", "layout"].contains(op.property) else { return false }
+            var ancestor = views[op.id]?.nodeSuperview
+            while let node = ancestor {
+                if node.scroll != nil || (node.overflowClips && !node.clipsOneAxis) { return true }
+                ancestor = node.nodeSuperview
+            }
+            return false
+        }
+    }
+
     /// A batch that says only where lists stand (a report's answer that
     /// moved no view: in a fling, the measurement a slice's rows sent, half
     /// its batches) and nothing of the page's. It changes no view, so none of

@@ -61,6 +61,11 @@ fn range(value: &str, at: u32, unit: Unit) -> (u32, u32) {
     }
 }
 
+#[cfg(any(target_os = "android", test))]
+pub(super) fn word_range(value: &str, at: u32) -> (u32, u32) {
+    range(value, at, Unit::Word)
+}
+
 fn selection(anchor: (u32, u32), current: (u32, u32)) -> FieldSelection {
     let (from, to) = if current.0 < anchor.0 {
         (anchor.1, current.0)

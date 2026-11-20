@@ -876,6 +876,11 @@ export async function open({
       return r;
     },
     close: carrier.close,
+    background(ms) {
+      if (!Number.isInteger(ms) || ms < 0 || ms > 2147483647) throw new MalformedOperation('background takes a whole number of milliseconds from 0 through 2147483647');
+      if (!carrier.background) throw new Error('background needs the iOS simulator or a connected iPhone');
+      return carrier.background(ms);
+    },
     springboard: carrier.springboard,
   };
   Object.assign(s, sessionInput(s, { carrier, host, timing, touch, app }));

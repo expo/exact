@@ -169,12 +169,30 @@ update` once its `app.json` names Android. That verb is `build <app> --apk --ins
 runs the tests, the first screen and the relaunch with screenshots light and dark, without `check`, which this host
 does not observe for yet.
 
+Standard development APKs carry the plan, compatibility document, and any Hermes
+bytecode and module receipt in a separate read-only native image. The host reads
+TypeScript grants and the Canvas 2D roster from that receipt. The bake runs before the host build.
+Cargo watches the generated Rust, and a change confined to the baked data replaces
+only the data image. Android's linker maps it at launch. Each Cargo build unit
+has its own bake. Release builds embed the bake in the Canvas library. An
+authored workspace splits automatically when its build script and library entry
+match the generated shell. A custom build script can opt in with
+`exact_js_bake::take_android_linked` or `exact_bake::host::take_android_linked` at
+entry and return when it answers true. The `exact_bake` helper takes the names of
+the additional generated Rust files the entry includes. Cargo applies the compiler
+and linker directives from the separate bake and relinks when the native objects
+or archives they name change.
+
 **In a dev loop** (LLP 1122 D4): `bun exact.mjs android --run --url http://127.0.0.1:<port>/`, with the loop
 (`bun exact.mjs web`) running, launches the app following it. By hand: give the launch the loop's page URL as
 `x_dev_plan` (exact2's `EXACT_DEV_PLAN`), through `adb reverse` since the loop serves this Mac's loopback only:
 `adb reverse tcp:<port> tcp:<port>`, then
-`adb shell am start -S -n <app id>/dev.exact.app.MainActivity --es x_dev_plan http://127.0.0.1:<port>/` (`-S`:
-the environment is read once per process, so a running reader is stopped first). The reader
+`adb shell am start -S -n <app id>/dev.exact.app.DevLoop --es x_dev_plan http://127.0.0.1:<port>/` (`-S`:
+the environment is read once per process, so a running reader is stopped first). The development
+APK follows this URL after a launcher or notification start, including after a force-stop. Installing
+the APK again clears the selection. A badge shows which loop the reader follows and when updates
+pause. If a USB or wireless reconnect drops the reverse, restore it with
+`adb reverse tcp:<port> tcp:<port>`; the reader keeps polling. The reader
 polls it as the Linux display does (`CanvasHost`'s turn and wakes): a plan the loop compiles replaces the running
 one with its state carried, as does the `app.ts` module pair it compiles (the envelope's `module`), and the build
 channel brings the design server's live batches, pins and `prefer`s, and registers the build, so the design tool sees
@@ -196,9 +214,9 @@ which `exact setup` installs.
 ## A TypeScript data module (LLP 1115.001 §5.2)
 
 Shelf (`apps/shelf`) is the app that defines "Android works", and its data is `app.ts`. Its library
-(`apps/shelf/android`) is Caltrain's with two differences: the build script is the Linux host's JavaScript bake
-(`exact_js_bake::build(.., "linux")`: the plan, the module as Hermes bytecode, its identity and grants), and the
-library links `exact-js` and with it the lean Hermes VM, from the pinned Ibex release's Android Hermes bundle, which
+(`apps/shelf/android`) runs `exact_js_bake::build_android`, which uses the Linux host's JavaScript bake
+to produce the plan and Hermes bytecode. The library links `exact-js` with the lean Hermes VM from the
+pinned Ibex release's Android Hermes bundle, which
 `exact setup` installs and verifies as it does the other targets' (LLP 1107 §4.1). One built from an Ibex checkout
 with `bun scripts/hermes-android.mjs build` takes its place (`agent-android.mjs` hands it to Cargo).
 The local builder selects API 29, the oldest supported Android, for both Hermes and ICU.
@@ -1285,10 +1303,10 @@ below the status bar (expo/exact#234).
 It slides up as it opens (350 ms, emphasized decelerate) and down as it leaves (200 ms, emphasized accelerate) from
 where it was, its last drawing kept for that (`paint/tape.rs`), so a sheet the app closes slides out too. A drag
 on its handle, a header or a form's rows moves it once past the system's 8 dp slop, letting go of what the
-finger pressed. Over a vertical scroller, a sheet with several detents takes an upward drag below its tallest
-detent and a downward drag when the scroll chain is at its start and none hears `refresh`. A short or empty
-refreshing list keeps its pulls, as does a single-detent sheet's list. A horizontal drag retires the pending sheet
-drag. Let go and the sheet rests on the detent its speed carries it to, or leaves the window. A drag that began
+finger pressed. Dragging up on a vertical list raises a sheet with several detents. Once the sheet reaches its
+tallest detent, the rest of the same movement scrolls the list. Dragging down scrolls the list and its parents to
+their start before lowering the sheet. A list that hears `refresh` keeps its downward pull, even when short or
+empty. A single-detent sheet leaves scrolling to its list. A horizontal drag retires the pending sheet drag. Let go and the sheet rests on the detent its speed carries it to, or leaves the window. A drag that began
 on a module view that disallowed interception is the view's
 ("Pickers and hatches" above). A tap on the scrim dismisses it. Either dismissal closes the sheet whole, with any route
 pushed inside it: a root that hears `navigate` is sent to the location beneath the sheet, else Back goes once for

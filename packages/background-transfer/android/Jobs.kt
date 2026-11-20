@@ -1,6 +1,7 @@
 package exact.backgroundtransfer
 
 import android.app.ActivityManager
+import android.app.AlarmManager
 import android.app.ApplicationStartInfo
 import android.app.Notification
 import android.app.NotificationChannel
@@ -136,7 +137,8 @@ internal class Jobs(private val app: Context) : Platform {
     }
 
     private val prefs get() = app.getSharedPreferences("exact.transfer.custody", Context.MODE_PRIVATE)
-    private val custody get() = Intent(app, TransferJob::class.java).setAction("exact.transfer.custody")
+    private fun custody(flags: Int): PendingIntent? = PendingIntent.getBroadcast(app, 0,
+        Intent(app, TransferBoot::class.java).setAction("exact.transfer.custody"), PendingIntent.FLAG_IMMUTABLE or flags)
     private val boot get() = android.provider.Settings.Global.getInt(app.contentResolver, "boot_count", -1)
     private val updated get() = app.packageManager.getPackageInfo(app.packageName, 0).lastUpdateTime
     private val schedulers = ConcurrentHashMap<Namespace, JobScheduler>()
@@ -154,11 +156,13 @@ internal class Jobs(private val app: Context) : Platform {
      * force-stop is read from the cancelled pending intent this app kept, which is good only
      * within the boot and the install it was kept in.
      */
-    override fun stopped(): Boolean {
+    override fun stopped(registrations: Set<Key>): Boolean {
         if (Build.VERSION.SDK_INT >= 35) return forced(starts(), prefs.getLong("start", -1))
-        val kept = PendingIntent.getService(app, 0, custody, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_NO_CREATE)
-        return kept == null && prefs.getBoolean("kept", false) && boot >= 0 && prefs.getInt("boot", -2) == boot &&
-            prefs.getLong("updated", -1) == updated
+        if (custody(PendingIntent.FLAG_NO_CREATE) != null || !prefs.getBoolean("kept", false) || boot < 0 ||
+            prefs.getInt("boot", -2) != boot || prefs.getLong("updated", -1) != updated) return false
+        // A force-stop removes every transfer job. A surviving registration's job in any namespace rules it out.
+        return Build.VERSION.SDK_INT < 34 || registrations.asSequence().map { it.namespace }.distinct()
+            .none { namespace -> held(namespace).any(registrations::contains) }
     }
 
     override fun restarted(namespace: Namespace): Boolean = space(namespace).let {
@@ -172,7 +176,10 @@ internal class Jobs(private val app: Context) : Platform {
         val edit = prefs.edit().putInt("boot.${space(namespace)}", boot).putLong("updated.${space(namespace)}", updated)
         // The newest start that has a launch time: one with none cannot be named, and stays evidence.
         if (Build.VERSION.SDK_INT >= 35) starts().firstNotNullOfOrNull { it.first }?.let { edit.putLong("start", it) } else {
-            PendingIntent.getService(app, 0, custody, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            // AlarmManager holds the token across ordinary process death. A token held only by this process can
+            // disappear as soon as the system collects its last reference. The alarm never needs to wake the device.
+            app.getSystemService(AlarmManager::class.java).set(AlarmManager.ELAPSED_REALTIME, Long.MAX_VALUE / 2,
+                checkNotNull(custody(PendingIntent.FLAG_UPDATE_CURRENT)))
             edit.putBoolean("kept", true).putInt("boot", boot).putLong("updated", updated)
         }
         check(edit.commit())

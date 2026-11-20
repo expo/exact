@@ -226,6 +226,16 @@ export function webSourceRoots(app, js, render = 'rust') {
   return [...[...roots].filter(source), ...[...files].filter(source).map(file => ({ file })), ...[...excluded].filter(source).map(exclude => ({ exclude }))];
 }
 
+/** Cargo targets omitted from a web build prune directory scans and recursive watches. */
+export function partitionWebRoots(roots) {
+  const active = [], excluded = [];
+  for (const root of roots) {
+    if (root.exclude) excluded.push(resolve(root.exclude));
+    else active.push(root);
+  }
+  return { active, skipTarget: path => excluded.some(dir => within(dir, path)) };
+}
+
 /** A receipt's `sources` (serve.mjs `appSources`): the app's files as the build ends, or null when one came or went
  * while it built (`atStart`), so that `serve` builds it again. */
 function sourcesBuilt(app, dist, atStart) {
@@ -535,7 +545,7 @@ if (bakeOnly) planBytes = readFileSync(resolve(buildEnv.EXACT_BAKE_OUTPUT, 'web-
 else {
 wasm = readFileSync(out);
 const unbooted = () => { throw new Error('app logic ran while extracting baked bytes'); };
-const { instance } = await WebAssembly.instantiate(wasm, { exact_grants: grantOrigins(() => instance.exports.memory), exact_js: { call: unbooted }, exact_rust: { load: unbooted, call: unbooted, read: unbooted, drop: unbooted }, exact_data: { random: unbooted, agent_seed: unbooted }, exact_clock: { now: unbooted }, exact_geometry: { range: unbooted, read: unbooted, point: unbooted, points: unbooted, shown: unbooted } });
+const { instance } = await WebAssembly.instantiate(wasm, { exact_grants: grantOrigins(() => instance.exports.memory), exact_js: { call: unbooted }, exact_rust: { load: unbooted, call: unbooted, read: unbooted, drop: unbooted }, exact_data: { random: unbooted, agent_seed: unbooted }, exact_clock: { now: unbooted }, exact_geometry: { scroll_metrics: unbooted, range: unbooted, read: unbooted, point: unbooted, points: unbooted, shown: unbooted } });
 exports = instance.exports;
 if (typeof exports.exact_plan !== 'function' || typeof exports.exact_out !== 'function' || !(exports.memory instanceof WebAssembly.Memory)) {
   throw new Error('the web wasm does not export exact_plan, exact_out, and memory');

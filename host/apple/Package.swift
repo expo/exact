@@ -148,7 +148,7 @@ let sharedCore = ProcessInfo.processInfo.environment["EXACT_CORE_FRAMEWORK"]
 let watchSync = ProcessInfo.processInfo.environment["EXACT_WATCH_SYNC"] == "1"
 let watchSyncDependency: [Target.Dependency] = watchSync ? [.target(name: "ExactWatchSync")] : []
 let watchSyncSettings: [SwiftSetting] = watchSync ? [.define("EXACT_WATCH_SYNC")] : []
-let core: [Target] = [
+var core: [Target] = [
     .systemLibrary(name: "CExact", path: "Sources/CExact"),
     // C, so its constructor runs before `main` and can read the process start and prewarm flag.
     .target(name: "CExactLaunch", path: "Sources/CExactLaunch"),
@@ -171,11 +171,13 @@ let core: [Target] = [
     // module family answers a module's bindings through it, and links it.
     .target(name: "ExactFormaBinding", dependencies: ["ExactKit", "CExact"], path: "Sources/ExactFormaBinding", swiftSettings: devTools),
     .target(name: "ExactHeavyLeaves", dependencies: ["ExactKit"], path: "Sources/ExactHeavyLeaves", swiftSettings: devTools),
-] + allCapabilities.map {
+]
+core += allCapabilities.map {
     .target(name: $0.target, dependencies: ["ExactKit", "CExact"] + (capabilityNeeds[$0.target] ?? []), path: "Sources/\($0.target)",
             // The tool door answers a file face's landing, compiled only for one (`EXACT_INTENT_FILES`).
             swiftSettings: devTools + ($0.target == "ExactToolDoor" ? intentFileSettings : []))
-} + [
+}
+core += [
     // A launch part may call the tool door (`ExactTools.call`), which a plan with a tool links.
     .target(name: "ExactLaunchParts", dependencies: ["ExactKit"] + (links("tools") ? ["ExactToolDoor"] : []), path: launchParts,
             swiftSettings: launchPartsTarget.map { [.unsafeFlags(["-target", $0])] } ?? []),

@@ -42,7 +42,7 @@ import { parseColour, schemeColours } from './scheme-colours.mjs';
 import { missingDependencies } from './package-libraries.mjs';
 import { HOST_DEV, PINNED_RUST, androidPackageId, bakeWatchEnv, buildBake, claimLive, hermesBundle, cargoEnvironment, copyShaders, linuxBuild, mavenProblems, resolveApp } from './app.mjs';
 import { ANDROID_MIN_API } from './hermes-android.mjs';
-import { ANDROID_TARGET, ANDROID_ABIS, androidAbis, androidSdk, androidToolchainEnv, androidHermesDir } from './android-abi.mjs';
+import { ANDROID_TARGET, ANDROID_ABIS, androidAbis, androidSdk, androidToolchainEnv, androidHermesDir, androidBakeLibraryName, stageAndroidBake } from './android-abi.mjs';
 export { ANDROID_TARGET, androidSdk, androidToolchainEnv, androidHermesDir } from './android-abi.mjs';
 import { ANDROID_PAGE_SIZE, androidCargo } from './cargo-check.mjs';
 import { guardFlags, reportBuilt } from './help.mjs';
@@ -55,6 +55,7 @@ import { CHANNELS_RECEIVER, androidNotificationResources, googleServices } from 
 import { pickIcon, placeRgba, readPng, resize } from './app-icons.mjs';
 import { encodePng } from './png.mjs';
 import { copyStaticTreeIfPresent } from '../host/web/serve.mjs';
+import { takeLock } from '../host/web/build-lock.mjs';
 
 /** The oldest Android the binary runs on (the NDK's clang wrapper names it). */
 const API = ANDROID_MIN_API;
@@ -300,9 +301,7 @@ export const apkBuildDir = (app) => apkDirs(resolveApp(app)).app;
 const readerApk = (app) => resolve(apkDirs(app).app, 'outputs/apk/release/app-release.apk');
 /** Distribution builds keep full R8 and release lint; development APKs only shrink. */
 export const developmentApkArgs = (development, profile, bundle) => development && profile !== 'release' && !bundle ? ['-PdevelopmentApk=1'] : [];
-/** What `build --apk` records beside the APK, for a drive to tell whether it is older than its sources: when the build
- * began, the ABIs and libraries it packaged (whose dep-info names the Rust, plan and module sources), and the
- * app's Kotlin. Null without one. */
+/** The APK's freshness record covers its libraries, separate bakes and Kotlin. Null without one. */
 export function apkRecord(app, apk = readerApk(app)) {
   try { return JSON.parse(readFileSync(resolve(dirname(apk), 'exact-build.json'), 'utf8')); } catch { return null; }
 }
@@ -787,19 +786,6 @@ export function loadAlignment(path) {
 /** The capabilities the plan uses (LLP 1047 D2), one a line in `uses.txt`; none when the crate writes none. */
 const planUses = (out) => out && existsSync(resolve(out, 'uses.txt')) ? readFileSync(resolve(out, 'uses.txt'), 'utf8').split('\n').filter(Boolean) : [];
 
-/** The same, where the build ran without JSON (a bake): the crate's build script output that wrote `uses.txt` last,
- * under Cargo's `build` directory. */
-function bakedOut(dir, crate) {
-  const prefix = `${crate.replaceAll('-', '_')}-`, alt = `${crate}-`;
-  let newest = null;
-  for (const name of existsSync(dir) ? readdirSync(dir) : []) {
-    if (!name.startsWith(prefix) && !name.startsWith(alt)) continue;
-    const file = resolve(dir, name, 'out/uses.txt');
-    if (existsSync(file) && (!newest || statSync(file).mtimeMs > newest.at)) newest = { out: resolve(dir, name, 'out'), at: statSync(file).mtimeMs };
-  }
-  return newest?.out ?? null;
-}
-
 /** How the reader's Gradle wrapper starts on `platform`. Windows cannot run the POSIX `gradlew`, and Bun starts a `.bat`
  * only through cmd.exe, which would reparse every argument: there the JDK runs the wrapper jar with the arguments
  * `gradlew` gives it, JAVA_OPTS and GRADLE_OPTS among them (JAVA_HOME's java, else the one on PATH). */
@@ -1038,7 +1024,11 @@ export function androidReleaseEnvironment(env = process.env, bundle = false) {
  * path Cargo gave it: a crate's `[lib] name` names the file, and the bake records that name for the host to open. */
 export function bakeGpuLibraries(app, options, bake = buildBake) {
   const libraries = [];
-  bake(app, 'android', options.target ?? ANDROID_TARGET, { ...options, kind: 'android', prepareGpu: (product) => { libraries.push(product); return product; } });
+  let image;
+  bake(app, 'android', options.target ?? ANDROID_TARGET, { ...options, kind: 'android',
+    androidPayload: options.androidPayload ? () => (image = androidBakeLibraryName(libraries.map(path => basename(path)))) : null,
+    capture: receipt => options.capture?.(receipt, image, libraries),
+    prepareGpu: (product) => { libraries.push(product); return product; } });
   return libraries;
 }
 
@@ -1078,6 +1068,14 @@ export function stageSoundLibrary(jniLibs, env, target = ANDROID_TARGET) {
  * (`stageGpuLibraries`).
  * Gradle wants a JDK (17 or newer) and the SDK's platform. The APK's path, or null. */
 export function buildApk(app, env, profile, writeLocks = false, bundle = false, abis = ['arm64-v8a']) {
+  const dirs = apkDirs(app);
+  mkdirSync(dirname(dirs.app), { recursive: true });
+  const release = takeLock(`${dirs.app}.apk.lock`, { waitMs: Infinity });
+  try { return assembleApk(app, env, profile, writeLocks, bundle, abis, dirs); }
+  finally { release(); }
+}
+
+function assembleApk(app, env, profile, writeLocks, bundle, abis, dirs) {
   env = androidReleaseEnvironment(env, bundle);
   const java = androidJavaEnv(env);
   if (!java) throw new Error(androidJavaFix(env));
@@ -1086,7 +1084,6 @@ export function buildApk(app, env, profile, writeLocks = false, bundle = false, 
   if (!app.manifest.game && !crateManifest(app, 'android')) throw new Error(`${app.dir} has no android/ crate, the app's library for the Canvas host: bun exact.mjs update adds one to an app that names android in app.json (apps/shelf/android is one)`);
   refuseIdSuffix(env);
   // The icon and banner first, so a refused one costs no compile.
-  const dirs = apkDirs(app);
   let icons;
   try { icons = androidIcons(app.manifest, app.dir, resolve(dirs.app, 'icons/res')); }
   catch (error) { for (const line of error.message.split('\n')) console.error(`${app.name}: ${line}`); return null; }
@@ -1095,14 +1092,44 @@ export function buildApk(app, env, profile, writeLocks = false, bundle = false, 
   const androidWidgets = (app.manifest.widgets ?? []).filter((row) => (row.families ?? []).some((family) => family.startsWith('system')));
   if (app.manifest.widgets?.length && !androidWidgets.length) console.warn(`${app.name}: app.json's widgets declare only accessory families, which Android has no counterpart for, so this APK has no widget`);
   const widgetArgs = androidWidgets.length ? ['-Pwidgets=1', `-PwidgetsBuildDir=${dirs.widgets}`] : [];
-  const target = ANDROID_ABIS[abis[0]];
-  const built = (name, triple = target) => resolve(app.target, triple, profile, `lib${name.replaceAll('-', '_')}.so`);
+  const target = ANDROID_ABIS[abis[0]], bakeStarted = new Date().toISOString();
+  const androidPayload = profile === HOST_DEV && !bundle && env.EXACT_UPDATE_TRUST !== 'production';
+  const staged = resolve(dirs.app, 'rust'), out = resolve(staged, 'bake');
+  rmSync(staged, { recursive: true, force: true });
+  const built = triple => resolve(app.target, triple, profile, `lib${crate.replaceAll('-', '_')}.so`);
+  const bakes = [], libraries = [];
+  let gpuArgs = [];
+  const bake = abi => {
+    const triple = ANDROID_ABIS[abi], toolchain = androidToolchainEnv(env, process.platform, API, triple);
+    return bakeGpuLibraries(app, {profile, target:triple, env:toolchain, androidPayload,
+      capture: (receipt, image, modules) => {
+        bakes.push(receipt);
+        // Snapshot the inputs to Gradle while buildBake still owns the Cargo products.
+        const jniLibs = resolve(staged, 'jniLibs', abi), canvas = resolve(jniLibs, 'libexactcanvas.so');
+        mkdirSync(jniLibs, {recursive:true});
+        copyFileSync(built(triple), canvas);
+        const args = stageGpuLibraries(modules, jniLibs);
+        if (triple === target) {
+          gpuArgs = args;
+          mkdirSync(out, {recursive:true});
+          for (const file of ['artifacts.json', 'compat.json', 'uses.txt', 'permissions.txt', 'app.module.json', 'app.sources.json']) {
+            const path = resolve(receipt.androidOut, file);
+            if (existsSync(path)) copyFileSync(path, resolve(out, file));
+          }
+        }
+        const sound = stageSoundLibrary(jniLibs, toolchain, triple);
+        const payload = receipt.linkedPlan ? [stageAndroidBake(receipt.linkedPlan, jniLibs, toolchain, triple, androidWidgets, image)] : [];
+        for (const library of [canvas, ...modules.map(path => resolve(jniLibs, basename(path))), sound, ...payload]) {
+          if (loadAlignment(library) < 16384) throw new Error(`${abi}/${basename(library)} is not 16 KB aligned; add "${ANDROID_PAGE_SIZE}" to [target.${triple}] rustflags in the app's Cargo configuration`);
+          libraries.push({ abi, library });
+        }
+      }});
+  };
   // Every ABI is baked (`buildBake`), which writes its own android-<target>.build.json receipt:
   // a first `push` starts a stream from exactly this APK's cohort (LLP 1030.006 D6).
   let gpu;
-  try { gpu = bakeGpuLibraries(app, { profile, env, target }); }
+  try { gpu = bake(abis[0]); }
   catch (error) { console.error(error.message); return null; }
-  const out = bakedOut(resolve(app.target, target, profile, 'build'), crate);
   const extensions = JSON.parse(readFileSync(resolve(out, 'artifacts.json'), 'utf8')).extensions;
   const bound = androidImplementations(app.dir, extensions);
   const maven = mavenCoordinates(app, bound);
@@ -1119,31 +1146,9 @@ export function buildApk(app, env, profile, writeLocks = false, bundle = false, 
     if (!firebase && profile === 'release') { console.error(`${app.name}: push-google-services-missing: a release build that pushes needs a ${missing}`); return null; }
     if (!firebase) console.warn(`${app.name}: push is unavailable in this development build, which finds no ${missing} (a release build refuses it)`);
   }
-  const uses = planUses(out), modulesByAbi = new Map([[abis[0], gpu]]);
-  // Finish every bake before the packaging timestamp: dep-info also names the GPU libraries it produced.
-  try { for (const abi of abis.slice(1)) {
-    const triple = ANDROID_ABIS[abi];
-    modulesByAbi.set(abi, bakeGpuLibraries(app, { profile, target: triple, env: androidToolchainEnv(env, process.platform, API, triple) }));
-  } } catch (error) { console.error(error.message); return null; }
-  const started = new Date().toISOString(), staged = resolve(dirs.app, 'rust');
-  rmSync(staged, { recursive: true, force: true });
-  const libraries = [];
-  let gpuArgs = [];
-  for (const abi of abis) {
-    const triple = ANDROID_ABIS[abi], toolchain = androidToolchainEnv(env, process.platform, API, triple);
-    const modules = modulesByAbi.get(abi);
-    const jniLibs = resolve(staged, 'jniLibs', abi);
-    mkdirSync(jniLibs, { recursive: true });
-    copyFileSync(built(crate, triple), resolve(jniLibs, 'libexactcanvas.so'));
-    const args = stageGpuLibraries(modules, jniLibs);
-    if (triple === target) gpuArgs = args;
-    const sound = stageSoundLibrary(jniLibs, toolchain, triple);
-    for (const library of [resolve(jniLibs, 'libexactcanvas.so'), ...modules, sound]) {
-      // A table in the app's Cargo configuration can replace the build's page-size flag.
-      if (loadAlignment(library) < 16384) throw new Error(`${abi}/${basename(library)} is not 16 KB aligned; add "${ANDROID_PAGE_SIZE}" to [target.${triple}] rustflags in the app's Cargo configuration`);
-      libraries.push({ abi, library });
-    }
-  }
+  try { for (const abi of abis.slice(1)) bake(abi); }
+  catch (error) { console.error(error.message); return null; }
+  const started = new Date().toISOString(), uses = planUses(out);
   copyStaticTreeIfPresent(resolve(app.dir, 'assets'), resolve(staged, 'assets/app/assets'));
   // The modules' shader text (LLP 1030 D8), which the host registers from `shaders/` under the asset root.
   if (gpu.length) copyShaders(app, resolve(staged, 'assets/app/shaders'));
@@ -1183,7 +1188,9 @@ export function buildApk(app, env, profile, writeLocks = false, bundle = false, 
     const name = basename(library), kept = keptLibrary(readFileSync(library), zipEntry(packaged, `${bundle ? 'base/' : ''}lib/${abi}/${name}`), [dirs.app, dirs.canvas], name);
     if (kept) { console.error(`exact android ${abi}: ${kept}`); return null; }
   }
-  writeFileSync(resolve(dirname(apk), 'exact-build.json'), JSON.stringify({ started, package: androidPackageId(app.manifest), abis, libraries: abis.map(abi => built(crate, ANDROID_ABIS[abi])), workspace: app.workspace ?? app.dir,
+  writeFileSync(resolve(dirname(apk), 'exact-build.json'), JSON.stringify({ started, package: androidPackageId(app.manifest), abis, libraries: abis.map(abi => built(ANDROID_ABIS[abi])), workspace: app.workspace ?? app.dir,
+    bakeStarted, bakes: bakes.flatMap(receipt => receipt.linkedInputs ?
+      [{ ...receipt.linkedInputs, products: receipt.products.filter(({path}) => receipt.linkedInputs.paths.includes(path)) }] : []),
     sources: [...READER_SOURCES, ...[resolve(app.dir, 'modules/android')].filter(existsSync), ...icons.files, ...launch.files] }) + '\n');
   // What its bake inlined of each setting (LLP 1153 D4), bound to the APK, for a drive to compare with their sources.
   recordBuiltSettings(apk, app, out);
@@ -1330,7 +1337,7 @@ function extensionArgs(app, out, config, bound, firebase, development) {
 /** The `am start` arguments that launch the app `id`, following the dev loop at `url` when there is one (LLP 1122 D4):
  * `-S` stops a running reader first, since it reads its launch extras once per process. */
 export const launchArgs = (id, url = null) =>
-  ['shell', 'am', 'start', '-W', ...(url ? ['-S'] : []), '-n', `${id}/dev.exact.app.MainActivity`, ...(url ? ['--es', 'x_dev_plan', url] : [])];
+  ['shell', 'am', 'start', '-W', ...(url ? ['-S'] : []), '-n', `${id}/dev.exact.app.${url ? 'DevLoop' : 'MainActivity'}`, ...(url ? ['--es', 'x_dev_plan', url] : [])];
 
 /** `--install` (`--run`: and launch it): the APK onto the device `androidDevice` names. With none ready the build
  * stands and says how to install it; several entries must be one phone’s transports or name ANDROID_SERIAL. `url`

@@ -229,6 +229,9 @@ export function forwardedEnv(env = process.env) {
   return Object.fromEntries(['EXACT_STORE', 'EXACT_AGENT_PADS'].filter((k) => env[k]).map((k) => [k, env[k]]));
 }
 
+/** The development launch sent to devicectl. Only an explicit live drive selects the wall clock. */
+export const phoneLaunch = (extra, env = process.env) => ({ ...forwardedEnv(env), EXACT_AGENT: '1', ...extra });
+
 /** What `simctl launch` gives the app of `env`: each `SIMCTL_CHILD_` variable, without the prefix. */
 export const simulatorChildEnv = (env = process.env) =>
   Object.fromEntries(Object.entries(env).filter(([k]) => k.startsWith('SIMCTL_CHILD_')).map(([k, v]) => [k.slice('SIMCTL_CHILD_'.length), v]));

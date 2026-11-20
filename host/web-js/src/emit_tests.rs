@@ -792,7 +792,7 @@ fn virtual_surface_finite_defaults_run_unpublished_omitted_and_nested() {
         r#"
 const src = await Bun.file(process.argv[1]).text();
 const data = {{}}, Resources = [], commit = f => {{ f(); return true; }}, R = () => {{}}, Refusal = Error;
-const surfaces = new Function('data','Resources','commit','R','Refusal','Kept','say',src.replace(/^import .*;$/gm,'').replace(/^export /gm,'') + ';return surfaces;')(data,Resources,commit,R,Refusal,k=>'exact.'+k+'.',()=>{{}});
+const surfaces = new Function('data','Resources','commit','R','Refusal','Kept','say','rt',src.replace(/^import .*;$/gm,'').replace(/^export /gm,'') + ';return surfaces;')(data,Resources,commit,R,Refusal,k=>'exact.'+k+'.',()=>{{}},{{deferForReplacement:()=>false}});
 surfaces({{hud:['world',{descriptor}]}});
 const read = () => data.reserved.exactSurface(null, [], 'hud');
 const expected = ['a|b', ['a|b', null, []]];
@@ -1415,4 +1415,19 @@ fn a_pressed_nodes_bound_scale_reaches_its_composed_presentation() {
         output.js
     );
     assert!(output.js.contains(",\"scale\",\"\",()=>"), "{}", output.js);
+}
+
+/// LLP 1094.000 D2: a bound drag's files and `url` reach the page by the
+/// names `drag.js` hooks to admit them, so a DOM name of their own would
+/// pass them unadmitted.
+#[test]
+fn a_drags_bound_data_is_written_by_the_names_drag_js_admits() {
+    let plan = contract::compile(
+        "component App\n  state files = [\"assets/a.jpg\"]\n  state link = \"https://example.com/a\"\n  view\n    column draggable=true dataTransfer=DataTransfer(files=files, url=link)\n      text \"a\"\n",
+    )
+    .unwrap();
+    let js = crate::emit::emit(&plan, false, false).unwrap().js;
+    for name in ["data-datatransferfiles", "data-datatransferurl"] {
+        assert!(js.contains(&format!("\"{name}\"")), "{name}:\n{js}");
+    }
 }

@@ -1082,7 +1082,8 @@ package final class Presenter {
         PaintOrder.begin()
         let post = Self.signposts.beginInterval("apply", "\(batch.ops.count) ops"), phase = HostPhases.shared.begin(.apply)
         defer { Self.signposts.endInterval("apply", post); HostPhases.shared.end(phase) }
-        viewport.invalidateDocumentFit()
+        let keepFit = preservesDocumentFit(batch) && viewport.hasCurrentDocumentFit
+        if !keepFit { viewport.invalidateDocumentFit() }
         collections.beginBatch(batch)
         // The window's bar is read again only by a batch that touches what it read (`WindowToolbarHost.concerns`),
         // or one whose navigation pass moved what it reads (`inputsChanged`, below).
@@ -1270,7 +1271,7 @@ package final class Presenter {
         navigation.sync(batch, reparented: stage.map { reparented.subtracting($0.tops.keys) } ?? reparented)
         sidebar.sync(batch)
         if !pendingTips.isEmpty { settleTips() }
-        fitDocument()
+        if !keepFit || !viewport.hasCurrentDocumentFit { fitDocument() }
         // The page's canvas colour is the first root's background — what
         // shows beyond a document shorter than the viewport, as a browser
         // paints the root element's background over the whole canvas.

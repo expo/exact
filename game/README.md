@@ -1113,8 +1113,13 @@ Put everything else the game shows in `Game::STREAMED`: those are fetched from t
 start, after `ASSETS`, but Play does not wait for them; each draws as it lands and
 stays resident. Simulation cannot read a streamed asset (`w.model` is None), so
 load order never reaches the hash; a save refuses only while a shown one is in
-flight. A model a tick animates or reads belongs in `ASSETS`. Streamed names are
-models and textures (sounds are not streamed yet), and never also in `ASSETS`.
+flight. A model a tick animates or reads belongs in `ASSETS`.
+
+Put sampled sounds in `STREAMED` to start play before
+their PCM arrives. The bake supplies their durations and identities in a small
+catalog. Voices advance on the simulation clock while silent. On delivery a
+loop or a still-playing sample joins at its current offset. An expired sound
+stays silent. Saves can be restored against the same catalog with PCM still in flight.
 Under the live clock a renderer's first frame waits only for what the world presents
 (the models entities' meshes name, sprite and material-override textures, and their
 models' textures); a look registered at tick zero and not shown is prepared after that

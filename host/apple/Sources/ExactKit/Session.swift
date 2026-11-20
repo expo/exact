@@ -54,6 +54,7 @@ public enum ExactEnv {
     /// Whether the agent's world is settled between calls: native animation
     /// applies at once. False under `platform` timing.
     public static let agentFreezes = agentMode && agentTiming != "platform"
+    static let postsLiveWork = !agentFreezes && environment["EXACT_FILL_SYNC"] != "1"
     public static let smoke = environment["EXACT_SMOKE"] == "1"
     /// Milliseconds since the process's `main`: the wall clock for startup stamps.
     public static let t0 = CACurrentMediaTime()
@@ -340,6 +341,10 @@ public final class ExactSession {
     /// removal when the session is made, so a process that exits removes it too (AgentPasteboard.swift).
     let agentPasteboard: String?
     public weak var delegate: ExactSessionDelegate?
+    /// The targets native code registered by name (LLP 1123 D9), each held weakly, and the last generation one
+    /// took, which no later registration of any name falls below (`ExactNativeTarget`).
+    let nativeTargets = NSMapTable<NSString, AnyObject>.strongToWeakObjects()
+    var nativeTargetGeneration: UInt64 = 0
     public private(set) var state: State = .created {
         didSet { if state != oldValue { let changed = state; app.deliver { [weak self] in guard let self else { return }; delegate?.exactSession(self, didChange: changed) } } }
     }
@@ -400,6 +405,7 @@ public final class ExactSession {
     var clockDue: Double?
     /// An advance of a deadline already due is running (`advanceIfDue`)
     var advancingDue = false
+    var postsTimerAdvances = ExactEnv.postsLiveWork
     lazy var taskTimers = NativeTaskTimers(now: { [weak self] in self?.now() ?? 0 }, ready: { [weak self] in self?.deliverNativeTimer() })
     lazy var timerAdmissions = TimerAdmissions(session: self)
     /// The agent's clock (milliseconds) when the driver owns time; nil runs
@@ -457,9 +463,8 @@ public final class ExactSession {
     // main instead, and runs after the slice lands, in order.
     private(set) var fillInFlight = false { didSet { releaseWaitingFirings() } }
     typealias IdleWork = (views: Int?, work: () -> Void, cancelled: (() -> Void)?, cause: AnyObject?)
-    /// The work waiting, in the order asked (work asked while a slice lands, while work waits or while it runs joins the
-    /// end, so nothing runs ahead of work asked before it), and whether a drain of it runs (`runWaitingWork`)
-    var afterFill: [IdleWork] = [], draining = false
+    /// Work waiting for a slice or a batch to finish, in request order. A stale slice releases its work next turn.
+    var afterFill: [IdleWork] = [], draining = false, idleScheduled = false
     /// A slice's batch is applying, ahead of the work that waited for it
     var fillLanding = false
     private(set) var viewsEpoch = 0
@@ -516,7 +521,7 @@ public final class ExactSession {
     /// Read when a session wires itself; tests set it to drive the
     /// asynchronous path on macOS.
     #if os(iOS) || os(tvOS)
-    nonisolated(unsafe) static var asyncFills = !ExactEnv.agentFreezes && ExactEnv.environment["EXACT_FILL_SYNC"] != "1"
+    nonisolated(unsafe) static var asyncFills = ExactEnv.postsLiveWork
     #else
     nonisolated(unsafe) static var asyncFills = false
     #endif
@@ -663,11 +668,14 @@ public final class ExactSession {
         // A reply the slices released (`afterFill`) may have left a deadline
         // due: it advances once they have landed, unless a batch waits on them.
         // Sizes measured as they applied are reported as it ends, whether its last batch applied or was skipped (`reportMeasured`).
-        defer { landing = false; if !applying { reportMeasured() }; workEnded(); if !holdingReports { advanceIfDue() } }
+        defer { landing = false; runWaitingWork(); if !applying { reportMeasured() }; workEnded(); if !holdingReports { advanceIfDue() } }
         while true {
-            while let first = published.earliest, first < limit, let next = published.next() { takePublished(next) }
-            guard let index = nextLanding(before: limit) else { break }
-            land(pending.remove(at: index))
+            let first = min(published.earliest ?? limit, limit)
+            if let index = nextLanding(before: first) {
+                land(pending.remove(at: index))
+            } else if first < limit, let next = published.next() {
+                takePublished(next)
+            } else { break }
         }
         // What was made after the batch being applied lands after it, in a turn of its own.
         if published.claimDrain() { DispatchQueue.main.async { [weak self] in self?.landPublished() } }
@@ -729,7 +737,7 @@ public final class ExactSession {
         fillLanding = false
         if state != .destroyed { presenter.collections.landed(view, at: ProcessInfo.processInfo.systemUptime) }
         guard stale else { return runWaitingWork() }
-        DispatchQueue.main.async { [weak self] in self?.runWaitingWork() }
+        scheduleWaitingWork()
     }
 
     /// Land every session's slice in flight.
@@ -741,7 +749,8 @@ public final class ExactSession {
     private func wire() {
         runtime.topLayer = { [weak self] in self?.presenter.openTopLayer ?? ([], nil, nil) }
         runtime.setInlineGeometry({ [weak self] id in self?.presenter.inlineFrame(id) },
-                                  range: { [weak self] id, start, end in self?.presenter.rangeFrame(id, start: start, end: end) })
+                                  range: { [weak self] id, start, end in self?.presenter.rangeFrame(id, start: start, end: end) },
+                                  metrics: { [weak self] id in self?.presenter.textareaScrollMetrics(id) })
         if ExactSession.asyncFills {
             // @ref LLP 1072 §8.5 — main does not wait for a canvas's draw.
             SurfacesLink.installed?.deferDraws(runtime)
@@ -1096,6 +1105,7 @@ public final class ExactSession {
         }
         // What the pass did that a scroll moves (`scrolledWithoutPass`).
         if scrolled { presenter.scrolledWithoutPass() }
+        runWaitingWork()
         drainReports()
         workEnded()
         advanceIfDue()
@@ -1103,7 +1113,7 @@ public final class ExactSession {
 
     /// Reports laid-out control sizes after earlier owner batches land (LLP 1034 T4); an in-flight slice leaves the report to its landing.
     func reportMeasured() {
-        guard !holdingReports, !(applying || landing || fillInFlight) || !(ownerInFlight || hasPublished()) else { return }
+        guard !holdingReports, !landing, !(applying || fillInFlight) || !(ownerInFlight || hasPublished()) else { return }
         presenter.controls.reportMeasured()
     }
 
@@ -1153,6 +1163,7 @@ public final class ExactSession {
             guard !drained else { return }
             drained = true; insideApply = false
             if !landing, !pending.isEmpty { landFill() }
+            runWaitingWork()
             if transaction { CATransaction.commit() }
         }
         defer { drain() }
@@ -1407,7 +1418,13 @@ public final class ExactSession {
     var pendingViewDark: [(UInt32, Bool)] = []
     var colorsOwed = false
     fileprivate(set) var awaitingTree = false // committed to a new runner whose tree is not in: a report would reach the old views
-    private func treeIsIn() { awaitingTree = false; replayHeld(); if colorsOwed { colorsOwed = false; reportColors() } } // only the replacement batch, not a reset's cleanup
+    private func treeIsIn() { awaitingTree = false; replayHeld(); reportNativeTargets(); if colorsOwed { colorsOwed = false; reportColors() } } // only the replacement batch, not a reset's cleanup
+    /// A boot's or a restart's new kernel holds no registered target: tell it every live one (LLP 1123 D9).
+    private func reportNativeTargets() {
+        #if os(iOS)
+        if booted { ExactNativeTarget.reportAll(in: self) }
+        #endif
+    }
     /// Nodes awaiting the session's or their own appearance report.
     var unreported = Set<UInt32>()
     /// A new runtime has heard no view's appearance: forget what was said,

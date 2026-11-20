@@ -44,3 +44,32 @@ pub fn scope<'a>(admitted: &'a str, requested: Option<&'a str>) -> Result<&'a st
     }
     Ok(requested)
 }
+
+/// Native file stores use this scope for persisted root state (LLP 1116 D5).
+pub const PERSISTED_SCOPE: &str = "exact.state";
+
+/// Populate a fresh, named drive's persisted preferences before its boot snapshot (LLP 1116 D5).
+pub fn seed_persisted<E: std::fmt::Display>(
+    mut write: impl FnMut(&str, &[u8]) -> Result<(), E>,
+) -> Result<(), exact_runner::DataError> {
+    let Some(raw) = std::env::var_os("EXACT_AGENT_STORED") else {
+        return Ok(());
+    };
+    let invalid = |why: String| exact_runner::DataError::Unavailable(format!("stored: {why}"));
+    let entries: Vec<(String, String)> = serde_json::from_str(
+        raw.to_str()
+            .ok_or_else(|| invalid("expected UTF-8".into()))?,
+    )
+    .map_err(|e| invalid(e.to_string()))?;
+    for (name, json) in entries {
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+        {
+            return Err(invalid(format!("invalid state name {name:?}")));
+        }
+        write(&name, json.as_bytes()).map_err(|e| invalid(format!("{name}: {e}")))?;
+    }
+    Ok(())
+}

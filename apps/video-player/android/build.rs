@@ -1,5 +1,5 @@
 //! Compile and bake `app.contract` into `OUT_DIR/app.plan` at build time, with
-//! the compatibility id beside it, for `exact_painted::canvas_jni!` to embed,
+//! the compatibility id beside it, for `exact_painted::canvas_jni!`,
 //! and what the plan links (`contract::native::android_entry`: Media3's player,
 //! LLP 1042.001 D2).
 
@@ -9,6 +9,9 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     // The library is empty off Android (src/lib.rs): nothing to bake.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("android") {
+        return;
+    }
+    if exact_bake::host::take_android_linked(&[]).unwrap_or_else(|e| panic!("Android bake: {e}")) {
         return;
     }
     contract::rerun_if_changed(std::path::Path::new("../app.contract"));

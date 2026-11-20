@@ -143,7 +143,7 @@ internal object Lifecycle {
      * @property held the registrations whose user-initiated job the platform holds, pending or running.
      */
     data class Enter(override val namespace: Namespace, val stopped: Boolean, val restarted: Boolean, val held: Set<Key>,
-                     val conditions: Conditions) : Event
+                     val conditions: Conditions, val fresh: Boolean = false) : Event
     data class SessionStarted(override val namespace: Namespace, val incarnation: Int) : Event
     /** A launch with a view: an activity shows the session. */
     data class ViewAttached(override val namespace: Namespace, val incarnation: Int, val conditions: Conditions) : Event
@@ -313,11 +313,16 @@ internal object Lifecycle {
 
         private fun enter(e: Enter) {
             val namespace = e.namespace
-            if (namespace in process.crossed) return
+            if (e.fresh && !namespace.agent) return refuse()
+            if (!e.fresh && namespace in process.crossed) return
             // The evidence is the app's, and this entrant rearms it: every namespace is marked first.
             if (e.stopped) write(Stopping(durable.stopping + durable.records.keys.map { it.namespace } + namespace))
             val stopped = namespace in durable.stopping
             for (r in records(namespace)) {
+                if (e.fresh) {
+                    retire(r, fresh = true)
+                    continue
+                }
                 // A user-initiated job gone with no reboot or update to explain it is one a person stopped.
                 val gone = stopped || (r.job == Job.UserJob && r.key !in e.held && !e.restarted)
                 when (r.phase) {
@@ -695,13 +700,20 @@ internal object Lifecycle {
             }
         }
 
-        private fun retire(r: Record) {
+        private fun retire(r: Record, fresh: Boolean = false) {
             val key = r.key
             put(r.copy(phase = Phase.Retired, job = null, parked = false))
             release(key)
             abandon(key)
+            // A fresh drive cancels either kind of job, even one the previous process died before recording.
+            if (fresh) {
+                process.waking[key]?.let { emit(Expire(key, it)) }
+                process = process.copy(waking = process.waking - key)
+                finish(key, again = false)
+                emit(Cancel(key, null))
+            }
             // A handler that retires inside its own wake keeps its run until the wake's outcome.
-            if (key in process.runs) { if (key !in process.waking) finish(key, again = false) }
+            else if (key in process.runs) { if (key !in process.waking) finish(key, again = false) }
             else if (r.job != null) emit(Cancel(key, r.job))
             answer(key, false)
             process = process.copy(launch = process.launch - key)

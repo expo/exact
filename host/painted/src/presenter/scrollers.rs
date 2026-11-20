@@ -77,6 +77,8 @@ pub struct Under {
     /// Finger directions a nested sheet takes: up before its list, down at
     /// the list's start. The reader retains scrolling and fling physics.
     pub sheet_directions: (bool, bool),
+    /// The reader can share one drag with this sheet. Its top and limits are in viewport points.
+    pub nested_sheet: Option<(exact_kernel::NodeKey, [f32; 3])>,
     /// The text field the shell hosts that a touch there is for, when the
     /// node hit is one (LLP 1115.001 D8): the touch is then that field's,
     /// and the presenter hears of the focus it takes, not of the touch.
@@ -267,6 +269,7 @@ impl<D: DataSource> Presenter<D> {
         let mut claims = self.claims_at(hit);
         let mut sheet = false;
         let mut sheet_directions = (false, false);
+        let mut nested_sheet = None;
         // A sheet's scrim takes every drag; on the sheet, a drag up or down
         // follows the sheet/list direction rules in `stage/touch.rs`.
         match self.stage_claims(x, y) {
@@ -276,6 +279,7 @@ impl<D: DataSource> Presenter<D> {
                     claims: (true, true),
                     sheet: false,
                     sheet_directions,
+                    nested_sheet,
                     field: None,
                 }
             }
@@ -284,6 +288,9 @@ impl<D: DataSource> Presenter<D> {
                 chain.retain(|s| s.id != PAGE && route.is_some_and(|r| self.is_inside(s.id, r)));
                 if !claims.1 {
                     sheet_directions = self.sheet_drag_directions(&chain);
+                    if chain.iter().any(|s| s.axes.1 && s.max.1 > 0.) {
+                        nested_sheet = self.nested_sheet_bounds();
+                    }
                 }
                 sheet = sheet_directions == (true, true);
                 claims.1 |= sheet;
@@ -295,6 +302,7 @@ impl<D: DataSource> Presenter<D> {
             claims,
             sheet,
             sheet_directions,
+            nested_sheet,
             field: self.hosted_at(hit),
         }
     }
@@ -610,6 +618,11 @@ impl<D: DataSource> Presenter<D> {
             out.extend([s.id as i32, self.reader_flags(s) | tap, rev as i32]);
             let px = [s.offset.0, s.offset.1, s.max.0, s.max.1];
             out.extend(px.iter().chain(&s.port).map(|v| bits(v * scale)));
+        }
+        if let Some((modal, bounds)) = under.nested_sheet {
+            out[0] |= 32;
+            out.extend([modal.index as i32, modal.generation as i32]);
+            out.extend(bounds.map(|v| bits(v * scale)));
         }
         out
     }

@@ -22,6 +22,80 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::Instant;
 
+/// The development APK's baked bytes, mapped by Android's linker.
+///
+/// # Safety
+/// The library must be the data image built for this APK and export only
+/// blobs in the layout described below.
+#[doc(hidden)]
+pub unsafe fn baked(library: &'static str, symbol: &CStr) -> &'static [u8] {
+    static IMAGE: std::sync::OnceLock<libloading::Library> = std::sync::OnceLock::new();
+    let image = IMAGE.get_or_init(|| {
+        // SAFETY: The APK build links this read-only image without code or constructors.
+        let image = unsafe { libloading::Library::new(library) }
+            .expect("the development APK carries its bake image");
+        // SAFETY: The requested symbol names data inside the image, which stays loaded.
+        let at = unsafe { image.get::<*const c_void>(symbol.to_bytes_with_nul()) }
+            .expect("the baked image carries the requested blob");
+        release_module_pages_too(*at);
+        image
+    });
+    // SAFETY: The packaging link exports each blob as a 16-byte header (length and padding)
+    // followed by that many bytes. IMAGE keeps the entire mapping live.
+    unsafe {
+        let blob = *image
+            .get::<*const u64>(symbol.to_bytes_with_nul())
+            .expect("the baked image carries the requested blob");
+        std::slice::from_raw_parts(blob.add(2).cast(), *blob as usize)
+    }
+}
+
+/// The TypeScript grants from the development APK's module receipt.
+#[doc(hidden)]
+pub fn baked_grants(receipt: &'static [u8]) -> &'static str {
+    &baked_module(receipt).grants
+}
+
+/// The TypeScript Canvas 2D roster from the development APK's module receipt.
+#[doc(hidden)]
+pub fn baked_canvas_surfaces(receipt: &'static [u8]) -> &'static [(&'static str, usize)] {
+    static SURFACES: std::sync::OnceLock<Vec<(&'static str, usize)>> = std::sync::OnceLock::new();
+    SURFACES.get_or_init(|| {
+        baked_module(receipt)
+            .surfaces
+            .iter()
+            .map(|(name, arity)| (name.as_str(), *arity))
+            .collect()
+    })
+}
+
+#[derive(serde::Deserialize)]
+struct BakedModule {
+    grants: String,
+    surfaces: std::collections::BTreeMap<String, usize>,
+}
+
+fn baked_module(receipt: &[u8]) -> &'static BakedModule {
+    static MODULE: std::sync::OnceLock<BakedModule> = std::sync::OnceLock::new();
+    MODULE.get_or_init(|| serde_json::from_slice(receipt).expect("invalid baked module receipt"))
+}
+
+/// Read a blob from the development APK's data image.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! android_baked {
+    ($symbol:expr) => {{
+        const SYMBOL: &::std::ffi::CStr =
+            match ::std::ffi::CStr::from_bytes_with_nul(concat!($symbol, "\0").as_bytes()) {
+                Ok(symbol) => symbol,
+                Err(_) => panic!("invalid baked symbol"),
+            };
+        // SAFETY: The APK build uses the same name at compile time and when it
+        // packages the read-only bake image with its blob symbols.
+        unsafe { $crate::android::baked(env!("EXACT_ANDROID_BAKE_LIBRARY"), SYMBOL) }
+    }};
+}
+
 #[link(name = "android")]
 extern "C" {
     fn ANativeWindow_release(window: *mut c_void);
@@ -191,8 +265,8 @@ fn release_pages_of(at: *const c_void) -> usize {
     released
 }
 
-/// The libraries this app loads besides its own (the GPU module, LLP 1009),
-/// each by an address inside it: their read-only pages go too.
+/// The app's loaded libraries (the GPU module, LLP 1009, and the development
+/// bake), each by an address inside it. Their read-only pages go too.
 static MODULES: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
 
 /// `at`'s library is the app's and stays loaded: [`release_library_pages`]
@@ -212,6 +286,22 @@ pub fn release_library_pages() -> usize {
         released += release_pages_of(*at as *const c_void);
     }
     released
+}
+
+#[cfg(test)]
+#[test]
+#[ignore = "set EXACT_ANDROID_TEST_BAKE to a staged development bake image on the device"]
+fn the_bake_image_registers_its_pages_once() {
+    let library = std::env::var("EXACT_ANDROID_TEST_BAKE").unwrap().leak();
+    let registered = MODULES.lock().unwrap().len();
+    // SAFETY: The test receives a data image staged by the APK packager.
+    let plan = unsafe { baked(library, c"exact_app_plan") };
+    let compat = unsafe { baked(library, c"exact_compat_json") };
+    let modules = MODULES.lock().unwrap();
+    assert_eq!(modules.len(), registered + 1);
+    assert!(release_pages_of(modules[registered] as *const c_void) > 0);
+    assert!(!plan.is_empty());
+    assert_eq!(compat.first(), Some(&b'{'));
 }
 
 /// [`release_library_pages`] once, `after` this call, on a thread of its

@@ -1836,16 +1836,24 @@ fixture does next: `{"action": "expire-access", "profile": "spec"}`, and
 returns once the app's token request is held, and `release-token` lets it
 go), `deny-authorize`; `fixture.ts`'s `control` lists them all.
 
+The fixture app can exercise a signed-in screen with a fixed backend answer.
+`authorize` completes the nonce-bound code exchange. `reload` reopens the
+app with the session saved in this test's scratch store.
+
 ```contract-test
-test "signs in, shows the person, and is still signed in after a relaunch"
-  request POST "/control" {"action": "reset"}
+test "loads an authenticated screen from a saved OIDC session"
+  answer fetch "http://127.0.0.1:4400/p/spec/api/me" with 200 {"name":"Offline reader"}
+  request POST "/control" {"action":"reset"}
+  clock data
   tap "sign-in"
   authorize
   clock data
-  expect text "name" == "Ada Lovelace"
+  expect text "status" == "Signed in"
+  expect text "name" == "Offline reader"
   reload
   clock data
   expect text "status" == "Signed in"
+  expect text "name" == "Offline reader"
 ```
 
 #### HTTPS callbacks
@@ -2432,11 +2440,17 @@ fires once, on the list the row lands in, with the dragged row's key, then the
 key it lands before (`none` at the end) and, for an action taking one more
 parameter, `ReorderEvent { from, to }`. The action decides where the row goes: a board whose cards join the bottom
 of the column they are dropped on ignores that key when `from != to`. A board
-is columns in a plain horizontal `scroll`, each a header, a grouped list
-(`flex=1 min-height=…`: the list is the drop target, where the lifted card's centre
-is inside its scroll box, so space below a list that only fits its rows does not
-take the card: a release there lands at the last gap the drag passed over, in the
-card's own column when it crossed no other list) and its quick-add; give each grip `touch-action="none"`
+has columns in a horizontal `scroll`, each with a header, a grouped list and
+a quick-add. Give the list `flex=1 min-height=…` so its scroll box fills the
+available height. The finger or pointer chooses the list under it, even with
+a grip at the edge of a wide card. The lifted card's centre chooses the gap
+within that list. Releasing over a header or gutter uses the last gap the
+drag reached. To highlight that column, bind
+`reordertargetchange=highlight(col)` on each grouped list. Its action takes
+the bound column and a boolean. The source becomes the target on lift. When
+another list takes over, the old list receives `false` and the new list
+receives `true`. Drop and cancel clear the highlight. Keyboard and
+accessibility moves use the same signal. Give each grip `touch-action="none"`
 and no `press`, `pan`, `pointerdown` or `key` of its own, so the host's keys
 (Space, the arrows, Enter, Escape) work on it. The host draws the lifted row,
 holds the drop until the move shows (a second at most) and scrolls the lists
@@ -5423,6 +5437,14 @@ screen is never `high`, nor is any iOS or Android device natively. A game's rend
 read it to offer a quality setting. A native host answers its GPU module's tier
 once the module loads (`high` before it). Under the agent it is `high` from launch, and
 `prefer gpu-tier low` substitutes it and remakes each world's renderer at its rung.
+`exactPage().platform` identifies the host from the first frame. Declare
+`platform: string` or an enum over the following values in the page resource's shape.
+The native hosts report
+`ios`, `macos`, `tvos`, `watchos`, `android`, `linux` or `windows`.
+A browser or server-rendered web page reports `web`, a terminal app reports
+`terminal`, and a runner booted without a host reports `headless`. A browser
+on an Android phone therefore reports `web`.
+
 `exactPage` answers `visibilityState`, `frozen`, `onLine`, `canShare`,
 `canShareFiles` and `canSharePictures` (whether `share(files=…)` takes
 `app:/` files and an element's `"#id"`; the web never takes a picture),
@@ -6922,10 +6944,10 @@ A runtime choice with a bundled-font literal is refused so it cannot silently
 select an installed face with the same name; write bundled choices as literals.
 
 A `text` with `selectionchange=act` hears the reader's real text selection
-on the web, macOS and iOS: `action act(s: Selection)` gets `s.text`, `s.start` and
+on the web, macOS, iOS and Android. `action act(s: Selection)` gets `s.text`, `s.start` and
 `s.end` in the node's own text ("" at 0, 0 when nothing there is selected).
 On web and macOS, `s.rects` is a list of `Geometry` snapshots for the selected
-fragments in viewport space; empty when cleared (and on iOS).
+fragments in viewport space. It is empty when cleared. iOS and Android report an empty list.
 `removeAllRanges()` clears the reader selection, and
 `setSelectionRange(id, start, end[, direction])` selects a `text` on web and
 macOS using source UTF-16 offsets. Both report changed parts through
@@ -6937,7 +6959,7 @@ long press or a double tap selects a word of text its author made selectable
 selected (under `--touch platform`, `tap <id> drag 0 0 press 900` is a real
 long press).
 
-For a plain text field on the **web, macOS, iOS and Linux**, `setRangeText(id, text[, start,
+For a plain text field on the **web, macOS, iOS, Linux, Windows and Android**, `setRangeText(id, text[, start,
 end[, selectionMode]])` replaces its selection or a UTF-16 range. Selection
 is preserved by default (`select`, `start`, `end` are the other modes).
 Exact deliberately fires one `input` so its action can update the bound
@@ -6947,7 +6969,10 @@ type also covers hatch replacements and browser spelling
 corrections, so it does not uniquely identify this command. `select` follows
 input only when the selection changes. URL inputs trim surrounding ASCII
 whitespace. Markdown editors on web and Apple use source offsets and add one
-undo step. Windows, Android and terminal do not support it yet. Field
+undo step. On Linux, Windows and Android, range replacement requires a plain
+field. To edit and preview Markdown there, bind a plain textarea and a
+`text markup="markdown"` reader to the same string. The terminal host
+refuses `setRangeText`. Field
 `selectionchange` reports caret moves through `InputEvent`, and
 `beforeinput` reports the proposed edit's `inputType` and optional `data`.
 Call `preventDefault()` to reject a cancelable edit; composition events
@@ -7239,8 +7264,11 @@ paragraph (one selection is one paragraph there). An inline run that says
 `all` is selectable in text that is not (a label, a `header`), alone, on
 all three. Text that presses (`press=`) still presses on each click or
 tap; on macOS it does not select, and on iOS a tap while it holds a
-selection clears the selection, as in a text view. Linux, Windows, Android
-and tvOS have no text
+selection clears the selection, as in a text view. On Android a long press on
+`user-select="text"` selects a word. The handles adjust the selection within
+one paragraph, and the floating toolbar offers Copy, Share and Select all.
+An inline or enclosing `all` selects its text as a unit. Dragging the paragraph
+away from a handle scrolls its container. Linux, Windows and tvOS have no text
 selection, so `text` and `all` change nothing there. `contain` is refused by
 name: no native host has it. These rows take literals
 or choices of literals, so unsupported runtime values cannot bypass the check.

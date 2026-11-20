@@ -663,3 +663,57 @@ fn anonymous_grid_text_paints_and_hits_at_its_track_width() {
         }
     }
 }
+
+#[test]
+fn selected_word_handles_and_all_use_the_painted_multiline_paragraph() {
+    let mut p = boot("component App\n  view\n    column padding=20\n      text testId=\"p\" white-space=\"pre\" user-select=\"text\" font-size=16 line-height=\"20px\"\n        text \"first line of a log\"\n        text \"\\nsecond line of a log\"\n");
+    let id = view(&p, "p");
+    let (x, y, _, _) = p.rect_of(id).unwrap();
+    let selected = |p: &mut Presenter<()>| p.reader_select(5, 0., 0., 1.).unwrap();
+    let at = p.reader_select(0, x + 12., y + 30., 1.).unwrap();
+    assert_eq!(selected(&mut p), "second");
+    assert_eq!(at["marks"].as_array().unwrap().len(), 1);
+    p.reader_select(1, x, y + 8., 1.).unwrap();
+    assert_eq!(selected(&mut p), "first line of a log\nsecond");
+    p.reader_select(3, 0., 0., 1.).unwrap();
+    assert_eq!(
+        selected(&mut p),
+        "first line of a log\nsecond line of a log"
+    );
+    assert!(p.reader_select(6, 0., 0., 1.).is_none());
+    assert!(p.reader_select(5, 0., 0., 1.).is_none());
+}
+
+#[test]
+fn inline_all_is_atomic_inside_an_unselectable_label() {
+    let mut p = boot("component App\n  view\n    text testId=\"p\" font-size=16\n      text \"No \"\n      text \"🐈 cat\" user-select=\"all\"\n      text \" outside\"\n");
+    let id = view(&p, "p");
+    let (x, y, _, _) = p.rect_of(id).unwrap();
+    assert!(p.reader_select(0, x + 4., y + 8., 1.).is_none());
+    p.reader_select(0, x + 44., y + 8., 1.).unwrap();
+    p.reader_select(3, 0., 0., 1.).unwrap();
+    assert_eq!(p.reader_select(5, 0., 0., 1.).unwrap(), "🐈 cat");
+}
+
+#[test]
+fn selection_events_name_source_offsets_and_copy_uses_the_visible_spaces() {
+    let mut p = boot(
+        r#"component App
+  state part = ""
+  action changed(s: Selection)
+    part = `${s.start}|${s.end}|${s.text}`
+  view
+    text testId="p" selectionchange=changed user-select="text" font-size=16
+      text "🐈  "
+      text "log   file"
+"#,
+    );
+    let id = view(&p, "p");
+    let (x, y, _, _) = p.rect_of(id).unwrap();
+    p.reader_select(0, x + 5., y + 8., 1.).unwrap();
+    p.reader_select(3, 0., 0., 1.).unwrap();
+    assert_eq!(slot(&p, "part"), "0|14|🐈  log   file");
+    assert_eq!(p.reader_select(5, 0., 0., 1.).unwrap(), "🐈 log file");
+    p.reader_select(6, 0., 0., 1.);
+    assert_eq!(slot(&p, "part"), "0|0|");
+}

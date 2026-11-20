@@ -177,6 +177,7 @@ package final class Runtime {
     package let completions = RuntimeDoor()
     package var topLayer: (() -> TopLayerGeometry)?
     package var inlineFrame: ((UInt32) -> CGRect?)?
+    package var scrollMetrics: ((UInt32) -> [Double]?)?
     package var rangeFrame: ((UInt32, UInt32, UInt32) -> CGRect?)?
     #if DEBUG
     // Per-runtime observation for differential tests of actual session traffic.

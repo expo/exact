@@ -1,7 +1,7 @@
 //! Dropping across lists (LLP 1094 D5–D9) on Linux: a grip in a list with a
 //! `reorderGroup` lifts its row as a ghost (`paint/lift.rs`) that follows
-//! the contact; the ghost's centre picks the grouped list whose scrollport
-//! holds it and the gap there (the runner's `preview_reorder_into`, in
+//! the contact. The contact picks the list, and the ghost's centre picks
+//! the gap there (the runner's `preview_reorder_into`, in
 //! process); the drop goes to that target and may hold until the move
 //! shows; the ghost then springs onto the row wherever it is, or goes with
 //! it. Keys move the gap a row or a list (D9). The session is the runner's;
@@ -208,7 +208,7 @@ impl<D: DataSource> Presenter<D> {
         self.group_lift(binding, origin, true, now)
     }
 
-    /// The ghost follows the contact; its centre samples the lists.
+    /// Move the ghost with the contact and sample the list beneath the contact.
     pub(super) fn move_group(&mut self, point: (f32, f32)) -> Result<bool, String> {
         let Some(s) = self.group.as_mut().filter(|s| s.phase == Phase::Active) else {
             return Ok(false);
@@ -223,17 +223,17 @@ impl<D: DataSource> Presenter<D> {
         Ok(accepted)
     }
 
-    /// The grouped list whose port holds the ghost's centre, the gap at
-    /// the centre's content y there (D5, D7); outside every port nothing,
-    /// so the last certified gap stands.
+    /// The contact picks the list and the ghost's centre gives its insertion height.
+    /// Outside every port the last certified gap stands (D5, D7).
     fn group_sample(&mut self) -> Result<bool, String> {
         let Some(s) = self.group.as_ref() else {
             return Ok(false);
         };
         let (token, centre) = (s.token, centre(s));
+        let point = contact(s);
         let Some((target, port)) = self.group_lists(&s.group).into_iter().find_map(|list| {
             let (port, clip, _) = self.list_port(list)?;
-            contains(clip, centre).then_some((list, port))
+            contains(clip, point).then_some((list, port))
         }) else {
             return Ok(false);
         };
@@ -500,7 +500,7 @@ impl<D: DataSource> Presenter<D> {
             .as_ref()
             .filter(|s| s.phase == Phase::Active && s.ghost)?;
         let c = centre(s);
-        let contact = (s.at.0 + s.grab.0, s.at.1 + s.grab.1);
+        let contact = contact(s);
         let target = self
             .host
             .runner()
@@ -703,6 +703,10 @@ impl<D: DataSource> Presenter<D> {
         let binding = self.host.runner().reorder_binding(node.key)?;
         self.group_of(&binding).map(|_| binding)
     }
+}
+
+fn contact(s: &State) -> (f32, f32) {
+    (s.at.0 + s.grab.0, s.at.1 + s.grab.1)
 }
 
 fn centre(s: &State) -> (f32, f32) {

@@ -179,6 +179,8 @@ impl From<bool> for ControlValue {
 /// A host event aimed at a view.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
+    /// This grouped list became or ceased to be the active reorder destination.
+    ReorderTargetChange(bool),
     /// Certified physical drop or explicitly synthesized List reorder request.
     ReorderDrop {
         /// Exact source string key (including the empty string).
@@ -1025,6 +1027,7 @@ impl<D: DataSource> Runner<D> {
     fn dispatch_event(&mut self, view: ViewId, event: Event) -> Result<CommitReceipt, RunnerError> {
         let name = match &event {
             Event::ReorderDrop { .. } => "reorderdrop",
+            Event::ReorderTargetChange(_) => "reordertargetchange",
             Event::Press | Event::PressWith(_) => "press",
             Event::Input(_) => "input",
             Event::Change(_) => "change",
@@ -1229,6 +1232,11 @@ impl<D: DataSource> Runner<D> {
                     Value::str(atom),
                 ])),
                 "select",
+            ),
+            Event::ReorderTargetChange(on) => (
+                EventKind::Reordertargetchange,
+                Some(Value::Bool(*on)),
+                "reordertargetchange",
             ),
             Event::Hover(over) => (EventKind::Hover, Some(Value::Bool(*over)), "hover"),
             Event::Focus => (EventKind::Focus, None, "focus"),

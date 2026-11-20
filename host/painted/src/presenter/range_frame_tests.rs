@@ -470,3 +470,46 @@ fn a_caret_between_directions_in_a_right_to_left_line() {
         "the space's right edge"
     );
 }
+
+#[test]
+fn a_resize_reads_the_textarea_scroll_extent_before_the_next_paint_or_wheel() {
+    let lines = std::iter::repeat_n("m".repeat(83), 70)
+        .collect::<Vec<_>>()
+        .join("\\n");
+    let source = r#"component App
+  state long: number[] = []
+  state short: number[] = []
+  state unknown = false
+  action size(w: number, h: number)
+    long = match scrollMetrics("long") { case some(m) => [m.scrollLeft, m.scrollTop, m.scrollWidth, m.scrollHeight, m.clientWidth, m.clientHeight], case none => [] }
+    short = match scrollMetrics("short") { case some(m) => [m.scrollWidth, m.clientWidth], case none => [] }
+    unknown = match scrollMetrics("missing") { case some(m) => false, case none => true }
+  view
+    column
+      textarea id="long" value="LONG_LINES" resize=size width="100%" height=120 appearance="none" border-width=0 padding=0 white-space="pre" font-size=14 font-family="monospace"
+      textarea id="short" value="ok" width="100%" height=120 appearance="none" border-width=0 padding=0
+"#.replace("LONG_LINES", &lines);
+    let mut p = boot(&source);
+    for width in [370., 1180., 370.] {
+        assert_eq!(p.resize(width, 600.), None);
+        let state = slot(&p, "long");
+        let m = state.as_array().unwrap();
+        assert_eq!(m.len(), 6, "{state}");
+        assert_eq!(m[0], 0.);
+        assert_eq!(m[1], 0.);
+        assert_eq!(m[4], f64::from(width));
+        assert_eq!(m[5], 120.);
+        assert!(m[3].as_f64().unwrap() > 120.);
+        let overflow = m[2].as_f64().unwrap() - f64::from(width);
+        if width == 370. {
+            assert!(overflow > 100., "{m:?}");
+        } else {
+            assert_eq!(overflow, 0.);
+        }
+        let short = slot(&p, "short");
+        assert_eq!(short[0].as_f64(), Some(f64::from(width)));
+        assert_eq!(short[1].as_f64(), Some(f64::from(width)));
+        assert_eq!(slot(&p, "unknown"), true);
+        p.frame();
+    }
+}

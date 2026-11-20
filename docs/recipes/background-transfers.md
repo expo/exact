@@ -1,37 +1,37 @@
 # Recipe: transfers the system finishes
 
-`@exact/background-transfer` (iOS, macOS and Android; the web reads `available`
-false and uses `fetch`) hands an upload or download to the system, which
-finishes it after the app is suspended or terminated. Data code alone
-starts one, since its headers may carry a credential; each `url`,
-`bodyFrom` and `saveTo` must be granted (`net.fetch`, `fs.read`,
-`fs.write`):
+On iOS, macOS and Android, data code can start a transfer that survives suspension. On the web,
+`backgroundFetchStatus().available` is false. Grant `net.fetch` for the
+URL, `fs.read` for each upload file and `fs.write` for `saveTo`.
 
 ```ts
 import { backgroundFetch } from '@exact/background-transfer';
-await backgroundFetch({ id: `photo:${key}`, requests: [{ url: uploadUrl, method: 'PUT', bodyFrom: 'app:/data/out/photo.jpg', headers: [{ name: 'Authorization', value: token }], saveTo: null }] });
+await backgroundFetch({ id: `photo:${key}`, requests: [{ url, form: [
+  { name: 'album', value: album }, { name: 'photo', from: 'app:/data/out/photo.jpg', contentType: 'image/jpeg' }
+] }] });
 ```
 
+Use `bodyFrom` for a raw file or `form` for up to 256 ordered parts. Both
+default to POST. The host streams files into a private snapshot before
+answering. For a form it sets Content-Type and the boundary. A file part
+defaults to the source filename and `application/octet-stream`. Form
+metadata is limited to 64 KiB. On Android this includes the URL and headers.
+
 The root hears `backgroundfetchsuccess`, `backgroundfetchfail` or
-`backgroundfetchabort` with the registration, in a wake. Each response
-body is a file: the request's `saveTo`, else the kept path
-`app:/data/transfers/<id>/<index>` (grant `fs.read app:/data`), where the id
-is one path segment, each byte outside ASCII letters, digits, `-` and `_`
-percent-encoded: read `records[index].path`. Retire it
-(`retireBackgroundFetch`) once what it carried is kept. Retiring removes the kept files, and
-the id can be started again once it has answered. On Android a retirement
-that cannot remove them (a locked secret store) rejects with `UnknownError`
-and the id stays taken: call it again.
-`packages/background-transfer/test` is a whole example.
+`backgroundfetchabort` in a wake. Read each response at `records[index].path`.
+With `saveTo` it belongs to the app. Otherwise the host keeps it at
+`app:/data/transfers/<id>/<index>` (grant `fs.read app:/data`). The id is
+percent-encoded except for ASCII letters, digits, `-` and `_`.
+`retireBackgroundFetch` removes the kept files and frees the id. If Android
+rejects retirement with `UnknownError` (for example, a locked secret store),
+retry.
 
-On Android a transfer runs as WorkManager work that waits for a network.
-Three stops by the system or five network failures in a row, with no
-response kept between them, end it as `fetch-error`. A drive's transfers
-are its own, with `--bind background-transfer` too.
+On Android, WorkManager waits for a network. Three system stops or five consecutive
+network failures without a kept response end in `fetch-error`. A drive owns its transfers
+even with `--bind background-transfer`. `--reset-storage` cancels its jobs and frees its ids.
 
-A start within five seconds of a person's press, key or notification tap,
-while the app shows, is that person's transfer (a timer inside that window
-counts, as on the web). Android 14 and later run it as a
+A transfer started within five seconds of a press, key or notification tap while the
+app shows is person-initiated, including one started by a timer. Android 14 and later run it as a
 user-initiated job with a notification (a tap raises
 `backgroundfetchclick`) and no time limit, Android 12 and 13 as foreground
 work started while the app shows. The system's stops never fail it: after three it

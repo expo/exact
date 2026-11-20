@@ -22,6 +22,9 @@ extension NavigationTabsIOSTests {
             session.apply(session.runtime.press(try node(session, "toggle-choosing").id, now: session.now()))
             until("the stack takes the shown tablist") { root.tablistHidden == false }
             XCTAssertTrue(tabs.isTabBarHidden, "the bar waits for the transition")
+            // Hold the session's later batches, so none, such as the layout new text asks for or a tick, can do at
+            // rest what only the transition's end should
+            session.holdFillForTests()
         }, read: { tabs.isTabBarHidden })
         XCTAssertEqual(hidden, false, "the bar came back as the transition ended")
     }
@@ -42,27 +45,33 @@ extension NavigationTabsIOSTests {
             list.style["display"] = .string("none")
             session.presenter.navigationHost.followTablist(nav.viewControllers.compactMap { $0 as? RouteController }, in: nav)
             XCTAssertFalse(tabs.isTabBarHidden, "the bar waits for the transition")
+            // Hold the session's later batches, so none, such as the layout new text asks for or a tick, can do at
+            // rest what only the transition's end should
+            session.holdFillForTests()
         }, read: { tabs.isTabBarHidden })
         XCTAssertEqual(hidden, true, "the bar left as the transition ended")
     }
 
-    /// A route the router pushes while a sheet presents over the tabs is pushed as the presentation ends.
+    /// A route the router pushes while a sheet presents over the tabs waits for the presentation's end and is pushed
+    /// after it, by whichever sync first writes the stack then. One that runs within a batch lifts the route's header as
+    /// the batch applies, and the push then waits for the runtime's answer to its cover (`liftHeld`), a later batch, so
+    /// the test lets later batches through.
     func testARoutePushedDuringATransitionIsPushedAfterIt() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "a presentation completes only in a scene's window") }
         let session = try fixture("pushed-during-transition")
         let tabs = try XCTUnwrap(session.presenter.navigationHost.tabController)
         let nav = try XCTUnwrap(tabs.selectedViewController as? UINavigationController)
-        let routes = try whenAHeldPresentationEnds(over: tabs, in: session, during: {
+        _ = try whenAHeldPresentationEnds(over: tabs, in: session, during: {
             // Press the button through the runtime: it is under the sheet
             session.apply(session.runtime.press(try node(session, "detail").id, now: session.now()))
             XCTAssertEqual(nav.viewControllers.count, 1, "the push waits for the transition")
+            XCTAssertTrue(session.presenter.navigationHost.tabsHeld, "which holds the stack's write")
         }, read: { nav.viewControllers.count })
-        XCTAssertEqual(routes, 2, "Detail was pushed as the transition ended")
+        until("Detail is pushed after the transition") { nav.viewControllers.count == 2 }
     }
 
     /// `read` as a presentation over `tabs`, held open while `during` runs, ends: on the turn after the transition's
-    /// completions, this one added after any that `during` added. The session's later batches wait (a held fill), so
-    /// none, such as the layout new text asks for or a tick, can do at rest what only the transition's end should.
+    /// completions, this one added after any that `during` added.
     private func whenAHeldPresentationEnds<Value>(over tabs: UITabBarController, in session: ExactSession, during: () throws -> Void, read: @escaping () -> Value) throws -> Value? {
         let held = HeldPresentation(), sheet = UIViewController()
         defer { held.end() }
@@ -72,7 +81,6 @@ extension NavigationTabsIOSTests {
         let presentation = try XCTUnwrap(tabs.transitionCoordinator, "the sheet's transition holds the tabs")
         until("the presentation animates") { held.animating }
         try during()
-        session.holdFillForTests()
         var value: Value?
         presentation.animate(alongsideTransition: nil) { _ in DispatchQueue.main.async { value = read() } }
         held.end()

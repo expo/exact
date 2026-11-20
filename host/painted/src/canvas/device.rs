@@ -182,7 +182,8 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// Bit 1 requests light status bar icons. Bit 2 hides the
     /// system bars (LLP 1105 D7). `None` while nothing changed.
     pub fn chrome(&mut self) -> Option<[i32; 6]> {
-        let now = pack_chrome(self.p.chrome(), self.scale);
+        let mut now = pack_chrome(self.p.chrome(), self.scale);
+        now[5] |= self.p.development_status() << 3;
         if self.shell.chrome == Some(now) {
             return None;
         }

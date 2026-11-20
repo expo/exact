@@ -24,6 +24,19 @@ class Tracks internal constructor() {
         holds += h
         return { holds -= h }
     }
+    /** The agent camera's video source, shared by consumers even without a mounted viewfinder. */
+    var cameraClip: CameraClip? = null
+        set(value) {
+            if (field === value) return
+            field = value
+            clipObservers.toList().forEach { it(value) }
+        }
+    private val clipObservers = LinkedHashSet<(CameraClip?) -> Unit>()
+    fun observeClip(observer: (CameraClip?) -> Unit): () -> Unit {
+        clipObservers += observer
+        return { clipObservers -= observer }
+    }
+
     fun held(kind: String): Boolean = holds.any { it.kind == kind }
 
     fun add(entry: TrackEntry) { entries[entry.id] = entry }
@@ -67,6 +80,12 @@ class TrackEntry(val id: String, val kind: String, val tracks: List<String> = em
         pictureObservers += changed
         return { pictureObservers -= changed }
     }
+}
+
+/** A decoded camera frame and how long it lasts from the instant requested, in milliseconds. */
+data class CameraFrame(val bitmap: android.graphics.Bitmap, val remaining: Double)
+fun interface CameraClip {
+    fun sample(trackElapsed: Double): CameraFrame
 }
 
 /** Why a track call failed: a `DOMException` name, as answered. */

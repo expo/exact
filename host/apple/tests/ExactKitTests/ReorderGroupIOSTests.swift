@@ -97,6 +97,16 @@ final class ReorderGroupIOSTests: XCTestCase {
         window?.isHidden = true
     }
 
+    func testTheFingerCanEnterTheDestinationByFivePoints() throws {
+        let calls = ReorderGroupRecorder()
+        let (presenter, grip) = fixture(calls)
+        let hold = try XCTUnwrap(ReorderGroupHold(grip, point: CGPoint(x: 140, y: 20), ghost: true))
+        XCTAssertTrue(hold.move(CGPoint(x: 205, y: 20)))
+        XCTAssertEqual(calls.log.last, "into 5")
+        XCTAssertTrue(presenter.reorderHost?.group === hold)
+        hold.cancel()
+    }
+
     func testAutoscrollPassesAFractionalInnerLimitToItsAncestor() throws {
         for scale in [2, 3] as [CGFloat] {
             let (p, grip) = fixture(ReorderGroupRecorder(), nested: true)

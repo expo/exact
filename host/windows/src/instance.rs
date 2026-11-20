@@ -103,6 +103,50 @@ pub(crate) fn settle(
     }
 }
 
+/// A command-line document or the launch's first location, in argument order.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Activation {
+    Document(String),
+    Location(String),
+}
+
+fn local_file(path: &std::path::Path) -> bool {
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        let Some(Component::Prefix(prefix)) = path.components().next() else {
+            return false;
+        };
+        if !matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)) {
+            return false;
+        }
+    }
+    path.is_absolute() && path.is_file()
+}
+
+/// A relative file belongs to the process that was launched, whose working
+/// directory may differ from the running window's. Rooted app routes and
+/// URLs retain their spelling.
+#[cfg(windows)]
+pub(crate) fn arguments() -> Vec<String> {
+    let mut args: Vec<_> = std::env::args_os()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    for arg in args.iter_mut().skip(1) {
+        let path = std::path::Path::new(arg);
+        if arg.starts_with(['-', '/']) || path.has_root() {
+            continue;
+        }
+        let Ok(absolute) = std::path::absolute(path) else {
+            continue;
+        };
+        if local_file(&absolute) {
+            *arg = absolute.to_string_lossy().into_owned();
+        }
+    }
+    args
+}
+
 /// What the running app does with a later launch.
 #[derive(Debug, PartialEq)]
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -112,9 +156,8 @@ pub(crate) enum Handed {
     /// A plain launch: the window shown and brought forward, as the Dock's
     /// reopen does on the Mac.
     Show,
-    /// A launch with a location (a jump-list task, a link): the window
-    /// shown, and the location opened in it.
-    Open(String),
+    /// The window takes each document and the first route or link.
+    Open(Vec<Activation>),
 }
 
 /// What a later launch with `args` (its own path first) asks of the app.
@@ -124,9 +167,20 @@ pub(crate) fn handed(args: &[String]) -> Handed {
     if crate::desktop::login_launch(args).is_some() {
         return Handed::Nothing;
     }
-    match exact_painted::app::launch_argument(args.iter().cloned()) {
-        Some(href) => Handed::Open(href),
-        None => Handed::Show,
+    let mut opened_location = false;
+    let mut activations = Vec::new();
+    for arg in args.iter().filter(|arg| !arg.starts_with('-')) {
+        if local_file(std::path::Path::new(arg)) {
+            activations.push(Activation::Document(arg.clone()));
+        } else if !opened_location {
+            activations.push(Activation::Location(arg.clone()));
+            opened_location = true;
+        }
+    }
+    if activations.is_empty() {
+        Handed::Show
+    } else {
+        Handed::Open(activations)
     }
 }
 
@@ -463,6 +517,23 @@ mod tests {
     }
 
     #[test]
+    fn a_launch_opens_every_file_in_order_and_only_the_first_location() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let a = root.join("Cargo.toml").to_str().unwrap().to_owned();
+        let b = root.join("src/instance.rs").to_str().unwrap().to_owned();
+        let args = ["app", &a, "--flag", "/add", &b, "/other", &a].map(str::to_owned);
+        assert_eq!(
+            handed(&args),
+            Handed::Open(vec![
+                Activation::Document(a.clone()),
+                Activation::Location("/add".into()),
+                Activation::Document(b),
+                Activation::Document(a),
+            ])
+        );
+    }
+
+    #[test]
     fn a_later_launch_shows_the_window_opens_its_location_or_does_nothing_at_login() {
         let args = |rest: &[&str]| {
             std::iter::once(r"C:\Apps\Shelf.exe")
@@ -471,10 +542,13 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(handed(&args(&[])), Handed::Show);
-        assert_eq!(handed(&args(&["/add"])), Handed::Open("/add".into()));
+        assert_eq!(
+            handed(&args(&["/add"])),
+            Handed::Open(vec![Activation::Location("/add".into())])
+        );
         assert_eq!(
             handed(&args(&["shelf://book/7"])),
-            Handed::Open("shelf://book/7".into())
+            Handed::Open(vec![Activation::Location("shelf://book/7".into())])
         );
         assert_eq!(handed(&args(&["--login"])), Handed::Nothing);
         assert_eq!(handed(&args(&["--login", "hidden"])), Handed::Nothing);

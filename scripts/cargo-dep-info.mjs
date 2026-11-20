@@ -352,6 +352,10 @@ export function cargoInputPaths(stdout, base) {
   }))].sort();
 }
 
+/** Cargo library filenames use the target name even when the package has another name. */
+export const cargoLibraryTarget = pkg => pkg.targets.find(target =>
+  target.kind.some(kind => ['cdylib', 'staticlib', 'rlib', 'lib'].includes(kind)));
+
 /** Supply Cargo with a content revision for the selected bake, then retain
  * its actual watches after success. File watches still serve direct Cargo. */
 export function cargoBakeInputs(pkg, target, profile, env, app = null) {

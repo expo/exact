@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { decodePng, encodePng } from '../../scripts/png.mjs';
-import { chooseSimulator, crashReports, crashSummary, crashWatch, displayAsIs, forwardedEnv, installedAlready, simulator, withDisplay, withMaterials, phoneBridge, phoneStartupFailure, softwareKeyboard, replacedNote, keepInstalledRelease } from './devices.mjs';
+import { chooseSimulator, crashReports, crashSummary, crashWatch, displayAsIs, forwardedEnv, phoneLaunch, installedAlready, simulator, withDisplay, withMaterials, phoneBridge, phoneStartupFailure, softwareKeyboard, replacedNote, keepInstalledRelease } from './devices.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createConnection } from 'node:net';
 import { once } from 'node:events';
@@ -850,6 +850,9 @@ test('a page capture with no glass in it reads nothing of the display', async ()
 });
 // simctl and devicectl hand the app none of the drive's environment: EXACT_STORE=real must be passed by name.
 test('an iOS drive passes EXACT_STORE on to the app it launches, and nothing else of its environment', () => {
+  expect(phoneLaunch({}, { EXACT_AGENT: 'live', HOME: '/h' })).toEqual({ EXACT_AGENT: '1' });
+  expect(phoneLaunch({ EXACT_AGENT: 'live', EXACT_AGENT_CONNECT: 'endpoint' }, { EXACT_STORE: 'real' }))
+    .toEqual({ EXACT_AGENT: 'live', EXACT_AGENT_CONNECT: 'endpoint', EXACT_STORE: 'real' });
   expect(forwardedEnv({ EXACT_STORE: 'real', HOME: '/h' })).toEqual({ EXACT_STORE: 'real' });
   expect(forwardedEnv({ HOME: '/h' })).toEqual({});
 });

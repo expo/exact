@@ -846,20 +846,7 @@ fn streamed_assets_load_after_setup_without_reaching_the_simulation() {
 }
 
 #[test]
-fn streamed_declarations_refuse_sounds_and_names_setup_also_waits_for() {
-    struct Sound;
-    impl Game for Sound {
-        const ID: &'static str = "streamed-sound";
-        const STREAMED: &'static [&'static str] = &["boom.sound"];
-        type Args = ();
-        fn setup(_: &mut World, _: &()) {}
-        fn tick(_: &mut World, _: &Input, _: &()) {}
-    }
-    let error = Sim::<Sound>::new(()).err().unwrap().to_string();
-    assert!(
-        error.contains("`boom.sound`: sounds are not streamed"),
-        "{error}"
-    );
+fn streamed_declarations_refuse_names_setup_also_waits_for() {
     struct Both;
     impl Game for Both {
         const ID: &'static str = "streamed-twice";

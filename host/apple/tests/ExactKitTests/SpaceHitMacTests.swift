@@ -288,6 +288,18 @@ final class SpaceHitMacTests: XCTestCase {
         p.fitDocument()
         XCTAssertEqual(p.root.frame.width, 400, accuracy: 1e-6, "clipped X descendant must not widen document")
         XCTAssertEqual(p.root.frame.height, 510, accuracy: 1e-6, "visible Y descendant extends document: 10 + 400 + 100")
+
+        let moveChild = wireBatch([["op": "present", "id": 3, "property": "translate", "x": 0, "y": 100]])
+        p.apply(moveChild)
+        XCTAssertEqual(p.root.frame.height, 610, accuracy: 1e-6)
+        p.apply(wireBatch([["op": "style", "id": 2, "style": ["overflow_x": "clip", "overflow_y": "clip"]]]))
+        XCTAssertEqual(p.root.frame.height, 300, accuracy: 1e-6)
+        XCTAssertTrue(p.preservesDocumentFit(moveChild))
+        p.apply(moveChild)
+        XCTAssertEqual(p.root.frame.height, 300, accuracy: 1e-6)
+
+        p.apply(wireBatch([["op": "present", "id": 2, "property": "translate", "x": 0, "y": 400]]))
+        XCTAssertEqual(p.root.frame.height, 460, accuracy: 1e-6, "the clipping box itself moved")
     }
 }
 #endif

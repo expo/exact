@@ -307,6 +307,20 @@ for (const engine of engines) {
     });
   }, 60000);
 
+  engineTest[engine](`${engine}: joining Markdown lines changes only the newline`, async () => {
+    const source = 'A **bold word.**\nabc.', at = source.indexOf('\n');
+    await editor(engine, source, async (page, field) => {
+      await field.focus();
+      for (const [key, caret] of [['Backspace', at + 1], ['Delete', at]]) {
+        await field.evaluate((el, index) => el.setSelectionRange(index, index), caret);
+        await page.keyboard.press(key);
+        expect(await field.evaluate(el => [el.value, el.selectionStart, el.selectionEnd])).toEqual([source.replace('\n', ''), at, at]);
+        await page.keyboard.press('ControlOrMeta+Z');
+        expect(await field.evaluate(el => el.value)).toBe(source);
+      }
+    });
+  }, 60000);
+
   engineTest[engine](`${engine}: emptying inline Markdown leaves no rule or code fence`, async () => {
     await editor(engine, '', async (page, field) => {
       await field.focus();

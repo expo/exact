@@ -70,13 +70,7 @@ macro_rules! sim_with_art {
             >,
         > = ::std::sync::OnceLock::new();
         match ART.get_or_init(|| ::exact_game_bake::game_art(env!("CARGO_MANIFEST_DIR"))) {
-            ::std::result::Result::Ok(art) => $crate::Sim::with_assets($args, |name: &str| {
-                art.get(name).cloned().ok_or_else(|| {
-                    ::std::format!(
-                        "`{name}` is not a payload of this game's art/ (a model `x.model` comes from art/x.glb or art/x.gltf)"
-                    )
-                })
-            }),
+            ::std::result::Result::Ok(art) => ::exact_game_bake::sim_from_art($args, art),
             ::std::result::Result::Err(error) => ::std::result::Result::Err(error.clone()),
         }
     }};

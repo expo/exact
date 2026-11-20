@@ -344,6 +344,8 @@ fn deliver(step: &Step) -> Result<Option<Item>, String> {
         Step::ExpectSound { .. } => Item::Observe(step.span()),
         // Displayed wake-lock holders have no Lean oracle (LLP 1125 D11).
         Step::ExpectWakelock { .. } => Item::Observe(step.span()),
+        // What a drag carries is the host's props, which Lean has no model of (LLP 1094.000 D10).
+        Step::ExpectDrag { .. } => Item::Observe(step.span()),
         // A control's `disabled` and the focus are read from the host's tree (LLP 1116.010 D3), and a box from its
         // layout, which Lean has no model of.
         Step::ExpectDisabled { .. }
@@ -394,6 +396,7 @@ fn delivered_kind(kind: &str) -> bool {
             | "ExpectTree"
             | "ExpectSound"
             | "ExpectWakelock"
+            | "ExpectDrag"
             | "ExpectDisabled"
             | "ExpectFocused"
             | "ExpectLayout"

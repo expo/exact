@@ -64,11 +64,11 @@ fn a_nested_lists_downward_drag_lowers_the_sheet_only_at_the_lists_start() {
     let rows = id(&p, "rows");
     let (_, sheet) = p.top_sheet().unwrap();
     let y = sheet.1 + SHEET_HANDLE + 60.;
-    assert_eq!(p.reader_under(200., y, 1.)[0], 0b110);
+    assert_eq!(p.reader_under(200., y, 1.)[0] & 31, 0b110);
     p.reader_wheel(rows, 0., 100.).unwrap();
     p.frame();
     assert_eq!(
-        p.reader_under(200., y, 1.)[0],
+        p.reader_under(200., y, 1.)[0] & 31,
         0b1000,
         "only up raises the sheet"
     );
@@ -92,7 +92,7 @@ fn a_nested_lists_downward_drag_lowers_the_sheet_only_at_the_lists_start() {
     assert!(near(tall.1, STATUS));
     let y = tall.1 + SHEET_HANDLE + 60.;
     assert_eq!(
-        p.reader_under(200., y, 1.)[0],
+        p.reader_under(200., y, 1.)[0] & 31,
         0b10000,
         "only down lowers a tall sheet"
     );
@@ -126,7 +126,7 @@ fn a_nested_lists_downward_drag_lowers_the_sheet_only_at_the_lists_start() {
     tap(&mut p, "open");
     after(&mut p, 1000.);
     assert_eq!(
-        p.reader_under(200., y, 1.)[0],
+        p.reader_under(200., y, 1.)[0] & 31,
         0,
         "a single-detent sheet leaves its list alone"
     );
@@ -246,7 +246,7 @@ fn refreshing_lists_keep_pulls(counts: &[usize]) {
                 0
             };
             assert_eq!(
-                p.reader_under(200., y, 1.)[0],
+                p.reader_under(200., y, 1.)[0] & 31,
                 expected,
                 "{detents}, {count} rows"
             );
@@ -290,4 +290,38 @@ fn an_agent_scroll_drag_accepts_a_sheet_only_claim() {
     }
     assert!(near(p.scroll[&rows].1, 400.));
     assert!(near(p.top_sheet().unwrap().1 .1, sheet.1));
+}
+
+#[test]
+fn reader_shares_a_sheet_only_with_the_route_hit_on_down() {
+    let mut p = phone_source(LIST);
+    tap(&mut p, "open");
+    after(&mut p, 1000.);
+    let (_, bounds) = p.top_sheet().unwrap();
+    let words = p.reader_under(200., bounds.1 + SHEET_HANDLE + 55., 1.);
+    assert_ne!(words[0] & 32, 0);
+    let at = 3 + 11 * words[1] as usize;
+    let modal = exact_kernel::NodeKey {
+        index: words[at] as u32,
+        generation: words[at + 1] as u32,
+    };
+    let top = f32::from_bits(words[at + 3] as u32);
+    let now = p.host().now();
+    p.reader_sheet_drag(
+        exact_kernel::NodeKey {
+            generation: modal.generation.wrapping_add(1),
+            ..modal
+        },
+        top,
+        None,
+        now,
+    );
+    assert!(near(p.top_sheet().unwrap().1 .1, bounds.1));
+    p.reader_sheet_drag(modal, top, None, now);
+    assert!(near(p.top_sheet().unwrap().1 .1, top));
+    assert!(p.stage_follows_finger());
+    p.reader_sheet_drag(modal, top, Some(0.), now);
+    assert!(!p.stage_follows_finger());
+    after(&mut p, 1000.);
+    assert!(near(p.top_sheet().unwrap().1 .1, STATUS));
 }

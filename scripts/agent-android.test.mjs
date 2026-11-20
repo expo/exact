@@ -1230,28 +1230,6 @@ test('Android bundles and unattended APKs have explicit command flags', async ()
   }
 });
 
-test('an APK carries each GPU library the bake built, by the name Cargo gave it, unstripped (#306)', async () => {
-  const { bakeGpuLibraries, stageGpuLibraries } = await import('./agent-android.mjs');
-  const dir = mkdtempSync(resolve(tmpdir(), 'exact-apk-gpu-'));
-  try {
-    const app = { hasGpu: true, manifest: { gpu: { modules: { extra: ['extra'] } } } };
-    // The named module's crate sets `[lib] name = "extra"`: Cargo builds libextra.so, not libfiddl_gpu_extra.so.
-    const products = ['libfiddl_gpu.so', 'libextra.so'].map((file) => resolve(dir, file));
-    let asked;
-    const bake = (...args) => { asked = args; for (const product of products) expect(args[3].prepareGpu(product)).toBe(product); };
-    const libraries = bakeGpuLibraries(app, { profile: 'release', env: { A: '1' } }, bake);
-    expect(libraries).toEqual(products);
-    expect(asked.slice(0, 3)).toEqual([app, 'android', 'aarch64-linux-android']);
-    expect(asked[3]).toMatchObject({ profile: 'release', env: { A: '1' }, kind: 'android' });
-    for (const library of libraries) writeFileSync(library, library);
-    const jniLibs = resolve(dir, 'jniLibs/arm64-v8a');
-    mkdirSync(jniLibs, { recursive: true });
-    expect(stageGpuLibraries(libraries, jniLibs)).toEqual(['-PgpuModules=libfiddl_gpu.so,libextra.so']);
-    for (const library of libraries) expect(readFileSync(resolve(jniLibs, library.split('/').pop()), 'utf8')).toBe(library);
-    expect(stageGpuLibraries([], jniLibs)).toEqual([]);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
-});
-
 test('locks are written in a Gradle home with nothing resolved, keeping its configuration and the wrapper', async () => {
   const { coldGradleHome } = await import('./agent-android.mjs');
   const warm = mkdtempSync(resolve(tmpdir(), 'exact-warm-gradle-')), bare = mkdtempSync(resolve(tmpdir(), 'exact-bare-gradle-'));
@@ -1412,7 +1390,7 @@ test('android --run --url launches the app following that dev loop, stopping a r
   const { launchArgs, reversedPorts } = await import('./agent-android.mjs');
   expect(launchArgs('com.example.app')).toEqual(['shell', 'am', 'start', '-W', '-n', 'com.example.app/dev.exact.app.MainActivity']);
   expect(launchArgs('com.example.app', 'http://127.0.0.1:9147/')).toEqual(['shell', 'am', 'start', '-W', '-S', '-n',
-    'com.example.app/dev.exact.app.MainActivity', '--es', 'x_dev_plan', 'http://127.0.0.1:9147/']);
+    'com.example.app/dev.exact.app.DevLoop', '--es', 'x_dev_plan', 'http://127.0.0.1:9147/']);
   expect(reversedPorts({ EXACT_DEV_PLAN: 'http://127.0.0.1:9147/' })).toEqual(['9147']);
   const refused = (...args) => spawnSync(process.execPath, [resolve(import.meta.dir, 'agent-android.mjs'), 'build', 'shelf', ...args], { encoding: 'utf8', timeout: 30_000 });
   expect(refused('--url', 'http://127.0.0.1:9147/').stderr).toContain('--url is the dev loop the launched APK follows');

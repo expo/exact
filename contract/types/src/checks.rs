@@ -14,6 +14,7 @@ mod open_url;
 mod permission;
 mod pickers;
 mod sounds;
+mod transfer;
 
 /// Whether a roster parameter admits `t`. The roster table spells three
 /// parameters `any`; each is held to the values its runner entry reads, so a
@@ -1160,6 +1161,9 @@ fn check_attr(a: &Attr, scope: &Scope, shapes: &Shapes) -> Result<(), TypeError>
                 a.span,
             ),
         };
+    }
+    if a.name == "dataTransfer" {
+        return transfer::check(&a.value, scope, shapes);
     }
     if a.name == "surface" {
         // `surface=name(args)`: the name is the GPU module's,

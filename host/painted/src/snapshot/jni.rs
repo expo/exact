@@ -11,23 +11,23 @@
 /// wrote to `OUT_DIR` (`entries = [(kind, "plans/<kind>.plan"), …]`), with
 /// `data` the expression that makes the app's data source for a refresh and
 /// `module` whether the bake paired a TypeScript module (`app.module.json`,
-/// `app.hbc`) with them, which a TypeScript refresh runs.
+/// `app.hbc`) with them, and `separate` whether the APK maps these bytes from
+/// its data image.
 #[macro_export]
 macro_rules! widgets_jni {
-    (data = $data:expr, module = $module:tt, entries = [$(($kind:literal, $path:literal)),* $(,)?] $(,)?) => {
+    (data = $data:expr, module = $module:tt, separate = $separate:tt, entries = [$(($kind:literal, $path:literal)),* $(,)?] $(,)?) => {
         mod exact_widgets_jni {
             #![allow(clippy::missing_safety_doc, unsafe_code)]
             use super::*;
             use $crate::canvas::jni_sys::{jbyteArray, jclass, jdouble, jfloat, jfloatArray, jlong, JNIEnv};
 
-            const ENTRIES: &[(&str, &[u8])] = &[
-                $(($kind, include_bytes!(concat!(env!("OUT_DIR"), "/", $path)))),*
-            ];
-
-            $crate::widgets_jni!(@module $module);
+            $crate::widgets_jni!(@module $module, $separate);
 
             fn plan(kind: &str) -> Option<&'static [u8]> {
-                ENTRIES.iter().find(|(k, _)| *k == kind).map(|(_, p)| *p)
+                match kind {
+                    $($kind => Some($crate::widgets_jni!(@plan $separate, $kind, $path)),)*
+                    _ => None,
+                }
             }
 
             /// The process's environment, as the reader's (`canvas_jni!`'s
@@ -133,7 +133,21 @@ macro_rules! widgets_jni {
             }
         }
     };
-    (@module true) => {
+    (@plan true, $kind:literal, $path:literal) => {
+        $crate::android_baked!(concat!("exact_widget_", $kind))
+    };
+    (@plan false, $kind:literal, $path:literal) => {
+        include_bytes!(concat!(env!("OUT_DIR"), "/", $path))
+    };
+    (@module true, true) => {
+        fn module() -> Option<$crate::snapshot::Module<'static>> {
+            Some($crate::snapshot::Module {
+                receipt: std::str::from_utf8($crate::android_baked!("exact_app_module_json")).expect("baked app.module.json is UTF-8"),
+                bytecode: $crate::android_baked!("exact_app_hbc"),
+            })
+        }
+    };
+    (@module true, false) => {
         fn module() -> Option<$crate::snapshot::Module<'static>> {
             static BYTECODE: &$crate::snapshot::Aligned<[u8]> =
                 &$crate::snapshot::Aligned(*include_bytes!(concat!(env!("OUT_DIR"), "/app.hbc")));
@@ -143,7 +157,7 @@ macro_rules! widgets_jni {
             })
         }
     };
-    (@module false) => {
+    (@module false, $separate:tt) => {
         fn module() -> Option<$crate::snapshot::Module<'static>> {
             None
         }

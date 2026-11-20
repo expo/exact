@@ -195,7 +195,19 @@ fn ligature_features(bits: u8) -> Vec<(&'static [u8; 4], u16)> {
 pub(super) struct HardLine {
     /// Byte offset in the canonical runs, after the preceding separator.
     pub(super) start: usize,
+    pub(super) shape: Arc<LineShape>,
+}
+
+impl std::ops::Deref for HardLine {
+    type Target = LineShape;
+    fn deref(&self) -> &LineShape {
+        &self.shape
+    }
+}
+
+pub(super) struct LineShape {
     pub(super) text: String,
+    pub(super) bytes: usize,
     layout: Mutex<Broken>,
     /// The resolved base direction (CSS `direction`, or the first strong
     /// character under `ltr`).
@@ -455,6 +467,14 @@ impl ShapedSource {
     }
 
     pub(super) fn new(lease: catalog::Lease, spec: Arc<Spec>) -> Self {
+        Self::replacing(lease, spec, None)
+    }
+
+    pub(super) fn replacing(
+        lease: catalog::Lease,
+        spec: Arc<Spec>,
+        old: Option<&ShapedSource>,
+    ) -> Self {
         let mut catalog = lease.borrow_mut();
         let minimum = catalog.line_height(&spec.strut);
         let (ascent, descent, leading) = catalog.font_metrics(&spec.strut);
@@ -486,7 +506,22 @@ impl ShapedSource {
         let pieces = hard_lines(&spec);
         let mut edges = run_edges(&spec, &pieces);
         let mut lines = Vec::with_capacity(pieces.len());
+        let count = pieces.len();
         for (h, (start, text, runs, boxes, _)) in pieces.into_iter().enumerate() {
+            if let Some(line) = old.and_then(|s| {
+                s.matching_line(h, count, |i, line| {
+                    // Indentation and balancing give the first line its own shaping inputs.
+                    text == line.text
+                        && (h == 0) == (i == 0)
+                        && !(h == 0 && spec.text_wrap_style == exact_kernel::TextWrapStyle::Balance)
+                })
+            }) {
+                lines.push(HardLine {
+                    start,
+                    shape: line.1.shape.clone(),
+                });
+                continue;
+            }
             #[cfg(test)]
             SHAPE_LINES.with(|n| n.set(n.get() + 1));
             text_bytes += text.len();
@@ -558,17 +593,20 @@ impl ShapedSource {
             }
             lines.push(HardLine {
                 start,
-                text,
-                rtl: layout.is_rtl(),
-                layout: Mutex::new(Broken {
-                    layout,
-                    at: None,
-                    balance: None,
+                shape: Arc::new(LineShape {
+                    bytes: text.capacity() + layout.capacity_bytes(),
+                    text,
+                    rtl: layout.is_rtl(),
+                    layout: Mutex::new(Broken {
+                        layout,
+                        at: None,
+                        balance: None,
+                    }),
+                    inset,
+                    indent,
+                    rooms,
+                    box_leads,
                 }),
-                inset,
-                indent,
-                rooms,
-                box_leads,
             });
         }
         catalog.release_scratch(text_bytes);
@@ -602,6 +640,24 @@ impl ShapedSource {
             flow: RefCell::new(None),
         }
     }
+    fn matching_line(
+        &self,
+        h: usize,
+        count: usize,
+        matches: impl Fn(usize, &HardLine) -> bool,
+    ) -> Option<(usize, &HardLine)> {
+        let lines = &self.data.lines;
+        [Some(h), lines.len().checked_sub(count - h)]
+            .into_iter()
+            .flatten()
+            .find_map(|i| {
+                lines
+                    .get(i)
+                    .filter(|line| matches(i, line))
+                    .map(|line| (i, line))
+            })
+    }
+
     /// The shape's own storage: the hard lines' text and Parley's arrays.
     fn capacities(&self) -> usize {
         fn vec<T>(v: &Vec<T>) -> usize {
@@ -609,22 +665,16 @@ impl ShapedSource {
         }
         let mut bytes = vec(&self.data.lines) + vec(&self.data.run_metrics);
         for line in &self.data.lines {
-            bytes +=
-                line.text.capacity() + line.layout.lock().map_or(0, |l| l.layout.capacity_bytes());
+            bytes += line.bytes + std::mem::size_of::<LineShape>();
         }
         bytes
     }
     pub(super) fn layout(self: &Rc<Self>, width: Option<f32>) -> Paragraph {
-        self.layout_as(width, false, false)
-    }
-    /// [`Self::layout`], holding the lines it broke for this frame's paint
-    /// ([`Paragraph::measured`]) where it would keep only scalars.
-    pub(super) fn layout_held(self: &Rc<Self>, width: Option<f32>) -> Paragraph {
-        self.layout_as(width, false, true)
+        self.layout_as(width, false, WidthUse::Measure)
     }
     /// CSS `text-overflow: ellipsis`: each over-wide line ends in "…" (paint).
     pub(super) fn layout_ellipsized(self: &Rc<Self>, width: f32) -> Paragraph {
-        self.layout_as(Some(width), true, false)
+        self.layout_as(Some(width), true, WidthUse::Measure)
     }
     /// The paragraph's widest content, min- or max-content (LLP 1085.000
     /// §4, "Content widths"): min-content is Parley's patched content
@@ -646,7 +696,7 @@ impl ShapedSource {
             .fold(0.0, f32::max)
     }
     fn layout_widths(&self, width: Option<f32>) -> f32 {
-        let (lines, _) = self.break_lines(width, false, None);
+        let (lines, _) = self.break_lines(width, false, None, None, false);
         lines.lines.iter().map(|l| l.w).fold(0.0, f32::max)
     }
     /// A measured width's lines, made again for its first paint when the
@@ -655,7 +705,7 @@ impl ShapedSource {
     /// measured is what is painted. A layout still broken at this width is
     /// not broken again.
     pub(super) fn remake(&self, width: Option<f32>) -> Lines {
-        self.break_lines(width, false, None).0
+        self.break_lines(width, false, None, None, false).0
     }
     /// Break every hard line at `width` and copy its lines out, clamped and
     /// ellipsized as the paragraph asks. Returns the lines and whether a
@@ -665,6 +715,8 @@ impl ShapedSource {
         width: Option<f32>,
         ellipsis: bool,
         mut catalog: Option<&mut catalog::Catalog>,
+        previous: Option<&Paragraph>,
+        field: bool,
     ) -> (Lines, bool) {
         let spec = &self.spec;
         let preserves = spec.white_space.model().preserves();
@@ -677,7 +729,20 @@ impl ShapedSource {
         let balanced = self.balanced(width).map(|(balanced, _)| balanced);
         #[cfg(test)]
         BREAKS.with(|n| n.set((n.get().0 + 1, n.get().1)));
+        let mut field = field.then(lines::FieldLines::default);
+        let mut prior_visual = 0;
+        let mut faces = Vec::new();
         'hard: for (h, hard) in self.data.lines.iter().enumerate() {
+            if let Some((field, (old, i))) = field.as_mut().zip(previous.and_then(|p| {
+                let (i, _) = p
+                    .source
+                    .matching_line(h, count, |_, line| Arc::ptr_eq(&line.shape, &hard.shape))?;
+                Some((p.lines(), i))
+            })) {
+                field.reuse(&mut out, old, i, h, &mut prior_visual, &mut faces);
+                continue;
+            }
+            let first_visual = out.lines.len();
             let (_, rest) = hard.inset;
             let mut broken = hard.layout.lock().expect("layout lock");
             let balanced = balanced.as_ref().filter(|_| h == 0);
@@ -774,8 +839,14 @@ impl ShapedSource {
                     }
                 }
             }
+            if let Some(field) = &mut field {
+                field.extracted(&mut out, first_visual);
+            }
         }
         out.tighten();
+        if let Some(field) = field {
+            out.glyphs = field.finish();
+        }
         (out, cut)
     }
 
@@ -1043,10 +1114,33 @@ impl ShapedSource {
         last.w = w;
     }
 
-    fn layout_as(self: &Rc<Self>, width: Option<f32>, ellipsis: bool, hold: bool) -> Paragraph {
+    pub(super) fn layout_as(
+        self: &Rc<Self>,
+        width: Option<f32>,
+        ellipsis: bool,
+        usage: WidthUse,
+    ) -> Paragraph {
         let spec = &self.spec;
         let mut catalog = self.catalog.borrow_mut();
-        let (lines, _) = self.break_lines(width, ellipsis, Some(&mut catalog));
+        let hold = !matches!(usage, WidthUse::Measure);
+        let previous = usage.previous().filter(|old| {
+            old.remake == Some(width)
+                && old.flow.is_none()
+                && (old.record.get().is_some() || old.measured.borrow().is_some())
+        });
+        let keep_field_metrics = matches!(usage, WidthUse::Field(_))
+            && self.data.lines.len() > 1
+            && width.is_some()
+            && spec.line_clamp == 0
+            && !ellipsis
+            && matches!(spec.runs.as_slice(), [r] if r.inline.is_none() && r.edges.is_empty());
+        let (mut lines, _) = self.break_lines(
+            width,
+            ellipsis,
+            Some(&mut catalog),
+            previous,
+            keep_field_metrics,
+        );
         let strut = self.data.strut;
         let run_metrics = &self.data.run_metrics;
         let mut w = 0.0f32;
@@ -1057,16 +1151,29 @@ impl ShapedSource {
         if let Some((_, widest)) = self.balanced(width) {
             w = w.max(widest);
         }
+        if keep_field_metrics {
+            lines.field_metrics.resize(lines.lines.len(), None);
+        }
         for (i, line) in lines.lines.iter().enumerate() {
             w = w.max(line.w);
-            let (mut above, mut below, is_explicit) = line_box(
-                lines.glyphs_of(line).iter(),
-                &lines.faces,
-                spec,
-                &mut catalog,
-                strut,
-                run_metrics,
-            );
+            let (mut above, mut below, is_explicit) = lines
+                .field_metrics
+                .get(i)
+                .copied()
+                .flatten()
+                .unwrap_or_else(|| {
+                    line_box(
+                        lines.glyphs_of(line).iter(),
+                        &lines.faces,
+                        spec,
+                        &mut catalog,
+                        strut,
+                        run_metrics,
+                    )
+                });
+            if keep_field_metrics {
+                lines.field_metrics[i] = Some((above, below, is_explicit));
+            }
             // CSS 2 §10.8: an image's margin box grows the line to hold it.
             for b in lines.boxes.iter().filter(|b| b.line as usize == i) {
                 let (a, d) = box_extent(spec, &mut catalog, b.run as usize);

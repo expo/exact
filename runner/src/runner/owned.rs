@@ -107,6 +107,9 @@ impl<D: DataSource> Runner<D> {
         self.owned_launch = true;
         let asked = self.reconcile_owned();
         self.owned_launch = false;
+        // The first frame's launch asks are made: their marks go, as the
+        // boot's own do (`boot_inner`), so a later forced ask is a refresh.
+        self.launch.clear();
         // A checkpoint's answers that no launch instance took are dropped,
         // so an instance made later asks.
         for i in 0..self.plan.resources.len() {

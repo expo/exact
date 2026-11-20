@@ -176,7 +176,7 @@ fn failed_recordings_are_not_kept_and_the_next_row_is_complete() {
             ink.slot_begin(8);
         }
         if failure == 2 {
-            assert!(ink.layer_begin(9, ts, (0., 0.), [0., 0., 1., 0., 1., 0., 0.]));
+            assert!(ink.layer_begin(9, ts, (0., 0.), (0., 0.), [0., 0., 1., 0., 1., 0., 0.]));
         }
         if failure == 3 {
             ink.row_end((0., 0., 90., 85.));
@@ -256,6 +256,7 @@ fn translated_layer_respects_stationary_outer_clip_or_refuses_lowering() {
     let lowered = ink.layer_begin(
         1,
         Transform::identity(),
+        (0., 0.),
         (0., 0.),
         [40., 0., 1., 0., 1., 0., 0.],
     );

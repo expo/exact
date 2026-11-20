@@ -16,7 +16,7 @@
 //! drag timeline. Anything else is sampled as before.
 
 use super::Host;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 use crate::paint::Presented;
 use exact_kernel::motion::MotionSync;
 use exact_kernel::svg::Paint;
@@ -89,35 +89,35 @@ pub const LOWER_MOVE: u8 = 16;
 pub const LOWER_COLOR: u8 = 32;
 
 /// Track property codes on the wire.
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 const OPACITY: u32 = 0;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 const TX: u32 = 1;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 const TY: u32 = 2;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 const SCALE: u32 = 3;
 #[cfg(any(target_os = "android", test))]
 const ROTATE: u32 = 4;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 const R: u32 = 5;
 #[cfg(any(target_os = "android", test))]
 const DASH: u32 = 6;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 const CX: u32 = 7;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 const CY: u32 = 8;
 /// A text's colour: four tracks from here, straight red, green, blue and
 /// alpha, 0-255.
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 const COLOR: u32 = 9;
 /// A box's background colour, likewise.
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 const BACKGROUND: u32 = 13;
 /// Keyframes a colour transition is sent as: its values along the engine's
 /// own interpolation (premultiplied, or OKLab), straight 8-bit channels the
 /// reader joins linearly.
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 const COLOR_STEPS: usize = 8;
 
 impl<D: DataSource> Host<D> {
@@ -390,8 +390,13 @@ impl<D: DataSource> Host<D> {
     /// keyframes with CSS's implicit ones from the underlying `base`. Easing:
     /// `0` none (the animation's), `1` cubic + 4, `2` steps + count +
     /// position, `3` linear() + n + n pairs. Empty when nothing is lowered.
-    #[cfg(target_os = "android")]
-    pub(crate) fn layer_tracks(&self, key: NodeKey, base: &Presented) -> Vec<u32> {
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn layer_tracks(
+        &self,
+        key: NodeKey,
+        base: &Presented,
+        reference: (f32, f32),
+    ) -> Vec<u32> {
         let mut out = Vec::new();
         if self.lowered_mask(key) == 0 {
             return out;
@@ -466,12 +471,7 @@ impl<D: DataSource> Host<D> {
                     out.push(track.len() as u32);
                     for (offset, e, v) in &track {
                         f(&mut out, *offset);
-                        let v = if p == Property::Rotate {
-                            exact_motion::rotation::presented(*v)
-                        } else {
-                            *v
-                        };
-                        f(&mut out, if axis == 1 { v.y } else { v.x });
+                        f(&mut out, track_component(p, *v, axis, reference));
                         easing(&mut out, Some(*e));
                     }
                 }
@@ -495,18 +495,6 @@ impl<D: DataSource> Host<D> {
                 }
                 _ => continue,
             };
-            let axis = |v: &Value, a: usize| {
-                let v = if *p == Property::Rotate {
-                    exact_motion::rotation::presented(*v)
-                } else {
-                    *v
-                };
-                if a == 1 {
-                    v.y
-                } else {
-                    v.x
-                }
-            };
             for &(code, a) in axes {
                 out.push(code);
                 f(&mut out, t.start);
@@ -524,7 +512,7 @@ impl<D: DataSource> Host<D> {
                         out.push(2);
                         for (offset, v) in [(0.0, &t.from), (1.0, &t.to)] {
                             f(&mut out, offset);
-                            f(&mut out, axis(v, a));
+                            f(&mut out, track_component(*p, *v, a, reference));
                             out.push(0);
                         }
                     }
@@ -534,7 +522,7 @@ impl<D: DataSource> Host<D> {
                         let last = values.len().saturating_sub(1).max(1) as f64;
                         for (i, v) in values.iter().enumerate() {
                             f(&mut out, i as f64 / last);
-                            f(&mut out, axis(v, a));
+                            f(&mut out, track_component(*p, *v, a, reference));
                             out.push(0);
                         }
                     }
@@ -542,6 +530,18 @@ impl<D: DataSource> Host<D> {
             }
         }
         out
+    }
+}
+
+/// One scalar for the layer player. CSS interpolates each length and percentage
+/// against the same reference box throughout a sample.
+#[cfg(any(target_os = "android", test))]
+fn track_component(property: Property, value: Value, axis: usize, reference: (f32, f32)) -> f64 {
+    match property {
+        Property::Translate if axis == 0 => value.x + value.z * f64::from(reference.0) / 100.,
+        Property::Translate => value.y + value.w * f64::from(reference.1) / 100.,
+        Property::Rotate => exact_motion::rotation::presented(value).x,
+        _ => value.x,
     }
 }
 
@@ -667,7 +667,7 @@ fn recolors(n: &exact_kernel::NodeRef<'_>, property: Property) -> bool {
 
 /// A colour transition as four tracks from `code` (red, green, blue, alpha;
 /// straight, 0-255): [`COLOR_STEPS`] linear pieces along its curve.
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 fn color_tracks(out: &mut Vec<u32>, code: u32, t: &PlayedTransition) {
     let values: Vec<[u8; 4]> = match &t.curve {
         PlayedCurve::Easing { .. } => (0..=COLOR_STEPS)

@@ -270,6 +270,13 @@ impl Range {
         Range { min, max, step }
     }
 
+    /// The increments used by Arrow and Page keys, before clamping or snapping.
+    pub fn keyboard_steps(&self) -> (f64, f64) {
+        let span = self.max - self.min;
+        let small = self.step.unwrap_or(span / 100.0);
+        (small, small.max(span / 10.0))
+    }
+
     /// `value` clamped and snapped as HTML sanitizes it: to the nearest
     /// step from `min` (half up), within `min` and `max`.
     pub fn sanitize(&self, value: f64) -> f64 {
@@ -1134,6 +1141,7 @@ mod tests {
         let r = Range::of(&props);
         assert_eq!((r.min, r.max, r.step), (0.0, 100.0, Some(1.0)));
         assert_eq!(r.shown(&props), 50.0);
+        assert_eq!(r.keyboard_steps(), (1.0, 10.0));
         assert_eq!(r.sanitize(40.5), 41.0);
         assert_eq!(r.sanitize(140.0), 100.0);
         props.set(PropId::Min, PropValue::Str("0.85".into()));
@@ -1144,6 +1152,12 @@ mod tests {
         assert_eq!(r.sanitize(0.1), 0.85);
         props.set(PropId::Step, PropValue::Str("any".into()));
         assert_eq!(Range::of(&props).sanitize(1.123), 1.123);
+        let range = Range {
+            min: 0.,
+            max: 20.,
+            step: None,
+        };
+        assert_eq!(range.keyboard_steps(), (0.2, 2.0));
         props.set(PropId::Step, PropValue::Str("0.3".into()));
         props.set(PropId::Min, PropValue::Str("0".into()));
         props.set(PropId::Max, PropValue::Str("1".into()));

@@ -93,7 +93,7 @@ fn node_row(plan: &exact_plan::Plan, id: StyleId) -> (NodeType, exact_plan::Bind
 fn a_bound_layout_transition_compiles_and_is_followed() {
     let js = crate::emit::emit(&plan(), false, false).unwrap().js;
     assert!(js.contains("\"--exact-layout-transition\""), "{js}");
-    assert!(js.contains(";lt(e0,$$t"), "{js}");
+    assert!(js.contains(";lt(e0,$parseTransition"), "{js}");
 }
 
 #[test]
@@ -106,7 +106,11 @@ fn named_and_computed_layout_values_write_what_the_kernel_writes() {
                 .flatten())
         })
         .to_vec();
-    let map = crate::presence::layout_transition_map(&crate::paint::transitions(), "7", "say");
+    let map = crate::presence::layout_transition_map(
+        &crate::paint::transitions(&crate::paint::motion_words()),
+        "7",
+        "say",
+    );
     let inputs: Vec<serde_json::Value> = VALUES
         .iter()
         .map(|v| serde_json::json!(v))
@@ -157,7 +161,7 @@ fn computed_layout_transitions_match_the_kernel_grammar_and_css() {
         ]
         .map(str::to_owned),
     );
-    let parser = crate::paint::transitions();
+    let parser = crate::paint::transitions(&crate::paint::motion_words());
     let actual = bun(&format!(
         "const parse={parser};console.log(JSON.stringify({}.map(v=>{{const t=parse(v);return [t?.held??false,t?.css??null]}})))",
         serde_json::json!(values)
@@ -188,8 +192,10 @@ fn computed_layout_transitions_match_the_kernel_grammar_and_css() {
 fn the_paint_flag_is_set_where_the_kernel_holds_the_row() {
     let plan = plan();
     let (kind, b) = node_row(&plan, StyleId::LayoutTransition);
-    let (_, test) =
-        crate::paint::binding(&plan, kind, &b, crate::paint::transitions).expect("a paint flag");
+    let (_, test) = crate::paint::binding(&plan, kind, &b, |p| {
+        p.source(&plan, &crate::paint::motion_words())
+    })
+    .expect("a paint flag");
     let mut expected: Vec<u32> = VALUES
         .map(|v| if runner_holds(v) { 260 } else { 0 })
         .to_vec();
@@ -293,8 +299,10 @@ fn exit_values_write_native_css_and_clear_unlisted_values() {
 fn an_exit_paint_flag_follows_the_kernel_mask() {
     let plan = exit_plan();
     let (kind, binding) = node_row(&plan, StyleId::ExitAnimation);
-    let (_, flag) =
-        crate::paint::binding(&plan, kind, &binding, crate::paint::transitions).unwrap();
+    let (_, flag) = crate::paint::binding(&plan, kind, &binding, |p| {
+        p.source(&plan, &crate::paint::motion_words())
+    })
+    .unwrap();
     let got = bun(&format!(
         "const f=v=>({flag});console.log(JSON.stringify({}.map(f)))",
         serde_json::json!(EXITS)
@@ -323,13 +331,13 @@ fn only_a_row_presence_plays_registers_with_presence() {
     let pressed = page("-exact-press-scale=0.9");
     assert!(pressed.contains("--exact-press:"), "{pressed}");
     assert!(pressed.contains("pressFeedback()"), "{pressed}");
-    assert!(!pressed.contains("pr(e"), "{pressed}");
+    assert!(!pressed.contains("pr("), "{pressed}");
     for row in [
         "-exact-layout-transition=\"200ms linear\"",
         "-exact-exit-animation=\"leave 200ms linear both\"",
         "-exact-press-scale=0.9 -exact-layout-transition=\"200ms linear\"",
     ] {
         let js = page(row);
-        assert!(js.contains("pr(e"), "{row}: {js}");
+        assert!(js.contains("pr("), "{row}: {js}");
     }
 }

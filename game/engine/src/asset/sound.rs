@@ -2,13 +2,29 @@
 //! undoes this layout, so no audio decoder is linked into a game.
 //! @ref LLP 1046.003 §AU4 (where decoding happens)
 use crate::Data;
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 /// Resident 16-bit PCM for every delivered sound in one world, counted once per asset.
 /// A delivery that would exceed it is refused by name before setup can run.
 pub const SOUND_BYTE_BUDGET: usize = 32 * 1024 * 1024;
 /// Source rates accepted by the bake and at delivery; outputs resample to the device.
 pub const SOUND_RATES: std::ops::RangeInclusive<u32> = 8_000..=192_000;
+
+/// Startup metadata for the sounds in `Game::STREAMED` (LLP 1046.003 AU4).
+pub const SOUND_CATALOG: &str = "exact-streamed-sounds.bin";
+
+/// A sample's simulation-visible format and the identity of the PCM the mixer may use.
+#[derive(Data, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SoundInfo {
+    /// Frames per second.
+    pub rate: u32,
+    /// One or two interleaved channels.
+    pub channels: u32,
+    /// Frames per channel.
+    pub frames: u32,
+    /// Identity of the baked sound record.
+    pub digest: u64,
+}
 
 /// The `.sound` record: 16-bit PCM, channels planar, each channel stored as wrapping
 /// first differences, which gzip compresses 1.3–2.2× smaller than interleaved PCM.
@@ -25,6 +41,16 @@ pub struct SoundData {
     pub deltas: Vec<u16>,
 }
 impl SoundData {
+    /// Describe this record for the startup catalog without allocating decoded PCM.
+    pub fn info(&self) -> SoundInfo {
+        SoundInfo {
+            rate: self.rate,
+            channels: self.channels,
+            frames: self.frames,
+            digest: crate::hash::of(self),
+        }
+    }
+
     /// Encode interleaved 16-bit samples.
     pub fn encode(rate: u32, channels: u32, interleaved: &[i16]) -> Result<Self, String> {
         if !(1..=2).contains(&channels) {
@@ -54,7 +80,9 @@ impl SoundData {
     }
     /// Resident bytes once decoded.
     pub fn pcm_bytes(&self) -> usize {
-        self.frames as usize * self.channels as usize * 2
+        (self.frames as usize)
+            .saturating_mul(self.channels as usize)
+            .saturating_mul(2)
     }
     /// Refuse malformed or oversized records before allocating PCM.
     pub fn validate(&self) -> Result<(), String> {
@@ -121,13 +149,13 @@ pub struct SoundAsset {
     pub digest: u64,
 }
 impl SoundAsset {
-    pub(crate) fn new(data: &SoundData) -> Self {
+    fn new(data: &SoundData, digest: u64) -> Self {
         Self {
             rate: data.rate,
             channels: data.channels,
             frames: data.frames,
             samples: data.samples().into(),
-            digest: crate::hash::of(data),
+            digest,
         }
     }
     /// Resident bytes.
@@ -137,37 +165,126 @@ impl SoundAsset {
 }
 
 impl<G: crate::Game> crate::Sim<G> {
+    pub(crate) fn deliver_sound_catalog(
+        &mut self,
+        name: &str,
+        catalog: BTreeMap<String, SoundInfo>,
+    ) -> Result<(), String> {
+        let expected: std::collections::BTreeSet<_> = G::STREAMED
+            .iter()
+            .copied()
+            .filter(|n| n.ends_with(".sound"))
+            .collect();
+        if name != SOUND_CATALOG
+            || expected.is_empty()
+            || !catalog.keys().map(String::as_str).eq(expected)
+        {
+            return Err(
+                "the sound catalog must describe exactly the sounds in Game::STREAMED".into(),
+            );
+        }
+        let mut bytes: u64 = self
+            .world()
+            .assets
+            .sounds
+            .iter()
+            .filter(|(name, _)| !catalog.contains_key(name.as_str()))
+            .map(|(_, sound)| sound.bytes() as u64)
+            .sum();
+        for (sample, info) in &catalog {
+            if !SOUND_RATES.contains(&info.rate)
+                || !(1..=2).contains(&info.channels)
+                || info.frames == 0
+            {
+                return Err(format!("streamed sound `{sample}` has an invalid format"));
+            }
+            bytes += u64::from(info.channels) * u64::from(info.frames) * 2;
+            if bytes > SOUND_BYTE_BUDGET as u64 {
+                return Err(format!(
+                    "sound `{sample}` exceeds the combined {} sound residency budget",
+                    mib(SOUND_BYTE_BUDGET)
+                ));
+            }
+        }
+        let digest = crate::hash::of(&catalog);
+        let assets = &mut self.world_mut().assets;
+        if assets.identity(name).is_some_and(|old| old != digest) {
+            return Err("the sound catalog changed; restart the game".into());
+        }
+        assets.identify(name, digest);
+        assets.sound_catalog = Some(Arc::new(catalog));
+        assets.states.insert(name.into(), super::AssetState::Loaded);
+        Ok(())
+    }
+
     pub(crate) fn deliver_sound(&mut self, name: &str, data: SoundData) -> Result<(), String> {
-        if !G::ASSETS.contains(&name) {
+        let expected = self
+            .world()
+            .assets
+            .sound_catalog
+            .as_deref()
+            .and_then(|c| c.get(name))
+            .copied();
+        if !G::ASSETS.contains(&name) && expected.is_none() {
             return Err(format!("sound `{name}` is not declared by Game::ASSETS"));
         }
-        let sound = SoundAsset::new(&data);
+        data.validate()?;
+        let info = data.info();
+        if expected.is_some_and(|expected| expected != info) {
+            return Err(format!(
+                "streamed sound `{name}` differs from its baked catalog"
+            ));
+        }
         let assets = &mut self.world_mut().assets;
-        if assets.identity(name).is_some_and(|old| old != sound.digest) {
+        if assets.identity(name).is_some_and(|old| old != info.digest) {
             return Err(format!(
                 "sound `{name}` cannot change after delivery; restart with the new sound"
             ));
         }
-        let resident: usize = assets
-            .sounds
-            .iter()
-            .filter(|(other, _)| *other != name)
-            .map(|(_, s)| s.bytes())
-            .sum();
-        if resident + sound.bytes() > SOUND_BYTE_BUDGET {
-            return Err(format!(
-                "{} of 16-bit PCM with {} already resident exceeds the {} sound residency budget",
-                mib(sound.bytes()),
-                mib(resident),
-                mib(SOUND_BYTE_BUDGET)
-            ));
+        if expected.is_none() {
+            // Reserve the streamed catalog even when required sounds arrive after it.
+            let catalog = assets.sound_catalog.as_deref();
+            let resident: usize = assets
+                .sounds
+                .iter()
+                .filter(|(other, _)| {
+                    *other != name && !catalog.is_some_and(|c| c.contains_key(other.as_str()))
+                })
+                .map(|(_, sound)| sound.bytes())
+                .sum();
+            let reserved: usize = catalog
+                .into_iter()
+                .flat_map(|c| c.values())
+                .map(|i| i.frames as usize * i.channels as usize * 2)
+                .sum();
+            let used = resident + reserved;
+            if data.pcm_bytes() > SOUND_BYTE_BUDGET - used {
+                return Err(format!(
+                    "{} of 16-bit PCM with {} already {} exceeds the {} sound residency budget",
+                    mib(data.pcm_bytes()),
+                    mib(used),
+                    if reserved == 0 {
+                        "resident"
+                    } else {
+                        "reserved"
+                    },
+                    mib(SOUND_BYTE_BUDGET)
+                ));
+            }
+            assets.identify(name, info.digest);
         }
-        assets.identify(name, sound.digest);
-        assets.sounds.insert(name.into(), Arc::new(sound));
+        assets
+            .sounds
+            .insert(name.into(), Arc::new(SoundAsset::new(&data, info.digest)));
         assets.states.insert(name.into(), super::AssetState::Loaded);
         Ok(())
     }
+    /// Resident PCM for the mixer, including streamed sounds. Game callbacks receive only a World.
+    pub fn presentation_sound(&self, name: &str) -> Option<&SoundAsset> {
+        self.world().assets.sounds.get(name).map(Arc::as_ref)
+    }
 }
+
 impl crate::World {
     /// A declared, delivered sound's PCM, for presentation executors.
     pub fn sound_asset(&self, name: &str) -> Option<&SoundAsset> {

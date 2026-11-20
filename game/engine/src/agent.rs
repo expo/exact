@@ -210,11 +210,18 @@ impl<G: Game> Sim<G> {
     pub fn presentation_assets(&self) -> impl Iterator<Item = &str> {
         self.world.assets.states.keys().map(String::as_str)
     }
-    /// Named content failures; readiness must never hide a failed declaration.
+    /// Failures that keep a frame from being ready. Streamed audio failures remain in asset diagnostics.
     pub fn asset_failures(&self) -> impl Iterator<Item = &str> {
-        self.world.assets.states.values().filter_map(|s| match s {
-            crate::asset::AssetState::Failed(reason) => Some(reason.as_str()),
-            _ => None,
+        let assets = &self.world.assets;
+        assets.states.iter().filter_map(|(name, state)| {
+            let crate::asset::AssetState::Failed(reason) = state else {
+                return None;
+            };
+            let streamed_sound = assets
+                .sound_catalog
+                .as_deref()
+                .is_some_and(|catalog| catalog.contains_key(name));
+            (!streamed_sound).then_some(reason.as_str())
         })
     }
 

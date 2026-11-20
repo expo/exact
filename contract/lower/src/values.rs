@@ -159,6 +159,7 @@ pub(crate) fn describe(e: &StyleValueError) -> String {
         StyleValueError::WrongKind { expected, .. } => format!("expected {expected}"),
         StyleValueError::BadEnv { refusal, .. } => refusal.reason().into(),
         StyleValueError::BadComparison { reason, .. } => (*reason).into(),
+        StyleValueError::UnknownEnumValue { style: StyleId::ScrollEdgeEffectHidden | StyleId::ScrollEdgeEffectSoft | StyleId::ScrollEdgeEffectHard | StyleId::SafeAreaReachEdges } => "expected `none`, or edges, each named once, separated by spaces: `top`, `right`, `bottom`, `left`, `start`, `end`".into(),
         StyleValueError::UnknownEnumValue { style: StyleId::FontVariantLigatures } => "expected `normal`, `none`, or a space-separated list taking at most one of each pair: `common-ligatures` or `no-common-ligatures`, `discretionary-ligatures` or `no-discretionary-ligatures`, `historical-ligatures` or `no-historical-ligatures`, `contextual` or `no-contextual`".into(),
         StyleValueError::UnknownEnumValue { style } => format!(
             "expected one of {}",

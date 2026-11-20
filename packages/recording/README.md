@@ -68,10 +68,14 @@ Ending the track still stops the take.
 An Apple session that cannot add its movie output reports the failure in the
 recorder state. A file or encoder failure leaves no successful result.
 
-Under the agent, no camera or encoder opens. A video recording writes #752's
-deterministic three-frame MP4, 16×16 at 10 fps. Its result describes that
-300 ms fixture, while the recorder's elapsed time and duration limit use the
-session clock.
+On Android, a drive that sets `prefer extension camera.clip={"path":"assets/frames.mp4"}`
+records the same frames as the viewfinder. The clip loops on the camera track's
+clock. Pausing the recorder omits that interval from the file. The result's
+duration, dimensions and average frame rate come from the encoded MP4.
+
+Without a clip, Android writes the same three-frame fixture as the Apple and
+web agents. The fixture is a 300 ms, 16×16 MP4 at 10 fps. All three agents time
+the recorder and its duration limit on the session clock.
 
 The API follows [MediaStream Recording](https://www.w3.org/TR/mediastream-recording/).
 Native video uses [CameraX video capture](https://developer.android.com/media/camera/camerax/video-capture)

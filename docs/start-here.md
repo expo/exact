@@ -157,10 +157,13 @@ required tool, device or simulator is unavailable, report that target as unteste
 |---|---|---|
 |Web|`bun exact.mjs verify web`|`bun exact.mjs web`|
 |iOS|`bun exact.mjs verify ios`|`bun exact.mjs ios --run`|
-|Android|`bun exact.mjs verify android`|`bun exact.mjs android --run`|
+|Android|`bun exact.mjs verify android`|Start `bun exact.mjs web`, then run `bun exact.mjs android --run --url http://127.0.0.1:8765/` in another terminal.|
 |Windows|`bun exact.mjs verify windows`|`bun exact.mjs windows --run`|
 |macOS|`bun exact.mjs test macos`, then `bun exact.mjs agent macos --chrome platform "clock data" "screenshot .exact/mac.png window"` (`check` is the web's and iOS's)|`bun exact.mjs mac --run`|
 |Linux|`bun exact.mjs linux`, then `bun exact.mjs test linux`|The Linux host is headless; inspect it with `bun exact.mjs agent linux tree` after building.|
+
+For Android live iteration, use the port the web loop prints. Saving a Contract
+or `app.ts` edit updates the running app without rebuilding the APK.
 
 A bare `bun exact.mjs verify`, `test` or `agent` runs on a target `app.json` names:
 the web when it names the web or nothing, else the first that runs on this machine (iOS,
@@ -234,6 +237,7 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |brand colours, light and dark, icon tokens|`theme`, `forma`|
 |an icon: in a button, a tab, beside a label (a symbol, never a character such as ▦ ☏ ★ or an emoji)|`symbols`|
 |a module in Swift that `app.ts` asks (a resource that reads `native.available` or calls `native.call` keeps its answer across launches); a value a launch gives is a setting, not a module (`contract vocab env`)|`native-module`|
+|a WGSL fragment shader on a canvas, including a Shadertoy port|`gpu-shader`|
 |a canvas drawn in Rust on the GPU (a `Surface`): a crate beside app.json, in a workspace exact2 generates|`gpu-module`|
 |a GPU module whose crates call into Java on Android: the app's Java VM and `Context`|`gpu-module-android`|
 |data answered in Rust instead of `app.ts` (`exact new --rust`, app.json's `rust.data`)|`bun exact.mjs docs Rust data sources`|
