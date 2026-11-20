@@ -1,0 +1,11 @@
+//! The session window's own commands: what `contract vocab` says of each.
+
+/// A window command's text after "host command".
+pub(super) fn command(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "setWindowOpacity" => "; `setWindowOpacity(opacity)` draws the session's window at that opacity, 0 (unseen, still key and still hearing keys) to 1, as Electron's `BrowserWindow.setOpacity`: what an app's own quit hold does before it quits. The Mac's; iOS, Linux, Windows and the web refuse it in the journal (LLP 1069.010)",
+        "hideWindow" => "; `hideWindow()` puts the session's window away and keeps the app running, as the person's ⌘W does under `host.macos.window.keepRunning` or while a status item is placed, and as Electron's `BrowserWindow.hide`: `exactPage().visibilityState` reads `hidden` and `persisted` `true`, and bare `focus()`, a Dock click or the status item's own press shows it again as a restore (`restores`). For the menu-bar utility whose window goes once its work is done; `close()` still closes and ends the app. The Mac's, refused in the journal where the app would not keep running (no `keepRunning`, no status item placed, a `navigate-new` app); iOS, Linux, Windows, Android and the web refuse it in the journal (LLP 1133.025 D4)",
+        "startViewTransition" => "; `startViewTransition()` cross-fades the whole window from how it looked before the action into the action's commit, as the web's `document.startViewTransition()` with the root's default animation (0.25 s); `startViewTransition(0.3)` sets the duration in seconds. For a change that replaces most of the screen with no route of its own, such as a switch of the app's whole data set. The commit's own pushes and pops land in it without their own animation. iOS runs `UIView.transition(with: window, options: .transitionCrossDissolve)`; a sheet the commit closes slides out while the page beneath it cross-fades, and one that stays fades with the window. The Mac fades the window's content. iOS and the Mac fade under reduced motion too, as UIKit's dissolve does; the web cuts there, and a host without it cuts. A duration that is not above 0 at run time is 0.25 s",
+        _ => return None,
+    })
+}

@@ -9,6 +9,8 @@ struct SessionBatchOps {
     var authentication: [BatchOp] = []
     var reorders: [BatchOp] = []
     var roles: BatchOp?
+    /// `startViewTransition(seconds)`'s duration, when the batch names it.
+    var viewTransition: Double?
 
     init(_ ops: some Sequence<BatchOp>) {
         for op in ops {
@@ -21,6 +23,9 @@ struct SessionBatchOps {
             case .auth, .presence: authentication.append(op)
             case .reorder: reorders.append(op)
             case .roles: roles = op
+            case .command where op.payload["name"] as? String == "startViewTransition" && viewTransition == nil:
+                let seconds = (op.payload["args"] as? [Any])?.first as? Double ?? 0.25
+                viewTransition = seconds.isFinite && seconds > 0 ? seconds : 0.25
             default: break
             }
         }

@@ -811,6 +811,23 @@ pub(super) fn check_command(
             span,
         );
     }
+    if name == "startViewTransition" {
+        let fits = match args {
+            [] => true,
+            [Expr::Number(n, _)] => *n > 0.0,
+            [Expr::Unary(UnOp::Neg, _, _)] => false,
+            [arg] => matches!(infer(arg, scope, shapes)?, Ty::Number),
+            _ => false,
+        };
+        if fits {
+            return Ok(());
+        }
+        return err(
+            "type-view-transition",
+            "`startViewTransition()` cross-fades the whole window into the action's commit over 0.25 s, as the web's `document.startViewTransition()`; `startViewTransition(seconds)` takes its duration, a number above 0",
+            span,
+        );
+    }
     if name == "close" && args.len() > 1 {
         return err(
             "type-close",

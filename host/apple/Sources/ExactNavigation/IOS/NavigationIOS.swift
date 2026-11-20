@@ -127,6 +127,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// animates it (`.pop`, LLP 1021 §5.1). The selected route's key tells
     /// whether its press navigated.
     var unanimated = false
+    var crossFading = false
+    var closesPresentation: Bool { presenter.modalHost.hasRetiring }
     /// Whether a reselected tab's scroll to the top (`scrollToTop`) is
     /// UIKit's animated one: not under the agent's frozen clock, where Exact
     /// starts no UIKit animation, nor in a test outside an app's scene, where
@@ -558,7 +560,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
                     prepareZoomPush(top, beneath: stack[stack.count - 2] as? RouteController)
                 }
                 #endif
-                nav.setViewControllers(nav.stackFront + stack, animated: (pushOrPop || arrives) && index == owners.count - 1 && mounted.count == boundaries.count && !ExactEnv.agentFreezes && !unanimated && nav.view.window != nil)
+                nav.setViewControllers(nav.stackFront + stack, animated: (pushOrPop || arrives) && index == owners.count - 1 && mounted.count == boundaries.count && !ExactEnv.agentFreezes && !unanimated && !crossFading && nav.view.window != nil)
                 lastTransition = "idle"
                 // A press that pushed may hand its control's focus to the arriving route's first autofocus (PressHandoffIOS).
                 if pushOrPop || arrives { presenter.pressShows((stack.last as? RouteController)?.node) }

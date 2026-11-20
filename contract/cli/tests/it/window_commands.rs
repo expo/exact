@@ -1,6 +1,7 @@
 //! The commands an app gives its own window. LLP 1069.010: a quit the app
 //! holds leaves full screen and fades its window first. LLP 1133.025 D4: a
-//! utility that keeps running puts its window away.
+//! utility that keeps running puts its window away. `startViewTransition`
+//! cross-fades the whole window into the action's commit.
 
 use exact_kernel::Kernel;
 use exact_plan::Value;
@@ -77,4 +78,39 @@ fn a_utility_hides_its_window_and_shows_it_again() {
         format!("{error:?}").contains("type-hide-window"),
         "{error:?}"
     );
+}
+
+/// `startViewTransition()` and `startViewTransition(seconds)` reach the host
+/// with the commit they fade into; a duration of 0 or less, a string or a
+/// second argument is refused.
+#[test]
+fn a_switch_cross_fades_the_window_into_its_commit() {
+    let src = "component App\n  state game = \"a\"\n  action pick(g: string)\n    startViewTransition(0.3)\n    game = g\n  action plain\n    startViewTransition()\n  view\n    button press=pick(\"b\")\n      text game\n";
+    let mut r = boot(src);
+    r.act("pick", vec![Value::from("b")]).unwrap();
+    r.act("plain", vec![]).unwrap();
+    let commands = r.take_commands();
+    let named: Vec<(&str, Vec<Value>)> = commands
+        .iter()
+        .map(|c| (c.name.as_str(), c.args.clone()))
+        .collect();
+    assert_eq!(
+        named,
+        [
+            ("startViewTransition", vec![Value::Number(0.3)]),
+            ("startViewTransition", vec![])
+        ]
+    );
+    for bad in [
+        "startViewTransition(0)",
+        "startViewTransition(-1)",
+        "startViewTransition(\"slow\")",
+        "startViewTransition(0.3, 1)",
+    ] {
+        let error = contract::compile(&src.replace("startViewTransition(0.3)", bad)).unwrap_err();
+        assert!(
+            format!("{error:?}").contains("type-view-transition"),
+            "{bad}: {error:?}"
+        );
+    }
 }

@@ -1,0 +1,33 @@
+// ViewTransitionIOSTests: `startViewTransition(0.3)` from the page, and from
+// a sheet whose commit closes it or keeps it.
+routes nav
+  home "/"
+    settings "/settings"
+
+component App
+  state game = "a"
+  action follow(url: string)
+    nav = go(nav, url)
+  action pick(g: string)
+    startViewTransition(0.3)
+    game = g
+  action pickAndClose(g: string)
+    startViewTransition(0.3)
+    game = g
+    nav = back(nav)
+  view
+    main navigationKey=`${top(nav).id}` navigate=follow width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        if e.name == "home"
+          column navigationKey=`${e.id}` position="absolute" inset=0 padding=16
+            text game testId="game"
+            button press=pick("b") testId="pick"
+              text "Pick"
+            link href="/settings" testId="open"
+              text "Settings"
+        if e.name == "settings"
+          column navigationKey=`${e.id}` navigationPresentation="modal" navigationDetent="medium" position="absolute" inset=0 padding=16
+            button press=pickAndClose("c") testId="pick-and-close"
+              text "Pick and close"
+            button press=pick("d") testId="pick-and-stay"
+              text "Pick and stay"

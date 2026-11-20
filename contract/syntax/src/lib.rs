@@ -238,6 +238,11 @@ pub const HOST_COMMANDS: &[&str] = &[
     // status item, the app still running, as Electron's `BrowserWindow.hide`.
     // The Mac's; a host or an app that cannot keep running refuses it.
     "hideWindow",
+    // `startViewTransition()`: the action's commit cross-fades the whole
+    // window from how it looked before, as the web's
+    // `document.startViewTransition()` with the root's default animation;
+    // `startViewTransition(seconds)` sets its duration.
+    "startViewTransition",
     // @ref LLP 1096 D2, D14 — `playSound(src, at=, gain=, group=, playbackRate=, pan=)`,
     // `playSounds(hits)`, `stopSounds(group=)` and `setSounds(group=, gain=,
     // playbackRate=, pan=, ramp=)`: the runner keeps the voice table, so

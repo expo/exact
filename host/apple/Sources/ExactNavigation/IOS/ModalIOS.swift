@@ -291,6 +291,8 @@ final class ModalHost: NSObject, UIAdaptivePresentationControllerDelegate {
     // Native dismissal outlives logical removal and reload. Retire from the
     // top down, without letting an old completion touch a new owner.
     private var retiring: [Presentation] = []
+    /// Whether a presentation is closed and not yet dismissed.
+    var hasRetiring: Bool { !retiring.isEmpty }
     private var dismissing: Presentation?
     private var closing = false
     /// The fullscreen controller hidden until its zoom starts (`present`).
@@ -722,7 +724,7 @@ final class ModalHost: NSObject, UIAdaptivePresentationControllerDelegate {
         zoomGuard = nil
         defer { if owner.presentedViewController !== controller { endPress(layer) } } // UIKit refused it
         HostLog.note(presenter.session, "presentation: presenting the \(layer.kind) \(layer.route.props["navigationKey"] ?? "?")")
-        owner.present(controller, animated: !ExactEnv.agentFreezes) { [weak self, weak layer, weak controller] in
+        owner.present(controller, animated: !ExactEnv.agentFreezes && !presenter.navigationHost.crossFading) { [weak self, weak layer, weak controller] in
             if guarded { UIView.performWithoutAnimation { controller?.view.alpha = 1 } }
             guard let self, let layer else { return }
             HostLog.note(presenter.session, "presentation: presented the \(layer.kind) \(layer.route.props["navigationKey"] ?? "?")")
