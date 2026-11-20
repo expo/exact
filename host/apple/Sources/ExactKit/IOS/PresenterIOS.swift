@@ -142,6 +142,10 @@ package final class Presenter {
     lazy var accent = AppAccent(self)
     /// The native menu arm (LLP 1021 D3).
     package lazy var menus = MenuHost(presenter: self)
+    #if os(iOS)
+    /// The drag sources (LLP 1094.000 D4), when the module is linked.
+    package lazy var dragOut: DragOutSources? = DragOutLink.installed?.sources(self)
+    #endif
     /// A `dialog` that is not a confirmation, as UIKit's sheet (`DialogLink`).
     lazy package var dialogs: any DialogHosting = DialogLink.make?(self) ?? NoDialogs(self)
     /// The `input`s the batch being applied makes in a closed box (`MenuHost.waitingFields`).
@@ -373,6 +377,9 @@ package final class Presenter {
         fieldSelections.reset()
         edited = nil
         menus.reset()
+        #if os(iOS)
+        dragOut?.reset()
+        #endif
         swipeActions.reset(); rowCells.reset()
         pool.reset()
         leaves?.reset()
@@ -1199,6 +1206,9 @@ package final class Presenter {
         #endif
         attachRegionPopovers()
         ApplyProfile.time("pass.menus") { menus.sync() }
+        #if os(iOS)
+        ApplyProfile.time("pass.dragOut") { dragOut?.sync() }
+        #endif
         glassGroups.reconcile()
         positionContexts()
         // A view a `children` op moved within its parent keeps its ancestors.
