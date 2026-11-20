@@ -12,21 +12,12 @@ final class ColorReference: ExactModule {
             if #available(iOS 26, *) { return ["available": true] }
             #endif
             return ["available": false]
-        case "sidebarBarHeight":
-            #if os(iOS)
-            return ["height": Double(split?.sidebarBarHeight ?? 0)]
-            #else
-            return ["height": 0]
-            #endif
         case let op:
-            throw ExactNativeRefusal("The gallery's module was asked for \(op.map { "\"\($0)\"" } ?? "no operation"), which it does not answer. Pass \"colorReference\" or \"sidebarBarHeight\" as native.call's op.")
+            throw ExactNativeRefusal("The gallery's module was asked for \(op.map { "\"\($0)\"" } ?? "no operation"), which it does not answer. Pass \"colorReference\" as native.call's op.")
         }
     }
 
     #if os(iOS)
-    /// What the `sidebarBarHeight` answer watches: said whenever the split's `sidebarBarHeight` changes
-    static let sidebarBarTopic = "gallery-sidebar-bar"
-    private weak var split: GallerySplit?
     private let sharedBackgrounds = NSMapTable<UIViewController, NSNumber>.weakToStrongObjects()
 
     /// Whether the gallery draws the header's material itself, before iOS 26, where the bar draws one of
@@ -36,13 +27,6 @@ final class ColorReference: ExactModule {
     private static var sharesMaterial: Bool {
         if #available(iOS 26, *) { return false }
         return true
-    }
-
-    override func tabContainer(_ contents: ExactTabContents) -> UIViewController? {
-        let split = GallerySplit(contents)
-        split.sidebarBarHeightChanged = { [context] in context.changed(Self.sidebarBarTopic) }
-        self.split = split
-        return split
     }
 
     override func route(_ route: ExactRoute) {

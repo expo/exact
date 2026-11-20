@@ -1,32 +1,44 @@
 use GalleryDemo, Display, SpaceRow, PicturePair, HdrPicture, NativeFeatures from "./gallery.contract"
 
+// A list of the sections and the section shown: beside each other on a wide
+// window (UIKit's split view on iOS, LLP 1127; the web from 900 points; the
+// Mac), and on a narrow one the list, which pushes a section with Back
 routes nav
-  tab typography "/"
-  tab textcolors "/textcolors"
-  tab css "/css"
-  tab profiles "/profiles"
-  tab images "/images"
-  tab hdr "/hdr"
-  tab effects "/effects"
-  tab media "/media"
-  tab menus "/menus"
+  sections "/"
+    demo "/demo/:section"
+
+shape Page
+  platform: string
+
+// A section: its name, its title, and its symbol, each a `symbol:` source
+// without the prefix: a role, which every host draws, and the one the Apple
+// hosts draw, an SF Symbol (`sf/…`) where one fits the section better
+shape GallerySection
+  name: string
+  title: string
+  symbol: string
+  sf: string
+  group: string
 
 component UIGallery
+  resource page = exactPage() as shape Page
   resource display = exactViewport() as shape Display
-  resource css = colorSpaces("css") as shape SpaceRow[]
-  resource platform = colorSpaces("platform") as shape SpaceRow[]
-  resource pictures = picturePairs() as shape PicturePair[]
-  resource hdr = hdrPictures() as shape HdrPicture[]
-  resource hiddenPictures = hidden("pictures") as shape string
-  resource hiddenHdr = hidden("hdr") as shape string
-  resource caveat = caveat("constrained") as shape string
-  resource host = hostKind() as shape string
+  resource css = colorSpaces("css", page.platform) as shape SpaceRow[]
+  resource platform = colorSpaces("platform", page.platform) as shape SpaceRow[]
+  resource pictures = picturePairs(page.platform) as shape PicturePair[]
+  resource hdr = hdrPictures(page.platform) as shape HdrPicture[]
+  resource hiddenPictures = hidden("pictures", page.platform) as shape string
+  resource hiddenHdr = hidden("hdr", page.platform) as shape string
+  resource caveat = caveat("constrained", page.platform) as shape string
+  derive host = page.platform
+  // SF Symbols draw on Apple's platforms; a role draws everywhere
+  derive apple = host == "ios" or host == "macos" or host == "tvos" or host == "watchos"
   resource tallText = textSample() as shape string
-  resource nativeFeatures = nativeFeatures() as shape NativeFeatures
-  resource sidebarBarHeight = sidebarBarHeight() as shape number
+  resource nativeFeatures = nativeFeatures(page.platform) as shape NativeFeatures
+  derive sections = [GallerySection(name="typography", title="Typography", symbol="article", sf="sf/textformat", group="Text"), GallerySection(name="textcolors", title="Text colors", symbol="compose", sf="sf/paintpalette", group="Text"), GallerySection(name="css", title="CSS color spaces", symbol="circle", sf="sf/circle.lefthalf.filled", group="Color & images"), GallerySection(name="profiles", title="Platform profiles", symbol="adjust", sf="adjust", group="Color & images"), GallerySection(name="images", title="Image profiles", symbol="photo", sf="photo", group="Color & images"), GallerySection(name="hdr", title="HDR", symbol="layers", sf="sf/sun.max", group="Color & images"), GallerySection(name="effects", title="Effects & controls", symbol="sparkles", sf="sparkles", group="UI & media"), GallerySection(name="media", title="Canvas & video", symbol="play", sf="sf/play.rectangle", group="UI & media"), GallerySection(name="menus", title="Context menus", symbol="messages", sf="sf/text.bubble", group="UI & media")]
   // rec2100 colors come from data: the web build refuses a literal one.
-  resource one = hdrWhite(1) as shape string
-  resource four = hdrWhite(4) as shape string
+  resource one = hdrWhite(1, page.platform) as shape string
+  resource four = hdrWhite(4, page.platform) as shape string
   state limit = "no-limit"
   state moved = false
   state textMoved = false
@@ -46,44 +58,33 @@ component UIGallery
     textMoved = not textMoved
   action pickLift(choice: string)
     liftPicked = choice
-  action pick(name: string)
-    nav = select(nav, name)
   action back()
     nav = back(nav)
+  // A section chosen while one shows replaces it, as a sidebar's row does; any other location (the
+  // browser's Back to the list) goes there
   action follow(url: string)
-    nav = go(nav, url)
+    nav = top(nav).name == "demo" and url.startsWith("/demo/") ? replace(nav, url) : go(nav, url)
   view
-    main viewport-fit="cover" navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow width="100%" height="100%" display="flex" flex-direction="column" background-color="light-dark(#ffffff, #000000)" color="light-dark(#111827, #f3f4f6)"
-      column flex=1 min-height=0 position="relative"
-        for t in nav.tabs key=t.name
-          column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
-            for e in t.stack key=e.id
-              GalleryDemo(section=t.name, navigationId=`${e.id}`, authoredHeader=false, compact=false, back=back, display=display, css=css, platform=platform, pictures=pictures, hdr=hdr, hiddenPictures=hiddenPictures, hiddenHdr=hiddenHdr, caveat=caveat, host=host, tallText=tallText, nativeFeatures=nativeFeatures, sidebarBarHeight=sidebarBarHeight, one=one, four=four, limit=limit, moved=moved, textMoved=textMoved, videoSource=videoSource, videoPlaying=videoPlaying, liftPicked=liftPicked, active=nav.tab == t.name, chooseVideo=chooseVideo, toggleVideo=toggleVideo, choose=choose, toggleMoved=toggleMoved, toggleText=toggleText, pickLift=pickLift)
-      row role="tablist" testId="gallery-sections" overflow-x="auto"
-        button appearance="none" role="tab" aria-controls="panel-typography" aria-selected=(nav.tab == "typography") press=pick("typography") testId="section-typography" flex-shrink=0 padding=10
-          image "symbol:sf/textformat"
-          text "Typography"
-        button appearance="none" role="tab" aria-controls="panel-textcolors" aria-selected=(nav.tab == "textcolors") press=pick("textcolors") testId="section-textcolors" flex-shrink=0 padding=10
-          image "symbol:sf/paintpalette"
-          text "Text colors"
-        button appearance="none" role="tab" aria-controls="panel-css" aria-selected=(nav.tab == "css") press=pick("css") testId="section-css" flex-shrink=0 padding=10
-          image "symbol:sf/circle.lefthalf.filled"
-          text "CSS color spaces"
-        button appearance="none" role="tab" aria-controls="panel-profiles" aria-selected=(nav.tab == "profiles") press=pick("profiles") testId="section-profiles" flex-shrink=0 padding=10
-          image "symbol:sf/slider.horizontal.3"
-          text "Platform profiles"
-        button appearance="none" role="tab" aria-controls="panel-images" aria-selected=(nav.tab == "images") press=pick("images") testId="section-images" flex-shrink=0 padding=10
-          image "symbol:sf/photo"
-          text "Image profiles"
-        button appearance="none" role="tab" aria-controls="panel-hdr" aria-selected=(nav.tab == "hdr") press=pick("hdr") testId="section-hdr" flex-shrink=0 padding=10
-          image "symbol:sf/sun.max"
-          text "HDR"
-        button appearance="none" role="tab" aria-controls="panel-effects" aria-selected=(nav.tab == "effects") press=pick("effects") testId="section-effects" flex-shrink=0 padding=10
-          image "symbol:sf/sparkles"
-          text "Effects & controls"
-        button appearance="none" role="tab" aria-controls="panel-media" aria-selected=(nav.tab == "media") press=pick("media") testId="section-media" flex-shrink=0 padding=10
-          image "symbol:sf/play.rectangle"
-          text "Canvas & video"
-        button appearance="none" role="tab" aria-controls="panel-menus" aria-selected=(nav.tab == "menus") press=pick("menus") testId="section-menus" flex-shrink=0 padding=10
-          image "symbol:sf/text.bubble"
-          text "Context menus"
+    main viewport-fit="cover" navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow width="100%" height="100%" background-color="light-dark(#ffffff, #000000)" color="light-dark(#111827, #f3f4f6)"
+      for e in stack(nav) key=e.id
+        if e.name == "sections"
+          column navigationKey=`${e.id}` navigationScroll="gallery-sidebar" position="absolute" inset=0 display="flex" flex-direction="column"
+            header
+              text "UI Gallery" role="heading" aria-level=1
+            list id="gallery-sidebar" testId="gallery-sidebar" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
+              for group in ["Text", "Color & images", "UI & media"] key=group
+                section
+                  header
+                    text group
+                  for item in sections.filter(s => s.group == group) key=item.name
+                    link href=path("demo", item.name) testId=`sidebar-${item.name}` aria-current=(top(nav).params.section == item.name ? "page" : "false")
+                      image `symbol:${apple ? item.sf : item.symbol}` aria-hidden=true
+                      text item.title
+                      image "symbol:forward-chevron"
+            column navigationSplit="placeholder" align-items="center" justify-content="center" row-gap=8 padding=24 testId="gallery-placeholder"
+              image "symbol:layers" aria-hidden=true font-size=40 color="-exact-secondary-label"
+              text "Choose a section" role="heading" aria-level=2 font-size=22 font-weight=600
+        // A section chosen in place of another is a new screen, as a sidebar's detail is: it opens at its top, its title large
+        if e.name == "demo"
+          for s in [e.params.section] key=s
+            GalleryDemo(section=e.params.section, navigationId=`${e.id}`, authoredHeader=false, compact=false, back=back, display=display, css=css, platform=platform, pictures=pictures, hdr=hdr, hiddenPictures=hiddenPictures, hiddenHdr=hiddenHdr, caveat=caveat, host=host, tallText=tallText, nativeFeatures=nativeFeatures, one=one, four=four, limit=limit, moved=moved, textMoved=textMoved, videoSource=videoSource, videoPlaying=videoPlaying, liftPicked=liftPicked, active=true, chooseVideo=chooseVideo, toggleVideo=toggleVideo, choose=choose, toggleMoved=toggleMoved, toggleText=toggleText, pickLift=pickLift)

@@ -1,7 +1,10 @@
-// On a compact iPhone the gallery opens on its sidebar, UIKit's collapsed
-// split view, and a section's views are on screen only once it is selected.
-// So a test taps inside a section only after selecting that section.
+// The gallery opens on its list of sections, and a section's views are on
+// screen only once it is chosen, so a test taps inside a section only after
+// choosing it. A narrow window pushes the section over the list, so a test
+// goes back to the list before choosing the next.
 test "text styles and color samples are present and animate"
+  tap "sidebar-typography"
+  clock settle
   clock data
   expect tree has "text-styles"
   expect tree has "text-underlined"
@@ -25,31 +28,58 @@ test "text styles and color samples are present and animate"
   expect tree has "text-tall"
   expect text "text-changing" == "Original words"
   expect text "text-numeric" == "109.01"
-  tap "section-textcolors"
+  back
+  clock settle
+  tap "sidebar-textcolors"
+  clock settle
   clock data
   expect tree has "text-color-srgb-red-light"
   expect tree has "text-color-display-p3-red-dark"
   expect tree has "text-color-oklch-red-light"
-  tap "section-css"
+  back
+  clock settle
+  tap "sidebar-css"
+  clock settle
   clock data
   expect tree has "srgb"
-  tap "section-profiles"
+  back
+  clock settle
+  tap "sidebar-profiles"
+  clock settle
   clock data
-  tap "section-images"
+  back
+  clock settle
+  tap "sidebar-images"
+  clock settle
   clock data
   expect tree has "pictures"
-  tap "section-hdr"
+  back
+  clock settle
+  tap "sidebar-hdr"
+  clock settle
   clock data
-  tap "section-effects"
+  back
+  clock settle
+  tap "sidebar-effects"
+  clock settle
   clock data
   expect tree has "transition-toggle"
-  tap "section-media"
+  back
+  clock settle
+  tap "sidebar-media"
+  clock settle
   clock data
   expect tree has "canvas-p3"
-  tap "section-menus"
+  back
+  clock settle
+  tap "sidebar-menus"
+  clock settle
   clock data
   expect tree has "lift-picked"
-  tap "section-typography"
+  back
+  clock settle
+  tap "sidebar-typography"
+  clock settle
   clock data
   expect text "text-changing" == "Original words"
   expect text "text-numeric" == "109.01"
@@ -63,43 +93,72 @@ test "text styles and color samples are present and animate"
   expect text "text-numeric" == "109.01"
 
 test "HDR range choices stay enabled across native sections" on ios
+  tap "sidebar-typography"
+  clock settle
   clock data
   expect tree has "range-typography"
   expect text "range-typography-title" == "Dynamic range limit"
   expect tree missing "range-typography-note"
   expect state limit == "no-limit"
-  tap "section-textcolors"
+  back
+  clock settle
+  tap "sidebar-textcolors"
+  clock settle
   clock data
   tap "range-textcolors-standard"
   expect state limit == "standard"
   expect enabled "range-textcolors-no-limit"
   tap "range-textcolors-no-limit"
   expect state limit == "no-limit"
-  tap "section-css"
+  back
+  clock settle
+  tap "sidebar-css"
+  clock settle
   clock data
   expect state limit == "no-limit"
   tap "range-css-constrained"
-  tap "section-profiles"
+  back
+  clock settle
+  tap "sidebar-profiles"
+  clock settle
   clock data
   expect state limit == "constrained"
   tap "range-profiles-standard"
-  tap "section-images"
+  back
+  clock settle
+  tap "sidebar-images"
+  clock settle
   clock data
   expect state limit == "standard"
-  tap "section-hdr"
+  back
+  clock settle
+  tap "sidebar-hdr"
+  clock settle
   clock data
   expect tree missing "range-hdr"
-  tap "section-effects"
+  back
+  clock settle
+  tap "sidebar-effects"
+  clock settle
   clock data
   expect state limit == "standard"
-  tap "section-media"
+  back
+  clock settle
+  tap "sidebar-media"
+  clock settle
   clock data
   expect state limit == "standard"
   tap "range-media-no-limit"
-  tap "section-menus"
+  back
+  clock settle
+  tap "sidebar-menus"
+  clock settle
   clock data
   expect tree missing "range-menus"
-  tap "section-typography"
+  back
+  clock settle
+  tap "sidebar-typography"
+  clock settle
   clock data
   expect state limit == "no-limit"
   expect enabled "range-typography-standard"
@@ -107,37 +166,67 @@ test "HDR range choices stay enabled across native sections" on ios
   expect state limit == "standard"
 
 test "the browser offers range choices only for HDR images" on web
+  tap "sidebar-typography"
+  clock settle
   clock data
+  expect tree has "text-styles"
   expect tree missing "range-typography"
-  tap "section-textcolors"
+  back
+  clock settle
+  tap "sidebar-textcolors"
+  clock settle
   clock data
   expect tree missing "range-textcolors"
-  tap "section-css"
+  back
+  clock settle
+  tap "sidebar-css"
+  clock settle
   clock data
   expect tree missing "range-css"
-  tap "section-profiles"
+  back
+  clock settle
+  tap "sidebar-profiles"
+  clock settle
   clock data
   expect tree missing "range-profiles"
-  tap "section-images"
+  back
+  clock settle
+  tap "sidebar-images"
+  clock settle
   clock data
   expect text "range-images-title" == "Dynamic range limit"
   expect tree missing "range-images-note"
   tap "range-images-standard"
   expect state limit == "standard"
-  tap "section-hdr"
+  back
+  clock settle
+  tap "sidebar-hdr"
+  clock settle
   clock data
   expect tree missing "range-hdr"
-  tap "section-effects"
+  back
+  clock settle
+  tap "sidebar-effects"
+  clock settle
   clock data
   expect tree missing "range-effects"
-  tap "section-media"
+  back
+  clock settle
+  tap "sidebar-media"
+  clock settle
   clock data
   expect tree missing "range-media"
-  tap "section-images"
+  back
+  clock settle
+  tap "sidebar-images"
+  clock settle
   clock data
   expect state limit == "standard"
   tap "range-images-no-limit"
   expect state limit == "no-limit"
-  tap "section-menus"
+  back
+  clock settle
+  tap "sidebar-menus"
+  clock settle
   clock data
   expect tree missing "range-menus"
