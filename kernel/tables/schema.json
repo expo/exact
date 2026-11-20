@@ -2513,6 +2513,56 @@
       ],
       "default": "none"
     },
+    "SafeAreaEdges": {
+      "_comment": "@ref LLP 1123 D13, D14: an `<edges>` set, the keywords of the safe_area_reach_edges, scroll_edge_effect_soft, scroll_edge_effect_hard and scroll_edge_effect_hidden rows, not a wire enum. none is 0, naming no edge; each other value is one bit in this order (top bit 0, end bit 5).",
+      "values": [
+        "none",
+        "top",
+        "right",
+        "bottom",
+        "left",
+        "start",
+        "end"
+      ],
+      "default": "none"
+    },
+    "SafeAreaExtend": {
+      "_comment": "@ref LLP 1123 D13: `-exact-safe-area-extend`, the keywords of the safe_area_extend row, not a wire enum. none is 0; each other value is one bit in this order (top bit 0, end bit 5, manual bit 6).",
+      "values": [
+        "none",
+        "top",
+        "right",
+        "bottom",
+        "left",
+        "start",
+        "end",
+        "manual"
+      ],
+      "default": "none"
+    },
+    "SafeAreaReach": {
+      "values": [
+        "auto",
+        "edges"
+      ],
+      "default": "auto"
+    },
+    "ScrollInsetAdjustment": {
+      "values": [
+        "automatic",
+        "scrollable-axes",
+        "always",
+        "never"
+      ],
+      "default": "automatic"
+    },
+    "ScrollIndicatorAdjustment": {
+      "values": [
+        "auto",
+        "none"
+      ],
+      "default": "auto"
+    },
     "LayoutMarginsPreserved": {
       "_comment": "@ref LLP 1123 D8: `-exact-preserves-superview-layout-margins`, the keywords of the layout_margins_preserved row, not a wire enum: false is 0, true 1.",
       "values": [
@@ -4573,7 +4623,7 @@
       "bit": 168,
       "field": "scroll_edge_effect",
       "codec": "enum:ScrollEdgeEffect",
-      "_comment": "@ref LLP 1077 D16: not CSS. A scroll container's edge effect where content meets a bar (iOS 26): automatic, soft, hard or none.",
+      "_comment": "@ref LLP 1077 D16: not CSS. A scroll container's edge effect where content meets a bar (iOS 26): automatic, soft, hard or none, on every edge. LLP 1123 replaces it at activation with D14's `-exact-scroll-edge-effect-style` and `-exact-scroll-edge-effect-hidden` (§\"What it replaces\"); until then a scroller takes its styles and its hidden edges from those forms where it sets them, and from this row where it does not.",
       "cold": true
     },
     {
@@ -5560,6 +5610,208 @@
       "snapshot": "admit",
       "watch": "admit",
       "cold": true
+    },
+    {
+      "bit": 277,
+      "field": "scroll_content_inset_top",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D14: `-exact-scroll-content-inset: <length>{1,4}`, one row per edge: a scroller's authored content inset, the `authored` term its host's one writer adds to UIKit's `contentInset` on that edge, beyond the depth of what occupies the edge. A length may be negative, as UIKit's `UIEdgeInsets` are. Not layout: the CSS padding and content boxes stay as laid out. Not inherited."
+    },
+    {
+      "bit": 278,
+      "field": "scroll_content_inset_right",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "default": 0
+    },
+    {
+      "bit": 279,
+      "field": "scroll_content_inset_bottom",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "default": 0
+    },
+    {
+      "bit": 280,
+      "field": "scroll_content_inset_left",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "default": 0
+    },
+    {
+      "bit": 281,
+      "field": "scroll_inset_adjustment",
+      "rare": true,
+      "codec": "enum:ScrollInsetAdjustment",
+      "_comment": "@ref LLP 1123 D14: `-exact-scroll-inset-adjustment: automatic | scrollable-axes | always | never`, UIKit's `contentInsetAdjustmentBehavior` for the scroller, the platform's term *P* of D14's equation; under `never` *P* is 0 and Exact's terms cover the whole occupied region. `automatic`, the initial value, is UIKit's default. Not inherited."
+    },
+    {
+      "bit": 282,
+      "field": "scroll_vertical_indicator_insets_top",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D14: `-exact-scroll-vertical-indicator-insets: <length>{1,4}`, one row per edge: the authored term of the vertical scroll indicator's inset there, which the host writes with UIKit's automatic indicator adjustment off. A length may be negative, as UIKit's `UIEdgeInsets` are. Not inherited."
+    },
+    {
+      "bit": 283,
+      "field": "scroll_vertical_indicator_insets_right",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "default": 0
+    },
+    {
+      "bit": 284,
+      "field": "scroll_vertical_indicator_insets_bottom",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "default": 0
+    },
+    {
+      "bit": 285,
+      "field": "scroll_vertical_indicator_insets_left",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "default": 0
+    },
+    {
+      "bit": 286,
+      "field": "scroll_horizontal_indicator_insets_top",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D14: `-exact-scroll-horizontal-indicator-insets: <length>{1,4}`, one row per edge: the authored term of the horizontal scroll indicator's inset there, as the vertical indicator's. Not inherited."
+    },
+    {
+      "bit": 287,
+      "field": "scroll_horizontal_indicator_insets_right",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "default": 0
+    },
+    {
+      "bit": 288,
+      "field": "scroll_horizontal_indicator_insets_bottom",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "default": 0
+    },
+    {
+      "bit": 289,
+      "field": "scroll_horizontal_indicator_insets_left",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "default": 0
+    },
+    {
+      "bit": 290,
+      "field": "scroll_indicator_adjustment",
+      "rare": true,
+      "codec": "enum:ScrollIndicatorAdjustment",
+      "_comment": "@ref LLP 1123 D14: `-exact-scroll-indicator-adjustment: auto | none`: under `auto`, the initial value, each indicator inset is its authored term plus the edge's occupied depth; under `none`, the authored terms alone. Not inherited."
+    },
+    {
+      "bit": 291,
+      "field": "scroll_edge_effect_soft",
+      "codec": "u8",
+      "keywords": "SafeAreaEdges",
+      "rare": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D14: `-exact-scroll-edge-effect-style: [<edges> [automatic | soft | hard]]#`, one of its two rows: the edges on which UIKit's scroll edge effect (iOS 26) is soft, as SafeAreaEdges' bits. UIKit holds a style for each edge, so the form is held as two edge sets, this row's soft edges and scroll_edge_effect_hard's hard ones; an edge in neither is automatic, and an edge in both, which Contract never writes, is hard. Where one set names an edge by `start` or `end` and the other names the same edge by `left` or `right`, the edge takes the first set's style; a list that gives `start` or `end` `automatic` beside `left` or `right` `soft` or `hard` is refused, as an automatic edge is held in neither set. `start` and `end` resolve against the box's `direction`. Until activation retires `-exact-scroll-edge-effect`, a scroller's styles come from this form and its hidden edges from `-exact-scroll-edge-effect-hidden`, each where it is set, and the old row gives the one that is not: its `none` hides every edge and its other words style every edge. Not inherited."
+    },
+    {
+      "bit": 292,
+      "field": "scroll_edge_effect_hard",
+      "codec": "u8",
+      "keywords": "SafeAreaEdges",
+      "rare": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D14: the edges on which the scroller's edge effect is hard (`-exact-scroll-edge-effect-style`, with scroll_edge_effect_soft). Not inherited."
+    },
+    {
+      "bit": 293,
+      "field": "scroll_edge_effect_hidden",
+      "codec": "u8",
+      "keywords": "SafeAreaEdges",
+      "rare": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D14: `-exact-scroll-edge-effect-hidden: none | <edges>`: the edges on which the scroller's edge effect is hidden, as SafeAreaEdges' bits; `start` and `end` resolve against the box's `direction`. `none`, the initial value, hides none. Not inherited."
+    },
+    {
+      "bit": 294,
+      "field": "safe_area_reach",
+      "rare": true,
+      "codec": "enum:SafeAreaReach",
+      "_comment": "@ref LLP 1123 D13: `-exact-safe-area-reach: auto | none | <edges>`, SwiftUI's `background(_:ignoresSafeAreaEdges:)` and `overlay(_:ignoresSafeAreaEdges:)`, one of its two rows: `auto`, the initial value, reaches for a scroller and for a box with a plain background colour; `edges` reaches on the edges safe_area_reach_edges names, none for `none`. On a reached edge the box's native view reaches the allocation's edge where the box touches a safe edge, outset there with its bounds origin shifted so its subviews stay where layout put them. It changes where the box paints and takes touches, never its layout or its incoming observations. Not inherited."
+    },
+    {
+      "bit": 295,
+      "field": "safe_area_reach_edges",
+      "codec": "u8",
+      "keywords": "SafeAreaEdges",
+      "rare": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D13: the edges `-exact-safe-area-reach` names, as SafeAreaEdges' bits, read where safe_area_reach is `edges`; `start` and `end` resolve against the box's `direction`. Not inherited."
+    },
+    {
+      "bit": 296,
+      "field": "safe_area_extend",
+      "codec": "u8",
+      "keywords": "SafeAreaExtend",
+      "rare": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D13: `-exact-safe-area-extend: none | <edges> [manual]`: the box's rendered content is mirrored into the band on those edges, with `UIBackgroundExtensionView` (iOS 26) or `NSBackgroundExtensionView` (macOS 26); `start` and `end` resolve against the box's `direction`. `manual` puts the extension's content view at the box's final frame instead of letting the extension view place it. Where no extension view exists, the band shows the box's background colour. `none`, the initial value, extends nothing. Not inherited."
+    },
+    {
+      "bit": 297,
+      "field": "safe_area_extend_bounds_top",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "admitsAuto": true,
+      "default": "auto",
+      "_comment": "@ref LLP 1123 D13: `-exact-safe-area-extend-bounds: [<length> | auto]{1,4}`, one row per edge: how far the extension's container reaches beyond the box on an edge it extends on. `auto`, the initial value, reaches from the box's edge to the allocation's edge where the box touches the band, and is 0 where it does not. A negative length is refused, and a calculation below 0 counts as 0. It does nothing on an edge the box does not extend on. Not inherited."
+    },
+    {
+      "bit": 298,
+      "field": "safe_area_extend_bounds_right",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "admitsAuto": true,
+      "default": "auto"
+    },
+    {
+      "bit": 299,
+      "field": "safe_area_extend_bounds_bottom",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "admitsAuto": true,
+      "default": "auto"
+    },
+    {
+      "bit": 300,
+      "field": "safe_area_extend_bounds_left",
+      "rare": true,
+      "codec": "dimension",
+      "refusesPercent": true,
+      "admitsAuto": true,
+      "default": "auto"
     }
   ],
   "_transitions": "The `transition` row is CSS `transition` (LLP 1002): count u8 (≤8), then per declaration property u8 (0 all, then 1 + `Property`: 1 translate, 2 scale, 3 rotate, 4 opacity, 5 height, 6 stroke-dashoffset, 7 r, 8 color, 9 background-color, 10 fill, 11 stroke, 12 cx, 13 cy, 14 x, 15 y, 16 rx, 17 ry, 18 border-top-color, 19 border-right-color, 20 border-bottom-color, 21 border-left-color, 22 -exact-tint-color, 23 box-shadow — LLP 1062; 24, box-shadow's colour alone, is refused; 25 font-weight, 26 font-stretch, 27 font-variation-settings — LLP 1019 §13 D10; 28 is CSS's `border-color` shorthand; 29 is a path's `d`, LLP 1055.000 D15; 30 is `filter`, LLP 1003.002), duration f32 s, delay f32 s, easing u8 (0 linear, 1 ease, 2 ease-in, 3 ease-out, 4 ease-in-out, 5 cubic-bezier + 4×f32, 6 steps + u16 count + u8 position, 7 spring + f32 stiffness/damping/mass, 8 linear() + u8 count + count×(f32 input, f32 output)). Its Rust type lives in exact-motion; the kernel owns the bytes.",

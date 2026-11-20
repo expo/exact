@@ -1251,9 +1251,9 @@ fn attr_detail(name: &str, a: &AttrTarget) -> Vec<String> {
             } else {
                 lines.extend(names.iter().zip(&texts).map(|(n, t)| format!("{n}: {t}")));
             }
-            if matches!(a, AttrTarget::Flex) {
-                lines.push("`flex: <n>` is CSS's `<n> 1 0%`".into());
-            }
+            // A grammar the rows do not show: flex's, and LLP 1123 D13's and D14's forms'
+            let note = matches!(a, AttrTarget::Flex).then_some("`flex: <n>` is CSS's `<n> 1 0%`");
+            lines.extend(note.or_else(|| scroll::note(name)).map(Into::into));
             // The roles a colour takes, by name: a builder guessed one (`contract vocab background-color`, tip-splitter).
             if rows.iter().any(|r| vocab::takes_roles(*r)) {
                 let (exact, css) = vocab::color_roles();
