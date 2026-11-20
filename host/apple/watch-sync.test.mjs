@@ -49,3 +49,19 @@ test('a secret replica requires a profile granting the shared Keychain group', a
   profile.keychain = [];
   assert.deepEqual(watchProfiles(options), [profile]);
 });
+
+test("every app's watch companion builds in one shared Swift scratch per destination and trust", async () => {
+  const { watchSwiftScratch } = await import('./watch.mjs');
+  const { appleArtifacts } = await import('./build.mjs');
+  const { resolveApp } = await import('../../scripts/app.mjs');
+  const [hello, caltrain] = ['hello', 'caltrain'].map(resolveApp);
+  assert.notEqual(hello.dir, caltrain.dir);
+  for (const device of [false, true]) for (const production of [false, true]) {
+    const scratch = watchSwiftScratch(hello, { device, production });
+    assert.equal(watchSwiftScratch(caltrain, { device, production }), scratch);
+    assert.ok(!scratch.startsWith(appleArtifacts(hello, { destination: 'ios' }).owner + '/'), scratch);
+  }
+  const all = [false, true].flatMap(device => [false, true].map(production => watchSwiftScratch(hello, { device, production })));
+  assert.equal(new Set(all).size, 4);
+  assert.equal(new Set([...all, appleArtifacts(hello, { destination: 'ios' }).swift, appleArtifacts(hello, { destination: 'ios-simulator' }).swift]).size, 6);
+});
