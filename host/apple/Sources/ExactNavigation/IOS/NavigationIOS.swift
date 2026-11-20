@@ -778,7 +778,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         if let top = primaryOwner {
             fitOwner()
             placeOwner()
-            top.view.layoutIfNeeded()
+            if split?.laysOutItself != true { top.view.layoutIfNeeded() }
         }
         for (id, c) in controllers where !routeIDs.contains(id) { end(c) }
         controllers = controllers.filter { routeIDs.contains($0.key) }
@@ -1253,7 +1253,11 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     }
 
     func navigationController(_ navigationController: UINavigationController, didShow viewController: UIViewController, animated: Bool) {
+        if columnLayoutHeld(navigationController) { return }
         followPops()
+        // A stack UIKit moves between the split's columns as it collapses or expands shows its routes as a step of
+        // that move: the move's report syncs the settled columns (`SplitIOS.splitViewControllerDidCollapse`)
+        if let split, split.moving, split.list === navigationController || split.detail === navigationController { return }
         if navigationController === more {
             followSelection(showing: viewController)
             if declineMoreRow(viewController) { return }
