@@ -16,6 +16,7 @@ pub use retirement::{ModuleIdentity, ModuleInstance};
 mod background;
 mod commit;
 mod console;
+mod drag_files;
 pub use console::Console;
 mod completion;
 mod control;

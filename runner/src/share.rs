@@ -193,7 +193,7 @@ impl Share {
 
 /// `http://` or `https://` (any case) and a host: what `new URL` and
 /// `URL(string:)` both read as absolute, without a relative form to resolve.
-fn absolute_http(url: &str) -> bool {
+pub(crate) fn absolute_http(url: &str) -> bool {
     let lower = url.get(..8).unwrap_or(url).to_ascii_lowercase();
     let rest = if lower.starts_with("https://") {
         &url[8..]
@@ -227,9 +227,7 @@ fn file<D: DataSource>(runner: &Runner<D>, entry: &str, reach: Reach) -> Result<
             "{entry} is neither an app:/ file nor an element's #id"
         ));
     }
-    if !runner.covers("fs.read", entry) {
-        return Err(format!("{entry} is outside the app's fs.read grants"));
-    }
+    crate::transfer::app_file(runner, entry)?;
     if let Some(reason) = reach.files {
         return Err(reason.into());
     }

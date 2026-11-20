@@ -114,6 +114,7 @@ fn attrs(tag: &str, attrs: &[Attr], errors: &mut Vec<CompileError>) {
             Some(AttrTarget::Handler(_)) => errors.push(fail("snapshot-handler", "a snapshot handler cannot navigate or take input; make it a `link href=…` (button and toggle intents are stage 2)")),
             Some(AttrTarget::Styles(_) | AttrTarget::Shorthand) => values::attribute(a, errors, false),
             Some(AttrTarget::Surface | AttrTarget::MediaMetadata) => errors.push(fail("snapshot-request", "render only supplied props; move this work into the refresh function and use an image")),
+            Some(AttrTarget::DataTransfer) => errors.push(fail("snapshot-request", "a widget lifts nothing to drag; remove `dataTransfer` from the entry")),
             Some(AttrTarget::Prop(p) | AttrTarget::InvertedBoolProp(p))
                 if !admits_prop(p) => {
                 errors.push(fail("snapshot-prop", "this prop requires a running host; remove it from the entry"));

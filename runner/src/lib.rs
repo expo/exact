@@ -106,6 +106,7 @@ pub mod strings;
 pub mod surface_record;
 pub mod time;
 pub mod tools;
+mod transfer;
 pub mod transport;
 pub mod upload;
 pub mod uses;

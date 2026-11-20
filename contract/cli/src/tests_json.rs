@@ -415,6 +415,24 @@ fn step_json(step: &Step, s: &mut String) {
         Step::ExpectWakelock { held, .. } => {
             s.push_str(&format!("{{\"op\":\"expect-wakelock\",\"held\":{held}"));
         }
+        Step::ExpectDrag {
+            target,
+            kind,
+            present,
+            value,
+            name,
+            ..
+        } => {
+            s.push_str("{\"op\":\"expect-drag\",\"target\":");
+            q(target, s);
+            s.push_str(&format!(",\"present\":{present}"));
+            for (key, field) in [("kind", kind), ("value", value), ("name", name)] {
+                if let Some(text) = field {
+                    s.push_str(&format!(",\"{key}\":"));
+                    q(text, s);
+                }
+            }
+        }
         Step::ExpectSound {
             src,
             present,

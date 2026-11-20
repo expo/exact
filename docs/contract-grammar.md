@@ -767,8 +767,8 @@ only its selected arm. Conditions require booleans.
 Named arguments are accepted only by the corresponding constructs: component
 uses, a native module's sources and sends (the only place a dotted name,
 `apple.desiredAccuracy=`, is one), record construction/copy, localization (`t`), placeholders (`empty`),
-canvas `surface=` bindings, and specialized host commands (`share`,
-`scrollIntoView`). Ordinary function calls are positional. Arrow expressions are admitted
+canvas `surface=` bindings, `dataTransfer=DataTransfer(…)` (LLP 1094.000),
+and specialized host commands (`share`, `scrollIntoView`). Ordinary function calls are positional. Arrow expressions are admitted
 as the callbacks to `map` and `filter`, with at most item and index parameters;
 they are not first-class values or event handlers.
 
@@ -874,6 +874,8 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
                   [ "at" NUMBER ] [ "gain" NUMBER ] [ "ends" NUMBER ]
                   [ "playbackRate" NUMBER ] [ "pan" [ "-" ] NUMBER ] [ "by" IDENT ] NL
               | "expect" "wakelock" ( "held" | "released" ) NL
+              | "expect" "drag" STRING ( "none" | "has" STRING [ "==" STRING ] [ "name" STRING ] | "missing" STRING ) NL
+                                                     (* what the node's drag carries, as `tree` shows it (LLP 1094.000) *)
               | "expect" "midi" ( "sent" | "missing" ) STRING HEX { HEX } [ "at" NUMBER ] NL
               | "expect" "mediasession" ( IDENT "==" ( STRING | "none" )
                   | ( "has" | "missing" ) STRING ) NL ;
@@ -2444,6 +2446,19 @@ Web and macOS, as `drop`. The driver's `tap <target> dragenter <path…>`
 brings a drag of those files over the target and leaves it there (for a
 screenshot); `tap <target> drop <path…>` drops it, and `tap <target>
 dragleave` takes it away undropped.
+
+`draggable` is HTML's attribute: a node a person can lift and drop into
+another app, a boolean that may be bound, on a box, a `link`, a `button` or
+an `image` (LLP 1094.000). `dataTransfer=DataTransfer(text=, url=, files=[…])`
+declares what the drag carries, by `DataTransfer`'s names: `text` as
+`text/plain`, `url` (absolute `http:` or `https:`) as `text/uri-list`, and
+each file as itself, a shipped `assets/` file or an `app:/` path behind
+`fs.read`. Each needs the other. The data is declared on the node, not set in
+a `dragstart` listener, because every platform takes a drag's items as it
+begins; `dragstart`, `drag` and `dragend` are refused for now
+(`lower-handler-later`). The runner admits each file and `url` for the host
+and journals a refusal (`drag: refused: …`); `expect drag` asserts what a node
+carries ([recipe](recipes/drag-out.md)). No host lifts it to the system yet.
 
 `beforeunload` is DOM's: the window is about to close or the app to quit
 (macOS: its close button, File ▸ Close Window, ⌘Q; the web: leaving the page).

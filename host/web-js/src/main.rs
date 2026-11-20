@@ -606,6 +606,11 @@ fn main() -> ExitCode {
                 let flag = serde_json::json!({ "extensions": plan.package_extensions(), "sources": sources });
                 let _ = std::fs::write(dir.join("modules.flag"), flag.to_string());
             }
+            // A node with `draggable` (drag.js, LLP 1094.000 D2, D3).
+            let _ = std::fs::remove_file(dir.join("drag.flag"));
+            if exact_runner::uses(&plan).has(exact_runner::uses::Capability::DragOut) {
+                let _ = std::fs::write(dir.join("drag.flag"), "");
+            }
             // `wakelock` (wakelock.js, LLP 1125 D11).
             let _ = std::fs::remove_file(dir.join("wakelock.flag"));
             if exact_runner::wakelock::bound(&plan) {

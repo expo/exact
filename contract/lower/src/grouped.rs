@@ -392,6 +392,14 @@ fn section(
             span,
         );
     }
+    // @ref LLP 1094.000 D4 — nothing written in a grouped list's section drags out.
+    let dragged = Node::walk(std::slice::from_ref(node)).find_map(|n| match n {
+        Node::Element { attrs, .. } => attrs.iter().find(|a| crate::transfer::drags(a)),
+        _ => None,
+    });
+    if let Some(a) = dragged {
+        return Err(crate::transfer::grouped(a));
+    }
     // LLP 1116.017 D3, before the label's check: copied only when one folds.
     let fold = |c: &Node| {
         (is(c, "header") || is(c, "footer"))

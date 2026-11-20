@@ -1687,6 +1687,30 @@
       "_comment": "@ref LLP 1105 D7: Android navigation bar icons, light-content, dark-content or auto. Without a declaration the page's scheme decides."
     },
     {
+      "id": 314,
+      "name": "draggable",
+      "kind": "bool",
+      "_comment": "@ref LLP 1094.000 D1: HTML's `draggable`: a person can lift this node and drop what its `dataTransfer=` carries into another app. Nothing drags unless it is true and the node carries data (`dataTransferText`, `dataTransferUrl`, `dataTransferFiles`)."
+    },
+    {
+      "id": 315,
+      "name": "dataTransferText",
+      "kind": "str",
+      "_comment": "@ref LLP 1094.000 D1: `DataTransfer(text=)`, the drag's `text/plain`. The compiler's, never authored."
+    },
+    {
+      "id": 316,
+      "name": "dataTransferUrl",
+      "kind": "str",
+      "_comment": "@ref LLP 1094.000 D1: `DataTransfer(url=)`, the drag's `text/uri-list`: an absolute `http:` or `https:` URL. The compiler's, never authored."
+    },
+    {
+      "id": 317,
+      "name": "dataTransferFiles",
+      "kind": "str",
+      "_comment": "@ref LLP 1094.000 D2: `DataTransfer(files=)`, newline-joined: each a shipped `assets/` file or an `app:/` path. The runner rewrites it to the entries its file rule admits for the host before a batch is sent. The compiler's, never authored."
+    },
+    {
       "id": 255,
       "name": "statusBarAnimation",
       "kind": "str",

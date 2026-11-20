@@ -17,6 +17,7 @@ mod card;
 mod concepts;
 mod frames;
 mod recipes;
+mod records;
 mod scroll;
 
 use concepts::Concept;
@@ -878,7 +879,7 @@ fn kind(a: &AttrTarget) -> &'static str {
         AttrTarget::Flex => "flex",
         AttrTarget::Shorthand => "shorthand",
         AttrTarget::Surface => "surface",
-        AttrTarget::MediaMetadata => "record",
+        AttrTarget::MediaMetadata | AttrTarget::DataTransfer => "record",
     }
 }
 
@@ -920,9 +921,6 @@ const KEEP_MOUNTED: &str = "keep-mounted on a `list virtualized=true`: the keys 
 const NAVIGATE: &str = "on the navigation root: a location from outside the running app (a link, a protocol handler's or a notification's URL, the web's Back and Forward), whose action chooses the verb (LLP 1038 D8). `go` pops to the location when the selected stack holds it, selects the tab whose top it is, and otherwise pushes it on the selected tab, whatever tab declares its route. `open(nav, url)` lands in the route's declared tab, that tab's stack its declared chain. A cold launch's location is no event: it opens there, as `open` does";
 
 const PLAYING: &str = "on video or audio, with no payload: playback is ready to start after a pause or delay for media data (WHATWG: https://html.spec.whatwg.org/multipage/media.html#event-media-playing). The web forwards the browser's event. Apple waits until the item's timebase advances, then reports once per start or resumption; calling play alone does not fire it. Use playing to hand over a feed's volume; timeupdate remains a periodic position report (250 ms on Apple). This is not a guarantee that a speaker has produced sound. Android and the painted hosts do not currently deliver this event (LLP 1042).";
-
-/// What `metadata=` takes (LLP 1098 D1): the Media Session's record.
-const METADATA: &str = "MediaMetadata(title=, artist=, album=, artwork=), each a string";
 
 /// `border-radius` on a sheet route (ModalIOS.swift `cornerRadius(of:)`).
 const SHEET_RADIUS: &str = "on iOS a sheet route's (`navigationPresentation=\"modal\"`) top-left radius is also its sheet's corner radius (`preferredCornerRadius`), which seats a large sheet flat on the bottom edge. Unsaid, the sheet is UIKit's: on iOS 26 and later rounded like the display and inset from the bottom edge, as Apple's own sheets are";
@@ -1075,9 +1073,9 @@ fn attr_json(name: &str, a: &AttrTarget) -> Value {
             }
         }
         AttrTarget::Surface => {}
-        AttrTarget::MediaMetadata => {
-            doc["type"] = METADATA.into();
-            doc["props"] = json!(["mediaTitle", "mediaArtist", "mediaAlbum", "mediaArtwork"]);
+        AttrTarget::MediaMetadata | AttrTarget::DataTransfer => {
+            let h = records::of(a).expect("a hoisted record");
+            (doc["type"], doc["props"]) = (h.construct.into(), json!(h.props));
         }
     }
     if let Some(only) = only_on(name) {
@@ -1358,11 +1356,7 @@ fn attr_detail(name: &str, a: &AttrTarget) -> Vec<String> {
             .chain([format!("event {event}")])
             .collect(),
         AttrTarget::Surface => vec!["a canvas's surface binding: surface=name(args)".into()],
-        AttrTarget::MediaMetadata => vec![
-            format!("record {METADATA}"),
-            "props mediaTitle, mediaArtist, mediaAlbum, mediaArtwork, its fields".into(),
-            "claims the media session (LLP 1098 D1)".into(),
-        ],
+        AttrTarget::MediaMetadata | AttrTarget::DataTransfer => records::detail(a),
     }
 }
 
@@ -1432,7 +1426,9 @@ fn listing() -> String {
         let mut text = match a {
             AttrTarget::Prop(p) => prop_type(*p),
             AttrTarget::InvertedBoolProp(p) => format!("bool (inverse of {})", p.name()),
-            AttrTarget::MediaMetadata => METADATA.into(),
+            AttrTarget::MediaMetadata | AttrTarget::DataTransfer => {
+                records::of(a).map_or_else(String::new, |h| h.construct.into())
+            }
             _ => "surface=name(args), on `canvas`".into(),
         };
         if let Some(only) = only_on(name) {
