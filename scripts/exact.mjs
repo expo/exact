@@ -761,13 +761,6 @@ export function refreshTypes(dir, tool, {quiet = false} = {}) {
   if (!quiet) console.error(`app.contract.d.ts: ${before === null ? 'written' : 'regenerated, since a source\'s signature changed'} (the types app.ts imports)`);
   return true;
 }
-/** Whether this machine has the Apple tools an iPhone build needs and `exact setup` does not install: Xcode with its
- *  iOS SDK on a Mac, the Apple cross SDK and its tools on Linux. */
-export function iphoneBuildable(env = process.env, os = process.platform) {
-  if (!['darwin', 'linux'].includes(os)) return false;
-  const tools = os === 'linux' ? CROSS_IOS_ROWS : ['Xcode', 'iOS SDK'];
-  return sdkReport(env, { only: 'ios', device: true }).filter(row => tools.includes(row.name)).every(row => row.ok);
-}
 /** `exact new`: check the machine first, since a game's or a Snapback app's scaffold needs Cargo (an app's does
  * not); then write it and say what its builds will still need. */
 async function newApp(path, {update = false, without = null, with: platforms = [], game = false, assets = false, rust = false, snapback = null, title, id} = {}) {
@@ -824,7 +817,9 @@ async function newApp(path, {update = false, without = null, with: platforms = [
   // The table above is the web's (LLP 1153 D1.6): a platform the app names is checked before its first build.
   const shown = shellPath(resolve(ROOT, 'scripts/exact.mjs'));
   for (const platform of game ? [] : platforms ?? []) console.log(`Before the first ${platform} build: bun ${shown} setup --check --platform ${platform} names what it lacks (the Xcode or SDK it needs among them).`);
-  if (!game && !iphoneBuildable()) console.log(`\nThis machine lacks ${process.platform === 'linux' ? 'the Apple cross SDK and its tools' : 'Xcode'}, so it cannot build the app for iPhone. Exact Build builds it in the cloud, and AppDrop installs it on a phone: https://exact.appdrop.app/agents.md is the guide for an agent, https://exact.appdrop.app/docs the API.`);
+  // Exact Build where this machine lacks the Apple tools exact setup does not install: Xcode, or Linux's cross SDK.
+  const appleTools = process.platform === 'linux' ? CROSS_IOS_ROWS : ['Xcode', 'iOS SDK'];
+  if (!game && (!['darwin', 'linux'].includes(process.platform) || sdkReport(process.env, { only: 'ios', device: true }).some(row => appleTools.includes(row.name) && !row.ok))) console.log(`\nThis machine lacks ${process.platform === 'linux' ? 'the Apple cross SDK and its tools' : 'Xcode'}, so it cannot build the app for iPhone. Exact Build builds it in the cloud, and AppDrop installs it on a phone: https://exact.appdrop.app/agents.md is the guide for an agent, https://exact.appdrop.app/docs the API.`);
   if (note >= 0) console.log(created.slice(note));
   if (!canBuildTools) console.log('\nA matching prebuilt tool set lets you run `bun exact.mjs contract build app.contract` and build a Contract and TypeScript app for the web. Native builds and apps with Rust code need Rust locally or a build service.');
 }
