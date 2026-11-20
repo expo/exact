@@ -80,7 +80,7 @@ extension NodeView {
     /// otherwise. A painted row's content can start nearer the edge (10
     /// points in the Mac's grouped form), or a swipe row can be inset by its
     /// margin, so the selection is placed by the content: 8 points before
-    /// its first leaf and after the row's padding at the end, and no more
+    /// its first leaf or first painted box and after the row's padding at the end, and no more
     /// than 10 points in from, or out past, the view that holds the row (a
     /// section's card, the list's document). It is a layer of that view,
     /// over its own box and under its rows, so a swipe row's scroll view
@@ -95,8 +95,10 @@ extension NodeView {
             let box = layer.sublayers?.last { sublayer in paint.contains { $0 === sublayer } }
             if let box { layer.insertSublayer(mark, above: box) } else { layer.insertSublayer(mark, at: 0) }
         }
+        // A box that paints (a monogram's disc, a symbol's tile) is where the content starts, not the glyph in it.
+        let paints = { (v: NodeView) in v.boxFill != nil || v.boxGradient != nil || v.boxBorder != nil }
         var leaf: NodeView = self
-        while let first = leaf.childNodes.first(where: { !$0.isHidden }) { leaf = first }
+        while leaf === self || !paints(leaf), let first = leaf.childNodes.first(where: { !$0.isHidden }) { leaf = first }
         let start = leaf === self ? frame.minX + number("padding_left") : holder.convert(leaf.bounds, from: leaf).minX
         let end = frame.maxX - number("padding_right"), edges = holder.bounds
         let left = min(max(start - 8, edges.minX), edges.minX + 10), right = max(min(end + 8, edges.maxX), edges.maxX - 10)

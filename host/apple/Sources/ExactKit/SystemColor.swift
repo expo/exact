@@ -83,8 +83,10 @@ package enum SystemColor {
                          tint resolvedTint: [Double]? = nil, tintColor: PlatformColor? = nil, fallback: [Double]?) -> [Double]? {
         let contrast = contrast ?? highContrast
         #if os(macOS)
-        // The grouped-card metric carries its identity until its window is known.
-        if name == "exactGroupedCardColor" { return dark && elevated ? [255, 255, 255, 8] : fallback }
+        // The grouped-card metric carries its identity until its window is known. On the page it
+        // is an overlay, as SwiftUI's grouped Form's card is: #272727 / #f9f9f9 over an untinted
+        // window (#1e1e1e / #ffffff), and the window's wallpaper tint showing through it.
+        if name == "exactGroupedCardColor" { return dark ? [255, 255, 255, elevated ? 8 : 10] : [0, 0, 0, 6] }
         if selectedItem, Thread.isMainThread, let share = selectedInk[name],
            var c = rgba(.alternateSelectedControlTextColor, dark: dark, contrast: contrast) { c[3] *= share; return c }
         #endif
