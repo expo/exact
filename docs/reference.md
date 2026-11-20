@@ -803,7 +803,7 @@ On Android 12 and later a row with a `system*` family is a home-screen widget
 same component is laid out at the launcher's size in the system's colours, and
 the same `refresh` keeps its timeline. Accessory families have no Android
 counterpart. What the launcher's views cannot draw yet (a gradient, a rounded or
-styled border, `clip-path`, an `image`, a bundled font, letter spacing) fails
+styled border, `clip-path`, an `image`, letter spacing) fails
 the widget's render, which then shows its last good entry. A tap follows the
 entry's `link` (one at the root takes the whole widget), else opens the app, and
 the app asks its widgets to refresh whenever it leaves the foreground.
@@ -1234,8 +1234,10 @@ unused component's inject is not demanded by the app's view. A configured widget
 second fact is its configuration, the `snapshot_configuration` inject above. A `performanceNow()` call is refused everywhere, including
 inside `time` and `progress`; pass instants from refresh for platform time
 presentation. A variable's name imposes no restriction. A class is a style name
-or `class=(condition ? A : B)`. Only literal font families reached through the
-entry are bundled; a dynamic font string selects installed or generic families.
+or `class=(condition ? A : B)`. An entry uses only installed or generic font
+families, such as `system-ui`: the system draws a widget or Live Activity in its
+own process, which has none of the app's fonts, so the bake refuses a bundled
+`font` the entry reaches (`snapshot-font-bundled`).
 Images use a bundle-relative path, an `app:/` path written by the app, or a
 `symbol:` source. Computed paths need a fixed local prefix; refresh downloads
 remote images. A live `time` (`relative`, `timer`, `countdown`) must own its

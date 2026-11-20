@@ -447,6 +447,35 @@ pub(super) fn compile_file(
     if let Err(refused) = check(&file, &styles) {
         errors.extend(refused);
     }
+    let mut fonts = HashSet::new();
+    let mut font_attrs = |attrs: &[Attr]| {
+        for a in attrs.iter().filter(|a| a.name == "font-family") {
+            literal_fonts(&a.value, &mut fonts);
+        }
+    };
+    for c in &file.components {
+        Node::walk(&c.view).for_each(|n| {
+            if let Node::Element { attrs, .. } = n {
+                font_attrs(attrs);
+            }
+        });
+    }
+    for s in file.styles.iter().filter(|s| styles.contains(&s.name)) {
+        font_attrs(&s.attrs);
+    }
+    // The system decodes and draws the entry in its own process, which has
+    // only installed fonts: a bundled face fails the render on iOS and Android.
+    errors.extend(file.fonts.iter().filter(|f| fonts.contains(&f.name)).map(|f| {
+        refusal(
+            "snapshot-font-bundled",
+            format!(
+                "the system draws a widget or Live Activity in a process without the app's fonts; replace `{}` with an installed or generic family such as `system-ui`",
+                f.name
+            ),
+            f.span,
+        )
+    }));
+    file.fonts.clear();
     if !errors.is_empty() {
         return Err(errors);
     }
@@ -495,23 +524,6 @@ pub(super) fn compile_file(
             routes
         });
     }
-    let mut fonts = HashSet::new();
-    let mut font_attrs = |attrs: &[Attr]| {
-        for a in attrs.iter().filter(|a| a.name == "font-family") {
-            literal_fonts(&a.value, &mut fonts);
-        }
-    };
-    for c in &file.components {
-        Node::walk(&c.view).for_each(|n| {
-            if let Node::Element { attrs, .. } = n {
-                font_attrs(attrs);
-            }
-        });
-    }
-    for s in &file.styles {
-        font_attrs(&s.attrs);
-    }
-    file.fonts.retain(|f| fonts.contains(&f.name));
     let mut wrapper = contract_syntax::parse("component Snapshot\n  view\n    view\n")
         .expect("wrapper")
         .components
