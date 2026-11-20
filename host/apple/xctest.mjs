@@ -3,12 +3,15 @@
 // `.xctestrun` xcodebuild wrote, without the Thread Performance Checker.
 import { spawn, spawnSync } from './toolchain.mjs';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { availableParallelism } from 'node:os';
+import { availableParallelism, homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { appleAssets, appleAssetCatalogInventory, rasterIconAssets, iosAssets, plistFile } from './assets.mjs';
+import { simulators } from './devices.mjs';
 import { encodePng } from '../../scripts/png.mjs';
 
 const read = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, ...opts });
+/** The device set xcodebuild makes the simulator clones for parallel test runners in. */
+const TESTING_DEVICES = resolve(homedir(), 'Library/Developer/XCTestDevices');
 
 /** Rebuild fixture plans with `env.EXACT_CONTRACT`; write their paths to `<prefix>_<KEY>_PLAN`.
  * Plans embed the current schema digest. App entries need the test app's `appId` to boot. */
@@ -323,8 +326,10 @@ export async function macTests(pkg, scratch, env, canvasGpu, only = null) {
  *  failure, and `runApple` refuses a mixed deployment target. `only`, when
  *  given, names the classes to run, and a run with none of them is left out. Tests needing
  *  real touches run without simulator clones, beside the existing XCTest touch runner. Every run
- *  writes its result bundle into `derived`, beside the build. */
-export async function iosTestRuns({ pkg, derived, destination, udid, env, canvasGpu, hostSource, triple, runApple, run, only = null }) {
+ *  writes its result bundle into `derived`, beside the build. After the last run, the simulator's
+ *  clones left over from test runs in the device set `testingDevices` are deleted
+ *  (`deleteLeftoverClones`). */
+export async function iosTestRuns({ pkg, derived, destination, udid, env, canvasGpu, hostSource, triple, runApple, run, only = null, testingDevices = TESTING_DEVICES }) {
   // Build without code coverage, which the package's generated scheme turns on: instrumented tests
   // write tens of megabytes of profiles per run, and nothing in Exact reads them
   runApple('xcodebuild', ['build-for-testing', '-scheme', 'Exact-Package', '-destination', destination, '-derivedDataPath', derived, '-enableCodeCoverage', 'NO'], { cwd: pkg, stdio: 'inherit', env });
@@ -400,8 +405,55 @@ export async function iosTestRuns({ pkg, derived, destination, udid, env, canvas
     }
   }
   if (!classes || classes.includes(gpuTests)) testRun(bare, [`-only-testing:${gpuTests}`], { ...env, TEST_RUNNER_EXACT_CANVAS_GPU_DYLIB: canvasGpu });
+  // Warn of clones left over rather than fail: they fail no test
+  try {
+    deleteLeftoverClones(testingDevices, udid);
+  } catch (e) {
+    console.warn(`host/apple: leftover clones of the iOS tests' simulator may remain in ${testingDevices}: ${e.message}. List them with \`xcrun simctl --set ${testingDevices} list devices\` and delete one with \`xcrun simctl --set ${testingDevices} delete <udid>\`, or the next iOS test run on this simulator tries again`);
+  }
   if (failures.length === 1) throw failures[0];
   if (failures.length) throw new AggregateError(failures, `iOS tests failed:\n  ${failures.map(e => e.message).join('\n  ')}`);
+}
+
+/** Deletes the clones of the simulator `udid` left over from test runs in the device set at `set`.
+ *  xcodebuild clones its destination for each parallel test runner while the tests run, and
+ *  CoreSimulator deletes those clones once xcodebuild exits, but not one still being made then:
+ *  CoreSimulator finishes that one after xcodebuild has gone, and it stays (Xcode 27.1). A clone
+ *  has its simulator's runtime and device type and is named `Clone <n> of <the simulator's name>`.
+ *  Another run may be testing on this simulator: xcodebuild shuts its destination down while it
+ *  tests on the clones, and `build.mjs` chooses a simulator that is not booted. That run's clones
+ *  can be shut down too: a clone is shut down before its runner starts and after it finishes, and
+ *  goes only when xcodebuild exits. So nothing is deleted while an xcodebuild that may clone
+ *  (`mayClone`) names the simulator, by its UDID or its name, or another simulator with its name,
+ *  runtime and type, whose clones look the same. Otherwise every shut-down clone of the simulator
+ *  is left over. A parallel test run in Xcode itself is not seen, and it can lose a shut-down
+ *  clone if it overlaps an iOS test run of `build.mjs` on the same simulator. A clone still being
+ *  made as the last run ends is not listed yet, so a later run on the simulator deletes it, and the
+ *  last clone of a simulator that is then deleted or renamed stays. */
+function deleteLeftoverClones(set, udid) {
+  if (!existsSync(set)) return;
+  const defaults = simulators(), simulator = defaults.find(d => d.udid === udid);
+  if (!simulator) return;
+  const alike = d => d.runtime === simulator.runtime && d.type === simulator.type;
+  const named = [simulator.name, ...defaults.filter(d => d.name === simulator.name && alike(d)).map(d => d.udid)];
+  const processes = read('ps', ['-axww', '-o', 'command=']);
+  if (processes.status !== 0) throw new Error(`\`ps\` could not list the running xcodebuilds: ${processes.stderr || processes.error?.message}`);
+  if (processes.stdout.split('\n').some(command => mayClone(command) && named.some(word => command.includes(word)))) return;
+  const failed = [];
+  for (const clone of simulators(set).filter(d => d.state === 'Shutdown' && alike(d) && /^Clone \d+ of (.*)$/.exec(d.name)?.[1] === simulator.name)) {
+    const deleted = read('xcrun', ['simctl', '--set', set, 'delete', clone.udid]);
+    // Skip a clone another run's cleanup deleted meanwhile
+    if (deleted.status !== 0 && existsSync(resolve(set, clone.udid))) failed.push(`${clone.udid} (${(deleted.stderr || deleted.error?.message || '').trim()})`);
+  }
+  if (failed.length) throw new Error(`\`xcrun simctl delete\` failed for ${failed.join(', ')}`);
+}
+
+/** Whether the command line `command` is an xcodebuild that may clone its destination: a test
+ *  action without parallel testing turned off. */
+function mayClone(command) {
+  const words = command.split(/\s+/), parallel = words.lastIndexOf('-parallel-testing-enabled');
+  return words.some(word => word === 'xcodebuild' || word.endsWith('/xcodebuild')) && (words.includes('test') || words.includes('test-without-building'))
+    && !(parallel >= 0 && words[parallel + 1] === 'NO');
 }
 
 /** The newest `.xctestrun` `build-for-testing` wrote in `products`, as

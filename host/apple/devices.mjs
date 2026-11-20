@@ -320,10 +320,12 @@ function covered(points, app, display, scale) {
 
 /** Every available simulator: { udid, name, runtime, state, type } — `type`
  *  the device type's last component (`iPhone-18-Pro`, `Apple-TV-4K-…`), which a
- *  renamed simulator keeps. */
-export function simulators() {
-  const r = read('xcrun', ['simctl', 'list', 'devices', 'available', '-j']);
-  if (r.status !== 0) throw new Error('xcrun simctl list: ' + r.stderr);
+ *  renamed simulator keeps. In the device set at `set` when given, else in the
+ *  default set (`~/Library/Developer/CoreSimulator/Devices`). */
+export function simulators(set) {
+  // A set of thousands of devices lists more than spawnSync's default 1 MiB of output
+  const r = read('xcrun', ['simctl', ...(set ? ['--set', set] : []), 'list', 'devices', 'available', '-j'], { maxBuffer: 32 * 1024 * 1024 });
+  if (r.status !== 0) throw new Error('xcrun simctl list: ' + (r.stderr || r.error?.message || '').trim());
   return Object.entries(JSON.parse(r.stdout).devices).flatMap(([runtime, list]) => list.map((d) => ({ udid: d.udid, name: d.name, runtime, state: d.state, type: d.deviceTypeIdentifier?.split('.').pop() ?? '' })));
 }
 

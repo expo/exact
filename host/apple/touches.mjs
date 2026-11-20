@@ -396,7 +396,9 @@ export async function openTouches({ udid, appId, foldable }) {
       }));
       // Its own session and its output in a file: it outlives this process.
       const out = openSync(log, 'w');
-      child = spawn('xcodebuild', ['test-without-building', '-xctestrun', run, '-derivedDataPath', derivedData(udid), '-destination', `id=${udid}`, '-collect-test-diagnostics', 'never', '-only-testing:ExactTouches/ExactTouches/testDrive'], { stdio: ['ignore', out, out], detached: true });
+      // Turn parallel testing off: the runner drives this simulator itself, not a clone, and the iOS
+      // tests' clone cleanup (xctest.mjs `mayClone`) reads that off its command line
+      child = spawn('xcodebuild', ['test-without-building', '-xctestrun', run, '-derivedDataPath', derivedData(udid), '-destination', `id=${udid}`, '-collect-test-diagnostics', 'never', '-parallel-testing-enabled', 'NO', '-only-testing:ExactTouches/ExactTouches/testDrive'], { stdio: ['ignore', out, out], detached: true });
       closeSync(out);
       // Recorded before its hello: a driver killed while it waits leaves a runner the next one can retire.
       kept = { key: identity.key, port: null, token: bridge.env.EXACT_AGENT_TOKEN, pid: child.pid, run, log };
