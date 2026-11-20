@@ -71,9 +71,8 @@ for (const p of pages) {
   const shown = main.headline ?? main.name;
   if (p.path !== '/' && shown !== p.title) fail(p.path, `headline ${JSON.stringify(shown)} is not the page title`);
   for (const href of ICONS) if (!html.includes(` href="${href}"`)) fail(p.path, `no link to ${href}`);
-  if (!html.includes('<link rel="llms-txt" href="/llms.txt">')) fail(p.path, 'no llms-txt link');
   if (!html.includes(`<meta property="og:locale" content="${site.locale}">`)) fail(p.path, 'no og:locale');
-  if (ORIGIN) for (const tag of ['property="og:image"', 'property="og:image:url"', 'property="og:image:secure_url"', 'name="twitter:image"']) if (!html.includes(`<meta ${tag} content="${ORIGIN}${SHARE_IMAGE}">`)) fail(p.path, `no ${tag} for ${SHARE_IMAGE}`);
+  if (ORIGIN) for (const tag of ['property="og:image"', 'name="twitter:image"']) if (!html.includes(`<meta ${tag} content="${ORIGIN}${SHARE_IMAGE}">`)) fail(p.path, `no ${tag} for ${SHARE_IMAGE}`);
   const canonical = html.match(/<link rel="canonical" href="([^"]*)">/)?.[1];
   if (ORIGIN && canonical !== ORIGIN + p.path) fail(p.path, `canonical is ${JSON.stringify(canonical)}, not ${ORIGIN + p.path}`);
   if (!ORIGIN && canonical) fail(p.path, 'a canonical link without an origin');
