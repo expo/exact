@@ -817,6 +817,10 @@ extension NavigationHost {
         releaseMore()
         if tabsHatched, tabController != nil { presenter.session?.natives.tabsHatch(tabController, event: 1) }
         if tabController == nil, tabOwner != nil { presenter.session?.natives.tabsHatch(nil, event: 3) }
+        // Let the selected tab's stack, which `primaryNavigation` names while there are tabs, go with its container,
+        // as the other tabs' stacks do: until a projection installs a new primary owner, `fitOwner` has none to take
+        // out of the retired container
+        if tabOwner != nil { primaryNavigation = nil }
         // Leave the slot of a container the app owns as it is; Exact's own container's is emptied as
         // `tabController` changes
         if let holder = tabOwner {
