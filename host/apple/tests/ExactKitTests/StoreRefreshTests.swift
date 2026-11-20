@@ -57,6 +57,26 @@ final class StoreRefreshTests: XCTestCase {
     }
     #endif
 
+    func testABurstOfStoreWritesReloadsTheWidgetsOnceItIsQuiet() {
+        let refresh = SharedStoreRefresh()
+        refresh.quiet = 0.2
+        var reloads = 0
+        refresh.reloadWhenQuiet { reloads += 1 }
+        refresh.firstPixel()
+        refresh.reloadWhenQuiet { reloads += 1 }
+        refresh.reloadWhenQuiet { reloads += 1 }
+        XCTAssertEqual(reloads, 0, "no reload starts while the burst is still writing")
+        let settled = expectation(description: "the burst settles")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { settled.fulfill() }
+        wait(for: [settled], timeout: 5)
+        XCTAssertEqual(reloads, 1, "one reload after the last write of the burst")
+        refresh.reloadWhenQuiet { reloads += 1 }
+        let next = expectation(description: "a later write")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { next.fulfill() }
+        wait(for: [next], timeout: 5)
+        XCTAssertEqual(reloads, 2, "a write after the quiet period reloads again")
+    }
+
     func testProductionObserverRefreshesEverySessionAndRecoversAtActivation() throws {
         #if os(macOS)
         _ = NSApplication.shared
