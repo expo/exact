@@ -1,7 +1,7 @@
 //! Exercise the adapter's real pass boundaries with an ordered fake queue.
 use super::*;
 use exact_ink::device::{Submission, TextureDesc, TextureUpload};
-use exact_ink::instance::Frame;
+use exact_ink::instance::{Frame, Scissor};
 use std::collections::HashMap;
 type Native = exact_ink::device::Selected;
 type Buffer = <Native as Device>::Buffer;
@@ -373,4 +373,24 @@ fn a_canvas_redrawn_at_its_size_keeps_one_texture() {
             .count()
     };
     assert_eq!((uploads(first), uploads(resized)), (4, 1));
+}
+
+#[test]
+fn opacity_composite_covers_draws_from_both_passes() {
+    let mut ink = Ink::from_device(Selected::Fake(Fake::default()));
+    ink.begin(1920., 1080., 1.);
+    let identity = Transform::identity();
+    let clip = Shape::rect((120., 40., 40., 40.));
+    ink.push_clip(&clip, identity);
+    ink.push_opacity(0.5);
+    ink.fill(&Shape::rect((100., 48., 30., 8.)), [255; 4], identity);
+    ink.flush().unwrap();
+    ink.fill(&Shape::rect((144., 64., 30., 8.)), [255; 4], identity);
+    ink.pop_opacity();
+    ink.pop_clip();
+    let frame = ink.encoder.take_frame();
+    let [composite] = frame.batches.as_slice() else {
+        panic!("expected one opacity composite: {:?}", frame.batches);
+    };
+    assert_eq!(composite.scissor, Scissor::from_rect([119., 46., 42., 28.]));
 }

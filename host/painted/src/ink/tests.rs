@@ -472,3 +472,67 @@ fn a_shape_clip_draws_only_the_masks_its_parents_need() {
         assert_eq!(pixels.data()[(63 * 64 + 63) * 4 + 3], 255);
     }
 }
+
+#[test]
+fn opacity_layers_preserve_fractional_edges_after_flush_and_replay() {
+    let Some(mut ink) = open() else { return };
+    let viewport = (0., 0., 32., 24.);
+    let identity = Transform::identity();
+    let pixel = |image: &Pixmap, x: usize, y: usize, expected: u8| {
+        let index = (y * image.width() as usize + x) * 4;
+        let rgba = &image.data()[index..index + 4];
+        assert!(
+            rgba.iter().all(|v| v.abs_diff(expected) <= 1),
+            "pixel ({x},{y}): {rgba:?}, expected [{expected}; 4]"
+        );
+    };
+    let mut draw = |retained: bool| {
+        ink.page([0; 4]);
+        ink.begin(viewport.2, viewport.3, 1.);
+        if retained {
+            ink.row_begin(1, (0., 0.), None);
+        }
+        let clip = Shape::new((2.25, 1.25, 34., 28.), [4.; 4]);
+        ink.push_clip(&clip, identity);
+        ink.push_opacity(0.5);
+        ink.fill(&Shape::rect((0., 6., 14.25, 7.)), [255; 4], identity);
+        if !retained {
+            ink.flush().unwrap();
+        }
+        ink.push_opacity(0.5);
+        ink.fill(&Shape::rect((27., 18., 8., 8.)), [255; 4], identity);
+        ink.pop_opacity();
+        ink.pop_opacity();
+        ink.pop_clip();
+
+        if retained {
+            ink.row_end(viewport);
+            ink.begin(viewport.2, viewport.3, 1.);
+            ink.row_draw(1, (0., 0.), viewport);
+        }
+        let image = ink.finish().unwrap();
+        if retained {
+            ink.row_free(1);
+        }
+        image
+    };
+    let fresh = draw(false);
+    let replay = draw(true);
+    for image in [&fresh, &replay] {
+        pixel(image, 1, 8, 0);
+        pixel(image, 2, 8, 96);
+        pixel(image, 6, 8, 128);
+        pixel(image, 14, 8, 32);
+        pixel(image, 15, 8, 0);
+        pixel(image, 24, 16, 0);
+        pixel(image, 31, 23, 64);
+    }
+    assert!(
+        fresh
+            .data()
+            .iter()
+            .zip(replay.data())
+            .all(|(a, b)| a.abs_diff(*b) <= 1),
+        "retained layer differs from the fresh draw"
+    );
+}
