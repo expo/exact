@@ -6,7 +6,7 @@
 //! runtime waits on.
 
 use super::Host;
-use exact_kernel::{Display, FlexDirection, HostCover, PositionType, PropId, ViewId};
+use exact_kernel::{HostCover, ViewId};
 use exact_runner::DataSource;
 
 impl<D: DataSource> Host<D> {
@@ -40,28 +40,15 @@ impl<D: DataSource> Host<D> {
     /// name a panel and those panels in tab order. `navigation`: whether each
     /// panel's tab needs a navigation controller
     /// (`Runner::panels_need_navigation`), read from the plan, so it is known
-    /// for a tab not built yet. `unsaid`: the app left the bar's placement
-    /// unsaid, by the web's rule for its own sidebar (`host/web/navigation.js`
-    /// `unsaidBar`, LLP 1116.004 D1.1): the tablist is a direct child of the
-    /// root, not vertical, in flow in the root's flex column, and itself a
-    /// row. It is read here because the layout rows it asks of never cross to
-    /// the presenter (`style::presenter_ignores`). `covered`: the tablist is
-    /// covered whole, as the boot covers one a tab bar replaces (`closed.rs`).
+    /// for a tab not built yet. `unsaid` follows `RootTabs::allows_sidebar`. An
+    /// optional `footer` names the view below those tabs. `covered` says the
+    /// boot has removed the tablist from layout for a platform bar (`closed.rs`).
     fn root_tabs_json(&self, root: ViewId) -> Option<String> {
         let list = |ids: &[ViewId]| ids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
         let kernel = self.runner.kernel();
         let tabs = kernel.root_tabs(root)?;
-        let (node, bar) = (kernel.node(root)?, kernel.node(tabs.tablist)?);
-        let column = |d| matches!(d, FlexDirection::Column | FlexDirection::ColumnReverse);
-        let unsaid = node.children().contains(&tabs.tablist)
-            && bar.props.str(PropId::AccessibilityOrientation) != Some("vertical")
-            && node.style.display == Display::Flex
-            && column(node.style.flex_direction)
-            && matches!(
-                bar.layout_position(),
-                PositionType::Static | PositionType::Relative
-            )
-            && !column(bar.style.flex_direction);
+        let unsaid = tabs.allows_sidebar(kernel, root);
+        let footer = tabs.footer.filter(|_| unsaid);
         let arena = kernel.arena();
         let covered =
             arena.slot_of(tabs.tablist).and_then(|s| arena.cover(s)) == Some(HostCover::Whole);
@@ -71,8 +58,9 @@ impl<D: DataSource> Host<D> {
             .map(bool::to_string)
             .collect::<Vec<_>>()
             .join(",");
+        let footer = footer.map_or_else(String::new, |id| format!(",\"footer\":{id}"));
         Some(format!(
-            "{{\"root\":{root},\"tablist\":{},\"tabs\":[{}],\"panels\":[{}],\"navigation\":[{navigation}],\"unsaid\":{unsaid},\"covered\":{covered}}}",
+            "{{\"root\":{root},\"tablist\":{},\"tabs\":[{}],\"panels\":[{}],\"navigation\":[{navigation}],\"unsaid\":{unsaid},\"covered\":{covered}{footer}}}",
             tabs.tablist,
             list(&tabs.tabs),
             list(&tabs.panels)

@@ -78,8 +78,9 @@ final class SidebarMacTests: XCTestCase {
 
     """
 
-    private func boot(size: CGSize, scrollingTabs: Bool = false) throws -> ExactSession {
+    private func boot(size: CGSize, scrollingTabs: Bool = false, source: String? = nil) throws -> ExactSession {
         _ = NSApplication.shared
+        let app = source ?? self.app
         let source = scrollingTabs ? app.replacingOccurrences(of: "row role=\"tablist\"", with: "row overflow-x=\"auto\" role=\"tablist\"") : app
         let session = ExactApp.shared.makeSession(label: "sidebar-" + UUID().uuidString)
         self.session = session
@@ -139,6 +140,40 @@ final class SidebarMacTests: XCTestCase {
     private func choose(_ split: ExactSidebarController, _ row: Int) {
         // A person's choice of a row, as the table asks its delegate on the way down.
         XCTAssertEqual(split.table.delegate?.tableView?(split.table, shouldSelectRow: row), false, "the table never selects by itself")
+    }
+
+    func testSidebarFooterKeepsItsButtonAndReturnsToTheAuthoredNav() throws {
+        let bar = try XCTUnwrap(app.range(of: "      row role=\"tablist\""))
+        let rows = app[bar.lowerBound...].split(separator: "\n").map { "  " + String($0) }
+        var source = String(app[..<bar.lowerBound]) + "      nav testId=\"rail\"\n"
+        source += rows.joined(separator: "\n")
+        source += "\n        footer testId=\"foot\" height=46\n          button testId=\"account\" press=pick(\"history\")\n            text \"Account\"\n"
+        let session = try boot(size: CGSize(width: 700, height: 500), source: source)
+        let split = compose(ExactView(session: session), shown: true)
+        let footer = try node("foot"), account = try node("account"), rail = try node("rail")
+        let window = try XCTUnwrap(self.window)
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            window.layoutIfNeeded()
+            return footer.superview is BlockView && account.bounds.width > 0 && footer.frame.height == 46
+        }, object: nil)
+        wait(for: [ready], timeout: 5)
+        let pane = try XCTUnwrap(footer.superview as? BlockView)
+        if #available(macOS 26, *) {
+            let item = try XCTUnwrap(split.splitViewItems.first)
+            XCTAssertTrue(item.bottomAlignedAccessoryViewControllers.first?.view === pane)
+        }
+        XCTAssertTrue(account.isDescendant(of: pane))
+        XCTAssertEqual(footer.frame.height, 46, accuracy: 1)
+        XCTAssertGreaterThan(pane.bounds.width, 50)
+        let button = account.convert(CGPoint(x: account.bounds.midX, y: account.bounds.midY), to: window.contentView)
+        let hit = try XCTUnwrap(window.contentView?.hitTest(button))
+        XCTAssertTrue(hit === account || hit.isDescendant(of: account))
+        let reply = Agent(session: session).tap(["id": Int(account.id)])
+        XCTAssertNil(reply["error"])
+        XCTAssertEqual(split.table.selectedRow, 1)
+        try press("authored-history")
+        XCTAssertTrue(footer.superview === rail)
+        if #available(macOS 26, *) { XCTAssertTrue(split.splitViewItems[0].bottomAlignedAccessoryViewControllers.isEmpty) }
     }
 
     func testRestartRecomposesTheWindowWhenTheNewPlanNeedsNoSidebar() throws {

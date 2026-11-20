@@ -12,7 +12,7 @@ pub trait Clipboard {
 }
 
 impl<D: DataSource> Presenter<D> {
-    /// Enable desktop clipboard shortcuts for this window's text fields.
+    /// Enable desktop clipboard shortcuts for this window.
     pub fn set_clipboard(&mut self, clipboard: Box<dyn Clipboard>) {
         self.clipboard = Some(clipboard);
     }
@@ -147,11 +147,11 @@ impl<D: DataSource> Presenter<D> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use std::{cell::RefCell, rc::Rc};
 
-    struct Memory(Rc<RefCell<String>>);
+    pub(in crate::presenter) struct Memory(pub(in crate::presenter) Rc<RefCell<String>>);
     impl Clipboard for Memory {
         fn read_text(&mut self) -> Result<Option<String>, String> {
             Ok(Some(self.0.borrow().clone()))
@@ -189,7 +189,7 @@ mod tests {
         p.set_clipboard(Box::new(Memory(text.clone())));
         (p, id, text)
     }
-    fn chord(p: &mut Presenter<()>, key: &str) {
+    pub(in crate::presenter) fn chord(p: &mut Presenter<()>, key: &str) {
         let code = format!("Key{}", key.to_ascii_uppercase());
         p.hardware_key("ControlLeft", "Control", true, false);
         p.hardware_key(&code, key, true, false);

@@ -78,20 +78,6 @@ impl Painter {
             self.row_refuse();
         }
         walk.text.insert(node.key, paragraph.clone());
-        if let Some(inline) = inline_frame::Captured::new(kernel, node, &paragraph, &palette) {
-            let origin = (
-                content.0,
-                content.1
-                    + if frags.is_empty() {
-                        kernel.text_line_offset(node)
-                    } else {
-                        0.
-                    },
-            );
-            let inline = inline.place(origin, frags, ts);
-            self.row_inline(node.id, &inline);
-            walk.inline.insert(node.id, inline);
-        }
         // The canvas recorder leases the same paragraph the paint drew.
         self.row_text(node.key, &paragraph);
         // CSS `text-overflow: ellipsis` in a clipping box: an over-wide line
@@ -184,7 +170,6 @@ impl Painter {
                 &shown,
                 (content.0, content.1 + kernel.text_line_offset(node)),
             );
-            return baseline;
         }
         for g in frags {
             if g.lines.0 == g.lines.1 {
@@ -195,6 +180,21 @@ impl Painter {
             self.backend.push_clip(&clip, ts);
             at(self, &shown, (content.0 + g.dx, content.1 + g.dy));
             self.backend.pop_clip();
+        }
+        if let Some(inline) = inline_frame::Captured::new(kernel, node, &paragraph, &palette) {
+            let origin = (
+                content.0,
+                content.1
+                    + if frags.is_empty() {
+                        kernel.text_line_offset(node)
+                    } else {
+                        0.
+                    },
+            );
+            let inline = inline.place(origin, frags, ts);
+            self.highlight_reader(&inline);
+            self.row_inline(node.id, &inline);
+            walk.inline.insert(node.id, inline);
         }
         baseline
     }

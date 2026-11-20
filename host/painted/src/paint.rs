@@ -422,6 +422,8 @@ pub struct Painter {
     pub(crate) shared: SharedState,
     // Accepted owners retain their paragraph leases while a subsequent backend frame fails.
     accepted_text: BTreeMap<exact_kernel::NodeKey, Rc<Paragraph>>,
+    pub(crate) reader_highlights:
+        BTreeMap<exact_kernel::NodeKey, inline_frame::selection::Highlight>,
     pub(crate) field_text: HashMap<ViewId, Rc<field::PaintedField>>,
     pub(crate) caret_hidden: bool,
     pub(crate) composition: Option<Rc<field::Composition>>,
@@ -519,19 +521,6 @@ impl Painter {
         std::mem::take(&mut self.notes)
     }
 
-    pub(crate) fn replaced(&mut self) {
-        self.native_session = native::new_session();
-        // A fresh kernel can reuse both epochs and node keys: a row kept by
-        // key would replay the old tree's drawing.
-        self.paint_epoch = None;
-        self.discard_rows();
-        self.shared = SharedState::default();
-        self.svg_warned.clear();
-        // The old tree's presses: its view ids are another tree's now.
-        self.ripples.clear();
-        self.zoom.clear();
-    }
-
     /// A painter over a backend.
     pub fn new(text: Shared, scale: f32, backend: Box<dyn Backend>) -> Painter {
         Painter {
@@ -585,6 +574,7 @@ impl Painter {
             clipped: None,
             field_content: HashMap::new(),
             field_text: HashMap::new(),
+            reader_highlights: BTreeMap::new(),
             caret_hidden: false,
             composition: None,
             inline_text: HashMap::new(),
@@ -1453,7 +1443,7 @@ pub fn bbox(ts: Transform, r: Rect4) -> Rect4 {
     (x0, y0, x1 - x0, y1 - y0)
 }
 
-fn intersect(a: Rect4, b: Rect4) -> Rect4 {
+pub(crate) fn intersect(a: Rect4, b: Rect4) -> Rect4 {
     let x0 = a.0.max(b.0);
     let y0 = a.1.max(b.1);
     let x1 = (a.0 + a.2).min(b.0 + b.2);

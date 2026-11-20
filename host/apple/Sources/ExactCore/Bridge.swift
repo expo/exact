@@ -1184,6 +1184,7 @@ public struct OrientationRequest: Equatable {
 /// applies (host/apple/src/root_tabs.rs).
 public struct RootTabs: Equatable {
     public let root: UInt32, tablist: UInt32
+    public let footer: UInt32?
     /// The tabs that name a panel, and those panels, in tab order.
     public let tabs: [UInt32], panels: [UInt32]
     /// Whether each panel's tab needs a navigation controller, read from the
@@ -1193,7 +1194,7 @@ public struct RootTabs: Equatable {
     /// bar. One fixed route with no header is a plain view controller.
     public let navigation: [Bool]
     /// The app left the bar's placement unsaid, by the web's rule for its
-    /// own sidebar (LLP 1116.004 D1.1; `host/web/navigation.js` `unsaidBar`):
+    /// own sidebar (LLP 1116.004 D1.1; `host/web/navigation.js` `placeTabBar`):
     /// read from the kernel's layout rows, which do not cross to the views.
     public let unsaid: Bool
     /// The tablist is covered whole as the batch ends, so the kernel lays it
@@ -1201,7 +1202,8 @@ public struct RootTabs: Equatable {
     /// (host/apple/src/closed.rs); the first install reads it (`adoptBootCover`).
     public let covered: Bool
 
-    public init(root: UInt32, tablist: UInt32, tabs: [UInt32], panels: [UInt32], navigation: [Bool] = [], unsaid: Bool, covered: Bool = false) {
+    public init(root: UInt32, tablist: UInt32, tabs: [UInt32], panels: [UInt32], footer: UInt32? = nil, navigation: [Bool] = [], unsaid: Bool, covered: Bool = false) {
+        self.footer = footer
         (self.root, self.tablist, self.tabs, self.panels, self.navigation, self.unsaid, self.covered) = (root, tablist, tabs, panels, navigation, unsaid, covered)
     }
 
@@ -1209,7 +1211,7 @@ public struct RootTabs: Equatable {
         guard let root = o["root"]?.number, let tablist = o["tablist"]?.number else { return nil }
         let ids = { (key: String) in (o[key]?.array ?? []).compactMap { $0.number.map { UInt32($0) } } }
         self.init(root: UInt32(root), tablist: UInt32(tablist), tabs: ids("tabs"), panels: ids("panels"),
-                  navigation: (o["navigation"]?.array ?? []).map { $0 == .bool(true) },
+                  footer: o["footer"]?.number.map { UInt32($0) }, navigation: (o["navigation"]?.array ?? []).map { $0 == .bool(true) },
                   unsaid: o["unsaid"] == .bool(true), covered: o["covered"] == .bool(true))
     }
 }

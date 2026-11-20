@@ -27,6 +27,9 @@ public final class ExactSidebarController: NSSplitViewController {
     /// The source list; nil in a window whose app has no root tab bar for one.
     private let list: SidebarList?
     private let page: NSViewController
+    private weak var footer: NodeView?
+    private weak var footerPane: BlockView?
+    private var removeFooter: (() -> Void)?
     let detail: SplitDetail
     private let sidebarItem: NSSplitViewItem?
     private let pageItem: NSSplitViewItem
@@ -163,6 +166,51 @@ public final class ExactSidebarController: NSSplitViewController {
             splitView.autosaveName = autosave
             hiddenForApp = false
         }
+    }
+
+    /// The accessory owns the footer's view. Its width lays out the authored subtree, whose
+    /// measured height in turn leaves that much space below the last sidebar row.
+    func showFooter(_ node: NodeView?) {
+        guard footer !== node || (node == nil && removeFooter != nil) else { return }
+        let presenter = exactView.session.presenter
+        if let footer { presenter.blocks.release(footer) }
+        footerPane = nil
+        removeFooter?()
+        removeFooter = nil
+        footer = node
+        guard let node, let sidebarItem, let list else { return }
+        let pane = BlockView(frame: NSRect(x: 0, y: 0, width: sidebarWidth, height: node.frame.height))
+        let height = pane.heightAnchor.constraint(equalToConstant: node.frame.height)
+        height.isActive = true
+        if #available(macOS 26, *) {
+            let accessory = NSSplitViewItemAccessoryViewController()
+            accessory.view = pane
+            sidebarItem.addBottomAlignedAccessoryViewController(accessory)
+            removeFooter = { accessory.removeFromParent() }
+        } else {
+            list.setFooter(pane)
+            removeFooter = { [weak list] in list?.setFooter(nil) }
+        }
+        footerPane = pane
+        pane.sizeChanged = { [weak self] _ in self?.resizeFooter() }
+        pane.pointerTracking = { [weak presenter] event in presenter?.trackPointer(event) }
+        presenter.blocks.show(node, in: pane, block: footerBlock(in: pane), owner: false) { size in
+            if height.constant != size.height { height.constant = size.height }
+        }
+    }
+
+    private func footerBlock(in pane: BlockView) -> HostBlock {
+        HostBlock(width: .size(pane.bounds.width), height: .atMost(max(1, view.bounds.height)))
+    }
+
+    private func resizeFooter() {
+        guard let footer, let pane = footerPane else { return }
+        exactView.session.presenter.blocks.resize(footer, footerBlock(in: pane))
+    }
+
+    public override func viewDidLayout() {
+        super.viewDidLayout()
+        resizeFooter()
     }
 
     public override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
@@ -363,6 +411,8 @@ final class SplitDetail: NSViewController {
 final class SidebarList: NSViewController, NSTableViewDataSource, NSTableViewDelegate {
     private unowned let host: SidebarHost
     let table = NSTableView()
+    private var scrollBottom: NSLayoutConstraint?
+    private weak var pinnedFooter: NSView?
     private var rows: [SidebarRow] = []
     /// The row a mouse-down pressed, and that click's number: its mouse-up
     /// is the same click, not a second press.
@@ -394,7 +444,31 @@ final class SidebarList: NSViewController, NSTableViewDataSource, NSTableViewDel
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
-        view = scroll
+        if #available(macOS 26, *) {
+            view = scroll
+        } else {
+            view = NSView()
+            scroll.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(scroll)
+            let bottom = scroll.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+            scrollBottom = bottom
+            NSLayoutConstraint.activate([scroll.topAnchor.constraint(equalTo: view.topAnchor),
+                scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor), scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor), bottom])
+        }
+    }
+
+    /// Before AppKit offered split item accessories, the sidebar pinned its footer below the scroller.
+    func setFooter(_ pane: NSView?) {
+        loadViewIfNeeded()
+        pinnedFooter?.removeFromSuperview()
+        pinnedFooter = pane
+        scrollBottom?.isActive = pane == nil
+        guard let pane, let scroll = table.enclosingScrollView else { return }
+        pane.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(pane)
+        NSLayoutConstraint.activate([pane.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            pane.trailingAnchor.constraint(equalTo: view.trailingAnchor), pane.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            scroll.bottomAnchor.constraint(equalTo: pane.topAnchor)])
     }
 
     func show(_ shown: SidebarHost.Shown) {

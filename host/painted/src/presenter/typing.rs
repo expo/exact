@@ -791,6 +791,9 @@ impl<D: DataSource> Presenter<D> {
 
     /// Default keyboard behavior shared by the page and authored top-layer boxes.
     pub(super) fn key_default(&mut self, name: &str, code: &str, repeat: bool, now_ms: f64) {
+        if self.copy_reader_key(name) {
+            return;
+        }
         // Tab's default action moves the focus, from a canvas or a field too,
         // as the browser's does (LLP 1088 D7.3).
         if name == "Tab" {

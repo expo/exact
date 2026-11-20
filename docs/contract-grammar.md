@@ -2565,8 +2565,11 @@ once per change. The web and macOS select text; iOS selects text its author
 made selectable (`user-select="text"`), by a long press, a double tap and the
 selection's handles. On Android a long press selects a word in an opted-in
 paragraph. Dragging its handles changes the selected range and Select all
-takes the paragraph's selectable text. Linux has no text selection on a
-`text`, so it never fires there. In a `user-select="all"` element one click (a long press on Android or iOS,
+takes the paragraph's selectable text. On Linux, dragging the mouse selects
+text in opted-in paragraphs. For Markdown, the offsets count UTF-16 units
+in the rendered text. Ctrl+C copies the visible text, with a newline between
+paragraphs, when the host supplies a clipboard. In a
+`user-select="all"` element one click (a long press on Android or iOS,
 or a double tap on iOS) selects the whole element, and a selection that reaches
 into it takes all of it.
 
@@ -2584,8 +2587,9 @@ an empty rectangle list.
 
 Rectangles are snapshots at that event, not live layout facts. On the web they
 are the paragraph's selected `Range.getClientRects()`; macOS uses the same
-CoreText fragments as its selection highlight and inline-run geometry. Their
-`provisional` and `unavailable` flags are false; an empty selection has no
+CoreText fragments as its selection highlight and inline-run geometry. Linux
+reports the clipped fragments of its painted highlight. The `provisional` and
+`unavailable` flags are false; an empty selection has no
 rectangles. Native paragraphs rendered by the reader worker currently return
 an empty rectangle list: their caret geometry is not available synchronously.
 Scrolling alone does not emit another selection event.

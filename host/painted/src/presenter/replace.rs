@@ -35,6 +35,7 @@ impl<D: DataSource> Presenter<D> {
             fields,
             field_history,
             field_drag,
+            mouse_selection,
             #[cfg(any(target_os = "android", test))]
             reader_selection,
             range_drag,
@@ -191,6 +192,7 @@ impl<D: DataSource> Presenter<D> {
         fields.clear();
         *field_history = Default::default();
         *field_drag = None;
+        *mouse_selection = Default::default();
         #[cfg(any(target_os = "android", test))]
         {
             *reader_selection = None;

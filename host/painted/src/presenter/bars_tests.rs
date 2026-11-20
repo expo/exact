@@ -457,6 +457,84 @@ fn a_header_or_tablist_that_writes_appearance_none_stays_the_pages() {
 }
 
 #[test]
+fn a_bottom_bar_hides_its_sidebar_footer_and_returns_it_to_the_page() {
+    let source = r#"component App
+  state page = "home"
+  state own = false
+  state hidden = false
+  action pick(name: string)
+    page = name
+  action hide
+    hidden = !hidden
+  action toggle
+    own = !own
+  view
+    main navigationKey=page navigationBack="back" display="flex" flex-direction="column" width="100%" height="100%"
+      column role="tabpanel" id="home-panel"
+        column navigationKey="home"
+          button testId="toggle" press=toggle
+            text "Change bars"
+          button testId="hide" press=hide
+            text "Show or hide tabs"
+      column role="tabpanel" id="other-panel"
+        column navigationKey="other"
+          header
+            button id="back" press=pick("home")
+              text "Back"
+            text "Other" role="heading"
+      nav
+        row role="tablist" display=(hidden ? "none" : "flex") appearance=(own ? "none" : "auto")
+          button role="tab" aria-controls="home-panel" aria-selected=(page == "home") press=pick("home")
+            text "Home"
+          button role="tab" aria-controls="other-panel" aria-selected=(page == "other") press=pick("other")
+            text "Other"
+        footer
+          button press=toggle testId="account"
+            text "Account"
+"#;
+    let (mut p, _) = barred(source);
+    let account = id(&p, "account");
+    assert!(p.bar_plans().1.is_some());
+    assert!(
+        p.rect_of(account).is_none(),
+        "the sidebar footer has no box above a bottom bar"
+    );
+    assert!(
+        p.tap(account).is_err(),
+        "the hidden footer cannot be pressed"
+    );
+    tap(&mut p, "hide").unwrap();
+    assert!(p.bar_plans().1.is_none());
+    assert!(p.rect_of(account).is_none());
+    tap(&mut p, "hide").unwrap();
+    tap(&mut p, "toggle").unwrap();
+    assert!(p.bar_plans().1.is_none());
+    assert!(p.rect_of(account).is_some());
+    tap(&mut p, "account").unwrap();
+    assert!(p.bar_plans().1.is_some());
+    assert!(p.rect_of(account).is_none());
+
+    for source in [
+        source.replace(
+            "        footer",
+            "        footer position=\"absolute\" top=100",
+        ),
+        source.replace(
+            "      nav\n",
+            "      nav display=\"flex\" flex-direction=\"row\"\n",
+        ),
+    ] {
+        let (mut p, _) = barred(&source);
+        assert!(p.bar_plans().1.is_some());
+        let account = id(&p, "account");
+        assert!(
+            p.rect_of(account).is_some(),
+            "an explicitly placed footer stays in the page"
+        );
+    }
+}
+
+#[test]
 fn a_touch_lights_its_target_and_the_shell_is_told_each_change_once() {
     let (mut p, pictures) = barred(APP);
     let words = p.reader_bars(2.0).expect("the bars are told");

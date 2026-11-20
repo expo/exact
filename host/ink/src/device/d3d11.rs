@@ -25,6 +25,7 @@ mod composition;
 #[cfg(test)]
 mod desktop_tests;
 pub mod fields;
+mod pace;
 pub mod rich_edit;
 mod setup;
 mod startup;

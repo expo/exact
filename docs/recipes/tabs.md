@@ -1,10 +1,9 @@
 # Recipe: tabs
 
-`bun exact.mjs pattern tabs` gives native tabs with separate stacks: iOS's bar, a sidebar on iPad and
-wide Mac/web windows.
+`bun exact.mjs pattern tabs` gives each tab a stack. See [native bars and sidebars](../contract-for-agents.md#tabs-and-stacks).
 
-For an **app-drawn bar**, use `appearance="none"`: iOS lays routes full-height.
-Overlay the bar and pad **every route** by its height plus the bottom safe inset.
+With an **app-drawn bar** (`appearance="none"`), iOS lays routes full-height.
+Overlay the bar. Pad **every route** by its height plus the bottom safe inset.
 Root `viewport-fit="cover"` exposes the insets. Label the badge for VoiceOver.
 
 ```contract
@@ -56,5 +55,5 @@ component App
 ```
 
 Tabs mount on selection and keep stacks, drafts and scroll. Reselecting pops.
-Hide a tab or the tablist with `display="none"`, never `if`; while hidden, drop route padding and gate its
-resources ([how](../contract-for-agents.md#a-features-requests)).
+Hide a tab or tablist with `display="none"` to keep its stack. While hidden, drop route padding and
+[gate requests](../contract-for-agents.md#a-features-requests).

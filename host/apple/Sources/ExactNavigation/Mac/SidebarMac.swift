@@ -1,7 +1,7 @@
 // @ref LLP 1115.002 D3 — the root tab bar as the window's sidebar. Where an
 // app's root `tablist` is placed as the tabs recipe writes it (the web's
-// rule for its own sidebar, LLP 1116.004 D1.1: a horizontal bar, a direct
-// child of the root's flex column, in flow), a Mac window shows the tabs as
+// rule for its own sidebar, LLP 1116.004 D1.1: a horizontal bar in the root's
+// flex column, directly or inside the nav that holds its footer), a Mac window shows the tabs as
 // AppKit's source list in a real sidebar beside the page. Which tablist is
 // the root's is the kernel's rule (`Kernel::root_tabs`, LLP 1115.001 D11);
 // what a tab shows is `TabFace`'s, as UIKit's tab bar item's is.
@@ -37,6 +37,7 @@ final class SidebarHost {
     /// The root tab bar as a sidebar shows it.
     struct Shown {
         let tablist: NodeView
+        var footer: NodeView?
         /// The tablist's `aria-label`: the list's.
         let label: String?
         var rows: [SidebarRow]
@@ -102,6 +103,7 @@ final class SidebarHost {
     }
     func detach(_ controller: ExactSidebarController) {
         guard self.controller === controller else { return }
+        controller.showFooter(nil)
         self.controller = nil
         sync()
     }
@@ -109,6 +111,7 @@ final class SidebarHost {
     /// A restart: every view goes and the covers are forgotten with them
     /// (`HostCovers.reset`), so nothing is told to the runner that is leaving.
     func reset() {
+        controller?.showFooter(nil)
         projected = nil
         shown = nil; watched = []; decision = nil
     }
@@ -150,9 +153,6 @@ final class SidebarHost {
             decide("kept as authored: the root tablist #\(host.tablist.id) writes appearance none")
             return
         }
-        // The web's rule for a bar whose placement the app left unsaid: a
-        // direct child of the root, not vertical, in flow in the root's flex
-        // column, itself a row. A tablist the app arranged stays the app's.
         guard kernel.unsaid else {
             shown = nil
             decide("kept as authored: the root tablist #\(host.tablist.id) is placed by the app (not a row in flow in the root's flex column)")
@@ -160,6 +160,7 @@ final class SidebarHost {
         }
         for tab in host.tabs { tab.rejectNativeActiveProperties(on: "NSOutlineView sidebar row") }
         decide("the root tablist #\(host.tablist.id) is the window's sidebar (\(host.tabs.count) tabs)")
+        let footer = kernel.footer.flatMap { presenter.views[$0] }
         let hidden = host.tablist.style["display"]?.string == "none"
         // Native button faces are viewless. Rebuild rows for every controls batch,
         // including unrelated buttons, and for changes in the tablist subtree.
@@ -167,6 +168,7 @@ final class SidebarHost {
         if let now = shown, now.tablist === host.tablist, now.rows.map(\.tab) == host.tabs.map(\.id), !watched.isEmpty, !touched {
             shown?.selected = root.at
             shown?.hidden = hidden
+            shown?.footer = footer
             return
         }
         watched = [host.tablist.id]
@@ -175,7 +177,7 @@ final class SidebarHost {
             view.subviews.forEach(watch)
         }
         host.tabs.forEach(watch)
-        shown = Shown(tablist: host.tablist, label: host.tablist.authoredLabel,
+        shown = Shown(tablist: host.tablist, footer: footer, label: host.tablist.authoredLabel,
                       rows: host.tabs.map { SidebarRow(tab: $0.id, face: TabFace($0), testId: $0.props["testId"]) },
                       selected: root.at, hidden: hidden)
     }
@@ -183,9 +185,10 @@ final class SidebarHost {
     /// Show what was read, where a controller holds this session's view,
     /// and say in the same step that the tablist's box is the platform's.
     private func present() {
-        if rooted, let shown { return project(shown) }
+        if rooted, let shown { controller?.showFooter(nil); return project(shown) }
         guard let shown, let controller, controller.hasSidebar, controller.holds(presenter) else { return unproject() }
         controller.show(shown)
+        controller.showFooter(shown.footer)
         project(shown)
     }
 
@@ -198,7 +201,9 @@ final class SidebarHost {
         }
         shown.tablist.isHidden = true
         shown.tablist.setAccessibilityHidden(true)
-        presenter.covers.report("sidebar", [shown.tablist.id: .whole])
+        var covers: [UInt32: HostCover] = [shown.tablist.id: .whole]
+        if rooted, let footer = shown.footer { covers[footer.id] = .whole }
+        presenter.covers.report("sidebar", covers)
     }
 
     private func unprojectView() {
@@ -210,6 +215,7 @@ final class SidebarHost {
     }
 
     private func unproject() {
+        controller?.showFooter(nil)
         unprojectView()
         presenter.covers.report("sidebar", [:])
     }

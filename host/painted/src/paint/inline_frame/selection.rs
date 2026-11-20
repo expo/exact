@@ -91,6 +91,9 @@ impl Source {
         palette: &[RunPaint],
         inline: impl Iterator<Item = ViewId>,
     ) -> Option<Self> {
+        if cfg!(windows) && !cfg!(test) {
+            return None;
+        }
         let admits =
             |n: &NodeRef<'_>| matches!(n.style.user_select, UserSelect::Text | UserSelect::All);
         let above =
@@ -111,6 +114,10 @@ impl Source {
 }
 
 impl PaintedInline {
+    pub(crate) fn selection_key(&self) -> Option<NodeKey> {
+        Some(self.captured.selection.as_ref()?.key)
+    }
+
     pub(crate) fn selectable(&self) -> Option<(NodeKey, &Shaped)> {
         let source = self.captured.selection.as_ref()?;
         let p = &self.captured.paragraph;
@@ -172,16 +179,17 @@ impl PaintedInline {
             .placements
             .iter()
             .find(|(lines, _)| lines.contains(&line))?;
-        Some(bbox(self.transform, (x + left, y + top, w, h)))
+        Some((x + left, y + top, w, h))
     }
 
+    #[cfg(any(target_os = "android", test))]
     pub(crate) fn selection_caret(&self, offset: u32, trailing: bool) -> Option<(Rect4, bool)> {
         let geom = &self.selectable()?.1.geom;
         let (line, rect, rtl) = geom.selection_edge(offset, trailing);
-        Some((self.selection_rect(line, rect)?, rtl))
+        Some((bbox(self.transform, self.selection_rect(line, rect)?), rtl))
     }
 
-    pub(crate) fn selection_marks(&self, range: Range<u32>, clip: Rect4) -> Vec<Rect4> {
+    fn local_marks(&self, range: Range<u32>) -> Vec<Rect4> {
         let Some((_, shaped)) = self.selectable() else {
             return Vec::new();
         };
@@ -192,9 +200,50 @@ impl PaintedInline {
             .into_iter()
             .filter_map(|r| {
                 let line = bottoms.partition_point(|&bottom| bottom <= r.1);
-                let shown = intersect(self.selection_rect(line, r)?, clip);
-                (shown.2 > 0. && shown.3 > 0.).then_some(shown)
+                self.selection_rect(line, r)
             })
             .collect()
+    }
+
+    pub(crate) fn selection_marks(&self, range: Range<u32>, clip: Rect4) -> Vec<Rect4> {
+        self.local_marks(range)
+            .into_iter()
+            .map(|r| intersect(bbox(self.transform, r), clip))
+            .filter(|r| r.2 > 0. && r.3 > 0.)
+            .collect()
+    }
+}
+
+#[derive(PartialEq)]
+pub(crate) struct Highlight {
+    pub value: Rc<str>,
+    pub ranges: Vec<Range<u32>>,
+}
+
+impl Painter {
+    pub(in crate::paint) fn highlight_reader(&mut self, inline: &PaintedInline) {
+        let Some(mark) = inline
+            .selection_key()
+            .and_then(|key| self.reader_highlights.get(&key))
+        else {
+            return;
+        };
+        if !inline
+            .selectable()
+            .is_some_and(|(_, s)| s.value == mark.value)
+        {
+            return;
+        }
+        // A translucent selection preserves inline backgrounds and text decorations.
+        let [r, g, b, _] = caret::HIGHLIGHT[usize::from(self.dark)];
+        for rect in mark
+            .ranges
+            .iter()
+            .cloned()
+            .flat_map(|r| inline.local_marks(r))
+        {
+            self.backend
+                .fill(&Shape::rect(rect), [r, g, b, 128], inline.transform);
+        }
     }
 }
