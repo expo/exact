@@ -435,14 +435,14 @@ echo "cargo::rustc-env=THEME=$THEME"
 
 test('Android splits complete bakes and preserves authored build script outputs', async () => {
   const {androidLinkable, buildAndroidBake} = await import('./linked-plan.mjs');
-  const {authoredCrate, copiedBuildScripts} = await import('./app-shells.mjs');
+  const {authoredCrates, copiedBuildScripts} = await import('./app-shells.mjs');
   const dir = mkdtempSync(resolve(import.meta.dir, '../target/android-build-script-'));
   try {
     const src_path = resolve(dir, 'build.rs'), entry = resolve(dir, 'lib.rs');
     const pkg = {targets:[{kind:['custom-build'], src_path}, {kind:['cdylib'], src_path:entry}]};
     const [, standard] = copiedBuildScripts().android;
     writeFileSync(src_path, standard);
-    const stock = authoredCrate(dir, 'android', 'test', 'Test')['android/src/lib.rs'];
+    const stock = authoredCrates(dir, {}, 'test', ['android']).android['src/lib.rs'];
     writeFileSync(entry, stock + 'const PLAN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/app.plan"));\n');
     expect(androidLinkable(pkg)).toBe(false);
     writeFileSync(entry, stock);
