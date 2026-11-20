@@ -539,7 +539,7 @@ impl Parser {
                 return self.err(
                     "syntax-expected-step",
                     format!(
-                    "expected `tap`, `type`, `pick`, `authorize`, `presence`, `clock`, `resize`, `reload`, `close`, `back`, `screenshot`, `fail fetch`, `answer fetch`, `pass fetch`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `stored`, `fresh`, `before data`, `fail fetch`), found {}",
+                    "expected `tap`, `scroll`, `type`, `pick`, `authorize`, `presence`, `clock`, `resize`, `reload`, `close`, `back`, `screenshot`, `fail fetch`, `answer fetch`, `pass fetch`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `stored`, `fresh`, `before data`, `fail fetch`), found {}",
                     describe(&other)
                 ),
                 )
@@ -566,6 +566,10 @@ impl Parser {
                 };
                 Step::Prefer { name, value, span }
             }
+            "scroll" => Step::Scroll {
+                target: self.str_lit("a testId")?,
+                span,
+            },
             "tap" => {
                 let target = self.str_lit("a testId")?;
                 if self.at_ident("drag") {
@@ -1276,7 +1280,7 @@ impl Parser {
                 return Err(SyntaxError {
                     id: "syntax-expected-step",
                     message: format!(
-                    "expected `tap`, `type`, `pick`, `authorize`, `presence`, `clock`, `resize`, `reload`, `close`, `back`, `screenshot`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `stored`, `fresh`, `before data`), found `{other}`"
+                    "expected `tap`, `scroll`, `type`, `pick`, `authorize`, `presence`, `clock`, `resize`, `reload`, `close`, `back`, `screenshot`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `stored`, `fresh`, `before data`), found `{other}`"
                 ),
                     span,
                 })

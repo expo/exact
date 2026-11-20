@@ -62,6 +62,10 @@ fn steps_json(steps: &[Step], s: &mut String) {
 fn step_json(step: &Step, s: &mut String) {
     let line = step.span().line;
     match step {
+        Step::Scroll { target, .. } => {
+            s.push_str("{\"op\":\"scroll\",\"target\":");
+            q(target, s);
+        }
         Step::Tap {
             target,
             form,

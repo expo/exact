@@ -1029,6 +1029,11 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
             if (r?.dropped !== true) throw new Error(`drop stream is unavailable on ${host}`);
             break;
           }
+          case 'scroll': {
+            const node = await s.find(st.target);
+            await s.reveal(node.id);
+            break;
+          }
           // The driver's `tap` forms (feed F10): `into` brings a virtualized list's row into view by its key.
           case 'tap': {
             const opts = st.form === 'into' ? { into: { key: st.key } }

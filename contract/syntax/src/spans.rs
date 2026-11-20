@@ -183,7 +183,7 @@ macro_rules! record_variants {
 }
 record_variants! {
     Step {
-        Tap { target, form, modifiers, span }, Drag { target, dx, dy, to, from, mouse, into, press, over, hold, during, span },
+        Scroll { target, span }, Tap { target, form, modifiers, span }, Drag { target, dx, dy, to, from, mouse, into, press, over, hold, during, span },
         Size { width, height, span }, At { location, span }, Epoch { value, span }, TimeZone { zone, span },
         Locale { tag, span }, Prefer { name, value, span }, Seed { seed, span }, Stored { name, value, span }, Fresh { seed, span }, BeforeData { span }, FailFetch { prefix, times, span }, AnswerFetch { prefix, response, span }, PassFetch { prefix, span }, Request { method, path, body, persona, status, span }, Type { target, text, append, span }, Key { target, key, phase, duration, span },
         DropStream { prefix, span }, Pick { target, paths, span }, Authorize { cancel, span }, Presence { answer, span }, Clipboard { target, edit, text, span },
@@ -313,7 +313,8 @@ impl Step {
     /// Where: the step's line.
     pub fn span(&self) -> Span {
         match self {
-            Step::Tap { span, .. }
+            Step::Scroll { span, .. }
+            | Step::Tap { span, .. }
             | Step::Drag { span, .. }
             | Step::Size { span, .. }
             | Step::At { span, .. }

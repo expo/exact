@@ -72,6 +72,13 @@ steps! {
 /// One step of a `test`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Step {
+    /// Bring a mounted node into view without pressing it.
+    Scroll {
+        /// The target's testId.
+        target: String,
+        /// Where.
+        span: Span,
+    },
     /// `tap "testId"`, or one of the driver's other forms of it
     /// (`modifiers "Shift"` for a press with keys held).
     Tap {

@@ -133,6 +133,8 @@ pub struct Item {
 /// host can animate the individual properties apart from the list.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Transform {
+    /// Width and height of the box against which percentage translations resolve.
+    pub reference: (f32, f32),
     /// `transform-origin` in user units (after `transform-box`).
     pub origin: (f32, f32),
     /// `translate`, presented.
@@ -684,6 +686,7 @@ impl<'k> Resolver<'k, '_> {
             translate.1 + percent.1 / 100.0 * reference.3,
         );
         Some(Transform {
+            reference: (reference.2, reference.3),
             origin: origin.point(reference),
             translate,
             rotate,

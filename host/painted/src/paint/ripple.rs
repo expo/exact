@@ -451,7 +451,7 @@ impl Painter {
         // The clip stays outside the layer, so it does not scale with it.
         self.backend.push_clip(shape, ts);
         let layer = crate::host::lower::ripple_layer(node.key);
-        let taken = self.backend.layer_begin(layer, ts, middle, base);
+        let taken = self.backend.layer_begin(layer, ts, middle, (0., 0.), base);
         if taken {
             let reach = 1.5 * bound;
             let (side, corner) = (2.0 * reach, [reach; 4]);

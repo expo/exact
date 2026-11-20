@@ -1185,7 +1185,9 @@ report unsupported. Scope these tests with `on web`.
 `tap "id" dblclick` and `contextmenu` are the driver's forms of the same names
 (no Linux carrier double-clicks). `tap "list" into "key"` brings a virtualized
 list's row into view by its key, so a row outside the rendered window can be
-tapped by its own id on the next step. `type "id" "text"` sets the field's
+tapped by its own id on the next step. For a mounted target, `scroll "id"`
+brings its middle into view through the enclosing scrollers without pressing it.
+A plain `tap "id"` already asks the host to reveal its target before pressing it. `type "id" "text"` sets the field's
 value, as Playwright's `fill`; `append` adds the text after the value the tree
 shows (a prefilled reply). `type "id" key "Name"` presses the key (on iOS,
 ArrowRight or ArrowLeft at an `input type="range"` that shows its `UISlider`
