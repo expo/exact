@@ -12,6 +12,9 @@ use windows::Win32::{
     UI::Controls::MARGINS,
 };
 
+// Let the CPU prepare a frame while the previous frame is still in flight.
+const MAX_FRAME_LATENCY: u32 = 2;
+
 /// A live HWND and its owner, retained until DirectComposition releases it.
 #[derive(Clone)]
 pub struct Window {
@@ -217,7 +220,7 @@ impl Composition {
             let swap: IDXGISwapChain2 = factory
                 .CreateSwapChainForComposition(device, &desc, None)?
                 .cast()?;
-            swap.SetMaximumFrameLatency(1)?;
+            swap.SetMaximumFrameLatency(MAX_FRAME_LATENCY)?;
             let swap_ms = start.elapsed().as_secs_f64() * 1000.;
             let visual_started = Instant::now();
             let existing = window.visual.borrow().upgrade();
@@ -355,7 +358,7 @@ impl Composition {
             )?;
             let old = std::mem::replace(&mut self.latency, HANDLE::default());
             let _ = CloseHandle(old);
-            self.swap.SetMaximumFrameLatency(1)?;
+            self.swap.SetMaximumFrameLatency(MAX_FRAME_LATENCY)?;
             self.latency = self.swap.GetFrameLatencyWaitableObject();
             if self.latency.is_invalid() {
                 return Err(Error::Device(
@@ -1272,7 +1275,7 @@ mod tests {
             d.present(t).unwrap();
             let c = d.composition.as_ref().unwrap();
             assert!(!c.latency.is_invalid());
-            assert_eq!(unsafe { c.swap.GetMaximumFrameLatency().unwrap() }, 1);
+            assert_eq!(unsafe { c.swap.GetMaximumFrameLatency().unwrap() }, 2);
             d.retire_texture(t).unwrap();
         }
     }
