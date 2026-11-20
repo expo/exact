@@ -76,6 +76,32 @@ final class SymbolColorIOSTests: XCTestCase {
         try assertInk(p, 4, [48, 176, 199, 255], "a live colour change repaints the installed image")
     }
 
+    /// An SF Symbol its configuration colours (a palette with colours, hierarchical, multicolour) is drawn as
+    /// configured, with no ink over its image, which would flatten its layers to one colour; the written `color`
+    /// is its view's tint, which a multicolour symbol's tinted layers take. An empty palette colours nothing, so
+    /// the `color` is the ink.
+    func testASymbolItsConfigurationColoursHasNoInkOverIt() throws {
+        let palette: [Any] = [[255, 255, 255, 255], [88, 86, 214, 255]]
+        let p = presenter([(2, true, ["text_color": pink, "symbol_rendering": "palette", "symbol_palette": palette]),
+                           (3, true, ["text_color": pink, "symbol_rendering": "multicolor"]),
+                           (4, true, ["text_color": pink, "symbol_rendering": "hierarchical"]),
+                           (5, true, ["text_color": pink, "symbol_rendering": "palette", "symbol_palette": [Any]()])])
+        for id: UInt32 in [2, 3, 4] {
+            let view = try XCTUnwrap(p.views[id]?.symbolView), state = SymbolEffectState.of(view)
+            XCTAssertNotNil(state.inkSource, "symbol \(id) was inked")
+            XCTAssertTrue(view.image === state.inkSource, "symbol \(id) is drawn as configured")
+            let tint = try XCTUnwrap(view.tintColor?.resolvedColor(with: view.traitCollection))
+            var (r, g, b, a) = (CGFloat(0), CGFloat(0), CGFloat(0), CGFloat(0))
+            XCTAssertTrue(tint.getRed(&r, green: &g, blue: &b, alpha: &a))
+            for (got, want) in zip([r, g, b, a].map { Double($0 * 255) }, [173.0, 20, 87, 255]) {
+                XCTAssertEqual(got, want, accuracy: 1, "symbol \(id)'s view is tinted the written colour")
+            }
+        }
+        XCTAssertFalse(try XCTUnwrap(p.views[5]?.symbolView).image === SymbolEffectState.of(try XCTUnwrap(p.views[5]?.symbolView)).inkSource,
+                       "an empty palette's symbol is inked")
+        try assertInk(p, 5, [173, 20, 87, 255], "in the written colour")
+    }
+
     func testComputedSymbolColorsInASnapshot() throws {
         let label: [String: Any] = ["sys": "labelColor", "c": [[0, 0, 0, 255], [255, 255, 255, 255]]]
         let p = presenter([(2, false, ["text_color": label]), (3, false, ["text_color": pink]),
