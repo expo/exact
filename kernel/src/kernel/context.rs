@@ -66,8 +66,34 @@ fn taken(arena: &NodeArena, slot: u32) -> [bool; 4] {
         return [false; 4];
     }
     let ignored = super::ignore::edges(arena, slot, SafeAreaIgnore::Container);
+    let off = route_off(arena, slot);
     let axes = [vertical, horizontal, vertical, horizontal];
-    std::array::from_fn(|e| axes[e] && !ignored[e])
+    std::array::from_fn(|e| axes[e] && !ignored[e] && !off[e])
+}
+
+/// The edges the content owner `slot` lies in turns off, top right bottom
+/// left: those its root's `-exact-safe-area` names or its root ignores, and
+/// the top under its transparent bar. There the host takes UIKit's adjustment
+/// of the route's scrollers back (`RouteSafeArea`), so a scroller's content
+/// reads the owner's inset and clears the band itself.
+fn route_off(arena: &NodeArena, slot: u32) -> [bool; 4] {
+    let mut at = arena.parent(slot);
+    while let Some(s) = at {
+        if arena.blocks.local(s).is_some() {
+            let bits = arena.style(s).rare.safe_area;
+            let ignored = super::ignore::edges(arena, s, SafeAreaIgnore::Container);
+            let transparent =
+                arena.props(s).str(crate::PropId::NavigationBar) == Some("transparent");
+            return std::array::from_fn(|e| {
+                bits & (1 << e) != 0 || ignored[e] || (e == 0 && transparent)
+            });
+        }
+        if arena.top_layer_slots.contains(s) {
+            break;
+        }
+        at = arena.parent(s);
+    }
+    [false; 4]
 }
 
 /// Whether `slot`'s author scrolls it vertically and sideways.

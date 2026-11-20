@@ -77,8 +77,9 @@ final class LocalInsetsIOSTests: XCTestCase {
         }
         XCTAssertGreaterThan(controller.view.safeAreaInsets.top, try XCTUnwrap(window).safeAreaInsets.top)
         XCTAssertEqual(onScreen(try XCTUnwrap(node(session, "hero"))).minY, 0, accuracy: 0.5)
-        XCTAssertEqual(try XCTUnwrap(node(session, "document-inset")).bounds.height, 0)
-        XCTAssertEqual(p.insets.top, 0, "env() remains the document's inset under auto")
+        // `env()` reads what the route leaves its content (the inset rule): under the transparent bar, the bar's band
+        XCTAssertEqual(try XCTUnwrap(node(session, "document-inset")).bounds.height, controller.view.safeAreaInsets.top, accuracy: 0.5)
+        XCTAssertEqual(p.insets.top, 0, "the document's inset stays 0 under auto")
     }
 
     func testARoutesContentReadsItsBarsAndABackgroundReachesUnderThem() throws {

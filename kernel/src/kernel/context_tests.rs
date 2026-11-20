@@ -166,3 +166,28 @@ fn a_local_inset_declared_inside_a_scroller_stands() {
         "the author's, below the scroller that takes the top"
     );
 }
+
+/// A route that turns its top off (`-exact-safe-area`) has the host take
+/// UIKit's inset of its scroller back there, so the scroller's content pads by
+/// the route's inset itself.
+#[test]
+fn a_scroller_in_a_route_that_turns_its_top_off_leaves_it_to_its_content() {
+    let mut ops = create(1..=4);
+    ops.extend([
+        style(2, &[(StyleId::SafeArea, "top")]),
+        style(
+            3,
+            &[(StyleId::OverflowY, "scroll"), (StyleId::Height, "844")],
+        ),
+        style(
+            4,
+            &[(StyleId::PaddingTop, "var(--exact-safe-area-inset-top)")],
+        ),
+    ]);
+    ops.extend([children(1, &[2]), children(2, &[3]), children(3, &[4])]);
+    ops.push(Op::AttachRoot { id: 1 });
+    let mut k = page(ops, Env::new(62.0, 0.0, 34.0, 0.0));
+    k.set_local_insets(2, Some([116.0, 0.0, 0.0, 0.0])).unwrap();
+    k.compute_layout(1, Offer::definite(390.0, 844.0)).unwrap();
+    assert_eq!(padding(&k, 4)[0], 116.0, "the route's inset, under its bar");
+}
