@@ -366,3 +366,76 @@ fn moving_blends_reuse_completed_snapshot_storage() {
     assert_eq!(peak_targets, 1);
     assert!(peak_bytes <= 1920 * 1080 * 4);
 }
+
+#[test]
+fn fractional_clip_intersections_survive_retained_replay_and_shadows() {
+    let Some(mut ink) = open() else { return };
+    let identity = Transform::identity();
+    let masks = [
+        Shape::new((-2.75, 3.25, 54., 41.), [11., 7., 10., 12.]),
+        Shape::new((2.375, 1.625, 50., 41.5), [9., 6., 12., 8.]),
+        Shape::elliptical((0.125, 5.25, 49., 37.), [(13.5, 8.25); 4]),
+        Shape::elliptical((3.5, 6.375, 44., 36.), [(11., 9.); 4]),
+    ];
+    for scale in [1., 1.25, 2.] {
+        for nested in [false, true] {
+            let mut draw = |order: &[usize], retained: bool| {
+                ink.page([0; 4]);
+                ink.begin(68., 50., scale);
+                if retained {
+                    ink.row_begin(1, (0., 0.), None);
+                }
+                for &index in order {
+                    ink.push_clip(&masks[index], identity);
+                }
+                if nested {
+                    ink.push_clip(&masks[3], identity);
+                }
+                ink.fill(
+                    &Shape::rect((0., 0., 68., 50.)),
+                    [210, 62, 97, 255],
+                    identity,
+                );
+                let shadow = Shape::new((12.25, 13.5, 19., 13.), [4.; 4]);
+                assert!(ink.blurred_shadow(
+                    &shadow,
+                    [81, 101, 163, 128],
+                    3.,
+                    &shadow.inset(1.),
+                    identity
+                ));
+                for _ in 0..order.len() + usize::from(nested) {
+                    ink.pop_clip();
+                }
+                if retained {
+                    let bounds = (0., 0., 68., 50.);
+                    ink.row_end(bounds);
+                    ink.begin(68., 50., scale);
+                    ink.row_draw(1, (0., 0.), bounds);
+                }
+                let pixels = ink.finish().unwrap();
+                if retained {
+                    ink.row_free(1);
+                }
+                pixels
+            };
+            let reference = draw(&[2, 0, 1], false);
+            let actual = draw(&[0, 1, 2], true);
+            assert!(reference
+                .data()
+                .chunks_exact(4)
+                .any(|p| (1..255).contains(&p[3])));
+            let maximum = reference
+                .data()
+                .iter()
+                .zip(actual.data())
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap();
+            assert!(
+                maximum <= 2,
+                "scale {scale}, nested mask {nested}, maximum difference {maximum}/255"
+            );
+        }
+    }
+}
