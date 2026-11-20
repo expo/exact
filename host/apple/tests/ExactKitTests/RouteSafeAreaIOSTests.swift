@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactNavigation
 
 /// LLP 1123 D4's executor on a scroller whose UIKit contribution the test
 /// sets, inside a view whose safe area it sets too.

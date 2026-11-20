@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactNavigation
 @testable import ExactGroupedLists
 
 /// A header search's results as a level of the stack (`placingResults`), over `scripts/fixtures/search-levels.contract`:

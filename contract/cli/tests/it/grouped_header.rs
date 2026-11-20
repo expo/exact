@@ -145,6 +145,12 @@ fn a_custom_headers_written_inline_padding_is_from_the_cards_edge() {
         width: None,
     });
     let both = " padding-left=16 padding-right=16";
+    let measured = Some(GroupedMargins {
+        width: Some(370.0),
+        ..uikit.unwrap()
+    });
+    assert_eq!(ends("inset-grouped", "", measured), (20.0, 350.0));
+    assert_eq!(ends("inset-grouped", both, measured), (16.0, 354.0));
     assert_eq!(
         ends("inset-grouped", "", uikit),
         (36.0, 366.0),

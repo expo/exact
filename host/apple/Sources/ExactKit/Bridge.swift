@@ -195,17 +195,19 @@ extension Runtime {
     /// registered (D9, `ExactNativeTarget.encode`), under one layout, checked whole:
     /// `exact_host_covers` kinds 21 and 22, each record's length after its kind.
     func ownerReports(updates: [(UInt32, Data)] = [], registrations: [Data] = []) -> Batch {
-        return on(layout: true) {
-            var bytes = Data()
-            let records = updates.map { ($0.0, UInt32(21), $0.1) } + registrations.map { (UInt32(0), UInt32(22), $0) }
-            for (view, kind, record) in records {
-                for word in [view, kind, UInt32(record.count)] {
-                    withUnsafeBytes(of: word.littleEndian) { bytes.append(contentsOf: $0) }
-                }
-                bytes.append(record)
+        blocks(Self.ownerReportRecords(updates: updates, registrations: registrations))
+    }
+
+    static func ownerReportRecords(updates: [(UInt32, Data)], registrations: [Data] = []) -> Data {
+        var bytes = Data()
+        let records = updates.map { ($0.0, UInt32(21), $0.1) } + registrations.map { (UInt32(0), UInt32(22), $0) }
+        for (view, kind, record) in records {
+            for word in [view, kind, UInt32(record.count)] {
+                withUnsafeBytes(of: word.littleEndian) { bytes.append(contentsOf: $0) }
             }
-            return read(exact_host_covers(rt, write(bytes)))
+            bytes.append(record)
         }
+        return bytes
     }
     /// The border box a person dragged `view`'s `resize` grip to, under one
     /// layout (`Runner::resize_box`); nil keeps an axis.

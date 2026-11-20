@@ -238,6 +238,9 @@ package final class OwnerBlocks {
     private(set) var toldShown: [UInt32: BlockShown] = [:]
     /// The given blocks told as a navigation bar's items (LLP 1141.004 D3).
     private var toldBarItems: Set<UInt32> = []
+    #if os(iOS)
+    private var toldUpdates: [UInt32: OwnerUpdateIOS] = [:]
+    #endif
     private var toldSideBars: [UInt32: UIEdgeInsets] = [:]
     private var resetting = false, revealOwed = false
     private var viewChanges = 0
@@ -373,7 +376,7 @@ package final class OwnerBlocks {
     /// with how routes show against their stacks' tops (claim kind 23), which
     /// `exact_host_covers` takes and `exact_view` refuses; without, a change
     /// of it is told at the next publication.
-    func takeChanges(shown withShown: Bool = false) -> Data {
+    func takeChanges(shown withShown: Bool = false, fold: ViewportFold? = nil) -> Data {
         guard !resetting, !presenter.resetting, !presenter.applying,
               !Owner.shared.isServingMain, let session = presenter.session,
               session.state != .destroyed, !session.fillInFlight else { return Data() }
@@ -382,6 +385,10 @@ package final class OwnerBlocks {
         for (id, block) in presenter.navigation.barItemBlocks { now[id] = (block, nil) }
         for (id, block) in presenter.dialogs.containingBlocks { now[id] = (block, nil) }
         var sideBars: [UInt32: UIEdgeInsets] = [:]
+        var updateRecords = Data()
+        #if os(iOS)
+        var updates = toldUpdates
+        #endif
         for (route, view, block, shown, presented) in routes {
             let id = route.node.id
             guard shown else {
@@ -395,6 +402,9 @@ package final class OwnerBlocks {
                 continue
             }
             #if os(iOS)
+            if !ExactEnv.authoredChrome, !route.safeAreaNeedsLayout {
+                updates[id] = routeUpdate(route, view: view, block: block, fold: fold ?? presenter.fold)
+            }
             if !presented, !ExactEnv.authoredChrome, let tabs = presenter.navigation.tabController, route.tabBarController === tabs {
                 let insets = tabs.barInsets(beside: view)
                 if insets != .zero { sideBars[id] = insets }
@@ -436,14 +446,46 @@ package final class OwnerBlocks {
             return (id, (sides.left, sides.right))
         }
         toldSideBars = sideBars
+        #if os(iOS)
+        updates = updates.filter { now[$0.key] != nil }
+        let changed = Set(updates.keys).union(toldUpdates.keys).compactMap { id -> (UInt32, Data)? in
+            guard updates[id] != toldUpdates[id], presenter.views[id] != nil else { return nil }
+            return (id, (updates[id] ?? OwnerUpdateIOS()).encode())
+        }
+        updateRecords = Runtime.ownerReportRecords(updates: changed)
+        toldUpdates = updates
+        #endif
         guard withShown else {
             if !shownChanges().isEmpty { publish() }
-            return Runtime.blockRecords(blocks, placements: placements, barItems: barItems, sideBars: sideChanges)
+            return Runtime.blockRecords(blocks, placements: placements, barItems: barItems, sideBars: sideChanges) + updateRecords
         }
         let shown = shownChanges()
         toldShown = presenter.navigation.routesShown.filter { told[$0.key] != nil }
-        return Runtime.blockRecords(blocks, placements: placements, shown: shown, barItems: barItems, sideBars: sideChanges)
+        return Runtime.blockRecords(blocks, placements: placements, shown: shown, barItems: barItems, sideBars: sideChanges) + updateRecords
     }
+
+    #if os(iOS)
+    private func routeUpdate(_ route: any RouteSurface, view: UIView, block: CGRect, fold: ViewportFold) -> OwnerUpdateIOS {
+        let sample = OwnerUpdateIOS.sample(controller: route, view: view, session: presenter.session?.view)
+        let content: CGRect
+        if case .edges(let cover)? = presenter.navigation.covers[route.node.id] {
+            let off = RouteGeometry.clearanceOff(route.node)
+            content = block.inset(by: UIEdgeInsets(top: off & 1 == 0 ? cover.top : 0, left: off & 8 == 0 ? cover.left : 0,
+                                                  bottom: off & 4 == 0 ? cover.bottom : 0, right: off & 2 == 0 ? cover.right : 0))
+        } else {
+            content = block
+        }
+        let viewport = presenter.viewport
+        let parts = fold.rects.compactMap { rect -> CGRect? in
+            let page = rect.offsetBy(dx: viewport.pageOrigin.x, dy: viewport.pageOrigin.y)
+            let clipped = viewport.convert(page, to: view).intersection(content)
+            return clipped.isEmpty ? nil : clipped.offsetBy(dx: -content.minX, dy: -content.minY)
+        }
+        let segments = ViewportFold.grid(parts)
+        // Route covers already supply clearance. Publish the observations without clearing the band twice.
+        return OwnerUpdateIOS(margins: sample.margins, segments: segments.rects.isEmpty ? nil : segments)
+    }
+    #endif
 
     /// How the routes with a block show against their stacks' tops, where
     /// that changed since it was last told (`NavigationHosting.routesShown`).
@@ -492,6 +534,9 @@ package final class OwnerBlocks {
         toldShown = [:]
         toldBarItems = []
         toldSideBars = [:]
+        #if os(iOS)
+        toldUpdates = [:]
+        #endif
         blockRects = [:]
         revealOwed = false
     }

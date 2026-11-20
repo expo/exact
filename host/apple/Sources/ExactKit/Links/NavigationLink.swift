@@ -46,6 +46,7 @@ package protocol RouteSurface: UIViewController {
     var ridingBars: [NodeView] { get }
     /// The text field of the search the route's bar shows, while it shows one.
     var headerSearchEditor: UIView? { get }
+    var safeAreaNeedsLayout: Bool { get }
     /// Whether UIKit's search field in the route's bar is editing.
     var searchBarEditing: Bool { get }
     /// The stack that holds the route (a navigation controller, a plain tab or the boot owner); nil once popped.

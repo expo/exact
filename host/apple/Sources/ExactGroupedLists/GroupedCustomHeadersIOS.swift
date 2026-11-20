@@ -90,7 +90,8 @@ extension GroupedListView {
     /// insets an inset-grouped list's header as it does its card, and the
     /// kernel lays a header out across the section.
     private func shift(of view: UICollectionViewListCell) -> CGFloat {
-        reach.left + horizontalPadding.left - view.frame.minX - view.contentView.frame.minX
+        if host.told[owner.id]?.count == 4 { return -view.contentView.frame.minX }
+        return reach.left + horizontalPadding.left - view.frame.minX - view.contentView.frame.minX
     }
 
     /// Where a carried view is drawn when layout places it at `place`: a

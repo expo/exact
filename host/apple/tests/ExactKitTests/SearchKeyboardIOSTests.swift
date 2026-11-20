@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactNavigation
 
 /// A header's search field and the keyboard as the search's route is covered and shown again, and as editing ends
 /// with nothing typed (`NavigationHost.searchCovered`, `HeaderSearch.settle`).

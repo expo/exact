@@ -682,7 +682,7 @@ public final class ExactView: UIView {
         if segments != lastFold, (segments.posture, segments.cols, segments.rows) == (lastFold.posture, lastFold.cols, lastFold.rows) {
             keyed = segments; lastFold = segments
         }
-        change.blocks = presenter.owners.takeChanges()
+        change.blocks = presenter.owners.takeChanges(fold: keyed)
         session.view(change, fold: keyed)
         // Scale reports also lay out the native container, so size goes first.
         fitDisplay()
