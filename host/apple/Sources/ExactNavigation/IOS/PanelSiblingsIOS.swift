@@ -173,8 +173,7 @@ final class PanelSiblings: LiftedNodes {
     /// Whether `box` is beside the routes: no route's box meets it where CSS lays the routes out
     /// (`routes`), so the web shows it, and the routes' views (`drawn`), which UIKit may size to
     /// the page, do not cover it, or cover it only to their side, where the container's safe area
-    /// clears them of it (a column that reaches the container's top edge and exactly one side;
-    /// another insets nothing, so it covers the route there). A row above or below routes drawn over the
+    /// clears them of it (`NavigationHost.sideReach`). A row above or below routes drawn over the
     /// whole page is not beside them: the native bars span the page there and keep their place
     /// over it.
     static func beside(_ box: CGRect, _ routes: [CGRect], drawn: [CGRect]) -> Bool {

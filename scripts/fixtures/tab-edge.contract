@@ -6,12 +6,13 @@
 // the glass (TabEdgeIOSTests). Grid replaces the tab bar with an authored
 // selection row at its root and a pushed route, the row either the root's
 // child or the panels' sibling in a shared column. Its header search
-// exercises keyboard clearance; its tabs can keep their authored appearance.
-// The shared column can also hold a sidebar before the panels and a drawer
-// positioned over them, a box with no area over them whose button shows
-// outside it, a button that straddles its bottom edge while it clips only x,
-// and the grid's panel a button beside its routes, which iOS lifts over its
-// tab container; the column can set an accent and keep its tint from greying.
+// exercises keyboard clearance; its tabs can keep their authored
+// appearance. The shared column can also hold a sidebar before the panels,
+// which a margin can set off, and a drawer positioned over them, a box with
+// no area over them whose button shows outside it, a button that straddles
+// its bottom edge while it clips only x, and the grid's panel a button
+// beside its routes, which iOS lifts over its tab container; the column can
+// set an accent and keep its tint from greying.
 routes nav
   tab scrolls "/"
     scrollsPushed "/scrolls/pushed"
@@ -39,6 +40,7 @@ component TabEdge
   state fadingBar = false
   state inertColumn = false
   state trailingSidebar = false
+  state sidebarSetOff = false
   state extraRows = false
   state accented = false
   state keptTint = false
@@ -55,6 +57,9 @@ component TabEdge
     inertColumn = true
   action showSidebar
     sidebar = true
+  action setOffSidebar
+    sidebar = true
+    sidebarSetOff = true
   action showFab
     fab = true
   action showWrappedFab
@@ -96,10 +101,10 @@ component TabEdge
         if extraRows
           row testId="top-row" height=44 flex-shrink=0 background-color="#123456"
         if sidebar
-          column testId="side" width="5rem" flex-shrink=0 background-color="#fedcba"
+          column testId="side" width="5rem" flex-shrink=0 margin=(sidebarSetOff ? 12 : 0) background-color="#fedcba"
             button press=showSidebar testId="side-button"
               text "Side"
-        column flex=1 min-height=0 position="relative"
+        column flex=1 min-height=0 position="relative" testId="panels-holder"
           for t in nav.tabs key = t.name
             column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
               for e in t.stack key = e.id
@@ -127,6 +132,8 @@ component TabEdge
                         text "Tabs"
                       button press=showSidebar testId="show-sidebar"
                         text "Sidebar"
+                      button press=setOffSidebar testId="set-off-sidebar"
+                        text "Set off"
                       button press=showTrailingSidebar testId="show-trailing-sidebar"
                         text "Trailing sidebar"
                       button press=showRows testId="show-rows"

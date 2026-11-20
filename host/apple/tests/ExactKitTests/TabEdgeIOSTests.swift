@@ -219,7 +219,7 @@ final class TabEdgeIOSTests: XCTestCase {
         XCTAssertTrue(hit === side || hit.isDescendant(of: side), "the sidebar takes its touches, not \(hit)")
         XCTAssertEqual(try pixel(at: point), [254, 220, 186], "the sidebar paints over the container")
         let owner = try XCTUnwrap(navigation.primaryOwner)
-        XCTAssertEqual(owner.additionalSafeAreaInsets.left, side.bounds.width, accuracy: 0.5, "the container's bars clear the sidebar")
+        waitFor("the container's safe area, UIKit's own inset included, reaches the sidebar") { abs(owner.view.safeAreaInsets.left - side.bounds.width) < 0.5 }
         // Tab: the sidebar's button first, then, among the rest, the route's
         let presenter = session.presenter, sideButton = try node("side-button"), first = try node("grid-first")
         XCTAssertTrue(presenter.moveFocus(backward: false))
@@ -279,8 +279,60 @@ final class TabEdgeIOSTests: XCTestCase {
         let hit = try XCTUnwrap(win.hitTest(point, with: nil))
         XCTAssertTrue(hit === side || hit.isDescendant(of: side), "the sidebar takes its touches, not \(hit)")
         XCTAssertEqual(try pixel(at: point), [254, 220, 186], "the sidebar paints over the container")
-        XCTAssertEqual(try XCTUnwrap(navigation.primaryOwner).additionalSafeAreaInsets.right, side.bounds.width, accuracy: 0.5,
-                       "the container's bars clear the sidebar")
+        let owner = try XCTUnwrap(navigation.primaryOwner)
+        waitFor("the container's safe area, UIKit's own inset included, reaches the sidebar") { abs(owner.view.safeAreaInsets.right - side.bounds.width) < 0.5 }
+    }
+
+    /// A sidebar beside the panels set off by a margin, so it reaches neither the container's top nor its leading
+    /// edge: lifted, it grows the container's leading safe area up to where the panels' holder, and so the
+    /// routes, begin, and the bar's contents start there, as the route's header does on the web (LLP 1083.000 D4).
+    /// An inset the container inherits is part of that reach, not added to it.
+    func testASetOffSidebarGrowsTheSafeAreaToWhereTheRoutesBegin() throws {
+        let session = try fixture(wholeScreen: true), navigation = session.presenter.navigationHost
+        try tap("tab-grid", route: "grid")
+        try press("set-off-sidebar", route: "grid")
+        let side = try node("side"), owner = try XCTUnwrap(navigation.primaryOwner)
+        waitFor("the sidebar is lifted over the container") { side.window != nil && side.bounds.width > 0 && navigation.siblings.holds(side) }
+        let area = try XCTUnwrap(owner.view), box = side.convert(side.bounds, to: area)
+        XCTAssertGreaterThan(box.minX, 0.5, "the sidebar is set off from the leading edge")
+        XCTAssertGreaterThan(box.minY, 0.5, "and from the top")
+        let start = try node("panels-holder").convert(try node("panels-holder").bounds, to: area).minX
+        XCTAssertGreaterThan(start, box.maxX + 0.5, "the routes begin past the sidebar's margin")
+        waitFor("the container's leading safe area reaches where the routes begin") { abs(owner.additionalSafeAreaInsets.left - start) < 0.5 }
+        let nav = try XCTUnwrap(navigation.primaryNavigation)
+        waitFor("the bar's layout clears the sidebar and its margin") { nav.navigationBar.safeAreaInsets.left >= start - 0.5 }
+        let host = try XCTUnwrap(window?.rootViewController)
+        host.additionalSafeAreaInsets.left = 20
+        defer { host.additionalSafeAreaInsets.left = 0 }
+        waitFor("the container adds what the inherited inset leaves") { abs(owner.additionalSafeAreaInsets.left - (start - 20)) < 0.5 }
+        waitFor("so the bar's layout still starts where the routes begin") { abs(nav.navigationBar.safeAreaInsets.left - start) < 0.5 }
+    }
+
+    /// A container that defines its presentation context, as an app's may, covers the routes with a presentation in it:
+    /// no route is in the window, while the session still is, and a report then leaves the sidebar's lift and the inset
+    /// it asks of the container as they were, as it leaves the covers, so the bars under the cover keep their layout
+    /// through its dismissal. (A presentation over the whole session takes the session out of the window, which retires
+    /// the containers.)
+    func testASidebarsInsetStandsUnderACoverOverItsContainer() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit presents only from a window a scene holds") }
+        let session = try fixture(wholeScreen: true), navigation = session.presenter.navigationHost
+        try tap("tab-grid", route: "grid")
+        try press("show-sidebar", route: "grid")
+        let side = try node("side"), owner = try XCTUnwrap(navigation.primaryOwner)
+        waitFor("the sidebar insets the container") { navigation.siblings.holds(side) && owner.additionalSafeAreaInsets.left > 0.5 }
+        let inset = owner.additionalSafeAreaInsets
+        let cover = UIViewController()
+        cover.modalPresentationStyle = .currentContext
+        owner.definesPresentationContext = true
+        owner.present(cover, animated: false)
+        waitFor("the cover takes the routes out of the window") { owner.viewIfLoaded?.window == nil }
+        XCTAssertNotNil(session.view?.window, "and leaves the session in it")
+        navigation.reportCovers()
+        XCTAssertEqual(owner.additionalSafeAreaInsets, inset, "the inset stands under the cover")
+        XCTAssertTrue(navigation.siblings.holds(side), "as the lift does")
+        cover.dismiss(animated: false)
+        waitFor("the routes are back in the window") { owner.viewIfLoaded?.window != nil }
+        XCTAssertEqual(owner.additionalSafeAreaInsets, inset)
     }
 
     /// Rows above and below the panels while the native bars show: neither is beside the routes, so neither
