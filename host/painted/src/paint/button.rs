@@ -206,7 +206,7 @@ fn face_typography(
         symbol_style.font_size = material_dp(metric::ICON_BUTTON_ICON) * scale;
     }
     // A Material button's symbol is beside its title (alone, it is an icon button).
-    if material && !symbol_style.mask.has(StyleId::FontSize) {
+    if material && !declared(&symbol_style, StyleId::FontSize) {
         symbol_style.font_size = material_dp(metric::FILLED_BUTTON_ICON) * scale;
     }
     (title_style, subtitle_style, symbol_style)
@@ -330,8 +330,10 @@ pub(super) fn face_layout(
     };
     // An icon beside the title has `ButtonDefaults`' `…WithIconContentPadding`:
     // its own side, Compose's start, and the title's, its end.
-    let with_icon =
-        material_face && !column && face.title.is_some() && (face.symbol.is_some() || face.raster);
+    let with_icon = material_face
+        && !column
+        && (face.title.is_some() || face.subtitle.is_some())
+        && (face.symbol.is_some() || face.raster);
     let (icon_side, title_side) = match material {
         Some(MaterialButton::Text) if with_icon => (
             inline,
