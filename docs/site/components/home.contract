@@ -51,6 +51,7 @@ component Home
   view
     column testId="home-page"
       column align-items="center" text-align="center" padding="clamp(16px, 6vw, 56px) 0 8px"
+        image "symbol:icon.exactmark" aria-hidden=true width="5.125rem" height="3rem" margin-bottom=24 color="var(--color-text-default)"
         h1 font-size="var(--text-4xl)" font-weight=600 letter-spacing="-2px" line-height=1.2 color="var(--color-text-default)"
           text page.title
         text page.description margin-top=12 font-size="var(--text-base)" color="var(--color-text-secondary)"
