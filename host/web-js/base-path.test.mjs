@@ -223,7 +223,7 @@ test('an explicit root base produces exactly the default build bytes', async () 
 engineTest.chromium('Shelf deep links, path links and pushes work under /app/, and an outside location draws notfound', async () => {
   const dir = workspace(); let browser;
   try {
-    for (const name of ['app.json', 'app.contract', 'app.ts']) cpSync(resolve(root, 'apps/shelf', name), resolve(dir, name));
+    for (const name of ['app.json', 'app.contract', 'app.ts', 'assets']) cpSync(resolve(root, 'apps/shelf', name), resolve(dir, name), { recursive: true });
     const app = JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8')); app.host.web.base = '/app/'; delete app.preload;
     save(dir, 'app.json', JSON.stringify(app));
     const made = await build(dir, ['--render', 'none']); expect(made.status, made.output).toBe(0);
