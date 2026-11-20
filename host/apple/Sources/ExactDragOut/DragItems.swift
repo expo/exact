@@ -4,7 +4,6 @@
 // own when a destination asks, through what it holds until the provider is
 // released, however the drag ends.
 #if os(iOS)
-import CExact
 import ExactCore
 import ExactKit
 import UIKit
@@ -59,7 +58,7 @@ enum DragItems {
     /// `NSItemProvider.h`), so its URL needs no copy of Exact's.
     static func shipped(_ entry: String, _ resolver: AssetResolver?, _ session: ExactSession?) -> Load {
         { [weak session] completion in
-            if let url = resolver?.url(entry), FileManager.default.isReadableFile(atPath: url.path) {
+            if let url = DragFiles.shipped(entry, in: resolver) {
                 completion(url, false, nil)
             } else {
                 // The session is held on the main thread only.
@@ -94,9 +93,7 @@ enum DragItems {
     /// The destination gets nothing for the item, and the journal says why.
     /// On the main thread.
     static func fail(_ entry: String, _ reason: String, _ session: ExactSession?, _ completion: (URL?, Bool, Error?) -> Void) {
-        let line = "drag: \(entry) could not be read: \(reason)"
-        session?.log(line)
-        completion(nil, false, NSError(domain: NSCocoaErrorDomain, code: CocoaError.fileReadUnknown.rawValue, userInfo: [NSLocalizedDescriptionKey: line]))
+        completion(nil, false, DragFiles.failed(entry, reason, session))
     }
 
     final class Copy {
@@ -112,12 +109,7 @@ enum DragItems {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             self.directory = directory
             let url = directory.appendingPathComponent((entry as NSString).lastPathComponent)
-            let ask = try JSONSerialization.data(withJSONObject: ["op": "shareFile", "path": entry, "to": url.path])
-            let reply = (try? JSONSerialization.jsonObject(with: Data(session.runtime.ask(exact_share_file, String(decoding: ask, as: UTF8.self)).utf8))) as? [String: Any]
-            guard reply?["file"] is String else {
-                throw NSError(domain: NSCocoaErrorDomain, code: CocoaError.fileReadUnknown.rawValue,
-                              userInfo: [NSLocalizedDescriptionKey: reply?["error"] as? String ?? "it could not be copied"])
-            }
+            try DragFiles.copy(entry, to: url, session)
             made = url
             return url
         }

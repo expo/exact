@@ -2,10 +2,9 @@
 // with `draggable` lifts what its `dataTransfer` declares into another app.
 // An app's composition links this module when its plan has a `draggable`,
 // and installs it before any session is made; the core reaches it only
-// through `DragOutLink`. iOS and iPadOS (D4); the Mac's lift is LLP 1094.000
-// D5's, and tvOS has no drag.
+// through `DragOutLink`. iOS and iPadOS (D4) here, the Mac (D5) in
+// `DragOutMac.swift`; tvOS has no drag.
 #if os(iOS)
-import CExact
 import ExactCore
 import ExactKit
 import UIKit
@@ -154,7 +153,7 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
         return false
     }
 }
-#else
+#elseif !os(macOS)
 public enum ExactDragOut {
     public static func install() {}
 }

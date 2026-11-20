@@ -107,6 +107,8 @@ package final class Presenter {
     lazy var mouseLayoutPan = MouseLayoutPan(self)
     /// The mouse drags (LLP 1047.001 D4: the Drag module's, when linked).
     lazy var mouseDrags = DragLink.installed?.mouseDrags(self) ?? .none
+    /// The drag out of the app (LLP 1094.000 D5), when the module is linked.
+    lazy var mouseDragOut = DragOutLink.installed?.mouseDrag(self)
     lazy var mouseChain = MouseChain(self)
     /// Reordering a list's rows: the lists family's (`ReorderLink`).
     lazy package var reorders: any ReorderHosting = ReorderLink.make?(self) ?? NoReorders()

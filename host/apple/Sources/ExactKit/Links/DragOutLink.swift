@@ -1,17 +1,27 @@
-// @ref LLP 1094.000 D3, D4 — a node as a drag source to other apps is a
+// @ref LLP 1094.000 D3, D4, D5 — a node as a drag source to other apps is a
 // linked capability, `drag_out`: the `ExactDragOut` module, which an app's
 // composition links when its plan has a `draggable`, and installs here.
 // Without it no node lifts, and a plan with a `draggable` is refused at boot
 // (`Unlinked("drag_out")`).
 #if os(iOS)
 import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
 
 /// What the core asks of the capability.
 package protocol DragOutCapability: AnyObject {
+    #if os(iOS)
     /// A presenter's drag sources.
     func sources(_ presenter: Presenter) -> DragOutSources
+    #elseif os(macOS)
+    /// A presenter's mouse drag out of the app, last in the mouse chain's
+    /// rank on one node (D8).
+    func mouseDrag(_ presenter: Presenter) -> MouseRecognizer
+    #endif
 }
 
+#if os(iOS)
 /// A presenter's drag sources: one drag interaction on each draggable node,
 /// which the node pool parks and lends with the node's view, as it does a
 /// context menu's (`ContextMenuHost`).
@@ -29,9 +39,9 @@ package protocol DragOutSources: AnyObject {
     /// A parked `view` leaves the pool for good.
     func dropped(_ view: NodeView)
 }
+#endif
 
 /// The drag-out module, installed by the composition.
 package enum DragOutLink {
     package static var installed: DragOutCapability?
 }
-#endif
