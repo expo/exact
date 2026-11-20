@@ -199,6 +199,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         val parent = parent as? View ?: return
         main.window.set(-left.toFloat(), -top.toFloat(), (parent.width - left).toFloat(), (parent.height - top).toFloat())
+        relayer.window.set(main.window)
     }
 
     /** The view's size is never told to exact2 (LLP 1115.001 D3.3): the activity tells it the window and its insets,
