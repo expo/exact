@@ -574,26 +574,27 @@ fn reached_bundled_fonts_are_refused_and_runtime_families_bake_without_faces() {
         )
         .unwrap()
     };
-    write("(title == \"a\" ? \"A\" : \"B, system-ui\")");
+    write("(title == \"x\" ? \"a\" : \"B, system-ui\")");
     let errors = compile_entries(&temp.0, &manifest).unwrap_err();
     let refused: Vec<_> = errors
         .iter()
         .filter(|e| e.id == "snapshot-font-bundled")
-        .map(|e| &e.message)
         .collect();
     assert_eq!(refused.len(), 2, "{errors:?}");
+    // Each is at its use and names the font as declared, whatever its case.
+    let written = std::fs::read_to_string(temp.0.join("app.contract")).unwrap();
+    let used = written.lines().position(|l| l.contains("font-family"));
     for family in ["`A`", "`B`"] {
         assert!(
             refused
                 .iter()
-                .any(|m| m.contains(family) && m.contains("`system-ui`")),
+                .any(|e| Some(e.span.line as usize) == used.map(|l| l + 1)
+                    && e.message.contains(family)
+                    && e.message.contains("`system-ui`")),
             "{errors:?}"
         );
     }
-    assert!(
-        !refused.iter().any(|m| m.contains("`Unused`")),
-        "{errors:?}"
-    );
+    assert_ne!(refused[0].span.col, refused[1].span.col, "{errors:?}");
     write("title");
     let entries = compile_entries(&temp.0, &manifest).unwrap();
     assert!(entries["next-trains"].plan.faces.is_empty());
