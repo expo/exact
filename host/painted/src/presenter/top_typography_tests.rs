@@ -100,8 +100,10 @@ fn material_surfaces_refresh_when_bold_text_changes_in_both_directions() {
                 shot.clone_rect(tiny_skia::IntRect::from_xywh(12, 20, 24, 24).unwrap())
                     .unwrap()
             };
+            // Material's filled `edit` is a vector, as Compose's icon is, and
+            // Bold Text weights only text.
             assert!(
-                crop(&shots[0]).data() != crop(&shots[1]).data(),
+                crop(&shots[0]).data() == crop(&shots[1]).data(),
                 "the symbol"
             );
         }
