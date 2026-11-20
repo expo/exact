@@ -1368,6 +1368,7 @@ impl<D: DataSource> Presenter<D> {
             }
         }
         self.tick_arrange(self.host.now());
+        self.tick_field_drag(self.host.now());
         self.step_glides(now_ms);
         self.step_zooms(now_ms);
         if let Some(error) = self.deliver_scroll_ends() {

@@ -65,7 +65,18 @@ impl<D: DataSource> Presenter<D> {
         }
         let id = self.focus?;
         let field = self.brush.field_text.get(&id)?;
-        let next = field.reveal_cursor(self.field_cursor(id));
+        let key = self.host.kernel().node(id)?.key;
+        let next = self
+            .field_drag
+            .as_mut()
+            .and_then(|drag| drag.take_scroll(key, &field.value))
+            .map(|(x, y)| {
+                (
+                    x.clamp(0., field.scroll_max.0),
+                    y.clamp(0., field.scroll_max.1),
+                )
+            })
+            .unwrap_or_else(|| field.reveal_cursor(self.field_cursor(id)));
         if self.scroll_of(id) == next {
             return None;
         }
@@ -527,6 +538,16 @@ mod tests {
       text `${clicks}`
       textarea testId="editor" value=body input=edit width=260 height=120 font-size=14
 "##;
+        let coloured = format!("decoration accent color=\"#db1141\"\n{source}").replace(
+            "value=body input=edit",
+            "value=body input=edit decorations=TextDecorations(value=body,spans=[TextDecorationSpan(name=\"accent\",start=0,end=5)])",
+        );
+        for source in [source, &coloured] {
+            exercise_field_geometry(source);
+        }
+    }
+
+    fn exercise_field_geometry(source: &str) {
         let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(source),
             (),

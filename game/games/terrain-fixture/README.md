@@ -24,9 +24,17 @@ The Linux leg enables the GPU-backed agent and reads the bake's shader pack.
 On a Mac with Metal and Chrome with WebGPU, record the tick and save baseline
 again with `bun game/prove.mjs terrain-fixture --hosts linux,web --repin`.
 
-Saves made before the canvas arguments were added do not restore. The smoke
-tick hash is unchanged. At 1280 × 720 the updated save pin comes from the
-device-free simulation. The graphics proof can check that pin on both hosts.
+The continuation save includes the `jobs` canvas argument. Older saves lack
+that field, so their continuation bytes differ. The smoke tick hash is unchanged, and the save at 1280 × 720 is
+pinned from the device-free simulation. A restore to the same or a later tick
+with the same seed and settings keeps the window and jobs in flight. Both
+derive from the tick, seed and settings. `jobs=off` keeps its window the
+same way.
+
+The proof also runs `jobs=on` on each host using the same radius-8 smoke
+window. Both runs require 37 advances and the `inline` lane. The 20 held
+looks preserve the job counts and pixels, and the completed frame draws 823
+sections.
 
 ## Decision workload
 
@@ -46,14 +54,14 @@ machine's load before and after, and marks itself when there was more load
 than cores.
 
 - The default `budget=deadline` stops after a completed operation when the live
-  deadline has passed. `budget=count:N` skips the deadline check and still
-  respects the engine's allowance. Section work takes priority over blended
+  deadline has passed. `budget=count:N` respects the engine's allowance and
+  checks the deadline with `jobs=on`. Section work takes priority over blended
   uploads.
 - A unit of the allowance is one mesh, one install, one dropped staged result,
   one edit or one blended upload, or 64 reuse compares or retirements, which
   are far cheaper (a compare measured about 0.01 ms). A run of fewer than 64
   before a larger unit, or at the end of a call, costs nothing. With no
-  deadline (the agent's clock, or `budget=count:N`) a call can therefore do 64
+  deadline (the agent's clock, or `budget=count:N` with `jobs=off`) a call can do 64
   times its allowance of them: 4,096 compares at the declared 64. The row's
   `operationsCompleted` counts each compare, retirement, mesh, install and edit
   as one, so it is not the allowance spent.
@@ -64,6 +72,30 @@ than cores.
   sections nearest the camera first and queues one compare per installed
   section awaiting reuse. A changed repair mesh stages until an advancing
   frame can install it. A late start begins the edit schedule at the current tick.
+- `jobs=off|on` defaults to `off`. The jobs lane moves section lighting and
+  meshing to one job per section and batches up to 64 reuse compares per job.
+  Compares share the previous padded inputs. Installation, retirement and
+  blended sorting and uploads stay in `prepare`. The frame reserves its
+  last unit for section work when sections are pending and none has run.
+  Each result costs one unit, even when a compare batch has fewer than 64
+  sections. After the frame's units, the hook refills the pool's queue up
+  to 32 KiB, past the deadline if needed. That step selects and submits work.
+  Lighting and meshing run on the workers.
+- With `inflight=keep` on either lane, a kept stale mesh finishes its crossing
+  and its repair is separate work.
+- On a canvas that rests, pending jobs can keep the canvas drawing and ticking
+  after a canvas with finished jobs would rest, so later input can land on a
+  different tick.
+- The lane uses up to four workers on a live native canvas and runs inline
+  under the agent's clock or on WebAssembly. A hook that uses jobs declares
+  a positive allowance. This fixture takes at most 64 results per frame
+  within its current allowance and takes the first result of a late frame
+  past the deadline. It caps queued inputs at 32
+  KiB and holds completed outputs at a 32 MiB threshold. The queue budget
+  covers metadata and references to already resident padded inputs. The
+  completion threshold prevents a radius-40 window of 64-byte vertices
+  from accumulating in CPU memory while uploads wait. Up to four running
+  meshes can finish after the threshold is reached.
 - `itemsDrawn` counts submitted sections once across the opaque and blended
   draws, using the sections in the blended buffer's last upload.
 
@@ -76,9 +108,22 @@ finished durations for window percentiles. A window that exceeds that limit
 reports the completion count and marks its distribution inconclusive.
 
 The discard counters distinguish stale staged results, staged results that left
-the window, and queued work dropped after it left the window. `gpuBufferBytes`
-covers installed vertex, index and blended buffers. `cpuBytes` covers retained
-padded inputs, staged meshes and blended quads. Both include peaks.
+the window, and queued work dropped after it left the window. With
+`jobs=on`, `operationsCompleted` counts job operations whose results reached
+the hook, along with operations performed in `prepare`. Work a worker
+finished for a section that left the window contributes to `queuedLeft`
+and `renderHooks.jobs.stale`. A compare batch contributes one stale result
+and counts each of its sections in `queuedLeft`.
+
+`gpuBufferBytes` covers installed vertex, index and blended buffers.
+`cpuBytes` is sampled in `prepare` and covers retained padded inputs, staged
+meshes, blended quads, queued jobs and completed results. It excludes the
+submitted batch's section list (about 2 KB per batch) while its result waits.
+It also excludes previous padded inputs a running compare still shares
+after their sections retire, up to 64 × 8,000 bytes per running batch.
+`peakCpuBytes` also counts
+a result as it is taken, before installation. Each benchmark window records
+its own jobs counters in `jobs`. The row records `lane` when enabled.
 
 The JSON row records separate CPU timing rings with `paired: false`. The trace
 export lacks per-frame prepare and total encode samples joined to tick CPU time

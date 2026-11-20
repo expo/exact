@@ -320,10 +320,10 @@ impl<D: DataSource> Presenter<D> {
     /// The caret used to edit also exists in email and number inputs,
     /// whose DOM selection API cannot read or write it.
     pub(crate) fn field_selection(&self, id: ViewId) -> FieldSelection {
-        let value = self.field_value(id);
+        let value = self.field_text_ref(id);
         match self.fields.get(&id) {
             Some(mark) if mark.value == value => mark.selection,
-            _ => FieldSelection::at_end(&value),
+            _ => FieldSelection::at_end(value),
         }
     }
 
@@ -446,8 +446,9 @@ impl<D: DataSource> Presenter<D> {
         selection: FieldSelection,
         upstream: bool,
     ) {
-        let changed = self.field_selection(id) != selection;
-        self.mark_field(id, value, selection, false);
+        let before = self.field_selection(id);
+        let changed = before != selection;
+        self.mark_field_from(id, value, before, selection, false);
         if let Some(mark) = self.fields.get_mut(&id) {
             mark.upstream = upstream;
         }

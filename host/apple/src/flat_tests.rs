@@ -502,6 +502,7 @@ fn authored_nonlayout_rows_and_handlers_keep_their_box() {
         "aria-label=\"named\"",
         "press=go",
         "display=\"grid\"",
+        "draggable=true dataTransfer=DataTransfer(text=\"a\")",
     ] {
         let source = SHOP.replacen("row gap=12", &format!("row {attribute} gap=12"), 1);
         let (host, _) = boot(&source, true);

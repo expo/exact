@@ -175,7 +175,7 @@ pub use theme::retained::{
     with_design_scan, DesignScan,
 };
 pub use theme::{retention, rows, synthetic_candidates};
-pub use warnings::{warnings, MAX_WARNINGS};
+pub use warnings::{warnings, WarningSelection, MAX_WARNINGS};
 
 use contract_analyze::Analysis;
 use contract_syntax::{Attr, Expr, File, FnDecl, Node, Owner, Span};
@@ -368,17 +368,16 @@ pub fn lower(
         .map_err(|mut all| all.swap_remove(0))
 }
 
-/// Lower, reporting every independent refusal: each element and each of its attributes is
-/// lowered whatever its siblings' fate (at most [`MAX_REFUSALS`]). `mapped` also returns the
-/// development source sites; `profile` is the surface the plan is for. `warned` collects diagnostics
-/// using the plan's control appearance decisions. It links every row's grammar (LLP 1053.000 §2).
+/// Lower every element and attribute, reporting up to [`MAX_REFUSALS`] independent refusals.
+/// `mapped` requests development source sites. Collected warnings use the plan's control
+/// appearance decisions. Every row's grammar is linked (LLP 1053.000 §2).
 pub fn lower_all(
     checked: &Checked<'_>,
     analysis: &Analysis,
     asset_root: Option<&Path>,
     mapped: bool,
     profile: Profile,
-    warned: Option<&mut Vec<LowerError>>,
+    warned: Option<(&WarningSelection, &mut Vec<LowerError>)>,
 ) -> Result<(Plan, Option<Sites>), Vec<LowerError>> {
     exact_kernel::style::link_all();
     if mapped && checked.expanded.instances.is_empty() {
@@ -404,11 +403,12 @@ pub fn lower_all(
         profile,
         warned.as_ref().map(|_| &mut text_styles),
     );
-    if let Some(out) = warned {
+    if let Some((selection, out)) = warned {
         out.extend(warnings::with_text_styles(
             checked,
             &text_styles,
             asset_warnings,
+            selection,
         ));
     }
     let result = match result {

@@ -211,3 +211,70 @@ fn word_and_paragraph_units_preserve_unicode_and_password_privacy() {
     assert_eq!(range(value, 9, Unit::Paragraph), (0, 13));
     assert_eq!(range(value, 2, Unit::Password), (0, utf16_len(value)));
 }
+
+#[test]
+fn holding_a_selection_beyond_the_textarea_scrolls_until_the_pointer_returns_or_releases() {
+    let value = (0..150)
+        .map(|n| format!("Line {n} sample text"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (mut p, id) = fixture(&value, "");
+    let (x, y) = point(&mut p, id, 22, 0.5);
+    let rect = p.rect_of(id).unwrap();
+    let below = rect.1 + rect.3 + 14.;
+    p.pointer_down_with_clicks(x, y, 0., 1).unwrap();
+    p.pointer_move(x, below, 10.).unwrap();
+    p.frame();
+    assert!(
+        p.needs_animation_frame(),
+        "the held drag requests its next frame"
+    );
+    let initial = p.field_selection(id);
+    let initial_scroll = p.scroll_of(id);
+    let hold = |p: &mut Presenter<()>, start: u32| {
+        for n in 1..=16 {
+            p.tick(f64::from(start + n * 40));
+            p.frame();
+        }
+    };
+    hold(&mut p, 10);
+    let later = p.field_selection(id);
+    assert_eq!(later.start, initial.start);
+    assert!(
+        later.end > initial.end && p.scroll_of(id).1 > initial_scroll.1,
+        "stationary drag: {initial:?} -> {later:?}"
+    );
+    p.pointer_move(x, y, 660.).unwrap();
+    p.frame();
+    assert!(!p.needs_animation_frame());
+    let inside = (p.field_selection(id), p.scroll_of(id));
+    hold(&mut p, 660);
+    assert_eq!((p.field_selection(id), p.scroll_of(id)), inside);
+    p.pointer_move(x, below, 1310.).unwrap();
+    p.pointer_up(x, below, 1320.).unwrap();
+    p.frame();
+    let released = (p.field_selection(id), p.scroll_of(id));
+    hold(&mut p, 1320);
+    assert_eq!((p.field_selection(id), p.scroll_of(id)), released);
+
+    p.pointer_down_with_clicks(x, y, 1970., 1).unwrap();
+    p.pointer_move(x, rect.1 - 14., 1980.).unwrap();
+    p.frame();
+    let upward = p.field_selection(id);
+    let top = p.scroll_of(id).1;
+    hold(&mut p, 1980);
+    let earlier = p.field_selection(id);
+    assert!(earlier.start < upward.start && p.scroll_of(id).1 < top);
+    assert_eq!(earlier.end, upward.end);
+    hold(&mut p, 2620);
+    assert_eq!(p.scroll_of(id).1, 0.);
+    assert!(
+        !p.needs_animation_frame(),
+        "the top of the document is at rest"
+    );
+    p.pointer_move(x, below, 3270.).unwrap();
+    p.frame();
+    assert!(p.needs_animation_frame());
+    p.pointer_cancel(3280.).unwrap();
+    assert!(!p.needs_animation_frame());
+}

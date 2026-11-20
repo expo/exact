@@ -45,7 +45,7 @@ const recordedGame = {
 
 const defaultArgs = {
   radius: 'smoke', move: 'stand', light: '0', edits: '0', inflight: 'discard',
-  compare: 'off', vertex: '12', blend: 'off', budget: 'deadline', draw: 'on', pool: 'off',
+  compare: 'off', vertex: '12', blend: 'off', budget: 'deadline', draw: 'on', pool: 'off', jobs: 'off',
 };
 
 function double({
@@ -307,4 +307,34 @@ test('validates hosts, metadata and switch values before opening a host', async 
   const mac = parseOptions(['macos', '--device=Mac Studio', '--os=macOS', '--refresh-hz=59.94',
     '--warmup-ms=0', '--window-ms=10', '--poll-ms=1'], false);
   expect(await readBench(double(), mac, 'abc')).toMatchObject({ profile: 'host-dev', refreshHz: 59.94 });
+});
+
+test('records the jobs switch, counters and lane', async () => {
+  expect(options().switches.jobs).toBe('off');
+  expect(() => options('jobs=yes')).toThrow('jobs');
+  const host = double();
+  const read = host.state;
+  const jobs = { queued: 3, queuedBytes: 32, running: 1, done: 7, stale: 2, failed: 0, lane: 'pool' };
+  let resetAt = 0, window = 0;
+  host.state = async reset => {
+    const world = await read(reset);
+    if (reset) {
+      resetAt = host.now();
+      window++;
+    }
+    world.renderHooks.jobs = { ...jobs, done: (host.now() - resetAt) * window,
+      stale: Number(host.now() > resetAt) * window };
+    return world;
+  };
+  const row = await readBench(host, options('jobs=on'), 'abc');
+  expect(row.observedSwitches.jobs).toBe('on');
+  expect(row.windows.map(window => window.jobs)).toEqual([1, 2, 3].map(window => ({
+    ...jobs, done: window * 10, stale: window,
+  })));
+  expect(row).not.toHaveProperty('renderHooks');
+  expect(row.lane).toBe('pool');
+  expect(tableRow(row)).toContain('| pool |');
+  const off = await readBench(double(), options(), 'abc');
+  expect(off.windows.map(window => window.jobs)).toEqual([null, null, null]);
+  expect(off.lane).toBeNull();
 });

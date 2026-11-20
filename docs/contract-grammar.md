@@ -2458,7 +2458,8 @@ a `dragstart` listener, because every platform takes a drag's items as it
 begins; `dragstart`, `drag` and `dragend` are refused for now
 (`lower-handler-later`). The runner admits each file and `url` for the host
 and journals a refusal (`drag: refused: …`); `expect drag` asserts what a node
-carries ([recipe](recipes/drag-out.md)). No host lifts it to the system yet.
+carries ([recipe](recipes/drag-out.md)). On iOS and iPadOS a press held on the
+node lifts it into another app; the Mac, the web and Android lift it later.
 
 `beforeunload` is DOM's: the window is about to close or the app to quit
 (macOS: its close button, File ▸ Close Window, ⌘Q; the web: leaving the page).
