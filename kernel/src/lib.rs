@@ -90,7 +90,7 @@ pub use invocation::Invocation;
 pub use kernel::{
     credited_edges, decode_registration, encode_registration, BlockAxis, BlockMeasure, HostBlock,
     HostCover, Kernel, Keyboard, KeyboardPolicy, NodeRef, OwnerMargins, OwnerUpdate,
-    PresentedHeight, StickyConstraint, TablePlace,
+    PresentedHeight, ScrollTerms, StickyConstraint, TablePlace,
 };
 pub use layout::LayoutReceipt;
 pub use motion::{motion_node, MotionSync};

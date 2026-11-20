@@ -5756,7 +5756,7 @@
       "field": "safe_area_reach",
       "rare": true,
       "codec": "enum:SafeAreaReach",
-      "_comment": "@ref LLP 1123 D13: `-exact-safe-area-reach: auto | none | <edges>`, SwiftUI's `background(_:ignoresSafeAreaEdges:)` and `overlay(_:ignoresSafeAreaEdges:)`, one of its two rows: `auto`, the initial value, reaches for a scroller and for a box with a plain background colour; `edges` reaches on the edges safe_area_reach_edges names, none for `none`. On a reached edge the box's native view reaches the allocation's edge where the box touches a safe edge, outset there with its bounds origin shifted so its subviews stay where layout put them. It changes where the box paints and takes touches, never its layout or its incoming observations. Not inherited."
+      "_comment": "@ref LLP 1123 D13: `-exact-safe-area-reach: auto | none | <edges>`, SwiftUI's `background(_:ignoresSafeAreaEdges:)` and `overlay(_:ignoresSafeAreaEdges:)`, one of its two rows: `auto`, the initial value, reaches for a scroller and for a box with a plain background colour; `edges` reaches on the edges safe_area_reach_edges names, none for `none`. On a reached edge where the box's border edge meets or lies inside the area that reaches it, its native view reaches the outer side of that area, outset with its bounds origin shifted so its subviews stay where layout put them, no further than the padding edge of an ancestor that stops reach (D13). It changes where the box paints and takes touches, never its layout or its incoming observations. Not inherited."
     },
     {
       "bit": 295,

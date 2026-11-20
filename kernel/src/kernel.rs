@@ -45,6 +45,7 @@ mod segments;
 pub(crate) mod targets;
 pub(crate) use intrinsic::apply_projection;
 mod row_memo;
+mod scroll_terms;
 mod sticky;
 mod table;
 mod trim;
@@ -62,6 +63,7 @@ pub use keyboard::{Keyboard, KeyboardPolicy};
 pub use margins::OwnerMargins;
 pub use owner_update::{decode_registration, encode_registration, OwnerUpdate};
 pub use provenance::{Contribution, Operation};
+pub use scroll_terms::ScrollTerms;
 pub use sticky::StickyConstraint;
 pub use table::TablePlace;
 
