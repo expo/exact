@@ -367,7 +367,21 @@ fn the_reader_plays_a_moving_ripple() {
     p.clock(1000.);
     p.pointer_down(at.0, at.1, 1000.).unwrap();
     p.frame();
-    let held = p.brush.ripples.tracks(key).cloned().expect("its tracks");
+    // What the canvas host sends the reader after a paint: the clock, once,
+    // and the ripple layer's tracks.
+    use crate::canvas::layer::{CLOCK, TRACKS};
+    let mut tracks = crate::canvas::tracks::Tracks::default();
+    let mut sent = |p: &Presenter<()>| {
+        let mut ops = Vec::new();
+        tracks.send(p, 0, &mut ops);
+        ops
+    };
+    let ops = sent(&p);
+    assert_eq!(
+        (ops[0], ops[3], ops[5] as usize),
+        (CLOCK, TRACKS, ops.len() - 6)
+    );
+    let held = ops[6..].to_vec();
     assert!(!p.needs_animation_frame(), "the reader plays it");
     // A track is 11 words and 3 a sample, its value the second: opacity,
     // then the offset's x and y, then the scale.
@@ -378,10 +392,19 @@ fn the_reader_plays_a_moving_ripple() {
     let from = [value(&held, 1, 0), value(&held, 2, 0)];
     let touch = [20. - card.2 / 2., 60. - card.3 / 2.];
     assert_eq!(from, touch, "it starts at the touch, from the middle");
+    // A paint while it is held: its words are neither encoded nor sent again.
+    let encoded = p.brush.ripples.tracks(key).unwrap().as_ptr();
+    p.clock(1200.);
+    p.frame();
+    let again = p.brush.ripples.tracks(key).unwrap().as_ptr();
+    assert_eq!(again, encoded, "encoded once");
+    assert!(sent(&p).is_empty(), "and sent once");
     p.clock(11_000.);
     p.pointer_up(at.0, at.1, 11_000.).unwrap();
     p.frame();
-    let released = p.brush.ripples.tracks(key).cloned().expect("its tracks");
+    let ops = sent(&p);
+    assert_eq!((ops[0], ops[2] as usize), (TRACKS, ops.len() - 3));
+    let released = ops[3..].to_vec();
     assert_ne!(released, held, "the release sends the exit");
     assert!(released.len() < held.len(), "only the exit is sampled");
     let rest = [0, 1, 2, 3].map(|track| value(&released, track, 0));
