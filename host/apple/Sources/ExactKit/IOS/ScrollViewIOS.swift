@@ -94,11 +94,17 @@ package class ScrollView: UIScrollView {
     /// tab bar's inset reaches a grid after it opened at its newest row
     /// (r25's photos, at launch and as a viewer closes), and kept, the
     /// offset left that row under the bar.
+    /// The kept insets move once Exact's own writes to a controller above settle (LLP 1123 D11), so
+    /// the list compares the insets from before the writes with the settled ones, not a step's.
     package override func adjustedContentInsetDidChange() {
-        let was = keptInset
-        keptInset = adjustedContentInset
         super.adjustedContentInsetDidChange()
         setNeedsLayout()
+        SafeAreaSteps.react(self) { [weak self] in self?.insetsSettled() }
+    }
+
+    private func insetsSettled() {
+        let was = keptInset
+        keptInset = adjustedContentInset
         // the port is a `scroll` event's (`clientHeight`): one that changes without moving
         // the offset gets no `scrollViewDidScroll`, so its event is sent from here.
         (superview as? NodeView)?.queueScrollEvent()

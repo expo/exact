@@ -379,7 +379,7 @@ fn a_report_is_refused_whole() {
             ],
         },
         controller(1, f32::NAN),
-        controller(1, -1.0),
+        controller(1, f32::INFINITY),
         NativeTargets {
             chain: vec![older],
             relations: Vec::new(),
@@ -707,3 +707,28 @@ mod segments;
 
 #[path = "owner_update_tests.rs"]
 mod owner_update;
+
+#[test]
+fn a_negative_raw_inset_is_taken_and_a_padding_reads_it_clamped_at_0() {
+    // UIKit gives a window's root a negative inset under a negative addition past its insets:
+    // the report is taken, and a padding that reads it is 0, as a negative `calc()` is
+    let mut ops = create(3..=4);
+    ops.push(reads(3, Target::Kind(Kind::Owner)));
+    ops.push(style(
+        4,
+        vec![(
+            StyleId::MarginTop,
+            observe(Target::Kind(Kind::Owner), Edge::Top, Some(7.0)),
+        )],
+        &[(StyleId::Height, "10")],
+    ));
+    ops.extend([children(1, &[2]), children(2, &[3, 4])]);
+    let mut k = owner(390.0, 844.0, ops);
+    lay_out(&mut k);
+    assert!(k.set_owner_targets(2, controller(1, -40.0)).is_ok());
+    lay_out(&mut k);
+    assert_eq!(top(&k, 3), 0.0);
+    // A margin may be negative, so it reads the raw inset
+    let margin = k.node(4).unwrap().frame.y - k.node(3).unwrap().frame.height;
+    assert_eq!(margin, -40.0);
+}
