@@ -219,3 +219,49 @@ fn an_owner_update_with_one_bad_field_changes_nothing() {
         assert!(!held.segments.contains_key(&slot), "{field}");
     }
 }
+
+#[test]
+fn a_registration_round_trips_and_a_malformed_one_is_refused() {
+    use crate::kernel::{decode_registration, encode_registration};
+    let target = native(7, 12.0);
+    let bytes = encode_registration("map", Some(&target));
+    assert_eq!(
+        decode_registration(&bytes),
+        Ok(("map".into(), Some(target)))
+    );
+    assert_eq!(
+        decode_registration(&encode_registration("map", None)),
+        Ok(("map".into(), None))
+    );
+    for n in 0..bytes.len() {
+        assert!(
+            decode_registration(&bytes[..n]).is_err(),
+            "{n} of {} bytes",
+            bytes.len()
+        );
+    }
+    assert!(decode_registration(&[bytes, vec![0]].concat()).is_err());
+}
+
+#[test]
+fn a_registrations_wire_form_is_the_one_hosts_write() {
+    use crate::kernel::encode_registration;
+    // The name's length and bytes, then the target after a presence byte: its id, its
+    // generation and its insets after their own
+    let target = NativeTarget {
+        id: 9,
+        generation: 2,
+        insets: Some([30.0, 0.0, 0.0, 0.0]),
+    };
+    let mut w = vec![3];
+    w.extend(b"map");
+    w.push(1);
+    w.extend(9u64.to_le_bytes());
+    w.extend(2u64.to_le_bytes());
+    w.push(1);
+    [30.0f32, 0.0, 0.0, 0.0]
+        .iter()
+        .for_each(|v| w.extend(v.to_le_bytes()));
+    assert_eq!(encode_registration("map", Some(&target)), w);
+    assert_eq!(encode_registration("map", None), [3, b'm', b'a', b'p', 0]);
+}

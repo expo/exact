@@ -60,7 +60,7 @@ fn horizontal_padding_and_native_card_margins_each_reduce_the_row_once() {
                         &[],
                         &[],
                         &[],
-                        Vec::new(),
+                        exact_apple::host::OwnerReports::default(),
                     );
                     let batch: serde_json::Value = serde_json::from_str(&batch).unwrap();
                     assert!(batch["error"].is_null(), "{batch}");

@@ -134,6 +134,26 @@ impl Kernel {
         Ok(!readers.is_empty())
     }
 
+    /// Why [`Kernel::set_registered_target`] would refuse registering
+    /// `target` under `name`, or its removal (`None`), changing nothing.
+    pub fn check_registered_target(
+        &self,
+        name: &str,
+        target: Option<&NativeTarget>,
+    ) -> Result<(), KernelError> {
+        if !targets::valid_name(name) {
+            return Err(LayoutError::NativeTarget(
+                "a registered name must be ASCII lowercase letters, digits and inner hyphens, at most 64; rename the target",
+            )
+            .into());
+        }
+        let last = self.arena.observations.targets.registered.get(name);
+        match target.and_then(|t| targets::registration_refusal(t, last)) {
+            Some(why) => Err(LayoutError::NativeTarget(why).into()),
+            None => Ok(()),
+        }
+    }
+
     /// Register a native target for the session under `name`, which
     /// `--exact-target-<name>-safe-area-inset-*` reads anywhere (LLP 1123
     /// D9, "Registration"), or remove it (`None`). Returns whether a layout
@@ -147,18 +167,14 @@ impl Kernel {
         name: &str,
         target: Option<NativeTarget>,
     ) -> Result<bool, KernelError> {
-        if !targets::valid_name(name) {
-            return Err(LayoutError::NativeTarget(
-                "a registered name must be ASCII lowercase letters, digits and inner hyphens, at most 64; rename the target",
-            )
-            .into());
-        }
-        let registered = &self.arena.observations.targets.registered;
-        let last = registered.get(name).copied();
-        let refusal = target.and_then(|t| targets::registration_refusal(&t, last.as_ref()));
-        if let Some(why) = refusal {
-            return Err(LayoutError::NativeTarget(why).into());
-        }
+        self.check_registered_target(name, target.as_ref())?;
+        let last = self
+            .arena
+            .observations
+            .targets
+            .registered
+            .get(name)
+            .copied();
         // Keep a removed registration, unavailable, for its generation
         let Some(next) = target.or(last.map(|l| NativeTarget { insets: None, ..l })) else {
             return Ok(false);

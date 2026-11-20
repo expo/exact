@@ -220,7 +220,7 @@ impl<D: DataSource> Host<D> {
             keyboard,
             blocks,
             placements,
-            Vec::new(),
+            crate::host::OwnerReports::default(),
             None,
         )
     }
@@ -238,7 +238,7 @@ impl<D: DataSource> Host<D> {
         keyboard: Option<f32>,
         blocks: &[(exact_kernel::ViewId, Option<exact_kernel::HostBlock>)],
         placements: &[(exact_kernel::ViewId, Option<exact_runner::BlockPlacement>)],
-        updates: Vec<(exact_kernel::ViewId, exact_kernel::OwnerUpdate)>,
+        owners: crate::host::OwnerReports,
         now_ms: Option<f64>,
     ) -> String {
         let keyboard = keyboard.map(f64::from);
@@ -279,7 +279,7 @@ impl<D: DataSource> Host<D> {
                 return self.finish(Batch::new(), Some("view: segments off the grid".into()));
             }
         }
-        if let Some(why) = self.refused_update(&updates) {
+        if let Some(why) = self.refused_report(&owners) {
             return self.finish(Batch::new(), Some(why));
         }
         let (mut batch, error) = if size.is_some() {
@@ -290,7 +290,10 @@ impl<D: DataSource> Host<D> {
         } else {
             (Batch::new(), None)
         };
-        let (blocked, owed) = self.blocks_into(blocks, placements, updates);
+        // A refusal past here keeps the blocks and reports applied: only the
+        // environment's change and the viewport's geometry can still refuse,
+        // each checked above for what it can refuse alone
+        let (blocked, owed) = self.blocks_into(blocks, placements, owners);
         let error = error.or(blocked);
         let changed = self.environment_into(env, segments, &mut batch);
         if let Err(error) = changed {

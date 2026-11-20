@@ -458,5 +458,18 @@ final class ResetGateTests: XCTestCase {
         XCTAssertEqual(replays.first, .fit)
         until("the runtime lays out at the new size after the replay") { width() == 320 }
     }
+
+    #if os(iOS)
+    /// A registration the teardown disposes of, its report held: dropped, as a restart's new kernel holds no
+    /// registration and is told every live one when the new tree is in (LLP 1123 D9).
+    func testARegistrationTheResetDisposesOfIsDropped() throws {
+        let (session, _) = try boot()
+        var target: ExactNativeTarget? = try ExactNativeTarget.register(name: "map", view: UIView(), in: session)
+        XCTAssertNotNil(target)
+        let (held, replays, _) = held(session) { target = nil }
+        XCTAssertEqual(held.filter { $0.hasPrefix("ownerReports") }, ["ownerReports(updates:registrations:)"], "\(held)")
+        XCTAssertEqual(replays, [])
+    }
+    #endif
 }
 #endif

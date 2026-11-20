@@ -42,7 +42,7 @@ fn drag(host: &mut Host<NoData>, id: &str, size: [Option<f32>; 2]) -> (f32, f32)
         &[],
         &[(view, Restyle::Size(size))],
         &[],
-        Vec::new(),
+        exact_apple::host::OwnerReports::default(),
     );
     let batch: serde_json::Value = serde_json::from_str(&batch).unwrap();
     assert!(batch["error"].is_null(), "{id}: {batch}");

@@ -60,7 +60,7 @@ pub(crate) use cover::{
 pub use cover::{credited_edges, HostCover};
 pub use keyboard::{Keyboard, KeyboardPolicy};
 pub use margins::OwnerMargins;
-pub use owner_update::OwnerUpdate;
+pub use owner_update::{decode_registration, encode_registration, OwnerUpdate};
 pub use provenance::{Contribution, Operation};
 pub use sticky::StickyConstraint;
 pub use table::TablePlace;

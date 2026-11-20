@@ -340,6 +340,10 @@ public final class ExactSession {
     /// removal when the session is made, so a process that exits removes it too (AgentPasteboard.swift).
     let agentPasteboard: String?
     public weak var delegate: ExactSessionDelegate?
+    /// The targets native code registered by name (LLP 1123 D9), each held weakly, and the last generation one
+    /// took, which no later registration of any name falls below (`ExactNativeTarget`).
+    let nativeTargets = NSMapTable<NSString, AnyObject>.strongToWeakObjects()
+    var nativeTargetGeneration: UInt64 = 0
     public private(set) var state: State = .created {
         didSet { if state != oldValue { let changed = state; app.deliver { [weak self] in guard let self else { return }; delegate?.exactSession(self, didChange: changed) } } }
     }
@@ -1408,7 +1412,13 @@ public final class ExactSession {
     var pendingViewDark: [(UInt32, Bool)] = []
     var colorsOwed = false
     fileprivate(set) var awaitingTree = false // committed to a new runner whose tree is not in: a report would reach the old views
-    private func treeIsIn() { awaitingTree = false; replayHeld(); if colorsOwed { colorsOwed = false; reportColors() } } // only the replacement batch, not a reset's cleanup
+    private func treeIsIn() { awaitingTree = false; replayHeld(); reportNativeTargets(); if colorsOwed { colorsOwed = false; reportColors() } } // only the replacement batch, not a reset's cleanup
+    /// A boot's or a restart's new kernel holds no registered target: tell it every live one (LLP 1123 D9).
+    private func reportNativeTargets() {
+        #if os(iOS)
+        if booted { ExactNativeTarget.reportAll(in: self) }
+        #endif
+    }
     /// Nodes awaiting the session's or their own appearance report.
     var unreported = Set<UInt32>()
     /// A new runtime has heard no view's appearance: forget what was said,
