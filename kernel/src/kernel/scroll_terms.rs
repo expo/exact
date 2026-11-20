@@ -1,10 +1,11 @@
 //! A scroller's terms for its host's one writer (LLP 1123 D13, D14): on each edge, how far its
 //! native view reaches past its laid-out box, and, measured from that reached edge, the depth
 //! of what Exact reserves there and of the keyboard it takes, with whether it observes the
-//! container region there. The writer takes the larger of the container and keyboard terms the
-//! scroller observes, the container's being `reserved` where Exact reserves and the scroller's
-//! native band elsewhere, and writes it less the platform's adjustment, at least 0 where it
-//! observes the container region and Exact reserves nothing (D14).
+//! container region there and whether the band reaches it. The writer takes the larger of the
+//! container and keyboard terms the scroller observes, the container's being `reserved` where
+//! Exact reserves and elsewhere the scroller's native band where the band reaches it, and writes
+//! it less the platform's adjustment, at least 0 where it observes the container region, Exact
+//! reserves nothing and the band reaches it (D14).
 use super::area::{self, Space};
 use super::block::reservation;
 use super::{block, ignore, keyboard};
@@ -31,6 +32,13 @@ pub struct ScrollTerms {
     /// D14's `keyboard` term: under `resizes-visual`, the docked keyboard's overlap with the
     /// reached box on the bottom edge, where the scroller takes it (D7); 0 elsewhere.
     pub keyboard: [f32; 4],
+    /// Whether the band of its space, its owner's or the session's, reaches it on each edge past
+    /// every scroller between it and its layout's root, the root included (D9). A scroller above
+    /// takes the band on each edge except one it ignores where its box reaches the area, as UIKit
+    /// gives a scroll view's content none of an edge it adjusts. Where it is false the band is no
+    /// term, and the writer cancels the platform's adjustment there. False on every edge while
+    /// the band is unavailable.
+    pub band_reaches: [bool; 4],
     /// Whether it observes the container region on each edge, which with `reserved` picks D14's
     /// equation there; an owner's root observes its own reservations on an edge it takes, as D4
     /// applies them after its ignore.
@@ -68,6 +76,7 @@ fn terms(arena: &NodeArena, slot: u32, space: &Space) -> ScrollTerms {
             ..Default::default()
         };
     };
+    let band_reaches = area::open_edges(arena, slot, space, band);
     let (mut sides, mut reserving) = area::area_reserving(arena, slot, space, band);
     // Take what its host clears as the area of an owner's root that reserves, as a controller's
     // view lies under its own additional insets
@@ -104,6 +113,7 @@ fn terms(arena: &NodeArena, slot: u32, space: &Space) -> ScrollTerms {
         reach,
         reserved,
         keyboard,
+        band_reaches,
         container,
     }
 }

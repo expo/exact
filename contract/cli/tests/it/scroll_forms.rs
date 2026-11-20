@@ -281,3 +281,28 @@ fn vocab_prints_each_forms_grammar_under_its_rows() {
         );
     }
 }
+
+#[test]
+fn a_scrollers_node_reply_carries_its_terms() {
+    // @ref LLP 1123 D13, D14 — a document under the session's 47-point top band, padded clear of
+    // it: its scroller, at the band's inner side, reaches it and observes the container region
+    let source = "component A\n  view\n    column\n      column padding-top=47\n        column testId=\"list\" overflow-y=\"scroll\" height=300\n          text \"a\"\n      column testId=\"plain\"\n";
+    let mut r = boot(source);
+    let root = r.roots()[0];
+    let k = r.kernel_mut();
+    k.set_session_band([47.0, 0.0, 34.0, 0.0]).unwrap();
+    k.compute_layout(root, exact_kernel::Offer::definite(390.0, 844.0))
+        .unwrap();
+    let id = |r: &Runner<NoData>, t: &str| {
+        r.kernel()
+            .node_by_key(r.kernel().find_by_test_id(t)[0])
+            .unwrap()
+            .id
+    };
+    let list = exact_runner::agent::node(&r, id(&r, "list"));
+    assert!(
+        list.contains("\"scrollTerms\":{\"reach\":[47,0,0,0],\"reserved\":[null,null,null,null],\"keyboard\":[0,0,0,0],\"bandReaches\":[true,true,true,true],\"container\":[true,true,true,true]}"),
+        "{list}"
+    );
+    assert!(!exact_runner::agent::node(&r, id(&r, "plain")).contains("scrollTerms"));
+}

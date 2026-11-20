@@ -86,7 +86,7 @@ package class ScrollView: UIScrollView {
             presenter.moveOrPlace(node) { super.bounds = newValue }
         }
     }
-    /// The insets the offset was last kept under (`adjustedContentInsetDidChange`).
+    /// The insets the offset was last kept under (`insetsSettled`, or D14's writer through `kept(under:)`).
     private var keptInset = UIEdgeInsets.zero
     /// A list that opens at its end (`scroll-start: end`) or follows it, at
     /// its end, stays there as its insets change, as SwiftUI's
@@ -103,18 +103,28 @@ package class ScrollView: UIScrollView {
     }
 
     private func insetsSettled() {
-        let was = keptInset
+        let atEnd = restsAtEnd, was = keptInset
         keptInset = adjustedContentInset
         // the port is a `scroll` event's (`clientHeight`): one that changes without moving
         // the offset gets no `scrollViewDidScroll`, so its event is sent from here.
         (superview as? NodeView)?.queueScrollEvent()
-        guard let node = superview as? NodeView, node.props["scrollStart"] == "end" || node.props["scrollFollowEnd"] == "true",
-              node.presenter?.collections.snapshot(node.id)?.horizontal != true,
-              !isTracking, !isDecelerating, contentSize.height > 0, !node.authorOwnsScroll(self) else { return }
-        let end = { (inset: UIEdgeInsets) in max(-inset.top, self.contentSize.height + inset.bottom - self.bounds.height) }
-        guard contentOffset.y >= end(was) - 1, was.bottom != keptInset.bottom else { return }
-        contentOffset = PixelGrid.offset(CGPoint(x: contentOffset.x, y: end(keptInset)), in: self)
+        guard atEnd, !isTracking, !isDecelerating, was.bottom != keptInset.bottom else { return }
+        contentOffset = PixelGrid.offset(CGPoint(x: contentOffset.x, y: end(under: keptInset)), in: self)
     }
+    /// Whether it keeps its end as its insets change (`adjustedContentInsetDidChange`, and D14's writer, which moves
+    /// the offset itself): a list that opens at its end or follows it, with content, not a horizontal collection, and
+    /// not one whose author owns its scroll position.
+    package var keepsEnd: Bool {
+        guard let node = superview as? NodeView, node.props["scrollStart"] == "end" || node.props["scrollFollowEnd"] == "true" else { return false }
+        return node.presenter?.collections.snapshot(node.id)?.horizontal != true && contentSize.height > 0 && !node.authorOwnsScroll(self)
+    }
+    /// The offset at which its content's end rests under `inset`.
+    package func end(under inset: UIEdgeInsets) -> CGFloat { max(-inset.top, contentSize.height + inset.bottom - bounds.height) }
+    /// Whether it keeps its end and rests there under the insets its offset was last kept under.
+    package var restsAtEnd: Bool { keepsEnd && contentOffset.y >= end(under: keptInset) - 1 }
+    /// Records that its offset is kept under `inset`, as D14's writer keeps it, so the reaction to
+    /// the writer's insets keeps nothing again.
+    package func kept(under inset: UIEdgeInsets) { keptInset = inset }
     package override var accessibilityElements: [Any]? {
         get {
             super.accessibilityElements ?? scrollingNode?.presenter?.navigation.lifted?.accessibilityElements(of: self)
