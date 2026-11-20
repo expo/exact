@@ -205,8 +205,12 @@ extension NodeView {
     /// the content back where layout put it, and clamps the offset to the range they make; so
     /// activation applies reach first and the writer after it, as reach grows and as it shrinks.
     package func setReach(_ reach: UIEdgeInsets) {
+        let changed = !reachGiven || reach != self.reach
+        if !reachGiven { more.reachGiven = true }
         // The scroller's frame and offset move as one: inside an animation UIKit has open, only if the last frame showed it
         moveOrPlace { reachScroll(reach) }
+        // A grouped list's geometry, its cards' margins and side safe area among it, follows a new answer now, not at its next batch
+        if changed, groupedOwner { presenter?.groupedLists?.geometryChanged(id) }
     }
     private func reachScroll(_ reach: UIEdgeInsets) {
         guard let sv = scrollView, reach != self.reach else { return }

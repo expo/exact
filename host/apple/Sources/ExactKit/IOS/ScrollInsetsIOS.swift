@@ -2,6 +2,14 @@
 import ExactCore
 import UIKit
 
+/// A native scroll view whose own layout clears some depth of the occupied region on some edges, top right bottom
+/// left, as a grouped list insets its cards from the side safe area its layout uses (LLP 1123 D9: each native scroll
+/// view an owner hosts reports the band it consumes). D14's writer writes the occupied depth less that there, and the
+/// indicators, which the layout does not move, the whole of it.
+package protocol BandConsumer: AnyObject {
+    var consumedBand: [CGFloat] { get }
+}
+
 /// D14's one writer of a scroller's content and indicator insets (LLP 1123): the kernel's terms
 /// (`Kernel::scroll_terms`), the scroller's authored rows and its held terms, with the band and
 /// the adjustment UIKit gives, written as one `contentInset` and two indicator insets. On each
@@ -12,8 +20,9 @@ import UIKit
 /// Where Exact reserves, the band does not reach the scroller, or the scroller ignores the
 /// container region, it adds the occupied depth less *P* whatever its sign, so a negative inset
 /// inside the root reaches the scroller, a scroller under another takes none of the band that one
-/// took, and an ignored region cancels *P*. Activation (stage 5) writes every scroller through it;
-/// until then only its tests do.
+/// took, and an ignored region cancels *P*. On an edge a native scroll view's own layout consumes
+/// (`BandConsumer`), it adds the occupied depth less what that layout clears, less *P*. Activation
+/// (stage 5) writes every scroller through it; until then only its tests do.
 package struct ScrollInsetsIOS: Equatable {
     package var content: UIEdgeInsets
     package var verticalIndicator: UIEdgeInsets
@@ -41,7 +50,8 @@ package struct ScrollInsetsIOS: Equatable {
             let adjusted = scroll.adjustedContentInset, inset = scroll.contentInset
             let platform = edges(UIEdgeInsets(top: adjusted.top - inset.top, left: adjusted.left - inset.left,
                                               bottom: adjusted.bottom - inset.bottom, right: adjusted.right - inset.right))
-            let next = insets(terms: terms, rows: rows, held: held, band: band(of: scroll, in: owner), platform: platform)
+            let consumed = (scroll as? BandConsumer)?.consumedBand ?? [0, 0, 0, 0]
+            let next = insets(terms: terms, rows: rows, held: held, band: band(of: scroll, in: owner), platform: platform, consumed: consumed)
             let half = 0.5 / max(scroll.traitCollection.displayScale, 1)
             if !near(inset, next.content, half) { scroll.contentInset = next.content }
             if !near(scroll.verticalScrollIndicatorInsets, next.verticalIndicator, half) {
@@ -57,18 +67,21 @@ package struct ScrollInsetsIOS: Equatable {
         }
     }
 
-    /// D14's insets from the terms, the rows and the held terms, with the scroller's native `band`
-    /// and UIKit's adjustment `platform` (`adjustedContentInset − contentInset`), each top right
-    /// bottom left.
+    /// D14's insets from the terms, the rows and the held terms, with the scroller's native `band`,
+    /// UIKit's adjustment `platform` (`adjustedContentInset − contentInset`) and the depth a native
+    /// list's layout clears itself, `consumed` (`BandConsumer`), each top right bottom left.
     package static func insets(terms: Terms, rows: Rows, held: [CGFloat] = [0, 0, 0, 0], band: [CGFloat],
-                               platform: [CGFloat]) -> ScrollInsetsIOS {
+                               platform: [CGFloat], consumed: [CGFloat] = [0, 0, 0, 0]) -> ScrollInsetsIOS {
         var content = [CGFloat](repeating: 0, count: 4), occupied = content
         for e in 0..<4 {
             let reaches = terms.bandReaches[e]
             let container = terms.container[e] ? terms.reserved[e] ?? (reaches ? band[e] : 0) : 0
             occupied[e] = max(container, terms.keyboard[e], 0)
-            let past = occupied[e] - platform[e]
-            let clamped = terms.container[e] && terms.reserved[e] == nil && reaches
+            // What the layout clears of an observed region is not the writer's, and UIKit's adjustment over it is
+            // cancelled, unclamped; an inset cannot undo what it clears of an ignored one, which it is to clear none of,
+            // nor what it clears past a shallower reservation, which it is to clear no more than
+            let past = occupied[e] - (terms.container[e] ? consumed[e] : 0) - platform[e]
+            let clamped = terms.container[e] && terms.reserved[e] == nil && reaches && consumed[e] == 0
             content[e] = rows.authored[e] + held[e] + (clamped ? max(0, past) : past)
         }
         let follow = { (authored: [CGFloat]) in (0..<4).map { authored[$0] + (rows.indicatorsFollow ? occupied[$0] : 0) } }

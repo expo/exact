@@ -3,7 +3,7 @@ import ExactKit
 import UIKit
 
 /// A grouped list's collection view, by type, for the agent's wheel.
-final class GroupedCollectionView: UICollectionView, GroupedScroller {
+final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsumer {
     /// The offset, which UIKit itself also sets (keeping the list at its
     /// start as a safe area reaches it and insets it): inside an animation
     /// UIKit has open it moves only if the last frame showed the list's node,
@@ -23,9 +23,10 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller {
         super.adjustedContentInsetDidChange()
         owner?.scrollInsetMoved(self)
     }
-    /// The safe area at the sides the collection reaches over (`sideReach`):
-    /// the window's, which the host keeps from the views it lays out (LLP
-    /// 1123), or a fold's half band. UIKit insets the cards from it, as in a
+    /// The safe area at the sides the collection reaches over: the kernel's
+    /// side reach once it has given one (LLP 1123 D13), else the list's own
+    /// (`sideReach`), the window's or a fold's half band. UIKit insets the
+    /// cards from it or its own safe area, whichever is deeper, as in a
     /// hand-built list.
     var sideSafeArea: (left: CGFloat, right: CGFloat) = (0, 0) {
         didSet {
@@ -34,6 +35,9 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller {
             collectionViewLayout.invalidateLayout()
         }
     }
+    /// The depth the cards are inset from on each side, the side safe area the layout uses (`safeAreaInsets`: UIKit's
+    /// or `sideSafeArea`, whichever is deeper), top right bottom left, which D14's writer leaves to the layout.
+    package var consumedBand: [CGFloat] { [0, safeAreaInsets.right, 0, safeAreaInsets.left] }
     override var safeAreaInsets: UIEdgeInsets {
         var insets = super.safeAreaInsets
         insets.left = max(insets.left, sideSafeArea.left)
