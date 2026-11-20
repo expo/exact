@@ -388,3 +388,37 @@ fn the_reader_plays_a_moving_ripple() {
     assert_eq!(rest, [1. - 0.1 / 0.6, 0., 0., 0.5], "from the wave at rest");
     assert!(!p.needs_animation_frame());
 }
+
+/// A release that puts the pressed card in a projective plane, where the
+/// recorder keeps no layer: the ripple is painted per frame from there, so
+/// it asks for the frames that end it.
+#[test]
+fn a_ripple_that_loses_its_layer_is_painted_again() {
+    if !material_process() {
+        return;
+    }
+    let mut p = boot_app(
+        r##"component App
+  state turned = false
+  action turn
+    turned = true
+  view
+    column width=400 height=600 background-color="#ffffff" perspective=400
+      column press=turn rotate=(turned ? "x 30deg" : "none") background-color="#ffffff" color="#000000" width=300 height=120 testId="card"
+"##,
+        false,
+    );
+    p.brush
+        .replace_backend(Box::new(crate::canvas::Recorder::new()));
+    p.host_mut().lowering = true;
+    let card = rect(&mut p, "card");
+    let at = (card.0 + 20., card.1 + 60.);
+    p.clock(1000.);
+    p.pointer_down(at.0, at.1, 1000.).unwrap();
+    p.frame();
+    assert!(!p.needs_animation_frame(), "the reader plays it");
+    p.clock(1100.);
+    p.pointer_up(at.0, at.1, 1100.).unwrap();
+    p.frame();
+    assert!(p.needs_animation_frame(), "the walk paints its exit");
+}

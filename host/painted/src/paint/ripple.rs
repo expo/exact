@@ -57,6 +57,8 @@ pub(crate) struct Ripple {
     drawn: bool,
     /// The reader plays it: it asks for no frames.
     played: bool,
+    /// The paint recorded its layer.
+    layered: bool,
 }
 
 impl Ripple {
@@ -69,6 +71,7 @@ impl Ripple {
             released: None,
             drawn: false,
             played: false,
+            layered: false,
         }
     }
 
@@ -309,8 +312,15 @@ impl Ripples {
     /// draw, whose node left the tree or no longer shows, as the platform's
     /// ripple goes with its view.
     pub(super) fn painted(&mut self, now: f64, still: bool) {
-        self.live
-            .retain(|_, (_, r)| !r.gone(now, still) && std::mem::take(&mut r.drawn));
+        let reader = self.reader;
+        self.live.retain(|_, (_, r)| {
+            // One whose layer this paint did not record (a recorder keeps
+            // none inside a projective plane) is painted per frame again.
+            if reader {
+                r.played = std::mem::take(&mut r.layered);
+            }
+            !r.gone(now, still) && std::mem::take(&mut r.drawn)
+        });
         let live = &self.live;
         self.tracks
             .retain(|key, _| live.values().any(|(k, _)| k == key));
@@ -486,7 +496,7 @@ impl Painter {
         let words = crate::host::lower::ripple_words(start, span / 1000.0, &samples);
         self.ripples.tracks.insert(node.key, words);
         if let Some((_, live)) = self.ripples.live.get_mut(&node.id) {
-            (live.drawn, live.played) = (true, true);
+            (live.drawn, live.layered) = (true, true);
         }
         true
     }
