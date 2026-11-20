@@ -20,12 +20,15 @@ use crate::Outcome;
 use exact_plan::Value;
 
 /// The re-ask being committed: its resource, the re-asks its streak has made
-/// with it, and its arguments; and whether the reply being landed was refused
-/// by its own turn over its budget.
+/// with it, and its arguments; whether the reply being landed was refused
+/// by its own turn over its budget; and whether that reply answers the
+/// launch's own ask, which a refresh in its turn ends (`force_refresh`), as
+/// it ends a pending request's.
 #[derive(Default)]
 pub(super) struct Overrun {
     pub(super) reasking: Option<(usize, usize, Vec<Value>)>,
     pub(super) replied: bool,
+    pub(super) launch: bool,
 }
 
 /// How long after each refusal the resource is asked again: spaced, so a spike

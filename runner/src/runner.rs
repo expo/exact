@@ -325,7 +325,10 @@ struct PendingReq {
     replied: bool,
     /// Never sent: when a resource an overrun refused is asked again (`overrun.rs`).
     reask_at: Option<f64>,
-    /// The wait is for the launch's own ask, so its re-ask is the launch's too.
+    /// The launch's own ask (its target was in `Runner::launch` when asked),
+    /// and what its replies ask for next: a wait for it, at the ask or after
+    /// its reply's turn over its budget, asks again as the launch's. A refresh
+    /// clears it (`force_refresh`).
     launch: bool,
     /// The re-asks after a turn over its budget this ask's streak has made.
     reasks: usize,

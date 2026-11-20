@@ -284,6 +284,7 @@ impl<D: DataSource> Runner<D> {
         if self.poisoned {
             return Err(RunnerError::Poisoned);
         }
+        self.overrun.launch = p.launch;
         let name = self.target_name(p.target);
         let turn = std::mem::take(&mut self.mapper_turns.landing);
         let message = p.stream.is_some() && !outcome.messages().is_empty();
@@ -441,16 +442,19 @@ impl<D: DataSource> Runner<D> {
                             p.args.clone(),
                             request,
                             false,
+                            false,
                         );
                     }
                 }
                 self.continue_answer(&p);
-                if p.upload {
-                    for next in self
-                        .pending
-                        .iter_mut()
-                        .filter(|n| n.ticket >= ticket && n.target == p.target)
-                    {
+                // What a reply asks for next is part of its ask: the launch's
+                // while the replied ask is (LLP 1162.000 D1)
+                let launch = self.overrun.launch;
+                for next in
+                    (self.pending.iter_mut()).filter(|n| n.ticket >= ticket && n.target == p.target)
+                {
+                    next.launch = launch;
+                    if p.upload {
                         self.uploads
                             .continue_at(p.ticket, next, p.sent || !failed_end);
                     }
