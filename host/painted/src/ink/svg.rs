@@ -1,6 +1,6 @@
 use super::*;
 use crate::paint::{Ink as Paint, SvgPaint};
-use exact_ink::instance::{Clip, CoverageClip};
+use exact_ink::instance::Clip;
 
 pub(super) fn svg_path(path: &exact_kernel::svg::Path) -> Option<Path> {
     let mut b = PathBuilder::new();
@@ -142,11 +142,7 @@ impl Ink {
         coverage: exact_ink::path::Coverage,
         transformed: bool,
     ) -> Result<()> {
-        let clip = CoverageClip {
-            texture: coverage.entry.texture,
-            rect: coverage.rect,
-            uv: coverage.entry.uv,
-        };
+        let clip = super::clips::mask_clip(coverage);
         if !transformed {
             if self.encoder.push_clip(Clip::Coverage(clip)).is_ok() {
                 self.clips.push(());
