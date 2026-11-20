@@ -483,7 +483,7 @@ pages.forEach(page => {
 
 const nav = {
   year: `${new Date().getUTCFullYear()}`,
-  shareImage: ORIGIN ? `${ORIGIN}/assets/og-image.png` : '',
+  shareImage: ORIGIN ? ORIGIN + site.shareImage : '',
   agentIntro: AGENT_INTRO,
   startPrompt: START_PROMPT,
   startLabel: 'docs/start-here.md',
