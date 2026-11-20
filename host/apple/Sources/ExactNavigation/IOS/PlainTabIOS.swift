@@ -89,10 +89,10 @@ extension NavigationHost {
     func tabStack(_ index: Int) -> UIViewController? { tabPanels.indices.contains(index) ? tabStacks[tabPanels[index]] : nil }
 
     /// Where UIKit holds each tab's routes, in tab order (`routesStack`), or
-    /// the one stack of a root without tabs.
+    /// the one stack of a root without tabs: a split's two columns.
     var primaryStacks: [UIViewController] {
         if let bootOwner { return [bootOwner] }
-        guard !tabPanels.isEmpty else { return [primaryNavigation].compactMap { $0 } }
+        guard !tabPanels.isEmpty else { return [primaryNavigation, split?.detail].compactMap { $0 } }
         let held = moreTab
         return tabPanels.indices.compactMap { $0 == held ? more : tabStack($0) }
     }

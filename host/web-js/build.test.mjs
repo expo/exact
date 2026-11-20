@@ -668,17 +668,33 @@ test('web-build --json reports the trust the JS target built under, not the envi
   const dir = realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-json-trust-')));
   try {
     writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Trust', app: { id: 'test.exact.trust', name: 'Trust' }, rust: false }));
-    writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    text "hello"\n');
+    const children = ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth'];
+    writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    column\n' + children.map(name => `      ${name}()\n`).join('')
+      + children.map(name => `component ${name}\n  view\n    text "${name} 😀"\n`).join(''));
+    let stdout;
     const build = (...args) => {
       const r = spawnSync(process.execPath, ['host/web/build.mjs', 'trust', '--render', 'none', '--json', ...args], { cwd: root, env: { ...process.env, EXACT_APP_DIR: dir, EXACT_WEB_DIST: resolve(dir, 'target/web-dist'), EXACT_UPDATE_TRUST: 'production' }, encoding: 'utf8' });
       expect(r.status, r.stderr).toBe(0);
       // Run alone, the object is stdout's last line, after the build's own.
+      stdout = r.stdout;
       return JSON.parse(r.stdout.trim().split('\n').at(-1));
     };
     const development = build();
     expect(development).toEqual({ path: resolve(dir, 'target/web-dist'), target: 'web', trust: 'development' });
     expect(readdirSync(development.path).some((name) => name.startsWith('agent-')), 'a development page carries agent support').toBe(true);
-    expect(build('--out', resolve(dir, 'dist'))).toEqual({ path: resolve(dir, 'dist'), target: 'web', trust: 'production' });
+    const dist = resolve(dir, 'dist');
+    expect(build('--out', dist)).toEqual({ path: dist, target: 'web', trust: 'production' });
+    const entry = builtFile(dist, 'app.js'), bytes = readFileSync(resolve(dist, entry));
+    build('--out', dist, '--sizes');
+    expect(builtFile(dist, 'app.js')).toBe(entry);
+    expect(readFileSync(resolve(dist, entry)).equals(bytes)).toBe(true);
+    expect(readdirSync(dist, { recursive: true }).some(path => path.endsWith('.js.map'))).toBe(false);
+    const header = stdout.split('Contract VM bytecode by component')[1].split('Launch script')[0];
+    expect(header).toContain('across 7 components');
+    for (const name of ['App', ...children]) expect(header).toContain(` B  ${name} (1 instance)`);
+    const report = stdout.split('Minified bytes by source module\n')[1].split('\n').filter(line => /^  \d+ B  /.test(line));
+    expect(report.some(line => line.endsWith(' B  app.js'))).toBe(true);
+    expect(report.reduce((sum, line) => sum + parseInt(line), 0)).toBe(bytes.length);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

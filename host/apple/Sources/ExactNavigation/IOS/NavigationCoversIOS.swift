@@ -197,7 +197,9 @@ extension NavigationHost {
             // under More, and none on the tab bar.
             let search = searching(c)
             let barAbove = nav.map { c.parent is PlainTab ? !$0.isNavigationBarHidden : routeShowsBar(c, in: $0) } ?? false
-            let settled = c.surface.window != nil && (search || (nav?.isNavigationBarHidden ?? true) != barAbove)
+            // Nested in a split's list column, the detail's routes are under that column's bar (LLP 1127 §1, item 2)
+            let barNav = split.flatMap { $0.nested && nav === $0.detail ? $0.list : nil } ?? nav
+            let settled = c.surface.window != nil && (search || (barNav?.isNavigationBarHidden ?? true) != barAbove)
             // A route showing no bar has no title: its inset is the status bar's, none in landscape (LLP 1130 D3).
             let barless = !barAbove
             let topPeers = arrangementScrollers(in: c, top: true), bottomPeers = arrangementScrollers(in: c, top: false)
@@ -567,7 +569,8 @@ extension NavigationHost {
         // no hatch, so the `hatched` guard skips it
         for nav in allNavigations {
             guard let stack = stacks[ObjectIdentifier(nav)], stack.hatched else { continue }
-            if nav.transitionCoordinator == nil, !searching(nav.topViewController as? RouteController), nav.isNavigationBarHidden == topShowsBar(nav) { say("navigation \(stack.label)", "navigation bar visibility") }
+            // Nested, a split's detail column's bar is UIKit's to hide
+            if nav.transitionCoordinator == nil, split.map({ !$0.nested || nav !== $0.detail }) ?? true, !searching(nav.topViewController as? RouteController), nav.isNavigationBarHidden == topShowsBar(nav) { say("navigation \(stack.label)", "navigation bar visibility") }
             #if !os(tvOS)
             if let pop = nav.interactivePopGestureRecognizer, pop.delegate !== self { say("navigation \(stack.label)", "the pop gesture's delegate") }
             if #available(iOS 26.0, tvOS 26.0, *), let pop = nav.interactiveContentPopGestureRecognizer, pop.delegate !== self {

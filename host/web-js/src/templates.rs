@@ -37,8 +37,13 @@ struct Call {
 enum Part {
     Js(Box<str>),
     Site(u32),
+    /// The DOM parent at which a frame mounts its caller's children.
+    Slot(Box<str>),
     Value(Value),
-    GetterArgs { shared: bool, pc: Value },
+    GetterArgs {
+        shared: bool,
+        pc: Value,
+    },
     Call(Call),
 }
 
@@ -132,7 +137,9 @@ impl Templates {
                 result.push(Part::Js(js.into()));
             }
             if let Some(op) = slices.next() {
-                result.push(if let Some(site) = op.strip_prefix('s') {
+                result.push(if let Some(parent) = op.strip_prefix("slot:") {
+                    Part::Slot(parent.into())
+                } else if let Some(site) = op.strip_prefix('s') {
                     Part::Site(site.parse().expect("site"))
                 } else if let Some(js) = op.strip_prefix("v:") {
                     Part::Value(Value::Js(js.into()))
@@ -358,6 +365,14 @@ impl Templates {
     }
 }
 
+/// Slot operands and diagnostic sites resolve in the caller, including when the frame is inlined.
+#[derive(Clone, Copy)]
+struct Slot<'a> {
+    call: &'a Call,
+    base: Base,
+    args: &'a [Value],
+}
+
 struct Render<'a> {
     templates: &'a Templates,
     names: &'a [Option<String>],
@@ -380,8 +395,26 @@ impl Render<'_> {
     }
 
     fn expand(&self, body: &[Part], base: Base, args: &[Value], out: &mut String) {
-        for part in body {
+        self.expand_with_slot(body, base, args, None, out);
+    }
+
+    fn expand_with_slot(
+        &self,
+        body: &[Part],
+        base: Base,
+        args: &[Value],
+        slot: Option<Slot<'_>>,
+        out: &mut String,
+    ) {
+        let mut parts = body.iter();
+        while let Some(part) = parts.next() {
             match part {
+                Part::Slot(parent) => match slot {
+                    Some(slot) => {
+                        self.call(slot.call, slot.base, slot.args, Some(parent), None, out)
+                    }
+                    None => write!(out, "$slot({parent});").unwrap(),
+                },
                 Part::Js(js) => out.push_str(js),
                 Part::Site(n) => out.push_str(&base.plus(*n).js()),
                 Part::Value(value) => out.push_str(&self.operand(value.resolve(args))),
@@ -397,57 +430,75 @@ impl Render<'_> {
                     out.push_str(&crate::code::getter_args(capture, *shared, pc));
                 }
                 Part::Call(call) => {
-                    let t = &self.templates.bodies[call.id];
-                    if let Some(name) = &self.names[call.id] {
-                        out.push_str(name);
-                        let mut inputs: Vec<_> =
-                            call.base.map(|n| base.plus(n).js()).into_iter().collect();
-                        let captures: Vec<_> = t
-                            .columns
-                            .iter()
-                            .enumerate()
-                            .filter(|(i, column)| column.fixed.is_none() && column.first == *i)
-                            .map(|(i, _)| self.operand(call.args[i].resolve(args)))
-                            .collect();
-                        if !captures.is_empty() {
-                            inputs.push(format!("[{}]", captures.join(",")));
-                        }
-                        if let Some(parent) = &call.parent {
-                            inputs.push(parent.to_string());
-                            let end = if call.takes_slot { "," } else { ");" };
-                            write!(out, "({}{end}", inputs.join(",")).unwrap();
-                        } else if t.params.is_none() {
-                            write!(out, "({})", inputs.join(",")).unwrap();
-                        } else if !inputs.is_empty() {
-                            write!(out, ".bind(null,{})", inputs.join(",")).unwrap();
-                        }
-                    } else {
-                        let values: Vec<_> =
-                            call.args.iter().map(|v| v.resolve(args).clone()).collect();
-                        let base = base.plus(call.base.unwrap_or(0));
-                        let Some(params) = &t.params else {
-                            self.expand(&t.body, base, &values, out);
-                            continue;
+                    let content = call.takes_slot.then(|| {
+                        let Some(Part::Call(content)) = parts.next() else {
+                            unreachable!("a slot frame takes a mount")
                         };
-                        if call.takes_slot {
-                            write!(out, "(({params})=>{{").unwrap();
-                            self.expand(&t.body, base, &values, out);
-                            write!(out, "}})({},", call.parent.as_deref().unwrap()).unwrap();
-                            continue;
+                        Slot {
+                            call: content,
+                            base,
+                            args,
                         }
-                        match call.parent.as_deref() {
-                            Some("p") => out.push('{'),
-                            // The parent can have the same local name as a child.
-                            Some(parent) => write!(out, "{{const p={parent};{{").unwrap(),
-                            None => write!(out, "({params})=>{{").unwrap(),
-                        }
-                        self.expand(&t.body, base, &values, out);
-                        out.push('}');
-                        if call.parent.as_deref().is_some_and(|p| p != "p") {
-                            out.push('}');
-                        }
-                    }
+                    });
+                    self.call(call, base, args, call.parent.as_deref(), content, out);
                 }
+            }
+        }
+    }
+
+    fn call(
+        &self,
+        call: &Call,
+        base: Base,
+        args: &[Value],
+        parent: Option<&str>,
+        slot: Option<Slot<'_>>,
+        out: &mut String,
+    ) {
+        let t = &self.templates.bodies[call.id];
+        if let Some(name) = &self.names[call.id] {
+            out.push_str(name);
+            let mut inputs: Vec<_> = call.base.map(|n| base.plus(n).js()).into_iter().collect();
+            let captures: Vec<_> = t
+                .columns
+                .iter()
+                .enumerate()
+                .filter(|(i, column)| column.fixed.is_none() && column.first == *i)
+                .map(|(i, _)| self.operand(call.args[i].resolve(args)))
+                .collect();
+            if !captures.is_empty() {
+                inputs.push(format!("[{}]", captures.join(",")));
+            }
+            if let Some(parent) = parent {
+                inputs.push(parent.to_string());
+                write!(out, "({}", inputs.join(",")).unwrap();
+                if let Some(slot) = slot {
+                    out.push(',');
+                    self.call(slot.call, slot.base, slot.args, None, None, out);
+                }
+                out.push_str(");");
+            } else if t.params.is_none() {
+                write!(out, "({})", inputs.join(",")).unwrap();
+            } else if !inputs.is_empty() {
+                write!(out, ".bind(null,{})", inputs.join(",")).unwrap();
+            }
+        } else {
+            let values: Vec<_> = call.args.iter().map(|v| v.resolve(args).clone()).collect();
+            let base = base.plus(call.base.unwrap_or(0));
+            let Some(params) = &t.params else {
+                self.expand(&t.body, base, &values, out);
+                return;
+            };
+            match parent {
+                Some("p") => out.push('{'),
+                // The parent can have the same local name as a child.
+                Some(parent) => write!(out, "{{const p={parent};{{").unwrap(),
+                None => write!(out, "({params})=>{{").unwrap(),
+            }
+            self.expand_with_slot(&t.body, base, &values, slot, out);
+            out.push('}');
+            if parent.is_some_and(|p| p != "p") {
+                out.push('}');
             }
         }
     }

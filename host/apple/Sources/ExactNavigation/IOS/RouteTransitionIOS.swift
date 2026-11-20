@@ -78,14 +78,14 @@ extension NavigationHost {
                          from: UIViewController, to: UIViewController) -> UIViewControllerAnimatedTransitioning? {
         switch operation {
         case .push:
-            guard let route = to as? RouteController,
+            guard let route = pushedRoute(to),
                   let part = presenter.session?.runtime.routePart(route.node.id, exit: false, size: nav.view.bounds.size) else { return nil }
             return RouteTransition(part: part, arriving: true)
         case .pop:
             #if os(iOS)
             if nav.interactivePopGestureRecognizer?.state == .began { return nil }
             #endif
-            guard let part = (from as? RouteController)?.exitPart else { return nil }
+            guard let part = pushedRoute(from)?.exitPart else { return nil }
             return RouteTransition(part: part, arriving: false)
         default:
             return nil
@@ -93,11 +93,14 @@ extension NavigationHost {
     }
 
     /// Keep the exit the top route of `routes` declares: the route is gone
-    /// from the tree by the time UIKit asks for the pop's animator.
+    /// from the tree by the time UIKit asks for the pop's animator. A
+    /// stack's first route is never popped, but for a split's detail column,
+    /// which a collapsed split pops off the list's.
     func keepExit(_ routes: [RouteController], in nav: UINavigationController?) {
         guard let top = routes.last else { return }
         let size = nav?.view.bounds.size ?? top.view.bounds.size
-        top.exitPart = routes.count > 1 ? presenter.session?.runtime.routePart(top.node.id, exit: true, size: size) : nil
+        let pops = routes.count > 1 || (nav != nil && nav === split?.detail)
+        top.exitPart = pops ? presenter.session?.runtime.routePart(top.node.id, exit: true, size: size) : nil
     }
 }
 #endif

@@ -496,6 +496,9 @@ test('cards with different slot contents share their frame and retain each row b
               text "Selected"
             else
               text "Waiting"
+          column aria-label="Row control"
+            row
+              button id press=choose(id)
 component Card
   slot
   view
@@ -505,14 +508,17 @@ component Card
       text "Footer"
 `, async (page, js) => {
     for (const fixed of ['"Shared card"', '"Header"', '"Footer"']) expect(js.split(fixed)).toHaveLength(2);
+    expect(js).not.toContain('((p,$slot)=>');
     const cards = page.getByLabel('Shared card');
     expect(await cards.allTextContents()).toEqual([
       'HeaderAliceFooter', 'HeaderChooseAliceFooter', 'HeaderWaitingFooter',
       'HeaderBobFooter', 'HeaderChooseBobFooter', 'HeaderWaitingFooter',
     ]);
-    await page.getByRole('button', { name: 'Bob' }).click();
+    await cards.nth(4).getByRole('button', { name: 'Bob' }).click();
     expect(await cards.nth(5).textContent()).toBe('HeaderSelectedFooter');
     expect(await cards.nth(2).textContent()).toBe('HeaderWaitingFooter');
+    await page.getByLabel('Row control').getByRole('button', { name: 'Alice' }).click();
+    expect(await cards.nth(2).textContent()).toBe('HeaderSelectedFooter');
   });
 }, 60000);
 

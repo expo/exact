@@ -1,6 +1,7 @@
 package dev.exact.reference
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
@@ -94,6 +95,16 @@ private fun Inline(id: String) {
         "tonal-button" -> FilledTonalButton(onClick = {}) { Text("Save") }
         "tonal-button-disabled" -> FilledTonalButton(onClick = {}, enabled = false) { Text("Save") }
         "text-button" -> TextButton(onClick = {}) { Text("Save") }
+        "filled-button-icon" -> Button(onClick = {}, contentPadding = ButtonDefaults.ButtonWithIconContentPadding) {
+            Icon(Icons.Filled.Add, contentDescription = null, Modifier.size(ButtonDefaults.IconSize))
+            Spacer(Modifier.size(ButtonDefaults.IconSpacing))
+            Text("Add")
+        }
+        "text-button-icon" -> TextButton(onClick = {}, contentPadding = ButtonDefaults.TextButtonWithIconContentPadding) {
+            Icon(Icons.Filled.Add, contentDescription = null, Modifier.size(ButtonDefaults.IconSize))
+            Spacer(Modifier.size(ButtonDefaults.IconSpacing))
+            Text("Add")
+        }
         "checkbox-checked" -> Checkbox(checked = true, onCheckedChange = {})
         "checkbox-unchecked" -> Checkbox(checked = false, onCheckedChange = {})
         "radio-selected" -> RadioButton(selected = true, onClick = {})

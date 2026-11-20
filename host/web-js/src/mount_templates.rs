@@ -30,7 +30,7 @@ impl Em<'_> {
         // their captures and relocate their diagnostic sites together.
         let body = if let Some(slot) = slot {
             let frame = self.mount_templates.slot_frame(body);
-            format!("{frame}{slot});")
+            format!("{frame}{slot}")
         } else {
             body
         };
@@ -62,7 +62,7 @@ impl Em<'_> {
         self.next_local_element = outer;
         let body = std::mem::replace(&mut self.out, saved);
         let callback = self.mount_templates.mount("p", body, None, None);
-        write!(self.out, "$slot({parent});").unwrap();
+        write!(self.out, "\0slot:{parent}\0").unwrap();
         if slot.end < children.len() {
             let tail = Scope {
                 capture_sites: true,

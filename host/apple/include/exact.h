@@ -1057,7 +1057,12 @@ uint32_t exact_intrinsics(ExactRuntime rt, size_t len);
  * kernel refuses, or two for one owner, refuses the call; an update whose
  * view's block the kernel refuses is not applied, and one whose view is
  * gone is not applied and is the batch's error. An update for a view with
- * no block holds its keyboard against no bounds, so it occupies nothing. */
+ * no block holds its keyboard against no bounds, so it occupies nothing.
+ * Kind 23 says how a split shows a block's route against its stack's top
+ * (LLP 1127 D8): float 1 beside it, live (the split's list column beside
+ * its detail), 2 under a pane over it, not live (the detail under the list
+ * that overlays it, the columns under a sheet), 0 in its stack; then three
+ * unused. */
 uint32_t exact_host_covers(ExactRuntime rt, size_t len);
 /* What a block's root would measure in another block (a popover's
  * position-area option, LLP 1021 D2): each axis a length and a policy as

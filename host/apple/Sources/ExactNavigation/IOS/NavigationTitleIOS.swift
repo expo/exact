@@ -476,7 +476,13 @@ extension NavigationHost {
 
     /// Whether the bar shows for the route on top of a stack.
     func topShowsBar(_ nav: UINavigationController) -> Bool {
-        (nav.topViewController as? RouteController).map { routeShowsBar($0, in: nav) } ?? barShows(nav)
+        barTop(nav).map { routeShowsBar($0, in: $0.navigationController ?? nav) } ?? barShows(nav)
+    }
+
+    /// The route whose item a stack's bar shows: its top, or the top of a
+    /// stack nested in it (a collapsed split's detail column, LLP 1127 D7).
+    func barTop(_ nav: UINavigationController) -> RouteController? {
+        nav.topViewController as? RouteController ?? (nav.topViewController as? UINavigationController)?.topViewController as? RouteController
     }
 
     /// Runs a hatch over `nav`, noting a tint it gave the bar (`NavigationStack.hatchTintsBar`), which
@@ -494,7 +500,11 @@ extension NavigationHost {
     /// Called from `willShow`, UIKit's place for it: the bar moves with the
     /// transition, an interactive pop's included, and back on a cancel.
     func showBar(_ nav: UINavigationController, for c: RouteController? = nil, animated: Bool) {
-        let c = c ?? nav.topViewController as? RouteController
+        // Nested in a split's list column, the detail's column has its bar
+        // hidden by UIKit, which shows its top in the list's: the route on top
+        // decides that bar, under its own column's opt-outs (LLP 1127 D7)
+        if let split, nav === split.detail, split.nested { return showBar(split.list, for: c, animated: animated) }
+        let c = c ?? barTop(nav)
         guard let stack = stacks[ObjectIdentifier(nav)] else { return }
         // The bar's tint is the route's accent, as a hand-built app tints its bar for the screen it shows:
         // its title, items and field in the tint draw it and grey behind a sheet or an alert. A tint a
@@ -505,7 +515,7 @@ extension NavigationHost {
             stack.barTint = c?.node.ownAccent
         }
         guard !searching(c) else { return }
-        let shows = c.map { routeShowsBar($0, in: nav) } ?? barShows(nav)
+        let shows = c.map { routeShowsBar($0, in: $0.navigationController ?? nav) } ?? barShows(nav)
         guard nav.isNavigationBarHidden == shows else { return }
         nav.setNavigationBarHidden(!shows, animated: animated)
         // A bar that comes back for a large title (a route with no bar turned

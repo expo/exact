@@ -19,17 +19,32 @@ impl Em<'_> {
         b: &BindingsRow,
         scope: &Scope,
     ) -> Result<String, String> {
-        let before = self.uses.metered;
-        let mut f = self.f(b.expr, scope)?;
-        let metered = self.uses.metered != before;
+        let f = self.binding_value(i, e, b, scope)?;
+        Ok(self.status_read(i, e, b, f))
+    }
+
+    pub(super) fn status_read(&mut self, i: u32, e: &str, b: &BindingsRow, f: String) -> String {
         if let Some(owners) = (b.kind == BindingKind::Prop)
             .then(|| self.answers.status_binding(i, b.id))
             .flatten()
         {
             let owners = super::answers::status_owners(owners);
             let guard = self.uses.rt("statusSubject");
-            f = format!("(globalThis.__exactRender?{guard}({e},{f},{owners}):{f})");
+            return format!("(globalThis.__exactRender?{guard}({e},{f},{owners}):{f})");
         }
+        f
+    }
+
+    pub(super) fn binding_value(
+        &mut self,
+        i: u32,
+        owner: &str,
+        b: &BindingsRow,
+        scope: &Scope,
+    ) -> Result<String, String> {
+        let before = self.uses.metered;
+        let f = self.f(b.expr, scope)?;
+        let metered = self.uses.metered != before;
         if !metered {
             return Ok(f);
         }
@@ -42,7 +57,7 @@ impl Em<'_> {
         let tg = self.uses.budget("tg");
         let site = self.site_number(scope, i);
         Ok(format!(
-            "{tg}({e},{site},{},{f})",
+            "{tg}({owner},{site},{},{f})",
             serde_json::to_string(&row).unwrap()
         ))
     }

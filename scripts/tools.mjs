@@ -19,7 +19,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHash, createPrivateKey, createPublicKey, sign, verify } from 'node:crypto';
 import { parseArgs } from 'node:util';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -90,6 +90,11 @@ function differs(product, root = ROOT) {
 const glance = (entry, product) => sha(JSON.stringify([entry, product.inputs.map(([file]) => seen(resolve(ROOT, file))), seen(resolve(ROOT, 'Cargo.lock')), seen(resolve(ROOT, 'Cargo.toml'))]));
 const stampOf = (name) => resolve(ROOT, 'target/tools', `${name}.json`);
 
+function productFile(set, product) {
+  const path = resolve(set.dir, product.file);
+  return statSync(path, { throwIfNoEntry: false })?.isFile() ? path : null;
+}
+
 /**
  * Product `name` from the newest set in this machine's cache that `source` made (`built` here by `keep`, or
  * `fetched`) and whose inputs are this checkout's bytes: `{ path, set, product }`, or null.
@@ -99,17 +104,21 @@ export function fromSet(name, source, env = process.env) {
     const last = JSON.parse(readFileSync(stampOf(name), 'utf8'));
     const set = { dir: last.entry, manifest: JSON.parse(readFileSync(resolve(last.entry, 'manifest.json'), 'utf8')) };
     const product = set.manifest.products[name];
-    if (within(cacheDir(env), set.dir) && set.manifest.source === source && glance(last.entry, product) === last.glance && existsSync(resolve(set.dir, product.file)))
-      return { path: resolve(set.dir, product.file), set, product };
+    if (within(cacheDir(env), set.dir) && set.manifest.source === source && glance(last.entry, product) === last.glance) {
+      const path = productFile(set, product);
+      if (path) return { path, set, product };
+    }
   } catch {}
   for (const set of sets(env)) {
     const product = set.manifest.products?.[name];
-    if (set.manifest.source !== source || !product || differs(product)) continue;
+    if (set.manifest.source !== source || !product) continue;
+    const path = productFile(set, product);
+    if (!path || differs(product)) continue;
     try {
       mkdirSync(dirname(stampOf(name)), { recursive: true });
       writeFileSync(stampOf(name), JSON.stringify({ entry: set.dir, glance: glance(set.dir, product) }));
     } catch {}
-    return { path: resolve(set.dir, product.file), set, product };
+    return { path, set, product };
   }
   return null;
 }
@@ -126,8 +135,10 @@ export class RustMissing extends Error {
     const newest = sets(env).find(set => set.manifest.products?.[name]);
     let why = `no tool set on this machine has it (${cacheDir(env).replace(home(env), '~')})`, commit = '';
     if (newest) {
-      const at = differs(newest.manifest.products[name]), built = short(newest.manifest.commit);
-      why = at ? `${at} differs from the newest tool set's, built at ${built}` : `the tool set built at ${built} that matches was fetched, and EXACT_TOOLS_ORIGIN=none runs none`;
+      const product = newest.manifest.products[name], built = short(newest.manifest.commit);
+      const path = productFile(newest, product), at = path && differs(product);
+      if (!path) why = `the tool set built at ${built} is missing ${product.file}`;
+      else why = at ? `${at} differs from the newest tool set's, built at ${built}` : `the tool set built at ${built} that matches was fetched, and EXACT_TOOLS_ORIGIN=none runs none`;
       // Its commit to check out, when that moves nothing of the author's and is not where the checkout is.
       const git = (...args) => spawnSync('git', ['-C', ROOT, ...args], { encoding: 'utf8' });
       const clean = git('status', '--porcelain', '--untracked-files=no');
@@ -145,22 +156,31 @@ export class RustMissing extends Error {
 }
 
 const CONTRACT = resolve(ROOT, 'target/debug', `contract${EXE}`);
-/** The Contract compiler built already, to `launch`: this checkout's debug build, else a tool set's; null when neither is. */
-export const builtContract = () => { const path = existsSync(CONTRACT) ? CONTRACT : fromSets('contract')?.path; return path ? launch(path) : null; };
+/** The Contract compiler built already, to `launch`: this checkout's fresh debug build or a matching tool set's. */
+export function builtContract(env = process.env) {
+  const path = freshCompiler(CONTRACT) ? CONTRACT : fromSets('contract', env)?.path;
+  return path ? launch(path, [], undefined, env) : null;
+}
 
-/**
- * `exact contract`'s compiler in D5's order: this checkout's debug build while it is fresh, a tool set's, else `cargo`
- * (Cargo's `launch`-shaped command). Null where only Cargo could build it and Rust is missing, after saying so (on
- * stderr, or as `--json`'s one diagnostic, at `file`).
- */
-export async function contractTool(cargo, { env = process.env, json = false, file = '' } = {}) {
-  const built = freshCompiler(CONTRACT) ? CONTRACT : fromSets('contract', env)?.path;
-  if (built) return launch(built, [], undefined, env);
+export function compilerCargo(verb, env = process.env) {
+  const clean = cargoEnvironment(env), channel = pin();
+  delete clean.RUSTUP_TOOLCHAIN;
+  delete clean.CARGO_TARGET_DIR;
+  const args = [`+${channel}`, verb, '-q', '--manifest-path', resolve(ROOT, 'Cargo.toml'), '-p', 'contract'];
+  if (verb === 'run') args.push('--');
+  return { ...launch('cargo', args, undefined, clean), pin: channel };
+}
+
+/** Select a fresh Contract compiler, building with the pinned Cargo when needed (D5).
+ * A Rust-less machine receives the diagnostic in the form requested by the caller. */
+export function contractTool({ env = process.env, json = false, file = '' } = {}) {
+  const built = builtContract(env);
+  if (built) return built;
   if (rustMissing(env)) { new RustMissing('contract', env).say(json, file); return null; }
   if (!existsSync(CONTRACT)) console.error('exact contract: building the Contract compiler once (about a minute on a cold checkout; `exact new` starts it in the background)…');
   // Built before and stale, as after a pull: Cargo runs quietly, so say why the wait (LLP 1156.006.000 D11).
   else console.error('exact contract: rebuilding the Contract compiler, since its sources changed (about a minute)…');
-  return cargo;
+  return compilerCargo('run', env);
 }
 
 /** Cargo's metadata as `webSourceRoots` reads it, for `WEB_CRATES`' closure: its local packages with their targets,

@@ -602,9 +602,11 @@ specimens.
 its title in label-large, padded 24 dp across (`ButtonDefaults`, the `filled-button-` rows). Its `buttonStyle` picks
 which: `filled` and the prominent styles the filled `Button`, `tinted` the `FilledTonalButton` (`secondaryContainer`),
 `plain` and `borderless` the `TextButton` (no container, the title in `primary`, padded 12 dp), anything else, unsaid
-included, the `OutlinedButton` (a whole-pixel `outlineVariant` line round a title in `onSurfaceVariant`). Disabled,
-each takes `ButtonDefaults`' disabled colours. The oracle draws them beside Compose's as the `filled-button`,
-`outlined-button`, `tonal-button` and `text-button` specimens, with a disabled filled and tonal one.
+included, the `OutlinedButton` (a whole-pixel `outlineVariant` line round a title in `onSurfaceVariant`). A symbol
+beside the title is 18 dp and 8 dp from it, its side padded 16 dp, or on a text button 12 dp with the title's side
+16 (`ButtonDefaults.…WithIconContentPadding`). Disabled, each takes `ButtonDefaults`' disabled colours. The oracle
+draws them beside Compose's as the `filled-button`, `outlined-button`, `tonal-button` and `text-button` specimens,
+with a disabled filled and tonal one, and `filled-button-icon` and `text-button-icon` with a symbol.
 
 **A press is Material's ripple** (D9; `host/painted/src/paint/ripple.rs`): on a button, a segment, a field that opens
 something, a checkbox and a radio (in the 40 dp circle round the mark, from its middle), a list's row and any other

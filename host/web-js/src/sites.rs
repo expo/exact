@@ -148,31 +148,21 @@ pub(super) fn repeated_nodes(plan: &Plan, sites: &Sites) -> Vec<MountShape> {
     }
     let mut slots = vec![None; shapes.uses.len()];
     for group in variants.values().filter(|group| group.len() > 1) {
-        let first = group[0].1;
-        let mut prefix = first.len();
-        let mut suffix = first.len();
-        for &(_, children) in &group[1..] {
-            prefix = first[..prefix]
-                .iter()
-                .zip(children)
-                .take_while(|(a, b)| a == b)
-                .count();
-            suffix = first
-                .iter()
-                .rev()
-                .take(suffix)
-                .zip(children.iter().rev())
-                .take_while(|(a, b)| a == b)
-                .count();
-        }
-        let shortest = group
-            .iter()
-            .map(|(_, children)| children.len())
-            .min()
-            .unwrap();
-        suffix = suffix.min(shortest - prefix);
-        for &(shape, children) in group {
-            slots[shape] = Some(prefix..children.len() - suffix);
+        // Two cards can share their header and footer even when another
+        // container of the same type has different children at both ends.
+        if !share_edges(group, &mut slots) {
+            let mut frames = HashMap::<_, Vec<_>>::new();
+            for &(shape, children) in group {
+                if let (Some(first), Some(last)) = (children.first(), children.last()) {
+                    frames
+                        .entry((first, last))
+                        .or_default()
+                        .push((shape, children));
+                }
+            }
+            for frame in frames.values().filter(|f| f.len() > 1) {
+                share_edges(frame, &mut slots);
+            }
         }
     }
     let mut repeated = vec![MountShape::default(); plan.nodes.len()];
@@ -183,6 +173,34 @@ pub(super) fn repeated_nodes(plan: &Plan, sites: &Sites) -> Vec<MountShape> {
         };
     }
     repeated
+}
+
+/// Set the slot between the common children. Return whether any child stays in the frame.
+fn share_edges(group: &[(usize, &[usize])], slots: &mut [Option<std::ops::Range<usize>>]) -> bool {
+    let first = group[0].1;
+    let mut prefix = first.len();
+    let mut suffix = first.len();
+    let mut shortest = first.len();
+    for &(_, children) in &group[1..] {
+        shortest = shortest.min(children.len());
+        prefix = first[..prefix]
+            .iter()
+            .zip(children)
+            .take_while(|(a, b)| a == b)
+            .count();
+        suffix = first
+            .iter()
+            .rev()
+            .take(suffix)
+            .zip(children.iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+    }
+    suffix = suffix.min(shortest - prefix);
+    for &(shape, children) in group {
+        slots[shape] = Some(prefix..children.len() - suffix);
+    }
+    prefix + suffix > 0
 }
 
 /// Mark each arm a resource or task owner crosses when it mounts. A site

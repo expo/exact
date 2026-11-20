@@ -5107,7 +5107,9 @@ skipped (except an id-less hit outside its named ancestor's box includes that
 ancestor once). `querySelectorAll("[data-paint~=\"accent\"]")` lists the own ids of
 mounted, displayed, non-inert nodes bearing the declared `data-paint` word in
 tree order. Covered routes and unselected tabs do not answer; a split list
-answers with its detail where the host presents it (the web at desktop widths).
+answers with its detail where the host shows them side by side (the web at desktop
+widths, and iOS where UIKit's split view shows both columns; over the detail only the
+list answers, LLP 1127 D8, and `state window.split` says which shows).
 Closed popovers and dialogs do not answer; open ones do. Point reads skip inert
 subtrees and use the presenter's placement for open top-layer content. Point reads
 also name the front modal dialog or presented route where its native backdrop accepts input,

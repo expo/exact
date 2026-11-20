@@ -1306,8 +1306,8 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.tracks_epoch = epoch;
         for (id, key, basis) in alive {
             let cached = self.tracks.get(&id);
-            let words = if crate::host::lower::is_spinner(key) {
-                self.p.host().spinner_tracks()
+            let words = if let Some(words) = self.p.own_tracks(key) {
+                words
             } else {
                 let key = exact_kernel::motion::node_key(key);
                 if cached.is_some_and(|(old, _)| *old == basis)

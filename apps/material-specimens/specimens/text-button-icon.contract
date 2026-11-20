@@ -1,0 +1,6 @@
+component App
+  view
+    column padding=16 align-items="flex-start"
+      button buttonStyle="plain" testId="specimen"
+        image "symbol:add"
+        text "Add" testId="label"

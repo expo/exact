@@ -303,19 +303,47 @@ extension NavigationHost {
         (tabs as? TabController)?.syncBarAccessibility()
     }
 
-    /// Before installing: a root that gains, loses or changes its tabs gets
-    /// its containers again (the router's stacks are untouched).
+    /// Before installing: a root that gains, loses or changes its tabs, or a
+    /// stack that starts or stops splitting (its list's rows came later, or
+    /// its root says `navigationSplit="none"` now; LLP 1127 D2), gets its
+    /// containers again (the router's stacks are untouched). While the
+    /// runner cannot say whether the stack splits (a sync inside a callback
+    /// it waits on), the containers stay, and the stack is asked again on
+    /// the main queue's next turn.
     func reshape(_ p: Projection) {
         let panels = p.tabs?.panels.map(\.id) ?? []
-        guard primaryOwner != nil, panels != tabPanels || builtTabsChanged(p) else { return }
-        presenter.session?.log("navigation: the tabs changed; the containers are built again")
-        if tabOwner != nil { retireTabs() } else if let nav = primaryNavigation {
+        guard primaryOwner != nil else { return }
+        let tabsChanged = panels != tabPanels || builtTabsChanged(p)
+        var startsOrStops = false
+        if !tabsChanged, p.tabs == nil {
+            guard let rule = splitRule(p.chosen.first) else { return askSplitNextTurn() }
+            if let list = rule?.list { split?.listNode = list }
+            split?.rule = rule
+            startsOrStops = (rule != nil) != (split != nil)
+        }
+        guard tabsChanged || startsOrStops else { return }
+        presenter.session?.log(tabsChanged ? "navigation: the tabs changed; the containers are built again"
+            : "navigation: the stack \(split == nil ? "splits" : "no longer splits"); its containers are built again")
+        if tabOwner != nil { retireTabs() } else if split != nil { retireSplit(releasing: true) } else if let nav = primaryNavigation {
             release(nav)
             nav.willMove(toParent: nil)
             nav.view.removeFromSuperview()
             nav.removeFromParent()
         }
         primaryNavigation = nil
+    }
+
+    /// One sync on the main queue's next turn, which asks the runner again
+    /// whether the stack splits (`reshape`); a turn already owed reads the
+    /// tree as it is then, so a second asks nothing more.
+    func askSplitNextTurn() {
+        guard !splitAskOwed else { return }
+        splitAskOwed = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            splitAskOwed = false
+            resync()
+        }
     }
 
     /// Each batch: every other tab's stack, the selected tab, its items.

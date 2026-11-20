@@ -260,6 +260,17 @@ package protocol NavigationHosting: AnyObject {
     func routeKey(containing view: UIView, layout: Bool) -> String?
     func isInactiveRoute(containing view: UIView, layout: Bool) -> Bool
     func resolve(route key: String, id: String) -> NodeView?
+    /// Each route shown beside its stack's top or under a pane over it, by
+    /// its node (LLP 1127 D8): a split's columns. The others show in their stack.
+    var routesShown: [UInt32: BlockShown] { get }
+    /// Whether a grouped list shows as UIKit's sidebar: in a split's list column while the split is expanded (LLP 1127 D7).
+    func showsAsSidebar(_ list: UIView) -> Bool
+    /// The row of a sidebar list whose detail shows, which stays selected;
+    /// `.some(nil)` for none, and nil while the runner cannot say.
+    func sidebarSelection(_ list: UIView) -> UInt32??
+    /// A grouped list's `row`, in `list`, pressed by `press`: in a split's
+    /// list column, a detail its batches bring is the row's (LLP 1127 D3).
+    func listPress(_ row: UInt32, in list: UIView, _ press: () -> Void)
 
     // Focus and transitions: separate answers, each read where it is read today.
     var defersFocus: Bool { get }
@@ -340,6 +351,8 @@ package protocol NavigationHosting: AnyObject {
     /// The bar's search field submitting, as the keyboard's Search key does; false when `editor` is no bar's search field.
     func submitSearch(_ editor: UITextField) -> Bool
     func agentBack() -> String?
+    /// A list beside its detail as UIKit's split shows it, for `state window.split` (LLP 1127 D11).
+    var splitObservation: [String: Any] { get }
     func activateChrome(_ node: NodeView, before: (CGPoint?) -> Bool) -> [String: Any]?
     func drawnSearch(_ node: NodeView) -> UITextField?
     func barButtonItem(_ node: NodeView) -> (bar: UINavigationBar, item: UIBarButtonItem, of: UINavigationItem)?
@@ -519,6 +532,10 @@ package final class NoNavigation: NavigationHosting {
     package func routeKey(containing view: UIView, layout: Bool) -> String? { nil }
     package func isInactiveRoute(containing view: UIView, layout: Bool) -> Bool { false }
     package func resolve(route key: String, id: String) -> NodeView? { nil }
+    package var routesShown: [UInt32: BlockShown] { [:] }
+    package func showsAsSidebar(_ list: UIView) -> Bool { false }
+    package func sidebarSelection(_ list: UIView) -> UInt32?? { .some(nil) }
+    package func listPress(_ row: UInt32, in list: UIView, _ press: () -> Void) { press() }
 
     package var defersFocus: Bool { syncing || mounting }
     package var inTransition: Bool { defersFocus }
@@ -593,6 +610,7 @@ package final class NoNavigation: NavigationHosting {
     package func observation() -> [String: Any] { ["linked": false] }
     package func submitSearch(_ editor: UITextField) -> Bool { false }
     package func agentBack() -> String? { nil }
+    package var splitObservation: [String: Any] { ["installed": false] }
     package func activateChrome(_ node: NodeView, before: (CGPoint?) -> Bool) -> [String: Any]? { nil }
     package func drawnSearch(_ node: NodeView) -> UITextField? { nil }
     package func barButtonItem(_ node: NodeView) -> (bar: UINavigationBar, item: UIBarButtonItem, of: UINavigationItem)? { nil }
