@@ -637,8 +637,9 @@ is idle: nothing is asked, a request in flight is let go (an upload's goes on),
 nothing. It keeps the value it showed, which is no longer an answer: `current` is
 false. When `cond` turns true the resource is asked again, forced, even at the
 arguments it had, and is current once that answer lands. A resource idle at boot
-shows its placeholder. A resource over a list takes no `when`
-(`syntax-resource-for-when`).
+shows its placeholder, or an answer the boot starts with: a rendered page's for it,
+or one a native host kept; `current` is false either way. A resource over a list
+takes no `when` (`syntax-resource-for-when`).
 
 A resource over a list, `resource r = source(x) for x in list as shape S`,
 asks its source once for each element (LLP 1017.000 P4c, amended
