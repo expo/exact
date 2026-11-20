@@ -440,7 +440,7 @@ async function verbRun({ dir, name, game = false, exact2, args }, reply) {
     // The Xcode row holds a build to the SDK it compiles with, and only a build that compiles the Swift host to its floor.
     const destination = { only: platform, device, tv: rest.includes('--tvos'), swift: named || await import(resolve(exact2, 'host/apple/devices.mjs')).then(({ compilesSwiftHost }) => compilesSwiftHost(rest), () => true) };
     const report = named ? null : await import(resolve(exact2, 'scripts/exact.mjs')).then(({ sdkReport, platformReport }) => platformReport(platform, sdkReport(process.env, destination), { device })).catch((error) => ({ error: String(error?.message ?? error) }));
-    const brought = await shells.bringPlatform(dir, platform, { report, name });
+    const brought = await shells.bringPlatform(dir, platform, { report, name, verb });
     if (brought.refused) { console.error(brought.refused); reply?.({ code: 'platform_refused', error: brought.refused }); return log(1); }
     for (const line of brought.lines) console.error(line);
   }

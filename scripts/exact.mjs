@@ -807,8 +807,10 @@ async function newApp(path, {update = false, without = null, with: platforms = [
     // Builders read a bare "still needs" list as the reason a later command failed (bench diaries,
     // 2026-10-07/08): say when nothing on it blocks the app.
     const blocking = report.some(row => !row.ok && row.required);
+    // An app's table is the web's alone: say so, or a builder reads it as what its iPhone or Mac build lacks.
     console.log(blocking
-      ? '\nThis machine still needs (exact setup --check shows the whole table):'
+      ? game ? '\nThis machine still needs (exact setup --check shows the whole table):'
+        : '\nFor the web (bun exact.mjs web, test web, verify), this machine still needs (exact setup --check shows the whole table):'
       : '\nThe app was created; nothing below blocks it. Each is needed only for what it names (exact setup --check shows the whole table):');
     printReport(report, {onlyMissing: true});
   }
