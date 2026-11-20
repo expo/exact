@@ -83,8 +83,9 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsum
     /// they were to there.
     private func followBar(from was: CGFloat?) {
         top = adjustedContentInset.top
+        // The initial inset takes effect before the first frame.
         guard followsBar, let was, let top, top > was + 1, UIView.inheritedAnimationDuration == 0, window != nil,
-              abs(contentOffset.y + top) < 0.5 else { return }
+              abs(contentOffset.y + top) < 0.5, let owner, owner.presenter?.showed(owner) == true else { return }
         let spring = CASpringAnimation(keyPath: "bounds.origin.y")
         (spring.mass, spring.stiffness, spring.damping) = (1, 306, 28) // ω 17.5 per second, ζ 0.8
         spring.fromValue = top - was

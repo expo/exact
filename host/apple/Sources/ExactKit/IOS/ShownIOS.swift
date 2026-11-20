@@ -91,7 +91,7 @@ extension Presenter {
 
     /// Whether the last frame showed `view` where it is: it and every node
     /// above it, none hidden now.
-    func showed(_ view: NodeView) -> Bool {
+    package func showed(_ view: NodeView) -> Bool {
         var at: UIView? = view
         while let v = at {
             if let node = v as? NodeView, node.isHidden || !shown(node) { return false }
