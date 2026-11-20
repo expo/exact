@@ -614,7 +614,18 @@ impl<D: DataSource> Runner<D> {
                         if let Some(waiting) = &mut self.resources[i].waiting {
                             waiting.slept = true;
                         }
-                        let state = match states[i].take() {
+                        // A new instance sleeps on the page's answer at the
+                        // arguments it wants, while the boot holds the page's
+                        // answers, as a declared resource does (LLP
+                        // 1035.005.004 D8). Its ask is dropped: a closed gate
+                        // asks nothing, nor marks the launch's ask.
+                        let paged = (want.as_ref())
+                            .filter(|_| states[i].is_none())
+                            .and_then(|w| self.seed_member(i, &w.args, &mut Vec::new()));
+                        if paged.is_some() {
+                            self.launch.retain(|l| *l != i);
+                        }
+                        let state = match states[i].take().or(paged) {
                             Some(s) => s.sleeping(),
                             None => {
                                 let Some(v) = self.placeholder(i, &row, &resources) else {

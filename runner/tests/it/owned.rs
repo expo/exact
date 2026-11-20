@@ -478,6 +478,52 @@ fn a_rendered_pages_instances_answer_the_boots_first_frame() {
     assert_eq!(r.data().asks, ["subjectWorks(2)"]);
 }
 
+/// An instance made at boot under a gate the boot finds closed sleeps on its
+/// page's answer, asking nothing, as a declared resource there does
+/// (LLP 1035.005.004 D8, LLP 1161.002 D2). The gate was open at the render,
+/// and a persisted state the device's store holds closes it.
+#[test]
+fn an_instance_under_a_gate_closed_at_boot_sleeps_on_its_page_s_answer() {
+    let source = BOOKS
+        .replace(
+            "component App\n",
+            "component App\n  state paused = false persist\n  action resume\n    paused = false\n",
+        )
+        .replace(
+            "Book(id=e.params.id)",
+            "Book(id=e.params.id, on=paused == false)",
+        )
+        .replace("    id: string\n", "    id: string\n    on: bool\n")
+        .replace("subjectWorks(id) as", "subjectWorks(id) when on as");
+    let plan = contract::compile(&source).unwrap();
+    let mut rendered = Runner::boot(
+        plan.clone(),
+        Works::default(),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/book/1",
+    )
+    .unwrap();
+    assert_eq!(land(&mut rendered), 1, "the render's gate was open");
+    let checkpoint = rendered.document_checkpoint("/book/1");
+    let mut r = Runner::boot_checkpoint(
+        plan,
+        Works::default(),
+        Kernel::with_monospace(),
+        &checkpoint,
+        vec![("exact.state.paused".into(), b"true".to_vec())],
+        Default::default(),
+        Default::default(),
+        "/book/1",
+    )
+    .unwrap();
+    assert!(r.data().asks.is_empty(), "{:?}", r.data().asks);
+    assert_eq!(text(&r, "book-1").as_deref(), Some("1: 1"));
+    // Waking asks it, once (LLP 1161.002 D3)
+    r.act("resume", vec![]).unwrap();
+    assert_eq!(r.data().asks, ["subjectWorks(1)"]);
+}
+
 /// The agent's `state` names a child's resources and lists each instance's
 /// under its path; `perf` counts every instance's asks under the declared
 /// name (LLP 1035.005.004 D8).
