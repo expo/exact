@@ -368,21 +368,11 @@ final class TintEdgesIOSTests: XCTestCase {
              "style": ["font_size": 24, "text_color": [0, 255, 0, 255], "written": ["text_color"], "tint_adjustment": "dimmed"]],
             ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 24, "h": 24], ["op": "roots", "ids": [1]],
         ]))
-        let node = try XCTUnwrap(p.views[1]), image = try XCTUnwrap(node.symbolView)
-        let face = try XCTUnwrap(ChipFace(node, readout: true))
-        let readout = ReadoutView(); readout.show(face, ReadoutFacts())
-        controller.view.addSubview(readout)
-        readout.tintAdjustmentMode = .dimmed
-        let readoutImage = try XCTUnwrap(readout.stack.arrangedSubviews.first as? UIImageView)
-        readoutImage.frame.size = CGSize(width: 24, height: 24)
+        let image = try XCTUnwrap(try XCTUnwrap(p.views[1]).symbolView)
         func check() throws {
-            readout.frame.size = readout.intrinsicContentSize
-            readout.layoutIfNeeded()
-            for view in [image, readoutImage] {
-                view.frame.size = CGSize(width: 24, height: 24)
-                XCTAssertEqual(view.tintAdjustmentMode, .dimmed, "explicit ink must not override the owner's mode")
-                assertColor(try pixel(view), green)
-            }
+            image.frame.size = CGSize(width: 24, height: 24)
+            XCTAssertEqual(image.tintAdjustmentMode, .dimmed, "explicit ink must not override the owner's mode")
+            assertColor(try pixel(image), green)
         }
         try check()
         try alert { try check() }

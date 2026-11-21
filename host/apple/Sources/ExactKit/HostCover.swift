@@ -14,6 +14,10 @@ package enum HostCover: Equatable {
     }
     case edges(Edges)
     case whole
+    /// Replaced by a bar that shows the nodes given blocks inside the box in
+    /// views of its own (LLP 1141.004 D2): `display: none`, as `whole`, but
+    /// for those blocks, which are laid out and shown.
+    case bar
     /// A scroller UIKit insets (a route's collapsing or bottom-edge
     /// scroller): the kernel lays its content out between these insets
     /// (LLP 1116.000 D1.2).

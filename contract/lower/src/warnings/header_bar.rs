@@ -67,7 +67,12 @@ fn part(node: Visit<'_>) -> Part {
         || (has(attrs, "popovertarget") && literal(attrs, "popovertargetaction") != Some("hide"))
         || (has(attrs, "commandfor")
             && (computed(attrs, "command") || literal(attrs, "command").is_some_and(opens)));
-    if has(attrs, "press") || (tag == "button" && item) || tag == "link" {
+    // A link follows its `href`, unless it has none or an empty one (`fact::HREF`).
+    let follows = has(attrs, "href") && literal(attrs, "href") != Some("");
+    if has(attrs, "press")
+        || (tag == "button" && item)
+        || (matches!(tag, "button" | "link") && follows)
+    {
         return Part::Pressable;
     }
     if role == Some("status") && tag != "header" {
@@ -82,8 +87,9 @@ fn part(node: Visit<'_>) -> Part {
     }
 }
 
-/// Whether the subtree holds something the bar places or the compiler
-/// cannot see through: then a box around it is walked, not dropped whole.
+/// Whether the subtree holds something the bar decides itself (a button
+/// that presses nothing too) or the compiler cannot see through: then a box
+/// around it is walked, not shown whole as an item.
 fn holds_placed(node: Visit<'_>) -> bool {
     node.regions()[0]
         .walk_regions_with((), |k, _| {
@@ -98,15 +104,29 @@ fn holds_placed(node: Visit<'_>) -> bool {
                     | Part::Tablist
                     | Part::Pressable
                     | Part::Status
-            )
+            ) || !matches!(part(k), Part::Hidden)
+                && matches!(k.element(), Some(("button" | "link", _, _)))
         })
+}
+
+/// A box that shows nothing but boxes like it (a spacer, a box of spacers),
+/// as the kernel's rule reads one: no item.
+fn empty_box(node: Visit<'_>) -> bool {
+    node.children().all(|k| match part(k) {
+        Part::Hidden => true,
+        Part::Box => empty_box(k),
+        _ => false,
+    })
 }
 
 fn holds_heading(node: Visit<'_>) -> bool {
     node.regions()[0]
         .walk_regions_with((), |k, _| {
             [
-                matches!(part(k), Part::Box | Part::Pressable | Part::Status).then_some(()),
+                (matches!(part(k), Part::Box | Part::Pressable | Part::Status)
+                    || matches!(part(k), Part::Other)
+                        && matches!(k.element(), Some(("button" | "link", _, _))))
+                .then_some(()),
                 None,
             ]
         })
@@ -200,7 +220,14 @@ struct Bar<'a> {
     /// A bar item, a readout, a search field or a tablist: what a header
     /// with no heading needs to be the bar.
     placed: bool,
+    /// What iOS hides: what the heading's own box holds beyond what the
+    /// title shows, a second search field or tablist, a button that presses
+    /// nothing.
     unplaced: Vec<(Span, String)>,
+    /// An element outside the heading's box that the bar shows as written,
+    /// an item of its own (LLP 1141.004 D1): with no heading, it keeps the
+    /// header in the page.
+    hosted: Vec<(Span, String)>,
 }
 
 /// A route's `header` that is not the bar, in `lower-header-no-bar`'s words (LLP 1115.000 D5.2).
@@ -257,14 +284,19 @@ pub(super) fn route_header(children: Structure<'_>, out: &mut Vec<LowerError>) {
 fn check_header(header: Visit<'_>, content: &[Visit<'_>], out: &mut Vec<LowerError>) {
     let mut bar = Bar::default();
     walk(header, &mut bar);
-    // No heading, and nothing the bar has no place for: the bar with no title.
-    let untitled = bar.headings == 0 && bar.placed && !bar.avatar && bar.unplaced.is_empty();
+    // No heading, and nothing but buttons, readouts, a search field and a
+    // tablist: the bar with no title.
+    let untitled = bar.headings == 0
+        && bar.placed
+        && !bar.avatar
+        && bar.unplaced.is_empty()
+        && bar.hosted.is_empty();
     if bar.headings != 1 && !untitled {
         if !bar.doubt {
             out.push(LowerError {
                 id: "lower-header-no-bar",
                 message: if bar.headings == 0 && bar.placed {
-                    let what = match bar.unplaced.first() {
+                    let what = match bar.unplaced.first().or(bar.hosted.first()) {
                         Some((_, what)) => what.trim_end_matches(',').trim_end_matches(", before the heading").to_string(),
                         None => "its filled box".into(),
                     };
@@ -286,25 +318,37 @@ fn check_header(header: Visit<'_>, content: &[Visit<'_>], out: &mut Vec<LowerErr
         out.push(LowerError {
             id: "lower-header-unplaced",
             message: format!(
-                "{what} in this route's `header` is not shown on iOS: the navigation bar there takes one heading as its title (with the symbol images beside it in its own row), the first text after it as the subtitle, one `input type=\"search\"`, one `role=\"tablist\"`, the buttons that press or are disabled and the readouts (`role=\"status\"`), and hides the rest of the header. Move it below the `header`, into the route's content (the scroller's first row), make it a button that presses, or, if it is a status that nothing presses (a \"● Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold (a chat's avatar beside the name), say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")"
+                "{what} in this route's `header` is not shown on iOS: the navigation bar there shows each element outside the box around the heading as an item, drawn as written, but of that box only the title (the heading, the symbol images beside it in its own row, the text after it, an avatar before it); it has one place for a search field and one for a tablist, and a button that presses nothing is no item. Move it out of the heading's box, so it is an item of its own, or below the `header`, into the route's content; make it a button that presses, or, if it is a status that nothing presses (a \"● Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold (a chat's avatar beside the name), say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")"
             ),
             span,
         });
     }
 }
 
-/// The children of `parent`, a header or a box in it, into `bar`.
+/// The children of `parent`, a header or a box in it, into `bar`. A box that
+/// holds the heading is the title's: nothing in it is an item of its own.
 fn walk<'a>(parent: Visit<'a>, bar: &mut Bar<'a>) {
-    for _ in parent.regions()[0].walk_regions_with(title_row(parent), |node, &glyphs| {
-        let descend = bar.visit(node, glyphs);
-        [descend.then(|| title_row(node)), None]
+    let start = (title_row(parent), false);
+    for _ in parent.regions()[0].walk_regions_with(start, |node, &(glyphs, title)| {
+        let descend = bar.visit(node, glyphs, title);
+        [
+            descend.then(|| (title_row(node), title || holds_heading(node))),
+            None,
+        ]
     }) {}
 }
 
 impl<'a> Bar<'a> {
-    fn visit(&mut self, node: Visit<'a>, glyphs: bool) -> bool {
+    /// `title`: `node` is inside the heading's own box.
+    fn visit(&mut self, node: Visit<'a>, glyphs: bool, title: bool) -> bool {
         let bar = self;
         let span = node.span();
+        // Outside the heading's box the bar shows it as an item; inside, the
+        // title shows only its own parts.
+        let mut hide = |what: String| match title {
+            true => bar.unplaced.push((span, what)),
+            false => bar.hosted.push((span, what)),
+        };
         match part(node) {
             Part::Doubt => bar.doubt = true,
             Part::Hidden => {}
@@ -326,40 +370,63 @@ impl<'a> Bar<'a> {
                 bar.tap = true;
                 return true;
             }
+            // One that neither presses nor opens around the heading (a link,
+            // a disabled button) is walked for it, as the kernel walks it.
+            Part::Pressable if !has_press(node) && !opens_named(node) && holds_heading(node) => {
+                return true
+            }
             Part::Pressable => bar.placed = true,
             // A status around the heading is no readout: walked for it.
             Part::Status if holds_heading(node) => return true,
             Part::Status => bar.placed = true,
             Part::Text if bar.passed && !bar.subtitle => bar.subtitle = true,
-            Part::Text => bar.unplaced.push((
-                span,
-                if bar.passed {
-                    "this text, after the subtitle,".into()
-                } else {
-                    "this text, before the heading,".into()
-                },
-            )),
+            Part::Text if bar.passed => hide("this text, after the subtitle,".into()),
+            Part::Text => hide("this text, before the heading,".into()),
             Part::Box if bar.passed && !bar.subtitle && glyph_line(node) => bar.subtitle = true,
             Part::Box if !bar.passed && !bar.avatar && filled(node) && !holds_heading(node) => {
                 bar.avatar = true;
             }
             Part::Box if holds_placed(node) => return true,
             // A box with nothing in it lays the bar's items out (a spacer).
-            Part::Box if node.children().next().is_none() => {}
-            Part::Box => bar.unplaced.push((span, "this box".into())),
+            Part::Box if empty_box(node) => {}
+            Part::Box => hide("this box".into()),
             // Drawn in the title, before or after its text.
             Part::Other if glyphs && symbol(node) && !filled(node) => {}
-            Part::Other => {
-                let what = match node.element() {
-                    Some(("button", _, _)) => "a `button` that presses nothing".into(),
-                    Some((tag, _, _)) => format!("this `{tag}`"),
-                    _ => "this node".into(),
-                };
-                bar.unplaced.push((span, what));
+            // An idle button or link around the heading is walked for it.
+            Part::Other
+                if matches!(node.element(), Some(("button" | "link", _, _)))
+                    && holds_heading(node) =>
+            {
+                return true;
             }
+            Part::Other => match node.element() {
+                Some(("button", _, _)) => bar
+                    .unplaced
+                    .push((span, "a `button` that presses nothing".into())),
+                Some(("link", _, _)) => bar
+                    .unplaced
+                    .push((span, "a `link` with no `href` that presses nothing".into())),
+                Some((tag, _, _)) => hide(format!("this `{tag}`")),
+                _ => hide("this node".into()),
+            },
         }
         false
     }
+}
+
+/// Whether the node opens what it names, a popover or a dialog
+/// (`Invocation::opens`); a computed command is given the benefit.
+fn opens_named(node: Visit<'_>) -> bool {
+    node.element().is_some_and(|(_, _, attrs)| {
+        let opens = |c: &str| {
+            ["show-modal", "show-popover", "toggle-popover"]
+                .iter()
+                .any(|w| c.eq_ignore_ascii_case(w))
+        };
+        (has(attrs, "popovertarget") && literal(attrs, "popovertargetaction") != Some("hide"))
+            || (has(attrs, "commandfor")
+                && (computed(attrs, "command") || literal(attrs, "command").is_some_and(opens)))
+    })
 }
 
 fn has_press(node: Visit<'_>) -> bool {

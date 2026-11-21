@@ -56,9 +56,13 @@ pub(crate) fn intersection(
         while let Some(slot) = ancestor {
             // A box its host replaces whole (a closed `dialog` or popover on
             // iOS, `closed.rs`) lays out nothing under it, as `display: none`
-            // does; the box itself answers by its native frame below.
-            let replaced =
-                slot != key.index && arena.cover(slot) == Some(exact_kernel::HostCover::Whole);
+            // does; the box itself answers by its native frame below. A node a
+            // bar shows in a view of its own is not placed in the page
+            // either (LLP 1141.004 D2).
+            let replaced = slot != key.index
+                && arena
+                    .cover(slot)
+                    .is_some_and(exact_kernel::HostCover::replaces);
             if arena.style(slot).display == Display::None
                 || arena.flags(slot).has(NodeFlags::HIDDEN)
                 || replaced

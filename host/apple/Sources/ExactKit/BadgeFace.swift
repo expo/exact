@@ -27,7 +27,8 @@ package struct BadgeFace: Equatable {
     package let shares: [Double?]
     #endif
     package init?(_ button: NodeView) {
-        let kids = button.childNodes
+        // A child hidden as authored is no part of the face.
+        let kids = button.childNodes.filter { $0.style["display"]?.string != "none" }
         guard kids.count == 1, let box = kids.first else { return nil }
         self.init(box: box)
     }
@@ -38,8 +39,11 @@ package struct BadgeFace: Equatable {
     package init?(box: NodeView, authored: Bool = false) {
         guard box.channels("background_color") != nil else { return nil }
         var text = "", symbol: String?, ink: NodeView?, pictured: NodeView?
+        // Shown parts only: a part hidden as authored, or one `visibility`
+        // hides (a paragraph keeps a run that computes `visible`), is not drawn.
         func walk(_ node: NodeView) {
-            for child in node.childNodes {
+            for child in node.childNodes where child.style["display"]?.string != "none"
+                && !(child.isParagraph ? !child.accessibilityExposed : child.kind == "image" && child.cssVisibilityHidden) {
                 if child.kind == "image", let name = child.faceSymbol { symbol = symbol ?? name; ink = ink ?? child }
                 else if child.kind == "image", child.imageSource != nil { pictured = pictured ?? child }
                 else if child.isParagraph, text.isEmpty { text = child.accessibleText; ink = ink ?? child }

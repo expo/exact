@@ -323,9 +323,31 @@ fn a_popover_moved_out_from_under_a_replaced_box_is_laid_out() {
     });
     ops.push(Op::AttachRoot { id: 1 });
     k.apply(0, 1, &ops).unwrap();
+    // A bar's box hides it too: the kernel implies its block, which no bar
+    // shows, unless a block the bar's host gives holds it (a popover in a
+    // hosted item, LLP 1141.004 D2).
+    for cover in [crate::HostCover::Bar, crate::HostCover::Whole] {
+        k.set_host_cover(2, Some(cover)).unwrap();
+        k.compute_layout(1, OFFER).unwrap();
+        assert_eq!(
+            frame(&k, 5).width,
+            0.0,
+            "hidden with the replaced box: {cover:?}"
+        );
+    }
+    let given = Some(crate::HostBlock {
+        tactic: Default::default(),
+        width: crate::BlockAxis::Fit(200.0),
+        height: crate::BlockAxis::Fit(44.0),
+    });
+    k.set_host_block(4, given).unwrap();
+    k.set_host_cover(2, Some(crate::HostCover::Bar)).unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(frame(&k, 5).width, 400.0, "in a hosted item: shown");
     k.set_host_cover(2, Some(crate::HostCover::Whole)).unwrap();
     k.compute_layout(1, OFFER).unwrap();
-    assert_eq!(frame(&k, 5).width, 0.0, "hidden with the replaced box");
+    assert_eq!(frame(&k, 5).width, 0.0, "replaced whole: hidden");
+    k.set_host_block(4, None).unwrap();
     let moved = [
         Op::SetChildren {
             id: 2,

@@ -31,15 +31,10 @@ struct ChipFace: Equatable {
     /// Each part's opacity: its own and its ancestors' below the button
     /// (a view's alpha, a flat leaf's `opacity`), as CSS multiplies them.
     let opacities: [CGFloat]
-    /// Each part's line height as its author wrote it (a text's
-    /// `line-height`), nil where unsaid: a readout's label is that tall,
-    /// its line centred in it as CSS's half-leading does.
-    let lineHeights: [CGFloat?]
     /// Each part's share of the tint where its colour is the tint (`AccentColor` 1, `Highlight` 0.2),
-    /// nil otherwise, and its node's accent (`ownAccent`): a readout's part view takes the accent as
-    /// its own tint and draws the share in UIKit's tint, which dims; an image is baked by `carriedTint`.
-    /// Unwritten bar-button ink is the tint before iOS 26; a readout's is always the label colour.
-    let shares: [Double?], accents: [UIColor?]
+    /// nil otherwise: the image is baked again in the dimmed tint. Unwritten bar-button ink is the
+    /// tint before iOS 26.
+    let shares: [Double?]
     let gap: CGFloat
     /// The button's left and right padding, room the face keeps inside the
     /// item's glass beside its parts, as a button in the page keeps it.
@@ -58,19 +53,16 @@ struct ChipFace: Equatable {
 
     /// The face of `button`, or nil when what it shows is one symbol or one
     /// line of text in the platform's type: the bar's own title or image.
-    /// `readout`: a header's `role="status"` (LLP 1075.003 §9.15), whose
-    /// face it is however plain, the readout itself its first part (a dot
-    /// alone, its opacity), its unwritten type the platform's body.
     /// `traits`: the text size and Bold Text to draw for, the button's own
     /// unless the view showing the face has newer ones.
-    init?(_ button: NodeView, engine: TextEngine? = nil, readout: Bool = false, traits: UITraitCollection? = nil) {
+    init?(_ button: NodeView, engine: TextEngine? = nil, traits: UITraitCollection? = nil) {
         guard !button.isNativeButton, let engine = engine ?? button.text else { return nil }
         let traits = traits ?? button.traitCollection
         let bold = traits.legibilityWeight == .bold
         let unwrittenShare: Double?
         if #available(iOS 26.0, tvOS 26.0, *) { unwrittenShare = nil }
-        else { unwrittenShare = readout ? nil : 1 }
-        var parts: [Part] = [], opacities: [CGFloat] = [], lineHeights: [CGFloat?] = [], shares: [Double?] = [], accents: [UIColor?] = [], dotted = false, typed = false, gap: CGFloat?
+        else { unwrittenShare = 1 }
+        var parts: [Part] = [], opacities: [CGFloat] = [], shares: [Double?] = [], dotted = false, typed = false, gap: CGFloat?
         func pair(_ node: NodeView, _ key: String) -> [[Double]] {
             [node.carriedChannels(key, dark: false) ?? [0, 0, 0, 1], node.carriedChannels(key, dark: true) ?? [1, 1, 1, 1]]
         }
@@ -89,9 +81,7 @@ struct ChipFace: Equatable {
             parts.append(.dot(size, sides,
                               BorderPaint.reduced(BorderPaint.radii(style, in: rect), in: rect)))
             opacities.append(alpha)
-            lineHeights.append(nil)
             shares.append(fill.tintAlpha)
-            accents.append(host.ownAccent)
         }
         // `inked`: an ancestor up to the button wrote the colour its text inherits.
         func walk(_ node: NodeView, fonted: Bool, inked: Bool, alpha: CGFloat) {
@@ -129,20 +119,15 @@ struct ChipFace: Equatable {
                 // (LLP 1115.000 D12.3).
                 let family = Int(child.number("font_family"))
                 let weight = Int(child.number("font_weight", 400))
-                let font = readout && !fonted ? UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits)
-                    : engine.font(size: child.number("font_size", PageFacts.defaultRootFontSize), weight: min(1000, weight),
-                                  family: family, italic: child.style["font_style"]?.string == "italic")
+                let font = engine.font(size: child.number("font_size", PageFacts.defaultRootFontSize), weight: min(1000, weight),
+                                       family: family, italic: child.style["font_style"]?.string == "italic")
                 parts.append(.text(text, font, inked ? pair(child, "text_color") : nil))
                 opacities.append(alpha)
-                lineHeights.append(child.wrote("line_height") ? child.usedLineHeight : nil)
                 shares.append(inked ? child.style["text_color"]?.tintAlpha : unwrittenShare)
-                accents.append(child.ownAccent)
             } else if child.kind == "image", let name = child.faceSymbol {
                 parts.append(.symbol(name, child.number("font_size", PageFacts.defaultRootFontSize), inked ? pair(child, "text_color") : nil))
                 opacities.append(alpha)
-                lineHeights.append(nil)
                 shares.append(inked ? child.style["text_color"]?.tintAlpha : unwrittenShare)
-                accents.append(child.ownAccent)
             } else if (child.presenter?.flats.children(of: child.id) ?? child.container.subviews.compactMap { ($0 as? NodeView)?.id }).isEmpty,
                       child.style["background_color"] != nil {
                 dot(child.style, alpha, host: child)
@@ -150,19 +135,14 @@ struct ChipFace: Equatable {
                 walk(child, fonted: fonted, inked: inked, alpha: alpha)
             }
         }
-        // A readout is visited whole: one text (`text "Saved" role="status"`)
-        // or a dot alone is its face, and its own opacity is its parts'.
-        if readout { visit(button, fonted: false, inked: false, alpha: button.alpha) }
-        else { walk(button, fonted: ["font_family", "font_size", "font_weight"].contains(where: button.wrote), inked: button.wrote("text_color"), alpha: 1) }
-        guard !parts.isEmpty, readout || dotted || typed else { return nil }
+        walk(button, fonted: ["font_family", "font_size", "font_weight"].contains(where: button.wrote), inked: button.wrote("text_color"), alpha: 1)
+        guard !parts.isEmpty, dotted || typed else { return nil }
         self.parts = parts
         self.opacities = opacities
-        self.lineHeights = lineHeights
         self.shares = shares
-        self.accents = accents
         self.gap = gap ?? 0
-        insetLeft = readout ? 0 : max(0, button.number("padding_left"))
-        insetRight = readout ? 0 : max(0, button.number("padding_right"))
+        insetLeft = max(0, button.number("padding_left"))
+        insetRight = max(0, button.number("padding_right"))
         dark = button.drawsDark
         self.bold = bold
     }
@@ -175,7 +155,7 @@ struct ChipFace: Equatable {
             case .symbol(let name, let points, let tint): return "s\(name)\(points)\(tint)"
             case .text(let text, let font, let color): return "t\(text)\(font.fontName)\(font.pointSize)\(color)"
             }
-        }.joined(separator: "|") + "|\(opacities)|\(lineHeights)|\(shares)|\(gap)|\(insetLeft),\(insetRight)|\(dark)|\(bold)"
+        }.joined(separator: "|") + "|\(opacities)|\(shares)|\(gap)|\(insetLeft),\(insetRight)|\(dark)|\(bold)"
     }
 
     /// The face drawn, its unwritten ink the bar's (`tint`, what a plain

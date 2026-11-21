@@ -264,6 +264,8 @@ package protocol NavigationHosting: AnyObject {
     /// its node (LLP 1127 D8): a split's columns. The others show in their stack.
     var routesShown: [UInt32: BlockShown] { get }
     var sidebarFooterBlock: (id: UInt32, block: HostBlock, placement: BlockPlacement?)? { get }
+    /// The blocks the bars' hosted items are laid out in, by element (LLP 1141.004 D3).
+    var barItemBlocks: [UInt32: HostBlock] { get }
     /// Whether a grouped list shows as UIKit's sidebar: in a split's list column while the split is expanded (LLP 1127 D7).
     func showsAsSidebar(_ list: UIView) -> Bool
     /// The row of a sidebar list whose detail shows, which stays selected;
@@ -541,6 +543,7 @@ package final class NoNavigation: NavigationHosting {
     package func resolve(route key: String, id: String) -> NodeView? { nil }
     package var routesShown: [UInt32: BlockShown] { [:] }
     package var sidebarFooterBlock: (id: UInt32, block: HostBlock, placement: BlockPlacement?)? { nil }
+    package var barItemBlocks: [UInt32: HostBlock] { [:] }
     package func showsAsSidebar(_ list: UIView) -> Bool { false }
     package func sidebarSelection(_ list: UIView) -> UInt32?? { .some(nil) }
     package func listPress(_ row: UInt32, in list: UIView, _ press: () -> Void) { press() }

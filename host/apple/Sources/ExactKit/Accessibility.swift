@@ -252,6 +252,10 @@ extension NodeView {
         guard liveAnnouncementView != nil, !text.isEmpty else { return false }
         #else
         guard accessibilityVisible, !text.isEmpty else { return false }
+        // `aria-hidden` in the authored tree, which a node UIKit holds in
+        // another container (a bar's hosted item, LLP 1141.004 D3; a painted
+        // popover) still has above it.
+        if authoredLine.contains(where: { $0.props["accessibilityElementsHidden"] == "true" }) { return false }
         #endif
         if let previous = liveText { return previous != text }
         return liveRole == "alert" && !launching

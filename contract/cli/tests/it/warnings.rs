@@ -31,40 +31,49 @@ fn route(header: &str) -> String {
 
 const UNPLACED: &str = "lower-header-unplaced";
 
+/// LLP 1141.004 D5: iOS shows every element outside the heading's box as an
+/// item of its own, and still hides what that box holds beyond the title, a
+/// second search field or tablist, and a button that presses nothing.
 #[test]
-fn a_header_node_the_ios_bar_drops_is_named_with_its_repair() {
-    // household-list's count beside its subtitle, recipe-finder's icon:
-    // shown on the web, hidden with the header under UIKit's bar.
+fn a_header_node_the_ios_bar_still_hides_is_named_with_its_repair() {
+    // A count beside the heading inside its box: the title takes the first
+    // text after the heading, and hides the rest of the box.
     let src = route(
-        "  text \"List\" role=\"heading\" aria-level=1\n  text \"3 left\"\n  text \"synced\"\n  image \"symbol:heart\"\n  button press=go testId=\"add\"\n    text \"Add\"",
+        "  row\n    text \"List\" role=\"heading\" aria-level=1\n    text \"3 left\"\n    text \"synced\"\n  button press=go testId=\"add\"\n    text \"Add\"",
     );
-    assert_eq!(
-        warned(&src),
-        [(UNPLACED.to_string(), 14), (UNPLACED.to_string(), 15)]
-    );
+    assert_eq!(warned(&src), [(UNPLACED.to_string(), 15)]);
     let (_, warnings) = contract::compile_warned(&src);
+    let says = &warnings[0].message;
     assert!(
-        warnings[0]
-            .message
-            .contains("this text, after the subtitle,")
-            && warnings[1].message.contains("this `image`")
-            && warnings[0]
-                .message
-                .contains("Move it below the `header`, into the route's content"),
-        "{warnings:?}"
+        says.contains("this text, after the subtitle,")
+            && says.contains("Move it out of the heading's box, so it is an item of its own"),
+        "{says}"
     );
-    // Before the heading, a text has no place either; a second search
-    // field or tablist neither.
+    // Nor does a button that presses nothing, in a box or not.
     assert_eq!(
         warned(&route(
-            "  text \"Hi\"\n  text \"List\" role=\"heading\" aria-level=1\n  input type=\"search\" value=q\n  input type=\"search\" value=q"
+            "  text \"List\" role=\"heading\" aria-level=1\n  row\n    button aria-label=\"Idle\"\n      text \"Idle\""
         )),
-        [(UNPLACED.to_string(), 12), (UNPLACED.to_string(), 15)]
+        [(UNPLACED.to_string(), 14)]
     );
-    // A box of things the bar does not place is named once, as a box.
+    // Nor does a link with an empty `href`, which follows nothing.
     assert_eq!(
         warned(&route(
-            "  text \"List\" role=\"heading\" aria-level=1\n  text \"sub\"\n  row\n    text \"a\"\n    text \"b\""
+            "  text \"List\" role=\"heading\" aria-level=1\n  link href=\"\" aria-label=\"Nowhere\"\n    text \"Nowhere\""
+        )),
+        [(UNPLACED.to_string(), 13)]
+    );
+    // Nor does a spinner in the heading's box, read through a link that follows nothing.
+    assert_eq!(
+        warned(&route(
+            "  column\n    link href=\"\"\n      text \"List\" role=\"heading\" aria-level=1\n    progress"
+        )),
+        [(UNPLACED.to_string(), 15)]
+    );
+    // A second search field has no place either.
+    assert_eq!(
+        warned(&route(
+            "  text \"List\" role=\"heading\" aria-level=1\n  input type=\"search\" value=q\n  input type=\"search\" value=q"
         )),
         [(UNPLACED.to_string(), 14)]
     );
@@ -80,9 +89,20 @@ fn what_the_bar_places_or_the_compiler_cannot_see_is_not_warned() {
         "  row\n    box background-color=\"-exact-system-blue\"\n      text \"AL\"\n    text \"Ada\" role=\"heading\" aria-level=1\n    row\n      image \"symbol:sf/bell.slash\"\n      text \"Muted\"",
         // A pressable group around the heading is the title, tapped.
         "  button press=go\n    text \"Ada\" role=\"heading\" aria-level=1\n    text \"online\"",
+        // A link that follows nothing around the heading is walked for it;
+        // a button with an `href` follows it, an item.
+        "  link href=\"\"\n    text \"List\" role=\"heading\" aria-level=1",
+        "  text \"List\" role=\"heading\" aria-level=1\n  button href=\"/history\" aria-label=\"History\"\n    text \"History\"",
+        // A button that follows an `href` around the heading is walked for
+        // it; the spinner beside it is an item.
+        "  button href=\"/history\"\n    text \"List\" role=\"heading\" aria-level=1\n  progress",
         // Readouts (LLP 1075.003 §9.15): a status of a dot and a text after
         // the buttons, a status text before the heading.
         "  text \"Saved\" role=\"status\"\n  text \"Log\" role=\"heading\"\n  button press=go\n    text \"Add\"\n  row role=\"status\" gap=6\n    view width=7 height=7 border-radius=3.5 background-color=\"-exact-system-blue\"\n    text \"Clock\" font-family=\"Menlo\" font-size=12",
+        // Elements outside the heading's box are items of their own (LLP
+        // 1141.004 D1): a text before the heading, a count after the
+        // subtitle, a picture, a row of a spinner and its words.
+        "  text \"Hi\"\n  text \"List\" role=\"heading\" aria-level=1\n  text \"3 left\"\n  text \"synced\"\n  image \"symbol:heart\"\n  row gap=6\n    progress\n    text \"Updating\"\n  button press=go testId=\"add\"\n    text \"Add\"\n  row\n    view flex=1",
         // `if`, `for` and a computed role are given the benefit.
         "  text \"List\" role=\"heading\" aria-level=1\n  text \"sub\"\n  if q != \"\"\n    text q\n  for x in [\"a\"] key=x\n    text x\n  text \"c\" role=(q == \"\" ? \"note\" : \"status\")",
         // Shown on no host, or over the page when opened.
@@ -143,6 +163,15 @@ fn a_header_with_no_heading_or_two_is_named_as_no_bar() {
         assert_ne!(drawn, none);
         assert_eq!(warned(&drawn), [], "{attr}");
     }
+    // A button that opens a dialog around the only heading is an item: no heading.
+    let opens = route(
+        "  button commandfor=\"about\" command=\"show-modal\"\n    text \"List\" role=\"heading\" aria-level=1\n  progress\n  dialog id=\"about\"\n    text \"About\"",
+    );
+    assert_eq!(
+        warned(&opens).first().map(|w| w.0.as_str()),
+        Some(NO_BAR),
+        "{opens}"
+    );
     let two = route("  text \"A\" role=\"heading\" aria-level=1\n  text \"B\" role=\"heading\" aria-level=2\n  image \"symbol:heart\"");
     assert_eq!(warned(&two), [(NO_BAR.to_string(), 11)]);
     let (_, warnings) = contract::compile_warned(&two);
@@ -155,7 +184,7 @@ fn a_header_with_no_heading_or_two_is_named_as_no_bar() {
     // header is the route's first child while its branch is taken.
     let branched = route("  text \"List\" role=\"heading\" aria-level=1").replace(
         "          header display=\"flex\"\n            text \"List\" role=\"heading\" aria-level=1\n",
-        "          if q == \"\"\n            header\n              text \"Sheet\"\n          else\n            header\n              text \"List\" role=\"heading\" aria-level=1\n              image \"symbol:heart\"\n",
+        "          if q == \"\"\n            header\n              text \"Sheet\"\n          else\n            header\n              text \"List\" role=\"heading\" aria-level=1\n              button aria-label=\"Idle\"\n                text \"Idle\"\n",
     );
     assert_eq!(
         warned(&branched),
@@ -170,7 +199,7 @@ fn a_header_with_no_heading_or_two_is_named_as_no_bar() {
         )
         .replace(
             "          header display=\"flex\"\n            text \"List\" role=\"heading\" aria-level=1\n",
-            "          match picked\n            case some(p)\n              header\n                text \"Sheet\"\n            case none\n              header\n                text \"List\" role=\"heading\" aria-level=1\n                image \"symbol:heart\"\n",
+            "          match picked\n            case some(p)\n              header\n                text \"Sheet\"\n            case none\n              header\n                text \"List\" role=\"heading\" aria-level=1\n                button aria-label=\"Idle\"\n                  text \"Idle\"\n",
         );
     assert_eq!(
         warned(&matched),

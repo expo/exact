@@ -194,8 +194,6 @@ final class BarFaceIOSTests: XCTestCase {
         XCTAssertNil(color, "inherited: unsaid")
         if #available(iOS 26.0, *) { XCTAssertNil(face.shares[1], "unwritten ink uses the label colour") }
         else { XCTAssertEqual(face.shares[1], 1, "unwritten ink uses the tint and follows its dimming") }
-        let readout = try XCTUnwrap(ChipFace(node, engine: TextEngine(resolve: { _ in nil }), readout: true))
-        XCTAssertNil(readout.shares[1], "a readout's unwritten ink is always the label colour")
     }
 
     func testASymbolOnlyUsesColourWrittenInsideTheBarButton() throws {
@@ -269,13 +267,12 @@ final class BarFaceIOSTests: XCTestCase {
 
     /// The button's left and right padding is room the face keeps inside
     /// the item's glass: the image is that much wider and its parts start
-    /// after the left padding. A readout's face is its parts alone.
+    /// after the left padding.
     func testAButtonsSidePaddingWidensItsFace() throws {
         let engine = TextEngine(resolve: { _ in nil })
         let (p, node) = button([dot, label(["written": ["text_color"]])])
         defer { p.reset() }
         let tight = try XCTUnwrap(ChipFace(node, engine: engine))
-        let tightReadout = try XCTUnwrap(ChipFace(node, engine: engine, readout: true))
         p.apply(wireBatch([["op": "style", "id": 1, "style": ["text_color": [0, 0, 0, 255], "padding_left": 7, "padding_right": 3]]]))
         let padded = try XCTUnwrap(ChipFace(node, engine: engine))
         XCTAssertEqual(padded.insetLeft, 7)
@@ -289,11 +286,6 @@ final class BarFaceIOSTests: XCTestCase {
         XCTAssertEqual(gutter.3, 0, "nothing is drawn in the left padding")
         let green = try XCTUnwrap(SharePictureCase.rgba(cg, x: Int((7 + 7) * after.scale), y: row))
         XCTAssertGreaterThan(green.1, 150, "the dot starts after it")
-        let readout = try XCTUnwrap(ChipFace(node, engine: engine, readout: true))
-        XCTAssertEqual(readout.insetLeft, 0)
-        XCTAssertEqual(readout.insetRight, 0)
-        XCTAssertEqual(readout.image(tint: .systemBlue).size.width, tightReadout.image(tint: .systemBlue).size.width,
-                       accuracy: 0.001, "a readout ignores the padding")
     }
 
     /// A native button's title size and weight, written on it or on its
