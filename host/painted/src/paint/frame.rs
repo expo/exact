@@ -37,7 +37,7 @@ impl Painter {
         scene: &Scene<'_>,
         viewport: (f32, f32),
     ) -> Result<Frame<Option<Arc<Pixmap>>>, String> {
-        let backend = std::mem::replace(&mut self.backend, Box::new(layer::Unpainted));
+        let backend = std::mem::replace(&mut self.backend, Box::new(layer::Unpainted::<false>));
         let rows = std::mem::take(&mut self.rows);
         let frame = self.paint_selected_for(scene, viewport, None, None, FrameTarget::Geometry);
         self.rows = rows;
@@ -63,7 +63,12 @@ impl Painter {
         target: FrameTarget,
     ) -> Result<Frame<Option<Arc<Pixmap>>>, String> {
         if target == FrameTarget::Geometry && !self.backend.needs_geometry_paint() {
-            let backend = std::mem::replace(&mut self.backend, Box::new(layer::Unpainted));
+            let unpainted: Box<dyn Backend> = if self.backend.independent_section_rows() {
+                Box::new(layer::Unpainted::<true>)
+            } else {
+                Box::new(layer::Unpainted::<false>)
+            };
+            let backend = std::mem::replace(&mut self.backend, unpainted);
             let frame = self.paint_selected_for(scene, viewport, None, None, target);
             self.backend = backend;
             return frame;

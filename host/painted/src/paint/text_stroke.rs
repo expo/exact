@@ -431,7 +431,7 @@ mod tests {
         let mut unpainted = Painter::new(
             painter.text.clone(),
             3.0,
-            Box::new(crate::paint::layer::Unpainted),
+            Box::new(crate::paint::layer::Unpainted::<false>),
         );
         unpainted.stroke_pass(&paragraph, &palette, 5.0, (0.0, 0.0), Transform::identity());
         assert_eq!(

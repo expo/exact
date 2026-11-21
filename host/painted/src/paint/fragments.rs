@@ -82,8 +82,9 @@ impl Painter {
         self.row_text(node.key, &paragraph);
         // CSS `text-overflow: ellipsis` in a clipping box: an over-wide line
         // ends in "…" (LLP 1053 G5; paint only).
+        let (ox, oy) = effective_overflow(node);
         let shown = (s.text_overflow == exact_kernel::TextOverflow::Ellipsis
-            && effective_overflow(node).0 != Overflow::Visible)
+            && ox != Overflow::Visible)
             .then(|| paragraph.ellipsized(width))
             .flatten()
             .unwrap_or_else(|| paragraph.clone());
@@ -105,8 +106,12 @@ impl Painter {
                     && !control::ringless(n)
             });
         let focus = focus.map(|focused| (focused.id, control::ring(&focused, self.dark)));
+        let can_overflow = frags.is_empty() && (ox == Overflow::Visible || oy == Overflow::Visible);
         let mut baseline = None;
         let mut at = |painter: &mut Self, shown: &Paragraph, origin: (f32, f32)| {
+            if can_overflow {
+                painter.row_text_reach(shown, origin, geometry.content, ts);
+            }
             if baseline.is_none() {
                 baseline = shown.baseline_at(origin);
             }

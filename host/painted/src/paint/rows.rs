@@ -100,6 +100,11 @@ struct Row {
     /// The scrollers inside it and their offsets when recorded: one moved
     /// (a swipe) records the row again.
     scrolls: Vec<(ViewId, (f32, f32))>,
+    /// A fresh geometry walk can translate these hits without consulting descendants.
+    can_translate_hits: bool,
+    may_have_hit_slop: bool,
+    /// Kept through a clipped fractional move. Re-record its glyphs before drawing.
+    paint_stale: bool,
     unsupported: bool,
     /// What the row's drawing covers, relative to its origin.
     bounds: Rect4,
@@ -110,6 +115,25 @@ struct Row {
     /// What its subtree lets escape into its list's painting, while nothing
     /// in it changed ([`Painter::refresh_ranks`]).
     order: Option<exact_kernel::paint_order::Potentials>,
+}
+
+impl Row {
+    fn bounds_at(&self, origin: (f32, f32)) -> Rect4 {
+        let (x, y, w, h) = self.bounds;
+        (x + origin.0, y + origin.1, w, h)
+    }
+
+    fn can_translate_geometry_to(&self, origin: (f32, f32), viewport: (f32, f32)) -> bool {
+        let (width, height) = viewport;
+        if (origin.0 - self.origin.0).abs() <= width && (origin.1 - self.origin.1).abs() <= height {
+            return true;
+        }
+        // A long translation can round a hit to the old box's exclusive edge.
+        // Walk rows that can be seen at the new position in their current space.
+        let (_, _, w, h) = intersect(self.bounds_at(origin), (0., 0., width, height));
+        // A box with hit slop can take hits beyond the drawing's bounds.
+        !self.may_have_hit_slop && (w <= 0. || h <= 0.)
+    }
 }
 
 /// A picture a backend may keep apart from its row ([`Backend::slot_begin`]):
@@ -139,6 +163,8 @@ impl RowPin {
 struct Capture {
     clip: Option<Rect4>,
     refused: bool,
+    split_sections: bool,
+    may_have_hit_slop: bool,
     /// What its boxes' filters paint, in the walk's coordinates (`box_filter.rs`).
     reach: Option<Rect4>,
     images: Vec<(ViewId, Option<std::sync::Weak<Bitmap>>)>,
@@ -167,6 +193,8 @@ pub(super) struct Rows {
     /// Rows drawings took by reference, and rows they walked again.
     #[cfg(test)]
     pub(super) referred: (usize, usize),
+    #[cfg(test)]
+    geometry_replays: usize,
     /// Viewport width, scale, appearance and whether desktop bars draw.
     world: Option<(u32, u32, bool, bool)>,
     /// The last paint's focused node and whether its ring was suppressed.
@@ -332,6 +360,11 @@ impl Painter {
         self.unkeep_rows();
     }
 
+    #[cfg(test)]
+    pub(crate) fn retained_row_id(&self, key: NodeKey) -> Option<u32> {
+        self.rows.kept.get(&key).map(|row| row.id)
+    }
+
     /// The platform's colours resolve differently (LLP 1115.001 D4):
     /// nothing kept from a paint under the old ones stands. Every kept row
     /// is freed and recorded again, and the next paint is whole.
@@ -363,7 +396,7 @@ impl Painter {
         self.rows.frame += 1;
         self.rows.groups.clear();
         self.rows.active = !off
-            && self.backend.rows()
+            && (self.backend.rows() || self.backend.geometry_rows())
             && walk.skip.is_none()
             && walk.replay.is_none()
             && self.placements.is_empty()
@@ -384,6 +417,9 @@ impl Painter {
 
     /// At a walk's end: free what no longer draws.
     pub(super) fn rows_end(&mut self) {
+        if self.backend.geometry_rows() {
+            return;
+        }
         if self.rows.active {
             let frame = self.rows.frame;
             let stale: Vec<NodeKey> = self
@@ -397,8 +433,8 @@ impl Painter {
                 let gone = self.rows.kept.remove(&k).expect("listed");
                 self.rows.freed.push(gone.id);
             }
+            self.rows.suspect.clear();
         }
-        self.rows.suspect.clear();
         let held = std::mem::take(&mut self.rows.held);
         for id in std::mem::take(&mut self.rows.freed).into_iter().chain(held) {
             if (self.rows.pins.get(&id)).is_some_and(|pin| pin.strong_count() > 0) {
@@ -412,7 +448,7 @@ impl Painter {
 
     /// A scroller's rows begin: the backend groups them; their boxes are noted.
     pub(super) fn group_begin(&mut self, walk: &Walk<'_, '_>, id: ViewId) {
-        if self.rows.refer.is_some() {
+        if self.rows.refer.is_some() || self.backend.geometry_rows() {
             return;
         }
         let scroll = walk.scene.scroll.get(&id).copied().unwrap_or((0.0, 0.0));
@@ -423,7 +459,7 @@ impl Painter {
     }
 
     pub(super) fn group_end(&mut self, walk: &Walk<'_, '_>) {
-        if self.rows.refer.is_some() {
+        if self.rows.refer.is_some() || self.backend.geometry_rows() {
             return;
         }
         self.backend.group_end();
@@ -460,7 +496,7 @@ impl Painter {
         // A zoomable container's child is drawn at the zoom, which a row
         // replayed at another offset would not follow.
         self.rows.active
-            && (self.rows.refer.is_some() || self.backend.rows())
+            && (self.rows.refer.is_some() || self.backend.rows() || self.backend.geometry_rows())
             && (scrolls(y) || self.rows_wrapper(node.key))
             && zoom::range(node).is_none()
     }
@@ -505,7 +541,25 @@ impl Painter {
             .is_some_and(|n| n.children().len() > 1 && !scrolls(effective_overflow(&n).1))
     }
 
-    /// A scroller's one container, walked with its children as the rows.
+    /// A column with a sticky heading keeps its body rows apart.
+    pub(super) fn is_row_section(walk: &Walk<'_, '_>, id: ViewId) -> bool {
+        walk.scene.kernel.node(id).is_some_and(|node| {
+            node.node_type == NodeType::View
+                && node.style.flex_direction == exact_kernel::FlexDirection::Column
+                && node.layout_position() != exact_kernel::PositionType::Sticky
+                && !scrolls(effective_overflow(&node).0)
+                && !scrolls(effective_overflow(&node).1)
+                && {
+                    let mut children = node.child_nodes();
+                    children.len() >= 3
+                        && children.any(|child| {
+                            child.layout_position() == exact_kernel::PositionType::Sticky
+                        })
+                }
+        })
+    }
+
+    /// A container walked with its children as the rows.
     pub(super) fn wrapped(
         &mut self,
         walk: &mut Walk<'_, '_>,
@@ -521,20 +575,19 @@ impl Painter {
     }
 
     /// Note a node walked while a row records.
-    pub(super) fn row_node(
-        &mut self,
-        kernel: &Kernel,
-        key: NodeKey,
-        f: exact_kernel::Frame,
-        shown: &Presented,
-    ) {
+    pub(super) fn row_node(&mut self, kernel: &Kernel, node: &NodeRef<'_>, shown: &Presented) {
         if let Some(c) = &mut self.rows.recording {
             c.frames.push(RowFrame {
-                node: key,
-                frame: f,
-                padding: kernel.resolved_padding(key).unwrap_or_default(),
+                node: node.key,
+                frame: node.frame,
+                padding: kernel.resolved_padding(node.key).unwrap_or_default(),
             });
-            c.refused |= shown.press != 1.0 || shown.press_translate != [0.; 4];
+            c.may_have_hit_slop |= c.split_sections && node.style.may_have_hit_slop();
+            // The sticky offset can change independently of the row's origin.
+            c.refused |= (c.split_sections
+                && node.layout_position() == exact_kernel::PositionType::Sticky)
+                || shown.press != 1.0
+                || shown.press_translate != [0.; 4];
         }
     }
 
@@ -654,11 +707,48 @@ impl Painter {
         within(clip, self.rows.recording.as_ref().and_then(|c| c.clip))
     }
 
+    /// The shadow can reach the port while its box is outside it.
+    pub(super) fn row_shadows(
+        &mut self,
+        shadows: &[shadow::ShadowPaint],
+        rect: Rect4,
+        ts: Transform,
+    ) {
+        if let Some(c) = &mut self.rows.recording {
+            for bounds in shadows
+                .iter()
+                .filter_map(|shadow| shadow.outer_bounds(rect))
+            {
+                c.reach = Some(union(c.reach, bbox(ts, bounds)));
+            }
+        }
+    }
+
     /// What a box's filter paints in a recording row, past the box.
     pub(super) fn row_reach(&mut self, r: Rect4) {
         if let Some(c) = &mut self.rows.recording {
             c.reach = Some(union(c.reach, r));
         }
+    }
+
+    pub(super) fn row_text_reach(
+        &mut self,
+        text: &Paragraph,
+        at: (f32, f32),
+        content: Rect4,
+        ts: Transform,
+    ) {
+        if self.rows.recording.is_none() {
+            return;
+        }
+        let (x, y, w, h) = super::text_shadow::line_bounds(text);
+        let lines = (x + at.0, y + at.1, w, h);
+        if intersect(lines, content) == lines {
+            return;
+        }
+        let (x, y, w, h) = bbox(ts, lines);
+        // Give the lines the same room for glyph overhang as the layout box.
+        self.row_reach((x - MARGIN, y - MARGIN, w + 2. * MARGIN, h + 2. * MARGIN));
     }
 
     /// Whether a kept row draws what it would record now; `pictures`: its
@@ -710,27 +800,58 @@ impl Painter {
         if self.rows.refer.is_some() {
             return self.row_referred(walk, id, ts, offset, clip_rect);
         }
-        // A transparent ancestor can replace the backend after rows_begin enabled reuse.
-        if !self.backend.rows() || walk.hit_space.is_some() {
-            return self.node(walk, id, ts, offset, clip_rect);
-        }
         let Some(node) = walk.scene.kernel.node(id) else {
             return;
         };
-        if ts.kx != 0.0 || ts.ky != 0.0 || (walk.scene.hidden)(id) {
-            return self.node(walk, id, ts, offset, clip_rect);
+        let split_sections = self.backend.independent_section_rows();
+        // The outer scroller already owns the backend's open row group.
+        // A sticky root on Ink can draw directly because it never reuses a row.
+        let geometry = self.backend.geometry_rows();
+        if !(self.backend.rows() || geometry)
+            || walk.hit_space.is_some()
+            || ts.kx != 0.0
+            || ts.ky != 0.0
+            || (walk.scene.hidden)(id)
+            || (split_sections && node.layout_position() == exact_kernel::PositionType::Sticky)
+        {
+            let paused = self.rows_pause(None);
+            self.node(walk, id, ts, offset, clip_rect);
+            self.rows_resume(paused);
+            return;
         }
         let r = paint_rect(node.frame, offset);
         let origin = (ts.sx * r.0 + ts.tx, ts.sy * r.1 + ts.ty);
         let scale = (ts.sx, ts.sy);
         let frame = self.rows.frame;
-        let kept = self.rows.kept.get(&node.key);
-        let valid = kept.is_some_and(|row| self.backend.row_reusable(row.id, origin))
+        let kept =
+            self.rows.kept.get(&node.key).filter(|row| {
+                !split_sections || row.can_translate_geometry_to(origin, self.viewport)
+            });
+        let suspect = self.rows.suspect.contains(&node.key);
+        let can_draw = !geometry
+            && kept
+                .is_some_and(|row| !row.paint_stale && self.backend.row_reusable(row.id, origin));
+        let metadata_only = !can_draw
+            && !suspect
+            && kept.is_some_and(|row| {
+                row.can_translate_hits
+                    && (geometry
+                        || (!self.backend.rows_through()
+                            && self
+                                .backend
+                                .can_keep_clipped_row(row.id, row.bounds_at(origin))))
+            });
+        let valid = (can_draw || metadata_only)
             && (kept.is_some_and(|row| self.row_valid(row, &node, walk, scale, true))
-                || (kept.is_some_and(|row| self.row_valid(row, &node, walk, scale, false))
+                || (can_draw
+                    && kept.is_some_and(|row| self.row_valid(row, &node, walk, scale, false))
                     && self.pictures_again(walk, node.key)));
         if let Some(row) = self.rows.kept.get(&node.key).filter(|_| valid) {
             counters::add(Counter::RowsReplayed, 1);
+            #[cfg(test)]
+            if geometry {
+                self.rows.geometry_replays += 1;
+            }
             let d = (origin.0 - row.origin.0, origin.1 - row.origin.1);
             for b in &row.boxes {
                 let mut b = b.clone();
@@ -748,18 +869,23 @@ impl Painter {
                 walk.inline.insert(*id, inline.translated(d.0, d.1));
             }
             self.damage.unsupported |= row.unsupported;
-            let bounds = (
-                row.bounds.0 + origin.0,
-                row.bounds.1 + origin.1,
-                row.bounds.2,
-                row.bounds.3,
-            );
+            let bounds = row.bounds_at(origin);
             let rid = row.id;
-            self.rows.kept.get_mut(&node.key).expect("kept").seen = frame;
-            if !self.backend.row_culled(bounds) {
+            if !geometry {
+                let row = self.rows.kept.get_mut(&node.key).expect("kept");
+                row.seen = frame;
+                row.paint_stale |= metadata_only;
+                // The pixel replay permits small shifts inside a suspect row.
+                // Its old hit boxes are no longer safe for geometry reuse.
+                row.can_translate_hits &= !suspect;
+            }
+            if can_draw && !self.backend.row_culled(bounds) {
                 self.backend.row_draw(rid, origin, bounds);
             }
             return;
+        }
+        if geometry {
+            return self.node(walk, id, ts, offset, clip_rect);
         }
         counters::observe(|s| {
             s.add(Counter::RowsRecorded, 1);
@@ -813,6 +939,7 @@ impl Painter {
         self.backend.row_begin(self.rows.next, content, previous);
         self.rows.recording = Some(Capture {
             clip: clip_rect,
+            split_sections,
             ..Capture::default()
         });
         let page = self.kept.to_page;
@@ -924,6 +1051,9 @@ impl Painter {
                 origin,
                 scale,
                 size: (node.frame.width, node.frame.height),
+                can_translate_hits: boxes.iter().all(|b| b.hit.is_none()),
+                may_have_hit_slop: capture.may_have_hit_slop,
+                paint_stale: false,
                 boxes,
                 text: capture.text,
                 inline: capture.inline,
@@ -1021,6 +1151,11 @@ impl Painter {
             }
         };
         recorder.row(pin, origin, bounds, place, drawing);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn geometry_rows_replayed(&self) -> usize {
+        self.rows.geometry_replays
     }
 
     /// Rows drawings took by reference, and rows they walked again.

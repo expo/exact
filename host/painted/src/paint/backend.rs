@@ -384,6 +384,17 @@ pub trait Backend {
     fn rows(&self) -> bool {
         false
     }
+    /// Whether this geometry walk can read existing row metadata without
+    /// recording, drawing or freeing rows on the backend.
+    fn geometry_rows(&self) -> bool {
+        false
+    }
+
+    /// Whether rows can be kept separately within a sticky section and
+    /// their saved metadata reused in a geometry-only walk.
+    fn independent_section_rows(&self) -> bool {
+        false
+    }
     /// Whether a kept drawing ([`tape`](super::tape)) may hold this
     /// backend's rows by reference, drawing them through its transform
     /// ([`Backend::row_draw_through`]); otherwise it records their draw calls.
@@ -398,6 +409,13 @@ pub trait Backend {
     /// Whether a retained recording remains usable at this viewport origin.
     fn row_reusable(&self, _id: u32, _origin: (f32, f32)) -> bool {
         true
+    }
+    /// Whether an existing recording may stay in cache while fully clipped,
+    /// even when it would have to be recorded again to draw at this origin.
+    /// Only used when `rows_through()` is false: a retained drawing must not
+    /// hold a reference to a recording that needs to be made again.
+    fn can_keep_clipped_row(&self, _id: u32, _bounds: Rect4) -> bool {
+        false
     }
     /// Record row `id`, whose ops are relative to `origin` (viewport points;
     /// zero when the row is walked in its own coordinates); the row was

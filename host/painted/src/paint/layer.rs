@@ -13,12 +13,18 @@ use std::sync::Arc;
 use tiny_skia::{Pixmap, Transform};
 
 /// Walk geometry without drawing pixels.
-pub(super) struct Unpainted;
+pub(super) struct Unpainted<const REUSE_ROWS: bool>;
 
-impl Backend for Unpainted {
+impl<const REUSE_ROWS: bool> Backend for Unpainted<REUSE_ROWS> {
     crate::paints_nothing!();
     fn name(&self) -> &'static str {
         "none"
+    }
+    fn geometry_rows(&self) -> bool {
+        REUSE_ROWS
+    }
+    fn independent_section_rows(&self) -> bool {
+        REUSE_ROWS
     }
     fn begin(&mut self, _: f32, _: f32, _: f32) {}
     fn fill(&mut self, _: &Shape, _: [u8; 4], _: Transform) {}

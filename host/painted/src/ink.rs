@@ -903,6 +903,10 @@ impl Backend for Ink {
     }
 
     fn rows(&self) -> bool {
+        // Row recordings cannot nest inside a layer capture.
+        self.rows.capture.is_empty()
+    }
+    fn independent_section_rows(&self) -> bool {
         true
     }
     fn row_local(&self) -> bool {
@@ -910,6 +914,9 @@ impl Backend for Ink {
     }
     fn row_reusable(&self, id: u32, origin: (f32, f32)) -> bool {
         self.reusable(id, origin)
+    }
+    fn can_keep_clipped_row(&self, id: u32, bounds: Rect4) -> bool {
+        self.keeps_row_outside_clip(id, bounds)
     }
     fn group_begin(&mut self, _id: u32, scroll: (f32, f32)) {
         if exact_ink::counters::enabled() {
@@ -921,7 +928,10 @@ impl Backend for Ink {
             self.rows.scrolls.pop();
         }
     }
-    fn row_begin(&mut self, id: u32, origin: (f32, f32), _: Option<u32>) {
+    fn row_begin(&mut self, id: u32, origin: (f32, f32), previous: Option<u32>) {
+        if let Some(previous) = previous {
+            self.observe_row_replacement(previous, origin);
+        }
         self.record_row(id, origin);
     }
     fn row_end(&mut self, _: Rect4) -> u32 {
