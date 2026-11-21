@@ -1,6 +1,6 @@
 //! The build CLI's human and structured diagnostics. @ref LLP 1035.005 D2.
 
-use std::{io::Write, path::Path, process::ExitCode};
+use std::{path::Path, process::ExitCode};
 
 pub(crate) const USAGE: &str = "usage: contract build <file.contract> [--stdin | --stdin-as <used.contract>] [-o <file.plan>] [--json] [--errors-only] [--map (requires -o)] [--entry <kind> (requires -o; no --map or --stdin)] [--surface terminal (no --entry)]";
 

@@ -1,7 +1,7 @@
 //! LLP 1017 P7: `test` blocks parse to the agent's steps and print as JSON
 //! the driver reads (`scripts/agent.mjs --test`).
 
-use contract_syntax::{Expr, StateComparison, StateOperand, Step, TapForm};
+use contract_syntax::{Expr, StateOperand, Step, TapForm};
 
 #[test]
 fn a_test_answers_a_pending_presence_prompt() {
