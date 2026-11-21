@@ -27,18 +27,25 @@ final class DragOutHost: DragOutCapability {
 final class MouseDragOut: NSObject, MouseRecognizer, NSDraggingSource {
     weak var presenter: Presenter?
     private(set) weak var armed: NodeView?
+    /// The node the down landed on, from which the source is found again as
+    /// the drag begins.
+    private weak var down: NodeView?
     private(set) var engaged = false
     /// The window a session began in, which its end posts the release to,
     /// whether or not the node is still there.
     private weak var sessionWindow: NSWindow?
     private var origin = CGPoint.zero
+    /// AppKit's session, begun from the node; a test's stand-in records it,
+    /// since a session follows the hardware mouse.
+    var begin: (NodeView, [NSDraggingItem], NSEvent, NSDraggingSource) -> Void = { $0.beginDraggingSession(with: $1, event: $2, source: $3) }
 
     init(_ presenter: Presenter) { self.presenter = presenter }
 
     func arm(_ node: NodeView, event: NSEvent) {
-        armed = nil; engaged = false
+        armed = nil; down = nil; engaged = false
         guard !ExactEnv.agentMode, let presenter else { return }
         armed = Self.source(from: node, in: presenter)
+        down = node
         origin = event.locationInWindow
     }
 
@@ -49,32 +56,38 @@ final class MouseDragOut: NSObject, MouseRecognizer, NSDraggingSource {
         // it, so a dominant sideways drag reaches an earlier swipe first.
         let point = event.locationInWindow
         guard max(abs(point.x - origin.x), abs(point.y - origin.y)) > Gesture.slop else { return false }
+        // A batch since the down may have disabled the node, turned its
+        // `draggable` off, or put a press or a disabled node on the way up.
+        guard let down, Self.source(from: down, in: presenter) === armed else { self.armed = nil; return false }
         let items = DragItemsMac.items(of: armed, in: presenter.session)
-        guard !items.isEmpty else { self.armed = nil; return false }
+        // Read again: the items' picture draws the node, which runs views' own code
+        guard !items.isEmpty, Self.source(from: down, in: presenter) === armed else { self.armed = nil; return false }
         began(in: armed.window)
         // AppKit tracks the mouse from here; the session's end resets this.
-        armed.beginDraggingSession(with: items, event: event, source: self)
+        begin(armed, items, event, self)
         return true
     }
 
     /// The up `ended(at:)` posts, or a real one: taken while a session ran.
     func up(_ event: NSEvent) -> Bool {
-        defer { armed = nil; engaged = false }
+        defer { armed = nil; down = nil; engaged = false }
         return engaged
     }
 
-    func cancel() { armed = nil; engaged = false }
+    func cancel() { armed = nil; down = nil; engaged = false }
 
     /// A session began from the armed node in `window`.
     func began(in window: NSWindow?) {
         engaged = true; sessionWindow = window
     }
 
-    /// The node a down on `node` drags: the innermost draggable one on the
-    /// way up, found through the presenter's index, unless a node that hears
-    /// `press` or edits text, or a disabled one, comes first.
+    /// The node a down on `node` drags: the innermost draggable one that
+    /// carries something on the way up, found through the presenter's index,
+    /// unless a node that hears `press` or edits text, or a disabled one,
+    /// comes first.
     static func source(from node: NodeView, in presenter: Presenter) -> NodeView? {
-        let draggable = presenter.carrying("draggable").filter { $0.props["draggable"] == "true" }
+        let carried = ["dataTransferFiles", "dataTransferUrl", "dataTransferText"]
+        let draggable = presenter.carrying("draggable").filter { v in v.props["draggable"] == "true" && carried.contains { !(v.props[$0] ?? "").isEmpty } }
         guard draggable.contains(where: { node.isDescendant(of: $0) }) else { return nil }
         let sources = Set(draggable.map(ObjectIdentifier.init))
         let nodes = Dictionary(presenter.views.values.map { (ObjectIdentifier($0), $0) }, uniquingKeysWith: { first, _ in first })
