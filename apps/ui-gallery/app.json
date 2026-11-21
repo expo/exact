@@ -44,11 +44,12 @@
       "ios": "0"
     }
   },
-  "hatches": [
-    "sticky-limit",
-    "hdr-probe",
-    "hdr-reference"
-  ],
+  "hatches": {
+    "sidebar-list": ["ios"],
+    "sticky-limit": ["ios", "tvos", "macos", "web", "linux", "windows", "android"],
+    "hdr-probe": ["ios", "tvos", "macos", "web", "linux", "windows", "android"],
+    "hdr-reference": ["ios", "tvos", "macos", "web", "linux", "windows", "android"]
+  },
   "data": [
     "kind",
     "limit"

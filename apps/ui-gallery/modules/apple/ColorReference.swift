@@ -14,7 +14,7 @@ final class ColorReference: ExactModule {
             return ["available": false]
         case "sidebarBarHeight":
             #if os(iOS)
-            sidebarBar.update()
+            // Answer what was measured: the module says when it measures another height
             return ["height": Double(sidebarBar.height)]
             #else
             return ["height": 0]
@@ -31,12 +31,9 @@ final class ColorReference: ExactModule {
         return height
     }()
 
-    /// Measures the list's bar again, and says so when its height changed.
-    private func updateSidebarBar() {
-        if sidebarBar.update() { context.changed(SidebarBarHeight.topic) }
-    }
+    override func window(_ window: ExactWindow) { sidebarBar.scheduleUpdate() }
 
-    override func window(_ window: ExactWindow) { updateSidebarBar() }
+    override func windowEnded(_ window: ExactWindow) { sidebarBar.scheduleUpdate() }
 
     private let sharedBackgrounds = NSMapTable<UIViewController, NSNumber>.weakToStrongObjects()
 
@@ -50,8 +47,6 @@ final class ColorReference: ExactModule {
     }
 
     override func route(_ route: ExactRoute) {
-        sidebarBar.follow(route.controller)
-        updateSidebarBar()
         let shared = route.element("range-bar") != nil
         if Self.sharesMaterial, route.isNew || sharedBackgrounds.object(forKey: route.controller)?.boolValue != shared {
             let appearance = UINavigationBarAppearance()
@@ -81,6 +76,14 @@ final class ColorReference: ExactModule {
     override func element(_ element: ExactElement) {
         #if os(iOS)
         guard let view = element.view else { return }
+        if element.hatch == .sidebarList || element.hatch == .stickyLimit, element.isNew {
+            let watch = SidebarBarWatch(frame: view.bounds)
+            watch.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            watch.onChange = { [weak sidebarBar] in sidebarBar?.scheduleUpdate() }
+            view.addSubview(watch)
+            element.owns(view: watch, "Watch for the list bar's height")
+            if element.hatch == .sidebarList { sidebarBar.follow(list: view) }
+        }
         if Self.sharesMaterial, element.hatch == .stickyLimit, element.isNew {
             // Keep the authored wrapper unpainted so Exact recognizes it as a native control bar. `route`
             // clears the bar over it, so this material is the header's and the controls' one.
@@ -145,6 +148,12 @@ final class ColorReference: ExactModule {
                 }
             }
         }
+        #endif
+    }
+
+    override func elementEnded(_ element: ExactElement) {
+        #if os(iOS)
+        if element.hatch == .sidebarList, let view = element.view { sidebarBar.forget(list: view) }
         #endif
     }
 

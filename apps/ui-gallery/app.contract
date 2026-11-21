@@ -75,7 +75,7 @@ component UIGallery
           column navigationKey=`${e.id}` navigationScroll="gallery-sidebar" padding-top=(host == "macos" ? "env(safe-area-inset-top)" : "0px") position="absolute" inset=0 display="flex" flex-direction="column"
             header
               text "UI Gallery" role="heading" aria-level=1
-            list id="gallery-sidebar" testId="gallery-sidebar" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
+            list id="gallery-sidebar" testId="gallery-sidebar" hatch="sidebar-list" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
               for group in ["Text", "Color & images", "UI & media"] key=group
                 section
                   header

@@ -12,7 +12,7 @@ final class GalleryUITests: XCTestCase {
 
     func testSidebarSelectionFinishesWithoutAnotherTouch() throws {
         let app = XCUIApplication(bundleIdentifier: "com.exact.uigallery")
-        app.launch()
+        launchShowingTheList(app)
         let sidebar = app.collectionViews["gallery-sidebar"]
         XCTAssertTrue(sidebar.waitForExistence(timeout: 20))
         try requireSidebarBesideThePage(app)
@@ -27,7 +27,7 @@ final class GalleryUITests: XCTestCase {
 
     func testHeaderCollapsesAndTheRangeBarFollowsIt() throws {
         let app = XCUIApplication(bundleIdentifier: "com.exact.uigallery")
-        app.launch()
+        launchShowingTheList(app)
         let sidebar = app.collectionViews["gallery-sidebar"]
         XCTAssertTrue(sidebar.waitForExistence(timeout: 20))
         open("css", in: app)
@@ -81,35 +81,36 @@ final class GalleryUITests: XCTestCase {
                            try XCTUnwrap(reading["controlCenter"] as? CGFloat), accuracy: 0.5,
                            "The label is vertically centered beside the control")
         }
-        // Beside the list, once it is scrolled too, the docked range bar ends level with the list's inline bar
+        // Beside the list, once it is scrolled too, the docked range bar ends level with the list's inline bar. The
+        // list scrolled to its end shows its last row, which then says whether the list shows.
         if sidebarIsBesideThePage(app) {
+            XCTAssertTrue(sidebar.cells["sidebar-css"].isHittable, "The list shows beside the page")
             let rangeBar = app.otherElements["range-bar-css"].firstMatch, sidebarBar = app.navigationBars["UI Gallery"]
-            let large = sidebarBar.frame.height
+            let large = sidebarBar.frame.height, lastRow = sidebar.cells["sidebar-drag"]
             sidebar.swipeUp(velocity: .slow)
-            XCTAssertLessThan(sidebarBar.frame.height, large, "The list's title is inline once it is scrolled")
-            XCTAssertEqual(rangeBar.frame.minY, sidebarBar.frame.minY, accuracy: 0.5, "The range bar is docked where the list's bar starts")
-            XCTAssertEqual(rangeBar.frame.maxY, sidebarBar.frame.maxY, accuracy: 0.5, "The two headers end on one line")
-            let docked = rangeBar.frame, row = sidebar.cells["sidebar-css"]
-            // UIKit keeps a hidden list hidden at the next launch, so show it again from the page's bar, at the
-            // page's top, however this test ends
-            addTeardownBlock {
-                let scroll = app.otherElements["gallery"].firstMatch, show = app.buttons["Show Sidebar"]
-                for _ in 0..<3 where !row.isHittable && !show.isHittable { scroll.swipeDown(velocity: .fast) }
-                if show.isHittable { show.tap() }
-                XCTAssertTrue(row.isHittable, "The list shows beside the page again")
-            }
+            for _ in 0..<2 where !lastRow.isHittable { sidebar.swipeUp(velocity: .slow) }
+            let pinned = try settled(rangeBar, sidebarBar), docked = pinned[0], listBar = pinned[1]
+            XCTAssertLessThan(listBar.height, large, "The list's title is inline once it is scrolled")
+            XCTAssertEqual(docked.minY, listBar.minY, accuracy: 0.5, "The range bar is docked where the list's bar starts")
+            XCTAssertEqual(docked.maxY, listBar.maxY, accuracy: 0.5, "The two headers end on one line")
+            XCTAssertTrue(lastRow.isHittable, "The list's last row shows once the list is scrolled")
+            // UIKit keeps a hidden list hidden at the next launch: show it again however this test ends
+            addTeardownBlock { [unowned self] in showSidebar(app) }
             app.buttons["Hide Sidebar"].tap()
-            XCTAssertFalse(row.isHittable, "The list is hidden")
-            XCTAssertEqual(rangeBar.frame.minY, docked.minY, accuracy: 0.5, "Hiding the list moves nothing in the page's header")
-            XCTAssertEqual(rangeBar.frame.height, docked.height, accuracy: 0.5, "Hiding the list keeps the range bar's height")
+            XCTAssertTrue(waitForList(app, shown: false, rows: [lastRow]), "The list is hidden")
+            let hidden = try settled(rangeBar)[0]
+            XCTAssertEqual(hidden.minY, docked.minY, accuracy: 0.5, "Hiding the list moves nothing in the page's header")
+            XCTAssertEqual(hidden.height, docked.height, accuracy: 0.5, "Hiding the list keeps the range bar's height")
             // The scrolled page hides its bar and the list's button with it, so drag the list in from the left edge
             let edge = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.002, dy: 0.5))
             edge.press(forDuration: 0.1, thenDragTo: edge.withOffset(CGVector(dx: 320, dy: 0)))
-            XCTAssertTrue(row.isHittable, "The list shows again")
-            XCTAssertEqual(rangeBar.frame.minY, docked.minY, accuracy: 0.5, "Dragging the list in moves nothing in the page's header")
-            XCTAssertEqual(rangeBar.frame.height, docked.height, accuracy: 0.5, "Dragging the list in keeps the range bar's height")
+            XCTAssertTrue(waitForList(app, shown: true, rows: [lastRow]), "The list shows again")
+            let dragged = try settled(rangeBar)[0]
+            XCTAssertEqual(dragged.minY, docked.minY, accuracy: 0.5, "Dragging the list in moves nothing in the page's header")
+            XCTAssertEqual(dragged.height, docked.height, accuracy: 0.5, "Dragging the list in keeps the range bar's height")
             // Hide it again, as a tap on the page would only dismiss a list laid over it
             app.buttons["Hide Sidebar"].tap()
+            XCTAssertTrue(waitForList(app, shown: false, rows: [lastRow]), "The list is hidden again")
         }
         range.buttons["standard"].tap()
         XCTAssertTrue(range.buttons["standard"].isSelected, "The control takes a tap over the scrolled page")
@@ -121,9 +122,51 @@ final class GalleryUITests: XCTestCase {
         XCTAssertTrue(sidebar.cells["sidebar-css"].isHittable)
     }
 
+    /// A section chosen from a list hidden since launch, dragged in over the page, docks its range bar at the list's
+    /// inline bar height: as tall as once the list shows beside the page and both are scrolled.
+    func testAListHiddenSinceLaunchIsMeasuredOverThePage() throws {
+        let app = XCUIApplication(bundleIdentifier: "com.exact.uigallery")
+        launchShowingTheList(app)
+        let sidebar = app.collectionViews["gallery-sidebar"]
+        XCTAssertTrue(sidebar.waitForExistence(timeout: 20))
+        try requireSidebarBesideThePage(app)
+        // UIKit keeps a hidden list hidden at the next launch: show it again however this test ends
+        addTeardownBlock { [unowned self] in showSidebar(app) }
+        app.buttons["Hide Sidebar"].tap()
+        XCTAssertTrue(waitForList(app, shown: false), "The list is hidden")
+        app.terminate()
+        app.launch()
+        let show = app.buttons["Show Sidebar"]
+        XCTAssertTrue(show.waitForExistence(timeout: 20) && waitForList(app, shown: false), "The list is hidden since launch")
+        let edge = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.002, dy: 0.5))
+        edge.press(forDuration: 0.1, thenDragTo: edge.withOffset(CGVector(dx: 320, dy: 0)))
+        XCTAssertTrue(waitForList(app, shown: true), "The list lies over the page")
+        sidebar.cells["sidebar-css"].tap()
+        let rangeBar = app.otherElements["range-bar-css"].firstMatch, page = app.otherElements["gallery"].firstMatch
+        let range = app.segmentedControls["range-css"]
+        XCTAssertTrue(rangeBar.waitForExistence(timeout: 10))
+        XCTAssertTrue(waitForList(app, shown: false), "Choosing a section puts the list away")
+        page.swipeUp(velocity: .fast)
+        let overPage = try settled(rangeBar)[0]
+        for _ in 0..<3 where !show.isHittable { page.swipeDown(velocity: .fast) }
+        show.tap()
+        XCTAssertTrue(waitForList(app, shown: true), "The list shows again")
+        let shown = try settled(range, sidebar)
+        XCTAssertGreaterThanOrEqual(shown[0].minX, shown[1].maxX - 0.5, "The list shows beside the page, which makes room for it")
+        let large = try settled(app.navigationBars["UI Gallery"])[0].height
+        page.swipeUp(velocity: .fast)
+        sidebar.swipeUp(velocity: .slow)
+        let pinned = try settled(rangeBar, app.navigationBars["UI Gallery"]), beside = pinned[0], sidebarBar = pinned[1]
+        XCTAssertLessThan(sidebarBar.height, large, "The list's title is inline once it is scrolled")
+        XCTAssertEqual(beside.minY, sidebarBar.minY, accuracy: 0.5, "The range bar is docked where the list's bar starts")
+        XCTAssertEqual(beside.maxY, sidebarBar.maxY, accuracy: 0.5, "The two headers end on one line")
+        XCTAssertEqual(overPage.minY, beside.minY, accuracy: 0.5, "The range bar was docked at the top before the list showed beside it")
+        XCTAssertEqual(overPage.height, beside.height, accuracy: 0.5, "The range bar was as tall before the list showed beside it")
+    }
+
     func testRangeControlsRemainInteractiveOverScrollingContent() throws {
         let app = XCUIApplication(bundleIdentifier: "com.exact.uigallery")
-        app.launch()
+        launchShowingTheList(app)
         XCTAssertTrue(app.collectionViews["gallery-sidebar"].waitForExistence(timeout: 20))
         for section in ["css", "images", "css"] {
             open(section, in: app)
@@ -148,7 +191,7 @@ final class GalleryUITests: XCTestCase {
 
     func testVideoFormatAndPlaybackControls() throws {
         let app = XCUIApplication(bundleIdentifier: "com.exact.uigallery")
-        app.launch()
+        launchShowingTheList(app)
         XCTAssertTrue(app.collectionViews["gallery-sidebar"].waitForExistence(timeout: 20))
         open("media", in: app)
         let formats = app.segmentedControls["video-formats"]
@@ -175,7 +218,7 @@ final class GalleryUITests: XCTestCase {
     /// Every page starts below its range bar, and beside the list.
     func testPageSwitchesKeepContentBelowTheRangeBarAndBesideTheSidebar() throws {
         let app = XCUIApplication(bundleIdentifier: "com.exact.uigallery")
-        app.launch()
+        launchShowingTheList(app)
         let sidebar = app.collectionViews["gallery-sidebar"]
         XCTAssertTrue(sidebar.waitForExistence(timeout: 20))
         try requireSidebarBesideThePage(app)
@@ -206,14 +249,99 @@ final class GalleryUITests: XCTestCase {
     private func open(_ section: String, in app: XCUIApplication) {
         let list = app.collectionViews["gallery-sidebar"], back = app.buttons["BackButton"].firstMatch
         if back.exists { back.tap() }
-        let cell = list.cells["sidebar-" + section], later = ["hdr", "effects", "media", "menus"].contains(section)
+        let cell = list.cells["sidebar-" + section], later = ["hdr", "effects", "media", "menus", "drag"].contains(section)
         for _ in 0..<4 where !cell.isHittable { if later { list.swipeUp() } else { list.swipeDown() } }
         cell.tap()
+    }
+
+    /// Launches the gallery with its list showing: UIKit keeps a list hidden at the next launch, so a test does not
+    /// rely on the one before it to have shown the list again
+    private func launchShowingTheList(_ app: XCUIApplication) {
+        app.launch()
+        let sidebar = app.collectionViews["gallery-sidebar"], show = app.buttons["Show Sidebar"]
+        let rows = [sidebar.cells["sidebar-typography"], sidebar.cells["sidebar-drag"]], deadline = Date().addingTimeInterval(20)
+        while Date() < deadline, !rows.contains(where: \.isHittable), !show.isHittable { RunLoop.current.run(until: Date().addingTimeInterval(0.3)) }
+        if show.isHittable { show.tap() }
+        XCTAssertTrue(waitForList(app, shown: true), "The list shows at launch")
     }
 
     /// Skips the test unless the sidebar shows beside the page, as on the open Duo
     private func requireSidebarBesideThePage(_ app: XCUIApplication) throws {
         guard sidebarIsBesideThePage(app) else { throw XCTSkip("Needs the open Duo, whose sidebar stays beside the page") }
+    }
+
+    /// Shows the list beside the page from the page's bar, at the page's top, after putting away a list that shows,
+    /// which may lie over the page: UIKit keeps the list where the page's button put it at the next launch
+    private func showSidebar(_ app: XCUIApplication) {
+        let show = app.buttons["Show Sidebar"], hide = app.buttons["Hide Sidebar"], scroll = app.otherElements["gallery"].firstMatch
+        let sidebar = app.collectionViews["gallery-sidebar"]
+        // Let a list sliding in or out finish first
+        guard listSettles(app, in: [true, false]) != nil else { return XCTFail("The list keeps sliding in or out") }
+        if hide.isHittable {
+            hide.tap()
+            guard waitForList(app, shown: false) else { return XCTFail("The list is put away") }
+        }
+        for _ in 0..<3 where !show.isHittable && scroll.exists { scroll.swipeDown(velocity: .fast) }
+        show.tap()
+        guard wait(for: show, hittable: false), waitForList(app, shown: true) else { return XCTFail("The list shows again") }
+        // Check where a section shows that the page makes room for the list; an empty detail, as a test that stops
+        // before choosing a section leaves it, only centres its message
+        let title = app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH 'range-' AND identifier ENDSWITH '-title'")).firstMatch
+        if title.waitForExistence(timeout: 5) {
+            XCTAssertGreaterThanOrEqual(title.frame.minX, sidebar.frame.maxX - 0.5, "The list shows beside the page, which makes room for it")
+        }
+    }
+
+    /// Whether the list has finished sliding in (`shown`) or out within 5 seconds (`listSettles`)
+    private func waitForList(_ app: XCUIApplication, shown: Bool, rows: [XCUIElement]? = nil) -> Bool {
+        listSettles(app, in: [shown], rows: rows) == shown
+    }
+
+    /// Whether the list has finished sliding in (true) or out (false) within 5 seconds, to one of `states`, else nil:
+    /// shown, it lies within the window and a row of it takes taps (`rows` first, by default its first and last, one
+    /// of which shows however it is scrolled); hidden, it is gone or wholly off screen; and either way its frame reads
+    /// the same twice, 0.3 seconds apart
+    private func listSettles(_ app: XCUIApplication, in states: Set<Bool>, rows: [XCUIElement]? = nil) -> Bool? {
+        let sidebar = app.collectionViews["gallery-sidebar"], deadline = Date().addingTimeInterval(5)
+        let rows = rows ?? [sidebar.cells["sidebar-typography"], sidebar.cells["sidebar-drag"]]
+        var last: (shown: Bool, frame: CGRect)?
+        while Date() < deadline {
+            let frame = sidebar.exists ? sidebar.frame : .null
+            var state: Bool?
+            if frame.isNull || frame.maxX <= 0.5 {
+                state = false
+            } else if states.contains(true), app.windows.firstMatch.frame.insetBy(dx: -0.5, dy: -0.5).contains(frame),
+                      rows.contains(where: \.isHittable) || sidebar.cells.allElementsBoundByIndex.contains(where: \.isHittable) {
+                state = true
+            }
+            if let state, states.contains(state) {
+                if let last, last.shown == state, last.frame == frame { return state }
+                last = (state, frame)
+            } else {
+                last = nil
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        }
+        return nil
+    }
+
+    /// The elements' frames once they all read the same twice, 0.3 seconds apart, within 5 seconds, else a failure
+    private func settled(_ elements: XCUIElement..., file: StaticString = #filePath, line: UInt = #line) throws -> [CGRect] {
+        let deadline = Date().addingTimeInterval(5)
+        var last = elements.map(\.frame)
+        while Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+            let frames = elements.map(\.frame)
+            if frames == last, !frames.contains(where: \.isEmpty) { return frames }
+            last = frames
+        }
+        return try XCTUnwrap(nil as [CGRect]?, "\(elements) still move or have no frame", file: file, line: line)
+    }
+
+    /// Whether `element` is (or is not) hittable within 5 seconds
+    private func wait(for element: XCUIElement, hittable: Bool) -> Bool {
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == %@", NSNumber(value: hittable)), object: element)
+        return XCTWaiter().wait(for: [settled], timeout: 5) == .completed
     }
 
     /// Whether the window is wide enough for the sidebar to stay beside the page, as on the open Duo

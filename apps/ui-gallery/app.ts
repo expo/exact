@@ -152,7 +152,13 @@ export const answer: Answer = ((source: string, args: unknown[], _secrets: unkno
   if (source === 'sidebarBarHeight') {
     if (args[args.length - 1] !== 'ios' || !native?.available) return 0;
     native.watch('gallery-sidebar-bar');
-    return (native.call({ op: 'sidebarBarHeight' }) as { height: number }).height;
+    // A module that failed to load refuses the call, and the range bar keeps its own height
+    try {
+      const height = (native.call({ op: 'sidebarBarHeight' }) as { height: number }).height;
+      return Number.isFinite(height) ? height : 0;
+    } catch {
+      return 0;
+    }
   }
   // rec2100 white where an Apple host draws it; SDR white on the web and the Android preview
   if (source === 'hdrWhite') return APPLE.has(String(args[args.length - 1])) ? `color(rec2100-linear ${args[0]} ${args[0]} ${args[0]})` : '#ffffff';
