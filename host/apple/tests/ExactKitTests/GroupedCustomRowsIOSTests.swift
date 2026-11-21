@@ -135,37 +135,52 @@ final class GroupedCustomRowsIOSTests: GroupedListFixture {
 
     func testACustomRowsSymbolIsAListCellsImageAndItsLineStartsUnderItsContent() throws {
         let p = presenter { self.customFirst() }
-        // The kernel's boxes for a row of a leading symbol (the sheet's 24 by
-        // 20, 16 in), its content inset 56 past it, spanning its card.
+        // The fixture's 17-point symbol and offsets are the default text size's
+        window.traitOverrides.preferredContentSizeCategory = .large
+        window.layoutIfNeeded() // traits reach the views at layout
+        let l = try list(p)
+        l.collection.layoutIfNeeded()
+        // The card's width, read as the standard row's, and UIKit's cell margins, left then right, which the host reads
+        // from the first visible cell for the kernel (`GroupedListView.margins`): the device decides them
+        let card = try cell(p, 10).bounds.width, margins = try XCTUnwrap(l.margins()), left = margins[2], right = margins[3]
+        // The kernel's boxes for a row of a leading symbol (the sheet's 24 by 20, at the left margin), its content 40
+        // points from the symbol's leading edge to the right margin, and its chevron at the right margin.
         p.apply(wireBatch([
             ["op": "create", "id": 30, "kind": "image", "props": ["imageSource": "symbol:person", "symbolName": "person.circle"], "style": ["font_size": 17.0, "object_fit": "contain"]],
             ["op": "create", "id": 31, "kind": "image", "props": ["imageSource": "symbol:forward-chevron", "symbolName": "chevron.forward"], "style": ["font_size": 17.0]],
             ["op": "children", "id": 21, "ids": [30, 31]],
-            ["op": "frame", "id": 21, "x": 0.0, "y": 0.0, "w": 370.0, "h": 61.0],
-            ["op": "frame", "id": 30, "x": 16.0, "y": 20.5, "w": 24.0, "h": 20.0],
-            ["op": "frame", "id": 31, "x": 344.0, "y": 23.0, "w": 10.0, "h": 14.0],
+            ["op": "frame", "id": 21, "x": 0.0, "y": 0.0, "w": Double(card), "h": 61.0],
+            ["op": "frame", "id": 30, "x": Double(left), "y": 20.5, "w": 24.0, "h": 20.0],
+            ["op": "frame", "id": 31, "x": Double(card - right - 10), "y": 23.0, "w": 10.0, "h": 14.0],
         ]))
         let row = try XCTUnwrap(p.views[21]), leaf = try XCTUnwrap(p.views[30])
-        row.kernelContentBox = CGRect(x: 56, y: 0, width: 298, height: 61)
+        row.kernelContentBox = CGRect(x: left + 40, y: 0, width: card - right - (left + 40), height: 61)
         // The next batch carries the row again, which notes its line and lays
         // the list out again for it.
         p.apply(wireBatch([["op": "props", "id": 21, "set": ["testId": "custom"]]]))
-        let l = try list(p)
         l.collection.layoutIfNeeded()
         let custom = try cell(p, 21), standard = try cell(p, 10)
         XCTAssertTrue(row.superview === custom.contentView)
         XCTAssertTrue(leaf.listSymbol, "the first child, a symbol")
         XCTAssertFalse(try XCTUnwrap(p.views[31]).listSymbol, "an accessory's chevron is no leading symbol")
-        // UIKit draws a cell's image at the large scale of the body's size
-        // (its `preferredSymbolConfiguration`), at its own size, centred.
+        // UIKit draws a cell's image at the large scale of the body's size at
+        // the default text size (its `preferredSymbolConfiguration`), at its
+        // own size, centred.
         func images(_ v: UIView) -> [UIImageView] { (v as? UIImageView).map { [$0] } ?? v.subviews.flatMap(images) }
         let theirs = try XCTUnwrap(images(standard.contentView).first { $0.frame.width > 20 })
         let ours = try XCTUnwrap(leaf.symbolView)
         let drawn = try XCTUnwrap(ours.image).size
         XCTAssertEqual(drawn.width, theirs.bounds.width, accuracy: 0.5, "the symbol as wide as the standard row's")
         XCTAssertEqual(drawn.height, theirs.bounds.height, accuracy: 0.5, "and as tall")
-        XCTAssertEqual(ours.contentMode, .center)
-        XCTAssertFalse(ours.clipsToBounds, "its own size, past the sheet's box")
+        XCTAssertEqual(ours.bounds.width, drawn.width, accuracy: 0.5, "its view its own size, so drawn unscaled")
+        XCTAssertEqual(ours.bounds.height, drawn.height, accuracy: 0.5)
+        // Its own size, past the sheet's box, which nothing trims it to
+        XCTAssertTrue(ours.superview === leaf, "in the leaf itself, with no clipping box between")
+        XCTAssertFalse(leaf.bounds.contains(ours.frame), "the symbol overhangs the sheet's box")
+        XCTAssertFalse(leaf.clipsToBounds)
+        XCTAssertFalse(ours.clipsToBounds)
+        XCTAssertNil(leaf.layer.mask)
+        XCTAssertNil(ours.layer.mask)
         XCTAssertEqual(ours.convert(ours.bounds, to: custom).midX, theirs.convert(theirs.bounds, to: standard).midX, accuracy: 0.5,
                        "centred where the standard row's is")
         // The line under the custom row starts under its content, where the
@@ -178,16 +193,16 @@ final class GroupedCustomRowsIOSTests: GroupedListFixture {
         }
         let mine = try XCTUnwrap(under(custom), "a line under the custom row")
         let theirLine = try XCTUnwrap(under(standard), "a line under the standard row")
-        XCTAssertEqual(mine.minX, 56, accuracy: 0.5, "under its content")
+        XCTAssertEqual(mine.minX, left + 40, accuracy: 0.5, "under its content")
         XCTAssertEqual(mine.minX, theirLine.minX, accuracy: 0.5, "as the standard row's")
         // Its content moves in a batch that keeps its height: the line follows.
-        row.kernelContentBox = CGRect(x: 16, y: 0, width: 338, height: 61)
+        row.kernelContentBox = CGRect(x: left, y: 0, width: card - right - left, height: 61)
         p.apply(wireBatch([["op": "props", "id": 21, "set": ["testId": "moved"]]]))
         l.collection.layoutIfNeeded()
         let moved = lines(l.collection).map { $0.convert($0.bounds, to: l.collection) }
         let frame = custom.convert(custom.bounds, to: l.collection)
         let line = try XCTUnwrap(moved.first { abs($0.maxY - frame.maxY) < 1.5 })
-        XCTAssertEqual(line.minX - frame.minX, 16, accuracy: 0.5, "the line where the content now starts")
+        XCTAssertEqual(line.minX - frame.minX, left, accuracy: 0.5, "the line where the content now starts")
     }
 
     /// A carried row's leading symbol laid out again in the same box leaves its image view's geometry as it was:
