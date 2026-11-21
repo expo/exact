@@ -387,8 +387,6 @@ export function res(
         if (r.asleep) {
           r.asleep = false;
           r.forced = true;
-          // woken later in the boot that passed its build-time answer over, it starts from it, as one never idle
-          if (r.passed && r.stand === null && booting()) adopt();
         }
         // `asked`: the overlay's arguments while a placeholder stands; a refused commit put `failed` back, and `fail`
         // follows it there too
@@ -422,8 +420,10 @@ export function res(
         }
         // an upload answers as it ended, or goes on
         if (mk) return data.uploads.answer(r, mk, a, { take, fails, release });
+        // an instance has a `path` (each.js `own`)
         const baked = r.baked,
-          was = r.stale;
+          was = r.stale,
+          root = r.path === undefined;
         r.baked = false;
         if (baked) r.stale = true;
         // the first frame's build-time answer, said once when it starts to stand in for an answer (the runner's
@@ -435,8 +435,11 @@ export function res(
         if (!forced && !rev) {
           // Reuse follows the request in flight; the displayed value may answer older arguments (LLP 1016 D5).
           // `equal`: `-0` is `0`, NaN asks again; a bake is asked once anyway (LLP 1048.003 D6).
-          // (not pending: arguments that left the build-time answer's before its source was ready are back)
-          if (!r.ticket && r.settled !== undefined && equal(a, r.settled) && !baked) return (flag(pend, false), r.value);
+          if (!r.ticket && r.settled !== undefined && equal(a, r.settled) && !baked) {
+            // before its source is ready, a root resource's arguments are its build-time answer's again
+            if (root && r.stand === 'build') flag(pend, false);
+            return r.value;
+          }
           if (r.ticket && equal(a, r.ticket.args)) return r.value;
         }
         let ans;
@@ -539,14 +542,13 @@ export function res(
         // Not ready (Rust loads after first paint): the bake's answer stands, not pending, asked at `ready` as at
         // data_ready (review B3); another compiled value stands, stale, forced then (LLP 1027 D4). That ask's refusal
         // fails it, not the commit; a commit refused otherwise is followed by one failing it.
-        // After the boot the runner adopts a compiled value in any settlement while the source is not ready, but for
-        // an instance (one with a `path`, each.js `own`). So a root resource shows the build-time answer it passed
-        // over, with no journal line, which the runner says only of its boot, and is pending only at other arguments,
-        // however often it is asked before its source is ready.
-        const root = r.path === undefined;
-        if (root && r.passed && r.stand === null) {
+        // While the source is not ready the runner adopts a compiled value in any settlement, but for an instance
+        // after the boot. So a wake shows the build-time answer a closed gate passed over: in the boot, with the
+        // journal's line, which the runner says of its boot alone, and after it for a root resource only, which is
+        // pending only at other arguments however often it is asked before its source is ready.
+        if (r.passed && r.stand === null && (root || booting())) {
           adopt();
-          quiet = true;
+          quiet = !booting();
         }
         const shown = (baked || (root && r.stand === 'build')) && eq(a, r.settled);
         r.launch = !forced && waited !== false;

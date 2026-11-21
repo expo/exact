@@ -1076,7 +1076,7 @@ test('web builds expose their version inputs in the view and delivery state', as
 // not ready, a root resource shows its build-time answer, not pending, each time, as the runner adopts a compiled
 // value then, and the journal names that answer only when the source's replaces it; an instance, which the runner
 // adopts nothing for after the boot, is pending, on its placeholder or on a build-time answer it showed. Before its
-// source is ready a build-time answer is pending only while the arguments are not its own.
+// source is ready a root resource's build-time answer is pending only while the arguments are not its own.
 test('a resource idle at its first settlement shows its placeholder over a build-time answer, and keeps a page\'s', async () => {
   const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
   try {
@@ -1102,14 +1102,14 @@ test('a resource idle at its first settlement shows its placeholder over a build
       const at = rt.sig(1), saved = rt.sig(null);
       const res = (name, gate, args = () => []) => rt.res(name, 'echo', Object.assign(args, { gate: () => gate() }), 'build-time', args(), 's', 'waiting');
       // an instance is named by its path before it first settles, as each.js `own` names it
-      const instance = (name, gate) => {
-        const made = res(name, gate);
+      const instance = (name, gate, args) => {
+        const made = res(name, gate, args);
         made.r.path = name;
         return made;
       };
       const built = res('built', open), kept = res('kept', open), written = res('written', shut);
       const closed = res('closed', closes), opened = res('opened', opens), moved = res('moved', () => true, () => [at()]);
-      const launched = instance('launched', open), awake = instance('awake', nap);
+      const launched = instance('launched', open), awake = instance('awake', nap, () => [at()]);
       let write;
       rt.mount(root => {
         write = rt.mut('saved', saved, [written], 'b');
@@ -1138,12 +1138,16 @@ test('a resource idle at its first settlement shows its placeholder over a build
         return [built(), built.p(), launched(), launched.p(), later(), later.p(), awake(), awake.p()];
       };
       const woken = wake();
+      // an instance still owes its answer when its arguments leave and come back
+      rt.commit(() => rt.W(at, 2));
+      rt.commit(() => rt.W(at, 1));
+      const back = [awake.p(), moved.p()];
       rt.commit(() => rt.W(open, false));
       const again = wake();
       ready = true;
       for (const f of rt.data.q.splice(0)) f();
       const lines = rt.journal.filter(l => /build-time/.test(l)).map(l => l.replace(/^t=\S+ /, '')).sort();
-      return { atBoot, afterBoot, under, pending, woken, again, answered: [built(), launched(), later(), awake(), opened(), closed()], lines };
+      return { atBoot, afterBoot, under, pending, woken, back, again, answered: [built(), launched(), later(), awake(), opened(), closed()], lines };
     });
     expect(observed).toEqual({
       atBoot: { shown: ['waiting', 'page answer', 'waiting', 'build-time', 'build-time', false, 'build-time'], asked: [] },
@@ -1151,6 +1155,7 @@ test('a resource idle at its first settlement shows its placeholder over a build
       under: 'waiting and 1 write at 0 arguments',
       pending: [false, true, false, true, false],
       woken: ['build-time', false, 'waiting', true, 'waiting', true, 'build-time', true],
+      back: [true, false],
       again: ['build-time', false, 'waiting', true, 'waiting', true, 'build-time', true],
       answered: ['fresh', 'fresh', 'fresh', 'fresh', 'fresh', 'build-time'],
       lines: [
