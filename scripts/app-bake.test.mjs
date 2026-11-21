@@ -16,9 +16,9 @@ import { fileURLToPath } from 'node:url';
 import { copyStaticTreeIfPresent, syncStaticTree } from '../host/web/serve.mjs';
 
 test.each([
-  ['host/web-js/build.mjs', "// Launch modules' web services", '\nif (devReload)', '', ['assets', 'deck'], false],
+  ['host/web-js/build.mjs', "copyStaticTreeIfPresent(resolve(appDir, 'assets')", '\nif (devReload)', '', ['assets', 'deck'], false],
   ['host/windows/build.mjs', "  for (const name of ['assets','deck'])", '\n  copyShaders', '', ['assets', 'deck'], true],
-  ['host/apple/watch.mjs', '  for (const entry of entries) copyFileSync', '\n  const appInfo', '', ['assets', 'deck'], false],
+  ['host/apple/watch.mjs', '    for (const entry of entries) copyFileSync', '\n    const appInfo', '', ['assets', 'deck'], false],
   ['host/apple-painted/build.mjs', "  writeFileSync(resolve(bundle, 'Contents/Info.plist')", "\n  run('codesign'", 'Contents/Resources', ['assets'], true],
   ['scripts/agent-android.mjs', "  copyStaticTreeIfPresent(resolve(app.dir, 'assets')", "\n  // The modules' shader text", 'assets/app', ['assets'], false],
 ])('%s packages static files without Finder metadata', async (file, start, end, prefix, folders, reused) => {
@@ -1330,7 +1330,9 @@ test('game web, release and unwired gpu-dev bakes never open registry generation
       const builds=[];
       mock.module(${JSON.stringify(resolve(import.meta.dir,'../game/app/crates.mjs'))},()=>({keptGameCrates(){calls++;return {take(){calls++;},keep(){calls++;}};}}));
       mock.module(${JSON.stringify(resolve(import.meta.dir,'../game/app/shells.mjs'))},()=>({gameDefaults(){},prepareGame(){},lintGame(){lints++;}}));
-      const appPath=${JSON.stringify(resolve(import.meta.dir,'app.mjs'))};
+      const appPath=${JSON.stringify(resolve(import.meta.dir,'app.mjs'))}, checkPath=${JSON.stringify(resolve(import.meta.dir,'cargo-check.mjs'))};
+      // Each stub is written into the module that defines its function, and the check refuses a run without both.
+      const stubbed=new Set();
       globalThis.stubBuild=(command,args)=>{
         assert.equal(command,'cargo');
         const pkg=args[args.indexOf('-p')+1]; builds.push(pkg);
@@ -1342,15 +1344,16 @@ test('game web, release and unwired gpu-dev bakes never open registry generation
         return {products:messages.flatMap(m=>m.filenames)};
       };
       Bun.plugin({name:'stub-bake-execution',setup(builder){
-        builder.onLoad({filter:/[\\/]scripts[\\/]app\\.mjs$/},({path})=>{
-          assert.equal(path,appPath);
+        builder.onLoad({filter:/[\\/]scripts[\\/](app|cargo-check)\\.mjs$/},({path})=>{
+          assert.ok([appPath,checkPath].includes(path),path);
           const source=readFileSync(path,'utf8')
-            .replace(/(function buildCommand\\([^\\n]+\\{)/,'$1 return globalThis.stubBuild(...arguments);')
-            .replace(/(function completeBuild\\([^\\n]+\\{)/,'$1 return globalThis.stubReceipt(...arguments);');
+            .replace(/(function buildCommand\\([^\\n]+\\{)/,(m)=>(stubbed.add('buildCommand'),m+' return globalThis.stubBuild(...arguments);'))
+            .replace(/(function completeBuild\\([^\\n]+\\{)/,(m)=>(stubbed.add('completeBuild'),m+' return globalThis.stubReceipt(...arguments);'));
           return {contents:source,loader:'js'};
         });
       }});
       const {buildBake}=await import(appPath);
+      assert.deepEqual([...stubbed].sort(),['buildCommand','completeBuild']);
       const dir=${JSON.stringify(dir)};
       for(const [platform,profile,target] of [['web','web','wasm32-unknown-unknown'],['linux','release',${JSON.stringify(bakeTarget('linux'))}],['linux','gpu-dev',${JSON.stringify(bakeTarget('linux'))}]]) {
         const name='fixture-'+platform;
