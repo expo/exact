@@ -241,23 +241,30 @@ mod tests {
     fn windows_default_cache_file_without_home_or_xdg() {
         const CHILD: &str = "EXACT_WINDOWS_FONT_CACHE_TEST";
         if std::env::var_os(CHILD).is_none() {
-            let output = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "text::font_cache::tests::windows_default_cache_file_without_home_or_xdg",
-                ])
-                .env(CHILD, "1")
-                .env_remove("HOME")
-                .env_remove("XDG_CACHE_HOME")
-                .env_remove("LOCALAPPDATA")
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "{}{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
+            // Unset, empty and relative: none of them is a cache base.
+            for value in [None, Some(""), Some("cache")] {
+                let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+                child
+                    .args([
+                        "--exact",
+                        "text::font_cache::tests::windows_default_cache_file_without_home_or_xdg",
+                    ])
+                    .env(CHILD, "1")
+                    .env_remove("LOCALAPPDATA");
+                for variable in ["HOME", "XDG_CACHE_HOME"] {
+                    match value {
+                        Some(value) => child.env(variable, value),
+                        None => child.env_remove(variable),
+                    };
+                }
+                let output = child.output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "{value:?}: {}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
             return;
         }
 
