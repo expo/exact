@@ -143,11 +143,11 @@ test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('a cached names b
       const split = splitStages(named);
       if (previous) expect(split.core).toEqual(previous);
       previous = split.core;
-      const module = await WebAssembly.compile(split.core), core = await WebAssembly.instantiate(module);
+      const module = await WebAssembly.compile(split.core), core = await WebAssembly.instantiate(module, await placeholders());
       const card = JSON.parse(Buffer.from(WebAssembly.Module.customSections(module, 'exact.stages')[0]));
       expect(Object.keys(card.stages)).toEqual(['inspection']);
       expect(core.exports.boot()).toBe(7);
-      expect(() => core.exports.read()).toThrow();
+      expect(() => core.exports.read()).toThrow('app.wasm called the inspection stage (placeholder 0) before the stage loaded');
       for (const path of Object.values(card.stages)) {
         const capability = await WebAssembly.compile(split.files.get(path));
         const imports = Object.fromEntries(WebAssembly.Module.imports(capability).map(entry => [entry.module, core.exports]));
@@ -158,14 +158,12 @@ test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('a cached names b
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-// Each way the core could reach a stage before it loads is refused: a seam wasm-opt merged with an identical core
-// callback, which then fills the callback's table slot too or is exported in its place; a start function, which the
-// call graph does not root; a second crate that shares the SDK's path; a direct call from a table root, whatever its
-// name; a call through the seam's slot by a constant index, which is as direct; a table or an import the module shares
-// with a script, or code that writes the table; and, once split, a stage that changes a slot the core holds or a
-// reference to the seam outside its slot.
-test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('a split the core could reach early is refused', () => {
-  const dir = mkdtempSync(resolve(tmpdir(), 'exact-web-merged-seam-'));
+// A seam the planner cannot show to be the one way into its stage ships the module whole: a seam wasm-opt merged with an
+// identical core callback, which then fills the callback's table slot too or is exported in its place; a start function,
+// which the call graph does not root; a second crate that shares the SDK's path. A direct call from a table root,
+// whatever its name, fails the build.
+test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('a seam that may not be the one way into its stage is refused', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-merged-seam-'));
   const other = HANDLE.replace('C12exact_runner', 'Cs1_12exact_runner');
   const cases = [
     ['in 2 table slots', true, `(table 2 funcref) (elem (i32.const 0) $${HANDLE} $callback)
@@ -180,65 +178,75 @@ test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('a split the core
     // A function the graph's key shares its name with ("B") is a table root that calls the seam directly.
     ['directly from B', false, `(table 2 funcref) (elem (i32.const 0) $${HANDLE} $B)
       (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $B (type $read) (result i32) call $${HANDLE})`],
-    ['directly from boot', false, `(table 1 funcref) (elem (i32.const 0) $${HANDLE})
-      (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $boot (export "boot") (result i32) i32.const 0 call_indirect (type $read))`],
-    // A table a script or the code may write, whose slots the planner cannot read a call through by their first function
-    ['exports a table', false, `(table (export "table") 1 funcref) (elem (i32.const 0) $${HANDLE})
-      (func $${HANDLE} (type $read) (result i32) i32.const 0)`],
-    ['TableSet', false, `(table 2 funcref) (elem (i32.const 0) $${HANDLE}) (elem declare func $${HANDLE})
-      (func $${HANDLE} (type $read) (result i32) i32.const 0) (func (export "copy") (table.set (i32.const 1) (ref.func $${HANDLE})))`],
-    // An import other than a function's, here a global a segment's offset reads, so a slot's first function is unknown
-    ['imports a table, a memory, a global', false, `(import "env" "base" (global $base i32)) (table 1 funcref) (elem (global.get $base) $${HANDLE})
-      (func $${HANDLE} (type $read) (result i32) i32.const 0)`],
-    // References to the seam outside its slot, in code or a global, which wasm-split would make trampolines for, and a
-    // null entry, which keeps them from being counted
-    ['leaves the element segments', false, `(table 1 funcref) (elem (i32.const 0) $${HANDLE}) (elem declare func $${HANDLE})
-      (func $${HANDLE} (type $read) (result i32) i32.const 0) (func (export "get") (result funcref) (ref.func $${HANDLE}))`],
-    ['leaves the element segments', false, `(table 1 funcref) (elem (i32.const 0) $${HANDLE}) (global $held (export "held") funcref (ref.func $${HANDLE}))
-      (func $${HANDLE} (type $read) (result i32) i32.const 0)`],
-    ['null function reference', false, `(table 3 funcref) (elem (i32.const 0) funcref (ref.func $${HANDLE}) (ref.null func) (ref.func $callback))
-      (elem declare func $${HANDLE}) (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $callback (type $read) (result i32) i32.const 1)
-      (func (export "get") (result funcref) (ref.func $${HANDLE}))`],
-    // Found once split: a stage's segment that, loaded, writes over a slot the core holds
-    ['changes slot 0', false, `(table 1 funcref) (elem (i32.const 0) $${HANDLE}) (elem (i32.const 0) $callback)
-      (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $callback (type $read) (result i32) i32.const 1)`, true],
   ];
   try {
-    for (const [refusal, optimized, body, split] of cases) {
+    for (const [refusal, optimized, body] of cases) {
       const input = resolve(dir, 'app.wasm'), wat = resolve(dir, 'app.wat'), named = resolve(dir, 'app.named.wasm');
       writeFileSync(wat, `(module (type $read (func (result i32))) ${body} (global $hook (export "hook") (mut i32) (i32.const 0))
         (func (export "read") (result i32) global.get $hook call_indirect (type $read)))`);
       expect(spawnSync('wasm-as', [wat, '-g', '--enable-reference-types', '--enable-bulk-memory', '-o', input]).status).toBe(0);
       if (optimized) expect(optimizeWasm(input, named, ['-Oz', '-g'], resolve(dir, `cache-${refusal}`)).status).toBe(0);
-      // A direct call into the seam fails the build; every other refusal ships the module unsplit.
       let thrown;
-      try { (split ? splitStages : planStages)(optimized ? named : input); } catch (e) { thrown = e; }
+      try { planStages(optimized ? named : input); } catch (e) { thrown = e; }
       expect([refusal, thrown?.message.includes(refusal), thrown instanceof Unsplittable]).toEqual([refusal, true, !refusal.startsWith('directly')]);
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-// The glue's report of a trap: an empty table slot while a stage is not loaded names the stage, which the trap does not.
-test('a null-function trap while a stage is not loaded names the stage', async () => {
+// Every other way the core may call into a stage before it loads reaches the stage's placeholder, which reports it:
+// a call through a slot index the code holds, as the gated hook is held; a constant slot; a direct call the call graph
+// mislabels, from a function whose name holds its edge syntax; and a reference to the seam returned to a script.
+test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('a call into a stage before it loads reports the stage', async () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-early-stage-'));
+  const cases = [
+    ['a held slot index', `(func (export "early") (result i32) global.get $hook call_indirect (type $read))`],
+    ['a constant slot', `(func (export "early") (result i32) i32.const 0 call_indirect (type $read))`],
+    ['an edge in a name', `(func $"boot\\" -> \\"decoy" (export "early") (result i32) call $${HANDLE})`],
+    ['an escaping reference', `(elem declare func $${HANDLE}) (func (export "get") (result funcref) ref.func $${HANDLE})`, core => core.get()()],
+  ];
+  try {
+    for (const [way, body, early = core => core.early()] of cases) {
+      const wat = resolve(dir, 'app.wat'), named = resolve(dir, 'app.named.wasm');
+      writeFileSync(wat, `(module (type $read (func (result i32))) (table 1 funcref) (elem (i32.const 0) $${HANDLE})
+        (global $hook (export "hook") (mut i32) (i32.const 0)) (func $${HANDLE} (type $read) (result i32) i32.const 42)
+        (func (export "read") (result i32) global.get $hook call_indirect (type $read)) ${body})`);
+      expect(spawnSync('wasm-as', [wat, '-g', '--enable-reference-types', '--enable-bulk-memory', '-o', named]).status).toBe(0);
+      const split = splitStages(named), core = (await WebAssembly.instantiate(split.core, await placeholders())).instance.exports;
+      let thrown;
+      try { early(core); } catch (e) { thrown = e; }
+      expect([way, thrown?.message]).toEqual([way, 'app.wasm called the inspection stage (placeholder 0) before the stage loaded']);
+      const [path] = split.files.keys();
+      await WebAssembly.instantiate(split.files.get(path), { primary: core });
+      expect([way, early(core)]).toEqual([way, 42]);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+/** The glue's imports for a split core (wasm/boot.js `withPlaceholders`): each stage placeholder throws, naming its stage. */
+async function placeholders() {
   const { wasmSource, glueDeclarations } = await import('./tests/glue-fixture.mjs');
   const vm = await import('node:vm');
-  const report = (stages, loaded, error) => {
-    const said = [];
-    const context = vm.createContext({ host: { stages }, root: { dataset: {} }, exact: {}, WebAssembly, String,
-      stageLoaded: (name) => loaded.includes(name), console: { error: (line) => said.push(line) } });
-    vm.runInContext(glueDeclarations(wasmSource, ['stopModule']), context);
-    context.stopModule(error);
+  const context = vm.createContext({});
+  vm.runInContext(glueDeclarations(wasmSource, ['StageNotLoaded', 'withPlaceholders']), context);
+  return context.withPlaceholders({});
+}
+
+// The glue's guard on the core's exports: a stage placeholder's error stops the module, as a trap does, and the report
+// says how a call reaches a stage, which a trap's does not.
+test('a call that reached an unloaded stage stops the module and says how calls reach a stage', async () => {
+  const { wasmSource, glueDeclarations } = await import('./tests/glue-fixture.mjs');
+  const vm = await import('node:vm');
+  const said = [];
+  const context = vm.createContext({ host: {}, root: { dataset: {} }, exact: {}, WebAssembly, String,
+    console: { error: (line) => said.push(line) } });
+  vm.runInContext(glueDeclarations(wasmSource, ['ModuleStopped', 'StageNotLoaded', 'stopModule', 'guardedExports']), context);
+  const exports = vm.runInContext(`guardedExports({ early: () => { throw new StageNotLoaded('x'); }, trap: () => { throw new WebAssembly.RuntimeError('null function'); } })`, context);
+  const report = (name) => {
+    context.host.trapped = null; said.length = 0;
+    expect(() => exports[name]()).toThrow();
+    expect(context.host.trapped).toBeTruthy();
     return said[0];
   };
-  const plain = 'exact: app.wasm trapped, and the page no longer calls it:', empty = new WebAssembly.RuntimeError('null function');
-  expect(report({ inspection: 'stages/inspection.wasm' }, [], empty)).toContain('reached the inspection stage before it loaded, around its gate');
-  expect(report({ inspection: 'stages/inspection.wasm' }, ['inspection'], empty)).toBe(plain);
-  expect(report({}, [], empty)).toBe(plain);
-  expect(report({ inspection: 'stages/inspection.wasm' }, [], new WebAssembly.RuntimeError('unreachable'))).toBe(plain);
-  // SpiderMonkey's and JavaScriptCore's empty slots, and JavaScriptCore's null reference, which is no call
-  expect(report({ inspection: 'stages/inspection.wasm' }, [], new WebAssembly.RuntimeError('indirect call to null'))).toContain('inspection stage');
-  expect(report({ inspection: 'stages/inspection.wasm' }, [], new WebAssembly.RuntimeError('call_indirect to a null table entry'))).toContain('inspection stage');
-  expect(report({ inspection: 'stages/inspection.wasm' }, [], new WebAssembly.RuntimeError('ref.as_non_null to a null reference'))).toBe(plain);
-  // Older V8's one message for an empty slot and a signature mismatch names no stage.
-  expect(report({ inspection: 'stages/inspection.wasm' }, [], new WebAssembly.RuntimeError('null function or function signature mismatch'))).toBe(plain);
+  expect(report('early')).toContain('every call into a stage goes through its gate, which loads the stage first');
+  expect(report('trap')).toBe('exact: app.wasm trapped, and the page no longer calls it:');
 });
