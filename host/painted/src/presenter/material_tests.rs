@@ -1396,3 +1396,31 @@ fn materials_labelled_buttons_take_their_emphasis() {
     assert_eq!(ink("trailing"), (false, true), "a trailing symbol");
     assert_eq!(ink("rtl"), (false, true), "a leading symbol, right to left");
 }
+
+/// Compose's bare `BasicTextField` shows its focus by its caret alone, and
+/// shows no ring when a key brings the focus to it either.
+#[test]
+fn materials_bare_text_field_shows_no_ring_from_a_key() {
+    if !material_process() {
+        return;
+    }
+    let source = r##"component App
+  view
+    column padding=10
+      input testId="field" appearance="none" accent-color="#ff0000" width=200 height=30
+"##;
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &crate::test_plan(source),
+        (),
+        (400., 600.),
+        2.4375,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.key_down("Tab", 1.);
+    assert_eq!(p.focus, Some(id(&p, "field")));
+    let r = p.rect_of(id(&p, "field")).unwrap();
+    assert_ne!(pixel(&mut p, r.0 + 60., r.1 + 0.5), [255, 0, 0, 255]);
+}
