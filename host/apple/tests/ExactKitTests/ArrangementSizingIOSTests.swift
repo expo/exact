@@ -71,6 +71,43 @@ final class ArrangementSizingIOSTests: XCTestCase {
                                     withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel)
     }
 
+    func testWithoutNavigationAPaneTakenOutIsCoveredWholeUntilItIsPutBack() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
+        let make = NavigationLink.make, makeModals = NavigationLink.makeModals
+        NavigationLink.make = nil; NavigationLink.makeModals = nil
+        defer { NavigationLink.make = make; NavigationLink.makeModals = makeModals }
+        try takeOutAndPutBack(navigation: false)
+    }
+
+    func testAPaneTakenOutStaysCoveredWholeThroughANavigationReset() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
+        try takeOutAndPutBack(navigation: true)
+    }
+
+    @available(iOS 27.1, *)
+    private func takeOutAndPutBack(navigation linked: Bool) throws {
+        let (session, controller, _) = try fixture()
+        let p = session.presenter
+        XCTAssertEqual(p.navigation is NoNavigation, !linked)
+        XCTAssertEqual(p.modals is NoModals, !linked)
+        let holder = try XCTUnwrap(controller.viewController(for: .secondary) as? ArrangementPaneController), id = holder.node.id
+        waitForMainQueue("the arrangement's setup pass")
+        var told: [HostCover?] = [], tell = p.onCovers
+        p.onCovers = { changes in told += changes.filter { $0.0 == id }.map(\.1); tell?(changes) }
+        controller.setViewController(nil, for: .secondary)
+        waitFor("the pane taken out is told covered whole") { told.last == .whole && holder.node.bounds.isEmpty }
+        if linked {
+            // A batch on a root without `navigationBack` resets the navigation host, which tells nothing of the pane
+            p.apply(facesBatch())
+            waitForMainQueue("the batch's work")
+            XCTAssertEqual(told, [.whole])
+        }
+        controller.setViewController(holder, for: .secondary)
+        waitFor("the pane put back is told uncovered and laid out") { told.last == .some(nil) && !holder.node.bounds.isEmpty }
+        waitForMainQueue("a pass still queued")
+        XCTAssertEqual(told, [.whole, nil], "each change is told once, and a pane shown is never told covered")
+    }
+
     func testProposalsMeasureAuthoredTextWithoutChangingItsAllocation() throws {
         let session = try booted()
         let primary = try node("primary")

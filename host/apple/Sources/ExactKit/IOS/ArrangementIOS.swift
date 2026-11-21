@@ -27,6 +27,12 @@ final class ArrangementPaneController: UIViewController {
         super.viewSafeAreaInsetsDidChange()
         SafeAreaSteps.react(self) { [weak self] in self?.changed() }
     }
+    /// UIKit hides a pane by taking its controller out of the arrangement and shows it by putting it back, either of which
+    /// can leave its sibling's layout, and so the calls above, untouched
+    override func didMove(toParent parent: UIViewController?) {
+        super.didMove(toParent: parent)
+        changed()
+    }
 }
 
 /// A UIKit container measures its Contract subtree at the width and priorities UIKit offers.
@@ -176,8 +182,9 @@ package final class ArrangementHost {
     /// A sync asked for while one runs, by a UIKit callback inside its writes: the running one queues a pass as it ends.
     private var syncOwed = false
     private var layoutPending = false
-    /// The panes UIKit hides, as last reported covered whole.
-    private var toldHidden: Set<UInt32> = []
+    /// The panes UIKit hid at the last pass, after its layout, which the covers read: a report can find UIKit's views
+    /// partway through a change
+    package private(set) var hidden: Set<UInt32> = []
     private var reaches: [UInt32: BottomReach] = [:]
     private var children: [UInt32: [UInt32]] = [:]
     private(set) var entries: [UInt32: Entry] = [:]
@@ -195,7 +202,7 @@ package final class ArrangementHost {
             controller.setViewController(holders[1], for: .secondary)
         }
         func isHidden(_ holder: ArrangementPaneController) -> Bool {
-            // Read view visibility because an overlay can report hidden while its views remain visible
+            // Read view visibility because an overlay's `state(for:)` reports both panes hidden while both stay on screen
             var current: UIView? = holder.view
             while let view = current {
                 if view.isHidden { return true }
@@ -316,11 +323,13 @@ package final class ArrangementHost {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             layoutPending = false
-            guard !entries.isEmpty || !insetScrollers.isEmpty else { return reportHiddenPanes() }
-            syncInsets()
-            refreshContentSizes()
-            presenter.owners.publish()
-            reportHiddenPanes()
+            // With nothing arranged too: the panes of a retired arrangement give their covers up
+            hidden = Set(hiddenPanes)
+            if !entries.isEmpty || !insetScrollers.isEmpty {
+                syncInsets()
+                refreshContentSizes()
+                presenter.owners.publish()
+            }
             presenter.navigation.coversChanged()
         }
     }
@@ -475,19 +484,6 @@ package final class ArrangementHost {
         }
     }
 
-    /// A pane UIKit hides takes no room in the authored layout: it is covered
-    /// whole, told with what changed since the last report. A scroller's least
-    /// content height follows its cover (`scrollFloor`).
-    private func reportHiddenPanes() {
-        let now = Set(hiddenPanes)
-        guard now != toldHidden else { return }
-        let changes = now.subtracting(toldHidden).map { ($0, HostCover.whole as HostCover?) }
-            + toldHidden.subtracting(now).filter { presenter.views[$0] != nil }.map { ($0, nil as HostCover?) }
-        toldHidden = now
-        for (id, _) in changes { presenter.views[id]?.fitScroll() }
-        presenter.onCovers?(changes)
-    }
-
     /// Native-hidden panes take no room in the authored edge chain.
     package var hiddenPanes: [UInt32] {
         entries.values.flatMap { entry in
@@ -518,7 +514,7 @@ package final class ArrangementHost {
 
     func reset() {
         for entry in entries.values { retire(entry) }
-        entries = [:]; requests = [:]; children = [:]; toldHidden = []
+        entries = [:]; requests = [:]; children = [:]; hidden = []
         syncInsets()
     }
 }

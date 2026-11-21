@@ -734,7 +734,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// UIKit changed a route's safe area: lay out its content in this call.
     func coversChanged() {
         // sync reports the final containment below; intermediate safe areas
-        // belong to the controller the route is leaving.
+        // belong to the controller the route is leaving. An arrangement's pass
+        // loses nothing in a press: a pane it hides or shows changes its block,
+        // whose batch syncs.
         guard !syncing, tapping == nil, !coversPending else { return }
         coversPending = true
         presenter.afterBatch { [weak self] in
@@ -1227,9 +1229,10 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         #endif
         retireSplit()
         if let primaryNavigation { retireStack(primaryNavigation) }
-        // An open dialog's header its sheet's bar stands for stays covered (DialogBarIOS.swift).
+        // An open dialog's header its sheet's bar stands for stays covered (DialogBarIOS.swift), and a pane a native
+        // arrangement hides.
         #if os(iOS)
-        let kept = dialogBarCovers
+        let kept = dialogBarCovers.merging(arrangedCovers) { _, whole in whole }
         #else
         let kept: [UInt32: HostCover] = [:]
         #endif
