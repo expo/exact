@@ -57,6 +57,8 @@ final class CollectionPageBandIOSTests: XCTestCase {
         ]))
         let node = try XCTUnwrap(p.views[1]), scroll = try XCTUnwrap(node.scroll)
         node.setPageBand(UIEdgeInsets(top: 60, left: 0, bottom: 30, right: 0))
+        // What the list draws through, with no reach, is the page band (LLP 1123 D13's `scrollDrawnThrough`)
+        XCTAssertEqual(node.scrollDrawnThrough(scroll), UIEdgeInsets(top: 60, left: 0, bottom: 30, right: 0))
         let rest = scroll.contentOffset.y
         let facts = try XCTUnwrap(p.listHost.geometry(1))
         XCTAssertEqual(facts.portMain, 290)
@@ -90,6 +92,29 @@ final class CollectionPageBandIOSTests: XCTestCase {
         p.listHost.endBatch()
         XCTAssertEqual(scroll.contentOffset.y, -scroll.adjustedContentInset.top, "at the top, not 40 points into the list")
         XCTAssertEqual(try XCTUnwrap(p.listHost.geometry(1)).offset, -140)
+    }
+
+    func testARowListWithNoReachCountsThePageBandAsPortAcross() throws {
+        let p = Presenter()
+        p.viewport.frame = CGRect(x: 0, y: 0, width: 300, height: 200)
+        defer { p.reset() }
+        p.apply(wireBatch([
+            ["op": "collections", "items": [["view": 1, "axis": "x", "revision": 1, "scrollSequence": 0, "count": 20, "totalExtent": 2000,
+                "rows": [["view": 2, "root": 2, "epoch": 1]], "correction": NSNull()]]],
+            ["op": "create", "id": 1, "kind": "list", "style": ["overflow_x": "scroll", "overflow_y": "scroll"]],
+            ["op": "create", "id": 2, "kind": "view"],
+            ["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 300, "h": 200],
+            ["op": "frame", "id": 2, "x": 0, "y": 0, "w": 100, "h": 200],
+            ["op": "content", "id": 1, "w": 2000, "h": 200]
+        ]))
+        let node = try XCTUnwrap(p.views[1]), scroll = try XCTUnwrap(node.scroll)
+        XCTAssertEqual(p.listHost.entries[1]?.snapshot.horizontal, true)
+        node.setPageBand(UIEdgeInsets(top: 60, left: 0, bottom: 0, right: 0))
+        XCTAssertEqual(scroll.adjustedContentInset.top, 60, "the band's inset")
+        // With no reach the band is port across and no inset of the batch's, as for a vertical list
+        XCTAssertEqual(try XCTUnwrap(p.listHost.geometry(1)).portCross, 260)
+        XCTAssertEqual(p.listHost.portInsets(1)?.first, 0)
     }
 }
 #endif

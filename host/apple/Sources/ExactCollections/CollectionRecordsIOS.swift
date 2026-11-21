@@ -33,7 +33,8 @@ final class CollectionRecords {
     struct Port: Equatable {
         var bounds: CGRect
         var insets: UIEdgeInsets
-        var band: UIEdgeInsets
+        var outset: UIEdgeInsets
+        var through: UIEdgeInsets
     }
     var rows: [UInt32: Row] = [:]
     var measurements: [CollectionMeasurement] = []
