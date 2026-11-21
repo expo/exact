@@ -112,6 +112,15 @@ pub trait Lists<D: DataSource> {
     ) -> Option<f64> {
         None
     }
+    /// Headers and body rows in the authored sections of a virtualized list.
+    fn list_sections(
+        &self,
+        _: &Tree,
+        _: &mut Update<'_>,
+        _: ViewId,
+    ) -> Result<Option<crate::list_api::SectionTable>, crate::instance::InstanceError> {
+        Ok(None)
+    }
     /// Row `key`'s logical index in list `view`.
     fn list_index(&self, _: &Tree, _view: ViewId, _key: &str) -> Option<usize> {
         None
@@ -332,6 +341,20 @@ impl<D: DataSource> Runner<D> {
             view,
             [release, rest, port, minimum, maximum],
         )
+    }
+
+    /// Native table rows in a list whose items are sections, including items
+    /// outside the viewport. Reading their structure creates no views.
+    pub fn list_sections(
+        &self,
+        view: ViewId,
+    ) -> Result<Option<crate::list_api::SectionTable>, RunnerError> {
+        let Some(tree) = self.tree.as_ref() else {
+            return Ok(None);
+        };
+        let mut ids = Ids::default();
+        let mut u = self.instance_update(&mut ids);
+        Ok(self.seams.lists.list_sections(tree, &mut u, view)?)
     }
 
     /// Resolve an opaque row key without materializing that row.

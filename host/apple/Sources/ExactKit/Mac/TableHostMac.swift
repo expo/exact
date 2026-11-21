@@ -4,8 +4,8 @@
 // Contract marks the lists whose rows are cells; this host reads that mark.
 //
 // A marked list can keep every row mounted or let the runner window them.
-// In a split's list column, a sectioned list that keeps its rows mounted
-// also takes a table. Its headers become AppKit group rows. Outside the
+// In a split's list column, a sectioned list also takes a table. Its
+// headers become AppKit group rows, including offscreen ones. Outside the
 // split, the same sections keep their authored or grouped presentation.
 //
 // Under the agent the rows are painted, as the header and the tablist are,
@@ -66,6 +66,7 @@ package final class TableHost {
     private var said: [UInt32: String] = [:]
     init(_ presenter: Presenter) { self.presenter = presenter }
 
+    private var sectionTables: [UInt32: WindowedTableSections] = [:]
     private var splitList: UInt32?
     package func setSplitList(_ id: UInt32?) {
         guard id != splitList else { return }
@@ -96,8 +97,10 @@ package final class TableHost {
         guard let presenter else { return }
         for (id, feed) in feeds where presenter.views[id] == nil || presenter.listViews[id] == nil { feeds[id] = nil; said[id] = nil; feed.remove() }
         for (id, list) in presenter.listViews {
-            let sections = id == splitList && !presenter.collections.owns(id) && (list.props["listStyle"] != nil ||
-                rowChildren[id]?.contains { presenter.views[$0]?.props["semanticTag"] == "section" } == true)
+            let windowed = presenter.collections.owns(id)
+            let projection = id == splitList && windowed ? sectionTables[id] : nil
+            let sections = projection != nil || (id == splitList && !windowed && (list.props["listStyle"] != nil ||
+                rowChildren[id]?.contains { presenter.views[$0]?.props["semanticTag"] == "section" } == true))
             let why = painted ? "" : refusal(list, splitSections: sections)
             if let feed = feeds[id], feed.sections != sections {
                 feeds[id] = nil
@@ -107,8 +110,10 @@ package final class TableHost {
             if let why {
                 if let feed = feeds.removeValue(forKey: id) { feed.remove(); presenter.keyViewLoopStale = true }
                 if !why.isEmpty, said[id] != why { said[id] = why; presenter.session?.log("table: list #\(id) keeps painted rows: \(why)") }
-            } else if feeds[id] == nil {
-                feeds[id] = TableFeed(list, presenter: presenter, style: .inset, sections: sections)
+            } else if let feed = feeds[id] {
+                feed.windowedSections = projection
+            } else {
+                feeds[id] = TableFeed(list, presenter: presenter, style: .inset, sections: sections, windowed: projection)
                 if sections { list.fitScroll() }
                 presenter.keyViewLoopStale = true
                 if said[id] != "" { said[id] = ""; presenter.session?.log("table: list #\(id) is an NSTableView") }
@@ -126,7 +131,7 @@ package final class TableHost {
     /// document, and a child that is no row in the document.
     func owns(_ node: NodeView, in list: UInt32) -> Bool {
         guard let feed = feeds[list] else { return node.superview is TableRowCell }
-        if feed.sections && node.props["semanticTag"] == "section" { return false }
+        if feed.sections && (node.props["semanticTag"] == "section" || node.props["listItemKey"] != nil) { return false }
         guard node.superview == nil || feed.children != nil else { return node.superview is TableRowCell }
         guard feed.expects(node) else { return false }
         feed.dirty = true
@@ -302,6 +307,13 @@ package final class TableHost {
 
     /// After a batch's ops (`Presenter.apply`).
     func sync(_ batch: Batch) {
+        for op in batch.ops {
+            guard let updates = op.sectionTables else { continue }
+            for update in updates {
+                guard case .array(let fields) = update, let list = fields.first?.number.flatMap(UInt32.init(exactly:)) else { continue }
+                sectionTables[list] = WindowedTableSections(fields, previous: sectionTables[list])
+            }
+        }
         if !painted || !feeds.isEmpty, batch.ops.contains(where: { Self.deciding.contains($0.op) }) { decide() }
         // A separator follows its row's authored border, shadow and `aria-hidden`, and its neighbour.
         let provenance = batch.ops.contains { Self.deciding.contains($0.op) && $0.op != .collections }
@@ -328,6 +340,7 @@ package final class TableHost {
         cancelPress()
         feeds.values.forEach { $0.remove() }
         feeds.removeAll()
+        sectionTables.removeAll()
         said.removeAll()
         rowChildren.removeAll()
         nextRow.removeAll()

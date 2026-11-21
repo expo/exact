@@ -634,6 +634,9 @@ impl<D: DataSource> Host<D> {
 
     /// The lists' metadata, when it moved.
     pub(super) fn emit_collections(&mut self, batch: &mut Batch) -> Result<(), String> {
+        let mut heads = self.runner.collections_shallow();
+        #[cfg(target_os = "macos")]
+        self.publish_section_tables(batch, &heads)?;
         let collections = if self.native_mode() {
             self.collection_heads = None;
             self.native_collections_json()?
@@ -641,7 +644,6 @@ impl<D: DataSource> Host<D> {
             // Revisions cover rows, extent and corrections; the window also
             // carries edge arming. A newer feedback sequence alone needs no
             // snapshot or serialization.
-            let mut heads = self.runner.collections_shallow();
             for head in &mut heads {
                 head.scroll_sequence = 0;
             }
@@ -652,7 +654,7 @@ impl<D: DataSource> Host<D> {
             self.runner.collections_json()
         };
         if collections != self.collections_json {
-            batch.collections(&collections);
+            batch.collections("items", &collections);
             self.collections_json = collections;
         }
         Ok(())

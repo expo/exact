@@ -16,6 +16,7 @@
 //! until one does or none waits; a root that names no route of any panel
 //! shows all of them, as the projection does.
 
+use super::bound::literal_str;
 use super::*;
 use crate::head::{tab_panels, HeadNode};
 use exact_kernel::{PropId, PropList, PropValue};
@@ -100,25 +101,6 @@ pub fn sites_need_navigation(plan: &Plan, sites: &[NodesId]) -> Vec<bool> {
         }
     }
     navigation
-}
-
-/// The string node `n`'s `prop` is bound to, when that binding is a literal.
-fn literal_str(plan: &Plan, n: NodesId, prop: PropId) -> Option<&str> {
-    plan.node(n).bindings.iter().find_map(|b| {
-        let b = plan.binding(b);
-        if b.kind != BindingKind::Prop || b.id != prop as u16 {
-            return None;
-        }
-        match crate::vm::instructions(plan.read_code(plan.code(b.expr)).0)
-            .collect::<Result<Vec<_>, _>>()
-            .as_deref()
-        {
-            Ok([v, r]) if r.op == exact_plan::Opcode::Return && v.op == exact_plan::Opcode::Str => {
-                Some(plan.str(exact_plan::StrId(v.args[0] as u32)))
-            }
-            _ => None,
-        }
-    })
 }
 
 /// Whether node `n` binds `prop`.

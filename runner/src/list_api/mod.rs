@@ -32,6 +32,25 @@ impl RowsShown {
     }
 }
 
+/// The table rows a sectioned collection exposes to a native data source.
+#[derive(Debug, PartialEq, Eq)]
+pub struct SectionTable {
+    /// The logical row kinds, including sections outside the window.
+    pub runs: Rc<[SectionRun]>,
+    /// Each mounted section's item index and the views for its table rows.
+    pub mounted: Vec<(usize, Vec<exact_kernel::ViewId>)>,
+}
+
+/// Consecutive collection items with the same section rows. A header is
+/// `true`, a body row `false`; a footer has no row (LLP 1115.002 §4).
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct SectionRun {
+    /// Exclusive item index at the end of the run.
+    pub end: usize,
+    /// Row kinds in each of those sections, in authored order.
+    pub headers: Vec<bool>,
+}
+
 /// The host's paragraph and `user-select: auto` rules for logical copies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListTextPolicy {

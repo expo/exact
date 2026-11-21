@@ -969,7 +969,7 @@ pub(super) fn decoration_rows(
     )
 }
 
-fn constant_str<'a>(plan: &'a Plan, code: &[u8]) -> Option<&'a str> {
+pub(crate) fn constant_str<'a>(plan: &'a Plan, code: &[u8]) -> Option<&'a str> {
     match plan.read_code(code).0 {
         [op, a, b, c, d, ret] if *op == Opcode::Str as u8 && *ret == Opcode::Return as u8 => {
             let id = u32::from_le_bytes([*a, *b, *c, *d]);

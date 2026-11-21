@@ -140,6 +140,10 @@ impl<D: DataSource> Bridge<D> {
                         view,
                         Some(exact_kernel::HostCover::Gutter([edge(12), edge(16)])),
                     )),
+                    25 => covers.push((
+                        view,
+                        Some(exact_kernel::HostCover::RowSpacing([edge(8), edge(16)])),
+                    )),
                     3 => {
                         let inset = exact_kernel::HostCover::Inset([edge(8), edge(16)]);
                         covers.push((view, Some(inset)));
