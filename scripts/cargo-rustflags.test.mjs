@@ -35,12 +35,15 @@ test('added target rustflags join a configured string or array', () => {
 
 // A web build's wasm remap is such a flag: an app configuring its wasm rustflags as a string failed in Cargo's merge.
 test('a wasm build takes its remap over the app\'s configured wasm rustflags, a string or an array', () => {
+  // As the temporary directory is named, which on macOS is a link (/var -> /private/var) Cargo reads through
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-wasm-config-'));
   const workspace = resolve(dir, 'app'), previousRoot = process.env.EXACT_SOURCE_ROOT;
   try {
     process.env.EXACT_SOURCE_ROOT = dir;
     mkdirSync(resolve(workspace, 'src'), { recursive: true });
     mkdirSync(resolve(workspace, '.cargo'), { recursive: true });
+    // exact2's toolchain, which a generated workspace carries (app-shells.mjs), not the machine's rustup default
+    writeFileSync(resolve(workspace, 'rust-toolchain.toml'), readFileSync(new URL('../rust-toolchain.toml', import.meta.url), 'utf8'));
     mkdirSync(resolve(dir, 'shared/src'), { recursive: true });
     writeFileSync(resolve(dir, 'shared/Cargo.toml'), '[workspace]\n[package]\nname="shared"\nversion="0.1.0"\nedition="2021"\n');
     writeFileSync(resolve(dir, 'shared/src/lib.rs'), 'pub fn path() -> &\'static str { file!() }\n');
