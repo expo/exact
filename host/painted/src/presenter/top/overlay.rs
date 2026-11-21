@@ -64,19 +64,25 @@ impl<D: DataSource> Presenter<D> {
     }
 
     pub(in crate::presenter) fn overlay_scroll(&mut self, delta: f32) -> bool {
-        if !self.top.overlay.enabled {
+        if !self.top.overlay.enabled || self.top.open.is_none() {
             return false;
         }
+        self.scroll_surface_by(delta);
+        true
+    }
+
+    pub(in crate::presenter) fn scroll_surface_by(&mut self, delta: f32) -> bool {
         let Some(open) = self.top.open.as_mut() else {
             return false;
         };
-        if open.layout.scroll_content(delta) {
-            open.hovered = None;
-            open.pressed = None;
-            open.revision += 1;
-            self.dirty = true;
-            self.executor.notify();
+        if !open.layout.scroll_content(delta) {
+            return false;
         }
+        open.hovered = None;
+        open.pressed = None;
+        open.revision += 1;
+        self.dirty = true;
+        self.executor.notify();
         true
     }
 

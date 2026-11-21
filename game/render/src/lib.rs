@@ -20,7 +20,11 @@ mod cull_tests;
 mod frame;
 pub mod hooks;
 pub mod jobs;
-pub use jobs::{Cancel, Done, Full, Job, JobError, Jobs, JobsReport, Lane, Limits, Take};
+pub use jobs::{
+    install_module_transport, run_remote_job, Attempt, Cancel, Done, Full, Job, JobError, Jobs,
+    JobsReport, Lane, Limits, Outcome, Posting, QueueId, RemoteJob, ResultRead, RunMark, Take,
+    Transport, TransportEvent, TransportReport, TransportState, WireError, WireJob, WorkerId,
+};
 /// Recipe: blended geometry in a hook stage.
 #[doc = include_str!("../../recipes/blended-hook-geometry.md")]
 pub mod blended_hook_geometry {}

@@ -214,8 +214,10 @@ pub(crate) fn append_state<H: Hooks>(
     out.push_str(",\"jobs\":");
     if let Some(jobs) = jobs {
         use std::fmt::Write;
-        write!(out, "{{\"queued\":{},\"queuedBytes\":{},\"running\":{},\"done\":{},\"stale\":{},\"failed\":{},\"lane\":\"{}\"}}",
+        write!(out, "{{\"queued\":{},\"queuedBytes\":{},\"running\":{},\"done\":{},\"stale\":{},\"failed\":{},\"lane\":\"{}\"",
             jobs.queued, jobs.queued_bytes, jobs.running, jobs.done, jobs.stale, jobs.failed, jobs.lane.as_str()).unwrap();
+        jobs.append_wire(out);
+        out.push('}');
     } else {
         out.push_str("null");
     }

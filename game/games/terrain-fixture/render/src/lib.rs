@@ -683,6 +683,7 @@ impl Passes {
 
 impl Hooks for Passes {
     const ALLOWANCE: u32 = 64;
+    const REMOTE: &'static [exact_game_render::RemoteJob] = jobs::REMOTE;
 
     fn prepare(
         &mut self,

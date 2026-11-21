@@ -1,6 +1,19 @@
 use super::{Job, SectionWork, Workload, SIDE, SMALL_PER_UNIT};
 use terrain_fixture_logic::{Inflight, WorkloadSettings};
 
+impl Job {
+    pub(crate) fn mesh_input(origin: super::Origin, changed: bool) -> Self {
+        Self {
+            origin,
+            changed,
+            kind: SectionWork::Mesh,
+            revision: 0,
+            crossing: None,
+            repair: false,
+        }
+    }
+}
+
 impl<T: Default> Workload<T> {
     pub(crate) fn generation(&self) -> u64 {
         self.generation

@@ -144,17 +144,7 @@ impl<D: DataSource> Presenter<D> {
             .map_or(open.layout.size.1, |clip| clip.3);
         let row = open.layout.targets.first().map_or(shows, |t| t.rect.3);
         let step = (shows - row).max(row).max(1.0);
-        if !open
-            .layout
-            .scroll_content(if forward { step } else { -step })
-        {
-            return false;
-        }
-        (open.pressed, open.hovered) = (None, None);
-        open.revision += 1;
-        self.dirty = true;
-        self.executor.notify();
-        true
+        self.scroll_surface_by(if forward { step } else { -step })
     }
 
     /// Put the open select's menu's focus at row `at`, scrolled into view.

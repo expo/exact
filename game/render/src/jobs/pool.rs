@@ -5,6 +5,11 @@ use std::thread;
 
 impl<J: Job> Jobs<J> {
     pub(super) fn wake_pool(&mut self) {
+        #[cfg(test)]
+        if self.fail_pool_start {
+            self.wake_pool_with(|_| Err(std::io::ErrorKind::WouldBlock.into()));
+            return;
+        }
         self.wake_pool_with(|shared| thread::Builder::new().spawn(move || work(&shared)));
     }
 
@@ -72,14 +77,14 @@ pub(super) fn work<J: Job>(shared: &Shared<J>) {
             && (state.lane != Lane::Pool
                 || state.queue.is_empty()
                 || (!state.completed.is_empty()
-                    && state.completed_bytes >= shared.limits.completed_bytes))
+                    && state.completed_bytes >= shared.limits.completed_bytes as u64))
         {
             state = shared.changed.wait(state).unwrap();
         }
         if state.closed {
             return;
         }
-        let (order, Queued { ticket, job, .. }) = state.pop().unwrap();
+        let (order, Queued { ticket, job, .. }, _) = state.pop().unwrap();
         let cancel = Cancel::default();
         state.running.insert(order, cancel.clone());
         drop(state);
@@ -90,7 +95,7 @@ pub(super) fn work<J: Job>(shared: &Shared<J>) {
                 ticket,
                 output: None,
             };
-            let result = job.run(&cancel);
+            let result = shared.run(job, &cancel, None);
             let bytes = match &result {
                 Ok(output) => J::output_bytes(output),
                 Err(error) => error.0.capacity(),
@@ -123,7 +128,7 @@ impl<J: Job> Drop for Running<'_, J> {
                     generation: self.ticket.generation,
                     result,
                 };
-                state.completed_bytes += bytes;
+                state.completed_bytes += bytes as u64;
                 state.record_retained_peak();
                 state
                     .completed

@@ -136,10 +136,10 @@ impl Access {
                     (Action::ShowContextMenu, _) => {
                         p.access_act(id, act::LONG_CLICK, 0., now);
                     }
-                    (Action::Increment | Action::ScrollDown | Action::ScrollRight, _) => {
+                    (Action::Increment, _) => {
                         p.access_act(id, act::FORWARD, 0., now);
                     }
-                    (Action::Decrement | Action::ScrollUp | Action::ScrollLeft, _) => {
+                    (Action::Decrement, _) => {
                         p.access_act(id, act::BACKWARD, 0., now);
                     }
                     (Action::SetValue, Some(ActionData::NumericValue(value)))
@@ -177,7 +177,11 @@ impl Access {
                             );
                         }
                     }
-                    _ => {}
+                    (action, data) => {
+                        if let Some(to) = model::scroll_target(node, action, data.as_ref()) {
+                            p.access_scroll_to(id, to);
+                        }
+                    }
                 }
             }
         }

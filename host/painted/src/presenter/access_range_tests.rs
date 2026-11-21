@@ -64,7 +64,10 @@ fn a_drawn_range_steps_by_its_authors_keys() {
     assert!(p.access_act(of("Level"), act::FORWARD, 0.0, 0.0));
     settle(&mut p);
     assert_eq!(heard(&p), "ArrowRight up:ArrowRight");
-    assert_eq!(named(&statement(&mut p).nodes, "Level").range[2], 60.0);
+    assert_eq!(
+        named(&statement(&mut p).nodes, "Level").reader_range()[2],
+        60.0
+    );
     assert!(p.access_act(of("Level"), act::BACKWARD, 0.0, 0.0));
     assert!(p.access_act(of("Floor"), act::BACKWARD, 0.0, 0.0));
     assert!(p.access_act(of("Tilt"), act::FORWARD, 0.0, 0.0));
@@ -74,9 +77,9 @@ fn a_drawn_range_steps_by_its_authors_keys() {
         "ArrowRight up:ArrowRight ArrowLeft up:ArrowLeft ArrowDown ArrowUp"
     );
     let nodes = statement(&mut p).nodes;
-    assert_eq!(named(&nodes, "Level").range[2], 50.0);
-    assert_eq!(named(&nodes, "Floor").range[2], 2.0);
-    assert_eq!(named(&nodes, "Tilt").range[2], 1.0);
+    assert_eq!(named(&nodes, "Level").reader_range()[2], 50.0);
+    assert_eq!(named(&nodes, "Floor").reader_range()[2], 2.0);
+    assert_eq!(named(&nodes, "Tilt").reader_range()[2], 1.0);
     assert!(!p.access_act(named(&nodes, "Level").id, act::SET, 20.0, 0.0));
     assert!(p.access_act(named(&nodes, "Floor").id, act::BACKWARD, 0.0, 0.0));
     settle(&mut p);
@@ -183,8 +186,8 @@ fn a_native_ranges_step_is_its_arrow_key_first() {
         settle(p);
         let nodes = statement(p).nodes;
         (
-            named(&nodes, "Seek").range[2],
-            named(&nodes, "Plain").range[2],
+            named(&nodes, "Seek").reader_range()[2],
+            named(&nodes, "Plain").reader_range()[2],
         )
     };
     assert!(p.access_act(seek, act::FORWARD, 0.0, 0.0));
@@ -249,7 +252,10 @@ fn an_unprevented_step_follows_the_keydown_and_what_it_changed() {
         "ArrowRight input:65 change:65 up:ArrowRight",
         "one step past the handler's 60, under its new maximum, before the keyup"
     );
-    assert_eq!(named(&statement(&mut p).nodes, "Jump").range[2], 65.0);
+    assert_eq!(
+        named(&statement(&mut p).nodes, "Jump").reader_range()[2],
+        65.0
+    );
 }
 
 /// A disabled range takes no step and sends no key, as a keyboard's arrow

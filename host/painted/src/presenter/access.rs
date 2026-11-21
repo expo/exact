@@ -46,6 +46,8 @@
 //! itself: its node here says only where it stands in the order and what
 //! its author named it.
 mod menu;
+mod scroll;
+pub use scroll::NodeRange;
 mod surface;
 mod walk;
 
@@ -233,9 +235,8 @@ pub struct Node {
     /// Where it shows, in points: in the window for the page and the bars,
     /// in its own window for a surface of the top layer.
     pub rect: [f32; 4],
-    /// A range's least, greatest and present value; for a scroller, where
-    /// it is along its axis and how far it goes.
-    pub range: [f32; 3],
+    /// The control's value range or the container's scroll offsets.
+    pub range: NodeRange,
     /// Its place among its kind, from 1, and how many they are (a tab, a
     /// list's row); for a `tablist`, 0 and how many tabs. 0 and 0: none.
     pub set: (i32, i32),
@@ -608,7 +609,7 @@ impl<D: DataSource> Presenter<D> {
         node: &NodeRef<'_>,
         role: i32,
         mut flags: i32,
-        range: [f32; 3],
+        range: impl Into<NodeRange>,
         words: impl FnOnce() -> Option<(String, String)>,
     ) -> Option<i32> {
         let kernel = self.host.kernel();
@@ -649,7 +650,7 @@ impl<D: DataSource> Presenter<D> {
             role,
             flags,
             rect: [shows.0 + b.origin.0, shows.1 + b.origin.1, shows.2, shows.3],
-            range,
+            range: range.into(),
             set: std::mem::take(&mut b.item),
             grid: [0; 4],
             name,
@@ -762,23 +763,6 @@ impl<D: DataSource> Presenter<D> {
         } else {
             0
         }
-    }
-
-    /// A scroller's flags and where it is along the axis it scrolls on.
-    fn access_scroll(s: &Scroller) -> (i32, [f32; 3]) {
-        let sideways = s.axes.0 && !s.axes.1;
-        let (at, max) = match sideways {
-            true => (s.offset.0, s.max.0),
-            false => (s.offset.1, s.max.1),
-        };
-        let mut flags = if sideways { flag::SIDEWAYS } else { 0 };
-        if at < max - 0.5 {
-            flags |= flag::FORWARD;
-        }
-        if at > 0.5 {
-            flags |= flag::BACKWARD;
-        }
-        (flags, [at, max, 0.0])
     }
 
     /// A node a bar stands for, at `rect` in the bar at `frame`.
@@ -1153,10 +1137,12 @@ impl<D: DataSource> Presenter<D> {
                 stated.push(node.id);
             }
             if what & change::SCROLLED != 0 {
-                let by = node.range[0] - was.range[0];
-                let sideways = node.flags & flag::SIDEWAYS != 0;
-                let entry = changed.entry(node.id).or_insert((0, 0.0, 0.0));
-                (entry.1, entry.2) = if sideways { (by, 0.0) } else { (0.0, by) };
+                if let (NodeRange::Scroll { offset, .. }, NodeRange::Scroll { offset: old, .. }) =
+                    (node.range, was.range)
+                {
+                    let entry = changed.entry(node.id).or_insert((0, 0.0, 0.0));
+                    (entry.1, entry.2) = (offset.0 - old.0, offset.1 - old.1);
+                }
             }
             if was.rect != node.rect {
                 // Moved or sized: the node above shows its children anew.
@@ -1288,7 +1274,7 @@ impl<D: DataSource> Presenter<D> {
                 node.flags,
             ]);
             out.extend(node.rect.map(px));
-            out.extend(node.range.map(|v| v.to_bits() as i32));
+            out.extend(node.reader_range().map(|v| v.to_bits() as i32));
             out.extend([node.set.0, node.set.1]);
             out.extend(node.grid);
             for text in [&node.name, &node.value, &node.hint] {

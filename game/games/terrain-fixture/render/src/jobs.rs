@@ -2,10 +2,14 @@ use crate::workload::{FrameBudget, Job, Origin, SectionWork, Workload};
 use crate::{height, mesh, Candidate, PaddedInput, Passes, WorkloadSettings, SIDE};
 use exact_game_render::{
     Cancel, Done, FrameView, Full, HookGpu, HookTime, Job as RenderJob, JobError, Jobs, Lane,
-    Limits, Take,
+    Limits, RemoteJob, Take,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
+
+mod wire;
+
+pub(super) const REMOTE: &[RemoteJob] = &[RemoteJob::of::<Input>()];
 
 const LIMITS: Limits = Limits {
     // Holds about five frames of radius-40 flight submissions at 60 Hz (LLP 1182.000 D9).
@@ -124,6 +128,7 @@ trait Results: Iterator<Item = Done<Output>> {
         input: Input,
     ) -> Result<(), Full<Input>>;
     fn sample_retained_bytes(&mut self) -> (usize, usize);
+    fn mark_late_unit_spent(&mut self);
 }
 
 impl Results for Take<'_, Input> {
@@ -139,6 +144,10 @@ impl Results for Take<'_, Input> {
 
     fn sample_retained_bytes(&mut self) -> (usize, usize) {
         self.sample_retained_bytes()
+    }
+
+    fn mark_late_unit_spent(&mut self) {
+        self.mark_late_unit_spent();
     }
 }
 
@@ -159,7 +168,7 @@ impl Prepare<'_, '_> {
 impl TerrainJobs {
     pub(crate) fn new() -> Self {
         Self {
-            queue: Jobs::new(LIMITS),
+            queue: Jobs::remote(LIMITS),
             pending: PendingJobs::default(),
         }
     }
@@ -267,7 +276,10 @@ impl Passes {
         };
         let mut results = jobs.queue.take(gpu, view);
         let lane = results.lane();
-        let worked = self.prepare_job_units(&mut jobs.pending, &mut results, &frame, lane);
+        let worked = self.prepare_job_units(&mut jobs.pending, &mut results, &frame, lane, |_| {
+            frame.deadline_passed()
+        });
+        drop(results);
         if self.job_error.is_some() {
             jobs.clear();
             self.workload.job_bytes(0, 0);
@@ -282,6 +294,7 @@ impl Passes {
         results: &mut impl Results,
         frame: &Prepare<'_, '_>,
         lane: Lane,
+        deadline_passed: impl Fn(&Self) -> bool,
     ) -> bool {
         let mut budget = FrameBudget::new(self.settings.budget, frame.time.allowance);
         budget.use_deadline();
@@ -296,7 +309,8 @@ impl Passes {
             {
                 let small = unit.small();
                 self.run_unit(frame.gpu, unit, frame.hz, frame.camera);
-                budget.spent(small, || frame.deadline_passed());
+                budget.spent(small, || deadline_passed(self));
+                results.mark_late_unit_spent();
                 worked = true;
                 continue;
             }
@@ -319,7 +333,13 @@ impl Passes {
                         return true;
                     }
                 }
-                budget.received(|| frame.deadline_passed());
+                budget.received(|| {
+                    let passed = deadline_passed(self);
+                    if passed {
+                        results.mark_late_unit_spent();
+                    }
+                    passed
+                });
                 worked = true;
                 continue;
             }
@@ -333,16 +353,18 @@ impl Passes {
                 break;
             };
             self.run_unit(frame.gpu, unit, frame.hz, frame.camera);
-            budget.spent(false, || frame.deadline_passed());
+            budget.spent(false, || deadline_passed(self));
+            results.mark_late_unit_spent();
             worked = true;
         }
         worked |= self.finish_blended_refills();
-        if lane == Lane::Pool {
+        let fills_ahead = matches!(lane, Lane::Pool | Lane::Worker);
+        if fills_ahead {
             pending.fill(self, results, frame);
         }
         let (bytes, peak) = results.sample_retained_bytes();
         self.workload.job_bytes(bytes as u64, peak as u64);
-        worked || lane == Lane::Pool
+        worked || fills_ahead
     }
 
     fn apply_job(&mut self, gpu: Option<&HookGpu<'_>>, work: &[Job], output: Output) {
