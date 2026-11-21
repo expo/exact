@@ -1,6 +1,7 @@
 // ViewTransitionIOSTests and ViewTransitionMacTests: `startViewTransition()`
-// from the page, from a sheet whose commit closes it or keeps it, from the
-// upper of two sheets, and from a dialog its commit closes with `close(id)`.
+// from the page, with a push or a pop; from a sheet whose commit closes it
+// or keeps it; from the upper of two sheets, closing one or both; and from a
+// dialog its commit closes with `close(id)`.
 routes nav
   home "/"
     settings "/settings"
@@ -9,6 +10,9 @@ routes nav
 
 keyframes enter
   from opacity=0
+
+keyframes leave
+  to opacity=0
 
 component App
   state game = "a"
@@ -21,6 +25,10 @@ component App
     startViewTransition()
     game = g
     nav = back(nav)
+  action pickAndGo(g: string, url: string)
+    startViewTransition()
+    game = g
+    nav = go(nav, url)
   action pickAndPush(g: string)
     startViewTransition()
     game = g
@@ -61,8 +69,14 @@ component App
           column navigationKey=`${e.id}` navigationPresentation="modal" navigationDetent="medium" position="absolute" inset=0 padding=16
             button press=pickAndClose("g") testId="pick-and-close-about"
               text "Pick and close"
+            button press=pickAndGo("i", "/") testId="pick-and-home"
+              text "Pick and close both"
         if e.name == "item"
           column navigationKey=`${e.id}` position="absolute" inset=0 padding=16 background-color="white" testId="item"
             ::view-transition-new
               animation="enter 2s linear both"
+            ::view-transition-old
+              animation="leave 2s linear both"
             text game
+            button press=pickAndClose("h") testId="pick-and-pop"
+              text "Pick and pop"

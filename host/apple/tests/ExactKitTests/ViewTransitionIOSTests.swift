@@ -125,6 +125,29 @@ final class ViewTransitionIOSTests: XCTestCase {
         XCTAssertTrue(host.presentedViewController === beneath, "the sheet beneath stays")
     }
 
+    func testClosingBothOfTwoSheetsCrossFadesThePageBeneathThem() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "a sheet needs the hosted app's window scene") }
+        let (session, host) = try fixture(scene)
+        let p = session.presenter, window = try XCTUnwrap(window)
+        p.press(try XCTUnwrap(named("open")).id)
+        until("the first sheet is presented") {
+            guard let sheet = host.presentedViewController else { return false }
+            return !sheet.isBeingPresented && self.named("open-about")?.window != nil
+        }
+        let beneath = try XCTUnwrap(host.presentedViewController)
+        p.press(try XCTUnwrap(named("open-about")).id)
+        until("the second sheet is presented") {
+            guard let sheet = beneath.presentedViewController else { return false }
+            return !sheet.isBeingPresented && self.named("pick-and-home")?.window != nil
+        }
+        p.press(try XCTUnwrap(named("pick-and-home")).id)
+        until("the page beneath both cross-fades") { host.view.layer.animation(forKey: "transition") != nil }
+        try assertCrossFade(host.view.layer)
+        XCTAssertNil(beneath.view.layer.animation(forKey: "transition"), "the lower sheet leaves too: it is outside the fade")
+        XCTAssertNil(window.layer.animation(forKey: "transition"))
+        until("both sheets are gone") { host.presentedViewController == nil }
+    }
+
     func testADialogItsCommitClosesSlidesOutWhileThePageCrossFades() throws {
         guard let scene = hostedWindowScene() else { throw missing("scene", "a dialog's sheet needs the hosted app's window scene") }
         let (session, host) = try fixture(scene)

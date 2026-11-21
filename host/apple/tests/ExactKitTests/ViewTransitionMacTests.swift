@@ -5,10 +5,10 @@ import XCTest
 @testable import ExactNavigation
 
 /// `startViewTransition()` on the Mac (LLP 1013.003): the action's commit
-/// fades the window's content, and a route the commit pushes plays no
-/// entrance of its own.
+/// fades the window's content, and a route the commit pushes or pops plays
+/// no entrance or exit of its own.
 final class ViewTransitionMacTests: XCTestCase {
-    func testACommitFadesTheWindowsContentAndItsPushPlaysNoEntrance() throws {
+    func testACommitFadesTheWindowsContentAndItsRoutesPlayNoPartOfTheirOwn() throws {
         _ = NSApplication.shared
         let path = try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_VIEW_TRANSITION_PLAN"])
         let session = ExactApp.shared.makeSession(label: "view-transition")
@@ -42,6 +42,12 @@ final class ViewTransitionMacTests: XCTestCase {
         XCTAssertNil(item.layer?.animation(forKey: "exact.route-transition"), "the pushed route's entrance does not play")
         XCTAssertNil(p.navigationHost.transitions.held, "no route is held for an entrance")
         XCTAssertFalse(item.routeInert, "the pushed route takes input at once")
+        layer.removeAnimation(forKey: kCATransition)
+
+        p.press(try XCTUnwrap(named("pick-and-pop")).id)
+        waitFor("the window's content fades with the pop") { fade() != nil && named("item") == nil }
+        XCTAssertNil(p.navigationHost.transitions.exiting, "the popped route's exit does not play")
+        XCTAssertNil(p.leaving[item.id], "its view is not kept for one")
     }
 }
 #endif

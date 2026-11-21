@@ -548,7 +548,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         for index in 0...common where index < owners.count {
             let stack = Array(wanted[parts[index]])
             if index == 0, let split {
-                let animated = index == owners.count - 1 && mounted.count == boundaries.count && !ExactEnv.agentFreezes && !unanimated && split.controller.view.window != nil
+                let animated = index == owners.count - 1 && mounted.count == boundaries.count && !ExactEnv.agentFreezes && !unanimated && !crossFading && split.controller.view.window != nil
                 if syncSplit(split, stack, animated: animated) { held = true }
                 continue
             }

@@ -23,6 +23,8 @@ component App
     startViewTransition()
     game = g
     nav = push(nav, path("item"))
+  action open
+    nav = push(nav, path("item"))
   view
     main navigationKey=\`\${top(nav).id}\` width="100%" height="100%"
       for e in stack(nav) key=e.id
@@ -32,6 +34,8 @@ component App
           text game testId="game"
           button press=pick("b") testId=\`pick-\${e.name}\`
             text "Pick"
+          button press=open testId=\`open-\${e.name}\`
+            text "Open"
 `;
 
 let dir, server;
@@ -94,6 +98,27 @@ for (const engine of ['chromium', 'webkit']) engineTest[engine](`in ${engine} th
     expect(during.parts).toContain('::view-transition-new(root) 250');
     expect(during.parts).toContain('::view-transition-old(root) 250');
     await p.evaluate(() => transitions[0].skipTransition());
+    expect(errors).toEqual([]);
+  } finally {
+    await close();
+  }
+}, 60_000);
+
+// A route's own entrance leaves the root unnamed in the transitions' style element; the fade names it again.
+engineTest.chromium("the commit cross-fades the whole page after a route's own entrance has played", async () => {
+  const { p, errors, state, ready, close } = await page();
+  try {
+    await p.click('[data-testid=open-home]');
+    expect(await ready()).toBe(true);
+    expect((await state()).parts.some(part => part.endsWith(' 2000') && !part.includes('(root)'))).toBe(true);
+    await p.evaluate(() => transitions[0].skipTransition());
+    await p.click('[data-testid=pick-item]');
+    expect(await ready()).toBe(true);
+    const during = await state();
+    expect(during.started).toBe(2);
+    expect(during.parts).toContain('::view-transition-new(root) 250');
+    expect(during.parts.every(part => /\(root\) 250$/.test(part))).toBe(true);
+    await p.evaluate(() => transitions[1].skipTransition());
     expect(errors).toEqual([]);
   } finally {
     await close();
