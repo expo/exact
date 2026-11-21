@@ -439,10 +439,8 @@ impl Painter {
         // Material's field shows its focus by its indicator, not a ring, and
         // an `appearance: none` one by its caret alone, as Compose's
         // `BasicTextField`, however the focus came.
-        let ringed = focused
-            && !self.unringed(node)
-            && !look::material()
-            && (!native || look::neutral());
+        let ringed =
+            focused && !self.unringed(node) && !look::material() && (!native || look::neutral());
         let content = if let Some(c) = node.field_content_rect() {
             (rect.0 + c.x, rect.1 + c.y, c.width, c.height)
         } else {

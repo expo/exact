@@ -1840,8 +1840,9 @@ The cut was the smallest one. Left in the reader:
     From Android 14 Back is previewed as the gesture goes ([Sheets and route motion](#sheets-and-route-motion-llp-1115001-d10-d12)).
   - *A finger is a finger* (D7.4, D7.6). Each touch says what touched (`Native.touch`'s tool type), so a finger is a
     `touch` pointer to the app, hovers nothing, and leaves no focus ring on what it presses. A key brings the ring
-    back, but typing at a text field on the soft keyboard does not, as an `EditText` or a Compose text field shows
-    none. The system's touch slop, told with the settings, is how far a touch moves before it is a drag. A GPU
+    back, but typing at a text field on the soft keyboard does not. A text field shows no ring however its focus
+    came, as a Compose text field shows its focus by its indicator or, bare, by its caret alone. The system's touch
+    slop, told with the settings, is how far a touch moves before it is a drag. A GPU
     canvas that holds the touch (its first finger landed on the canvas) takes every other finger that lands on it
     (`Native.finger`, `Fingers.kt`, `surfaces/fingers.rs`): each is a pointer of its own there, numbered from 2 and
     never reused, as on iOS, and stays the canvas's after the first finger lifts; a finger landing anywhere else is
