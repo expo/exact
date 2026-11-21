@@ -1023,9 +1023,10 @@ digits with `inputmode="numeric"`), capitalization as said and none unsaid (the 
 prose unless `autocorrect="off"`, and no suggestions with `spellcheck="false"` (Android has one switch for the spell
 checker and the suggestions). `enterkeyhint` is the IME action. Unsaid, a search field's is Search, a field with a
 `submit` handler's Go, and any other's the platform's own default for a field: Next where another field follows it,
-Done where none does. `autocomplete`'s last token is autofill's hint (`email`, `username`, `current-password`,
-`new-password`, `one-time-code`, `name`, `tel`, `postal-code` and the address and card tokens); `off` takes the
-field out of autofill. `maxlength` is an `InputFilter.LengthFilter`.
+Done where none does. A textarea's key is a new line unless `enterkeyhint` names an action, which the keyboard then
+shows. `autocomplete`'s last token is autofill's hint (`email`, `username`, `current-password`, `new-password`,
+`one-time-code`, `name`, `tel`, `postal-code` and the address and card tokens); `off` takes the field out of
+autofill. `maxlength` is an `InputFilter.LengthFilter`.
 
 **Where a field is, and how it is drawn.** The view is put where its box was painted, for real: its handles, its
 magnifier and the keyboard's cursor anchor are placed by the view's own position. It sits in a `Port` the size of
@@ -1057,7 +1058,7 @@ ScrollView would.
 | `Native.fieldEdited(id, generation, seq, value, start, end)` | the person's edit number `seq` left the field holding `value`, the selection at `start` to `end` (UTF-16 units) | the field's text is that; `input` fires, with the selection |
 | `Native.fieldComposing(id, generation, composing, value)` | the field's text began to compose, holding `value`, or its composition ended, committed or cancelled: before the edit that began or ended it | while it composes a statement says the field's own text, and the app's value is held; once it ends, the value the app then shows |
 | `Native.fieldSelected(id, generation, start, end)` | the selection moved with no edit | kept for the next `input`; `select` fires for a range |
-| `Native.fieldAction(id, generation, action)` | the action key, or Enter or Tab on a hardware keyboard: 0 Enter with no action, 2 done, 3 go, 4 next, 5 previous, 6 search, 7 send, 16 Tab, 17 Shift+Tab | Enter's `key` handlers, then `change` and `submit` for a single line; then `next` and `previous` move to the field after or before (the focus leaves where there is none), and `done`, `go`, `search` and `send` leave the field, which puts the keyboard away. Tab is the page's own Tab |
+| `Native.fieldAction(id, generation, action)` | the action key, or Enter or Tab on a hardware keyboard: 0 Enter with no action, 2 done, 3 go, 4 next, 5 previous, 6 search, 7 send, 16 Tab, 17 Shift+Tab | Enter's `key` handlers, then `change` and `submit` for a single line, or a new line in a textarea, which keeps the focus; then, for a single line, `next` and `previous` move to the field after or before (the focus leaves where there is none), and `done`, `go`, `search` and `send` leave the field, which puts the keyboard away. Tab is the page's own Tab |
 | `Native.fieldInput(id, generation, kind)` | IME input (0), a pointer down (1), or a hardware key that shows focus (2) | updates focus modality for pointer and hardware input; a state held on the field (LLP 1122 D8, `hold`, `holdState`) lets go |
 
 What a call says of a generation exact2 has moved on from is dropped.
@@ -1084,7 +1085,7 @@ field through the keyboard request (kind 6, with the field's id): the `EditText`
 shows. A focus that leaves the fields (a press on a button, `blur()`, Done) hides the keyboard and gives the focus
 back to the reader's view, so keys go on to exact2 (`Native.key`). Back closes the keyboard first, which the system
 does itself for an `EditText`: the IME takes Back before the reader's callback. A hardware keyboard types into the
-`EditText`; its Enter is the action key and its Tab the page's. Off the fields, Tab and Shift+Tab go to exact2 by
+`EditText`; its Enter is the action key (a textarea's own new line) and its Tab the page's. Off the fields, Tab and Shift+Tab go to exact2 by
 name (`Keys.named`, `Native.namedKey`) and move its focus.
 
 **A field that exact2 takes the focus from gives it up itself.** Two roads led the platform to move the focus on its
