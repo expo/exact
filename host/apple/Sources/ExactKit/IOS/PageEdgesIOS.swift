@@ -181,11 +181,14 @@ extension Presenter {
         bars.allSatisfy { $0.paintRank >= v.paintRank || !$0.wrote("z_index") && !v.wrote("z_index") }
     }
 
-    /// A virtualized list draws rows a port past its own (D5): a longer band is not taken.
+    /// A virtualized list draws rows a port past its own (D5): a longer band is not taken. Its port is its box, past it
+    /// by its scroll view's outset once it has reach, less the part of its insets it does not draw through
+    /// (`ListHosting.drawnThrough`).
     private static func drawn(_ band: UIEdgeInsets, _ v: NodeView, _ sv: UIScrollView) -> Bool {
-        guard v.presenter?.collections.owns(v.id) == true else { return true }
-        let i = sv.adjustedContentInset, own = v.pageBand
-        let port = v.bounds.height - (i.top - own.top) - (i.bottom - own.bottom)
+        guard let lists = v.presenter?.collections, lists.owns(v.id) else { return true }
+        let i = sv.adjustedContentInset, o = v.reach == .zero ? .zero : v.scrollOutset
+        let through = lists.drawnThrough(v.id) ?? v.scrollDrawnThrough(sv)
+        let port = v.bounds.height + o.top + o.bottom - (i.top - through.top) - (i.bottom - through.bottom)
         return band.top <= port + 0.5 && band.bottom <= port + 0.5
     }
 }

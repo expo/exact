@@ -622,7 +622,7 @@ final class CollectionHost: ListHosting {
               sliceLimits[id] == nil, !refreshPins, !entry.owed, !entry.gesture,
               entry.travelled || !entry.snapshot.pending,
               !animating.contains(id), !ancestorMoving(id), !entry.records.changed,
-              entry.records.unacknowledged.isEmpty else { return false }
+              entry.records.unacknowledged.isEmpty, covered(id) == entry.covered else { return false }
         let focus = focusFound ?? focusedView()
         focusFound = focus
         guard (owningCollection(focus) == id ? focus : nil) == previous.focus,
@@ -1001,8 +1001,14 @@ final class CollectionHost: ListHosting {
                 let glimpse = glimpsing.contains(id) && retireLimit == nil && limit != nil
                 let offMain = building?.view == id && same && retireLimit == nil && !glimpse ? building : nil
                 let reading = Reading(scrolling: readerScrolling(id), gesture: entry.gesture, animating: animating.contains(id))
+                // What the bars cover goes to the runner with a report, so a change of it alone owes one
+                #if os(iOS) || os(tvOS)
+                let coveredMoved = covered(id) != entry.covered
+                #else
+                let coveredMoved = false
+                #endif
                 if entry.lastFacts != facts || entry.lastSequence != entry.cursor.sequence || entry.lastReading != reading
-                    || (entry.snapshot.pending && limit != 0) || further || retireLimit != nil || entry.owed || atRest {
+                    || (entry.snapshot.pending && limit != 0) || further || retireLimit != nil || entry.owed || atRest || coveredMoved {
                     var report = facts
                     // A sent report may be rejected atomically. Only the
                     // runner's measured snapshot acknowledges a height;

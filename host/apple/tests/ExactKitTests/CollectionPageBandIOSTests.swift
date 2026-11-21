@@ -116,5 +116,66 @@ final class CollectionPageBandIOSTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(p.listHost.geometry(1)).portCross, 260)
         XCTAssertEqual(p.listHost.portInsets(1)?.first, 0)
     }
+
+    func testARowListDrawsThroughItsSideReachAndAddsNoRangeForIt() throws {
+        let p = Presenter()
+        p.viewport.frame = CGRect(x: 0, y: 0, width: 400, height: 300)
+        defer { p.reset() }
+        let (node, scroll) = try reachedList(in: p, axis: "x", reach: UIEdgeInsets(top: 0, left: 30, bottom: 0, right: 20))
+        let facts = try XCTUnwrap(p.listHost.geometry(1))
+        XCTAssertEqual(facts.portMain, 350, "the reached frame")
+        XCTAssertEqual(facts.portCross, 200)
+        XCTAssertEqual([facts.paddingStart, facts.paddingEnd], [30, 20], "the reach it draws through")
+        XCTAssertEqual(facts.offset, -30, "at rest before the first item")
+        XCTAssertEqual(p.listHost.covered(1), [30, 20])
+        XCTAssertEqual(p.listHost.portInsets(1), [0, 0])
+        // The content is no narrower than the box, so the reach adds no range
+        p.listHost.shift(1, by: 0, extent: 100, from: nil)
+        XCTAssertEqual(scroll.contentSize.width, 300)
+        p.listHost.correct(1, top: 200, extent: 2000)
+        XCTAssertEqual(scroll.contentOffset.x, 200)
+        XCTAssertEqual(try XCTUnwrap(p.listHost.geometry(1)).offset, 200)
+        p.listHost.keepStart(1, at: 100)
+        XCTAssertEqual(scroll.contentOffset.x, 100)
+        p.listHost.shift(1, by: 40, extent: 2000, from: 100)
+        XCTAssertEqual(scroll.contentOffset.x, 140)
+        XCTAssertEqual(node.scrollDrawnThrough(scroll), UIEdgeInsets(top: 0, left: 30, bottom: 0, right: 20))
+    }
+
+    func testAVerticalListsSideReachIsNeitherPortNorPadding() throws {
+        let p = Presenter()
+        p.viewport.frame = CGRect(x: 0, y: 0, width: 400, height: 300)
+        defer { p.reset() }
+        _ = try reachedList(in: p, axis: "y", reach: UIEdgeInsets(top: 0, left: 30, bottom: 0, right: 0))
+        let facts = try XCTUnwrap(p.listHost.geometry(1))
+        XCTAssertEqual(facts.portCross, 300, "the reached frame less the whole side inset: the box")
+        XCTAssertEqual(facts.cross, 300, "rows as wide as the box")
+        XCTAssertEqual([facts.portMain, facts.paddingStart, facts.paddingEnd], [200, 0, 0])
+        XCTAssertEqual(p.listHost.covered(1), [0, 0])
+        XCTAssertEqual(p.listHost.portInsets(1), [0, 30])
+    }
+
+    /// A list in a 300 by 200 box, `axis` "x" for a row list, given `reach` and the insets and offset D14's writer
+    /// gives it for that reach, its content back where layout put it.
+    private func reachedList(in p: Presenter, axis: String, reach: UIEdgeInsets) throws -> (NodeView, UIScrollView) {
+        let row = axis == "x" ? (w: 100.0, h: 200.0) : (w: 300.0, h: 50.0)
+        p.apply(wireBatch([
+            ["op": "collections", "items": [["view": 1, "axis": axis, "revision": 1, "scrollSequence": 0, "count": 20,
+                "totalExtent": 2000, "rows": [["view": 2, "root": 2, "epoch": 1]], "correction": NSNull()]]],
+            ["op": "create", "id": 1, "kind": "list", "style": axis == "x" ? ["overflow_x": "scroll"] : ["overflow_y": "scroll"]],
+            ["op": "create", "id": 2, "kind": "view"],
+            ["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 50, "y": 50, "w": 300, "h": 200],
+            ["op": "frame", "id": 2, "x": 0, "y": 0, "w": row.w, "h": row.h],
+            ["op": "content", "id": 1, "w": row.w, "h": row.h]
+        ]))
+        let node = try XCTUnwrap(p.views[1]), scroll = try XCTUnwrap(node.scroll)
+        XCTAssertEqual(p.listHost.entries[1]?.snapshot.horizontal, axis == "x")
+        node.setReach(reach)
+        XCTAssertEqual(scroll.frame.width, 300 + reach.left + reach.right)
+        scroll.contentInset = reach
+        scroll.contentOffset = CGPoint(x: -reach.left, y: -reach.top)
+        return (node, scroll)
+    }
 }
 #endif

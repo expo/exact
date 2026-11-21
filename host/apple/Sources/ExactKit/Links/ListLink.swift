@@ -81,6 +81,8 @@ package protocol ListHosting: AnyObject {
     func readerMoves(_ id: UInt32)
     func watchContacts(in port: UIView) -> UIGestureRecognizer
     func offsetsMoved(_ id: UInt32, by dy: CGFloat)
+    /// What list `id` draws through of its scroll view's insets, on each edge.
+    func drawnThrough(_ id: UInt32) -> UIEdgeInsets?
     func lastRequests() -> [UInt32: UInt64]
     func lastRequest(_ id: UInt32) -> UInt64
     #else
@@ -157,6 +159,7 @@ final class NoLists: ListHosting {
     func readerMoves(_ id: UInt32) {}
     func watchContacts(in port: UIView) -> UIGestureRecognizer { UIGestureRecognizer() }
     func offsetsMoved(_ id: UInt32, by dy: CGFloat) {}
+    func drawnThrough(_ id: UInt32) -> UIEdgeInsets? { nil }
     func lastRequests() -> [UInt32: UInt64] { [:] }
     func lastRequest(_ id: UInt32) -> UInt64 { 0 }
     #else
