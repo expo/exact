@@ -7,18 +7,23 @@ import { existsSync, rmSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
+/** Whether `line`, one line of Cargo's stderr, is its error header for a failed build script: one that panicked or
+ * exited non-zero, as the plan's bake does on a Contract error, or one that logged `cargo::error=`. Not the phrase
+ * quoted in rustc's excerpt of a source line. */
+export const buildScriptFailed = (line) =>
+  /^error: (failed to run custom build command for |build script logged errors$)/.test(line.replace(/\x1b\[[0-9;]*m/g, ''));
+/** The line the stderr relay adds to stdout when it streamed that. */
+export const BUILD_SCRIPT_FAILED_LINE = '{"reason":"exact-build-script-failed"}';
+
 /** Whether a failed Cargo run can be the Contract's: a build that a build
  * script failed. A rustc error, a linker's, `cargo metadata`'s or a spawn's
- * is not, and asks no second compiler. With its stderr inherited, a
- * `--message-format=json` build says rustc's errors on stdout instead. */
+ * is not, and asks no second compiler. */
 export function contractMayHaveFailed(args, result) {
   if (result.error || !['build', 'rustc', 'check'].includes(args[0])) return false;
-  if (typeof result.stderr === 'string') return result.stderr.includes('failed to run custom build command');
-  // With stderr inherited, Cargo's JSON on stdout says it: a build script that was built and did not run. Under
-  // --message-format=json-render-diagnostics rustc's own errors are rendered to stderr and leave no message here.
-  const messages = (result.stdout ?? '').split('\n').flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } });
-  const ran = new Set(messages.filter((m) => m.reason === 'build-script-executed').map((m) => m.package_id));
-  return messages.some((m) => m.reason === 'compiler-artifact' && m.target?.kind?.includes('custom-build') && !ran.has(m.package_id));
+  if (typeof result.stderr === 'string') return result.stderr.split('\n').some(buildScriptFailed);
+  // With stderr inherited, the relay that streams it (scripts/cargo-check.mjs `streamCargo`) says so on stdout: neither
+  // Cargo's JSON (rustc's errors are rendered to stderr under json-render-diagnostics) nor its human format can.
+  return (result.stdout ?? '').split('\n').includes(BUILD_SCRIPT_FAILED_LINE);
 }
 
 /** Throw the Contract's errors when `result`, a failed `cargo <args>` of

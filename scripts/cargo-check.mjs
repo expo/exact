@@ -3,7 +3,7 @@ import { spawn, spawnSync } from '../host/apple/toolchain.mjs';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { OFFLINE_MISSING, withHostDeployment } from './filesystem.mjs';
-import { throwContractErrors } from './contract-diagnosis.mjs';
+import { BUILD_SCRIPT_FAILED_LINE, buildScriptFailed, throwContractErrors } from './contract-diagnosis.mjs';
 import { basename, delimiter, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
@@ -159,11 +159,21 @@ async function streamCargo(args) {
     process.on(signal, handler); return [signal, handler];
   });
   const filter = cargoDiagnosticFilter(text => process.stderr.write(text));
+  // Whether a build script failed, which the caller cannot read from the stderr this streams (contract-diagnosis.mjs),
+  // read from whole lines however the stream splits them
+  let partial = '', failed = false;
   try {
     child.stderr.setEncoding('utf8');
-    for await (const text of child.stderr) filter.write(text);
+    for await (const text of child.stderr) {
+      filter.write(text);
+      const lines = (partial + text).split('\n');
+      partial = lines.pop();
+      failed ||= lines.some(buildScriptFailed);
+    }
     filter.end();
+    failed ||= buildScriptFailed(partial);
     const { code, signal } = await ended;
+    if (failed && (signal || code !== 0)) process.stdout.write(`${BUILD_SCRIPT_FAILED_LINE}\n`);
     for (const [signal, handler] of handlers) process.off(signal, handler);
     if (signal) process.kill(process.pid, signal); else process.exitCode = code;
   } finally { for (const [signal, handler] of handlers) process.off(signal, handler); }
