@@ -355,8 +355,6 @@ extension CollectionHost {
         // from there.
         let moving = scroll.isTracking || scroll.isDragging || scroll.isDecelerating
         guard authored || !moving else { return }
-        // An authored correction is a newer position than one an arranged pane owes
-        if authored { node.cancelScrollHandoff() }
         // Under Reduce Motion a smooth correction lands at once, as an
         // element's reveal does (LLP 1070.000 §14)
         var smooth = smooth && !DisplayPreferences.reducedMotion

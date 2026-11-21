@@ -166,40 +166,12 @@ struct BottomReach {
     }
 }
 
-/// An arranged pane's owed scroll position, CSS `scrollTop`, while UIKit adopts the inset its scroller takes as the
-/// pane joins UIKit's adjustment (LLP 1123 D14: the content keeps `scrollTop` as the insets change). No inset ends it,
-/// since UIKit may settle on any, a bar arriving a layout after the route's among them; a newer position does.
-struct ScrollHandoff {
-    /// The owed CSS `scrollTop`.
-    let top: CGFloat
-    /// The scroll view it owes it to: one that replaces it owes nothing.
-    let scroll: ObjectIdentifier
-    private var written: (offset: CGPoint, inset: UIEdgeInsets)?
-
-    init(top: CGFloat, scroll: UIScrollView) { self.top = top; self.scroll = ObjectIdentifier(scroll) }
-
-    enum Step: Equatable { case write, hold, end }
-
-    /// What a pass that finds the scroller at `offset` under `inset` does, `same` comparing two offsets on the pixel grid.
-    func step(offset: CGPoint, inset: UIEdgeInsets, same: (CGPoint, CGPoint) -> Bool) -> Step {
-        guard let written, written.inset == inset else { return .write }
-        return same(written.offset, offset) ? .hold : .end
-    }
-
-    /// Records what the handoff's write left: the offset, and the inset its target was computed under.
-    mutating func wrote(offset: CGPoint, inset: UIEdgeInsets) { written = (offset, inset) }
-
-    /// Forgets the last write, so the next pass writes the owed position again whatever it finds.
-    mutating func forget() { written = nil }
-}
-
 /// UIKit containment for two retained authored panes
 @available(iOS 27.1, *)
 package final class ArrangementHost {
     private unowned let presenter: Presenter
     private var requests: [UInt32: UIArrangementViewController] = [:]
     private var insetScrollers: [UInt32: UIScrollView] = [:]
-    private var pendingTops: [UInt32: ScrollHandoff] = [:]
     private var syncingInsets = false
     /// A sync asked for while one runs, by a UIKit callback inside its writes: the running one queues a pass as it ends.
     private var syncOwed = false
@@ -312,7 +284,7 @@ package final class ArrangementHost {
 
     private func retire(_ entry: Entry) {
         // Before the panes move, whose callbacks a pass may be running under
-        for pane in entry.panes { reaches[pane.id] = nil; pendingTops[pane.id] = nil }
+        for pane in entry.panes { reaches[pane.id] = nil }
         let ids = children[entry.node.id] ?? entry.panes.map(\.id)
         let held = entry.holders.filter { $0.node.superview === $0.view }.map(\.node)
         for pane in held where presenter.views[pane.id] !== pane || !ids.contains(pane.id) { pane.removeFromSuperview() }
@@ -331,6 +303,10 @@ package final class ArrangementHost {
         guard let entry = entries[node.id] else { return nil }
         return entry.holders.filter { !entry.isHidden($0) && presenter.views[$0.node.id] === $0.node }.map(\.node)
     }
+
+    /// A joined pane's adjusted inset moved outside a layout of it (`NodeView.scrollInsetMoved`): a pass publishes the
+    /// owners' values and the route's covers under it.
+    func scrollInsetMoved(_ id: UInt32) { if insetScrollers[id] != nil { layoutChanged() } }
 
     private func layoutChanged() {
         NodeView.scrollLayoutEpoch &+= 1
@@ -430,34 +406,27 @@ package final class ArrangementHost {
         insetScrollers = now
         for (id, scroll) in previous where now[id] !== scroll {
             let node = presenter.views[id]
-            // The owed position only while the handoff still owns it: a scroll under way, or one that moved the offset under
-            // its inset, is newer
-            let saved = pendingTops.removeValue(forKey: id).flatMap { handoff in
-                node?.scrollUnderWay(scroll) == true || handoff.step(offset: scroll.contentOffset, inset: scroll.adjustedContentInset) { PixelGrid.same($0, $1, in: scroll) } == .end ? nil : handoff.top
-            }
             if hiddenPanes.contains(id), let node {
                 // A position carried from another scroll view gives way to a scroll under way, as `applyPendingScroll` has it
                 let carried = node.extras?.pendingScrollTransfer == true && node.scrollUnderWay(scroll) ? nil : node.pendingScrollTop
-                let top = carried.map { CGFloat($0) } ?? saved ?? (scroll.contentOffset.y + node.scrollTopInset(scroll))
+                let top = carried.map { CGFloat($0) } ?? (scroll.contentOffset.y + node.scrollTopInset(scroll))
                 node.hiddenScroll = CGPoint(x: scroll.contentOffset.x + node.scrollLeftInset(scroll), y: top)
             }
             if let node, presenter.navigation.routeSurfaces.values.contains(where: { $0.collapseScroll === node || $0.edgeScroll === node }) { continue }
-            let top = scroll.contentOffset.y + (node?.scrollTopInset(scroll) ?? scroll.adjustedContentInset.top)
-            scroll.contentInsetAdjustmentBehavior = .never
-            node?.scrollOrigin = 0; node?.scrollCollapsed = 0
-            scroll.contentOffset.y = top - (node?.scrollTopInset(scroll) ?? 0)
+            if let node {
+                node.keepingScrollTop(of: scroll) { scroll.contentInsetAdjustmentBehavior = .never; node.scrollOrigin = 0; node.scrollCollapsed = 0 }
+            } else {
+                let top = scroll.contentOffset.y + scroll.adjustedContentInset.top
+                scroll.contentInsetAdjustmentBehavior = .never
+                scroll.contentOffset.y = top
+            }
         }
         for (id, scroll) in now {
             guard let node = presenter.views[id] else { continue }
-            let top = scroll.contentOffset.y + node.scrollTopInset(scroll)
-            if previous[id] !== scroll {
-                pendingTops[id] = ScrollHandoff(top: node.pendingScrollTop.map { CGFloat($0) } ?? node.hiddenScroll?.y ?? top, scroll: scroll)
-            }
+            // UIKit keeps CSS `scrollTop` across the inset changes measured under its adjustment, but keeps the offset across
+            // a change of the behavior itself: Exact keeps what D14 keeps across that one, as on leaving
             if scroll.contentInsetAdjustmentBehavior != .automatic {
-                let owed = pendingTops[id] != nil
-                scroll.contentInsetAdjustmentBehavior = .automatic
-                // The position kept across the change, unless a newer one chosen inside it, a list's end, released the handoff
-                if !node.scrollUnderWay(scroll), !owed || pendingTops[id] != nil { scroll.contentOffset.y = top - node.scrollTopInset(scroll) }
+                node.keepingScrollTop(of: scroll) { scroll.contentInsetAdjustmentBehavior = .automatic }
             }
         }
         for entry in entries.values {
@@ -468,7 +437,6 @@ package final class ArrangementHost {
                 }
             }
         }
-        finishScrollHandoffs()
     }
 
     /// Move each arrangement under the controller that holds its node now. A route adopts its
@@ -505,54 +473,6 @@ package final class ArrangementHost {
                 if needed != extra { holder.additionalSafeAreaInsets = needed }
             }
         }
-    }
-
-    private func finishScrollHandoffs() {
-        // Each handoff is read as the pass reaches it: a write's scroll callback can release another's
-        for id in Array(pendingTops.keys) {
-            guard let handoff = pendingTops[id] else { continue }
-            guard let node = presenter.views[id], let scroll = insetScrollers[id], node.scrollView === scroll, ObjectIdentifier(scroll) == handoff.scroll else {
-                pendingTops[id] = nil
-                continue
-            }
-            let authored = node.extras?.pendingScrollTransfer == true ? nil : node.pendingScrollTop.map { CGFloat($0) }
-            // A newer position: a scroll under way, an authored one other than the owed one, and a list keeping the end it
-            // rests at, which D14 puts first
-            let newer = node.scrollUnderWay(scroll) || authored.map { $0 != handoff.top } == true || (scroll as? ScrollView)?.restsAtEnd == true
-            switch newer ? .end : handoff.step(offset: scroll.contentOffset, inset: scroll.adjustedContentInset, same: { PixelGrid.same($0, $1, in: scroll) }) {
-            case .end: pendingTops[id] = nil
-            case .hold: continue
-            case .write:
-                let inset = scroll.adjustedContentInset
-                let point = PixelGrid.offset(CGPoint(x: scroll.contentOffset.x, y: handoff.top - node.scrollTopInset(scroll)), in: scroll)
-                if scroll.contentOffset != point { scroll.contentOffset = point }
-                // Only a sync makes a handoff, and none runs inside this one: one still here is the one written
-                guard pendingTops[id] != nil else { continue }
-                pendingTops[id]?.wrote(offset: scroll.contentOffset, inset: inset)
-                // UIKit moved the inset inside that write: the next pass, which this schedules, writes again under it
-                if scroll.adjustedContentInset != inset { layoutChanged() }
-            }
-        }
-    }
-
-    func cancelScrollHandoff(_ id: UInt32) { pendingTops[id] = nil }
-
-    /// `cancelScrollHandoff` for the pane whose scroll view is `scroll`.
-    package func cancelScrollHandoff(of scroll: UIScrollView) {
-        for (id, view) in insetScrollers where view === scroll { pendingTops[id] = nil }
-    }
-
-    /// `id`'s scroll view moved its adjusted inset, or was replaced: a pane's handoff writes under the new inset, or ends
-    /// with its scroll view, at the next pass.
-    func scrollInsetMoved(_ id: UInt32) { if pendingTops[id] != nil || insetScrollers[id] != nil { layoutChanged() } }
-
-    /// Whether `id`'s scroller still owes a handoff's position.
-    func owesScroll(_ id: UInt32) -> Bool { pendingTops[id] != nil }
-
-    /// An authored scroll position written to `id`'s scroller takes the position from its handoff, unless it is the very
-    /// position the handoff owes, which the handoff began from.
-    func authoredScroll(_ id: UInt32, top: CGFloat?) {
-        if pendingTops[id]?.top != top { pendingTops[id] = nil } else { pendingTops[id]?.forget() }
     }
 
     /// A pane UIKit hides takes no room in the authored layout: it is covered
@@ -598,7 +518,7 @@ package final class ArrangementHost {
 
     func reset() {
         for entry in entries.values { retire(entry) }
-        entries = [:]; requests = [:]; children = [:]; toldHidden = []; pendingTops = [:]
+        entries = [:]; requests = [:]; children = [:]; toldHidden = []
         syncInsets()
     }
 }

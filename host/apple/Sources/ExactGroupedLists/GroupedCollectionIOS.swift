@@ -17,8 +17,8 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsum
     }
     /// The list's node, which the collection is the scroll view of.
     private var owner: NodeView? { superview as? NodeView }
-    /// An arranged pane's owed position follows an inset UIKit moves outside a layout of the pane, as a plain
-    /// scroller's does (`ScrollView.adjustedContentInsetDidChange`).
+    /// An inset UIKit moves outside a layout of the list reaches the arrangement, as a plain scroller's does
+    /// (`ScrollView.adjustedContentInsetDidChange`).
     override func adjustedContentInsetDidChange() {
         super.adjustedContentInsetDidChange()
         owner?.scrollInsetMoved(self)

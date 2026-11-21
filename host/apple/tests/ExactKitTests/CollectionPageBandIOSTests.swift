@@ -231,6 +231,24 @@ final class CollectionPageBandIOSTests: XCTestCase {
         p.listHost.endBatch()
     }
 
+    func testAnEndFollowingListStaysAtItsEndAsTheSwitchHelperDeepensItsInsetInABatch() throws {
+        let p = Presenter()
+        p.viewport.frame = CGRect(x: 0, y: 0, width: 400, height: 300)
+        defer { p.reset() }
+        let (node, scroll) = try reachedList(in: p, axis: "y", reach: .zero)
+        p.apply(wireBatch([["op": "content", "id": 1, "w": 300, "h": 2000], ["op": "props", "id": 1, "set": ["scrollFollowEnd": "true"]]]))
+        let list = try XCTUnwrap(scroll as? ScrollView), end = { list.end(under: list.adjustedContentInset) }
+        list.contentOffset.y = end()
+        list.kept(under: list.adjustedContentInset)
+        XCTAssertTrue(list.restsAtEnd)
+        // An 82-point top inset set through the switch helper, standing in for joining UIKit's adjustment under a bar:
+        // the helper keeps the end, and the batch's start moves with it, so the batch keeps it too
+        p.listHost.beginBatch(wireBatch([]))
+        node.keepingScrollTop(of: list) { list.contentInset.top += 82 }
+        p.listHost.endBatch()
+        XCTAssertEqual(list.contentOffset.y, end(), accuracy: 0.5)
+    }
+
     /// A list in a 300 by 200 box, `axis` "x" for a row list, given `reach` and the insets and offset D14's writer
     /// gives it for that reach, its content back where layout put it.
     private func reachedList(in p: Presenter, axis: String, reach: UIEdgeInsets) throws -> (NodeView, UIScrollView) {

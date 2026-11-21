@@ -1297,14 +1297,12 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
                 for child in children { sv.addSubview(child) }
             }
             scroll = sv
-            scrollBackendReplaced()
             if pageBand != .zero || bandInset != .zero || reachGiven { more.pageBand = .zero; more.bandInset = .zero; more.reach = .zero; more.reachGiven = false } // a new scroll view reaches no band, and has no reach, until asked (LLP 1130 D3, LLP 1123 D13)
             scrollWritten = nil
             updateRefresh()
             presenter?.navigation.scrollBackendChanged(self)
         }
         if !scrolls || groupedOwner, let sv = scroll {
-            scrollBackendReplaced()
             if groupedOwner { retainScrollPosition(from: sv) }
             dropZoom()
             // Neither axis scrolls any more: the children come back out.

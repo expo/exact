@@ -190,8 +190,6 @@ extension Presenter {
         guard abs(o.y - sv.contentOffset.y) > 0.5 || abs(o.x - sv.contentOffset.x) > 0.5 else { return false }
         o = PixelGrid.offset(o, in: sv)
         guard o != sv.contentOffset else { return false }
-        // The reveal is newer than a position owed for the scroller
-        owner?.cancelScrollHandoff()
         sv.contentOffset = o
         // The bar's large title collapsing as the list scrolls changes its
         // insets inside this assignment, and UIKit moves the offset on by the
@@ -346,10 +344,6 @@ extension Presenter {
         if frame.maxY > visible.maxY { y += frame.maxY - visible.maxY } else if frame.minY < visible.minY { y -= visible.minY - frame.minY }
         y = min(max(y, -insets.top), max(-insets.top, list.contentSize.height + insets.bottom - list.bounds.height))
         let offset = PixelGrid.offset(CGPoint(x: list.contentOffset.x, y: y), in: list)
-        // The row's port is a newer position than one an arranged pane owes
-        #if os(iOS)
-        if #available(iOS 27.1, *), offset != list.contentOffset { arrangements.cancelScrollHandoff(of: list) }
-        #endif
         if ExactEnv.agentFreezes { list.contentOffset = offset } else { UIView.animate(withDuration: 0.25) { list.contentOffset = offset } }
         carryRows(laying: list)
     }
