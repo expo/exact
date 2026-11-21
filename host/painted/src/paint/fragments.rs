@@ -96,7 +96,7 @@ impl Painter {
         let focus = walk
             .scene
             .focus
-            .filter(|id| self.ringless != Some(*id))
+            .filter(|id| self.ringless != Some(*id) && !look::material())
             .and_then(|id| kernel.node(id))
             .filter(|n| {
                 n.node_type == NodeType::Text

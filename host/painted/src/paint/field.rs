@@ -461,8 +461,11 @@ impl Painter {
         let disabled = node.props.bool(PropId::Disabled) == Some(true);
         let focused = walk.scene.focus == Some(node.id);
         let field_shape = native.then(|| self.text_field_chrome(node, surface, focused, ts));
-        // Material's field shows its focus by its indicator, not a ring.
-        let ringed = focused && !control::ringless(node) && (!native || look::neutral());
+        // Material's field shows its focus by its indicator, not a ring, and
+        // an `appearance: none` one by its caret alone, as Compose's
+        // `BasicTextField`, however the focus came.
+        let ringed =
+            focused && !self.unringed(node) && !look::material() && (!native || look::neutral());
         let content = if let Some(c) = node.field_content_rect() {
             (rect.0 + c.x, rect.1 + c.y, c.width, c.height)
         } else {

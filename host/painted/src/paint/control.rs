@@ -246,6 +246,8 @@ impl super::Painter {
     /// Fields and native controls ring their chrome; links ring their text
     /// fragments. Other focus targets, including a route's heading or its
     /// container (LLP 1115.000 D4.2), ring their outer box after its own clip.
+    /// Material rings none: what presses shows its state layer instead
+    /// ([`Painter::pressable`]).
     pub(super) fn node_ring(
         &mut self,
         walk: &super::Walk<'_, '_>,
@@ -254,6 +256,7 @@ impl super::Painter {
         ts: Transform,
     ) {
         if walk.scene.focus != Some(node.id)
+            || look::material()
             || matches!(node.node_type, NodeType::Control | NodeType::TextInput)
             || node.props.str(PropId::Href).is_some()
             || self.unringed(node)
@@ -366,7 +369,8 @@ impl super::Painter {
             } else {
                 self.unringed(node)
             };
-            if focused && !unringed && node.props.bool(PropId::Disabled) != Some(true) {
+            let shows = focused && !unringed && !look::material();
+            if shows && node.props.bool(PropId::Disabled) != Some(true) {
                 self.field_ring(&shape, ring(node, dark), ts);
             }
             return (!bare && !node.style.written.has(StyleId::BackgroundColor)).then_some(shape);

@@ -424,11 +424,12 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// `id` as the focus no ring marks, unless it is a text field, which
-    /// matches `:focus-visible` however it was focused.
+    /// matches `:focus-visible` however it was focused, as in Chrome. In
+    /// Android's touch mode a text field too shows no ring (LLP 1115.001 D7.6).
     pub(crate) fn unringed(&self, id: ViewId) -> Option<ViewId> {
         let field =
             (self.host.kernel().node(id)).is_some_and(|n| n.node_type == NodeType::TextInput);
-        (!field).then_some(id)
+        (!field || self.brush.touch_mode).then_some(id)
     }
 
     /// A script focus follows input modality. Chrome also carries a visible

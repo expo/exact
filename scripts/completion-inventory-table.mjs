@@ -1229,7 +1229,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/top/overlay.rs", "Presenter::prepare_overlay"],
     ["painted:host/painted/src/presenter/top/select.rs", "Presenter::choose_option Presenter::is_select Presenter::present_select Presenter::select_plan Presenter::select_surface_key"],
     ["painted:host/painted/src/presenter/transform.rs", "Presenter::begin_transform_drag"],
-    ["painted:host/painted/src/presenter/typing.rs", "Presenter::bound_text Presenter::field_text_ref Presenter::focus_stop Presenter::keep_typed Presenter::key_pressed Presenter::move_focus_in Presenter::shown_boxes"],
+    ["painted:host/painted/src/presenter/typing.rs", "Presenter::bound_text Presenter::field_text_ref Presenter::focus_stop Presenter::keep_typed Presenter::key_pressed Presenter::key_shows_ring Presenter::move_focus_in Presenter::shown_boxes"],
     ["painted:host/painted/src/presenter/wheel.rs", "Presenter::desktop_scroll_focus Presenter::desktop_scroll_key Presenter::scroll_container_by"],
     ["painted:host/painted/src/surface_controls.rs",
       "Presenter::cancel_removed_controls Presenter::canvas_contact_target Presenter::control_input Presenter::control_press_focus Presenter::control_target " +

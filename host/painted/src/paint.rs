@@ -456,6 +456,9 @@ pub struct Painter {
     pub(crate) feedback: (Option<ViewId>, Option<ViewId>),
     /// The control a held `active` presses (`presenter/held.rs`), beside a contact's.
     pub(crate) held_press: Option<ViewId>,
+    /// The focus is on something that presses, which Material shows by its
+    /// state layer (`ripple.rs`).
+    pub(crate) focus_presses: bool,
     /// Material's ripples, each from its press's touch (`ripple.rs`).
     pub(crate) ripples: ripple::Ripples,
     /// The background the last box painted shows, its states' over its own,
@@ -571,6 +574,7 @@ impl Painter {
             symbols: look::symbols(),
             feedback: (None, None),
             held_press: None,
+            focus_presses: false,
             ripples: Default::default(),
             clipped: None,
             field_content: HashMap::new(),
@@ -1127,7 +1131,8 @@ impl Painter {
                 dark,
                 feedback,
             );
-            self.pressable(node, &surface.outer, ts);
+            let focused = walk.scene.focus == Some(node.id);
+            self.pressable(node, &surface.outer, focused, ts);
         }
         let outer = geometry.outer;
         let content = geometry.content;
@@ -1278,7 +1283,8 @@ impl Painter {
                 control::paint(
                     backend, node, content, ts, self.dark, held, hovered, self.scale,
                 );
-                self.mark_ripple(node, content, held, ts);
+                let focused = walk.scene.focus == Some(node.id);
+                self.mark_ripple(node, content, held, focused, ts);
             }
             _ => {}
         }

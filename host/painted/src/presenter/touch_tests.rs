@@ -883,7 +883,7 @@ fn androids_touch_mode_shows_no_ring_until_a_key_and_a_touch_ends_it() {
     p.set_pointer_kind(PointerKind::Touch);
     let (x, y) = middle(&p, "field");
     tap(&mut p, x, y, 1.);
-    assert_eq!(p.brush.ringless, None, "a field keeps its ring");
+    assert_eq!(p.brush.ringless, Some(id(&p, "field")), "nor does a field");
     // A route popped back restores the row's focus from a field's: by
     // Chrome's rule it would show a ring, but no key has been pressed.
     let native = id(&p, "native");
@@ -897,6 +897,28 @@ fn androids_touch_mode_shows_no_ring_until_a_key_and_a_touch_ends_it() {
     let other = id(&p, "other");
     assert!(p.set_focus(Some(other), 5.).is_none());
     assert_ne!(edge(&mut p, "other"), RING, "a touch re-enters touch mode");
+}
+
+#[test]
+fn a_tapped_field_shows_no_ring_in_androids_touch_mode_while_typed_at() {
+    let source = r##"component App
+  view
+    column width=400 height=300
+      input testId="field" appearance="none" accent-color="#ff0000" width=200 height=30
+"##;
+    let mut p = boot(source);
+    (p.brush.touch_mode, p.brush.pointer_modality) = (true, true);
+    p.set_pointer_kind(PointerKind::Touch);
+    let (x, y) = middle(&p, "field");
+    tap(&mut p, x, y, 1.);
+    assert_eq!(p.focus, Some(id(&p, "field")));
+    assert_ne!(edge(&mut p, "field"), RING);
+    p.key_down("a", 3.);
+    p.key_down("Backspace", 4.);
+    assert_ne!(edge(&mut p, "field"), RING, "nor once typed at");
+    assert!(p.brush.pointer_modality, "typing keeps touch mode");
+    p.key_down("ArrowLeft", 5.);
+    assert_eq!(edge(&mut p, "field"), RING, "a key that types nothing");
 }
 
 #[test]
@@ -933,7 +955,11 @@ fn script_focus_remembers_pointer_input_on_empty_space_and_fields() {
             };
             tap(&mut p, x, y, 1.);
             if target == "field" {
-                assert_eq!(p.brush.ringless, None, "fields stay focus-visible");
+                let unringed = android.then(|| id(&p, "field"));
+                assert_eq!(
+                    p.brush.ringless, unringed,
+                    "outside touch mode, focus-visible"
+                );
             } else {
                 assert_eq!(p.focus, None, "{target}: a background press blurs");
             }
