@@ -139,6 +139,7 @@ impl RowPin {
 struct Capture {
     clip: Option<Rect4>,
     refused: bool,
+    refuse_sticky: bool,
     /// What its boxes' filters paint, in the walk's coordinates (`box_filter.rs`).
     reach: Option<Rect4>,
     images: Vec<(ViewId, Option<std::sync::Weak<Bitmap>>)>,
@@ -505,7 +506,25 @@ impl Painter {
             .is_some_and(|n| n.children().len() > 1 && !scrolls(effective_overflow(&n).1))
     }
 
-    /// A scroller's one container, walked with its children as the rows.
+    /// A column with a sticky heading keeps its body rows apart.
+    pub(super) fn is_row_section(walk: &Walk<'_, '_>, id: ViewId) -> bool {
+        walk.scene.kernel.node(id).is_some_and(|node| {
+            node.node_type == NodeType::View
+                && node.style.flex_direction == exact_kernel::FlexDirection::Column
+                && node.layout_position() != exact_kernel::PositionType::Sticky
+                && !scrolls(effective_overflow(&node).0)
+                && !scrolls(effective_overflow(&node).1)
+                && {
+                    let mut children = node.child_nodes();
+                    children.len() >= 3
+                        && children.any(|child| {
+                            child.layout_position() == exact_kernel::PositionType::Sticky
+                        })
+                }
+        })
+    }
+
+    /// A container walked with its children as the rows.
     pub(super) fn wrapped(
         &mut self,
         walk: &mut Walk<'_, '_>,
@@ -521,20 +540,18 @@ impl Painter {
     }
 
     /// Note a node walked while a row records.
-    pub(super) fn row_node(
-        &mut self,
-        kernel: &Kernel,
-        key: NodeKey,
-        f: exact_kernel::Frame,
-        shown: &Presented,
-    ) {
+    pub(super) fn row_node(&mut self, kernel: &Kernel, node: &NodeRef<'_>, shown: &Presented) {
         if let Some(c) = &mut self.rows.recording {
             c.frames.push(RowFrame {
-                node: key,
-                frame: f,
-                padding: kernel.resolved_padding(key).unwrap_or_default(),
+                node: node.key,
+                frame: node.frame,
+                padding: kernel.resolved_padding(node.key).unwrap_or_default(),
             });
-            c.refused |= shown.press != 1.0 || shown.press_translate != [0.; 4];
+            // The sticky offset can change independently of the row's origin.
+            c.refused |= (c.refuse_sticky
+                && node.layout_position() == exact_kernel::PositionType::Sticky)
+                || shown.press != 1.0
+                || shown.press_translate != [0.; 4];
         }
     }
 
@@ -654,11 +671,48 @@ impl Painter {
         within(clip, self.rows.recording.as_ref().and_then(|c| c.clip))
     }
 
+    /// The shadow can reach the port while its box is outside it.
+    pub(super) fn row_shadows(
+        &mut self,
+        shadows: &[shadow::ShadowPaint],
+        rect: Rect4,
+        ts: Transform,
+    ) {
+        if let Some(c) = &mut self.rows.recording {
+            for bounds in shadows
+                .iter()
+                .filter_map(|shadow| shadow.outer_bounds(rect))
+            {
+                c.reach = Some(union(c.reach, bbox(ts, bounds)));
+            }
+        }
+    }
+
     /// What a box's filter paints in a recording row, past the box.
     pub(super) fn row_reach(&mut self, r: Rect4) {
         if let Some(c) = &mut self.rows.recording {
             c.reach = Some(union(c.reach, r));
         }
+    }
+
+    pub(super) fn row_text_reach(
+        &mut self,
+        text: &Paragraph,
+        at: (f32, f32),
+        content: Rect4,
+        ts: Transform,
+    ) {
+        if self.rows.recording.is_none() {
+            return;
+        }
+        let (x, y, w, h) = super::text_shadow::line_bounds(text);
+        let lines = (x + at.0, y + at.1, w, h);
+        if intersect(lines, content) == lines {
+            return;
+        }
+        let (x, y, w, h) = bbox(ts, lines);
+        // Give the lines the same room for glyph overhang as the layout box.
+        self.row_reach((x - MARGIN, y - MARGIN, w + 2. * MARGIN, h + 2. * MARGIN));
     }
 
     /// Whether a kept row draws what it would record now; `pictures`: its
@@ -710,15 +764,23 @@ impl Painter {
         if self.rows.refer.is_some() {
             return self.row_referred(walk, id, ts, offset, clip_rect);
         }
-        // A transparent ancestor can replace the backend after rows_begin enabled reuse.
-        if !self.backend.rows() || walk.hit_space.is_some() {
-            return self.node(walk, id, ts, offset, clip_rect);
-        }
         let Some(node) = walk.scene.kernel.node(id) else {
             return;
         };
-        if ts.kx != 0.0 || ts.ky != 0.0 || (walk.scene.hidden)(id) {
-            return self.node(walk, id, ts, offset, clip_rect);
+        let split_sections = self.backend.split_sticky_sections();
+        // The outer scroller already owns the backend's open row group.
+        // A sticky root on Ink can draw directly because it never reuses a row.
+        if !self.backend.rows()
+            || walk.hit_space.is_some()
+            || ts.kx != 0.0
+            || ts.ky != 0.0
+            || (walk.scene.hidden)(id)
+            || (split_sections && node.layout_position() == exact_kernel::PositionType::Sticky)
+        {
+            let paused = self.rows_pause(None);
+            self.node(walk, id, ts, offset, clip_rect);
+            self.rows_resume(paused);
+            return;
         }
         let r = paint_rect(node.frame, offset);
         let origin = (ts.sx * r.0 + ts.tx, ts.sy * r.1 + ts.ty);
@@ -813,6 +875,7 @@ impl Painter {
         self.backend.row_begin(self.rows.next, content, previous);
         self.rows.recording = Some(Capture {
             clip: clip_rect,
+            refuse_sticky: split_sections,
             ..Capture::default()
         });
         let page = self.kept.to_page;

@@ -36,6 +36,10 @@ const STEP: f32 = 1.5;
 /// ...up to this many bands; wider blurs step a little coarser.
 const BANDS: f32 = 32.0;
 
+pub(super) fn shadow_outset(blur: f32, spread: f32) -> f32 {
+    1.5 * blur + spread.max(0.0) + 1.0
+}
+
 impl ShadowPaint {
     /// The node's shadows, in list order (the first on top); none of them
     /// that would show nothing.
@@ -99,6 +103,20 @@ impl ShadowPaint {
     /// Whether it paints inside the padding box.
     pub fn inset(&self) -> bool {
         self.inset
+    }
+
+    /// A conservative bound on the pixels drawn by this shadow, without the box.
+    pub(super) fn outer_bounds(&self, (x, y, w, h): Rect4) -> Option<Rect4> {
+        if self.inset || self.color[3] == 0 {
+            return None;
+        }
+        let d = shadow_outset(self.blur, self.spread);
+        Some((
+            x + self.offset.0 - d,
+            y + self.offset.1 - d,
+            w + 2.0 * d,
+            h + 2.0 * d,
+        ))
     }
 
     /// An outer shadow as one blurred shape, for a backend with its own

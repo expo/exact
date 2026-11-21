@@ -64,7 +64,7 @@ pub(crate) fn mul3(a: &[f32; 9], b: &[f32; 9]) -> [f32; 9] {
 fn shadow_reach(node: &exact_kernel::NodeRef<'_>) -> (f32, f32, f32, f32) {
     let mut out = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
     for s in node.style.box_shadow.shadows().iter().filter(|s| !s.inset) {
-        let r = 1.5 * s.blur + s.spread.max(0.0) + 1.0;
+        let r = super::shadow::shadow_outset(s.blur, s.spread);
         out.0 = out.0.max(r - s.offset.x);
         out.1 = out.1.max(r - s.offset.y);
         out.2 = out.2.max(r + s.offset.x);

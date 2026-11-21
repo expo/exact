@@ -148,6 +148,8 @@ struct Heard {
     drawn: Vec<u32>,
     through: Vec<(u32, Transform)>,
     bounds: Vec<Rect4>,
+    group_depth: u32,
+    max_group_depth: u32,
 }
 
 /// Keeps rows and draws nothing.
@@ -194,8 +196,19 @@ impl Backend for Keeps {
     fn rows(&self) -> bool {
         true
     }
+    fn split_sticky_sections(&self) -> bool {
+        true
+    }
     fn rows_through(&self) -> bool {
         true
+    }
+    fn group_begin(&mut self, _: ViewId, _: (f32, f32)) {
+        let mut heard = self.heard.borrow_mut();
+        heard.group_depth += 1;
+        heard.max_group_depth = heard.max_group_depth.max(heard.group_depth);
+    }
+    fn group_end(&mut self) {
+        self.heard.borrow_mut().group_depth -= 1;
     }
     fn row_begin(&mut self, id: u32, _: (f32, f32), previous: Option<u32>) {
         self.row = id;
@@ -490,6 +503,286 @@ fn a_row_whose_padding_alone_changed_is_recorded_again() {
         let again: Vec<_> = heard.begun.iter().map(|(_, previous)| *previous).collect();
         assert_eq!(again, [Some(first.begun[0].0)], "the padded row alone");
     }
+}
+
+#[test]
+fn sticky_sections_keep_body_rows_and_hits_when_the_heading_is_pushed_off() {
+    let plan = crate::test_plan(
+        r#"component App
+  view
+    scroll testId="port" width=200 height=100
+      column
+        box width=200 height=40
+        column width=200 height=180
+          column testId="heading" position="sticky" top=0 z-index=1 width=200 height=20
+            scroll width=40 height=20
+              box width=40 height=80
+          box testId="first" width=200 height=80
+          box testId="second" width=200 height=80
+        box testId="below" width=200 height=120
+"#,
+    );
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &plan,
+        (),
+        (200., 120.),
+        1.25,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let id = |name| {
+        let k = p.host.kernel();
+        k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id
+    };
+    let (port, heading, first, second, below) = (
+        id("port"),
+        id("heading"),
+        id("first"),
+        id("second"),
+        id("below"),
+    );
+    let heard = Rc::new(RefCell::new(Heard::default()));
+    p.reader_replaced(Box::new(Keeps {
+        heard: heard.clone(),
+        row: 0,
+    }));
+
+    p.frame();
+    assert_eq!(heard.borrow().begun.len(), 4);
+    assert_eq!(p.rect_of(heading).unwrap().1, 40.);
+
+    p.scroll_to(port, (0., 80.)).unwrap();
+    p.frame();
+    assert_eq!(p.rect_of(heading).unwrap().1, 0.);
+    assert_eq!(p.hit(100., 5.), Some(heading));
+    assert_eq!(p.hit(100., 30.), Some(first));
+    assert_eq!(p.hit(100., 75.), Some(second));
+
+    p.scroll_to(port, (0., 205.)).unwrap();
+    p.frame();
+    assert_eq!(p.rect_of(heading).unwrap().1, -5.);
+    assert_eq!(p.hit(100., 5.), Some(heading));
+    assert_eq!(p.hit(100., 20.), Some(below));
+    let heard = heard.borrow();
+    assert_eq!(heard.begun.len(), 4, "body rows stay recorded");
+    assert_eq!(heard.max_group_depth, 1);
+    assert_eq!(heard.group_depth, 0);
+}
+
+#[test]
+fn a_lowered_sticky_section_paints_its_body_inside_the_layer() {
+    use crate::host::lower::{LOWERED, LOWER_OPACITY};
+
+    let plan = crate::test_plan(
+        r#"component App
+  state faded = false
+  action fade
+    faded = true
+  view
+    column
+      button "Fade" testId="fade" press=fade width=160 height=10
+      scroll width=160 height=100
+        column
+          box width=160 height=5
+          column testId="section" width=160 opacity=(faded ? 0.5 : 1) transition="opacity 1s linear"
+            box position="sticky" top=0 width=160 height=20
+            box testId="body" width=160 height=50 background-color="red"
+            box width=160 height=80
+"#,
+    );
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &plan,
+        (),
+        (160., 120.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.host_mut().lowering = true;
+    p.host_mut().engine.set_lowered_properties(&LOWERED);
+    p.reader_replaced(Box::new(crate::ink::Ink::new().expect("an Ink device")));
+    p.frame();
+    let section = p.host.kernel().find_by_test_id("section")[0];
+    let fade = p.host.kernel().find_by_test_id("fade")[0];
+    let fade = p.host.kernel().node_by_key(fade).unwrap().id;
+    let body = p.host.kernel().find_by_test_id("body")[0];
+    let body = p.host.kernel().node_by_key(body).unwrap().id;
+    let (_, y, _, h) = p.rect_of(body).unwrap();
+    assert_eq!(
+        p.host.dispatch_at(fade, exact_runner::Event::Press, 0.),
+        None
+    );
+    assert_eq!(p.advance(250.), None);
+    assert_eq!(p.host.lowered_mask(section), LOWER_OPACITY);
+    let pixel = p.frame().pixel(80, (y + h / 2.0) as u32).unwrap();
+    assert!(pixel.red() > pixel.green(), "body pixel: {pixel:?}");
+}
+
+#[test]
+fn a_rotated_sticky_section_does_not_open_nested_row_groups() {
+    let plan = crate::test_plan(
+        r#"component App
+  view
+    scroll width=200 height=100
+      column
+        box width=200 height=40
+        column width=200 height=180 rotate=1
+          column position="sticky" top=0 z-index=1 width=200 height=20
+            scroll width=40 height=20
+              box width=40 height=80
+          box width=200 height=80
+          box width=200 height=80
+"#,
+    );
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &plan,
+        (),
+        (200., 120.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let heard = Rc::new(RefCell::new(Heard::default()));
+    p.reader_replaced(Box::new(Keeps {
+        heard: heard.clone(),
+        row: 0,
+    }));
+    p.frame();
+    let heard = heard.borrow();
+    assert_eq!(heard.max_group_depth, 1);
+    assert_eq!(heard.group_depth, 0);
+}
+
+#[test]
+fn sticky_sections_draw_shadows_reaching_into_the_port_from_below() {
+    for row in [
+        r#"box width=200 height=25 box-shadow="0 -100px 0 red""#,
+        r#"text "HHHH" width=200 height=25 text-shadow="0 -100px 0 red""#,
+    ] {
+        let plan = crate::test_plan(&format!(
+            r#"component App
+  view
+    scroll width=200 height=100
+      column
+        box width=200 height=5
+        column width=200
+          box position="sticky" top=0 width=200 height=20
+          box width=200 height=150
+          {row}
+"#
+        ));
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
+            &plan,
+            (),
+            (200., 120.),
+            1.,
+            PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        let (at, expected) = p
+            .frame()
+            .pixels()
+            .iter()
+            .copied()
+            .enumerate()
+            .find(|(_, pixel)| (pixel.red(), pixel.green(), pixel.blue()) == (255, 0, 0))
+            .expect("the shadow casts into the scroll port");
+
+        p.reader_replaced(Box::new(crate::ink::Ink::new().expect("an Ink device")));
+        assert_eq!(p.frame().pixels()[at], expected, "{row}");
+    }
+}
+
+#[test]
+fn overflowing_lines_still_draw_when_their_sticky_section_row_is_offscreen() {
+    let plan = crate::test_plan(
+        r#"component App
+  view
+    scroll testId="port" width=200 height=100
+      column
+        box width=200 height=5
+        column width=200
+          box position="sticky" top=0 width=200 height=20
+          text "MMMM MMMM MMMM MMMM MMMM MMMM MMMM MMMM MMMM MMMM MMMM MMMM" width=120 height=10 overflow="visible" font-size=20 line-height="20px" color="red"
+          box width=200 height=300
+"#,
+    );
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &plan,
+        (),
+        (200., 120.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let k = p.host.kernel();
+    let port = k.node_by_key(k.find_by_test_id("port")[0]).unwrap().id;
+    p.scroll_to(port, (0., 120.)).unwrap();
+    let red = |pixel: &tiny_skia::PremultipliedColorU8| {
+        pixel.red() > 200 && pixel.green() < 50 && pixel.blue() < 50
+    };
+    let expected: Vec<_> = p.frame().pixels().iter().map(red).collect();
+    assert!(
+        expected.iter().any(|red| *red),
+        "the ungrouped text is in view"
+    );
+    p.reader_replaced(Box::new(crate::ink::Ink::new().expect("an Ink device")));
+    assert!(
+        p.frame()
+            .pixels()
+            .iter()
+            .zip(expected)
+            .any(|(pixel, expected)| expected && red(pixel)),
+        "Ink draws the text that overflows its row"
+    );
+}
+
+#[test]
+fn a_retained_row_does_not_hold_a_sticky_descendant_at_its_old_position() {
+    let source = r#"component App
+  view
+    scroll testId="port" width=200 height=100
+      column
+        box width=200 height=40
+        column width=200 height=180
+          box testId="heading" position="sticky" top=0 z-index=1 width=200 height=20
+          box testId="body" width=200 height=120
+        box width=200 height=120
+"#;
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &crate::test_plan(source),
+        (),
+        (200., 120.),
+        1.25,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let id = |name| {
+        let k = p.host.kernel();
+        k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id
+    };
+    let (port, heading, body) = (id("port"), id("heading"), id("body"));
+    p.reader_replaced(Box::new(Keeps {
+        heard: Rc::default(),
+        row: 0,
+    }));
+    p.frame();
+    p.scroll_to(port, (0., 80.)).unwrap();
+    p.frame();
+    assert_eq!(p.hit(5., 5.), Some(heading));
+    assert_eq!(p.hit(5., 30.), Some(body));
 }
 
 #[test]

@@ -273,6 +273,70 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_sticky_heading_keeps_its_section_background_for_the_backdrop() {
+        use crate::presenter::{PainterChoice, Presenter};
+
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
+            &crate::test_plan(
+                r#"component App
+  view
+    scroll width=200 height=100
+      column
+        box width=200 height=5
+        column width=200 background-color="blue"
+          box position="sticky" top=0 width=200 height=20 backdrop-filter="saturate(0)"
+          box width=200 height=150
+          box width=200 height=25
+"#,
+            ),
+            (),
+            (200., 120.),
+            1.,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.frame();
+        let ops = FINISHED.with(|f| f.borrow_mut().take()).expect("a frame");
+        let (mut row, mut background, mut backdrop) = (None, None, None);
+        let mut at = 0;
+        while at < ops.len() {
+            match ops[at] {
+                ROW_BEGIN => {
+                    row = Some(ops[at + 1]);
+                    at += 6;
+                    continue;
+                }
+                ROW_END => row = None,
+                RRECT if ops[at + 1] == 0xff0000ff => background = row,
+                BACKDROP => backdrop = row,
+                _ => {}
+            }
+            at = end(&ops, at).expect("a valid stream");
+        }
+        assert!(
+            backdrop.is_some(),
+            "the reader draws the heading's backdrop"
+        );
+        assert_eq!(backdrop, background, "the reader samples only its own row");
+        let section = backdrop.unwrap();
+        for _ in 0..2 {
+            p.repaint();
+            p.frame();
+            let ops = FINISHED.with(|f| f.borrow_mut().take()).expect("a frame");
+            let mut at = 0;
+            let mut drawn = false;
+            while at < ops.len() {
+                assert_ne!(ops[at], ROW_BEGIN, "an unchanged section keeps its row");
+                drawn |= ops[at] == ROW_DRAW && ops[at + 1] == section;
+                at = end(&ops, at).expect("a valid stream");
+            }
+            assert!(drawn, "the reader still draws the section");
+        }
+    }
+
+    #[test]
     fn memory_trim_frees_canvas_rows_without_freeing_their_replacements() {
         trimmed_rows("memory");
     }

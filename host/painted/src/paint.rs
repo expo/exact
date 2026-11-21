@@ -935,7 +935,7 @@ impl Painter {
         let f = node.frame;
         let (x, y, w, h) = paint_rect(f, offset);
         let p = (walk.scene.presented)(id);
-        self.row_node(walk.scene.kernel, node.key, f, &p);
+        self.row_node(walk.scene.kernel, &node, &p);
         // @ref LLP 1077 D8 — turned or moved in space: painted apart, warped.
         if self.spatial(walk, &node, &p, (x, y, w, h), ts, offset, clip_rect) {
             self.row_refuse();
@@ -1111,6 +1111,7 @@ impl Painter {
         // and a text node still walks its runs so a visible inline paints.
         if paints_self {
             surface.bleed = self.bleed(walk.scene.kernel, node.id, &surface.outer, ts);
+            self.row_shadows(&paint.shadows, surface.outer.rect, ts);
             paint.paint(self.backend.as_mut(), &surface, ts);
             self.column_rules(walk.scene.kernel, node, rect, ts);
             let (dark, feedback) = (

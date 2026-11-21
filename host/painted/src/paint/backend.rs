@@ -384,6 +384,11 @@ pub trait Backend {
     fn rows(&self) -> bool {
         false
     }
+
+    /// Whether splitting a sticky section preserves overflow and backdrops.
+    fn split_sticky_sections(&self) -> bool {
+        false
+    }
     /// Whether a kept drawing ([`tape`](super::tape)) may hold this
     /// backend's rows by reference, drawing them through its transform
     /// ([`Backend::row_draw_through`]); otherwise it records their draw calls.
