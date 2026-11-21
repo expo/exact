@@ -55,6 +55,10 @@ internal class Pane(
 
     override fun getAccessibilityNodeProvider(): android.view.accessibility.AccessibilityNodeProvider? = access?.provider
 
+    override fun sendAccessibilityEventUnchecked(event: android.view.accessibility.AccessibilityEvent) {
+        if (access?.heard(event) != true) super.sendAccessibilityEventUnchecked(event)
+    }
+
     override fun dispatchHoverEvent(event: MotionEvent): Boolean = access?.hover(event) == true || super.dispatchHoverEvent(event)
 
     init {

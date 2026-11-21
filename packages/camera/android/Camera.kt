@@ -61,6 +61,7 @@ import androidx.core.content.ContextCompat
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.Files
+import dev.exact.canvas.Native
 import dev.exact.canvas.TrackError
 import dev.exact.canvas.TrackConsumer
 import dev.exact.canvas.VideoSource
@@ -69,7 +70,6 @@ import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
-import java.nio.file.StandardCopyOption
 
 class CameraModule(context: ExtensionContext) : ExactExtension(context) {
     companion object {
@@ -388,14 +388,14 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         }
         val request = context.request
         val camera = android.Manifest.permission.CAMERA
-        if (!declares(camera) || held(camera)) return openCameraApp(shot, request, path, file, args, reply)
+        if (!declares(camera) || held(camera)) return openCameraApp(shot, request, path, args, reply)
         cameraAppUp = true
         cameraAppRequest = request
         cameraAppLetGo = false
         context.askPermission(camera) {
             cameraAppUp = false
             if (cameraAppLetGo) return@askPermission reply(error("AbortError"))
-            if (held(camera)) return@askPermission openCameraApp(shot, request, path, file, args, reply)
+            if (held(camera)) return@askPermission openCameraApp(shot, request, path, args, reply)
             say("camera app: the app declares CAMERA and does not hold it")
             reply(error("NotAllowedError"))
         }
@@ -410,14 +410,12 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         app.packageManager.getPackageInfo(app.packageName, PackageManager.GET_PERMISSIONS).requestedPermissions?.contains(permission) == true
     }.getOrDefault(false)
 
-    private fun openCameraApp(shot: Shot, request: Int?, path: String, file: File, args: JSONObject, reply: (JSONObject) -> Unit) {
-        // Outside `app:/cache` and `app:/tmp` (`cache/cache`, `cache/temporary`), where the app's own code writes. A
-        // file staged before the process last ended answers nothing now.
-        val staging = File(context.application.cacheDir, "exact.camera-app")
-        Files.removeTree(staging)
-        val staged = File(staging, "${shot.noun}.${shot.ext}")
-        val out = Files.writableUri(context.application, staged) ?: return reply(error("UnknownError"))
-        val intent = Intent(shot.action).putExtra(MediaStore.EXTRA_OUTPUT, out)
+    private fun openCameraApp(shot: Shot, request: Int?, path: String, args: JSONObject, reply: (JSONObject) -> Unit) {
+        // A capture staged before the process last ended answers nothing now.
+        Files.removeTree(Files.captures(context.application))
+        val capture = Files.capture(context.application, "${shot.noun}.${shot.ext}") ?: return reply(error("UnknownError"))
+        val staged = capture.file
+        val intent = Intent(shot.action).putExtra(MediaStore.EXTRA_OUTPUT, capture.uri)
             .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
         // Android names no extra for the side; these are the ones camera apps read (Google Camera among them).
         when (args.optString("facingMode")) {
@@ -439,8 +437,7 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         cameraAppLetGo = false
         say("camera app for $path")
         val end = { reason: String ->
-            Files.endWrite(staged)
-            Files.removeTree(staging)
+            Files.endCapture(context.application, capture)
             cameraAppUp = false
             cameraAppRequest = null
             say("camera app: $reason")
@@ -449,7 +446,7 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
             end("not started, $refusal")
             reply(error(refusal))
         }) { code, data ->
-            Files.endWrite(staged)
+            Files.revoke(context.application, capture)
             if (code != Activity.RESULT_OK) {
                 end("cancelled")
                 return@startActivityForResult reply(error("AbortError"))
@@ -457,17 +454,24 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
             // A camera app that records to its own place despite `EXTRA_OUTPUT` answers its URI; copied in, and the
             // facts read, off the main thread. The kept file is published back on it, where `cancel` runs.
             val own = if (shot === VIDEO && !(Files.regular(staged) && staged.length() > 0)) data?.data else null
+            // The camera app's own video is copied into a file it was never handed, which it cannot hold open.
+            val kept = if (own == null) staged else File(staged.parentFile, "own-${staged.name}")
             Thread {
-                val copied = own == null || copyIn(own, staged)
-                val facts = if (copied && Files.regular(staged) && staged.length() > 0) {
-                    if (shot === VIDEO) video(path, staged) else photo(path, staged)
+                val copied = own == null || copyIn(own, kept)
+                // On disk before the rename on the main thread, whose own sync then has only what the camera app
+                // wrote since. Opened without being made: one gone since its facts were read, or that cannot be
+                // synced, is not kept.
+                val facts = if (copied && Files.regular(kept) && kept.length() > 0) {
+                    (if (shot === VIDEO) video(path, kept) else photo(path, kept)).takeIf {
+                        runCatching { java.nio.channels.FileChannel.open(kept.toPath(), java.nio.file.StandardOpenOption.WRITE).use { it.force(true) } }.isSuccess
+                    }
                 } else null
                 android.os.Handler(android.os.Looper.getMainLooper()).post {
                     when {
                         cameraAppLetGo -> { end("let go; kept nothing at $path"); reply(error("AbortError")) }
                         facts == null -> { end("kept nothing at $path"); reply(error("UnknownError")) }
-                        runCatching { keep(staged, file) }.isFailure -> { end("could not keep $path"); reply(error("UnknownError")) }
-                        else -> { end("took $path (${file.length()} bytes)"); reply(facts) }
+                        !Native.publishApp(path, kept.path) -> { end("could not keep $path"); reply(error("UnknownError")) }
+                        else -> { end("took $path (${facts.optLong("size")} bytes)"); reply(facts) }
                     }
                 }
             }.apply { name = "exact-camera-app" }.start()
@@ -475,10 +479,11 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
     }
 
     /** The camera app's own video at [uri], copied to [staged] 64 KiB at a time: a `video/` type only, never one of the
-     * app's own files. A copy that fails leaves no staged file. */
+     * app's own files, whichever user's authority names them (`<user>@<authority>`). A copy that fails leaves no staged
+     * file. */
     private fun copyIn(uri: android.net.Uri, staged: File): Boolean {
         val resolver = context.application.contentResolver
-        if (uri.scheme != "content" || uri.authority == "${context.application.packageName}.exact.files") {
+        if (uri.scheme != "content" || uri.authority?.substringAfterLast('@') == "${context.application.packageName}.exact.files") {
             say("camera app: answered $uri, not read")
             return false
         }
@@ -495,16 +500,6 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
             staged.delete()
             say("camera app: could not read $uri, ${it.message}")
         }.isSuccess
-    }
-
-    /** [staged] in place of [file]: renamed over it, which replaces a link there rather than writing what it names. */
-    private fun keep(staged: File, file: File) {
-        file.parentFile?.mkdirs()
-        try {
-            java.nio.file.Files.move(staged.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-        } catch (e: java.nio.file.AtomicMoveNotSupportedException) {
-            Files.output(file).use { out -> staged.inputStream().use { it.copyTo(out) } }
-        }
     }
 
     /** The capture's `ImageCapture`, built again when a builder word changes (D4). */
