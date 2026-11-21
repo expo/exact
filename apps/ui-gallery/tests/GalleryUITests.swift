@@ -90,6 +90,14 @@ final class GalleryUITests: XCTestCase {
             XCTAssertEqual(rangeBar.frame.minY, sidebarBar.frame.minY, accuracy: 0.5, "The range bar is docked where the list's bar starts")
             XCTAssertEqual(rangeBar.frame.maxY, sidebarBar.frame.maxY, accuracy: 0.5, "The two headers end on one line")
             let docked = rangeBar.frame, row = sidebar.cells["sidebar-css"]
+            // UIKit keeps a hidden list hidden at the next launch, so show it again from the page's bar, at the
+            // page's top, however this test ends
+            addTeardownBlock {
+                let scroll = app.otherElements["gallery"].firstMatch, show = app.buttons["Show Sidebar"]
+                for _ in 0..<3 where !row.isHittable && !show.isHittable { scroll.swipeDown(velocity: .fast) }
+                if show.isHittable { show.tap() }
+                XCTAssertTrue(row.isHittable, "The list shows beside the page again")
+            }
             app.buttons["Hide Sidebar"].tap()
             XCTAssertFalse(row.isHittable, "The list is hidden")
             XCTAssertEqual(rangeBar.frame.minY, docked.minY, accuracy: 0.5, "Hiding the list moves nothing in the page's header")
@@ -105,13 +113,6 @@ final class GalleryUITests: XCTestCase {
         }
         range.buttons["standard"].tap()
         XCTAssertTrue(range.buttons["standard"].isSelected, "The control takes a tap over the scrolled page")
-        if sidebarIsBesideThePage(app) {
-            // Show the list again from the page's bar, at the page's top: UIKit keeps it hidden at the next launch
-            let scroll = app.otherElements["gallery"].firstMatch
-            for _ in 0..<3 where !app.buttons["Show Sidebar"].isHittable { scroll.swipeDown(velocity: .fast) }
-            app.buttons["Show Sidebar"].tap()
-            XCTAssertTrue(sidebar.cells["sidebar-css"].isHittable, "The list shows beside the page again")
-        }
         // A compact window collapses the split to one stack, whose back button returns to the list
         guard app.windows.firstMatch.frame.width < 500 else { return }
         let back = app.buttons["BackButton"].firstMatch

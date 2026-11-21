@@ -7,8 +7,9 @@ import UIKit
 /// (LLP 1127), found from a route's controller; nothing here sets its delegate or columns.
 ///
 /// It holds whether or not the list shows, so hiding the list, showing it or dragging it in moves nothing in the
-/// page's header. It is measured only while the list's bar is in a window, so it is 0 until a list hidden since
-/// launch first shows, and a size change while the list is hidden takes effect when it next shows.
+/// page's header. It is measured only while the list's bar is in a window, when the module is told of a route or of
+/// a window change, since nothing tells a module that the list showed: a list hidden since launch is measured as
+/// the first section is chosen from it, and a size change while the list is hidden takes effect at the next route.
 final class SidebarBarHeight {
     /// What the `sidebarBarHeight` answer watches: said whenever `height` changes
     static let topic = "gallery-sidebar-bar"
