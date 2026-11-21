@@ -1352,5 +1352,26 @@ extension SplitIOSTests {
     /// The inspector's column starts to slide away while the detail's pop is
     /// still under way, not after it.
     @available(iOS 26.0, *)
+    /// The detail's first route counts as pushed whatever projects its stack again (LLP 1127 D7): an appearance change
+    /// (the app switcher's snapshot takes the app in light and dark as it leaves the screen) projected it as a root,
+    /// whose bar it hid, animated, as UIKit nested the detail in the list to collapse for the snapshot; UIKit then
+    /// failed its assertion laying out a bar shown with its items in the list's bar, and the app crashed.
+    func testAnAppearanceChangeKeepsTheDetailsFirstRoutePushed() throws {
+        let session = try boot(size: CGSize(width: 1100, height: 800))
+        let navigation = session.presenter.navigationHost, agent = Agent(session: session)
+        until("a split") { navigation.split != nil && !agent.nativeInFlight() }
+        let split = try XCTUnwrap(navigation.split)
+        split.controller.traitOverrides.horizontalSizeClass = .regular
+        until("expanded") { !split.controller.isCollapsed && !agent.nativeInFlight() }
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "row-a").id)])["error"])
+        until("the book is in the detail") { split.shown.count == 2 && !agent.nativeInFlight() }
+        let route = try XCTUnwrap(split.detail.viewControllers.first as? RouteController)
+        XCTAssertTrue(route.pushed, "the detail's first route is pushed")
+        let hidden = split.detail.isNavigationBarHidden
+        navigation.appearanceChanged()
+        XCTAssertTrue(route.pushed, "an appearance change leaves it pushed")
+        XCTAssertEqual(split.detail.isNavigationBarHidden, hidden, "and its bar as it was")
+    }
+
 }
 #endif

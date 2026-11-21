@@ -587,7 +587,7 @@ extension NavigationHost {
         // Count UIKit's list before a tab's root under More: More pushes the root over it, with a Back to it
         let front = nav?.stackFront.count ?? 0
         // A split's detail column counts as pushed, its first route included (LLP 1127 D7)
-        let detail = nav != nil && nav === split?.detail
+        let detail = nav.map { nav in nav === split?.detail || tabSplits.values.contains { $0.detail === nav } } ?? false
         for (index, c) in routes.enumerated() {
             // The bar is each route's (LLP 1115.000 D5.2, D5.3): its header,
             // the system Back alone on a pushed route with none of its own
