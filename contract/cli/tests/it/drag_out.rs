@@ -145,7 +145,7 @@ fn bound_entries_and_urls_are_refused_by_the_same_rules() {
         [
             "drag: refused: img/x.jpg is neither a shipped assets/ file nor an app:/ path",
             "drag: refused: app:/data/../x.pdf is not a plain app:/ path",
-            "drag: refused: /card/1 is not an absolute http: or https: URL",
+            "drag: refused: url is not an absolute http: or https: URL: another app cannot open this app's path",
         ]
     );
 }
@@ -176,6 +176,11 @@ fn each_refusal_names_what_to_write_instead() {
             "draggable=true dataTransfer=DataTransfer(url=\"/card/1\")",
             "type-data-transfer",
             "another app cannot open this app's path",
+        ),
+        (
+            "draggable=true dataTransfer=DataTransfer(url=\"https://[broken\")",
+            "type-data-transfer",
+            "its host is not a name of letters, digits, `-`, `.` and `_`",
         ),
         (
             "draggable=true dataTransfer=DataTransfer(files=[\"https://example.com/a.jpg\"])",

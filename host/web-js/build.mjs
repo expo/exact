@@ -861,6 +861,7 @@ cpSync(resolve(here, 'ts-stream.js'), resolve(gen, 'ts-stream.js'));
 cpSync(resolve(here, 'ts-sqlite.js'), resolve(gen, 'ts-sqlite.js'));
 cpSync(resolve(here, 'auth.js'), resolve(gen, 'auth.js'));
 cpSync(resolve(here, 'files.js'), resolve(gen, 'files.js'));
+cpSync(resolve(here, 'url.js'), resolve(gen, 'url.js'));
 cpSync(resolve(here, 'sounds.js'), resolve(gen, 'sounds.js'));
 cpSync(resolve(here, 'wakelock.js'), resolve(gen, 'wakelock.js'));
 writeFileSync(resolve(gen, 'drag.js'), localImports(readFileSync(resolve(here, 'drag.js'), 'utf8')));
