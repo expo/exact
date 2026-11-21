@@ -801,9 +801,12 @@ class HostedTouchTest {
         f.touch(2, x = 250f, y = 200f, time = 120)
         f.touch(2, x = 250f, y = 400f, time = 140)
         f.touch(1, x = 250f, y = 400f, time = 160)
-        val indicator = (0 until f.parent.childCount).map { f.parent.getChildAt(it) }.filterIsInstance<Refresh>().single()
-        assertTrue(indicator.spinning)
         val scrolling = ReflectionHelpers.getField<Scrolling>(f.view, "scrolling")
+        val scrollers = ReflectionHelpers.getField<Map<*, *>>(scrolling, "scrollers")
+        val indicator = scrollers.values.filterIsInstance<Scrolling.Scroller>().mapNotNull { it.pull }.single()
+        val shown = requireNotNull(indicator.parent)
+        assertNotSame("the indicator is in the root's overlay, not among its children", f.parent, shown)
+        assertTrue(indicator.spinning)
         scrolling.told(intArrayOf(9, 2 or 16 or 32, 0, 0, 0, 0, 0, 500f.toBits(), 500f.toBits()))
         Engine.reply[4] = 2 or 16 or 32
         Engine.reply[Engine.reply.lastIndex] = 7
@@ -812,7 +815,7 @@ class HostedTouchTest {
         org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(
             java.time.Duration.ofMillis(android.view.ViewConfiguration.getLongPressTimeout().toLong() + 1))
         assertTrue(Engine.touches.contains(4))
-        assertSame("opening a context menu must leave the refresh indicator attached", f.parent, indicator.parent)
+        assertSame("opening a context menu must leave the refresh indicator attached", shown, indicator.parent)
         assertTrue(indicator.spinning)
         f.touch(1, time = android.os.SystemClock.uptimeMillis())
         f.view.running(false, false)
