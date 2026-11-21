@@ -49,7 +49,7 @@ import { filesystem, installedModules, OFFLINE_MISSING, removePrivateTree, withH
 import { installedFileDependencies } from './file-dependencies.mjs';
 import { holdAppOutput, startSweep } from './sweep.mjs';
 import { WEB_TOOLCHAIN, WEB_STD, WEB_SIZE, WEB_RUSTFLAGS, webToolchainEnv, cargoEnvironment,
-  appCrates, authoredWorkspace, buildCommand, cargoOnPath, claimTargetCrates,
+  appCrates, authoredWorkspace, buildCommand, cargoOnPath, claimTargetCrates, physicalPath,
   wholeProgram, declaredWorkspace, knownWorkspace, refuseLoose, rememberWorkspace, shellsDir, targetRustflags } from './cargo-check.mjs';
 export { WEB_TOOLCHAIN, WEB_STD, WEB_SIZE, webToolchainEnv, cargoEnvironment, cargoOnPath, wholeProgram } from './cargo-check.mjs';
 import { appCrateName, gpuModules, packageGpuInputs, packageGpuManifest, gpuView, joinMetadata, joinsGpu, settleShells } from './app-shells.mjs';
@@ -250,9 +250,9 @@ export function rustRemapFlags(app, toolchain = null, env = process.env) {
   const { commit, sysroot } = rustcFacts.get(key);
   const pairs = [[resolve(env.CARGO_HOME ?? resolve(homedir(), '.cargo')), 'cargo']];
   if (sysroot && commit) pairs.push([resolve(sysroot, 'lib/rustlib/src/rust'), `/rustc/${commit}`]);
-  // The source root as Cargo names its sources, through any link in the given spelling (macOS's /var is /private/var)
-  const real = path => { try { return realpathSync.native(path); } catch { return path; } };
-  if (env.EXACT_SOURCE_ROOT) pairs.push([real(resolve(env.EXACT_SOURCE_ROOT)), 'source']);
+  // The source root by the physical path Cargo names its sources by (/var is /private/var), and as given, last, so
+  // rustc's last matching prefix is the given spelling where both match one path
+  if (env.EXACT_SOURCE_ROOT) for (const root of new Set([physicalPath(env.EXACT_SOURCE_ROOT), resolve(env.EXACT_SOURCE_ROOT)].filter(Boolean))) pairs.push([root, 'source']);
   pairs.push([ROOT, '']);
   if (app && resolve(app.workspace) !== ROOT) pairs.push([resolve(app.workspace), '']);
   if (app) pairs.push([resolve(app.target), 'target']);

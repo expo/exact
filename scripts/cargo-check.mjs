@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { OFFLINE_MISSING, withHostDeployment } from './filesystem.mjs';
 import { throwContractErrors } from './contract-diagnosis.mjs';
-import { basename, delimiter, dirname, relative, resolve, sep } from 'node:path';
+import { basename, delimiter, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
@@ -433,10 +433,27 @@ export function cargoBuildEnv(cwd, env) {
  * keeps an argument with a space whole, and Cargo appends it to a configured array. Cargo refuses to merge an array
  * into a configured string ("expected string, but found array"), so over a string the flags are one string, the
  * configured flags first, which replaces it; a flag with a space cannot join one. */
+/** `path` as the system reaches it, each link followed before a later `..` (which `path.resolve`, and Bun's
+ * `realpathSync.native`, collapse first), or null when a part of it cannot be read. */
+export function physicalPath(path) {
+  let at = sep;
+  for (const part of (isAbsolute(path) ? path : process.cwd() + sep + path).split(/[\\/]+/)) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') { at = dirname(at); continue; }
+    try { at = realpathSync.native(resolve(at, part)); } catch { return null; }
+  }
+  return at;
+}
+
 export function targetRustflags(target, flags, { cwd = process.cwd(), env = process.env } = {}) {
   const configured = cargoConfigurations(cwd, env, `pass ${target}'s rustflags`).findLast(({ configuration }) => configuration.target?.[target]?.rustflags !== undefined);
   const value = configured?.configuration.target[target].rustflags;
   if (typeof value !== 'string') return ['--config', `target.${target}.rustflags=${JSON.stringify(flags)}`];
+  // A string cannot carry a remap whose prefix has a space: one whose prefix is the physical path of another flag's,
+  // remapped alike (the alias rustRemapFlags adds for a link), is left out, and a given spelling never is
+  const remap = flag => /^--remap-path-prefix=(.*)=([^=]*)$/.exec(flag);
+  const alias = flag => flags.some(other => other !== flag && !/\s/.test(other) && remap(other)?.[2] === remap(flag)[2] && physicalPath(remap(other)[1]) === remap(flag)[1]);
+  flags = flags.filter(flag => !(/\s/.test(flag) && remap(flag) && alias(flag)));
   const spaced = flags.find(flag => /\s/.test(flag));
   if (spaced) throw new Error(`${configured.path}: [target.${target}] rustflags is a string, which Cargo splits at whitespace, so the build cannot add ${spaced} to it; write it as an array, rustflags = ${JSON.stringify(value.trim().split(/\s+/).filter(Boolean))}`);
   return ['--config', `target.${target}.rustflags=${JSON.stringify([value.trim(), ...flags].filter(Boolean).join(' '))}`];
