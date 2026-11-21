@@ -45,7 +45,7 @@ extension ExactSession {
         }
         var items: [Any] = []
         if let text = request["text"] as? String { items.append(text) }
-        if let url = (request["url"] as? String).flatMap(URL.init(string:)) { items.append(url) }
+        if let written = request["url"] as? String, let url = ShareSheet.link(written, log: { self.log($0) }) { items.append(url) }
         // Each entry is written into a folder of its own in a scratch
         // directory removed when the sheet closes: an app file as a copy read
         // through the library's confined path (`fs.read` admitted, no link
@@ -77,6 +77,9 @@ extension ExactSession {
                 discard(); outcome("share: refused: \(error.localizedDescription)"); return
             }
         }
+        // The runner admits a share with something to share, so an empty one
+        // shared only a URL that `ShareSheet.link` left out.
+        guard !items.isEmpty else { discard(); outcome("share: refused: Foundation cannot read its url, and it shares nothing else"); return }
         let (view, rect) = presenter.presentationAnchor(source)
         #if os(iOS)
         let barItem = source.flatMap { presenter.navigation.shownBarItem($0) }
@@ -120,6 +123,15 @@ enum ShareSheet {
     /// The real sheets a drive shows beside their holds: each one's sheet
     /// and what closes it as dismissed.
     nonisolated(unsafe) static var shown: [Key: (sheet: AnyObject, dismissed: () -> Void)] = [:]
+
+    /// The URL a share carries, as Foundation reads what the runner admitted.
+    /// The runner admits a URL by what Exact owns (LLP 1094.000 D1); one
+    /// Foundation cannot read is shared without it, and the journal says so.
+    static func link(_ written: String, log: (String) -> Void) -> URL? {
+        if let url = URL(string: written) { return url }
+        log("share: url not shared: Foundation cannot read it as a URL; percent-encode what a browser would")
+        return nil
+    }
 
     /// The agent answered a share's hold in `session` (`tap @t shared|cancel`):
     /// its sheet closes, the answer already journalled.

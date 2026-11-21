@@ -6,6 +6,7 @@
 // the page journals one when the value changes. `install` takes the runtime's hooks and journal, as follow.js
 // does, so the rules load without a page. The drag itself is the browser's, its data `drag-out.js`'s.
 import { listen, writeDraggable } from '../web/drag-out.js';
+import { httpUrlRefusal } from './url.js';
 
 const FILES = 'data-datatransferfiles', URL_PROP = 'data-datatransferurl';
 
@@ -15,13 +16,6 @@ export function shipped(entry) {
   const rest = entry.slice('assets/'.length);
   return rest.length > 0 && rest.length <= 128 && /^[\x20-\x7e]+$/.test(rest) && !/[:?#%\\]/.test(rest)
     && !rest.startsWith('/') && rest.split('/').every((s) => s && s !== '.' && s !== '..');
-}
-
-/** Whether `url` is absolute `http:` or `https:` with a host (`share.rs`'s `absolute_http`). */
-export function absolute(url) {
-  const scheme = /^https?:\/\//i.exec(url);
-  const rest = scheme ? url.slice(scheme[0].length) : '';
-  return rest !== '' && !/^[/?#]/.test(rest) && !/[\p{White_Space}\p{Cc}]/u.test(url);
 }
 
 /** The entries the page carries, each refusal said in the runner's words. */
@@ -35,8 +29,10 @@ export function admit(files, refuse) {
 
 /** The `url` the page carries, or '' with the refusal said. */
 export function admitUrl(url, refuse) {
-  if (!url || absolute(url)) return url ?? '';
-  refuse(`${url} is not an absolute http: or https: URL`);
+  const why = url ? httpUrlRefusal(url) : null;
+  if (!why) return url ?? '';
+  // The URL itself stays out of the journal: it may hold a password or a token.
+  refuse(`url is not an absolute http: or https: URL: ${why}`);
   return '';
 }
 
@@ -53,7 +49,9 @@ export function install({ PropHooks, say, document = globalThis.document }) {
   });
   hook(FILES, admit);
   hook(URL_PROP, admitUrl);
+  // A render on the server (main-server.js) admits the data and hears no drag.
+  if (!document) return;
   // The listener holds a node's drag off while a field in it keeps a contact, so it writes `draggable` (drag-out.js).
   PropHooks.draggable = (e, v) => (writeDraggable(e, v), true);
-  if (document) listen(document, (e) => e.$exactTree === true);
+  listen(document, (e) => e.$exactTree === true);
 }

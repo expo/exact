@@ -1443,3 +1443,22 @@ fn a_drags_bound_data_is_written_by_the_names_drag_js_admits() {
     assert!(js.contains("\"draggable\":\"true\""), "{js}");
     assert!(!js.contains("data-draggable"), "{js}");
 }
+
+/// A drag's `url` and `files` the compiler folds to constants are bound
+/// too, never written into the markup, so `drag.js` admits them as the
+/// runner does (LLP 1094.000 D1, D2).
+#[test]
+fn a_drags_constant_data_is_bound_for_drag_js_to_admit() {
+    let plan = contract::compile(
+        "component App\n  view\n    column draggable=true dataTransfer=DataTransfer(files=[\"app:/data/a.pdf\"], url=`https://${\"example.com\"}/a b`)\n      text \"a\"\n",
+    )
+    .unwrap();
+    let js = crate::emit::emit(&plan, false, false).unwrap().js;
+    for name in ["data-datatransferfiles", "data-datatransferurl"] {
+        assert!(js.contains(&format!(",\"{name}\",")), "{name} bound:\n{js}");
+        assert!(
+            !js.contains(&format!("\"{name}\":")),
+            "{name} in the markup:\n{js}"
+        );
+    }
+}

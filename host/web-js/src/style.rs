@@ -349,13 +349,17 @@ pub fn project(
                 .props
                 .insert("data-exact-router-press".into(), writes.to_string());
         }
-        // A sampled prop decided the tag; its value is the effect's.
+        // A sampled prop decided the tag; its value is the effect's. A drag's
+        // `url` and `files` are bound, whatever their value.
         for b in node.bindings.iter() {
             let row = plan.binding(b);
-            if row.kind == BindingKind::Prop && literal(plan, plan.code(row.expr)).is_none() {
-                if let Some(prop) =
-                    PropId::from_wire(row.id).filter(|p| decides_tag(plan, &node, *p))
-                {
+            if row.kind == BindingKind::Prop
+                && (literal(plan, plan.code(row.expr)).is_none()
+                    || crate::emit::admitted_on_the_page(row.id))
+            {
+                if let Some(prop) = PropId::from_wire(row.id).filter(|p| {
+                    decides_tag(plan, &node, *p) || crate::emit::admitted_on_the_page(row.id)
+                }) {
                     if let Ok(name) = prop_name(NodeType::from_wire(node.node_type).unwrap(), prop)
                     {
                         parts.props.remove(&name);
