@@ -429,10 +429,6 @@ export function cargoBuildEnv(cwd, env) {
   return result;
 }
 
-/** The `--config` that gives `target` the rustflags `flags` beside those its Cargo configuration gives it. A TOML array
- * keeps an argument with a space whole, and Cargo appends it to a configured array. Cargo refuses to merge an array
- * into a configured string ("expected string, but found array"), so over a string the flags are one string, the
- * configured flags first, which replaces it; a flag with a space cannot join one. */
 /** `path` as the system reaches it, each link followed before a later `..` (which `path.resolve`, and Bun's
  * `realpathSync.native`, collapse first), or null when a part of it cannot be read. */
 export function physicalPath(path) {
@@ -445,6 +441,10 @@ export function physicalPath(path) {
   return at;
 }
 
+/** The `--config` that gives `target` the rustflags `flags` beside those its Cargo configuration gives it. A TOML array
+ * keeps an argument with a space whole, and Cargo appends it to a configured array. Cargo refuses to merge an array
+ * into a configured string ("expected string, but found array"), so over a string the flags are one string, the
+ * configured flags first, which replaces it; a flag with a space cannot join one. */
 export function targetRustflags(target, flags, { cwd = process.cwd(), env = process.env } = {}) {
   const configured = cargoConfigurations(cwd, env, `pass ${target}'s rustflags`).findLast(({ configuration }) => configuration.target?.[target]?.rustflags !== undefined);
   const value = configured?.configuration.target[target].rustflags;
