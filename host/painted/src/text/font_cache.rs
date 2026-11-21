@@ -250,6 +250,7 @@ mod tests {
                 ])
                 .env(CHILD, "1")
                 .env_remove("HOME")
+                .env_remove("LOCALAPPDATA")
                 .env_remove("XDG_CACHE_HOME")
                 .status()
                 .unwrap()
