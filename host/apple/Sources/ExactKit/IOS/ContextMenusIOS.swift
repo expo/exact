@@ -92,6 +92,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     private(set) var open: Open?
     /// The menu that set focus aside, until dismissal finishes or its interaction comes off
     private var focusOwner: (configuration: NSObject, interaction: UIInteraction)?
+    private var stages: [ObjectIdentifier: LiftStage] = [:]
     private var animations = 0
     var inTransition: Bool { animations > 0 }
 
@@ -408,8 +409,9 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
            let nearest = hit.contextMenuSource(at: hit.convert(location, from: view)), nearest !== source { return nil }
         let pop = link == nil ? popover(named: name) : nil
         guard link != nil || pop != nil else { log("context menu \(name) refused: no popover has that id"); return nil }
-        // A press released before its menu showed never reached `willEnd`.
+        // A press released before its menu showed never reached `willEnd`: its record goes, and its stage once UIKit is done with it.
         if let previous = open { restore(previous) }
+        for (key, stage) in stages where stage.release() { stages[key] = nil }
         let owner = Open(source: source, popover: pop, name: name, point: point, inlineID: run?.id, linkURL: link?.url)
         owner.interaction = interaction
         owner.fromTitle = fromTitle
@@ -559,7 +561,8 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     /// §5.1): it hides the node, lifts it and returns it. A run of text cannot
     /// lift its paragraph, which UIKit would hide whole: it lifts a picture of
     /// what lies under the run's lines (`runPreview`), and the paragraph stays
-    /// shown. Both rise over `LiftTarget.container(of:)`.
+    /// shown. The node rises on its `LiftStage`, the run's picture over
+    /// `LiftTarget.container(of:)`.
     private func targeted(_ configuration: UIContextMenuConfiguration) -> UITargetedPreview? {
         guard let owner = open, owner.configuration === configuration, let source = owner.source, live(source),
               (configuration.identifier as? NSNumber)?.uint32Value == (owner.inlineID ?? source.id) else { return nil }
@@ -600,7 +603,14 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         if let fill = shown.ownFill, fill.alpha > 0 {
             parameters.backgroundColor = UIColor(cgColor: fill)
         }
-        guard let target = LiftTarget.target(shown) else { return nil }
+        // Where the parent's space is no plane's affine map (an authored perspective), the node stands in it, which carries that
+        guard LiftStage.carries(shown) else { return LiftTarget.targetInParent(shown).map { UITargetedPreview(view: shown, parameters: parameters, target: $0) } }
+        let key = ObjectIdentifier(configuration)
+        if stages[key]?.holds(shown) != true {
+            stages[key]?.release()
+            stages[key] = LiftStage(for: shown)
+        }
+        guard let stage = stages[key], let target = LiftTarget.target(shown, on: stage) else { return nil }
         return UITargetedPreview(view: shown, parameters: parameters, target: target)
     }
 
@@ -1334,6 +1344,9 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
 
     func contextMenuInteraction(_ interaction: UIContextMenuInteraction, willEndFor configuration: UIContextMenuConfiguration, animator: UIContextMenuInteractionAnimating?) {
         track(animator)
+        if let stage = stages.removeValue(forKey: ObjectIdentifier(configuration)) {
+            if let animator { animator.addCompletion { stage.release() } } else { stage.release() }
+        }
         let focus: () -> Void = { [weak self] in self?.restoreFocus(for: configuration) }
         if let animator { animator.addCompletion(focus) } else { focus() }
         guard let owner = open, owner.configuration === configuration else { return }
@@ -1359,6 +1372,8 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     }
 
     func reset() {
+        for stage in stages.values { stage.end() }
+        stages.removeAll()
         focusOwner = nil
         keyboardInteraction.dismissMenu()
         for interaction in projected.values {
