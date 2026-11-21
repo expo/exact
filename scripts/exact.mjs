@@ -561,7 +561,7 @@ export function sdkReport(env = process.env, { only = null, device = false, tv =
       .filter(([, onPath, xcode]) => onPath && xcode && !['/usr/bin', dirname(xcode)].includes(dirname(realpathSync(onPath))));
     rows.push(row('clang on PATH', other.length ? other.map(([tool, onPath]) => `${tool}: ${onPath}`).join(', ') : "Xcode's", "Xcode's (/usr/bin or xcrun --find)", !other.length,
       `put /usr/bin before ${[...new Set(other.map(([, onPath]) => dirname(onPath)))].join(' and ')} on PATH, or unset the toolchain manager's override`, 'iOS and macOS builds'));
-  } else if (process.platform === 'linux' && want(...CROSS_IOS_ROWS)) rows.push(...appleCrossReport(env));
+  } else if (process.platform === 'linux' && want(...CROSS_IOS_ROWS)) rows.push(...appleCrossReport(env, spawnSync, device ? ['iphoneos'] : undefined));
   // Native builds and captures take tens of gigabytes; a full disk fails them midway (LLP 1156.000 D3).
   if (!only) { const room = freeSpace(homedir()); if (room) rows.push(row('Free disk', `${room.gb} GB`, `${ROOM_GB} GB for a cold native build`, room.gb >= ROOM_GB, room.text, 'native builds')); }
   const hostName = `Hermes bundle (${hermesTarget() ?? 'no host bundle'})`;

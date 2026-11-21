@@ -11,8 +11,9 @@ export const hasCrossSdk = (name, env = process.env) => { try { crossSdk(name, e
 
 export const CROSS_IOS_ROWS = ['Apple cross SDK', 'Swift for Apple cross compilation', 'LLVM Apple tools', 'Apple codesign'];
 
-/** Linux's build prerequisites; checking them never installs or changes the SDK. */
-export function appleCrossReport(env = process.env, execute = spawnSync) {
+/** Linux's build prerequisites; checking them never installs or changes the SDK. `sdks` are the cross SDKs the build
+ *  needs: a device build's is iphoneos alone, and it builds without the simulator's. */
+export function appleCrossReport(env = process.env, execute = spawnSync, sdks = ['iphoneos', 'iphonesimulator']) {
   const row = (name, have, want, ok, fix) => ({ name, have: have || 'missing', want, ok, fix, required: false, need: 'iOS on Linux/WSL' });
   const output = (command, args) => {
     const result = execute(command, args, { env, encoding: 'utf8' });
@@ -20,7 +21,7 @@ export function appleCrossReport(env = process.env, execute = spawnSync) {
   };
   let sdk = '', valid = false;
   try {
-    const installed = ['iphoneos', 'iphonesimulator'].map(name => crossSdk(name, env));
+    const installed = sdks.map(name => crossSdk(name, env));
     sdk = installed.map(sdk => sdk.version).join(' / ');
     valid = installed.every(sdk => Number.parseFloat(sdk.version) >= 27.1 && Number.parseInt(sdk.version) === 27 &&
       [sdk.runtime, resolve(sdk.tools, 'ld64.lld'), resolve(sdk.tools, 'llvm-lib')].every(existsSync));
