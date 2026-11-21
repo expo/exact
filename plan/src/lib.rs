@@ -24,6 +24,8 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod http_url;
+pub use http_url::{http_url_refusal, is_absolute_http_url};
 pub mod asm;
 pub mod builder;
 pub mod bytes;

@@ -23,11 +23,12 @@ impl<D: DataSource> Runner<D> {
             let (id, prop) = (*id, *prop);
             let kept = if prop == PropId::DataTransferUrl {
                 let url = value.to_string();
-                match url.is_empty() || crate::share::absolute_http(&url) {
-                    true => url,
-                    false => {
+                match exact_plan::http_url_refusal(&url).filter(|_| !url.is_empty()) {
+                    None => url,
+                    Some(why) => {
+                        // The URL itself stays out of the journal: it may hold a password or a token.
                         self.log(format!(
-                            "drag: refused: {url} is not an absolute http: or https: URL"
+                            "drag: refused: url is not an absolute http: or https: URL: {why}"
                         ));
                         String::new()
                     }

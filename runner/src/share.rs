@@ -147,8 +147,8 @@ impl Share {
             return Err("needs text=, url= or files=".into());
         }
         if let Some(url) = &self.url {
-            if !absolute_http(url) {
-                return Err("url is not an absolute http: or https: URL".into());
+            if let Some(why) = exact_plan::http_url_refusal(url) {
+                return Err(format!("url is not an absolute http: or https: URL: {why}"));
             }
         }
         Ok(self)
@@ -189,22 +189,6 @@ impl Share {
         }
         s
     }
-}
-
-/// `http://` or `https://` (any case) and a host: what `new URL` and
-/// `URL(string:)` both read as absolute, without a relative form to resolve.
-pub(crate) fn absolute_http(url: &str) -> bool {
-    let lower = url.get(..8).unwrap_or(url).to_ascii_lowercase();
-    let rest = if lower.starts_with("https://") {
-        &url[8..]
-    } else if lower.starts_with("http://") {
-        &url[7..]
-    } else {
-        return false;
-    };
-    !rest.is_empty()
-        && !rest.starts_with(['/', '?', '#'])
-        && !url.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
 /// One `files=` entry against the running app and the host: an `#id` the

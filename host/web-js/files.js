@@ -14,6 +14,7 @@ import { journal, clock, nextTicket, inflight, Hosts, OnHooks, viewId, Views, da
 import { record } from './pointer.js';
 import { inertAncestor, reportPlace, liveById } from './navigation.js';
 import { appGrantSet, coversPath } from './admission.js';
+import { httpUrlRefusal } from './url.js';
 
 const say = line => journal.push(`t=${clock.now} ${line}`);
 const x = () => (globalThis.exact ??= {});
@@ -183,7 +184,8 @@ Hosts.share = (title, text, url, files) => {
   files ??= [];
   if (!Array.isArray(files) || files.some(f => typeof f !== 'string')) return refuse('files= is a list of strings');
   if (text == null && url == null && !files.length) return refuse('needs text=, url= or files=');
-  if (url != null && !/^https?:\/\/[^/?#\s]\S*$/i.test(url)) return refuse('url is not an absolute http: or https: URL');
+  const why = url == null ? null : httpUrlRefusal(String(url));
+  if (why) return refuse(`url is not an absolute http: or https: URL: ${why}`);
   // `files=` (LLP 1125 D12): app:/ files behind `fs.read`; a picture of an element is refused on the web.
   for (const f of files) {
     if (f.startsWith('#')) return refuse('a picture of an element is not available on the web');
