@@ -1069,12 +1069,14 @@ test('web builds expose their version inputs in the view and delivery state', as
 }, 60000);
 
 // A resource idle at its first settlement adopts nothing compiled, so it shows its placeholder, not its build-time
-// answer, as the runner's does (LLP 1161.002 D4): at boot, and an instance made later that has a build-time answer, as
-// a store reader's does. At a boot from a rendered page it keeps the page's answer (§7). None asks, and a write shows
-// over the placeholder. One the boot settled awake keeps its build-time answer when its gate closes later in the boot
-// (D2). Woken while its source is not ready, a root resource shows its build-time answer, not pending, each time, as
-// the runner adopts a compiled value then, and the journal names that answer only when the source's replaces it; an
-// instance, which the runner adopts nothing for after the boot, shows its placeholder.
+// answer, as the runner's does (LLP 1161.002 D4): at boot, and an instance made later that has a build-time answer. At
+// a boot from a rendered page it keeps the page's answer (§7). None asks, and a write shows over the placeholder. The
+// boot's last word stands: one settled awake keeps its build-time answer when its gate closes later in the boot (D2),
+// and one settled idle starts from it when its gate opens later in the boot. Woken after the boot while its source is
+// not ready, a root resource shows its build-time answer, not pending, each time, as the runner adopts a compiled
+// value then, and the journal names that answer only when the source's replaces it; an instance, which the runner
+// adopts nothing for after the boot, is pending, on its placeholder or on a build-time answer it showed. Before its
+// source is ready a build-time answer is pending only while the arguments are not its own.
 test('a resource idle at its first settlement shows its placeholder over a build-time answer, and keeps a page\'s', async () => {
   const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
   try {
@@ -1094,50 +1096,73 @@ test('a resource idle at its first settlement shows its placeholder over a build
         return ready ? { v: 'fresh' } : undefined;
       };
       rt.data.overlay = (source, args, answer, writes) => ({ value: `${answer} and ${writes.length} write at ${args.length} arguments`, keep: [] });
-      // the gate a persisted state closes at boot, opened later; `shut` stays closed; `once` closes during the boot
-      const open = rt.sig(false), shut = rt.sig(false), once = rt.sig(true), saved = rt.sig(null);
-      const gated = gate => Object.assign(() => [], { gate: () => gate() });
-      const res = (name, gate) => rt.res(name, 'echo', gated(gate), 'build-time', [], 's', 'waiting');
+      // `open`: the gate a persisted state closes at boot, opened later; `shut` stays closed; `closes` and `opens`
+      // change during the boot; `nap` closes after it
+      const open = rt.sig(false), shut = rt.sig(false), closes = rt.sig(true), opens = rt.sig(false), nap = rt.sig(true);
+      const at = rt.sig(1), saved = rt.sig(null);
+      const res = (name, gate, args = () => []) => rt.res(name, 'echo', Object.assign(args, { gate: () => gate() }), 'build-time', args(), 's', 'waiting');
       // an instance is named by its path before it first settles, as each.js `own` names it
       const instance = (name, gate) => {
         const made = res(name, gate);
         made.r.path = name;
         return made;
       };
-      const built = res('built', open), kept = res('kept', open), written = res('written', shut), shown = res('shown', once);
-      const launched = instance('launched', open);
+      const built = res('built', open), kept = res('kept', open), written = res('written', shut);
+      const closed = res('closed', closes), opened = res('opened', opens), moved = res('moved', () => true, () => [at()]);
+      const launched = instance('launched', open), awake = instance('awake', nap);
       let write;
       rt.mount(root => {
         write = rt.mut('saved', saved, [written], 'b');
-        rt.hd(root, { headTitle: () => built() + kept() + launched() + written() + shown() });
-        rt.W(once, false);
+        rt.hd(root, { headTitle: () => built() + kept() + launched() + written() + closed() + opened() + awake() + moved() });
+        rt.W(closes, false);
+        rt.W(opens, true);
       });
-      const atBoot = { shown: [built(), kept(), launched(), shown()], asked: asked.filter(name => name !== 'shown') };
+      const atBoot = {
+        shown: [built(), kept(), launched(), closed(), opened(), opened.p(), awake()],
+        asked: asked.filter(name => ['built', 'kept', 'launched', 'written'].includes(name)),
+      };
       let later;
       rt.commit(() => { later = instance('later', open); });
       const afterBoot = later();
       rt.commit(() => rt.M(write, 'save', []));
       const under = written();
+      // its arguments leave the build-time answer's and come back, unforced and then refreshed
+      const pending = [moved.p()];
+      for (const [to, refresh] of [[2], [1], [2], [1, true]]) {
+        rt.commit(() => { rt.W(at, to); if (refresh) rt.R(moved); });
+        pending.push(moved.p());
+      }
       const wake = () => {
-        rt.commit(() => rt.W(open, true));
-        return [built(), built.p(), launched(), launched.p(), later(), later.p()];
+        rt.commit(() => rt.W(nap, false));
+        rt.commit(() => { rt.W(open, true); rt.W(nap, true); });
+        return [built(), built.p(), launched(), launched.p(), later(), later.p(), awake(), awake.p()];
       };
       const woken = wake();
       rt.commit(() => rt.W(open, false));
       const again = wake();
       ready = true;
       for (const f of rt.data.q.splice(0)) f();
-      const lines = rt.journal.filter(l => /build-time/.test(l)).map(l => l.replace(/^t=\S+ /, ''));
-      return { atBoot, afterBoot, under, woken, again, answered: [built(), launched(), later(), shown()], lines };
+      const lines = rt.journal.filter(l => /build-time/.test(l)).map(l => l.replace(/^t=\S+ /, '')).sort();
+      return { atBoot, afterBoot, under, pending, woken, again, answered: [built(), launched(), later(), awake(), opened(), closed()], lines };
     });
     expect(observed).toEqual({
-      atBoot: { shown: ['waiting', 'page answer', 'waiting', 'build-time'], asked: [] },
+      atBoot: { shown: ['waiting', 'page answer', 'waiting', 'build-time', 'build-time', false, 'build-time'], asked: [] },
       afterBoot: 'waiting',
       under: 'waiting and 1 write at 0 arguments',
-      woken: ['build-time', false, 'waiting', true, 'waiting', true],
-      again: ['build-time', false, 'waiting', true, 'waiting', true],
-      answered: ['fresh', 'fresh', 'fresh', 'build-time'],
-      lines: ['shown shows its build-time answer until its source answers', 'built answered: replaces its build-time answer'],
+      pending: [false, true, false, true, false],
+      woken: ['build-time', false, 'waiting', true, 'waiting', true, 'build-time', true],
+      again: ['build-time', false, 'waiting', true, 'waiting', true, 'build-time', true],
+      answered: ['fresh', 'fresh', 'fresh', 'fresh', 'fresh', 'build-time'],
+      lines: [
+        'awake answered: replaces its build-time answer',
+        'awake shows its build-time answer until its source answers',
+        'built answered: replaces its build-time answer',
+        'closed shows its build-time answer until its source answers',
+        'moved answered: replaces its build-time answer',
+        'moved shows its build-time answer until its source answers',
+        'opened answered: replaces its build-time answer',
+        'opened shows its build-time answer until its source answers',
+      ],
     });
   } finally { await browser.close(); server.stop(true); }
 }, 30000);
