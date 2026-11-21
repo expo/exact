@@ -438,7 +438,7 @@ fn a_choice_of_literal_families_resolves_each_arm_to_its_stack() {
 fn shared_font_choices_preserve_baseline_plan_bytes() {
     // Captured with the pre-admission compiler at 7f4abbc2b (LLP 1172.013 step
     // 4), which the admission compiler matched byte for byte; recaptured at
-    // f3c8c622dc, after eee9b7fe4c, e8631a11ea and it changed what every plan
+    // f3c8c622dc, after eee9b7fe4c, e8631a11ea and it changed what this plan
     // carries (longer member names, pooled again, and source-place rows).
     let baseline = include_bytes!("../fixtures/shared-font-choice.plan");
     for face in ["\"serif\"", "`serif`"] {
