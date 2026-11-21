@@ -1099,6 +1099,12 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     release(false, lifted);
   }, true);
   document.addEventListener("pointercancel", e => { if (e.pointerId === press?.id) release(); }, true);
+  // A drag that goes ends the press it began from (LLP 1094.000 D8), read once the event has run, as another listener may
+  // still cancel it: WebKit sends the contact no pointerup or pointercancel after it.
+  document.addEventListener("dragstart", e => {
+    const p = press;
+    if (e.isTrusted && p && (p.el.contains(e.target) || e.target.contains?.(p.el))) setTimeout(() => { if (!e.defaultPrevented && press === p) release(); });
+  }, true);
   // Leaving the page, the window or the tab may take the release with it, as the pointer dispatch below assumes: the
   // press, a key's too, ends at once. A gesture that claims the contact (motion-glue's swipe) ends the press as it
   // claims it, as a pan cancels a touch.
@@ -1315,7 +1321,9 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
       // Under a nested press the pan captures nothing until it begins, so until
       // then the window hears the contact's moves and its end (capture phase),
       // wherever they happen: a release outside this node ends it here too.
-      const watched = { pointermove: e => move(e, true), pointerup: e => up(e, true), pointercancel: e => { if (e.pointerId === contact?.pointer) cancelled(e); } };
+      const watched = { pointermove: e => move(e, true), pointerup: e => up(e, true), pointercancel: e => { if (e.pointerId === contact?.pointer) cancelled(e); },
+        // A drag another script's draggable around the pan begins from a mouse's contact the pan took (Firefox, before any move)
+        dragstart: e => { if (contact?.mouse && e.target.contains?.(el) && e.target !== el) e.preventDefault(); } };
       const watch = on => { for (const t in watched) (on ? addEventListener : removeEventListener)(t, watched[t], true); };
       // A swipe defers capture, so its waiting ancestor must hear an outside end too.
       const endDeferred = e => { if (contact?.deferred && contact.pointer === e.pointerId) cancel(); };
@@ -1377,7 +1385,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
       // A child's implicit touch capture, lost when a deferred pan takes it, bubbles here.
       on("lostpointercapture", e => { if (e.target === el) cancel(); });
       el.addEventListener("click", e => { if (suppressClick) { suppressClick = false; e.preventDefault(); e.stopImmediatePropagation(); } }, true);
-      el.addEventListener("dragstart", e => { if (contact?.nested && !e.target.closest?.('[draggable="true"]')) e.preventDefault(); }); // a link's own drag is not the pan's; a draggable node's is the page's (LLP 1094.000 D6)
+      el.addEventListener("dragstart", e => { const source = e.target.closest?.('[draggable="true" i]'); if (contact?.nested && (contact.mouse || !(source && el.contains(source)))) e.preventDefault(); }); // a link's own drag is not the pan's; a draggable node's is the page's (LLP 1094.000 D6)
       return e => {
         // Only the click right after a pan is suppressed; a drag makes none.
         suppressClick = false;
@@ -1385,11 +1393,12 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
         // A control or editor between the contact and this node keeps it (rule 3).
         const inner = e.target.closest("input,textarea,select,[contenteditable]");
         if (inner && inner !== el && el.contains(inner)) return;
-        // By a mouse the innermost draggable node that carries something drags (LLP 1094.000 D8).
-        const source = e.pointerType === "mouse" && e.target.closest('[draggable="true"]');
-        const carries = source && ["text", "url", "files"].some(k => source.hasAttribute(`data-datatransfer${k}`));
-        const kept = carries && e.target.closest("button,a[href],[data-exact-on~='press']");
-        if (carries && source !== el && el.contains(source) && !(kept && kept !== source && source.contains(kept))) return;
+        // By a mouse the innermost draggable node drags (LLP 1094.000 D8): another script's, or one the app made that
+        // carries something, unless a press between keeps the contact from it.
+        const source = e.pointerType === "mouse" && e.target.closest('[draggable="true" i]');
+        const drags = source && (source.exactDraggable !== "true" || ["text", "url", "files"].some(k => source.getAttribute(`data-datatransfer${k}`)));
+        const kept = drags && e.target.closest("button,a[href],[data-exact-on~='press']");
+        if (drags && source !== el && el.contains(source) && !(kept && kept !== source && source.contains(kept))) return;
         // A press handler between keeps it only within the slop, as a draggable
         // element hears a drag that starts on a button inside it (kanban F6):
         // nothing is captured or prevented until the pan begins, so a tap stays the button's.
@@ -1397,7 +1406,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
         const deferred = contacts().get(e.pointerId) === "pending";
         e.exactPan = true; // the innermost pan takes the contact (rule 3)
         if (!nested) { e.preventDefault(); e.stopPropagation(); if (!deferred) el.setPointerCapture(e.pointerId); }
-        contact = {pointer:e.pointerId,from:[e.clientX,e.clientY],to:[e.clientX,e.clientY],active:false,deferred,nested,watching:nested};
+        contact = {pointer:e.pointerId,from:[e.clientX,e.clientY],to:[e.clientX,e.clientY],active:false,deferred,nested,watching:nested,mouse:e.pointerType === "mouse"};
         if (deferred) watchEnd(true);
         if (nested) watch(true);
         velocity.sample?.(id, e.clientX, e.clientY, e.timeStamp, true);
