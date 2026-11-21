@@ -13,7 +13,7 @@ pub(super) struct Group {
 
 impl Group {
     pub(super) fn can_bound_composite(&self) -> bool {
-        self.transform.is_none() && self.opacity.is_finite()
+        self.transform.is_none_or(|ts| ts.is_identity()) && self.opacity.is_finite()
     }
 }
 

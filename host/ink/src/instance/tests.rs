@@ -185,3 +185,79 @@ fn snapshot_bounds_cover_transformed_quads_and_intersect_the_effective_clips() {
     image.xform = [2., 1., 1., 3., 99., 17.];
     assert_eq!(encoder.bounds(&image), Scissor::from_rect(image.rect));
 }
+
+#[test]
+fn draw_bounds_unite_clipped_draws_and_stop_at_the_limit() {
+    let mut e = Encoder::new(100, 100);
+    e.push(quad(), Bindings::default()).unwrap();
+    e.push_clip(Clip::Scissor(Scissor {
+        x: 50,
+        y: 50,
+        width: 10,
+        height: 10,
+    }))
+    .unwrap();
+    e.push(
+        Instance::rounded([40., 40., 30., 30.], [0.; 4], [1.; 4]),
+        Bindings::default(),
+    )
+    .unwrap();
+    let frame = e.take_frame();
+    let full = Scissor::full([100, 100]);
+    let clipped = Scissor {
+        x: 50,
+        y: 50,
+        width: 10,
+        height: 10,
+    };
+    let quad_bounds = Scissor::from_rect(Encoder::device_rect(&quad()));
+    assert_eq!(
+        frame.draw_bounds(None, full),
+        Some(quad_bounds.union(clipped))
+    );
+    // The walk stops once the bound covers the limit, before the clipped draw.
+    assert_eq!(frame.draw_bounds(None, quad_bounds), Some(quad_bounds));
+
+    // Every backend refuses a range past the instances; it adds nothing here.
+    let mut refused = frame.clone();
+    refused.batches[0].instances = 0..9;
+    assert_eq!(refused.draw_bounds(None, full), Some(clipped));
+
+    // A skewed draw's vertices are uncertain: it takes its batch's scissor.
+    let mut e = Encoder::new(100, 100);
+    let scissor = Scissor {
+        x: 30,
+        y: 30,
+        width: 40,
+        height: 40,
+    };
+    e.push_clip(Clip::Scissor(scissor)).unwrap();
+    let mut skewed = Instance::rounded([40., 40., 10., 10.], [0.; 4], [1.; 4]);
+    skewed.xform = [1., 0.5, 0., 1., 0., 0.];
+    e.push(skewed, Bindings::default()).unwrap();
+    assert_eq!(e.take_frame().draw_bounds(None, full), Some(scissor));
+    // So does a draw too far out for the CPU and the shader to agree.
+    e.push(
+        Instance::rounded([70000., 40., 10., 10.], [0.; 4], [1.; 4]),
+        Bindings::default(),
+    )
+    .unwrap();
+    assert_eq!(e.take_frame().draw_bounds(None, full), Some(scissor));
+    // A coverage quad is in device space: its brush transform does not move it.
+    let mut coverage = Instance::new(Kind::Coverage, Brush::Solid, [40., 40., 10., 10.]);
+    coverage.xform = [1., 0.5, 0., 1., 0., 0.];
+    e.push(coverage, Bindings::default()).unwrap();
+    assert_eq!(
+        e.take_frame().draw_bounds(None, full),
+        Some(Scissor::from_rect([40., 40., 10., 10.]))
+    );
+
+    let empty = Scissor {
+        x: 200,
+        y: 200,
+        width: 0,
+        height: 0,
+    };
+    assert_eq!(empty.union(clipped), clipped);
+    assert_eq!(clipped.union(empty), clipped);
+}

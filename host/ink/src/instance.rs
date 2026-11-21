@@ -226,6 +226,12 @@ impl Scissor {
     }
 
     pub fn union(self, other: Self) -> Self {
+        if self.width == 0 || self.height == 0 {
+            return other;
+        }
+        if other.width == 0 || other.height == 0 {
+            return self;
+        }
         let x = self.x.min(other.x);
         let y = self.y.min(other.y);
         let right = self
@@ -288,13 +294,16 @@ pub struct Frame {
 }
 
 impl Frame {
-    /// Bounds of the pixels a draw can write, including each batch's scissor.
-    pub fn draw_bounds(&self) -> Option<Scissor> {
-        let mut bounds: Option<Scissor> = None;
+    /// `bounds` grown by the pixels this frame's draws can write, each within
+    /// its batch's scissor. It stops once they cover `limit`.
+    pub fn draw_bounds(&self, mut bounds: Option<Scissor>, limit: Scissor) -> Option<Scissor> {
         for batch in &self.batches {
-            for instance in
-                &self.instances[batch.instances.start as usize..batch.instances.end as usize]
-            {
+            let range = batch.instances.start as usize..batch.instances.end as usize;
+            // Every backend refuses a frame with a range out of bounds.
+            for instance in self.instances.get(range).unwrap_or_default() {
+                if bounds.is_some_and(|b| b.intersect(limit) == limit) {
+                    return bounds;
+                }
                 let draw = raster_rect(instance).map_or(batch.scissor, |rect| {
                     batch.scissor.intersect(Scissor::from_rect(rect))
                 });

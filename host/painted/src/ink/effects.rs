@@ -88,9 +88,7 @@ impl Ink {
             .filter(|group| group.can_bound_composite())
         {
             debug_assert!(clear.is_none() || clear == Some([0.; 4]));
-            if let Some(drawn) = frame.draw_bounds() {
-                group.drawn = Some(group.drawn.map_or(drawn, |previous| previous.union(drawn)));
-            }
+            group.drawn = frame.draw_bounds(group.drawn, Scissor::full(self.size));
         }
         self.device.render(&frame, target, clear)?;
         self.layer_ms += started.elapsed().as_secs_f64() * 1000.;
