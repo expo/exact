@@ -50,6 +50,12 @@ class CameraAppTest {
             @JvmStatic @Implementation fun __staticInitializer__() {}
             @JvmStatic @Implementation fun underAgent(name: String) = agent
             @JvmStatic @Implementation fun appFile(path: String): String = File(root, path.removePrefix("app:/")).path
+            @JvmStatic @Implementation fun openApp(path: String): ParcelFileDescriptor? =
+                File(appFile(path)).takeIf(Files::regular)?.let { ParcelFileDescriptor.open(it, ParcelFileDescriptor.MODE_READ_ONLY) }
+            @JvmStatic @Implementation fun publishApp(path: String, source: String): Boolean {
+                val to = File(appFile(path)).apply { parentFile!!.mkdirs() }
+                return File(source).renameTo(to)
+            }
         }
     }
 
@@ -118,9 +124,9 @@ class CameraAppTest {
         return answers.single()
     }
 
-    /** The staged video's facts as the platform's retriever would read them. */
-    private fun facts(width: Int, height: Int, rotation: Int, ms: Long) {
-        val staged = File(application.cacheDir, "exact.camera-app/video.mp4").path
+    /** The video staged at [out] with its facts as the platform's retriever would read them. */
+    private fun facts(out: Uri, width: Int, height: Int, rotation: Int, ms: Long) {
+        val staged = staged(out).path
         ShadowMediaMetadataRetriever.addMetadata(staged, MediaMetadataRetriever.METADATA_KEY_MIMETYPE, "video/mp4")
         ShadowMediaMetadataRetriever.addMetadata(staged, MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH, "$width")
         ShadowMediaMetadataRetriever.addMetadata(staged, MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT, "$height")
@@ -134,6 +140,12 @@ class CameraAppTest {
     /** The camera app's write: through the provider, as another app opens an `EXTRA_OUTPUT` URI. */
     private fun write(uri: Uri, bytes: ByteArray) =
         provider.openFile(uri, "w").use { pfd -> FileOutputStream(pfd.fileDescriptor).use { it.write(bytes) } }
+
+    /** Where the reader keeps the file the camera app writes through [out]. */
+    private fun staged(out: Uri) = File(Files.captures(application), out.pathSegments.drop(1).joinToString("/"))
+
+    /** Whether any capture's file is still staged. */
+    private fun staging() = Files.captures(application).listFiles().orEmpty().isNotEmpty()
 
     private fun started(): Pair<Intent, Int> {
         val made = shadowOf(activity).nextStartedActivityForResult ?: error("no activity started")
@@ -158,7 +170,7 @@ class CameraAppTest {
         assertFalse("staged outside the app's directories", out.path!!.startsWith(Host.root.canonicalPath))
 
         // Another of the app's files stays read-only, the destination among them.
-        val other = Files.uri(application, visitor)!!
+        val other = Files.uri(application, "app:/data/visitor.jpg")!!
         assertThrows(SecurityException::class.java) { provider.openFile(other, "w") }
         val photo = jpeg(40, 30)
         write(out, photo)
@@ -185,7 +197,8 @@ class CameraAppTest {
         Extensions.activityResult(code, Activity.RESULT_CANCELED, null)
         assertEquals("AbortError", answers.single().getString("error"))
         assertEquals("kept", visitor.readText())
-        assertFalse(File(out.path!!).exists())
+        assertFalse(staged(out).exists())
+        assertFalse(staging())
     }
 
     /** A video: the camera app's video intent with the call's limits as its extras, and no permission asked, the
@@ -206,7 +219,7 @@ class CameraAppTest {
         assertEquals(0, intent.getIntExtra("android.intent.extras.CAMERA_FACING", -1))
         val bytes = ByteArray(4096) { it.toByte() }
         provider.openFile(output(intent), "rw").use { pfd -> FileOutputStream(pfd.fileDescriptor).use { it.write(bytes) } }
-        facts(1920, 1080, 90, 31_500)
+        facts(output(intent), 1920, 1080, 90, 31_500)
         assertEquals("the last clip", clip.readText())
 
         Extensions.activityResult(code, Activity.RESULT_OK, null)
@@ -247,13 +260,22 @@ class CameraAppTest {
         assertEquals("kept", kept.readText())
 
         answers.clear()
-        val secret = File(Host.root, "data/secret.mp4").apply { parentFile!!.mkdirs(); writeText("the app's own") }
+        File(Host.root, "data/secret.mp4").apply { parentFile!!.mkdirs(); writeText("the app's own") }
         record()
         code = started().second
-        Extensions.activityResult(code, Activity.RESULT_OK, Intent().setData(Files.uri(application, secret)))
+        Extensions.activityResult(code, Activity.RESULT_OK, Intent().setData(Files.uri(application, "app:/data/secret.mp4")))
         assertEquals("UnknownError", settled().getString("error"))
         assertEquals("kept", kept.readText())
-        assertFalse(File(application.cacheDir, "exact.camera-app/video.mp4").exists())
+
+        // Nor under another user's form of the same authority.
+        answers.clear()
+        record()
+        code = started().second
+        val mine = Files.uri(application, "app:/data/secret.mp4")!!
+        Extensions.activityResult(code, Activity.RESULT_OK, Intent().setData(mine.buildUpon().encodedAuthority("10@${mine.authority}").build()))
+        assertEquals("UnknownError", settled().getString("error"))
+        assertEquals("kept", kept.readText())
+        assertFalse(staging())
     }
 
     /** A call let go while the camera app is up (LLP 1133.008.000 D7): what the person keeps there is not written, the
@@ -268,7 +290,7 @@ class CameraAppTest {
         Extensions.activityResult(code, Activity.RESULT_OK, null)
         assertEquals("AbortError", settled().getString("error"))
         assertEquals("kept", clip.readText())
-        assertFalse(File(application.cacheDir, "exact.camera-app/video.mp4").exists())
+        assertFalse(staging())
         answers.clear()
         module.later("takePhotoWithCameraApp", JSONObject(), null) { answers += it }
         assertEquals(MediaStore.ACTION_IMAGE_CAPTURE, started().first.action)

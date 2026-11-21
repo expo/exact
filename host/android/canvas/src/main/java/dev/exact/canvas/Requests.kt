@@ -16,7 +16,6 @@ import android.util.Log
 import android.view.Choreographer
 import android.view.HapticFeedbackConstants
 import androidx.core.content.ContextCompat
-import java.io.File
 
 /**
  * What exact2 asks of the platform, acted on (LLP 1115.001 D5): the one channel out. exact2 queues a request and
@@ -258,10 +257,9 @@ internal class Requests(private val activity: ExactActivity) {
         while (i < end) {
             val (src, next) = string(w, i)
             i = next
-            val file = Native.appFile(src)?.let(::File)?.takeIf(Files::regular)
-            val uri = file?.let { Files.uri(activity, it) }
+            val uri = Files.uri(activity, src)
                 ?: return Exact.answer(id, "$src could not be read: the app has no such file; write it before sharing it")
-            files += uri to Files.type(file)
+            files += uri to Files.type(src)
         }
         val words = listOfNotNull(text.takeIf { given and 2 != 0 }, url.takeIf { given and 4 != 0 }).joinToString(" ")
         val send = sendIntent(title.takeIf { given and 1 != 0 }, words, files)
@@ -280,8 +278,12 @@ internal class Requests(private val activity: ExactActivity) {
     private fun drag(w: IntArray, at: Int) {
         val view = view ?: return
         val ask = DragOut.read(w, at)
-        if (!DragOut.start(activity, view, ask.box, ask.finger, ask.service, ask.text, ask.url, ask.files)) {
-            Exact.journal("drag: nothing to drag: the node carries no text, no URL and no file the app has")
+        val clip = DragOut.clip(activity, ask.text, ask.url, ask.files)
+            ?: return Exact.journal("drag: nothing to drag: the node carries no text, no URL and no file the app has")
+        if (!ask.service) return DragOut.start(activity, view, ask.box, ask.finger, clip) { activity.windowDragging }
+        if (activity.windowDragging) return Exact.journal(DragOut.UNHEARD)
+        if (!activity.access.drag(ask.node, clip, DragOut.flags(true, Build.VERSION.SDK_INT))) {
+            Exact.journal("drag: the platform began no drag for the service: another drag is under way, or the node is gone")
         }
     }
 
