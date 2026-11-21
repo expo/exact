@@ -3,6 +3,15 @@ import { bare, lineColumn, propertyName, walkRuntime } from './__exact_portable.
 import { grantsDeclaration } from './__exact_launch_setting.mjs';
 
 const named = node => node?.name ?? node?.value;
+/** The names a declaration's binding pattern binds. */
+const bound = (pattern, names = []) => {
+  if (pattern?.type === 'Identifier') names.push(pattern.name);
+  else if (pattern?.type === 'ObjectPattern') for (const p of pattern.properties) bound(p.type === 'RestElement' ? p.argument : p.value, names);
+  else if (pattern?.type === 'ArrayPattern') for (const p of pattern.elements) bound(p, names);
+  else if (pattern?.type === 'AssignmentPattern') bound(pattern.left, names);
+  else if (pattern?.type === 'RestElement') bound(pattern.argument, names);
+  return names;
+};
 const syntax = "must be a constant the build reads without running the module: a string, a template or + of constants, an array of them .join('\\n'), or a top-level const holding one";
 
 function moduleFacts(file, code, parse, source = code) {
@@ -25,7 +34,12 @@ function moduleFacts(file, code, parse, source = code) {
   for (const statement of parsed.program.body) {
     const s = ['ExportNamedDeclaration', 'ExportDefaultDeclaration'].includes(statement.type) ? statement.declaration ?? statement : statement;
     if (s.type === 'VariableDeclaration') for (const d of s.declarations) {
-      if (d.id.type !== 'Identifier') continue;
+      if (d.id.type !== 'Identifier') {
+        // A destructured export is no constant the build reads, and it is still the module's export of each name
+        // it binds: without an entry, the name would resolve through an `export *` beside it (ECMA-262 ResolveExport).
+        if (statement.type === 'ExportNamedDeclaration') for (const name of bound(d.id)) exported.set(name, { local: name });
+        continue;
+      }
       if (s.kind === 'const') consts.set(d.id.name, d.init);
       if (statement.type === 'ExportNamedDeclaration') exported.set(d.id.name, { local: d.id.name });
     }

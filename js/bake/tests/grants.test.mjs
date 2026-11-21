@@ -46,6 +46,19 @@ for (const [specifier, read] of [['* as session', "session['SECRET_GRANTS']"], [
   });
 }
 
+// A destructured export is the module's own export of its names, so an `export *` beside it does not supply them.
+for (const [specifier, read] of [['{ LINE }', 'LINE'], ['* as strings', 'strings.LINE']]) {
+  test(`grants refuse a destructured export and do not take a star export's in its place: ${read}`, async () => {
+    const f = fixture({
+      'app.ts': `import ${specifier} from './strings';\nexport const grants = ${read};\n`,
+      'strings.ts': "export const { LINE, inner: [OTHER = 'x', ...REST] } = { LINE: 'secret.keep explicit', inner: [] };\nexport * from './fallback';\n",
+      'fallback.ts': "export const LINE = 'secret.keep fallback';\n",
+    });
+    try { await expect(configure(f.stage, false, parseSync)).rejects.toThrow('grants require a top-level const; LINE is not one'); }
+    finally { f.close(); }
+  });
+}
+
 const constants = {
   'strings.ts': "export const PREFIX = 'secret.keep ';\nexport const NAME = 'session.refresh';\nexport const LINE = PREFIX + NAME;\nexport const LINES = [LINE, `secret.keep session.device`];\n",
   'barrel.ts': "export { PREFIX, NAME as REFRESH, LINE, LINES } from './strings';\n",
