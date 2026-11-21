@@ -22,6 +22,7 @@ mod reach;
 mod receipt;
 mod sandbox;
 mod widgets;
+mod windows_resources;
 
 pub use compat::{
     compatibility_id, compatibility_id_pinned, compatibility_id_sources,
@@ -32,6 +33,7 @@ pub use compat::{
 pub use exact_runner::hands_out_work;
 pub use link::{ahead, apple_link, take_linked};
 pub use receipt::{plan_graph, write_development_artifacts};
+pub use windows_resources::link_windows_resources;
 
 /// The Bun a bake spawns: an explicit `BUN`, the versioned home install,
 /// then PATH. Refuse an older executable before it can compile the app.

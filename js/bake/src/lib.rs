@@ -9,7 +9,6 @@ mod mixed;
 pub use mixed::{build_beside, build_mixed, build_mixed_with, hands_out_work};
 mod beside;
 pub mod cli;
-mod icon;
 mod launch;
 mod library;
 mod linked;
@@ -72,7 +71,7 @@ pub fn build(app: &Path, platform: &str) -> Result<(), BakeError> {
     let baked =
         std::env::var_os("EXACT_BAKED").filter(|_| std::env::var_os("EXACT_RUST_BAKE").is_none());
     library::link(app, platform, baked.is_some()).map_err(BakeError)?;
-    icon::link();
+    exact_bake::link_windows_resources();
     match baked {
         Some(baked) => std::env::var_os("OUT_DIR")
             .ok_or_else(|| "build requires OUT_DIR".to_string())

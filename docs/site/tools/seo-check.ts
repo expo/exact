@@ -9,6 +9,8 @@ import { site } from '../constants/site.ts';
 const SITE = resolve(import.meta.dir, '..');
 const DIST = resolve(SITE, process.argv[2] ?? 'dist');
 const ORIGIN = site.origin;
+const SHARE_IMAGE = site.shareImage;
+const ICONS = ['favicon.svg', 'favicon-48x48.png', 'favicon-32x32.png', 'favicon-16x16.png', 'apple-touch-icon.png'].map(f => `/assets/favicons/${f}`);
 type Page = { path: string; title: string; description: string; updated: string };
 const pages: Page[] = JSON.parse(readFileSync(join(SITE, 'content/pages.json'), 'utf8'));
 
@@ -68,11 +70,15 @@ for (const p of pages) {
   const main = nodes[0];
   const shown = main.headline ?? main.name;
   if (p.path !== '/' && shown !== p.title) fail(p.path, `headline ${JSON.stringify(shown)} is not the page title`);
-  if (!html.includes('<link rel="icon" href="/favicon.svg"')) fail(p.path, 'no favicon link');
+  for (const href of ICONS) if (!html.includes(` href="${href}"`)) fail(p.path, `no link to ${href}`);
+  if (!html.includes(`<meta property="og:locale" content="${site.locale}">`)) fail(p.path, 'no og:locale');
+  if (ORIGIN) for (const tag of ['property="og:image"', 'name="twitter:image"']) if (!html.includes(`<meta ${tag} content="${ORIGIN}${SHARE_IMAGE}">`)) fail(p.path, `no ${tag} for ${SHARE_IMAGE}`);
   const canonical = html.match(/<link rel="canonical" href="([^"]*)">/)?.[1];
   if (ORIGIN && canonical !== ORIGIN + p.path) fail(p.path, `canonical is ${JSON.stringify(canonical)}, not ${ORIGIN + p.path}`);
   if (!ORIGIN && canonical) fail(p.path, 'a canonical link without an origin');
 }
+
+for (const file of [...ICONS, SHARE_IMAGE, '/favicon.ico']) if (!existsSync(join(DIST, file))) fail(file, 'missing');
 
 const robots = existsSync(join(DIST, 'robots.txt')) ? readFileSync(join(DIST, 'robots.txt'), 'utf8') : '';
 if (!/^User-agent: \*$/m.test(robots)) fail('robots.txt', 'missing, or no "User-agent: *"');
@@ -97,4 +103,4 @@ if (problems.length) {
   console.error(`seo-check: ${problems.length} problems\n${problems.map(p => `  ${p}`).join('\n')}`);
   process.exit(1);
 }
-console.log(`seo-check: ${pages.length} pages' JSON-LD, favicon${ORIGIN ? ', canonical links, robots.txt and sitemap.xml' : ' and robots.txt'} are valid${ORIGIN ? '' : ' (no origin yet: URLs, canonical links and sitemap.xml not checked)'}`);
+console.log(`seo-check: ${pages.length} pages' JSON-LD, favicons, share image${ORIGIN ? ', canonical links, robots.txt and sitemap.xml' : ' and robots.txt'} are valid${ORIGIN ? '' : ' (no origin yet: URLs, canonical links and sitemap.xml not checked)'}`);
