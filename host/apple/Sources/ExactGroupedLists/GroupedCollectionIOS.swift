@@ -11,9 +11,17 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller {
     override var bounds: CGRect {
         get { super.bounds }
         set {
-            guard UIView.inheritedAnimationDuration > 0, let node = superview as? NodeView, let presenter = node.presenter else { return super.bounds = newValue }
+            guard UIView.inheritedAnimationDuration > 0, let node = owner, let presenter = node.presenter else { return super.bounds = newValue }
             presenter.moveOrPlace(node) { super.bounds = newValue }
         }
+    }
+    /// The list's node, which the collection is the scroll view of.
+    private var owner: NodeView? { superview as? NodeView }
+    /// An arranged pane's owed position follows an inset UIKit moves outside a layout of the pane, as a plain
+    /// scroller's does (`ScrollView.adjustedContentInsetDidChange`).
+    override func adjustedContentInsetDidChange() {
+        super.adjustedContentInsetDidChange()
+        owner?.scrollInsetMoved(self)
     }
     /// The safe area at the sides the collection reaches over (`sideReach`):
     /// the window's, which the host keeps from the views it lays out (LLP

@@ -57,3 +57,14 @@ impl NodeInst {
             })
     }
 }
+
+/// The string node `n`'s `prop` is bound to, when that binding is a literal.
+pub(super) fn literal_str(plan: &Plan, n: NodesId, prop: exact_kernel::PropId) -> Option<&str> {
+    plan.node(n).bindings.iter().find_map(|b| {
+        let b = plan.binding(b);
+        if b.kind != BindingKind::Prop || b.id != prop as u16 {
+            return None;
+        }
+        crate::uses::constant_str(plan, plan.code(b.expr))
+    })
+}

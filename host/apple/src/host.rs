@@ -282,6 +282,9 @@ pub struct Host<D: DataSource> {
     /// Last published common collection snapshot; refreshed only after layout.
     collections_json: String,
     collection_heads: Option<Vec<exact_runner::CollectionSnapshot>>,
+    /// Section indices and mounted cells in the last batch for Mac split lists.
+    #[cfg(target_os = "macos")]
+    section_tables: std::collections::BTreeMap<ViewId, exact_runner::list_api::SectionTable>,
     engine: Engine,
     paint: paint::Paint,
     holds: BTreeMap<u64, HoldToken>,
@@ -668,6 +671,8 @@ impl<D: DataSource> Host<D> {
             roots: Vec::new(),
             collections_json: "[]".into(),
             collection_heads: Some(Vec::new()),
+            #[cfg(target_os = "macos")]
+            section_tables: Default::default(),
             engine: {
                 // Settled values only when the plan animates nothing (LLP 1047.001).
                 let mut engine = Engine::linked(links.engine);

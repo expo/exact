@@ -317,3 +317,30 @@ list testId=\"leading\"
         "cleared, the look's again"
     );
 }
+
+#[test]
+fn a_windowed_sections_table_indices_include_unmounted_items() {
+    use exact_runner::list_api::SectionRun;
+    let items = (0..80)
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source = format!("list testId=\"it\" virtualized=true estimated-item-height=84 height=320\n  for n in [{items}] key=n\n    section\n      header height=24\n        text `Shelf ${{n}}`\n      for row in (n < 75 or wide ? [1,2] : [1]) key=row\n        text `Book ${{row}}` testId=`book-${{n}}-${{row}}`\n      footer\n        text \"End\"");
+    let mut r = boot(&source);
+    let list = id(&r, "it");
+    let shape = |end, headers| SectionRun { end, headers };
+    assert!(r.kernel().find_by_test_id("book-79-1").is_empty());
+    assert_eq!(
+        r.list_sections(list).unwrap().unwrap().runs.as_ref(),
+        [
+            shape(75, vec![true, false, false]),
+            shape(80, vec![true, false]),
+        ]
+    );
+    r.act("go", vec![]).unwrap();
+    assert_eq!(
+        r.list_sections(list).unwrap().unwrap().runs.as_ref(),
+        [shape(80, vec![true, false, false])]
+    );
+    assert!(r.kernel().find_by_test_id("book-79-1").is_empty());
+}

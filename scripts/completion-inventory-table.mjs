@@ -216,7 +216,7 @@ export const classifications = [
     ["runner:runner/src/runner/canvas2d.rs",
       "Canvases::draw#next_seq:1 Canvases::publish#LIFETIMES.fetch_add:1 Canvases::reply#generation:1 Canvases::set_geometry#generation:1 Runner::canvas_bitmap " +
       "Runner::canvas_describe Runner::canvas_frame Runner::canvas_owed Runner::canvas_settings Runner::canvas_views Runner::canvas_wants_frame " +
-      "Runner::draw_canvases Runner::is_canvas_2d Runner::layout_canvases Runner::set_canvas_geometry Runner::set_canvas_limits Runner::set_canvas_text " +
+      "Runner::draw_canvases Runner::is_canvas_2d Runner::layout_canvases Runner::retire_canvas_generations Runner::set_canvas_geometry Runner::set_canvas_limits Runner::set_canvas_text " +
       "Runner::take_canvas_lists"],
     ["runner:runner/src/runner/canvas2d/completion.rs", "Runner::canvas_draw_completion Runner::canvas_reply"],
     ["runner:runner/src/runner/canvas_performance.rs", "Runner::set_canvas_performance Runner::wants_canvas_performance"],
@@ -227,7 +227,7 @@ export const classifications = [
   group("canvas images", ["one-shot"], "image source and the canvas lifetimes that requested it", "UI-owned",
     "runner/src/runner/canvas2d.rs:1360-1380 updates only canvases still held by this runner; image source strings themselves carry no session capability.", [
     ["apple:host/apple/src/canvas_exports.rs", "exact_canvas_image exact_canvas_image_released"],
-    ["painted:host/painted/src/host_canvas.rs", "Host::canvas_picture_changed Host::sync_canvases"],
+    ["painted:host/painted/src/host_canvas.rs", "Host::canvas_picture_changed Host::prune_canvas_pixels Host::sync_canvases"],
     ["runner:runner/src/runner/canvas2d.rs", "Runner::canvas_fonts_loaded Runner::canvas_image Runner::canvas_image_named Runner::canvas_image_released Runner::canvas_images_pending Runner::take_canvas_image_requests"],
     ["web:host/web/src/canvas2d.rs", "exact_canvas_image"],
   ]),
@@ -280,7 +280,7 @@ export const classifications = [
     ["runner:runner/src/runner/list_seam.rs",
       "Runner::collection_travel Runner::collection Runner::collection_data Runner::collection_feedback Runner::collection_feedback_bytes Runner::collection_feedback_filled " +
       "Runner::collection_mounted Runner::collection_shown Runner::collections Runner::collections_bounded Runner::collections_json Runner::collections_shallow " +
-      "Runner::kept_positions_json"],
+      "Runner::kept_positions_json Runner::list_sections"],
     ["runner:runner/src/runner/gates.rs", "Runner::collection_reply_key"],
     ["runner:runner/src/runner/foresee.rs", "Runner::foresee"],
     ["runner:runner/src/runner/into_view.rs", "Runner::into_view_json Runner::reveal_collection_index Runner::scroll_into_view Runner::scroll_into_view_at Runner::set_list_covered"],
@@ -434,7 +434,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/media.rs", "Presenter::media_json"],
     ["painted:host/painted/src/presenter/painter.rs",
       "Presenter::apple_painter_can_draw Presenter::apple_painter_retry_deadline Presenter::apple_painter_starting Presenter::apple_window_frame " +
-      "Presenter::attach_apple_layer Presenter::attach_painter_window Presenter::displayed_process_ms Presenter::suspend_window_painter"],
+      "Presenter::attach_apple_layer Presenter::attach_painter_window Presenter::displayed_process_ms Presenter::prepare_window_show Presenter::suspend_window_painter"],
     ["painted:host/painted/src/presenter/pointer.rs", "Presenter::pointer_node"],
     ["painted:host/painted/src/presenter/preferences.rs", "Presenter::dark"],
     ["painted:host/painted/src/presenter/remote.rs", "Presenter::container Presenter::remote"],

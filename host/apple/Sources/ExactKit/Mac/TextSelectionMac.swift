@@ -12,6 +12,7 @@ package final class TextSelection {
     private var focusIndex = 0
     private var dragged = false
     private var shown: [NodeView]?
+    private var paragraphContainers: Set<UInt32> = []
     private var ordered: [NodeView]?
     private var indices: [UInt32: Int] = [:]
     private var painted: [UInt32: NSRange] = [:]
@@ -139,10 +140,17 @@ package final class TextSelection {
     var shownParagraphs: [NodeView] {
         if let shown { return shown }
         var result: [NodeView] = []
-        for top in tops { texts(in: top) { result.append($0) } }
+        paragraphContainers.removeAll(keepingCapacity: true)
+        for top in tops {
+            texts(in: top, containing: { self.paragraphContainers.insert($0.id) }) { result.append($0) }
+        }
         shown = result
         return result
     }
+
+    /// Moving a sampled box can change the viewport index only if the box
+    /// contains a paragraph. A pending document walk leaves its answer open.
+    func mayMoveParagraph(_ id: UInt32) -> Bool { shown == nil || paragraphContainers.contains(id) }
 
     /// The views the session's page is shown in: the root, then each subtree
     /// the host moved out of it into a container of its own (a split's
@@ -171,15 +179,23 @@ package final class TextSelection {
     /// The paragraphs under `view` in order, selectable or not, as the
     /// runner's text projection walks a row: a hidden view and a region's
     /// own are left out, and an inline run is its paragraph's.
-    private func texts(in view: NSView, withinList: Bool = false, _ found: (NodeView) -> Void) {
-        if view.isHidden { return }
-        if let node = view as? NodeView {
-            if node.held { return }
-            if withinList && presenter?.collections.owns(node.id) == true { return }
-            if presenter?.session?.regions.owns(node) == true { return }
-            if node.isParagraph { found(node); return }
+    @discardableResult
+    private func texts(in view: NSView, withinList: Bool = false, containing: ((NodeView) -> Void)? = nil,
+                       _ found: (NodeView) -> Void) -> Bool {
+        guard !view.isHidden else { return false }
+        let node = view as? NodeView
+        if let node {
+            if node.held { return false }
+            if withinList && presenter?.collections.owns(node.id) == true { return false }
+            if presenter?.session?.regions.owns(node) == true { return false }
+            if node.isParagraph { found(node); containing?(node); return true }
         }
-        for child in view.subviews { texts(in: child, withinList: withinList, found) }
+        var hasText = false
+        for child in view.subviews {
+            if texts(in: child, withinList: withinList, containing: containing, found) { hasText = true }
+        }
+        if hasText, let node { containing?(node) }
+        return hasText
     }
 
     private func invalidate() {

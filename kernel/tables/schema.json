@@ -6090,6 +6090,10 @@
           "items": {
             "member": "collections",
             "codec": "collectionSnapshots"
+          },
+          "tables": {
+            "member": "sectionTables",
+            "codec": "sectionTables"
           }
         }
       },

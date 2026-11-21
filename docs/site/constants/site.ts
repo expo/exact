@@ -5,6 +5,8 @@ const ORIGIN = 'https://exact.expo.dev';
 export const site = {
   origin: (process.env.SITE_ORIGIN ?? ORIGIN).replace(/\/+$/, ''),
   name: 'Exact Docs',
+  locale: 'en_US',
+  shareImage: '/assets/og-image.png',
   description:
     'Exact is a cross-platform application runtime: an interface in Contract, data in TypeScript or Rust, on the web, macOS, iOS and Linux.',
 };

@@ -1147,7 +1147,6 @@ package final class Presenter {
         }
         // No view changed: no pass over the views. A correction may have scrolled a context preview's source.
         if Self.onlySnapshots(batch) { tables.sync(batch); positionContexts(); return }
-        if !batch.ops.isEmpty { textViewportIndex = nil }
         var reparented = Set<UInt32>()
         let structureChanged = batch.ops.contains { [.children, .roots, .destroy, .create, .renew, .style].contains($0.op) }
         if structureChanged { selection.structureChanged() }
@@ -1277,7 +1276,14 @@ package final class Presenter {
         navigation.sync(batch, reparented: stage.map { reparented.subtracting($0.tops.keys) } ?? reparented)
         sidebar.sync(batch)
         if !pendingTips.isEmpty { settleTips() }
-        if !keepFit || !viewport.hasCurrentDocumentFit { fitDocument() }
+        if !keepFit || !viewport.hasCurrentDocumentFit {
+            if !batch.ops.isEmpty || batch.rootTabs != nil || batch.routeInspectors != nil || batch.controls || batch.layoutProvisional || stage != nil {
+                textViewportIndex = nil
+            }
+            fitDocument()
+        } else if batch.ops.contains(where: { $0.property != "opacity" && selection.mayMoveParagraph($0.id) }) {
+            textViewportIndex = nil
+        }
         // The page's canvas colour is the first root's background — what
         // shows beyond a document shorter than the viewport, as a browser
         // paints the root element's background over the whole canvas.

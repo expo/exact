@@ -243,6 +243,13 @@ fn draw_bounds_unite_clipped_draws_and_stop_at_the_limit() {
     )
     .unwrap();
     assert_eq!(e.take_frame().draw_bounds(None, full), Some(scissor));
+    // And a draw whose extent is NaN, which no bound contains.
+    e.push(
+        Instance::rounded([40., 40., f32::NAN, 10.], [0.; 4], [1.; 4]),
+        Bindings::default(),
+    )
+    .unwrap();
+    assert_eq!(e.take_frame().draw_bounds(None, full), Some(scissor));
     // A coverage quad is in device space: its brush transform does not move it.
     let mut coverage = Instance::new(Kind::Coverage, Brush::Solid, [40., 40., 10., 10.]);
     coverage.xform = [1., 0.5, 0., 1., 0., 0.];

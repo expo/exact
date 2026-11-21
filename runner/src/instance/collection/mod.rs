@@ -16,6 +16,7 @@ mod reorder_group;
 #[cfg(test)]
 mod reorder_tests;
 mod reuse;
+mod sections;
 pub(crate) mod shown;
 mod sizing;
 mod snap;
@@ -174,6 +175,8 @@ pub(crate) struct Collection {
     /// authored row moves from the list's own by it, with a row's own resize
     /// ([`Tree::collection_data`]).
     data_generation: u64,
+    /// The unmounted sections' row kinds, computed only for a native table that asks.
+    section_rows: RefCell<Option<Rc<[SectionRun]>>>,
     next_epoch: u64,
     zero_heights: std::collections::BTreeSet<String>,
     geometry: Option<CollectionFeedback>,
@@ -366,6 +369,7 @@ impl Collection {
         if changed {
             self.end_preview(u)?;
             self.unsettle_incoming();
+            self.section_rows.get_mut().take();
         }
         self.instant = instant;
         let anchor = if changed { self.anchor()? } else { None };

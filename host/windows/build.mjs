@@ -134,7 +134,7 @@ if (import.meta.main) {
   prepareShaders(app.manifest);
   const target = bakeTarget('windows');
   const profile = args.includes('--release') ? 'release' : 'gpu-dev';
-  // The executable's icon (LLP 1163 D6), which the app crate's build script links (`exact_js_bake`). Made again only
+  // The executable's icon (LLP 1163 D6), which the app crate's build script links. Made again only
   // when the picked file changes, since a new file relinks the executable; its source's digest is kept beside it.
   let icon;
   try { icon = pickIcon(app.manifest, app.dir, { purposes: ['any', 'maskable'], px: 256, formats: ['png'], native: true, name: 'the Windows icon' }); }

@@ -1284,6 +1284,12 @@ impl<D: DataSource> Host<D> {
             }
             self.media_mounts.commit(self.runner.kernel(), r);
         }
+        if !self.runner.plan().surfaces.is_empty()
+            && receipts.iter().any(|t| !t.receipt.destroyed.is_empty())
+        {
+            self.runner.retire_canvas_generations();
+            self.prune_canvas_pixels();
+        }
         self.track_presence(receipts);
         self.size_new_symbols(receipts);
         if receipts.iter().any(|t| !t.receipt.created.is_empty()) {

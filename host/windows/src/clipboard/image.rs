@@ -65,22 +65,33 @@ impl Image {
         }
         // A first animation frame composites over transparent black. Later
         // frames and disposal do not affect the clipboard's still image.
-        let mut rgba = vec![0; size];
-        let samples = info.color_type.samples();
-        for row in 0..info.height as usize {
-            for col in 0..info.width as usize {
-                let src = &frame[row * stride + col * samples..][..samples];
-                let pixel = match info.color_type {
-                    png::ColorType::Rgba => [src[0], src[1], src[2], src[3]],
-                    png::ColorType::Rgb => [src[0], src[1], src[2], 255],
-                    png::ColorType::GrayscaleAlpha => [src[0], src[0], src[0], src[1]],
-                    png::ColorType::Grayscale => [src[0], src[0], src[0], 255],
-                    png::ColorType::Indexed => return Err("PNG palette was not expanded".into()),
-                };
-                let at = ((row + y as usize) * width as usize + col + x as usize) * 4;
-                rgba[at..at + 4].copy_from_slice(&pixel);
+        let rgba = if info.color_type == png::ColorType::Rgba
+            && info.width == width
+            && info.height == height
+        {
+            frame.truncate(size);
+            frame
+        } else {
+            let mut rgba = vec![0; size];
+            let samples = info.color_type.samples();
+            for row in 0..info.height as usize {
+                for col in 0..info.width as usize {
+                    let src = &frame[row * stride + col * samples..][..samples];
+                    let pixel = match info.color_type {
+                        png::ColorType::Rgba => [src[0], src[1], src[2], src[3]],
+                        png::ColorType::Rgb => [src[0], src[1], src[2], 255],
+                        png::ColorType::GrayscaleAlpha => [src[0], src[0], src[0], src[1]],
+                        png::ColorType::Grayscale => [src[0], src[0], src[0], 255],
+                        png::ColorType::Indexed => {
+                            return Err("PNG palette was not expanded".into())
+                        }
+                    };
+                    let at = ((row + y as usize) * width as usize + col + x as usize) * 4;
+                    rgba[at..at + 4].copy_from_slice(&pixel);
+                }
             }
-        }
+            rgba
+        };
         // Preserve colour interpretation, but no text, EXIF or animation. No
         // ICC conversion crate is locked here: tagged non-sRGB pixels are
         // offered as PNG only, never mislabeled by our sRGB DIB (LLP 1133.006 D5).
@@ -147,7 +158,9 @@ impl Image {
         };
         let mut png = Vec::new();
         {
-            let encoder = png::Encoder::with_info(&mut png, output).map_err(|e| e.to_string())?;
+            let mut encoder =
+                png::Encoder::with_info(&mut png, output).map_err(|e| e.to_string())?;
+            encoder.set_compression(png::Compression::Fast);
             let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
             writer.write_image_data(pixels).map_err(|e| e.to_string())?;
             writer.finish().map_err(|e| e.to_string())?;

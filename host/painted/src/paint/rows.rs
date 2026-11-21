@@ -27,6 +27,7 @@ use exact_kernel::NodeKey;
 #[derive(Default)]
 pub struct Dirty {
     hard: Vec<NodeKey>,
+    destroyed: bool,
     moved: Vec<NodeKey>,
     /// Nodes a commit bound to another item (LLP 1078).
     renewed: Vec<NodeKey>,
@@ -53,6 +54,7 @@ impl Dirty {
         self.hard.extend(&r.touched);
         self.hard.extend(&r.created);
         self.hard.extend(&r.destroyed);
+        self.destroyed |= !r.destroyed.is_empty();
         self.renewed.extend(&r.renewed);
     }
 
@@ -236,6 +238,9 @@ impl Painter {
 
     /// Invalidate the rows reached by the host's changes.
     pub(crate) fn rows_dirty(&mut self, kernel: &Kernel, dirty: Dirty) {
+        if dirty.destroyed {
+            self.canvases.retain(|view, _| kernel.node(*view).is_some());
+        }
         self.numerals.committed = dirty.committed;
         self.invalidate_rows(kernel, dirty);
     }
