@@ -688,7 +688,10 @@ impl<D: DataSource> Presenter<D> {
     /// Windows any key counts (`winui_focus`): WinUI's keyboard processor
     /// marks the keyboard as the last input for a modifier too, as Windows
     /// has shown hidden focus rectangles when Alt is pressed
-    /// (`WM_UPDATEUISTATE`).
+    /// (`WM_UPDATEUISTATE`). In Android's touch mode typing at a text field
+    /// (a character, Backspace or Enter) keeps touch mode (LLP 1115.001
+    /// D7.6), as the IME's keys do: the IME's text reaches a painted field as
+    /// these keys, and an `EditText` shows no ring for typing.
     pub(crate) fn key_shows_ring(&mut self, name: &str) {
         let held = self.modifiers();
         let winui = self.brush.winui_focus;
@@ -696,6 +699,13 @@ impl<D: DataSource> Presenter<D> {
             || (!(held.ctrl || held.alt || held.meta)
                 && !matches!(name, "Control" | "Alt" | "Meta" | "AltGraph"))
         {
+            let typed = name.chars().count() == 1 || matches!(name, "Backspace" | "Enter");
+            let kernel = self.host.kernel();
+            if (self.brush.ringless.and_then(|id| kernel.node(id)))
+                .is_some_and(|n| typed && n.node_type == NodeType::TextInput)
+            {
+                return;
+            }
             self.brush.pointer_modality = false;
             if self.brush.ringless.take().is_some() {
                 self.dirty = true;

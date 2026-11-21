@@ -22,7 +22,7 @@ fn additional_canvas_fingers_restore_pointer_modality_after_a_hardware_key() {
         };
         assert!(p.canvas_finger(2, 0, x, y, 2.));
         assert_eq!(p.focus, Some(editor));
-        assert_eq!(p.brush.ringless, None, "the editor stays focus-visible");
+        assert_eq!(p.brush.ringless, Some(editor), "touch mode hides its ring");
         let next = find(&p, "remove");
         assert!(p.set_focus(Some(next), 3.).is_none());
         assert_eq!(p.brush.ringless, Some(next), "{target}");
@@ -112,7 +112,7 @@ fn a_canvas_action_press_moves_unringed_focus_to_the_control() {
 }
 
 #[test]
-fn a_canvas_touch_keeps_an_editors_focus_visible_and_script_focus_unringed() {
+fn a_canvas_touch_keeps_an_editors_ring_outside_touch_mode_and_script_focus_unringed() {
     for android in [false, true] {
         let (mut p, path) = fixture();
         p.brush.touch_mode = android;
@@ -124,7 +124,7 @@ fn a_canvas_touch_keeps_an_editors_focus_visible_and_script_focus_unringed() {
         let (x, y, w, h) = p.rect_of(find(&p, "raw")).unwrap();
         p.pointer_down(x + w / 2., y + h / 2., 1.).unwrap();
         assert_eq!(p.focus, Some(editor));
-        assert_eq!(p.brush.ringless, None);
+        assert_eq!(p.brush.ringless, android.then_some(editor));
         p.pointer_up(x + w / 2., y + h / 2., 2.).unwrap();
         assert_eq!(p.focus, Some(editor));
         let next = find(&p, "remove");
