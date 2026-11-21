@@ -177,6 +177,7 @@ impl<D: DataSource> Presenter<D> {
             self.host.log(error);
         }
         self.refresh_looks(None); // the focus's ring (LLP 1121 D8)
+        self.brush.focus_presses = self.focus.is_some_and(|id| self.presses_itself(id));
         self.restore_scroll_anchors();
         self.arm_scroll_anchors();
         self.scroll_timelines();

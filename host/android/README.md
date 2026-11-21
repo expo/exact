@@ -585,7 +585,7 @@ schemes are always told: night mode chooses between them in exact2.
 table and the four rows it adds. A report paints the page again; a role D4 leaves out (the system hues but red and
 blue) keeps its table pair.
 
-**One accent.** A control, a focus ring and a filled button paint in the node's `accent-color` where it sets one, else
+**One accent.** A control, a field's focused indicator and a filled button paint in the node's `accent-color` where it sets one, else
 in `AccentColor` as reported, with `AccentColorText` drawn on it (a check, a switch's thumb, a filled button's title):
 the device's `primary` and `onPrimary`. The painter's own blue is desktop Linux's alone, where nothing is reported.
 
@@ -1839,9 +1839,9 @@ The cut was the smallest one. Left in the reader:
     its animation. An open alert or menu closes first (D10): its window takes Back by the system's own routing.
     From Android 14 Back is previewed as the gesture goes ([Sheets and route motion](#sheets-and-route-motion-llp-1115001-d10-d12)).
   - *A finger is a finger* (D7.4, D7.6). Each touch says what touched (`Native.touch`'s tool type), so a finger is a
-    `touch` pointer to the app, hovers nothing, and leaves no focus ring on what it presses. A key brings the ring
-    back, but typing at a text field on the soft keyboard does not. A text field shows no ring however its focus
-    came, as a Compose text field shows its focus by its indicator or, bare, by its caret alone. The system's touch
+    `touch` pointer to the app, hovers nothing, and shows no focus on what it presses. A key shows the focus again, but typing at a text field on the soft keyboard does not. The focus looks as Compose's, never as a ring:
+    what presses shows its state layer (its content's colour at 10% over its shape, a checkbox's circle round its
+    mark), a text field its indicator or, bare, its caret alone, and an inline link nothing. The system's touch
     slop, told with the settings, is how far a touch moves before it is a drag. A GPU
     canvas that holds the touch (its first finger landed on the canvas) takes every other finger that lands on it
     (`Native.finger`, `Fingers.kt`, `surfaces/fingers.rs`): each is a pointer of its own there, numbered from 2 and
