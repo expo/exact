@@ -19,11 +19,18 @@ import { resolve } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { withLock } from './build-lock.mjs';
 
-/** The staged capabilities and their seam entries, demangled. */
+/** The staged capabilities and their seam entries, by symbol: Rust's v0
+ * mangling, which the web nightly uses, names each instantiation of a generic
+ * function `_RINv…` and nothing nested in it so. A pattern's first group is
+ * the defining crate's disambiguator, which all of a seam's entries share. */
 export const STAGES = [
   // Inspection (LLP 1012): the agent API's reads. Host::agent calls the hook
-  // `HostLinks::of` installs; the glue's `ask` is its only caller.
-  { name: 'inspection', seam: /^exact_runner::agent::handle::</ },
+  // `HostLinks::of` installs; the glue's `ask` is its only caller. Only
+  // `exact_runner::agent::handle::<D>` is a seam entry. A demangled prefix
+  // once matched its `|_| false` closure too, which wasm-opt had merged with
+  // the core's identical closures under that name, and the split moved what
+  // the core calls through the table into the stage.
+  { name: 'inspection', seam: /^_RINvNtC(s[0-9A-Za-z]*_)?12exact_runner5agent6handle/ },
 ];
 /** The binaryen that splits. A stage imports the core's generated export
  * names, so the pair comes from one run of one version; another version
@@ -69,8 +76,11 @@ export function unsplitReason() {
 }
 
 /** Each stage's functions (raw names) in `named`, a wasm that keeps its name
- * section. Throws when a core function calls into a stage directly. */
+ * section. Throws when the core could reach a stage other than through its
+ * seam's one table slot, which the glue gates. */
 export function planStages(named, stages = STAGES) {
+  // The call graph roots exports and table slots, not a start function, which runs at instantiation.
+  if (hasStart(readFileSync(named))) throw new Error(`${named} has a start function, which the call graph does not root, so the planner cannot tell whether instantiation reaches a stage; build it unsplit`);
   const graph = run('wasm-opt', [named, '--print-call-graph', ...FEATURES, '-o', devNull]);
   if (graph.status !== 0) throw new Error(`wasm-opt --print-call-graph failed: ${graph.stderr}`);
   const nodes = new Map(), calls = new Map(), callers = new Map();
@@ -84,15 +94,19 @@ export function planStages(named, stages = STAGES) {
     }
     const node = /^\s*"(.+?)" \[(.*)\];?\s*$/.exec(line);
     // The graph's key names four example nodes; a function is never named so.
+    // An export is gray, and each table slot a function fills is a rounded line.
     if (node && !['Import', 'Export', 'Indirect Target', 'A', 'B'].includes(node[1])) {
-      nodes.set(node[1], { root: /fillcolor="gray"/.test(node[2]) || /rounded/.test(node[2]) });
+      const seen = nodes.get(node[1]) ?? { exported: false, slots: 0 };
+      if (/fillcolor="gray"/.test(node[2])) seen.exported = true;
+      if (/rounded/.test(node[2])) seen.slots++;
+      nodes.set(node[1], { ...seen, root: seen.exported || seen.slots > 0 });
     }
   }
-  for (const name of [...calls.keys(), ...callers.keys()]) if (!nodes.has(name)) nodes.set(name, { root: false });
+  for (const name of [...calls.keys(), ...callers.keys()]) if (!nodes.has(name)) nodes.set(name, { exported: false, slots: 0, root: false });
   const raw = [...nodes.keys()];
   const plain = run('c++filt', [], { input: raw.join('\n') }).stdout.split('\n');
   const demangled = new Map(raw.map((name, i) => [name, normalizeDemangled(plain[i] ?? name)]));
-  const entries = new Map(stages.map(stage => [stage.name, raw.filter(name => stage.seam.test(demangled.get(name)))]));
+  const entries = new Map(stages.map(stage => [stage.name, raw.filter(name => stage.seam.test(name))]));
   const seams = new Set([...entries.values()].flat());
   const reach = (starts, blocked) => {
     const seen = new Set(), stack = [...starts];
@@ -109,14 +123,32 @@ export function planStages(named, stages = STAGES) {
   for (const stage of stages) {
     const seam = entries.get(stage.name);
     if (!seam.length) throw new Error(`stage ${stage.name}: no function matches its seam ${stage.seam}`);
+    const crates = new Set(seam.map(entry => stage.seam.exec(entry)[1]));
+    if (crates.size > 1) throw new Error(`stage ${stage.name}: its seam ${stage.seam} matches functions of ${crates.size} crates, so another crate shares the SDK's path; build it unsplit`);
     for (const entry of seam) {
-      if (!nodes.get(entry).root) throw new Error(`stage ${stage.name}: ${demangled.get(entry)} is not address-taken, so it is no seam`);
+      // The glue gates a seam's one table slot. An export, or another slot (a function wasm-opt merged with the seam
+      // once filled its own), is a way the core may reach the stage before it loads, and would find it empty.
+      const { exported, slots } = nodes.get(entry);
+      if (!exported && !slots) throw new Error(`stage ${stage.name}: ${demangled.get(entry)} is not address-taken, so it is no seam`);
+      if (exported || slots !== 1) throw new Error(`stage ${stage.name}: its seam ${demangled.get(entry)} is ${exported ? 'exported' : `in ${slots} table slots`}, so the core may reach it other than through the gated slot, which a split leaves empty until the stage loads; give the seam a body no other function shares, or build unsplit`);
       const direct = [...callers.get(entry) ?? []].filter(caller => core.has(caller));
       if (direct.length) throw new Error(`stage ${stage.name}: the core calls its seam ${demangled.get(entry)} directly from ${direct.slice(0, 3).map(c => demangled.get(c)).join(', ')}`);
     }
     planned.push({ name: stage.name, functions: [...reach(seam, new Set())].filter(f => !core.has(f)) });
   }
   return planned;
+}
+
+/** Whether the module in `bytes` has a start section (id 8). */
+function hasStart(bytes) {
+  for (let at = 8; at < bytes.length;) {
+    const id = bytes[at++];
+    let size = 0;
+    for (let shift = 0, byte = 0x80; byte & 0x80; shift += 7) { byte = bytes[at++]; size += (byte & 0x7f) * 2 ** shift; }
+    if (id === 8) return true;
+    at += size;
+  }
+  return false;
 }
 
 /** A wasm custom section: id 0, its size, then its name and payload. */

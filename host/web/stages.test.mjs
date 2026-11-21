@@ -3,16 +3,19 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { delimiter, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { normalizeDemangled, optimizeWasm, splitStages, STAGES, unsplitReason } from './stages.mjs';
+import { normalizeDemangled, optimizeWasm, planStages, splitStages, STAGES, unsplitReason } from './stages.mjs';
 
-test.each(['', '[3c1c0]', '[6acfc8ca64c5829]', '[0123456789abcdef]'])(
-  'inspection seam accepts crate disambiguator %s', (hash) => {
-    const name = `exact_runner${hash}::agent::handle::<caltrain_web${hash}::AppData>`;
-    const normalized = normalizeDemangled(name);
-    expect(normalized).toBe('exact_runner::agent::handle::<caltrain_web::AppData>');
-    expect(STAGES.find(stage => stage.name === 'inspection').seam.test(normalized)).toBe(true);
-  },
-);
+// The interaction gallery's symbols for `exact_runner::agent::handle::<Gallery>`, its `{closure#0}`, and the plain
+// path a crate without a disambiguator gives.
+test.each([
+  ['_RINvNtCs41IsHxXs5ek_12exact_runner5agent6handleNtCshkVtqmrZMu0_24interaction_gallery_data7GalleryECs7smTbzDW5eq_23interaction_gallery_web', true],
+  ['_RINvNtC12exact_runner5agent6handleNtC8caltrain7AppDataE', true],
+  ['_RNCINvNtCs41IsHxXs5ek_12exact_runner5agent6handleNtCshkVtqmrZMu0_24interaction_gallery_data7GalleryE0Cs7smTbzDW5eq_23interaction_gallery_web', false],
+  ['_RINvNtCs41IsHxXs5ek_12exact_runner5agent7handlerNtC8caltrain7AppDataE', false],
+  ['_RNvNtCs41IsHxXs5ek_12exact_runner4json9field_str', false],
+])('the inspection seam is the handler alone: %s', (symbol, seam) => {
+  expect(STAGES.find(stage => stage.name === 'inspection').seam.test(symbol)).toBe(seam);
+});
 
 test.each([
   ['<alloc[2d4e00666e4053f6]::sync::Arc<[f64]>>::drop_slow', '<alloc::sync::Arc<[f64]>>::drop_slow'],
@@ -109,15 +112,23 @@ test('a missing or failed optimizer is never cached', () => {
   });
 });
 
+// The handler and its closure by their v0 symbols, as rustc names them for an app crate `caltrain`.
+const HANDLE = '_RINvNtC12exact_runner5agent6handleNtC8caltrain7AppDataE';
+const CLOSURE = '_RNCINvNtC12exact_runner5agent6handleNtC8caltrain7AppDataE0C8caltrain';
+
+// The production seam on a module whose boot calls the handler's closure through the table before inspection loads,
+// as the core's timers did: the closure stays in the core, and the handler answers once its stage is loaded.
 test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('a cached names build still splits and loads its capability', async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-web-opt-stages-'));
   try {
     const input = resolve(dir, 'app.wasm'), wat = resolve(dir, 'app.wat'), cache = resolve(dir, 'cache');
     writeFileSync(wat, `(module
       (type $read (func (result i32)))
-      (table (export "table") 1 funcref)
-      (elem (i32.const 0) $inspection)
-      (func $inspection (type $read) (result i32) i32.const 42)
+      (table (export "table") 2 funcref)
+      (elem (i32.const 0) $${HANDLE} $${CLOSURE})
+      (func $${HANDLE} (type $read) (result i32) i32.const 42)
+      (func $${CLOSURE} (type $read) (result i32) i32.const 7)
+      (func (export "boot") (result i32) i32.const 1 call_indirect (type $read))
       (func (export "read") (result i32) i32.const 0 call_indirect (type $read)))`);
     expect(spawnSync('wasm-as', [wat, '-g', '-o', input]).status).toBe(0);
     let previous;
@@ -127,12 +138,13 @@ test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('a cached names b
       const optimized = optimizeWasm(input, named, ['-Oz', '-g'], cache);
       expect(optimized.status).toBe(0);
       expect(!!optimized.cached).toBe(i === 1);
-      const split = splitStages(named, [{ name: 'inspection', seam: /^inspection$/ }]);
+      const split = splitStages(named);
       if (previous) expect(split.core).toEqual(previous);
       previous = split.core;
       const module = await WebAssembly.compile(split.core), core = await WebAssembly.instantiate(module);
       const card = JSON.parse(Buffer.from(WebAssembly.Module.customSections(module, 'exact.stages')[0]));
       expect(Object.keys(card.stages)).toEqual(['inspection']);
+      expect(core.exports.boot()).toBe(7);
       expect(() => core.exports.read()).toThrow();
       for (const path of Object.values(card.stages)) {
         const capability = await WebAssembly.compile(split.files.get(path));
@@ -140,6 +152,35 @@ test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('a cached names b
         await WebAssembly.instantiate(capability, imports);
       }
       expect(core.exports.read()).toBe(42);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// Each way the core could reach a stage before it loads is refused: a seam wasm-opt merged with an identical core
+// callback, which then fills the callback's table slot too or is exported in its place; a start function, which the
+// call graph does not root; and a second crate that shares the SDK's path.
+test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('a split the core could reach early is refused', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-web-merged-seam-'));
+  const other = HANDLE.replace('C12exact_runner', 'Cs1_12exact_runner');
+  const cases = [
+    ['in 2 table slots', true, `(table 2 funcref) (elem (i32.const 0) $${HANDLE} $callback)
+      (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $callback (type $read) (result i32) i32.const 0)
+      (func (export "boot") (result i32) i32.const 1 call_indirect (type $read))`],
+    ['exported', true, `(table 1 funcref) (elem (i32.const 0) $${HANDLE})
+      (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $callback (export "boot") (type $read) (result i32) i32.const 0)`],
+    ['start function', false, `(table 1 funcref) (elem (i32.const 0) $${HANDLE}) (global $g (mut i32) (i32.const 0))
+      (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $boot (global.set $g (call $${HANDLE}))) (start $boot)`],
+    ['2 crates', false, `(table 2 funcref) (elem (i32.const 0) $${HANDLE} $${other})
+      (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $${other} (type $read) (result i32) i32.const 1)`],
+  ];
+  try {
+    for (const [refusal, optimized, body] of cases) {
+      const input = resolve(dir, 'app.wasm'), wat = resolve(dir, 'app.wat'), named = resolve(dir, 'app.named.wasm');
+      writeFileSync(wat, `(module (type $read (func (result i32))) ${body}
+        (func (export "read") (result i32) i32.const 0 call_indirect (type $read)))`);
+      expect(spawnSync('wasm-as', [wat, '-g', '-o', input]).status).toBe(0);
+      if (optimized) expect(optimizeWasm(input, named, ['-Oz', '-g'], resolve(dir, `cache-${refusal}`)).status).toBe(0);
+      expect(() => planStages(optimized ? named : input)).toThrow(refusal);
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
