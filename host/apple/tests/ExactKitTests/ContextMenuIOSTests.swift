@@ -71,8 +71,21 @@ final class ContextMenuIOSTests: XCTestCase {
         while !done(), Date() < deadline { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02)) }
         XCTAssertTrue(done(), what)
     }
-    /// Where a target's center or a view's middle shows, in the window
-    private func shown(_ target: UIPreviewTarget) -> CGPoint { target.container.convert(target.center, to: nil) }
+    /// `peek`'s parent made a strip as tall and wide as it that clips, as
+    /// Landscapes' strips are, where UIKit's growing lift would be cut and the
+    /// node lifts on a stage; the returned closure puts the parent back
+    private func stripAround(_ peek: NodeView) throws -> () -> Void {
+        let strip = try XCTUnwrap(peek.superview)
+        let (frame, bounds, clips) = (strip.frame, strip.bounds, strip.clipsToBounds)
+        strip.clipsToBounds = true
+        strip.frame = strip.convert(peek.frame, to: strip.superview)
+        strip.bounds.origin = peek.frame.origin
+        return { strip.clipsToBounds = clips; strip.frame = frame; strip.bounds = bounds }
+    }
+    /// Where a target places a view's middle (its center moved by its transform's translation), or where a view's middle shows, in the window
+    private func shown(_ target: UIPreviewTarget) -> CGPoint {
+        target.container.convert(CGPoint(x: target.center.x + target.transform.tx, y: target.center.y + target.transform.ty), to: nil)
+    }
     private func shown(_ view: UIView) -> CGPoint { view.convert(CGPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil) }
     /// The same point, but for the rounding of converting it through the stage
     private func near(_ a: CGPoint, _ b: CGPoint) -> Bool { abs(a.x - b.x) < 1e-6 && abs(a.y - b.y) < 1e-6 }
@@ -81,10 +94,12 @@ final class ContextMenuIOSTests: XCTestCase {
         try XCTUnwrap(sequence(first: try XCTUnwrap(node.superview) as UIResponder, next: { $0.next }).lazy.compactMap { ($0 as? UIViewController)?.viewIfLoaded }.first)
     }
 
-    /// A node lifts on its stage, which takes its parent's coordinate space
-    /// with the ancestors' scale over its controller's view: the target
-    /// carries the node's own scale, and stands where the node shows, also
-    /// where a box that clips already cuts it.
+    /// In a strip that clips around it, a node lifts on its stage, which takes its parent's
+    /// coordinate space with the ancestors' scale and fade over its
+    /// controller's view: the target carries the node's own scale, and stands
+    /// where the node shows, also where the strip already cuts it. Where no
+    /// stage can carry it (its own turn, a perspective, a mask, a scale of its
+    /// parent's children), it lifts as it would without one (`LiftTarget.target`).
     func testTheTargetCarriesTheAncestorsScale() throws {
         let session = try boot()
         let host = session.presenter.menus.context
@@ -93,25 +108,51 @@ final class ContextMenuIOSTests: XCTestCase {
         let configuration = try XCTUnwrap(host.contextMenuInteraction(interaction, configurationForMenuAtLocation: .zero))
         defer { host.contextMenuInteraction(interaction, willEndFor: configuration, animator: nil) }
         let parent = try XCTUnwrap(peek.superview)
-        parent.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
-        peek.transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
-        defer { parent.transform = .identity; peek.transform = .identity; parent.clipsToBounds = false }
         func lifted() throws -> UIPreviewTarget {
             try XCTUnwrap(host.contextMenuInteraction(interaction, configuration: configuration, highlightPreviewForItemWithIdentifier: configuration.identifier)).target
         }
+        let undo = try stripAround(peek)
+        defer { undo() }
+        parent.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
+        parent.alpha = 0.5
+        peek.transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
+        defer { parent.transform = .identity; parent.alpha = 1; peek.transform = .identity }
         let inside = try lifted()
         let stage = try XCTUnwrap(inside.container as? LiftStage)
         XCTAssertTrue(stage.superview === (try holder(of: peek)), "over its controller's view")
         XCTAssertEqual(stage.transform, CGAffineTransform(scaleX: 0.5, y: 0.5), "its parent's scale")
+        XCTAssertEqual(stage.layer.opacity, 0.5, accuracy: 0.001, "and its fade")
+        parent.isHidden = true
+        stage.follow()
+        XCTAssertTrue(stage.isHidden, "hidden with it")
+        parent.isHidden = false
+        stage.follow()
         XCTAssertEqual(inside.transform, CGAffineTransform(scaleX: 0.96, y: 0.96), "its own scale")
         XCTAssertTrue(near(shown(inside), shown(peek)), "where it shows")
+        peek.layer.anchorPoint = CGPoint(x: 0, y: 0.5)
+        peek.transform = CGAffineTransform(rotationAngle: .pi / 3)
+        XCTAssertTrue(near(shown(try lifted()), shown(peek)), "a card turned about its edge, from its middle")
+        peek.layer.transform = CATransform3DMakeRotation(.pi / 3, 0, 1, 0)
+        XCTAssertTrue(try lifted().container === parent, "turned in 3D itself: in its parent, as without a stage")
+        peek.layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        peek.transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
         var perspective = CATransform3DIdentity
         perspective.m34 = -1 / 500
         parent.layer.sublayerTransform = perspective
         XCTAssertTrue(try lifted().container === parent, "under a perspective, no stage's plane carries it: in its parent")
+        parent.layer.sublayerTransform = CATransform3DIdentity
+        let mask = CALayer()
+        mask.frame = parent.bounds
+        mask.backgroundColor = UIColor.black.cgColor
+        parent.layer.mask = mask
+        XCTAssertTrue(try lifted().container === parent, "under a mask, whose shape no stage follows, in its parent")
+        parent.layer.mask = nil
+        parent.layer.sublayerTransform = CATransform3DMakeScale(2, 2, 1)
+        XCTAssertTrue(try lifted().container === LiftTarget.target(peek)?.container, "under a scale of its parent's children, as without a stage")
+        parent.layer.sublayerTransform = perspective
         parent.clipsToBounds = true
         peek.transform = CGAffineTransform(scaleX: 0.96, y: 0.96).translatedBy(x: parent.bounds.width, y: 0)
-        XCTAssertTrue(try lifted().container === parent, "cut by it too, in the parent that carries the projection")
+        XCTAssertTrue(try lifted().container === (try holder(of: peek)), "cut by it too, over the controller's view, as without a stage")
         parent.layer.sublayerTransform = CATransform3DIdentity
         let cut = try lifted()
         XCTAssertTrue(cut.container === stage, "cut by its parent: on the same stage, above it")
@@ -146,27 +187,111 @@ final class ContextMenuIOSTests: XCTestCase {
         stage.addSubview(highlight)
         strip.bounds.origin.x += 40
         until("it moves with the strip's scroll") { self.near(self.shown(target), self.shown(peek)) }
+        strip.bounds.origin.x += 1000
+        until("it hides once the card has scrolled out of the strip") { stage.isHidden }
+        strip.bounds.origin.x -= 1000
+        until("and shows again as the card comes back") { !stage.isHidden }
         host.contextMenuInteraction(interaction, willEndFor: configuration, animator: nil)
         XCTAssertNotNil(stage.superview, "UIKit's return outlasts the presentation")
         highlight.removeFromSuperview()
         until("it goes once UIKit takes its view back") { stage.superview == nil }
     }
 
-    /// An authored close lets the presentation's record go at once; its stage
-    /// stays for UIKit's return until UIKit ends the presentation.
+    /// An authored close lets the presentation's record go at once; UIKit's
+    /// return still takes the node back onto its stage, also past a press that
+    /// began meanwhile, and the stage stays until UIKit ends the presentation.
     func testAnAuthoredCloseKeepsTheStageUntilThePresentationEnds() throws {
         let session = try boot()
         let host = session.presenter.menus.context
         let peek = try node(session, "peek")
+        let undo = try stripAround(peek)
+        defer { undo() }
         let interaction = try XCTUnwrap(peek.interactions.compactMap { $0 as? UIContextMenuInteraction }.first)
         let configuration = try XCTUnwrap(host.contextMenuInteraction(interaction, configurationForMenuAtLocation: .zero))
         let lifted = try XCTUnwrap(host.contextMenuInteraction(interaction, configuration: configuration, highlightPreviewForItemWithIdentifier: configuration.identifier))
         let stage = try XCTUnwrap(lifted.target.container as? LiftStage)
+        host.contextMenuInteraction(interaction, willDisplayMenuFor: configuration, animator: nil)
+        // UIKit takes what it drew on the stage into a layer of its own while the menu shows: the stage stays for the return
+        let drawn = UIView()
+        stage.addSubview(drawn)
+        drawn.removeFromSuperview()
+        var turned = false
+        DispatchQueue.main.async { turned = true }
+        until("a turn passes") { turned }
+        XCTAssertNotNil(stage.window, "held for the menu that showed")
         host.close(try XCTUnwrap(host.open?.popover))
         XCTAssertNil(host.open)
+        let next = try XCTUnwrap(host.contextMenuInteraction(interaction, configurationForMenuAtLocation: .zero), "another press")
+        defer { host.contextMenuInteraction(interaction, willEndFor: next, animator: nil) }
         XCTAssertNotNil(stage.window, "the stage stays for UIKit's return")
+        let returned = try XCTUnwrap(host.contextMenuInteraction(interaction, configuration: configuration, dismissalPreviewForItemWithIdentifier: configuration.identifier),
+                                     "UIKit's return asked for after the close")
+        XCTAssertTrue(returned.view === peek && returned.target.container === stage && near(shown(returned.target), shown(peek)), "the node back onto its stage, where it shows")
+        let incarnation = peek.incarnation
+        peek.incarnation = 0
+        XCTAssertNil(host.contextMenuInteraction(interaction, configuration: configuration, dismissalPreviewForItemWithIdentifier: configuration.identifier),
+                     "a view lent to another node since returns nothing")
+        peek.incarnation = incarnation
         host.contextMenuInteraction(interaction, willEndFor: configuration, animator: nil)
         XCTAssertNil(stage.superview, "and goes as the presentation ends, holding nothing")
+    }
+
+    /// Only a box that clips and would cut the node as UIKit grows it calls for
+    /// a stage: with room to grow, the node lifts as it did without stages.
+    func testOnlyAClipThatWouldCutTheGrowingLiftCallsForAStage() {
+        let host = UIViewController(), window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        let clip = UIView(frame: CGRect(x: 0, y: 0, width: 300, height: 200)), card = UIView(frame: CGRect(x: 100, y: 50, width: 100, height: 100))
+        clip.clipsToBounds = true
+        clip.addSubview(card)
+        host.view.addSubview(clip)
+        XCTAssertFalse(LiftStage.cut(card), "room to grow in its clip")
+        card.frame = CGRect(x: 100, y: 0, width: 100, height: 200)
+        XCTAssertTrue(LiftStage.cut(card), "a strip as tall as the card")
+        clip.clipsToBounds = false
+        XCTAssertFalse(LiftStage.cut(card), "nothing clips")
+    }
+
+    /// A stage whose parent has left the window, been freed with the strip a
+    /// batch removed, or moved under another controller's view, hides what
+    /// UIKit holds on it until UIKit takes that back.
+    func testAStageWhoseParentHasGoneHides() throws {
+        let host = UIViewController(), window = UIWindow(frame: CGRect(x: 0, y: 0, width: 300, height: 300))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        var made: LiftStage?
+        autoreleasepool {
+            let parent = UIView(frame: CGRect(x: 0, y: 0, width: 200, height: 100)), card = UIView(frame: CGRect(x: 10, y: 10, width: 50, height: 50))
+            parent.addSubview(card)
+            host.view.addSubview(parent)
+            made = LiftStage(for: card)
+            parent.removeFromSuperview()
+        }
+        let stage = try XCTUnwrap(made, "a stage over the controller's view")
+        defer { stage.end() }
+        stage.follow()
+        XCTAssertTrue(stage.isHidden, "its parent gone, nothing of the card shows on it")
+        let parent = UIView(frame: CGRect(x: 0, y: 0, width: 200, height: 100)), card = UIView(frame: CGRect(x: 10, y: 10, width: 50, height: 50))
+        parent.addSubview(card)
+        host.view.addSubview(parent)
+        let moving = try XCTUnwrap(LiftStage(for: card))
+        defer { moving.end() }
+        moving.follow()
+        XCTAssertFalse(moving.isHidden)
+        let other = UIViewController()
+        host.view.addSubview(other.view)
+        other.view.addSubview(parent)
+        moving.follow()
+        XCTAssertTrue(moving.isHidden, "its parent under another controller's view, nothing of the card shows on it")
+        // Torn down and freed while UIKit's view is still on it, as a reset can
+        autoreleasepool {
+            let torn = LiftStage(for: card)
+            torn?.addSubview(UIView())
+            torn?.end()
+        }
     }
 
     func testTheLiftsOutlineIsTheNodesOwn() throws {
@@ -229,6 +354,8 @@ final class ContextMenuIOSTests: XCTestCase {
         let session = try boot()
         let host = session.presenter.menus.context
         let peek = try node(session, "peek")
+        let undo = try stripAround(peek)
+        defer { undo() }
         let interaction = try XCTUnwrap(peek.interactions.compactMap { $0 as? UIContextMenuInteraction }.first)
         let configuration = try XCTUnwrap(host.contextMenuInteraction(interaction, configurationForMenuAtLocation: .zero))
         defer { host.contextMenuInteraction(interaction, willEndFor: configuration, animator: nil) }
@@ -246,6 +373,8 @@ final class ContextMenuIOSTests: XCTestCase {
         let session = try boot()
         let host = session.presenter.menus.context
         let peek = try node(session, "peek")
+        let undo = try stripAround(peek)
+        defer { undo() }
         let interaction = try XCTUnwrap(peek.interactions.compactMap { $0 as? UIContextMenuInteraction }.first, "the node's context menu is UIKit's")
         XCTAssertEqual(peek.contextRecognizer?.isEnabled, false, "its plain long press is off: the interaction recognizes it")
         XCTAssertEqual(text(try node(session, "peeks")), "peeks 0")
@@ -359,6 +488,8 @@ final class ContextMenuIOSTests: XCTestCase {
         let session = try boot()
         let host = session.presenter.menus.context
         let peek = try node(session, "peek")
+        let undo = try stripAround(peek)
+        defer { undo() }
         let interaction = try XCTUnwrap(peek.interactions.compactMap { $0 as? UIContextMenuInteraction }.first)
         let configuration = try XCTUnwrap(host.contextMenuInteraction(interaction, configurationForMenuAtLocation: .zero))
         let owner = try XCTUnwrap(host.open)
