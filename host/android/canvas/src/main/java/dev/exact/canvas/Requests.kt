@@ -15,6 +15,7 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.Choreographer
 import android.view.HapticFeedbackConstants
+import androidx.core.content.ContextCompat
 import java.io.File
 
 /**
@@ -78,14 +79,14 @@ internal class Requests(private val activity: ExactActivity) {
         sound?.apply(body)
     }
 
-    /** Hears the chooser's result broadcast. Before Android 13 a receiver registered at run time is exported, so the
-     * broadcast must come from a sender holding [shared], a permission of this app's signature (`AndroidManifest.xml`);
-     * the chooser sends it as this app, which made its `PendingIntent`. */
+    /** Hears the chooser's result broadcast, from this app alone: before Android 13 a receiver registered at run time
+     * is exported, and AndroidX's then requires a permission of the app's signature, which its library manifest declares
+     * in every app that embeds the reader (`ContextCompat.RECEIVER_NOT_EXPORTED`). The chooser sends the result as this
+     * app, which made its `PendingIntent`. */
     private fun listen() {
         if (listening) return
         listening = true
-        if (Build.VERSION.SDK_INT >= 33) activity.registerReceiver(receiver, IntentFilter(shared), Context.RECEIVER_NOT_EXPORTED)
-        else activity.registerReceiver(receiver, IntentFilter(shared), shared, null)
+        ContextCompat.registerReceiver(activity, receiver, IntentFilter(shared), ContextCompat.RECEIVER_NOT_EXPORTED)
     }
 
     /** The requests in [words]: for each its kind, its id, the count of words that follow, and those words. A kind
@@ -331,17 +332,15 @@ internal class Requests(private val activity: ExactActivity) {
         /**
          * The Sharesheet's intent: the text and the URL as its text, the title as its subject, and [files] (content URIs
          * and their types) as its streams, typed by the one type they share, else by their one family with any subtype,
-         * else as any type, with a read grant the chooser passes on to the app chosen (`Intent.createChooser`). Several
-         * files are `ACTION_SEND_MULTIPLE`, whose text is a list with an entry for each stream, the first the text
-         * (`Intent.ACTION_SEND_MULTIPLE`, `Intent.migrateExtraStreamToClipData`).
+         * else as any type (`image/png`; `image/png` and `image/jpeg` as `image/*`; with `application/pdf` as `*/*`), with a
+         * read grant the chooser passes on to the app chosen (`Intent.createChooser`). The text is one `EXTRA_TEXT`, left
+         * out where files go without it, whether one file or several: the Sharesheet's preview and AndroidX's
+         * `ShareCompat.IntentReader` read it so, though `ACTION_SEND_MULTIPLE`'s documentation allows a list.
          */
         fun sendIntent(title: String?, words: String, files: List<Pair<Uri, String>>): Intent {
             val many = files.size > 1
             val send = Intent(if (many) Intent.ACTION_SEND_MULTIPLE else Intent.ACTION_SEND).setType("text/plain")
-            if (words.isNotEmpty() || files.isEmpty()) {
-                if (many) send.putCharSequenceArrayListExtra(Intent.EXTRA_TEXT, ArrayList<CharSequence>(files.indices.map { if (it == 0) words else "" }))
-                else send.putExtra(Intent.EXTRA_TEXT, words)
-            }
+            if (words.isNotEmpty() || files.isEmpty()) send.putExtra(Intent.EXTRA_TEXT, words)
             if (title != null) { send.putExtra(Intent.EXTRA_SUBJECT, title); send.putExtra(Intent.EXTRA_TITLE, title) }
             if (files.isEmpty()) return send
             val types = files.map { it.second }.distinct()
@@ -349,10 +348,13 @@ internal class Requests(private val activity: ExactActivity) {
             send.type = types.singleOrNull() ?: families.singleOrNull()?.let { "$it/*" } ?: "*/*"
             val uris = ArrayList(files.map { it.first })
             if (many) send.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris) else send.putExtra(Intent.EXTRA_STREAM, uris[0])
-            // The clip says what its streams are, as a receiver may ask it before opening one, and its first item carries
-            // the text, as Android's own clip from the extras does (`Intent.migrateExtraStreamToClipData`).
-            val first = ClipData.Item(words.ifEmpty { null }, null, uris[0])
-            send.clipData = ClipData(ClipDescription(null, types.toTypedArray()), first).apply { uris.drop(1).forEach { addItem(ClipData.Item(it)) } }
+            // The clip says what its streams are, and that it holds text, as a receiver may ask it before reading an item,
+            // and its first item carries the text, as Android's own clip from the extras does
+            // (`Intent.migrateExtraStreamToClipData`).
+            val text = words.ifEmpty { null }
+            val described = (types + listOfNotNull(text?.let { ClipDescription.MIMETYPE_TEXT_PLAIN })).distinct()
+            send.clipData = ClipData(ClipDescription(null, described.toTypedArray()), ClipData.Item(text, null, uris[0]))
+                .apply { uris.drop(1).forEach { addItem(ClipData.Item(it)) } }
             send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             return send
         }

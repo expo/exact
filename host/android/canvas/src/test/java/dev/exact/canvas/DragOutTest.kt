@@ -94,9 +94,9 @@ class DragOutTest {
     }
 
     /** The sheet's intent: text alone; one file as its stream with its type; files of one family as several streams
-     * typed by the family, their text a list with an entry for each; files of two families as any type; each with the
-     * clip, which says the streams' types and carries the text on its first item, and the read grant the chooser
-     * passes on. */
+     * typed by the family; files of two families as any type; the text one `EXTRA_TEXT` whatever the files; each with
+     * the clip, which says the streams' types and text and carries the text on its first item, and the read grant the
+     * chooser passes on. */
     @Test fun theSheetIsGivenTheFilesAsStreamsWithAReadGrant() {
         val text = Requests.sendIntent("A post", "Read this", emptyList())
         assertEquals(listOf(Intent.ACTION_SEND, "text/plain", "Read this", "A post"),
@@ -106,16 +106,20 @@ class DragOutTest {
         val b = Uri.parse("content://app.exact.files/b.jpg") to "image/jpeg"
         val c = Uri.parse("content://app.exact.files/c.pdf") to "application/pdf"
         val one = Requests.sendIntent(null, "", listOf(a))
+        val clipOf = { send: Intent -> (0 until send.clipData!!.description.mimeTypeCount).map { send.clipData!!.description.getMimeType(it) } }
+        val captioned = Requests.sendIntent(null, "A photo", listOf(a))
+        assertEquals(listOf("A photo", "A photo"), listOf(captioned.getStringExtra(Intent.EXTRA_TEXT), captioned.clipData!!.getItemAt(0).text.toString()))
+        assertEquals(listOf("image/png", "text/plain"), clipOf(captioned))
         @Suppress("DEPRECATION")
         assertEquals(listOf(Intent.ACTION_SEND, "image/png", a.first), listOf(one.action, one.type, one.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)))
         assertFalse("no empty text beside a file", one.hasExtra(Intent.EXTRA_TEXT))
         val two = Requests.sendIntent(null, "Two photos", listOf(a, b))
         @Suppress("DEPRECATION")
-        assertEquals(listOf(Intent.ACTION_SEND_MULTIPLE, "image/*", listOf(a.first, b.first), listOf("Two photos", "")),
-            listOf(two.action, two.type, two.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM), two.getCharSequenceArrayListExtra(Intent.EXTRA_TEXT)?.map { it.toString() }))
-        assertEquals(listOf("image/png", "image/jpeg"), (0 until two.clipData!!.description.mimeTypeCount).map { two.clipData!!.description.getMimeType(it) })
+        assertEquals(listOf(Intent.ACTION_SEND_MULTIPLE, "image/*", listOf(a.first, b.first), "Two photos"),
+            listOf(two.action, two.type, two.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM), two.getStringExtra(Intent.EXTRA_TEXT)))
+        assertEquals(listOf("image/png", "image/jpeg", "text/plain"), clipOf(two))
         assertEquals(listOf("Two photos", null), (0 until two.clipData!!.itemCount).map { two.clipData!!.getItemAt(it).text?.toString() })
-        assertEquals(listOf("image/png"), (0 until one.clipData!!.description.mimeTypeCount).map { one.clipData!!.description.getMimeType(it) })
+        assertEquals(listOf("image/png"), clipOf(one))
         assertEquals("*/*", Requests.sendIntent(null, "", listOf(a, c)).type)
         for (send in listOf(one, two)) {
             assertTrue(send.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)

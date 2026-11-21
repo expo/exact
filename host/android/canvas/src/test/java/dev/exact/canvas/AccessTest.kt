@@ -131,7 +131,7 @@ class AccessTest {
     }
 
     /** A node a held press drags offers TalkBack's Start drag (LLP 1094.000 D9), which asks exact2 for the drag. */
-    @Test @Config(sdk = [33], shadows = [Acts::class]) fun aNodeThatDragsOffersStartDrag() {
+    @Test @Config(sdk = [32], shadows = [Acts::class]) fun aNodeThatDragsOffersStartDrag() {
         Acts.asked.clear()
         val access = told(listOf(Said(1, 0, Access.GROUP, "Ochre dunes", flags = Access.DRAG), Said(2, 0, Access.BUTTON, "Open", flags = Access.CLICK)))
         val start = android.R.id.accessibilityActionDragStart
