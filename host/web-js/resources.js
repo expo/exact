@@ -41,7 +41,7 @@ import {
   Origin,
   Invocation,
 } from './rt.js';
-import { booting, checkpoint, READER, keptAnswer } from './mount.js';
+import { checkpoint, READER, keptAnswer } from './mount.js';
 /** Resource instances, including list members; list aggregates have no entry. */
 export const Resources = [];
 /** A source change during an ordinary request waits for its reply. Several changes
@@ -258,12 +258,14 @@ export function res(
     Inspections.placeholder(r);
   };
   // `id`: the call arguments, `with` aside (`current`, LLP 1161.001); `asleep`: a closed `when`, the value kept (but a
-  // build-time one at boot, D4) and no answer, a request let go but an upload's (LLP 1161.002 D2)
+  // build-time one never shown, D4) and no answer, a request let go but an upload's (LLP 1161.002 D2)
   const id = a => a?.slice(0, Math.max(0, a.length - r.context)),
     asleep = () => {
-      // Show the placeholder over a build-time answer while the runtime boots: a resource idle at boot adopts nothing
-      // compiled (LLP 1161.002 D4); a page's answer stays (§7).
-      if (booting() && r.stand === 'build') {
+      // Idle at its first settlement, it adopts nothing compiled and shows its placeholder (LLP 1161.002 D4); a page's
+      // answer stays (§7). A build-time answer is `stale` from the first settlement that finds the gate open, so one
+      // that is not has never shown. `passed` keeps a root resource's for a wake before its source is ready.
+      if (r.stand === 'build' && !r.stale) {
+        if (r.path === undefined) r.passed = [r.value, r.settled];
         r.value = r.settled = undefined;
         r.stand = null;
       }
@@ -299,6 +301,7 @@ export function res(
     if (globalThis.__exactRender) r.renderCall = call;
     r.stand = null;
     r.stale = false;
+    r.passed = undefined;
     Inspections.take(r, generation);
   };
   const land = t =>
@@ -416,8 +419,9 @@ export function res(
         if (baked) r.stale = true;
         // the first frame's build-time answer, said once when it starts to stand in for an answer (the runner's
         // `journal_build_time`)
+        let quiet = false;
         const stands = () => {
-          if (!was && r.stale && r.stand === 'build') say(`${name} shows its build-time answer until its source answers`);
+          if (!was && !quiet && r.stale && r.stand === 'build') say(`${name} shows its build-time answer until its source answers`);
         };
         if (!forced && !rev) {
           // Reuse follows the request in flight; the displayed value may answer older arguments (LLP 1016 D5).
@@ -525,18 +529,18 @@ export function res(
         // Not ready (Rust loads after first paint): the bake's answer stands, not pending, asked at `ready` as at
         // data_ready (review B3); another compiled value stands, stale, forced then (LLP 1027 D4). That ask's refusal
         // fails it, not the commit; a commit refused otherwise is followed by one failing it.
-        // Show the build-time answer again for a root resource the boot passed over: the runner adopts a compiled
-        // value while its source is not ready, but for an instance (one with a `path`, each.js `own`) after the boot.
-        // Showing its placeholder with no answer taken, it is still the one the boot passed over, as a source once
-        // ready is never not ready again.
-        if (r.path === undefined && !kept && !carried && initial !== undefined && r.stand === null && r.placeholder) {
-          r.value = initial;
-          r.settled = initialArgs;
+        // A root resource idle at its first settlement shows the build-time answer it passed over: the runner adopts
+        // a compiled value in any settlement while the source is not ready, but for an instance (one with a `path`,
+        // each.js `own`) after the boot. The runner says the journal's line only of its boot, so this says none.
+        if (r.passed && r.stand === null) {
+          [r.value, r.settled] = r.passed;
           r.stand = 'build';
           r.placeholder = false;
+          quiet = true;
           Inspections.stoodIn(r);
         }
-        const shown = baked && eq(a, r.settled);
+        // Not pending while a build-time answer shows for these arguments, however often it is asked before then
+        const shown = (baked || r.stand === 'build') && eq(a, r.settled);
         r.launch = !forced && waited !== false;
         if (!shown) {
           hold();
@@ -560,7 +564,8 @@ export function res(
         }
         return r.value;
       })(),
-      r.settled ?? r.asked,
+      // idle before any answer, it has read no arguments: none, as the runner's placeholder state
+      r.settled ?? r.asked ?? [],
       r.origin,
     );
     flag(
