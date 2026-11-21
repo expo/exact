@@ -16,6 +16,22 @@
 import AVFoundation
 import UIKit
 
+/// The node a view lay in as a press found it: a pooled view lent to another node since, or a native control kept
+/// as its node was rebound, is that node's no longer (`incarnation`, LLP 1068 §4.9)
+struct PressedNode {
+    weak var node: NodeView?
+    let incarnation: UInt64
+    init?(_ view: UIView) {
+        guard let node = NodeView.innermost(view) else { return nil }
+        self.node = node
+        incarnation = node.incarnation
+    }
+    func still(_ view: UIView) -> Bool {
+        guard let node, node.incarnation == incarnation else { return false }
+        return NodeView.innermost(view) === node
+    }
+}
+
 final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditMenuInteractionDelegate {
     private weak var presenter: Presenter?
     private weak var menus: MenuHost?
@@ -70,6 +86,8 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         /// The view a long press in a sheet fell on, when the menu is a
         /// logical ancestor's behind the sheet: its preview lifts that.
         weak var touched: UIView?
+        /// The node `touched` lay in as the press found it
+        var touchedNode: PressedNode?
         weak var homePopover: NodeView?
         weak var container: UIView?
         var inPopover = true
@@ -92,7 +110,33 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     private(set) var open: Open?
     /// The menu that set focus aside, until dismissal finishes or its interaction comes off
     private var focusOwner: (configuration: NSObject, interaction: UIInteraction)?
-    private var stages: [ObjectIdentifier: LiftStage] = [:]
+    /// Each presentation's lift, by its configuration, until the presentation ends (`willEndFor`): an authored close
+    /// lets the presentation's record go before UIKit asks for the return, which then comes from here (`returning`).
+    private var lifts: [ObjectIdentifier: Lift] = [:]
+    /// Where a presentation's node lifts: its stage, the view on it and that preview's parameters, and the node
+    /// the menu is for as it was then (its view may be lent to another node, or its cell to another row)
+    private final class Lift {
+        weak var configuration: UIContextMenuConfiguration?
+        let stage: LiftStage
+        weak var view: UIView?
+        weak var source: NodeView?
+        let sourceID: UInt32, incarnation: UInt64
+        /// The node the lifted view lay in, where that view is not the source (a row in a sheet the press fell on)
+        let lifted: PressedNode?
+        /// Whether its menu showed: UIKit then ends the presentation (`willEndFor`), and the lift waits for that
+        var displayed = false
+        /// Whether its preview's press navigated: its node is under the new screen, and nothing returns there
+        var navigated = false
+        init(_ configuration: UIContextMenuConfiguration, _ stage: LiftStage, _ view: UIView, _ source: NodeView) {
+            self.configuration = configuration; self.stage = stage; self.view = view
+            self.source = source; sourceID = source.id; incarnation = source.incarnation
+            lifted = view === source ? nil : PressedNode(view)
+        }
+    }
+    /// `configuration`'s lift; none for a configuration another took the place of in memory
+    private func lift(for configuration: UIContextMenuConfiguration) -> Lift? {
+        lifts[ObjectIdentifier(configuration)].flatMap { $0.configuration === configuration ? $0 : nil }
+    }
     private var animations = 0
     var inTransition: Bool { animations > 0 }
 
@@ -411,13 +455,14 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         guard link != nil || pop != nil else { log("context menu \(name) refused: no popover has that id"); return nil }
         // A press released before its menu showed never reached `willEnd`: its record goes, and its stage once UIKit is done with it.
         if let previous = open { restore(previous) }
-        for (key, stage) in stages where stage.release() { stages[key] = nil }
+        // A shown menu's lift waits for its end, unless UIKit has let its configuration go without one
+        for (key, lift) in lifts where !lift.displayed || lift.configuration == nil { if lift.stage.release() { lifts[key] = nil } }
         let owner = Open(source: source, popover: pop, name: name, point: point, inlineID: run?.id, linkURL: link?.url)
         owner.interaction = interaction
         owner.fromTitle = fromTitle
         // A title's lift is the popover's as written when the press begins, before its `contextmenu` can change it
         if fromTitle { _ = liftsAvatar(owner) }
-        if !(view is NodeView) { owner.touched = hit }
+        if !(view is NodeView) { owner.touched = hit; owner.touchedNode = hit.flatMap(PressedNode.init) }
         open = owner
         // A run's picture as the finger lands: UIKit asks for the configuration
         // before a press it starts has drawn (measured), so the picture holds
@@ -579,7 +624,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         // A title the bar no longer shows has no place to lift from or return to
         if owner.fromTitle, (owner.interaction?.view as? TitleMenuSurface)?.showsSource != true { return nil }
         // A view the touch fell on that has left the window gives way to the node
-        let shown = owner.touched.flatMap { $0.window == nil ? nil : $0 } ?? source
+        let shown = owner.touched.flatMap { $0.window != nil && owner.touchedNode?.still($0) != false ? $0 : nil } ?? source
         // A title with no preview row lifts its avatar alone, in its outline
         if owner.fromTitle, liftsAvatar(owner) {
             // Decided at the first ask: the avatar then, or none, which lifts the whole title throughout
@@ -594,24 +639,51 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
             }
         }
         if source.placedAncestor?.placement != nil { return Self.placedPreview(of: shown, in: source) }
+        let parameters = Self.lifted(shown)
+        // In its parent, which moves, fades and clips it as it is (over the controller's view where a box already cuts
+        // it, `LiftTarget.target`), unless a box that clips would cut it as UIKit grows it (a strip as tall as its
+        // cards) and a stage can take its parent's space
+        guard LiftStage.cut(shown), LiftStage.carries(shown) else {
+            return LiftTarget.target(shown).map { UITargetedPreview(view: shown, parameters: parameters, target: $0) }
+        }
+        let key = ObjectIdentifier(configuration)
+        let kept = lift(for: configuration).map { $0.view === shown && $0.stage.holds(shown) } ?? false
+        if !kept {
+            lifts[key]?.stage.release()
+            lifts[key] = LiftStage(for: shown).map { Lift(configuration, $0, shown, source) }
+        }
+        guard let lift = lifts[key], let target = LiftTarget.target(shown, on: lift.stage) else { return nil }
+        return UITargetedPreview(view: shown, parameters: parameters, target: target)
+    }
+
+    /// The return of a presentation whose record an authored close let go (`close`): its node back onto the stage
+    /// it lifted on, while it still shows where it lifted from
+    private func returning(_ configuration: UIContextMenuConfiguration) -> UITargetedPreview? {
+        guard open?.configuration !== configuration, let lift = lift(for: configuration), !lift.navigated, let view = lift.view,
+              let source = lift.source, live(source), source.id == lift.sourceID, source.incarnation == lift.incarnation,
+              // a node the app hid (`display: none`, or a `visibility` other than visible) is gone for the return, though UIKit
+              // hides it while lifted
+              ![source, lift.lifted?.node].contains(where: { $0?.style["display"]?.string == "none" || $0?.cssVisibilityHidden == true }),
+              // The node itself, a list's cell still showing its row, or a node the press fell on that is still that node: a
+              // view inside a cell may stand for another row by then, which its node cannot tell, and UIKit's own return serves it
+              view === source || (view as? GroupedMenuSurface)?.menuSource === source || lift.lifted.map({ $0.node === view && $0.still(view) }) == true else { return nil }
+        // Where a stage can no longer carry it, where the highlight would stand without one (`LiftStage.carries`)
+        guard let target = LiftStage.carries(view) ? LiftTarget.target(view, on: lift.stage) : LiftTarget.target(view) else { return nil }
+        return UITargetedPreview(view: view, parameters: Self.lifted(view), target: target)
+    }
+
+    /// The parameters of `view` lifted as its own preview, from its outline and fill as they are now
+    private static func lifted(_ view: UIView) -> UIPreviewParameters {
         let parameters = UIPreviewParameters()
-        parameters.visiblePath = LiftTarget.rounded(shown)
+        parameters.visiblePath = LiftTarget.rounded(view)
         // UIKit's lifted copy leaves out the view's own layer fill (as a
         // pull-down's stand-in does, `MenuFocus.lendFill`): the preview's ground
         // is that fill, so a chat bubble keeps its colour, not UIKit's white. A
         // fill drawn otherwise (`background-clip: text`) is in the copy already.
-        if let fill = shown.ownFill, fill.alpha > 0 {
+        if let fill = view.ownFill, fill.alpha > 0 {
             parameters.backgroundColor = UIColor(cgColor: fill)
         }
-        // Where the parent's space is no plane's affine map (an authored perspective), the node stands in it, which carries that
-        guard LiftStage.carries(shown) else { return LiftTarget.targetInParent(shown).map { UITargetedPreview(view: shown, parameters: parameters, target: $0) } }
-        let key = ObjectIdentifier(configuration)
-        if stages[key]?.holds(shown) != true {
-            stages[key]?.release()
-            stages[key] = LiftStage(for: shown)
-        }
-        guard let stage = stages[key], let target = LiftTarget.target(shown, on: stage) else { return nil }
-        return UITargetedPreview(view: shown, parameters: parameters, target: target)
+        return parameters
     }
 
     /// Whether a title's menu lifts its avatar alone: its popover holds no
@@ -1264,7 +1336,8 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     }
     func contextMenuInteraction(_ interaction: UIContextMenuInteraction, configuration: UIContextMenuConfiguration, dismissalPreviewForItemWithIdentifier identifier: NSCopying) -> UITargetedPreview? {
         // After a commit that navigated, the source is under the new screen.
-        open?.navigated == true ? nil : targeted(configuration)
+        if let owner = open, owner.configuration === configuration, owner.navigated { return nil }
+        return targeted(configuration) ?? returning(configuration)
     }
 
     /// The preview tapped: its row's press, as a tap on it would be.
@@ -1301,6 +1374,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         // would (measured on iOS 27). The pushed screen's layout is the one.
         if presenter.navigation.activeKey != before {
             owner.navigated = true
+            if let configuration = owner.configuration { lift(for: configuration)?.navigated = true }
             animator.preferredCommitStyle = .pop
             animator.addAnimations { [weak presenter] in presenter?.session?.view?.layoutIfNeeded() }
             // The row back when the morph is done, if `willEndFor` has not
@@ -1337,6 +1411,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     /// the software keyboard up over the menu (MenuFocusIOS.swift).
     func contextMenuInteraction(_ interaction: UIContextMenuInteraction, willDisplayMenuFor configuration: UIContextMenuConfiguration, animator: UIContextMenuInteractionAnimating?) {
         track(animator)
+        if let lift = lift(for: configuration) { lift.displayed = true; lift.stage.held = true }
         focusOwner = (configuration, interaction)
         menus?.focus.setAside()
         if let owner = open, let pop = owner.popover { owner.toggled = true; presenter?.popoverEvents.changed(pop, open: true) }
@@ -1344,8 +1419,15 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
 
     func contextMenuInteraction(_ interaction: UIContextMenuInteraction, willEndFor configuration: UIContextMenuConfiguration, animator: UIContextMenuInteractionAnimating?) {
         track(animator)
-        if let stage = stages.removeValue(forKey: ObjectIdentifier(configuration)) {
-            if let animator { animator.addCompletion { stage.release() } } else { stage.release() }
+        // Its lift answers UIKit's return until the end's animation completes
+        if let lift = lift(for: configuration) {
+            let key = ObjectIdentifier(configuration)
+            let end = { [weak self, weak lift] in
+                guard let self, let lift else { return }
+                lift.stage.release()
+                if lifts[key] === lift { lifts[key] = nil }
+            }
+            if let animator { animator.addCompletion(end) } else { end() }
         }
         let focus: () -> Void = { [weak self] in self?.restoreFocus(for: configuration) }
         if let animator { animator.addCompletion(focus) } else { focus() }
@@ -1372,8 +1454,8 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     }
 
     func reset() {
-        for stage in stages.values { stage.end() }
-        stages.removeAll()
+        for lift in lifts.values { lift.stage.end() }
+        lifts.removeAll()
         focusOwner = nil
         keyboardInteraction.dismissMenu()
         for interaction in projected.values {
