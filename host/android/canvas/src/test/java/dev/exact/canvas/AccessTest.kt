@@ -142,10 +142,13 @@ class AccessTest {
         assertEquals(listOf(1 to 6), Acts.asked)
     }
 
-    /** Android 12, which has no Start drag (API 32 adds it), offers none. */
-    @Test fun noStartDragBeforeApi32() {
+    /** Android 12, which has no Start drag (API 32 adds it), offers none and takes none. */
+    @Test @Config(shadows = [Acts::class]) fun noStartDragBeforeApi32() {
+        Acts.asked.clear()
         val access = told(listOf(Said(1, 0, Access.GROUP, "Ochre dunes", flags = Access.DRAG)))
         assertTrue(access.provider.createAccessibilityNodeInfo(1)!!.actionList.none { it.id == android.R.id.accessibilityActionDragStart })
+        assertFalse(access.provider.performAction(1, android.R.id.accessibilityActionDragStart, null))
+        assertEquals(listOf<Pair<Int, Int>>(), Acts.asked)
     }
 
     /** exact2's side of an act: each node and act asked, all taken. */

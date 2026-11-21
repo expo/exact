@@ -90,7 +90,9 @@ internal object DragOut {
         val items = found.map { ClipData.Item(it.first) } + words.map { ClipData.Item(it) }
         if (items.isEmpty()) return null
         val types = found.map { it.second } + words.map { ClipDescription.MIMETYPE_TEXT_PLAIN }
-        val label = found.firstOrNull()?.third ?: text.ifEmpty { url }
+        // Other windows see the label when the drag starts, before any drop: a file's name, else none, as a TextView's
+        // drag of text has.
+        val label = found.firstOrNull()?.third
         return ClipData(ClipDescription(label, types.distinct().toTypedArray()), items.first()).apply { items.drop(1).forEach(::addItem) }
     }
 

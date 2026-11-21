@@ -10,6 +10,11 @@
     <!-- A GPU surface's haptics play on the vibrator (LLP 1009 D10), which needs this normal permission; `haptic()`
          and a press's haptic need none (`performHapticFeedback`). Nothing is asked of the person. -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- The chooser's result broadcast (Requests.listen): before Android 13 a receiver registered at run time is
+         exported, so it takes the broadcast only from a sender holding this permission, which only an app signed with
+         this app's certificate can hold. -->
+    <permission android:name="${applicationId}.exact.SHARED" android:protectionLevel="signature" />
+    <uses-permission android:name="${applicationId}.exact.SHARED" />
     <!-- No usesCleartextTraffic and no Network Security Config, for any app: its `fetch` and WebSocket are the Rust
          transport's own sockets, which Android's cleartext policy does not govern ("there's no expectation that the
          Socket API honors this flag"), so `http:` and `ws:` reach any host the grants admit with no key (on Apple,

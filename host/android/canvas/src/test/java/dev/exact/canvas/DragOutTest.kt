@@ -73,7 +73,7 @@ class DragOutTest {
     }
 
     /** A missing file, one outside the assets that exists, and an unknown scheme are left out and journaled; with
-     * nothing else, there is no drag, and the label is a carried file's or the text. */
+     * nothing else, there is no drag, and with no file there is no label. */
     @Test fun aFileTheAppDoesNotHaveIsLeftOut() {
         File(context.filesDir, "outside.txt").writeText("not shipped")
         val none = { _: String -> null }
@@ -81,7 +81,8 @@ class DragOutTest {
         assertNull(DragOut.clip(context, "", "", refused, assets, none))
         assertEquals(refused.map { "drag: $it could not be read: the app has no such file, so the drag leaves it out" }, Journal.lines)
         val clip = DragOut.clip(context, "kept", "", listOf("assets/missing.png"), assets, none)!!
-        assertEquals(listOf("kept", "kept"), listOf(clip.getItemAt(0).text.toString(), clip.description.label.toString()))
+        assertEquals("kept", clip.getItemAt(0).text.toString())
+        assertNull("other windows see the label before any drop", clip.description.label)
     }
 
     /** A service's drag says it is one where the platform has the flag, API 32 and later. */
@@ -93,8 +94,9 @@ class DragOutTest {
     }
 
     /** The sheet's intent: text alone; one file as its stream with its type; files of one family as several streams
-     * typed by the family; files of two families as any type; each with the clip and the read grant the chooser passes
-     * on. */
+     * typed by the family, their text a list with an entry for each; files of two families as any type; each with the
+     * clip, which says the streams' types and carries the text on its first item, and the read grant the chooser
+     * passes on. */
     @Test fun theSheetIsGivenTheFilesAsStreamsWithAReadGrant() {
         val text = Requests.sendIntent("A post", "Read this", emptyList())
         assertEquals(listOf(Intent.ACTION_SEND, "text/plain", "Read this", "A post"),
@@ -107,10 +109,13 @@ class DragOutTest {
         @Suppress("DEPRECATION")
         assertEquals(listOf(Intent.ACTION_SEND, "image/png", a.first), listOf(one.action, one.type, one.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)))
         assertFalse("no empty text beside a file", one.hasExtra(Intent.EXTRA_TEXT))
-        val two = Requests.sendIntent(null, "", listOf(a, b))
+        val two = Requests.sendIntent(null, "Two photos", listOf(a, b))
         @Suppress("DEPRECATION")
-        assertEquals(listOf(Intent.ACTION_SEND_MULTIPLE, "image/*", listOf(a.first, b.first)),
-            listOf(two.action, two.type, two.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)))
+        assertEquals(listOf(Intent.ACTION_SEND_MULTIPLE, "image/*", listOf(a.first, b.first), listOf("Two photos", "")),
+            listOf(two.action, two.type, two.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM), two.getCharSequenceArrayListExtra(Intent.EXTRA_TEXT)?.map { it.toString() }))
+        assertEquals(listOf("image/png", "image/jpeg"), (0 until two.clipData!!.description.mimeTypeCount).map { two.clipData!!.description.getMimeType(it) })
+        assertEquals(listOf("Two photos", null), (0 until two.clipData!!.itemCount).map { two.clipData!!.getItemAt(it).text?.toString() })
+        assertEquals(listOf("image/png"), (0 until one.clipData!!.description.mimeTypeCount).map { one.clipData!!.description.getMimeType(it) })
         assertEquals("*/*", Requests.sendIntent(null, "", listOf(a, c)).type)
         for (send in listOf(one, two)) {
             assertTrue(send.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)

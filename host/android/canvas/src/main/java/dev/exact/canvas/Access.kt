@@ -270,7 +270,7 @@ internal class Access(private val host: View) {
                 AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS -> unfocus(id)
                 AccessibilityNodeInfo.ACTION_CLICK -> n.has(CLICK) && Exact.accessAct(id, PRESS, 0f)
                 AccessibilityNodeInfo.ACTION_LONG_CLICK -> n.has(LONG_CLICK) && Exact.accessAct(id, HOLD, 0f)
-                android.R.id.accessibilityActionDragStart -> n.has(DRAG) && Exact.accessAct(id, DRAG_START, 0f)
+                android.R.id.accessibilityActionDragStart -> drags(n) && Exact.accessAct(id, DRAG_START, 0f)
                 AccessibilityNodeInfo.ACTION_EXPAND -> n.has(EXPANDABLE) && !n.has(EXPANDED) && n.has(CLICK) && Exact.accessAct(id, PRESS, 0f)
                 AccessibilityNodeInfo.ACTION_COLLAPSE -> n.has(EXPANDED) && n.has(CLICK) && Exact.accessAct(id, PRESS, 0f)
                 AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, android.R.id.accessibilityActionScrollDown, android.R.id.accessibilityActionScrollRight ->
@@ -391,7 +391,7 @@ internal class Access(private val host: View) {
         // What a double tap does. A tab that is selected takes none, as Material's does not.
         if (n.has(CLICK) && !(n.role == TAB && n.has(SELECTED))) { info.isClickable = true; info.addAction(AccessibilityAction.ACTION_CLICK) }
         if (n.has(LONG_CLICK)) { info.isLongClickable = true; info.addAction(AccessibilityAction.ACTION_LONG_CLICK) }
-        if (n.has(DRAG) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S_V2) info.addAction(AccessibilityAction.ACTION_DRAG_START)
+        if (drags(n)) info.addAction(AccessibilityAction.ACTION_DRAG_START)
         if (n.has(EXPANDABLE) && n.has(CLICK)) info.addAction(if (n.has(EXPANDED)) AccessibilityAction.ACTION_COLLAPSE else AccessibilityAction.ACTION_EXPAND)
         // A range steps forward and back, as a SeekBar does; only a native one is set to a value (a drawn one steps by its author's keys).
         if (n.role == SCROLLER || n.role == LIST_BOX || n.has(RANGE)) {
@@ -564,6 +564,9 @@ internal class Access(private val host: View) {
     }
 
     private fun changed(id: Int, types: Int) = send(id, AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) { it.contentChangeTypes = types }
+
+    /** Whether a service may drag [n]: it drags, on API 32 and later, where Android has the drag's actions. */
+    private fun drags(n: Node) = n.has(DRAG) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S_V2
 
     /** An event from node [id], or from the view itself. */
     private fun send(id: Int, type: Int, fill: ((AccessibilityEvent) -> Unit)? = null) {

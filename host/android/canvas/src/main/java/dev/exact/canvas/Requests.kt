@@ -4,6 +4,7 @@ import android.app.PendingIntent
 import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.ClipData
+import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -77,11 +78,14 @@ internal class Requests(private val activity: ExactActivity) {
         sound?.apply(body)
     }
 
+    /** Hears the chooser's result broadcast. Before Android 13 a receiver registered at run time is exported, so the
+     * broadcast must come from a sender holding [shared], a permission of this app's signature (`AndroidManifest.xml`);
+     * the chooser sends it as this app, which made its `PendingIntent`. */
     private fun listen() {
         if (listening) return
         listening = true
         if (Build.VERSION.SDK_INT >= 33) activity.registerReceiver(receiver, IntentFilter(shared), Context.RECEIVER_NOT_EXPORTED)
-        else activity.registerReceiver(receiver, IntentFilter(shared))
+        else activity.registerReceiver(receiver, IntentFilter(shared), shared, null)
     }
 
     /** The requests in [words]: for each its kind, its id, the count of words that follow, and those words. A kind
@@ -327,19 +331,28 @@ internal class Requests(private val activity: ExactActivity) {
         /**
          * The Sharesheet's intent: the text and the URL as its text, the title as its subject, and [files] (content URIs
          * and their types) as its streams, typed by the one type they share, else by their one family with any subtype,
-         * else as any type, with a read grant the chooser passes on to the app chosen (`Intent.createChooser`).
+         * else as any type, with a read grant the chooser passes on to the app chosen (`Intent.createChooser`). Several
+         * files are `ACTION_SEND_MULTIPLE`, whose text is a list with an entry for each stream, the first the text
+         * (`Intent.ACTION_SEND_MULTIPLE`, `Intent.migrateExtraStreamToClipData`).
          */
         fun sendIntent(title: String?, words: String, files: List<Pair<Uri, String>>): Intent {
-            val send = Intent(if (files.size > 1) Intent.ACTION_SEND_MULTIPLE else Intent.ACTION_SEND).setType("text/plain")
-            if (words.isNotEmpty() || files.isEmpty()) send.putExtra(Intent.EXTRA_TEXT, words)
+            val many = files.size > 1
+            val send = Intent(if (many) Intent.ACTION_SEND_MULTIPLE else Intent.ACTION_SEND).setType("text/plain")
+            if (words.isNotEmpty() || files.isEmpty()) {
+                if (many) send.putCharSequenceArrayListExtra(Intent.EXTRA_TEXT, ArrayList<CharSequence>(files.indices.map { if (it == 0) words else "" }))
+                else send.putExtra(Intent.EXTRA_TEXT, words)
+            }
             if (title != null) { send.putExtra(Intent.EXTRA_SUBJECT, title); send.putExtra(Intent.EXTRA_TITLE, title) }
             if (files.isEmpty()) return send
-            val types = files.map { it.second }.toSet()
+            val types = files.map { it.second }.distinct()
             val families = types.map { it.substringBefore('/') }.toSet()
             send.type = types.singleOrNull() ?: families.singleOrNull()?.let { "$it/*" } ?: "*/*"
             val uris = ArrayList(files.map { it.first })
-            if (uris.size == 1) send.putExtra(Intent.EXTRA_STREAM, uris[0]) else send.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
-            send.clipData = ClipData.newRawUri(null, uris[0]).apply { uris.drop(1).forEach { addItem(ClipData.Item(it)) } }
+            if (many) send.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris) else send.putExtra(Intent.EXTRA_STREAM, uris[0])
+            // The clip says what its streams are, as a receiver may ask it before opening one, and its first item carries
+            // the text, as Android's own clip from the extras does (`Intent.migrateExtraStreamToClipData`).
+            val first = ClipData.Item(words.ifEmpty { null }, null, uris[0])
+            send.clipData = ClipData(ClipDescription(null, types.toTypedArray()), first).apply { uris.drop(1).forEach { addItem(ClipData.Item(it)) } }
             send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             return send
         }
