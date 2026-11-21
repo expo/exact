@@ -161,14 +161,16 @@ test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('a cached names b
 // Each way the core could reach a stage before it loads is refused: a seam wasm-opt merged with an identical core
 // callback, which then fills the callback's table slot too or is exported in its place; a start function, which the
 // call graph does not root; a second crate that shares the SDK's path; a direct call from a table root, whatever its
-// name; and a call through the seam's slot by a constant index, which is as direct.
+// name; a call through the seam's slot by a constant index, which is as direct; a table or an import the module shares
+// with a script, or code that writes the table; and, once split, a stage that changes a slot the core holds or a
+// reference to the seam outside its slot.
 test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('a split the core could reach early is refused', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-web-merged-seam-'));
   const other = HANDLE.replace('C12exact_runner', 'Cs1_12exact_runner');
   const cases = [
     ['in 2 table slots', true, `(table 2 funcref) (elem (i32.const 0) $${HANDLE} $callback)
       (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $callback (type $read) (result i32) i32.const 0)
-      (func (export "boot") (result i32) i32.const 1 call_indirect (type $read))`],
+      (global $slot (export "slot") (mut i32) (i32.const 1)) (func (export "boot") (result i32) global.get $slot call_indirect (type $read))`],
     ['exported', true, `(table 1 funcref) (elem (i32.const 0) $${HANDLE})
       (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $callback (export "boot") (type $read) (result i32) i32.const 0)`],
     ['start function', false, `(table 1 funcref) (elem (i32.const 0) $${HANDLE}) (global $g (mut i32) (i32.const 0))
@@ -185,16 +187,24 @@ test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('a split the core
       (func $${HANDLE} (type $read) (result i32) i32.const 0)`],
     ['TableSet', false, `(table 2 funcref) (elem (i32.const 0) $${HANDLE}) (elem declare func $${HANDLE})
       (func $${HANDLE} (type $read) (result i32) i32.const 0) (func (export "copy") (table.set (i32.const 1) (ref.func $${HANDLE})))`],
-    // A slot whose first function the planner cannot know, and a reference that leaves the table
-    ['no constant', false, `(import "env" "base" (global $base i32)) (table 1 funcref) (elem (global.get $base) $${HANDLE})
+    // An import other than a function's, here a global a segment's offset reads, so a slot's first function is unknown
+    ['imports a table, a memory, a global', false, `(import "env" "base" (global $base i32)) (table 1 funcref) (elem (global.get $base) $${HANDLE})
       (func $${HANDLE} (type $read) (result i32) i32.const 0)`],
-    ['fill one slot', false, `(table 2 funcref) (elem (i32.const 0) $${HANDLE} $callback) (elem (i32.const 1) $${HANDLE})
-      (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $callback (type $read) (result i32) i32.const 1)`],
-    ['leaves the table', false, `(table 1 funcref) (elem (i32.const 0) $${HANDLE}) (elem declare func $${HANDLE})
+    // References to the seam outside its slot, in code or a global, which wasm-split would make trampolines for, and a
+    // null entry, which keeps them from being counted
+    ['leaves the element segments', false, `(table 1 funcref) (elem (i32.const 0) $${HANDLE}) (elem declare func $${HANDLE})
       (func $${HANDLE} (type $read) (result i32) i32.const 0) (func (export "get") (result funcref) (ref.func $${HANDLE}))`],
+    ['leaves the element segments', false, `(table 1 funcref) (elem (i32.const 0) $${HANDLE}) (global $held (export "held") funcref (ref.func $${HANDLE}))
+      (func $${HANDLE} (type $read) (result i32) i32.const 0)`],
+    ['null function reference', false, `(table 3 funcref) (elem (i32.const 0) funcref (ref.func $${HANDLE}) (ref.null func) (ref.func $callback))
+      (elem declare func $${HANDLE}) (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $callback (type $read) (result i32) i32.const 1)
+      (func (export "get") (result funcref) (ref.func $${HANDLE}))`],
+    // Found once split: a stage's segment that, loaded, writes over a slot the core holds
+    ['changes slot 0', false, `(table 1 funcref) (elem (i32.const 0) $${HANDLE}) (elem (i32.const 0) $callback)
+      (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $callback (type $read) (result i32) i32.const 1)`, true],
   ];
   try {
-    for (const [refusal, optimized, body] of cases) {
+    for (const [refusal, optimized, body, split] of cases) {
       const input = resolve(dir, 'app.wasm'), wat = resolve(dir, 'app.wat'), named = resolve(dir, 'app.named.wasm');
       writeFileSync(wat, `(module (type $read (func (result i32))) ${body} (global $hook (export "hook") (mut i32) (i32.const 0))
         (func (export "read") (result i32) global.get $hook call_indirect (type $read)))`);
@@ -202,7 +212,7 @@ test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('a split the core
       if (optimized) expect(optimizeWasm(input, named, ['-Oz', '-g'], resolve(dir, `cache-${refusal}`)).status).toBe(0);
       // A direct call into the seam fails the build; every other refusal ships the module unsplit.
       let thrown;
-      try { planStages(optimized ? named : input); } catch (e) { thrown = e; }
+      try { (split ? splitStages : planStages)(optimized ? named : input); } catch (e) { thrown = e; }
       expect([refusal, thrown?.message.includes(refusal), thrown instanceof Unsplittable]).toEqual([refusal, true, !refusal.startsWith('directly')]);
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }

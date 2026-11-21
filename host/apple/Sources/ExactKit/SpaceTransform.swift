@@ -281,10 +281,8 @@ extension NodeView {
                           height: PixelGrid.length(content.height, from: place.origin, vertical: true, scale: scale))
         } ?? content
         var reach = drawnRect(CGRect(origin: .zero, size: extent), in: document)
-        // Each box goes with whether it or a box above it carries drawn
-        // points. Below none, the platform's conversion is `drawnRect`, and
-        // this pass, which runs at every batch, walks each box's ancestors
-        // once rather than twice per corner.
+        // A canvas placement or an AppKit layer transform needs the drawn corners.
+        // Else the platform can convert the whole rectangle in one call.
         #if os(iOS) || os(tvOS)
         var below: [(NodeView, Bool, AxisClip?)] = [(self, placedAncestor != nil, nil)]
         #else
@@ -294,7 +292,7 @@ extension NodeView {
             guard child.style["display"]?.string != "none", child.props["semanticTag"] != "dialog",
                   child.props["popover"] == nil else { continue }
             if child.bounds.width > 0, child.bounds.height > 0 {
-                let raw = carried ? child.drawnRect(child.bounds, in: document) : child.convertedRect(child.bounds, to: document)
+                let raw = carried ? child.drawnRect(child.bounds, in: document) : child.convert(child.bounds, to: document)
                 if raw.origin.x.isFinite, raw.origin.y.isFinite, raw.width.isFinite, raw.height.isFinite,
                    let box = clip == nil ? raw : clip!.apply(raw) {
                     reach = reach.union(box)
@@ -310,7 +308,7 @@ extension NodeView {
             if !child.overflowClips {
                 childClip = clip
             } else if child.clipsOneAxis {
-                let pad = carried ? child.drawnRect(child.overflowPaddingBox, in: document) : child.convertedRect(child.overflowPaddingBox, to: document)
+                let pad = carried ? child.drawnRect(child.overflowPaddingBox, in: document) : child.convert(child.overflowPaddingBox, to: document)
                 guard pad.origin.x.isFinite, pad.origin.y.isFinite, pad.width.isFinite, pad.height.isFinite else { continue }
                 let base = clip ?? AxisClip()
                 let clipped = child.style["overflow_x"]?.string == "clip"
@@ -330,14 +328,5 @@ extension NodeView {
             below.append(contentsOf: child.childNodes.map { ($0, carried || $0.carriesDrawnPoints, childClip) })
         }
         return reach
-    }
-
-    /// The bounds in `top`'s coordinates of `r`'s corners, each converted by
-    /// the platform: `drawnRect` where no box on the way carries drawn points.
-    private func convertedRect(_ r: CGRect, to top: SpaceView) -> CGRect {
-        let corners = [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.minX, y: r.maxY)]
-            .map { convert($0, to: top) }
-        let xs = corners.map { $0.x }, ys = corners.map { $0.y }
-        return CGRect(x: xs.min()!, y: ys.min()!, width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
     }
 }

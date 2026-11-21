@@ -80,20 +80,41 @@ export function unsplitReason() {
 export class Unsplittable extends Error {}
 
 /** Each stage's functions (raw names) in `named`, a wasm that keeps its name
- * section. Throws `Unsplittable` when it cannot show that the core reaches a
- * stage only through its seam's one table slot, which the glue gates, and an
- * `Error` when the core calls a seam directly or no function is one. */
+ * section. Throws an `Error` when no function is a stage's seam or the core
+ * calls one directly, which fail the build (LLP 1047.000 §9), and
+ * `Unsplittable` when it cannot show that the core reaches a stage only
+ * through its seam's one table slot, which the glue gates. */
 export function planStages(named, stages = STAGES) {
   const bytes = readFileSync(named);
+  // What fails the build whatever the module's shape comes first, off the plain call graph.
+  const graph = callGraph(named, []);
+  const plan = planOn(graph, stages);
   // The call graph roots exports and table slots, not a start function, which runs at instantiation.
   if (hasStart(bytes)) throw new Unsplittable(`${named} has a start function, which the call graph does not root, so the planner cannot tell whether instantiation reaches a stage`);
   const shape = unprovable(named, bytes);
-  if (shape) throw new Unsplittable(`${named}: ${shape}, so the call graph may not hold every call into a stage`);
-  // A `call_indirect` of a constant slot is a call the core makes as surely as a direct one: `--directize` makes it
-  // one, so the direct-call check below sees it, taking each slot's first function as its function, which
-  // `unprovable` has shown nothing changes but a stage's own instantiation, filling its own slots. A slot read at run
-  // time, as the hook `HostLinks::of` installs, stays the gate's to guard.
-  const graph = run('wasm-opt', [named, '--directize', '--pass-arg=directize-initial-contents-immutable', '--print-call-graph', ...FEATURES, '-o', devNull]);
+  if (shape) throw new Unsplittable(`${named}: ${shape}, so a table slot may hold another function at run time than the one it starts with`);
+  for (const { stage, entry } of plan.entries) {
+    // The glue gates a seam's one table slot. An export, or another slot (a function wasm-opt merged with the seam
+    // once filled its own), is a way the core may reach the stage before it loads, and would find it empty.
+    const { exported, slots } = graph.nodes.get(entry);
+    if (exported || slots !== 1) throw new Unsplittable(`stage ${stage.name}: its seam ${plan.demangled.get(entry)} is ${exported ? 'exported' : `in ${slots} table slots`}, so the core may reach it other than through the gated slot, which a split leaves empty until the stage loads`);
+  }
+  for (const stage of stages) {
+    const crates = new Set(plan.seams.get(stage.name).map(entry => stage.seam.exec(entry)[1]));
+    if (crates.size > 1) throw new Unsplittable(`stage ${stage.name}: its seam ${stage.seam} matches functions of ${crates.size} crates, so another crate shares the SDK's path`);
+  }
+  // A `call_indirect` of a constant slot is a call the core makes as surely as a direct one: `--directize`, taking each
+  // slot's first function as its function, which `unprovable` has shown nothing but a stage's own instantiation
+  // changes, makes it one, which fails the build as a direct call does. A slot read at run time, as the hook
+  // `HostLinks::of` installs, stays the gate's to guard.
+  return planOn(callGraph(named, ['--directize', '--pass-arg=directize-initial-contents-immutable']), stages).planned;
+}
+
+/** Binaryen's call graph of the module at `named`, run through `passes` first: each function's node (exported, the
+ * table slots it fills), and its calls each way. Every line must be one the printer writes; a name it cannot write
+ * whole, with a line break, ends the plan as `Unsplittable`. */
+function callGraph(named, passes) {
+  const graph = run('wasm-opt', [named, ...passes, '--print-call-graph', ...FEATURES, '-o', devNull]);
   if (graph.status !== 0) throw new Error(`wasm-opt --print-call-graph failed: ${graph.stderr}`);
   const nodes = new Map(), calls = new Map(), callers = new Map();
   // The graph's key is a subgraph of example nodes, which a function may share a name with ("B").
@@ -115,14 +136,22 @@ export function planStages(named, stages = STAGES) {
       if (/fillcolor="gray"/.test(node[2])) seen.exported = true;
       if (/rounded/.test(node[2])) seen.slots++;
       nodes.set(node[1], { ...seen, root: seen.exported || seen.slots > 0 });
+      continue;
     }
+    if (!/^\s*(digraph call \{|rankdir = LR;|node \[shape=box, fontname=courier, fontsize=10\];|\})?\s*$/.test(line)) throw new Unsplittable(`${named}: a function name the call graph cannot hold whole, so it may hide a call`);
   }
   for (const name of [...calls.keys(), ...callers.keys()]) if (!nodes.has(name)) nodes.set(name, { exported: false, slots: 0, root: false });
-  const raw = [...nodes.keys()];
+  return { nodes, calls, callers };
+}
+
+/** Each stage's functions on `graph`: what its seam entries reach and the core does not. Throws when no function is a
+ * stage's seam, an entry is not address-taken, or the core calls one directly. */
+function planOn(graph, stages) {
+  const { nodes, calls, callers } = graph, raw = [...nodes.keys()];
   const plain = run('c++filt', [], { input: raw.join('\n') }).stdout.split('\n');
   const demangled = new Map(raw.map((name, i) => [name, normalizeDemangled(plain[i] ?? name)]));
-  const entries = new Map(stages.map(stage => [stage.name, raw.filter(name => stage.seam.test(name))]));
-  const seams = new Set([...entries.values()].flat());
+  const seams = new Map(stages.map(stage => [stage.name, raw.filter(name => stage.seam.test(name))]));
+  const all = new Set([...seams.values()].flat());
   const reach = (starts, blocked) => {
     const seen = new Set(), stack = [...starts];
     while (stack.length) {
@@ -133,88 +162,73 @@ export function planStages(named, stages = STAGES) {
     }
     return seen;
   };
-  const core = reach(raw.filter(name => nodes.get(name).root && !seams.has(name)), seams);
-  const planned = [];
+  const core = reach(raw.filter(name => nodes.get(name).root && !all.has(name)), all);
+  const planned = [], entries = [];
   for (const stage of stages) {
-    const seam = entries.get(stage.name);
+    const seam = seams.get(stage.name);
     if (!seam.length) throw new Error(`stage ${stage.name}: no function matches its seam ${stage.seam}`);
-    const crates = new Set(seam.map(entry => stage.seam.exec(entry)[1]));
-    if (crates.size > 1) throw new Unsplittable(`stage ${stage.name}: its seam ${stage.seam} matches functions of ${crates.size} crates, so another crate shares the SDK's path; build it unsplit`);
     for (const entry of seam) {
-      // The glue gates a seam's one table slot. An export, or another slot (a function wasm-opt merged with the seam
-      // once filled its own), is a way the core may reach the stage before it loads, and would find it empty.
       const { exported, slots } = nodes.get(entry);
       if (!exported && !slots) throw new Error(`stage ${stage.name}: ${demangled.get(entry)} is not address-taken, so it is no seam`);
-      if (exported || slots !== 1) throw new Unsplittable(`stage ${stage.name}: its seam ${demangled.get(entry)} is ${exported ? 'exported' : `in ${slots} table slots`}, so the core may reach it other than through the gated slot, which a split leaves empty until the stage loads; give the seam a body no other function shares, or build unsplit`);
       const direct = [...callers.get(entry) ?? []].filter(caller => core.has(caller));
       if (direct.length) throw new Error(`stage ${stage.name}: the core calls its seam ${demangled.get(entry)} directly from ${direct.slice(0, 3).map(c => demangled.get(c)).join(', ')}`);
+      entries.push({ stage, entry });
     }
     planned.push({ name: stage.name, functions: [...reach(seam, new Set())].filter(f => !core.has(f)) });
   }
-  return planned;
+  return { planned, entries, seams, demangled };
 }
 
-/** Why the planner cannot read every call into a stage off the call graph of the module at `named` (in `bytes`), or
- * null: what could change a table slot from its first function (a table imported or exported, which a script may write;
- * an instruction that sets, fills, copies, grows or initializes one), a slot whose first function is not plain (an
- * element segment at an offset that is no constant, or over another's slots), or a function reference that leaves the
- * table (`ref.func` in code or a global, or `table.get`), which wasm-split turns into a trampoline the stage fills. */
+/** Why the call graph of the module at `named` (in `bytes`) may not hold every way into a stage, as the engine and
+ * binaryen read the module, or null: a table it imports or exports, which a script may write; an import other than a
+ * function's; an instruction that sets, fills, copies, grows, initializes or reads a table; or a function reference
+ * outside the element segments, in code or a global, which wasm-split would turn into a trampoline into the stage.
+ * Binaryen counts each segment entry as a `ref.func` (`[table-data]`) and a null one as a `ref.null` too, so with no
+ * null the references beyond the entries are those. What a split leaves of the table is checked after it
+ * (`splitChecked`). */
 function unprovable(named, bytes) {
-  let at = 0;
-  const leb = () => { let value = 0; for (let shift = 0, byte = 0x80; byte & 0x80; shift += 7) { byte = bytes[at++]; value += (byte & 0x7f) * 2 ** shift; } return value; };
-  const sleb = () => { let value = 0, shift = 0, byte; do { byte = bytes[at++]; value += (byte & 0x7f) * 2 ** shift; shift += 7; } while (byte & 0x80); return byte & 0x40 ? value - 2 ** shift : value; };
-  const name = () => { const length = leb(); at += length; };
-  // A value type: one byte, or a reference's 0x63 or 0x64 and its heap type
-  const valueType = () => { const type = bytes[at++]; if (type === 0x63 || type === 0x64) sleb(); else if (type < 0x6f) return false; return true; };
-  // A constant offset: `i32.const n` and `end`
-  const offset = () => { if (bytes[at++] !== 0x41) return null; const value = sleb(); return bytes[at++] === 0x0b ? value : null; };
-  const slots = [];
-  for (at = 8; at < bytes.length;) {
-    const id = bytes[at++], size = leb(), end = at + size;
-    if (id === 2) {
-      for (let count = leb(); count > 0; count--) {
-        name(); name();
-        const kind = bytes[at++];
-        if (kind === 0) leb();
-        else if (kind === 1) return 'it imports a table';
-        else if (kind === 2) { const flags = bytes[at++]; if (flags & ~0xf) return 'it imports a memory the planner cannot read'; leb(); if (flags & 1) leb(); if (flags & 8) leb(); }
-        else if (kind === 3) { if (!valueType()) return 'it imports a global the planner cannot read'; at++; }
-        else if (kind === 4) { at++; leb(); }
-        else return 'it imports what the planner cannot read';
-      }
-      if (at !== end) return 'its imports are not as the planner reads them';
-    } else if (id === 7) {
-      for (let count = leb(); count > 0; count--) { name(); if (bytes[at++] === 1) return 'it exports a table'; leb(); }
-    } else if (id === 9) {
-      for (let count = leb(); count > 0; count--) {
-        const flags = leb();
-        if (flags > 7) return 'it has an element segment the planner cannot read';
-        const active = !(flags & 1), table = flags & 2 && active ? leb() : 0;
-        const start = active ? offset() : 0;
-        if (start === null) return 'an element segment starts at an offset that is no constant';
-        if (flags & 2 || !active) at++;
-        const items = leb();
-        for (let item = 0; item < items; item++) {
-          if (!(flags & 4)) { leb(); continue; }
-          const op = bytes[at++];
-          if (op === 0xd2) leb(); else if (op === 0xd0) at++; else return 'an element segment holds what the planner cannot read';
-          if (bytes[at++] !== 0x0b) return 'an element segment holds what the planner cannot read';
-        }
-        if (!active) continue;
-        if (table !== 0) return 'an element segment fills a second table';
-        if (slots.some(([from, to]) => start < to && from < start + items)) return 'two element segments fill one slot';
-        slots.push([start, start + items]);
-      }
-    }
-    at = end;
-  }
+  let module;
+  try { module = new WebAssembly.Module(bytes); } catch (e) { return `the engine cannot compile it (${e.message})`; }
+  if (WebAssembly.Module.imports(module).some((entry) => entry.kind !== 'function')) return 'it imports a table, a memory, a global or a tag';
+  if (WebAssembly.Module.exports(module).some((entry) => entry.kind === 'table')) return 'it exports a table';
   const metrics = run('wasm-opt', [named, '--metrics', ...FEATURES, '-o', devNull]);
   if (metrics.status !== 0) throw new Error(`wasm-opt --metrics failed: ${metrics.stderr}`);
-  const count = (key) => Number(new RegExp(`^\\s*${key.replace(/[[\]]/g, '\\$&')}\\s*:\\s*(\\d+)`, 'm').exec(metrics.stdout)?.[1] ?? 0);
-  const writes = ['TableSet', 'TableFill', 'TableCopy', 'TableGrow', 'TableInit', 'TableGet'].filter((key) => count(key) > 0);
-  if (writes.length) return `its code holds ${writes.join(', ')}`;
-  // Binaryen counts each element segment's entry as a `ref.func`; more are references in code or a global
-  if (count('RefFunc') > count('[table-data]')) return 'a function reference leaves the table, through code or a global';
+  const count = (name) => Number(new RegExp(`^\\s*${name.replace(/[[\]]/g, '\\$&')}\\s*:\\s*(\\d+)`, 'm').exec(metrics.stdout)?.[1] ?? 0);
+  const used = ['TableSet', 'TableFill', 'TableCopy', 'TableGrow', 'TableInit', 'TableGet'].filter((name) => count(name) > 0);
+  if (used.length) return `its code holds ${used.join(', ')}`;
+  if (count('RefNull')) return 'it holds a null function reference, which keeps the planner from counting the references outside its element segments';
+  if (count('RefFunc') > count('[table-data]')) return 'a function reference leaves the element segments, through code or a global';
+  return null;
+}
+
+/** Why the split in `work` would let the core lose a function before or as a stage loads, or null: a stage that, loaded,
+ * changes a slot the core already holds (an element segment over another's). The core and its stages are instantiated
+ * by the engine, with imports that throw. */
+function splitChecked(work, planned) {
+  const stubs = (module, given = {}) => {
+    const imports = {};
+    for (const entry of WebAssembly.Module.imports(module)) {
+      (imports[entry.module] ??= {})[entry.name] = given[entry.module]?.[entry.name] ?? (() => { throw new Error('a stub import was called'); });
+    }
+    return imports;
+  };
+  try {
+    const coreModule = new WebAssembly.Module(readFileSync(resolve(work, 'core.wasm')));
+    const core = new WebAssembly.Instance(coreModule, stubs(coreModule)).exports;
+    const tables = Object.values(core).filter((value) => value instanceof WebAssembly.Table);
+    const before = tables.map((table) => Array.from({ length: table.length }, (_, i) => table.get(i)));
+    for (const stage of planned) {
+      const module = new WebAssembly.Module(readFileSync(resolve(work, `stage-${stage.name}.wasm`)));
+      new WebAssembly.Instance(module, stubs(module, { primary: core }));
+    }
+    for (const [t, table] of tables.entries()) {
+      for (let i = 0; i < before[t].length; i++) {
+        if (before[t][i] !== null && table.get(i) !== before[t][i]) return `loading a stage changes slot ${i}, which the core already holds`;
+      }
+    }
+  } catch (e) {
+    return `the engine cannot instantiate the split to check it (${e.message})`;
+  }
   return null;
 }
 
@@ -256,6 +270,8 @@ export function splitStages(named, stages = STAGES) {
     writeFileSync(manifest, planned.map(stage => [stage.name, ...stage.functions].join('\n')).join('\n\n') + '\n');
     const split = run('wasm-split', ['--multi-split', named, '--manifest', manifest, '--out-prefix', resolve(work, 'stage-'), '-o', resolve(work, 'core.wasm'), '--no-placeholders', ...FEATURES]);
     if (split.status !== 0) throw new Error(`wasm-split failed: ${split.stderr}`);
+    const unsafe = splitChecked(work, planned);
+    if (unsafe) throw new Unsplittable(`${named}: ${unsafe}`);
     const strip = (from) => stripWasm(from, from.replace(/\.wasm$/, '.stripped.wasm'));
     const files = new Map(), table = {};
     for (const stage of planned) {
