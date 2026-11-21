@@ -14,6 +14,11 @@ impl NodeInst {
         sites.data.deps.bindings[(row.bindings.start + i as u32) as usize].is_constant()
     }
 
+    /// Record what a nonconstant binding last emitted.
+    pub(super) fn set_emitted(&mut self, slot: usize, value: Option<Value>) {
+        Rc::make_mut(self.last.as_mut().expect("binding slots"))[slot] = value;
+    }
+
     /// The value binding `i` last emitted.
     pub(super) fn emitted(&self, plan: &Plan, sites: &SiteIndex, i: usize) -> Option<Value> {
         let row = plan.node(self.node);
@@ -21,7 +26,7 @@ impl NodeInst {
             let b = row.bindings.start + i as u32;
             return sites.constants.borrow().get(&b).cloned();
         }
-        self.last[Self::slot(sites, &row, i)].clone()
+        self.last.as_ref().expect("binding slots")[Self::slot(sites, &row, i)].clone()
     }
 
     /// The value a style binding last emitted.

@@ -69,7 +69,7 @@ Your shell commands have no such help, so keep one directory.
 |`contract build app.contract --json --errors-only`|A CI gate: `[]` and exit zero mean no errors (omit `--errors-only` for every unaccepted lowering warning); it rewrites the types `app.ts` imports and type-checks it.|
 |`verify`, `verify ios`|Builds, runs `app.test.contract` and each other `*.test.contract` beside it, `check`s the first screen and where each test ends (light, dark, two widths), reads each of those screens' accessibility tree once (`tree --ax`: a control with no name, or one a screen reader reaches though hidden or behind an open modal; counted as `check`'s findings are), relaunches once on real time, and reads those screens (on the web, also the ones the tests pass through) at the largest text size, where what spills is the app's layout to fix (the web comparison leaves out content iOS projects into its navigation bar and its tab bar, whose items UIKit keeps at one size), with a remedy that keeps the text's size (no `line-clamp` in a list's row; `hyphens="auto"` only on a text of one word, which a UILabel breaks between syllables when it is longer than its line); `verify ios` also plays real touches on a long list on the first screen, once per build, and says `scrolling: like UIKit` or what a person would notice, each with UIKit's value and its cause, counting only what the app can fix: one report. A clean run on the app's platform is done.|
 |`agent web --storage s1 "clock data" "tap add" "check both"`|Drives the app by hand, to see why something fails; `--keep-storage` reopens saved data.|
-|`web`, `ios --run`, `windows --run`|For a person watching: its URL, rebuilds on save; a simulator; a window (from SSH, on the signed-in desktop). A second web loop of the same target for this app refuses, naming the first URL and PID.|
+|`web`, `ios --run`, `android --run --url <url>`, `windows --run`|For a person watching: its URL, rebuilds on save; a simulator; an Android device following `web`'s live loop without rebuilding the APK on each edit; a window (from SSH, on the signed-in desktop). A second web loop of the same target for this app refuses, naming the first URL and PID.|
 |`share`|For a person to try an iPhone app on their own phone: prints an AppDrop link that installs it. Run it when the app is ready for them, and again after each change they should see; send the link it prints.|
 
 An unanswered modal system alert gets one `verify` finding. The screen beneath it is left unjudged,
@@ -379,7 +379,7 @@ works (`new Date(ms)`, `Intl.DateTimeFormat`). `console.log` appears in the agen
 `logs`, its last lines in a failed test’s notes, and the device’s log, in a release build too,
 where anyone with the device can read it: keep tokens and personal data out of it. It imports its own `.ts`/`.js` and pure-JS npm
 packages (ESM or CommonJS, a `browser` build first); one needing Node (`fs`, `Buffer`), the DOM or a native
-addon is refused by name. Type an untyped one with `@types/<name>` or `declare module '<name>';` in a `.d.ts`.
+addon — or calling forbidden globals such as `Date.now`, `setInterval`, `window`, `document`, `navigator`, or `process` anywhere in `node_modules` — is refused by name. Type an untyped one with `@types/<name>` or `declare module '<name>';` in a `.d.ts`.
 
 ```ts
 import type { Answer, Result, Sources, Storage } from './app.contract.d.ts';

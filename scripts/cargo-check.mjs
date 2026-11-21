@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { OFFLINE_MISSING, withHostDeployment } from './filesystem.mjs';
 import { throwContractErrors } from './contract-diagnosis.mjs';
-import { delimiter, dirname, relative, resolve, sep } from 'node:path';
+import { basename, delimiter, dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
@@ -270,6 +270,38 @@ export function appCrates(dir) {
       const joins = Object.keys(MEMBER_OF).find(kind => declared === MEMBER_OF[kind]) ?? null;
       return { dir: crate, manifest: resolve(crate, 'Cargo.toml'), name: pkg?.name ?? null, joins };
     });
+}
+/** The directory of the package `name` that the app's host crates at `dir` build with, linked by path, which may be
+ * another app's, as Unsaid links Hello's data crate (LLP 1153.003 D2), or null when none does: through a normal or
+ * build dependency of that name or one renamed to it, given its own `path` or inheriting one from the crate's
+ * workspace, found as Cargo finds it and read without a build's lock check; a test's dev-dependency is not what a
+ * host builds. Two host crates linking different directories under that name are refused. */
+export function linkedCrate(dir, name) {
+  const found = new Set();
+  for (const crate of appCrates(dir).filter(crate => HOST_CRATES.includes(basename(crate.dir)))) {
+    const manifest = readToml(crate.manifest) ?? {};
+    const tables = [manifest, ...Object.values(manifest.target ?? {})]
+      .flatMap(table => [table.dependencies, table['build-dependencies']]);
+    let workspace;
+    for (const [key, dep] of tables.flatMap(table => Object.entries(table ?? {}))) {
+      if (dep?.workspace === true) workspace ??= cargoWorkspace(crate.dir, manifest);
+      const from = dep?.workspace === true ? workspace?.dependencies[key] : dep, base = dep?.workspace === true ? workspace?.root : crate.dir;
+      if ((from?.package ?? key) === name && typeof from?.path === 'string') found.add(resolve(base, from.path));
+    }
+  }
+  if (found.size > 1) throw new Error(`${dir}: its host crates link ${name} from ${[...found].join(' and ')}; link one directory`);
+  return found.size ? [...found][0] : null;
+}
+
+/** The workspace of the crate at `crate` (its parsed `manifest`), `{ root, dependencies }`, as Cargo finds it: the
+ * one `package.workspace` names, else the nearest directory with a `[workspace]`, the crate's own first; or null. */
+function cargoWorkspace(crate, manifest) {
+  const named = typeof manifest.package?.workspace === 'string' ? resolve(crate, manifest.package.workspace) : null;
+  for (let at = named ?? crate; ; at = dirname(at)) {
+    const workspace = readToml(resolve(at, 'Cargo.toml'))?.workspace;
+    if (workspace) return { root: at, dependencies: workspace.dependencies ?? {} };
+    if (named || dirname(at) === at) return null;
+  }
 }
 /** The refusal of a crate beside app.json that joins neither generated workspace, with the line to add. */
 export const notAMember = (crate) => `${crate.manifest}: a crate beside app.json joins the app's generated workspace. Add, under [package], workspace = "${MEMBER_OF.host}" (a GPU crate: workspace = "${MEMBER_OF.gpu}"). An app that writes its own host crates writes their workspace too, a Cargo.toml beside app.json (docs/reference.md, "An authored workspace").`;

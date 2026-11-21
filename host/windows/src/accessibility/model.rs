@@ -1,10 +1,11 @@
 //! AccessKit nodes shared by the page and its popup windows.
 use accesskit::{
-    Action, Affine, Live, Node, NodeId, Rect, Role, Toggled, TreeId, TreeInfo, TreeUpdate,
+    Action, ActionData, Affine, Live, Node, NodeId, Rect, Role, Toggled, TreeId, TreeInfo,
+    TreeUpdate,
 };
 use exact_painted::{
     presenter::{
-        access::{act, flag, role, Node as Source, PopupAccess},
+        access::{act, flag, role, Node as Source, NodeRange, PopupAccess},
         top::{StatusMenu, SurfaceKind},
     },
     Presenter,
@@ -145,51 +146,92 @@ pub(super) fn map_node(
             node.add_action(Action::SetTextSelection);
         }
     }
-    if flags & flag::RANGE != 0 {
-        node.set_min_numeric_value(source.range[0].into());
-        node.set_max_numeric_value(source.range[1].into());
-        node.set_numeric_value(source.range[2].into());
-        if flags & flag::SETTABLE != 0 {
-            node.add_action(Action::SetValue);
+    match source.range {
+        NodeRange::Value([min, max, value]) if flags & flag::RANGE != 0 => {
+            node.set_min_numeric_value(min.into());
+            node.set_max_numeric_value(max.into());
+            node.set_numeric_value(value.into());
+            if flags & flag::SETTABLE != 0 {
+                node.add_action(Action::SetValue);
+            }
+            if flags & flag::FORWARD != 0 {
+                node.add_action(Action::Increment);
+            }
+            if flags & flag::BACKWARD != 0 {
+                node.add_action(Action::Decrement);
+            }
         }
-    }
-    if matches!(source.role, role::SCROLLER | role::LIST_BOX) {
-        if source.role == role::SCROLLER {
-            node.add_action(Action::Focus);
+        NodeRange::Scroll {
+            offset: (x, y),
+            max: (width, height),
+        } => {
+            if source.role == role::SCROLLER {
+                node.add_action(Action::Focus);
+            }
+            if width > 0. {
+                node.set_scroll_x(x.into());
+                node.set_scroll_x_min(0.);
+                node.set_scroll_x_max(width.into());
+                if x > 0. {
+                    node.add_action(Action::ScrollLeft);
+                }
+                if x < width {
+                    node.add_action(Action::ScrollRight);
+                }
+            }
+            if height > 0. {
+                node.set_scroll_y(y.into());
+                node.set_scroll_y_min(0.);
+                node.set_scroll_y_max(height.into());
+                if y > 0. {
+                    node.add_action(Action::ScrollUp);
+                }
+                if y < height {
+                    node.add_action(Action::ScrollDown);
+                }
+            }
+            if width > 0. || height > 0. {
+                node.add_action(Action::SetScrollOffset);
+            }
         }
-        let sideways = flags & flag::SIDEWAYS != 0;
-        if sideways {
-            node.set_scroll_x(source.range[0].into());
-            node.set_scroll_x_min(0.);
-            node.set_scroll_x_max(source.range[1].into());
-        } else {
-            node.set_scroll_y(source.range[0].into());
-            node.set_scroll_y_min(0.);
-            node.set_scroll_y_max(source.range[1].into());
-        }
-        if flags & flag::FORWARD != 0 {
-            node.add_action(if sideways {
-                Action::ScrollRight
-            } else {
-                Action::ScrollDown
-            });
-        }
-        if flags & flag::BACKWARD != 0 {
-            node.add_action(if sideways {
-                Action::ScrollLeft
-            } else {
-                Action::ScrollUp
-            });
-        }
-    } else if flags & flag::RANGE != 0 {
-        if flags & flag::FORWARD != 0 {
-            node.add_action(Action::Increment);
-        }
-        if flags & flag::BACKWARD != 0 {
-            node.add_action(Action::Decrement);
-        }
+        _ => {}
     }
     node
+}
+
+/// UIA’s small and large increments move one WinUI line or one viewport.
+pub(super) fn scroll_target(
+    node: &Node,
+    action: Action,
+    data: Option<&ActionData>,
+) -> Option<(f32, f32)> {
+    if let (Action::SetScrollOffset, Some(ActionData::SetScrollOffset(to))) = (action, data) {
+        return Some((to.x as f32, to.y as f32));
+    }
+    let (horizontal, forward) = match action {
+        Action::ScrollLeft => (true, false),
+        Action::ScrollRight => (true, true),
+        Action::ScrollUp => (false, false),
+        Action::ScrollDown => (false, true),
+        _ => return None,
+    };
+    let bounds = node.bounds()?;
+    let step = match data {
+        Some(ActionData::ScrollUnit(accesskit::ScrollUnit::Item)) => f64::from(crate::wheel::LINE),
+        _ if horizontal => bounds.width(),
+        _ => bounds.height(),
+    };
+    let delta = if forward { step } else { -step };
+    let (x, y) = (
+        node.scroll_x().unwrap_or_default(),
+        node.scroll_y().unwrap_or_default(),
+    );
+    let to = if horizontal {
+        (x + delta, y)
+    } else {
+        (x, y + delta)
+    };
+    Some((to.0 as f32, to.1 as f32))
 }
 
 /// The HWND represents the menu itself, including while UIA handles its close event.
@@ -341,6 +383,10 @@ pub(super) fn menu_action<D: DataSource>(p: &mut Presenter<D>, request: accesski
     if node.is_disabled() || !node.supports_action(request.action) {
         return;
     }
+    if let Some(to) = scroll_target(&node, request.action, request.data.as_ref()) {
+        p.access_scroll_to(id, to);
+        return;
+    }
     let (view, expanded) = (source.view, source.flags & flag::EXPANDED != 0);
     let now = p.host().now();
     match request.action {
@@ -360,12 +406,6 @@ pub(super) fn menu_action<D: DataSource>(p: &mut Presenter<D>, request: accesski
         }
         Action::Click => {
             p.access_act(id, act::CLICK, 0., now);
-        }
-        Action::ScrollDown => {
-            p.access_act(id, act::FORWARD, 0., now);
-        }
-        Action::ScrollUp => {
-            p.access_act(id, act::BACKWARD, 0., now);
         }
         _ => {}
     }
@@ -394,7 +434,7 @@ mod tests {
             role,
             flags: flag::CLICK,
             rect: [10., 20., 100., 40.],
-            range: [0.; 3],
+            range: [0.; 3].into(),
             set: (0, 0),
             grid: [0; 4],
             name: "Message".into(),
@@ -449,7 +489,10 @@ mod tests {
         assert_eq!(menu.bounds(), Some(Rect::new(310., 70., 410., 110.)));
         source.role = role::SCROLLER;
         source.flags = flag::BACKWARD | flag::SIDEWAYS;
-        source.range = [240., 240., 0.];
+        source.range = NodeRange::Scroll {
+            offset: (240., 0.),
+            max: (240., 0.),
+        };
         let scroller = map_node(&source, (0., 0.), false, false, false);
         assert_eq!(scroller.scroll_x(), Some(240.));
         assert_eq!(scroller.scroll_x_max(), Some(240.));
@@ -510,7 +553,10 @@ mod tests {
         assert!(option.supports_action(Action::Click));
         source.role = role::LIST_BOX;
         source.flags = flag::FORWARD;
-        source.range = [0., 900., 0.];
+        source.range = NodeRange::Scroll {
+            offset: (0., 0.),
+            max: (0., 900.),
+        };
         let list = map_node(&source, (0., 0.), false, false, false);
         assert_eq!(list.scroll_y_max(), Some(900.));
         assert!(list.supports_action(Action::ScrollDown));
@@ -783,23 +829,18 @@ mod tests {
             assert_ne!(alert.serial, menu.serial);
             assert!(snapshot.refresh(&p, &alert, 1.25));
             let tree = snapshot.tree();
-            let node = |name| {
+            let node = |role, name| {
                 tree.nodes
                     .iter()
-                    .find(|(_, n)| n.label() == Some(name))
+                    .find(|(_, n)| n.role() == role && n.label() == Some(name))
                     .unwrap()
             };
-            let (headline, heading) = node("Keep it?");
-            let (supporting, message) = node("You can change this later.");
-            let (cancel, button) = node("Cancel");
-            assert_eq!(heading.role(), Role::Heading);
-            assert_eq!(message.role(), Role::Label);
-            assert_eq!(button.role(), Role::Button);
+            let (_, dialog) = node(Role::AlertDialog, "Keep it?");
+            let (headline, _) = node(Role::Heading, "Keep it?");
+            let (supporting, _) = node(Role::Label, "You can change this later.");
+            let (cancel, button) = node(Role::Button, "Cancel");
             assert!(button.supports_action(Action::Click));
-            assert!(tree
-                .nodes
-                .iter()
-                .any(|(_, node)| { node.children() == [*headline, *supporting, *cancel] }));
+            assert_eq!(dialog.children(), [*headline, *supporting, *cancel]);
             menu_action(
                 &mut p,
                 accesskit::ActionRequest {

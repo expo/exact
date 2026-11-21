@@ -1068,7 +1068,8 @@ uint32_t exact_host_covers(ExactRuntime rt, size_t len);
 /* What a block's root would measure in another block (a popover's
  * position-area option, LLP 1021 D2): each axis a length and a policy as
  * exact_host_covers' kind 4 takes them (0 size, 1 maximum, 2 fit, 3 a
- * position-area's region). The used width and height, the border box's
+ * position-area's region, 4 a pane's border box, 5 the axis a container
+ * sizes to the content). The used width and height, the border box's
  * width and height, then the margins (top, right, bottom, left) as the layout
  * resolved them, eight LE floats in the output buffer, and 32; 0 when refused.
  * The tactic uses kind 4's side permutation.

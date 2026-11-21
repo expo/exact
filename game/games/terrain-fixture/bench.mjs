@@ -11,7 +11,7 @@ const defaults = {
 const choices = {
   radius: ['smoke', '8', '40'], move: ['stand', 'walk', 'fly'], inflight: ['discard', 'keep'],
   compare: ['off', 'on'], vertex: ['12', '64'], blend: ['off', 'window', 'background', 'surface'],
-  draw: ['on', 'off'], pool: ['off', 'on'], jobs: ['off', 'on'],
+  draw: ['on', 'off', 'arena', 'indirect'], pool: ['off', 'on'], jobs: ['off', 'on'],
   quality: ['low', 'medium', 'high'], fps: ['0', '30', '45', '60'],
 };
 const whole = number => /^\d+$/.test(number) && Number(number) <= 0xffffffff;
@@ -101,6 +101,8 @@ function reading(before, end, durationMs, browser, refreshHz) {
   const start = game(before), finish = game(end);
   const perf = end?.perf;
   const hooks = end?.renderHooks;
+  const draws = hooks?.frame?.draws ?? null;
+  const binds = change(start, finish, 'bindsTotal');
   const raf = distribution(browser?.rafIntervals ?? []);
   const frameP50 = perf?.frameMs?.p50;
   const bufferKeys = ['created', 'reused', 'destroyed', 'bytesWritten'];
@@ -113,7 +115,8 @@ function reading(before, end, durationMs, browser, refreshHz) {
     displayPeriodsPerFrame: refreshHz != null && Number.isFinite(frameP50) ? frameP50 / (1000 / refreshHz) : null,
     drawMs: hooks ? { opaque: hooks.cpuMs?.opaque, background: hooks.cpuMs?.background, surface: hooks.cpuMs?.surface } : null,
     budget: hooks?.budget ?? null, jobs: hooks?.jobs ?? null, catchUp: perf?.catchUp ?? null,
-    uploadBytes: hooks?.frame?.uploadBytes ?? null, draws: hooks?.frame?.draws ?? null,
+    uploadBytes: hooks?.frame?.uploadBytes ?? null, draws,
+    binds: binds != null && draws?.count > 0 ? binds / draws.count : null,
     itemsDrawn: hooks?.frame?.itemsDrawn ?? null,
     gpuMs: end?.gpuMs ?? null, timestampQueries: finish?.timestampQueries ?? null,
     thermalStateStart: start?.thermalState ?? null, thermalStateEnd: finish?.thermalState ?? null,
@@ -171,7 +174,7 @@ export async function readBench(session, config, commit) {
 
   const start = session.now();
   const limit = start + timeoutMs;
-  const drawing = switches.draw === 'on';
+  const drawing = switches.draw !== 'off';
   await session.play();
   let firstPicture, fullWindow, backlog;
   for (;;) {

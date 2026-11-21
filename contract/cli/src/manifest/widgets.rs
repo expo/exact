@@ -181,6 +181,7 @@ impl Manifest {
                                         | "systemMedium"
                                         | "systemLarge"
                                         | "systemExtraLarge"
+                                        | "systemExtraLargePortrait"
                                         | "accessoryCircular"
                                         | "accessoryRectangular"
                                         | "accessoryInline"

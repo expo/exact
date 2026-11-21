@@ -123,5 +123,36 @@ extension TextSelectionMacTests {
         XCTAssertEqual(try XCTUnwrap(boxes.first).minY, 25, accuracy: 1)
     }
 
+    /// A presented popover that is also reachable from `presenter.root` must not
+    /// trap `paragraphs` with duplicate `NodeView.id`s (LLP 1156.007 §5.1).
+    func testOverlappingTopRootsDeduplicateParagraphs() throws {
+        _ = NSApplication.shared
+        let p = Presenter()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = p.viewport
+        defer { window.close() }
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "view", "props": ["popover": "auto", "id": "pop"]],
+            ["op": "create", "id": 3, "kind": "text", "handlers": ["selectionchange"], "props": ["text": "Status words"], "style": ["font_size": 16.0]],
+            ["op": "children", "id": 2, "ids": [3]],
+            ["op": "children", "id": 1, "ids": [2]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 400, "h": 300],
+            ["op": "frame", "id": 2, "x": 10, "y": 10, "w": 200, "h": 80],
+            ["op": "frame", "id": 3, "x": 0, "y": 0, "w": 200, "h": 24],
+        ]))
+        let pop = try XCTUnwrap(p.views[2]), text = try XCTUnwrap(p.views[3])
+        defer { p.menus.reset() }
+        p.menus.action("showPopover", ["pop"])
+        XCTAssertTrue(p.menus.isOpen(pop))
+        if !pop.isDescendant(of: p.root) { p.root.addSubview(pop) }
+        p.selection.structureChanged()
+        XCTAssertEqual(p.selection.shownParagraphs.filter { $0.id == text.id }.count, 1)
+        XCTAssertEqual(p.selection.paragraphs.filter { $0.id == text.id }.count, 1)
+    }
+
 }
 #endif

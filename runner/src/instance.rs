@@ -132,7 +132,9 @@ pub struct NodeInst {
     pub view: ViewId,
     /// Last emitted value per binding that can change, in binding order
     /// ([`NodeInst::slot`]); a constant binding's is the site index's.
-    last: Box<[Option<Value>]>,
+    /// Rollback snapshots share these values until a binding changes.
+    /// A node with only constant bindings needs no storage here.
+    last: Option<Rc<[Option<Value>]>>,
     /// Ordered children: static nodes and regions interleaved by `order`.
     children: Vec<Child>,
     /// Last emitted child list.
@@ -850,11 +852,11 @@ impl NodeInst {
             id: view,
             node_type,
         });
+        let slots = Self::slot(u.sites, &row, row.bindings.len as usize);
         let mut inst = NodeInst {
             node,
             view,
-            last: vec![None; Self::slot(u.sites, &row, row.bindings.len as usize)]
-                .into_boxed_slice(),
+            last: (slots != 0).then(|| (0..slots).map(|_| None).collect()),
             children: Vec::new(),
             last_children: Box::default(),
             rare: None,
@@ -962,7 +964,7 @@ impl NodeInst {
                 Evaluated::Trapped { first } => {
                     u.ids.evaluated(self.node, !first);
                     if let Some(slot) = slot {
-                        self.last[slot] = None;
+                        self.set_emitted(slot, None);
                     }
                     if first && !u.discard {
                         self.unset_trapped(u, i, &binding);
@@ -972,7 +974,7 @@ impl NodeInst {
             };
             let unchanged = match slot {
                 None => !fresh,
-                Some(slot) => self.last[slot]
+                Some(slot) => self.last.as_ref().expect("binding slots")[slot]
                     .as_ref()
                     .is_some_and(|last| crate::compare::equal(last, &value) == Some(true)),
             };
@@ -991,7 +993,7 @@ impl NodeInst {
                     u.text_styled = true;
                 }
                 if let Some(slot) = slot {
-                    self.last[slot] = Some(value);
+                    self.set_emitted(slot, Some(value));
                 }
                 continue;
             }
@@ -1134,7 +1136,7 @@ impl NodeInst {
                 }
             }
             if let Some(slot) = slot {
-                self.last[slot] = Some(value);
+                self.set_emitted(slot, Some(value));
             }
         }
         if !tuned {

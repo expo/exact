@@ -78,6 +78,7 @@ component App
         button press=pick("b") role="tab" aria-controls="panel-b" aria-selected=(nav.tab == "b")
           text "B"
       Unsent(replace=replace)
+      text (replacing ? "attempted" : "committed")
 component Unsent
   props
     replace: action

@@ -206,6 +206,37 @@ fn move_position(
     Ok((pos, moved))
 }
 
+fn visible_line_bounds(range: &Range<'_>) -> Vec<accesskit::Rect> {
+    if range.is_degenerate() {
+        return Vec::new();
+    }
+    let boxes = range.bounding_boxes();
+    if boxes.is_empty() {
+        return Vec::new();
+    }
+    let mut boxes = boxes.into_iter();
+    let mut lines = Vec::new();
+    let mut line: Option<accesskit::Rect> = None;
+    range.traverse_text(|run, _| {
+        if run.data().previous_on_line().is_none() {
+            lines.extend(line.take());
+        }
+        let mut rect = boxes.next()?;
+        for clip in std::iter::successors(run.parent(), |n| n.parent())
+            .filter(|n| n.clips_children())
+            .filter_map(|n| n.bounding_box())
+        {
+            rect = rect.intersect(clip);
+        }
+        if !rect.is_empty() {
+            line = Some(line.map_or(rect, |previous| previous.union(rect)));
+        }
+        None::<()>
+    });
+    lines.extend(line);
+    lines
+}
+
 #[implement(ITextRangeProvider)]
 pub(crate) struct PlatformRange {
     context: Weak<Context>,
@@ -493,17 +524,19 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
 
     fn GetBoundingRectangles(&self) -> Result<*mut SAFEARRAY> {
         self.read_with_context(|range, context| {
-            let rects = range.bounding_boxes();
-            if rects.is_empty() {
+            let lines = visible_line_bounds(&range);
+            if lines.is_empty() {
                 return Ok(std::ptr::null_mut());
             }
             let client_top_left = context.client_top_left();
-            let mut result = Vec::<f64>::with_capacity(rects.len() * 4);
-            for rect in rects {
-                result.push(rect.x0 + client_top_left.x);
-                result.push(rect.y0 + client_top_left.y);
-                result.push(rect.width());
-                result.push(rect.height());
+            let mut result = Vec::with_capacity(lines.len() * 4);
+            for rect in lines {
+                result.extend([
+                    rect.x0 + client_top_left.x,
+                    rect.y0 + client_top_left.y,
+                    rect.width(),
+                    rect.height(),
+                ]);
             }
             Ok(safe_array_from_f64_slice(&result))
         })
@@ -617,8 +650,10 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
         self.do_action(|range, tree| {
             let position = if align_to_top.into() {
                 range.start()
-            } else {
+            } else if range.is_degenerate() {
                 range.end()
+            } else {
+                range.end().biased_to_end()
             };
             let (target_node, target_tree) = tree
                 .state()
@@ -649,4 +684,60 @@ impl ITextRangeProvider_Impl for PlatformRange_Impl {
 fn platform_range_impl_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<PlatformRange>();
+}
+
+#[test]
+fn text_range_bounds_clip_and_join_the_runs_of_each_visible_line() {
+    use accesskit::{Node, NodeId, Rect, Role, TextDirection, TreeId, TreeInfo, TreeUpdate};
+    let root = NodeId(1);
+    let mut field = Node::new(Role::MultilineTextInput);
+    field.set_bounds(Rect::new(10., 10., 75., 45.));
+    field.set_clips_children();
+    let layer_id = NodeId(2);
+    field.set_children([layer_id]);
+    let mut layer = Node::new(Role::GenericContainer);
+    layer.set_bounds(Rect::new(8., 12., 80., 50.));
+    layer.set_clips_children();
+    layer.set_children([NodeId(3), NodeId(4), NodeId(5), NodeId(6)]);
+    let mut nodes = vec![(root, field), (layer_id, layer)];
+    for (id, x, y) in [(3, 0., 0.), (4, 40., 0.), (5, 0., 35.), (6, 0., 60.)] {
+        let mut run = Node::new(Role::TextRun);
+        run.set_value("word");
+        run.set_bounds(Rect::new(x, y, x + 40., y + 20.));
+        run.set_character_lengths([1; 4]);
+        run.set_character_positions([0., 10., 20., 30.]);
+        run.set_character_widths([10.; 4]);
+        run.set_text_direction(TextDirection::LeftToRight);
+        if id == 3 {
+            run.set_next_on_line(NodeId(4));
+        }
+        if id == 4 {
+            run.set_previous_on_line(NodeId(3));
+        }
+        nodes.push((NodeId(id), run));
+    }
+    let tree = Tree::new(
+        TreeUpdate {
+            nodes,
+            tree_id: TreeId::ROOT,
+            tree: Some(TreeInfo::new(root)),
+            focus: root,
+        },
+        true,
+    );
+    let field = tree.state().root();
+    let all = field.document_range();
+    assert_eq!(
+        visible_line_bounds(&all),
+        [Rect::new(10., 12., 75., 20.), Rect::new(10., 35., 40., 45.)]
+    );
+    let mut partial = all.clone();
+    partial.set_start(field.text_position_from_global_utf16_index(2).unwrap());
+    partial.set_end(field.text_position_from_global_utf16_index(5).unwrap());
+    assert_eq!(
+        visible_line_bounds(&partial),
+        [Rect::new(20., 12., 50., 20.)]
+    );
+    assert!(visible_line_bounds(&all.end().to_degenerate_range()).is_empty());
+    assert!(visible_line_bounds(&field.line_range_from_index(2).unwrap()).is_empty());
 }

@@ -289,11 +289,14 @@ fn jobs_zero_limits_make_progress() {
 #[test]
 fn jobs_failed_pool_start_stays_inline() {
     let mut jobs = Jobs::new(LIMITS);
-    jobs.submit(1, 0, 0, Work::value(1)).unwrap();
-    jobs.shared.state.lock().unwrap().lane = Lane::Pool;
-    jobs.wake_pool_with(|_| Err(std::io::ErrorKind::WouldBlock.into()));
-    assert_eq!(jobs.report().lane, Lane::Inline);
-    assert_eq!(values(&mut jobs, time(false, 4)), [1]);
+    let mut take = jobs.take_with_time(&time(false, 4));
+    assert_eq!(take.lane(), Lane::Pool);
+    take.jobs.fail_pool_start = true;
+    take.submit(1, 0, 0, Work::value(1)).unwrap();
+    assert_eq!(take.lane(), Lane::Inline);
+    assert_eq!(take.next().unwrap().result, Ok(1));
+    drop(take);
+    assert!(values(&mut jobs, time(false, 4)).is_empty());
     assert_eq!(jobs.report().lane, Lane::Inline);
     assert!(jobs.workers.is_empty());
 }
@@ -534,4 +537,38 @@ fn jobs_state_adds_and_resets_queues_without_a_device() {
     assert!(state.contains(r#""jobs":{"queued":2,"queuedBytes":2,"running":0,"done":0,"stale":0,"failed":0,"lane":"inline"}"#));
     assert_eq!(canvas.render_hooks().0[0].report().done, 0);
     assert_eq!(canvas.render_hooks().0[1].report().stale, 0);
+}
+
+// Work owns a Receiver, which is Send and not Sync.
+const _: fn() = || {
+    fn check<T: Send + Sync>() {}
+    check::<Jobs<Work>>();
+};
+
+#[test]
+fn jobs_late_install_preserves_first_delivery_on_pool_and_inline() {
+    for (seekable, lane) in [(false, Lane::Pool), (true, Lane::Inline)] {
+        let mut jobs = Jobs::new(Limits {
+            completed_bytes: 64,
+            ..LIMITS
+        });
+        for key in 1..=2 {
+            jobs.submit(key, 0, 0, Work::value(key)).unwrap();
+        }
+        if !seekable {
+            drop(jobs.take_with_time(&time(false, 4)));
+            jobs.wait_for_completions(2);
+        }
+        let frame = HookTime {
+            deadline: Some(Deadline::new(crate::perf::Stamp::now(), -1.)),
+            ..time(seekable, 4)
+        };
+        let mut take = jobs.take_with_time(&frame);
+        assert_eq!(take.lane(), lane);
+        take.mark_late_unit_spent();
+        assert_eq!(take.next().map(|done| done.result), Some(Ok(1)));
+        assert!(take.next().is_none());
+        drop(take);
+        assert_eq!(values(&mut jobs, time(seekable, 4)), [2]);
+    }
 }

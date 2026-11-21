@@ -62,7 +62,42 @@ test('Duo panes retain state and avoid book and laptop hinges in both reading di
     expect(title.x).toBeGreaterThanOrEqual(56);
     expect(activity.x).toBeGreaterThanOrEqual(56);
     expect(activity.x + activity.width).toBeLessThanOrEqual(760);
+    // On a book fold the panes pad their sides by the route's insets, which an agent's explicit size can leave nonzero
+    // where the browser's are 0: with those at 40 and 24 CSS pixels, the panes' content keeps 16 CSS pixels inside each
     await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, left: 0, right: 0, bottom: 0 } });
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false,
+      displayFeature: { orientation: 'vertical', offset: 620, maskLength: 40 } });
+    await page.evaluate(() => {
+      document.documentElement.style.setProperty('--exact-safe-area-inset-left', '40px');
+      document.documentElement.style.setProperty('--exact-safe-area-inset-right', '24px');
+    });
+    // A 90-character word in the echo wraps onto several lines inside its pane, folded or flat
+    await page.getByTestId('panes-activity-draft').fill('W'.repeat(90));
+    const echo = () => page.evaluate(() => {
+      const pane = document.querySelector('[data-testid="panes-activity-pane"]'), range = document.createRange();
+      range.selectNodeContents(document.querySelector('[data-testid="panes-activity-echo"]'));
+      return { overflow: pane.scrollWidth - pane.clientWidth, wrapped: range.getClientRects().length > 1 };
+    });
+    for (const direction of ['ltr', 'rtl']) {
+      await page.evaluate(direction => { document.documentElement.dir = direction; }, direction);
+      const [left, right] = direction === 'rtl' ? ['activity', 'workspace'] : ['workspace', 'activity'];
+      await page.waitForFunction(right => Math.abs(document.querySelector(`[data-testid="panes-${right}-pane"]`).getBoundingClientRect().left - 660) < 1
+        && document.querySelector('[data-testid="panes-activity-echo"]').textContent.length === 90, right);
+      const edges = await page.evaluate(([left, right]) => ({
+        left: document.querySelector(`[data-testid="panes-${left}-draft"]`).getBoundingClientRect().left,
+        right: document.querySelector(`[data-testid="panes-${right}-draft"]`).getBoundingClientRect().right,
+      }), [left, right]);
+      expect({ direction, ...edges, ...await echo() }).toEqual({ direction, left: 56, right: 1240, overflow: 0, wrapped: true });
+    }
+    await page.evaluate(() => { document.documentElement.dir = 'ltr'; });
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-testid="panes-activity-pane"]')).position === 'relative');
+    expect(await echo()).toEqual({ overflow: 0, wrapped: true });
+    await page.getByTestId('panes-activity-draft').fill('');
+    await page.evaluate(() => {
+      document.documentElement.style.removeProperty('--exact-safe-area-inset-left');
+      document.documentElement.style.removeProperty('--exact-safe-area-inset-right');
+    });
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 800, height: 1000, deviceScaleFactor: 1, mobile: false });
     await page.getByTestId('panes-next').click();
     await page.getByTestId('pushed-next').click();
@@ -70,5 +105,7 @@ test('Duo panes retain state and avoid book and laptop hinges in both reading di
     await page.getByTestId('tab-fold').click();
     expect(await page.getByTestId('fact-h').textContent()).toBe('1');
     expect(errors).toEqual([]);
+    // The runtime journals a style the browser refuses without throwing
+    expect(await page.evaluate(() => exact.journal.filter(line => line.includes(' is not a value it takes')))).toEqual([]);
   } finally { await suite?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true }); }
 }, 180000);

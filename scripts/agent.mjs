@@ -244,11 +244,9 @@ export async function main(argv, injected = {}) {
   // A trace a person's session saved (LLP 1079 D5), read back with no app running.
   if (host === 'trace' && (ops.length === 1 || (!ops.length && (flags.phone || flags.device || flags.pid)))) {
     const traces = name => {
-      try {
-        return resolve(resolveApp(flags.app ?? name).target, 'traces');
-      } catch {
-        return resolve(process.cwd(), 'target', 'traces');
-      }
+      let dir = process.cwd();
+      try { dir = resolveApp(flags.app ?? name).dir; } catch { /* An unrecognized app saves in the current project. */ }
+      return resolve(dir, '.exact', 'traces');
     };
     const file =
       ops[0] ??

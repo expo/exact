@@ -1888,3 +1888,107 @@ fill.
 
 In Chrome the lane is inline and the row is the `jobs=off` row: an inline lane
 adds no throughput.
+
+### Mac Studio with the jobs lane, 2026-11-21
+
+Mac Studio (Apple M5 Ultra, 36 cores), macOS 27.2.1, on Metal, `host-dev`, a
+1280 × 720 window on a 1920 × 1080 display at 60 Hz (the rows of 2026-11-18 were
+read at 75 Hz and are not comparable), radius 40, `move=fly`, uncalibrated. Three
+windows of 60 s after 20 s of warm-up; a range is the windows' range. `jobs=off`
+beside `jobs=on` with the fixture's job queue at 32 KiB (`bf61e9d6f`) and at
+256 KiB (branch commit `7c5363e71`, the tree of the change that set it).
+
+| Switches | `jobs` | Operations a window | `prepare` p50, p95 | `prepare` share | Frames past the deadline | Frames a window | Refill p50 | First fill |
+|---|---|---|---|---|---|---|---|---|
+| `light=8000 compare=on` | off | 3,985,200 | 0.02–0.2, 13.1–13.2 ms | 29 % | 75–93 | 3,598–3,599 | 400 ms | 14.5 s |
+| `light=8000 compare=on` | on, 32 KiB | 2,540,504–2,540,832 | 0.4–0.5, 1.5–2.0 ms | 4 % | 0 | 3,598–3,600 | 1,300 ms | 14.8 s |
+| `light=8000 compare=on` | on, 256 KiB | 3,985,200 | 0.8–0.9, 3.8 ms | 7 % | 0–9 | 3,597–3,600 | 417 ms | 14.5 s |
+| game guess | off | 3,987,103–3,987,126 | 12.9, 15.6 ms | 67–68 % | 1,428–1,440 | 3,524–3,525 | 550 ms | 28.3 s |
+| game guess | on, 32 KiB | 2,369,304–2,375,439 | 6.0–6.1, 6.8–7.4 ms | 31–32 % | 1–3 | 3,599–3,600 | 1,400 ms | not in 60 s |
+| game guess | on, 256 KiB | 3,987,806–3,987,826 | 5.1–5.2, 6.6–8.3 ms | 23–24 % | 0–2 | 3,599 | 417 ms | 14.6 s |
+| meshing alone | off | 97,200 | 0.01, 5.9–6.0 ms | 7 % | 0–10 | 3,598–3,600 | 183 ms | 14.3 s |
+| meshing alone | on, 256 KiB | 97,200 | 0.02, 1.9–2.0 ms | 3 % | 0 | 3,598 | 200 ms | 14.3 s |
+
+The game guess is `light=96000 compare=on vertex=64 blend=window edits=4`. A flight
+asks 3.99 million operations a window with the reuse compare and 97,200 without.
+
+With a 32 KiB queue the lane relieved the frame thread and fell behind: the pool
+finished each frame's fill before the next and stood idle (`renderHooks.jobs` read
+`queued: 0, running: 0` at every window's end), completing two thirds of what
+`jobs=off` did, with a refill longer than the 800 ms crossing at the game guess.
+On the Pixel 5 the same queue was never empty: its workers were the limit.
+
+With 256 KiB the lane completes the flight. `prepare` at p95 falls from 13.1 ms
+to 3.8 ms, from 15.6 ms to 6.6–8.3 ms at the game guess, and from 5.9 ms to 1.9 ms
+with meshing alone. At the game guess the 75 frames a window that `jobs=off` drops
+are drawn, the refill falls from 550 ms to 417 ms and the first fill halves. At
+the two lighter workloads the refill is one frame longer: a result is installed in
+the frame after it is made, and both lanes install at most 64 units a frame.
+
+### Pixel 5 and Chrome on the Mac, 2026-11-21: the rung, a cap, and what a draw costs
+
+The Pixel 5 of the rows above (Android 14; display adaptive, 90 Hz at every reading
+before, during and after each row; battery 23.6 to 27.9 °C, thermal status 0), its
+native app on Vulkan (release) and its Chrome 155 on WebGPU, at `73440a874` and
+`47be848cc` (the native rows with the setup form of `2cf518362`). The Mac Studio
+in Chrome 159 at `73440a874`, a 1280 × 720 page on a display at 60 Hz. Uncalibrated.
+Three windows of 60 s; a range is the windows' range.
+
+**The rung** (native, `radius=40 move=fly`, meshing alone). This scene has one
+sample and no sun at every rung, so `low` differs from `high` by the render scale.
+
+| `quality` | Pixels | GPU frame p50, p95 | Forward and sky | Bloom | Tone map | Frame interval p50, p95 | Frames a window | Refill p50 | First fill |
+|---|---|---|---|---|---|---|---|---|---|
+| `high` | 1080 × 2138 | 18.2, 20.1–20.2 ms | 4.6, 6.5–6.6 ms | 9.9, 11.9 ms | 3.4, 5.2–5.3 ms | 18.3–18.5, 24.3–24.5 ms | 3,267–3,273 | 372–381 ms | 14.6 s |
+| `low` | 540 × 1069 | 9.9, 10.2 ms | 2.0, 3.7 ms | 5.4, 7.0–7.1 ms | 0.9, 1.2 ms | 11.1, 11.8 ms | 5,396–5,399 | 192 ms | 9.8 s |
+
+At `low` the phone holds its 90 Hz: the GPU's frame fits the 11.1 ms period where
+at `high` it is 18 ms. Bloom is more than half of the frame at both rungs, and at a
+quarter of the pixels it is still 5.4 ms: its first pass goes from 4.6 ms to
+3.9 ms.
+
+**A cap** (Chrome on the phone, `radius=40 move=fly`, meshing alone).
+
+| `fps` | Frame interval p50 | Encode p50 | `prepare` mean | First fill | Refills finished of 75 | Refill p50 |
+|---|---|---|---|---|---|---|
+| `0` | 11.1 ms | 9.6–10.8 ms | 0.3 ms | not in 60 s; 42,702 sections pending at the end | 0 | — |
+| `45` | 22.2 ms | 5.9–6.1 ms | 4.7 ms | 19.5 s | 75 | 289 ms |
+
+Uncapped, the encode fills the period, every frame enters late and `prepare` gets
+one unit. Capped at 45, D6 takes the cap's period as its target and the window
+fills and keeps up.
+
+**What a draw costs** (Chrome). On a filled, standing window `prepare` is idle and
+the encode is the engine's own work and the hook's draws.
+
+| Host, switches | `draw` | Draws a frame | Binds a frame | Encode p50 |
+|---|---|---|---|---|
+| Phone, `radius=8 move=stand` | `on` | 141 | 283 | 3.12–3.15 ms |
+| | `arena` | 141 | 7 | 2.80–2.88 ms |
+| | `indirect` | 141 | 148 | 3.17–3.19 ms |
+| | `off` | 0 | 0 | 2.79–2.87 ms |
+| Mac, `radius=40 move=stand` | `on` | 1,136 | 2,273 | 1.57–1.74 ms |
+| | `arena` | 1,136 | 31 | 1.28–1.39 ms |
+| | `indirect` | 1,136 | 1,167 | 1.43–1.51 ms |
+| | `off` | 0 | 0 | 1.28–1.30 ms |
+
+Standing, 141 draws from a buffer each cost the phone 0.3 ms and 1,136 cost the Mac
+0.3 to 0.45 ms. From shared arenas they cost less than the windows' spread. A bind
+at a dynamic offset with an indirect draw costs about what three direct calls do.
+
+In flight the same switches say what the calls do not (phone, `radius=40 move=fly`):
+
+| `draw` | Encode p50 | `prepare` p50 | Encode less `prepare` | Sections pending at the end | First fill |
+|---|---|---|---|---|---|
+| `on` | 10.7–11.2 ms | 0.2 ms | about 10.7 ms | 42,196 | not in 60 s |
+| `arena` | 10.9–12.1 ms | 7.2–7.6 ms | about 4 ms | 12,216 | not in 60 s |
+| `off` | 9.2 ms | 4.5–5.0 ms | about 4.4 ms | 473 | 21.1 s |
+
+(The two medians are of separate rings, so the third column is an estimate.)
+A flight installs and retires sections every frame. With a buffer for each
+section that costs about 6 ms of encode a frame in the phone's Chrome, and
+`prepare` is starved; from arenas, about 400 draws a frame cost what no draws do,
+and `prepare` gets 7 ms. The window still does not fill in 60 s with `arena`, and
+does with `off`, though `prepare` runs longer with `arena`: a unit costs more
+there. Why was not read; the allocator and `write_buffer` into a retained buffer
+are what differ.

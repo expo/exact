@@ -44,8 +44,7 @@ extension Presenter {
             if op.op == .children { touched(id, children: true) } else if op.op != .create { touched(id, textChanged: op.op == .props || op.op == .style) }
             switch op.op {
             case .create:
-                let v = newView(op)
-                v.held = true
+                let v = newView(op, stage: .preparing(plan.publication))
                 views[id] = v
                 plan.made[id] = v
                 plan.madeOrder.append(id)
@@ -112,18 +111,17 @@ extension Presenter {
             guard let node = plan.made[id] else { continue }
             if !prepareAccessibility(node) { plan.revealAccessibility.insert(id) }
             inputGates.prepared(node)
+            if node.props["title"] != nil || node.isButton { plan.tips.append(node) }
+            if node.hasCursorRects { plan.cursorRects.append(node) }
         }
     }
 
     /// The reveal: what preparation made joins the committed tree, with the
     /// tooltips, cursor rectangles and after-batch work it held back.
     func publish(_ plan: StagePlan) {
-        for id in plan.madeOrder {
-            guard let v = plan.made[id] else { continue }
-            v.held = false
-            settleTip(v)
-            v.window?.invalidateCursorRects(for: v)
-        }
+        plan.publication.committed = true
+        for view in plan.tips { settleTip(view) }
+        for view in plan.cursorRects { view.window?.invalidateCursorRects(for: view) }
         afterBatchWork.append(contentsOf: plan.afterReveal)
         plan.afterReveal = []
         // What a box lays out from its committed children (a form row's bezel) counts the new ones.
@@ -148,7 +146,7 @@ extension Presenter {
     /// screen and removed a few views a turn (`Teardown`): one removal of
     /// a 2,400-view subtree costs AppKit about 13 ms.
     func retire(_ view: NodeView, _ plan: StagePlan) -> Bool {
-        view.held = true
+        view.stage = .retired
         view.toolTip = nil
         view.window?.invalidateCursorRects(for: view)
         if let up = view.nodeSuperview, plan.destroyed.contains(up.id) { return true }
@@ -158,12 +156,106 @@ extension Presenter {
             window.endEditing(for: nil)
         }
         view.holdOffstage()
-        teardown.add(view, destroying: plan.destroyed)
+        teardown.add(view)
         return true
     }
 }
 
+/// Views a reveal took out, removed a few each turn, innermost first so
+/// that each removal is one view's.
+final class Teardown {
+    private struct Branch {
+        let node: NodeView
+        var children: [NodeView]
+        init(_ node: NodeView) {
+            self.node = node
+            children = node.structuralChildren
+        }
+    }
+    private var roots: [NodeView?] = []
+    private var next = 0
+    private var path: [Branch] = []
+    private var tops = Set<ObjectIdentifier>()
+    /// Released boxes whose caches go as each is removed.
+    private var forgetting: [ObjectIdentifier: NodeView] = [:]
+    private var scheduled = false
+    private static let turnSeconds = 0.0015
+
+    func add(_ top: NodeView) {
+        roots.append(top)
+        tops.insert(ObjectIdentifier(top))
+        schedule()
+    }
+
+    /// Takes every waiting view down now: the presenter's tree is being replaced.
+    func finish() {
+        while hasWork { advance() }
+    }
+
+    func forgetAsRemoved(_ node: NodeView) {
+        forgetting[ObjectIdentifier(node)] = node
+        schedule()
+    }
+
+    /// Whether `view` is a top that waits here to be removed.
+    func holds(_ view: NSView) -> Bool { !tops.isEmpty && tops.contains(ObjectIdentifier(view)) }
+
+    private var hasWork: Bool { !path.isEmpty || next < roots.count || !forgetting.isEmpty }
+
+    private func schedule() {
+        guard !scheduled, hasWork else { return }
+        scheduled = true
+        DispatchQueue.main.async { [weak self] in self?.step() }
+    }
+
+    private func step() {
+        scheduled = false
+        let deadline = CACurrentMediaTime() + Self.turnSeconds
+        while hasWork, CACurrentMediaTime() < deadline { advance() }
+        schedule()
+    }
+
+    /// Discover one child or remove one leaf. Walking the whole outgoing tree during
+    /// the reveal would still hold the display link, even if the removals happened later.
+    private func advance() {
+        if path.isEmpty {
+            guard next < roots.count, let top = roots[next] else {
+                // A box whose top was removed at once rather than here.
+                forgetting.popFirst()?.value.forget()
+                return
+            }
+            roots[next] = nil
+            next += 1
+            if next == roots.count { roots = []; next = 0 }
+            path.append(Branch(top))
+        }
+        let last = path.count - 1
+        if let child = path[last].children.popLast() {
+            // A child may have joined the new tree since this branch was opened.
+            if case .retired = child.stage, child.nodeSuperview === path[last].node {
+                path.append(Branch(child))
+            }
+            return
+        }
+        let node = path.removeLast().node
+        let parent = path.last?.node
+        forgetting.removeValue(forKey: ObjectIdentifier(node))?.forget()
+        if parent == nil || node.nodeSuperview === parent { node.removeFromSuperview() }
+        tops.remove(ObjectIdentifier(node))
+    }
+}
+
 extension NodeView {
+    enum Stage { case committed, preparing(StagePlan.Publication), retired }
+    /// Outside the committed tree during preparation or after retirement.
+    var held: Bool {
+        switch stage {
+        case .committed: return false
+        case .preparing(let publication): return !publication.committed
+        case .retired: return true
+        }
+    }
+
     /// Drawn but unseen, unhit and off the accessibility tree, until
     /// `releaseOffstage`; what is written to `alphaValue` meanwhile is kept.
     /// The box stays where it stands: moving a 2,400-view subtree to

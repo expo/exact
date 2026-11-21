@@ -36,7 +36,13 @@ test('the hooks write what is admitted, remove an empty prop and journal a value
 });
 
 test('install hears the contacts and the drags on the page\'s document', () => {
-  const heard = [];
-  install({ PropHooks: {}, say() {}, document: { addEventListener: (type, _, capture) => heard.push([type, !!capture]) } });
-  expect(heard).toEqual([['pointerdown', true], ['pointerup', true], ['dragstart', false]]);
+  const heard = [], PropHooks = {};
+  install({ PropHooks, say() {}, document: { addEventListener: (type, _, capture) => heard.push([type, !!capture]),
+    defaultView: { addEventListener: (type) => heard.push([`window ${type}`, false]) } } });
+  expect(heard).toEqual([['pointerdown', true], ['pointerup', true], ['pointercancel', true], ['pointermove', true],
+    ['window blur', false], ['dragend', true], ['dragstart', false]]);
+  // The page writes `draggable` through the listener, which holds a node's drag off for a field's contact.
+  const el = { setAttribute: (name, value) => heard.push([name, value]) };
+  expect(PropHooks.draggable(el, 'true')).toBe(true);
+  expect(heard.at(-1)).toEqual(['draggable', 'true']);
 });

@@ -2,7 +2,7 @@ use exact_game::*;
 
 mod options;
 pub use options::{
-    camera_chunk, edit, edit_count, Blend, Budget, Inflight, Motion, Options, Window,
+    camera_chunk, edit, edit_count, Blend, Budget, Draw, Inflight, Motion, Options, Window,
     WorkloadSettings,
 };
 

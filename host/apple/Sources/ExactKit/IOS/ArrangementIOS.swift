@@ -41,6 +41,7 @@ package final class MeasuredPaneView: UIView {
     }
     private var intrinsic: Measurement?
     private var fitting: Measurement?
+    private var proposal: (size: CGSize, horizontal: UILayoutPriority, vertical: UILayoutPriority)?
     private var measuring = false
 
     package init(node: NodeView, room: @escaping () -> CGSize) {
@@ -60,9 +61,36 @@ package final class MeasuredPaneView: UIView {
     }
 
     package override var intrinsicContentSize: CGSize {
-        // The enclosing element's room is independent of the pane's allocation.
-        intrinsic = measure(.region(room()), previous: intrinsic)
+        intrinsic = measure(intrinsicBlock, previous: intrinsic)
         return intrinsic?.size ?? CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
+    }
+
+    /// The block the pane's intrinsic size is measured in: the enclosing element's room, which is independent of the
+    /// pane's allocation, with the pane's own percentages on the axis its split sizes cyclic, since the allocation this
+    /// answer decides is their basis (LLP 1123 D7). Across, they keep the room.
+    private var intrinsicBlock: HostBlock {
+        let room = room(), sized = splitAxis
+        return HostBlock(width: sized == .horizontal ? .content(room.width) : .region(room.width),
+                         height: sized == .vertical ? .content(room.height) : .region(room.height))
+    }
+
+    /// A fitting query's block: a required axis is the target's length; the axis the pane's split sizes fits the
+    /// content with the pane's own percentages there cyclic, as `intrinsicBlock`; another fits it within the target.
+    private func fittingBlock(_ size: CGSize, horizontal: UILayoutPriority, vertical: UILayoutPriority) -> HostBlock {
+        let sized = splitAxis
+        let axis = { (length: CGFloat, priority: UILayoutPriority, along: Bool) -> HostBlock.Axis in
+            let finite = max(0, min(length, CGFloat(Float.greatestFiniteMagnitude)))
+            return priority == .required ? .size(finite) : along ? .content(finite) : .region(finite)
+        }
+        return HostBlock(width: axis(size.width, horizontal, sized == .horizontal), height: axis(size.height, vertical, sized == .vertical))
+    }
+
+    /// The axis the pane's split arrangement sizes it along (`UIArrangementViewController.ViewState.splitAxis`), none
+    /// outside a split.
+    private var splitAxis: UIAxis? {
+        guard #available(iOS 27.1, *), let holder = next as? UIViewController, let arrangement = holder.parent as? UIArrangementViewController,
+              let placement = arrangement.placement(for: holder) else { return nil }
+        return arrangement.state(for: placement)?.splitAxis
     }
 
     package override func sizeThatFits(_ size: CGSize) -> CGSize {
@@ -80,11 +108,8 @@ package final class MeasuredPaneView: UIView {
     }
 
     private func fit(_ size: CGSize, horizontal: UILayoutPriority, vertical: UILayoutPriority) -> CGSize? {
-        let axis = { (length: CGFloat, priority: UILayoutPriority) -> HostBlock.Axis in
-            let finite = max(0, min(length, CGFloat(Float.greatestFiniteMagnitude)))
-            return priority == .required ? .size(finite) : .region(finite)
-        }
-        fitting = measure(HostBlock(width: axis(size.width, horizontal), height: axis(size.height, vertical)), previous: fitting)
+        proposal = (size, horizontal, vertical)
+        fitting = measure(fittingBlock(size, horizontal: horizontal, vertical: vertical), previous: fitting)
         return fitting?.size
     }
 
@@ -107,8 +132,8 @@ package final class MeasuredPaneView: UIView {
 
     package func refresh() -> Bool {
         let before = (intrinsic?.size, fitting?.size)
-        if intrinsic != nil { intrinsic = measure(.region(room()), previous: intrinsic) }
-        if let last = fitting { fitting = measure(last.block, previous: last) }
+        if intrinsic != nil { intrinsic = measure(intrinsicBlock, previous: intrinsic) }
+        if let last = fitting, let proposal { fitting = measure(fittingBlock(proposal.size, horizontal: proposal.horizontal, vertical: proposal.vertical), previous: last) }
         // Allocation reports advance the layout stamp too; only a different answer invalidates UIKit.
         return before.0 != intrinsic?.size || before.1 != fitting?.size
     }

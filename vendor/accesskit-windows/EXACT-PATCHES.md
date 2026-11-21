@@ -75,3 +75,22 @@ rerun those tests; the upstream suite alone does not cover the patch.
    the popup opens, it initializes the adapter early and raises MenuOpened
    after the HWND is shown. The native client test observes popup focus and
    invokes Exit while listening for MenuClosed through HWND destruction.
+
+9. **`node/scroll.rs`, UI Automation ScrollPattern.** Scrollable containers
+   expose their position and visible percentage on each axis. Small and large
+   increments request an item or a page. Setting a percentage requests an
+   absolute offset. Both axes are validated before dispatch. The implementation
+   adapts [AccessKit pull request 816](https://github.com/AccessKit/accesskit/pull/816)
+   to 0.35.2 and handles finite ranges wider than the largest finite float.
+   `node.rs` registers the pattern beside ScrollItem, using the registration
+   macros in `node/patterns.rs`. `tests::simple::scroll_an_overflowing_pane_through_uia`
+   exercises the public UI Automation client against a window and checks the
+   actions delivered to the application.
+
+10. **`text.rs`, UI Automation text ranges.** At a line boundary,
+    `ScrollIntoView(false)` aligns the last included text run with the bottom
+    of the field. A collapsed range keeps its insertion position.
+11. **`text.rs`, UI Automation range bounds.** `GetBoundingRectangles`
+    clips each text run to its scrolling ancestors and returns the visible
+    portion of each selected line in screen coordinates. A collapsed range
+    returns no rectangles.

@@ -7,7 +7,7 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path
 import { fileURLToPath } from 'node:url';
 import { pathWithin } from '../../scripts/paths.mjs';
 import { parseManifest, shaderFiles } from '../../scripts/app.mjs';
-import { lockBlocks, lockChanges, memberRefusal, outsideSdkLock, series, seriesId, staleLock } from '../../scripts/app-shells.mjs';
+import { lockBlocks, lockChanges, memberRefusal, mergeLockBlocks, outsideSdkLock, series, seriesId, staleLock } from '../../scripts/app-shells.mjs';
 
 // Resolve authored keys in memory before writing the resolved manifest.
 const merge = (base, overrides) => {
@@ -430,6 +430,10 @@ ${bakeArt ? `    exact_game_bake::bake_art(${JSON.stringify(relative(shell, appD
 // game/app/shells.lock, the lock of the union of every shell's dependencies.
 // A game that adds packages captures its own Cargo.lock with --update-lock.
 const sdkLockFile = source => [resolve(source, 'app/shells.lock'), resolve(gameRoot, 'app/shells.lock')].find(path => existsSync(path));
+const rootLock = source => {
+  const path = resolve(source, '../Cargo.lock');
+  return existsSync(path) ? readFileSync(path, 'utf8') : '';
+};
 // Root crates reach every shell by path, so a root commit that adds a registry
 // dependency to one (15856ff7: cssparser in kernel) moves every shell's graph
 // while updating only the root Cargo.lock. Those packages are as decided as the
@@ -438,7 +442,7 @@ const sdkLockFile = source => [resolve(source, 'app/shells.lock'), resolve(gameR
 // game resolves offline before anyone refreshes the SDK lock. A new root crate
 // (00d37ef9f: exact-svg-filter under the kernel) is one too: the root lock's
 // path packages, which carry no source or checksum, seed it the same way.
-export function withRootPins(sdk, root = existsSync(resolve(gameRoot, '../Cargo.lock')) ? readFileSync(resolve(gameRoot, '../Cargo.lock'), 'utf8') : '') {
+export function withRootPins(sdk, root = rootLock(gameRoot)) {
   // A root's new major of a package the SDK lock holds is a pin too; a compatible one is not.
   const packages = Bun.TOML.parse(sdk).package ?? [];
   const held = new Set(packages.map(pkg => `${pkg.name} ${series(pkg.version)}`));
@@ -699,10 +703,18 @@ function sdkStage(source, lock, use) {
  * dependencies, or (`update`) rewrite it from that union. */
 export function sdkLock(source = gameRoot, {update = false, env = process.env} = {}) {
   const path = resolve(source, 'app/shells.lock');
-  // A refresh takes the root lock's versions for packages new to the SDK.
-  const lock = existsSync(path) ? (update ? withRootPins(readFileSync(path, 'utf8')) : readFileSync(path, 'utf8')) : null;
+  const sdk = existsSync(path) ? readFileSync(path, 'utf8') : null;
+  const root = update ? rootLock(source) : '';
+  const lock = update && sdk ? withRootPins(sdk, root) : sdk;
   sdkStage(source, lock, stage => {
-    const result = cargoMetadata(stage, update ? [] : ['--locked', '--offline'], env);
+    let result = cargoMetadata(stage, update ? [] : ['--locked', '--offline'], env);
+    if (result.status !== 0 && update && lock && root) {
+      // A new root dependency can require a newer patch of a crate the SDK already pins.
+      // Retry with the newer checked-in registry versions, preserving SDK-only packages.
+      const registry = lockBlocks(root).filter(block => /^source = "registry\+/m.test(block));
+      writeFileSync(resolve(stage, 'Cargo.lock'), mergeLockBlocks(lock, registry));
+      result = cargoMetadata(stage, [], env);
+    }
     if (result.status !== 0) throw new Error(`${update ? 'SDK lock update' : `${path} is stale for the SDK's shell dependencies; refresh it: bun game/app/shells.mjs --update-lock`}\n${result.stderr || result.error?.message}`);
     if (update) writeChanged(path, readFileSync(resolve(stage, 'Cargo.lock'), 'utf8'), false);
   });

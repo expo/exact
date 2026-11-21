@@ -140,9 +140,12 @@ package final class TextSelection {
     var shownParagraphs: [NodeView] {
         if let shown { return shown }
         var result: [NodeView] = []
+        var seen: Set<UInt32> = []
         paragraphContainers.removeAll(keepingCapacity: true)
         for top in tops {
-            texts(in: top, containing: { self.paragraphContainers.insert($0.id) }) { result.append($0) }
+            texts(in: top, containing: { self.paragraphContainers.insert($0.id) }) {
+                if seen.insert($0.id).inserted { result.append($0) }
+            }
         }
         shown = result
         return result
@@ -168,9 +171,19 @@ package final class TextSelection {
     var paragraphs: [NodeView] {
         if let ordered { return ordered.filter(selectable) }
         var result: [NodeView] = []
+        var seen: Set<UInt32> = []
         // Which text is hidden or inert is asked each time: `inert` changes
         // with a prop or a dialog, which leave this order as it is.
-        for top in tops { texts(in: top) { if $0.textSelectable || $0.inlineText.contains(where: \.selectsAll) { result.append($0) } } }
+        // Deduplicate by view id: a presented popover still attached under the
+        // page root is walked by both roots in `tops` (LLP 1156.007 §5.1).
+        for top in tops {
+            texts(in: top) {
+                if ($0.textSelectable || $0.inlineText.contains(where: \.selectsAll)),
+                   seen.insert($0.id).inserted {
+                    result.append($0)
+                }
+            }
+        }
         ordered = result
         indices = Dictionary(uniqueKeysWithValues: result.enumerated().map { ($0.element.id, $0.offset) })
         return result.filter(selectable)

@@ -196,6 +196,8 @@ fn ligature_features(bits: u8) -> Vec<(&'static [u8; 4], u16)> {
 pub(super) struct HardLine {
     /// Byte offset in the canonical runs, after the preceding separator.
     pub(super) start: usize,
+    /// The canonical run corresponding to brush zero in this line.
+    pub(super) run_base: u32,
     pub(super) shape: Arc<LineShape>,
 }
 
@@ -376,7 +378,7 @@ fn run_edges(spec: &Spec, pieces: &[(usize, String, Pieces, Boxes, Empties)]) ->
 impl ShapedSource {
     pub(super) fn flow_box<'a>(
         &self,
-        glyphs: impl Iterator<Item = &'a LayoutGlyph>,
+        glyphs: impl Iterator<Item = (&'a LayoutGlyph, usize)>,
         faces: &[lines::Face],
     ) -> (f32, f32) {
         let (above, below, _) = line_box(
@@ -433,17 +435,14 @@ impl ShapedSource {
             BaseDirection::Auto
         };
         let mut text_bytes = 0;
-        // A glyph stores its paragraph-wide run index. Reuse a line only when its
-        // local text ranges still name the same runs with the same shaping inputs.
         let mut end = 0;
         let prior_runs: Vec<_> = old
             .into_iter()
-            .flat_map(|s| s.spec.runs.iter())
-            .zip(&spec.runs)
-            .map(|(old, new)| {
+            .flat_map(|s| &s.spec.runs)
+            .map(|run| {
                 let start = end;
-                end += old.text.len();
-                (start..end, cache::same_run_style(old, new))
+                end += run.text.len();
+                (start..end, run)
             })
             .collect();
         let edit = LineEdit::between(&spec, old);
@@ -457,15 +456,16 @@ impl ShapedSource {
         let edges = run_edges(&spec, &pieces);
         for ((start, text, runs, boxes, _), edges) in pieces.into_iter().zip(edges) {
             let h = lines.len();
+            let run_base = runs.first().map_or(0, |(_, index)| *index as u32);
             if let Some(line) = old.and_then(|s| {
                 s.matching_line(h, count, |i, line| {
-                    // Indentation and balancing give the first line its own shaping inputs.
                     text == line.text
                         && runs.iter().all(|(range, index)| {
-                            prior_runs.get(*index).is_some_and(|(old, same)| {
-                                *same
-                                    && old.start <= line.start + range.start
-                                    && line.start + range.end <= old.end
+                            let prior = line.run_base as usize + (*index - run_base as usize);
+                            prior_runs.get(prior).is_some_and(|(bounds, before)| {
+                                bounds.start <= line.start + range.start
+                                    && line.start + range.end <= bounds.end
+                                    && cache::same_run_style(before, &spec.runs[*index])
                             })
                         })
                         && (h == 0) == (i == 0)
@@ -474,6 +474,7 @@ impl ShapedSource {
             }) {
                 lines.push(HardLine {
                     start,
+                    run_base,
                     shape: line.1.shape.clone(),
                 });
                 continue;
@@ -496,7 +497,7 @@ impl ShapedSource {
                     &mut builder,
                     &spec.runs[*index],
                     range.clone(),
-                    *index as u32,
+                    *index as u32 - run_base,
                     &families[*index],
                 );
             }
@@ -549,6 +550,7 @@ impl ShapedSource {
             }
             lines.push(HardLine {
                 start,
+                run_base,
                 shape: Arc::new(LineShape {
                     bytes: text.capacity() + layout.capacity_bytes(),
                     text,
@@ -568,6 +570,7 @@ impl ShapedSource {
         if let Some(first) = edit.suffix.first() {
             lines.extend(edit.suffix.iter().map(|line| HardLine {
                 start: edit.bytes.end + (line.start - first.start),
+                run_base: line.run_base,
                 shape: line.shape.clone(),
             }));
         }
@@ -701,7 +704,7 @@ impl ShapedSource {
                     .matching_line(h, count, |_, line| Arc::ptr_eq(&line.shape, &hard.shape))?;
                 Some((p.lines(), i))
             })) {
-                field.reuse(&mut out, old, i, h, &mut prior_visual, &mut faces);
+                field.reuse(&mut out, old, i, (h, hard), &mut prior_visual, &mut faces);
                 continue;
             }
             let first_visual = out.lines.len();
@@ -777,6 +780,7 @@ impl ShapedSource {
                 let indent = if i == 0 { hard.indent } else { 0.0 };
                 out.lines.push(LayoutLine {
                     hard: h as u32,
+                    run_base: hard.run_base,
                     glyphs: (start, out.glyphs.len() as u32),
                     w: (content - trailing + indent).max(0.0) + rest,
                     ..LayoutLine::default()
@@ -948,7 +952,8 @@ impl ShapedSource {
         let (a, b) = (line.glyphs.0 as usize, line.glyphs.1 as usize);
         let glyphs: Vec<LayoutGlyph> = out.glyphs[a..b].to_vec();
         let end = if rtl { glyphs.first() } else { glyphs.last() };
-        let run = end.map_or(0, |g| g.run());
+        let brush = end.map_or(0, |g| g.metadata);
+        let run = (line.run_base + brush) as usize;
         let Some(spec_run) = self.spec.runs.get(run) else {
             return;
         };
@@ -1028,7 +1033,7 @@ impl ShapedSource {
                     x: g.x + pen,
                     start: boundary,
                     end: boundary,
-                    metadata: run as u32,
+                    metadata: brush,
                     face: out.face(face),
                     ..*g
                 }
@@ -1125,7 +1130,10 @@ impl ShapedSource {
                 .flatten()
                 .unwrap_or_else(|| {
                     line_box(
-                        lines.glyphs_of(line).iter(),
+                        lines
+                            .glyphs_of(line)
+                            .iter()
+                            .map(|g| (g, g.run(line.run_base))),
                         &lines.faces,
                         spec,
                         &mut catalog,
@@ -1205,7 +1213,7 @@ fn line_inset(
         for line in layout.lines() {
             for r in line.runs() {
                 for c in r.visual_clusters() {
-                    if c.first_style().brush == index as u32 {
+                    if c.first_style().brush == 0 {
                         sum += c.advance();
                     }
                 }
@@ -1238,7 +1246,7 @@ pub(super) fn box_extent(spec: &Spec, catalog: &mut catalog::Catalog, run: usize
 /// Returns the space above and below the baseline, and whether an explicit
 /// length decided either.
 pub(super) fn line_box<'a>(
-    glyphs: impl Iterator<Item = &'a LayoutGlyph>,
+    glyphs: impl Iterator<Item = (&'a LayoutGlyph, usize)>,
     faces: &[lines::Face],
     spec: &Spec,
     catalog: &mut catalog::Catalog,
@@ -1248,9 +1256,9 @@ pub(super) fn line_box<'a>(
     let (mut above, mut below) = strut;
     let mut above_explicit = spec.strut.line_height.is_some();
     let mut below_explicit = above_explicit;
-    let mut last: Option<(u16, u32, u32)> = None;
-    for glyph in glyphs {
-        let key = (glyph.face, glyph.font_size.to_bits(), glyph.metadata);
+    let mut last = None;
+    for (glyph, run) in glyphs {
+        let key = (glyph.face, glyph.font_size.to_bits(), run);
         if last == Some(key) {
             continue;
         }
@@ -1264,7 +1272,6 @@ pub(super) fn line_box<'a>(
         if m.units_per_em == 0 {
             continue;
         }
-        let run = glyph.run();
         let scale = glyph.font_size / m.units_per_em as f32;
         // Explicit lengths size the authored inline box; only normal
         // expands to the actual fallback glyph font.
@@ -1298,6 +1305,8 @@ pub(super) fn line_box<'a>(
 /// One visual line as painters and tests read it.
 #[derive(Clone, Copy, Debug)]
 pub struct LayoutRun<'a> {
+    /// The first canonical glyph run of this hard line.
+    pub run_base: u32,
     /// Its hard line's index.
     pub line_i: usize,
     /// The source text indexed by its glyph ranges: a hard line for ordinary
@@ -1348,6 +1357,7 @@ impl<'a> Iterator for Runs<'a> {
                 (top, p.baselines[i], p.bottoms[i] - top)
             };
         Some(LayoutRun {
+            run_base: line.run_base,
             line_i: line.hard as usize,
             text: p
                 .flow

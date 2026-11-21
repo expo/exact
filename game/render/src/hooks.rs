@@ -331,6 +331,8 @@ pub trait Hooks: Default {
     const ENABLED: bool = true;
     /// Maximum bounded units per advancing frame, or zero to opt out.
     const ALLOWANCE: u32 = 0;
+    /// Job types this GPU module can dispatch in a worker.
+    const REMOTE: &'static [crate::RemoteJob] = &[];
     /// Allocate/resize resources, extract immutable world data, and upload uniforms.
     fn prepare(
         &mut self,

@@ -136,7 +136,7 @@ android {
         val attr = { v: String -> v.replace("&", "&amp;").replace("<", "&lt;").replace("\"", "&quot;") }
         val text = { v: String -> attr(v).replace("\\", "\\\\").replace("'", "\\'").replace(Regex("^([@?])"), "\\\\$1") }
         // Apple's families as cell spans (D4); `systemExtraLarge` is iPad's, a 4×4 here as `systemLarge`.
-        val cells = mapOf("systemSmall" to (2 to 2), "systemMedium" to (4 to 2), "systemLarge" to (4 to 4), "systemExtraLarge" to (4 to 4))
+        val cells = mapOf("systemSmall" to (2 to 2), "systemMedium" to (4 to 2), "systemLarge" to (4 to 4), "systemExtraLarge" to (4 to 4), "systemExtraLargePortrait" to (4 to 4))
         // The settings screen offers fixed choices only (LLP 1126.003 D7). An entity parameter is left out, so its
         // field stays none here, and a row with no parameter left has no settings.
         val rows = (manifest["widgets"] as List<*>?).orEmpty().map { it as Map<*, *> }

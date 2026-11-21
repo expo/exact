@@ -30,8 +30,8 @@ impl<'a> LineEdit<'a> {
         let old_len = len(&old.spec);
         let pairs = old.spec.runs.iter().zip(&spec.runs);
         let prefix = matching_bytes(pairs.clone(), false);
-        // Each glyph names its run by index. A suffix at different run
-        // indices must be shaped again even when its text and style match.
+        // These slices keep their run bases. The per-line matcher can also
+        // reuse a line whose runs moved within the paragraph.
         let suffix = if prefix < old_len.min(new_len) && old.spec.runs.len() == spec.runs.len() {
             matching_bytes(pairs.rev(), true)
                 .min(old_len - prefix)

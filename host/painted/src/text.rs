@@ -406,7 +406,7 @@ impl Paragraph {
         self.owned_capacity_bytes() - self.source.accessible_capacity_bytes
     }
 
-    /// The runs it was shaped from, in the order glyphs' `metadata` index.
+    /// The canonical runs referenced by this paragraph's glyphs.
     pub fn runs(&self) -> &[Run] {
         &self.source.spec.runs
     }
@@ -477,18 +477,17 @@ impl Paragraph {
         for (line, baseline) in self.layout_runs().zip(self.baselines.iter()) {
             let mut spans: Vec<(f32, f32, usize)> = Vec::new();
             for g in line.glyphs {
-                if backgrounds.get(g.run()).copied().flatten().is_none() {
+                let run = g.run(line.run_base);
+                if backgrounds.get(run).copied().flatten().is_none() {
                     continue;
                 }
                 let (lo, hi) = (g.x.min(g.x + g.w), g.x.max(g.x + g.w));
                 match spans.last_mut() {
-                    Some(last)
-                        if last.2 == g.run() && lo <= last.1 + 0.01 && hi >= last.0 - 0.01 =>
-                    {
+                    Some(last) if last.2 == run && lo <= last.1 + 0.01 && hi >= last.0 - 0.01 => {
                         last.0 = last.0.min(lo);
                         last.1 = last.1.max(hi);
                     }
-                    _ => spans.push((lo, hi, g.run())),
+                    _ => spans.push((lo, hi, run)),
                 }
             }
             spans.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -537,13 +536,17 @@ impl Paragraph {
         &'a self,
         palette: &'a [RunPaint],
     ) -> impl Iterator<Item = (&'a LayoutGlyph, f32, RunPaint)> + 'a {
-        self.layout_runs()
-            .zip(self.baselines.iter())
-            .flat_map(move |(line, baseline)| {
-                line.glyphs
-                    .iter()
-                    .map(move |glyph| (glyph, *baseline, palette[glyph.run()]))
-            })
+        self.glyphs_with_runs()
+            .map(move |(glyph, baseline, run)| (glyph, baseline, palette[run]))
+    }
+
+    /// Positioned glyphs with their baseline and canonical run in this paragraph.
+    pub(crate) fn glyphs_with_runs(&self) -> impl Iterator<Item = (&LayoutGlyph, f32, usize)> {
+        self.layout_runs().flat_map(|line| {
+            line.glyphs
+                .iter()
+                .map(move |glyph| (glyph, line.line_y, glyph.run(line.run_base)))
+        })
     }
 }
 
@@ -1162,9 +1165,9 @@ impl TextEngine {
                 .map(|query| (index, query))
         }) {
             let _nodes = index.visit(query, |chunk| {
-                let (glyphs, baseline) = index.glyphs(paragraph, chunk);
+                let (glyphs, baseline, base) = index.glyphs(paragraph, chunk);
                 for g in glyphs {
-                    draw(g, baseline, palette[g.run()]);
+                    draw(g, baseline, palette[g.run(base)]);
                 }
             });
             #[cfg(test)]
@@ -1199,8 +1202,8 @@ impl TextEngine {
         type Key = (u16, u32, usize);
         type Runs = Vec<(Key, Vec<(u32, f32, f32)>)>;
         let mut runs: Runs = Vec::new();
-        let mut add = |g: &LayoutGlyph, baseline| {
-            let key = (g.face, g.font_size.to_bits(), g.run());
+        let mut add = |g: &LayoutGlyph, baseline, run| {
+            let key = (g.face, g.font_size.to_bits(), run);
             let (x, y) = position(g, baseline);
             match runs.last_mut() {
                 Some((k, glyphs)) if *k == key => glyphs.push((g.glyph_id, x, y)),
@@ -1209,14 +1212,14 @@ impl TextEngine {
         };
         if let Some((index, query)) = visible {
             index.visit(query, |chunk| {
-                let (glyphs, baseline) = index.glyphs(paragraph, chunk);
+                let (glyphs, baseline, base) = index.glyphs(paragraph, chunk);
                 for glyph in glyphs {
-                    add(glyph, baseline);
+                    add(glyph, baseline, glyph.run(base));
                 }
             });
         } else {
-            for (glyph, baseline, _) in paragraph.paint_glyphs(palette) {
-                add(glyph, baseline);
+            for (glyph, baseline, run) in paragraph.glyphs_with_runs() {
+                add(glyph, baseline, run);
             }
         }
         let catalog = paragraph.source.catalog.borrow();

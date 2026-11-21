@@ -236,8 +236,19 @@ final class GroupedListHost: GroupedLists {
     /// Before a batch: every carried row back where the presenter put it.
     func prepare() { for list in lists.values { list.restore() } }
 
+    /// The owner's frame moved outside a batch: the list mounts again by it, seats its custom headers by the settled
+    /// layout, and tells the kernel the margins that layout gives.
+    func geometryChanged(_ id: UInt32) {
+        guard let list = lists[id] else { return }
+        list.mount(looks: false)
+        list.collection.layoutIfNeeded()
+        list.carryHeaders()
+        tellSoon()
+    }
+
     /// After a batch. `changed` is the touched views and their ancestors; a
     /// list outside it keeps its model and only carries its rows again.
+
     func sync(changed: Set<UInt32>? = nil) {
         var live = Set<UInt32>()
         // A live edit of the theme's roles (LLP 1121 stage 5) changes no row,
@@ -531,7 +542,7 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
     /// Of `reach`, what is a fold's half band: UIKit counts it as safe area
     /// but sets no margin past it there, where a hand-built split view's
     /// card has its 20 (`section`).
-    private var foldReach: (left: CGFloat, right: CGFloat) = (0, 0)
+    var foldReach: (left: CGFloat, right: CGFloat) = (0, 0)
     /// Only the host-hidden bit: CSS display remains authoritative.
     private var hiddenRoots: [UInt32: (node: NodeView, hidden: Bool)] = [:]
     /// The list's padding and final footer space, independent of other insets.
@@ -857,15 +868,18 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         // A short settings list bounces, as UIKit's collection default would not.
         assign(collection, \.alwaysBounceVertical, owner.scrollsVertically)
         assign(collection, \.bounces, owner.style["overscroll_behavior_y"]?.string != "none")
-        // With the page's bands it reaches (LLP 1130 D3), and the side safe
-        // areas its edges meet, where UIKit insets the cards by its own rule.
+        // With the page's bands it reaches (LLP 1130 D3), and the side safe areas its edges meet, where UIKit insets
+        // the cards by its own rule. Once the kernel gives the owner its reach (LLP 1123 D13), zero included, the frame
+        // already lies over them and the list's own reach, a fold's half band among it, gives way to the kernel's
+        let fold = foldReach
+        if owner.reachGiven { reach = (owner.reach.left, owner.reach.right); foldReach = (0, 0) }
         #if os(iOS)
-        reach = sideReach()
+        if !owner.reachGiven { reach = sideReach() }
         (collection as? GroupedCollectionView)?.sideSafeArea = reach
         #endif
+        if foldReach != fold { collection.collectionViewLayout.invalidateLayout() }
         var frame = owner.scrollFrame
-        frame.origin.x -= reach.left
-        frame.size.width += reach.left + reach.right
+        if !owner.reachGiven { frame.origin.x -= reach.left; frame.size.width += reach.left + reach.right }
         assign(collection, \.frame, frame)
         if looks { refreshLooks() }
         for cell in collection.visibleCells {
@@ -1017,41 +1031,6 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
     func cell(_ id: UInt32) -> UICollectionViewCell? {
         source.indexPath(for: id).flatMap { collection.cellForItem(at: $0) }
     }
-
-    #if os(iOS)
-    /// How far past each side the list's edge meets the collection reaches,
-    /// a safe area there, where nothing between the list and the window
-    /// transforms or clips it away. The window's side safe area: Exact's
-    /// layout keeps a route's content inside it (LLP 1123), where UIKit puts
-    /// an inset-grouped list's cards 20 in, and 16 past it when the list
-    /// spans the screen, as a hand-built one does. Half a fold's band (LLP
-    /// 1078): a hand-built split view's column reaches the band's middle,
-    /// that half its safe area, and its card ends 20 short of the band, where
-    /// a list ending at the band has its card run into it (iPhone Duo, iOS
-    /// 27.1, `~/audits/exact2-no-tells-2026-10-11/duo-fold-probe/`).
-    private func sideReach() -> (left: CGFloat, right: CGFloat) {
-        foldReach = (0, 0)
-        guard let window = owner.window else { return (0, 0) }
-        let safe = window.safeAreaInsets, r = owner.convert(owner.bounds, to: window)
-        let meets = { (inset: CGFloat, edge: CGFloat) in inset > 0 && abs(edge - inset) < 0.5 ? inset : 0 }
-        var reach = (left: meets(safe.left, r.minX), right: meets(safe.right, window.bounds.width - r.maxX))
-        for band in (ReservedRegions.divisions(of: window) ?? []).filter(\.active).map(\.frame) where band.height > band.width {
-            if abs(r.maxX - band.minX) < 0.5 { reach.right = band.width / 2; foldReach.right = reach.right }
-            if abs(r.minX - band.maxX) < 0.5 { reach.left = band.width / 2; foldReach.left = reach.left }
-        }
-        guard reach.left > 0 || reach.right > 0 else { return reach }
-        let reached = r.inset(by: UIEdgeInsets(top: 0, left: -reach.left, bottom: 0, right: -reach.right))
-        var at: UIView? = owner.superview
-        while let v = at, v !== window {
-            if !v.transform.isIdentity || v.clipsToBounds && !v.convert(v.bounds, to: window).insetBy(dx: -0.5, dy: -0.5).contains(reached) {
-                foldReach = (0, 0)
-                return (0, 0)
-            }
-            at = v.superview
-        }
-        return reach
-    }
-    #endif
 
     /// Row `id`'s middle, or the middle of `inner` (a box in the row's own
     /// space), scrolled to the middle of `port` when outside it, unanimated

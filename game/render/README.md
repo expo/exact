@@ -106,16 +106,18 @@ Use `exact_game_render::Jobs<J>` for bounded presentation work (LLP 1182.000 D9)
 A `Job` is a function of the data moved into it by `submit`. Keep GPU handles
 out of jobs and install results in `Hooks::prepare`. `take` requires the
 `HookGpu` from that `prepare` and borrows it and the `FrameView` for the
-lifetime of the iterator.
+lifetime of the iterator. Drop the take before using the queue again. On the
+worker lane a take can post work when it drops.
 
 - Declare `Hooks::ALLOWANCE > 0`. The allowance belongs to the hook for that
   `prepare`. Takes from one `Jobs` share it. A hook with two queues divides
   the allowance between them itself.
-- `take_per_frame` and the deadline bound delivered results. A late frame
-  can deliver its first current result past the deadline. Results invalidated
-  since they completed are dropped along the way without using a unit.
+- `take_per_frame` and the deadline bound delivered results. The pool and
+  inline lanes can deliver the first current result of a late frame.
+  Results invalidated since they completed are dropped without using a unit.
   After the first delivery, the deadline is checked between results and
-  stale drops (LLP 1182.000 D6).
+  stale drops (LLP 1182.000 D6). The worker lane shares its late unit with
+  job encoding and hook work.
 - Each step of `take` yields the ready `Done { key, generation, result }`
   with the highest priority, breaking ties by submission order.
 - `submit(key, generation, priority, job)` supersedes earlier work for the
@@ -128,9 +130,10 @@ lifetime of the iterator.
   drops waiting results. A running job can poll `Cancel::is_set()` to stop
   early. Its output is discarded when it returns after `cancel` or `clear`.
   Clear and advance the hook's generation when a restore or restart
-  invalidates job inputs. The default device-loss reset
-  drops the queue, cancelling and joining its workers.
-  Drop waits for running jobs, so jobs should poll `Cancel::is_set()` or finish quickly.
+  invalidates job inputs. The default device-loss reset drops the queue. A
+  native pool cancels and joins its workers, so jobs should poll
+  `Cancel::is_set()` or finish quickly. A remote queue retires immediately.
+  Its transport owns the workers.
 - A job returns `JobError` by value. A native worker that unwinds reports
   `job panicked` for that job. A hook waiting for work should clear
   `PENDING` or expose the failure through `error()`. `pending()` counts
@@ -143,7 +146,8 @@ knows the current clock mode. Submit only on an advancing frame. A pool uses
 up to four threads at the platform's default priority, leaving two logical
 CPUs when possible. If no worker can start, the queue runs inline.
 
-WebAssembly and the agent's clock run jobs inline as the iterator advances.
+WebAssembly runs jobs inline without a transport or until a take sees a ready
+worker. The agent's clock runs jobs inline as the iterator advances.
 A held frame takes no result and runs no job inline. A pool that was working
 when the agent took the clock keeps working until the first advance. That
 advance's `take` waits for running jobs and delivers results in the same
@@ -158,11 +162,88 @@ that rests, input sent after that lands on a different tick.
 
 Return `Some(jobs.report())` from `Hooks::jobs` to populate
 `state.world.renderHooks.jobs`. The report holds `queued`, `queuedBytes`,
-`running`, `done`, `stale`, `failed` and `lane` (`"pool"` or `"inline"`).
-`done` counts successful results taken, `stale` counts results discarded
+`running`, `done`, `stale`, `failed` and `lane` (`"pool"`, `"inline"` or
+`"worker"`). On the worker lane, `running` counts jobs out that the hook can
+still receive. A worker can still occupy a posting slot after those jobs are
+cancelled. `done` counts successful results taken, `stale` counts results discarded
 after replacement, cancellation or clear, and `failed` counts error results
-taken. `perf_reset` clears those three counters. Use `+` to report several
+taken. On the worker lane, `stale` counts only answers the queue saw in a
+snapshot. An answer discarded by the transport before that snapshot is
+excluded. `perf_reset` clears those three counters. Use `+` to report several
 queues from one hook. Hooks without a report return `null`.
+
+#### Worker transport
+
+`Jobs::remote` uses the registered `WireJob` codec. The browser adapter must
+call `install_module_transport` once on the owner thread before constructing
+hooks. Queues capture the installed transport at construction. Code holding
+the transport can read its buffers, so the adapter belongs in generated
+code. The worker export will call `run_remote_job`.
+
+Rust owns job values, priorities, generations and limits. A job's wire
+eligibility is decided at submission for transport queues. Debug builds
+round-trip wire-capable jobs on the pool and inline lanes, including after
+the worker lane ends. On the worker lane, a take yields
+arrived answers and queued jobs that decline the wire in priority and
+submission order. Once a take sees a ready worker, a later `Starting`
+snapshot keeps the queue on the worker lane, where it can drain answers
+while a replacement starts. An advancing take on the agent's clock requeues
+work out or arrived and forgets its attempts. A held take leaves worker
+state alone. Submission, cancellation and clear can also discard transport
+buffers or withdraw a queue's ask.
+
+A live, advancing take calls `Transport::events` once at entry for a snapshot
+of readiness and events. During the take, transport state changes only in
+calls from the queue. Posting at exit counts the announced answer bytes
+still held, in 64 bits. Posting stops at the completed byte threshold while
+an answer from the snapshot is pending. On the worker lane, a queue has one
+late unit per `prepare`, shared by all its takes. Delivering a result past the
+deadline, encoding a job past the deadline or calling
+`Take::mark_late_unit_spent` spends it. A job encoded late spends the unit even
+if its post is refused and it stays queued. Once the unit is spent, the
+queue delivers and encodes nothing more past the deadline for the rest of
+that prepare, even if the lane ends. A queue that begins and stays on the
+pool or inline lane can still deliver the first result of a late frame.
+
+The transport owns the five-second start timeout, the ten-second batch
+timeout since posting or the last answer, worker replacement and the count
+of consecutive losses. A wanted attempt ends once in `Arrived`, `Lost` or
+`Ended`. A trap arrives as `Trapped`. The transport closes and replaces its
+worker without counting a loss and reports the rest of that batch as lost
+for retry. Batch timeouts, worker errors, posts that throw and rejected
+answers count as losses. A rejection immediately stops posts to that worker, stages its
+loss event for the next advancing live take and preserves other answers
+already received. The count resets when the queue accepts a result, a
+`JobError` or `Trapped`. Three consecutive losses or a failed replacement
+end the lane. The transport ignores late messages from lost workers and
+forgotten attempts. A positive `Ready` count
+includes busy workers. Use `Starting` while no worker is ready and a start
+is pending, and `Ended` when none can still start. At end the transport drops
+every answer buffer, including those announced to an open take.
+`Transport::read_result` returns `ResultRead::Gone` for a missing buffer.
+The take runs the retained job in its turn without recording a loss. The
+next take applies arrivals and losses before the end and requeues remaining
+work for inline execution. Known traps are delivered as failures on live
+takes, including after the lane ends. The agent's clock discards all arrived
+results, including traps, and requeues their jobs.
+
+A worker holds one batch of up to 16 jobs. Encode each `u64` attempt as two
+32-bit words at the JavaScript boundary. A refused post accepts no
+attempts. At the end of a worker take, a queue asks for a worker while it
+has wire work queued, room under its running and completed byte limits,
+and time or a late unit to encode. A queue withdraws its ask when it stops
+for a limit, its deadline or a refused post. An eligible queue that cannot
+get an idle worker stays active for 250 ms on the transport's clock.
+An idle worker goes to the active queue served least recently, with queues
+that have never posted first. A successful batch post updates when the
+queue was last served. Other queues cannot post to that worker on their take.
+
+`Jobs::report()` exposes the queue's own gauges and counts. The renderer adds
+`renderHooks.jobs.wire` for diagnostics with Rust-side wire time percentiles and
+bytes copied, plus the transport's ready worker count, largest worker
+linear memory, total message-handler time and peak buffered answer bytes.
+`perf_reset` resets the Rust-side wire time and bytes. The transport
+readings cover the instance's lifetime.
 
 ### Render stages
 

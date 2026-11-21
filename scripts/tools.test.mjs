@@ -61,6 +61,17 @@ test('publish exposes a verified manifest and complete blobs before updating eit
     const altered = Buffer.from(JSON.stringify({ ...manifest, commit: 'a'.repeat(40) }));
     assert.throws(() => readToolManifest(altered, id, triple, publicKey), /digest/);
     assert.throws(() => readToolManifest(altered, sha(altered), triple, publicKey), /signature/);
+    if (triple === 'aarch64-apple-darwin') {
+      const linux = 'x86_64-unknown-linux-gnu';
+      const linuxSet = { dir, manifest: { ...set.manifest, triple: linux } };
+      const linuxId = await publishToolSet(origin, linuxSet, privateKey);
+      const linuxBase = `.exact/tools/${linux}`;
+      assert.equal(JSON.parse(await origin.get(`${linuxBase}/commits/${commit}.json`)), linuxId);
+      assert.deepEqual(JSON.parse(await origin.get(`${linuxBase}/recent.json`)), [linuxId]);
+      const bytes = await origin.get(`${linuxBase}/manifests/${linuxId}.json`);
+      assert.equal(readToolManifest(bytes, linuxId, linux, publicKey).triple, linux);
+      assert.throws(() => readToolManifest(bytes, linuxId, triple, publicKey), /not a version 1 set/);
+    }
     assert.equal(await publish(commit), id);
     assert.equal(JSON.parse(await origin.get(`${base}/commits/${commit}.json`)), id);
     assert.deepEqual(JSON.parse(await origin.get(`${base}/recent.json`)), [id]);

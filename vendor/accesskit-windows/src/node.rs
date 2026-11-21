@@ -35,6 +35,10 @@ use crate::{
     util::*,
 };
 
+#[macro_use]
+mod patterns;
+mod scroll;
+
 const RUNTIME_ID_SIZE: usize = 5;
 
 pub(crate) fn runtime_id_from_node_id(id: FullNodeId) -> [i32; RUNTIME_ID_SIZE] {
@@ -807,6 +811,7 @@ fn enqueue_property_change(
     IValueProvider,
     IRangeValueProvider,
     IScrollItemProvider,
+    IScrollProvider,
     ISelectionItemProvider,
     ISelectionProvider,
     ITextProvider,
@@ -1217,129 +1222,6 @@ impl IRawElementProviderFragmentRoot_Impl for PlatformNode_Impl {
     }
 }
 
-macro_rules! properties {
-    ($(($id:ident, $m:ident)),+) => {
-        impl NodeWrapper<'_> {
-            fn get_property_value(&mut self, property_id: UIA_PROPERTY_ID) -> Variant {
-                match property_id {
-                    $($id => {
-                        self.$m().into()
-                    })*
-                    _ => Variant::empty()
-                }
-            }
-            fn enqueue_simple_property_changes(
-                &mut self,
-                queue: &mut Vec<QueuedEvent>,
-                context: &Arc<Context>,
-                element: &IRawElementProviderSimple,
-                old: &mut NodeWrapper,
-            ) {
-                $({
-                    let old_value = old.$m();
-                    let new_value = self.$m();
-                    if old_value != new_value {
-                        enqueue_property_change(
-                            queue,
-                            element,
-                            $id,
-                            old_value.into(),
-                            new_value.into(),
-                        );
-                    }
-                })*
-
-                let mut old_controls = old.node.controls().filter(|controlled| filter(controlled) == FilterResult::Include);
-                let mut new_controls = self.node.controls().filter(|controlled| filter(controlled) == FilterResult::Include);
-                let mut are_equal = true;
-                let mut controls: Vec<IUnknown> = Vec::new();
-                loop {
-                    let old_controlled = old_controls.next();
-                    let new_controlled = new_controls.next();
-                    match (old_controlled, new_controlled) {
-                        (Some(a), Some(b)) => {
-                            are_equal = are_equal && a.id() == b.id();
-                            controls.push(context.get_or_create_platform_node(b.id()).into_interface::<IRawElementProviderSimple>().into());
-                        }
-                        (None, None) => break,
-                        _ => are_equal = false,
-                    }
-                }
-                if !are_equal {
-                    enqueue_property_change(
-                        queue,
-                        &element,
-                        UIA_ControllerForPropertyId,
-                        Variant::empty(),
-                        controls.into(),
-                    );
-                }
-            }
-        }
-    };
-}
-
-macro_rules! patterns {
-    ($(($pattern_id:ident, $provider_interface:ident, $provider_interface_impl:ident, $is_supported:ident, (
-        $(($property_id:ident, $com_getter:ident, $getter:ident, $com_type:ident)),*
-    ), (
-        $($extra_trait_method:item),*
-    ))),+) => {
-        impl PlatformNode_Impl {
-            fn pattern_provider(&self, pattern_id: UIA_PATTERN_ID) -> Result<IUnknown> {
-                self.resolve(|node| {
-                    let mut buffer = StringBuffer::acquire();
-                    let wrapper = NodeWrapper { node: &node, string_buffer: &mut buffer };
-                    match pattern_id {
-                        $($pattern_id if wrapper.$is_supported() => {
-                            let intermediate: $provider_interface = self.to_interface();
-                            return intermediate.cast();
-                        })*
-                        _ => (),
-                    }
-                    Err(Error::empty())
-                })
-            }
-        }
-        impl NodeWrapper<'_> {
-            fn enqueue_pattern_property_changes(
-                &mut self,
-                queue: &mut Vec<QueuedEvent>,
-                element: &IRawElementProviderSimple,
-                old: &mut NodeWrapper,
-            ) {
-                $(if self.$is_supported() && old.$is_supported() {
-                    $({
-                        let old_value = old.$getter();
-                        let new_value = self.$getter();
-                        if old_value != new_value {
-                            enqueue_property_change(
-                                queue,
-                                element,
-                                $property_id,
-                                old_value.into(),
-                                new_value.into(),
-                            );
-                        }
-                    })*
-                })*
-            }
-        }
-        $(#[allow(non_snake_case)]
-        impl $provider_interface_impl for PlatformNode_Impl {
-            $(fn $com_getter(&self) -> Result<$com_type> {
-                self.resolve(|node| {
-                    let mut buffer = StringBuffer::acquire();
-                    #[allow(unused_mut)]
-                    let mut wrapper = NodeWrapper { node: &node, string_buffer: &mut buffer };
-                    Ok(wrapper.$getter().into())
-                })
-            })*
-            $($extra_trait_method)*
-        })*
-    };
-}
-
 properties! {
     (UIA_ControlTypePropertyId, control_type),
     (UIA_LocalizedControlTypePropertyId, localized_control_type),
@@ -1415,6 +1297,22 @@ patterns! {
                     data: None,
                 }))
             })
+        }
+    )),
+    (UIA_ScrollPatternId, IScrollProvider, IScrollProvider_Impl, is_scroll_pattern_supported, (
+        (UIA_ScrollHorizontalScrollPercentPropertyId, HorizontalScrollPercent, horizontal_scroll_percent, f64),
+        (UIA_ScrollVerticalScrollPercentPropertyId, VerticalScrollPercent, vertical_scroll_percent, f64),
+        (UIA_ScrollHorizontalViewSizePropertyId, HorizontalViewSize, horizontal_view_size, f64),
+        (UIA_ScrollVerticalViewSizePropertyId, VerticalViewSize, vertical_view_size, f64),
+        (UIA_ScrollHorizontallyScrollablePropertyId, HorizontallyScrollable, horizontally_scrollable, BOOL),
+        (UIA_ScrollVerticallyScrollablePropertyId, VerticallyScrollable, vertically_scrollable, BOOL)
+    ), (
+        fn Scroll(&self, horizontal_amount: ScrollAmount, vertical_amount: ScrollAmount) -> Result<()> {
+            self.scroll(horizontal_amount, vertical_amount)
+        },
+
+        fn SetScrollPercent(&self, horizontal_percent: f64, vertical_percent: f64) -> Result<()> {
+            self.set_scroll_percent(horizontal_percent, vertical_percent)
         }
     )),
     (UIA_SelectionItemPatternId, ISelectionItemProvider, ISelectionItemProvider_Impl, is_selection_item_pattern_supported, (), (

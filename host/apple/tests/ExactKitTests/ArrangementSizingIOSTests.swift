@@ -13,12 +13,12 @@ final class ArrangementSizingIOSTests: XCTestCase {
         super.tearDown()
     }
 
-    private func booted() throws -> ExactSession {
+    private func booted(_ size: CGSize = CGSize(width: 600, height: 800)) throws -> ExactSession {
         let path = try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_ARRANGEMENT_SIZING_PLAN"])
         let session = ExactApp.shared.makeSession(label: "arrangement-sizing")
         self.session = session
         let host = UIViewController(), view = ExactView(session: session)
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 600, height: 800))
+        let window = UIWindow(frame: CGRect(origin: .zero, size: size))
         window.rootViewController = host
         window.makeKeyAndVisible()
         host.view.addSubview(view)
@@ -30,8 +30,8 @@ final class ArrangementSizingIOSTests: XCTestCase {
     }
 
     @available(iOS 27.1, *)
-    private func fixture() throws -> (ExactSession, UIArrangementViewController, UIView) {
-        let session = try booted()
+    private func fixture(_ size: CGSize = CGSize(width: 600, height: 800)) throws -> (ExactSession, UIArrangementViewController, UIView) {
+        let session = try booted(size)
         let controller = UIArrangementViewController()
         controller.updateArrangement(split(.intrinsic))
         XCTAssertTrue(session.presenter.arrangements.set(try node("arrangement").id, controller: controller))
@@ -50,6 +50,18 @@ final class ArrangementSizingIOSTests: XCTestCase {
         properties.height.minimum = .absolute(0)
         properties.height.preferred = dimension
         properties.height.maximum = .fractional(1)
+        split.setViewProperties(properties, for: .primary)
+        return split
+    }
+
+    /// Panes side by side, the primary's width `dimension`.
+    @available(iOS 27.1, *)
+    private func across(_ dimension: UISplitArrangement.Dimension) -> UISplitArrangement {
+        var split = UISplitArrangement().axes(.horizontal)
+        var properties = split.defaultViewProperties
+        properties.width.minimum = .absolute(0)
+        properties.width.preferred = dimension
+        properties.width.maximum = .fractional(1)
         split.setViewProperties(properties, for: .primary)
         return split
     }
@@ -176,6 +188,67 @@ final class ArrangementSizingIOSTests: XCTestCase {
         XCTAssertTrue(reaches(told(230), below: 25))
         XCTAssertTrue(reaches(told(255), below: 0))
         XCTAssertFalse(reaches(told(230), below: 60), "nor in a block past its maximum")
+    }
+
+    /// A percentage height on a pane its arrangement sizes to its content is cyclic (LLP 1123 D7): the pane takes its
+    /// content's height, not the room's; given an absolute allocation, the percentage has it as its basis, within the
+    /// pane's maximum.
+    func testAPercentageHeightIsCyclicUnderIntrinsicSizingAndHasTheAllocationOtherwise() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
+        // `height: 100%`, at most 280, landed before the arrangement takes the pane
+        let session = try booted(), primary = try node("primary")
+        session.presenter.press(try node("cap").id)
+        waitForActivation(session)
+        waitFor("the cap lands") { !session.ownerInFlight && !session.hasPublished() }
+        let controller = UIArrangementViewController()
+        controller.updateArrangement(split(.intrinsic))
+        XCTAssertTrue(session.presenter.arrangements.set(try node("arrangement").id, controller: controller))
+        let pane = try XCTUnwrap(controller.viewController(for: .primary)?.view)
+        func layout() { window?.layoutIfNeeded(); controller.view.layoutIfNeeded() }
+        // UIKit settles the pane at its content's height after it attaches, not the room's, though a region gives it its maximum
+        waitFor("the pane takes its content's 60 points", cap: 5, facts: { "pane \(pane.bounds.height), primary \(primary.frame.height)" }) {
+            layout(); return abs(pane.bounds.height - 60) < 1 && abs(primary.frame.height - 60) < 1
+        }
+        XCTAssertEqual(session.runtime.measureBlock(primary.id, in: .region(CGSize(width: 600, height: 800)))?.used.height, 280, "the cap is in")
+        for (allocation, height) in [(CGFloat(200), CGFloat(200)), (400, 280)] {
+            controller.updateArrangement(split(.absolute(allocation)))
+            waitFor("100% of \(allocation), at most 280", cap: 5, facts: { "pane \(pane.bounds.height), primary \(primary.frame.height)" }) {
+                layout(); return abs(pane.bounds.height - allocation) < 1 && abs(primary.frame.height - height) < 1
+            }
+        }
+    }
+
+    /// Side by side, in a window wide enough for UIKit to put them so, the axis the split sizes is the width: a
+    /// `width: 100%` pane's intrinsic and fitted widths are its content's, while its `height: 50%` keeps the room's height,
+    /// or a fitting target's, as its basis; and an overlay that stacks its panes, which sizes no axis, gives the width its basis back.
+    func testOnlyTheAxisTheSplitSizesTakesThePanesPercentagesAsCyclic() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
+        let (session, controller, pane) = try fixture(CGSize(width: 1000, height: 600))
+        let primary = try node("primary")
+        controller.updateArrangement(across(.intrinsic))
+        let primaryHolder = try XCTUnwrap(controller.viewController(for: .primary))
+        let axis = { controller.placement(for: primaryHolder).flatMap { controller.state(for: $0)?.splitAxis } }
+        waitFor("UIKit reports the split side by side", cap: 5, facts: { "splitAxis \(String(describing: axis()))" }) {
+            self.window?.layoutIfNeeded(); controller.view.layoutIfNeeded(); return axis() == .horizontal
+        }
+        session.presenter.press(try node("across").id)
+        waitFor("the percentages land", cap: 5) { session.runtime.measureBlock(primary.id, in: .region(CGSize(width: 600, height: 800)))?.used == CGSize(width: 600, height: 400) }
+        controller.view.layoutIfNeeded()
+        let intrinsic = pane.intrinsicContentSize
+        let room = controller.view.bounds.size
+        XCTAssertLessThan(intrinsic.width, room.width / 2, "the content's width, not the room's")
+        XCTAssertEqual(intrinsic.height, room.height / 2, accuracy: 1, "half the room's height")
+        let fitted = pane.systemLayoutSizeFitting(CGSize(width: 600, height: 300), withHorizontalFittingPriority: .fittingSizeLevel,
+                                                  verticalFittingPriority: .fittingSizeLevel)
+        XCTAssertEqual(fitted, CGSize(width: intrinsic.width, height: 150), "the width the content's, the height half the target's")
+        // UIKit settles the pane's allocation at the content's width
+        waitFor("the side-by-side pane settles at its content's width", cap: 5, facts: { "pane \(pane.bounds.width)" }) {
+            self.window?.layoutIfNeeded(); controller.view.layoutIfNeeded(); return abs(pane.bounds.width - intrinsic.width) < 1
+        }
+        controller.updateArrangement(.overlay)
+        controller.view.layoutIfNeeded()
+        pane.invalidateIntrinsicContentSize()
+        XCTAssertEqual(pane.intrinsicContentSize.width, room.width, accuracy: 1, "an overlay that stacks the panes sizes no axis: the room's")
     }
 
     func testIntrinsicAllocationFollowsContentAndOtherDimensionsStillWork() throws {

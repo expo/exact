@@ -127,6 +127,7 @@ export const classifications = [
     ["painted:host/painted/src/holds.rs", "Host::dispatch_held Host::dispatch_retained"],
     ["painted:host/painted/src/host.rs", "Host::boot_decoded Host::dispatch_at Host::dispatch_now"],
     ["painted:host/painted/src/presenter/access.rs", "Presenter::access_act Presenter::access_menu_flag Presenter::access_pressable"],
+    ["painted:host/painted/src/presenter/access/scroll.rs", "Presenter::access_scroll_to"],
     ["painted:host/painted/src/presenter/addressed_tap.rs", "Presenter::presses_itself Presenter::tap Presenter::tap_at"],
     ["painted:host/painted/src/presenter/back.rs", "Presenter::system_back"],
     ["painted:host/painted/src/presenter/bars.rs", "Presenter::bar_choose"],
@@ -139,8 +140,9 @@ export const classifications = [
     ["painted:host/painted/src/presenter/contact/mouse.rs", "Presenter::pointer_down_with_clicks"],
     ["painted:host/painted/src/presenter/control.rs", "Presenter::commit_control_value Presenter::key_click Presenter::toggle_control Presenter::toggle_control_with_press"],
     ["painted:host/painted/src/presenter/desktop_access.rs",
-      "Presenter::access_focus Presenter::access_focus_node Presenter::access_origin Presenter::access_select Presenter::access_selection Presenter::access_text " +
+      "FieldTextLayout::runs FieldTextLayout::same_shape Presenter::access_focus Presenter::access_focus_node Presenter::access_origin Presenter::access_scroll_text_line Presenter::access_select Presenter::access_selection Presenter::access_text Presenter::access_text_layout " +
       "Presenter::access_view"],
+    ["painted:host/painted/src/text/field.rs", "FieldTextRun::character_metrics FieldTextRun::same_metrics"],
     ["painted:host/painted/src/presenter/drag_out.rs", "Presenter::ask_drag Presenter::drag_of Presenter::drag_source_at Presenter::inside Presenter::lift_source_at"],
     ["painted:host/painted/src/presenter/reader_selection.rs",
       "Presenter::reader_select Presenter::report_selection Presenter::selection_policy Presenter::selection_reports"],

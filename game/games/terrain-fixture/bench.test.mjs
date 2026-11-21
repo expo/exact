@@ -52,7 +52,7 @@ const defaultArgs = {
 
 function double({
   first = 1, full = 2, intervals, timestamps = true, thermal = false, extraUnits = 0,
-  extraUploads = 0, encodeMs = recorded.perf.encodeMs, ignoredSwitch, finishedCount = 1,
+  extraUploads = 0, encodeMs = recorded.perf.encodeMs, ignoredSwitch, finishedCount = 1, bindsPerMs,
 } = {}) {
   let elapsed = 0, window = 0;
   const calls = [];
@@ -77,6 +77,7 @@ function double({
             ...recordedGame,
             pending, drew: elapsed >= first, completed: recordedGame.completed + (7 + extraUnits) * elapsed,
             uploadBytes: (1024 + extraUploads) * elapsed,
+            bindsTotal: bindsPerMs == null ? null : bindsPerMs * elapsed,
             timestampQueries: timestamps,
             thermalState: 'nominal', thermalChanges: thermal && afterFirstWindow ? 2 : 0,
             refills: afterFirstWindow
@@ -168,6 +169,22 @@ test('mount timeouts carry their backlog and draw off has no first picture', asy
   const off = await readBench(double(), options('draw=off'), 'abc');
   expect(off.firstPicture).toBeNull();
   expect(off.fullWindow).toEqual({ ms: 2 });
+});
+
+test('arena and indirect rows wait for a first picture and report mean binds beside draws', async () => {
+  for (const [draw, bindsPerMs, mean] of [['arena', 14, 20], ['indirect', 63, 90]]) {
+    const host = double({ first: 3, bindsPerMs });
+    const row = await readBench(host, options('draw=' + draw), 'abc');
+    expect(host.calls).toEqual([['draw', draw], 'play']);
+    expect(row.observedSwitches.draw).toBe(draw);
+    expect(row.firstPicture).toEqual({ ms: 3 });
+    expect(row.inconclusive).toEqual([]);
+    expect(tableRow(row)).toContain('draw=' + draw);
+    for (const window of row.windows) {
+      expect(window.binds).toBe(mean);
+      expect(window.draws).toEqual(recorded.renderHooks.frame.draws);
+    }
+  }
 });
 
 test('reports browser cadence, long tasks and display periods for each web window', async () => {

@@ -50,6 +50,7 @@ marks the row headless.
 
 | Switch | Values | Default | Effect |
 |---|---|---|---|
+| `draw` | `on`, `off`, `arena`, `indirect` | `on` | Submits dedicated, shared-arena or indirect opaque draws. `off` skips draws. |
 | `quality` | `low`, `medium`, `high` | `high` | Sets the renderer's quality rung at mount. Any other setup input uses `high`. |
 | `fps` | `0`, `30`, `45`, `60` in the bench | `0` | The setup screen accepts integers from 5 to 240 as a cap. Any other input, including `0`, leaves the frame rate uncapped. |
 
@@ -107,8 +108,11 @@ than cores.
   last unit for section work when sections are pending and none has run.
   Each result costs one unit, even when a compare batch has fewer than 64
   sections. After the frame's units, the hook refills the pool's queue up
-  to 32 KiB, past the deadline if needed. That step selects and submits work.
-  Lighting and meshing run on the workers.
+  to 256 KiB, past the deadline if needed. That holds about five frames of
+  radius-40 flight submissions at 60 Hz. Lighting and meshing run on the workers.
+  A pool may be starved if `renderHooks.jobs` shows `queued: 0, running: 0`
+  at the end of successive benchmark windows, `sectionsPending` stays above
+  zero, and a matched `jobs=off` run completes more operations.
 - With `inflight=keep` on either lane, a kept stale mesh finishes its crossing
   and its repair is separate work.
 - On a canvas that rests, pending jobs can keep the canvas drawing and ticking
@@ -118,10 +122,9 @@ than cores.
   under the agent's clock or on WebAssembly. A hook that uses jobs declares
   a positive allowance. This fixture takes at most 64 results per frame
   within its current allowance and takes the first result of a late frame
-  past the deadline. It caps queued inputs at 32
-  KiB and holds completed outputs at a 32 MiB threshold. The queue budget
-  covers metadata and references to already resident padded inputs. The
-  completion threshold prevents a radius-40 window of 64-byte vertices
+  past the deadline. It holds completed outputs at a 32 MiB threshold. The
+  queue budget covers metadata and references to already resident padded
+  inputs. The completion threshold prevents a radius-40 window of 64-byte vertices
   from accumulating in CPU memory while uploads wait. Up to four running
   meshes can finish after the threshold is reached.
 - `itemsDrawn` counts submitted sections once across the opaque and blended
@@ -143,7 +146,9 @@ finished for a section that left the window contributes to `queuedLeft`
 and `renderHooks.jobs.stale`. A compare batch contributes one stale result
 and counts each of its sections in `queuedLeft`.
 
-`gpuBufferBytes` covers installed vertex, index and blended buffers.
+`gpuBufferBytes` covers resident geometry buffers, whole 4 MiB arenas and
+indirect argument and uniform buffers. `arenaFreeBytes` includes unused ranges
+in retained arenas.
 `cpuBytes` is sampled in `prepare` and covers retained padded inputs, staged
 meshes, blended quads, queued jobs and completed results. It excludes the
 submitted batch's section list (about 2 KB per batch) while its result waits.
@@ -158,3 +163,23 @@ export lacks per-frame prepare and total encode samples joined to tick CPU time
 and the display interval on the same frame. `--pair draw` runs `draw=on` and
 `draw=off` in order. It subtracts the corresponding encode statistics for each
 window if completed operations match and uploaded bytes differ by at most 2%.
+
+`draw=on`, `draw=arena` and `draw=indirect` submit one opaque draw per visible
+section. `on` binds each section's vertex and index ranges and, with
+`pool=off`, creates a buffer for each upload. `arena` and `indirect` collect
+draws by arena, bind the whole range as vertex and index buffers, and upload
+with `write_buffer` into retained buffers. An oversized section uses a
+dedicated buffer and two geometry binds in every mode.
+
+`indirect` also writes 20 bytes of arguments per install and submits a dynamic
+uniform bind and an indirect draw per section. The shader does not read that
+uniform. This measures the cost of the submission calls. The engine binds a
+scene group with a storage range its shader reads.
+
+Compare the three modes end to end on a filled, standing window at equal draw
+counts. With `prepare` idle, compare the encode p50 to see the cost of submitting
+the draws. A difference of two p95s does not give the p95 of a difference.
+
+`binds` is the mean opaque bind count over the frames that count draws. A look
+during a measurement window adds binds without adding a frame. The bench takes
+no looks.

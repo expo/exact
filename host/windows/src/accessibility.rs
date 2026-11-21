@@ -1,11 +1,12 @@
 //! UI Automation over the presenter's accessibility model.
 use accesskit::{
-    Action, ActionData, Affine, Node, NodeId, Rect, Role, TreeId, TreeInfo, TreeUpdate,
+    Action, ActionData, Affine, Node, NodeId, Rect, Role, ScrollHint, TreeId, TreeInfo, TreeUpdate,
 };
 use accesskit_winit::{Adapter, WindowEvent as AccessEvent};
 use exact_kernel::PropId;
 use exact_painted::{
     presenter::access::{act, role},
+    presenter::desktop_access::{FieldTextLayout, FieldTextRun},
     presenter::top::StatusMenu,
     Presenter,
 };
@@ -114,6 +115,25 @@ impl Access {
                     return;
                 }
                 self.sync(p, window, title);
+                if let (Action::ScrollIntoView, Some(ActionData::ScrollHint(hint))) =
+                    (request.action, &request.data)
+                {
+                    let run = request.target_node;
+                    let owner = NodeId(run.0 >> 32);
+                    let Some(line) = self.runs.get(&owner).and_then(|runs| runs.run(owner, run))
+                    else {
+                        return;
+                    };
+                    if matches!(hint, ScrollHint::TopEdge | ScrollHint::BottomEdge) {
+                        p.access_scroll_text_line(
+                            owner.0 as i32,
+                            line.start,
+                            *hint == ScrollHint::TopEdge,
+                        );
+                        self.sync(p, window, title);
+                    }
+                    return;
+                }
                 let Some(node) = self.nodes.get(&request.target_node) else {
                     return;
                 };
@@ -136,10 +156,10 @@ impl Access {
                     (Action::ShowContextMenu, _) => {
                         p.access_act(id, act::LONG_CLICK, 0., now);
                     }
-                    (Action::Increment | Action::ScrollDown | Action::ScrollRight, _) => {
+                    (Action::Increment, _) => {
                         p.access_act(id, act::FORWARD, 0., now);
                     }
-                    (Action::Decrement | Action::ScrollUp | Action::ScrollLeft, _) => {
+                    (Action::Decrement, _) => {
                         p.access_act(id, act::BACKWARD, 0., now);
                     }
                     (Action::SetValue, Some(ActionData::NumericValue(value)))
@@ -177,7 +197,11 @@ impl Access {
                             );
                         }
                     }
-                    _ => {}
+                    (action, data) => {
+                        if let Some(to) = model::scroll_target(node, action, data.as_ref()) {
+                            p.access_scroll_to(id, to);
+                        }
+                    }
                 }
             }
         }
@@ -253,7 +277,8 @@ impl Access {
                     .get(&id)
                     .and_then(Node::value)
                     .zip(self.runs.remove(&id));
-                let field = FieldRuns::update(id, &source.value, previous, &mut changed);
+                let layout = p.access_text_layout(source.view, &source.value);
+                let field = FieldRuns::update(id, &source.value, layout, previous, &mut changed);
                 if let Some(selection) = p.access_selection(source.id) {
                     let (anchor, focus) = if selection.direction == SelectionDirection::Backward {
                         (selection.end, selection.start)
@@ -265,11 +290,36 @@ impl Access {
                         focus: field.position(id, focus),
                     });
                 }
-                node.set_children(
-                    (0..field.lines.len())
-                        .map(|i| FieldRuns::id(id, i))
-                        .collect::<Vec<_>>(),
-                );
+                let children = (0..field.runs.len())
+                    .map(|i| FieldRuns::id(id, i))
+                    .collect::<Vec<_>>();
+                if let Some((mut transform, clip)) = field
+                    .layout
+                    .as_ref()
+                    .and_then(|l| l.transform.map(|t| (t, l.clip)))
+                {
+                    // A scroll changes the text layer's placement. Every glyph remains
+                    // in its original paragraph coordinates.
+                    let layer_id = NodeId(id.0 << 32);
+                    let mut layer = Node::new(Role::GenericContainer);
+                    transform[4] += f64::from(origin.0);
+                    transform[5] += f64::from(origin.1);
+                    let (x, y, w, h) = clip;
+                    layer.set_transform(Affine::new(transform));
+                    layer.set_bounds(Rect::new(
+                        x.into(),
+                        y.into(),
+                        (x + w).into(),
+                        (y + h).into(),
+                    ));
+                    layer.set_clips_children();
+                    layer.set_children(children);
+                    next.insert(layer_id, layer);
+                    node.set_clips_children();
+                    node.set_children([layer_id]);
+                } else {
+                    node.set_children(children);
+                }
                 runs.insert(id, field);
             }
             next.insert(id, node);
@@ -346,24 +396,63 @@ impl Access {
     }
 }
 
-/// AccessKit indexes a grapheme within a hard line. The editor indexes UTF-16 units in the whole value.
+/// AccessKit indexes a grapheme within a text run. The editor indexes UTF-16 units in the whole value.
 struct FieldRuns {
-    lines: Vec<FieldLine>,
+    layout: Option<FieldTextLayout>,
+    runs: Vec<FieldRun>,
 }
 
-struct FieldLine {
+struct FieldRun {
+    previous_on_line: bool,
+    next_on_line: bool,
+    bytes: usize,
     start: u32,
     offsets: Vec<u32>,
 }
 
 impl FieldRuns {
-    fn id(field: NodeId, line: usize) -> NodeId {
-        NodeId((field.0 << 32) | (line as u64 + 1))
+    fn id(field: NodeId, index: usize) -> NodeId {
+        NodeId((field.0 << 32) | (index as u64 + 1))
     }
 
     fn update(
         field: NodeId,
         text: &str,
+        layout: Option<FieldTextLayout>,
+        previous: Option<(&str, Self)>,
+        changed: &mut Vec<(NodeId, Node)>,
+    ) -> Self {
+        let previous = match previous {
+            Some((before, mut runs))
+                if before == text
+                    && match (&layout, &runs.layout) {
+                        (Some(new), Some(old)) => new.same_shape(old),
+                        (None, None) => true,
+                        _ => false,
+                    } =>
+            {
+                runs.layout = layout;
+                return runs;
+            }
+            other => other,
+        };
+        let mut shapes: Vec<_> = layout.iter().flat_map(FieldTextLayout::runs).collect();
+        let positioned = layout.as_ref().is_some_and(|l| l.transform.is_some());
+        if !positioned {
+            shapes.dedup_by_key(|run| run.line);
+        }
+        let starts = layout.as_ref().map(|_| shapes.iter().map(|run| run.start));
+        let metrics = if positioned { shapes.as_slice() } else { &[] };
+        let mut runs = Self::build(field, text, starts, metrics, previous, changed);
+        runs.layout = layout;
+        runs
+    }
+
+    fn build(
+        field: NodeId,
+        text: &str,
+        starts: Option<impl Iterator<Item = u32>>,
+        shapes: &[FieldTextRun<'_>],
         previous: Option<(&str, Self)>,
         changed: &mut Vec<(NodeId, Node)>,
     ) -> Self {
@@ -371,39 +460,116 @@ impl FieldRuns {
             text.split_inclusive('\n')
                 .chain((text.is_empty() || text.ends_with('\n')).then_some(""))
         }
-        let mut previous = match previous {
-            Some((before, runs)) if before == text => return runs,
-            previous => previous
-                .into_iter()
-                .flat_map(|(before, runs)| hard_lines(before).zip(runs.lines)),
+        let (mut before, prior) = previous.unwrap_or((
+            "",
+            Self {
+                layout: None,
+                runs: Vec::new(),
+            },
+        ));
+        let mut old_shapes = prior
+            .layout
+            .iter()
+            .filter(|l| l.transform.is_some())
+            .flat_map(FieldTextLayout::runs);
+        let mut previous = prior.runs.into_iter().map(|line| {
+            let (old, rest) = before.split_at(line.bytes);
+            before = rest;
+            (old, line)
+        });
+        let slices = if let Some(starts) = starts {
+            let mut chars = text.chars();
+            let (mut units, mut byte) = (0, 0);
+            let mut slices = Vec::new();
+            for next in starts.skip(1) {
+                while units < next {
+                    let Some(ch) = chars.next() else { break };
+                    units += ch.len_utf16() as u32;
+                }
+                let end = text.len() - chars.as_str().len();
+                slices.push(&text[byte..end]);
+                byte = end;
+            }
+            slices.push(&text[byte..]);
+            slices
+        } else {
+            hard_lines(text).collect()
         };
-        let mut lines = Vec::new();
+        let mut runs = Vec::new();
         let mut start = 0;
-        for line in hard_lines(text) {
+        for line in slices {
+            let i = runs.len();
+            let shape = shapes.get(i);
+            let older = old_shapes.next();
+            let same_geometry = match (shape, older) {
+                (Some(new), Some(old)) => new.same_metrics(&old),
+                (None, None) => true,
+                _ => false,
+            };
+            let previous_on_line = i > 0 && shape.is_some_and(|s| shapes[i - 1].line == s.line);
+            let next_on_line = shape
+                .zip(shapes.get(i + 1))
+                .is_some_and(|(a, b)| a.line == b.line);
             let offsets = match previous.next() {
-                Some((old, run)) if old == line => run.offsets,
+                Some((old, run))
+                    if old == line
+                        && same_geometry
+                        && previous_on_line == run.previous_on_line
+                        && next_on_line == run.next_on_line =>
+                {
+                    run.offsets
+                }
                 _ => {
                     let (lengths, offsets) = text_offsets(line, 0);
                     let mut run = Node::new(Role::TextRun);
                     run.set_value(line);
                     run.set_character_lengths(lengths);
-                    changed.push((Self::id(field, lines.len()), run));
+                    if let Some(s) = shape {
+                        let (x, y, w, h) = s.bounds;
+                        run.set_bounds(Rect::new(
+                            x.into(),
+                            y.into(),
+                            (x + w).into(),
+                            (y + h).into(),
+                        ));
+                        let (positions, widths) = s.character_metrics(start, &offsets);
+                        run.set_character_positions(positions);
+                        run.set_character_widths(widths);
+                        run.set_text_direction(if s.rtl {
+                            accesskit::TextDirection::RightToLeft
+                        } else {
+                            accesskit::TextDirection::LeftToRight
+                        });
+                        if previous_on_line {
+                            run.set_previous_on_line(Self::id(field, i - 1));
+                        }
+                        if next_on_line {
+                            run.set_next_on_line(Self::id(field, i + 1));
+                        }
+                    }
+                    changed.push((Self::id(field, i), run));
                     offsets
                 }
             };
             let end = start + offsets.last().unwrap();
-            lines.push(FieldLine { start, offsets });
+            runs.push(FieldRun {
+                previous_on_line,
+                next_on_line,
+                bytes: line.len(),
+                start,
+                offsets,
+            });
             start = end;
         }
-        Self { lines }
+        Self { layout: None, runs }
     }
 
     fn position(&self, field: NodeId, offset: u32) -> accesskit::TextPosition {
         let line = self
-            .lines
+            .runs
             .partition_point(|line| line.start <= offset)
             .saturating_sub(1);
-        let FieldLine { start, offsets } = &self.lines[line];
+        let FieldRun { start, offsets, .. } = &self.runs[line];
         accesskit::TextPosition {
             node: Self::id(field, line),
             character_index: offsets
@@ -412,12 +578,15 @@ impl FieldRuns {
         }
     }
 
-    fn offset(&self, field: i32, at: accesskit::TextPosition) -> Option<u32> {
-        if at.node.0 >> 32 != field as u64 {
+    fn run(&self, field: NodeId, run: NodeId) -> Option<&FieldRun> {
+        if run.0 >> 32 != field.0 {
             return None;
         }
-        let line = (at.node.0 as u32).checked_sub(1)?;
-        let line = self.lines.get(line as usize)?;
+        self.runs.get((run.0 as u32).checked_sub(1)? as usize)
+    }
+
+    fn offset(&self, field: i32, at: accesskit::TextPosition) -> Option<u32> {
+        let line = self.run(NodeId(field as u64), at.node)?;
         Some(line.start + line.offsets.get(at.character_index)?)
     }
 }
@@ -517,22 +686,53 @@ mod tests {
         let old = "a\r\n🦀e\u{301}\n";
         let new = "start\r\n🦀e\u{301}\n";
         let mut changed = Vec::new();
-        let runs = FieldRuns::update(id, old, None, &mut changed);
+        let runs = FieldRuns::update(id, old, None, None, &mut changed);
         assert_eq!(changed.len(), 3);
-        let kept = runs.lines[1].offsets.as_ptr();
+        let kept = runs.runs[1].offsets.as_ptr();
         changed.clear();
-        let runs = FieldRuns::update(id, old, Some((old, runs)), &mut changed);
+        let runs = FieldRuns::update(id, old, None, Some((old, runs)), &mut changed);
         assert!(changed.is_empty());
-        let runs = FieldRuns::update(id, new, Some((old, runs)), &mut changed);
+        let runs = FieldRuns::update(id, new, None, Some((old, runs)), &mut changed);
         assert_eq!(changed.len(), 1);
         assert_eq!(changed[0].0, FieldRuns::id(id, 0));
-        assert_eq!(runs.lines[1].offsets.as_ptr(), kept);
+        assert_eq!(runs.runs[1].offsets.as_ptr(), kept);
         for offset in [0, 7, 9, 11, 12] {
             let position = runs.position(id, offset);
             assert_eq!(runs.offset(42, position), Some(offset));
             assert_eq!(runs.offset(43, position), None);
         }
         assert_eq!(runs.position(id, 12).node, FieldRuns::id(id, 2));
+    }
+
+    #[test]
+    fn text_runs_follow_wrapping_without_splitting_graphemes_or_adding_line_breaks() {
+        let id = NodeId(42);
+        let text = "a🦀e\u{301} word\n";
+        let update = |starts: &[u32], previous| {
+            let mut changed = Vec::new();
+            let runs = FieldRuns::build(
+                id,
+                text,
+                Some(starts.iter().copied()),
+                &[],
+                previous,
+                &mut changed,
+            );
+            (runs, changed)
+        };
+        let (narrow, changed) = update(&[0, 3, 6, 11], None);
+        assert_eq!(
+            changed
+                .iter()
+                .map(|(_, n)| n.value().unwrap())
+                .collect::<Vec<_>>(),
+            ["a🦀", "e\u{301} ", "word\n", ""]
+        );
+        assert_eq!(narrow.position(id, 6).node, FieldRuns::id(id, 2));
+        let (wide, changed) = update(&[0, 11], Some((text, narrow)));
+        assert_eq!(changed[0].1.value(), Some(text));
+        assert_eq!(wide.offset(42, wide.position(id, 6)), Some(6));
+        assert!(wide.run(id, FieldRuns::id(id, 2)).is_none());
     }
 
     #[test]

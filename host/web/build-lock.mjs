@@ -1,7 +1,7 @@
 // Build swaps and GPU-cache copies each take a persistent lock file beside the tree they write. Removing it would
 // let a waiter lock the old inode while another opens a new one under the same name. The PID in it is diagnostic;
 // only the OS grants ownership.
-import { closeSync, ftruncateSync, openSync, readFileSync, writeSync } from 'node:fs';
+import { constants, closeSync, ftruncateSync, openSync, readFileSync, writeSync } from 'node:fs';
 import { constants as os } from 'node:os';
 import { toNamespacedPath } from 'node:path';
 
@@ -63,7 +63,7 @@ function kernel() {
       flock: { args: ['i32', 'i32'], returns: 'i32' }, [errno]: { args: [], returns: 'ptr' },
     });
     locking = {
-      open: (path, create) => openSync(path, create ? 'a+' : 'r'),
+      open: (path, create, noFollow) => openSync(path, (create ? constants.O_CREAT | constants.O_RDWR : constants.O_RDONLY) | (noFollow ? constants.O_NOFOLLOW : 0)),
       take(fd, exclusive) {
         // NFS needs write access for LOCK_EX; inspection uses LOCK_SH.
         if (symbols.flock(fd, (exclusive ? LOCK_EX : LOCK_SH) + LOCK_NB) === 0) return true;
@@ -86,14 +86,14 @@ export function withLock(lock, fn) {
 }
 
 /** `lock` taken, waiting up to 30 s for another holder: what releases it. */
-export function takeLock(lock, { waitMs = 30000 } = {}) {
-  const osLock = kernel(), handle = osLock.open(lock, true), started = Date.now();
+export function takeLock(lock, { waitMs = 30000, shared = false, noFollow = false } = {}) {
+  const osLock = kernel(), handle = osLock.open(lock, true, noFollow), started = Date.now();
   try {
-    while (!osLock.take(handle, true)) {
+    while (!osLock.take(handle, !shared)) {
       if (Date.now() - started >= waitMs) throw Object.assign(new Error(`${lock}: waited ${waitMs / 1000} s for this build lock, which ${holder(lock)} holds; wait for its build to finish, or stop it if it is stuck`), { code: 'ELOCKED' });
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
     }
-    osLock.mark(handle);
+    if (!shared) osLock.mark(handle);
   } catch (e) { osLock.close(handle); throw e; }
   let held = true;
   return () => { if (held) { held = false; osLock.close(handle); } };

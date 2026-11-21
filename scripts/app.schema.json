@@ -522,6 +522,7 @@
                 "systemMedium",
                 "systemLarge",
                 "systemExtraLarge",
+                "systemExtraLargePortrait",
                 "accessoryCircular",
                 "accessoryRectangular",
                 "accessoryInline",

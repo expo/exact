@@ -263,36 +263,33 @@ function release(app) {
   const zip = resolve(out, `${app.displayName}.zip`);
   sh('/usr/bin/ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', staged, zip]);
 
-  console.log(`notarising ${app.displayName} — Apple's turn, usually a minute or two`);
-  // Both streams: notarytool reports progress on stdout and every failure —
-  // including a missing credential profile — on stderr.
-  const submit = spawnSync('xcrun', ['notarytool', 'submit', zip, '--keychain-profile', profile, '--wait'], { encoding: 'utf8' });
-  const said = `${submit.stdout ?? ''}${submit.stderr ?? ''}`;
-  process.stdout.write(said);
-  const id = /id: ([0-9a-f-]{36})/.exec(said)?.[1];
-  if (submit.status !== 0 || !/status: Accepted/.test(said)) {
+  const notarise = (artifact, label) => {
+    console.log(`notarising ${label} — Apple's turn, usually a minute or two`);
+    // Both streams: notarytool reports progress on stdout and failures on stderr.
+    const submit = spawnSync('xcrun', ['notarytool', 'submit', artifact, '--keychain-profile', profile, '--wait'], { encoding: 'utf8' });
+    const said = `${submit.stdout ?? ''}${submit.stderr ?? ''}`;
+    process.stdout.write(said);
+    const id = /id: ([0-9a-f-]{36})/.exec(said)?.[1];
+    if (submit.status === 0 && /status: Accepted/.test(said)) return;
     if (/Keychain (profile|password item)/i.test(said)) {
       throw new Error(`no notarytool credentials named "${profile}". Store them once:
   xcrun notarytool store-credentials ${profile} --apple-id <your-apple-id> --team-id <TEAMID> --password <app-specific-password>
   The password is an app-specific one from https://account.apple.com, not your Apple ID password.
   EXACT_NOTARY_PROFILE names a different profile.`);
     }
-    if (id) {
-      console.error(`\nwhat Apple objected to (submission ${id}):`);
-      spawnSync('xcrun', ['notarytool', 'log', id, '--keychain-profile', profile], { stdio: 'inherit' });
-    }
+    if (id) { console.error(`\nwhat Apple objected to (submission ${id}):`); spawnSync('xcrun', ['notarytool', 'log', id, '--keychain-profile', profile], { stdio: 'inherit' }); }
     throw new Error('notarisation did not come back Accepted; nothing was stapled');
-  }
-
-  // Staple the ticket into the artifacts, so they open on a machine that is
-  // offline or that Apple's service cannot be reached from.
+  };
+  notarise(zip, app.displayName);
+  // Staple the ticket into the app, then sign, notarise and staple the DMG (LLP 1156.007 §5.1).
   sh('xcrun', ['stapler', 'staple', staged]);
-  const dmg = resolve(out, `${app.displayName}.dmg`);
-  const image = mkdtempSync(resolve(out, '.dmg-'));
+  const dmg = resolve(out, `${app.displayName}.dmg`), image = mkdtempSync(resolve(out, '.dmg-'));
   sh('/usr/bin/ditto', [staged, resolve(image, `${appleExecutableName(app)}.app`)]);
   symlinkSync('/Applications', resolve(image, 'Applications'));
   sh('hdiutil', ['create', '-volname', app.displayName, '-srcfolder', image, '-ov', '-format', 'UDZO', '-quiet', dmg]);
   rmSync(image, { recursive: true, force: true });
+  sh('codesign', ['--force', '--sign', identity, '--timestamp', dmg]);
+  notarise(dmg, `${app.displayName}.dmg`);
   sh('xcrun', ['stapler', 'staple', dmg]);
   // The zip carries no ticket of its own; rebuild it from the stapled app.
   rmSync(zip, { force: true });

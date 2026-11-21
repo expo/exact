@@ -864,7 +864,7 @@ export function packageGpuLock(sdk, own, attempt = 'merged', pins = {}) {
     const identities = new Set(ownBlocks.map(lockBlockId));
     return lock([...ownBlocks, ...added.filter(b => !identities.has(lockBlockId(b)))]);
   }
-  return lockSeed(lock(s.blocks.filter((_, i) => sdkGpu.has(i) || pinned.includes(i))), lock(keep),
+  return mergeLockBlocks(lock(s.blocks.filter((_, i) => sdkGpu.has(i) || pinned.includes(i))), keep,
     attempt === 'merged' ? new Set(pinned.map(i => lockSeriesSource(s.blocks[i]))) : null);
 }
 
@@ -1113,10 +1113,10 @@ const lockSeriesSource = block => `${seriesId(block)} ${/^source = "([^"#]*)/m.e
 const lockBlockId = block => `${/^name = "([^"]+)"/m.exec(block)[1]} ${/^version = "([^"]+)"/m.exec(block)[1]} ${/^source = "([^"]*)"/m.exec(block)?.[1] ?? ''}`;
 
 /** Merge by compatible series and source, preserving exact pins; null keeps every SDK choice. */
-function lockSeed(sdk, own, pinned) {
+export function mergeLockBlocks(sdk, incoming, pinned = new Set()) {
   const held = new Map(lockBlocks(sdk).map(block => [lockSeriesSource(block), block]));
   const version = block => /^version = "([^"]+)"/m.exec(block)[1];
-  for (const block of lockBlocks(own)) {
+  for (const block of incoming) {
     const id = lockSeriesSource(block), previous = held.get(id);
     if (!previous || pinned && !pinned.has(id) && Bun.semver.order(version(block), version(previous)) > 0
       && gpuVersionMatches(version(block), version(previous))) held.set(id, block);

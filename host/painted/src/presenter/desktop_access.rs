@@ -2,6 +2,33 @@
 use super::*;
 use exact_runner::FieldSelection;
 
+pub use crate::text::field::FieldTextRun;
+
+/// The editor layout used by the last paint, with placement separate from shaping
+/// so that scrolling can move the text without rebuilding its accessibility runs.
+#[derive(Clone)]
+pub struct FieldTextLayout {
+    geometry: std::rc::Rc<crate::text::field::Geometry>,
+    /// Paragraph-to-viewport transform in logical pixels. A perspective projection
+    /// retains the text's line breaks but has no affine placement.
+    pub transform: Option<[f64; 6]>,
+    /// The field's content viewport in paragraph coordinates.
+    pub clip: Rect4,
+}
+
+impl FieldTextLayout {
+    /// Directional runs in source order.
+    pub fn runs(&self) -> impl Iterator<Item = FieldTextRun<'_>> {
+        self.geometry.access_runs()
+    }
+
+    /// Whether the runs retain their positions within the paragraph.
+    pub fn same_shape(&self, other: &Self) -> bool {
+        std::rc::Rc::ptr_eq(&self.geometry, &other.geometry)
+            && self.transform.is_some() == other.transform.is_some()
+    }
+}
+
 impl<D: DataSource> Presenter<D> {
     /// The live view for an enabled node in the last accessibility statement.
     pub fn access_view(&self, id: i32) -> Option<ViewId> {
@@ -69,6 +96,33 @@ impl<D: DataSource> Presenter<D> {
     pub fn access_text(&self, id: i32) -> Option<String> {
         self.access_selection(id)?;
         Some(self.field_text(self.access_view(id)?))
+    }
+
+    /// Published geometry for this field value. An accessibility client may keep the
+    /// snapshot while another frame is being painted.
+    pub fn access_text_layout(&self, view: ViewId, value: &str) -> Option<FieldTextLayout> {
+        let (field, projected) = self.ranges.published_field(view)?;
+        if field.value != value {
+            return None;
+        }
+        let (t, clip) = field.text_placement();
+        Some(FieldTextLayout {
+            geometry: field.geometry.clone(),
+            transform: (!projected).then(|| [t.sx, t.ky, t.kx, t.sy, t.tx, t.ty].map(f64::from)),
+            clip,
+        })
+    }
+
+    /// Align a text range's endpoint with the top or bottom of its field.
+    pub fn access_scroll_text_line(&mut self, id: i32, offset: u32, top: bool) -> bool {
+        let Some(view) = self.access_view(id) else {
+            return false;
+        };
+        let Some(field) = self.brush.field_text.get(&view) else {
+            return false;
+        };
+        let y = field.aligned_line_y(offset, top);
+        self.scroll_to(view, (self.scroll_of(view).0, y)).is_some()
     }
 
     /// Select text requested by an accessibility service, clamped to the current value.

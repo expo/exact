@@ -446,12 +446,13 @@ final class HeaderMacTests: XCTestCase {
     /// committed tree (LLP 1072 T13): the bar reads the header without it.
     func testABoxHeldByAStagedBatchIsNoPartOfTheBar() throws {
         let p = fixture(extra: view(16, "image", ["imageSource": "assets/logo.png"]) + [children(10, [11, 12, 13, 14, 16])])
-        try node(p, 16).held = true
+        let publication = StagePlan.Publication()
+        try node(p, 16).stage = .preparing(publication)
         XCTAssertTrue(p.toolbar.attach(to: window))
         XCTAssertEqual(window.title, "Library")
         XCTAssertEqual(identifiers(), [back, "exact.command.11", "exact.command.13", "exact.command.14"])
         // Revealed, it is a picture the bar has no place for.
-        try node(p, 16).held = false
+        publication.committed = true
         p.toolbar.sync()
         XCTAssertEqual(identifiers(), [back])
         p.toolbar.detach()
@@ -723,6 +724,27 @@ final class HeaderMacTests: XCTestCase {
         let names = [17, 18].map { p.statusItems.items[$0]?.autosaveName }
         XCTAssertEqual(names.compactMap { $0 }.count, 2, "both are placed: \(names)")
         XCTAssertNotEqual(names[0], names[1])
+    }
+
+    func testUnchangedStatusItemKeepsItsImageAcrossBatches() throws {
+        let status = ["menuPlacement": "status"]
+        let p = fixture(extra: symbolButton(17, "Two", "2.circle", status) + [children(15, [17])])
+        defer { p.statusItems.reset() }
+        var symbol = "2.circle"
+        p.buttonFace = { id in
+            var face = ButtonFace()
+            if id == 17 { face.symbol = symbol }
+            return face
+        }
+        p.statusItems.sync()
+        let item = try XCTUnwrap(p.statusItems.items[17])
+        let before = try XCTUnwrap(item.button?.image)
+        p.apply(wireBatch([children(15, [17])]))
+        XCTAssertTrue(item.button?.image === before, "unchanged status item keeps its NSImage across batches")
+        symbol = "3.circle"
+        p.apply(wireBatch([children(15, [17])]))
+        let after = try XCTUnwrap(item.button?.image)
+        XCTAssertFalse(after === before, "changed status item symbol updates its NSImage")
     }
 
     /// A header's button that opens a menu is AppKit's menu item: the menu

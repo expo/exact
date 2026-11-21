@@ -405,4 +405,74 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn moving_or_clearing_a_field_highlight_keeps_the_untouched_glyph_rows() {
+        use crate::text::{field::Geometry, fixtures::engine, shaping::shape_line_calls};
+        let mut engine = engine();
+        let styles = json!({"accent":[[StyleId::TextColor as u16,"#db1141"]]}).to_string();
+        let projected = |value: &str, start: Option<usize>| {
+            let spans: Vec<_> = start
+                .into_iter()
+                .map(|byte| value[..byte].encode_utf16().count())
+                .map(|start| json!({"name":"accent","start":start,"end":start + 6}))
+                .collect();
+            FieldDecorations::read(&record(value, json!(spans)), &styles)
+                .unwrap()
+                .project(spec(value), value)
+        };
+        let original = (0..128)
+            .map(|i| format!("export const line_{i} = '{i}😀';"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let last = original.rfind('\n').unwrap() + 1;
+        let penultimate = original[..last - 1].rfind('\n').unwrap() + 1;
+        let mut edited = original.clone();
+        edited.insert(last, '\n');
+        let width = Some(600.);
+        let old = engine.edited_field(&projected(&original, Some(0)).spec, width, None);
+        let geometry = Geometry::new(&old, &original, false, 0., 0., None);
+        for start in [None, Some(penultimate)] {
+            let current = projected(&edited, start);
+            let before = shape_line_calls();
+            let next = engine.edited_field(&current.spec, width, Some(&old));
+            let shaped = shape_line_calls() - before;
+            let hits = Geometry::new(&next, &edited, false, 0., 0., Some((&old, &geometry)));
+            let (old_lines, new_lines) = (old.lines(), next.lines());
+            for row in 1..128 {
+                if start.is_some() && row == 126 {
+                    continue;
+                }
+                let to = if row == 127 { row + 1 } else { row };
+                assert_eq!(
+                    old_lines.glyphs_of(&old_lines.lines[row]).as_ptr(),
+                    new_lines.glyphs_of(&new_lines.lines[to]).as_ptr(),
+                    "unchanged row {row}"
+                );
+                assert!(hits.shares_spans(to, &geometry, row));
+            }
+            // The original highlight boundary, the inserted LF and any new highlight boundary.
+            assert_eq!(shaped, 2 + usize::from(start.is_some()));
+
+            let fresh = crate::text::fixtures::engine().layout(&current.spec, width);
+            assert_eq!(new_lines.lines, fresh.lines().lines);
+            for (line, expected) in new_lines.lines.iter().zip(&fresh.lines().lines) {
+                assert_eq!(new_lines.glyphs_of(line), fresh.lines().glyphs_of(expected));
+            }
+            let mut byte = 0;
+            for line in next.layout_runs() {
+                for glyph in line.glyphs {
+                    let at = byte + glyph.start as usize;
+                    assert_eq!(
+                        current.inks[glyph.run(line.run_base)].is_some(),
+                        start.is_some_and(|begin| (begin..begin + 6).contains(&at))
+                    );
+                }
+                byte += line.text.len() + 1;
+            }
+            let expected = Geometry::new(&fresh, &edited, false, 0., 0., None);
+            let caret = edited[..last + 1].encode_utf16().count() as u32;
+            assert_eq!(hits.range(caret, caret), expected.range(caret, caret));
+        }
+    }
 }

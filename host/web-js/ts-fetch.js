@@ -258,6 +258,12 @@ class AnswerPromise extends Promise {
     super(typeof run == 'function' ? (yes, no) => run(mark(yes), mark(no)) : run);
     this.own = own;
   }
+  static resolve(value) {
+    const promise = super.resolve(value);
+    // WebKit 26 can return the page's promise here. Adopt it so its reactions run through this class's then.
+    if (promise === value && !(promise instanceof this)) return new this(resolve => resolve(value));
+    return promise;
+  }
   then(yes, no) {
     const at = currentContext();
     let out;

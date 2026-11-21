@@ -153,6 +153,11 @@ fn a_measure_is_the_used_size_the_block_would_give() {
             region(250.0, 600.0),
             HostBlock {
                 tactic: Default::default(),
+                width: BlockAxis::Region(250.0),
+                height: BlockAxis::Content(600.0),
+            },
+            HostBlock {
+                tactic: Default::default(),
                 width: BlockAxis::AtMost(200.0),
                 height: BlockAxis::AtMost(40.0),
             },
@@ -204,6 +209,104 @@ fn a_region_is_fit_content_with_its_minimum_winning() {
         150.0,
         "a percentage is the region's"
     );
+}
+
+/// On a `Content` axis (an arranged pane sized to its content, LLP 1123 D7)
+/// the box's own percentages there have no basis (CSS Sizing 3 §5.2.1): a
+/// percentage size and maximum, a calculation with one among them, a zero
+/// one too, measure as
+/// `auto` and `none` do, and a minimum is resolved against 0, so a
+/// `calc()`'s fixed part stays and a percentage alone leaves the content's
+/// own percentages without a basis too. A length and a sizing keyword are
+/// the author's, a percentage across keeps its basis, and a region still
+/// gives one its length.
+#[test]
+fn a_content_axis_takes_the_boxs_own_percentages_as_cyclic() {
+    let block = |width, height| HostBlock {
+        tactic: Default::default(),
+        width,
+        height,
+    };
+    let content = block(BlockAxis::Region(300.0), BlockAxis::Content(600.0));
+    let used = |k: &mut Kernel, block| k.measure_block(3, block).unwrap().used;
+    let short = |rows: &[(StyleId, StyleValue)]| page(rows, "a b");
+    let auto = used(&mut short(&[]), content);
+    for rows in [
+        vec![(StyleId::Height, t("100%"))],
+        vec![(StyleId::Height, t("calc(100% - 10px)"))],
+        vec![(StyleId::Height, t("calc(100px + 0%)"))],
+        vec![(
+            StyleId::Height,
+            t("max(80px, min(100%, calc(400px - 100%)))"),
+        )],
+        vec![(StyleId::MinHeight, t("50%"))],
+        vec![(StyleId::Height, t("100%")), (StyleId::MaxHeight, t("20%"))],
+    ] {
+        assert_eq!(used(&mut short(&rows), content), auto, "{rows:?}");
+    }
+    let rows = [(StyleId::Height, n(200.0)), (StyleId::MaxHeight, t("20%"))];
+    assert_eq!(used(&mut short(&rows), content).1, 200.0, "no maximum");
+    let rows = [(StyleId::MinHeight, t("calc(100px + 50%)"))];
+    assert_eq!(used(&mut short(&rows), content).1, 100.0, "a fixed part");
+    // A percentage minimum alone is zero, not `auto`, whose automatic minimum
+    // would let a ratio's box grow to its 200-point content
+    let rows = [
+        (StyleId::Width, n(100.0)),
+        (StyleId::AspectRatio, t("1 / 1")),
+        (StyleId::MinHeight, t("50%")),
+    ];
+    let mut k = short(&rows);
+    let tall = vec![style(5, &[(StyleId::Height, n(200.0))])];
+    k.apply(0, 2, &tall).unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(used(&mut k, content).1, 100.0, "the ratio's height");
+    let rows = [(StyleId::Height, n(200.0))];
+    assert_eq!(used(&mut short(&rows), content).1, 200.0, "a length");
+    let rows = [(StyleId::Width, t("50%"))];
+    assert_eq!(used(&mut short(&rows), content).0, 150.0, "across");
+    let rows = [(StyleId::Height, t("50%"))];
+    let region = block(BlockAxis::Region(300.0), BlockAxis::Region(600.0));
+    assert_eq!(used(&mut short(&rows), region).1, 300.0, "a region's");
+    // Across, a sizing keyword is the author's: `max-content` past the offer,
+    // as a region gives it
+    let text = "one two three four five six seven eight nine ten";
+    let keyword = |width| {
+        let mut k = page(&[(StyleId::Width, t("max-content"))], text);
+        used(&mut k, block(width, BlockAxis::Region(600.0))).0
+    };
+    let max_content = keyword(BlockAxis::Content(100.0));
+    assert_eq!(max_content, keyword(BlockAxis::Region(100.0)));
+    assert!(
+        max_content > 130.0,
+        "max-content, not the offer: {max_content}"
+    );
+    // The content's own percentage height has no basis under a percentage
+    // minimum: the 120-point box at `height: 50%` holding a 60-point one
+    // takes 60, as it does with no minimum
+    let nested = |rows: &[(StyleId, StyleValue)]| {
+        let mut k = short(rows);
+        let ops = vec![
+            Op::CreateView {
+                id: 6,
+                node_type: NodeType::View,
+            },
+            style(6, &[(StyleId::Height, n(60.0))]),
+            style(5, &[(StyleId::Height, t("50%"))]),
+            Op::SetChildren {
+                id: 5,
+                children: vec![6],
+            },
+        ];
+        k.apply(0, 2, &ops).unwrap();
+        k.compute_layout(1, OFFER).unwrap();
+        used(&mut k, content).1
+    };
+    assert_eq!(
+        nested(&[(StyleId::MinHeight, t("50%"))]),
+        nested(&[]),
+        "no basis"
+    );
+    assert!(nested(&[]) >= 60.0);
 }
 
 /// Nothing the kernel holds changes (theme2's condition a): frames, blocks

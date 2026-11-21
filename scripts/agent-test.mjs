@@ -241,7 +241,7 @@ export function storeBase(appId, host, env = process.env, home = homedir(), sand
 export function fetchOrigins(dist) {
   const read = f => { try { return readFileSync(resolve(dist, '.gen', f), 'utf8'); } catch { return ''; } };
   const text = read('admission-data.js') + read('app.js');
-  return [...new Set([...text.matchAll(/"net\.fetch (https?:\/\/[^/"\s]+)[/"]/g)].map((m) => m[1]))];
+  return [...new Set([...text.matchAll(/"(?:development )?net\.fetch (https?:(?:\/\/[^/"\s]+)?)[/"]/g)].map((m) => m[1]))];
 }
 /** The loopback ones: a backend on this machine the tests talk to. */
 export const loopbackOrigins = (dist) => fetchOrigins(dist).filter((o) => /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(o));
@@ -281,7 +281,7 @@ const listening = (origin, ms = 1000) => new Promise((done) => {
 export async function backendPreflight(app, dist, say = console.error) {
   const down = [];
   for (const origin of loopbackOrigins(dist)) if (!(await listening(origin))) down.push(origin);
-  if (!down.length) return snapbackDevice?.devicePreflight(app, fetchOrigins(dist));
+  if (!down.length) return snapbackDevice?.devicePreflight(app, fetchOrigins(dist).filter((o) => /^https?:\/\//.test(o)));
   const what = `no backend at ${down.map(origin=>`${origin} (source: ${backendOriginSource(app,origin)})`).join(', ')}: nothing listens there, and app.ts fetches it (a net.fetch grant)`;
   if (!snapbackDevice?.mountsSnapback(app)) return say(`note: ${what}; a test that loads from it fails`);
   throw new Error(`${what}. The app's Snapback client cannot open data that has never synced, so every test would fail. Start the server first, from the backend's directory (\`npx snapback4 dev --port ${new URL(down[0]).port || 80}\`, seeded if the tests read seeded rows), then run the tests again.`);
@@ -1339,20 +1339,25 @@ export function nativeFetchOrigins(dir, env = process.env) {
     grants = staticFacts(settings.code, parse, { load: settings.load }).grants ?? '';
   }
   catch { return []; } // the bake refuses it, and says why when it builds
-  return [...new Set([...declared, ...grants.split('\n').map(line => /^\s*(?:development\s+)?net\.fetch\s+(https?:\/\/[^/\s]+)/.exec(line)?.[1]).filter(Boolean)])];
+  return [...new Set([...declared, ...grants.split('\n').map(line => /^\s*(?:development\s+)?net\.fetch\s+(https?:(?:\/\/[^/\s]+)?)(?:\/|\s|$)/.exec(line)?.[1]).filter(Boolean)])];
 }
 /** Resolve the built grant alias and diagnose a fault that cannot meet a granted URL. */
 export function resolveFaultPrefix(prefix, origins, say=console.warn) {
   const unique=[...new Set(origins.map(o=>o.replace(/\/+$/,'')))];
   // A path (`/api/v9/channels`) is under the backend, as a `request` line's is: the test names what it
-  // fails without the port a checkout's fixture was given.
+  // fails without the port a checkout's fixture was given. Scheme grants (`https:`) have no single host.
   if (prefix==='backend' || prefix.startsWith('/')) {
-    const loopback=unique.filter(origin=>/^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(origin));
-    const candidates=loopback.length ? loopback : unique;
+    const concrete=unique.filter(origin=>/^https?:\/\//.test(origin));
+    const loopback=concrete.filter(origin=>/^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(origin));
+    const candidates=loopback.length ? loopback : concrete;
     if (candidates.length!==1) throw new Error(`fetch ${JSON.stringify(prefix)} needs exactly one net.fetch origin; found ${candidates.length}. Use a literal URL for a multi-backend app.`);
     return prefix==='backend' ? candidates[0] : candidates[0]+prefix;
   }
-  if (!unique.some(origin => origin.startsWith(prefix) || prefix.startsWith(origin+'/') || prefix===origin))
+  // A scheme grant (`net.fetch https:`) admits any URL on that scheme (LLP 1156.007 §5.2).
+  const matches = origin => /^https?:$/.test(origin)
+    ? prefix === origin || prefix.startsWith(`${origin}//`)
+    : origin.startsWith(prefix) || prefix.startsWith(origin+'/') || prefix===origin;
+  if (!unique.some(matches))
     say(`warning: fetch fault prefix ${JSON.stringify(prefix)} matches no granted origin (${unique.join(', ') || 'none'}); it will not intercept the backend`);
   return prefix;
 }

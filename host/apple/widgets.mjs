@@ -18,7 +18,7 @@ const root = resolve(fileURLToPath(new URL('../..', import.meta.url))), pkg = re
 export const accessoryFamilies = ['accessoryCircular', 'accessoryRectangular', 'accessoryInline', 'accessoryCorner'];
 export function platformWidgetEntries(app, platform = 'ios') {
   return widgetEntries(app).flatMap(entry => {
-    const families = (platform === 'watchos' ? entry.watchFamilies ?? entry.families : entry.families).filter(family => platform === 'watchos' ? accessoryFamilies.includes(family) : platform === 'macos' ? ['systemSmall', 'systemMedium', 'systemLarge', 'systemExtraLarge'].includes(family) : family !== 'accessoryCorner');
+    const families = (platform === 'watchos' ? entry.watchFamilies ?? entry.families : entry.families).filter(family => platform === 'watchos' ? accessoryFamilies.includes(family) : platform === 'macos' ? ['systemSmall', 'systemMedium', 'systemLarge', 'systemExtraLarge', 'systemExtraLargePortrait'].includes(family) : family !== 'accessoryCorner');
     return families.length ? [{ ...entry, families }] : [];
   });
 }
@@ -427,6 +427,11 @@ struct ${name}: WidgetConfigurationIntent, ExactConfigurationIntent {
   };
   const generated = entries.map((entry, i) => {
     const offered = offeredParameters(entry, platform), configured = offered.length > 0 && intentName(entry);
+    const portraitXL = entry.families.includes('systemExtraLargePortrait');
+    const baseFamilies = entry.families.filter(f => f !== 'systemExtraLargePortrait').map(f => `.${f}`).join(', ');
+    const supported = portraitXL
+      ? `{ var families: [WidgetFamily] = [${baseFamilies}]; if #available(iOS 27.0, macOS 27.0, *) { families.append(.systemExtraLargePortrait) }; return families }()`
+      : `[${baseFamilies}]`;
     return `${configured ? intent(entry.configuration, configured, offered) : ''}struct ${names[i]}: Widget {
     let kind = ${literal(entry.kind)}
     var body: some WidgetConfiguration {
@@ -436,7 +441,7 @@ struct ${name}: WidgetConfigurationIntent, ExactConfigurationIntent {
             ExactWidgetView(entry: entry)${gamut}
         }
         .configurationDisplayName(${literal(entry.title ?? human(entry.kind))}).description(${literal(entry.description ?? human(entry.kind))})
-        .supportedFamilies([${entry.families.map(f => `.${f}`).join(', ')}]).contentMarginsDisabled()
+        .supportedFamilies(${supported}).contentMarginsDisabled()
     }
 }`;
   }).join('\n');

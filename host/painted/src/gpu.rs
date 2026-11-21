@@ -173,7 +173,7 @@ impl Gpu {
         let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface,
-            force_fallback_adapter: false,
+            ..Default::default()
         }))
         .map_err(|e| format!("no adapter: {e}"))?;
         let info = adapter.get_info();
@@ -347,15 +347,16 @@ impl Gpu {
         rx.recv()
             .map_err(|_| "readback: no answer".to_string())?
             .map_err(|e| format!("readback: {e}"))?;
-        let mut data = Vec::with_capacity((width * height * 4) as usize);
-        {
-            let mapped = slice.get_mapped_range();
+        let data = slice.get_mapped_range().map(|mapped| {
+            let mut bytes = Vec::with_capacity((width * height * 4) as usize);
             for row in 0..height as usize {
                 let at = row * target.padded as usize;
-                data.extend_from_slice(&mapped[at..at + (width * 4) as usize]);
+                bytes.extend_from_slice(&mapped[at..at + (width * 4) as usize]);
             }
-        }
+            bytes
+        });
         target.buffer.unmap();
+        let data = data.map_err(|e| format!("readback: {e}"))?;
         self.last_ms = (encode_ms, t1.elapsed().as_secs_f64() * 1000.0);
         IntSize::from_wh(width, height)
             .and_then(|s| Pixmap::from_vec(data, s))

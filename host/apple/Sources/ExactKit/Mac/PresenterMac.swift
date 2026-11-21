@@ -1349,8 +1349,9 @@ package final class Presenter {
     }
 
     /// A node's view, as its `create` op makes it; `register` puts it in the table.
-    func newView(_ op: BatchOp) -> NodeView {
+    func newView(_ op: BatchOp, stage: NodeView.Stage = .committed) -> NodeView {
         let v = NodeView(id: op.id, kind: op.kind, presenter: self)
+        v.stage = stage
         v.handlers = op.handlers
         v.applyStyle(v.presented(op.style))
         v.applyProps(set: op.props, clear: [])

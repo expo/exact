@@ -327,23 +327,52 @@ export function syncMarkup(el) {
     });
   }).catch((error) => console.error("exact: Markdown editor:", error));
 }
-// @ref LLP 1094.000 D6 — the first node that turns draggable loads the drag-out glue, which then hears every drag in
-// the page. A load that fails is logged, and the next node that turns draggable tries again.
+// @ref LLP 1094.000 D6 — the first node that turns draggable loads the drag-out glue, which then hears every drag from
+// the app's live views. Until it listens, a node the app made draggable waits, undraggable, so no drag begins without
+// the node's data. A load that fails is logged and tried again later while a node waits.
+const liveView = (el) => views.get(Number(el.dataset?.view)) === el && !retiredViews.has(el);
 export function loadDragOut() {
-  host.dragOutModule ??= loadAfterPaint("./drag-out.js", "listenDragOut").then((listen) => listen(document), (e) => {
+  host.dragOutModule ??= loadAfterPaint("./drag-out.js", "listenDragOut").then((listen) => {
+    listen(document, liveView);
+    host.dragOutListening = true;
+    for (const el of host.dragOutWaiting ?? []) if (liveView(el)) globalThis.exact.writeDraggable(el, "true");
+    host.dragOutWaiting = null;
+  }).catch((e) => {
     host.dragOutModule = null;
     log(`drag-out module: ${e}`);
+    for (const el of host.dragOutWaiting ?? []) if (!liveView(el)) host.dragOutWaiting.delete(el);
+    host.dragOutRetry = Math.min(30000, (host.dragOutRetry ?? 500) * 2);
+    if (host.dragOutWaiting?.size) setTimeout(loadDragOut, host.dragOutRetry);
   });
+}
+
+/** Writes `el`'s `draggable` through the drag-out glue, which holds a node's drag off while a field in it keeps a
+ * contact (drag-out.js). Until the glue listens, a node made draggable stays `false`, which a link or an image needs
+ * to drag nothing of its own, and any other value is written as it is. */
+export function writeDraggable(el, value) {
+  if (host.dragOutListening) return void globalThis.exact.writeDraggable(el, value);
+  if (value === "true") {
+    (host.dragOutWaiting ??= new Set()).add(el);
+    el.setAttribute("draggable", "false");
+    loadDragOut();
+    return;
+  }
+  host.dragOutWaiting?.delete(el);
+  if (value == null) el.removeAttribute("draggable");
+  else el.setAttribute("draggable", value);
 }
 
 export function applyProps(el, set, clear, adopting = false) {
   syncMedia(el, set, clear);
-  if (set?.draggable === "true") loadDragOut();
   if (set && "data-scrolldocument" in set) {
     scrollDocs.add(el);
   }
   let sandboxChanged = false;
   for (const name of clear || []) {
+    if (name === "draggable") {
+      writeDraggable(el, null);
+      continue;
+    }
     if (name === "tabindex") el.exactAuthoredTabIndex = null;
     if (el instanceof HTMLIFrameElement && name === "src") {
       appFrameSource(el, null);
@@ -394,6 +423,10 @@ export function applyProps(el, set, clear, adopting = false) {
     }
   }
   for (const [name, value] of Object.entries(set || {})) {
+    if (name === "draggable") {
+      writeDraggable(el, value);
+      continue;
+    }
     if (name === "tabindex") el.exactAuthoredTabIndex = value;
     if (el instanceof HTMLIFrameElement && name === "sandbox" && el.getAttribute("sandbox") !== value) {
       sandboxChanged = true;

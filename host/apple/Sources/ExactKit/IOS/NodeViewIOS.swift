@@ -734,7 +734,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         // The kernel's authored frames already include this content room.
         // Keep the physical UI inset basis, but do not count native padding twice.
         let room = extras?.nativeScrollContentInsets ?? .zero
-        let outset = scrollOutset
+        let outset = reportedScrollOutset
         presenter.onScrolled?(id, Double(scrollView.contentOffset.x + room.left + outset.left), Double(scrollView.contentOffset.y + room.top + outset.top))
         presenter.stickies.scrolled(id); presenter.collections.changed(id, user: true, sequenceAdvanced: true)
         #if os(iOS)
@@ -1298,7 +1298,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
             }
             scroll = sv
             scrollBackendReplaced()
-            if pageBand != .zero || bandInset != .zero || reach != .zero { more.pageBand = .zero; more.bandInset = .zero; more.reach = .zero } // a new scroll view reaches no band, and has no reach, until asked (LLP 1130 D3, LLP 1123 D13)
+            if pageBand != .zero || bandInset != .zero || reachGiven { more.pageBand = .zero; more.bandInset = .zero; more.reach = .zero; more.reachGiven = false } // a new scroll view reaches no band, and has no reach, until asked (LLP 1130 D3, LLP 1123 D13)
             scrollWritten = nil
             updateRefresh()
             presenter?.navigation.scrollBackendChanged(self)
@@ -1314,7 +1314,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
                 if presenter?.navigation.container === self { presenter?.navigation.fitOwner() }
                 sv.removeFromSuperview()
             }
-            if pageBand != .zero || bandInset != .zero || reach != .zero { more.pageBand = .zero; more.bandInset = .zero; more.reach = .zero }
+            if pageBand != .zero || bandInset != .zero || reachGiven { more.pageBand = .zero; more.bandInset = .zero; more.reach = .zero; more.reachGiven = false }
         }
         scroll?.scrollsX = (ox == "scroll" || ox == "auto")
         scroll?.scrollsY = (oy == "scroll" || oy == "auto")

@@ -114,6 +114,21 @@ pub enum Budget {
     Deadline,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Data)]
+pub enum Draw {
+    #[default]
+    On,
+    Off,
+    Arena,
+    Indirect,
+}
+
+impl Draw {
+    pub fn shared(self) -> bool {
+        matches!(self, Self::Arena | Self::Indirect)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Presentation)]
 pub struct WorkloadSettings {
     pub radius: i32,
@@ -125,7 +140,7 @@ pub struct WorkloadSettings {
     pub vertex: u32,
     pub blend: Blend,
     pub budget: Budget,
-    pub draw: bool,
+    pub draw: Draw,
     pub pool: bool,
     pub jobs: bool,
 }
@@ -142,7 +157,7 @@ impl Default for WorkloadSettings {
             vertex: 12,
             blend: Blend::Off,
             budget: Budget::default(),
-            draw: true,
+            draw: Draw::On,
             pool: false,
             jobs: false,
         }
@@ -178,7 +193,12 @@ impl From<&Options> for WorkloadSettings {
                 .and_then(|count| count.parse::<u32>().ok())
                 .filter(|&count| count > 0)
                 .map_or(Budget::Deadline, Budget::Count),
-            draw: args.draw != "off",
+            draw: match args.draw.as_str() {
+                "off" => Draw::Off,
+                "arena" => Draw::Arena,
+                "indirect" => Draw::Indirect,
+                _ => Draw::On,
+            },
             pool: args.pool == "on",
             jobs: args.jobs == "on",
         }

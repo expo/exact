@@ -81,7 +81,9 @@ test or drive to investigate; it does not add another blocking check.
   diary's Checkpoints or a PR's Test Plan. `evidence.mjs note <host> "<what>"
   [--device "<model, OS>"]` records something seen by hand. Web, macOS and
   iOS-simulator builds are identified; other hosts' runs are listed as
-  unchecked.
+  unchecked. Each identified run keeps its build receipt in
+  `<app>/.exact/receipts/`. Traces saved by the web dev server or copied from
+  a running app by the driver go in `<app>/.exact/traces/`.
 
 ## Waiting
 
