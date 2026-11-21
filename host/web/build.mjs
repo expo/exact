@@ -36,7 +36,7 @@ import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { sourceProvenance, writeInstallPages } from '../../scripts/install-page.mjs';
 import { sealEnvelope } from '../../scripts/deploy-signing.mjs';
-import { compilerWarnings, oneScheme, webInputDigests } from '../../scripts/agent-launch.mjs';
+import { compilerWarnings, oneScheme, webInputDigests, webInputPresent } from '../../scripts/agent-launch.mjs';
 import { webBuildFailure } from '../../scripts/app-cli.mjs';
 import { builtSettings } from '../../js/bake/src/__exact_env.mjs';
 import { authoredWebBake, webRendererHost, packageGpuDir, packageGpuInputs, packageGpuManifest, rustDataOf } from '../../scripts/app-shells.mjs';
@@ -248,10 +248,10 @@ function completeWebInputs(app, js, render, inputRoots, inputs, inputsAt, settin
   const next = webSourceRoots(app, js, render);
   inputRoots.splice(0, inputRoots.length, ...next);
   const current = webInputDigests(app, js, next, settings.sourceInputs);
-  // An input the build no longer reads is dropped; one removed while it built is uncertified, as an edit would be.
+  // An input the build no longer reads is dropped; one removed while it built, or no longer a file it reads, keeps what
+  // was read at the start, so a check sees the removal (a generated asset recorded absent stays absent).
   for (const path of Object.keys(inputs)) if (!Object.hasOwn(current, path)) {
-    if (!path.startsWith('import.meta.env.') && !statSync(resolve(SDK_ROOT, path), { throwIfNoEntry: false })) inputs[path] = null;
-    else delete inputs[path];
+    if (path.startsWith('import.meta.env.') || webInputPresent(app, path)) delete inputs[path];
   }
   for (const [name,value] of Object.entries(settings.env ?? {})) current[`import.meta.env.${name}`] = JSON.stringify(value);
   for (const [path, value] of Object.entries(current)) {
