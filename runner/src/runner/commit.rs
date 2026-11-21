@@ -165,6 +165,7 @@ impl<D: DataSource> Runner<D> {
                 // A refused call still drew randomness; the bake must not keep its answer.
                 for (old, attempted) in resources.iter_mut().zip(&self.resources) {
                     old.entropy_reader |= attempted.entropy_reader;
+                    old.native_reader |= attempted.native_reader;
                 }
                 self.resources = resources;
                 self.readers_restore(c.module_readers);
@@ -1164,6 +1165,7 @@ impl<D: DataSource> Runner<D> {
         // Watch a data-code module read before it leaves: binding can announce
         // while it is in flight, and a failed reply rolls back its parse's topics.
         if let Target::Resource(i) = target {
+            self.resources[i].native_reader |= requests.iter().any(|r| r.is_native());
             for request in requests.iter().filter(|r| r.is_native()) {
                 if let Some(topic) = self.module_topic(&request.body) {
                     if !self.resources[i].watching.contains(&topic) {

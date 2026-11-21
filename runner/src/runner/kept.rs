@@ -45,6 +45,8 @@ pub(super) struct Keeping {
     /// Whether a module source declared `kept` keeps its answers (LLP
     /// 1133.015 D4): always, but in a private session.
     pub(super) modules: bool,
+    pub(super) private: bool,
+    pub(super) native: Vec<usize>,
 }
 
 /// Whether a reload keeps resource `resource`'s kept entry: the runner it
@@ -65,10 +67,17 @@ pub(super) fn compatible_on_reload(
 /// surface record's, a kept module source's, or a reader's whose source
 /// waits for the data module ([`waits_for_module`]).
 pub(super) fn keeps_answers(plan: &exact_plan::Plan, i: usize) -> bool {
+    kept_surface(plan, i) || kept_module(plan, i) || seeds_private(plan, i)
+}
+
+pub(super) fn seeds_private(plan: &exact_plan::Plan, i: usize) -> bool {
     let row = &plan.resources[i];
-    kept_surface(plan, i)
-        || kept_module(plan, i)
-        || row.reader && waits_for_module(plan, plan.str(row.source))
+    row.reader && waits_for_module(plan, plan.str(row.source))
+}
+
+fn module_source(plan: &exact_plan::Plan, i: usize) -> bool {
+    let source = plan.resources[i].source;
+    (plan.modules.iter()).any(|m| plan.sources[m.source.0 as usize].name == source)
 }
 
 /// Whether resource `i` reads a module's live source declared `"kept":
@@ -102,17 +111,23 @@ pub(super) fn waits_for_module(plan: &exact_plan::Plan, source: &str) -> bool {
 /// waits for the data module ([`waits_for_module`]). Any other entry (a
 /// reader made `transient`, a resource removed, a declared source's) is
 /// forgotten on disk, not carried forever. A reload's carried readers are
-/// checked for compatibility instead.
+/// checked for compatibility instead. An app that grants a private store
+/// (`private`, LLP 1069.008.000 D7) seeds none from a surface record or a
+/// kept module source.
 pub(super) fn obsolete<'n>(
     plan: &exact_plan::Plan,
+    private: bool,
     names: impl Iterator<Item = &'n String>,
 ) -> Vec<String> {
     names
         .filter_map(|name| {
             let resource = name.strip_prefix(Store::KEPT)?;
             (!(0..plan.resources.len()).any(|i| {
-                keeps_answers(plan, i)
-                    && !plan.resources[i].transient
+                (if private {
+                    seeds_private(plan, i)
+                } else {
+                    keeps_answers(plan, i)
+                }) && !plan.resources[i].transient
                     && plan.str(plan.resources[i].name) == resource
             }))
             .then(|| name.clone())
@@ -132,15 +147,6 @@ pub(super) fn transient<'n>(
                 (plan.resources.iter()).any(|r| r.transient && plan.str(r.name) == resource)
             })
         })
-        .cloned()
-        .collect()
-}
-
-/// Every kept entry in `names`: what an app that keeps no answers
-/// forgets (LLP 1069.008.000 D7).
-pub(super) fn all<'n>(names: impl Iterator<Item = &'n String>) -> Vec<String> {
-    names
-        .filter(|name| name.starts_with(Store::KEPT))
         .cloned()
         .collect()
 }
@@ -218,6 +224,12 @@ impl<D: DataSource> Runner<D> {
         self.identity_reads(i, |r| {
             let source = self.plan.str(self.resource_row(r).source);
             self.plan.fetch_named(source).is_some()
+        })
+    }
+
+    fn identity_reads_native(&self, i: usize) -> bool {
+        self.identity_reads(i, |r| {
+            self.resources[r].native_reader || module_source(&self.plan, self.resource_site(r))
         })
     }
 
@@ -500,6 +512,20 @@ impl<D: DataSource> Runner<D> {
                 .forget_kept(&kept_name(self.plan.str(self.resource_row(i).name)));
             return;
         }
+        if self.keeping.private
+            && (self.resources[i].native_reader || self.identity_reads_native(i))
+        {
+            self.answered_waiting(i, args, true);
+            let name = self.plan.str(self.resource_row(i).name).to_string();
+            self.store.forget_kept(&kept_name(&name));
+            if !self.keeping.native.contains(&i) {
+                self.keeping.native.push(i);
+                self.log(format!(
+                    "not kept: resource `{name}` called native code, or an identifying argument reads a resource that did, in an app granted a private store (Health, contacts, a calendar, the photo library), so the next launch starts it from its placeholder; a resource that reads only the app's own storage is kept (LLP 1069.008.000 D7)"
+                ));
+            }
+            return;
+        }
         // @ref LLP 1027.005 D6 — context reaches the source but does not
         // enter the kept entry or its budget.
         let row = self.resource_row(i).clone();
@@ -709,10 +735,7 @@ impl<D: DataSource> Runner<D> {
     /// value. A name the store holds was read, and the boot judged it.
     pub fn forget_unread_kept(&mut self, names: &[String]) {
         let unread = names.iter().filter(|name| self.store.kept(name).is_none());
-        let forgotten = match crate::device::keeps_no_answers(self.data.grants()) {
-            true => all(unread),
-            false => obsolete(&self.plan, unread),
-        };
+        let forgotten = obsolete(&self.plan, self.keeping.private, unread);
         for name in &forgotten {
             self.store.forget_unread_kept(name);
         }

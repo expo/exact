@@ -986,6 +986,7 @@ impl<D: DataSource> Runner<D> {
                             // (LLP 1018 D4).
                             let reads_before = self.store.reads();
                             let draws_before = self.store.entropy_draws();
+                            let native_before = self.store.native_calls();
                             // Asked again in a later pass: an earlier
                             // `Later` answer was never handed out.
                             if let RequestEffect::Later { requests, .. } =
@@ -1071,7 +1072,7 @@ impl<D: DataSource> Runner<D> {
                                     // A failed ask that read the store makes a store
                                     // reader too, so a reply's write asks it again
                                     // (LLP 1146 §2.3).
-                                    self.note_reads(i, reads_before, draws_before);
+                                    self.note_reads(i, reads_before, draws_before, native_before);
                                     resources[i] = Some(shown);
                                     settled_res[i] = true;
                                     current_res[i] =
@@ -1082,7 +1083,7 @@ impl<D: DataSource> Runner<D> {
                                 answer => answer,
                             };
                             force.retain(|forced| *forced != i);
-                            self.note_reads(i, reads_before, draws_before);
+                            self.note_reads(i, reads_before, draws_before, native_before);
                             // What a fresh answer watches replaces what the
                             // last one did; its reply's parse may add more.
                             self.resources[i].watching = self.store.take_topics();

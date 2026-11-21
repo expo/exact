@@ -18,6 +18,7 @@ pub(crate) struct ResourceRow {
     /// Its own ask read what the store holds (a secret, a file, a
     /// database), not only randomness.
     pub(super) contents_reader: bool,
+    pub(super) native_reader: bool,
     /// `contents_reader` is known: it was asked in this run, or a reload
     /// carried, or a rendered page says, what its last ask read.
     pub(super) reads_known: bool,
@@ -95,10 +96,13 @@ impl<D: DataSource> Runner<D> {
         i: usize,
         reads_before: usize,
         draws_before: usize,
+        native_before: usize,
     ) -> bool {
         let reads = self.store.reads() - reads_before;
         let draws = self.store.entropy_draws() - draws_before;
+        let native = self.store.native_calls() > native_before;
         let row = &mut self.resources[i];
+        row.native_reader |= native;
         row.store_reader |= reads > 0;
         row.entropy_reader |= draws > 0;
         row.contents_reader |= reads > draws;

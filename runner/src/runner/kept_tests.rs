@@ -24,6 +24,7 @@ struct Source {
     /// A device line whose app keeps no answers: Health's (LLP 1069.008.000
     /// D7), the contacts' or a calendar's (LLP 1133.018 D8).
     private: Option<&'static str>,
+    native: bool,
 }
 
 impl Default for Source {
@@ -37,6 +38,7 @@ impl Default for Source {
             asks: Vec::new(),
             parses: Vec::new(),
             private: None,
+            native: false,
         }
     }
 }
@@ -60,8 +62,13 @@ impl DataSource for Source {
             "a deferred source must not run before readiness"
         );
         store.get("token");
+        if self.native && !self.later {
+            store.observe_native_call();
+        }
         self.asks.push(args.to_vec());
-        Ok(if self.later {
+        Ok(if self.native && self.later {
+            Answer::Later(Request::native(b"{}".to_vec()))
+        } else if self.later {
             let suffix = if self.same_request {
                 "same"
             } else {
@@ -768,7 +775,7 @@ fn only_explicitly_kept_surface_facts_retain_a_launch_snapshot() {
                 "{source}, keep={keep}"
             );
             assert_eq!(
-                kept::obsolete(&plan, snapshot.iter().map(|(name, _)| name)).is_empty(),
+                kept::obsolete(&plan, false, snapshot.iter().map(|(name, _)| name)).is_empty(),
                 allowed,
                 "{source}, keep={keep}"
             );
@@ -782,7 +789,7 @@ fn only_explicitly_kept_surface_facts_retain_a_launch_snapshot() {
         plan.resources[0].transient = true;
         assert!(!kept::kept_surface(&plan, 0), "{source}");
         assert!(
-            !kept::obsolete(&plan, snapshot.iter().map(|(name, _)| name)).is_empty(),
+            !kept::obsolete(&plan, false, snapshot.iter().map(|(name, _)| name)).is_empty(),
             "{source}"
         );
         let decoded = Plan::decode(&plan.encode()).unwrap();
@@ -794,7 +801,7 @@ fn only_explicitly_kept_surface_facts_retain_a_launch_snapshot() {
             "a kept reader needs a declared surface: {source}"
         );
         assert!(
-            !kept::obsolete(&plan, snapshot.iter().map(|(name, _)| name)).is_empty(),
+            !kept::obsolete(&plan, false, snapshot.iter().map(|(name, _)| name)).is_empty(),
             "{source}"
         );
     }
@@ -835,7 +842,7 @@ fn a_cold_boot_forgets_the_kept_entries_the_host_did_not_read() {
     let mut r = seeded();
     r.forget_unread_kept(&[answer.clone(), gone.clone()]);
     shows(&r, "kept");
-    assert_eq!(removed(&r), [gone], "a read entry stays");
+    assert_eq!(removed(&r), std::slice::from_ref(&gone), "a read entry stays");
     let mut transient = plan(2, false);
     transient.resources[0].transient = true;
     let mut r = boot(transient, Source::default(), Vec::new());
@@ -850,44 +857,79 @@ fn a_cold_boot_forgets_the_kept_entries_the_host_did_not_read() {
         ..Source::default()
     };
     let mut r = boot(plan(2, false), source, Vec::new());
-    r.forget_unread_kept(std::slice::from_ref(&answer));
-    assert_eq!(removed(&r), [answer], "an app that keeps no answers");
+    r.forget_unread_kept(&[answer, gone.clone()]);
+    assert_eq!(removed(&r), [gone], "a private app's store reader's stays");
 }
 
 #[test]
-fn an_app_granting_a_private_store_neither_seeds_nor_keeps_answers() {
-    // A reader's answer kept before the grant (or by an older build) is
-    // forgotten on disk and does not paint the first frame; the fresh answer
-    // is never kept: Health's rule (LLP 1069.008.000 D7), and the contacts'
-    // and calendars' (LLP 1133.018 D8). The source loads after first pixel,
-    // as an app's TypeScript does.
+fn an_app_granting_a_private_store_keeps_only_answers_that_called_no_native_code() {
+    // Health's rule (LLP 1069.008.000 D7), and the contacts' and calendars'
+    // (LLP 1133.018 D8): what a native call answered is never kept, at once
+    // or after its request, and an older entry is forgotten. A reader of the
+    // app's own stores seeds and keeps as in any app. The source loads after
+    // first pixel, as an app's TypeScript does.
+    let removed = |r: &Runner<Source>| -> Vec<String> {
+        (r.store.writes().iter())
+            .filter(|w| w.value.is_none())
+            .map(|w| w.name.clone())
+            .collect()
+    };
     for line in ["health-read", "contacts", "calendar", "calendar-write-only"] {
-        let source = Source {
+        let own = Source {
             private: Some(line),
             ..Source::default()
         };
         let mut r = boot(
             plan(2, false),
-            source,
+            own,
             entry(&[Value::str("A")], &Value::str("kept")),
         );
-        shows(&r, "loading");
-        assert!(!state(&r).kept_seed, "{line}");
-        assert_eq!(r.store.kept(&kept::kept_name("answer")), None, "{line}");
-        let removed: Vec<_> = r
-            .store
-            .writes()
-            .iter()
-            .filter(|w| w.value.is_none())
-            .map(|w| w.name.clone())
-            .collect();
-        assert_eq!(removed, [kept::kept_name("answer")], "{line}");
+        shows(&r, "kept");
+        assert!(state(&r).kept_seed, "{line}");
         r.data.ready = true;
         assert!(r.data_ready().unwrap().is_some());
         shows(&r, "fresh");
-        assert_eq!(r.store.kept(&kept::kept_name("answer")), None, "{line}");
-        assert_eq!(answer_writes(&r), 1, "{line}: only the removal");
+        assert_eq!(
+            r.store.kept(&kept::kept_name("answer")),
+            Some(&kept::encode(&[Value::str("A")], &Value::str("fresh"))[..]),
+            "{line}"
+        );
+        assert!(removed(&r).is_empty(), "{line}");
+        for later in [false, true] {
+            let native = Source {
+                private: Some(line),
+                native: true,
+                later,
+                ..Source::default()
+            };
+            let mut r = boot(
+                plan(2, false),
+                native,
+                entry(&[Value::str("A")], &Value::str("kept")),
+            );
+            shows(&r, "kept");
+            r.data.ready = true;
+            assert!(r.data_ready().unwrap().is_some());
+            if later {
+                let ticket = r.take_requests().remove(0).ticket;
+                r.fulfill(ticket, Outcome::Storage(vec![])).unwrap();
+            }
+            shows(&r, "fresh");
+            assert_eq!(r.store.kept(&kept::kept_name("answer")), None, "{line}");
+            assert_eq!(removed(&r), [kept::kept_name("answer")], "{line}");
+        }
     }
+    let native = Source {
+        native: true,
+        ..Source::default()
+    };
+    let mut r = boot(plan(2, false), native, Vec::new());
+    r.data.ready = true;
+    assert!(r.data_ready().unwrap().is_some());
+    assert!(
+        r.store.kept(&kept::kept_name("answer")).is_some(),
+        "an app granting no private store keeps a native answer"
+    );
 }
 
 /// The sources this runner answers are the plan's list, the one the web

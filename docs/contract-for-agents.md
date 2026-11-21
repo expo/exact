@@ -791,8 +791,11 @@ state or resource it reads, never an identifying value.
 An answer that must never reach the device's storage (a one-time code, a message
 shown once) ends its line with `transient`: `resource code = otp(request) as shape
 Code transient`. It is never kept, a launch starts from its placeholder, and an
-answer an earlier build kept is forgotten at the next launch. To keep no answers at
-all, an app's grants decide (a Health grant keeps none).
+answer an earlier build kept is forgotten at the next launch. An app's grants
+decide the rest: with a Health, contacts, calendar or photo-library grant, a
+resource whose ask called native code, or whose identifying arguments read one
+that did, is never kept (`logs` says `not kept` once, naming it), and one that
+reads only the app's own storage is.
 Keep a first screen's resources small and move their bulk into a resource the first
 frame does not need. A write the resource does not hear about (a file or database save from
 a mutation without `refreshes saved`, not a `store` write it reads) leaves that

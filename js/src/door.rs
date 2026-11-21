@@ -148,7 +148,7 @@ pub(crate) unsafe extern "C" fn host_door(
                 Ok(state.later.then(|| "later".into()))
             } else {
                 if let Some(store) = state.store {
-                    (*store).observe_external_read();
+                    (*store).observe_native_call();
                 }
                 // A package's synchronous form is the host's app module's,
                 // beside a native module too.

@@ -75,8 +75,9 @@ pub struct Device {
     pub companion: Option<&'static str>,
     /// Whether the row applies on tvOS, which bakes the iOS plan (D5).
     pub tvos: bool,
-    /// An app granting it keeps no answers across launches (D7): its data
-    /// must not sit in `exact.kept.*` outside the platform's protection.
+    /// An app granting it keeps no answer native code gave it across launches
+    /// (D7): its data must not sit in `exact.kept.*` outside the platform's
+    /// protection. An answer read from the app's own stores is kept.
     pub keeps_no_answers: bool,
     /// The row this one asks for less of (a declared deviation, as
     /// `geolocation-approximate` is of `geolocation`, LLP 1133.002 D7): an app
@@ -947,8 +948,8 @@ pub fn granted(spec: &str, name: &str) -> bool {
     checked(spec).is_ok_and(|all| all.iter().any(|g| RULES[g.row].name == name))
 }
 
-/// Whether `spec` grants a device whose app keeps no answers
-/// (LLP 1069.008.000 D7).
+/// Whether `spec` grants a device whose app keeps no answer native code
+/// gave it (LLP 1069.008.000 D7).
 pub fn keeps_no_answers(spec: &str) -> bool {
     checked(spec).is_ok_and(|all| all.iter().any(|g| RULES[g.row].keeps_no_answers))
 }

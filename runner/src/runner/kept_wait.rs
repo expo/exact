@@ -337,17 +337,17 @@ impl<D: DataSource> Runner<D> {
     /// A reload keeps a waiting entry for a store reader or a kept module
     /// whose name, source and logic (`carried`, given only for the same data
     /// module) are unchanged and that is not `transient`; admission still
-    /// checks the entry's identity length and shape. A private session or a
-    /// launch with a presence secret locked keeps none (LLP 1027.005 D3).
+    /// checks the entry's identity length and shape. A private session keeps
+    /// a store reader's only, and a launch with a presence secret locked
+    /// keeps none (LLP 1027.005 D3).
     pub(super) fn carry_waiting_in(&mut self, carried: Option<&super::Carried>, private: bool) {
-        let Some(carried) = carried.filter(|_| !private && !self.store.opened_locked()) else {
+        let Some(carried) = carried.filter(|_| !self.store.opened_locked()) else {
             return;
         };
         for i in 0..self.plan.resources.len() {
             let row = &self.plan.resources[i];
-            let eligible = row.reader
-                && super::kept::waits_for_module(&self.plan, self.plan.str(row.source))
-                || super::kept::kept_module(&self.plan, i);
+            let eligible = super::kept::seeds_private(&self.plan, i)
+                || !private && super::kept::kept_module(&self.plan, i);
             if !eligible || row.transient {
                 continue;
             }

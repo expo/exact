@@ -4350,9 +4350,13 @@ or both, each with its own strings key (LLP 1069.008.000):
   HealthKit turned on. A team wildcard never allows it, and the build
   refuses (`grant-device-profile`) rather than sign one that fails at its
   first request.
-- An app with a Health grant keeps no answers across launches: its first
-  frame never shows last launch's data from the store, and any kept answer
-  on disk is forgotten at boot.
+- An app with a Health grant keeps no answer that native code gave it: a
+  resource whose ask called a native module (the app's own or a package's),
+  or whose identifying arguments read such a resource, starts every launch
+  from its placeholder, and an answer kept for it earlier is forgotten. A
+  resource that reads only the app's own storage (a file, a database, a
+  secret) is kept as in any app. A surface record's `keep` and a module's
+  kept source keep nothing in such an app.
 
 ### Sounds
 
