@@ -178,6 +178,9 @@ test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('a seam that may 
     // A function the graph's key shares its name with ("B") is a table root that calls the seam directly.
     ['directly from B', false, `(table 2 funcref) (elem (i32.const 0) $${HANDLE} $B)
       (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $B (type $read) (result i32) call $${HANDLE})`],
+    // A direct call fails the build even where the seam, in no slot, would otherwise ship the module whole.
+    ['directly from boot', false, `(table 1 funcref) (func $${HANDLE} (type $read) (result i32) i32.const 0)
+      (func $boot (export "boot") (result i32) call $${HANDLE})`],
   ];
   try {
     for (const [refusal, optimized, body] of cases) {

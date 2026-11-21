@@ -988,7 +988,7 @@ async function startupFixture(rustOnly = false, served = null, timerFirst = fals
   f.host = f;
   f.exact = served ? { documentPage: { connect: () => ({ started: Promise.resolve(), ...served }) } } : {}; // a served document's capture (document-glue.js)
   // navigation.js's export, which a context global would confuse with the browser's own `globalThis.navigation`.
-  vm.runInContext([source.match(/^const AGENT_ADMITTED = .*$/m)[0], "const navigation = { activate: () => events.push('navigation') };", ...['ModuleStopped', 'guardedExports', 'stopModule', 'setInputReady', 'activateData', 'main'].map(declaration)].join('\n')
+  vm.runInContext([source.match(/^const AGENT_ADMITTED = .*$/m)[0], "const navigation = { activate: () => events.push('navigation') };", ...['ModuleStopped', 'StageNotLoaded', 'withPlaceholders', 'guardedExports', 'stopModule', 'setInputReady', 'activateData', 'main'].map(declaration)].join('\n')
     .replaceAll('import.meta.url', '"https://fixture.invalid/glue.js"'), f);
   await f.main();
   if (served) return { f }; // a served document's first pixel is painted: activation is not a frame away

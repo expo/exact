@@ -124,12 +124,14 @@ export function planStages(named, stages = STAGES) {
     const crates = new Set(seam.map(entry => stage.seam.exec(entry)[1]));
     if (crates.size > 1) throw new Unsplittable(`stage ${stage.name}: its seam ${stage.seam} matches functions of ${crates.size} crates, so another crate shares the SDK's path`);
     for (const entry of seam) {
+      // A direct call fails the build first: a seam the core calls is in no slot once nothing takes its address,
+      // and would otherwise ship whole.
+      const direct = [...callers.get(entry) ?? []].filter(caller => core.has(caller));
+      if (direct.length) throw new Error(`stage ${stage.name}: the core calls its seam ${demangled.get(entry)} directly from ${direct.slice(0, 3).map(c => demangled.get(c)).join(', ')}`);
       // The glue gates a seam's one table slot. An export, or another slot (a function wasm-opt merged with the seam
       // once filled its own), is a way the core may call the stage before it loads.
       const { exported, slots } = nodes.get(entry);
       if (exported || slots !== 1) throw new Unsplittable(`stage ${stage.name}: its seam ${demangled.get(entry)} is ${exported ? 'exported' : `in ${slots} table slots`}, so the core may reach it other than through the gated slot`);
-      const direct = [...callers.get(entry) ?? []].filter(caller => core.has(caller));
-      if (direct.length) throw new Error(`stage ${stage.name}: the core calls its seam ${demangled.get(entry)} directly from ${direct.slice(0, 3).map(c => demangled.get(c)).join(', ')}`);
     }
     return { name: stage.name, functions: [...reach(seam, new Set())].filter(f => !core.has(f)) };
   });

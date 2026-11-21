@@ -26,7 +26,11 @@ async function bridge() {
     plan = readFileSync(file);
   }
   const unexpected = () => { throw new Error('the timer fixture called a data or geometry import'); };
-  const { instance } = await WebAssembly.instantiate(readFileSync(wasm), {
+  // A split core's stage placeholders (host/web/stages.mjs) are imports too.
+  const module = new WebAssembly.Module(readFileSync(wasm));
+  const placeholders = Object.fromEntries(WebAssembly.Module.imports(module).filter(({ module }) => module.startsWith('placeholder.'))
+    .map(({ module }) => [module, new Proxy({}, { get: () => unexpected })]));
+  const instance = await WebAssembly.instantiate(module, { ...placeholders,
     exact_grants: grantOrigins(() => instance.exports.memory), exact_js: { call: unexpected },
     exact_rust: { load: unexpected, call: unexpected, read: unexpected, drop: unexpected },
     exact_data: { random: unexpected, agent_seed: unexpected }, exact_clock: { now: unexpected },
