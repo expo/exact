@@ -24,9 +24,18 @@ test('only a failed build script asks the Contract compiler', () => {
   assert.equal(contractMayHaveFailed(['build'], { status: 0, stderr: '', stdout: '' }), false);
 });
 
+// Cargo's messages for `cargo build --message-format=json-render-diagnostics` of an app whose build script bakes the
+// plan: the script built and, when it ran, executed; a rustc error is rendered to stderr and is not among them.
+const script = '{"reason":"compiler-artifact","package_id":"app","target":{"kind":["custom-build"],"name":"build-script-build"}}';
+const executed = '{"reason":"build-script-executed","package_id":"app"}', finished = '{"reason":"build-finished","success":false}';
+
 test('an inherited stderr is read from the JSON messages on stdout', () => {
   assert.equal(contractMayHaveFailed(['rustc'], failed(null, `${warning}\n${rustcError}\n`)), false);
-  assert.equal(contractMayHaveFailed(['rustc'], failed(null, `${warning}\n{"reason":"build-finished","success":false}\n`)), true);
+  // The script built and did not run: it failed, and the Contract may be why.
+  assert.equal(contractMayHaveFailed(['build'], failed(null, `${script}\n${finished}\n`)), true);
+  // The script ran and the crate's own code then failed, as a type error does: no Contract to ask.
+  assert.equal(contractMayHaveFailed(['build'], failed(null, `${script}\n${executed}\n${warning}\n${finished}\n`)), false);
+  assert.equal(contractMayHaveFailed(['rustc'], failed(null, `${warning}\n${finished}\n`)), false);
 });
 
 // The compiler is built before the case, on its own budget: a slow or failed

@@ -14,7 +14,11 @@ import { tmpdir } from 'node:os';
 export function contractMayHaveFailed(args, result) {
   if (result.error || !['build', 'rustc', 'check'].includes(args[0])) return false;
   if (typeof result.stderr === 'string') return result.stderr.includes('failed to run custom build command');
-  return !(result.stdout ?? '').split('\n').some((line) => line.includes('"reason":"compiler-message"') && /"level":"error"/.test(line));
+  // With stderr inherited, Cargo's JSON on stdout says it: a build script that was built and did not run. Under
+  // --message-format=json-render-diagnostics rustc's own errors are rendered to stderr and leave no message here.
+  const messages = (result.stdout ?? '').split('\n').flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } });
+  const ran = new Set(messages.filter((m) => m.reason === 'build-script-executed').map((m) => m.package_id));
+  return messages.some((m) => m.reason === 'compiler-artifact' && m.target?.kind?.includes('custom-build') && !ran.has(m.package_id));
 }
 
 /** Throw the Contract's errors when `result`, a failed `cargo <args>` of
