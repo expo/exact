@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { authoredWorkspace, claimTargetCrates, declaredWorkspace, targetRustflags } from './cargo-check.mjs';
+import { authoredWorkspace, claimTargetCrates, declaredWorkspace, linkedCrate, targetRustflags } from './cargo-check.mjs';
 import { wasmRemapFlags } from './app.mjs';
 
 // Cargo refuses to merge an array given with --config into a configured string ("expected string, but found array"),
@@ -97,5 +97,37 @@ test('workspace discovery follows a linked app to its physical ancestors', () =>
     writeFileSync(resolve(app, 'Cargo.toml'), '[package]\nworkspace="../.."\nname="mobile"\nversion="0.1.0"\n');
     assert.equal(authoredWorkspace(alias), repo);
     assert.equal(declaredWorkspace(alias, [alias]), repo);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// An app's data crate may be another app's, which its own crates link by path, as Unsaid's is Hello's: given its own
+// path, renamed to it, or inherited from the workspace under its name or another, from a host crate and not a
+// test's dev-dependency or another crate; none links it; two host crates link it from different directories.
+test('the crate an app\'s own crates link by path is found by its package name', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-linked-crate-'));
+  try {
+    const write = (path, text) => { mkdirSync(resolve(dir, path, '..'), { recursive: true }); writeFileSync(resolve(dir, path), text); };
+    write('Cargo.toml', '[workspace]\nmembers = ["apps/a/android"]\n[workspace.dependencies]\nshared-data = { path = "shared/data" }\n');
+    write('apps/a/app.json', '{}');
+    write('apps/a/android/Cargo.toml', '[package]\nname = "a-android"\n[target.\'cfg(target_os = "android")\'.dependencies]\nhello-data = { path = "../../hello/data" }\n[dependencies]\nlogic = { package = "b-logic", path = "../../b/logic" }\nshared-data = { workspace = true }\n[dev-dependencies]\nfixture = { package = "hello-data", path = "../fixtures/hello" }\n');
+    const app = resolve(dir, 'apps/a');
+    assert.equal(linkedCrate(app, 'hello-data'), resolve(dir, 'apps/hello/data'));
+    assert.equal(linkedCrate(app, 'b-logic'), resolve(dir, 'apps/b/logic'));
+    assert.equal(linkedCrate(app, 'shared-data'), resolve(dir, 'shared/data'));
+    assert.equal(linkedCrate(app, 'weather-data'), null);
+    // A dependency inherited under another name, renamed in the workspace, is the one the host builds.
+    write('apps/c/android/Cargo.toml', '[package]\nname = "c-android"\n[dependencies]\nlogic = { workspace = true }\n');
+    writeFileSync(resolve(dir, 'Cargo.toml'), '[workspace]\nmembers = ["apps/a/android", "apps/c/android"]\n[workspace.dependencies]\nshared-data = { path = "shared/data" }\nlogic = { package = "c-data", path = "shared/c" }\n');
+    assert.equal(linkedCrate(resolve(dir, 'apps/c'), 'c-data'), resolve(dir, 'shared/c'));
+    // A host crate that is its own workspace's root inherits from its own manifest, and another joins it by name.
+    write('apps/d/apple/Cargo.toml', '[package]\nname = "d-apple"\n[workspace]\n[workspace.dependencies]\nd-data = { path = "../data" }\n[dependencies]\nd-data = { workspace = true }\n');
+    assert.equal(linkedCrate(resolve(dir, 'apps/d'), 'd-data'), resolve(dir, 'apps/d/data'));
+    write('apps/d/android/Cargo.toml', '[package]\nname = "d-android"\nworkspace = "../apple"\n[dependencies]\nd-data = { workspace = true }\n');
+    assert.equal(linkedCrate(resolve(dir, 'apps/d'), 'd-data'), resolve(dir, 'apps/d/data'));
+    // A crate that is not a host's, such as a benchmark, links what it likes.
+    write('apps/a/bench/Cargo.toml', '[package]\nname = "a-bench"\n[dependencies]\nhello-data = { path = "../old-hello" }\n');
+    assert.equal(linkedCrate(app, 'hello-data'), resolve(dir, 'apps/hello/data'));
+    write('apps/a/apple/Cargo.toml', '[package]\nname = "a-apple"\n[dependencies]\nhello-data = { path = "../hello-copy" }\n');
+    assert.throws(() => linkedCrate(app, 'hello-data'), /link hello-data from .* and .*; link one directory/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
