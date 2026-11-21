@@ -396,6 +396,7 @@ pub fn lower_all(
             bundled::check(&checking.expanded(), root)
         })
         .unwrap_or_default();
+    asset_errors.extend(routes::tab_accessory::check(checked));
     let mut text_styles = warnings::TextStyles::new();
     let result = lower_with_sites(
         checked,

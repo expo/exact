@@ -160,6 +160,9 @@ extension NavigationHost {
         // Fold every batch's child lists, whether or not a sync projects it: a sync asked for during a sync returns
         // without projecting its batch
         foldChildren(batch)
+        #if os(iOS)
+        freezeTabAccessory(for: batch)
+        #endif
         // Keep a route removed while its view is on screen for the transition that takes it away, UIKit's own pop,
         // which reached the router as it began (`followPops`), or one the app asked for, which Exact animates: its
         // pixels as drawn, and under them its views, until UIKit takes its view out of the window, as a sheet's views

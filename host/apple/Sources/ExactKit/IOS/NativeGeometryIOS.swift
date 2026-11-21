@@ -23,7 +23,7 @@ package final class NativeGeometry {
 
     /// Native containers animate above authored nodes. Their presentation layers
     /// carry the current position; authored transforms remain the runner's.
-    static func convert(_ rect: CGRect, from source: UIView, to destination: UIView) -> CGRect {
+    package static func convert(_ rect: CGRect, from source: UIView, to destination: UIView) -> CGRect {
         guard animates(source.layer) || animates(destination.layer),
               let from = source.layer.presentation(), let to = destination.layer.presentation() else {
             return source.convert(rect, to: destination)
@@ -41,16 +41,37 @@ package final class NativeGeometry {
     }
 
     /// A native modal surface accepts input only within its visible,
-    /// enabled ancestors. Dialog CSS does not gate its sibling backdrop.
+    /// enabled ancestors. Dialog CSS does not gate its sibling backdrop, and
+    /// an authored node gates it as its hit test does (`NodeView.hitTest`):
+    /// not by its opacity, which changes painting only, and beyond its box
+    /// only on an axis its overflow clips.
     package static func hitRegion(of source: UIView, in destination: UIView) -> CGRect? {
         guard source.window != nil else { return nil }
         var rect = bounds(of: source, in: destination), at: UIView? = source
         while let view = at {
-            guard !view.isHidden, view.isUserInteractionEnabled, view.alpha > 0.01 else { return nil }
-            rect = rect.intersection(bounds(of: view, in: destination))
+            guard !view.isHidden, view.isUserInteractionEnabled, let reach = reach(of: view, in: destination, within: rect) else { return nil }
+            rect = rect.intersection(reach)
             at = view.superview
         }
         return rect.isNull || rect.isEmpty ? nil : rect
+    }
+
+    /// Where a view's hit test reaches its subviews, as much of `rect` as it does, or nil where it takes no touch: a
+    /// UIKit view's bounds, unless it is all but transparent; an authored node whatever its opacity, limited on each
+    /// axis its overflow clips to its padding box (`NodeView.reachesChildren`) or a scroller's scroll view, drawn
+    /// past its box by its outset
+    private static func reach(of view: UIView, in destination: UIView, within rect: CGRect) -> CGRect? {
+        guard let node = view as? NodeView else { return view.alpha > 0.01 ? bounds(of: view, in: destination) : nil }
+        let x = (node.style["overflow_x"]?.string ?? "visible") != "visible", y = (node.style["overflow_y"]?.string ?? "visible") != "visible"
+        guard x || y else { return rect }
+        let outset = node.scrollOutset
+        let local = node.scrollView == nil ? node.overflowPaddingBox
+            : (node.surface?.frame ?? node.bounds).inset(by: UIEdgeInsets(top: -outset.top, left: -outset.left, bottom: -outset.bottom, right: -outset.right))
+        let box = convert(local, from: node, to: destination)
+        var reach = rect
+        if x { reach.origin.x = box.minX; reach.size.width = box.width }
+        if y { reach.origin.y = box.minY; reach.size.height = box.height }
+        return reach
     }
 
     /// UIKit's backdrop gestures exclude the presented view's hit bounds,
@@ -73,7 +94,7 @@ package final class NativeGeometry {
     private func followAnimations() {
         guard let presenter else { FrameClock.shared.drop(self); return }
         let routes = presenter.navigation.routeSurfaces.values.compactMap(\.viewIfLoaded)
-        let surfaces = presenter.presentations(includingRetiring: true)
+        let surfaces = presenter.presentations(includingRetiring: true) + presenter.navigation.topLayerBoxes.map(\.view)
         let moving = (routes + surfaces).contains { $0.window != nil && Self.animates($0.layer) }
         guard moving else { FrameClock.shared.drop(self); return }
         FrameClock.shared.want(self, .navigationReveal, rate: FrameClock.full(on: presenter.viewport.window?.screen)) { [weak self] _ in

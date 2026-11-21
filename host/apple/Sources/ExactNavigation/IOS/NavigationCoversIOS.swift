@@ -54,6 +54,9 @@ extension NavigationHost {
         let drawn = shown.map { $0.node.convert($0.node.bounds, to: root) }.filter { !$0.isEmpty }
         var owned = Set(tabPanels + (tablistAppearanceNone ? [] : [adoptedTablist].compactMap { $0 }))
         if let footer = sidebarFooter() { owned.insert(footer.id) }
+        #if os(iOS)
+        if let accessory = tabAccessory, let node = accessory.node, accessory.holds { owned.insert(node.id) }
+        #endif
         let area = holder.convert(holder.bounds, to: root)
         let before = besideOwner === owner ? besideInsets : .zero
         var changed = false, reach = UIEdgeInsets.zero, above: [NodeView] = []
@@ -196,6 +199,9 @@ extension NavigationHost {
     /// reported when they change, after the batch being applied.
     func reportCovers() {
         projectSidebarFooter(sidebarFooter())
+        #if os(iOS)
+        projectTabAccessory()
+        #endif
         let above = clearBesideRoutes()
         var changes: [(UInt32, HostCover?)] = []
         var wanted: [UInt32: HostCover] = [:]
