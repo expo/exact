@@ -23,6 +23,13 @@ pub(crate) fn stopped_rows() -> StyleMask {
     rows
 }
 
+pub(super) fn start_rows() -> StyleMask {
+    stopped_rows()
+        .union(StyleMask::of(StyleId::WhiteSpace))
+        .union(StyleMask::of(StyleId::FontVariantLigatures))
+        .union(StyleMask::of(StyleId::FontVariantNumeric))
+}
+
 fn starting_style(font: &ControlFont) -> StyleProps {
     let mut s = StyleProps::default();
     s.font_family = font.family_id;
@@ -227,5 +234,50 @@ impl NodeArena {
         self.is_native_text_control(slot)
             .then(|| self.field_content.get(&slot).copied())
             .flatten()
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+    use crate::{ButtonFonts, ControlTextStyles, FontStyle};
+
+    #[test]
+    fn control_mask_matches_web_neutral_and_native_styles() {
+        let font = ControlFont {
+            family: "system-ui".into(),
+            family_id: 1,
+            size: 18.0,
+            weight: 600,
+            style: FontStyle::Normal,
+        };
+        let mut arena = NodeArena::new();
+        arena.set_env(Env {
+            control_text_styles: Some(ControlTextStyles {
+                field: font.clone(),
+                textarea: font.clone(),
+                button: font.clone(),
+            }),
+            button_fonts: Some(ButtonFonts {
+                mini: Some(font.clone()),
+                small: Some(font.clone()),
+                medium: Some(font.clone()),
+                large: Some(font),
+            }),
+            ..Env::default()
+        });
+        let built = [
+            &*WEB_START,
+            &*WEB_BUTTON_START,
+            &*WEB_PROJECTED_BUTTON_START,
+        ]
+        .into_iter()
+        .chain(NEUTRAL_STARTS.iter())
+        .chain(arena.control_styles.as_ref().unwrap().iter())
+        .fold(StyleMask::EMPTY, |mask, style| mask.union(style.mask));
+        assert_eq!(
+            start_rows().intersect(StyleMask::INHERITED),
+            built.intersect(StyleMask::INHERITED),
+        );
     }
 }
