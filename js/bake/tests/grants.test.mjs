@@ -21,9 +21,9 @@ function fixture(files, manifest = {}) {
   return { stage, put, close: () => rmSync(stage, { recursive: true, force: true }) };
 }
 
-test('grants fold imported literal arrays and spreads without running their module', async () => {
+for (const [specifier, read] of [['{ SECRET_GRANTS }', 'SECRET_GRANTS'], ['* as session', 'session.SECRET_GRANTS']]) test(`grants fold imported literal arrays and spreads without running their module: ${read}`, async () => {
   const f = fixture({
-    'app.ts': "import { SECRET_GRANTS } from './src/session';\nexport const grants = ['net.fetch https://api.example.com', ...SECRET_GRANTS].join('\\n');\n",
+    'app.ts': `import ${specifier} from './src/session';\nexport const grants = ['net.fetch https://api.example.com', ...${read}].join('\\n');\n`,
     'src/session.ts': "throw new Error('the static reader must not run this');\nexport const SECRET_GRANTS = ['secret.keep session.refresh', 'secret.keep session.device'];\n",
   });
   try {

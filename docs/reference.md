@@ -5712,6 +5712,9 @@ import { SECRET_GRANTS } from './src/session';
 export const grants = ['net.fetch https://api.example.com', ...SECRET_GRANTS].join('\n');
 ```
 
+A namespace import reads the same constant: `import * as session` and
+`...session.SECRET_GRANTS`.
+
 The imported bindings follow the same literal grammar. Calls other than the
 array's `.join`, computed arrays, package bindings (including re-exports
 from packages), and dependencies on launch-marked settings are refused with a

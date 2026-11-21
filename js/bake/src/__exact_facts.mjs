@@ -117,7 +117,7 @@ function constantBindings(code, parse, { load, source = code } = {}) {
     }
     return target.local ? binding(target.m, target.local, target.node, name, evaluate) : evaluate(target.m, target.node, name);
   };
-  return { root, refuse, binding, exported, resolveBinding };
+  return { root, refuse, imported, binding, exported, resolveBinding };
 }
 
 /** The initializer actually exported as grants, with its authored node for receipt locations. */
@@ -131,7 +131,7 @@ export function grantsInitializer(code, parse, options) {
 
 /** appId stays local; grants may follow imports through `load`, which returns captured app-local syntax. */
 export function staticFacts(code, parse, { load, locations = false, source = code } = {}) {
-  const { root, refuse, binding, exported, resolveBinding } = constantBindings(code, parse, { load, source });
+  const { root, refuse, imported, binding, exported, resolveBinding } = constantBindings(code, parse, { load, source });
   if (root.parsed.errors?.length) return { appId: undefined, grants: undefined, exported: [], ...(locations ? { grantSources: [] } : {}) };
   const literal = (m, node, value) => {
     node = m.original.get(node) ?? node;
@@ -183,6 +183,10 @@ export function staticFacts(code, parse, { load, locations = false, source = cod
       const separator = node.arguments.length ? scalar(m, node.arguments[0], name) : literal(m, node, ',');
       return array.reduce((result, entry, i) => combine(i ? combine(result, { ...separator, value: String(separator.value) }) : result, { ...entry, value: String(entry.value) }), { value: '', parts: [] });
     }
+    // `ns.NAME` through `import * as ns` reads the export NAME, as a named import would.
+    const namespace = node.type === 'MemberExpression' && bare(node.object)?.type === 'Identifier' ? m.imports.get(bare(node.object).name) : undefined;
+    if (namespace && !namespace.imported && propertyName(node) !== null)
+      return exported(imported(m, namespace.source, namespace.node, name), propertyName(node), name, constant);
     const why = node.type === 'CallExpression' ? 'cannot call code; only a literal array .join(separator) is allowed'
       : node.type === 'ConditionalExpression' ? `${syntax}; conditional expressions are not allowed`
       : node.type === 'MemberExpression' ? 'cannot read a computed value or array element; use literal constants' : syntax;
