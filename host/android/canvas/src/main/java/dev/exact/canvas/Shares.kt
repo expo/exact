@@ -48,7 +48,7 @@ internal object Shares {
         } catch (e: PackageManager.NameNotFoundException) { null } ?: return null
         val share = JSONObject()
         (intent.getStringExtra(Intent.EXTRA_SUBJECT) ?: intent.getStringExtra(Intent.EXTRA_TITLE))?.let { share.put("title", it) }
-        intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()?.let { share.put("text", it) }
+        text(intent)?.let { share.put("text", it) }
         val files = JSONArray()
         var dropped = 0
         for (uri in streams(intent)) {
@@ -68,6 +68,16 @@ internal object Shares {
             if (!first.isNullOrEmpty()) share.put("dropped", JSONObject().put(first, dropped))
         }
         return JSONObject().put("target", JSONObject(target)).put("share", share).toString()
+    }
+
+    /**
+     * The text a share carries: `EXTRA_TEXT`. Several files are `ACTION_SEND_MULTIPLE`, whose text is a list with an
+     * entry for each stream (`Intent.ACTION_SEND_MULTIPLE`); its entries that say something are joined, one to a
+     * line. A sender that gives several files one text is read too.
+     */
+    internal fun text(intent: Intent): String? {
+        val entries = if (intent.action == Intent.ACTION_SEND_MULTIPLE) intent.getCharSequenceArrayListExtra(Intent.EXTRA_TEXT) else null
+        return entries?.filter { !it.isNullOrEmpty() }?.joinToString("\n")?.ifEmpty { null } ?: intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
     }
 
     /** The content URIs a share carries: `EXTRA_STREAM`, one or a list. */
