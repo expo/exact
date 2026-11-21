@@ -476,6 +476,9 @@ impl Backend for Gpu {
     fn name(&self) -> &'static str {
         "gpu"
     }
+    fn needs_geometry_paint(&self) -> bool {
+        false
+    }
 
     fn page(&mut self, color: [u8; 4]) {
         self.page = Some(color);

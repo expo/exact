@@ -59,6 +59,7 @@ mod field_pointer;
 mod field_scroll;
 #[cfg(test)]
 mod field_tests;
+mod file_drop;
 #[cfg(test)]
 mod frame_target_tests;
 mod group;
@@ -288,6 +289,7 @@ pub struct Presenter<D: DataSource> {
     pub(crate) fields: BTreeMap<ViewId, field::FieldMark>,
     field_history: history::Histories,
     field_drag: Option<field_pointer::Drag>,
+    file_drag: file_drop::FileDrag,
     mouse_selection: reader_selection::MouseSelection,
     #[cfg(any(target_os = "android", test))]
     reader_selection: Option<reader_selection::Selection>,
@@ -356,6 +358,9 @@ pub struct Presenter<D: DataSource> {
     /// The fields `rangeFrame` reads, as painted beside `boxes`.
     ranges: std::rc::Rc<range_frame::Painted>,
     pub(crate) dirty: bool,
+    /// Unpresented picture damage left behind by a geometry-only or non-window
+    /// paint; keeps `dirty()` true without forcing repeated `boxes()` walks.
+    pub(crate) picture_dirty: bool,
     pub(crate) image_paint_pending: bool,
     /// The app's `setScheme` (`None`: follow the system) and the appearance
     /// its shell or an agent says (LLP 1061 D5); light until either does.
@@ -632,6 +637,7 @@ impl<D: DataSource> Presenter<D> {
             fields: BTreeMap::new(),
             field_history: Default::default(),
             field_drag: None,
+            file_drag: Default::default(),
             mouse_selection: Default::default(),
             #[cfg(any(target_os = "android", test))]
             reader_selection: None,
@@ -673,6 +679,7 @@ impl<D: DataSource> Presenter<D> {
             boxes_serial: 0,
             ranges: Default::default(),
             dirty: true,
+            picture_dirty: false,
             image_paint_pending: false,
             deferred_collections: None,
             media: Default::default(),
@@ -822,24 +829,15 @@ impl<D: DataSource> Presenter<D> {
         self.dirty = true;
     }
 
-    fn picture_dirty(&self) -> bool {
-        #[cfg(windows)]
-        if self
-            .surfaces
-            .direct_window
-            .as_ref()
-            .is_some_and(|w| w.repaint_owed)
-        {
-            return true;
-        }
-        self.dirty
-    }
-
     /// Whether the picture is stale.
     pub fn dirty(&self) -> bool {
         // A hold no picture has carried owes one, to carry it to a present
         // (LLP 1003.001 D9).
-        self.picture_dirty() || !self.surfaces.captures.is_empty() || self.host.holds_uncarried()
+        self.dirty
+            || self.picture_dirty
+            || !self.surfaces.captures.is_empty()
+            || self.host.holds_uncarried()
+            || self.host.runner().canvas_owed(&|_| true)
     }
 
     /// Where the pointer is drawn (`None` draws none).

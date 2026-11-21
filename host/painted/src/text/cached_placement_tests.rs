@@ -83,6 +83,16 @@ fn edited_width_matches_fresh_shaping_after_lines_move_wrap_or_change_face() {
         (format!("中🙂\n{tail}"), 65., 13., false),
         (format!("b\n{tail}"), 120., 13., false),
         (format!("b\ná\n{tail}"), 120., 19., false),
+        (format!("head\nkeep\nx\r{tail}"), 120., 19., false),
+        (format!("head\nkeep\nx\r\n{tail}"), 120., 19., true),
+        (
+            format!("head\nkeep\n🙂\u{85}\u{2029}{tail}"),
+            120.,
+            19.,
+            true,
+        ),
+        ("head\nkeep\n".into(), 120., 19., false),
+        ("".into(), 120., 19., false),
     ] {
         let next_spec = spec(&value, size);
         let next = engine.edited_field(&next_spec, Some(width), Some(&old));
@@ -117,6 +127,50 @@ fn edited_width_matches_fresh_shaping_after_lines_move_wrap_or_change_face() {
 }
 
 #[test]
+fn a_field_edit_across_styled_runs_keeps_line_offsets_and_glyph_ownership() {
+    let mut engine = engine();
+    let style =
+        StyleProps::default().with_rows(|rows| rows.white_space = exact_kernel::WhiteSpace::Pre);
+    let mut previous = None;
+    for parts in [
+        vec!["one\n", "two\r", "\n🙂\nlast"],
+        vec!["one\n", "two\r", "🙂\nlast"],
+        vec!["one\n", "", "🙂\nlast"],
+        vec!["one\n", "🙂\n", "last", ""],
+        vec!["one\n", "🙂\r", "\n", ""],
+        vec!["one\n", "🙂\r", "\n"],
+    ] {
+        let mut spec = crate::paint::text_spec(&style, "");
+        spec.runs = parts
+            .into_iter()
+            .enumerate()
+            .map(|(i, text)| {
+                let mut run = spec.strut.clone();
+                run.text = text.into();
+                run.weight = if i % 2 == 0 { 400 } else { 700 };
+                run
+            })
+            .collect();
+        let next = engine.edited_field(&spec, Some(100.), previous.as_deref());
+        let fresh = engine.layout(&spec, Some(100.));
+        let lines = |p: &Paragraph| {
+            p.source
+                .data
+                .lines
+                .iter()
+                .map(|line| (line.start, line.text.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(lines(&next), lines(&fresh));
+        assert_eq!(next.lines().lines, fresh.lines().lines);
+        for (a, b) in next.lines().lines.iter().zip(&fresh.lines().lines) {
+            assert_eq!(next.lines().glyphs_of(a), fresh.lines().glyphs_of(b));
+        }
+        previous = Some(next);
+    }
+}
+
+#[test]
 fn short_field_rows_keep_glyph_storage_compact_after_an_edit() {
     let mut engine = engine();
     let style =
@@ -129,6 +183,18 @@ fn short_field_rows_keep_glyph_storage_compact_after_an_edit() {
             &crate::paint::text_spec(&style, &format!("q{value}")),
             Some(280.),
             Some(&before),
+        );
+        let split = shaping::SPLIT_BYTES.get();
+        let middle = format!("qhead\n{}Q{}", row.repeat(128), row.repeat(128));
+        let edited = engine.edited_field(
+            &crate::paint::text_spec(&style, &middle),
+            Some(280.),
+            Some(&after),
+        );
+        assert_eq!(shaping::SPLIT_BYTES.get() - split, 1 + row.len());
+        assert_eq!(
+            edited.source.data.lines[129].text,
+            format!("Q{}", row.trim_end())
         );
         let mut lines = after.lines().clone();
         assert_eq!(lines.glyphs.len(), glyphs);

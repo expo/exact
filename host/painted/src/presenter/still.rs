@@ -80,5 +80,6 @@ impl<D: DataSource> Presenter<D> {
     /// until something else changes or the host paints anyway.
     pub(crate) fn moved_without_paint(&mut self) {
         self.dirty = false;
+        self.picture_dirty = false;
     }
 }

@@ -44,6 +44,15 @@ import {
 import { checkpoint, READER, keptAnswer } from './mount.js';
 /** Resource instances, including list members; list aggregates have no entry. */
 export const Resources = [];
+/** A source change during an ordinary request waits for its reply. Several changes
+ * while it is in flight owe one more ask (LLP 1016.002 D4). */
+export function sourceChanged(r, topic) {
+  const t = r.ticket;
+  if (!t || t.stream || t.req?.stream) return R(r, true);
+  if (!t.again) say(`changed ${topic}: ticket ${t.id} (${r.name}) lands first, then it is asked again`);
+  t.again = true;
+}
+
 let ResourceIndex = 0;
 export let Ticket = 0;
 export const ticket = () => Ticket,

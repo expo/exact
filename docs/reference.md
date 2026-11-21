@@ -935,11 +935,12 @@ It can return immediately or await `fetch`
 and `storage.fs` reads from `app:/`. File writes, SQLite, document handles and
 native modules are unavailable in stage 1; `secret.keep` values are read from
 the shared Keychain only during refresh. The extension never persists store
-writes. The app reloads widget timelines after a successful write readable by a refresh.
+writes. The app reloads widget timelines after a successful write readable by a refresh, once the store has been quiet for half a second, so a burst of writes asks once.
 Refresh has a 900 ms deadline starting when it begins, including boot. Each JS
 turn gets the time remaining to that deadline, rather than the app's 100 ms
 per-call budget. This leaves 100 ms below LLP 1126 D8's one-second
-line for completion and teardown. Failure or timeout uses the last good timeline
+line for completion and teardown. A store write during a refresh restarts it under
+the new store while the deadline allows. Failure or timeout uses the last good timeline
 cached in the App Group for this kind, generation and configuration, only while the app's store
 has not changed since it was cached (a store write, such as an account switch,
 expires it), or else an “Open app” placeholder,
@@ -5560,7 +5561,8 @@ column dragenter=entered dragleave=left drop=took
 | macOS | yes: every file URL Finder drags, a field forwarding the drag to its `drop` node | file URLs, else PNG or TIFF data written as `image.png` |
 | iOS | none (declared; the driver's drag forms answer `unsupported`) | file URLs, else the pasteboard's image as `image.png` |
 | tvOS | none | empty: tvOS has no pasteboard |
-| Linux, Windows, Android, terminal | none (declared; Linux and Windows drivers refuse by name) | empty: these hosts paste text only |
+| Windows | yes, files and folders in Explorer selection order, including over an editable field | empty (text only) |
+| Linux, Android, terminal | none | empty (text only) |
 
 The driver: `tap <target> drop <path…>` (files and folders), `tap <target>
 dragenter <path…>` and `tap <target> dragleave`, `type <target> paste --file

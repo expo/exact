@@ -109,9 +109,7 @@ fn groups(events: &[Event]) -> Vec<std::ops::Range<usize>> {
     while i < events.len() {
         let start = i;
         i += 1;
-        if matches!(events[start], Event::Tap(_) | Event::Type(..))
-            && events.get(i) == Some(&Event::InputLand)
-        {
+        if events[start].is_input() && events.get(i) == Some(&Event::InputLand) {
             i += 1;
         }
         while matches!(events.get(i), Some(Event::TestClock(_))) {
@@ -132,7 +130,7 @@ fn normalize(plan: &Plan, case: &mut Case) -> (Vec<String>, Vec<usize>) {
             continue;
         }
         let step = driver.step(event);
-        skip = matches!(event, Event::Tap(_) | Event::Type(..)) && !crate::settle::delivered(&step);
+        skip = event.is_input() && !crate::settle::delivered(&step);
         lines.extend(step);
         events.push(event.clone());
         kept.push(i);

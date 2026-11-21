@@ -561,7 +561,7 @@ export function sdkReport(env = process.env, { only = null, device = false, tv =
       .filter(([, onPath, xcode]) => onPath && xcode && !['/usr/bin', dirname(xcode)].includes(dirname(realpathSync(onPath))));
     rows.push(row('clang on PATH', other.length ? other.map(([tool, onPath]) => `${tool}: ${onPath}`).join(', ') : "Xcode's", "Xcode's (/usr/bin or xcrun --find)", !other.length,
       `put /usr/bin before ${[...new Set(other.map(([, onPath]) => dirname(onPath)))].join(' and ')} on PATH, or unset the toolchain manager's override`, 'iOS and macOS builds'));
-  } else if (process.platform === 'linux' && want(...CROSS_IOS_ROWS)) rows.push(...appleCrossReport(env));
+  } else if (process.platform === 'linux' && want(...CROSS_IOS_ROWS)) rows.push(...appleCrossReport(env, spawnSync, device ? ['iphoneos'] : undefined));
   // Native builds and captures take tens of gigabytes; a full disk fails them midway (LLP 1156.000 D3).
   if (!only) { const room = freeSpace(homedir()); if (room) rows.push(row('Free disk', `${room.gb} GB`, `${ROOM_GB} GB for a cold native build`, room.gb >= ROOM_GB, room.text, 'native builds')); }
   const hostName = `Hermes bundle (${hermesTarget() ?? 'no host bundle'})`;
@@ -817,6 +817,9 @@ async function newApp(path, {update = false, without = null, with: platforms = [
   // The table above is the web's (LLP 1153 D1.6): a platform the app names is checked before its first build.
   const shown = shellPath(resolve(ROOT, 'scripts/exact.mjs'));
   for (const platform of game ? [] : platforms ?? []) console.log(`Before the first ${platform} build: bun ${shown} setup --check --platform ${platform} names what it lacks (the Xcode or SDK it needs among them).`);
+  // Exact Build where this machine lacks the Apple tools exact setup does not install: Xcode, or Linux's cross SDK.
+  const appleTools = process.platform === 'linux' ? CROSS_IOS_ROWS : ['Xcode', 'iOS SDK'];
+  if (!game && (!['darwin', 'linux'].includes(process.platform) || sdkReport(process.env, { only: 'ios', device: true }).some(row => appleTools.includes(row.name) && !row.ok))) console.log(`\nThis machine lacks ${process.platform === 'linux' ? 'the Apple cross SDK and its tools' : 'Xcode'}, so it cannot build the app for iPhone. Exact Build builds it in the cloud, and AppDrop installs it on a phone: https://exact.appdrop.app/agents.md is the guide for an agent, https://exact.appdrop.app/docs the API.`);
   if (note >= 0) console.log(created.slice(note));
   if (!canBuildTools) console.log('\nA matching prebuilt tool set lets you run `bun exact.mjs contract build app.contract` and build a Contract and TypeScript app for the web. Native builds and apps with Rust code need Rust locally or a build service.');
 }

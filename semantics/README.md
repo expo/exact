@@ -331,8 +331,10 @@ most 40 chosen primitive events each, plus automatic clock advances. `--walks`,
 search; the seed defaults to the app's path. Half the walks boot fresh; the others
 replay delivered test prefixes in turn before appending events. Each choice reads
 the live rendered controls. Inputs land before the next choice. Typed values come
-from that field's authored tests, then source literals, then the generator. Every
-script also runs from a seeded store when the app persists state, with the same
+from that field's authored tests, then source literals, then the generator. Walks
+press keys on boxes and text with a `keycapture`, `key` or `keyup` handler. They
+draw from the target's authored keys and from key names in its handlers, such as
+`x`, `Escape` and `F2`. Every script also runs from a seeded store when the app persists state, with the same
 oracle answers as its empty-store run.
 
 State properties beside the `test` blocks in `app.test.contract`:
@@ -374,7 +376,13 @@ why. A property failure or type refusal fails verification; app refusals are fin
 the observation format. Leading fixed `epoch` and `time-zone` lines set the
 runner's launch facts, using Bun's Date and Intl APIs for the date and offset;
 Lean receives the resulting host facts in its oracle. `epoch now` and other
-launch settings remain undelivered. A block runs up to its first
+launch settings remain undelivered. For `type "id" key "Name"`, the runner,
+Lean and the JS target deliver keydown through `keycapture` and `key` handlers,
+then bubble keyup. Each event follows the target and its ancestors. A handler
+can stop that event with `stopPropagation()`. The event carries the chord's
+modifiers and an empty physical `code`. Tab, a held key, or a key on a field,
+control or pressable element ends the block where host behavior is needed.
+A block runs up to its first
 undeliverable step, with its location, kind and reason printed. Only a block
 that stops at its first step is `SKIP`. Expectations before the stop still
 run. The summary counts whole, partial and skipped blocks.
@@ -467,7 +475,8 @@ DIVERGE apps/counter/app.contract: increments
 `OUTSIDE` means the semantics doesn't model a construct the app uses
 ("What the semantics leaves out"), not that something is wrong. `NOTE`
 means a test's `expect` fails against the seeded oracle's data instead of
-the app's own, which is information and not a failure. `--types` also
+the app's own. A test that supplies an `answer source` opts into the oracle's
+data. A failed expectation in its authored run prints `FAIL` and fails verification. `--types` also
 runs the Lean checker on the program. `--prove <Module>` regenerates
 `Apps/<Module>.lean` and builds `Apps/Proofs/<Module>.lean` (the next
 section). `contract verify` runs `cargo run -p contract-difftest --

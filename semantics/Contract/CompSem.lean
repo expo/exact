@@ -475,6 +475,8 @@ structure RCx where
   tabs : TabCx := {}
   /-- What the instances' requests ask (LLP 1035.005.004 D2). -/
   oracle : Oracle := {}
+  /-- A changed source invalidates its readers in each live component. -/
+  changedSource : Option String := none
 
 def RCx.enter (cx : RCx) (node : Nat) (key : Value) (dup : Nat) : RCx :=
   { cx with
@@ -556,7 +558,8 @@ def csettleOwned (fuel : Nat) (cx : RCx) (C : CComponent) (f : Frame) (id : Inst
             changed := true
       if !changed then return s
       go n s
-  go (rs.length + 2) slots
+  let forget := rs.filterMap fun r => if cx.changedSource == some r.source then some (ownedArgs r.name) else none
+  go (rs.length + 2) (slots.filter fun (x, _) => !forget.contains x)
 
 /-- Resolve literal props, injects and component derives as expansion
 does. A local or state read remains a read even when its value is constant. -/
@@ -707,11 +710,12 @@ def rootEnv (p : CProgram) (slots : List (String × Value)) (st : Settled) (now 
 keeping the instances `prev` holds; `every` when the host builds every tab
 panel (`Oracle.everyTab`). -/
 def renderRoot (p : CProgram) (slots : List (String × Value)) (st : Settled) (now : F64)
-    (prev : Store) (view : List CVNode := []) (every : Bool := false) (oracle : Oracle := {}) :
+    (prev : Store) (view : List CVNode := []) (every : Bool := false) (oracle : Oracle := {})
+    (changedSource : Option String := none) :
     Result (List CVNode × Store) :=
   let env : CEnv := { prog := p, root := rootEnv p slots st now, store := [] }
   crenderTabs fuel {
-    env, prev, oracle, frame := .root, comp := p.root.name, path := [],
+    env, prev, oracle, changedSource, frame := .root, comp := p.root.name, path := [],
     provides := p.root.provides.map fun (x, e) => (x, e, .root, []),
     fill := .none, tabs := { opened := Tabs.visited (ctabIndex view), every } }
 
@@ -802,6 +806,13 @@ def cfindTestId (id : String) : List CVNode → Option CVNode
       | .some m => .some m
       | .none => cfindTestId id rest
 
+private def callHandler (p : CProgram) (o : Oracle) (c : CConfig) (h : CHandler)
+    (payload : List Value) : CConfig × Outcome :=
+  let ce : CEnv := { prog := p, root := rootEnv p c.slots c.settled c.now, store := c.store }
+  match forceAll fuel ce h.args with
+  | .error e => (c, .refused e)
+  | .ok vs => crunAction p o c h.frame h.action (vs ++ payload)
+
 def cdispatch (p : CProgram) (o : Oracle) (c : CConfig) (target : String) (event : String)
     (payload : Option Value) : CConfig × Outcome :=
   if c.poisoned then (c, .refused (.refused "poisoned")) else
@@ -813,13 +824,11 @@ def cdispatch (p : CProgram) (o : Oracle) (c : CConfig) (target : String) (event
     | .some h =>
       if payload.isSome && n.control.isSome then
         (c, .refused (.unsupported s!"a payload for a `{n.control.getD ""}` control")) else
-      let ce : CEnv := { prog := p, root := rootEnv p c.slots c.settled c.now, store := c.store }
-      match forceAll fuel ce h.args with
-      | .error e => (c, .refused e)
-      | .ok vs => crunAction p o c h.frame h.action (vs ++ payload.toList)
+      callHandler p o c h payload.toList
 
 /-- `Contract.advance`, with the root's actions run as above. -/
-def cadvance (p : CProgram) (o : Oracle) (c : CConfig) (t : F64) : CConfig × Outcome :=
+def cadvance (p : CProgram) (o : Oracle) (c : CConfig) (t : F64)
+    (applyChanges : Bool := false) : CConfig × Outcome :=
   let due (c : CConfig) : Option (Timer × Nat) :=
     (c.timers.zipIdx).foldl (fun best (tm, i) =>
       if tm.next ≤ t then
@@ -853,11 +862,11 @@ def cadvance (p : CProgram) (o : Oracle) (c : CConfig) (t : F64) : CConfig × Ou
         -- as `advance` and the runner's `needs_apply` return: one due after
         -- other fires waits for the next step, and one that fires ends
         -- this step at its own time, or at `now` when it is overdue.
-        if tm.change && n + 1 < timerFireLimit then (c, .ok) else
+        if tm.change && !applyChanges && n + 1 < timerFireLimit then (c, .ok) else
         let timers := c.timers.set i tm.fired
         let c := { c with timers, now := if tm.change && tm.next < c.now then c.now else tm.next }
         match crunAction p o c .root tm.action [] with
-        | (c, .ok) => if tm.change then (c, .ok) else go n c
+        | (c, .ok) => if tm.change && !applyChanges then (c, .ok) else go n c
         | (c, out) => (c, out)
   if t < c.now then (c, .ok) else go timerFireLimit c
 
@@ -901,8 +910,53 @@ def cstep (p : CProgram) (o : Oracle) (c : CConfig) : Observe.Event → CConfig 
   | .clock ms => cadvance p o c (c.now + ms)
   | .other t e v => cdispatchAt p o c t e v
 
-/-- `Contract.Observe.run` for the unexpanded file. -/
-def crun (p : CProgram) (o : Oracle) (events : List Observe.Event) : List String := Id.run do
+/-- Ask the root and component readers of a changed source again in the same render. -/
+def csourceChanged (p : CProgram) (o : Oracle) (c : CConfig) (source : String) : CConfig × Outcome :=
+  let rp := rootProgram p
+  let names := (rp.resources.filter (·.source == source)).map (·.name)
+  match settle rp o c.slots c.now c.settled names with
+  | .error e => (c, .refused e)
+  | .ok st =>
+    match renderRoot p c.slots st c.now c.store c.view o.everyTab o (some source) with
+    | .error e => ({ c with settled := st, poisoned := true }, .poisoned e)
+    | .ok (view, live) => ({ c with settled := st, view, store := live }, .ok)
+
+private def ckeyPath (id : String) : List CVNode → Option (List CVNode)
+  | [] => .none
+  | n@{ children, .. } :: rest =>
+    if n.testId == .some id then .some [n] else
+    match ckeyPath id children with
+    | .some path => .some (n :: path)
+    | .none => ckeyPath id rest
+
+private def ckeyPhase (p : CProgram) (o : Oracle) (c : CConfig) (out : Outcome)
+    (handlers : List (CVNode × String)) (payload : List Value) : CConfig × Outcome := Id.run do
+  let mut current := c
+  let mut status := out
+  for (node, event) in handlers do
+    if current.poisoned then break
+    if let .some h := node.handlers.find? (·.event == event) then
+      let arity := ((p.actionIn h.frame h.action).map (·.params.length)).getD 0
+      let before := current.commands.length
+      let (next, result) := callHandler p o current h (payload.take (arity - h.args.length))
+      current := next
+      if let .ok := status then status := result
+      if (current.commands.drop before).any (·.1 == "stopPropagation") then break
+  return (current, status)
+
+private def ckeyPress (p : CProgram) (o : Oracle) (c : CConfig) (target key : String) (downInfo upInfo : Value) :
+    CConfig × Outcome := Id.run do
+  if (cfindTestId target c.view).isNone then
+    return (c, .refused (.refused s!"no element `{target}`"))
+  let (ready, due) := cadvance p o c c.now true
+  let path := (ckeyPath target ready.view).getD (ready.view.take 1)
+  let down := path.map (·, "keycapture") ++ path.reverse.map (·, "key")
+  let (pressed, status) := ckeyPhase p o ready due down [.str key, downInfo]
+  let up := (ckeyPath target pressed.view).getD (pressed.view.take 1)
+  return ckeyPhase p o pressed status (up.reverse.map (·, "keyup")) [.str key, upInfo]
+
+/-- Observe the same script against the unexpanded component tree. -/
+def crun (p : CProgram) (o : Oracle) (events : List Observe.ScriptEvent) : List String := Id.run do
   let rp := rootProgram p
   let (c, out) := cboot p o
   match out with
@@ -910,9 +964,15 @@ def crun (p : CProgram) (o : Oracle) (events : List Observe.Event) : List String
   | _ => return ["== boot", Observe.outcome out]
   let mut acc := Observe.lines rp "boot" c.toConfig out 0
   let mut c := c
+  let mut o := o
   for e in events do
     let before := c.commands.length
-    let (c', out) := cstep p o c e
+    o := e.oracle rp.resources o
+    let (c', out) := match e, e.event with
+      | .keyPress target key _ down up, _ => ckeyPress p o c target key down up
+      | .answerSource source _ _, _ => csourceChanged p o c source
+      | _, some event => cstep p o c event
+      | _, none => (c, Outcome.ok)
     acc := acc ++ Observe.lines rp e.label c'.toConfig out before
     c := c'
     match out with

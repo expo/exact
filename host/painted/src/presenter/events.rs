@@ -980,7 +980,11 @@ impl<D: DataSource> Presenter<D> {
         ))
     }
 
-    fn pointer_target(&mut self, id: ViewId, at: Option<(f32, f32)>) -> Result<(f32, f32), String> {
+    pub(super) fn pointer_target(
+        &mut self,
+        id: ViewId,
+        at: Option<(f32, f32)>,
+    ) -> Result<(f32, f32), String> {
         self.boxes();
         if self.host.route_visibility(id).1 || self.placement_hidden(id) {
             return Err(format!("view {id} is hidden or inert"));

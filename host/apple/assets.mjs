@@ -1053,12 +1053,14 @@ export function wrapFramework(frameworks, loose, name, app, platform = 'iPhoneOS
   writePrivacyManifest(dirname(layout.info), [layout.binary], { mac: platform === 'MacOSX', ...privacy });
 }
 
+/** The version and build number a framework's Info.plist carries: the app's, from EXACT_VERSION and EXACT_BUILD_NUMBER. */
+export const frameworkVersions = (env = process.env) => ({ CFBundleVersion: env.EXACT_BUILD_NUMBER ?? '1', CFBundleShortVersionString: env.EXACT_VERSION ?? '0.1.0' });
 /** The Info.plist `wrapFramework` writes. `signedGpuProduct` keys its signed copy on it, so
  * a change to what a framework declares makes the next build package it again. */
-export function frameworkInfo(name, app, platform) {
+export function frameworkInfo(name, app, platform, versions = frameworkVersions()) {
   return {
     CFBundleExecutable: name, CFBundleIdentifier: `${app.id}.${name.toLowerCase().replaceAll('_', '-')}`, CFBundleName: name,
-    CFBundlePackageType: 'FMWK', CFBundleVersion: process.env.EXACT_BUILD_NUMBER ?? '1', CFBundleShortVersionString: process.env.EXACT_VERSION ?? '0.1.0',
+    CFBundlePackageType: 'FMWK', ...versions,
     ...(platform === 'iPhoneOS' ? { UIRequiredDeviceCapabilities: ['arm64'] } : {}),
     CFBundleSupportedPlatforms: [platform], ...(platform === 'MacOSX' ? { LSMinimumSystemVersion: app.manifest.host?.macos?.minimumOS ?? '14.0' } : { MinimumOSVersion: app.manifest.host?.ios?.minimumOS ?? '17.0' }),
   };

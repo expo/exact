@@ -220,10 +220,7 @@ fn prepare_use(node: &Node, subst: &mut Subst<'_, Expr>, ctx: &mut Ctx<'_>) -> O
         .filter(|p| !p.ty.as_ref().is_some_and(is_action))
     {
         let expr = &child_subst[&prop.name];
-        if !matches!(
-            expr,
-            Expr::Ident(..) | Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(..)
-        ) {
+        if computed(expr) {
             ctx.thunks.push(Thunk {
                 name: format!("@argument:{}#{n}", prop.name),
                 expr: expr.clone(),

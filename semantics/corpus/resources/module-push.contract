@@ -14,3 +14,16 @@ test "an unsupported target uses the package's substitute"
   expect text "status" == "false unknown"
   expect text "idle" == "false granted"
   expect text "placeholder" == "false unknown"
+
+test "the imported permission source changes without opening a system prompt"
+  answer source pushPermissionState with {"available":true,"state":"denied"}
+  expect text "status" == "true denied"
+  expect text "placeholder" == "false unknown"
+  answer source pushPermissionState with {"state":"granted"}
+  expect text "status" == "true granted"
+  expect text "placeholder" == "false unknown"
+
+test "a permission starts on the host and changes after boot"
+  expect text "status" == "false unknown"
+  answer source pushPermissionState with {"available":true,"state":"granted"}
+  expect text "status" == "true granted"

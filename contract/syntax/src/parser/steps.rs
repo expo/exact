@@ -121,7 +121,10 @@ impl Parser {
             !launch_word(s).is_empty()
                 && !matches!(
                     s,
-                    Step::FailFetch { .. } | Step::AnswerFetch { .. } | Step::Prefer { .. }
+                    Step::FailFetch { .. }
+                        | Step::AnswerFetch { .. }
+                        | Step::AnswerSource { .. }
+                        | Step::Prefer { .. }
                 )
         });
         if let Some(late) = late {
@@ -539,7 +542,7 @@ impl Parser {
                 return self.err(
                     "syntax-expected-step",
                     format!(
-                    "expected `tap`, `scroll`, `type`, `pick`, `authorize`, `presence`, `clock`, `resize`, `reload`, `close`, `back`, `screenshot`, `fail fetch`, `answer fetch`, `pass fetch`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `stored`, `fresh`, `before data`, `fail fetch`), found {}",
+                    "expected `tap`, `scroll`, `type`, `pick`, `authorize`, `presence`, `clock`, `resize`, `reload`, `close`, `back`, `screenshot`, `fail fetch`, `answer fetch`, `answer source`, `pass fetch`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `stored`, `fresh`, `before data`, `fail fetch`), found {}",
                     describe(&other)
                 ),
                 )
@@ -1086,6 +1089,16 @@ impl Parser {
                 let prefix = self.launch_str("drop stream", "a URL prefix")?;
                 Step::DropStream { prefix, span }
             }
+            "answer" if self.at_ident("source") => {
+                self.next();
+                let source = self.ident()?.0;
+                self.expect_word("with")?;
+                Step::AnswerSource {
+                    source,
+                    value: self.json_value()?,
+                    span,
+                }
+            }
             "answer" => {
                 self.expect_word("fetch")?;
                 let prefix = self.launch_str("answer fetch", "a URL prefix")?;
@@ -1352,6 +1365,7 @@ pub(super) fn launch_word(step: &Step) -> &'static str {
         Step::BeforeData { .. } => "before data",
         Step::FailFetch { .. } => "fail fetch",
         Step::AnswerFetch { .. } => "answer fetch",
+        Step::AnswerSource { .. } => "answer source",
         _ => "",
     }
 }
@@ -1369,6 +1383,9 @@ pub fn same_launch(a: &Step, b: &Step) -> bool {
         Step::FailFetch { prefix: y, .. } | Step::AnswerFetch { prefix: y, .. },
     ) = (a, b)
     {
+        return x == y;
+    }
+    if let (Step::AnswerSource { source: x, .. }, Step::AnswerSource { source: y, .. }) = (a, b) {
         return x == y;
     }
     if let (Step::Stored { name: x, .. }, Step::Stored { name: y, .. }) = (a, b) {

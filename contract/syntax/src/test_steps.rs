@@ -204,6 +204,18 @@ pub enum Step {
         /// Where.
         span: Span,
     },
+    /// `answer source <name> with <json>`: what the named source answers
+    /// from here on, under `contract verify`'s runner. Leading a test (or the
+    /// file), before boot; later, a step that asks again every resource
+    /// reading the source.
+    AnswerSource {
+        /// The source, as the app's resources and sends name it.
+        source: String,
+        /// The answer as JSON text; a record may leave fields out.
+        value: String,
+        /// Where.
+        span: Span,
+    },
     /// `pass fetch "…"`: the prefix stops failing or answering (LLP 1103).
     PassFetch {
         /// The prefix a `fail fetch` armed.

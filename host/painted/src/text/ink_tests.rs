@@ -928,6 +928,7 @@ fn typing_at_the_start_of_a_textarea_shapes_places_and_indexes_only_the_edited_l
     p.frame();
     for (i, ch) in "abcd".chars().enumerate() {
         let before = ink::build_work();
+        let split = shaping::SPLIT_BYTES.get();
         let shaped = shaping::shape_line_calls();
         let broken = shaping::break_calls().1;
         let placed = lines::EXTRACTED.with(std::cell::Cell::get);
@@ -943,6 +944,13 @@ fn typing_at_the_start_of_a_textarea_shapes_places_and_indexes_only_the_edited_l
             .unwrap();
         assert!(value.starts_with(&"abcd"[..=i]));
         assert_eq!(value.len(), document.len() + i + 1);
+        let caret = p.field_selection(field);
+        assert_eq!((caret.start, caret.end), ((i + 1) as u32, (i + 1) as u32));
+        assert_eq!(
+            shaping::SPLIT_BYTES.get() - split,
+            65 + i,
+            "split bytes after {ch}"
+        );
         assert_eq!(shaping::shape_line_calls() - shaped, 1, "shapes after {ch}");
         assert_eq!(shaping::break_calls().1 - broken, 1, "breaks after {ch}");
         assert_eq!(

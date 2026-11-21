@@ -542,7 +542,7 @@ extension Agent {
                         // Return the down reply first. Common-mode blocks let
                         // the agent's next request run inside AppKit tracking.
                         CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
-                            NSApp.sendEvent(e)
+                            ExactAgentWindow.sendPointerEvent(e)
                         }
                         CFRunLoopWakeUp(CFRunLoopGetMain())
                     } else {
@@ -557,7 +557,7 @@ extension Agent {
                         }
                     }
                 } else {
-                    NSApp.sendEvent(e)
+                    ExactAgentWindow.sendPointerEvent(e)
                 }
             }
         }
@@ -894,14 +894,14 @@ extension Agent {
             presenter.menus.pointer(down)
             // Through the application, as a hand's click comes: its local
             // monitors see it, then the window (#107).
-            NSApp.sendEvent(down)
+            ExactAgentWindow.sendPointerEvent(down)
             // The queue's wrapper identifies the release, but its window location
             // is re-derived from the window server's and lands elsewhere by the
             // window's screen offset: a pointer tap pressed down and released
             // outside its button. Send this click's own release.
             presenter.menus.pointer(up)
             if release.takeQueued(from: NSApp) != nil {
-                NSApp.sendEvent(up)
+                ExactAgentWindow.sendPointerEvent(up)
             }
         }
         var reply: [String: Any] = ["tapped": Int(v.id), "at": at, "delivery": "platform"]
@@ -1346,10 +1346,23 @@ extension Agent {
     }
 }
 
-/// WebKit reads this public AppKit property when deciding whether to run a
-/// page's frames and timers. At the driver's reserved level, a covered window
-/// and its sheets still have live pages; their window-server order never changes.
 open class ExactAgentWindow: NSWindow {
+    private static weak var pointerWindow: NSWindow?
+
+    /// An inactive process cannot make its window key. AppKit checks the target
+    /// window's key state when a native table receives a primary button event.
+    fileprivate static func sendPointerEvent(_ event: NSEvent) {
+        let previous = pointerWindow
+        pointerWindow = NSApp.isActive ? nil : event.window
+        defer { pointerWindow = previous }
+        NSApp.sendEvent(event)
+    }
+
+    public override var isKeyWindow: Bool { self === Self.pointerWindow || super.isKeyWindow }
+
+    /// WebKit reads this public AppKit property when deciding whether to run a
+    /// page's frames and timers. At the driver's reserved level, a covered window
+    /// and its sheets still have live pages; their window-server order never changes.
     public override var occlusionState: NSWindow.OcclusionState {
         let actual = super.occlusionState
         var parent: NSWindow = self

@@ -68,7 +68,7 @@ component UIGallery
     main viewport-fit="cover" navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow width="100%" height="100%" background-color="light-dark(#ffffff, #000000)" color="light-dark(#111827, #f3f4f6)"
       for e in stack(nav) key=e.id
         if e.name == "sections"
-          column navigationKey=`${e.id}` navigationScroll="gallery-sidebar" position="absolute" inset=0 display="flex" flex-direction="column"
+          column navigationKey=`${e.id}` navigationScroll="gallery-sidebar" padding-top=(host == "macos" ? "env(safe-area-inset-top)" : "0px") position="absolute" inset=0 display="flex" flex-direction="column"
             header
               text "UI Gallery" role="heading" aria-level=1
             list id="gallery-sidebar" testId="gallery-sidebar" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0

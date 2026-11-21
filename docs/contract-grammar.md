@@ -812,6 +812,7 @@ launch        = "size" NUMBER "x" NUMBER NL          (* written 1200x800 *)
               | "before" "data" NL                   (* the first step does not wait for data *)
               | "prefer" IDENT { "." IDENT } ( IDENT | STRING ) NL
                                                      (* media feature, page fact, or permission.<module>; before observations *)
+              | "answer" "source" IDENT "with" json NL (* what a source answers under verify *)
               | "fail" "fetch" STRING [ "times" NUMBER ] NL ; (* armed before the first data load *)
 step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
                                                      (* bytes into an input; or clock ticks: bpm, ms *)
@@ -846,6 +847,7 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
               | "reload" NL
               | "fail" "fetch" STRING [ "times" NUMBER ] NL (* later fetches whose URL starts with it fail *)
               | "pass" "fetch" STRING NL             (* it stops failing *)
+              | "answer" "source" IDENT "with" json NL (* the source answers anew; its readers ask again *)
               | "drop" "stream" STRING NL           (* ends open streams whose URL starts with it *)
               | "prefer" IDENT STRING NL             (* quoted media preference or root-font-size *)
               | "request" METHOD STRING [ json ] [ "as" ( IDENT | STRING ) ] [ "expect" NUMBER ] NL
@@ -979,8 +981,10 @@ frame         = "only" "writes" { IDENT } NL          (* no other root slot chan
 `after`. The braces in the EBNF mean repetition, not written braces. A read names a
 whole root state or derive by its bare identifier; fields and indices are stage 2.
 Before any script runs, verify rejects a derive whose body, dependencies or called
-functions reach a resource, mutation status, clock or geometry read. A mutation's
-result slot is a state and may be named.
+functions reach a mutation status, clock or geometry read, or, outside `always`, a
+resource. An `always` line checks each printed configuration, where the runner and
+Lean print the same oracle answer; an `after` pair could see a resource change on a
+step that commits nothing. A mutation's result slot is a state and may be named.
 
 `always` checks every printed configuration, including boot. `stays v` means that a
 previous observation equal to `v` must remain `v`. `after "action"` reads the value
@@ -1124,6 +1128,19 @@ where `fail fetch` is a rejected connection. These fixtures cover buffered HTTP
 requests, including a worker's; streams, long polls, redirects, `exactBodyTo`,
 delays and response files are not supported.
 
+`answer source pairing with {"phase": "code", "code": "123456"}` supplies a typed
+answer in `contract verify`. It applies to every argument list for that source.
+An omitted record field keeps its previous value for those arguments, or the
+seeded value on the first call. Verify checks the named fields against the
+declared result type before running the test. A failed expectation in a test
+that supplies a source answer fails verification.
+
+A leading line supplies the answer at boot. A test's leading line replaces the
+file's default for that source. After boot the line changes the answer and asks
+the source's live readers again in one commit. Lean and `--js` replay the
+changes in order. On a device, `agent --test` reports tests that require these
+oracle answers as skipped.
+
 `request POST "/polls/1/votes" {"option": 2} as bob`
 (LLP 1116.006 D8) is the driver, not the app, writing through the app's server as
 another person: a method, a path in quotes under the server URL app.ts calls (its
@@ -1197,7 +1214,10 @@ is the slider's accessibility increment or decrement, the call VoiceOver's
 swipe makes; its halves are that step's keydown with the move, then its
 keyup, and a held key's repeats move it again);
 `down` and `up` are the two halves, and `for <ms>` holds it that long on the
-virtual clock (`down` or `up` together with `for` is refused). `reload` restarts the app on the store it had: the
+virtual clock (`down` or `up` together with `for` is refused). `contract verify`
+delivers a key press to a box or text and its ancestors, including the release.
+Tab and keys on controls or elements with `press` stop verification at that step
+(`semantics/README.md`). `reload` restarts the app on the store it had: the
 web page reloads its current URL in the same profile, keeping Back and Forward
 entries; each separate test starts with an isolated history. A native app
 relaunches on the same scratch store with a fresh navigation stack. On Linux,
@@ -2400,8 +2420,8 @@ action wheeled(e: WheelEvent)
 scroll wheel=wheeled …
 ```
 
-`drop` is DOM's `drop` of files dragged in from outside the app (Finder, the
-desktop) onto the innermost node that declares it: its `DragEvent` is
+`drop` is DOM's `drop` of files dragged in from outside the app (Finder, Explorer
+or the desktop) onto the innermost node that declares it: its `DragEvent` is
 `offsetX`, `offsetY`, `files` (a `string[]` of `doc:` handles minted as a
 picker's are, LLP 1069.010
 D1, readable under `fs.read doc:/`) and the modifiers. Files of any type are
@@ -2410,10 +2430,11 @@ taken, and a dropped folder is a folder's handle (`fs.stat` says
 path. A file drag over an `input` or a `textarea` inside such a node (or
 declaring `drop` itself) is the node's, as on the web, where its listener
 prevents the field's own drop: the field inserts no path text. A text drag,
-and a file drag over a field with no `drop` above it, stay the field's. Web
-(a browser without `getAsFileSystemHandle` hands read-only copies) and macOS;
-iOS, Linux, Windows, Android and the terminal have none. The driver's `tap
-<target> drop <path…>` drags files and folders in.
+and a file drag over a field with no `drop` above it, stay the field's. Web,
+macOS and Windows deliver files in the order the source supplies them. A
+browser without `getAsFileSystemHandle` hands the app read-only copies.
+iOS, Linux, Android and the terminal have no external file drops. The
+driver's `tap <target> drop <path…>` drags files and folders in.
 
 `dragenter` and `dragleave` are DOM's, as a node hears them when it ignores
 moves between its own descendants (the `currentTarget.contains(relatedTarget)`
@@ -2442,8 +2463,8 @@ column dragenter=entered dragleave=left drop=took position="relative"
       text "Drop files to attach" role="status"
 ```
 
-Web and macOS, as `drop`. The driver's `tap <target> dragenter <path…>`
-brings a drag of those files over the target and leaves it there (for a
+Web, macOS and Windows support these events. The driver's
+`tap <target> dragenter <path…>` brings a drag of those files over the target and leaves it there (for a
 screenshot); `tap <target> drop <path…>` drops it, and `tap <target>
 dragleave` takes it away undropped.
 

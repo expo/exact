@@ -740,9 +740,11 @@ at bounded uses
 ([A feature's requests](#a-features-requests)). A child used under `for` owns row state keyed to that row's identity.
 Stable keys matter when content is inserted, removed, filtered, or reordered.
 A child's derive is compiled once per component use and evaluated at each read
-in that instance's frame. Non-atomic prop and inject arguments share that
-representation. These calculations use the reader's list and call budgets;
-a trap belongs to the reader. They are not cached. A root derive evaluates
+in that instance's frame. A computed prop or inject argument shares that
+representation. Each read uses the reader's list and call budgets and can
+trap there. A literal stays inline, so the web compiler can fold
+`size == "sm"` when a component takes the enum argument `size="sm"`.
+A root derive evaluates
 once per settlement, so put a calculation there when its result should be
 shared across readers. Action-body reads, action calls and `fn` calls still
 expand in place. The web build reports its entry's bytes and each component's
@@ -6259,7 +6261,7 @@ application, so its local event monitors see them). Other carriers answer
 `delivery: "unsupported"` for forms they cannot carry; Firefox and WebKit carry
 clicks and wheels at a point, including wheels with modifiers. A word a form does
 not use is refused by name. `tap stage wheel 0 -20 modifiers Control`
-is a pinch's wheel; `tap world drop a.board` drags a file in (web, macOS). Plain canvas taps and held contacts are
+is a pinch's wheel; `tap world drop a.board` drags a file in (web, macOS, Windows). Plain canvas taps and held contacts are
 fingers, so their platform pointer identity and retained press history can differ
 from a mouse's; use the intended physical input when comparing game saves.
 

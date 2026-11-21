@@ -192,6 +192,7 @@ fn ligature_features(bits: u8) -> Vec<(&'static [u8; 4], u16)> {
 }
 
 /// A hard line: its text and its one shaped layout.
+#[derive(Clone)]
 pub(super) struct HardLine {
     /// Byte offset in the canonical runs, after the preceding separator.
     pub(super) start: usize,
@@ -263,79 +264,10 @@ pub(super) struct ShapeData {
     pub(super) run_metrics: Vec<FontMetrics>,
 }
 
-/// A hard line's runs: (range in the line, run index).
-type Pieces = Vec<(Range<usize>, usize)>;
-/// A hard line's inline boxes: (byte offset in the line, run index).
-type Boxes = Vec<(usize, usize)>;
-/// A hard line's runs with no text: (byte offset in the line, run index).
-type Empties = Vec<(usize, usize)>;
-
-/// The paragraph's text split into hard lines as cosmic-text split it: at
-/// each paragraph separator (`\r\n` one), the last empty piece dropped,
-/// and one empty line for no text. Each line keeps its byte offset and
-/// pieces: (range in the line, run index). An inline box's run has no text,
-/// only its place in the line (LLP 1011.002), and so has a run with no text.
-fn hard_lines(spec: &Spec) -> Vec<(usize, String, Pieces, Boxes, Empties)> {
-    let mut out: Vec<(usize, String, Pieces, Boxes, Empties)> =
-        vec![(0, String::new(), Vec::new(), Vec::new(), Vec::new())];
-    let mut offset = 0;
-    let mut after_cr = false;
-    for (index, run) in spec.runs.iter().enumerate() {
-        if run.inline.is_some() {
-            after_cr = false;
-            let (_, text, _, boxes, _) = out.last_mut().expect("one line");
-            boxes.push((text.len(), index));
-            continue;
-        }
-        if run.text.is_empty() {
-            let (_, text, _, _, empties) = out.last_mut().expect("one line");
-            empties.push((text.len(), index));
-            continue;
-        }
-        let mut rest = run.text.as_str();
-        while !rest.is_empty() {
-            let split = rest.find(super::PARAGRAPH_BREAKS);
-            let (piece, sep) = match split {
-                Some(at) => {
-                    let ch = rest[at..].chars().next().expect("found");
-                    (&rest[..at], Some((at, ch)))
-                }
-                None => (rest, None),
-            };
-            let consumed = sep.map_or(rest.len(), |(at, ch)| at + ch.len_utf8());
-            if !piece.is_empty() {
-                after_cr = false;
-                let (_, text, pieces, _, _) = out.last_mut().expect("one line");
-                let start = text.len();
-                text.push_str(piece);
-                pieces.push((start..text.len(), index));
-            }
-            match sep {
-                Some((at, ch)) => {
-                    // `\r\n` is one break.
-                    let next = offset + consumed;
-                    if ch == '\n' && after_cr && piece.is_empty() {
-                        out.last_mut().expect("one line").0 = next;
-                    } else {
-                        out.push((next, String::new(), Vec::new(), Vec::new(), Vec::new()));
-                    }
-                    after_cr = ch == '\r';
-                    rest = &rest[at + ch.len_utf8()..];
-                }
-                None => rest = "",
-            }
-            offset += consumed;
-        }
-    }
-    if out.len() > 1
-        && out
-            .last()
-            .is_some_and(|l| l.1.is_empty() && l.3.is_empty() && l.4.is_empty())
-    {
-        out.pop();
-    }
-    out
-}
+mod hard_lines;
+#[cfg(test)]
+pub(super) use hard_lines::SPLIT_BYTES;
+use hard_lines::{hard_lines, Boxes, Empties, LineEdit, Pieces};
 
 /// A hard line's inline-box room (`Run::edges`), each room shaped as advance
 /// on one cluster, which line breaking keeps it with: a run's start on the
@@ -514,11 +446,17 @@ impl ShapedSource {
                 (start..end, cache::same_run_style(old, new))
             })
             .collect();
-        let pieces = hard_lines(&spec);
-        let mut edges = run_edges(&spec, &pieces);
-        let mut lines = Vec::with_capacity(pieces.len());
-        let count = pieces.len();
-        for (h, (start, text, runs, boxes, _)) in pieces.into_iter().enumerate() {
+        let edit = LineEdit::between(&spec, old);
+        let mut pieces = hard_lines(&spec, edit.bytes.clone());
+        if !edit.suffix.is_empty() && pieces.last().is_some_and(|line| line.0 == edit.bytes.end) {
+            pieces.pop();
+        }
+        let count = edit.prefix.len() + pieces.len() + edit.suffix.len();
+        let mut lines = Vec::with_capacity(count);
+        lines.extend_from_slice(edit.prefix);
+        let edges = run_edges(&spec, &pieces);
+        for ((start, text, runs, boxes, _), edges) in pieces.into_iter().zip(edges) {
+            let h = lines.len();
             if let Some(line) = old.and_then(|s| {
                 s.matching_line(h, count, |i, line| {
                     // Indentation and balancing give the first line its own shaping inputs.
@@ -593,7 +531,7 @@ impl ShapedSource {
             });
             builder.set_line_break_override(Some(CHROME));
             let mut layout = builder.build(&text);
-            let Edges { rooms, box_leads } = std::mem::take(&mut edges[h]);
+            let Edges { rooms, box_leads } = edges;
             for room in &rooms {
                 layout.add_lead(room.at, room.w);
             }
@@ -626,6 +564,12 @@ impl ShapedSource {
                     box_leads,
                 }),
             });
+        }
+        if let Some(first) = edit.suffix.first() {
+            lines.extend(edit.suffix.iter().map(|line| HardLine {
+                start: edit.bytes.end + (line.start - first.start),
+                shape: line.shape.clone(),
+            }));
         }
         catalog.release_scratch(text_bytes);
         drop(catalog);

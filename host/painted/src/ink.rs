@@ -455,7 +455,14 @@ impl Backend for Ink {
         }
     }
     fn needs_geometry_paint(&self) -> bool {
-        true
+        #[cfg(windows)]
+        {
+            exact_ink::device::d3d11::fields::enabled()
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
     }
     fn trim(&mut self, hidden: bool) {
         self.encoder = Encoder::new(self.size[0], self.size[1]);

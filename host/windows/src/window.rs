@@ -25,6 +25,7 @@ use winit::{
 
 mod edit_menu;
 mod file_dialog;
+mod file_drop;
 mod frames;
 mod lifecycle;
 mod presents;
@@ -323,7 +324,7 @@ pub(super) fn run<D: DataSource + Default + 'static>(
     let timers = crate::timers::Timers::new(move |fired| {
         let _ = timer_proxy.send_event(crate::accessibility::Event::Timer(fired));
     });
-    let mut state = App::<D> {
+    let state = App::<D> {
         service_causes: 0,
         proxy,
         accessibility: None,
@@ -382,7 +383,10 @@ pub(super) fn run<D: DataSource + Default + 'static>(
         tray: None,
         presents: Default::default(),
     };
-    if let Err(e) = event_loop.run_app(&mut state) {
+    let state = Rc::new(std::cell::RefCell::new(state));
+    let result = event_loop.run_app(&mut file_drop::Window::new(state.clone()));
+    let mut state = state.borrow_mut();
+    if let Err(e) = result {
         eprintln!("exact-windows: {e}");
         state.failed = true;
     }
@@ -925,6 +929,7 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
             Window::default_attributes()
                 .with_no_redirection_bitmap(self.direct)
                 .with_visible(false)
+                .with_drag_and_drop(false)
                 .with_title(&self.name)
                 .with_window_icon(crate::icon::small())
                 .with_taskbar_icon(crate::icon::large())

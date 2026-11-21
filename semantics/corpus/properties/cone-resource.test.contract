@@ -1,2 +1,9 @@
 always "resource through derives"
   expect state outer whole
+
+test "a property observes the derive after its source changes"
+  answer source fetchData with {"counts":{"n":3,"label":"kept"}}
+  expect state outer == 4
+  answer source fetchData with {"counts":{"n":9}}
+  expect state outer == 10
+  expect text "other" == "kept 9"

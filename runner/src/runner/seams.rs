@@ -25,14 +25,19 @@ use super::{CommitReceipt, DataSource, Runner, RunnerError};
 use crate::presence::{Backend, Occupancy};
 use crate::request::{Dispatch, Work};
 use crate::{HoldAnswer, StoreWrite};
-use exact_plan::ModulesRow;
+use exact_plan::{ModulesRow, Value};
 use serde_json::{json, Value as Json};
 use std::any::Any;
+
+/// A verification host's typed answer for a source it supplies.
+type SourceAnswer<D> = fn(&mut D, &str, &[Value]) -> Option<Result<Value, super::DataError>>;
 
 /// What a runner links of its optional parts, chosen by an entry's
 /// composition (LLP 1047.001 D11): every part for the plain boots
 /// ([`ModuleLinks::ALL`]).
 pub struct ModuleLinks<D: DataSource> {
+    /// A verification host can supply a source before dispatch to its usual owner.
+    pub source_answer: Option<SourceAnswer<D>>,
     /// Native modules (LLP 1133.002), for a plan with module, view or event
     /// rows.
     pub modules: &'static dyn Modules<D>,
@@ -63,6 +68,7 @@ impl<D: DataSource> Copy for ModuleLinks<D> {}
 impl<D: DataSource> ModuleLinks<D> {
     /// Every part.
     pub const ALL: ModuleLinks<D> = ModuleLinks {
+        source_answer: None,
         modules: &LinkedModules,
         tools: &LinkedTools,
         presence: &LinkedPresence,
@@ -73,6 +79,7 @@ impl<D: DataSource> ModuleLinks<D> {
 
     /// No part: the core alone.
     pub const NONE: ModuleLinks<D> = ModuleLinks {
+        source_answer: None,
         modules: &NoModules,
         tools: &NoTools,
         presence: &NoPresence,
@@ -97,6 +104,7 @@ impl<D: DataSource> ModuleLinks<D> {
         let modules =
             plan.modules.is_empty() && plan.views.is_empty() && plan.module_events.is_empty();
         ModuleLinks {
+            source_answer: self.source_answer,
             modules: match modules {
                 true => &NoModules,
                 false => self.modules,
