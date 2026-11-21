@@ -222,17 +222,7 @@ const conv = (v, t, target) => { const a = arrays(v, t, answered.get(target)); a
 // module announces it (LLP 1016.002): an answer's topics are its call's
 // `watches`, which rt.js keeps on the resource it asked for.
 let watching = null, page = null, load = null;
-// A resource with a request in flight is not asked now: that request's
-// reply lands, then it is asked again (`t.again`, rt.js), once however many
-// changes came; a stream, or nothing in flight, is asked now (LLP 1016.002
-// D4, the runner's `changed`).
-const changed = (r, topic) => {
-  const t = r.ticket;
-  if (!t || t.stream || t.req?.stream) return rt.R(r, true);
-  if (!t.again) rt.journal.push(`t=${rt.clock.now} changed ${topic}: ticket ${t.id} (${r.name}) lands first, then it is asked again`);
-  t.again = true;
-};
-const announce = (topic, why) => rt.commit(() => { const m = moduleWatched.get(topic); for (const r of rt.Resources) if (r.watches?.has(topic) || m?.has(r.source)) changed(r, topic); }, `${why} ${topic}`);
+const announce = (topic, why) => rt.commit(() => { const m = moduleWatched.get(topic); for (const r of rt.Resources) if (r.watches?.has(topic) || m?.has(r.source)) rt.sourceChanged(r, topic); }, `${why} ${topic}`);
 const watch = topic => answering.call.watches.add(topic);
 // Another tab's durable write (LLP 1030.004 D2): its topics cross between the app's tabs on a channel of the app's,
 // after the write lands, and a tab never hears its own. An answer's read watches them, which opens the channel: in

@@ -440,9 +440,9 @@ impl Input {
                         let code = code.0;
                         let down = value != 0;
                         match code {
-                            // BTN_LEFT (a mouse) and BTN_TOUCH (a
-                            // touchscreen). Both are a primary press.
-                            0x110 | 0x14a => out.push(InputEvent::Button(down)),
+                            0x110 if down => out.push(InputEvent::MouseDown(e.timestamp())),
+                            0x14a if down => out.push(InputEvent::TouchDown),
+                            0x110 | 0x14a => out.push(InputEvent::ButtonUp),
                             // BTN_RIGHT, BTN_MIDDLE.
                             0x111 => out.push(InputEvent::Aux(2, down)),
                             0x112 => out.push(InputEvent::Aux(4, down)),
@@ -882,22 +882,22 @@ mod pointer_tests {
     #[test]
     fn a_report_keeps_diagonal_intent_atomic_and_boundaries_separate() {
         let mut report = PointerReport::default();
-        let mut out = vec![InputEvent::Button(true)];
+        let mut out = vec![InputEvent::MouseDown(std::time::UNIX_EPOCH)];
         report.relative.0 += 10.;
         report.relative.1 += 30.;
         report.flush(&mut out);
         report.absolute.0 = Some(0.2);
         report.absolute.1 = Some(0.3);
         report.flush(&mut out);
-        out.push(InputEvent::Button(false));
+        out.push(InputEvent::ButtonUp);
         report.flush(&mut out);
         assert_eq!(
             out,
             vec![
-                InputEvent::Button(true),
+                InputEvent::MouseDown(std::time::UNIX_EPOCH),
                 InputEvent::Motion(10., 30.),
                 InputEvent::Absolute(Some(0.2), Some(0.3)),
-                InputEvent::Button(false)
+                InputEvent::ButtonUp
             ]
         );
     }

@@ -34,3 +34,9 @@ test('the hooks write what is admitted, remove an empty prop and journal a value
   expect(attrs.get('data-datatransferurl')).toBe('https://example.com/1016');
   expect(journal).toEqual(['drag: refused: app:/data/b.pdf: an app:/ file cannot be dragged on the web', 'drag: refused: app:/data/b.pdf: an app:/ file cannot be dragged on the web']);
 });
+
+test('install hears the contacts and the drags on the page\'s document', () => {
+  const heard = [];
+  install({ PropHooks: {}, say() {}, document: { addEventListener: (type, _, capture) => heard.push([type, !!capture]) } });
+  expect(heard).toEqual([['pointerdown', true], ['pointerup', true], ['dragstart', false]]);
+});

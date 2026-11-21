@@ -125,11 +125,18 @@ pub(crate) fn boot(
     let every = oracle.prerendered;
     let launch = oracle.launch.clone();
     let mut r = exact_runner::time::launching_with(launch, || {
-        Runner::boot_stored(
+        Runner::boot_with_delivery_linked(
+            exact_runner::RunnerLinks::ALL,
+            exact_runner::ModuleLinks {
+                source_answer: Some(Oracle::platform_answer),
+                ..exact_runner::ModuleLinks::ALL
+            },
             plan,
             oracle,
             Kernel::with_monospace(),
+            None,
             snapshot,
+            Default::default(),
             Default::default(),
             "/",
         )
@@ -137,6 +144,7 @@ pub(crate) fn boot(
     // A module's per-target answers are the web's, as the JS target gives them, not those of the machine the
     // runner was built for: Photo Editor's wallet can pay on macOS and cannot on Linux, so a walk there never
     // reached its print sizes (#465). The answers boot asked for are asked again for the web.
+    r.set_device_links(exact_runner::runner::DeviceLinks::ALL);
     r.set_module_target("web");
     if let (_, Some(error)) = r.apply_announced() {
         return Err(error);
@@ -190,7 +198,12 @@ fn state(r: &mut Runner<Oracle>, plan: &Plan, out: &mut Vec<String>) {
     // The runner's own scroll to a fragment (LLP 1153 D5) is a host's effect
     // of a router change once its content settles, which the semantics leaves
     // out as it leaves out the change a host is sent: no app wrote it.
-    for c in (r.take_commands().into_iter()).filter(|c| c.name != "scrollToFragment") {
+    let mut commands = std::mem::take(&mut r.data().commands);
+    commands.extend(r.take_commands());
+    for c in commands
+        .into_iter()
+        .filter(|c| c.name != "scrollToFragment")
+    {
         let args: String = c.args.iter().map(|a| format!(" {}", value(a))).collect();
         out.push(format!("command {}{args}", c.name));
     }
@@ -238,6 +251,10 @@ pub struct Control {
     pub id: String,
     pub press: Option<String>,
     pub input: Option<String>,
+    /// Keyboard handlers on a target whose default the verifier can deliver.
+    pub key_actions: Vec<String>,
+    /// Candidate key values from those handlers.
+    pub keys: Vec<String>,
 }
 
 impl Driver {
@@ -261,7 +278,7 @@ impl Driver {
                     // Only what the runner answers itself: one of the app's
                     // sources may be asked nothing at boot (a closed `when`,
                     // LLP 1161.002) and asked of the oracle later.
-                    if answers_itself(&plan, res) {
+                    if answers_itself(&plan, res) && !r.data().scripted(plan.str(res.source)) {
                         let name = plan.str(res.name);
                         // Only an answer: a read held, refused or failed shows
                         // its placeholder, which `failed`, `pending` and
@@ -307,7 +324,19 @@ impl Driver {
         state(r, &self.plan, &mut before);
         let mut out = vec![format!("== {}", event.label())];
         let journaled = r.journal_start() + r.journal().count();
-        let ((result, receipts), ran) = r.trace_commits(|r| apply(r, event));
+        let ((result, receipts), mut ran) = r.trace_commits(|r| apply(r, event));
+        if let Event::Answer(source, _) = event {
+            if receipts > 0 || result.is_err() {
+                let outcome = if r.is_poisoned() {
+                    "poisoned"
+                } else if result.is_err() {
+                    "refused"
+                } else {
+                    "ok"
+                };
+                ran.push(format!("ran source {source} {outcome}"));
+            }
+        }
         let traced = ran
             .iter()
             .filter(|l| l.starts_with("ran ") && l.ends_with(" ok"))
@@ -381,20 +410,39 @@ impl Driver {
                     return None;
                 }
                 let (node, _) = r.site_of(view)?;
-                let action = |kind| {
+                let handler = |kind| {
                     self.plan
                         .node(node)
                         .handlers
                         .iter()
                         .map(|h| self.plan.handler(h))
                         .find(|h| h.event == kind)
-                        .map(|h| self.plan.str(self.plan.action(h.action).name).to_string())
+                        .map(|h| self.plan.action(h.action))
                 };
+                let action = |kind| handler(kind).map(|a| self.plan.str(a.name).to_string());
+                let mut key_actions = Vec::new();
+                let mut keys = Vec::new();
+                if host_default(r, view, "").is_none() {
+                    use exact_plan::EventKind::{Key, Keycapture, Keyup};
+                    for a in [Keycapture, Key, Keyup].into_iter().filter_map(handler) {
+                        key_actions.push(self.plan.str(a.name).to_string());
+                        for i in exact_runner::vm::instructions(self.plan.code(a.body)).flatten() {
+                            if i.op == exact_plan::Opcode::Str {
+                                let chord = self.plan.str(exact_plan::StrId(i.args[0] as u32));
+                                if is_key_value(chord) && !keys.iter().any(|k| k == chord) {
+                                    keys.push(chord.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
                 Some(Control {
                     id,
                     press: action(exact_plan::EventKind::Press),
                     input: action(exact_plan::EventKind::Input)
                         .or_else(|| action(exact_plan::EventKind::Change)),
+                    key_actions,
+                    keys,
                 })
             })
             .collect()
@@ -457,6 +505,156 @@ fn deliver(
     (advanced.error.map_or(Ok(()), Err), advanced.receipts.len())
 }
 
+/// Each DOM event gets its own path. A keydown handler can remove the focus
+/// before keyup, and stopping one event does not stop the other.
+fn key_route(
+    r: &Runner<Oracle>,
+    target: ViewId,
+    key: &exact_runner::KeyboardEvent,
+    release: bool,
+) -> Vec<(ViewId, HostEvent)> {
+    use exact_plan::EventKind;
+    let mut capture = Vec::new();
+    let mut bubble = Vec::new();
+    let mut at = Some(target);
+    while let Some(id) = at {
+        let handlers = r.handlers_of(id);
+        if release {
+            if handlers.contains(&EventKind::Keyup) {
+                bubble.push((id, HostEvent::Keyup(key.clone())));
+            }
+        } else {
+            if handlers.contains(&EventKind::Keycapture) {
+                capture.push((id, HostEvent::Keycapture(key.clone())));
+            }
+            if handlers.contains(&EventKind::Key) {
+                bubble.push((id, HostEvent::Key(key.clone())));
+            }
+        }
+        at = r.kernel().node(id).and_then(|n| n.parent);
+    }
+    capture.reverse();
+    capture.extend(bubble);
+    capture
+}
+
+fn key(
+    r: &mut Runner<Oracle>,
+    view: ViewId,
+    chord: &str,
+) -> (Result<(), exact_runner::RunnerError>, usize) {
+    // The work due fires before the keydown, so the route is the tree the
+    // key meets. A change action yields for the host to apply its receipts.
+    let (mut result, mut receipts) = (Ok(()), 0);
+    loop {
+        let a = r.advance_timed(r.now_ms());
+        receipts += a.receipts.len();
+        if let Some(error) = a.error {
+            result = Err(error);
+        }
+        if !a.needs_apply {
+            break;
+        }
+        if receipts >= exact_runner::TIMER_FIRE_LIMIT
+            && r.timer_due_ms().is_some_and(|at| at <= r.now_ms())
+        {
+            result = Err(exact_runner::RunnerError::TimerFireLimit {
+                limit: exact_runner::TIMER_FIRE_LIMIT,
+            });
+            break;
+        }
+    }
+    let due_commands = r.take_commands();
+    r.data().commands.extend(due_commands);
+    for (release, key) in [false, true]
+        .into_iter()
+        .zip(crate::script::key_press(chord))
+    {
+        let target = r
+            .kernel()
+            .node(view)
+            .map(|_| view)
+            .or_else(|| r.roots().first().copied());
+        let Some(target) = target else { break };
+        for (id, event) in key_route(r, target, &key, release) {
+            let outcome = r.dispatch(id, event);
+            receipts += usize::from(outcome.is_ok());
+            result = result.and(outcome.map(drop));
+            let commands = r.take_commands();
+            let stop = commands.iter().any(|c| c.name == "stopPropagation");
+            r.data().commands.extend(commands);
+            if stop {
+                break;
+            }
+        }
+    }
+    (result, receipts)
+}
+
+/// Infer walk candidates from single characters, function keys and common
+/// named keys in a handler. Tests can supply other keys explicitly.
+fn is_key_value(chord: &str) -> bool {
+    const NAMED: &[&str] = &[
+        "Enter",
+        "Escape",
+        "Tab",
+        "Backspace",
+        "Delete",
+        "Insert",
+        "Home",
+        "End",
+        "PageUp",
+        "PageDown",
+        "ArrowUp",
+        "ArrowDown",
+        "ArrowLeft",
+        "ArrowRight",
+        "ContextMenu",
+        "Shift",
+        "Control",
+        "Alt",
+        "Meta",
+    ];
+    let event = exact_runner::KeyboardEvent::chord(chord);
+    let key = event.key.as_str();
+    let function = key
+        .strip_prefix('F')
+        .and_then(|n| n.parse::<u8>().ok())
+        .is_some_and(|n| (1..=24).contains(&n));
+    key.chars().count() == 1 || function || NAMED.contains(&key)
+}
+
+/// Why a press of `key` at `view` does something the runner leaves to the
+/// host, if it does: the key's default there (docs/contract-grammar.md,
+/// "Then the default"). A field takes typing and Enter's commit, a control
+/// or an element with a `press` handler is pressed by Enter or Space, and
+/// Tab moves the focus anywhere. Only a box or a text without `press` keeps
+/// nothing for the host, so only there is a key delivered.
+pub(crate) fn host_default(r: &Runner<Oracle>, view: ViewId, key: &str) -> Option<String> {
+    let node = r.kernel().node(view)?;
+    if exact_runner::KeyboardEvent::chord(key).key == "Tab" {
+        return Some("Tab moves the focus".into());
+    }
+    if !matches!(
+        node.node_type,
+        exact_kernel::NodeType::View | exact_kernel::NodeType::Text
+    ) {
+        return Some(format!("a key at a {:?} node", node.node_type));
+    }
+    r.handlers_of(view)
+        .contains(&exact_plan::EventKind::Press)
+        .then(|| "Enter and Space press an element with a press handler".into())
+}
+
+impl Driver {
+    /// [`host_default`] at the first element with `test_id`; none when no
+    /// element has it, and the delivery says so.
+    pub fn key_default(&self, test_id: &str, key: &str) -> Option<String> {
+        let r = self.runner.as_ref()?;
+        host_default(r, find(r, test_id)?, key)
+    }
+}
+
 /// Whether the runner answers resource `res` itself, so that its boot value
 /// is a host fact: one of its own sources (but a transport's or MIDI port's,
 /// which change as they play), or a single read of a native module's name,
@@ -482,12 +680,14 @@ fn module_moved(r: &mut Runner<Oracle>, plan: &Plan) -> Vec<String> {
     let facts = facts.borrow();
     facts
         .iter()
-        .filter(|(name, _, _)| {
+        .filter(|(name, _, boot)| {
             plan.resources.iter().any(|res| {
-                plan.str(res.name) == name && plan.module_named(plan.str(res.source)).is_some()
-            })
+                let source = plan.str(res.source);
+                plan.str(res.name) == name
+                    && plan.module_named(source).is_some()
+                    && !r.data().scripted(source)
+            }) && r.resource(name).map(value) != Some(value(boot))
         })
-        .filter(|(name, _, boot)| r.resource(name).map(value) != Some(value(boot)))
         .map(|(name, _, _)| {
             format!("{MODULE_MOVED}: resource {name} no longer holds its boot answer")
         })
@@ -532,6 +732,10 @@ pub(crate) fn apply(
             ),
             None => (Err(exact_runner::RunnerError::UnknownView(0)), 0),
         },
+        Event::Key(t, k) => match find(r, t) {
+            Some(view) => key(r, view, k),
+            None => (Err(exact_runner::RunnerError::UnknownView(0)), 0),
+        },
         Event::Clock(ms) | Event::TestClock(ms) => {
             let a = r.advance_timed(r.now_ms() + ms);
             (a.error.map_or(Ok(()), Err), a.receipts.len())
@@ -539,6 +743,17 @@ pub(crate) fn apply(
         Event::Land | Event::InputLand => {
             let a = r.land_then();
             (a.error.map_or(Ok(()), Err), a.receipts.len())
+        }
+        Event::Answer(source, json) => {
+            if let Err(why) = r.data().answer(source, json) {
+                let error = exact_runner::DataError::Interface(why);
+                let resource = source.clone();
+                return (Err(exact_runner::RunnerError::Data { resource, error }), 0);
+            }
+            match r.changed(exact_runner::ResourceChange::Source(source)) {
+                Ok(receipt) => (Ok(()), usize::from(receipt.is_some())),
+                Err(e) => (Err(e), 0),
+            }
         }
     }
 }

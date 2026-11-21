@@ -1435,4 +1435,12 @@ extension Presenter {
         return menus.logicalParent(of: view) ?? groupedLists?.logicalParent(of: view) ?? navigation.lifted?.parent(of: view) ?? view.superview
     }
 }
+
+extension NodeView {
+    /// The node and its authored ancestors, including those UIKit holds in another container.
+    package var authoredLine: some Sequence<NodeView> {
+        sequence(first: self as UIView, next: { [weak presenter] in presenter?.authoredParent(of: $0) ?? $0.superview })
+            .lazy.compactMap { $0 as? NodeView }
+    }
+}
 #endif

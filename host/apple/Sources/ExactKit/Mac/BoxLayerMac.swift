@@ -449,7 +449,7 @@ extension NodeView {
     var standsOnSplitGround: Bool {
         guard !wrote("background_color"), case .object(let role)? = style["background_color"],
               role["sys"]?.string == "windowBackgroundColor", let presenter,
-              presenter.navigation.stackSplit.active else { return false }
+              presenter.navigation.stackSplit.active || presenter.navigation.stackSplit.hasInspector else { return false }
         return isDescendant(of: presenter.viewport) || presenter.navigation.stackSplit.pane(holding: self) != nil
     }
 }

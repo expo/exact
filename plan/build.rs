@@ -984,10 +984,7 @@ fn main() {
             );
         }
     }
-    let _ = writeln!(
-        w,
-        "        w.u32(self.strings.len() as u32); for s in &self.strings {{ w.string(s); }}"
-    );
+    let _ = writeln!(w, "        self.strings.encode(&mut w);");
     let _ = writeln!(
         w,
         "        w.u32(self.code.len() as u32); w.bytes(&self.code);"
@@ -1239,7 +1236,7 @@ fn main() {
     }
     let _ = writeln!(w, "        if snapshot_entry != snapshot.unwrap_or(\"\") {{ return Err(PlanError::WrongEntry); }}");
     let _ = writeln!(w, "        if (surface == \"terminal\") != terminal {{ return Err(PlanError::WrongSurface {{ plan: if surface.is_empty() {{ \"gui\".into() }} else {{ surface }}, host: if terminal {{ \"terminal\" }} else {{ \"gui\" }} }}); }}");
-    // A string is its 4-byte length and its bytes.
+    // The string pool owns the literal and qualified records.
     let _ = writeln!(
         w,
         "        let strings = crate::pool::Strings::decode(&mut r, bytes, lent)?;"

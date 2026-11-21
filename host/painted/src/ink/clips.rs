@@ -8,6 +8,13 @@ pub(super) struct Group {
     clear: Option<[f64; 4]>,
     opacity: f32,
     pub(super) transform: Option<Transform>,
+    pub(super) drawn: Option<Scissor>,
+}
+
+impl Group {
+    pub(super) fn can_bound_composite(&self) -> bool {
+        self.transform.is_none_or(|ts| ts.is_identity()) && self.opacity.is_finite()
+    }
 }
 
 impl Ink {
@@ -20,6 +27,7 @@ impl Ink {
             clear: self.draw_clear.replace([0.; 4]),
             opacity,
             transform: None,
+            drawn: None,
         });
     }
 
@@ -31,8 +39,7 @@ impl Ink {
             bounds.intersect(Scissor::from_rect(mask.rect))
         });
         // Keep the texels next to the mask bounds for linear filtering.
-        let [x, y, width, height] = bounds.rect();
-        let sample_bounds = Scissor::from_rect([x - 1., y - 1., width + 2., height + 2.]);
+        let sample_bounds = bounds.outset(1);
         let mut encoder = self.encoder.fork();
         let mask_in_first_draw = mask.is_some_and(|mask| {
             if encoder.push_clip(Clip::Coverage(mask_clip(mask))).is_ok() {
@@ -108,6 +115,7 @@ impl Ink {
         }
         let target = self.flush()?;
         let group = self.groups.pop().unwrap();
+        let can_bound = group.can_bound_composite();
         self.encoder = group.parent;
         self.draw_target = group.target;
         self.draw_clear = group.clear;
@@ -128,8 +136,18 @@ impl Ink {
             instance.flags |= flags::LAYER_MASK;
             bindings.color = mask;
         }
+        let viewport = Scissor::full(self.size);
+        let bounds = if can_bound {
+            let Some(drawn) = group.drawn else {
+                return Ok(());
+            };
+            // Keep the neighboring texels used by linear filtering.
+            drawn.outset(1).intersect(viewport)
+        } else {
+            viewport
+        };
         self.encoder
-            .push_unclipped(instance, bindings, self.size)
+            .push_unclipped_in(instance, bindings, bounds)
             .map_err(|_| Error::Invalid("group composition".into()))
     }
 

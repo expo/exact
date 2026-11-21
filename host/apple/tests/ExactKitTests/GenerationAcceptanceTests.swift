@@ -4,10 +4,70 @@ import CExact
 import XCTest
 #if os(macOS)
 import AppKit
+@testable import ExactImages
 #endif
 @testable import ExactKit
 
 final class GenerationAcceptanceTests: XCTestCase {
+    #if os(macOS)
+    func testAReplacementReadsTheNewPublicationForARetainedImage() throws {
+        _ = NSApplication.shared
+        let app = ExactApp.shared
+        let previous = app.lastPlan.map { ExactGeneration(plan: $0, assets: app.resolver, token: app.selectedToken, module: app.lastModule) }
+        let name = "assets/cover.png"
+        let plan = try TableFixture.plan("component App\n  view\n    image \"\(name)\" width=32 height=32\n")
+        func assets(width: Int) throws -> AssetResolver {
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: 2,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+            let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            return try AssetResolver(root: app.assetRoot, verified: [name: png])
+        }
+        let makeLoader = ImageLink.makeLoader
+        ImageLink.makeLoader = { RasterLoader() }
+        defer { ImageLink.makeLoader = makeLoader }
+        app.installInitial(ExactGeneration(plan: plan, assets: try assets(width: 3)))
+        let session = app.makeSession(label: "published-image")
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 80, height: 80), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer {
+            session.destroy(); window.close()
+            if let previous { app.installInitial(previous) } else {
+                app.installInitial(ExactGeneration(plan: plan, assets: app.resolver, token: 754))
+                _ = app.fallBackFromInitial(reason: "fixture finished")
+            }
+        }
+        window.contentView = ExactView(session: session)
+        window.orderFront(nil)
+        XCTAssertNil(session.boot(size: window.contentLayoutRect.size).error)
+        let image = try XCTUnwrap(session.presenter.views.values.first { $0.kind == "image" })
+        waitFor("first publication decoded") { image.raster?.image.naturalSize.width == 3 }
+
+        let unreadable = AssetResolver(root: app.assetRoot, names: [name]) { _ in throw CocoaError(.fileReadCorruptFile) }
+        let result = app.applyGeneration(ExactGeneration(plan: plan, assets: unreadable)) {
+            XCTFail("unreadable image reached durable commit"); return false
+        }
+        guard case .refused = result else { return XCTFail("expected a refusal, got \(result)") }
+        XCTAssertNotNil(unreadable.refusal)
+        XCTAssertEqual(image.raster?.image.naturalSize.width, 3)
+
+        let replacement = try assets(width: 7)
+        XCTAssertEqual(app.applyGeneration(ExactGeneration(plan: plan, assets: replacement)) { true }, .applied)
+        XCTAssertTrue(session.presenter.views[image.id] === image)
+        waitFor("replacement publication decoded") { image.raster?.image.naturalSize.width == 7 }
+        let generation = image.loadGeneration
+        let unchanged = try AssetResolver(root: app.assetRoot, verified: [name: XCTUnwrap(replacement.bytes(name))])
+        XCTAssertEqual(app.applyGeneration(ExactGeneration(plan: plan, assets: unchanged)) { true }, .applied)
+        XCTAssertEqual(image.loadGeneration, generation, "identical published bytes keep the decoded picture")
+
+        let removed = try TableFixture.plan("component App\n  view\n    text \"Done\"\n")
+        let unused = AssetResolver(root: app.assetRoot, names: [name]) { _ in
+            XCTFail("a removed picture was read"); return nil
+        }
+        XCTAssertEqual(app.applyGeneration(ExactGeneration(plan: removed, assets: unused)) { true }, .applied)
+        XCTAssertNil(session.presenter.views[image.id])
+    }
+    #endif
+
     func testRefusedPreparationDoesNotRegisterItsFontsInTheProcess() throws {
         #if os(macOS)
         _ = NSApplication.shared

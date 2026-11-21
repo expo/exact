@@ -16,42 +16,41 @@ use crate::analysis::{Boundary, CharInfo};
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub(crate) struct ClusterData {
     pub(crate) info: ClusterInfo,
-    /// Cluster flags (see impl methods for details).
-    pub(crate) flags: u16,
-    /// Style index for this cluster.
-    pub(crate) style_index: u16,
-    /// Number of glyphs in this cluster (0xFF = single glyph stored inline)
-    pub(crate) glyph_len: u8,
-    /// Number of text bytes in this cluster
-    pub(crate) text_len: u8,
-    /// If `glyph_len == 0xFF`, then `glyph_offset` is a glyph identifier,
+    /// Number of glyphs in this cluster.
+    pub(crate) glyph_len: u32,
+    /// For an inline glyph, `glyph_offset` is a glyph identifier,
     /// otherwise, it's an offset into the glyph array with the base
     /// taken from the owning run.
     pub(crate) glyph_offset: u32,
     /// Offset into the text for this cluster
-    pub(crate) text_offset: u16,
+    pub(crate) text_offset: u32,
     /// Advance width for this cluster
     pub(crate) advance: f32,
 }
 
 impl ClusterData {
-    pub(crate) const LIGATURE_START: u16 = 1;
-    pub(crate) const LIGATURE_COMPONENT: u16 = 2;
+    const LIGATURE_START: u8 = 1;
+    const LIGATURE_COMPONENT: u8 = 2;
+    const INLINE_GLYPH: u8 = 4;
+
+    pub(crate) fn has_inline_glyph(self) -> bool {
+        self.info.flags & Self::INLINE_GLYPH != 0
+    }
 
     #[inline(always)]
     pub(crate) fn is_ligature_start(self) -> bool {
-        self.flags & Self::LIGATURE_START != 0
+        self.info.flags & Self::LIGATURE_START != 0
     }
 
     #[inline(always)]
     pub(crate) fn is_ligature_component(self) -> bool {
-        self.flags & Self::LIGATURE_COMPONENT != 0
+        self.info.flags & Self::LIGATURE_COMPONENT != 0
     }
 
     #[inline(always)]
     pub(crate) fn text_range(self, run: &RunData) -> Range<usize> {
         let start = run.text_range.start + self.text_offset as usize;
-        start..start + self.text_len as usize
+        start..start + self.info.source_char().len_utf8()
     }
 }
 
@@ -59,16 +58,11 @@ impl ClusterData {
 pub(crate) struct ClusterInfo {
     boundary: Boundary,
     source_char: char,
+    flags: u8,
+    pub(crate) style_index: u16,
 }
 
 impl ClusterInfo {
-    pub(crate) fn new(boundary: Boundary, source_char: char) -> Self {
-        Self {
-            boundary,
-            source_char,
-        }
-    }
-
     // Returns the boundary type of the cluster.
     pub(crate) fn boundary(self) -> Boundary {
         self.boundary
@@ -396,7 +390,7 @@ impl<B: Brush> LayoutData<B> {
         };
         let cluster = &mut self.clusters[c];
         cluster.advance += amount;
-        if cluster.glyph_len != 0xFF {
+        if !cluster.has_inline_glyph() {
             let start = glyph_start + cluster.glyph_offset as usize;
             let end = start + cluster.glyph_len as usize;
             if let Some(last) = self.glyphs[start..end].last_mut() {
@@ -429,7 +423,7 @@ impl<B: Brush> LayoutData<B> {
             return;
         };
         let data = &mut self.clusters[cluster];
-        if data.glyph_len != 0xFF {
+        if !data.has_inline_glyph() {
             return;
         }
         self.hyphenated.push((cluster, *data));
@@ -455,7 +449,7 @@ impl<B: Brush> LayoutData<B> {
             return 0.0;
         };
         let data = &mut self.clusters[cluster];
-        if data.glyph_len != 0xFF {
+        if !data.has_inline_glyph() {
             return 0.0;
         }
         self.hyphenated.push((cluster, *data));
@@ -684,7 +678,7 @@ impl<B: Brush> LayoutData<B> {
                 }
                 if !nearly_zero(spacing) {
                     cluster.advance += spacing;
-                    if cluster.glyph_len != 0xFF {
+                    if !cluster.has_inline_glyph() {
                         let start = run.glyph_start + cluster.glyph_offset as usize;
                         let end = start + cluster.glyph_len as usize;
                         let glyphs = &mut self.glyphs[start..end];
@@ -737,7 +731,7 @@ impl<B: Brush> LayoutData<B> {
                     for (offset, cluster) in clusters.iter().enumerate() {
                         let index = run.cluster_range.start + offset;
                         let boundary = cluster.info.boundary();
-                        let style = &self.styles[cluster.style_index as usize];
+                        let style = &self.styles[cluster.info.style_index as usize];
                         let prev_text_wrap_mode = text_wrap_mode;
                         text_wrap_mode = style.text_wrap_mode;
                         if boundary == Boundary::Mandatory
@@ -874,7 +868,7 @@ impl<B: Brush> LayoutData<B> {
                             break 'items;
                         }
                         let wrapped = text_wrap_mode == TextWrapMode::Wrap;
-                        text_wrap_mode = self.styles[cluster.style_index as usize].text_wrap_mode;
+                        text_wrap_mode = self.styles[cluster.info.style_index as usize].text_wrap_mode;
                         if cluster.info.boundary() == Boundary::Line
                             && wrapped
                             && !cluster.is_ligature_component()
@@ -1259,7 +1253,7 @@ enum ClusterType {
     Newline,
 }
 
-impl From<&ClusterType> for u16 {
+impl From<&ClusterType> for u8 {
     fn from(cluster_type: &ClusterType) -> Self {
         match cluster_type {
             ClusterType::LigatureStart => ClusterData::LIGATURE_START,
@@ -1329,23 +1323,25 @@ fn push_cluster(
     cluster_type: ClusterType,
     inline_glyph_id: Option<u32>,
 ) {
-    let glyph_len = (total_glyphs - glyph_offset) as u8;
+    let glyph_len = total_glyphs - glyph_offset;
+    let mut flags = (&cluster_type).into();
 
     let (final_glyph_len, final_glyph_offset, final_advance) = match cluster_type {
         ClusterType::LigatureComponent => {
             // Ligature components have no glyphs, only advance.
             debug_assert_eq!(glyph_len, 0);
-            (0_u8, 0_u32, advance)
+            (0, 0, advance)
         }
         ClusterType::Newline => {
             // Newline clusters are stripped of their glyph contribution.
             debug_assert_eq!(glyph_len, 1);
-            (0_u8, 0_u32, 0.0)
+            (0, 0, 0.0)
         }
         _ if inline_glyph_id.is_some() => {
             // Inline glyphs are stored inline within `ClusterData`
             debug_assert_eq!(glyph_len, 0);
-            (0xFF_u8, inline_glyph_id.unwrap(), advance)
+            flags |= ClusterData::INLINE_GLYPH;
+            (1, inline_glyph_id.unwrap(), advance)
         }
         ClusterType::Regular | ClusterType::LigatureStart => {
             // Regular and ligature start clusters maintain their glyphs and advance.
@@ -1355,13 +1351,15 @@ fn push_cluster(
     };
 
     clusters.push(ClusterData {
-        info: ClusterInfo::new(char_info.0.boundary, cluster_start_char.1),
-        flags: (&cluster_type).into(),
-        style_index: char_info.1,
+        info: ClusterInfo {
+            boundary: char_info.0.boundary,
+            source_char: cluster_start_char.1,
+            flags,
+            style_index: char_info.1,
+        },
         glyph_len: final_glyph_len,
-        text_len: cluster_start_char.1.len_utf8() as u8,
         glyph_offset: final_glyph_offset,
-        text_offset: cluster_start_char.0 as u16,
+        text_offset: cluster_start_char.0 as u32,
         advance: final_advance,
     });
 }

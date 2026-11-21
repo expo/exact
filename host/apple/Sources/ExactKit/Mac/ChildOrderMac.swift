@@ -21,7 +21,7 @@ extension Presenter {
         }
         let leaving = current.filter { ($0 as? NodeView).map { !$0.paintGhost } ?? false && !wanted.contains(ObjectIdentifier($0)) }
         let native = current.filter { !($0 is NodeView) && !($0 is FlightSlot) }
-        ordered = native + ordered + leaving
+        ordered = native.filter { !($0 is DataTableScrollView) } + ordered + leaving + native.filter { $0 is DataTableScrollView }
         guard !ordered.elementsEqual(current, by: { $0 === $1 }) else { return }
         var ranks = Dictionary(uniqueKeysWithValues: ordered.enumerated().map { (ObjectIdentifier($0.element), $0.offset) })
         withUnsafeMutablePointer(to: &ranks) { context in

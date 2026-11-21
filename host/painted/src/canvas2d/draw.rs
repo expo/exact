@@ -18,7 +18,7 @@
 //! - **Patterns** repeat both ways in tiny-skia; `repeat-x`, `repeat-y` and
 //!   `no-repeat` mask the shape to the tiled band.
 
-use super::{blend, color, Env, Object, Replayer, Style};
+use super::{blend, color, CachedImage, Env, Object, Replayer, Style};
 use exact_canvas::list::Record;
 use std::sync::Arc;
 use tiny_skia::{
@@ -227,6 +227,10 @@ fn box_pass(src: &[f32], dst: &mut [f32], w: usize, h: usize, r: usize, horizont
     }
 }
 
+pub(super) fn premultiply_color(c: [f64; 4], a: f32) -> PremultipliedColorU8 {
+    premultiply(c, a)
+}
+
 fn premultiply(c: [f64; 4], a: f32) -> PremultipliedColorU8 {
     let a = (c[3] as f32 * a).clamp(0.0, 1.0);
     let ch = |v: f64| ((v as f32 / 255.0 * a) * 255.0).round() as u8;
@@ -256,7 +260,7 @@ fn stop_color(stops: &[(f32, [f64; 4])], t: f32) -> [f64; 4] {
 
 impl Replayer {
     /// A style's source for this paint.
-    pub(super) fn source(&self, style: Style, env: &Env<'_>) -> Source {
+    pub(super) fn source(&mut self, style: Style, env: &Env<'_>) -> Source {
         let alpha = self.state.alpha;
         let id = match style {
             Style::Color(c) => return Source::Color(color(c, alpha)),
@@ -296,27 +300,38 @@ impl Replayer {
                 repetition,
                 transform,
             }) => {
-                let Some(pixmap) = self.image(*image, env) else {
+                let (image, repetition, transform) = (*image, *repetition, *transform);
+                let Some(cached) = self.image(image, env) else {
                     return Source::Nothing;
                 };
                 Source::Pixmap {
-                    pixmap,
-                    space: self.device().pre_concat(*transform),
+                    pixmap: cached.pixels,
+                    space: self.device().pre_concat(transform),
                     spread: SpreadMode::Repeat,
                     quality: self.quality(),
                     opacity: alpha,
-                    band: (*repetition != 0).then_some(*repetition),
+                    band: (repetition != 0).then_some(repetition),
                 }
             }
             _ => Source::Nothing,
         }
     }
 
-    fn image(&self, id: u32, env: &Env<'_>) -> Option<Arc<Pixmap>> {
-        match self.objects.get(&id)? {
-            Object::Image(src) => env.images.get(src).cloned(),
-            _ => None,
+    fn image(&mut self, id: u32, env: &Env<'_>) -> Option<CachedImage> {
+        let src = match self.objects.get(&id)? {
+            Object::Image(src) => src.as_str(),
+            _ => return None,
+        };
+        let found = env.images.get(src).cloned();
+        if let Some(reads) = self.image_reads.as_mut() {
+            let ptr = found
+                .as_ref()
+                .map_or(0, |img| Arc::as_ptr(&img.pixels) as usize);
+            if !reads.iter().any(|(name, _)| name == src) {
+                reads.push((src.to_owned(), ptr));
+            }
         }
+        found
     }
 
     fn quality(&self) -> FilterQuality {
@@ -389,7 +404,7 @@ impl Replayer {
         Some(mask)
     }
 
-    fn shadowed(&self) -> bool {
+    pub(super) fn shadowed(&self) -> bool {
         let s = &self.state;
         s.shadow_color[3] > 0.0 && (s.shadow_blur > 0.0 || s.shadow_offset != (0.0, 0.0))
     }
@@ -399,6 +414,7 @@ impl Replayer {
         if matches!(src, Source::Nothing) {
             return;
         }
+        self.cleared = false;
         let mode = blend(self.state.composite);
         let extent = exact_canvas::composite_clips_extent(self.state.composite);
         let band = self.band(&src);
@@ -470,12 +486,17 @@ impl Replayer {
     /// `drawImage`: the source rectangle of a decoded handle into the
     /// destination under the author matrix.
     pub(super) fn draw_image(&mut self, r: &Record<'_>, env: &Env<'_>) {
-        let Some(image) = self.image(r.at(0) as u32, env) else {
+        let Some(cached) = self.image(r.at(0) as u32, env) else {
             return;
         };
-        let f = |i: usize| r.at(i) as f32;
-        let (sx, sy, sw, sh) = (f(1), f(2), f(3), f(4));
-        let (dx, dy, dw, dh) = (f(5), f(6), f(7), f(8));
+        let (sx64, sy64, sw64, sh64) = (r.at(1), r.at(2), r.at(3), r.at(4));
+        let (dx64, dy64, dw64, dh64) = (r.at(5), r.at(6), r.at(7), r.at(8));
+        if self.blit_whole_pixels(&cached, [sx64, sy64, sw64, sh64], [dx64, dy64, dw64, dh64]) {
+            return;
+        }
+        let image = cached.pixels;
+        let (sx, sy, sw, sh) = (sx64 as f32, sy64 as f32, sw64 as f32, sh64 as f32);
+        let (dx, dy, dw, dh) = (dx64 as f32, dy64 as f32, dw64 as f32, dh64 as f32);
         // Sample only the source rectangle: crop to the whole pixels it
         // covers, so filtering never reaches past it.
         let crop = IntRect::from_ltrb(
@@ -498,21 +519,6 @@ impl Replayer {
             .pre_translate(dx, dy)
             .pre_scale(dw / sw, dh / sh)
             .pre_translate(ox - sx, oy - sy);
-        let whole = |v: f32| (v - v.round()).abs() < 1e-3;
-        if whole(sx)
-            && whole(sy)
-            && whole(sw)
-            && whole(sh)
-            && sw > 0.0
-            && sh > 0.0
-            && dw > 0.0
-            && dh > 0.0
-            && (pixmap.width() as f32 - sw).abs() < 1e-3
-            && (pixmap.height() as f32 - sh).abs() < 1e-3
-            && self.blit(&pixmap, space)
-        {
-            return;
-        }
         let Some(rect) = Rect::from_xywh(dx, dy, dw, dh) else {
             return;
         };
@@ -529,50 +535,103 @@ impl Replayer {
         self.draw(Geom::Fill(&path, FillRule::Winding, ts), src);
     }
 
-    /// An image drawn at its own size on whole pixels, with nothing else
-    /// applying, is copied row by row.
-    fn blit(&mut self, image: &Pixmap, space: Transform) -> bool {
-        let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
-        if !(near(space.sx, 1.0)
-            && near(space.sy, 1.0)
-            && near(space.kx, 0.0)
-            && near(space.ky, 0.0))
-            || !near(space.tx, space.tx.round())
-            || !near(space.ty, space.ty.round())
-            || self.state.alpha != 1.0
-            || self.state.clip.is_some()
+    /// An unscaled image drawn onto whole device pixels with no clip, shadow,
+    /// alpha or non-source-over blend is copied (or blended) directly row by
+    /// row without allocating a cropped copy or running tiny-skia's path
+    /// rasterizer.
+    fn blit_whole_pixels(
+        &mut self,
+        cached: &CachedImage,
+        src_rect: [f64; 4],
+        dst_rect: [f64; 4],
+    ) -> bool {
+        if self.state.clip.is_some()
             || self.shadowed()
+            || self.state.alpha != 1.0
             || blend(self.state.composite) != BlendMode::SourceOver
             || exact_canvas::composite_clips_extent(self.state.composite)
         {
             return false;
         }
-        let (tx, ty) = (space.tx.round() as i64, space.ty.round() as i64);
-        let (iw, ih) = (image.width() as i64, image.height() as i64);
+        let [sx, sy, sw, sh] = src_rect;
+        let [dx, dy, dw, dh] = dst_rect;
+        if !(sw > 0.0 && sh > 0.0 && dw > 0.0 && dh > 0.0) {
+            return false;
+        }
+        let ts = self.device();
+        if ts.kx.abs() > 1e-6 || ts.ky.abs() > 1e-6 || ts.sx <= 0.0 || ts.sy <= 0.0 {
+            return false;
+        }
+        let scale_x = f64::from(ts.sx) * (dw / sw);
+        let scale_y = f64::from(ts.sy) * (dh / sh);
+        let near = |a: f64, b: f64| (a - b).abs() <= 1e-4;
+        if !near(scale_x, 1.0) || !near(scale_y, 1.0) {
+            return false;
+        }
+        let dx0 = dx * f64::from(ts.sx) + f64::from(ts.tx);
+        let dy0 = dy * f64::from(ts.sy) + f64::from(ts.ty);
+        let dx1 = (dx + dw) * f64::from(ts.sx) + f64::from(ts.tx);
+        let dy1 = (dy + dh) * f64::from(ts.sy) + f64::from(ts.ty);
+        if ![sx, sy, sx + sw, sy + sh, dx0, dy0, dx1, dy1]
+            .into_iter()
+            .all(|v| near(v, v.round()))
+        {
+            return false;
+        }
+        let (iw, ih) = (cached.pixels.width() as i64, cached.pixels.height() as i64);
+        let (sx_i, sy_i) = (sx.round() as i64, sy.round() as i64);
+        let (sx1_i, sy1_i) = ((sx + sw).round() as i64, (sy + sh).round() as i64);
+        if sx_i < 0 || sy_i < 0 || sx1_i > iw || sy1_i > ih {
+            return false;
+        }
+        let (dx_i, dy_i) = (dx0.round() as i64, dy0.round() as i64);
+        let (dx1_i, dy1_i) = (dx1.round() as i64, dy1.round() as i64);
+        if dx1_i - dx_i != sx1_i - sx_i || dy1_i - dy_i != sy1_i - sy_i {
+            return false;
+        }
         let (pw, ph) = (self.pixmap.width() as i64, self.pixmap.height() as i64);
-        let (x0, x1) = (tx.max(0), (tx + iw).min(pw));
-        let (y0, y1) = (ty.max(0), (ty + ih).min(ph));
+        let (x0, x1) = (dx_i.max(0), dx1_i.min(pw));
+        let (y0, y1) = (dy_i.max(0), dy1_i.min(ph));
         if x0 >= x1 || y0 >= y1 {
             return true;
         }
-        let from = image.data();
-        let to = Arc::make_mut(&mut self.pixmap).data_mut();
+        let replace = cached.opaque || self.cleared;
+        let full = x0 == 0 && y0 == 0 && x1 == pw && y1 == ph;
+        let to = if replace && (full || self.cleared) {
+            self.overwrite_all_pixmap().data_mut()
+        } else {
+            Arc::make_mut(&mut self.pixmap).data_mut()
+        };
+        let from = cached.pixels.data();
+        let (tx, ty) = (dx_i - sx_i, dy_i - sy_i);
         let n = ((x1 - x0) * 4) as usize;
         for y in y0..y1 {
             let s = (((y - ty) * iw + (x0 - tx)) * 4) as usize;
             let d = ((y * pw + x0) * 4) as usize;
             let (src, dst) = (&from[s..s + n], &mut to[d..d + n]);
-            if src.chunks_exact(4).all(|p| p[3] == 255) {
+            if replace {
                 dst.copy_from_slice(src);
             } else {
-                for (o, i) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
-                    let k = 255 - i[3] as u32;
-                    for c in 0..4 {
-                        o[c] = (i[c] as u32 + (o[c] as u32 * k + 127) / 255).min(255) as u8;
+                for (o, i) in dst
+                    .as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
+                    .zip(src.as_chunks::<4>().0)
+                {
+                    let a = i[3];
+                    if a == 255 {
+                        *o = *i;
+                    } else if a != 0 {
+                        let inv = 255 - u32::from(a);
+                        for c in 0..4 {
+                            o[c] = (u32::from(i[c]) + (u32::from(o[c]) * inv + 127) / 255).min(255)
+                                as u8;
+                        }
                     }
                 }
             }
         }
+        self.cleared = false;
         true
     }
 
@@ -582,18 +641,36 @@ impl Replayer {
         let (x0, y0) = (r.at(0) as i64, r.at(1) as i64);
         let (w, h) = (r.at(2) as i64, r.at(3) as i64);
         let (pw, ph) = (self.pixmap.width() as i64, self.pixmap.height() as i64);
-        let px = Arc::make_mut(&mut self.pixmap).pixels_mut();
-        for y in 0..h {
-            for x in 0..w {
-                let (tx, ty) = (x0 + x, y0 + y);
-                if tx < 0 || ty < 0 || tx >= pw || ty >= ph {
-                    continue;
-                }
-                let v = r.at(4 + (y * w + x) as usize) as u32;
+        let (sx0, sx1) = ((-x0).max(0), (pw - x0).min(w));
+        let (sy0, sy1) = ((-y0).max(0), (ph - y0).min(h));
+        if sx0 >= sx1 || sy0 >= sy1 {
+            return;
+        }
+        let full = x0 <= 0 && y0 <= 0 && x0 + w >= pw && y0 + h >= ph;
+        let px = if full || self.cleared {
+            self.overwrite_all_pixmap().pixels_mut()
+        } else {
+            Arc::make_mut(&mut self.pixmap).pixels_mut()
+        };
+        for y in sy0..sy1 {
+            let dst_row = ((y0 + y) * pw) as usize;
+            let src_row = (y * w) as usize;
+            for x in sx0..sx1 {
+                let v = r.at(4 + src_row + x as usize) as u32;
                 let [cr, cg, cb, ca] = v.to_be_bytes();
-                let c = [cr as f64, cg as f64, cb as f64, ca as f64 / 255.0];
-                px[(ty * pw + tx) as usize] = premultiply(c, 1.0);
+                let out = if ca == 255 {
+                    PremultipliedColorU8::from_rgba(cr, cg, cb, 255).unwrap()
+                } else if ca == 0 {
+                    PremultipliedColorU8::TRANSPARENT
+                } else {
+                    let a = u16::from(ca);
+                    let p = |ch: u8| ((u16::from(ch) * a + 127) / 255) as u8;
+                    PremultipliedColorU8::from_rgba(p(cr), p(cg), p(cb), ca)
+                        .unwrap_or(PremultipliedColorU8::TRANSPARENT)
+                };
+                px[dst_row + (x0 + x) as usize] = out;
             }
         }
+        self.cleared = false;
     }
 }

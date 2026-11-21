@@ -40,7 +40,7 @@ pub(crate) fn spinner_layer(key: NodeKey) -> u64 {
 }
 
 /// Whether a layer key is an indicator's ([`spinner_layer`]).
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 pub(crate) fn is_spinner(layer: u64) -> bool {
     layer & SPINNER != 0
 }
@@ -55,7 +55,7 @@ pub(crate) fn ripple_layer(key: NodeKey) -> u64 {
 }
 
 /// The node whose ripple a layer key is ([`ripple_layer`]).
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 pub(crate) fn ripple_node(layer: u64) -> Option<NodeKey> {
     (layer & (RIPPLE | SPINNER) == RIPPLE).then(|| exact_kernel::motion::node_key(layer & !RIPPLE))
 }
@@ -403,7 +403,7 @@ impl<D: DataSource> Host<D> {
 
     /// Bumped whenever a lowered node's plays may have changed: the reader's
     /// tracks are encoded again only then.
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", test))]
     pub(crate) fn lowered_epoch(&self) -> u64 {
         self.lowered_epoch
     }
@@ -411,7 +411,7 @@ impl<D: DataSource> Host<D> {
     /// Whether `key`'s plays changed after `epoch` ([`Host::lowered_epoch`]):
     /// its tracks are encoded again only then, not every layer's at each
     /// change of any (rows mounting in a fling start their own).
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", test))]
     pub(crate) fn lowered_changed_after(&self, key: NodeKey, epoch: u64) -> bool {
         self.lowered_changed
             .get(&node_u64(key))

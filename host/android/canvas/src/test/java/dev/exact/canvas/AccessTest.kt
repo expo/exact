@@ -8,6 +8,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], manifest = Config.NONE)
@@ -126,5 +128,33 @@ class AccessTest {
         assertTrue(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD.id in actions)
         assertTrue(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD.id in actions)
         assertFalse(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id in actions)
+    }
+
+    /** A node a held press drags offers TalkBack's Start drag (LLP 1094.000 D9), which asks exact2 for the drag. */
+    @Test @Config(sdk = [33], shadows = [Acts::class]) fun aNodeThatDragsOffersStartDrag() {
+        Acts.asked.clear()
+        val access = told(listOf(Said(1, 0, Access.GROUP, "Ochre dunes", flags = Access.DRAG), Said(2, 0, Access.BUTTON, "Open", flags = Access.CLICK)))
+        val start = android.R.id.accessibilityActionDragStart
+        assertTrue(start in access.provider.createAccessibilityNodeInfo(1)!!.actionList.map { it.id })
+        assertFalse(start in access.provider.createAccessibilityNodeInfo(2)!!.actionList.map { it.id })
+        assertTrue(access.provider.performAction(1, start, null))
+        assertFalse(access.provider.performAction(2, start, null))
+        assertEquals(listOf(1 to 6), Acts.asked)
+    }
+
+    /** Android 12, which has no Start drag (API 32 adds it), offers none. */
+    @Test fun noStartDragBeforeApi32() {
+        val access = told(listOf(Said(1, 0, Access.GROUP, "Ochre dunes", flags = Access.DRAG)))
+        assertTrue(access.provider.createAccessibilityNodeInfo(1)!!.actionList.none { it.id == android.R.id.accessibilityActionDragStart })
+    }
+
+    /** exact2's side of an act: each node and act asked, all taken. */
+    @Implements(Native::class, isInAndroidSdk = false)
+    class Acts {
+        companion object {
+            val asked = ArrayList<Pair<Int, Int>>()
+            @JvmStatic @Implementation fun __staticInitializer__() {}
+            @JvmStatic @Implementation fun accessAct(id: Int, action: Int, value: Float): Boolean { asked += id to action; return true }
+        }
     }
 }

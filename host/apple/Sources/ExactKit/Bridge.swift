@@ -213,6 +213,21 @@ extension Runtime {
             return read(exact_host_covers(rt, write(bytes)))
         }
     }
+    #if os(macOS)
+    /// The tracks an AppKit resize changed, each by its header. A withdrawn
+    /// width returns the column to CSS automatic sizing.
+    func tableColumnWidths(_ columns: [(UInt32, CGFloat?)]) -> Batch {
+        on(layout: true) {
+            var bytes = Data(capacity: columns.count * 24)
+            for (header, width) in columns {
+                for word: UInt32 in [header, 24, Float(width ?? .nan).bitPattern, 0, 0, 0] {
+                    withUnsafeBytes(of: word.littleEndian) { bytes.append(contentsOf: $0) }
+                }
+            }
+            return read(exact_host_covers(rt, write(bytes)))
+        }
+    }
+    #endif
     /// The margins UIKit's own list gives each grouped list's cards and
     /// cells, under one layout: the card's left and right insets, then the
     /// cell's left and right margins; nil clears them.

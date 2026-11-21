@@ -233,6 +233,7 @@ pub(crate) fn prop_row(id: exact_kernel::PropId, expr: Code, written: bool) -> B
 
 pub(crate) struct Lowerer<'a> {
     pub b: PlanBuilder,
+    each_steps: &'a BTreeMap<u32, u32>,
     /// The app's theme, resolved (LLP 1095 D4).
     pub theme: Vec<theme::ThemeEntry>,
     sites: Option<Sites>,
@@ -451,7 +452,8 @@ fn lower_with_sites(
         .map(|f| contract_syntax::share_calls(&f.body, &is_fn))
         .collect();
     let mut l = Lowerer {
-        b: PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, compiler_identity()),
+        b: nodes::builder(ex),
+        each_steps: &ex.each_steps,
         theme: Vec::new(),
         sites: capture_sites.then(|| Sites::declared(ex)),
         text_styles,
@@ -939,21 +941,6 @@ impl<'a> Lowerer<'a> {
         })
     }
 
-    /// A tag's fixed row value as a constant body, built once per compile.
-    fn fixed(&mut self, style: bool, value: &'static str) -> Code {
-        if let Some(code) = self.fixed.get(&(style, value)) {
-            return *code;
-        }
-        // A fixed style is an enum's name or a number in points.
-        let v = match value.parse::<f64>() {
-            Ok(n) if style => Value::Number(n),
-            _ => Value::str(value),
-        };
-        let code = self.b.constant(&v);
-        self.fixed.insert((style, value), code);
-        code
-    }
-
     pub(crate) fn expr_code(
         &mut self,
         e: &Expr,
@@ -1083,9 +1070,13 @@ impl<'a> Lowerer<'a> {
                 let mut inner = scope.clone();
                 inner.push_each_of(var, index.as_deref(), list_ty);
                 let key = self.expr_code(key, &inner, locals)?;
-                let (_r, arms) =
+                let (region, arms) =
                     self.b
                         .region(RegionKind::Each, parent, arm, order, subject, key, 1);
+                if let Some(&step) = self.each_steps.get(tag) {
+                    self.b
+                        .set_region_place(region, exact_plan::PlaceStepsId(step));
+                }
                 if let Some(sites) = &mut self.sites {
                     sites.region(*tag);
                 }

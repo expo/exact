@@ -13,7 +13,7 @@ const AGENT_ADMITTED = true; // false in a release, as the release gate writes i
 const TABS = true, SPLITS = true, SHEETS = true, BARS = true, CLEAR_BARS = true;
 let last = null, refused = new WeakMap();
 // The tabpanels each root last hid or showed (one it stops naming shows again); the keys of the stack it last showed.
-let managed = new WeakMap(), shown = new WeakMap(), placed = new WeakMap();
+let managed = new WeakMap(), shown = new WeakMap();
 let written = [], gone = new Set(), cursor = 0, first = null, originIndex = null, echo = null, pop = null, draining = false;
 const queue = [], waiters = new Set();
 let root, navigate, log, hostBack, hostGo, routeMatches = () => false, canonicalOf = (location) => location;
@@ -117,6 +117,41 @@ export function sheetLeaves(el) {
   return true;
 }
 // @ref LLP 1115.000 D4.8 — a sheet the look draws (fixed to the window) slides back down as it closes, as it slid up (neutral.css), unless the person asks for less motion. A runtime asks this before it removes a modal route (glue.js's `destroy`; rt.js's `clear`, `each` and presence's `Leave`); a sheet that leaves stays whole until it is off the window, from where it stands, out of input, accessibility and the routes as presence-glue.js's leaving views are (LLP 1063), the focus leaving it as a removed one's would (input-glue.js's `arrive` takes one a blur does not reach). One holding media or a field whose decorations the browser paints closes at once, as its runtime empties those with the commit, and so does one holding an open dialog or popover, which the top layer would leave frozen on the window; a native view slides, showing what its module left in it. It keeps its ids for what it draws, though a command by id passes over it (`liveById`), and its stack's projection ends it on showing a sheet that was not beneath it, which may share them (compared as elements: a replace keeps its key).
+const placed = new WeakMap();
+const flow = style => /^(static|relative)$/.test(style.position);
+const column = style => /flex/.test(style.display) && style.flexDirection.startsWith("column");
+
+// LLP 1115.002 item 5. Only the nav containing the root tabs and their footer belongs to
+// the sidebar. Another nav, or a footer inside a route, keeps its place in the document.
+function placeTabBar(root, list, wide) {
+  const parent = viewParent(list);
+  const children = parent?.localName === "nav" && viewParent(parent) === root ? viewChildren(parent) : [];
+  const footer = children.length === 2 ? children.find(el => el !== list && el.localName === "footer") : null;
+  const wrapper = footer ? parent : null;
+  const orientation = list?.getAttribute("aria-orientation");
+  const placement = [wide, parent === root, orientation, ...[root, wrapper, list, footer].map(el => el && [
+    el.className, el.style.display, el.style.flexDirection, el.style.position, el.style.appearance
+  ].join("|"))].join("/");
+  const last = placed.get(root);
+  if (last?.placement === placement && last.list === list && last.wrapper === wrapper) return;
+
+  // Read authored placement without our own CSS. An unrelated commit must not restyle the page.
+  root.removeAttribute("data-exact-sidebar");
+  last?.list?.removeAttribute("data-exact-sidebar-tabs");
+  last?.wrapper?.removeAttribute("data-exact-tab-navigation");
+  placed.set(root, { placement, list, wrapper });
+  if ((!wide && !wrapper) || (!wrapper && parent !== root) || orientation === "vertical") return;
+  const bar = getComputedStyle(list);
+  if (bar.appearance === "none" || !flow(bar) || !bar.flexDirection?.startsWith("row") || !column(getComputedStyle(root))) return;
+  if (wrapper) {
+    const style = getComputedStyle(wrapper);
+    if (!flow(style) || !(style.display === "block" || style.display === "contents" || column(style)) || !flow(getComputedStyle(footer))) return;
+    wrapper.setAttribute("data-exact-tab-navigation", bar.display === "none" ? "hidden" : wide ? "sidebar" : "bar");
+  }
+  root.toggleAttribute("data-exact-sidebar", wide);
+  list.toggleAttribute("data-exact-sidebar-tabs", wide);
+}
+
 // @ref LLP 1075.003 §3.7 — tabs name their kept panels with aria-controls; each panel holds a route stack.
 // Attribute and parent walks also work in the server renderer's DOM, which has no selector engine.
 const tabsOf = (nav) => {
@@ -457,8 +492,6 @@ function detailRows(routes, found) {
     }
   }
 }
-/** Whether a root's tablist is a bar whose placement the app left unsaid, read while the root is not yet a sidebar. */
-const unsaidBar = (nav, list) => viewParent(list) === nav && getComputedStyle(list).appearance !== "none" && list.getAttribute("aria-orientation") !== "vertical" && (([n, l]) => /flex/.test(n.display) && n.flexDirection.startsWith("column") && /^(static|relative)$/.test(l.position) && l.flexDirection.startsWith("row"))([getComputedStyle(nav), getComputedStyle(list)]);
 /** Routes and panels excluded from input or document fields. Only input keeps a visible split list live. */
 function unselectedWithin(nav, keepList) {
   const key = nav.getAttribute("navigationKey"), panels = panelsOf(nav), stacks = panels.length ? panels.map(routesIn) : [routesIn(nav)];
@@ -765,25 +798,7 @@ function watchClearBars() {
 function readProjections(root, log) {
   const projections = [...root.querySelectorAll("[navigationBack]")].map((nav) => {
     const [list, panels] = tabsOf(nav);
-    if (TABS) {
-      // The authored placement is read with the sidebar's own rules lifted, which restyles the page (an embedded frame re-centres), so only when what places the bar may have changed: the wide breakpoint, the bar's parent or orientation, or the root's or the bar's class or inline display, flex direction, position or appearance (their class rules and inline style are what place them).
-      const isWide = wide(), said = [
-        isWide,
-        viewParent(list) === nav && list.getAttribute("aria-orientation"),
-        ...[nav, list].map((el) => el && [
-          el.className,
-          el.style.display,
-          el.style.flexDirection,
-          el.style.position,
-          el.style.appearance
-        ].join("|"))
-      ].join("/");
-      if (placed.get(nav) !== said) {
-        nav.removeAttribute("data-exact-sidebar");
-        nav.toggleAttribute("data-exact-sidebar", isWide && unsaidBar(nav, list));
-        placed.set(nav, said);
-      }
-    }
+    if (TABS) placeTabBar(nav, list, wide());
     return { nav, list, panels, stacks: panels.length ? panels.map(routesIn) : [routesIn(nav)], leaving: [] };
   });
   // Placing a root's bar restyles the page, so every root is placed before any computed style is read.
@@ -1139,7 +1154,10 @@ export const navigation = {
     }
     document.addEventListener("click", captureLink, true);
     document.addEventListener("dragstart", (event) => {
-      if (root.contains(event.target) && event.target.matches?.("img[data-symbol-source], :is(button, a[href], [data-exact-on~=\"press\"]) img")) {
+      // A node an author made draggable drags with what is inside it, unless a press lies between (LLP 1094.000 D6, D8).
+      const source = event.target.closest?.('[draggable="true"]'), press = event.target.closest?.('button, a[href], [data-exact-on~="press"]');
+      const spared = source && (!press || press === source || press.contains(source));
+      if (root.contains(event.target) && event.target.matches?.("img[data-symbol-source], :is(button, a[href], [data-exact-on~=\"press\"]) img") && !spared) {
         event.preventDefault();
       }
     });

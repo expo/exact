@@ -146,9 +146,72 @@ fn view_of(r: &Runner<Stations>, id: &str) -> u32 {
 }
 
 #[test]
+fn inserting_another_component_keeps_the_draft_with_its_owner() {
+    let source = r#"component App
+  view
+    main
+      Editor()
+component Editor
+  state note = ""
+  action write
+    note = "Piranesi"
+  view
+    column
+      button "Write" press=write testId="write"
+      text note testId="draft"
+component Other
+  state note = "Unrelated"
+  view
+    text note testId="other"
+"#;
+    let mut runner = Runner::boot(
+        contract::compile(source).unwrap(),
+        Stations,
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    runner
+        .dispatch(view_of(&runner, "write"), Event::Press)
+        .unwrap();
+    let after = source.replace("      Editor()", "      Other()\n      Editor()");
+    let runner = Runner::boot_carrying(
+        contract::compile(&after).unwrap(),
+        Stations,
+        Kernel::with_monospace(),
+        &runner.carry(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    assert_eq!(
+        (text_of(&runner, "draft"), text_of(&runner, "other")),
+        ("Piranesi".into(), "Unrelated".into())
+    );
+}
+
+#[test]
 fn a_use_owns_its_state_and_a_row_owns_its_own_which_follows_its_key() {
     let plan = contract::compile(&corpus("instance.contract")).unwrap();
     let plan = contract::bake(plan, Stations).unwrap();
+    let slot = |base: &str| {
+        plan.slots
+            .iter()
+            .map(|row| plan.str(row.name))
+            .find(|name| name.starts_with(base))
+            .unwrap()
+            .to_owned()
+    };
+    let first_count = slot("n#");
+    let hot = slot("hot#");
+    let set_hot = plan
+        .actions
+        .iter()
+        .map(|row| plan.str(row.name))
+        .find(|name| name.starts_with("setHot#"))
+        .unwrap()
+        .to_owned();
     let mut r = Runner::boot(
         plan,
         Stations,
@@ -165,8 +228,8 @@ fn a_use_owns_its_state_and_a_row_owns_its_own_which_follows_its_key() {
     assert_eq!(text_of(&r, "count-text-a"), "a 2 4");
     assert_eq!(text_of(&r, "count-text-b"), "b 0 0");
     // A singleton's state is a root slot by its lifted name; carried by name.
-    assert_eq!(r.slot("n#1"), Some(&Value::Number(2.0)));
-    assert!(r.carry().slots.iter().any(|(n, _)| n == "n#1"));
+    assert_eq!(r.slot(&first_count), Some(&Value::Number(2.0)));
+    assert!(r.carry().slots.iter().any(|(n, _)| n == &first_count));
     // Rows: `label` initialized from the row item, then hover one while the
     // other is untouched.
     let mv = view_of(&r, "station-mv");
@@ -174,8 +237,8 @@ fn a_use_owns_its_state_and_a_row_owns_its_own_which_follows_its_key() {
     assert_eq!(text_of(&r, "name-mv"), "Mountain View !");
     assert_eq!(text_of(&r, "name-pa"), "Palo Alto");
     // A row slot is the row's: not a root slot, not carried.
-    assert_eq!(r.slot("hot#3"), None);
-    assert!(!r.carry().slots.iter().any(|(n, _)| n == "hot#3"));
+    assert_eq!(r.slot(&hot), None);
+    assert!(!r.carry().slots.iter().any(|(n, _)| n == &hot));
     // Reorder: the state followed the key.
     r.act("flip", vec![]).unwrap();
     assert_eq!(r.slot("order"), Some(&Value::str("desc")));
@@ -188,7 +251,7 @@ fn a_use_owns_its_state_and_a_row_owns_its_own_which_follows_its_key() {
     assert_eq!(text_of(&r, "name-pa"), "Palo Alto !");
     // A row action run with no row has nothing to write: a typed refusal,
     // and the kernel untouched.
-    assert!(r.act("setHot#3", vec![Value::Bool(true)]).is_err());
+    assert!(r.act(&set_hot, vec![Value::Bool(true)]).is_err());
     assert_eq!(text_of(&r, "name-mv"), "Mountain View");
 }
 

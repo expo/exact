@@ -105,7 +105,7 @@ impl<D: DataSource> Host<D> {
                 let size = (pixels.width(), pixels.height());
                 self.canvas2d
                     .images
-                    .insert(source.to_owned(), std::sync::Arc::new(pixels));
+                    .insert(source.to_owned(), crate::canvas2d::CachedImage::new(pixels));
                 size
             });
         self.runner.canvas_image(source, result, &[]);

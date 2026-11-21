@@ -415,6 +415,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// range is a leaf.
     package override func accessibilityChildren() -> [Any]? {
         if props["accessibilityElementsHidden"] == "true" || accessibilityHiddenWritten || held { return [] }
+        if semanticTag == "table", let native = presenter?.dataTables.native(self) { return childNodes.filter { $0.semanticTag == "caption" } + [native as NSView] }
         if actsAsButton { return withAtoms(controlAccessibilityChildren()) }
         return props["accessibilityRole"] == "img" || rangeRole != nil ? nil : withAtoms(textAccessibilityChildren() ?? inDrawnOrder(exposed(super.accessibilityChildren())))
     }
@@ -453,7 +454,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// `aria-hidden` takes the node and its subtree off the tree, as the
     /// web's does (onboarding F16: a checkbox's visible label stayed exposed).
     package override func isAccessibilityElement() -> Bool {
-        accessibilityExposed && props["accessibilityElementsHidden"] != "true" && !held && super.isAccessibilityElement()
+        accessibilityExposed && props["accessibilityElementsHidden"] != "true" && !held && (semanticTag != "table" || presenter?.dataTables.native(self) == nil) && super.isAccessibilityElement()
     }
     /// Where an image source resolves, as a page resolves `src`: an `http(s)`
     /// URL as is; a relative path under the asset root (`EXACT_ASSETS`, else
@@ -1319,7 +1320,8 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     package func fitScroll() {
         guard let scroll, let document = scroll.documentView else { return }
         let visible = scroll.contentView.bounds.size, origin = scroll.kernelDocumentOrigin, o = grid?.origin ?? .zero, s = presenter?.gridScale ?? 1
-        let size = CGSize(width: max(PixelGrid.length(content.width, from: o, vertical: false, scale: s) - origin.x, visible.width), height: max(PixelGrid.length(content.height, from: o, vertical: true, scale: s) - origin.y, visible.height)) // ending where its last edge is drawn (`PixelGridMac.swift`)
+        var size = CGSize(width: max(PixelGrid.length(content.width, from: o, vertical: false, scale: s) - origin.x, visible.width), height: max(PixelGrid.length(content.height, from: o, vertical: true, scale: s) - origin.y, visible.height)) // ending where its last edge is drawn (`PixelGridMac.swift`)
+        if let height = presenter?.tables.feeds[id]?.sectionDocumentHeight { size.height = max(size.height, height) }
         if case let size = scroll.zoom?.child?.grid?.layout.size ?? size, document.frame.size != size { document.setFrameSize(size) }
     }
 

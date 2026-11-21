@@ -201,7 +201,7 @@ fn the_test_command_reports_errors_at_their_source() {
 fn the_cone_follows_derives_and_functions_but_respects_local_names() {
     let property = contract::properties("always \"p\"\n  expect state outer whole\n").unwrap();
     for (program, reason) in [
-        ("shape Data\n  n: number\ncomponent App\n  resource data = read() as shape Data\n  derive inner = data.n\n  derive outer = inner + 1\n", "`outer` -> `inner` -> resource `data`"),
+        ("shape Data\n  n: number\ncomponent App\n  resource data = read() as shape Data\n  derive inner = pending(data) ? 1 : 0\n  derive outer = inner + 1\n", "`outer` -> `inner` -> `pending(…)` of resource `data`"),
         ("fn time(): number = performanceNow()\nfn other(): number = time()\ncomponent App\n  derive outer = other()\n", "fn `other` -> fn `time` -> `performanceNow(…)`"),
         ("component App\n  derive outer = frame(\"box\").width\n", "`frame(…)`"),
         ("component App\n  derive outer = measure(\"box\").height\n", "`measure(…)`"),
@@ -220,6 +220,35 @@ fn the_cone_follows_derives_and_functions_but_respects_local_names() {
     let file = contract_syntax::parse(program).unwrap();
     assert!(
         contract_analyze::check_properties(&file.components[0], &file.fns, &property).is_empty()
+    );
+}
+
+/// An `always` line checks each printed configuration, where both sides
+/// print the oracle's answer; `after` pairs a value with one commit, and a
+/// resource can change on a step that commits nothing.
+#[test]
+fn an_always_line_reads_a_derive_over_resources_and_after_does_not() {
+    let program = "shape Data\n  n: number\ncomponent App\n  resource data = read() as shape Data\n  derive inner = data.n\n  derive outer = inner + 1\n";
+    let file = contract_syntax::parse(program).unwrap();
+    let check = |text: &str| {
+        let property = contract::properties(text).unwrap();
+        contract_analyze::check_properties(&file.components[0], &file.fns, &property)
+    };
+    assert!(check("always \"p\"\n  expect state outer whole\n").is_empty());
+    let errors = check("after \"bump\" \"p\"\n  expect state outer == old\n");
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0]
+            .message
+            .contains("`outer` -> `inner` -> resource `data`"),
+        "{}",
+        errors[0]
+    );
+    let errors = check("always \"p\"\n  expect state data whole\n");
+    assert!(
+        errors[0].message.contains("`data` is a resource"),
+        "{}",
+        errors[0]
     );
 }
 

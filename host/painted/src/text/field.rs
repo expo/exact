@@ -133,9 +133,7 @@ impl Paragraph {
         (width, height): (f32, f32),
     ) -> (f32, f32) {
         let mut bottom = self.line_bottoms().last().copied().unwrap_or_default();
-        if value.ends_with([
-            '\n', '\r', '\u{1c}', '\u{1d}', '\u{1e}', '\u{85}', '\u{2029}',
-        ]) {
+        if value.ends_with(super::PARAGRAPH_BREAKS) {
             bottom += self.source.flow_box(std::iter::empty(), &[]).1;
         }
         (
@@ -234,14 +232,17 @@ impl Geometry {
     ) -> Self {
         let data = &paragraph.source.data;
         let mut retained = HashMap::new();
+        let key = |run: &LayoutRun<'_>| (run.text.as_ptr(), run.glyphs[0].start);
+        let mut same_metrics = false;
         if let Some((old, geometry)) =
             previous.filter(|(p, _)| !masked && p.source.data.strut_font == data.strut_font)
         {
-            // A shared glyph block has the same runs and font metrics on this line.
-            // Both paragraphs are alive, so a nonempty slice identifies the block.
+            // A reused hard line owns the same text. Its first visual cluster
+            // locates the slice even when short rows moved to a new allocation.
+            same_metrics = old.source.data.run_metrics == data.run_metrics;
             for (run, line) in old.layout_runs().zip(&geometry.lines) {
                 if !run.glyphs.is_empty() {
-                    retained.insert((run.glyphs.as_ptr(), run.glyphs.len()), &line.spans);
+                    retained.insert(key(&run), (run.glyphs, &line.spans));
                 }
             }
         }
@@ -250,12 +251,7 @@ impl Geometry {
         let mut after_cr = false;
         for (byte, c) in value.char_indices() {
             units += c.len_utf16() as u32;
-            if !masked
-                && matches!(
-                    c,
-                    '\n' | '\r' | '\u{1c}' | '\u{1d}' | '\u{1e}' | '\u{85}' | '\u{2029}'
-                )
-            {
+            if !masked && super::PARAGRAPH_BREAKS.contains(&c) {
                 let next = (byte + c.len_utf8(), units);
                 if c == '\n' && after_cr {
                     *hard_starts.last_mut().unwrap() = next
@@ -274,7 +270,9 @@ impl Geometry {
             let (byte, base) = hard_starts[run.line_i];
             let spans = if value.is_empty() || run.glyphs.is_empty() {
                 empty_spans.clone()
-            } else if let Some(&spans) = retained.get(&(run.glyphs.as_ptr(), run.glyphs.len())) {
+            } else if let Some((_, spans)) = retained.get(&key(&run)).filter(|(glyphs, _)| {
+                std::ptr::eq(*glyphs, run.glyphs) || same_metrics && *glyphs == run.glyphs
+            }) {
                 Rc::clone(spans)
             } else {
                 // Wrapped rows index the same hard line. A flowed row indexes the whole paragraph.

@@ -67,8 +67,10 @@
   html:not([data-scrolldocument]), html:not([data-scrolldocument]) body { overscroll-behavior-y: none; }
   #exact-root :is(button, a[href], input, select, textarea, summary, [data-exact-on~="press"]) { touch-action: manipulation; }
   /* LLP 1115.000 D4.14: a symbol, and an image in something pressable, is part of the control, not content: no long-press
-     callout and no image drag (the navigation glue cancels the drag where the engine has no property for it). */
-  #exact-root img[data-symbol-source], #exact-root :is(button, a[href], [data-exact-on~="press"]) img { -webkit-touch-callout: none; -webkit-user-drag: none; }
+     callout and no image drag (the navigation glue cancels the drag where the engine has no property for it), unless
+     the image is itself draggable (LLP 1094.000 D6). */
+  #exact-root img[data-symbol-source], #exact-root :is(button, a[href], [data-exact-on~="press"]) img { -webkit-touch-callout: none; }
+  #exact-root :is(img[data-symbol-source], :is(button, a[href], [data-exact-on~="press"]) img):not([draggable="true"]) { -webkit-user-drag: none; }
   /* The unsaid press (LLP 1115.000 D6): a custom `button`, a link or a box
      with a `press` that declares no feedback shows 65% of its opacity, the iOS
      host's dim (PressFeedback.swift), while marked `data-pressed` by the input
@@ -106,6 +108,9 @@
      as the kernel resolves an `em` under no sized ancestor. */
   body { font: 1rem system-ui, sans-serif; }
   button, input, textarea { all: unset; display: block; box-sizing: content-box; cursor: default; }
+  /* The UA's own `-webkit-user-drag: element` for a draggable node, which `all: unset` undid: without it Chromium drags
+     no button (LLP 1094.000 D6). */
+  [draggable="true"] { -webkit-user-drag: element; }
   /* Native text fields keep the UA's chrome and content-box sizing, with
      the common reset's inherited typography (LLP 1104 D4, D8). */
   #exact-root [data-native] { all: revert; display: block; font: inherit; letter-spacing: inherit; color: inherit; }
@@ -268,11 +273,15 @@
      viewport segments side by side, the list fills the segment at its inline start and the detail starts after the
      fold's gap (`--exact-split-detail`; LLP 1078 D6). */
   #exact-root [data-exact-sidebar] { flex-direction: row !important; }
-  #exact-root :is([data-exact-sidebar] > [role="tablist"], [data-exact-sidebar] > :where([data-exact-list-item]) > [role="tablist"]) { order: -1; flex: none !important; box-sizing: border-box !important; width: 240px !important; height: auto !important; flex-direction: column !important; flex-wrap: nowrap !important; align-items: stretch !important; justify-content: flex-start !important; gap: 2px !important; padding: 12px 10px !important; overflow-y: auto; }
-  #exact-root :is([data-exact-sidebar] > [role="tablist"], [data-exact-sidebar] > :where([data-exact-list-item]) > [role="tablist"], [data-exact-sidebar] > [role="tablist"] > :where([data-exact-list-item]), [data-exact-sidebar] > :where([data-exact-list-item]) > [role="tablist"] > :where([data-exact-list-item])) > [role="tab"] { flex: none !important; width: auto !important; height: auto !important; min-height: 36px; justify-content: start !important; padding: 6px 10px !important; border-radius: calc(8px * var(--exact-curve-reach)) !important; corner-shape: var(--exact-curve); }
+  #exact-root [role="tablist"][data-exact-sidebar-tabs] { order: -1; flex: none !important; box-sizing: border-box !important; width: 240px !important; height: auto !important; flex-direction: column !important; flex-wrap: nowrap !important; align-items: stretch !important; justify-content: flex-start !important; gap: 2px !important; padding: 12px 10px !important; overflow-y: auto; }
+  #exact-root :is([role="tablist"][data-exact-sidebar-tabs], [role="tablist"][data-exact-sidebar-tabs] > :where([data-exact-list-item])) > [role="tab"] { flex: none !important; width: auto !important; height: auto !important; min-height: 36px; justify-content: start !important; padding: 6px 10px !important; border-radius: calc(8px * var(--exact-curve-reach)) !important; corner-shape: var(--exact-curve); }
+  #exact-root [data-exact-tab-navigation="sidebar"] { order: -1; display: flex !important; flex: none !important; flex-direction: column !important; width: 240px !important; min-height: 0; }
+  #exact-root :is([data-exact-tab-navigation="sidebar"], [data-exact-tab-navigation="sidebar"] > :where([data-exact-list-item])) > [data-exact-sidebar-tabs] { flex: 1 1 0% !important; min-height: 0; width: 100% !important; }
+  #exact-root :is([data-exact-tab-navigation="sidebar"], [data-exact-tab-navigation="sidebar"] > :where([data-exact-list-item])) > footer { flex-shrink: 0; }
+  #exact-root [data-exact-tab-navigation="hidden"], #exact-root :is([data-exact-tab-navigation="bar"], [data-exact-tab-navigation="bar"] > :where([data-exact-list-item])) > footer { display: none !important; }
   /* A tab's symbol is in its ink as the page lays it out now (the runtimes copy the title's at a commit, and a resize is none). */
   #exact-root :is([role="tablist"], [role="tablist"] > :where([data-exact-list-item])) > button[role="tab"][aria-controls] > img { color: inherit !important; }
-  #exact-root :is([data-exact-sidebar] > [role="tablist"], [data-exact-sidebar] > :where([data-exact-list-item]) > [role="tablist"], [data-exact-sidebar] > [role="tablist"] > :where([data-exact-list-item]), [data-exact-sidebar] > :where([data-exact-list-item]) > [role="tablist"] > :where([data-exact-list-item])) > button[role="tab"][aria-controls] > img { color: var(--exact-accent, AccentColor) !important; }
+  #exact-root :is([role="tablist"][data-exact-sidebar-tabs], [role="tablist"][data-exact-sidebar-tabs] > :where([data-exact-list-item])) > button[role="tab"][aria-controls] > img { color: var(--exact-accent, AccentColor) !important; }
   #exact-root [data-exact-split="list"] { inset-inline-end: auto !important; box-sizing: border-box !important; width: var(--exact-split, 320px) !important; }
   #exact-root [data-exact-split="detail"] { inset-inline-start: var(--exact-split-detail, var(--exact-split, 320px)) !important; }
   /* LLP 1116.006 D2: a split showing no detail fills the detail pane with one quiet line, centred, in the secondary

@@ -258,3 +258,35 @@ component Fields
         assert!(covered > 20, "text-align={align}: the glyph is drawn");
     }
 }
+
+#[test]
+fn field_lines_follow_span_ink_and_ancestor_lines_keep_their_colour() {
+    let draw = |field_line, outer_line| {
+        let source = format!(
+            r##"decoration red color="#ff0000"
+decoration blue color="#0000ff"
+component Fields
+  view
+    column width=260 height=100 color="#00ff00" text-decoration-line="{outer_line}"
+      textarea testId="field" value="MMMMMMMM" readonly=true appearance="none" width=240 height=80 font-size=26 background-color="#ffffff" text-decoration-line="{field_line}"
+        decorations=TextDecorations(value="MMMMMMMM",spans=[TextDecorationSpan(name="red",start=0,end=4),TextDecorationSpan(name="blue",start=4,end=8)])
+"##
+        );
+        boot_source(&source).0.frame()
+    };
+    let plain = draw("none", "none");
+    let line_inks = |frame: &tiny_skia::Pixmap| {
+        let (mut red, mut green, mut blue) = (false, false, false);
+        for (before, after) in plain.pixels().iter().zip(frame.pixels()) {
+            if before != after {
+                let (r, g, b) = (after.red(), after.green(), after.blue());
+                red |= r > g && r > b;
+                green |= g > r && g > b;
+                blue |= b > r && b > g;
+            }
+        }
+        (red, green, blue)
+    };
+    assert_eq!(line_inks(&draw("underline", "none")), (true, false, true));
+    assert_eq!(line_inks(&draw("none", "underline")), (false, true, false));
+}

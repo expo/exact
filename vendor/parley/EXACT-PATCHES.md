@@ -149,6 +149,11 @@ named here pass.
     neither. Tests: `balance_tests.rs`
     (`the_reports_headings_break_where_chromes_scorer_breaks_them`,
     `a_line_separator_ends_the_balanced_lines`).
+20. **Long clusters.** Font fallback counts coverage over the whole grapheme.
+    Layout stores the full glyph count and run-relative byte offset, with a
+    separate flag for an inline glyph. The painted host checks face selection,
+    glyphs and source ranges in `long_clusters_keep_their_fallback_face_glyphs_and_byte_ranges`
+    (expo/exact#1150).
 
 `Cargo.toml` also carries the empty `[workspace]` boundary described below;
 retain it when updating. All remaining archive files are byte-for-byte upstream.

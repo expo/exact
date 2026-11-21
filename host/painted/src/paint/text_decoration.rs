@@ -134,57 +134,58 @@ impl Painter {
         // box's own visibility. Keep covered lines for their shadows; only
         // the nearest box's foreground line shows.
         let mut run_ranges = HashMap::new();
-        let flags: Vec<_> = palette
-            .iter()
-            .enumerate()
-            .map(|(index, run)| {
-                if !selected.contains(&index) || !super::paints(kernel, run.source, reveal) {
-                    return Vec::new();
+        let mut flags = vec![None; palette.len()];
+        let mut end = selected.start;
+        // Adjacent runs of a field or Markdown paragraph share one source box.
+        for group in palette[selected].chunk_by(|a, b| a.source == b.source) {
+            let start = end;
+            end += group.len();
+            let source = group[0].source;
+            if !super::paints(kernel, source, reveal) {
+                continue;
+            }
+            let mut boxes = Vec::new();
+            let mut current = kernel.node(source);
+            while let Some(node) = current {
+                current = node.parent.and_then(|parent| kernel.node(parent));
+                if node.style.text_decoration_line != TextDecorationLine::None {
+                    // A leaf's own line follows the presented run colour.
+                    // Markdown and ancestor boxes supply their own colour.
+                    let color = (node.id != source
+                        || node.props.str(PropId::Markup) == Some("markdown"))
+                    .then(|| super::rgba(node.text_color().resolve(self.dark)));
+                    run_ranges.entry(node.id).or_insert((start, end - 1)).1 = end - 1;
+                    boxes.push((node, color));
                 }
-                let mut current = Some(run.source);
-                let mut declarations = Vec::new();
-                while let Some(id) = current {
-                    let Some(node) = kernel.node(id) else {
-                        break;
-                    };
-                    // A leaf's own colour is its run's, as presented; a
-                    // Markdown paragraph's pieces take the paragraph's.
-                    let color =
-                        if id == run.source && node.props.str(PropId::Markup) != Some("markdown") {
-                            run.color
-                        } else {
-                            super::rgba(node.text_color().resolve(self.dark))
-                        };
-                    let line = node.style.text_decoration_line;
-                    if line != TextDecorationLine::None {
-                        run_ranges.entry(id).or_insert((index, index)).1 = index;
-                        declarations.push((
-                            line,
+            }
+            for (flag, run) in flags[start..end].iter_mut().zip(group) {
+                let declarations = boxes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (node, color))| {
+                        let color = color.unwrap_or(run.color);
+                        (
+                            node.style.text_decoration_line,
                             DecorationPaint {
-                                source: id,
-                                depth: 0,
+                                source: node.id,
+                                depth: boxes.len() - i - 1,
                                 color,
                                 shadow: run_shadows
                                     .is_none()
-                                    .then(|| self.text_shadow(&node, color))
+                                    .then(|| self.text_shadow(node, color))
                                     .flatten(),
                             },
-                        ));
-                    }
-                    current = node.parent;
-                }
-                let count = declarations.len();
-                for (index, (_, paint)) in declarations.iter_mut().enumerate() {
-                    paint.depth = count - index - 1;
-                }
-                declarations
-            })
-            .collect();
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                *flag = Some(declarations);
+            }
+        }
         let runs = paragraph.runs();
         if run_ranges.is_empty() && runs.iter().all(|run| run.mark & (UNDERLINE | STRIKE) == 0) {
             return Decorations(Vec::new());
         }
-        let underlines = flags.iter().flatten().any(|(line, _)| {
+        let underlines = flags.iter().flatten().flatten().any(|(line, _)| {
             matches!(
                 line,
                 TextDecorationLine::Underline | TextDecorationLine::UnderlineLineThrough
@@ -216,12 +217,11 @@ impl Painter {
         }
         let mut lines = Vec::new();
         for (glyph, baseline, paint) in paragraph.paint_glyphs(palette) {
-            if !selected.contains(&glyph.run()) || !super::paints(kernel, paint.source, reveal) {
+            let Some(declarations) = &flags[glyph.run()] else {
                 continue;
-            }
+            };
             // A Markdown piece's own: a followed link, `~~strike~~`.
             let mark = paragraph.runs().get(glyph.run()).map_or(0, |r| r.mark);
-            let declarations = &flags[glyph.run()];
             let marked_line = match (mark & UNDERLINE != 0, mark & STRIKE != 0) {
                 (true, true) => TextDecorationLine::UnderlineLineThrough,
                 (true, false) => TextDecorationLine::Underline,

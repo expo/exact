@@ -41,6 +41,7 @@ pub(crate) mod owner;
 mod owner_update;
 mod provenance;
 pub(crate) mod readers;
+mod replacement;
 mod segments;
 pub(crate) mod targets;
 pub(crate) use intrinsic::apply_projection;

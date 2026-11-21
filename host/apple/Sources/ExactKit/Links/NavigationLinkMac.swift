@@ -86,6 +86,7 @@ package protocol StackSplitting: AnyObject {
     var detailPane: NSView? { get }
     /// The split view and the divider between the list and its detail.
     var listDivider: (view: NSSplitView, index: Int)? { get }
+    var hasInspector: Bool { get }
     var emphasizedRow: NodeView? { get }
     /// The press of the row the list is pressing: a route it brings is that row's detail.
     var pressing: UInt32? { get set }
@@ -282,6 +283,7 @@ package final class NoSplit: StackSplitting {
     package var window: NSWindow? { nil }
     package var detailPane: NSView? { nil }
     package var listDivider: (view: NSSplitView, index: Int)? { nil }
+    package var hasInspector: Bool { false }
     package var emphasizedRow: NodeView? { nil }
     package var pressing: UInt32?
     package var table: UInt32? { nil }

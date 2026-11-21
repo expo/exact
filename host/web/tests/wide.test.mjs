@@ -111,6 +111,29 @@ check('a root tab bar left unsaid is a sidebar on a wide window and a bar on a p
   expect(await evaluate(`document.getElementById('nav').hasAttribute('data-exact-sidebar')`)).toBe(true);
 }), 60000);
 
+check('a root nav keeps its footer below the scrolling sidebar and hides it in the bottom bar', () => {
+  const foot = '<footer id="foot"><button id="account" onclick="calls.push(this.id)">Account</button></footer>';
+  const bar = BAR.replace('</div>', '<button role="tab">More</button>'.repeat(30) + '</div>');
+  return inChrome(page(tabs('<nav id="rail">' + bar + foot + '</nav>')), async (read, size, click) => {
+    const geometry = `[box('panels')[0], box('rail')[2], box('foot')[1] + box('foot')[3], box('bar')[3] <= box('foot')[1]]`;
+    expect(await read(geometry)).toEqual([240, 240, 800, true]);
+    expect(await read(`{ const bar = document.getElementById('bar'); bar.scrollTop = 100; [bar.scrollTop, box('foot')[1] + box('foot')[3]] }`)).toEqual([100, 800]);
+    await click('account');
+    expect(await read('calls')).toContain('account');
+    await size(390);
+    expect(await read(`[box('foot')[3], box('bar')[2], box('bar')[1] + box('bar')[3]]`)).toEqual([0, 390, 800]);
+    expect(await read(`document.getElementById('account').focus(); document.activeElement.id`)).not.toBe('account');
+    await size(1280);
+    expect(await read(geometry)).toEqual([240, 240, 800, true]);
+    // Author placement wins. Moving the footer out of the nav also gives it back to the page.
+    expect(await read(`document.getElementById('bar').style.appearance = 'none'; select(2); box('panels')[0]`)).toBe(0);
+    await size(390);
+    expect(await read(`box('foot')[3]`)).toBeGreaterThan(0);
+    expect(await read(`document.getElementById('bar').style.appearance = ''; select(2); box('foot')[3]`)).toBe(0);
+    expect(await read(`document.getElementById('nav').append(document.getElementById('foot')); select(2); box('foot')[3]`)).toBeGreaterThan(0);
+  });
+}, 60000);
+
 check('fold-only media changes reproject navigation without a viewport resource', () => inChrome(page(tabs(BAR)), async (evaluate, size, click, call) => {
   const sidebar = wanted => evaluate(`new Promise((resolve, reject) => {
     const root = document.getElementById('nav');

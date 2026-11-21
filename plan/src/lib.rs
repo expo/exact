@@ -378,11 +378,56 @@ impl Plan {
         }
     }
 
+    fn validate_place_steps(&self) -> Result<(), PlanError> {
+        let bad = |table, index: usize, field| PlanError::BadReference {
+            table,
+            row: index as u32,
+            field,
+        };
+        for (i, step) in self.place_steps.iter().enumerate() {
+            if let Some(outer) = step.outer {
+                if outer.0 as usize >= i
+                    || !matches!(
+                        self.place_steps[outer.0 as usize].kind,
+                        PlaceKind::Component | PlaceKind::Children
+                    )
+                {
+                    return Err(bad("place_steps", i, "outer"));
+                }
+            }
+            if step.shared_id && step.kind != PlaceKind::Element {
+                return Err(bad("place_steps", i, "shared_id"));
+            }
+            let named = step.kind != PlaceKind::Children;
+            if named == self.str(step.name).is_empty() {
+                return Err(bad("place_steps", i, "name"));
+            }
+        }
+        for (i, node) in self.nodes.iter().enumerate() {
+            if node
+                .place
+                .is_some_and(|id| self.place_steps[id.0 as usize].kind != PlaceKind::Element)
+            {
+                return Err(bad("nodes", i, "place"));
+            }
+        }
+        for (i, region) in self.regions.iter().enumerate() {
+            if region.place.is_some_and(|id| {
+                region.kind != RegionKind::Each
+                    || self.place_steps[id.0 as usize].kind != PlaceKind::Each
+            }) {
+                return Err(bad("regions", i, "place"));
+            }
+        }
+        Ok(())
+    }
+
     /// The rules the row codecs cannot express: region topology and timer
     /// progress. Called by the generated `validate`, so every loaded or built
     /// plan has passed it.
     pub fn validate_semantics(&self) -> Result<(), PlanError> {
         self.validate_unsettled()?;
+        self.validate_place_steps()?;
         let activity = !self.activity_slots.is_empty();
         if self.snapshot_entry.is_empty() {
             if self.snapshot_refresh.is_some() || activity {

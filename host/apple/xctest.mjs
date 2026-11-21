@@ -60,6 +60,10 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
   contract([resolve(root, 'host/apple/tests/fixtures/overflowing-tabs.contract'), '-o', env[`${prefix}_OVERFLOWING_TABS_PLAN`] = resolve(dir, 'overflowing-tabs.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/shop-scroll.contract'), '-o', env[`${prefix}_SHOP_SCROLL_PLAN`] = resolve(dir, 'shop-scroll.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/quiet-scroll.contract'), '-o', env[`${prefix}_QUIET_SCROLL_PLAN`] = resolve(dir, 'quiet-scroll.plan')]);
+  const filteredFeed = resolve(dir, 'filtered-feed.contract');
+  writeFileSync(filteredFeed, readFileSync(resolve(root, 'host/apple/tests/fixtures/quiet-scroll.contract'), 'utf8')
+    .replace('for n in items ', 'for n in items.filter(n => n % 2 != 0) '));
+  contract([filteredFeed, '-o', env[`${prefix}_FILTERED_FEED_PLAN`] = resolve(dir, 'filtered-feed.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/quiet-edge.contract'), '-o', env[`${prefix}_QUIET_EDGE_PLAN`] = resolve(dir, 'quiet-edge.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/scroll-facts.contract'), '-o', env[`${prefix}_SCROLL_FACTS_PLAN`] = resolve(dir, 'scroll-facts.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/scroll-snap.contract'), '-o', env[`${prefix}_SCROLL_SNAP_PLAN`] = resolve(dir, 'scroll-snap.plan')]);
@@ -74,7 +78,8 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
   contract([resolve(root, 'host/apple/tests/fixtures/range-adjust.contract'), '-o', env[`${prefix}_RANGE_ADJUST_PLAN`] = resolve(dir, 'range-adjust.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/replacement-hold.contract'), '-o', env[`${prefix}_REPLACEMENT_HOLD_PLAN`] = resolve(dir, 'replacement-hold.plan')]);
   const replaced = resolve(dir, 'replacement-hold-after.contract');
-  writeFileSync(replaced, readFileSync(resolve(root, 'host/apple/tests/fixtures/replacement-hold.contract'), 'utf8').replace('"before"', '"after"'));
+  writeFileSync(replaced, readFileSync(resolve(root, 'host/apple/tests/fixtures/replacement-hold.contract'), 'utf8')
+    .replace('"before"', '"after"').replace('      DraftNote()', '      OtherNote()\n      DraftNote()'));
   contract([replaced, '-o', env[`${prefix}_REPLACEMENT_HOLD_AFTER_PLAN`] = resolve(dir, 'replacement-hold-after.plan')]);
   // A test that writes its own manifest names the app the tests link (`SheetFixture`'s `data`).
   env[`${prefix}_TEST_APP_ID`] = appId;

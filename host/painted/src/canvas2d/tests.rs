@@ -18,7 +18,7 @@ fn replay(w: u32, h: u32, scale: f64, draw: impl Fn(&Context2d)) -> Pixmap {
     let mut tile = Pixmap::new(4, 4).unwrap();
     tile.fill(Color::from_rgba8(0, 0, 255, 255));
     let mut images = ImageCache::new();
-    images.insert("tile".into(), Arc::new(tile));
+    images.insert("tile".into(), CachedImage::new(tile));
     let env = Env {
         images: &images,
         text: None,
@@ -339,8 +339,8 @@ fn a_redraw_copies_the_bitmap_only_while_a_painter_holds_the_last_one() {
 
 #[test]
 fn whole_pixel_clear_and_blit_preserve_edge_cases() {
-    // Positive clearRect clears whole pixels; negative width/height fall back and
-    // clear the same 3x3 region without panicking.
+    // Positive clearRect clears whole pixels; negative width/height clear the
+    // same 3x3 region without panicking.
     for (x, y, w, h) in [(3., 2., 3., 3.), (6., 2., -3., 3.), (3., 5., 3., -3.)] {
         let p = replay(10, 10, 1.0, |c| {
             c.set_fill_style_str("#ff0000");
@@ -393,4 +393,357 @@ fn whole_pixel_clear_and_blit_preserve_edge_cases() {
     assert!(at(&frac, 2, 2)[3] > 0 && at(&frac, 2, 2)[3] < 255);
     assert_eq!(at(&frac, 3, 2), [0, 0, 255, 255]);
     assert!(at(&frac, 4, 2)[3] > 0 && at(&frac, 4, 2)[3] < 255);
+}
+
+#[test]
+fn whole_pixel_clear_fill_and_blit_match_reference_and_preserve_shared_snapshots() {
+    struct Sheet;
+    impl Images for Sheet {
+        fn size(&self, _: u64, src: &str) -> Option<(u32, u32)> {
+            match src {
+                "opaque" | "translucent" => Some((16, 12)),
+                _ => None,
+            }
+        }
+    }
+
+    let mut opaque = Pixmap::new(16, 12).unwrap();
+    for y in 0..12u32 {
+        for x in 0..16u32 {
+            opaque.pixels_mut()[(y * 16 + x) as usize] =
+                tiny_skia::PremultipliedColorU8::from_rgba(
+                    (x * 15) as u8,
+                    (y * 20) as u8,
+                    140,
+                    255,
+                )
+                .unwrap();
+        }
+    }
+    let mut translucent = Pixmap::new(16, 12).unwrap();
+    for y in 0..12u32 {
+        for x in 0..16u32 {
+            let a = match (x + y) % 3 {
+                0 => 0,
+                1 => 128,
+                _ => 255,
+            };
+            let ch = |v: u8| ((u16::from(v) * u16::from(a) + 127) / 255) as u8;
+            translucent.pixels_mut()[(y * 16 + x) as usize] =
+                tiny_skia::PremultipliedColorU8::from_rgba(
+                    ch((x * 15) as u8),
+                    ch((y * 20) as u8),
+                    ch(200),
+                    a,
+                )
+                .unwrap();
+        }
+    }
+    let mut images = ImageCache::new();
+    images.insert("opaque".into(), CachedImage::new(opaque));
+    images.insert("translucent".into(), CachedImage::new(translucent));
+    assert!(images["opaque"].opaque);
+    assert!(!images["translucent"].opaque);
+
+    // Reference replay forces the general tiny-skia path by setting a full-canvas clip mask.
+    let run = |w: u32, h: u32, scale: f64, draw: &dyn Fn(&Context2d), force_reference: bool| {
+        let ctx = Context2d::new();
+        ctx.set_env(CanvasEnv {
+            images: Arc::new(std::sync::Mutex::new(Some(Arc::new(Sheet)))),
+            ..Default::default()
+        });
+        draw(&ctx);
+        let env = Env {
+            images: &images,
+            text: None,
+        };
+        let mut r = Replayer::new(w, h, scale, 1, 0).unwrap();
+        if force_reference {
+            let mut m = Mask::new(w, h).unwrap();
+            m.data_mut().fill(255);
+            r.state.clip = Some(m);
+        }
+        for l in ctx.take_lists() {
+            r.apply(&l, &env).unwrap();
+        }
+        Arc::unwrap_or_clone(r.pixmap)
+    };
+
+    let cases: &[(u32, u32, f64, fn(&Context2d))] = &[
+        // 1:1 full and subrect opaque blit + partial clear + fillRect.
+        (24, 20, 1.0, |c| {
+            c.set_fill_style_str("#224466");
+            c.fill_rect(0., 0., 24., 20.);
+            c.clear_rect(4., 3., 10., 8.);
+            c.draw_image_with_image_handle_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                "opaque", 2., 3., 10., 6., -2., 5., 10., 6.,
+            )
+            .unwrap();
+            c.draw_image_with_image_handle("translucent", 6., 4.)
+                .unwrap();
+        }),
+        // Translucent image onto cleared canvas, then full clear with over-extent & negative size.
+        (20, 16, 1.0, |c| {
+            c.clear_rect(-5.5, -3.2, 40.7, 30.9);
+            c.draw_image_with_image_handle("translucent", 2., 1.)
+                .unwrap();
+            c.clear_rect(12., 10., -4., -3.);
+        }),
+        // 125% DPI scale with 1:1 physical device pixel image draw (dw = sw / 1.25).
+        (20, 15, 1.25, |c| {
+            c.clear_rect(0., 0., 16., 12.);
+            c.draw_image_with_image_handle_and_dw_and_dh("opaque", 0., 0., 16. / 1.25, 12. / 1.25)
+                .unwrap();
+        }),
+        // Fractional edges and alpha fall back cleanly without visual drift.
+        (20, 20, 1.0, |c| {
+            c.set_fill_style_str("#cc3311");
+            c.fill_rect(0., 0., 20., 20.);
+            c.clear_rect(2.5, 2.5, 6., 6.);
+            c.set_global_alpha(0.5);
+            c.draw_image_with_image_handle("opaque", 1., 1.).unwrap();
+        }),
+    ];
+
+    for (i, &(w, h, scale, draw)) in cases.iter().enumerate() {
+        let actual = run(w, h, scale, &draw, false);
+        let expected = run(w, h, scale, &draw, true);
+        for (p, (a, e)) in actual.data().iter().zip(expected.data().iter()).enumerate() {
+            assert!(
+                a.abs_diff(*e) <= 1,
+                "case {i} byte {p}: actual {a} vs expected {e}"
+            );
+        }
+    }
+
+    // Overwriting operations never mutate a snapshot held by a painter.
+    let env = Env {
+        images: &images,
+        text: None,
+    };
+    let mut r = Replayer::new(16, 12, 1.0, 1, 0).unwrap();
+    let run_ctx = |r: &mut Replayer, f: fn(&Context2d)| {
+        let ctx = Context2d::new();
+        ctx.set_env(CanvasEnv {
+            images: Arc::new(std::sync::Mutex::new(Some(Arc::new(Sheet)))),
+            ..Default::default()
+        });
+        f(&ctx);
+        r.apply_draw(&ctx.take_lists(), &env).unwrap();
+    };
+    run_ctx(&mut r, |c| {
+        c.set_fill_style_str("#112233");
+        c.fill_rect(0., 0., 16., 12.);
+    });
+    let held_fill = r.pixmap.clone();
+    run_ctx(&mut r, |c| {
+        c.clear_rect(0., 0., 16., 12.);
+    });
+    assert_eq!(at(&held_fill, 4, 4), [0x11, 0x22, 0x33, 255]);
+    assert_eq!(at(&r.pixmap, 4, 4), [0, 0, 0, 0]);
+    let held_clear = r.pixmap.clone();
+    run_ctx(&mut r, |c| {
+        c.draw_image_with_image_handle("opaque", 0., 0.).unwrap();
+    });
+    assert_eq!(at(&held_clear, 4, 4), [0, 0, 0, 0]);
+    assert_eq!(at(&r.pixmap, 4, 4), [60, 80, 140, 255]);
+    let held_blit = r.pixmap.clone();
+    run_ctx(&mut r, |c| {
+        let mut data = c.create_image_data_with_sw_and_sh(16., 12.).unwrap();
+        for p in data.data.as_chunks_mut::<4>().0 {
+            *p = [200, 100, 50, 128];
+        }
+        c.put_image_data(&data, 0., 0.).unwrap();
+    });
+    assert_eq!(at(&held_blit, 4, 4), [60, 80, 140, 255]);
+    assert_eq!(at(&r.pixmap, 4, 4), [100, 50, 25, 128]);
+}
+
+#[test]
+fn prefix_checkpoint_reuses_finished_strokes_and_invalidates_soundly() {
+    struct Bg;
+    impl Images for Bg {
+        fn size(&self, _: u64, src: &str) -> Option<(u32, u32)> {
+            (src == "bg").then_some((64, 48))
+        }
+    }
+
+    let make_bg = |r: u8, g: u8, b: u8| {
+        let mut p = Pixmap::new(64, 48).unwrap();
+        p.fill(Color::from_rgba8(r, g, b, 255));
+        CachedImage::new(p)
+    };
+    let mut images = ImageCache::new();
+    images.insert("bg".into(), make_bg(20, 40, 80));
+
+    let ctx = Context2d::new();
+    ctx.set_env(CanvasEnv {
+        images: Arc::new(std::sync::Mutex::new(Some(Arc::new(Bg)))),
+        ..Default::default()
+    });
+
+    let record_frame = |ctx: &Context2d, bg_x: f64, strokes: &[Vec<(f64, f64)>]| {
+        ctx.clear_rect(0., 0., 64., 48.);
+        ctx.draw_image_with_image_handle("bg", bg_x, 0.).unwrap();
+        ctx.set_stroke_style_str("#ff3300");
+        ctx.set_line_width(3.);
+        for pts in strokes {
+            ctx.begin_path();
+            for (i, &(x, y)) in pts.iter().enumerate() {
+                if i == 0 {
+                    ctx.move_to(x, y);
+                } else {
+                    ctx.line_to(x, y);
+                }
+            }
+            ctx.stroke();
+        }
+        ctx.take_lists()
+    };
+
+    let fresh_reference =
+        |lists: &[Vec<u8>], images: &ImageCache, bg_x: f64, strokes: &[Vec<(f64, f64)>]| {
+            let _ = lists;
+            let fresh_ctx = Context2d::new();
+            fresh_ctx.set_env(CanvasEnv {
+                images: Arc::new(std::sync::Mutex::new(Some(Arc::new(Bg)))),
+                ..Default::default()
+            });
+            let fresh_lists = record_frame(&fresh_ctx, bg_x, strokes);
+            let env = Env { images, text: None };
+            let mut r = Replayer::new(64, 48, 1.0, 1, 0).unwrap();
+            for l in &fresh_lists {
+                r.apply(l, &env).unwrap();
+            }
+            r.pixmap
+        };
+
+    let mut r = Replayer::new(64, 48, 1.0, 1, 0).unwrap();
+    let s1 = vec![(4., 4.), (20., 12.), (36., 8.)];
+    let s2 = vec![(6., 20.), (30., 28.), (54., 22.)];
+
+    // Draw 1 registers Op::Image("bg"); Draw 2 establishes the clean prefix;
+    // Draw 3..5 grow stroke 3 and reuse the checkpoint after stroke 2.
+    let mut active = vec![(10., 34.)];
+    for step in 0..5 {
+        if step > 0 {
+            active.push((10. + step as f64 * 10., 34. + (step % 2) as f64 * 6.));
+        }
+        let strokes = vec![s1.clone(), s2.clone(), active.clone()];
+        let lists = record_frame(&ctx, 0., &strokes);
+        let env = Env {
+            images: &images,
+            text: None,
+        };
+        r.apply_draw(&lists, &env).unwrap();
+        let expected = fresh_reference(&lists, &images, 0., &strokes);
+        assert_eq!(r.pixmap.data(), expected.data(), "step {step}");
+        if step >= 2 {
+            assert!(
+                r.checkpoint.is_some(),
+                "step {step} should hold a prefix checkpoint"
+            );
+        }
+    }
+    let cp_after_s2 = r.checkpoint.as_ref().unwrap().recs;
+
+    // Starting a 4th stroke advances the checkpoint past stroke 3.
+    let s3 = active;
+    let strokes = vec![
+        s1.clone(),
+        s2.clone(),
+        s3.clone(),
+        vec![(2., 40.), (18., 44.)],
+    ];
+    let lists = record_frame(&ctx, 0., &strokes);
+    r.apply_draw(
+        &lists,
+        &Env {
+            images: &images,
+            text: None,
+        },
+    )
+    .unwrap();
+    assert!(r.checkpoint.as_ref().unwrap().recs > cp_after_s2);
+    assert_eq!(
+        r.pixmap.data(),
+        fresh_reference(&lists, &images, 0., &strokes).data()
+    );
+
+    // An identical redraw reuses the checkpointed pixmap without copying it.
+    let lists_same = record_frame(&ctx, 0., &strokes);
+    r.apply_draw(
+        &lists_same,
+        &Env {
+            images: &images,
+            text: None,
+        },
+    )
+    .unwrap();
+    let ptr_before = Arc::as_ptr(&r.pixmap);
+    let lists_same_again = record_frame(&ctx, 0., &strokes);
+    r.apply_draw(
+        &lists_same_again,
+        &Env {
+            images: &images,
+            text: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(Arc::as_ptr(&r.pixmap), ptr_before);
+
+    // Replacing the background image invalidates the checkpoint and repaints it.
+    images.insert("bg".into(), make_bg(90, 120, 30));
+    let lists_reloaded = record_frame(&ctx, 0., &strokes);
+    r.apply_draw(
+        &lists_reloaded,
+        &Env {
+            images: &images,
+            text: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        r.pixmap.data(),
+        fresh_reference(&lists_reloaded, &images, 0., &strokes).data()
+    );
+    assert_eq!(at(&r.pixmap, 60, 44), [90, 120, 30, 255]);
+
+    // Undo (shorter prefix) rebuilds soundly.
+    let undone = vec![s1.clone()];
+    let lists_undo = record_frame(&ctx, 0., &undone);
+    r.apply_draw(
+        &lists_undo,
+        &Env {
+            images: &images,
+            text: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        r.pixmap.data(),
+        fresh_reference(&lists_undo, &images, 0., &undone).data()
+    );
+
+    // Moving the background (`bg_x` changes every frame) has no shared paint
+    // ops after clearRect and keeps no checkpoint memory.
+    for dx in [1., 2., 3.] {
+        let lists_move = record_frame(&ctx, dx, &[]);
+        r.apply_draw(
+            &lists_move,
+            &Env {
+                images: &images,
+                text: None,
+            },
+        )
+        .unwrap();
+        assert!(
+            r.checkpoint.is_none(),
+            "moving drawImage must not retain a checkpoint"
+        );
+        assert_eq!(
+            r.pixmap.data(),
+            fresh_reference(&lists_move, &images, dx, &[]).data()
+        );
+    }
 }

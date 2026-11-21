@@ -301,8 +301,14 @@ component Child
     let (plan, map) = app.compile();
     assert_eq!(map["slots"]["nav"]["line"], 1);
     assert_eq!(map["slots"]["count"]["line"], 4);
-    assert_eq!(map["slots"]["hot#1"]["line"], 9);
-    assert_eq!(map["slots"]["hot#1"]["component"], "Child");
+    let hot = plan
+        .slots
+        .iter()
+        .map(|s| plan.str(s.name))
+        .find(|s| s.starts_with("hot#"))
+        .unwrap();
+    assert_eq!(map["slots"][hot]["line"], 9);
+    assert_eq!(map["slots"][hot]["component"], "Child");
     assert_eq!(map["derives"]["next"]["file"], path.to_str().unwrap());
     assert_eq!(map["derives"]["next"]["line"], 5);
     assert_eq!(map["slots"].as_object().unwrap().len(), plan.slots.len());

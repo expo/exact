@@ -1009,6 +1009,7 @@ name = "contract-syntax"
 version = "0.1.0"
 dependencies = [
  "exact-motion",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -2339,6 +2340,7 @@ dependencies = [
  "tiny-skia",
  "unicode-segmentation",
  "windows",
+ "windows-core",
  "windows-sys 0.61.2",
  "winit",
 ]

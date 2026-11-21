@@ -423,10 +423,10 @@ mod tests {
     }
 
     #[test]
-    fn a_scrolled_textarea_paints_the_first_glyph_inside_its_horizontal_padding() {
+    fn a_scrolled_textarea_paints_and_hits_its_first_glyph_inside_its_padding() {
         let source = r##"component App
   view
-    textarea id="editor" value="M\n0123456789012345678901234567890123456789" width=200 height=90 box-sizing="border-box" appearance="none" border="none" padding="16px 28px" color="#000000" background-color="#ffffff" font-size=16 line-height=1.6 white-space="pre"
+    textarea id="editor" testId="editor" value="M\n0123456789012345678901234567890123456789" width=200 height=90 box-sizing="border-box" appearance="none" border="none" padding="16px 28px" color="#000000" background-color="#ffffff" font-size=16 line-height=1.6 white-space="pre"
 "##;
         let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(source),
@@ -459,6 +459,32 @@ mod tests {
             };
             assert_eq!(first_line(&mut p), expected, "scroll by {dx}");
         }
+        let k = p.host.kernel();
+        let field = k.node_by_key(k.find_by_test_id("editor")[0]).unwrap().id;
+        p.pointer_down(28., 28., 10.).unwrap();
+        p.pointer_up(28., 28., 20.).unwrap();
+        p.frame();
+        assert_eq!(p.focus, Some(field));
+        assert_eq!(p.field_selection(field), FieldSelection::caret(0));
+        for left in [0., 23.] {
+            p.scroll_to(field, (left, 0.));
+            p.frame();
+            p.pointer_down(6., 28., 30.).unwrap();
+            p.frame();
+            assert_eq!(p.scroll_of(field).0, left, "mouse down");
+            assert_eq!(p.field_selection(field), FieldSelection::caret(0));
+            p.pointer_up(6., 28., 40.).unwrap();
+            p.frame();
+            assert_eq!(p.scroll_of(field).0, left, "mouse up");
+        }
+        // The first line can also end to the left of the visible area.
+        p.scroll_to(field, (95., 0.));
+        p.frame();
+        p.pointer_down(6., 28., 50.).unwrap();
+        p.pointer_up(6., 28., 60.).unwrap();
+        p.frame();
+        assert_eq!(p.field_selection(field), FieldSelection::caret(1));
+        assert_eq!(p.scroll_of(field).0, 95.);
     }
 
     #[test]

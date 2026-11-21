@@ -494,7 +494,7 @@ fn selecting_a_tab_names_the_panel_when_its_initializer_traps() {
     selected_panel_trap(
         "Broken()",
         "component Broken\n  state rows = range(65537)\n  view\n    text `${rows.length}`\n",
-        "state \"rows#1\" initializer",
+        "state \"rows\" initializer",
     );
 }
 

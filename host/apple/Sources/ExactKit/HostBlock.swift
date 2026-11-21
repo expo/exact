@@ -10,10 +10,11 @@ package struct HostBlock: Equatable {
     /// the region a `position-area` option places the box in (fit-content
     /// across, min-content winning; its content's height down).
     package enum Axis: Equatable {
-        case size(CGFloat), atMost(CGFloat), fit(CGFloat), region(CGFloat)
+        case size(CGFloat), fill(CGFloat), atMost(CGFloat), fit(CGFloat), region(CGFloat)
         fileprivate var wire: (length: CGFloat, policy: CGFloat) {
             switch self {
             case .size(let length): (length, 0)
+            case .fill(let length): (length, 4)
             case .atMost(let length): (length, 1)
             case .fit(let length): (length, 2)
             case .region(let length): (length, 3)

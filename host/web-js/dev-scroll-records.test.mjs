@@ -61,14 +61,15 @@ test.each(['answer', 'focus', 'scroll', 'expire'])('replacement records survive 
       document.getElementById('above').style.height = '160px';
       document.getElementById('body').setAttribute('data-carry-type', 'Column');
       root.insertAdjacentHTML('beforeend', '<input data-carry-type="Input" id="field" value="Piranesi">');
+      const field = document.getElementById('field');
+      field.setSelectionRange(1, 3, 'forward');
       rt.inflight.n = 0; rt.settled();
       await new Promise(ok => requestAnimationFrame(() => requestAnimationFrame(ok)));
-      const field = document.getElementById('field');
       return { focus: document.activeElement.id, selection: [field.selectionStart, field.selectionEnd, field.selectionDirection],
         top: document.getElementById('port').scrollTop, restoration: history.scrollRestoration, pending: rt.After.length };
     });
     expect(result).toEqual({ focus: mode === 'expire' ? '' : mode === 'focus' ? 'other' : 'field',
-      selection: ['focus', 'expire'].includes(mode) ? [0, 0, 'none'] : [2, 5, 'backward'],
+      selection: ['focus', 'expire'].includes(mode) ? [1, 3, 'forward'] : [2, 5, 'backward'],
       top: mode === 'expire' ? 0 : mode === 'scroll' ? 215 : 190, restoration: 'auto', pending: 0 });
   } finally { await browser?.close(); server.stop(true); }
 }, 30000);

@@ -27,9 +27,26 @@ public final class ExactSidebarController: NSSplitViewController {
     /// The source list; nil in a window whose app has no root tab bar for one.
     private let list: SidebarList?
     private let page: NSViewController
+    private weak var footer: NodeView?
+    private weak var footerPane: BlockView?
+    private var removeFooter: (() -> Void)?
     let detail: SplitDetail
     private let sidebarItem: NSSplitViewItem?
     private let pageItem: NSSplitViewItem
+    private var inspectorItem: NSSplitViewItem?
+    private(set) weak var inspectorNode: NodeView?
+    private(set) weak var inspectorPane: BlockView?
+    private var inspectorPins: [NSLayoutConstraint] = []
+    /// AppKit moves the divider of the visible sibling, even when a collapsed item follows it.
+    private var inspectorDivider: Int? {
+        splitViewItems.indices.dropLast().last { !splitViewItems[$0].isCollapsed }
+    }
+    private var configuringInspector = false
+    private var inspectorWidthKey: String? { autosave.map { "Exact Inspector Width " + $0 } }
+    private var inspectorHiddenKey: String? { autosave.map { "Exact Inspector Hidden " + $0 } }
+    private lazy var inspectorWidth: Double? = inspectorWidthKey.flatMap { UserDefaults.standard.object(forKey: $0) as? Double }
+    private lazy var inspectorHidden = inspectorHiddenKey.map { UserDefaults.standard.bool(forKey: $0) } ?? false
+
     private let detailItem: NSSplitViewItem
     private let autosave: String?
     private let minimumPageWidth: CGFloat
@@ -101,6 +118,7 @@ public final class ExactSidebarController: NSSplitViewController {
                exactView.topAnchor.constraint(equalTo: safe.topAnchor), exactView.bottomAnchor.constraint(equalTo: safe.bottomAnchor)]
         NSLayoutConstraint.activate(pins)
         detail.pin(cover: cover)
+        pinInspector()
     }
     /// The first root's `viewport-fit` changed (the owner's hook).
     public func viewportFitChanged() { pin() }
@@ -165,7 +183,144 @@ public final class ExactSidebarController: NSSplitViewController {
         }
     }
 
+    /// The accessory owns the footer's view. Its width lays out the authored subtree, whose
+    /// measured height in turn leaves that much space below the last sidebar row.
+    func showFooter(_ node: NodeView?) {
+        guard footer !== node || (node == nil && removeFooter != nil) else { return }
+        let presenter = exactView.session.presenter
+        if let footer { presenter.blocks.release(footer) }
+        footerPane = nil
+        removeFooter?()
+        removeFooter = nil
+        footer = node
+        guard let node, let sidebarItem, let list else { return }
+        let pane = BlockView(frame: NSRect(x: 0, y: 0, width: sidebarWidth, height: node.frame.height))
+        let height = pane.heightAnchor.constraint(equalToConstant: node.frame.height)
+        height.isActive = true
+        if #available(macOS 26, *) {
+            let accessory = NSSplitViewItemAccessoryViewController()
+            accessory.view = pane
+            sidebarItem.addBottomAlignedAccessoryViewController(accessory)
+            removeFooter = { accessory.removeFromParent() }
+        } else {
+            list.setFooter(pane)
+            removeFooter = { [weak list] in list?.setFooter(nil) }
+        }
+        footerPane = pane
+        pane.sizeChanged = { [weak self] _ in self?.resizeFooter() }
+        pane.pointerTracking = { [weak presenter] event in presenter?.trackPointer(event) }
+        presenter.blocks.show(node, in: pane, block: footerBlock(in: pane), owner: false) { size in
+            if height.constant != size.height { height.constant = size.height }
+        }
+    }
+
+    private func footerBlock(in pane: BlockView) -> HostBlock {
+        HostBlock(width: .size(pane.bounds.width), height: .atMost(max(1, view.bounds.height)))
+    }
+
+    private func resizeFooter() {
+        guard let footer, let pane = footerPane else { return }
+        exactView.session.presenter.blocks.resize(footer, footerBlock(in: pane))
+    }
+
+    public override func viewDidLayout() {
+        super.viewDidLayout()
+        resizeFooter()
+    }
+
+    func showInspector(_ shape: RouteInspector?, node: NodeView?) {
+        guard !configuringInspector else { return }
+        configuringInspector = true
+        defer { configuringInspector = false }
+        let presenter = exactView.session.presenter
+        if let old = inspectorNode, old !== node {
+            inspectorNode = nil
+            presenter.blocks.release(old)
+            presenter.keyViewLoopStale = true
+        }
+        guard let shape, let node else {
+            if let item = inspectorItem {
+                NSLayoutConstraint.deactivate(inspectorPins)
+                inspectorPins = []
+                inspectorPane = nil
+                inspectorItem = nil
+                removeSplitViewItem(item)
+            }
+            return
+        }
+        let installing = inspectorItem == nil
+        let item: NSSplitViewItem
+        if let inspectorItem { item = inspectorItem }
+        else {
+            let content = NSViewController(), pane = BlockView(frame: .zero)
+            content.view = NSView()
+            pane.translatesAutoresizingMaskIntoConstraints = false
+            content.view.addSubview(pane)
+            inspectorPane = pane
+            item = NSSplitViewItem(inspectorWithViewController: content)
+            inspectorItem = item
+            pinInspector()
+            pane.sizeChanged = { [weak self] _ in self?.resizeInspector() }
+            pane.positionChanged = { [weak self] in self?.resizeInspector() }
+            pane.pointerTracking = { [weak presenter] event in presenter?.trackPointer(event) }
+        }
+        let min = shape.minimum ?? NSSplitViewItem.unspecifiedDimension
+        let max = shape.maximum.map { Swift.max($0, shape.minimum ?? 0) } ?? NSSplitViewItem.unspecifiedDimension
+        if item.minimumThickness != min { item.minimumThickness = min }
+        if item.maximumThickness != max { item.maximumThickness = max }
+        let changed = inspectorNode !== node
+        if installing { addSplitViewItem(item) }
+        guard let pane = inspectorPane else { return }
+        if changed {
+            inspectorNode = node
+            if !item.isCollapsed, view.window != nil, let divider = inspectorDivider {
+                splitView.layoutSubtreeIfNeeded()
+                let width = inspectorWidth ?? shape.width
+                splitView.setPosition(splitView.bounds.maxX - width - splitView.dividerThickness,
+                                      ofDividerAt: divider)
+                splitView.layoutSubtreeIfNeeded()
+            }
+            if installing { item.isCollapsed = inspectorHidden }
+            let size = CGSize(width: pane.bounds.width > 0 ? pane.bounds.width : shape.width,
+                              height: pane.bounds.height > 0 ? pane.bounds.height : view.bounds.height)
+            presenter.blocks.show(node, in: pane, block: HostBlock(width: .fill(size.width), height: .fill(size.height)),
+                                  placement: presenter.navigationHost.split.placement(of: node, in: pane))
+            presenter.keyViewLoopStale = true
+        }
+    }
+
+    private func pinInspector() {
+        guard let pane = inspectorPane, let container = pane.superview else { return }
+        NSLayoutConstraint.deactivate(inspectorPins)
+        let cover = exactView.viewportFit == "cover", safe = container.safeAreaLayoutGuide
+        inspectorPins = [pane.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                         pane.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+                         pane.topAnchor.constraint(equalTo: cover ? container.topAnchor : safe.topAnchor),
+                         pane.bottomAnchor.constraint(equalTo: cover ? container.bottomAnchor : safe.bottomAnchor)]
+        NSLayoutConstraint.activate(inspectorPins)
+    }
+
+    private func resizeInspector() {
+        guard let node = inspectorNode, let pane = inspectorPane, inspectorItem?.isCollapsed == false,
+              pane.bounds.width > 0, pane.bounds.height > 0 else { return }
+        let presenter = exactView.session.presenter
+        presenter.blocks.resize(node, HostBlock(width: .fill(pane.bounds.width), height: .fill(pane.bounds.height)),
+                                placement: presenter.navigationHost.split.placement(of: node, in: pane))
+    }
+
+    public override func toggleInspector(_ sender: Any?) {
+        guard let item = inspectorItem else { return }
+        inspectorHidden = !item.isCollapsed
+        if let key = inspectorHiddenKey { UserDefaults.standard.set(inspectorHidden, forKey: key) }
+        if inspectorHidden, let width = inspectorItem?.viewController.view.frame.width, width > 0 {
+            inspectorWidth = width
+            if let key = inspectorWidthKey { UserDefaults.standard.set(width, forKey: key) }
+        }
+        super.toggleInspector(sender)
+    }
+
     public override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(toggleInspector(_:)), inspectorItem == nil { return false }
         if item.action == #selector(toggleSidebar(_:)), hiddenForApp || sidebarItem == nil { return false }
         return super.validateUserInterfaceItem(item)
     }
@@ -242,6 +397,14 @@ public final class ExactSidebarController: NSSplitViewController {
     /// list's column keeps that width, here and at the next launch.
     public override func splitViewDidResizeSubviews(_ notification: Notification) {
         super.splitViewDidResizeSubviews(notification)
+        if !configuringInspector, let item = inspectorItem, !item.isCollapsed,
+           let divider = inspectorDivider, notification.userInfo?["NSSplitViewDividerIndex"] as? Int == divider {
+            let width = item.viewController.view.frame.width
+            if width > 0 {
+                inspectorWidth = width
+                if let key = inspectorWidthKey { UserDefaults.standard.set(width, forKey: key) }
+            }
+        }
         guard splits, !placing, notification.userInfo?["NSSplitViewDividerIndex"] as? Int == listDivider else { return }
         let width = page.view.frame.width
         guard width >= Self.listMinimum else { return }
@@ -363,6 +526,8 @@ final class SplitDetail: NSViewController {
 final class SidebarList: NSViewController, NSTableViewDataSource, NSTableViewDelegate {
     private unowned let host: SidebarHost
     let table = NSTableView()
+    private var scrollBottom: NSLayoutConstraint?
+    private weak var pinnedFooter: NSView?
     private var rows: [SidebarRow] = []
     /// The row a mouse-down pressed, and that click's number: its mouse-up
     /// is the same click, not a second press.
@@ -394,7 +559,31 @@ final class SidebarList: NSViewController, NSTableViewDataSource, NSTableViewDel
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
-        view = scroll
+        if #available(macOS 26, *) {
+            view = scroll
+        } else {
+            view = NSView()
+            scroll.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(scroll)
+            let bottom = scroll.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+            scrollBottom = bottom
+            NSLayoutConstraint.activate([scroll.topAnchor.constraint(equalTo: view.topAnchor),
+                scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor), scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor), bottom])
+        }
+    }
+
+    /// Before AppKit offered split item accessories, the sidebar pinned its footer below the scroller.
+    func setFooter(_ pane: NSView?) {
+        loadViewIfNeeded()
+        pinnedFooter?.removeFromSuperview()
+        pinnedFooter = pane
+        scrollBottom?.isActive = pane == nil
+        guard let pane, let scroll = table.enclosingScrollView else { return }
+        pane.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(pane)
+        NSLayoutConstraint.activate([pane.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            pane.trailingAnchor.constraint(equalTo: view.trailingAnchor), pane.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            scroll.bottomAnchor.constraint(equalTo: pane.topAnchor)])
     }
 
     func show(_ shown: SidebarHost.Shown) {

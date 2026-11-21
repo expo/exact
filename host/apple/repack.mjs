@@ -46,7 +46,7 @@ import { bakeOutside, linkedInputs } from '../../scripts/linked-plan.mjs';
 import { bakedSettings } from '../../js/bake/src/__exact_env.mjs';
 import { hasEntries, platformWidgetEntries, widgetExtensionInfo, widgetId, widgetsDigest } from './widgets.mjs';
 import { EXTENSION_KINDS, extensionKinds, notificationService, withoutExtensions } from './extensions.mjs';
-import { appleAssetsKey, bakedAssetInputs, frameworkInfo, iosAssets, plistFile } from './assets.mjs';
+import { appleAssetsKey, bakedAssetInputs, frameworkInfo, frameworkVersions, iosAssets, plistFile } from './assets.mjs';
 import { buildInfo } from './buildinfo.mjs';
 import { fitLinkedSections, occurrencesOutsideLinked, readLinkedSections } from './sections.mjs';
 import { nativeExtras } from './native-extras.mjs';
@@ -78,8 +78,9 @@ const REBUILT = (name) => ['Info.plist', 'receipt.json', '_CodeSignature', 'asse
  * grants), its target and trust. A plan-only change leaves all of them as they were. */
 const BINDING = ['inputs', 'target', 'embedded'];
 /** `embedded`'s digests of the plan, each entry's plan and the bundle's assets are the bundle's own: they move with every
- * plan edit, and repack writes the plans again. */
-const bindingOf = (compat, key) => key === 'embedded' && compat.embedded && typeof compat.embedded === 'object' ? (({ plan: _p, plans: _ps, assets: _a, ...rest }) => rest)(compat.embedded) : key === 'inputs' && compat.inputs && typeof compat.inputs === 'object' ? withoutApp(compat.inputs) : compat[key] ?? null;
+ * plan edit, and repack writes the plans again. So are its version and build number: no compiled code reads them (the
+ * app reads Info.plist's), and repack writes them again in compat.json, Info.plist and each framework's Info.plist. */
+const bindingOf = (compat, key) => key === 'embedded' && compat.embedded && typeof compat.embedded === 'object' ? (({ plan: _p, plans: _ps, assets: _a, version: _v, buildNumber: _b, ...rest }) => rest)(compat.embedded) : key === 'inputs' && compat.inputs && typeof compat.inputs === 'object' ? withoutApp(compat.inputs) : compat[key] ?? null;
 /** compat.json's inputs but for the app's identity, its icons and its grants, which reach no compiled code
  * (`inputs.linked` says what the grants link; the icons are bundle resources repack draws again): the base may be
  * another app's, such as a template built with the placeholder icon. */
@@ -90,6 +91,9 @@ export const bindingChanges = (baseCompat, compat) => {
   const fields = differs.includes('inputs') ? Object.keys(withoutApp({ ...baseCompat.inputs, ...compat.inputs })).filter(key => canonical(baseCompat.inputs?.[key] ?? null) !== canonical(compat.inputs?.[key] ?? null)).map(key => `inputs.${key}`) : [];
   return [...fields, ...differs.filter(key => key !== 'inputs')];
 };
+
+/** A base's version and build number, from its Info.plist (XML as plistFile writes it), as frameworkInfo takes them. */
+export const versionsOf = (plist) => Object.fromEntries(['CFBundleVersion', 'CFBundleShortVersionString'].map(key => [key, new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`).exec(plist)?.[1] ?? null]));
 
 /** Whether a base's full build stamped it as an archive (Info.plist's ExactBuildKind, XML as plistFile writes it):
  * a repack's kind is its base's, so it is the kind a full build of the same upload gets. */
@@ -220,16 +224,19 @@ export async function repack(args) {
     // Another app's base: each framework's Info.plist names the app (frameworkInfo), and its signature covers it.
     // Each is written for this app, as wrapFramework does, and signed again as assembleIOS signs it.
     const baseId = baseCompat.inputs?.app;
+    // And a base of another version or build number: each framework's Info.plist carries them too.
+    const baseVersions = versionsOf(basePlist), versions = frameworkVersions();
+    const restamped = baseId !== app.id || canonical(baseVersions) !== canonical(versions);
     // The base's code is kept as it is: if its own app id is compiled in (outside the sections this rewrites), this app
     // would run with another app's id (its storage keyed under it). A full build compiles its own.
     if (baseId && baseId !== app.id && occurrencesOutsideLinked(baseExecutable, baseId)) refuse(`the base's executable names its app id ${baseId} in compiled code`);
-    if (baseId !== app.id && existsSync(resolve(bundle, 'Frameworks'))) for (const entry of readdirSync(resolve(bundle, 'Frameworks'))) {
+    if (restamped && existsSync(resolve(bundle, 'Frameworks'))) for (const entry of readdirSync(resolve(bundle, 'Frameworks'))) {
       // A loose dylib (an arm an SDK ships unwrapped, such as libexact_web.dylib) has no Info.plist, and its signature
-      // names the file: it is every app's, and is kept as it is.
-      if (entry.endsWith('.dylib')) continue;
+      // names the file: it is every app's, and is kept as it is. An app with widgets' ExactCore is written below.
+      if (entry.endsWith('.dylib') || (widgets && entry === 'ExactCore.framework')) continue;
       const framework = resolve(bundle, 'Frameworks', entry), name = basename(entry, '.framework'), plist = resolve(framework, 'Info.plist');
-      if (!entry.endsWith('.framework') || !existsSync(plist) || readFileSync(plist, 'utf8') !== plistFile(frameworkInfo(name, { ...app, id: baseId }, 'iPhoneOS'))) refuse(`the base's ${entry} is not one repack can rename`);
-      writeFileSync(plist, plistFile(frameworkInfo(name, app, 'iPhoneOS')));
+      if (!entry.endsWith('.framework') || !existsSync(plist) || readFileSync(plist, 'utf8') !== plistFile(frameworkInfo(name, { ...app, id: baseId }, 'iPhoneOS', baseVersions))) refuse(`the base's ${entry} is not one repack can rename`);
+      writeFileSync(plist, plistFile(frameworkInfo(name, app, 'iPhoneOS', versions)));
       tool('codesign', ['--force', '--sign', '-', '--timestamp=none', framework], { stdio: 'ignore' });
     }
     mark('copy');
@@ -299,11 +306,13 @@ export async function repack(args) {
       tool('plutil', ['-insert', 'ExactKeychainAccessGroup', '-string', group, infoPath]);
       tool('plutil', ['-insert', 'ExactWidgetTypeScript', '-bool', String(existsSync(resolve(app.dir, 'app.ts'))), infoPath]);
       // ExactCore's Info.plist takes the app's versions and device capabilities (packageWidgets): the base's stands
-      // only while those are the base app's.
+      // only while its minimum OS and capabilities are the base app's, and takes this app's versions.
       const json = (path) => JSON.parse(tool('plutil', ['-convert', 'json', '-o', '-', path]).stdout);
       const appInfo = json(infoPath), baseApp = json(resolve(base, 'Info.plist'));
-      const inherited = (info) => canonical(['CFBundleVersion', 'CFBundleShortVersionString', 'MinimumOSVersion', 'UIRequiredDeviceCapabilities'].map(key => info[key] ?? null));
-      if (inherited(appInfo) !== inherited(baseApp)) refuse('the app\'s version, minimum OS or device capabilities changed, which ExactCore\'s Info.plist carries');
+      const inherited = (info) => canonical(['MinimumOSVersion', 'UIRequiredDeviceCapabilities'].map(key => info[key] ?? null));
+      if (inherited(appInfo) !== inherited(baseApp)) refuse('the app\'s minimum OS or device capabilities changed, which ExactCore\'s Info.plist carries');
+      const coreInfo = resolve(bundle, 'Frameworks/ExactCore.framework/Info.plist');
+      writeFileSync(coreInfo, plistFile({ ...json(coreInfo), CFBundleVersion: appInfo.CFBundleVersion, CFBundleShortVersionString: appInfo.CFBundleShortVersionString }));
       // The extension's Info.plist, from this app's, then its signature with its own entitlements, as packageWidgets
       // signs it for an unsigned device archive.
       const extension = resolve(bundle, WIDGET_EXTENSION);

@@ -14,9 +14,9 @@ use alloc::string::String;
 use alloc::vec;
 use hashbrown::HashMap;
 use read_fonts::{
-    FileRef, FontRef, TableProvider as _,
     tables::name,
     types::{NameId, Tag},
+    FileRef, FontRef, TableProvider as _,
 };
 use smallvec::SmallVec;
 #[cfg(feature = "std")]
@@ -61,14 +61,18 @@ impl<'a> ScannedFont<'a> {
 
 #[cfg(feature = "std")]
 /// Scans paths and invokes the given function for each font discovered.
+/// Returns whether every path within `max_depth` was read: each directory
+/// listed, and each file opened and mapped.
 pub fn scan_paths(
     paths: impl IntoIterator<Item = impl AsRef<Path>>,
     max_depth: u32,
     mut f: impl FnMut(&ScannedFont<'_>),
-) {
+) -> bool {
+    let mut complete = true;
     for path in paths {
-        scan_path_impl(path.as_ref(), max_depth, &mut f, 0);
+        scan_path_impl(path.as_ref(), max_depth, &mut f, 0, &mut complete);
     }
+    complete
 }
 
 /// Scans a memory buffer and invokes the given function for each font
@@ -150,18 +154,27 @@ fn scan_path_impl(
     max_depth: u32,
     f: &mut impl FnMut(&ScannedFont<'_>),
     depth: u32,
+    complete: &mut bool,
 ) -> Option<()> {
-    let metadata = path.metadata().ok()?;
+    fn read<T>(complete: &mut bool, result: std::io::Result<T>) -> Option<T> {
+        *complete &= result.is_ok();
+        result.ok()
+    }
+    let metadata = read(complete, path.metadata())?;
     if metadata.is_dir() {
         if depth > max_depth {
             return None;
         }
-        for entry in std::fs::read_dir(path).ok()?.filter_map(|entry| entry.ok()) {
-            scan_path_impl(entry.path().as_path(), max_depth, f, depth + 1);
+        for entry in read(complete, std::fs::read_dir(path))? {
+            let Some(entry) = read(complete, entry) else {
+                continue;
+            };
+            scan_path_impl(entry.path().as_path(), max_depth, f, depth + 1, complete);
         }
     } else {
-        let file = std::fs::File::open(path).ok()?;
-        let mapped = unsafe { memmap2::Mmap::map(&file) }.ok()?;
+        let mapped =
+            std::fs::File::open(path).and_then(|file| unsafe { memmap2::Mmap::map(&file) });
+        let mapped = read(complete, mapped)?;
         scan_memory_impl(&mapped, Some(path), f);
     }
     Some(())

@@ -232,7 +232,7 @@ test('a tab screen asks while shown and keeps its answer while hidden', () => fi
   // The agent lists it by instance path, apart from the root's resources.
   const state = await browser.state();
   expect(state.owned).toEqual(['works']);
-  expect(Object.keys(state.resources)).not.toContain('works#1');
+  expect(Object.keys(state.resources).filter(name => name.split('#')[0] === 'works')).toEqual([]);
   expect(Object.values(state.instances)).toEqual([{ works: { ok: true, works: ['sf'] } }]);
 
   await browser.tap('tab-home');

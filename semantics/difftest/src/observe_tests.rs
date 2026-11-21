@@ -509,3 +509,268 @@ fn a_polled_module_answer_that_moves_is_outside() {
         matches!(crate::compare(rust, lean), crate::Verdict::Unsupported(why) if why.starts_with(observe::MODULE_MOVED))
     );
 }
+
+const PAIRING: &str = r#"shape Pairing
+  phase: enum<"idle", "code", "done">
+  code: string
+  peer: string
+component App
+  resource pairing = pairing() as shape Pairing else empty(phase="idle", code="", peer="")
+  derive phase = pairing.phase
+  state taps = 0
+  action press
+    taps = taps + 1
+  view
+    column
+      button "Press" testId="press" press=press
+      text pairing.peer testId="peer"
+      if pairing.phase == "code"
+        text pairing.code testId="code"
+      if pairing.phase == "done"
+        text "Paired" testId="done"
+"#;
+
+/// A test chooses what a source answers, before boot and between steps: each
+/// later line asks the resource again and changes only the fields it names,
+/// and fields no line names keep the oracle's answer.
+#[test]
+fn a_test_chooses_a_sources_answers_and_changes_them_between_steps() {
+    let source = format!(
+        r#"{PAIRING}test "phases"
+  answer source pairing with {{"phase": "idle"}}
+  expect state phase == "idle"
+  expect tree missing "code"
+  answer source pairing with {{"phase": "code", "code": "123456"}}
+  expect state phase == "code"
+  expect text "code" == "123456"
+  tap "press"
+  expect text "code" == "123456"
+  answer source pairing with {{"phase": "done"}}
+  expect tree missing "code"
+  expect tree has "done"
+  answer source pairing with {{"phase": "code"}}
+  expect text "code" == "123456"
+"#
+    );
+    let s = script::scripted("answers", &source, None)
+        .unwrap()
+        .remove(0);
+    assert!(s.delivery.stopped.is_none(), "{:?}", s.delivery.stopped);
+    assert_eq!(
+        s.case.answers,
+        [("pairing".into(), r#"{"phase":"idle"}"#.into())]
+    );
+    let plan = compile(&s.case).unwrap();
+    let (lines, data) = observe::run(
+        plan.clone(),
+        Oracle::for_case(&plan, &s.case),
+        &s.case.events,
+    );
+    crate::expectations_on(&s, &plan, &lines).unwrap();
+    let oracle = data.unwrap();
+    let boot = oracle.text();
+    assert!(boot.contains(r#""idle""#) && !boot.contains(r#""123456""#));
+    for (revision, phase) in [(1, "code"), (2, "done"), (3, "code")] {
+        let calls = oracle.calls_text(Some("pairing"), revision);
+        assert!(
+            calls.contains(&crate::observe::quote(phase)) && calls.contains("123456"),
+            "{calls}"
+        );
+    }
+    assert!(lines.iter().all(|line| line != observe::OMITTED_COMMIT));
+    let peers: std::collections::BTreeSet<&String> = lines
+        .iter()
+        .filter(|l| l.starts_with("view \"peer\" "))
+        .collect();
+    assert_eq!(
+        peers.len(),
+        1,
+        "an unnamed field keeps one answer: {peers:?}"
+    );
+    assert!(
+        lines.contains(&r#"== answer source pairing with {"phase":"done"}"#.to_string()),
+        "{lines:?}"
+    );
+    let prepared = crate::prepare(&s.case, 0).expect("prepare the same script for Lean");
+    assert_eq!(
+        prepared.lean.events.len(),
+        s.case.events.len(),
+        "compare every delivered step"
+    );
+}
+
+#[test]
+fn an_answer_the_source_cannot_give_is_refused_by_name() {
+    let plan = contract::compile(PAIRING).unwrap();
+    let check = |source: &str, json: &str| crate::oracle::check_answer(&plan, source, json);
+    assert_eq!(check("pairing", r#"{"phase": "code"}"#), Ok(()));
+    assert_eq!(
+        check("pairng", "{}").unwrap_err(),
+        "the app has no source `pairng`"
+    );
+    assert_eq!(
+        check("pairing", r#"{"stage": "code"}"#).unwrap_err(),
+        "`Pairing` has no field `stage`"
+    );
+    assert_eq!(
+        check("pairing", r#"{"phase": "lost"}"#).unwrap_err(),
+        r#"phase: "lost" is not a member of "idle", "code", "done""#
+    );
+    assert_eq!(
+        check("pairing", r#"{"code": 7}"#).unwrap_err(),
+        "code: 7 is not a string"
+    );
+}
+
+const KEYED: &str = r#"component App
+  state closed = false
+  state note = ""
+  action keys(key: string)
+    if key == "Escape"
+      closed = true
+      note = "closed-by-key"
+  action released(key: string)
+    if key == "F2"
+      note = "renaming"
+  action typed(value: string)
+    note = value
+  action save
+    note = "saved"
+  view
+    column key=keys testId="window"
+      column keyup=released testId="release"
+      column press=save key=keys testId="pressable"
+      input value=note input=typed key=keys testId="note"
+      button "Save" press=save key=keys testId="save"
+"#;
+
+#[test]
+fn a_tests_key_press_runs_its_handlers_unless_its_default_is_the_hosts() {
+    let tests = r#"test "Escape closes the window"
+  expect state closed == false
+  type "window" key "Escape"
+  expect state closed == true
+
+test "a key at a field types into it, which the host does"
+  type "note" key "Escape"
+  expect state closed == true
+
+test "the host activates a pressable box"
+  type "pressable" key "Enter"
+
+test "the host moves focus"
+  type "window" key "Shift+Tab"
+"#;
+    let source = format!("{KEYED}\n{tests}");
+    let scripts = script::scripted("keys", &source, None).unwrap();
+    let closes = &scripts[0];
+    assert!(
+        closes.delivery.stopped.is_none(),
+        "{:?}",
+        closes.delivery.stopped
+    );
+    assert_eq!(
+        closes.case.events,
+        [
+            script::Event::Key("window".into(), "Escape".into()),
+            script::Event::InputLand
+        ]
+    );
+    assert_eq!(
+        closes.case.events[0].label(),
+        r#"type "window" key "Escape""#
+    );
+    crate::expectations(closes).unwrap();
+    for (script, reason) in scripts[1..]
+        .iter()
+        .zip(["TextInput", "press handler", "focus"])
+    {
+        let (_, kind, why) = script.delivery.stopped.as_ref().unwrap();
+        assert_eq!(kind, "type key (a control's default)");
+        assert!(why.contains(reason), "{why}");
+        assert!(script.case.events.is_empty());
+    }
+}
+
+#[test]
+fn a_walk_presses_the_keys_its_key_handlers_hold() {
+    let base = script::Case {
+        name: "keys".into(),
+        seed: Some(3),
+        source: KEYED.into(),
+        events: Vec::new(),
+        path: None,
+        stored: false,
+        prerendered: false,
+        launch: Default::default(),
+        answers: Vec::new(),
+    };
+    let plan = compile(&base).unwrap();
+    let source = format!("{KEYED}\ntest \"focus traversal\"\n  type \"window\" key \"Tab\"\n");
+    let tests = contract_syntax::parse(&source).unwrap().tests;
+    let inputs = crate::walk::Inputs::new(&source, tests.into_iter());
+    let walk = crate::walk::generate(&plan, &base, None, 3, 0, 40, &inputs);
+    let keys: Vec<_> = walk
+        .scripted
+        .case
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            script::Event::Key(target, key) => Some((target.as_str(), key.as_str())),
+            _ => None,
+        })
+        .collect();
+    let expected = [("window", "Escape"), ("release", "F2")];
+    for key in expected {
+        assert!(keys.contains(&key), "{keys:?}");
+    }
+    assert!(keys.iter().all(|k| expected.contains(k)), "{keys:?}");
+    for action in ["keys", "released"] {
+        assert!(walk.rendered.contains(action));
+        assert!(walk
+            .observation
+            .iter()
+            .any(|line| line.starts_with("ran handler") && line.contains(action)));
+    }
+}
+
+#[test]
+fn a_key_runs_capture_outermost_first_then_bubbles_until_a_stop() {
+    let source = include_str!("../../corpus/edge/keyboard-propagation.contract");
+    for s in script::scripted("route", source, None).unwrap() {
+        assert!(
+            s.delivery.stopped.is_none(),
+            "{}: {:?}",
+            s.case.name,
+            s.delivery.stopped
+        );
+        crate::expectations(&s).unwrap_or_else(|e| panic!("{}: {e}", s.case.name));
+    }
+}
+
+/// Work due at the keydown fires first, as it does before any input, so a
+/// change task the boot armed does not hold the key back.
+#[test]
+fn a_key_waits_for_no_change_task_due_before_it() {
+    let source = r#"component App
+  state closed = false
+  state seen = 0
+  action bump
+    seen = seen + 1
+  action keys(key: string)
+    if key == "Escape"
+      closed = true
+  task watch when not closed key=closed
+    change(bump)
+  view
+    column key=keys testId="window"
+      text `${seen}` testId="seen"
+
+test "Escape closes the window"
+  type "window" key "Escape"
+  expect state closed == true
+"#;
+    let s = script::scripted("due", source, None).unwrap().remove(0);
+    assert!(s.delivery.stopped.is_none(), "{:?}", s.delivery.stopped);
+    crate::expectations(&s).unwrap();
+}

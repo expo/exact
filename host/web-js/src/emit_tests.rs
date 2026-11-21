@@ -937,7 +937,16 @@ component Editor
     let js = crate::emit::emit(&plan, false, false).unwrap().js;
     assert_eq!(js.matches("tp(").count(), 2, "{js}");
     let dev = crate::emit::emit(&plan, false, true).unwrap().js;
-    assert!(dev.contains(r#"$devSig("draft#1"+"@"+e"#), "{dev}");
+    let draft = plan
+        .slots
+        .iter()
+        .map(|s| plan.str(s.name))
+        .find(|s| s.starts_with("draft#"))
+        .unwrap();
+    assert!(
+        dev.contains(&format!(r#"$devSig({draft:?}+"@"+e"#)),
+        "{dev}"
+    );
 }
 
 /// The boot's settlement asks `exactMIDI` and `exactTransport`, so their
@@ -1430,4 +1439,7 @@ fn a_drags_bound_data_is_written_by_the_names_drag_js_admits() {
     for name in ["data-datatransferfiles", "data-datatransferurl"] {
         assert!(js.contains(&format!("\"{name}\"")), "{name}:\n{js}");
     }
+    // And `draggable` as HTML's own attribute, which the browser drags by.
+    assert!(js.contains("\"draggable\":\"true\""), "{js}");
+    assert!(!js.contains("data-draggable"), "{js}");
 }

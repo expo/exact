@@ -88,20 +88,8 @@ fn prepare(case: &Case, i: usize) -> Result<Prepared, Verdict> {
     Ok(Prepared {
         flat,
         comp,
-        oracle: data.map_or_else(String::new, |o| o.text()),
-        // Component semantics refuses `then` and queue mutations. Its remaining
-        // programs have no modeled work for `land` to deliver.
-        events: case
-            .events
-            .iter()
-            .filter(|e| {
-                !matches!(
-                    e,
-                    crate::script::Event::Land | crate::script::Event::InputLand
-                )
-            })
-            .map(crate::script::Event::lean)
-            .collect(),
+        oracle: data.as_ref().map_or_else(String::new, |o| o.text()),
+        events: crate::script::lean_events(&case.events, data.as_ref()),
     })
 }
 
@@ -115,7 +103,7 @@ fn module(cases: &[(usize, Prepared)]) -> String {
         s.push('\n');
         s.push_str(&c.comp);
         s.push_str(&format!(
-            "\ndef o{i} : Oracle := OracleText.parse! {}\n\ndef e{i} : List Observe.Event := [{}]\n\n",
+            "\ndef o{i} : Oracle := OracleText.parse! {}\n\ndef e{i} : List Observe.ScriptEvent := [{}]\n\n",
             contract::lean::string(&c.oracle),
             c.events.join(", ")
         ));

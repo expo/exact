@@ -57,6 +57,19 @@ pub fn press_writes_router(plan: &Plan, site: NodesId) -> Option<bool> {
     }))
 }
 
+/// The complementary pane beside a route's content (LLP 1115.002, item 4).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RouteInspector {
+    /// The aside whose subtree goes in the pane.
+    pub view: ViewId,
+    /// Its laid-out border-box width in CSS pixels.
+    pub width: f32,
+    /// The authored minimum including the padding and border, when specified.
+    pub minimum: Option<f32>,
+    /// The authored maximum including the padding and border, when specified.
+    pub maximum: Option<f32>,
+}
+
 /// A stack that splits, read from its root route.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StackSplit {
@@ -86,6 +99,87 @@ struct ListRows {
 }
 
 impl<D: DataSource> Runner<D> {
+    /// A trailing aside is a window inspector when it fills the cross axis of the
+    /// route's own flex row. A nested aside belongs to its section.
+    pub fn route_inspector(&self, route: ViewId) -> Option<RouteInspector> {
+        use exact_kernel::{AlignItems, AlignSelf, BoxSizing, Dimension, PositionType, Visibility};
+
+        let route = self.kernel.node(route)?;
+        route.props.str(PropId::NavigationKey)?;
+        if route.style.display != Display::Flex
+            || route.style.flex_direction != FlexDirection::Row
+            || matches!(
+                route.props.str(PropId::NavigationPresentation),
+                Some("modal" | "fullscreen")
+            )
+        {
+            return None;
+        }
+        let mut children = route.child_nodes().rev().filter(|n| {
+            n.style.display != Display::None && n.layout_position() != PositionType::Absolute
+        });
+        let aside = children.next()?;
+        let complementary = match aside.props.str(PropId::AccessibilityRole) {
+            Some(role) => role == "complementary",
+            None => aside.props.str(PropId::SemanticTag) == Some("aside"),
+        };
+        if !complementary || children.next().is_none() {
+            return None;
+        }
+
+        if aside.style.visibility != Visibility::Visible {
+            return None;
+        }
+        let kernel = &self.kernel;
+        let padding = kernel.resolved_padding(route.key).unwrap_or_default();
+        let border = kernel.resolved_border(route.key).unwrap_or_default();
+        let height = route.frame.height - padding.1 - padding.3 - border.1 - border.3;
+        let top = route.frame.y + padding.1 + border.1;
+        let projected = kernel.host_block(aside.id).is_some();
+        let env = kernel.env();
+        let (x_inset, y_inset) = if aside.style.box_sizing == BoxSizing::ContentBox {
+            let pad = kernel.resolved_padding(aside.key).unwrap_or_default();
+            let border = kernel.resolved_border(aside.key).unwrap_or_default();
+            (
+                pad.0 + pad.2 + border.0 + border.2,
+                pad.1 + pad.3 + border.1 + border.3,
+            )
+        } else {
+            (0.0, 0.0)
+        };
+        let size = |dimension: &Dimension, basis, inset| match dimension.resolve(&env) {
+            Dimension::Auto | Dimension::Keyword(_) => None,
+            length => Some(length.at_basis(&env, basis).max(0.0) + inset),
+        };
+        // A native pane has its own containing block. Its frame no longer says
+        // whether the authored flex item stretches to the height of the route.
+        let fills = if projected {
+            let stretches = aside.style.align_self == AlignSelf::Stretch
+                || aside.style.align_self == AlignSelf::Auto
+                    && matches!(
+                        route.style.align_items,
+                        AlignItems::Stretch | AlignItems::Normal
+                    );
+            let h = size(&aside.style.height, height, y_inset);
+            h.map_or(stretches, |h| (h - height).abs() <= 1.0)
+                && size(&aside.style.max_height, height, y_inset).is_none_or(|h| h >= height - 1.0)
+                && size(&aside.style.min_height, height, y_inset).is_none_or(|h| h <= height + 1.0)
+        } else {
+            (aside.frame.height - height).abs() <= 1.0 && (aside.frame.y - top).abs() <= 1.0
+        };
+        if height <= 0.0 || aside.frame.width <= 0.0 || !fills {
+            return None;
+        }
+        let basis = route.frame.width - padding.0 - padding.2 - border.0 - border.2
+            + if projected { aside.frame.width } else { 0.0 };
+        Some(RouteInspector {
+            view: aside.id,
+            width: aside.frame.width,
+            minimum: size(&aside.style.min_width, basis, x_inset),
+            maximum: size(&aside.style.max_width, basis, x_inset),
+        })
+    }
+
     /// Whether the stack whose root route is `route` shows that route as a
     /// list beside the route above it (the module's rule), read from the
     /// tree as it now stands. `None` for a stack that pushes, and for a node

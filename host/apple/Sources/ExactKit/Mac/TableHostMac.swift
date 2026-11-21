@@ -3,12 +3,10 @@
 // and its keys, holding the runner's rows (`TableFeed`, TableFeedMac.swift).
 // Contract marks the lists whose rows are cells; this host reads that mark.
 //
-// A marked list is a table whether the runner windows its rows or keeps
-// them all mounted. Contract excludes carousels, authored arrangements,
-// grouped forms and sections (D16). Kept painted too, each said once in the log
-// and queued (LLP 1115.002 §3, stage 3b): a list whose rows are in
-// `section`s, a list inside another list's row, and a list whose rows are
-// dragged to reorder.
+// A marked list can keep every row mounted or let the runner window them.
+// In a split's list column, a sectioned list that keeps its rows mounted
+// also takes a table. Its headers become AppKit group rows. Outside the
+// split, the same sections keep their authored or grouped presentation.
 //
 // Under the agent the rows are painted, as the header and the tablist are,
 // and `--chrome platform` shows the table.
@@ -63,7 +61,7 @@ package final class TableHost {
     /// Painted rows, not AppKit's table: the driver's own chrome
     /// (`--chrome agent`), as it paints the header and the tablist. A test
     /// of the painted list says so.
-    var painted = ExactEnv.authoredChrome { didSet { if painted != oldValue { decide(); syncPainted() } } }
+    var painted = ExactEnv.authoredChrome { didSet { if painted != oldValue { decide(); syncPainted(); presenter?.dataTables.sync() } } }
     /// Why each list that is no table is none, as last said in the log.
     private var said: [UInt32: String] = [:]
     init(_ presenter: Presenter) { self.presenter = presenter }
@@ -111,6 +109,7 @@ package final class TableHost {
                 if !why.isEmpty, said[id] != why { said[id] = why; presenter.session?.log("table: list #\(id) keeps painted rows: \(why)") }
             } else if feeds[id] == nil {
                 feeds[id] = TableFeed(list, presenter: presenter, style: .inset, sections: sections)
+                if sections { list.fitScroll() }
                 presenter.keyViewLoopStale = true
                 if said[id] != "" { said[id] = ""; presenter.session?.log("table: list #\(id) is an NSTableView") }
             }

@@ -61,7 +61,7 @@ impl<D: DataSource> Presenter<D> {
     /// The innermost enabled node from `hit` up that hears one of `kinds`.
     /// A `wheel` is heard by a disabled box too, as by a `<div disabled>`
     /// in Chrome; only a disabled form control is out (review b5-b 4).
-    fn pointer_node(&self, hit: ViewId, kinds: &[EventKind]) -> Option<ViewId> {
+    pub(super) fn pointer_node(&self, hit: ViewId, kinds: &[EventKind]) -> Option<ViewId> {
         if self.host.route_visibility(hit).1 {
             return None;
         }
@@ -86,7 +86,7 @@ impl<D: DataSource> Presenter<D> {
     /// The record of a viewport point as `view` sees it, from its content
     /// box, and the viewport point itself (`clientX`, LLP 1094 D11): the
     /// button that changed (DOM's number, -1 for none) and those held.
-    fn pointer_record(
+    pub(super) fn pointer_record(
         &mut self,
         view: ViewId,
         x: f32,
@@ -110,7 +110,7 @@ impl<D: DataSource> Presenter<D> {
         Some(record)
     }
 
-    fn pointer_dispatch(
+    pub(super) fn pointer_dispatch(
         &mut self,
         view: ViewId,
         kind: EventKind,

@@ -308,10 +308,10 @@ fn serve(mut stream: TcpStream, shared: Arc<Shared>, key: [u8; 8]) -> io::Result
                     let pressed = mask & !buttons;
                     let released = buttons & !mask;
                     if pressed & 1 != 0 {
-                        push(&shared, InputEvent::Button(true));
+                        push(&shared, InputEvent::MouseDown(std::time::SystemTime::now()));
                     }
                     if released & 1 != 0 {
-                        push(&shared, InputEvent::Button(false));
+                        push(&shared, InputEvent::ButtonUp);
                     }
                     // RFB's middle (2) and right (4) are the web's 4 and 2.
                     for (rfb, bit) in [(2, 4), (4, 2)] {
@@ -583,9 +583,11 @@ mod contact_tests {
     #[test]
     fn disconnect_while_down_queues_cancel_and_never_a_successful_release() {
         let events = disconnect_holding(1);
-        assert!(events.contains(&InputEvent::Button(true)));
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, InputEvent::MouseDown(_))));
         assert_eq!(events.last(), Some(&InputEvent::Cancel));
-        assert!(!events.contains(&InputEvent::Button(false)));
+        assert!(!events.contains(&InputEvent::ButtonUp));
     }
 
     /// RFB's middle (2) and right (4) buttons are the web's 4 and 2: a

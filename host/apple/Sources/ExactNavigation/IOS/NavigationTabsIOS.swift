@@ -834,6 +834,7 @@ extension NavigationHost {
     /// What holds the tabs goes: its stacks are retired, the authored
     /// tablist paints again.
     func retireTabs() {
+        projectSidebarFooter(nil)
         siblings.putAllBack()
         // The tablist's hold on the bar goes with its container (§3.7).
         tablistRoot = nil
@@ -895,6 +896,80 @@ extension NavigationHost {
         guard tablistAppearanceNone, !syncing, let view = presenter.session?.view,
               let list = adoptedTablist.flatMap({ presenter.views[$0] }) else { return }
         if list.convert(list.bounds, to: view) != measuredTablist { reportCovers() }
+    }
+
+    /// A footer accompanies the root's tabs only while UIKit owns their presentation (LLP 1115.002 item 5).
+    func sidebarFooter() -> NodeView? {
+        guard [.phone, .pad].contains(UIDevice.current.userInterfaceIdiom), let tabs = tabController, tabOwner === tabs,
+              let root = container, let shape = presenter.rootTabs[root.id], let footer = shape.footer,
+              let list = presenter.views[shape.tablist], adopts(tablist: list) else { return nil }
+        return presenter.views[footer]
+    }
+
+    func projectSidebarFooter(_ node: NodeView?) {
+        #if os(iOS)
+        if #available(iOS 18.0, *), let tabs = tabController, tabs.mode == .tabSidebar, let node {
+            hideSidebarFooter(nil)
+            if sidebarFooterPane?.node !== node || sidebarFooterPane?.node.superview !== sidebarFooterPane {
+                releaseSidebarPane()
+                guard let home = node.authoredLine.first(where: { $0 !== node }) else { return }
+                let pane = MeasuredPaneView(node: node, room: { [weak tabs] in tabs?.view.bounds.size ?? .zero })
+                sidebarFooterPane = pane
+                sidebarFooterHome = home
+                pane.addSubview(node)
+                pane.layoutChanged = { [weak presenter] in presenter?.owners.publish() }
+                tabs.sidebar.bottomBarView = pane
+                presenter.owners.publish()
+            }
+            if let pane = sidebarFooterPane, pane.refresh() {
+                pane.invalidateIntrinsicContentSize()
+                pane.superview?.setNeedsLayout()
+            }
+            return
+        }
+        releaseSidebarPane()
+        #endif
+        hideSidebarFooter(node)
+    }
+
+    func sidebarParent(of view: UIView) -> NodeView? {
+        #if os(iOS)
+        if let pane = sidebarFooterPane, pane.node === view, view.superview === pane { return sidebarFooterHome }
+        #endif
+        return nil
+    }
+
+    var sidebarFooterBlock: (id: UInt32, block: HostBlock, placement: BlockPlacement?)? {
+        #if os(iOS)
+        if let pane = sidebarFooterPane, let root = container, presenter.views[pane.node.id] === pane.node {
+            let rect = pane.window == nil ? CGRect.zero : pane.convert(pane.bounds, to: root.container)
+            return (pane.node.id, .size(pane.bounds.size), BlockPlacement(rect: rect, within: root.id))
+        }
+        #endif
+        return nil
+    }
+
+    #if os(iOS)
+    private func releaseSidebarPane() {
+        guard let pane = sidebarFooterPane else { return }
+        let home = sidebarFooterHome
+        pane.layoutChanged = nil
+        sidebarFooterPane = nil
+        sidebarFooterHome = nil
+        if #available(iOS 18.0, *), tabController?.sidebar.bottomBarView === pane { tabController?.sidebar.bottomBarView = nil }
+        if pane.node.superview === pane {
+            if let home, presenter.views[home.id] === home, presenter.views[pane.node.id] === pane.node { siblings.putBack(pane.node, into: home) }
+            else { pane.node.removeFromSuperview() }
+        }
+        presenter.owners.publish()
+    }
+    #endif
+
+    func hideSidebarFooter(_ node: NodeView?) {
+        guard hiddenSidebarFooter !== node else { return }
+        if let old = hiddenSidebarFooter, presenter.views[old.id] === old { old.hiddenByHost = false }
+        node?.hiddenByHost = true
+        hiddenSidebarFooter = node
     }
 
     /// Whether a tab container takes this tablist's place.

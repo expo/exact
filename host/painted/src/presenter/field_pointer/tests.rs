@@ -204,12 +204,42 @@ fn selection_drag_retires_on_cancel_value_change_or_focus_loss() {
 #[test]
 fn word_and_paragraph_units_preserve_unicode_and_password_privacy() {
     assert_eq!(range("🦀 two", 0, Unit::Word), (0, 2));
-    let value = "café 🦀 two\r\nnext";
+    let value = "café 🦀 two\r\nnext\u{2029}last";
     assert_eq!(range(value, 2, Unit::Word), (0, 4));
     assert_eq!(range(value, 5, Unit::Word), (5, 7));
     assert_eq!(range(value, 9, Unit::Word), (8, 11));
     assert_eq!(range(value, 9, Unit::Paragraph), (0, 13));
+    assert_eq!(range(value, 14, Unit::Paragraph), (13, 18));
     assert_eq!(range(value, 2, Unit::Password), (0, utf16_len(value)));
+}
+
+#[test]
+fn off_edge_mouse_moves_keep_the_scroll_rate_of_a_stationary_drag() {
+    let value = "word word word word\n".repeat(150);
+    let run = |sideways: &[f32]| {
+        let (mut p, id) = fixture(&value, "");
+        let (x, y) = point(&mut p, id, 22, 0.2);
+        let rect = p.rect_of(id).unwrap();
+        let below = rect.1 + rect.3 + 200.;
+        p.pointer_down_with_clicks(x, y, 0., 1).unwrap();
+        p.pointer_move(x, below, 1.).unwrap();
+        p.frame();
+        assert_eq!(p.scroll_of(id).1, 0.);
+        let initial = p.field_selection(id);
+        for frame in 1..=12 {
+            let now = f64::from(frame * 16);
+            p.tick(now);
+            for dx in sideways {
+                p.pointer_move(x + dx, below, now).unwrap();
+            }
+            p.frame();
+        }
+        let end = p.field_selection(id);
+        assert_eq!(end.start, initial.start);
+        assert!(end.end > initial.end && p.scroll_of(id).1 > 0.);
+        (end, p.scroll_of(id))
+    };
+    assert_eq!(run(&[1., 0., 1., 0.]), run(&[]));
 }
 
 #[test]

@@ -1,5 +1,6 @@
 //! One native primary contact; property-specific policy stays in its helper.
 use super::*;
+mod mouse;
 use exact_kernel::{NodeKey, TransformDragBinding};
 use exact_motion::{HoldEnd, HoldStart, Value, VelocityTracker};
 
@@ -498,6 +499,16 @@ impl<D: DataSource> Presenter<D> {
     /// synthesis; then the node's `pointerdown` (LLP 1005 §3), which the
     /// contact never waits for.
     pub fn pointer_down(&mut self, x: f32, y: f32, now_ms: f64) -> Result<bool, String> {
+        self.pointer_down_counted(x, y, now_ms, 1)
+    }
+
+    fn pointer_down_counted(
+        &mut self,
+        x: f32,
+        y: f32,
+        now_ms: f64,
+        clicks: u32,
+    ) -> Result<bool, String> {
         // Before anything routes it: a scrollbar's, a sheet's or a menu's
         // press makes no contact, and holds a replacement all the same.
         self.pressed |= 1;
@@ -551,6 +562,18 @@ impl<D: DataSource> Presenter<D> {
                         }) {
                             self.begin_range_drag(key, (x, y));
                         }
+                        if !blocked {
+                            let target = self
+                                .contact
+                                .as_ref()
+                                .filter(|c| {
+                                    c.canvas.is_none()
+                                        && c.retained.is_none()
+                                        && c.candidate.is_none()
+                                })
+                                .and_then(|c| c.hit);
+                            self.begin_reader_drag(target, x, y, clicks);
+                        }
                         Ok(taken)
                     }
                 }
@@ -561,37 +584,6 @@ impl<D: DataSource> Presenter<D> {
         self.hatch_pointer(mark, crate::hatches::Phase::Down, x, y);
         // A contact that may drag a sheet is taken, whatever it presses.
         result.map(|taken| taken || self.stage_drag_pending())
-    }
-    /// A desktop mouse down with the shell's platform click count.
-    pub fn pointer_down_with_clicks(
-        &mut self,
-        x: f32,
-        y: f32,
-        now_ms: f64,
-        clicks: u32,
-    ) -> Result<bool, String> {
-        let before = self.hit(x, y).and_then(|id| {
-            let node = self.host.kernel().node(id)?;
-            (node.node_type == NodeType::TextInput)
-                .then(|| (node.key, self.field_text(id), self.field_selection(id)))
-        });
-        let result = self.pointer_down(x, y, now_ms);
-        if result.is_ok() && !self.contact_is_direct() {
-            let target = self
-                .contact
-                .as_ref()
-                .filter(|c| {
-                    c.focus_before_down.is_some()
-                        && !c.focus_blocked
-                        && c.canvas.is_none()
-                        && c.retained.is_none()
-                })
-                .and_then(|c| c.hit);
-            if let Some(key) = target {
-                self.begin_field_drag(key, (x, y), clicks, before);
-            }
-        }
-        result
     }
     fn focus_on_down(&mut self, key: NodeKey, point: (f32, f32), now_ms: f64, field: bool) {
         if self.contact_is_direct() || self.menu.is_some() {
@@ -865,6 +857,15 @@ impl<D: DataSource> Presenter<D> {
         }
         self.pointer_sample(x, y, now_ms)?;
         self.boxes();
+        let previous = self.contact.as_ref().unwrap().position;
+        if self.drag_reader(x, y, previous) {
+            if let Some(c) = &mut self.contact {
+                c.position = (x, y);
+                c.last_ms = now_ms;
+                c.event_ms = event_ms;
+            }
+            return Ok(true);
+        }
         let mut contact = self.contact.take().unwrap();
         contact.last_ms = now_ms;
         contact.event_ms = event_ms;
@@ -1125,6 +1126,7 @@ impl<D: DataSource> Presenter<D> {
         let mark = self.hatch_pointer_mark(crate::hatches::Phase::Up, x, y);
         let result = self.pointer_lift(x, y, now_ms, event_ms);
         self.field_drag = None;
+        self.mouse_selection.release();
         self.forget_range_drag();
         self.refresh_feedback();
         self.hatch_pointer(mark, crate::hatches::Phase::Up, x, y);
@@ -1357,40 +1359,6 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
-    fn mouse_click_target(&mut self, x: f32, y: f32) -> Option<NodeKey> {
-        if self
-            .field_drag
-            .as_ref()
-            .is_some_and(|drag| drag.moved((x, y)))
-        {
-            return None;
-        }
-        let contact = self.contact.as_ref()?;
-        if contact.canvas.is_some()
-            || contact.retained.is_some()
-            || contact.group
-            || contact.panning
-            || contact.hold.is_some()
-        {
-            return None;
-        }
-        let down = contact.hit?;
-        let up = self.hit_after_pointerdown(x, y)?;
-        if self.brush.region_blocks_action(up) {
-            return None;
-        }
-        let kernel = self.host.kernel();
-        // A removed down node cancels the click; there is no surviving-parent
-        // fallback. Walk from the original node, including it, toward the root.
-        let mut at = Some(kernel.node_by_key(down)?.id);
-        while let Some(id) = at {
-            if id == up || self.is_inside(up, id) {
-                return kernel.node(id).map(|n| n.key);
-            }
-            at = kernel.node(id)?.parent;
-        }
-        None
-    }
     fn end_contact(&mut self, held: &Hold, end: HoldEnd, now_ms: f64) -> Result<(), String> {
         match held.kind {
             HeldKind::Arrange(_) => self.end_arrange(held, false, now_ms).map(|_| ()),
@@ -1420,6 +1388,7 @@ impl<D: DataSource> Presenter<D> {
         self.stage_cancel(now_ms);
         self.overlay_pointer_cancel();
         self.field_drag = None;
+        self.mouse_selection.release();
         self.end_range_drag();
         self.forget_range_drag();
         self.brush.scrollbars.drag = None;

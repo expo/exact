@@ -151,18 +151,29 @@ extension NodeView {
         #if os(macOS)
         let place = { (child: PaintView) in position(child.siblingPaintRank)! }
         #else
-        // A navigation root's children beside the routes go above the native container where its box extends
-        // past the routes' boxes (`NavigationHost.clearBesideRoutes`): those at or below its rank go into the step
-        // above it, in their own ranks' order, so their `z-index` still orders them among themselves
+        // A child beside the routes can clear the native navigation view, whose box extends beyond them.
+        // Its peers at the navigation rank already in front of that view share the top of the same step.
+        // Tab panels that the native view represents stay on its plane. Equal authored ranks paint in subview order.
         let plane = position(1)
-        let lowest = plane == nil ? nil : children.lazy.compactMap { ($0 as? NodeView)?.clearsNavigation == true ? position($0.siblingPaintRank) : nil }.min()
+        let lowest = plane == nil ? nil : children.lazy.compactMap { child -> CGFloat? in
+            guard (child as? NodeView)?.navigationPaint == .besideRoutes, child.siblingPaintRank <= 1 else { return nil }
+            return position(child.siblingPaintRank)
+        }.min()
+        var pastNavigation = false
         let place = { (child: PaintView) -> CGFloat in
-            let own = position(child.siblingPaintRank)!
-            if let node = child as? NodeView, node.clearsNavigation, let plane, let lowest, own <= plane {
-                return plane + 0.0001 + 0.0008 * (plane > lowest ? (own - lowest) / (plane - lowest) : 1)
+            let rank = child.siblingPaintRank
+            let own = position(rank)!
+            let node = child as? NodeView
+            var depth = own
+            if let plane, let lowest, own <= plane {
+                if rank == 1 && child.paintForeground {
+                    pastNavigation = true
+                } else if node?.navigationPaint == .besideRoutes || (pastNavigation && rank == 1 && node?.navigationPaint != .represented) {
+                    depth = plane + 0.0001 + 0.0008 * (plane > lowest ? (own - lowest) / (plane - lowest) : 1)
+                }
             }
-            guard let over = (child as? NodeView)?.bandOver, let under = position(over) else { return own }
-            return max(own, under + 0.0005)
+            guard let over = node?.bandOver, let under = position(over) else { return depth }
+            return max(depth, under + 0.0005)
         }
         #endif
         var top: CGFloat = 0

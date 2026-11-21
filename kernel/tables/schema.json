@@ -1953,7 +1953,7 @@
       "id": 294,
       "name": "accessibilitySort",
       "kind": "str",
-      "_comment": "ARIA `aria-sort` on a `columnheader` or `rowheader`: `ascending`, `descending`, `none` or `other`, the order its table's rows are sorted by that column (WAI-ARIA 1.2 §6.7). The DOM attribute on the web; AppKit and UIKit have no such property on a view, so the Apple hosts expose none."
+      "_comment": "ARIA `aria-sort` on a `columnheader` or `rowheader`: `ascending`, `descending`, `none` or `other`, the order its table's rows are sorted by that column (WAI-ARIA 1.2 §6.7). The web sets the DOM attribute. AppKit exposes the header’s sort direction through AXSortDirection (Core-AAM)."
     },
     {
       "id": 295,
@@ -6270,6 +6270,10 @@
           "member": "controls",
           "codec": "bool"
         },
+        "replacesTree": {
+          "member": "replacesTree",
+          "codec": "bool"
+        },
         "layoutProvisional": {
           "member": "layoutProvisional",
           "codec": "bool"
@@ -6361,6 +6365,10 @@
         "orientationlock": {
           "member": "orientation",
           "codec": "orientation"
+        },
+        "routeInspectors": {
+          "member": "routeInspectors",
+          "codec": "routeInspectors"
         },
         "rootTabs": {
           "member": "rootTabs",

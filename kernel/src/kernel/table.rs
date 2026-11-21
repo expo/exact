@@ -26,6 +26,53 @@ pub struct TablePlace {
 }
 
 impl Kernel {
+    /// Give a single column the width chosen in its native header, or restore
+    /// automatic sizing. The width follows the header when columns move.
+    /// A late report for a header that left the grid changes no track.
+    pub fn set_table_column_width(
+        &mut self,
+        header: ViewId,
+        width: Option<f32>,
+    ) -> Result<bool, crate::LayoutError> {
+        if width.is_some_and(|w| !w.is_finite() || w < 0.0) {
+            return Err(crate::LayoutError::InvalidOffer);
+        }
+        let Some(slot) = self.arena.slot_of(header) else {
+            return Ok(false);
+        };
+        if self.arena.table_column_widths.get(&slot).copied() == width {
+            return Ok(false);
+        }
+        let place = self.table_place(header).filter(|p| {
+            p.row == 0
+                && p.columns == 1
+                && crate::style::table::column_header(&self.arena, slot)
+                && self.arena.slot_of(p.table).is_some_and(|t| {
+                    crate::style::table::context(&self.arena, t)
+                        == Some(crate::style::table::Context::Table)
+                })
+        });
+        if let Some(width) = width {
+            if place.is_none() {
+                return Ok(false);
+            }
+            self.arena.table_column_widths.insert(slot, width);
+        } else {
+            self.arena.table_column_widths.remove(&slot);
+        }
+        if let Some(p) = place {
+            let table = self.arena.slot_of(p.table).unwrap();
+            if let Some(tree) = self.layout.as_deref_mut().and_then(LayoutMirror::tree) {
+                tree.resize_table_column(&self.arena, table, p.column, width);
+            }
+            if self.arena.intrinsic(slot).is_some() {
+                self.intrinsic_changed(slot);
+            }
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
     /// Where `view`, a `tr`, `td` or `th`, stands in its table, as of the
     /// last layout; `None` for anything else, a part no table places, and
     /// a kernel that lays nothing out.

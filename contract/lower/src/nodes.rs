@@ -23,7 +23,44 @@ pub(super) struct ElementStep<'n> {
     pub(super) rows: u8,
 }
 
+pub(super) fn builder(ex: &contract_syntax::Expanded) -> PlanBuilder {
+    let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, compiler_identity());
+    for step in &ex.steps {
+        use contract_syntax::inline::SourceKind;
+        use exact_plan::PlaceKind;
+        let (kind, name) = match &step.kind {
+            SourceKind::Element(tag) => (PlaceKind::Element, tag.as_str()),
+            SourceKind::Component(name) => (PlaceKind::Component, name.as_str()),
+            SourceKind::Each(key) => (PlaceKind::Each, key.as_str()),
+            SourceKind::Children => (PlaceKind::Children, ""),
+        };
+        b.place_step(
+            step.outer.map(exact_plan::PlaceStepsId),
+            kind,
+            name,
+            step.ordinal,
+            step.shared_id,
+        );
+    }
+    b
+}
+
 impl Lowerer<'_> {
+    /// A tag's fixed row value as a constant body, built once per compile.
+    pub(super) fn fixed(&mut self, style: bool, value: &'static str) -> Code {
+        if let Some(code) = self.fixed.get(&(style, value)) {
+            return *code;
+        }
+        // A fixed style is an enum's name or a number in points.
+        let v = match value.parse::<f64>() {
+            Ok(n) if style => Value::Number(n),
+            _ => Value::str(value),
+        };
+        let code = self.b.constant(&v);
+        self.fixed.insert((style, value), code);
+        code
+    }
+
     #[allow(clippy::too_many_arguments)]
     #[inline(never)]
     pub(super) fn prepare_element<'n>(
@@ -43,6 +80,7 @@ impl Lowerer<'_> {
             children,
             span,
             instance,
+            place,
         } = n
         else {
             unreachable!("prepare_element only receives elements")
@@ -1068,6 +1106,9 @@ impl Lowerer<'_> {
             &handler_refs,
             surface,
         );
+        if let Some(step) = place {
+            self.b.set_node_place(id, exact_plan::PlaceStepsId(*step));
+        }
         if !look_rows.is_empty() {
             self.b.set_looks(id, &look_rows);
         }

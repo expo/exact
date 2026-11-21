@@ -101,7 +101,7 @@ test steps (app.test.contract, docs/contract-grammar.md)
   presence allow (cancel, fail, lockout, invalidated)
   fail fetch "<prefix>", pass fetch …
   drop stream "<prefix>"
-  answer fetch "<prefix>" with 200 {"text":"Hello"}
+  answer fetch "<prefix>" with 200 {…}, answer source s with {…}
   request POST "/items" {…} as grace expect 409
   size 390x844, at "/item/7#moves", epoch, time-zone, locale, seed, before data
 

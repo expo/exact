@@ -1,25 +1,42 @@
 //! The plan's interned strings. A decoded plan reads them where its bytes
-//! hold them: a plan linked into the binary lends its static bytes, any
-//! other keeps one copy of the pool; a plan a compiler builds, or a string
-//! interned after the decode, is its own `String`. A `Vec<String>` cost a
+//! hold their literal bytes. A static plan lends its pool and a loaded plan
+//! keeps one copy. A qualified member name is joined on its first read. A
+//! compiler or a later insertion supplies an owned `String`. A `Vec<String>` cost a
 //! euxy boot 1,331 allocations and some 70 KB for its life (2026-10-19).
 
-use crate::{bytes::Reader, PlanError};
+mod members;
+
+use crate::{
+    bytes::{Reader, Writer, MAX_COUNT},
+    PlanError,
+};
+use members::{Encoder, Members, QUALIFIED};
 use std::borrow::Cow;
 
 /// A plan's strings by id: the pool its bytes decoded to, then those interned since.
 #[derive(Clone, Default)]
 pub struct Strings {
-    /// The encoded records, `[len: u32 LE][UTF-8 bytes]`, each validated
+    /// The encoded string records, each validated
     /// when decoded and never written after.
     pool: Cow<'static, [u8]>,
-    /// Each pooled string's text, as an offset into `pool`.
+    /// Each record's offset into `pool`.
     at: Vec<u32>,
+    members: Option<Box<Members>>,
     /// Strings interned after the decode; their ids follow the pool's.
     extra: Vec<String>,
 }
 
 impl Strings {
+    pub(crate) fn encode(&self, w: &mut Writer) {
+        w.u32(self.len() as u32);
+        let mut members = Encoder::default();
+        for text in self.iter() {
+            if !members.write(text, w) {
+                w.string(text);
+            }
+        }
+    }
+
     /// Decode the pool at `r`, which reads `whole`; `lent` is `whole` when it
     /// lives as long as the program, so the pool stays in it.
     pub(crate) fn decode(
@@ -30,10 +47,24 @@ impl Strings {
         let n = r.count()?;
         let start = whole.len() - r.remaining();
         let mut at = Vec::with_capacity(r.reserve(n, 4));
-        for _ in 0..n {
-            let text = r.str()?;
-            let end = whole.len() - r.remaining();
-            at.push((end - text.len() - start) as u32);
+        let mut members = None;
+        for index in 0..n {
+            let offset = r.position() - start;
+            at.push(u32::try_from(offset).map_err(|_| PlanError::BadCount(u32::MAX))?);
+            let tag = r.u32()?;
+            if tag & QUALIFIED != 0 {
+                members.get_or_insert_with(Box::<Members>::default).read(
+                    (tag - QUALIFIED) as usize,
+                    index as u32,
+                    r,
+                )?;
+            } else {
+                let len = tag as usize;
+                if len > MAX_COUNT || len > r.remaining() {
+                    return Err(PlanError::BadCount(tag));
+                }
+                std::str::from_utf8(r.bytes(len)?).map_err(|_| PlanError::BadUtf8)?;
+            }
         }
         let end = whole.len() - r.remaining();
         let pool = match lent {
@@ -43,6 +74,7 @@ impl Strings {
         Ok(Strings {
             pool,
             at,
+            members,
             extra: Vec::new(),
         })
     }
@@ -62,8 +94,17 @@ impl Strings {
         match self.at.get(id) {
             Some(&at) => {
                 let at = at as usize;
-                let len = u32::from_le_bytes(self.pool[at - 4..at].try_into().ok()?) as usize;
-                std::str::from_utf8(self.pool.get(at..at + len)?).ok()
+                let tag = u32::from_le_bytes(self.pool.get(at..at + 4)?.try_into().ok()?);
+                if tag & QUALIFIED != 0 {
+                    let name = u32::from_le_bytes(self.pool.get(at + 4..at + 8)?.try_into().ok()?);
+                    return Some(
+                        self.members
+                            .as_ref()?
+                            .get(name as usize, (tag - QUALIFIED) as usize),
+                    );
+                }
+                let text = at + 4;
+                std::str::from_utf8(self.pool.get(text..text + tag as usize)?).ok()
             }
             None => self.extra.get(id - self.at.len()).map(String::as_str),
         }
@@ -91,6 +132,7 @@ impl Strings {
             let pooled: Vec<String> = self.iter().map(str::to_owned).collect();
             self.pool = Cow::Borrowed(&[]);
             self.at = Vec::new();
+            self.members = None;
             self.extra = pooled;
         }
         self.extra[id - self.at.len()] = s.into();
@@ -190,6 +232,49 @@ mod tests {
             "the text is read from the static bytes"
         );
         assert!(matches!(strings.pool, Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn qualified_names_round_trip_with_literals_and_extensions() {
+        let first = "0123456789abcdef".repeat(4);
+        let second = "f".repeat(64);
+        let names = [
+            "plain".into(),
+            format!("draft#{first}"),
+            format!("draft#{second}"),
+            format!("é#part#{first}"),
+            format!("literal#{}", first.to_uppercase()),
+        ];
+        let mut built = Strings::default();
+        built.extend(names.iter().cloned());
+        let mut wire = Writer::default();
+        built.encode(&mut wire);
+        let bytes = wire.into_vec();
+        assert!(bytes.len() < names.iter().map(|s| s.len() + 4).sum::<usize>());
+        let mut decoded = Strings::decode(&mut Reader::new(&bytes), &bytes, None).unwrap();
+        assert_eq!(decoded, built);
+        decoded.push("after");
+        decoded.set(1, "renamed");
+        assert_eq!(&decoded[1], "renamed");
+        assert_eq!(&decoded[2], names[2]);
+        assert_eq!(&decoded[5], "after");
+    }
+
+    #[test]
+    fn a_qualified_name_must_define_its_parts_in_order() {
+        let mut w = Writer::default();
+        w.u32(1);
+        w.u32(QUALIFIED | 1);
+        w.u32(0);
+        let bytes = w.into_vec();
+        assert!(matches!(
+            Strings::decode(&mut Reader::new(&bytes), &bytes, None),
+            Err(PlanError::BadReference {
+                table: "strings",
+                row: 0,
+                ..
+            })
+        ));
     }
 
     #[test]

@@ -128,3 +128,40 @@ fn the_roots_tabs_are_the_first_tablist_in_tree_order() {
     );
     assert_eq!(said[0]["tablist"], later, "the first in tree order: {said}");
 }
+
+#[test]
+fn the_route_inspector_is_a_full_height_trailing_complementary_pane() {
+    let source = r#"component App
+  view
+    main navigationKey="home" navigationBack="back" width=390 height=500
+      row navigationKey="home" width=390 height=500 display="flex" flex-direction="row" testId="route"
+        column flex=1
+        aside testId="inspector" width=100 min-width="20%" max-width=160 box-sizing="border-box"
+"#;
+    let (host, _) = boot(source);
+    let inspect = |host: &Host<NoData>| host.runner().route_inspector(view(host, "route"));
+    let pane = inspect(&host).unwrap();
+    assert_eq!(pane.view, view(&host, "inspector"));
+    assert_eq!(
+        (pane.width, pane.minimum, pane.maximum),
+        (100.0, Some(78.0), Some(160.0))
+    );
+
+    for other in [
+        source.replace("flex-direction=\"row\"", "flex-direction=\"column\""),
+        source.replace("testId=\"inspector\"", "height=64 testId=\"inspector\""),
+        source.replace(
+            "testId=\"inspector\"",
+            "position=\"absolute\" testId=\"inspector\"",
+        ),
+        source.replace(
+            "testId=\"inspector\"",
+            "role=\"navigation\" testId=\"inspector\"",
+        ),
+        format!("{source}        column width=20\n"),
+        source.replace("        aside", "        column\n          aside"),
+    ] {
+        let (host, _) = boot(&other);
+        assert_eq!(inspect(&host), None, "{other}");
+    }
+}

@@ -90,16 +90,18 @@ final class SplitHost {
         let row: UInt32?
     }
     private(set) var shown: Shown?
+    private var inspector: RouteInspector?
+    var hasInspector: Bool { controller?.inspectorNode != nil && capable }
     /// Whether a window shows the split: the stack splits, and the window's
     /// owner composed a controller that holds this session's view.
     var active: Bool { shown != nil && capable }
     /// The session's document spans both panes while its window is split.
-    var agentRoot: NSView { active ? controller?.view ?? presenter.viewport : presenter.viewport }
+    var agentRoot: NSView { active || hasInspector ? controller?.view ?? presenter.viewport : presenter.viewport }
     /// Captures keep the layout/pointer origin at the page's clip, and
     /// extend across the detail rather than including the window's chrome.
     var agentCaptureArea: CGRect {
         let root = agentRoot
-        guard active else { return CGRect(origin: .zero, size: root.bounds.size) }
+        guard active || hasInspector else { return CGRect(origin: .zero, size: root.bounds.size) }
         let clip = presenter.viewport.contentView, rect = root.convert(clip.bounds, from: clip)
         let x = rect.minX - root.bounds.minX
         let y = root.isFlipped ? rect.minY - root.bounds.minY : root.bounds.maxY - rect.maxY
@@ -180,6 +182,7 @@ final class SplitHost {
     }
     func detach(_ controller: ExactSidebarController) {
         guard self.controller === controller else { return }
+        controller.showInspector(nil, node: nil)
         self.controller = nil
         sync()
     }
@@ -191,19 +194,21 @@ final class SplitHost {
         presenter.afterBatch { [weak presenter] in presenter?.toolbar.sync(); presenter?.shortcuts.sync() }
     }
     private var paneState: [UInt32] {
-        held.keys.sorted() + [placeholder?.id ?? 0, controller?.view.window == nil ? 0 : 1, active ? 1 : 0]
+        held.keys.sorted() + [controller?.inspectorNode?.id ?? 0, placeholder?.id ?? 0, controller?.view.window == nil ? 0 : 1, active ? 1 : 0]
     }
     /// The node children `home` holds with the pane's routes back in their
     /// authored places among them: the page's Tab order goes through the
     /// detail where its route was written, after the list. A route in a
     /// sheet's window is a Tab loop of its own, and stays out.
     func authored(_ mounted: [NodeView], in home: NSView) -> [NodeView] {
-        guard !held.isEmpty || placeholder != nil else { return mounted }
-        return presenter.blocks.authored(mounted, in: home).filter { node in mounted.contains { $0 === node } || holds(node) || node === placeholder }
+        guard !held.isEmpty || placeholder != nil || hasInspector else { return mounted }
+        return presenter.blocks.authored(mounted, in: home).filter { node in mounted.contains { $0 === node } || holds(node) || node === placeholder || node === controller?.inspectorNode }
     }
     /// The detail's pane, when `view` is in it.
     func pane(holding view: NSView?) -> NSView? {
-        guard active, let view, let pane = controller?.detailPane, view.isDescendant(of: pane) else { return nil }
+        guard let view else { return nil }
+        if let pane = controller?.inspectorPane, view.isDescendant(of: pane) { return pane }
+        guard active, let pane = controller?.detailPane, view.isDescendant(of: pane) else { return nil }
         return pane
     }
     /// Whether the keyboard is in the detail's pane: `view` is in it.
@@ -212,6 +217,8 @@ final class SplitHost {
     /// A restart: every view goes, the pane's routes with them, and the new
     /// runner knows no block.
     func reset() {
+        inspector = nil
+        controller?.showInspector(nil, node: nil)
         for entry in held.values { entry.route.removeFromSuperview() }
         placeholder?.removeFromSuperview()
         held.removeAll(); rowOf.removeAll(); seen.removeAll(); kept.removeAll(); ended.removeAll()
@@ -236,6 +243,9 @@ final class SplitHost {
     /// `routes` is that stack and `selected` the route its root shows.
     func read(root: NodeView, routes: [NodeView], selected: Int) {
         defer { schedule() }
+        let page = routes.prefix(max(0, selected + 1)).prefix(while: { !Self.sheet($0) }).last
+        inspector = painted ? nil : page.flatMap { presenter.routeInspectors[$0.id] }
+        if inspector != nil { wantController() }
         guard !painted, let list = routes.first, routes.indices.contains(selected), !Self.sheet(list),
               let rule = ask(list) else {
             if let list = routes.first, held.values.contains(where: { $0.list == list.id }) { ended.insert(list.id) }
@@ -265,14 +275,18 @@ final class SplitHost {
         let current = detail != nil && owner?.row == nil ? rule.current : nil
         shown = Shown(root: root, list: list, table: rule.list, width: rule.width.map { CGFloat($0) }, routes: pane, detail: detail,
                       base: base, row: owner?.row ?? current)
-        if !wanted {
-            wanted = true
-            presenter.afterBatch { [weak self] in self?.onWanted?() }
-        }
+        wantController()
+    }
+
+    private func wantController() {
+        guard !wanted else { return }
+        wanted = true
+        presenter.afterBatch { [weak self] in self?.onWanted?() }
     }
 
     /// No navigation root, or no stack its key names: nothing splits.
     func readNone() {
+        inspector = nil
         shown = nil
         schedule()
     }
@@ -292,10 +306,12 @@ final class SplitHost {
         // The pane's routes, its placeholder and whether it splits: what the window's bar reads of it
         // (its beside header's buttons, the divider's separator). A change is presented with no batch.
         let before = paneState
+        let aside = capable ? inspector.flatMap { presenter.views[$0.view] } : nil
+        controller?.showInspector(inspector, node: aside)
         // A painted popover goes where its invoker now is: the pane or the page.
         defer {
             presenter.menus.layout()
-            if paneState != before { presenter.toolbar.sync() }
+            if paneState != before { presenter.toolbar.sync(); presenter.shortcuts.sync() }
         }
         for (id, entry) in held where presenter.views[id] !== entry.route && !presenter.isLeaving(entry.route) {
             held[id] = nil
@@ -499,10 +515,10 @@ final class SplitHost {
         }
     }
 
-    private func placement(of route: NodeView, in pane: NSView) -> BlockPlacement? {
+    func placement(of route: NodeView, in pane: NSView) -> BlockPlacement? {
         var parent = presenter.blocks.parent(of: route)
         while let view = parent {
-            if let node = view as? NodeView, node.window === pane.window {
+            if let node = view as? NodeView, node.window != nil, node.window === pane.window {
                 return BlockPlacement(rect: node.convertNativePresentation(pane.bounds, from: pane), within: node.id)
             }
             parent = view.superview

@@ -38,6 +38,9 @@ pub(in crate::instance) trait ListState: std::fmt::Debug {
     fn row_by_wrapper(&self, view: ViewId) -> Option<(&Frame, &[Child])>;
     /// `view`'s site within a mounted row, its row steps pushed on `path`.
     fn site(&self, view: ViewId, path: &mut Vec<InstanceStep>) -> Option<(NodesId, u32)>;
+    fn reading(&self) -> Option<super::collection::ListReading>;
+    /// The mounted rows with the loop that owns their keys.
+    fn visit_rows(&self, visit: &mut dyn FnMut(exact_plan::RegionsId, &super::Row));
     /// Its view's children as a document written without a kernel holds them.
     fn document_children<'a>(&'a self, plan: &Plan) -> Result<Vec<ListChild<'a>>, InstanceError>;
     /// Retire its mounted rows with the rest of the subtree.

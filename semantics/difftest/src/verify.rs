@@ -84,6 +84,12 @@ pub fn run(file: &Path, options: &Options) -> Result<bool, String> {
             .and_then(|tests| contract::properties(&text).map(|p| (tests, p)))
         {
             Ok((tests, declarations)) => {
+                for test in &tests {
+                    if let Err(e) = crate::script::check_answers(&plan, test) {
+                        println!("SCRIPT {}:{e}", show(path));
+                        ok = false;
+                    }
+                }
                 if let Err(errors) = contract::check_properties_path(&file, &declarations) {
                     for e in errors {
                         println!("PROPERTY REFUSED {}:{e}", show(path));
@@ -115,7 +121,7 @@ pub fn run(file: &Path, options: &Options) -> Result<bool, String> {
         "undeliverable parser step kinds: {}",
         crate::script::undeliverable_kinds()
     );
-    println!("delivered forms: tap press without modifiers; type replacement; clock +N, data, settle, until state (fields and indices included); leading size (no layout); expect (host-only reads omitted)");
+    println!("delivered forms: tap press without modifiers; type replacement; type key press at a box or text without press (its handlers; no default); answer source; clock +N, data, settle, until state (fields and indices included); leading size (no layout); expect (host-only reads omitted)");
     let mut delivery = crate::receipt::Delivery::default();
     let mut located = Vec::new();
     for (test_file, tests) in authored {
@@ -223,7 +229,13 @@ pub fn run(file: &Path, options: &Options) -> Result<bool, String> {
             let record = |driver: &crate::observe::Driver, rendered: &mut BTreeSet<String>| {
                 if is_walk {
                     for control in driver.controls() {
-                        rendered.extend(control.press.into_iter().chain(control.input));
+                        rendered.extend(
+                            control
+                                .press
+                                .into_iter()
+                                .chain(control.input)
+                                .chain(control.key_actions),
+                        );
                     }
                 }
             };
@@ -248,12 +260,20 @@ pub fn run(file: &Path, options: &Options) -> Result<bool, String> {
     let mut candidates = 0;
     for (i, (l, rust)) in located.iter().zip(&observations).enumerate() {
         if let Err(e) = expectations_on(&l.scripted, &plan, rust) {
-            println!(
-                "NOTE {}: with the oracle's data, {}",
-                l.scripted.case.name,
-                e.split_once("; the runner shows")
-                    .map_or(e.as_str(), |(h, _)| h)
-            );
+            let case = &l.scripted.case;
+            let supplied = !case.answers.is_empty()
+                || case.events.iter().any(|e| matches!(e, Event::Answer(..)));
+            if i < tests && supplied {
+                println!("FAIL {}: {e}", case.name);
+                ok = false;
+            } else {
+                println!(
+                    "NOTE {}: with the oracle's data, {}",
+                    case.name,
+                    e.split_once("; the runner shows")
+                        .map_or(e.as_str(), |(h, _)| h)
+                );
+            }
         }
         census.observe(rust);
         totals.merge(&crate::property::evaluate(&properties, rust));
@@ -672,6 +692,16 @@ fn save_case(
         std::process::id(),
         crate::seed_of(&case.name)
     ));
+    let mut facts = format!(
+        "{}\noracle seed: 0x{:016x}\nstored: {}\nlaunch: {:?}",
+        case.name,
+        case.seed.unwrap_or_else(|| crate::seed_of(&case.name)),
+        case.stored,
+        case.launch
+    );
+    for (source, json) in &case.answers {
+        facts.push_str(&format!("\nanswer source {source} with {json}"));
+    }
     for (extension, text) in [
         ("contract", case.source.clone()),
         (
@@ -683,16 +713,7 @@ fn save_case(
                 .join("\n"),
         ),
         ("rust.txt", rust.join("\n")),
-        (
-            "case.txt",
-            format!(
-                "{}\noracle seed: 0x{:016x}\nstored: {}\nlaunch: {:?}",
-                case.name,
-                case.seed.unwrap_or_else(|| crate::seed_of(&case.name)),
-                case.stored,
-                case.launch
-            ),
-        ),
+        ("case.txt", facts),
     ] {
         std::fs::write(stem.with_extension(extension), text).map_err(|e| e.to_string())?;
     }
@@ -779,7 +800,9 @@ fn locate(
         } else {
             step
         };
-        if let Event::Tap(id) | Event::Type(id, _) = &case.events[input_step - 1] {
+        if let Event::Tap(id) | Event::Type(id, _) | Event::Key(id, _) =
+            &case.events[input_step - 1]
+        {
             if let Some(where_) = site(&case.events[..input_step - 1], id) {
                 out.push_str(&format!("  the element {id:?} is {where_}\n"));
             }
@@ -1120,6 +1143,38 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn a_failed_expectation_fails_verification_when_the_test_supplies_source_answers() {
+        let dir =
+            TempDir(std::env::temp_dir().join(format!("verify-answers-{}", std::process::id())));
+        std::fs::create_dir_all(&dir).unwrap();
+        let app = dir.join("app.contract");
+        std::fs::write(&app, "shape Status\n  phase: string\ncomponent App\n  resource status = readStatus() as shape Status\n  view\n    text status.phase testId=\"phase\"\n").unwrap();
+        let test = dir.join("app.test.contract");
+        let options = super::Options {
+            runner_only: true,
+            walks: 0,
+            ..Default::default()
+        };
+        let check = |steps| {
+            std::fs::write(
+                &test,
+                format!("test \"phase\"\n{steps}  expect text \"phase\" == \"ready\"\n"),
+            )
+            .unwrap();
+            super::run(&app, &options).unwrap()
+        };
+        assert!(check(""));
+        assert!(!check("  reload\n  answer source missing with {}\n"));
+        assert!(!check(
+            "  answer source readStatus with {\"phase\":\"waiting\"}\n"
+        ));
+        assert!(!check("  expect tree has \"phase\"\n  answer source readStatus with {\"phase\":\"waiting\"}\n"));
+        assert!(check(
+            "  answer source readStatus with {\"phase\":\"ready\"}\n"
+        ));
     }
 
     #[test]

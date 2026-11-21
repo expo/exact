@@ -184,14 +184,16 @@ final class PanelSiblings: LiftedNodes {
     var isEmpty: Bool { lifted.isEmpty }
 
     /// The parent a view in a stand is under in the authored tree.
-    func parent(of view: UIView) -> NodeView? { (view.superview as? PanelSiblingsStand)?.parent }
+    func parent(of view: UIView) -> NodeView? { (view.superview as? PanelSiblingsStand)?.parent ?? navigation.sidebarParent(of: view) }
 
     /// Whether a stand holds `node`.
     func holds(_ node: NodeView) -> Bool { node.superview is PanelSiblingsStand && lifted[node.id]?.node === node }
 
     /// Whether `parent` lifted `node`, which `parent`'s children op then leaves where it is;
     /// another parent's op that takes it moves it there.
-    func holds(_ node: NodeView, under parent: NodeView) -> Bool { holds(node) && lifted[node.id]?.parent === parent }
+    func holds(_ node: NodeView, under parent: NodeView) -> Bool {
+        holds(node) && lifted[node.id]?.parent === parent || navigation.sidebarParent(of: node) === parent
+    }
 
     /// The nodes `parent` lifted.
     func lifted(from parent: NodeView) -> [NodeView] {
@@ -390,7 +392,7 @@ final class PanelSiblings: LiftedNodes {
     /// Back into its parent's view, before the next of its siblings there in the parent's
     /// order, else after its last node; no children op runs, so a parent that is an exit ghost
     /// keeps it, with its flat leaves, which are laid in again over it.
-    private func putBack(_ node: NodeView, into parent: NodeView) {
+    func putBack(_ node: NodeView, into parent: NodeView) {
         let content = parent.container
         let ids = placedIDs(of: parent)
         // Its siblings by id among the nodes in the parent's view, where an exit ghost's nodes

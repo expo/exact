@@ -4,7 +4,7 @@ use exact_runner::FieldSelection;
 use std::ops::Range;
 use tiny_skia::Transform;
 
-const HIGHLIGHT: [[u8; 4]; 2] = [[0xb4, 0xd5, 0xfe, 0xff], [0x3f, 0x63, 0x8b, 0xff]];
+pub(super) const HIGHLIGHT: [[u8; 4]; 2] = [[0xb4, 0xd5, 0xfe, 0xff], [0x3f, 0x63, 0x8b, 0xff]];
 
 impl super::Painter {
     pub(super) fn field_highlight(

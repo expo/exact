@@ -263,6 +263,7 @@ package protocol NavigationHosting: AnyObject {
     /// Each route shown beside its stack's top or under a pane over it, by
     /// its node (LLP 1127 D8): a split's columns. The others show in their stack.
     var routesShown: [UInt32: BlockShown] { get }
+    var sidebarFooterBlock: (id: UInt32, block: HostBlock, placement: BlockPlacement?)? { get }
     /// Whether a grouped list shows as UIKit's sidebar: in a split's list column while the split is expanded (LLP 1127 D7).
     func showsAsSidebar(_ list: UIView) -> Bool
     /// The row of a sidebar list whose detail shows, which stays selected;
@@ -533,6 +534,7 @@ package final class NoNavigation: NavigationHosting {
     package func isInactiveRoute(containing view: UIView, layout: Bool) -> Bool { false }
     package func resolve(route key: String, id: String) -> NodeView? { nil }
     package var routesShown: [UInt32: BlockShown] { [:] }
+    package var sidebarFooterBlock: (id: UInt32, block: HostBlock, placement: BlockPlacement?)? { nil }
     package func showsAsSidebar(_ list: UIView) -> Bool { false }
     package func sidebarSelection(_ list: UIView) -> UInt32?? { .some(nil) }
     package func listPress(_ row: UInt32, in list: UIView, _ press: () -> Void) { press() }

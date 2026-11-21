@@ -98,6 +98,11 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// How many routes the selected stack declared at the last projection.
     private var selectedRouteCount = 0
     var adoptedTablist: UInt32?
+    weak var hiddenSidebarFooter: NodeView?
+    #if os(iOS)
+    var sidebarFooterPane: MeasuredPaneView?
+    weak var sidebarFooterHome: NodeView?
+    #endif
     var tablistAppearanceNone = false
     /// Where the authored tablist was when its covers were last measured.
     var measuredTablist: CGRect?
@@ -651,14 +656,20 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         let after = Set(region.map { ids[($0 + 1)...] } ?? [])
         guard let next = mount.subviews.first(where: { ($0 as? NodeView).map { after.contains($0.id) } == true }) else {
             let placed = mount.subviews.last === owner || (mount.subviews.last === siblings.layer && mount.subviews.dropLast().last === owner)
-            if !placed { mount.bringSubviewToFront(owner) }
+            if !placed {
+                mount.bringSubviewToFront(owner)
+                PaintOrder.changed(mount)
+            }
             if siblings.layer != nil { siblings.mountLayer(in: mount, after: owner) }
             return
         }
         let at = mount.subviews.firstIndex { $0 === next }!
         let layer = siblings.layer.flatMap { $0.superview === mount ? $0 : nil }
         let behind = at > 0 && mount.subviews[at - 1] === layer ? at - 2 : at - 1
-        if behind < 0 || mount.subviews[behind] !== owner { mount.insertSubview(owner, belowSubview: next) }
+        if behind < 0 || mount.subviews[behind] !== owner {
+            mount.insertSubview(owner, belowSubview: next)
+            PaintOrder.changed(mount)
+        }
         if siblings.layer != nil { siblings.mountLayer(in: mount, after: owner) }
     }
 

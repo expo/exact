@@ -78,20 +78,6 @@ impl Painter {
             self.row_refuse();
         }
         walk.text.insert(node.key, paragraph.clone());
-        if let Some(inline) = inline_frame::Captured::new(kernel, node, &paragraph, &palette) {
-            let origin = (
-                content.0,
-                content.1
-                    + if frags.is_empty() {
-                        kernel.text_line_offset(node)
-                    } else {
-                        0.
-                    },
-            );
-            let inline = inline.place(origin, frags, ts);
-            self.row_inline(node.id, &inline);
-            walk.inline.insert(node.id, inline);
-        }
         // The canvas recorder leases the same paragraph the paint drew.
         self.row_text(node.key, &paragraph);
         // CSS `text-overflow: ellipsis` in a clipping box: an over-wide line
@@ -184,7 +170,6 @@ impl Painter {
                 &shown,
                 (content.0, content.1 + kernel.text_line_offset(node)),
             );
-            return baseline;
         }
         for g in frags {
             if g.lines.0 == g.lines.1 {
@@ -195,6 +180,21 @@ impl Painter {
             self.backend.push_clip(&clip, ts);
             at(self, &shown, (content.0 + g.dx, content.1 + g.dy));
             self.backend.pop_clip();
+        }
+        if let Some(inline) = inline_frame::Captured::new(kernel, node, &paragraph, &palette) {
+            let origin = (
+                content.0,
+                content.1
+                    + if frags.is_empty() {
+                        kernel.text_line_offset(node)
+                    } else {
+                        0.
+                    },
+            );
+            let inline = inline.place(origin, frags, ts);
+            self.highlight_reader(&inline);
+            self.row_inline(node.id, &inline);
+            walk.inline.insert(node.id, inline);
         }
         baseline
     }
@@ -256,24 +256,29 @@ pub(crate) fn hits(kernel: &Kernel, b: &PaintedBox, x: f32, y: f32) -> bool {
 /// grown in its own space, under the clips it was painted with. A box placed
 /// by a perspective takes none.
 pub(crate) fn slop_hits(kernel: &Kernel, b: &PaintedBox, x: f32, y: f32) -> bool {
-    let b = b.for_hit();
     let Some(node) = kernel.node(b.id) else {
         return false;
     };
+    if !node.style.may_have_hit_slop() {
+        return false;
+    }
     let [t, r, bottom, l] = node.style.hit_slop(&kernel.env_of(node.id));
-    if t + r + bottom + l <= 0.0 || b.projective.is_some() {
+    if t + r + bottom + l <= 0.0 {
+        return false;
+    }
+    let mut b = b.for_hit();
+    if b.projective.is_some() {
         return false;
     }
     let grow = |q: Rect4| (q.0 - l, q.1 - t, q.2 + l + r, q.3 + t + bottom);
-    let mut grown = b.clone();
     match b.affine {
         Some((ts, local)) => {
-            grown.affine = Some((ts, grow(local)));
-            grown.rect = bbox(ts, grow(local));
+            b.affine = Some((ts, grow(local)));
+            b.rect = bbox(ts, grow(local));
         }
-        None => grown.rect = grow(b.rect),
+        None => b.rect = grow(b.rect),
     }
-    grown.contains(x, y)
+    b.contains(x, y)
 }
 
 /// Where the agent's `tap` aims on a box with fragments: its first

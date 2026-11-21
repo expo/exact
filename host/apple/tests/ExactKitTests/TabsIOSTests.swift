@@ -187,6 +187,9 @@ final class TabsIOSTests: XCTestCase {
     func testAnIPadShowsTheUnsaidTabBarAsASidebar() throws {
         guard #available(iOS 18.0, *) else { throw XCTSkip("UITab is iOS 18") }
         guard UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("the sidebar is an iPad's") }
+        guard UIApplication.shared.connectedScenes.contains(where: { $0 is UIWindowScene }) else {
+            throw missing("scene", "the iPad sidebar needs a window with the scene's regular width")
+        }
         turned = true
         turn(.landscapeRight)
         let session = try fixture("EXACT_SEARCH_TABS_PLAN")
@@ -199,12 +202,40 @@ final class TabsIOSTests: XCTestCase {
         let sidebar = route.view.safeAreaInsets.left
         until("its content is laid out beside the sidebar") { text.convert(text.bounds, to: nil).minX >= sidebar }
         XCTAssertTrue(try node(session, "tabs").isHidden, "the sidebar takes the authored tablist's place")
+        let footer = try node(session, "sidebar-footer"), account = try node(session, "account")
+        let accessory = try XCTUnwrap(tabs.sidebar.bottomBarView, "the native sidebar holds the authored footer")
+        XCTAssertTrue(footer === accessory || footer.isDescendant(of: accessory))
+        let home = try XCTUnwrap(session.presenter.authoredParent(of: footer))
+        until("UIKit gives the sidebar footer room for its button") { accessory.bounds.width > 0 && account.bounds.height > 0 }
+        let center = account.convert(CGPoint(x: account.bounds.midX, y: account.bounds.midY), to: window)
+        let hit = try XCTUnwrap(window?.hitTest(center, with: nil))
+        XCTAssertTrue(hit === account || hit.isDescendant(of: account), "Account at \(center), footer \(accessory.bounds), button \(account.bounds), hit \(type(of: hit))")
         tabs.sidebar.isHidden = true
         until("hidden, the content takes the width back") { text.convert(text.bounds, to: nil).minX < sidebar }
-        // A row of the sidebar selects as the bar does.
         tabs.sidebar.isHidden = false
-        tapTab(tabs, 1)
-        until("Saved shown") { self.topRoute(session) == "route-saved" }
+        try tapNode(session, "account")
+        until("Account selects Saved from the sidebar") { self.topRoute(session) == "route-saved" }
+        tapTab(tabs, 0)
+        until("Home shown") { self.topRoute(session) == "route-home" }
+        try tapNode(session, "change-bar")
+        until("the app-drawn bar returns the footer to its parent") { tabs.sidebar.bottomBarView == nil && footer.superview === home }
+        try tapNode(session, "account")
+        until("Account selects Saved from the page") { self.topRoute(session) == "route-saved" }
+    }
+
+    func testThePhonesTabBarHidesTheSidebarFooterAndReturnsItsControls() throws {
+        guard UIDevice.current.userInterfaceIdiom == .phone else { throw XCTSkip("the phone's bottom tab bar") }
+        let session = try fixture("EXACT_SEARCH_TABS_PLAN")
+        let footer = try node(session, "sidebar-footer"), account = try node(session, "account")
+        let navigation = session.presenter.navigationHost, agent = Agent(session: session)
+        until("the platform bar takes the footer out of layout") { navigation.covers[footer.id] == .whole }
+        XCTAssertTrue(footer.isHidden)
+        XCTAssertNotNil(agent.tap(["id": Int(account.id)])["error"])
+        let change = try node(session, "change-bar")
+        XCTAssertNil(agent.tap(["id": Int(change.id)])["error"])
+        until("the app-drawn bar gives the footer back") { navigation.covers[footer.id] == nil && !footer.isHidden }
+        XCTAssertNil(agent.tap(["id": Int(account.id)])["error"])
+        until("Account selects Saved") { self.topRoute(session) == "route-saved" }
     }
 
     /// The search tab's face and form follow its author: with its symbol,

@@ -788,6 +788,8 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     const n = t.index;
     if (done) break;
     if (t.hosts && !t.hosts.includes(scope)) { landed({ name: t.name, index: n, failures: [], notes: [], skipped: `on ${t.hosts.join(', ')}` }); continue; }
+    // A device asks the app's own data module; only `contract verify`'s runner takes a test's answers.
+    if (t.steps.some((st) => st.op === 'answer-source')) { landed({ name: t.name, index: n, failures: [], notes: [], skipped: 'answer source: contract verify answers it' }); continue; }
     const failures = [], expectedRefusals = [], index = n;
     const refusalCursors = new Map();
     let end = null;

@@ -98,29 +98,29 @@ const PICTURES = [
   ['gainmap-iso.heic', 'Display P3 + ISO gain map · HEIC · HDR (Safari only on the web)'],
 ].map(([file, label, height]) => ({ src: `assets/${file}`, label, height: height ?? 44 }));
 
-// Only a browser has a user agent. Only Safari decodes HEIC and TIFF; no
-// browser decodes OpenEXR.
-const ua: string = (globalThis as any).navigator?.userAgent ?? '';
-const web = ua !== '';
-const safari = /Safari\//.test(ua) && !/Chrome|Chromium|CriOS|Edg|Firefox|FxiOS/.test(ua);
-const shows = (src: string) => !web || (!src.endsWith('.exr') && (safari || !/\.(heic|tif)$/.test(src)));
-const SAFARI_CONSTRAINED = "Safari doesn't support constrained yet and drops it: this column takes the page's limit, and choosing constrained above means no-limit.";
+// No browser decodes OpenEXR, and only Safari decodes HEIC and TIFF. The page's platform (`exactPage()`,
+// which each source that differs on the web takes as its last argument) names the web but not the browser,
+// so a browser shows HEIC and TIFF under labels that say they are Safari's, and Safari's caveat says whose it is.
+const shows = (src: string, web: boolean) => !web || !src.endsWith('.exr');
+const APPLE = new Set(['ios', 'macos', 'tvos', 'watchos']);
+const SAFARI_CONSTRAINED = "In Safari, which doesn't support constrained yet and drops it, this column takes the page's limit, and choosing constrained above means no-limit.";
 const HDR = [
   ['gainmap-iso.jpg', 'gain-map JPEG'],
-  ['gainmap-iso.heic', 'gain-map HEIC'],
+  ['gainmap-iso.heic', 'gain-map HEIC (Safari only on the web)'],
   ['pq-cicp.png', 'PQ PNG'],
   ['pq.avif', 'PQ AVIF'],
-  ['pq.heic', 'PQ HEIC'],
-  ['hlg.heic', 'HLG HEIC'],
+  ['pq.heic', 'PQ HEIC (Safari only on the web)'],
+  ['hlg.heic', 'HLG HEIC (Safari only on the web)'],
 ].map(([file, label]) => ({ src: `assets/${file}`, label }));
 
 export const answer: Answer = ((source: string, args: unknown[], _secrets: unknown, _storage: unknown, native?: NativeModule) => {
+  const web = args[args.length - 1] === 'web';
   if (source === 'colorSpaces') {
     if (args[0] === 'platform') return web ? [] : PLATFORM;
     return web ? CSS.map((r) => (r.name.startsWith('rec2100') ? { ...r, note: 'not in browsers yet', swatches: [] } : r)) : CSS;
   }
   if (source === 'picturePairs') {
-    const shown = PICTURES.filter((p) => shows(p.src)), pairs = [];
+    const shown = PICTURES.filter((p) => shows(p.src, web)), pairs = [];
     for (let i = 0; i < shown.length; i += 2) pairs.push({ a: shown[i], b: shown[i + 1] ?? shown[i], two: i + 1 < shown.length });
     return pairs;
   }
@@ -134,42 +134,17 @@ export const answer: Answer = ((source: string, args: unknown[], _secrets: unkno
   if (source === 'textSample') {
     return Array.from({ length: 180 }, (_, index): string => `Line group ${index + 1}: The quick brown fox jumps over the lazy dog. Café, naïve and Ångström keep their accents as the paragraph scrolls.`).join(' ');
   }
-  if (source === 'hostKind') return nativeHost(native) ? 'native' : 'web';
-  // Answer the sidebar's inline navigation bar height while the split is expanded, else 0, and watch
-  // the module's topic so that a change asks again
-  if (source === 'sidebarBarHeight') {
-    if (web || !native?.available) return 0;
-    // Web modules have no synchronous call, even when a module is available
-    try {
-      native.watch('gallery-sidebar-bar');
-      return (native.call({ op: 'sidebarBarHeight' }) as { height: number }).height;
-    } catch {
-      return 0;
-    }
-  }
-  if (source === 'hdrWhite') return nativeHost(native) ? `color(rec2100-linear ${args[0]} ${args[0]} ${args[0]})` : '#ffffff';
-  if (source === 'hdrPictures') return HDR.filter((p) => shows(p.src));
+  // rec2100 white where an Apple host draws it; SDR white on the web and the Android preview
+  if (source === 'hdrWhite') return APPLE.has(String(args[args.length - 1])) ? `color(rec2100-linear ${args[0]} ${args[0]} ${args[0]})` : '#ffffff';
+  if (source === 'hdrPictures') return HDR.filter((p) => shows(p.src, web));
   // As of Mobile Safari 27.0 (LLP 1100 D8).
-  if (source === 'caveat') return safari ? SAFARI_CONSTRAINED : '';
+  if (source === 'caveat') return web ? SAFARI_CONSTRAINED : '';
   if (source === 'hidden') {
-    const gone = (args[0] === 'hdr' ? HDR : PICTURES).filter((p) => !shows(p.src)).map((p) => p.src.slice(7));
+    const gone = (args[0] === 'hdr' ? HDR : PICTURES).filter((p) => !shows(p.src, web)).map((p) => p.src.slice(7));
     return gone.length ? `Not shown in this browser (it can't decode them): ${gone.join(', ')}.` : '';
   }
   throw new Error(`no source ${source}`);
 }) as unknown as Answer;
-
-function nativeHost(native?: NativeModule): boolean {
-  if (!native?.available) {
-    return false;
-  }
-  try {
-    // Probe a synchronous call because the web also reports its async module as available
-    native.call({ op: 'colorReference' });
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 export const surfaces: Record<string, number> = { reds: 0 };
 export function draw(surface: string, _args: any[], ctx: Ctx2D, frame: Frame): boolean {

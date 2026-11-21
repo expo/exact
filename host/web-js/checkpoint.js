@@ -130,14 +130,16 @@ function find(record) {
 const port = el => ({ left: 0, top: 0,
   right: el === document.scrollingElement ? innerWidth : el.clientWidth,
   bottom: el === document.scrollingElement ? innerHeight : el.clientHeight });
+function paddingAndBorder(css, axis) {
+  return (axis ? ['Top', 'Bottom'] : ['Left', 'Right']).reduce((sum, side) =>
+    sum + (parseFloat(css[`padding${side}`]) || 0) + (parseFloat(css[`border${side}Width`]) || 0), 0);
+}
 function dimensions(node) {
   const css = getComputedStyle(node);
   return ['width', 'height'].map((name, i) => {
     let value = parseFloat(css[name]);
     if (!Number.isFinite(value)) return node[i ? 'offsetHeight' : 'offsetWidth'];
-    if (css.boxSizing !== 'border-box') {
-      for (const side of i ? ['Top', 'Bottom'] : ['Left', 'Right']) value += (parseFloat(css[`padding${side}`]) || 0) + (parseFloat(css[`border${side}Width`]) || 0);
-    }
+    if (css.boxSizing !== 'border-box') value += paddingAndBorder(css, i);
     return value;
   });
 }
@@ -154,6 +156,67 @@ function layoutPosition(node) {
   }
   return { left, top };
 }
+// The measured border-box centres include translation and transform origins.
+function planarAxes(from, to) {
+  const projection = new DOMMatrix();
+  for (let n = from; n && n !== to; n = n.parentElement) {
+    const css = getComputedStyle(n);
+    if (css.display === 'contents') continue;
+    const z = css.translate.match(/calc\([^)]*\)|\S+/g)?.[2];
+    if (css.offsetPath !== 'none' || css.perspective !== 'none' || (z && parseFloat(z) !== 0)) return null;
+    const local = new DOMMatrix();
+    if (css.rotate !== 'none') {
+      const parts = css.rotate.split(' '), angle = parseFloat(parts.pop());
+      const axis = parts.length === 3 ? parts.map(Number) : { x: [1, 0, 0], y: [0, 1, 0] }[parts[0]] ?? [0, 0, 1];
+      local.rotateAxisAngleSelf(...axis, angle);
+    }
+    if (css.scale !== 'none') {
+      const [x, y = x, z = 1] = css.scale.split(' ').map(Number);
+      local.scaleSelf(x, y, z);
+    }
+    if (css.transform !== 'none') local.multiplySelf(new DOMMatrix(css.transform));
+    if (!local.is2D) return null;
+    local.e = local.f = 0;
+    projection.preMultiplySelf(local);
+  }
+  return projection.scaleSelf((from.currentCSSZoom ?? 1) / (to?.currentCSSZoom ?? 1));
+}
+const projectedSize = (m, w, h) => [Math.abs(m.a) * w + Math.abs(m.c) * h, Math.abs(m.b) * w + Math.abs(m.d) * h];
+// An outer SVG has no offsetParent. Its screen matrix includes the viewBox
+// scaling as well as the CSS transforms inside and outside the scrollport.
+function svgBox(el, node) {
+  if (el === document.scrollingElement) return null;
+  const m = node.getScreenCTM();
+  if (!m) return null;
+  const [w, h] = dimensions(node), [pw, ph] = dimensions(el);
+  let { a, b, c, d } = m;
+  const vb = node.viewBox.animVal;
+  if (vb.width && vb.height) {
+    const css = getComputedStyle(node);
+    let sx = (w - paddingAndBorder(css, 0)) / vb.width, sy = (h - paddingAndBorder(css, 1)) / vb.height;
+    const aspect = node.preserveAspectRatio.animVal;
+    if (aspect.align !== aspect.SVG_PRESERVEASPECTRATIO_NONE)
+      sx = sy = aspect.meetOrSlice === aspect.SVG_MEETORSLICE_SLICE ? Math.max(sx, sy) : Math.min(sx, sy);
+    a /= sx; b /= sx; c /= sy; d /= sy;
+  }
+  // A collapsed SVG can have a diagonal client rect with positive width and height.
+  const ad = a * d, bc = b * c;
+  if (Math.abs(ad - bc) <= Number.EPSILON * (Math.abs(ad) + Math.abs(bc))) return null;
+  const screen = new DOMMatrix([a, b, c, d, 0, 0]), inner = planarAxes(node, el);
+  // screen = outer × inner. Either planar map identifies the other, including
+  // when the browser alone knows the rotation along a motion path.
+  const outer = inner ? screen.multiply(inner.inverse()) : planarAxes(el, null);
+  if (!outer) return null;
+  const r = node.getBoundingClientRect(), p = el.getBoundingClientRect();
+  // Perspective can give boxes at different positions different projections.
+  const agrees = (bounds, [width, height]) => Math.abs(bounds.width - width) < 0.1 && Math.abs(bounds.height - height) < 0.1;
+  if (!agrees(p, projectedSize(outer, pw, ph)) || !agrees(r, projectedSize(screen, w, h))) return null;
+  const inverse = outer.inverse();
+  const centre = inverse.transformPoint({ x: r.left + r.width / 2 - p.left - p.width / 2, y: r.top + r.height / 2 - p.top - p.height / 2 });
+  const [width, height] = projectedSize(inverse.multiply(screen), w, h);
+  const left = centre.x + (pw - width) / 2 - el.clientLeft, top = centre.y + (ph - height) / 2 - el.clientTop;
+  return { left, top, right: left + width, bottom: top + height };
+}
 // Scroll Anchoring §2.2 measures within the scrolling box, before transforms
 // on that box or its ancestors. Client rects retain subpixels and descendant
 // transforms only when no outer transform projects them into screen space.
@@ -166,9 +229,9 @@ function box(el, node) {
     const r = node.getBoundingClientRect(), p = page ? { left: 0, top: 0 } : el.getBoundingClientRect();
     const left = r.left - p.left - (page ? 0 : el.clientLeft), top = r.top - p.top - (page ? 0 : el.clientTop);
     result = { left, top, right: left + r.width, bottom: top + r.height };
+  } else if (node instanceof SVGSVGElement) {
+    result = svgBox(el, node);
   } else {
-    // SVG has no offset box. An unmeasurable candidate falls back to another
-    // viable anchor, its recorded ancestor, or the numeric scroll offset.
     const at = layoutPosition(node), origin = layoutPosition(el);
     if (!at || !origin || !el.clientWidth || !el.clientHeight) return null;
     let left = at.left - origin.left - (page ? 0 : el.clientLeft), top = at.top - origin.top - (page ? 0 : el.clientTop);
@@ -179,7 +242,7 @@ function box(el, node) {
     const [width, height] = dimensions(node);
     result = { left, top, right: left + width, bottom: top + height };
   }
-  return Object.values(result).every(Number.isFinite) ? result : null;
+  return result && Object.values(result).every(Number.isFinite) ? result : null;
 }
 const scrollContainer = n => {
   const s = getComputedStyle(n);
@@ -316,7 +379,7 @@ export function prepareDev() {
     let pendingFocus = cp.focus, frame = null, done = false;
     const until = cp.restoreUntil ?? Date.now() + 10000;
     const reader = new Map(), armed = new Map(), positions = new WeakMap();
-    let inputFrame = null, held = false;
+    let cancelRelease, keyboard = false, held = false;
     const listPending = record => scrolls.some(s => Object.values(s.axes).some(a => a.anchor?.list
       && (!a.started || scroller(s)?.$list?.target || scroller(s)?.$list?.correction))
       && s.path?.length < record.path?.length && s.path.every((at, i) => at === record.path[i]));
@@ -344,15 +407,21 @@ export function prepareDev() {
     const offsets = { left: 'scrollLeft', top: 'scrollTop' };
     const positionOf = el => Object.fromEntries(Object.entries(offsets).map(([name, property]) => [name, el[property]]));
     const releaseInput = () => {
-      if (inputFrame !== null) cancelAnimationFrame(inputFrame);
-      inputFrame = null;
+      cancelRelease?.();
       if (held) return;
-      // Compositor scrolling can follow the input's first rendering opportunity.
-      inputFrame = requestAnimationFrame(() => {
-        inputFrame = requestAnimationFrame(() => { inputFrame = null; armed.clear(); });
-      });
+      if (keyboard) {
+        // A native smooth keyboard scroll can start several frames after the key.
+        // Allow the same quiet interval as scroll following (LLP 1070.000 §2.6).
+        const timer = setTimeout(() => armed.clear(), 300);
+        cancelRelease = () => clearTimeout(timer);
+      } else {
+        // Compositor scrolling can follow the first frame after pointer or wheel input.
+        let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => armed.clear()); });
+        cancelRelease = () => cancelAnimationFrame(frame);
+      }
     };
     const input = e => {
+      keyboard = e.type === 'keydown';
       if (e.type === 'pointerdown' || e.type === 'touchstart') held = true;
       // A middle-click can keep autoscrolling after the button is released.
       if ((e.type === 'pointerup' && e.button !== 1) || ['pointercancel', 'touchend', 'touchcancel'].includes(e.type)) held = false;
@@ -405,7 +474,7 @@ export function prepareDev() {
       keep(() => false);
       reader.clear();
       armed.clear();
-      if (inputFrame !== null) cancelAnimationFrame(inputFrame);
+      cancelRelease?.();
       observer.disconnect();
       window.removeEventListener('pagehide', end);
       document.removeEventListener('focusin', focused, true);

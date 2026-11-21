@@ -47,6 +47,8 @@ pub(crate) mod reservation;
 pub enum BlockAxis {
     /// The block is this long: a pane's side.
     Is(f32),
+    /// The host sizes the root's border box to this allocation, as a resizable pane does.
+    Fill(f32),
     /// The block is at most this long, and as long as its content: a sheet's.
     AtMost(f32),
     /// An automatic size fits its content under this limit. An authored
@@ -65,7 +67,7 @@ impl BlockAxis {
     /// The length the host gave, the size or the maximum.
     pub fn length(self) -> f32 {
         match self {
-            BlockAxis::Is(v) | BlockAxis::AtMost(v) | BlockAxis::Fit(v) | BlockAxis::Region(v) => v,
+            Self::Is(v) | Self::Fill(v) | Self::AtMost(v) | Self::Fit(v) | Self::Region(v) => v,
         }
     }
 
@@ -74,6 +76,7 @@ impl BlockAxis {
         let v = (self.length() - by).max(0.0);
         match self {
             BlockAxis::Is(_) => BlockAxis::Is(v),
+            BlockAxis::Fill(_) => BlockAxis::Fill(v),
             BlockAxis::AtMost(_) => BlockAxis::AtMost(v),
             BlockAxis::Fit(_) => BlockAxis::Fit(v),
             BlockAxis::Region(_) => BlockAxis::Region(v),
@@ -178,7 +181,7 @@ fn cleared_taking(arena: &NodeArena, held: &Held, taking: bool) -> [f32; 4] {
 fn fixed_lengths(arena: &NodeArena, held: &Held, clear: [f32; 4]) -> [Option<f32>; 2] {
     let given = held.given.filter(|_| is_owner(arena, held));
     let fixed = |axis: Option<BlockAxis>, by: f32| match axis {
-        Some(BlockAxis::Is(length)) => Some((length - by).max(0.0)),
+        Some(BlockAxis::Is(length) | BlockAxis::Fill(length)) => Some((length - by).max(0.0)),
         _ => None,
     };
     [
@@ -480,6 +483,19 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
     let edges = s.padding.resolve_or_zero(basis, resolve_calc)
         + s.border.resolve_or_zero(basis, resolve_calc);
     let content_box = s.box_sizing == BoxSizing::ContentBox;
+    let fill = |length: f32, edges: f32| {
+        taffy::Dimension::length((length - if content_box { edges } else { 0.0 }).max(0.0))
+    };
+    if let BlockAxis::Fill(width) = block.width {
+        s.size.width = fill(width, edges.horizontal_axis_sum());
+        s.min_size.width = s.size.width;
+        s.max_size.width = s.size.width;
+    }
+    if let BlockAxis::Fill(height) = block.height {
+        s.size.height = fill(height, edges.vertical_axis_sum());
+        s.min_size.height = s.size.height;
+        s.max_size.height = s.size.height;
+    }
     let ceiling = |most: f32, edges: f32, own: taffy::Dimension, basis: f32| {
         let most = (most - if content_box { edges } else { 0.0 }).max(0.0);
         let own = own.maybe_resolve(Some(basis), resolve_calc);
@@ -497,7 +513,7 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
     let capped = |axis: BlockAxis, auto: bool| match axis {
         BlockAxis::AtMost(_) => true,
         BlockAxis::Fit(_) => auto,
-        BlockAxis::Is(_) | BlockAxis::Region(_) => false,
+        BlockAxis::Is(_) | BlockAxis::Fill(_) | BlockAxis::Region(_) => false,
     };
     if let BlockAxis::AtMost(most) | BlockAxis::Fit(most) | BlockAxis::Region(most) = block.width {
         unplaced(&mut s.inset.left, &mut s.margin.left);
@@ -1141,7 +1157,7 @@ pub struct BlockMeasure {
 fn used_in(block: HostBlock, clear: [f32; 4], l: &taffy::tree::Layout) -> (f32, f32) {
     let [top, right, bottom, left] = clear;
     let axis = |axis: BlockAxis, end: f32| match axis {
-        BlockAxis::Is(length) => length,
+        BlockAxis::Is(length) | BlockAxis::Fill(length) => length,
         BlockAxis::AtMost(most) => end.clamp(0.0, most),
         BlockAxis::Fit(_) | BlockAxis::Region(_) => end.max(0.0),
     };

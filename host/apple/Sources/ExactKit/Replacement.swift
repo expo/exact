@@ -40,10 +40,11 @@ extension ExactApp {
     package func applyTogether(_ bytes: Data, label: String, resolver candidateResolver: AssetResolver, token: UInt64, identity: String? = nil, module: ExactModule? = nil, development: Bool = false, now: Bool = false, producer: AnyObject? = nil, commit: @escaping () -> Bool, finished: @escaping (ReplacementCompletion) -> Void = { _ in }) -> ExactApplyResult {
         guard !transaction else { return .refused("a replacement is already committing") }
         var requestsSince: TimeInterval?
-        return replacements.submit(token: token, now: now, producer: producer, attempt: { [unowned self] in
+        var displaced = Set<ObjectIdentifier>()
+        return replacements.submit(token: token, now: now, producer: producer, checkMarked: { !displaced.contains(ObjectIdentifier($0)) }, attempt: { [unowned self] in
             if now { endCompositions() }
             let letGo = development && requestsSince.map { ProcessInfo.processInfo.systemUptime - $0 >= 1 } == true
-            let result = commitTogether(bytes, label: label, resolver: candidateResolver, token: token, identity: identity, module: module, letGo: letGo, commit: commit)
+            let result = commitTogether(bytes, label: label, resolver: candidateResolver, token: token, identity: identity, module: module, letGo: letGo, heldFields: { displaced = $0 }, commit: commit)
             if development, result == .held("requests"), requestsSince == nil {
                 requestsSince = ProcessInfo.processInfo.systemUptime
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.replacements.changed() }
@@ -80,6 +81,53 @@ extension NodeView {
     }
 }
 
+extension ExactSession {
+    /// Only a retained native editor can finish the input method's marked text.
+    func displacedCompositions(_ batch: Batch) -> Set<ObjectIdentifier> {
+        #if os(macOS)
+        let windows = [presenter.viewport.window].compactMap { $0 } + (NSApp?.windows ?? [])
+        var displaced = Set<ObjectIdentifier>()
+        for window in windows {
+            guard let editor = window.firstResponder as? NSTextView, editor.hasMarkedText(),
+                  let node = presenter.owner(ofMarked: editor) else { continue }
+            if !node.keepsComposition(in: batch) { displaced.insert(ObjectIdentifier(node)) }
+        }
+        return displaced
+        #else
+        return []
+        #endif
+    }
+}
+
+#if os(macOS)
+extension Presenter {
+    func owner(ofMarked editor: NSTextView) -> NodeView? {
+        if let node = keyTarget(editor), node.textArea === editor || node.field?.currentEditor() === editor { return node }
+        // AppKit can host the shared field editor outside its field's view hierarchy.
+        return views.values.first { $0.textArea === editor || $0.field?.currentEditor() === editor }
+    }
+}
+
+extension NodeView {
+    fileprivate func keepsComposition(in batch: Batch) -> Bool {
+        guard batch.replacesTree, let presenter else { return false }
+        for op in batch.ops {
+            switch op.op {
+            case .create, .destroy, .renew, .exit: break
+            case .props:
+                if op.id == id && (op.props["disabled"] == "true" || op.props["editable"] == "false") { return false }
+                guard op.props["inert"] == "true" else { continue }
+            case .style:
+                guard op.style["display"]?.string == "none" || (op.style["visibility"]?.string ?? "visible") != "visible" else { continue }
+            default: continue
+            }
+            if let ancestor = presenter.views[op.id], presenter.logicallyWithin(self, ancestor) { return false }
+        }
+        return true
+    }
+}
+#endif
+
 /// The newest complete candidate that has to wait (D9): its bytes and its
 /// durable commit, never a prepared runner, so the state it carries is the
 /// state at its commit. It is tried at the first main run-loop turn with no
@@ -94,6 +142,7 @@ package final class ReplacementQueue {
         let now: Bool
         let producer: ObjectIdentifier?
         let sessions: [WeakSession]
+        let checkMarked: ((NodeView) -> Bool)?
         let attempt: () -> ExactApplyResult
         let finished: (ReplacementCompletion) -> Void
     }
@@ -119,9 +168,9 @@ package final class ReplacementQueue {
 
     /// Apply now, or keep `attempt` until no interaction holds it and try it
     /// then. A held candidate it replaces is superseded.
-    func submit(token: UInt64, now: Bool = false, producer: AnyObject? = nil, attempt: @escaping () -> ExactApplyResult,
+    func submit(token: UInt64, now: Bool = false, producer: AnyObject? = nil, checkMarked: ((NodeView) -> Bool)? = nil, attempt: @escaping () -> ExactApplyResult,
                 finished: @escaping (ReplacementCompletion) -> Void) -> ExactApplyResult {
-        let next = Candidate(token: token, now: now, producer: producer.map(ObjectIdentifier.init), sessions: app.sessions.map(WeakSession.init), attempt: attempt, finished: finished)
+        let next = Candidate(token: token, now: now, producer: producer.map(ObjectIdentifier.init), sessions: app.sessions.map(WeakSession.init), checkMarked: checkMarked, attempt: attempt, finished: finished)
         let old = take()
         latestSubmission = next.id
         candidate = next
@@ -143,7 +192,7 @@ package final class ReplacementQueue {
             }
             candidate = next
             reason = why
-            waitsOnInteraction = interaction != nil
+            waitsOnInteraction = interaction != nil || why == "composition"
             if !resuming {
                 heldSince = ProcessInfo.processInfo.systemUptime
                 changedSinceAttempt = true
@@ -224,8 +273,8 @@ package final class ReplacementQueue {
     }
 
     private func hold(for candidate: Candidate) -> String? {
-        guard candidate.now else { return interactionHold }
-        return app.sessions.contains { $0.state != .destroyed && $0.isApplyingPresentation } ? "presentation" : nil
+        guard candidate.now else { return interactionHold(checkMarked: candidate.checkMarked) }
+        return app.sessions.contains { $0.state != .destroyed && $0.presentingPriorTree } ? "presentation" : nil
     }
 
     /// What the person holds now (D7, D9; LLP 1030.003 D5), asked of the
@@ -234,11 +283,13 @@ package final class ReplacementQueue {
     /// answers come first, for a candidate that asks at every turn of the
     /// run loop. A batch being applied holds a replacement too, so it never
     /// runs inside one.
-    var interactionHold: String? {
+    var interactionHold: String? { interactionHold(checkMarked: nil) }
+
+    func interactionHold(checkMarked: ((NodeView) -> Bool)?) -> String? {
         let sessions = app.sessions.filter { $0.state != .destroyed }
-        if sessions.contains(where: \.isApplyingPresentation) { return "presentation" }
+        if sessions.contains(where: \.presentingPriorTree) { return "presentation" }
         #if os(macOS)
-        if composing(sessions) { return "composition" }
+        if composing(sessions, checkMarked: checkMarked) { return "composition" }
         #endif
         if pressed(sessions) { return "pointer" }
         // A grouped reorder the keyboard lifted holds no button.
@@ -297,9 +348,16 @@ package final class ReplacementQueue {
 
     #if os(macOS)
     /// Marked text is its window's first responder's, in a window that is not key too.
-    private func composing(_ sessions: [ExactSession]) -> Bool {
-        (sessions.compactMap { $0.presenter.viewport.window } + (NSApp?.windows ?? []))
-            .contains { ($0.firstResponder as? NSTextInputClient)?.hasMarkedText() == true }
+    private func composing(_ sessions: [ExactSession], checkMarked: ((NodeView) -> Bool)?) -> Bool {
+        let windows = sessions.compactMap { $0.presenter.viewport.window } + (NSApp?.windows ?? [])
+        return windows.contains { window in
+            guard let client = window.firstResponder as? NSTextInputClient, client.hasMarkedText() else { return false }
+            guard let checkMarked, let editor = client as? NSTextView else { return true }
+            for session in sessions {
+                if let owner = session.presenter.owner(ofMarked: editor) { return !checkMarked(owner) }
+            }
+            return true
+        }
     }
 
     /// The mouse buttons down, as the hardware has them
@@ -456,3 +514,7 @@ private final class ReplacementContact: UIGestureRecognizer {
     }
 }
 #endif
+
+private extension ExactSession {
+    var presentingPriorTree: Bool { isApplyingPresentation || insideApply || landing || fillLanding }
+}

@@ -136,7 +136,12 @@ final class TableRowCell: NSTableCellView {
     /// The row where layout has it, in this cell's space.
     func place() {
         guard let row, let feed, row.superview === self, let origin = feed.documentOrigin(of: self) else { return }
-        let wanted = feed.documentFrame(kernel, of: row).offsetBy(dx: -origin.x, dy: -origin.y)
+        var wanted = feed.documentFrame(kernel, of: row).offsetBy(dx: -origin.x, dy: -origin.y)
+        if feed.sections, let slot = feed.row(at: feed.table.row(for: self)), slot.node === row {
+            // AppKit inserts space before a group and can pin its header.
+            // Each cell carries the inset layout gave its row within that slot.
+            wanted.origin.y = slot.kernel.minY - slot.top - frame.minY
+        }
         if row.frame != wanted { row.frame = wanted; textMoved = true }
         guard textMoved else { return }
         textMoved = false
@@ -398,6 +403,7 @@ package final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDeleg
     /// Where the presenter keeps the list's rows: its document, or the
     /// list itself when it is no scroller of its own.
     var home: NSView? { list.map { $0.scroll?.documentView ?? $0.container } }
+    var sectionDocumentHeight: CGFloat? { sections ? table.frame.maxY : nil }
     /// What the list shows of that: its port.
     private var port: NSRect { list?.scroll?.contentView.bounds ?? home?.bounds ?? .zero }
     fileprivate func live(_ node: NodeView) -> Bool { presenter?.views[node.id] === node }
@@ -771,11 +777,14 @@ package final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDeleg
         }
         let y: CGFloat
         // Its view's place where it has one: AppKit rounds that to a pixel.
-        if let anchor, anchor < rows.count {
+        if sections, let first = rows.first {
+            y = first.top - table.rect(ofRow: first.index).minY
+        } else if let anchor, anchor < rows.count {
             let row = rows[anchor]
             y = row.top - (table.rowView(atRow: row.index, makeIfNecessary: false)?.frame.minY ?? table.rect(ofRow: row.index).minY)
         } else { y = list.contentBox().minY - (table.numberOfRows > 0 ? table.rect(ofRow: 0).minY : 0) }
         if table.frame.origin != NSPoint(x: 0, y: y) { table.setFrameOrigin(NSPoint(x: 0, y: y)) }
+        if sections { list.fitScroll() }
     }
     fileprivate func tableLaidOut() {
         guard !syncing, !aligning else { return }
@@ -819,6 +828,10 @@ package final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDeleg
     /// it; the table's place for such a row is AppKit's guess from the
     /// estimate, and the table is no longer than its rows' estimates.
     private func span(ofRow row: Int) -> ClosedRange<CGFloat> {
+        if sections {
+            let rect = table.rect(ofRow: row).offsetBy(dx: 0, dy: table.frame.minY)
+            return rect.minY...rect.maxY
+        }
         if let mounted = self.row(at: row) { return mounted.top...(mounted.top + mounted.height) }
         let content = list?.contentBox().minY ?? 0
         let extent = content + CGFloat(presenter?.collections.snapshot(id)?.extent ?? 0)
@@ -1058,6 +1071,7 @@ package final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDeleg
         table.dataSource = nil
         table.delegate = nil
         table.removeFromSuperview()
+        if sections { list?.fitScroll() }
     }
 }
 

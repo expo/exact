@@ -506,7 +506,7 @@ pub(super) fn init_owned(
     for (i, s) in plan.slots.iter().enumerate() {
         if s.owner == Some(arm) {
             let v = u.eval_named(s.init, frames, || {
-                format!("state {:?} initializer", plan.str(s.name))
+                crate::RunnerError::state_initializer(plan.str(s.name))
             })?;
             if !v.conforms(plan, s.ty) {
                 return Err(InstanceError::slot_type(plan, &v, s.ty, plan.str(s.name)));

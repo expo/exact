@@ -1062,7 +1062,8 @@ uint32_t exact_intrinsics(ExactRuntime rt, size_t len);
  * (LLP 1127 D8): float 1 beside it, live (the split's list column beside
  * its detail), 2 under a pane over it, not live (the detail under the list
  * that overlays it, the columns under a sheet), 0 in its stack; then three
- * unused. */
+ * unused. Kind 24 gives a column header its track width in the first float.
+ * NaN restores automatic sizing. */
 uint32_t exact_host_covers(ExactRuntime rt, size_t len);
 /* What a block's root would measure in another block (a popover's
  * position-area option, LLP 1021 D2): each axis a length and a policy as

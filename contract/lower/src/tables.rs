@@ -204,6 +204,7 @@ fn bodies(children: &[Node], span: Span, instance: u32) -> Vec<Node> {
         children: run,
         span,
         instance,
+        place: None,
     };
     let inner = |nodes: &[Node]| bodies(nodes, span, instance);
     let mut out = Vec::with_capacity(children.len());

@@ -222,6 +222,7 @@ extension StagePlan {
     /// two that carry them keep their order.
     func disjoint(_ other: Batch) -> Bool {
         if other.rootTabs != nil, batch.rootTabs != nil { return false }
+        if other.routeInspectors != nil, batch.routeInspectors != nil { return false }
         if let theirs = other.controlReads, theirs.contains(where: { structural.contains($0.key) || reads[$0.key]?.isDisjoint(with: $0.value.parts) == false }) { return false }
         for op in other.ops {
             switch op.op {
@@ -676,6 +677,7 @@ struct BatchFootprint {
         let sampling = batch.clockWork == .tick && batch.seq == nil
         // A native control's state, as the runtime made it with the batch, and the roots' tabs, which replace all.
         for (id, read) in batch.controlReads ?? [:] { written[id, default: []].formUnion(read.parts) }
+        if batch.routeInspectors != nil { written[.max, default: []].insert("routeInspectors") }
         if batch.rootTabs != nil { written[.max, default: []].insert("rootTabs") }
         for op in batch.ops {
             if op.op == .style { styled.insert(op.id); if sampling { paints.insert(op.id) } }

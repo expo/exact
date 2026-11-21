@@ -244,6 +244,11 @@ final class VideoView: VideoPlaying, VisibilityRefreshing {
         let radii = BorderPaint.contentRadii(owner.cornerSizes(in: owner.bounds), outer: owner.bounds, inner: content)
         BorderPaint.clip(layer, in: CGRect(origin: .zero, size: content.size), radii: radii)
     }
+    func reloadAssets(_ properties: Set<String>) {
+        for key in properties { resolved[key] = nil }
+        update()
+    }
+
     func update() {
         #if os(iOS) || os(tvOS)
         let started = CACurrentMediaTime()

@@ -5,7 +5,6 @@ use super::reader::monotonic_ns;
 use super::{agent, colors, device, surface, CanvasHost, MOVES};
 use crate::delivery::Opener;
 use exact_runner::DataSource;
-use std::collections::HashMap;
 use std::path::Path;
 
 impl<D: DataSource + Default> CanvasHost<D> {
@@ -109,6 +108,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
         // The reader takes what the presenter asks of the platform (D5),
         // and makes the top layer's windows (D10) and the bars (D11).
         p.serve_requests();
+        p.serve_share_sheet();
         surface::serve(&mut p);
         if let Some(palette) = &palette {
             p.set_palette(palette);
@@ -150,10 +150,8 @@ impl<D: DataSource + Default> CanvasHost<D> {
             borrowed: false,
             owed_surfaces: false,
             origin_ns,
-            clock_sent: false,
-            tracks: HashMap::new(),
+            tracks: Default::default(),
             feed: None,
-            tracks_epoch: 0,
             presents: Default::default(),
             launch,
             lead: false,

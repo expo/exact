@@ -11,11 +11,11 @@ final class ArrangementPaneController: UIViewController {
     }
     package required init?(coder: NSCoder) { nil }
     override func loadView() {
-        view = PaneView(node: node, room: room)
+        view = MeasuredPaneView(node: node, room: room)
         view.clipsToBounds = true
     }
     func contentChanged() {
-        guard let pane = viewIfLoaded as? PaneView, pane.refresh() else { return }
+        guard let pane = viewIfLoaded as? MeasuredPaneView, pane.refresh() else { return }
         pane.invalidateIntrinsicContentSize()
         parent?.view.setNeedsLayout()
     }
@@ -27,78 +27,90 @@ final class ArrangementPaneController: UIViewController {
         super.viewSafeAreaInsetsDidChange()
         SafeAreaSteps.react(self) { [weak self] in self?.changed() }
     }
+}
 
-    private final class PaneView: UIView {
-        private let node: NodeView
-        private let room: () -> CGSize
-        private struct Measurement {
-            let block: HostBlock
-            let stamp: UInt64
-            let size: CGSize?
-        }
-        private var intrinsic: Measurement?
-        private var fitting: Measurement?
-        private var measuring = false
+/// A UIKit container measures its Contract subtree at the width and priorities UIKit offers.
+package final class MeasuredPaneView: UIView {
+    package let node: NodeView
+    package var layoutChanged: (() -> Void)?
+    private let room: () -> CGSize
+    private struct Measurement {
+        let block: HostBlock
+        let stamp: UInt64
+        let size: CGSize?
+    }
+    private var intrinsic: Measurement?
+    private var fitting: Measurement?
+    private var measuring = false
 
-        package init(node: NodeView, room: @escaping () -> CGSize) {
-            self.node = node; self.room = room
-            super.init(frame: .zero)
-        }
-        package required init?(coder: NSCoder) { nil }
+    package init(node: NodeView, room: @escaping () -> CGSize) {
+        self.node = node; self.room = room
+        super.init(frame: .zero)
+    }
+    package required init?(coder: NSCoder) { nil }
 
-        override var intrinsicContentSize: CGSize {
-            // The enclosing element's room is independent of the pane's allocation.
-            intrinsic = measure(.region(room()), previous: intrinsic)
-            return intrinsic?.size ?? CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
-        }
+    package override func layoutSubviews() {
+        super.layoutSubviews()
+        layoutChanged?()
+    }
 
-        override func sizeThatFits(_ size: CGSize) -> CGSize {
-            fit(size, horizontal: .fittingSizeLevel, vertical: .fittingSizeLevel) ?? .zero
-        }
+    package override func didMoveToWindow() {
+        super.didMoveToWindow()
+        layoutChanged?()
+    }
 
-        override func systemLayoutSizeFitting(_ targetSize: CGSize) -> CGSize {
-            systemLayoutSizeFitting(targetSize, withHorizontalFittingPriority: .fittingSizeLevel, verticalFittingPriority: .fittingSizeLevel)
-        }
+    package override var intrinsicContentSize: CGSize {
+        // The enclosing element's room is independent of the pane's allocation.
+        intrinsic = measure(.region(room()), previous: intrinsic)
+        return intrinsic?.size ?? CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
+    }
 
-        override func systemLayoutSizeFitting(_ targetSize: CGSize, withHorizontalFittingPriority horizontal: UILayoutPriority,
-                                             verticalFittingPriority vertical: UILayoutPriority) -> CGSize {
-            fit(targetSize, horizontal: horizontal, vertical: vertical)
-                ?? super.systemLayoutSizeFitting(targetSize, withHorizontalFittingPriority: horizontal, verticalFittingPriority: vertical)
-        }
+    package override func sizeThatFits(_ size: CGSize) -> CGSize {
+        fit(size, horizontal: .fittingSizeLevel, vertical: .fittingSizeLevel) ?? .zero
+    }
 
-        private func fit(_ size: CGSize, horizontal: UILayoutPriority, vertical: UILayoutPriority) -> CGSize? {
-            let axis = { (length: CGFloat, priority: UILayoutPriority) -> HostBlock.Axis in
-                let finite = max(0, min(length, CGFloat(Float.greatestFiniteMagnitude)))
-                return priority == .required ? .size(finite) : .region(finite)
-            }
-            fitting = measure(HostBlock(width: axis(size.width, horizontal), height: axis(size.height, vertical)), previous: fitting)
-            return fitting?.size
-        }
+    package override func systemLayoutSizeFitting(_ targetSize: CGSize) -> CGSize {
+        systemLayoutSizeFitting(targetSize, withHorizontalFittingPriority: .fittingSizeLevel, verticalFittingPriority: .fittingSizeLevel)
+    }
 
-        private func measure(_ block: HostBlock, previous: Measurement?) -> Measurement {
-            let held = previous?.block == block ? previous?.size : nil
-            guard !measuring, let presenter = node.presenter, presenter.views[node.id] === node,
-                  let session = presenter.session, !Owner.shared.isServingMain else {
-                return Measurement(block: block, stamp: 0, size: held)
-            }
-            let stamp = session.runtime.layoutStamp()
-            if stamp != 0, let previous, previous.block == block, previous.stamp == stamp { return previous }
-            measuring = true
-            defer { measuring = false }
-            guard let measured = session.runtime.measureBlock(node.id, in: block) else {
-                // An initial allocation or pending layout may not be measurable yet. Retry after its batch.
-                return Measurement(block: block, stamp: 0, size: held)
-            }
-            return Measurement(block: block, stamp: stamp, size: measured.used)
-        }
+    package override func systemLayoutSizeFitting(_ targetSize: CGSize, withHorizontalFittingPriority horizontal: UILayoutPriority,
+                                         verticalFittingPriority vertical: UILayoutPriority) -> CGSize {
+        fit(targetSize, horizontal: horizontal, vertical: vertical)
+            ?? super.systemLayoutSizeFitting(targetSize, withHorizontalFittingPriority: horizontal, verticalFittingPriority: vertical)
+    }
 
-        func refresh() -> Bool {
-            let before = (intrinsic?.size, fitting?.size)
-            if intrinsic != nil { intrinsic = measure(.region(room()), previous: intrinsic) }
-            if let last = fitting { fitting = measure(last.block, previous: last) }
-            // Allocation reports advance the layout stamp too; only a different answer invalidates UIKit.
-            return before.0 != intrinsic?.size || before.1 != fitting?.size
+    private func fit(_ size: CGSize, horizontal: UILayoutPriority, vertical: UILayoutPriority) -> CGSize? {
+        let axis = { (length: CGFloat, priority: UILayoutPriority) -> HostBlock.Axis in
+            let finite = max(0, min(length, CGFloat(Float.greatestFiniteMagnitude)))
+            return priority == .required ? .size(finite) : .region(finite)
         }
+        fitting = measure(HostBlock(width: axis(size.width, horizontal), height: axis(size.height, vertical)), previous: fitting)
+        return fitting?.size
+    }
+
+    private func measure(_ block: HostBlock, previous: Measurement?) -> Measurement {
+        let held = previous?.block == block ? previous?.size : nil
+        guard !measuring, let presenter = node.presenter, presenter.views[node.id] === node,
+              let session = presenter.session, !Owner.shared.isServingMain else {
+            return Measurement(block: block, stamp: 0, size: held)
+        }
+        let stamp = session.runtime.layoutStamp()
+        if stamp != 0, let previous, previous.block == block, previous.stamp == stamp { return previous }
+        measuring = true
+        defer { measuring = false }
+        guard let measured = session.runtime.measureBlock(node.id, in: block) else {
+            // An initial allocation or pending layout may not be measurable yet. Retry after its batch.
+            return Measurement(block: block, stamp: 0, size: held)
+        }
+        return Measurement(block: block, stamp: stamp, size: measured.used)
+    }
+
+    package func refresh() -> Bool {
+        let before = (intrinsic?.size, fitting?.size)
+        if intrinsic != nil { intrinsic = measure(.region(room()), previous: intrinsic) }
+        if let last = fitting { fitting = measure(last.block, previous: last) }
+        // Allocation reports advance the layout stamp too; only a different answer invalidates UIKit.
+        return before.0 != intrinsic?.size || before.1 != fitting?.size
     }
 }
 
@@ -363,7 +375,7 @@ package final class ArrangementHost {
             let saved = pendingTops.removeValue(forKey: id)
             if hiddenPanes.contains(id), let node {
                 let top = node.pendingScrollTop.map { CGFloat($0) } ?? saved ?? (scroll.contentOffset.y + node.scrollTopInset(scroll))
-                node.hiddenScroll = CGPoint(x: scroll.contentOffset.x, y: top)
+                node.hiddenScroll = CGPoint(x: scroll.contentOffset.x + node.scrollLeftInset(scroll), y: top)
             }
             if let node, presenter.navigation.routeSurfaces.values.contains(where: { $0.collapseScroll === node || $0.edgeScroll === node }) { continue }
             let top = scroll.contentOffset.y + (node?.scrollTopInset(scroll) ?? scroll.adjustedContentInset.top)

@@ -2,7 +2,8 @@
 import AppKit
 
 /// One mouse contact's candidates, in LLP 1057.001 §1's order: innermost first,
-/// then reorder > transform > height > pan > swipe on one node. Every recognizer
+/// then reorder > transform > height > pan > swipe > a drag out of the app
+/// (LLP 1094.000 D8) on one node. Every recognizer
 /// arms on down; drags go to the first armed candidate that takes them, and the
 /// first to engage keeps the contact while the others are cancelled.
 package protocol MouseRecognizer: AnyObject {
@@ -28,7 +29,7 @@ extension Presenter {
     /// Only an open dialog or popover forwards a press to its authored parent.
     func presentationParent(of view: NSView) -> NSView? {
         guard let node = view as? NodeView else { return nil }
-        return dialogs.authoredParent(of: node) ?? menus.authoredParent(of: node)
+        return dialogs.authoredParent(of: node) ?? menus.authoredParent(of: node) ?? dataTables.authoredRow(of: node)?.container
     }
 }
 
@@ -256,7 +257,7 @@ final class MouseChain {
     /// Rule 4's rank on one node, the tie-break after depth.
     var ranked: [MouseRecognizer] {
         guard let p = presenter else { return [] }
-        return [p.reorders.mouse, p.mouseDrags.transform, p.mouseDrags.height, p.mouseLayoutPan, p.mouseSwipe]
+        return [p.reorders.mouse, p.mouseDrags.transform, p.mouseDrags.height, p.mouseLayoutPan, p.mouseSwipe] + (p.mouseDragOut.map { [$0] } ?? [])
     }
     /// Arms every recognizer once per event (forwarding reaches the
     /// ancestors' overrides with the same event). The `press` arms too, as on

@@ -385,6 +385,18 @@ final class IframeCaptureTests: XCTestCase {
         XCTAssertFalse(WebViews.localPDF(nil))
     }
 
+    func testTheSamePDFURLDisplaysItsReplacementDocument() throws {
+        let arm = try arm(), seen = Seen(), path = "assets/report.pdf"
+        let handle = try mount(arm, seen, configuration: ["pdf": true], src: path, document: Self.document(pages: 2))
+        defer { arm.destroy(handle) }
+        let view = try XCTUnwrap(current(arm, handle) as? PDFView)
+        waitFor("first PDF") { view.document?.pageCount == 2 }
+        sendData(Self.document(pages: 3), arm.setDocument, handle)
+        send(path, arm.setSrc, handle)
+        waitFor("replacement PDF at the same URL") { view.document?.pageCount == 3 }
+        XCTAssertTrue(current(arm, handle) === view)
+    }
+
     func testALocalPDFIsAPDFView() throws {
         #if os(iOS)
         guard hostedWindowScene() != nil else { throw missing("scene", "WebKit paints a snapshot only in an app's window scene") }

@@ -59,7 +59,7 @@ extension NodeView {
         guard (handlers.contains("scrollend") || presenter?.collections.owns(id) == true || presenter?.session?.timerAdmissions.enabled == true), hasScrollLayoutBox else { return }
         let end = scrollEnd ?? ScrollEnd()
         scrollEnd = end
-        guard end.moved(left: sv.contentOffset.x, top: sv.contentOffset.y, inset: scrollTopInset(sv), scale: sv.zoomScale) else { return }
+        guard end.moved(left: sv.contentOffset.x + scrollLeftInset(sv), top: sv.contentOffset.y, inset: scrollTopInset(sv), scale: sv.zoomScale) else { return }
         // A drag and its deceleration report their end; a touch that only
         // tracks reports none, so the quiet check asks until it lifts.
         if end.live || sv.isDragging || sv.isDecelerating || sv.isZooming || sv.isZoomBouncing { end.hold() } else { settleScrollEnd() }

@@ -42,6 +42,17 @@ pub(crate) fn spacing(style: &crate::StyleProps, env: &crate::Env) -> (f32, f32)
     )
 }
 
+/// A column header in an authored header group.
+pub(crate) fn column_header(arena: &NodeArena, slot: u32) -> bool {
+    let props = arena.props(slot);
+    props.str(PropId::SemanticTag) == Some("th")
+        && props.str(PropId::Scope) != Some("row")
+        && arena
+            .parent(slot)
+            .and_then(|row| arena.parent(row))
+            .is_some_and(|group| arena.props(group).str(PropId::SemanticTag) == Some("thead"))
+}
+
 /// HTML's UA padding of a `th` and a `td`, on each side where none is said.
 const CELL_PADDING: f32 = 1.0;
 
@@ -338,6 +349,31 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
             s.margin = zero();
             cell_padding(style, env, s);
             least(style, env, s);
+            if let Some((width, height)) =
+                arena.intrinsic(slot).filter(|_| column_header(arena, slot))
+            {
+                // AppKit measured the entire header cell, including its text insets.
+                // A drag can make it narrower; the native header truncates the title.
+                if !style.mask.has(StyleId::Width)
+                    && !style.mask.has(StyleId::MinWidth)
+                    && !arena.table_column_widths.contains_key(&slot)
+                {
+                    s.min_size.width = length(width);
+                }
+                if !style.mask.has(StyleId::Height) && !style.mask.has(StyleId::MinHeight) {
+                    s.min_size.height = length(height);
+                }
+                for (id, edge) in [
+                    (StyleId::PaddingLeft, &mut s.padding.left),
+                    (StyleId::PaddingRight, &mut s.padding.right),
+                    (StyleId::PaddingTop, &mut s.padding.top),
+                    (StyleId::PaddingBottom, &mut s.padding.bottom),
+                ] {
+                    if !style.mask.has(id) {
+                        *edge = zero();
+                    }
+                }
+            }
             // `vertical-align: middle`, the UA's for a cell; any other
             // keyword aligns a cell at its baseline (CSS 2.1 §17.5.4), its
             // first line's at the top of the cell's content.

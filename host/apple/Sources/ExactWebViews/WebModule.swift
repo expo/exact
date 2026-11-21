@@ -373,6 +373,11 @@ final class WebViews: WebHosting {
         data.withUnsafeBytes { module.configure(handle, $0.bindMemory(to: UInt8.self).baseAddress, UInt32(data.count)) }
     }
 
+    func reloadDocument(_ owner: NodeView) {
+        entries[owner.id]?.initialized = false
+        update(owner)
+    }
+
     func update(_ owner: NodeView) {
         guard let entry = entries[owner.id] else { return }
         let src = Self.browserSource(owner.props["src"])

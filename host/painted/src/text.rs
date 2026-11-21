@@ -69,6 +69,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tiny_skia::{IntSize, Mask, Pixmap, PixmapPaint, Transform};
 
+pub(crate) const PARAGRAPH_BREAKS: [char; 7] = [
+    '\n', '\r', '\u{1c}', '\u{1d}', '\u{1e}', '\u{85}', '\u{2029}',
+];
+
 // Ascent, descent, and leading in logical points.
 type FontMetrics = (f32, f32, f32);
 

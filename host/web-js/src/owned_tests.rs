@@ -53,12 +53,12 @@ component Discover
 /// which its action refreshes, and its path follows the runner's.
 #[test]
 fn each_instance_makes_and_refreshes_its_own_request() {
-    let js = crate::emit::emit(&contract::compile(SCREENS).unwrap(), false, false)
-        .unwrap()
-        .js;
-    assert!(js.contains("const r_0=owned(\"works#1\")"), "{js}");
+    let plan = contract::compile(SCREENS).unwrap();
+    let works = plan.str(plan.resources[0].name);
+    let js = crate::emit::emit(&plan, false, false).unwrap().js;
+    assert!(js.contains(&format!("const r_0=owned({works:?})")), "{js}");
     assert!(
-        js.contains(".r0=own(r_0,()=>res(\"works#1\",\"subjectWorks\""),
+        js.contains(&format!(".r0=own(r_0,()=>res({works:?},\"subjectWorks\"")),
         "{js}"
     );
     assert!(js.contains(r#"R($r["r0"])"#), "{js}");
@@ -159,11 +159,18 @@ component Book
 /// after its state and requests, its slot, refreshes and `then` its own.
 #[test]
 fn each_instance_makes_its_own_mutations() {
-    let js = crate::emit::emit(&contract::compile(BOOKS).unwrap(), false, false)
-        .unwrap()
-        .js;
-    assert!(js.contains("const m_0=ownedMut(\"detected#1\")"), "{js}");
-    assert!(js.contains("const m_1=ownedMut(\"saved#1\")"), "{js}");
+    let plan = contract::compile(BOOKS).unwrap();
+    let detected = plan.str(plan.mutations[0].name);
+    let saved = plan.str(plan.mutations[1].name);
+    let js = crate::emit::emit(&plan, false, false).unwrap().js;
+    assert!(
+        js.contains(&format!("const m_0=ownedMut({detected:?})")),
+        "{js}"
+    );
+    assert!(
+        js.contains(&format!("const m_1=ownedMut({saved:?})")),
+        "{js}"
+    );
     assert!(!js.contains("m_0.then"), "{js}");
     let (before, _) = js.split_once(".m0=ownMut(").unwrap();
     let owner = before.rsplit_once(';').unwrap().1;
@@ -203,7 +210,8 @@ fn a_use_outside_every_region_sends_as_the_root() {
     assert!(!js.contains("ownMut"), "{js}");
     let slot = plan.mutations[0].slot.0;
     let declared = js.find(&format!("const s_{slot}=")).expect("the late slot");
-    let made = js.find("const m_0=mut(\"detected#1\"").expect(&js);
+    let detected = plan.str(plan.mutations[0].name);
+    let made = js.find(&format!("const m_0=mut({detected:?}")).expect(&js);
     assert!(declared < made, "{js}");
     assert!(js.contains("m_0.then=()=>a_2(\"9\");"), "{js}");
 }

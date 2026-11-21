@@ -126,6 +126,127 @@ fn the_list_opens_at_its_end_on_measured_sizes() {
 }
 
 #[test]
+fn replacing_a_transcript_keeps_the_next_surviving_row_at_the_reading_position() {
+    let mut old = boot(APP);
+    let end = host(&mut old, 0.0, true);
+    host_once(&mut old, end - 2800.0, -2400.0);
+    host_once(&mut old, end - 3200.0, -2400.0);
+    let offset = host(&mut old, end - 3200.0, false);
+    let snapshot = list(&old);
+    let first = snapshot
+        .rows
+        .iter()
+        .find(|r| r.start <= offset && offset < r.start + r.size)
+        .unwrap();
+    let key = first.index + 1;
+    let offset = host(&mut old, first.start + 7.0, false);
+    assert!((offset - first.start - 7.0).abs() < 1.0);
+
+    let filtered = APP.replace(
+        "for x in rows ",
+        &format!("for x in rows.filter(n => n % 2 == {}) ", key % 2),
+    );
+    let expected_row = key / 2;
+    for kept in [true, false] {
+        let source = if kept {
+            filtered.clone()
+        } else {
+            filtered.replace(
+                "list virtualized=true",
+                "list appearance=\"none\" virtualized=true",
+            )
+        };
+        for apply in [true, false] {
+            let mut new = replace(&old, &source);
+            assert_eq!(list(&new).view == snapshot.view, kept);
+            assert!(
+                list(&new).rows.iter().any(|r| r.index == expected_row),
+                "the first window includes the reader's row"
+            );
+            let offset = host(&mut new, offset, apply);
+            let new_rows = list(&new);
+            let row = new_rows
+                .rows
+                .iter()
+                .find(|r| r.index == expected_row)
+                .expect("the reader's row stays mounted after measurement");
+            assert!(
+                (offset - row.start - 7.0).abs() <= 1.0,
+                "row {key} starts at {} in the port",
+                row.start - offset
+            );
+        }
+    }
+}
+
+#[test]
+fn a_replacement_without_a_surviving_successor_uses_the_predecessor_then_the_start() {
+    let mut old = boot(&APP.replace("scroll-start=\"end\"", "scroll-start=\"start\""));
+    let offset = host(&mut old, 8100.0, false);
+    let c = list(&old);
+    let first = c
+        .rows
+        .iter()
+        .find(|r| r.start <= offset && offset < r.start + r.size)
+        .unwrap();
+    let offset = host(&mut old, first.start + 7.0, false);
+    let source = APP.replace(
+        "for x in rows ",
+        &format!(
+            "for x in rows.filter(n => n < {}).concat(rows.map(n => n + 1000)) ",
+            first.index
+        ),
+    );
+    let mut new = replace(&old, &source);
+    let at = host(&mut new, offset, true);
+    let c = list(&new);
+    let previous = c.rows.iter().find(|r| r.index + 1 == first.index).unwrap();
+    assert!((at - previous.start - 7.0).abs() <= 1.0);
+    let mut unrelated = replace(&old, &APP.replace("key=x", "key=(x + 1000)"));
+    assert_eq!(host(&mut unrelated, offset, false), 0.0);
+}
+
+fn replace(old: &Runner<Data>, source: &str) -> Runner<Data> {
+    Runner::boot_carrying(
+        contract::compile(source).unwrap(),
+        Data,
+        Kernel::with_monospace(),
+        &old.carry(),
+        Default::default(),
+        "/",
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_replacement_preserves_the_start_and_a_followed_end() {
+    for follow in [false, true] {
+        let source = if follow {
+            APP.replace("scroll-start=", "scrollFollowEnd=true scroll-start=")
+        } else {
+            APP.replace("scroll-start=\"end\"", "scroll-start=\"start\"")
+        };
+        let mut old = boot(&source);
+        let offset = host(&mut old, 0.0, true);
+        let mut new = replace(
+            &old,
+            &source
+                .replace("scroll-start=\"start\"", "scroll-start=\"end\"")
+                .replace("for x in rows ", "for x in rows.filter(n => n % 2 == 1) "),
+        );
+        let c = list(&new);
+        let expected = if follow { c.count - 1 } else { 0 };
+        assert!(c.rows.iter().any(|r| r.index == expected));
+        let observed = host(&mut new, offset, false);
+        if follow {
+            at_end(&new, observed);
+        } else {
+            assert_eq!(observed, 0.0);
+        }
+    }
+}
+
+#[test]
 fn a_host_that_reports_before_it_applies_the_correction_still_opens_at_the_end() {
     let mut r = boot(APP);
     let offset = host(&mut r, 0.0, false);

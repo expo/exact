@@ -1233,9 +1233,7 @@ final class SplitMacTests: XCTestCase {
         XCTAssertEqual(own.style["display"]?.string, "none")
     }
 
-    /// The library with its books in the painted grouped form (D6), as
-    /// Excord's channels are: a section of rows whose press is an action
-    /// that pushes the book. A book's Next replaces it with the next.
+    /// Excord uses the grouped form (D6) with a button in each row. Next replaces the current book.
     private func paintedList() -> String {
         let swapping = app(tabs: false).replacingOccurrences(of: "  action count\n", with: "  action swap(url: string)\n    nav = replace(nav, url)\n  action count\n")
         let next = replacing("box testId=`half-${e.params.id}`", with: [
@@ -1270,7 +1268,9 @@ final class SplitMacTests: XCTestCase {
             "for id in (counted > 0 ? [\"a\", \"b\"] : [\"a\", \"b\", \"c\"]) key=id",
         ], in: grouped)
         let session = try boot(tabs: false, size: CGSize(width: 1100, height: 700), source: source)
-        _ = compose(ExactView(session: session), width: 1100, sidebar: false)
+        _ = compose(ExactView(session: session), width: 1100, sidebar: false, window: ExactAgentWindow.self)
+        window?.level = .agentBehind
+        window?.orderFront(nil)
         XCTAssertTrue(session.presenter.navigationHost.split.active)
         let list = try node("books")
         let feed = try XCTUnwrap(session.presenter.tables.feeds[list.id])
@@ -1282,7 +1282,11 @@ final class SplitMacTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(feed.table.rowView(atRow: 2, makeIfNecessary: true)).isGroupRowStyle)
         XCTAssertTrue(feed.tableView(feed.table, shouldSelectRow: 3))
         let row = try node("row-a"), parent = try XCTUnwrap(session.presenter.eventParent(of: row))
-        XCTAssertTrue(feed.pressRow(3))
+        let cell = try XCTUnwrap(feed.table.view(atColumn: 0, row: 3, makeIfNecessary: true))
+        let title = try node("name-a"), ink = cell.convert(title.bounds, from: title)
+        XCTAssertGreaterThanOrEqual(ink.minY, cell.bounds.minY)
+        XCTAssertLessThanOrEqual(ink.maxY, cell.bounds.maxY)
+        XCTAssertEqual(Agent(session: session).tap(["id": Int(row.id)])["delivery"] as? String, "platform")
         XCTAssertEqual(feed.table.selectedRow, 3)
         XCTAssertNotNil(try node("route-book-a"))
         try press("row-count")

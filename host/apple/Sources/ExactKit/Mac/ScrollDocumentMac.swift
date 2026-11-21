@@ -47,7 +47,7 @@ extension Presenter {
     /// the page. Moving the clipping box itself can change the page's extent.
     func preservesDocumentFit(_ batch: Batch) -> Bool {
         guard !applying, revealing == nil, preparing == nil, flightHost.isEmpty,
-              !batch.ops.isEmpty, batch.rootTabs == nil, !batch.controls, !batch.layoutProvisional else { return false }
+              !batch.ops.isEmpty, batch.rootTabs == nil, batch.routeInspectors == nil, !batch.controls, !batch.layoutProvisional else { return false }
         return batch.ops.allSatisfy { op in
             guard op.op == .present else { return false }
             if op.property == "opacity" { return true }
@@ -69,7 +69,7 @@ extension Presenter {
     /// the snapshot places.
     static func onlySnapshots(_ batch: Batch) -> Bool {
         !batch.ops.isEmpty && batch.ops.allSatisfy { $0.op == .collections } && batch.error == nil && batch.wakelock == nil
-            && batch.orientation == nil && batch.rootTabs == nil && !batch.layoutProvisional && !batch.controls
+            && batch.orientation == nil && batch.rootTabs == nil && batch.routeInspectors == nil && !batch.layoutProvisional && !batch.controls
     }
 
     /// Charge the report (decode, layout and apply) to the

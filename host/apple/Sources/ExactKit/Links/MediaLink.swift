@@ -24,6 +24,7 @@ package protocol WebHosting: AnyObject {
     var status: String { get }
     func create(owner: NodeView) -> ExactWebPlatformView?
     func update(_ owner: NodeView)
+    func reloadDocument(_ owner: NodeView)
     func destroy(id: UInt32)
     func hatched(_ id: UInt32)
     func hasFrame(_ target: String) -> Bool
@@ -55,6 +56,7 @@ package final class NoWebViews: WebHosting {
     package var status: String { "none" }
     package func create(owner: NodeView) -> ExactWebPlatformView? { nil }
     package func update(_ owner: NodeView) {}
+    package func reloadDocument(_ owner: NodeView) {}
     package func destroy(id: UInt32) {}
     package func hatched(_ id: UInt32) {}
     package func hasFrame(_ target: String) -> Bool { false }
@@ -79,6 +81,7 @@ package final class NoWebViews: WebHosting {
 package protocol VideoPlaying: AnyObject {
     /// The node's props changed: the player follows them.
     func update()
+    func reloadAssets(_ properties: Set<String>)
     func layout()
     /// The platform player (`AVPlayer`), for an element hatch.
     var platform: AnyObject? { get }

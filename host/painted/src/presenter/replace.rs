@@ -2,11 +2,9 @@
 //! update): what belongs to the old tree goes, and what belongs to the
 //! window or the session stays.
 //!
-//! The new runner numbers its views from 1 again and its kernel counts its
-//! epoch from where a boot does, so state kept by view id, node key, epoch
-//! or plan index would name another node, or none. [`Presenter::replaced`]
-//! names every field: a field added later does not compile until it is
-//! said to be the tree's or kept.
+//! A replacement can keep a view id. Kernel node keys, collection revisions
+//! and pending feedback still belong to the tree that produced them.
+//! [`Presenter::replaced`] accounts for each field when the host changes.
 use super::*;
 
 impl<D: DataSource> Presenter<D> {
@@ -35,6 +33,8 @@ impl<D: DataSource> Presenter<D> {
             fields,
             field_history,
             field_drag,
+            file_drag,
+            mouse_selection,
             #[cfg(any(target_os = "android", test))]
             reader_selection,
             range_drag,
@@ -102,6 +102,7 @@ impl<D: DataSource> Presenter<D> {
             boxes_page: _,
             boxes_serial: _,
             dirty: _,
+            picture_dirty: _,
             image_paint_pending: _,
             field_reveal: _,
             last_frame_succeeded: _,
@@ -191,6 +192,8 @@ impl<D: DataSource> Presenter<D> {
         fields.clear();
         *field_history = Default::default();
         *field_drag = None;
+        *file_drag = Default::default();
+        *mouse_selection = Default::default();
         #[cfg(any(target_os = "android", test))]
         {
             *reader_selection = None;

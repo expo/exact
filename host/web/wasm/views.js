@@ -327,8 +327,18 @@ export function syncMarkup(el) {
     });
   }).catch((error) => console.error("exact: Markdown editor:", error));
 }
+// @ref LLP 1094.000 D6 — the first node that turns draggable loads the drag-out glue, which then hears every drag in
+// the page. A load that fails is logged, and the next node that turns draggable tries again.
+export function loadDragOut() {
+  host.dragOutModule ??= loadAfterPaint("./drag-out.js", "listenDragOut").then((listen) => listen(document), (e) => {
+    host.dragOutModule = null;
+    log(`drag-out module: ${e}`);
+  });
+}
+
 export function applyProps(el, set, clear, adopting = false) {
   syncMedia(el, set, clear);
+  if (set?.draggable === "true") loadDragOut();
   if (set && "data-scrolldocument" in set) {
     scrollDocs.add(el);
   }

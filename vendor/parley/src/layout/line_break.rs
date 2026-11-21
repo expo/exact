@@ -634,7 +634,7 @@ impl<'a, B: Brush> BreakLines<'a, B> {
                         let boundary = cluster.info().boundary();
                         let line_height = run.metrics().line_height;
                         let max_height_exceeded = self.state.line.max_height_exceeded;
-                        let style = &self.layout.data.styles[cluster.data.style_index as usize];
+                        let style = &self.layout.data.styles[cluster.data.info.style_index as usize];
 
                         // Lag text_wrap_mode style by one cluster
                         let text_wrap_mode = self.state.line.text_wrap_mode;

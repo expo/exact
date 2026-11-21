@@ -7,11 +7,21 @@ use field::{byte_at, utf16_len};
 use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Clone, Copy)]
-enum Unit {
+pub(super) enum Unit {
     Character,
     Word,
     Paragraph,
     Password,
+}
+
+impl Unit {
+    pub(super) fn for_clicks(clicks: u32) -> Self {
+        match clicks {
+            0 | 1 => Self::Character,
+            2 => Self::Word,
+            _ => Self::Paragraph,
+        }
+    }
 }
 
 pub(super) struct Drag {
@@ -37,18 +47,26 @@ impl Drag {
     }
 }
 
-fn range(value: &str, at: u32, unit: Unit) -> (u32, u32) {
+pub(super) fn range(value: &str, at: u32, unit: Unit) -> (u32, u32) {
     // The painted geometry supplies a valid UTF-16 insertion offset.
     match unit {
         Unit::Character => (at, at),
         Unit::Password => (0, utf16_len(value)),
         Unit::Paragraph => {
             let byte = byte_at(value, at);
-            let start = value[..byte].rfind('\n').map_or(0, |i| i + 1);
-            let end = value[byte..]
-                .find('\n')
-                .map_or(value.len(), |i| byte + i + 1);
-            (utf16_len(&value[..start]), utf16_len(&value[..end]))
+            let mut start = 0;
+            for (i, sep) in value.match_indices(crate::text::PARAGRAPH_BREAKS) {
+                let end = i + sep.len();
+                // CRLF is one paragraph break.
+                if sep == "\r" && value[end..].starts_with('\n') {
+                    continue;
+                }
+                if byte < end {
+                    return (utf16_len(&value[..start]), utf16_len(&value[..end]));
+                }
+                start = end;
+            }
+            (utf16_len(&value[..start]), utf16_len(value))
         }
         Unit::Word => {
             #[cfg(target_os = "windows")]
@@ -113,11 +131,7 @@ impl<D: DataSource> Presenter<D> {
         let unit = if clicks > 1 && node.props.str(PropId::Type) == Some("password") {
             Unit::Password
         } else {
-            match clicks {
-                0 | 1 => Unit::Character,
-                2 => Unit::Word,
-                _ => Unit::Paragraph,
-            }
+            Unit::for_clicks(clicks)
         };
         let value = self.field_text(id);
         let Some(cursor) = self.field_pointer_hit(id, &value, point, unit, None) else {
@@ -187,10 +201,11 @@ impl<D: DataSource> Presenter<D> {
     fn extend_field_selection(
         &mut self,
         id: ViewId,
-        drag: &Drag,
-        autoscroll: Option<(f32, f32)>,
+        drag: &mut Drag,
+        scroll: (f32, f32),
     ) -> Option<()> {
-        let cursor = self.field_pointer_hit(id, &drag.value, drag.point, drag.unit, autoscroll)?;
+        let cursor =
+            self.field_pointer_hit(id, &drag.value, drag.point, drag.unit, Some(scroll))?;
         let current = range(&drag.value, cursor.offset, drag.unit);
         self.mark_pointer_selection(
             id,
@@ -198,6 +213,8 @@ impl<D: DataSource> Presenter<D> {
             selection(drag.anchor, current),
             cursor.upstream,
         );
+        drag.scroll = Some(scroll);
+        self.field_reveal = true;
         Some(())
     }
 
@@ -209,10 +226,11 @@ impl<D: DataSource> Presenter<D> {
             return false;
         };
         if drag.point != (x, y) {
-            drag.scroll = None;
             drag.point = (x, y);
             drag.moved = true;
-            if self.extend_field_selection(id, &drag, None).is_none() {
+            // A mouse sample selects at the visible edge. Only a frame advances the scroll.
+            let scroll = drag.scroll.unwrap_or_else(|| self.scroll_of(id));
+            if self.extend_field_selection(id, &mut drag, scroll).is_none() {
                 return false;
             }
         }
@@ -267,11 +285,8 @@ impl<D: DataSource> Presenter<D> {
             (old.0 + velocity.0 * dt).clamp(0., max.0),
             (old.1 + velocity.1 * dt).clamp(0., max.1),
         );
-        if old != next {
-            if self.extend_field_selection(id, &drag, Some(next)).is_none() {
-                return;
-            }
-            drag.scroll = Some(next);
+        if old != next && self.extend_field_selection(id, &mut drag, next).is_none() {
+            return;
         }
         self.field_drag = Some(drag);
     }

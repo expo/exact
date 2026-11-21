@@ -138,9 +138,12 @@ pub(crate) struct Ripples {
     input: f64,
     /// The reader plays ripples: it plays the host's layers.
     pub(crate) reader: bool,
-    /// Each played ripple's tracks, by its node.
-    tracks: HashMap<NodeKey, Vec<u32>>,
+    /// Each played ripple's tracks, by its node, and what they were
+    /// sampled from: its touch, start and release, and its shape's size.
+    tracks: HashMap<NodeKey, (Sampled, Vec<u32>)>,
 }
+
+type Sampled = (Option<(f32, f32)>, f64, Option<f64>, (f32, f32));
 
 /// What a ripple draws at an instant, in the coordinates of its box.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -329,7 +332,7 @@ impl Ripples {
     /// The tracks of the ripple the reader plays on `key`.
     #[cfg(any(target_os = "android", test))]
     pub(crate) fn tracks(&self, key: NodeKey) -> Option<&Vec<u32>> {
-        self.tracks.get(&key)
+        self.tracks.get(&key).map(|(_, words)| words)
     }
 }
 
@@ -478,6 +481,14 @@ impl Painter {
         if !taken {
             return false;
         }
+        if let Some((_, live)) = self.ripples.live.get_mut(&node.id) {
+            (live.drawn, live.layered) = (true, true);
+        }
+        // Its words change only with its press, its release and its size.
+        let of = (r.at, r.start, r.released, (w, h));
+        if (self.ripples.tracks.get(&node.key)).is_some_and(|(old, _)| *old == of) {
+            return true;
+        }
         // Lifted after the enter: the wave rests until the lift, as the first
         // sample holds, so only the exit is sampled.
         let from = r.released.filter(|at| *at >= ENTER_MS).unwrap_or(0.0);
@@ -494,10 +505,7 @@ impl Painter {
             .collect();
         let start = (r.start + from) / 1000.0;
         let words = crate::host::lower::ripple_words(start, span / 1000.0, &samples);
-        self.ripples.tracks.insert(node.key, words);
-        if let Some((_, live)) = self.ripples.live.get_mut(&node.id) {
-            (live.drawn, live.layered) = (true, true);
-        }
+        self.ripples.tracks.insert(node.key, (of, words));
         true
     }
 }

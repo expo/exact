@@ -1,6 +1,6 @@
 //! Host-owned date answers; never baked or carried.
 //! @ref LLP 1027.000.000
-use super::{DataError, DataSource, Runner, RunnerError};
+use super::{DataError, DataSource, ResourceChange, Runner, RunnerError};
 use crate::time::{Place, WallTime, SOURCE};
 use exact_kernel::CommitReceipt;
 use exact_plan::{TypeKind, Value};
@@ -372,8 +372,8 @@ impl<D: DataSource> Runner<D> {
         (receipts, error)
     }
 
-    /// The device says `topic` changed (LLP 1016.002): every resource whose
-    /// answer watches it is asked again, in one commit; none, no commit.
+    /// Refresh a topic's watchers or a source's readers in one commit.
+    /// A string announces a topic (LLP 1016.002 D4).
     ///
     /// @ref LLP 1016.002 D4 — a resource with a request in flight is not
     /// asked now: forgetting that request would drop its reply, and a topic
@@ -381,11 +381,23 @@ impl<D: DataSource> Runner<D> {
     /// resource. The request is marked instead; its reply lands as any
     /// reply does, and that commit asks the resource again, forced, once
     /// however many announcements came meanwhile.
-    pub fn changed(&mut self, topic: &str) -> Result<Option<CommitReceipt>, RunnerError> {
+    pub fn changed<'a>(
+        &mut self,
+        change: impl Into<ResourceChange<'a>>,
+    ) -> Result<Option<CommitReceipt>, RunnerError> {
+        let change = change.into();
         let mut which = Vec::new();
         for i in 0..self.resources.len() {
+            let (name, reads) = match change {
+                ResourceChange::Topic(topic) => {
+                    (topic, self.resources[i].watching.iter().any(|t| t == topic))
+                }
+                ResourceChange::Source(source) => {
+                    (source, self.plan.str(self.resource_row(i).source) == source)
+                }
+            };
             // An upload is asked once for its arguments (LLP 1016.000 D10).
-            if !self.resources[i].watching.iter().any(|t| t == topic) || self.upload_stands(i) {
+            if !reads || self.upload_stands(i) {
                 continue;
             }
             // A stream keeps no reply to wait for, and a refused request
@@ -405,8 +417,8 @@ impl<D: DataSource> Runner<D> {
                 }
             }
             if let Some(ticket) = log {
-                let name = self.target_name(crate::Target::Resource(i));
-                self.log(super::lines::waits_for(topic, ticket, &name));
+                let resource = self.target_name(crate::Target::Resource(i));
+                self.log(super::lines::waits_for(name, ticket, &resource));
             }
             if !in_flight {
                 which.push(i);

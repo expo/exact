@@ -26,6 +26,7 @@ mod looks;
 mod owned;
 pub(crate) use owned::declared_name;
 mod pending;
+mod place;
 mod row;
 /// A row's value as `node` prints it: the JS target's inspect table (LLP 1122 T2b) writes the same words.
 pub use row::row_json;
@@ -580,7 +581,8 @@ pub(super) fn token_fields(
 /// instance path to it (D6), and the kernel's frames: `frame` relative to
 /// the parent (a block's root in its own block), `absolute` in the root's
 /// space or the viewport when the host places its block (as `frame()`
-/// reports it), `content` when it scrolls.
+/// reports it), `content` when it scrolls, and a scroller's D13 and D14 terms
+/// (`scrollTerms`).
 /// Observations of the runner's memory, tagged with the generation, epoch and
 /// incarnation; a host adds the spaces and what it mounted. An id that is
 /// not a live node in this incarnation is refused by name.
@@ -635,6 +637,10 @@ pub fn node<D: DataSource>(runner: &Runner<D>, id: u32) -> String {
             }
         }
         s.push(']');
+    }
+    if let Some(path) = runner.view_place(id) {
+        s.push_str(",\"place\":");
+        place::write(&path, &mut s);
     }
     // The app modes it is in (LLP 1121 D5): the window's, overridden by the
     // pins above it (LLP 1122 D5's selected node's tuple).
@@ -755,6 +761,19 @@ pub fn node<D: DataSource>(runner: &Runner<D>, id: u32) -> String {
             ",\"content\":{{\"w\":{},\"h\":{}}}",
             num(node.content.0 as f64),
             num(node.content.1 as f64)
+        );
+    }
+    // A scroller's terms for its host's writer (LLP 1123 D13, D14), each top right bottom left
+    if let Some(t) = kernel.scroll_terms(node.key) {
+        let edges = |v: [f32; 4]| v.map(|x| num(x as f64).to_string()).join(",");
+        let _ = write!(
+            s,
+            ",\"scrollTerms\":{{\"reach\":[{}],\"reserved\":[{}],\"keyboard\":[{}],\"bandReaches\":[{}],\"container\":[{}]}}",
+            edges(t.reach),
+            t.reserved.map(|r| r.map_or("null".into(), |x| num(x as f64).to_string())).join(","),
+            edges(t.keyboard),
+            t.band_reaches.map(|b| b.to_string()).join(","),
+            t.container.map(|c| c.to_string()).join(",")
         );
     }
     // LLP 1056 §5: a 2D canvas's last list, readable (bounded: 200 lines,

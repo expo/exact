@@ -88,6 +88,7 @@ pub fn case(seed: u64, size: &Size) -> Case {
         stored: true,
         prerendered: false,
         launch: Default::default(),
+        answers: Vec::new(),
     }
 }
 

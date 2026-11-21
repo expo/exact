@@ -48,7 +48,7 @@ impl Raster {
         {
             return false;
         }
-        let Some(target) = self.target.path_pixels(path, dev) else {
+        let Some(target) = self.target.bounded_pixels(path.bounds(), dev) else {
             return false;
         };
         // Integer shared edges have no partial coverage or overlapping ink.

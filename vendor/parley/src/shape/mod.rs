@@ -273,7 +273,7 @@ fn fill_cluster_in_place(
 
     let mut force_normalize = false;
     let mut is_emoji_or_pictograph = false;
-    let mut map_len: u8 = 0;
+    let mut map_len = 0;
     let start = *code_unit_offset_in_string as u32;
 
     for ((_, ch), (info, style_index)) in segment_text.char_indices().zip(item_infos_iter.by_ref())
@@ -309,7 +309,6 @@ fn fill_cluster_in_place(
         char_cluster.chars.push(Char {
             ch,
             contributes_to_shaping,
-            glyph_id: 0,
             style_index: *style_index,
             is_control_character: info.is_control(),
         });
@@ -650,19 +649,7 @@ impl<'a, 'b, B: Brush> FontSelector<'a, 'b, B> {
             };
 
             let map_status = cluster.map(
-                |ch| {
-                    charmap
-                        .map(ch)
-                        .map(|g| {
-                            // HACK: in reality, we're only computing coverage, so
-                            // we only care about whether the font  has a mapping
-                            // for a particular glyph. Any non-zero value indicates
-                            // the existence of a glyph so we can simplify this
-                            // without a fallible conversion from u32 to u16.
-                            (g != 0) as u16
-                        })
-                        .unwrap_or_default()
-                },
+                |ch| charmap.map(ch).is_some_and(|g| g != 0),
                 analysis_data_sources,
             );
 

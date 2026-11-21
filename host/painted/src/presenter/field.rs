@@ -289,6 +289,7 @@ impl<D: DataSource> Presenter<D> {
                 None => FieldSelection::caret(0),
             };
             self.field_history.invalidate(id);
+            self.field_reveal |= self.focus == Some(id);
             self.mark_field_from(id, &value, before, after, false);
         }
     }
@@ -336,6 +337,7 @@ impl<D: DataSource> Presenter<D> {
         selection: FieldSelection,
         by_command: bool,
     ) {
+        self.field_reveal |= self.focus == Some(id);
         let before = self.field_selection(id);
         self.mark_field_from(id, value, before, selection, by_command);
     }
@@ -351,7 +353,6 @@ impl<D: DataSource> Presenter<D> {
         if before != selection {
             self.field_change_tasks.insert(id);
         }
-        self.field_reveal |= self.focus == Some(id);
         self.fields.insert(
             id,
             FieldMark {
@@ -467,8 +468,8 @@ impl<D: DataSource> Presenter<D> {
         {
             return;
         }
-        // Defer any pending caret reveal until after hit-testing against the
-        // text currently visible under the pointer.
+        // Hit-test the displayed text before a keyboard reveal can move it.
+        // A successful pointer placement keeps the scroll position of that picture.
         let deferred_reveal = std::mem::take(&mut self.field_reveal);
         self.boxes();
         let (x, y) = self
@@ -478,15 +479,12 @@ impl<D: DataSource> Presenter<D> {
             .map_or((x, y), |b| b.field_point(x, y));
         let value = self.field_value(id);
         if let Some(cursor) = self.current_field(id, &value).and_then(|f| f.hit(x, y)) {
-            self.mark_field(
+            self.mark_pointer_selection(
                 id,
                 &value,
                 FieldSelection::caret(cursor.offset.min(utf16_len(&value))),
-                false,
+                cursor.upstream,
             );
-            if let Some(mark) = self.fields.get_mut(&id) {
-                mark.upstream = cursor.upstream;
-            }
         } else {
             self.field_reveal |= deferred_reveal;
         }

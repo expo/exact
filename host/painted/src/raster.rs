@@ -494,7 +494,10 @@ impl Backend for Raster {
         if shape.rounded() && color[3] == 255 {
             if let Some(rect) = self.covered_clip(shape, dev) {
                 let path = PathBuilder::from_rect(rect);
-                if let Some(target) = self.target.path_pixels(&path, Transform::identity()) {
+                if let Some(target) = self
+                    .target
+                    .bounded_pixels(path.bounds(), Transform::identity())
+                {
                     target.fill_path(
                         &path,
                         &solid(color),
@@ -590,7 +593,7 @@ impl Backend for Raster {
             }
         }
         let mask = self.active_clip().cloned();
-        if let Some(t) = self.target.path_pixels(&path, dev) {
+        if let Some(t) = self.target.bounded_pixels(path.bounds(), dev) {
             t.fill_path(
                 &path,
                 &solid(color),
@@ -617,14 +620,6 @@ impl Backend for Raster {
         };
         let dev = self.device(ts);
         let mask = self.active_clip().cloned();
-        let target = if s.stroke.is_none() {
-            self.target.path_pixels(&path, dev)
-        } else {
-            self.target.pixels()
-        };
-        let Some(t) = target else {
-            return;
-        };
         // @ref LLP 1055.000 D7 — a gradient is a tiny-skia shader in the
         // path's space (two circles, as SVG's focal radial).
         fn paint<'a>(ink: &'a crate::paint::Ink<'_>) -> Option<tiny_skia::Paint<'a>> {
@@ -708,7 +703,7 @@ impl Backend for Raster {
                         } else {
                             FillRule::Winding
                         };
-                        if reach::within(&path, 0.0, dev) {
+                        if let Some(t) = self.target.svg_pixels(path.bounds(), dev) {
                             t.fill_path(&path, &p, rule, dev, mask.as_deref());
                         }
                     }
@@ -735,7 +730,12 @@ impl Backend for Raster {
                             .then(|| tiny_skia::StrokeDash::new(s.dash.clone(), s.phase))
                             .flatten(),
                     };
-                    if reach::within(&path, reach::stroke(s.width, s.miter), dev) {
+                    let outset = reach::stroke(s.width, s.miter);
+                    if let Some(t) = path
+                        .bounds()
+                        .outset(outset, outset)
+                        .and_then(|b| self.target.svg_pixels(b, dev))
+                    {
                         t.stroke_path(&path, &p, &stroke, dev, mask.as_deref());
                     }
                 }
@@ -797,7 +797,7 @@ impl Backend for Raster {
             ..Paint::default()
         };
         let mask = self.active_clip().cloned();
-        if let Some(t) = self.target.path_pixels(&path, dev) {
+        if let Some(t) = self.target.bounded_pixels(path.bounds(), dev) {
             t.fill_path(&path, &paint, FillRule::Winding, dev, mask.as_deref());
         }
     }
@@ -845,7 +845,7 @@ impl Backend for Raster {
         } else {
             mask
         };
-        if let Some(t) = self.target.path_pixels(&region, dev) {
+        if let Some(t) = self.target.bounded_pixels(region.bounds(), dev) {
             t.fill_path(
                 &region,
                 &solid(part.color),
@@ -1103,7 +1103,7 @@ impl Backend for Raster {
                         exact_kernel::svg::Seg::Close => b.close(),
                     }
                 }
-                if let Some(path) = b.finish().filter(|p| reach::within(p, 0.0, dev)) {
+                if let Some(path) = b.finish().filter(|p| reach::within(p.bounds(), dev)) {
                     let rule = if shape.even_odd {
                         FillRule::EvenOdd
                     } else {

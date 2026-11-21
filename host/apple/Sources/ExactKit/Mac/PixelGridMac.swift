@@ -121,7 +121,7 @@ extension Presenter {
         return PixelGrid.place(rect, in: origin, scale: gridScale(under: origin))
     }
     private func hostPlaces(_ v: NodeView) -> Bool {
-        dialogs.owns(v) || menus.owns(v) || v.superview is TableRowCell
+        dialogs.owns(v) || menus.owns(v) || v.superview is TableRowCell || v.superview is DataTableCell
     }
 
     /// A frame layout sent for `v`, drawn on the grid; a box whose origin
@@ -135,7 +135,8 @@ extension Presenter {
         if flightHost.frame(v.id, frame) { return }
         // A host that places the box is given layout's frame, as before the grid.
         let laid = v.frameInScrollDocument(rect)
-        if !dialogs.frame(v, laid) && !menus.frame(v, laid) && !tables.frame(v, laid) { v.frame = frame }
+        if let cell = v.superview as? DataTableCell { cell.place() }
+        else if !dialogs.frame(v, laid) && !menus.frame(v, laid) && !tables.frame(v, laid) { v.frame = frame }
         v.arrangeShift = .zero
         v.textRasterGeometryChanged()
         v.scroll?.frame = v.bounds

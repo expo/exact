@@ -558,31 +558,46 @@ fn images_are_local_and_clock_reads_are_refused_even_on_live_leaves() {
 }
 
 #[test]
-fn fonts_keep_only_reachable_literal_families() {
+fn reached_bundled_fonts_are_refused_and_runtime_families_bake_without_faces() {
     let temp = TempDir::new();
-    std::fs::create_dir(temp.0.join("assets")).unwrap();
-    std::fs::copy(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../scripts/fixtures/fonts/assets/DejaVuSans.ttf"),
-        temp.0.join("assets/font.ttf"),
-    )
-    .unwrap();
     let manifest = Manifest {
         id: "test.fonts".into(),
         name: "Test".into(),
         declared: true,
         json: json!({"widgets":[{"kind":"next-trains","component":"Card","props":"Props","refresh":"refreshCard","families":["systemSmall"],"preview":{"title":"system-ui"}}]}),
     };
-    let fonts = "font \"A\" = \"assets/font.ttf\"\nfont \"B\" = \"assets/font.ttf\"\nfont \"Unused\" = \"assets/missing.ttf\"";
-    for (family, count) in [("(title == \"a\" ? \"A\" : \"B\")", 2), ("title", 0)] {
+    let fonts = "font \"A\" = \"assets/a.ttf\"\nfont \"B\" = \"assets/b.ttf\"\nfont \"Unused\" = \"assets/c.ttf\"";
+    let write = |family: &str| {
         std::fs::write(
             temp.0.join("app.contract"),
             source(&format!("    text title font-family={family}"), fonts, ""),
         )
-        .unwrap();
-        let entries = compile_entries(&temp.0, &manifest).unwrap();
-        assert_eq!(entries["next-trains"].plan.faces.len(), count);
+        .unwrap()
+    };
+    write("(title == \"x\" ? \"a\" : \"B, system-ui\")");
+    let errors = compile_entries(&temp.0, &manifest).unwrap_err();
+    let refused: Vec<_> = errors
+        .iter()
+        .filter(|e| e.id == "snapshot-font-bundled")
+        .collect();
+    assert_eq!(refused.len(), 2, "{errors:?}");
+    // Each is at its use and names the font as declared, whatever its case.
+    let written = std::fs::read_to_string(temp.0.join("app.contract")).unwrap();
+    let used = written.lines().position(|l| l.contains("font-family"));
+    for family in ["`A`", "`B`"] {
+        assert!(
+            refused
+                .iter()
+                .any(|e| Some(e.span.line as usize) == used.map(|l| l + 1)
+                    && e.message.contains(family)
+                    && e.message.contains("`system-ui`")),
+            "{errors:?}"
+        );
     }
+    assert_ne!(refused[0].span.col, refused[1].span.col, "{errors:?}");
+    write("title");
+    let entries = compile_entries(&temp.0, &manifest).unwrap();
+    assert!(entries["next-trains"].plan.faces.is_empty());
 }
 
 #[test]

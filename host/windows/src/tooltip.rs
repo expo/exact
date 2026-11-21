@@ -29,8 +29,9 @@ fn tip_change<D: DataSource>(
 fn title_at<D: DataSource>(p: &mut Presenter<D>, point: (f32, f32)) -> Option<Tip> {
     let dirty = p.dirty();
     let mut at = p.hit(point.0, point.1);
-    // A geometry query does not present the CPU window's pending picture.
-    if dirty {
+    // In a windowed presenter `FrameTarget::Geometry` already keeps `picture_dirty`
+    // without re-dirtying `boxes()`; preserve damage only for headless CPU tests.
+    if dirty && !p.dirty() {
         p.repaint();
     }
     while let Some(id) = at {

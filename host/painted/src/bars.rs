@@ -175,15 +175,23 @@ impl<D: DataSource> Host<D> {
                 .filter(|name| !name.is_empty());
             let pressed = |id: ViewId| self.runner.handlers_of(id).contains(&EventKind::Press);
             let (found, all) = crate::navigation::stacks(kernel, root);
-            // A tablist hidden as authored is no bar, as the web shows none;
-            // nor is one whose author wrote `appearance: none`, which keeps
-            // its authored bar (LLP 1075.003 §9.10).
-            let found = found.filter(|tabs| {
+            let platform_tabs = found.filter(|tabs| {
                 kernel.node(tabs.tablist).is_some_and(|n| {
-                    n.style.display != Display::None
-                        && !(n.style.appearance == Appearance::None
-                            && n.style.written.has(StyleId::Appearance))
+                    !(n.style.appearance == Appearance::None
+                        && n.style.written.has(StyleId::Appearance))
                 })
+            });
+            // A sidebar footer has no destination in a bottom bar, including when the bar is hidden.
+            if let Some(footer) = platform_tabs
+                .as_ref()
+                .and_then(|tabs| tabs.footer.filter(|_| tabs.allows_sidebar(kernel, root)))
+            {
+                wanted.insert(footer, HostCover::Whole);
+            }
+            let found = platform_tabs.filter(|tabs| {
+                kernel
+                    .node(tabs.tablist)
+                    .is_some_and(|n| n.style.display != Display::None)
             });
             let below = if found.is_some() { below } else { 0.0 };
             // A tablist may hold the root's panels: those, and their
