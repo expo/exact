@@ -31,7 +31,7 @@ final class SplitIOSTests: XCTestCase {
 
     /// `fixture` booted in a window of `size` at the size class `width`
     /// (compact collapses the split, regular expands it).
-    private func boot(_ fixture: String = "SPLIT_BACK", size: CGSize = CGSize(width: 402, height: 874),
+    func boot(_ fixture: String = "SPLIT_BACK", size: CGSize = CGSize(width: 402, height: 874),
                       width: UIUserInterfaceSizeClass = .compact, mounted: Bool = true) throws -> ExactSession {
         if ExactEnv.authoredChrome { throw XCTSkip("under the agent's chrome the stack is not split") }
         let plan = try fixturePlan(fixture)
@@ -53,7 +53,7 @@ final class SplitIOSTests: XCTestCase {
         return session
     }
 
-    private func until(_ what: String, _ done: () -> Bool) { waitFor(what, cap: 20, done) }
+    func until(_ what: String, _ done: () -> Bool) { waitFor(what, cap: 20, done) }
 
     /// The split, once installed and at rest.
     private func split(_ session: ExactSession) throws -> SplitIOS {
@@ -62,7 +62,7 @@ final class SplitIOSTests: XCTestCase {
         return try XCTUnwrap(navigation.split)
     }
 
-    private func node(_ session: ExactSession, _ testId: String) throws -> NodeView {
+    func node(_ session: ExactSession, _ testId: String) throws -> NodeView {
         try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == testId }, testId)
     }
 
