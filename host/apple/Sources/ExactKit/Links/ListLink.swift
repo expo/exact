@@ -80,7 +80,10 @@ package protocol ListHosting: AnyObject {
     func rested(_ id: UInt32)
     func readerMoves(_ id: UInt32)
     func watchContacts(in port: UIView) -> UIGestureRecognizer
-    func offsetsMoved(_ id: UInt32, by dy: CGFloat)
+    /// Where list `id`'s port stands before a change of its scroll view's frame, insets or offset (`portMoved`).
+    func portMark(_ id: UInt32) -> ListPortMark?
+    /// List `id`'s scroll view changed since `mark`, not by the reader: what the list holds of its offsets moves with it.
+    func portMoved(_ id: UInt32, since mark: ListPortMark)
     /// What list `id` draws through of its scroll view's insets, on each edge.
     func drawnThrough(_ id: UInt32) -> UIEdgeInsets?
     func lastRequests() -> [UInt32: UInt64]
@@ -158,7 +161,8 @@ final class NoLists: ListHosting {
     func rested(_ id: UInt32) {}
     func readerMoves(_ id: UInt32) {}
     func watchContacts(in port: UIView) -> UIGestureRecognizer { UIGestureRecognizer() }
-    func offsetsMoved(_ id: UInt32, by dy: CGFloat) {}
+    func portMark(_ id: UInt32) -> ListPortMark? { nil }
+    func portMoved(_ id: UInt32, since mark: ListPortMark) {}
     func drawnThrough(_ id: UInt32) -> UIEdgeInsets? { nil }
     func lastRequests() -> [UInt32: UInt64] { [:] }
     func lastRequest(_ id: UInt32) -> UInt64 { 0 }
@@ -172,6 +176,15 @@ final class NoLists: ListHosting {
 }
 
 #if os(iOS) || os(tvOS)
+/// A list's port before a change of its scroll view (`ListHosting.portMark`): the insets CSS `scrollLeft` and `scrollTop`
+/// are read past (`NodeView.scrollLeftInset`, `scrollTopInset`), and its own offset along its axis before `geometry`'s
+/// clamp, as a batch keeps it.
+package struct ListPortMark {
+    package let css: CGPoint
+    package let list: CGFloat
+    package init(css: CGPoint, list: CGFloat) { self.css = css; self.list = list }
+}
+
 /// What the family asks of the presenter's scroll pump and element reveals.
 extension Presenter {
     /// List `id`'s travel is over: the pump stops leading it.

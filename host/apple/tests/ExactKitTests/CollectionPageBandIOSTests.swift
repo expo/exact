@@ -155,6 +155,82 @@ final class CollectionPageBandIOSTests: XCTestCase {
         XCTAssertEqual(p.listHost.portInsets(1), [0, 30])
     }
 
+    func testABandUnderRidingBarsMovesTheBatchsStartByTheBandAlone() throws {
+        let p = Presenter()
+        p.viewport.frame = CGRect(x: 0, y: 0, width: 400, height: 300)
+        defer { p.reset() }
+        let (node, scroll) = try reachedList(in: p, axis: "y", reach: .zero)
+        p.apply(wireBatch([["op": "content", "id": 1, "w": 300, "h": 2000]]))
+        node.setPageBand(UIEdgeInsets(top: 60, left: 0, bottom: 0, right: 0))
+        let top = { scroll.contentOffset.y + node.scrollTopInset(scroll) }
+        scroll.contentOffset.y = 100 - node.scrollTopInset(scroll)
+        XCTAssertEqual(top(), 100)
+        // A band 20 points deeper mid-batch whose inset grows 40, riding bars' depth with it (`NavigationHost`'s
+        // `riders`): the list's offset moves by the band, the native one by the inset
+        p.listHost.beginBatch(wireBatch([]))
+        node.setPageBand(UIEdgeInsets(top: 80, left: 0, bottom: 0, right: 0), inset: UIEdgeInsets(top: 100, left: 0, bottom: 0, right: 0))
+        p.listHost.endBatch()
+        XCTAssertEqual(top(), 100, "the batch kept `scrollTop`")
+        XCTAssertEqual(try XCTUnwrap(p.listHost.geometry(1)).offset, 20)
+    }
+
+    func testABandMidBatchLeavesARowListsStart() throws {
+        let p = Presenter()
+        p.viewport.frame = CGRect(x: 0, y: 0, width: 400, height: 300)
+        defer { p.reset() }
+        let (node, scroll) = try reachedList(in: p, axis: "x", reach: .zero)
+        p.apply(wireBatch([["op": "content", "id": 1, "w": 2000, "h": 200]]))
+        scroll.contentOffset.x = 100
+        // A plain band: the batch keeps no start, but a row correction counts from it
+        p.listHost.beginBatch(wireBatch([]))
+        node.setPageBand(UIEdgeInsets(top: 60, left: 0, bottom: 0, right: 0))
+        p.listHost.shift(1, by: 10, extent: 2000, from: p.listHost.entries[1]?.batchStart)
+        p.listHost.endBatch()
+        XCTAssertEqual(scroll.contentOffset.x, 110, "a band moves nothing along a row list")
+        // A band under riding bars: the batch keeps the start
+        scroll.contentOffset.x = 100
+        p.listHost.beginBatch(wireBatch([]))
+        node.setPageBand(UIEdgeInsets(top: 60, left: 0, bottom: 0, right: 0), inset: UIEdgeInsets(top: 80, left: 0, bottom: 0, right: 0))
+        p.listHost.endBatch()
+        XCTAssertEqual(scroll.contentOffset.x, 100)
+    }
+
+    func testAListAtItsTopOverABorderStaysThereAsABatchDeepensItsBand() throws {
+        let p = Presenter()
+        p.viewport.frame = CGRect(x: 0, y: 0, width: 400, height: 300)
+        defer { p.reset() }
+        let (node, scroll) = try reachedList(in: p, axis: "y", reach: .zero)
+        // Its port above the padding's start, over a 20-point top border, where `geometry`'s offset is clamped
+        p.apply(wireBatch([["op": "content", "id": 1, "w": 300, "h": 2000], contentOp(1, 300, 200, padding: [0, 0, 0, 0], border: [20, 0, 0, 0])]))
+        node.setPageBand(UIEdgeInsets(top: 60, left: 0, bottom: 0, right: 0))
+        let top = { scroll.contentOffset.y + node.scrollTopInset(scroll) }
+        XCTAssertEqual(top(), 0)
+        p.listHost.beginBatch(wireBatch([]))
+        node.setPageBand(UIEdgeInsets(top: 80, left: 0, bottom: 0, right: 0), inset: UIEdgeInsets(top: 100, left: 0, bottom: 0, right: 0))
+        p.listHost.endBatch()
+        XCTAssertEqual(top(), 0)
+    }
+
+    func testTheBatchsStartFollowsTheListsOffsetAcrossABandAndAReach() throws {
+        let p = Presenter()
+        p.viewport.frame = CGRect(x: 0, y: 0, width: 400, height: 300)
+        defer { p.reset() }
+        let (node, scroll) = try reachedList(in: p, axis: "y", reach: .zero)
+        // A list that fits, under a 20-point top border
+        p.apply(wireBatch([contentOp(1, 300, 200, padding: [0, 0, 0, 0], border: [20, 0, 0, 0])]))
+        let start = { try XCTUnwrap(p.listHost.entries[1]?.batchStart) }, offset = { try XCTUnwrap(p.listHost.geometry(1)).offset }
+        p.listHost.beginBatch(wireBatch([]))
+        // A band under riding bars takes the list to its new end, which `geometry` holds at the padding's start
+        node.setPageBand(UIEdgeInsets(top: 60, left: 0, bottom: 0, right: 0), inset: UIEdgeInsets(top: 100, left: 0, bottom: 0, right: 0))
+        XCTAssertEqual(try start(), try offset(), accuracy: 0.5, "the band")
+        // A reach deeper than the band, inside the inset, moves what the list draws through and not the native offset
+        let native = scroll.contentOffset
+        node.setReach(UIEdgeInsets(top: 80, left: 0, bottom: 0, right: 0))
+        XCTAssertEqual(scroll.contentOffset, native)
+        XCTAssertEqual(try start(), try offset(), accuracy: 0.5, "the reach")
+        p.listHost.endBatch()
+    }
+
     /// A list in a 300 by 200 box, `axis` "x" for a row list, given `reach` and the insets and offset D14's writer
     /// gives it for that reach, its content back where layout put it.
     private func reachedList(in p: Presenter, axis: String, reach: UIEdgeInsets) throws -> (NodeView, UIScrollView) {

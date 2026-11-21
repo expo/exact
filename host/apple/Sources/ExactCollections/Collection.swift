@@ -415,7 +415,7 @@ final class CollectionHost: ListHosting {
         // A kept scroll view has a new collection behind it. Its row epochs,
         // feedback sequences and correction revisions all start over.
         if batch.replacesTree { reset() }
-        if batchDepth == 0 { for (view, entry) in entries { entry.batchInsets = portInsets(view); entry.batchStart = geometry(view)?.offset } }
+        if batchDepth == 0 { for (view, entry) in entries { entry.batchInsets = portInsets(view); entry.batchStart = batchOffset(view) } }
         batchDepth += 1
         #if os(iOS) || os(tvOS)
         invalidateRecords(batch)

@@ -59,9 +59,7 @@ extension CollectionHost {
         let key = CollectionRecords.Port(bounds: bounds, insets: insets, outset: outset, through: through)
         let at = (animating.contains(id) ? owedTargets[id] ?? animationTargets[id] : nil) ?? scroll.contentOffset
         if records?.port == key, var facts = records?.facts {
-            let content = records!.content
-            facts.offset = Double(horizontal ? max(-CGFloat(facts.paddingStart), at.x + insets.left - through.left - content.minX)
-                : max(-CGFloat(facts.paddingStart), at.y + insets.top - through.top - content.minY))
+            facts.offset = Double(listOffset(node, at: at, insets: insets, through: through, horizontal: horizontal, content: records!.content))
             return facts
         }
         let content = node.contentBox()
@@ -82,9 +80,7 @@ extension CollectionHost {
             let cross = measured ?? available
             guard cross.isFinite else { return nil }
             let start = max(0, node.padding("left")) + through.left, end = max(0, node.padding("right")) + through.right
-            // From the first item: negative in the padding before it, down
-            // to that padding (LLP 1010 §6.9).
-            return keep(CollectionFacts(offset: Double(max(-start, at.x + insets.left - through.left - content.minX)),
+            return keep(CollectionFacts(offset: Double(listOffset(node, at: at, insets: insets, through: through, horizontal: true, content: content)),
                 portMain: Double(portWidth), portCross: Double(portHeight), cross: Double(cross),
                 measurements: [], focus: nil, interaction: nil, paddingStart: Double(start), paddingEnd: Double(end)))
         }
@@ -92,19 +88,47 @@ extension CollectionHost {
         let width = measured ?? available
         guard width.isFinite else { return nil }
         let start = max(0, node.padding("top")) + through.top, end = max(0, node.padding("bottom")) + through.bottom
-        return keep(CollectionFacts(offset: Double(max(-start, at.y + insets.top - through.top - content.minY)),
+        return keep(CollectionFacts(offset: Double(listOffset(node, at: at, insets: insets, through: through, horizontal: false, content: content)),
             portMain: Double(portHeight), portCross: Double(portWidth), cross: Double(width),
             measurements: [], focus: nil, interaction: nil, paddingStart: Double(start), paddingEnd: Double(end)))
     }
-    /// A smooth correction's native targets move with a page band's inset
-    /// (LLP 1130 D3), as the offset itself does (`NodeView.setPageBand`), and
-    /// so does where the batch found the port: its offset counts the band as
-    /// padding before the first row, so the top of a list the band grew
-    /// under mid-batch is the new band's top.
-    func offsetsMoved(_ id: UInt32, by dy: CGFloat) {
-        animationTargets[id]?.y += dy; owedTargets[id]?.y += dy
-        entries[id]?.batchStart? += Double(dy)
-        offsetDrivers[id]?.moveOffsets(by: dy)
+    /// Where a batch finds the port (`batchStart`): `geometry`'s offset before its clamp at the padding's start, which
+    /// `keepStart` and `shift` convert back to the native offset exactly, a port above that start (over a border, or
+    /// pulled past its top) included.
+    func batchOffset(_ id: UInt32) -> Double? {
+        guard let node = presenter?.views[id], let scroll = node.scroll else { return nil }
+        return Double(unclampedOffset(id, node, scroll))
+    }
+    func portMark(_ id: UInt32) -> ListPortMark? {
+        guard entries[id] != nil, let node = presenter?.views[id], let scroll = node.scroll else { return nil }
+        return ListPortMark(css: CGPoint(x: node.scrollLeftInset(scroll), y: node.scrollTopInset(scroll)),
+                            list: unclampedOffset(id, node, scroll))
+    }
+    /// A page band or reach that changed since `mark` (LLP 1130 D3, LLP 1123 D13) keeps CSS `scrollTop` and `scrollLeft`
+    /// (`NodeView.setPageBand`, `setReach`): a smooth correction's native targets, which are positions in CSS terms, move
+    /// by as much as that keeps them, whatever clamp or end the live offset took. Where the batch found the port moves with
+    /// the list's offset before `geometry`'s clamp (`batchOffset`) at the live port, which a row correction counts from.
+    func portMoved(_ id: UInt32, since mark: ListPortMark) {
+        guard let node = presenter?.views[id], let scroll = node.scroll else { return }
+        let moved = CGPoint(x: mark.css.x - node.scrollLeftInset(scroll), y: mark.css.y - node.scrollTopInset(scroll))
+        animationTargets[id]?.x += moved.x; animationTargets[id]?.y += moved.y
+        owedTargets[id]?.x += moved.x; owedTargets[id]?.y += moved.y
+        offsetDrivers[id]?.moveOffsets(by: moved)
+        entries[id]?.batchStart? += Double(unclampedOffset(id, node, scroll) - mark.list)
+    }
+    /// `batchOffset` for the port where it is now.
+    private func unclampedOffset(_ id: UInt32, _ node: NodeView, _ scroll: UIScrollView) -> CGFloat {
+        let horizontal = entries[id]?.snapshot.horizontal == true
+        return listOffset(node, at: scroll.contentOffset, insets: scroll.adjustedContentInset, through: drawnThrough(id, node, scroll),
+                          horizontal: horizontal, content: node.contentBox(), clamped: false)
+    }
+    /// A list's offset along its axis, from its first item: negative in the padding before it, down to that padding
+    /// (LLP 1010 §6.9), which counts what the list draws through, unless not `clamped`.
+    private func listOffset(_ node: NodeView, at: CGPoint, insets: UIEdgeInsets, through: UIEdgeInsets, horizontal: Bool,
+                            content: CGRect, clamped: Bool = true) -> CGFloat {
+        let offset = horizontal ? at.x + insets.left - through.left - content.minX : at.y + insets.top - through.top - content.minY
+        let start = horizontal ? max(0, node.padding("left")) + through.left : max(0, node.padding("top")) + through.top
+        return clamped ? max(-start, offset) : offset
     }
     /// What UIKit's bars cover of the list's port at its start and end: what it draws through (`drawnThrough`), which
     /// `geometry` counts as port and padding. The runner aligns a row clear of them, as
@@ -143,8 +167,8 @@ extension CollectionHost {
         return entries[id]?.snapshot.horizontal == true ? UIEdgeInsets(top: 0, left: t.left, bottom: 0, right: t.right)
             : UIEdgeInsets(top: t.top, left: 0, bottom: t.bottom, right: 0)
     }
-    /// The port back at `top` (`geometry`'s offset), within what it can
-    /// reach, unless the reader or a smooth correction is moving it.
+    /// The port back at `top` (where the batch found it, `batchOffset`), within
+    /// what it can reach, unless the reader or a smooth correction is moving it.
     func keepStart(_ id: UInt32, at top: Double) {
         guard let node = presenter?.views[id], let scroll = node.scroll, !animating.contains(id),
               !scroll.isTracking, !scroll.isDragging, !scroll.isDecelerating else { return }
@@ -180,7 +204,7 @@ extension CollectionHost {
         let insets = scroll.adjustedContentInset
         var target = scroll.contentOffset
         if let start {
-            // From where the batch began (`geometry`'s offset): UIKit has
+            // From where the batch began (`batchOffset`): UIKit has
             // already pulled the offset in to content that shrank under it.
             let content = node.contentBox(), through = drawnThrough(id, node, scroll)
             if horizontal { target.x = CGFloat(start) - insets.left + through.left + content.minX } else { target.y = CGFloat(start) - insets.top + through.top + content.minY }
@@ -490,8 +514,8 @@ final class OffsetDriver: NSObject {
         began = CACurrentMediaTime()
         FrameClock.shared.want(self, .offsetDriver, rate: FrameClock.full(on: scroll?.window?.screen)) { [weak self] in self?.frame($0) }
     }
-    /// Native offsets move by `dy` under it (a page band's inset, LLP 1130 D3).
-    func moveOffsets(by dy: CGFloat) { from.y += dy; to.y += dy }
+    /// Native offsets move by `d` under it (a page band or reach, `CollectionHost.portMoved`).
+    func moveOffsets(by d: CGPoint) { from.x += d.x; from.y += d.y; to.x += d.x; to.y += d.y }
     func retarget(_ target: CGPoint, serial: Int) {
         guard let scroll else { return }
         self.serial = serial
