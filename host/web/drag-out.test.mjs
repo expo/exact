@@ -5,7 +5,7 @@ import { test, expect } from 'bun:test';
 import vm from 'node:vm';
 import { declaration, deferred } from './glue-fixture.mjs';
 import { EXTENSION_TYPES } from '../../scripts/share-target.mjs';
-import { carried, start, typeOf } from './drag-out.js';
+import { carried, listen, sourceOf, start, typeOf, writeDraggable } from './drag-out.js';
 
 const BASE = 'https://example.com/app/';
 const node = (attrs) => ({
@@ -37,6 +37,8 @@ test('the drag carries the text, the url then the files as URIs, an image as HTM
     download: 'image/jpeg:1016&1017.jpg:https://example.com/app/assets/apple/1016&1017.jpg',
   });
   expect(carried(node({ draggable: 'true' }), BASE)).toBeNull();
+  // A name's trailing space is the file's, which the URL parser would strip.
+  expect(carried(node({ draggable: 'true', 'data-datatransferfiles': 'assets/report ' }), BASE).uris).toEqual(['https://example.com/app/assets/report%20']);
 });
 
 test('dragstart fills the transfer, leaves no picture file, pictures the node for a drag picked up inside it, and cancels an empty one', () => {
@@ -63,33 +65,68 @@ test('dragstart fills the transfer, leaves no picture file, pictures the node fo
   start(swiped, BASE);
   expect([...swiped.dataTransfer.data.keys()]).toEqual([]);
   start({ ...dragstart(node({})), preventDefault() { throw new Error('not ours'); } }, BASE);
+  // A draggable another script made is not the app's: its drag is its own.
+  const foreign = dragstart(node({ draggable: 'true' }));
+  start(foreign, BASE, null, () => false);
+  expect([foreign.defaultPrevented, [...foreign.dataTransfer.data.keys()]]).toEqual([false, []]);
 });
 
-test('the wasm glue loads the listener once, for the first node that turns draggable, and again after a failed load', async () => {
-  const loads = [], logs = [], heard = [], document = {};
+test('the wasm glue keeps a node made draggable undraggable until the listener listens, and tries a failed load again', async () => {
+  const loads = [], logs = [], heard = [], written = [], timers = [], document = {}, views = new Map(), retiredViews = new Set();
   let loading = deferred();
-  const context = vm.createContext({ host: {}, document, log: (line) => logs.push(line),
+  const context = vm.createContext({ host: {}, document, views, retiredViews, log: (line) => logs.push(line),
+    setTimeout: (fn, ms) => timers.push([fn, ms]), exact: { writeDraggable: (el, value) => written.push([el.id, value]) },
     loadAfterPaint: (...args) => { loads.push(args); return loading.promise; } });
-  vm.runInContext(declaration('loadDragOut'), context);
+  vm.runInContext(declaration('liveView') + declaration('loadDragOut') + declaration('writeDraggable'), context);
   const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
-  context.loadDragOut();
-  context.loadDragOut();
+  const element = (id, view) => {
+    const el = { id, dataset: { view: String(view) }, attributes: {}, setAttribute(name, v) { this.attributes[name] = v; },
+      removeAttribute(name) { delete this.attributes[name]; } };
+    views.set(view, el);
+    return el;
+  };
+  const [card, link, plain, gone] = [element('card', 1), element('link', 2), element('plain', 3), element('gone', 4)];
+  // A node made draggable stays `false`, so a link or an image drags nothing of its own; `false` and none are written.
+  context.writeDraggable(card, 'true');
+  context.writeDraggable(gone, 'true');
+  context.writeDraggable(link, 'false');
+  context.writeDraggable(plain, 'true');
+  context.writeDraggable(plain, null);
+  expect([card.attributes, link.attributes, plain.attributes]).toEqual([{ draggable: 'false' }, { draggable: 'false' }, {}]);
   expect(loads).toEqual([['./drag-out.js', 'listenDragOut']]);
+  // A failed load is tried again later while a live node waits; a retired one waits no more.
+  retiredViews.add(gone);
   loading.reject(new Error('import failed'));
   await settle();
-  expect(logs).toEqual(['drag-out module: Error: import failed']);
+  expect([logs, timers.map(([, ms]) => ms)]).toEqual([['drag-out module: Error: import failed'], [1000]]);
   loading = deferred();
-  context.loadDragOut();
-  loading.resolve((root) => heard.push(root));
+  timers[0][0]();
+  loading.resolve((root, owns) => heard.push([root, owns(card), owns(gone), owns({ dataset: { view: '1' } })]));
   await settle();
+  expect([loads.length, heard, written]).toEqual([2, [[document, true, false, false]], [['card', 'true']]]);
+  // Once it listens, every write is the listener's.
+  context.writeDraggable(link, 'true');
   context.loadDragOut();
-  expect([loads.length, heard]).toEqual([2, [document]]);
+  expect([loads.length, written.at(-1)]).toEqual([2, ['link', 'true']]);
+});
+
+test('a listener that throws as it starts is a failed load', async () => {
+  const logs = [], timers = [];
+  const context = vm.createContext({ host: {}, document: {}, views: new Map(), retiredViews: new Set(), log: (line) => logs.push(line),
+    setTimeout: (fn, ms) => timers.push(ms), exact: {}, loadAfterPaint: () => Promise.resolve(() => { throw new Error('no document'); }) });
+  vm.runInContext(declaration('liveView') + declaration('loadDragOut') + declaration('writeDraggable'), context);
+  context.writeDraggable({ dataset: { view: '1' }, setAttribute() {} }, 'true');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect([logs, context.host.dragOutModule, context.host.dragOutListening]).toEqual([['drag-out module: Error: no document'], null, undefined]);
 });
 
 // A small element tree: what `start` reads of the page, by the selectors it asks.
 class El {
   constructor(localName, attrs = {}, parent = null) { Object.assign(this, { localName, attrs, parent, isConnected: true }); }
   getAttribute(name) { return this.attrs[name] ?? null; }
+  setAttribute(name, value) { this.attrs[name] = value; }
+  removeAttribute(name) { delete this.attrs[name]; }
+  get parentElement() { return this.parent; }
   getBoundingClientRect() { return { left: 0, top: 0 }; }
   contains(other) { for (let at = other; at; at = at.parent) if (at === this) return true; return false; }
   matches(selector) {
@@ -130,4 +167,47 @@ test('the source is the innermost draggable node under the contact, and a press 
   const inner = new El('a', { href: '/elsewhere' }, card), own = dragstart(inner);
   start(own, BASE, { target: inner, mouse: true });
   expect([own.defaultPrevented, [...own.dataTransfer.data.keys()]]).toEqual([false, []]);
+});
+
+test('a field holds the drag of every draggable node around it off for its own contact alone', () => {
+  const heard = {}, root = { addEventListener: (type, fn) => (heard[type] = fn), defaultView: { addEventListener: (type, fn) => (heard[`window ${type}`] = fn) } };
+  listen(root);
+  const outer = new El('div', { draggable: 'true', 'data-datatransfertext': 'outer' });
+  const card = new El('div', { draggable: 'true', 'data-datatransfertext': 'card' }, outer), field = new El('input', {}, card);
+  const elsewhere = new El('div', {}), foreign = new El('div', { draggable: 'true' });
+  const pointer = (type, pointerId, pointerType, target, more = {}) => heard[type]({ type, pointerId, pointerType, target, isPrimary: true, ...more });
+  const states = () => [outer.attrs.draggable, card.attrs.draggable];
+  pointer('pointerdown', 1, 'mouse', field);
+  expect(states()).toEqual(['false', 'false']);
+  // A touch's contact is its own: its up ends no hold of the mouse's.
+  pointer('pointerdown', 2, 'touch', elsewhere);
+  pointer('pointerup', 2, 'touch', elsewhere);
+  // What the app writes meanwhile is the node's once the hold ends.
+  writeDraggable(card, 'false');
+  writeDraggable(card, 'true');
+  expect(states()).toEqual(['false', 'false']);
+  // A drag another element began, and its end, are not the contact's.
+  heard.dragstart({ target: foreign, defaultPrevented: false, preventDefault() {} });
+  heard.dragend({});
+  expect(states()).toEqual(['false', 'false']);
+  // The mouse's up went elsewhere: it moves with no button down.
+  pointer('pointermove', 1, 'mouse', elsewhere, { buttons: 0 });
+  expect(states()).toEqual(['true', 'true']);
+  pointer('pointerdown', 1, 'mouse', field);
+  heard['window blur']();
+  expect(states()).toEqual(['true', 'true']);
+});
+
+test('a drag during a field\'s hold is read from the source its down found', () => {
+  const card = new El('div', { draggable: 'true', 'data-datatransfertext': 'card' });
+  const editor = new El('div', { contenteditable: '' }, card), image = new El('img', {}, editor);
+  const source = sourceOf(image, true);
+  card.attrs.draggable = 'false';
+  // The image's own drag inside the held card is cancelled, as any picture's in a keeper is.
+  const event = dragstart(image);
+  start(event, BASE, { target: image, mouse: true, source });
+  expect(event.defaultPrevented).toBe(true);
+  const recomputed = dragstart(image);
+  start(recomputed, BASE, { target: image, mouse: true });
+  expect(recomputed.defaultPrevented).toBe(false);
 });
