@@ -457,6 +457,7 @@ public final class ExactSession {
     public private(set) var applyParts: [String: Double] = [:]
     /// Commands from the batch being applied, delivered after it (D2).
     private var pendingCommands: [(String, [Any], UInt32?)] = []
+    var crossFadeEnd: (() -> Void)? // what `crossFade` owes once the batch's commands are delivered (ViewTransition.swift)
     /// The ids the batch being applied asks `scrollIntoView` of (LLP 1070.000 §15: they win over the end-follow).
     var pendingElementScrolls: [String] { pendingCommands.compactMap { $0.0 == "scrollIntoView" ? $0.1.first as? String : nil } }
     private(set) var applying = false { didSet { releaseWaitingFirings() } }
@@ -1334,6 +1335,7 @@ public final class ExactSession {
                 if app.handleCommand(name) { continue }
                 app.deliver { [weak self] in guard let self else { return }; delegate?.exactSession(self, command: name, args: args) }
             }
+            if let end = crossFadeEnd { crossFadeEnd = nil; app.deliver(end) }
         }
     }
 

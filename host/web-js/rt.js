@@ -650,8 +650,7 @@ export function commit(f, what = 'commit', finished) {
   // a Back or Forward is mirrored to the history first, and one the browser animated cuts (router.js `traversal`)
   const deferred = Sh && ok && !Traversal?.();
   if (deferred && hasOutput(cmds)) HeldOutput.add(cmds);
-  const fade = cmds.find(c => c[0] === 'startViewTransition'), seconds = fade?.[1][0];
-  return deferred ? Sh.commit(tail, Queue, inflight, After, fade && (Number.isFinite(seconds) && seconds > 0 ? seconds : 0.25)) : tail();
+  return deferred ? Sh.commit(tail, Queue, inflight, After, cmds.some(c => c[0] === 'startViewTransition')) : tail();
 }
 /** A commit made again after a write ended or the source became ready (the runner's `commit_again`). Refused while
  * reads are owed (a reconciling ask), they fail, keeping what they show, before a commit publishes it; a refusal of

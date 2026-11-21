@@ -1,6 +1,6 @@
-// `startViewTransition(seconds)` on the JS target: the action's tree update runs inside the browser's view
-// transition, the root's own cross-fade at that duration; a push in the same commit plays nothing of its own, and
-// reduce motion cuts.
+// `startViewTransition()` on the JS target (LLP 1013.003): the action's tree update runs inside the browser's view
+// transition, the root's own cross-fade at the browser's 0.25 s; a push in the same commit plays nothing of its own,
+// and reduce motion cuts.
 import { expect, beforeAll, afterAll } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -20,7 +20,7 @@ keyframes enter
 component App
   state game = "a"
   action pick(g: string)
-    startViewTransition(2)
+    startViewTransition()
     game = g
     nav = push(nav, path("item"))
   view
@@ -81,7 +81,7 @@ async function page({ reducedMotion = 'no-preference', engine = 'chromium' } = {
   return { p, errors, state, ready, close: () => context.close() };
 }
 
-for (const engine of ['chromium', 'webkit']) engineTest[engine](`in ${engine} the action's commit cross-fades the whole page at its duration`, async () => {
+for (const engine of ['chromium', 'webkit']) engineTest[engine](`in ${engine} the action's commit cross-fades the whole page`, async () => {
   const { p, errors, state, ready, close } = await page({ engine });
   try {
     await p.click('[data-testid=pick-home]');
@@ -89,10 +89,10 @@ for (const engine of ['chromium', 'webkit']) engineTest[engine](`in ${engine} th
     const during = await state();
     expect(during.started).toBe(1);
     expect(during.game).toBe('b');
-    // The root's own pair alone: the pushed route's entrance does not play.
-    expect(during.parts.every(part => /^::view-transition-[a-z-]+\(root\) 2000$/.test(part))).toBe(true);
-    expect(during.parts).toContain('::view-transition-new(root) 2000');
-    expect(during.parts).toContain('::view-transition-old(root) 2000');
+    // The root's own pair alone, at the browser's duration: the pushed route's 2 s entrance does not play.
+    expect(during.parts.every(part => /^::view-transition-[a-z-]+\(root\) 250$/.test(part))).toBe(true);
+    expect(during.parts).toContain('::view-transition-new(root) 250');
+    expect(during.parts).toContain('::view-transition-old(root) 250');
     await p.evaluate(() => transitions[0].skipTransition());
     expect(errors).toEqual([]);
   } finally {

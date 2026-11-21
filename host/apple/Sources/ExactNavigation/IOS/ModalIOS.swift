@@ -291,8 +291,7 @@ final class ModalHost: NSObject, UIAdaptivePresentationControllerDelegate {
     // Native dismissal outlives logical removal and reload. Retire from the
     // top down, without letting an old completion touch a new owner.
     private var retiring: [Presentation] = []
-    /// Whether a presentation is closed and not yet dismissed.
-    var hasRetiring: Bool { !retiring.isEmpty }
+    func retires(_ controller: UIViewController) -> Bool { retiring.contains { $0.controller === controller } }
     private var dismissing: Presentation?
     private var closing = false
     /// The fullscreen controller hidden until its zoom starts (`present`).

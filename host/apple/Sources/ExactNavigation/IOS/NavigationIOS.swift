@@ -139,7 +139,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// whether its press navigated.
     var unanimated = false
     var crossFading = false
-    var closesPresentation: Bool { presenter.modalHost.hasRetiring }
+    func retires(_ controller: UIViewController) -> Bool { presenter.modalHost.retires(controller) }
     /// Whether a reselected tab's scroll to the top (`scrollToTop`) is
     /// UIKit's animated one: not under the agent's frozen clock, where Exact
     /// starts no UIKit animation, nor in a test outside an app's scene, where

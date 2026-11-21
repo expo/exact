@@ -163,12 +163,12 @@ function entrance(before, root, inflight, after) {
   t.finished.then(clean, clean);
 }
 
-/** `startViewTransition(seconds)`: the commit's tree update `run` inside a transition of the whole page, the root's
- * own cross-fade at that duration; its pushes and pops play nothing of their own. */
-function crossFade(run, seconds, inflight, after) {
+/** `startViewTransition()` (LLP 1013.003): the commit's tree update `run` inside a transition of the whole page, the
+ * root's own cross-fade as the browser plays it; its pushes and pops play nothing of their own. */
+function crossFade(run, inflight, after) {
   if (running) { running.skipTransition(); running = null; }
-  style ??= document.head.appendChild(document.createElement('style'));
-  style.textContent = `::view-transition-group(root){animation-duration:${seconds}s}`;
+  // the root takes part again: the other transitions here leave it unnamed
+  if (style) style.textContent = '';
   pending = Object.assign([run], { after: [] });
   inflight.n++;
   const t = document.startViewTransition(() => {
@@ -200,7 +200,7 @@ export function commit(tail, queue, inflight, after, fade) {
   if (pending) { pending.push(deferred()); return true; }
   // Under reduce motion every change cuts (LLP 1013.000 D7, LLP 1013.001 D6).
   if (typeof document.startViewTransition !== 'function' || matchMedia('(prefers-reduced-motion: reduce)').matches) return tail();
-  if (fade) return crossFade(deferred(), fade, inflight, after);
+  if (fade) return crossFade(deferred(), inflight, after);
   const root = document.getElementById('exact-root');
   const routes = root ? shownStacks(root) : new Map();
   const old = leavers(queue);

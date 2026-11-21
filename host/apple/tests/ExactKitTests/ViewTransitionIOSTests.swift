@@ -4,10 +4,10 @@ import XCTest
 @testable import ExactKit
 @testable import ExactNavigation
 
-/// `startViewTransition(seconds)`: the action's commit lands in UIKit's
-/// `UIView.transition(with: window, options: .transitionCrossDissolve)`.
-/// Under a sheet the commit closes, the sheet slides out while the page
-/// beneath it cross-fades; one that stays fades with the window.
+/// `startViewTransition()` (LLP 1013.003): the action's commit lands in
+/// UIKit's `UIView.transition(with: window, options: .transitionCrossDissolve)`.
+/// A sheet or dialog the commit closes slides out while what is beneath it
+/// cross-fades; one that stays fades with the window.
 final class ViewTransitionIOSTests: XCTestCase {
     private var window: UIWindow?
     private var session: ExactSession?
@@ -51,7 +51,7 @@ final class ViewTransitionIOSTests: XCTestCase {
     private func assertCrossFade(_ layer: CALayer, file: StaticString = #filePath, line: UInt = #line) throws {
         let fade = try XCTUnwrap(layer.animation(forKey: "transition") as? CATransition, file: file, line: line)
         XCTAssertEqual(fade.type, .fade, file: file, line: line)
-        XCTAssertEqual(fade.duration, 0.3, accuracy: 0.001, file: file, line: line)
+        XCTAssertEqual(fade.duration, 0.25, accuracy: 0.001, file: file, line: line)
     }
 
     func testACommitCrossFadesTheWindow() throws {
@@ -97,6 +97,62 @@ final class ViewTransitionIOSTests: XCTestCase {
         try assertCrossFade(window.layer)
         XCTAssertNil(host.view.layer.animation(forKey: "transition"))
         XCTAssertTrue(host.presentedViewController === sheet && !sheet.isBeingDismissed, "the sheet stays")
+    }
+
+    func testClosingTheUpperOfTwoSheetsCrossFadesTheSheetBeneath() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "a sheet needs the hosted app's window scene") }
+        let (session, host) = try fixture(scene)
+        let p = session.presenter, window = try XCTUnwrap(window)
+        p.press(try XCTUnwrap(named("open")).id)
+        until("the first sheet is presented") {
+            guard let sheet = host.presentedViewController else { return false }
+            return !sheet.isBeingPresented && self.named("open-about")?.window != nil
+        }
+        let beneath = try XCTUnwrap(host.presentedViewController)
+        p.press(try XCTUnwrap(named("open-about")).id)
+        until("the second sheet is presented") {
+            guard let sheet = beneath.presentedViewController else { return false }
+            return !sheet.isBeingPresented && self.named("pick-and-close-about")?.window != nil
+        }
+        let upper = try XCTUnwrap(beneath.presentedViewController)
+        p.press(try XCTUnwrap(named("pick-and-close-about")).id)
+        until("the sheet beneath cross-fades") { beneath.view.layer.animation(forKey: "transition") != nil }
+        try assertCrossFade(beneath.view.layer)
+        XCTAssertNil(host.view.layer.animation(forKey: "transition"), "the page under both sheets is outside the fade")
+        XCTAssertNil(window.layer.animation(forKey: "transition"), "the upper sheet's container is outside the fade")
+        until("the upper sheet slides out") { upper.isBeingDismissed }
+        until("the upper sheet is gone") { beneath.presentedViewController == nil }
+        XCTAssertTrue(host.presentedViewController === beneath, "the sheet beneath stays")
+    }
+
+    func testADialogItsCommitClosesSlidesOutWhileThePageCrossFades() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "a dialog's sheet needs the hosted app's window scene") }
+        let (session, host) = try fixture(scene)
+        let p = session.presenter, window = try XCTUnwrap(window)
+        p.press(try XCTUnwrap(named("open-note")).id)
+        until("the dialog's sheet is presented") {
+            guard let sheet = host.presentedViewController else { return false }
+            return !sheet.isBeingPresented && self.named("pick-and-close-note")?.window != nil
+        }
+        let sheet = try XCTUnwrap(host.presentedViewController)
+        p.press(try XCTUnwrap(named("pick-and-close-note")).id)
+        until("the page beneath cross-fades") { host.view.layer.animation(forKey: "transition") != nil }
+        try assertCrossFade(host.view.layer)
+        XCTAssertNil(window.layer.animation(forKey: "transition"), "the dialog's container is outside the fade")
+        XCTAssertTrue(sheet.isBeingDismissed, "`close(id)` in the same commit dismisses the dialog with its own animation")
+        until("the dialog is gone") { host.presentedViewController == nil }
+    }
+
+    func testAPushInTheCommitLandsWithoutItsOwnAnimation() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "a window transition needs the hosted app's window scene") }
+        let (session, _) = try fixture(scene)
+        let window = try XCTUnwrap(window)
+        session.presenter.press(try XCTUnwrap(named("pick-and-push")).id)
+        until("the window cross-fades") { window.layer.animation(forKey: "transition") != nil }
+        try assertCrossFade(window.layer)
+        let item = try XCTUnwrap(named("item"))
+        XCTAssertNotNil(item.window, "the pushed route is in the window as the fade starts")
+        XCTAssertFalse(session.presenter.navigation.transitioning, "the push is not a UIKit transition of its own")
     }
 }
 #endif

@@ -80,34 +80,21 @@ fn a_utility_hides_its_window_and_shows_it_again() {
     );
 }
 
-/// `startViewTransition()` and `startViewTransition(seconds)` reach the host
-/// with the commit they fade into; a duration of 0 or less, a string or a
-/// second argument is refused.
+/// `startViewTransition()` reaches the host with the commit it fades into;
+/// any argument is refused, as the web's takes no duration (LLP 1013.003 D2).
 #[test]
 fn a_switch_cross_fades_the_window_into_its_commit() {
-    let src = "component App\n  state game = \"a\"\n  action pick(g: string)\n    startViewTransition(0.3)\n    game = g\n  action plain\n    startViewTransition()\n  view\n    button press=pick(\"b\")\n      text game\n";
+    let src = "component App\n  state game = \"a\"\n  action pick(g: string)\n    startViewTransition()\n    game = g\n  view\n    button press=pick(\"b\")\n      text game\n";
     let mut r = boot(src);
     r.act("pick", vec![Value::from("b")]).unwrap();
-    r.act("plain", vec![]).unwrap();
     let commands = r.take_commands();
-    let named: Vec<(&str, Vec<Value>)> = commands
+    let named: Vec<(&str, &[Value])> = commands
         .iter()
-        .map(|c| (c.name.as_str(), c.args.clone()))
+        .map(|c| (c.name.as_str(), &c.args[..]))
         .collect();
-    assert_eq!(
-        named,
-        [
-            ("startViewTransition", vec![Value::Number(0.3)]),
-            ("startViewTransition", vec![])
-        ]
-    );
-    for bad in [
-        "startViewTransition(0)",
-        "startViewTransition(-1)",
-        "startViewTransition(\"slow\")",
-        "startViewTransition(0.3, 1)",
-    ] {
-        let error = contract::compile(&src.replace("startViewTransition(0.3)", bad)).unwrap_err();
+    assert_eq!(named, [("startViewTransition", &[][..])]);
+    for bad in ["startViewTransition(0.3)", "startViewTransition(\"slow\")"] {
+        let error = contract::compile(&src.replace("startViewTransition()", bad)).unwrap_err();
         assert!(
             format!("{error:?}").contains("type-view-transition"),
             "{bad}: {error:?}"
