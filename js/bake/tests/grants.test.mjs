@@ -33,6 +33,19 @@ for (const [specifier, read] of [['{ SECRET_GRANTS }', 'SECRET_GRANTS'], ['* as 
   } finally { f.close(); }
 });
 
+// Only `ns.NAME` of a namespace import reads an export. A computed key is refused, since the launch-setting walk does
+// not read every key this reader does, and so is a member of a named import, whose export's name may be the empty one.
+for (const [specifier, read] of [['* as session', "session['SECRET_GRANTS']"], ['* as session', 'session[`SECRET_GRANTS`]'], ['{ "" as session }', 'session.SECRET_GRANTS']]) {
+  test(`grants refuse ${read} of import ${specifier}`, async () => {
+    const f = fixture({
+      'app.ts': `import ${specifier} from './src/session';\nexport const grants = ['net.fetch https://api.example.com', ...${read}].join('\\n');\n`,
+      'src/session.ts': "export const SECRET_GRANTS = ['secret.keep session.refresh'];\nconst other = { SECRET_GRANTS: ['secret.keep other'] };\nexport { other as \"\" };\n",
+    });
+    try { await expect(configure(f.stage, false, parseSync)).rejects.toThrow('grants cannot read a computed value or array element'); }
+    finally { f.close(); }
+  });
+}
+
 const constants = {
   'strings.ts': "export const PREFIX = 'secret.keep ';\nexport const NAME = 'session.refresh';\nexport const LINE = PREFIX + NAME;\nexport const LINES = [LINE, `secret.keep session.device`];\n",
   'barrel.ts': "export { PREFIX, NAME as REFRESH, LINE, LINES } from './strings';\n",
