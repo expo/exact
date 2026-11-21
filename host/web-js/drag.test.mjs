@@ -37,7 +37,7 @@ test('the hooks write what is admitted, remove an empty prop and journal a value
 
 test('install hears the contacts and the drags on the page\'s document', () => {
   const heard = [], PropHooks = {};
-  install({ PropHooks, say() {}, document: { addEventListener: (type, _, capture) => heard.push([type, !!capture]),
+  install({ PropHooks, say() {}, document: { addEventListener: (type, _, options) => heard.push([type, !!options?.capture]),
     defaultView: { addEventListener: (type) => heard.push([`window ${type}`, false]) } } });
   expect(heard).toEqual([['pointerdown', true], ['pointerup', true], ['pointercancel', true], ['pointermove', true],
     ['window blur', false], ['dragend', true], ['dragstart', false]]);

@@ -89,7 +89,7 @@ async function drag(page, selector, by, { from = [0, 0], steps = 15 } = {}) {
   return page.evaluate(() => {
     const field = document.getElementById('field');
     return { drags: [...drags], deltas: deltas.length, begins: [...begins], range: Number(document.getElementById('range').value),
-      selection: field.selectionEnd - field.selectionStart };
+      selection: field.selectionEnd - field.selectionStart, box: document.getElementById('box').getAttribute('draggable') };
   });
 }
 /** The drags the browser went on with. */
@@ -118,13 +118,13 @@ for (const [engine, missing] of [['chromium', chromium().unavailable], ['firefox
         expect(card.map((d) => [d.kinds.every((kind) => kind === 'string'), d.uris])).toEqual([[true, `http://127.0.0.1:${server.port}/assets/a.png`]]);
       }
       // A press, a picture in it, a text field and a slider inside the node keep a mouse's contact: the field selects
-      // its text and the slider moves, and the node drags again after.
+      // its text and the slider moves, the node is draggable again at each release, and it drags again after.
       expect(went(await drag(page, '#press', [0, 20], { from: [-15, 0] }))).toEqual([]);
       expect(went(await drag(page, '#icon', [0, 20]))).toEqual([]);
       const field = await drag(page, '#field', [50, 0], { from: [-40, 0] });
-      expect([went(field), field.selection > 0]).toEqual([[], true]);
+      expect([went(field), field.selection > 0, field.box]).toEqual([[], true, 'true']);
       const slider = await drag(page, '#range', [60, 0], { from: [-44, 0] });
-      expect(went(slider)).toEqual([]);
+      expect([went(slider), slider.box]).toEqual([[], 'true']);
       expect(slider.range).toBeGreaterThan(40);
       expect(went(await drag(page, '#box', [0, 20], { from: [130, 0] })).map((d) => d.text)).toEqual(['box']);
       // A draggable the app did not make keeps the drag its own script gave it.
