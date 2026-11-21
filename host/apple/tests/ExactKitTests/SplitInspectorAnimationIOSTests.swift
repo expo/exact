@@ -11,7 +11,7 @@ extension SplitIOSTests {
     /// Duo's width, where it hides the list: the column slides in over
     /// UIKit's animation with its route laid out where it ends, still, while
     /// the detail's content moves to its new width inside that animation and
-    /// the list keeps its sidebar's look as it slides away. Closed, the
+    /// the list slides away in it, keeping its sidebar's look. Closed, the
     /// column slides out with the route's last pixels, the detail moving back
     /// with it.
     func testTheInspectorsColumnMovesWithTheDetailAndKeepsItsRoute() throws {
@@ -26,12 +26,25 @@ extension SplitIOSTests {
         until("the book is in the detail") { split.shown.count == 2 && !agent.nativeInFlight() }
         let books = try node(session, "books"), notes = try node(session, "notes-a")
         let wide = notes.frame
+        let list = try XCTUnwrap(split.list.view), whole = try XCTUnwrap(split.controller.view)
+        XCTAssertNotEqual(split.controller.displayMode, .secondaryOnly, "the list shows beside the detail")
+        let shown = Self.showing(list, in: whole)
         XCTAssertNil(agent.tap(["id": Int(try node(session, "info-a").id)])["error"])
         // UIKit puts the column in place as it lays the columns out, inside its animation (`SplitIOS.moveAlong`)
         until("its info is in the inspector's column") { split.inspecting?.navigationController?.view.superview != nil }
         let route = try XCTUnwrap(split.inspecting), info = try node(session, "info-page")
         let column = try XCTUnwrap(route.navigationController?.view.superview)
         let slide = try XCTUnwrap(Self.longest(column.layer), "the column slides in")
+        let leaving = try XCTUnwrap(Self.longest(from: list.layer, upTo: whole.layer), "the list's column slides out")
+        XCTAssertEqual(leaving.duration, slide.duration, accuracy: 0.01, "inside the animation that slides the inspector's column in")
+        // Where the screen shows the list while the inspector's column still moves: part of the way out, not gone at once
+        var partWay = false
+        until("the list is seen sliding, or the inspector's column has stopped") {
+            let now = Self.showing(list, in: whole)
+            partWay = now.minX < shown.minX - 1 && now.maxX > shown.minX + 1
+            return partWay || Self.longest(column.layer) == nil
+        }
+        XCTAssertTrue(partWay, "the list slides out as the inspector's column slides in")
         XCTAssertEqual(info.frame.width, route.view.bounds.width, "its route is laid out at the column's width")
         for view in [info] + info.subviews { XCTAssertNil(Self.longest(view.layer), "its route is laid out still: \(view)") }
         let moving = try XCTUnwrap(Self.longest(notes.layer), "the detail's content moves inside the column's animation")
@@ -52,6 +65,18 @@ extension SplitIOSTests {
 
     private static func longest(_ layer: CALayer) -> CAAnimation? {
         (layer.animationKeys() ?? []).compactMap { layer.animation(forKey: $0) }.max { $0.duration < $1.duration }
+    }
+
+    /// The longest animation on `layer` or on a layer above it, below `root`. UIKit slides the list's column on a
+    /// second layer of the column's view, above the view's own `layer`: no view's `layer` shows the slide (iOS 27.1).
+    private static func longest(from layer: CALayer, upTo root: CALayer) -> CAAnimation? {
+        sequence(first: layer, next: \.superlayer).prefix { $0 !== root }.compactMap(longest).max { $0.duration < $1.duration }
+    }
+
+    /// Where the screen shows `view` now, in `root`, with the animations above it under way.
+    private static func showing(_ view: UIView, in root: UIView) -> CGRect {
+        guard let shown = view.layer.presentation(), let within = root.layer.presentation() else { return view.convert(view.bounds, to: root) }
+        return shown.convert(shown.bounds, to: within)
     }
 }
 #endif
