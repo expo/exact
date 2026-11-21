@@ -34,8 +34,8 @@
 //   copy is its own. The camera app records the sound under its own microphone permission. Under the agent `take`
 //   writes the package's one-second clip, the same bytes on every host.
 // - A call let go publishes nothing (LLP 1133.008.000 D7): the camera app stays up, as another app's UI must, and
-//   what the person keeps there is removed. The kept file replaces the path on the main thread, where `cancel` runs,
-//   after a copy-in and the facts are read off it.
+//   what the person keeps there is removed. A private copy of the file is published to the path on a worker, after
+//   its facts are read; the start of publication is the commit point a `cancel` must come before.
 package exact.camera
 
 import android.app.Activity
@@ -61,6 +61,7 @@ import androidx.core.content.ContextCompat
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.Files
+import dev.exact.canvas.Native
 import dev.exact.canvas.TrackError
 import dev.exact.canvas.TrackConsumer
 import dev.exact.canvas.VideoSource
@@ -69,7 +70,7 @@ import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
-import java.nio.file.StandardCopyOption
+import java.util.concurrent.atomic.AtomicInteger
 
 class CameraModule(context: ExtensionContext) : ExactExtension(context) {
     companion object {
@@ -79,6 +80,10 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         /** The one `Preview` of the process, and the viewfinder that shows it. */
         private var preview: Preview? = null
         private var showing: PreviewView? = null
+        /** A camera app's call ([cameraAppState]). */
+        private const val UP = 0
+        private const val LET_GO = 1
+        private const val PUBLISHING = 2
     }
 
     /** What the runner said of a viewfinder, and what it consumes. */
@@ -147,8 +152,10 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
     /** The send [request] was let go (LLP 1133.016 D15 item 2): its camera app's result publishes nothing. */
     override fun cancel(request: Int) {
         if (cameraAppUp && request == cameraAppRequest) {
-            cameraAppLetGo = true
+            if (!cameraAppState.compareAndSet(UP, LET_GO)) return say("camera app: let go too late; its file is being kept")
             say("camera app: let go")
+            // After the result the call is settled now, whatever the worker still waits on.
+            cameraAppSettle?.invoke()
         }
     }
 
@@ -364,9 +371,15 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
 
     /** Whether the camera app is up for a call; one is at a time, a photo's or a video's. */
     private var cameraAppUp = false
-    /** The runner's number for that call, which a `cancel` names, and whether it was let go. */
+    /** The runner's number for that call, which a `cancel` names. */
     private var cameraAppRequest: Int? = null
-    private var cameraAppLetGo = false
+    /** The call's state: [UP], [LET_GO] by `cancel`, or [PUBLISHING] its file. Each change is a compare-and-set from
+     * [UP], `cancel`'s on the main thread and publishing's on the worker, so whichever comes first holds: a let-go
+     * before the publish begins keeps nothing (LLP 1133.008.000 D7), and one after is too late, as one after the
+     * answer is. */
+    private var cameraAppState = AtomicInteger(UP)
+    /** Answers a call let go once its result came, and ends it ([cancel]); null before the result. */
+    private var cameraAppSettle: (() -> Unit)? = null
 
     /** The answer of `takePhotoWithCameraApp` or `recordVideoWithCameraApp`, [tap] the agent's on its sheet. */
     private fun cameraApp(shot: Shot, args: JSONObject, tap: String?, reply: (JSONObject) -> Unit) {
@@ -388,14 +401,14 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         }
         val request = context.request
         val camera = android.Manifest.permission.CAMERA
-        if (!declares(camera) || held(camera)) return openCameraApp(shot, request, path, file, args, reply)
+        if (!declares(camera) || held(camera)) return openCameraApp(shot, request, path, args, reply)
         cameraAppUp = true
         cameraAppRequest = request
-        cameraAppLetGo = false
+        cameraAppState = AtomicInteger(UP)
         context.askPermission(camera) {
             cameraAppUp = false
-            if (cameraAppLetGo) return@askPermission reply(error("AbortError"))
-            if (held(camera)) return@askPermission openCameraApp(shot, request, path, file, args, reply)
+            if (cameraAppState.get() == LET_GO) return@askPermission reply(error("AbortError"))
+            if (held(camera)) return@askPermission openCameraApp(shot, request, path, args, reply)
             say("camera app: the app declares CAMERA and does not hold it")
             reply(error("NotAllowedError"))
         }
@@ -410,14 +423,12 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         app.packageManager.getPackageInfo(app.packageName, PackageManager.GET_PERMISSIONS).requestedPermissions?.contains(permission) == true
     }.getOrDefault(false)
 
-    private fun openCameraApp(shot: Shot, request: Int?, path: String, file: File, args: JSONObject, reply: (JSONObject) -> Unit) {
-        // Outside `app:/cache` and `app:/tmp` (`cache/cache`, `cache/temporary`), where the app's own code writes. A
-        // file staged before the process last ended answers nothing now.
-        val staging = File(context.application.cacheDir, "exact.camera-app")
-        Files.removeTree(staging)
-        val staged = File(staging, "${shot.noun}.${shot.ext}")
-        val out = Files.writableUri(context.application, staged) ?: return reply(error("UnknownError"))
-        val intent = Intent(shot.action).putExtra(MediaStore.EXTRA_OUTPUT, out)
+    private fun openCameraApp(shot: Shot, request: Int?, path: String, args: JSONObject, reply: (JSONObject) -> Unit) {
+        // A capture staged before the process last ended answers nothing now.
+        Files.removeTree(Files.captures(context.application))
+        val capture = Files.capture(context.application, "${shot.noun}.${shot.ext}") ?: return reply(error("UnknownError"))
+        val staged = capture.file
+        val intent = Intent(shot.action).putExtra(MediaStore.EXTRA_OUTPUT, capture.uri)
             .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
         // Android names no extra for the side; these are the ones camera apps read (Google Camera among them).
         when (args.optString("facingMode")) {
@@ -436,49 +447,81 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         }
         cameraAppUp = true
         cameraAppRequest = request
-        cameraAppLetGo = false
+        val state = AtomicInteger(UP).also { cameraAppState = it }
         say("camera app for $path")
         val end = { reason: String ->
-            Files.endWrite(staged)
-            Files.removeTree(staging)
+            Files.endCapture(context.application, capture)
             cameraAppUp = false
             cameraAppRequest = null
+            cameraAppSettle = null
             say("camera app: $reason")
         }
         context.startActivityForResult(intent, { refusal ->
             end("not started, $refusal")
             reply(error(refusal))
         }) { code, data ->
-            Files.endWrite(staged)
+            Files.revoke(context.application, capture)
+            if (state.get() == LET_GO) {
+                end("let go; kept nothing at $path")
+                return@startActivityForResult reply(error("AbortError"))
+            }
             if (code != Activity.RESULT_OK) {
                 end("cancelled")
                 return@startActivityForResult reply(error("AbortError"))
             }
-            // A camera app that records to its own place despite `EXTRA_OUTPUT` answers its URI; copied in, and the
-            // facts read, off the main thread. The kept file is published back on it, where `cancel` runs.
+            // A camera app that records to its own place despite `EXTRA_OUTPUT` answers its URI. It is copied in, its
+            // facts read and the kept file published off the main thread, then answered on it.
             val own = if (shot === VIDEO && !(Files.regular(staged) && staged.length() > 0)) data?.data else null
+            // What is kept is a copy in a file the camera app was never handed, so a descriptor it still holds reaches
+            // neither the kept file nor what the app writes there later.
+            // Made here, before the worker, which opens it without making it: a let-go that empties the directory
+            // meanwhile leaves the worker nothing to write into.
+            val kept = File(staged.parentFile, "kept-${staged.name}")
+            if (!runCatching { kept.createNewFile() }.getOrDefault(false)) {
+                end("could not stage a copy for $path")
+                return@startActivityForResult reply(error("UnknownError"))
+            }
+            cameraAppSettle = { end("let go; kept nothing at $path"); reply(error("AbortError")) }
             Thread {
-                val copied = own == null || copyIn(own, staged)
-                val facts = if (copied && Files.regular(staged) && staged.length() > 0) {
-                    if (shot === VIDEO) video(path, staged) else photo(path, staged)
+                val copied = if (own == null) copyOver(staged, kept) else copyIn(own, kept)
+                // On disk before the rename, whose own sync then has nothing left to write. Opened without being
+                // made: one gone since its facts were read, or that cannot be synced, is not kept.
+                val facts = if (copied && Files.regular(kept) && kept.length() > 0) {
+                    (if (shot === VIDEO) video(path, kept) else photo(path, kept)).takeIf {
+                        runCatching { java.nio.channels.FileChannel.open(kept.toPath(), java.nio.file.StandardOpenOption.WRITE).use { it.force(true) } }.isSuccess
+                    }
                 } else null
+                // The commit point: from here a let-go is too late.
+                val published = facts != null && state.compareAndSet(UP, PUBLISHING) && Native.publishApp(path, kept.path)
                 android.os.Handler(android.os.Looper.getMainLooper()).post {
                     when {
-                        cameraAppLetGo -> { end("let go; kept nothing at $path"); reply(error("AbortError")) }
+                        // Answered by `cancel`.
+                        state.get() == LET_GO -> Unit
                         facts == null -> { end("kept nothing at $path"); reply(error("UnknownError")) }
-                        runCatching { keep(staged, file) }.isFailure -> { end("could not keep $path"); reply(error("UnknownError")) }
-                        else -> { end("took $path (${file.length()} bytes)"); reply(facts) }
+                        !published -> { end("could not keep $path"); reply(error("UnknownError")) }
+                        else -> { end("took $path (${facts.optLong("size")} bytes)"); reply(facts) }
                     }
                 }
             }.apply { name = "exact-camera-app" }.start()
         }
     }
 
+    /** The camera app's [staged] file copied into [kept]. */
+    private fun copyOver(staged: File, kept: File): Boolean =
+        runCatching { staged.inputStream().use { input -> into(kept).use { input.copyTo(it, 64 shl 10) } } }
+            .onFailure { kept.delete() }.isSuccess
+
+    /** [kept], made before the worker began, open for writing: never made again, so a copy let go meanwhile writes
+     * nothing. */
+    private fun into(kept: File): java.io.OutputStream = java.nio.file.Files.newOutputStream(
+        kept.toPath(), java.nio.file.StandardOpenOption.WRITE, java.nio.file.StandardOpenOption.TRUNCATE_EXISTING, java.nio.file.LinkOption.NOFOLLOW_LINKS)
+
     /** The camera app's own video at [uri], copied to [staged] 64 KiB at a time: a `video/` type only, never one of the
-     * app's own files. A copy that fails leaves no staged file. */
+     * app's own files, whichever user's authority names them (`<user>@<authority>`). A copy that fails leaves no staged
+     * file. */
     private fun copyIn(uri: android.net.Uri, staged: File): Boolean {
         val resolver = context.application.contentResolver
-        if (uri.scheme != "content" || uri.authority == "${context.application.packageName}.exact.files") {
+        if (uri.scheme != "content" || uri.authority?.substringAfterLast('@') == "${context.application.packageName}.exact.files") {
             say("camera app: answered $uri, not read")
             return false
         }
@@ -489,22 +532,12 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         }
         return runCatching {
             val input = resolver.openInputStream(uri) ?: throw IOException("no stream")
-            input.use { Files.output(staged).use { out -> input.copyTo(out, 64 shl 10) } }
+            input.use { into(staged).use { out -> input.copyTo(out, 64 shl 10) } }
             say("camera app answered its own $uri; copied, and its gallery copy is the camera app's")
         }.onFailure {
             staged.delete()
             say("camera app: could not read $uri, ${it.message}")
         }.isSuccess
-    }
-
-    /** [staged] in place of [file]: renamed over it, which replaces a link there rather than writing what it names. */
-    private fun keep(staged: File, file: File) {
-        file.parentFile?.mkdirs()
-        try {
-            java.nio.file.Files.move(staged.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-        } catch (e: java.nio.file.AtomicMoveNotSupportedException) {
-            Files.output(file).use { out -> staged.inputStream().use { it.copyTo(out) } }
-        }
     }
 
     /** The capture's `ImageCapture`, built again when a builder word changes (D4). */

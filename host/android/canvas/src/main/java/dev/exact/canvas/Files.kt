@@ -3,10 +3,14 @@ package dev.exact.canvas
 import android.content.ContentProvider
 import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
+import android.os.Binder
 import android.os.ParcelFileDescriptor
+import android.os.Process
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
 import java.io.File
@@ -20,88 +24,151 @@ import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 
 /**
- * The app's files as content URIs another app may read under a grant (LLP 1133.024 D22 item 2): what an intent carries
- * for a mail's attachments, as `androidx.core`'s `FileProvider` does, without the library. Unexported, so only a URI
- * the app granted with its intent opens, and only for reading, unless the app handed that one file out for writing
- * ([writableUri]: the camera app's photo); a path outside the app's own data directory opens nothing. [uri] makes
- * one; `AndroidManifest.xml` declares it as `<package>.exact.files`.
+ * The app's files as content URIs another app may read under a grant (LLP 1133.024 D22 item 2, LLP 1094.000 D7):
+ * what a drag, a share or a mail carries, as `androidx.core`'s `FileProvider` serves them. A URI names its source,
+ * never a path: `app/data/…` for an `app:/data|cache|tmp/…` file, `shipped/assets/…` for one the app ships,
+ * `capture/<id>/<name>` for the camera app's photo ([capture]). Each open reads the source as it is then: an `app:/`
+ * file through the read the app's own `fs.read` makes (`Native.openApp`), below its root and through no symbolic link,
+ * and a shipped one under the running generation's assets. Unexported, so only a URI the app granted with its intent
+ * opens, and the grant is Android's. Only a capture's URI opens for writing, while its capture lasts. `AndroidManifest.xml`
+ * declares it as `<package>.exact.files`.
  */
 class Files : ContentProvider() {
     override fun onCreate() = true
 
-    private fun file(uri: Uri): File {
-        val context = context ?: throw FileNotFoundException()
-        val f = File(uri.path ?: "").canonicalFile
-        if (!inside(context, f) || !f.isFile) throw FileNotFoundException()
-        return f
-    }
-
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
-        if (mode == "r") return ParcelFileDescriptor.open(file(uri), ParcelFileDescriptor.MODE_READ_ONLY)
-        // [file] resolves links, so a link put in place of a handed-out file names one that is not handed out.
-        val f = file(uri)
-        if (!writes(f)) throw SecurityException("the app's files are shared for reading only")
-        return ParcelFileDescriptor.open(f, ParcelFileDescriptor.parseMode(mode))
+        val context = context ?: throw FileNotFoundException()
+        val parts = parts(uri)
+        if (parts.firstOrNull() == CAPTURE) {
+            // Android checks only the write grant for a mode with `w`: reading as well needs the read grant too.
+            if ('r' in mode && 'w' in mode && Binder.getCallingUid() != Process.myUid() &&
+                context.checkCallingUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+                throw SecurityException("$mode needs a read grant as well as a write grant")
+            }
+            return captured(context, parts, mode) ?: throw FileNotFoundException()
+        }
+        if (mode != "r") throw SecurityException("the app's files are shared for reading only")
+        return read(context, parts) ?: throw FileNotFoundException()
     }
 
-    /** The name and size a receiver shows ([OpenableColumns]). */
+    /** The name and size a receiver shows ([OpenableColumns]): the size the file has as it opens now. */
     override fun query(uri: Uri, projection: Array<out String>?, selection: String?, args: Array<out String>?, order: String?): Cursor {
-        val f = file(uri)
+        val context = context ?: throw FileNotFoundException()
+        val parts = parts(uri)
+        val opened = if (parts.firstOrNull() == CAPTURE) captured(context, parts, "r") else read(context, parts)
+        val size = opened?.use { it.statSize } ?: throw FileNotFoundException()
         val columns = projection?.filter { it == OpenableColumns.DISPLAY_NAME || it == OpenableColumns.SIZE }?.toTypedArray()
             ?: arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)
-        return MatrixCursor(columns, 1).apply { addRow(columns.map { if (it == OpenableColumns.SIZE) f.length() else f.name }) }
+        return MatrixCursor(columns, 1).apply { addRow(columns.map { if (it == OpenableColumns.SIZE) size else parts.last() }) }
     }
 
-    override fun getType(uri: Uri): String = type(File(uri.path ?: ""))
+    override fun getType(uri: Uri): String = type(uri.lastPathSegment ?: "")
 
     override fun insert(uri: Uri, values: ContentValues?): Uri? = throw UnsupportedOperationException()
     override fun update(uri: Uri, values: ContentValues?, selection: String?, args: Array<out String>?): Int = throw UnsupportedOperationException()
     override fun delete(uri: Uri, selection: String?, args: Array<out String>?): Int = throw UnsupportedOperationException()
 
+    /** A file the camera app writes its photo or video into ([capture]), and the URI it writes through. */
+    class Capture(val file: File, val uri: Uri)
+
     companion object {
-        private fun inside(context: Context, f: File): Boolean = f.path.startsWith(context.dataDir.canonicalPath + File.separator)
-
-        /** The content URI for [f], one of the app's own files, or null for any other. */
-        fun uri(context: Context, f: File): Uri? {
-            val canonical = f.canonicalFile
-            if (!inside(context, canonical) || !canonical.isFile) return null
-            return Uri.Builder().scheme("content").authority("${context.packageName}.exact.files").path(canonical.path).build()
-        }
-
-        /** The files another app may write through their URIs now, by canonical path ([writableUri]). */
-        private val writable: MutableSet<String> = java.util.Collections.synchronizedSet(HashSet())
+        private const val APP = "app"
+        private const val SHIPPED = "shipped"
+        private const val CAPTURE = "capture"
 
         /**
-         * A content URI another app may write [f] through, for an intent whose result is a file (the camera app's
-         * `EXTRA_OUTPUT`): [f], one of the app's own files, is made empty, and writes to it open until [endWrite].
-         * Null for a file outside the app's data directory, or a link.
+         * The source [parts] name, open for reading: an `app:/` file through the app's own confined read, a shipped one
+         * below the running generation's `assets` directory; null where it names no regular file now. In a process
+         * whose reader has not booted, as one Android starts for the provider alone, no `app:/` root is known, and the
+         * generation is the installed APK's.
          */
-        fun writableUri(context: Context, f: File): Uri? {
-            // Before anything is emptied: a file elsewhere is left as it is.
-            if (!inside(context, f.canonicalFile)) return null
-            if (!openForWrite(f)) return null
-            return uri(context, f) ?: run { endWrite(f); null }
+        private fun read(context: Context, parts: List<String>): ParcelFileDescriptor? {
+            if (!named(parts)) return null
+            return when (parts[0]) {
+                APP -> if (parts[1] in ROOTS) Native.openApp("app:/" + parts.drop(1).joinToString("/")) else null
+                SHIPPED -> if (parts[1] == "assets") shipped(context, parts.drop(2))?.let {
+                    try { ParcelFileDescriptor.open(it, ParcelFileDescriptor.MODE_READ_ONLY) } catch (e: FileNotFoundException) { null }
+                } else null
+                else -> null
+            }
         }
 
-        /** [f] made empty, following no link ([output]), and open to another app's writes through its URI until
-         * [endWrite]. */
-        internal fun openForWrite(f: File): Boolean {
-            try {
-                f.parentFile?.mkdirs()
-                output(f).close()
-            } catch (e: IOException) { return false }
-            writable.add(f.canonicalPath)
-            return true
+        /** The regular file [names] name below the running generation's `assets` directory, its links resolved; none
+         * where `assets` is itself a link. */
+        private fun shipped(context: Context, names: List<String>): File? = try {
+            val directory = File(AssetRoot.of(context), "assets")
+            if (!java.nio.file.Files.isDirectory(directory.toPath(), LinkOption.NOFOLLOW_LINKS)) null
+            else {
+                val assets = directory.canonicalFile
+                File(assets, names.joinToString("/")).canonicalFile.takeIf { it.path.startsWith(assets.path + File.separator) && regular(it) }
+            }
+        } catch (e: IOException) {
+            null
         }
 
-        /** Whether another app may write [f] through its URI now. */
-        internal fun writes(f: File): Boolean = f.canonicalPath in writable
+        /** [uri]'s path as names, or none where it is no plain run of them: an empty part, a trailing separator. */
+        private fun parts(uri: Uri): List<String> {
+            val path = uri.encodedPath ?: return emptyList()
+            return if (path.endsWith("/") || "//" in path) emptyList() else uri.pathSegments
+        }
 
-        /** [f]'s URI opens for reading only again. */
-        fun endWrite(f: File) { writable.remove(f.canonicalPath) }
+        /** Whether each of [parts] is one name: none empty, `.`, `..`, or holding a separator a URI encoded. */
+        private fun named(parts: List<String>) =
+            parts.size >= 2 && parts.none { it.isEmpty() || it == "." || it == ".." || '/' in it || '\u0000' in it }
 
-        /** A file's type by its extension, as a receiver reads it. */
-        fun type(f: File): String = MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase()) ?: "application/octet-stream"
+        /** The capture [parts] names, opened as [mode] says, while its capture lasts: its directory is the reader's own,
+         * which nothing of the app's reaches, and the file is the one [capture] made, so the mode makes none. Only the
+         * modes `ContentResolver` documents open it: Android checks the write grant for a mode with `w` alone, so
+         * `rt`, which empties the file, would pass with the read grant. */
+        private fun captured(context: Context, parts: List<String>, mode: String): ParcelFileDescriptor? {
+            if (parts.size != 3 || !named(parts) || mode !in MODES) return null
+            val file = File(File(captures(context), parts[1]), parts[2]).takeIf(::regular) ?: return null
+            return ParcelFileDescriptor.open(file, ParcelFileDescriptor.parseMode(mode) and ParcelFileDescriptor.MODE_CREATE.inv())
+        }
+
+        private val ROOTS = setOf("data", "cache", "tmp")
+        private val MODES = setOf("r", "w", "wt", "wa", "rw", "rwt")
+
+        /** The content URI for [src], an `app:/data|cache|tmp/…` path or a shipped `assets/…` name, or null where it
+         * names no regular file the app has now. */
+        fun uri(context: Context, src: String): Uri? {
+            val parts = if (src.startsWith("app:/")) listOf(APP) + src.removePrefix("app:/").split('/') else listOf(SHIPPED) + src.split('/')
+            read(context, parts)?.close() ?: return null
+            return Uri.Builder().scheme("content").authority(authority(context)).apply { parts.forEach(::appendPath) }.build()
+        }
+
+        private fun authority(context: Context) = "${context.packageName}.exact.files"
+
+        /** Where every capture's directory is: in the reader's cache, outside `app:/cache` and `app:/tmp` (`cache/cache`,
+         * `cache/temporary`), where the app's own code writes. */
+        fun captures(context: Context) = File(context.cacheDir, "exact.camera-app")
+
+        /** A new, empty file named [name] for the camera app to write (`EXTRA_OUTPUT`), in a directory of its own named
+         * at random, and its URI, which opens for writing until [endCapture]; null where it cannot be made. */
+        fun capture(context: Context, name: String): Capture? {
+            val id = java.util.UUID.randomUUID().toString()
+            val file = File(File(captures(context), id), name)
+            val made = try { file.parentFile!!.mkdirs() && file.createNewFile() } catch (e: IOException) { false }
+            if (!made) return null
+            return Capture(file, Uri.Builder().scheme("content").authority(authority(context)).appendPath(CAPTURE).appendPath(id).appendPath(name).build())
+        }
+
+        /** No app opens [capture]'s URI from now: Android's grants of it are taken back, while its file stays to be read. */
+        fun revoke(context: Context, capture: Capture) =
+            context.revokeUriPermission(capture.uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+
+        /** [capture] over: [revoke]d, and its directory removed, so that its URI names nothing. */
+        fun endCapture(context: Context, capture: Capture) {
+            revoke(context, capture)
+            capture.file.parentFile?.let(::removeTree)
+        }
+
+        /** A file's type by its name's extension, as a receiver reads it. */
+        fun type(name: String): String =
+            MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase()) ?: "application/octet-stream"
+
+        /** [f]'s type by its extension, as a receiver reads it. */
+        fun type(f: File): String = type(f.name)
 
         /** Removes [f] and, if it is a directory, everything in it, following no symbolic link: a link is removed, never
          * what it names. A module empties a directory of the app's with this, never [File.deleteRecursively], which

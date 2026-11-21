@@ -72,6 +72,15 @@ open class ExactActivity : Activity() {
         pads.key(event, requests.padInput) || super.dispatchKeyEvent(event)
     override fun dispatchGenericMotionEvent(event: android.view.MotionEvent): Boolean =
         pads.motion(event, requests.padInput) || super.dispatchGenericMotionEvent(event)
+    /** Every touch of the window, seen by a drag out of the app first ([DragOut.touched]). */
+    override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
+        DragOut.touched(event)
+        if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN && ::root.isInitialized) {
+            root.access.touched()
+            requests.surfaces?.answers?.touched()
+        }
+        return super.dispatchTouchEvent(event)
+    }
 
     override fun onCreate(state: Bundle?) {
         // An activity made again in a process whose host runs (LLP 1115.001 D15.1: a configuration change this
@@ -180,7 +189,7 @@ open class ExactActivity : Activity() {
     internal fun ax(limit: Int): org.json.JSONObject {
         val surface = requests.surfaces?.answers
         val elements = org.json.JSONArray()
-        val more = (surface ?: root.access).ax(elements, limit)
+        val more = access.ax(elements, limit)
         val ax = org.json.JSONObject().put("source", "android")
             .put("platform", "Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})").put("order", "tree")
             .put("observes", org.json.JSONArray(listOf("checked", "disabled", "expanded")))
@@ -191,6 +200,12 @@ open class ExactActivity : Activity() {
         if (more > 0) ax.put("truncated", org.json.JSONObject().put("elements", more).put("fields", 0))
         return ax
     }
+
+    /** The accessibility tree in front: the open surface's, or the page's. */
+    internal val access: Access get() = requests.surfaces?.answers ?: root.access
+
+    /** Whether the window has heard a drag start and not yet its end ([Root.dragging]). */
+    internal val windowDragging: Boolean get() = ::root.isInitialized && root.dragging
 
     /** A service came on, or the last one went; or this activity's reader was made ([read]) and is told which. */
     private fun accessible(on: Boolean) {
