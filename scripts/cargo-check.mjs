@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { OFFLINE_MISSING, withHostDeployment } from './filesystem.mjs';
 import { BUILD_SCRIPT_FAILED_LINE, buildScriptFailed, throwContractErrors } from './contract-diagnosis.mjs';
-import { basename, delimiter, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { basename, delimiter, dirname, isAbsolute, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
@@ -439,16 +439,28 @@ export function cargoBuildEnv(cwd, env) {
   return result;
 }
 
-/** `path` as the system reaches it, each link followed before a later `..` (which `path.resolve`, and Bun's
- * `realpathSync.native`, collapse first), or null when a part of it cannot be read. */
+/** `path` made absolute as written, a `..` kept: a relative one joins the working directory, a Windows drive's own
+ * for `D:staging`, and a root (a drive, a UNC share) stays whole. */
+export function writtenPath(path) {
+  if (isAbsolute(path)) return path;
+  const { root } = parse(path);
+  return resolve(root || '.') + sep + path.slice(root.length);
+}
+
+/** `path` as the system reaches it, or null when a part of it cannot be read. Windows collapses a `..` before it
+ * opens a path, as `path.resolve` does; POSIX follows each link before a later `..`, which `path.resolve`, and Bun's
+ * `realpathSync.native`, collapse first, so there a path with `..` is followed part by part, split at `/` alone. Bun
+ * 1.4.2's `realpathSync` cannot read a POSIX name that holds a backslash, which the system and Node read, so such a
+ * path gives null here and its root is remapped only as written. */
 export function physicalPath(path) {
-  let at = sep;
-  for (const part of (isAbsolute(path) ? path : process.cwd() + sep + path).split(/[\\/]+/)) {
-    if (part === '' || part === '.') continue;
-    if (part === '..') { at = dirname(at); continue; }
-    try { at = realpathSync.native(resolve(at, part)); } catch { return null; }
-  }
-  return at;
+  const written = writtenPath(path), { root } = parse(written);
+  const parts = written.slice(root.length).split(/\/+/).filter(part => part && part !== '.');
+  try {
+    if (process.platform === 'win32' || !parts.includes('..')) return realpathSync.native(resolve(written));
+    let at = realpathSync.native(root);
+    for (const part of parts) at = part === '..' ? dirname(at) : realpathSync.native(resolve(at, part));
+    return at;
+  } catch { return null; }
 }
 
 /** The `--config` that gives `target` the rustflags `flags` beside those its Cargo configuration gives it. A TOML array
@@ -459,11 +471,6 @@ export function targetRustflags(target, flags, { cwd = process.cwd(), env = proc
   const configured = cargoConfigurations(cwd, env, `pass ${target}'s rustflags`).findLast(({ configuration }) => configuration.target?.[target]?.rustflags !== undefined);
   const value = configured?.configuration.target[target].rustflags;
   if (typeof value !== 'string') return ['--config', `target.${target}.rustflags=${JSON.stringify(flags)}`];
-  // A string cannot carry a remap whose prefix has a space: one whose prefix is the physical path of another flag's,
-  // remapped alike (the alias rustRemapFlags adds for a link), is left out, and a given spelling never is
-  const remap = flag => /^--remap-path-prefix=(.*)=([^=]*)$/.exec(flag);
-  const alias = flag => flags.some(other => other !== flag && !/\s/.test(other) && remap(other)?.[2] === remap(flag)[2] && physicalPath(remap(other)[1]) === remap(flag)[1]);
-  flags = flags.filter(flag => !(/\s/.test(flag) && remap(flag) && alias(flag)));
   const spaced = flags.find(flag => /\s/.test(flag));
   if (spaced) throw new Error(`${configured.path}: [target.${target}] rustflags is a string, which Cargo splits at whitespace, so the build cannot add ${spaced} to it; write it as an array, rustflags = ${JSON.stringify(value.trim().split(/\s+/).filter(Boolean))}`);
   return ['--config', `target.${target}.rustflags=${JSON.stringify([value.trim(), ...flags].filter(Boolean).join(' '))}`];
