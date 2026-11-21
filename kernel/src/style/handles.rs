@@ -157,6 +157,21 @@ impl Drop for LayoutEnv {
     }
 }
 
+/// Whether a live handle's calculation holds a percentage: a pair of a
+/// percentage and a length does, `calc(100px + 0%)` among them, and a tree
+/// does where a percentage stands at a leaf (`Comparison::has_percent`). A
+/// released or unknown handle holds none.
+pub(crate) fn calc_has_percent(handle: *const ()) -> bool {
+    let table = HANDLES.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(calc) = table.get(handle as usize >> 3) else {
+        return false;
+    };
+    match calc.key {
+        Key::Pair { .. } => true,
+        Key::Tree { .. } => calc.value.as_ref().is_some_and(Comparison::has_percent),
+    }
+}
+
 /// Resolve a live handle; a released or unknown handle fails closed.
 pub(crate) fn resolve_calc(handle: *const (), basis: f32) -> f32 {
     let Some(calc) = HANDLES

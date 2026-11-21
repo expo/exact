@@ -40,7 +40,7 @@ mod intern;
 pub mod safe_area_properties;
 pub use calc::Comparison;
 use handles::calc_handle;
-pub(crate) use handles::{calc_handle_in, resolve_calc, tree_handle, LayoutEnv};
+pub(crate) use handles::{calc_handle_in, calc_has_percent, resolve_calc, tree_handle, LayoutEnv};
 pub mod env;
 pub mod targets;
 pub use env::link as link_segments;
