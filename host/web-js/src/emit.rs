@@ -537,7 +537,9 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
     // shared.js, which loads after first paint when a node asks for it: a
     // plan with one asks at boot, since the route that declares it is
     // seldom mounted then, and its first push would otherwise cut.
-    if em.route_parts {
+    // `startViewTransition()` plays through shared.js too, so an action that
+    // names it loads it at boot.
+    if em.route_parts || commands.iter().any(|c| c == "startViewTransition") {
         let load = em.uses.rt("pr");
         let _ = write!(body, "{load}();");
     }

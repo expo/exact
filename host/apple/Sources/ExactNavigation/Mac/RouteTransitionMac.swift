@@ -33,7 +33,8 @@ final class RouteTransitions {
     /// when it declares one that plays. `changed` plays it or, for a change
     /// that is not a pop, lets it go.
     func keeps(_ id: UInt32) -> Bool {
-        guard let top, top.id == id, let exit = top.exit, exit.plays else { return false }
+        // Inside `startViewTransition()`'s cross-fade no route plays a part of its own (LLP 1013.003 D3).
+        guard !presenter.navigation.crossFading, let top, top.id == id, let exit = top.exit, exit.plays else { return false }
         finish()
         leaving = (id, exit)
         return true
@@ -55,7 +56,7 @@ final class RouteTransitions {
             }
         }
         let route = stack.indices.contains(at) ? stack[at] : nil
-        if after.count == before.count + 1, after.starts(with: before), at > 0, let route,
+        if !presenter.navigation.crossFading, after.count == before.count + 1, after.starts(with: before), at > 0, let route,
            let part = presenter.session?.runtime.routePart(route.id, exit: false, size: route.bounds.size), part.plays {
             held = (stack[at - 1].id, route.id)
             play(part, on: route) { [weak self] alone in

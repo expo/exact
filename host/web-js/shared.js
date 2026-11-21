@@ -163,10 +163,31 @@ function entrance(before, root, inflight, after) {
   t.finished.then(clean, clean);
 }
 
+/** `startViewTransition()` (LLP 1013.003): the commit's tree update `run` inside a transition of the whole page, the
+ * root's own cross-fade as the browser plays it; its pushes and pops play nothing of their own. */
+function crossFade(run, inflight, after) {
+  if (running) { running.skipTransition(); running = null; }
+  // the root takes part again: the other transitions here leave it unnamed
+  if (style) style.textContent = '';
+  pending = Object.assign([run], { after: [] });
+  inflight.n++;
+  const t = document.startViewTransition(() => {
+    const tails = pending;
+    pending = null;
+    try { for (const f of tails) f(); } finally { for (const f of tails) if (!f.ran) f.release(); for (const f of tails.after) f(); }
+  });
+  running = t;
+  const ready = t.ready.then(() => { for (const f of after ?? []) f(); }, () => {}).finally(() => inflight.n--);
+  (globalThis.exact ??= {}).viewTransition = () => ready;
+  const clean = () => { if (running === t) running = null; };
+  t.finished.then(clean, clean);
+  return true;
+}
+
 /** Run a commit's tree update `tail`, inside a view transition when its
  * flush may hand a name on. Returns what `tail` returns, or true when it
  * waits for the browser. */
-export function commit(tail, queue, inflight, after) {
+export function commit(tail, queue, inflight, after, fade) {
   // A deferred tree update keeps the press that caused it (focus.js), so a field it mounts may still
   // take the focus from the pressed control.
   // A tool call waits for its commit's deferred update, whose commands are the call's (calls.js).
@@ -179,6 +200,7 @@ export function commit(tail, queue, inflight, after) {
   if (pending) { pending.push(deferred()); return true; }
   // Under reduce motion every change cuts (LLP 1013.000 D7, LLP 1013.001 D6).
   if (typeof document.startViewTransition !== 'function' || matchMedia('(prefers-reduced-motion: reduce)').matches) return tail();
+  if (fade) return crossFade(deferred(), inflight, after);
   const root = document.getElementById('exact-root');
   const routes = root ? shownStacks(root) : new Map();
   const old = leavers(queue);

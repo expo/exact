@@ -24,6 +24,8 @@ package protocol NavigationHosting: AnyObject {
     func groundChanged()
     /// Whether a node that left keeps its view for its route's exit.
     func keepsForExit(_ id: UInt32) -> Bool
+    /// A batch inside `startViewTransition()`'s cross-fade: its routes play no entrance or exit of their own.
+    var crossFading: Bool { get set }
 
     /// The first navigation root, the stack that holds the route it shows
     /// and that route's place in it, as of the last batch.
@@ -214,6 +216,7 @@ package final class NoNavigation: NavigationHosting {
     package let stackSplit: any StackSplitting
     private var menusQueued = false
     private var oneLocationAsked: Bool?
+    package var crossFading = false
     package init(_ presenter: Presenter) { self.presenter = presenter; stackSplit = NoSplit(presenter) }
 
     package func sync(_ batch: Batch, reparented: Set<UInt32>) {

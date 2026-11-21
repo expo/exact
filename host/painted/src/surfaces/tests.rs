@@ -294,7 +294,9 @@ uint32_t gpu_performance(uint32_t id, double now) {
 uint32_t gpu_messages(void) { return 268435457; }
 uint32_t gpu_carry(void) { return 268435457; }
 uint32_t gpu_restore(void) { return 1; }
-void gpu_destroy(void) {}
+static uint32_t destroys;
+void gpu_destroy(uint32_t id) { destroys++; }
+uint32_t test_destroys(void) { return destroys; }
 uint32_t gpu_error(void) { return 0; }
 uint32_t gpu_shader_names(void) { output="[]"; return 2; }
 uint32_t gpu_surfaces(void) { output="[\"probe\"]"; return strlen(output); }
@@ -851,62 +853,54 @@ fn gpu_modules_follow_the_runner_motion_preference() {
     }
 }
 
-/// A reload renumbers the tree from 1, so the canvas's old view id can name
-/// another node: the surface goes with the old tree and the canvas makes its
-/// own, which owns its name.
 #[test]
-fn a_reload_that_renumbers_the_tree_gives_the_canvas_its_own_surface() {
+fn a_reloaded_canvas_gets_a_new_surface_even_when_its_view_id_survives() {
     let (path, compat) = fixture();
-    let plan = |above: &str| {
-        let source = format!(
-            "component App\n  state n = 0\n  view\n    column\n{above}      canvas surface=world(n) width=50 height=50\n"
-        );
+    let canvas = "canvas surface=world(n) width=50 height=50";
+    let plan = |children: &str| {
+        let source =
+            format!("component App\n  state n = 0\n  view\n    column\n      {children}\n");
         contract::compile(&source).unwrap().encode()
     };
     let (mut p, _) = Presenter::boot(
-        &plan(""),
+        &plan(canvas),
         (),
         (100., 100.),
         1.,
         path.parent().unwrap().into(),
     )
     .unwrap();
-    p.surfaces
-        .abis
-        .insert(String::new(), Abi::open_path(&path, &compat, "").unwrap());
+    let abi = Abi::open_path(&path, &compat, "").unwrap();
+    // SAFETY: the probe exports its count of destroyed native surfaces.
+    let destroys = unsafe { abi.symbol::<unsafe extern "C" fn() -> u32>(b"test_destroys") };
+    p.surfaces.abis.insert(String::new(), abi);
     p.surfaces.attempted.insert(String::new());
     p.compat = compat.to_string();
-    let canvases = |p: &Presenter<()>| {
-        (p.surfaces.canvases.iter())
-            .map(|(view, c)| {
-                let node = p.host.kernel().node(*view).map(|n| n.node_type);
-                (*view, c.name.clone(), c.owner, node)
-            })
-            .collect::<Vec<_>>()
+    let owner = |p: &Presenter<()>| {
+        assert_eq!(p.surfaces.canvases.len(), 1);
+        let (&view, surface) = p.surfaces.canvases.iter().next().unwrap();
+        assert!(surface.owner);
+        assert_eq!(surface.name, "world");
+        assert_eq!(
+            p.host.kernel().node(view).unwrap().node_type,
+            exact_kernel::NodeType::Canvas
+        );
+        view
     };
-    let canvas = exact_kernel::NodeType::Canvas;
     p.sync_surfaces();
-    let before = canvases(&p);
-    assert_eq!(before.len(), 1);
-    assert_eq!(
-        (&before[0].1, before[0].2, before[0].3),
-        (&"world".into(), true, Some(canvas))
-    );
-
-    assert!(
-        p.reload(&plan("      text \"new\"\n"), ()).unwrap()
-            == crate::presenter::ReloadResult::Applied(None)
-    );
-    p.sync_surfaces();
-    let after = canvases(&p);
-    assert_eq!(after.len(), 1, "{after:?}");
-    assert_eq!(
-        (&after[0].1, after[0].2, after[0].3),
-        (&"world".into(), true, Some(canvas))
-    );
-    assert_ne!(after[0].0, before[0].0, "the plan moved the canvas");
-    drop(p);
-    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    let first = owner(&p);
+    for (children, same_view, retired) in [
+        (format!("text \"new\"\n      {canvas}"), true, 1),
+        (format!("row\n        {canvas}"), false, 2),
+    ] {
+        assert!(
+            p.reload(&plan(&children), ()).unwrap()
+                == crate::presenter::ReloadResult::Applied(None)
+        );
+        p.sync_surfaces();
+        assert_eq!(owner(&p) == first, same_view);
+        assert_eq!(unsafe { destroys() }, retired);
+    }
 }
 
 #[test]

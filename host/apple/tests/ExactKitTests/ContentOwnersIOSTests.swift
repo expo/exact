@@ -613,7 +613,7 @@ final class ContentOwnersIOSTests: XCTestCase {
 
     /// The edge-effect fixture's Panes tab, its two peers arranged side by side beneath the route's bars.
     @available(iOS 27.1, *)
-    private func arrangedPeers(in scene: UIWindowScene) throws -> (ExactSession, NodeView, NodeView, NodeView, RouteController, UIArrangementViewController) {
+    func arrangedPeers(in scene: UIWindowScene) throws -> (ExactSession, NodeView, NodeView, NodeView, RouteController, UIArrangementViewController) {
         let session = try fixture("arranged-edges", scene.coordinateSpace.bounds.size, plan: "EXACT_EDGE_EFFECT_PLAN")
         let p = session.presenter
         let reply = Agent(session: session).tap(["id": Int(try node(session, "tab-panes").id)])
@@ -682,7 +682,7 @@ final class ContentOwnersIOSTests: XCTestCase {
         override func location(in view: UIView?) -> CGPoint { target.convert(point, to: view) }
     }
 
-    private var window: UIWindow?
+    var window: UIWindow?
     private var host: UIViewController?
     private var sessions: [ExactSession] = []
 
@@ -695,7 +695,7 @@ final class ContentOwnersIOSTests: XCTestCase {
         super.tearDown()
     }
 
-    private func until(_ what: @autoclosure () -> String, _ seconds: Double = 5, _ done: () -> Bool) {
+    func until(_ what: @autoclosure () -> String, _ seconds: Double = 5, _ done: () -> Bool) {
         let deadline = Date().addingTimeInterval(seconds)
         while !done(), Date() < deadline { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02)) }
         XCTAssertTrue(done(), what())
@@ -729,7 +729,7 @@ final class ContentOwnersIOSTests: XCTestCase {
         return session
     }
 
-    private func node(_ session: ExactSession, _ testId: String) throws -> NodeView {
+    func node(_ session: ExactSession, _ testId: String) throws -> NodeView {
         try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == testId }, "no \(testId)")
     }
 

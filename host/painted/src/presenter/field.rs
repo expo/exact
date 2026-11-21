@@ -321,10 +321,14 @@ impl<D: DataSource> Presenter<D> {
     /// The caret used to edit also exists in email and number inputs,
     /// whose DOM selection API cannot read or write it.
     pub(crate) fn field_selection(&self, id: ViewId) -> FieldSelection {
+        self.field_selection_with_affinity(id).0
+    }
+
+    fn field_selection_with_affinity(&self, id: ViewId) -> (FieldSelection, bool) {
         let value = self.field_text_ref(id);
         match self.fields.get(&id) {
-            Some(mark) if mark.value == value => mark.selection,
-            _ => FieldSelection::at_end(value),
+            Some(mark) if mark.value == value => (mark.selection, mark.upstream),
+            _ => (FieldSelection::at_end(value), false),
         }
     }
 
@@ -390,17 +394,14 @@ impl<D: DataSource> Presenter<D> {
     }
 
     pub(crate) fn field_cursor(&self, id: ViewId) -> Cursor {
-        let selection = self.field_selection(id);
+        let (selection, upstream) = self.field_selection_with_affinity(id);
         Cursor {
             offset: if selection.direction == SelectionDirection::Backward {
                 selection.start
             } else {
                 selection.end
             },
-            upstream: self
-                .fields
-                .get(&id)
-                .is_some_and(|m| m.value == self.field_value(id) && m.upstream),
+            upstream,
         }
     }
 

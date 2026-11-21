@@ -34,6 +34,8 @@ pub(crate) fn is_symbol(source: &str) -> bool {
 #[cfg(test)]
 #[path = "image/allocation_tests.rs"]
 mod allocation_tests;
+#[cfg(test)]
+pub(crate) use allocation_tests::measure_allocations;
 #[path = "image/assets.rs"]
 mod assets;
 #[path = "image/bitmap.rs"]

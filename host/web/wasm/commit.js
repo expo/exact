@@ -802,6 +802,8 @@ function apply(batch) {
             log("setWindowOpacity refused: a page cannot change its window's opacity");
           } else if (op.name === "hideWindow") {
             log("hideWindow refused: a page cannot hide its window");
+          } else if (op.name === "startViewTransition") {
+            log("startViewTransition: cut: this host plays no view transition (exact-web-js does)");
           } else if (!/^(playSound|playSounds|stopSounds|setSounds|sendMIDI|requestMIDIAccess)$/.test(op.name)) {
             console.warn(`exact: unknown command ${op.name}`);
           }

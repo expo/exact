@@ -431,13 +431,19 @@ fn failed_paint_cannot_acknowledge_first_pixel_or_bind_stale_hit_boxes() {
 }
 
 #[test]
-fn headless_boxes_and_agent_layout_keep_the_existing_eager_frame_semantics() {
+fn headless_geometry_is_current_before_the_first_picture() {
     let (mut p, paints, _) = boot();
     assert!(!p.boxes().is_empty());
     assert_eq!(paints.get(), 1);
     p.set_pointer(Some((12., 12.)));
     p.layout_json(None, false);
     assert_eq!(paints.get(), 2);
+    assert!(p.dirty());
+    p.first_pixel();
+    assert!(!p.painted);
+    p.boxes();
+    assert_eq!(paints.get(), 2);
+    p.frame();
     assert!(!p.dirty());
     p.first_pixel();
     assert!(p.painted);

@@ -74,6 +74,9 @@ pub fn bake<D: DataSource>(
     constructor: &str,
     replace: impl FnOnce(&Entry) -> Option<String>,
 ) {
+    if platform == "windows" {
+        crate::link_windows_resources();
+    }
     let platform = if platform == "apple" {
         if matches!(
             env::var("CARGO_CFG_TARGET_OS").as_deref(),

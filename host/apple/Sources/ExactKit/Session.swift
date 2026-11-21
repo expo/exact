@@ -1217,7 +1217,7 @@ public final class ExactSession {
         // Each presenter takes its boot's table, a second one with the same too.
         ThemeRoles.apply(outputs.roles, root: presenter.root); if outputs.roles != nil { presenter.applyThemeTint() }
         let orientationChanged = presenter.orientationChangesScreen(batch)
-        ThemeRoles.within(presenter.root) { presenter.apply(batch) }; FormaLink.moved?(self) // bindings' places (LLP 1121 D12)
+        crossFade(outputs.viewTransition, closing: outputs.closes) { [self] in ThemeRoles.within(presenter.root) { presenter.apply(batch) } }; FormaLink.moved?(self) // bindings' places (LLP 1121 D12)
         drainCanvasCaptures(batch)
         if !batch.canvasImagesDropped.isEmpty { presenter.canvas2d.drop(batch.canvasImagesDropped) }
         if !batch.canvasImages.isEmpty { presenter.canvas2d.load(batch.canvasImages) }
@@ -1330,7 +1330,7 @@ public final class ExactSession {
                     app.deliver { [weak self] in self?.presenter.formatElement(args) }
                     continue
                 }
-                if ["playSound", "playSounds", "stopSounds", "setSounds", "sendMIDI", "requestMIDIAccess", "setRootFontSize"].contains(name) { continue } // the runner's own: its voice table's `sound` op plays them (LLP 1096 D8), its MIDI queue's `midi` op sends (LLP 1125 D7); the root font size is laid out already (LLP 1069.000 D3)
+                if ["playSound", "playSounds", "stopSounds", "setSounds", "sendMIDI", "requestMIDIAccess", "setRootFontSize", "startViewTransition"].contains(name) { continue } // the runner's own: its voice table's `sound` op plays them (LLP 1096 D8), its MIDI queue's `midi` op sends (LLP 1125 D7); the root font size is laid out already (LLP 1069.000 D3); the view transition played as its batch landed (`crossFade`)
                 if app.handleCommand(name) { continue }
                 app.deliver { [weak self] in guard let self else { return }; delegate?.exactSession(self, command: name, args: args) }
             }

@@ -159,8 +159,10 @@ fn character_click_and_drag_keep_the_upstream_caret_at_a_soft_wrap() {
         .end;
     let at = point(&mut p, id, end - 1, 1.2);
     click(&mut p, at, 1., 1);
-    assert_eq!(p.field_cursor(id).offset, end);
-    assert!(p.field_cursor(id).upstream);
+    let (cursor, peak, _) = crate::image::measure_allocations(|| p.field_cursor(id));
+    assert_eq!(cursor.offset, end);
+    assert!(cursor.upstream);
+    assert_eq!(peak, 0, "reading the caret must borrow the field value");
     let start = point(&mut p, id, 0, 0.1);
     p.pointer_down_with_clicks(start.0, start.1, 3., 1).unwrap();
     p.pointer_move(at.0, at.1, 4.).unwrap();

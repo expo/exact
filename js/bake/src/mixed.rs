@@ -1,7 +1,7 @@
 //! The bakes of an app with a Rust data source beside app.ts (LLP 1027.002): each source keeps its own identity and
 //! grants, and Rust answers the sources it owns.
 
-use crate::{android, build_sources, icon, library, BakeError, Composer};
+use crate::{android, build_sources, library, BakeError, Composer};
 use contract::DataSource;
 use exact_js::Module;
 use std::path::Path;
@@ -21,7 +21,7 @@ pub fn build_mixed(
     host_work: bool,
 ) -> Result<(), BakeError> {
     library::link(app, platform, false).map_err(BakeError)?;
-    icon::link();
+    exact_bake::link_windows_resources();
     build_sources(app, platform, Some((rust, host_work)), None, false).map_err(BakeError)
 }
 
@@ -54,7 +54,7 @@ pub fn build_mixed_with<D: DataSource>(
         }
     }
     library::link(app, platform, false).map_err(BakeError)?;
-    icon::link();
+    exact_bake::link_windows_resources();
     let composer = Composer {
         rust_sources: rust_sources.iter().map(|s| s.to_string()).collect(),
         compose: Box::new(compose),

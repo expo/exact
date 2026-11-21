@@ -128,6 +128,7 @@ shape Nav
   tabs: NavTab[]
   groups: NavGroup[]
   year: string
+  shareImage: string
   agentIntro: string
   startPrompt: string
   startLabel: string

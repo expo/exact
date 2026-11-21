@@ -712,7 +712,6 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         retainedScrollTop = nil; dropCarriedScroll()
         if handlers.contains("scrolldragstart") { presenter?.scrollDrag(id, nil) }
         #if os(iOS)
-        if #available(iOS 27.1, *) { presenter?.arrangements.cancelScrollHandoff(id) }
         if swipeOwner { presenter?.swipeActions.paintedBegan(self) }
         #endif
     }
@@ -1298,12 +1297,14 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
                 for child in children { sv.addSubview(child) }
             }
             scroll = sv
+            scrollBackendReplaced()
             if pageBand != .zero || bandInset != .zero || reach != .zero { more.pageBand = .zero; more.bandInset = .zero; more.reach = .zero } // a new scroll view reaches no band, and has no reach, until asked (LLP 1130 D3, LLP 1123 D13)
             scrollWritten = nil
             updateRefresh()
             presenter?.navigation.scrollBackendChanged(self)
         }
         if !scrolls || groupedOwner, let sv = scroll {
+            scrollBackendReplaced()
             if groupedOwner { retainScrollPosition(from: sv) }
             dropZoom()
             // Neither axis scrolls any more: the children come back out.

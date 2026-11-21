@@ -650,7 +650,7 @@ export function commit(f, what = 'commit', finished) {
   // a Back or Forward is mirrored to the history first, and one the browser animated cuts (router.js `traversal`)
   const deferred = Sh && ok && !Traversal?.();
   if (deferred && hasOutput(cmds)) HeldOutput.add(cmds);
-  return deferred ? Sh.commit(tail, Queue, inflight, After) : tail();
+  return deferred ? Sh.commit(tail, Queue, inflight, After, cmds.some(c => c[0] === 'startViewTransition')) : tail();
 }
 /** A commit made again after a write ended or the source became ready (the runner's `commit_again`). Refused while
  * reads are owed (a reconciling ask), they fail, keeping what they show, before a commit publishes it; a refusal of
@@ -979,7 +979,7 @@ export const Store = {
 // A release build's DEVELOPMENT_STORE is null: it inspects nothing, and its bundle drops the inspection's code.
 export const Inspections = DEVELOPMENT_STORE
   ? resourceInspection(true, () => clock.now)
-  : { track() {}, begin() {}, placeholder() {}, take() {}, fail() {} };
+  : { track() {}, begin() {}, placeholder() {}, stoodIn() {}, take() {}, fail() {} };
 // Requests in flight, for the agent's `clock settle`.
 export const inflight = { n: 0 };
 // A development build's only: the dev page's hold asks for it so, as a bundled page serves no rt.js; not on `exact`,

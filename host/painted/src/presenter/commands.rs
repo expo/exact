@@ -222,6 +222,10 @@ impl<D: DataSource> Presenter<D> {
                 "hideWindow" => self.host.log(
                     "hideWindow refused: a window that hides while the app keeps running is on the Mac and Windows hosts only",
                 ),
+                // The commit is already drawn: it cuts, as a browser without view transitions runs the update.
+                "startViewTransition" => self
+                    .host
+                    .log("startViewTransition: cut: this host plays no view transition"),
                 // A page zoom is the Mac's so far (LLP 1021 §5.3.1).
                 "setPageZoom" => self
                     .host

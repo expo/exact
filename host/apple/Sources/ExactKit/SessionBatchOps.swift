@@ -9,6 +9,10 @@ struct SessionBatchOps {
     var authentication: [BatchOp] = []
     var reorders: [BatchOp] = []
     var roles: BatchOp?
+    /// Whether the batch names `startViewTransition()`, and the dialogs its `close(id)` commands name, which
+    /// are delivered after the batch.
+    var viewTransition = false
+    var closes: [String] = []
 
     init(_ ops: some Sequence<BatchOp>) {
         for op in ops {
@@ -21,6 +25,9 @@ struct SessionBatchOps {
             case .auth, .presence: authentication.append(op)
             case .reorder: reorders.append(op)
             case .roles: roles = op
+            case .command where op.payload["name"] as? String == "startViewTransition": viewTransition = true
+            case .command where op.payload["name"] as? String == "close":
+                if let id = (op.payload["args"] as? [Any])?.first as? String { closes.append(id) }
             default: break
             }
         }

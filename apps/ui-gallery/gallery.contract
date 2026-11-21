@@ -117,6 +117,7 @@ component GalleryDemo
     host: string
     tallText: string
     nativeFeatures: NativeFeatures
+    sidebarBarHeight: number
     one: string
     four: string
     limit: string
@@ -146,7 +147,10 @@ component GalleryDemo
         if sectionTitle(section) != "" and not authoredHeader and host != "web"
           text sectionTitle(section) role="heading" aria-level=1
       if section != "hdr" and section != "menus" and (host != "web" or section == "images") and (section != "media" or nativeFeatures.video)
-        column id="range-bar" hatch="sticky-limit" position="relative" z-index=1 flex-shrink=0 box-sizing="border-box" justify-content="center" padding-top=8 padding-bottom=12 padding-left="calc(var(--exact-safe-area-inset-left) + 16px)" padding-right="calc(var(--exact-safe-area-inset-right) + 16px)" testId=`range-bar-${section}`
+        // Keep it as tall as the list column's inline navigation bar at least, while the split is expanded, so
+        // both columns' headers end level once scrolled and the page's bar hides (the Duo, iOS 27.1); a wrapped
+        // label or a larger text size makes it taller.
+        column id="range-bar" hatch="sticky-limit" position="relative" z-index=1 flex-shrink=0 box-sizing="border-box" min-height=sidebarBarHeight justify-content="center" padding-top=8 padding-bottom=12 padding-left="calc(var(--exact-safe-area-inset-left) + 16px)" padding-right="calc(var(--exact-safe-area-inset-right) + 16px)" testId=`range-bar-${section}`
           column testId=`range-card-${section}`
             LimitControl(section=section, limit=limit, choose=choose)
       // Name the hard scroll edge effect, which UIKit's automatic style draws under the range bar and which,

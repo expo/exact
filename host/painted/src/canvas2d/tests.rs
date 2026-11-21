@@ -288,10 +288,20 @@ fn capture_refuses_an_unheld_generation_without_overwriting_a_file() {
 }
 
 #[test]
-fn a_jpeg_capture_is_the_bitmap_over_opaque_black() {
+fn captures_encode_straight_alpha_in_png_and_flatten_onto_black_for_jpeg() {
     let mut p = Pixmap::new(2, 1).unwrap();
     // Transparent, and red at half alpha (premultiplied).
     p.pixels_mut()[1] = tiny_skia::PremultipliedColorU8::from_rgba(128, 0, 0, 128).unwrap();
+    let (encoded, ty) =
+        super::capture::encode(&p, &exact_runner::canvas_capture::Encoding::default()).unwrap();
+    assert_eq!(ty, "image/png");
+    let mut reader = png::Decoder::new(std::io::Cursor::new(encoded))
+        .read_info()
+        .unwrap();
+    assert!(reader.info().srgb.is_some());
+    let mut straight = [0; 8];
+    reader.next_frame(&mut straight).unwrap();
+    assert_eq!(straight, [0, 0, 0, 0, 255, 0, 0, 128]);
     let flat = super::capture::opaque(&p);
     let rgba: Vec<_> = (flat.pixels().iter())
         .map(|c| [c.red(), c.green(), c.blue(), c.alpha()])

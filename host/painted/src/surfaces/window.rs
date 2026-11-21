@@ -41,6 +41,7 @@ impl Surfaces {
         self.window_layers = None;
         self.direct_window = None;
         self.startup_device = None;
+        self.preparing_device = None;
         self.window_owner = None;
     }
 
@@ -414,7 +415,7 @@ impl DirectWindow {
         let pixels = p.frame();
         let target = device.create_target(size[0], size[1])?;
         device.upload_texture(target, [0, 0], size, pixels.data())?;
-        device.present(target)?;
+        self.ever_presented |= device.present(target)? > 0.;
         device.retire_texture(target)?;
         if let Some((previous, _)) = self.fallback.take() {
             device.retire_after_present(previous);
@@ -497,6 +498,7 @@ impl DirectWindow {
         let frame = self.paint_and_present(p);
         // Pixels returned here have not reached the window.
         self.presented = matches!(frame, Ok(None)) && p.last_frame_succeeded;
+        self.ever_presented |= self.presented;
         frame
     }
 
@@ -544,7 +546,6 @@ impl DirectWindow {
             }
             if p.last_frame_succeeded() {
                 self.retry = Default::default();
-                self.ever_presented = true;
                 return Ok(frame);
             }
             if !p.brush.device_lost() {
@@ -592,7 +593,6 @@ impl DirectWindow {
                         .presentation_retry_delay()
                         .map(|delay| std::time::Instant::now() + delay);
                     p.last_frame_succeeded = ms > 0.;
-                    self.ever_presented |= ms > 0.;
                     if ms > 0. && std::env::var_os("EXACT_AGENT_WINDOW_READY").is_some() {
                         eprintln!("exact-ink: CPU recovery frame presented through composition");
                     }
@@ -955,7 +955,7 @@ mod tests {
         direct.open = |_| Err(exact_ink::device::Error::Device("test refusal".into()));
         // Pixels returned for the host to present have not reached the window.
         assert!(direct.frame(&mut p).unwrap().is_some());
-        assert!(!direct.presented);
+        assert!(p.last_frame_succeeded() && !direct.presented && !direct.ever_presented);
         p.brush.replace_backend(Box::new(PresentPaint {
             name: "ink",
             lost: false,
@@ -965,12 +965,12 @@ mod tests {
         }));
         p.repaint();
         assert!(direct.frame(&mut p).unwrap().is_none());
-        assert!(direct.presented);
+        assert!(direct.presented && direct.ever_presented);
         // The device is lost before the next frame, and WARP refuses.
         p.brush.replace_backend(Box::new(Lost(true, false)));
         p.repaint();
         assert!(direct.frame(&mut p).unwrap().is_none());
-        assert!(direct.recovering && !direct.presented);
+        assert!(direct.recovering && !direct.presented && direct.ever_presented);
         p.surfaces.direct_window = Some(direct);
         p.frame();
         assert!(p.last_frame_succeeded() && !p.dirty());

@@ -453,11 +453,10 @@ impl Batch {
             && self.route_inspectors.is_none()
     }
 
-    /// Mounted collection metadata from the runner's common JSON array writer.
-    /// An empty array clears previously published collections on the presenter.
-    pub fn collections(&mut self, items: &str) {
+    /// Publish collection snapshots or changes to a split table's section index.
+    pub fn collections(&mut self, field: &'static str, records: &str) {
         self.ops
-            .push(format!("{{\"op\":\"collections\",\"items\":{items}}}"));
+            .push(format!(r#"{{"op":"collections","{field}":{records}}}"#));
     }
 
     /// `{"op":"create","id":…,"kind":…,"props":{…},"style":{…},"handlers":[…]}`;
@@ -1383,7 +1382,7 @@ mod finish_bytes_tests {
                             batch.command("focus", &[exact_plan::Value::Number(1.)], None);
                             batch.destroy(3);
                             batch.roots(&[1]);
-                            batch.collections("[]");
+                            batch.collections("items", "[]");
                             batch.ops.truncate(count);
                             let mut expected = old_finish(&batch, timers, motion, clock, error);
                             let deadline = timers.then_some(16.0);

@@ -237,17 +237,9 @@ fn encode(
     if encoding.media_type == "image/jpeg" {
         return crate::canvas2d::capture::encode(pixels, encoding).map_err(failed);
     }
-    let mut out = Vec::new();
-    {
-        let mut encoder = png::Encoder::new(&mut out, pixels.width(), pixels.height());
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        encoder.set_compression(png::Compression::Fast);
-        encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
-        let mut writer = encoder.write_header().map_err(failed)?;
-        writer.write_image_data(pixels.data()).map_err(failed)?;
-    }
-    Ok((out, "image/png"))
+    crate::canvas2d::capture::png(pixels.width(), pixels.height(), pixels.data())
+        .map(|out| (out, "image/png"))
+        .map_err(failed)
 }
 
 /// Fixture screens, with no native screen read. A drive can set `screens`

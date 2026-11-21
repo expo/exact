@@ -109,6 +109,14 @@ impl<D: DataSource> Lists<D> for LinkedLists {
             .ok()
             .flatten()
     }
+    fn list_sections(
+        &self,
+        tree: &Tree,
+        u: &mut Update<'_>,
+        view: ViewId,
+    ) -> Result<Option<crate::list_api::SectionTable>, crate::instance::InstanceError> {
+        tree.list_sections(u, view)
+    }
     fn list_index(&self, tree: &Tree, view: ViewId, key: &str) -> Option<usize> {
         tree.list_index(view, key)
     }

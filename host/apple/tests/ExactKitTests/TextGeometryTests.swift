@@ -192,6 +192,27 @@ final class TextGeometryTests: XCTestCase {
         XCTAssertEqual(presenter.selection.selectedText(), "")
     }
 
+    func testParagraphContainersFollowReparenting() {
+        let p = Presenter()
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "view"],
+            ["op": "create", "id": 3, "kind": "view"],
+            ["op": "create", "id": 4, "kind": "text"],
+            ["op": "children", "id": 2, "ids": [4]],
+            ["op": "children", "id": 1, "ids": [2, 3]],
+            ["op": "roots", "ids": [1]],
+        ]))
+        XCTAssertEqual(p.selection.shownParagraphs.map(\.id), [4])
+        for id: UInt32 in [1, 2, 4] { XCTAssertTrue(p.selection.mayMoveParagraph(id)) }
+        XCTAssertFalse(p.selection.mayMoveParagraph(3))
+
+        p.apply(wireBatch([["op": "children", "id": 2, "ids": [Int]()], ["op": "children", "id": 3, "ids": [4]]]))
+        XCTAssertEqual(p.selection.shownParagraphs.map(\.id), [4])
+        XCTAssertFalse(p.selection.mayMoveParagraph(2))
+        XCTAssertTrue(p.selection.mayMoveParagraph(3))
+    }
+
     func testParagraphVisibilityTracksScrollWithoutIndexingAgain() {
         let presenter = Presenter()
         presenter.viewport.frame = NSRect(x: 0, y: 0, width: 400, height: 300)

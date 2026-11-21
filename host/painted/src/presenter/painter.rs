@@ -535,6 +535,17 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
+    /// Start the hidden window's D3D11 workers while the page prepares its first visible frame.
+    #[cfg(windows)]
+    pub fn prepare_window_show(&mut self) {
+        if let Some(force_warp) = self.deferred_painter.and_then(PainterBoot::direct_d3d11) {
+            self.surfaces.preparing_device.get_or_insert_with(|| {
+                exact_ink::device::d3d11::Startup::start_for_first_present(force_warp)
+                    .map_err(|e| e.to_string())
+            });
+        }
+    }
+
     /// Open the deferred painter before the carrier attaches and draws with it.
     #[cfg(any(windows, test))]
     pub(crate) fn redraw_window<T>(
@@ -547,14 +558,14 @@ impl<D: DataSource> Presenter<D> {
 
     #[cfg(any(windows, test))]
     fn open_deferred_painter(&mut self) -> Result<bool, String> {
+        #[cfg(windows)]
+        self.prepare_window_show();
         let Some(painter) = self.deferred_painter.take() else {
             return Ok(false);
         };
         #[cfg(windows)]
-        if let Some(force_warp) = painter.direct_d3d11() {
-            let preparing = exact_ink::device::d3d11::Startup::start_for_first_present(force_warp)
-                .map_err(|e| e.to_string())?;
-            self.install_prepared_painter(preparing)?;
+        if let Some(preparing) = self.surfaces.preparing_device.take() {
+            self.install_prepared_painter(preparing?)?;
             return Ok(true);
         }
         let (backend, info) = painter.open()?;

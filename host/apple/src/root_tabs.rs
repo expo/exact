@@ -11,6 +11,94 @@ use exact_kernel::{HostCover, ViewId};
 use exact_runner::DataSource;
 
 impl<D: DataSource> Host<D> {
+    /// Publish only the parts of a windowed split list that changed. A scroll
+    /// typically replaces mounted cells while keeping the same logical index.
+    #[cfg(target_os = "macos")]
+    pub(super) fn publish_section_tables(
+        &mut self,
+        batch: &mut Batch,
+        heads: &[exact_runner::CollectionSnapshot],
+    ) -> Result<(), String> {
+        use exact_kernel::PropId;
+        use serde_json::json;
+        if heads.is_empty() && self.section_tables.is_empty() {
+            return Ok(());
+        }
+        let mut updates = Vec::new();
+        let mut active = Vec::new();
+        for head in heads {
+            let list = head.view;
+            let kernel = self.runner.kernel();
+            let previous = self.section_tables.get(&list);
+            let section = head
+                .rows
+                .first()
+                .and_then(|row| kernel.node(row.root))
+                .is_some_and(|n| n.props.str(PropId::SemanticTag) == Some("section"));
+            if !section && previous.is_none() {
+                continue;
+            }
+            let mut node = kernel.node(list);
+            while let Some(n) = node {
+                if n.props.str(PropId::NavigationKey).is_some() {
+                    break;
+                }
+                node = n.parent.and_then(|id| kernel.node(id));
+            }
+            let Some(route) = node else { continue };
+            let first = route
+                .parent
+                .and_then(|id| kernel.node(id))
+                .and_then(|parent| {
+                    parent
+                        .child_nodes()
+                        .find(|n| n.props.str(PropId::NavigationKey).is_some())
+                        .map(|n| n.id)
+                });
+            if first != Some(route.id)
+                || !self
+                    .runner
+                    .stack_split(route.id, previous.map(|_| list))
+                    .is_some_and(|s| s.list == Some(list))
+            {
+                continue;
+            }
+            let Some(table) = self
+                .runner
+                .list_sections(list)
+                .map_err(|e| format!("section rows: {e:?}"))?
+            else {
+                continue;
+            };
+            active.push(list);
+            let same = previous
+                .is_some_and(|p| std::rc::Rc::ptr_eq(&p.runs, &table.runs) || p.runs == table.runs);
+            if same && previous.is_some_and(|p| p.mounted == table.mounted) {
+                continue;
+            }
+            let runs = (!same).then(|| {
+                table
+                    .runs
+                    .iter()
+                    .map(|run| (&run.end, &run.headers))
+                    .collect::<Vec<_>>()
+            });
+            updates.push(json!([list, runs, table.mounted]));
+            self.section_tables.insert(list, table);
+        }
+        self.section_tables.retain(|id, _| {
+            let keep = active.contains(id);
+            if !keep {
+                updates.push(json!([id]));
+            }
+            keep
+        });
+        if !updates.is_empty() {
+            batch.collections("tables", &serde_json::Value::Array(updates).to_string());
+        }
+        Ok(())
+    }
+
     /// Send changed navigation shapes with the tree that produced them. A layout
     /// can change an inspector's eligibility without adding or removing a node.
     pub(super) fn navigation_shapes(&mut self, batch: &mut Batch) {

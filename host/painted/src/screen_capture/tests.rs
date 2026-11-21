@@ -390,7 +390,7 @@ fn a_still_reloads_only_for_mounted_canvases_and_a_remount_draws_it() {
     let files = Files::new();
     std::fs::create_dir_all(&files.roots()[2]).unwrap();
     let plan = crate::test_plan(
-        "component App\n  state shown = true\n  state other = false\n  action toggle\n    shown = not shown\n  action add\n    other = true\n  view\n    column\n      button press=toggle testId=\"toggle\" width=10 height=10\n      button press=add testId=\"add\" width=10 height=10\n      if other\n        canvas surface=blank() width=32 height=32\n      if shown\n        canvas surface=still() testId=\"still\" width=32 height=32\n",
+        "component App\n  state shown = true\n  state other = false\n  action toggle\n    shown = not shown\n  action add\n    other = true\n  view\n    column\n      button press=toggle testId=\"toggle\" width=10 height=10\n      button press=add testId=\"add\" width=10 height=10\n      if other\n        canvas surface=blank() testId=\"blank\" width=32 height=32\n      if shown\n        canvas surface=still() testId=\"still\" width=32 height=32\n",
     );
     let (mut presenter, error) = Presenter::boot_with(
         &plan,
@@ -414,7 +414,6 @@ fn a_still_reloads_only_for_mounted_canvases_and_a_remount_draws_it() {
     };
     let tap = |p: &mut Presenter<StillCanvas>, id: &str| {
         p.tap(named(p, id)).unwrap();
-        p.host.sync_canvases(1., true, &p.assets);
     };
     let toggle = |p: &mut Presenter<StillCanvas>| tap(p, "toggle");
     let capture = |p: &mut Presenter<StillCanvas>, red: u8| {
@@ -435,10 +434,28 @@ fn a_still_reloads_only_for_mounted_canvases_and_a_remount_draws_it() {
     assert_eq!(pixel(&mut presenter), [192, 64, 128, 255]);
     // Another canvas stays while the still's goes.
     tap(&mut presenter, "add");
+    drop(presenter.frame());
+    let id = named(&presenter, "still");
+    let blank = named(&presenter, "blank");
+    let bitmap = Arc::downgrade(&presenter.host().canvas_snapshots()[&id].pixels);
+    let kept = Arc::downgrade(&presenter.host().canvas_snapshots()[&blank].pixels);
+    let image = Arc::downgrade(presenter.host().cached_canvas_image(still).unwrap());
+    presenter.timer_visibility(true);
     toggle(&mut presenter);
-    assert!(!presenter.host().canvas_image_cached(still));
+    assert!(
+        bitmap.upgrade().is_none(),
+        "the hidden commit must release the unmounted bitmap"
+    );
+    assert!(
+        kept.upgrade().is_some(),
+        "the other canvas is still mounted"
+    );
+    assert!(
+        image.upgrade().is_none(),
+        "the last canvas using the still is gone"
+    );
     capture(&mut presenter, 32);
-    assert!(!presenter.host().canvas_image_cached(still));
+    assert!(presenter.host().cached_canvas_image(still).is_none());
     toggle(&mut presenter);
     assert_eq!(pixel(&mut presenter), [32, 64, 128, 255]);
 }

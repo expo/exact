@@ -99,6 +99,7 @@ package class ScrollView: UIScrollView {
     package override func adjustedContentInsetDidChange() {
         super.adjustedContentInsetDidChange()
         setNeedsLayout()
+        scrollingNode?.scrollInsetMoved(self)
         SafeAreaSteps.react(self) { [weak self] in self?.insetsSettled() }
     }
 
@@ -109,6 +110,8 @@ package class ScrollView: UIScrollView {
         // the offset gets no `scrollViewDidScroll`, so its event is sent from here.
         (superview as? NodeView)?.queueScrollEvent()
         guard atEnd, !isTracking, !isDecelerating, was.bottom != keptInset.bottom else { return }
+        // The end is newer than a position an arranged pane owes
+        scrollingNode?.cancelScrollHandoff()
         contentOffset = PixelGrid.offset(CGPoint(x: contentOffset.x, y: end(under: keptInset)), in: self)
     }
     /// Whether it keeps its end as its insets change (`adjustedContentInsetDidChange`, and D14's writer, which moves
@@ -400,6 +403,7 @@ extension NodeView {
             more.nativeScrollContentInsets = view == nil ? .zero : contentInsets
         }
         guard extras?.nativeScrollView !== view else { return }
+        scrollBackendReplaced()
         if pageBand != .zero { setPageBand(.zero) } // the scroll view leaving gives its band back (LLP 1130 D3)
         if reach != .zero { setReach(.zero) } // and its reach (LLP 1123 D13)
         more.nativeScrollView = view
@@ -419,6 +423,30 @@ extension NodeView {
     /// The reader's move supersedes a position Exact carries (`retainScrollPosition`), as an authored write does.
     package func dropCarriedScroll() {
         if extras?.pendingScrollTransfer == true { pendingScrollTop = nil; pendingScrollLeft = nil }
+        cancelScrollHandoff()
+    }
+
+    /// A newer position takes the scroller's from an arranged pane's handoff (`ScrollHandoff`).
+    package func cancelScrollHandoff() {
+        #if os(iOS)
+        if #available(iOS 27.1, *) { presenter?.arrangements.cancelScrollHandoff(id) }
+        #endif
+    }
+
+    /// `sv`'s adjusted inset moved: while `sv` is this node's scroll view, an arranged pane's handoff writes under the
+    /// new inset at the arrangement's next pass, which this asks for.
+    package func scrollInsetMoved(_ sv: UIScrollView) {
+        #if os(iOS)
+        if #available(iOS 27.1, *), scrollView === sv { presenter?.arrangements.scrollInsetMoved(id) }
+        #endif
+    }
+
+    /// The scroll view is leaving: its handoff goes with it, the position carried by `retainScrollPosition`, and the
+    /// arrangement takes up the new one at its next pass.
+    func scrollBackendReplaced() {
+        #if os(iOS)
+        if #available(iOS 27.1, *), let arrangements = presenter?.arrangements { arrangements.cancelScrollHandoff(id); arrangements.scrollInsetMoved(id) }
+        #endif
     }
 
     /// Whether a scroll newer than a position Exact carries is under way on `sv`: one the scroll view makes itself
@@ -597,6 +625,11 @@ extension NodeView {
         // It replaces an element reveal, as on the Mac (LLP 1070.000 §14).
         if pendingScrollTop != nil || pendingScrollLeft != nil { presenter?.elementScrolls.cutReveal(sv) }
         if pendingScrollTop != nil { retainedScrollTop = nil }
+        #if os(iOS)
+        if #available(iOS 27.1, *), extras?.pendingScrollTransfer != true, pendingScrollTop != nil || pendingScrollLeft != nil {
+            presenter?.arrangements.authoredScroll(id, top: pendingScrollTop.map { CGFloat($0) })
+        }
+        #endif
         guard hasScrollLayoutBox else {
             if hiddenScroll == nil {
                 hiddenScroll = beforeLayoutScroll.map { CGPoint(x: $0.offset.x + $0.leftInset, y: $0.offset.y + $0.topInset) } ?? .zero
