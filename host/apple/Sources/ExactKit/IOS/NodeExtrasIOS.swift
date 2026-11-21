@@ -189,7 +189,6 @@ final class NodeExtras {
     var dispatchingScrollEvent: Bool = false
     var scrollEnd: ScrollEnd?
     var beforeLayoutScroll: (offset: CGPoint, topInset: CGFloat, leftInset: CGFloat, room: CGFloat)?
-    var keptScrollLeft: KeptScrollLeft?
     /// Logical coordinates survive hiding and physical backend replacement.
     var hiddenScroll: CGPoint?
     var followedScroll: (top: CGFloat, end: Bool, start: Bool, port: CGFloat)?
@@ -506,7 +505,6 @@ extension NodeView {
     var dispatchingScrollEvent: Bool { get { extras?.dispatchingScrollEvent ?? false } set { if newValue || extras != nil { more.dispatchingScrollEvent = newValue } } }
     var scrollEnd: ScrollEnd? { get { extras?.scrollEnd } set { if newValue != nil || extras != nil { more.scrollEnd = newValue } } }
     var beforeLayoutScroll: (offset: CGPoint, topInset: CGFloat, leftInset: CGFloat, room: CGFloat)? { get { extras?.beforeLayoutScroll } set { if newValue != nil || extras != nil { more.beforeLayoutScroll = newValue } } }
-    var keptScrollLeft: KeptScrollLeft? { get { extras?.keptScrollLeft } set { if newValue != nil || extras != nil { more.keptScrollLeft = newValue } } }
     var hiddenScroll: CGPoint? { get { extras?.hiddenScroll } set { if newValue != nil || extras != nil { more.hiddenScroll = newValue } } }
     var followedScroll: (top: CGFloat, end: Bool, start: Bool, port: CGFloat)? { get { extras?.followedScroll } set { if newValue != nil || extras != nil { more.followedScroll = newValue } } }
     var followingEndAnimated: Bool { get { extras?.followingEndAnimated ?? false } set { if newValue || extras != nil { more.followingEndAnimated = newValue } } }

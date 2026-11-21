@@ -43,7 +43,8 @@ final class ScrollAnchoringIOSTests: XCTestCase {
 
     /// A scroller's place along its sideways axis is the reader's, as CSS keeps `scrollLeft` through a layout: a
     /// frame the batch passes through that leaves it less range (a strip framed wider for a moment as an iPhone Duo
-    /// unfolds) clamps nothing once the batch ends; a shorter range the batch ends with does.
+    /// unfolds) clamps nothing once the batch ends; a shorter range the batch ends with does, and an inset the host
+    /// sets keeps the offset as UIKit does.
     func testAFrameABatchPassesThroughLeavesASidewaysScrollerItsPlace() throws {
         let p = Presenter()
         window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
@@ -68,6 +69,29 @@ final class ScrollAnchoringIOSTests: XCTestCase {
         XCTAssertEqual(sv.contentOffset.x, 296, accuracy: 0.5, "a width the batch passes through clamps nothing")
         p.apply(wireBatch([frame(356)]))
         XCTAssertEqual(sv.contentOffset.x, 244, accuracy: 0.5, "a batch that ends wider clamps it, as CSS does")
+        // An inset the host sets keeps the offset, as UIKit does (`SafeReach.reconcile`)
+        let node = try XCTUnwrap(p.views[1])
+        sv.contentOffset.x = 100
+        node.captureScrollPosition(focused: nil)
+        sv.contentInset.left += 24
+        node.restoreScrollPosition()
+        XCTAssertEqual(sv.contentOffset.x, 100, accuracy: 0.5, "an inset the host set leaves the offset where it was")
+        sv.contentInset.left -= 24
+        sv.contentOffset.x = 0
+        node.captureScrollPosition(focused: nil)
+        sv.contentInset.left += 24
+        sv.contentOffset.x = -24
+        node.restoreScrollPosition()
+        XCTAssertEqual(sv.contentOffset.x, -24, accuracy: 0.5, "one at its start stays at its new start")
+        sv.contentInset.left -= 24
+        // A write after a clamp is a place of its own, which stays
+        sv.contentOffset.x = 296
+        node.captureScrollPosition(focused: nil)
+        sv.frame.size.width = 356
+        sv.frame.size.width = 300
+        sv.contentOffset.x = 270
+        node.restoreScrollPosition()
+        XCTAssertEqual(sv.contentOffset.x, 270, accuracy: 0.5, "the host's write after the clamp")
     }
 
     func testScrollLayoutBoxCachesUntilItsAncestryOrDisplayChanges() throws {

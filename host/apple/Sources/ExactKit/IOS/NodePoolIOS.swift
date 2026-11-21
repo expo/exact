@@ -593,12 +593,13 @@ extension NodeView {
         let delegate = sv.delegate
         sv.delegate = nil
         sv.setContentOffset(.zero, animated: false)
+        (sv as? ScrollView)?.clampedLeft = nil // the reset is the new list's place, whatever UIKit clamped before
         presenter?.elementScrolls.forget(sv)
         sv.contentSize = .zero
         sv.delegate = delegate
         content = .zero
         if let e = extras {
-            e.beforeLayoutScroll = nil; e.keptScrollLeft = nil; e.hiddenScroll = nil; e.followedScroll = nil
+            e.beforeLayoutScroll = nil; e.hiddenScroll = nil; e.followedScroll = nil
             e.anchoredScrollTop = nil; e.retainedScrollTop = nil; e.lastScrollEvent = []
             e.readingAnchors.removeAll(); e.activeReadingAnchor = nil; e.scrollAnchor = nil
             e.pendingScrollTop = nil; e.pendingScrollLeft = nil
