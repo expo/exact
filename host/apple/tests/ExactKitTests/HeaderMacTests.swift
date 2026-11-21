@@ -1120,6 +1120,41 @@ final class HeaderMacTests: XCTestCase {
         try XCTUnwrap(session?.presenter.views.values.first { $0.props["testId"] == testId }, testId)
     }
 
+    func testWindowToolbarHonorsBorderlessButtonStyles() throws {
+        let source = """
+        component App
+          state count = 0
+          action goBack
+            count = count + 1
+          view
+            main
+              row role="toolbar" toolbarPlacement="window" aria-label="Window"
+                button appearance="auto" id="back" buttonStyle=(count == 0 ? "borderless" : "bordered") toolbarPlacement="navigation" press=goBack aria-label="Back" testId="back"
+                  image "symbol:back"
+                button appearance="auto" id="label" buttonStyle="plain" color="red" press=goBack testId="label"
+                  text "Label"
+                button appearance="auto" id="regular" press=goBack testId="regular"
+                  text "Regular"
+        """
+        let session = try boot(size: CGSize(width: 600, height: 400), source: source)
+        let view = ExactView(session: session)
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        XCTAssertTrue(view.attachWindowToolbar(to: window))
+        let items = session.presenter.toolbar.items
+        let back = try XCTUnwrap(items[try named("back").id])
+        XCTAssertTrue(back.isNavigational)
+        XCTAssertFalse(back.isBordered)
+        let label = try XCTUnwrap(items[try named("label").id])
+        XCTAssertFalse(label.isBordered)
+        XCTAssertFalse(try XCTUnwrap(label.view as? NSButton).isBordered)
+        XCTAssertTrue(try XCTUnwrap(items[try named("regular").id]).isBordered)
+        session.apply(session.runtime.press(try named("back").id, now: session.now()))
+        XCTAssertTrue(back.isBordered, "the existing toolbar item follows the new style")
+    }
+
     func testASingleLocationRootHeaderDoesNotRetainItsToolbarWithoutHistory() throws {
         let source = app.replacingOccurrences(of: "    book \"/book\"\n", with: "")
             .replacingOccurrences(of: "go(nav, \"/book\")", with: "go(nav, \"/\")")

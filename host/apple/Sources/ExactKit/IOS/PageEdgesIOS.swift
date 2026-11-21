@@ -181,11 +181,14 @@ extension Presenter {
         bars.allSatisfy { $0.paintRank >= v.paintRank || !$0.wrote("z_index") && !v.wrote("z_index") }
     }
 
-    /// A virtualized list draws rows a port past its own (D5): a longer band is not taken.
+    /// A virtualized list draws rows a port past its own (D5): a longer band is not taken. Its port is its box, past it
+    /// by its scroll view's outset once it has reach, less the part of its insets it does not draw through
+    /// (`ListHosting.drawnThrough`).
     private static func drawn(_ band: UIEdgeInsets, _ v: NodeView, _ sv: UIScrollView) -> Bool {
-        guard v.presenter?.collections.owns(v.id) == true else { return true }
-        let i = sv.adjustedContentInset, own = v.pageBand
-        let port = v.bounds.height - (i.top - own.top) - (i.bottom - own.bottom)
+        guard let lists = v.presenter?.collections, lists.owns(v.id) else { return true }
+        let i = sv.adjustedContentInset, o = v.reach == .zero ? .zero : v.scrollOutset
+        let through = lists.drawnThrough(v.id) ?? v.scrollDrawnThrough(sv)
+        let port = v.bounds.height + o.top + o.bottom - (i.top - through.top) - (i.bottom - through.bottom)
         return band.top <= port + 0.5 && band.bottom <= port + 0.5
     }
 }
@@ -215,6 +218,8 @@ extension NodeView {
     private func reachScroll(_ reach: UIEdgeInsets) {
         guard let sv = scrollView, reach != self.reach else { return }
         let top = sv.contentOffset.y + scrollTopInset(sv), left = sv.contentOffset.x + scrollLeftInset(sv), height = sv.bounds.height
+        let mark = presenter?.collections.portMark(id)
+        defer { if let mark { presenter?.collections.portMoved(id, since: mark) } }
         more.reach = reach
         // A layout transition's surface that took the clip over keeps it until it ends (`endSurface`)
         if surface?.clippedSelf != true, clipsToBounds != clipsItself { clipsToBounds = clipsItself }
@@ -238,7 +243,7 @@ extension NodeView {
         let atEnd = follows && sv.contentOffset.y >= end() - 1 && !authorOwnsScroll(sv)
         // A list kept at its end takes a new position, newer than an owed one, released before the frame and insets move
         if atEnd { cancelScrollHandoff() }
-        let oldOwn = bandInset, top = sv.contentOffset.y + scrollTopInset(sv)
+        let oldOwn = bandInset, top = sv.contentOffset.y + scrollTopInset(sv), mark = presenter?.collections.portMark(id)
         more.pageBand = band; more.bandInset = own
         // A layout transition's surface that took the clip over keeps it until it ends (`endSurface`)
         if surface?.clippedSelf != true, clipsToBounds != clipsItself { clipsToBounds = clipsItself }
@@ -255,7 +260,7 @@ extension NodeView {
         let moved = own.top - oldOwn.top
         if var saved = beforeLayoutScroll { saved.offset.y -= moved; saved.topInset += moved; beforeLayoutScroll = saved }
         if var followed = followedScroll { followed.top -= moved; followedScroll = followed }
-        presenter?.collections.offsetsMoved(id, by: -moved)
+        if let mark { presenter?.collections.portMoved(id, since: mark) }
     }
 }
 #endif

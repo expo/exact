@@ -471,3 +471,23 @@ test('rejects a missing rung when the first window starts', async () => {
   await expect(readBench(host, options(), 'abc'))
     .rejects.toThrow('Quality rung at the start of window 1 is missing, expected high');
 });
+
+test('reports worker startup and handler and idle totals for each window and per frame', async () => {
+  const host = double();
+  const state = host.state;
+  host.state = async reset => {
+    const world = await state(reset);
+    const at = host.now();
+    world.perf.frameMs = ring(16.7, world.renderHooks.cpuMs.prepare.count - 1);
+    world.renderHooks.jobs = { lane: 'worker', wire: {
+      readyMs: at >= 12 ? 7 : null, handlerMs: 100 + at * 2, idleWithWork: 40 + at,
+    } };
+    return world;
+  };
+  const row = await readBench(host, options('jobs=on'), 'abc');
+  for (const window of row.windows) {
+    expect(window.wire).toEqual({ readyMs: 7, handlerMs: 20, handlerMsPerFrame: 20 / window.prepareMs.count,
+      idleWithWork: 10, idleWithWorkPerFrame: 10 / window.prepareMs.count });
+    expect(window.jobs.wire).toEqual(window.wire);
+  }
+});

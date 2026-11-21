@@ -9,14 +9,32 @@ pub fn properties(src: &str) -> Result<Vec<PropertyDecl>, CompileError> {
     Ok(contract_syntax::parse(src)?.properties)
 }
 
-/// Check property reads against the app's expanded root before running scripts.
+/// Validate authored properties against the app before running its scripts.
 pub fn check_properties_path(
     path: &Path,
     properties: &[PropertyDecl],
 ) -> Result<(), Vec<CompileError>> {
+    resolve_properties_path(path, &mut properties.to_vec())
+}
+
+/// Validate properties and bind their action scopes to the app's expanded names.
+pub fn resolve_properties_path(
+    path: &Path,
+    properties: &mut [PropertyDecl],
+) -> Result<(), Vec<CompileError>> {
     let (file, expanded) = property_program(path)?;
+    check_properties(&file, &expanded, properties)
+}
+
+/// Validate reads and resolve action scopes in a loaded program.
+pub fn check_properties(
+    file: &contract_syntax::File,
+    expanded: &contract_syntax::Expanded,
+    properties: &mut [PropertyDecl],
+) -> Result<(), Vec<CompileError>> {
     let errors: Vec<_> = contract_analyze::check_properties(&expanded.root, &file.fns, properties)
         .into_iter()
+        .chain(contract_analyze::resolve_actions(expanded, properties))
         .map(CompileError::from)
         .collect();
     if errors.is_empty() {
@@ -163,12 +181,18 @@ pub fn check_suggestions_path(
     properties: &[PropertyDecl],
 ) -> Result<Vec<contract_analyze::SuggestionCheck>, Vec<CompileError>> {
     let (file, expanded) = property_program(path)?;
+    let mut resolved = properties.to_vec();
+    let errors = contract_analyze::resolve_actions(&expanded, &mut resolved);
+    if !errors.is_empty() {
+        return Err(errors.into_iter().map(CompileError::from).collect());
+    }
     Ok(contract_analyze::check_suggestions(
-        &expanded, &file, properties,
+        &expanded, &file, &resolved,
     ))
 }
 
-fn property_program(
+/// Load the app and expand its components for property checks.
+pub fn property_program(
     path: &Path,
 ) -> Result<(contract_syntax::File, contract_syntax::Expanded), Vec<CompileError>> {
     // A relative path makes the `use` containment check compare a canonical

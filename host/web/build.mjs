@@ -39,13 +39,13 @@ import { sealEnvelope } from '../../scripts/deploy-signing.mjs';
 import { compilerWarnings, oneScheme, webInputDigests } from '../../scripts/agent-launch.mjs';
 import { webBuildFailure } from '../../scripts/app-cli.mjs';
 import { builtSettings } from '../../js/bake/src/__exact_env.mjs';
-import { packageGpuDir, packageGpuInputs, packageGpuManifest, rustDataOf } from '../../scripts/app-shells.mjs';
+import { authoredWebBake, webRendererHost, packageGpuDir, packageGpuInputs, packageGpuManifest, rustDataOf } from '../../scripts/app-shells.mjs';
 import { authClientMetadata, checkModuleRoster, gpuModules, markWorlds, rustPolicy, webGpuArtifacts, webHostFiles, worldSurfaces } from '../../scripts/app.mjs';
 import { webAudioSession, webCspFile, webHead } from '../../scripts/web-head.mjs';
 import { buildRust, rustFiles, rustCards, rustPackage } from '../../scripts/rust.mjs';
 import { webAppManifest, webDist, copyShaders, bakeOutput, bakeWatchEnv, buildBake, contractLast, readBake, verifyBakeFiles, developmentBuildEnv, resolveApp, webToolchainEnv } from '../../scripts/app.mjs';
 import { buildEditor, buildFlow, compilerSet } from '../web-js/module.mjs';
-import { RustMissing, WEB_CRATES, rustMissing, setMetadata } from '../../scripts/tools.mjs';
+import { RustMissing, WEB_CRATES, fromSets, rustMissing, setMetadata } from '../../scripts/tools.mjs';
 import { closeFilesystemReader, offlineMiss } from '../../scripts/filesystem.mjs';
 import { guardFlags, reportBuilt } from '../../scripts/help.mjs';
 import { BINARYEN_DOWNLOAD, optimizeWasm, splitStages, stripWasm, Unsplittable, unsplitReason } from './stages.mjs';
@@ -101,17 +101,18 @@ export function webSourceRoots(app, js, render = 'rust') {
     for (const name of ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', '.cargo/config']) files.add(resolve(metadata.workspace_root, name));
     workspaces.push({ metadata, packages: local, rootNames: new Set(names) });
   };
-  // The compiler and the leaves from a tool set: its record of Cargo's answer, and Cargo is not asked (LLP 1174 D5).
-  const set = js ? compilerSet() : null, recorded = set && setMetadata(set);
-  // Without Rust only a set answers what Cargo would: said as that, not as `cargo metadata` failing (LLP 1174 D5).
-  if (js && !set && rustMissing()) throw new RustMissing('exact-web-js');
+  // A machine without Rust also needs the set's Cargo metadata when a local compiler takes precedence (LLP 1174 D5).
+  const missing = js && rustMissing();
+  let set;
+  if (js) set = missing ? fromSets('exact-web-js')?.set : compilerSet();
+  const recorded = setMetadata(set);
+  if (missing && !recorded) throw new RustMissing('exact-web-js', process.env, set && 'the matching web compiler has no Cargo metadata for this checkout');
   closure(recorded ?? webMetadata(SDK_ROOT), WEB_CRATES);
-  const names = [], build = resolve(app.dir, 'web/build.rs');
+  const names = [];
   const data = rustDataOf(app.manifest);
   if (data) names.push(data.krate);
-  const authored = existsSync(build) && !/^\s*fn main\(\)\s*\{\s*exact_js_bake::build\w*\(/m.test(readFileSync(build, 'utf8'));
   if (app.crate) {
-    if (!js || authored) names.push(app.crate('web'));
+    if (!js || authoredWebBake(resolve(app.dir, 'web'))) names.push(app.crate('web'));
     if (app.manifest.rust?.module?.package) names.push(app.manifest.rust.module.package);
     const gpu = [...(app.manifest.game || existsSync(resolve(app.dir, 'gpu/Cargo.toml')) ? [app.crate('gpu')] : []), ...gpuModules(app.manifest, 'web').filter(m => !m.package).map(({ name }) => app.crate(`gpu-${name}`))];
     // Discovery reads the workspace the last build generated and never writes one: a dev loop's parent asks after
@@ -132,7 +133,7 @@ export function webSourceRoots(app, js, render = 'rust') {
     const own = gpu.length && app.gpuWorkspace && app.gpuWorkspace !== app.workspace ? app.gpuWorkspace : null;
     if (own) closure(webMetadata(own), gpu); else names.push(...gpu);
     const renderBin = app.name ? `${app.name}-render` : `${app.crate('web').replace(/-web$/, '')}-render`;
-    const at = (!js || render === 'rust') && ['linux', 'web'].find(dir => existsSync(resolve(app.dir, dir, 'src/bin', `${renderBin}.rs`)));
+    const at = (!js || render === 'rust') && webRendererHost(app.dir, renderBin);
     if (at) names.push(app.crate(at));
   }
   const renderBin = app.crate ? (app.name ? `${app.name}-render` : `${app.crate('web').replace(/-web$/, '')}-render`) : null;
@@ -715,9 +716,7 @@ if (!bakeOnly) {
 // robots.txt, and the shell itself as shell.html — what a client route is
 // served, and what the render server composes documents over.
 const renderBin = crate.replace(/-web$/, '-render');
-const renderAt = [['linux', app.crate('linux')], ['web', crate]]
-  .find(([dir]) => existsSync(resolve(app.dir, dir, 'src/bin', `${renderBin}.rs`)));
-const renderCrate = renderAt?.[1];
+const renderAt = webRendererHost(app.dir, renderBin);
 // Pay for what you use: an app that renders nothing at build builds and runs
 // no render entry (the wasm says which locations it renders, from its plan).
 // `--bake` has no wasm to ask: the entry, where there is one, renders what the plan declares.
@@ -726,6 +725,7 @@ const buildLocations = bakeOnly ? (renderAt ? ['the plan\'s'] : []) : locationsL
 if (buildLocations.error) throw new Error(`the plan's render=build routes: ${buildLocations.error}`);
 let documentNote = buildLocations.length ? `${buildLocations.length} declared, but no ${renderBin} entry in ${app.crate('linux')} or ${crate}` : 'none declared';
 if (buildLocations.length && renderAt) {
+  const renderCrate = renderAt === 'web' ? crate : app.crate('linux');
   // A build-time tool, never shipped: it renders the plan it is handed, so
   // its own Linux bake takes development trust (a production bake would
   // demand a publisher receipt for an updater nothing publishes).
@@ -783,6 +783,10 @@ let gpuNote = gpu.note;
 if (gpu.built) {
   copyHostFiles('gpu');
   if (gpuModules(app.manifest, 'web').length) copyHostFiles('gpuModules');
+  if (app.manifest.game?.render?.workers === true) {
+    copyHostFiles('gpuJobs');
+    gpuNote += `, ${Object.keys(webHostFiles('gpuJobs')).join(', ')}`;
+  }
   gpuNote += ', on demand';
   // A game's world surfaces, by name, as its GPU build declared them (`.shells/surfaces.json`): a browser without
   // WebGPU shows the refusal page over these and no other canvas (gpu-refusal.js, LLP 1139.003 D1).

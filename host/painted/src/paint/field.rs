@@ -41,6 +41,30 @@ pub(crate) struct PaintedField {
     decorations: Option<Rc<FieldDecorations>>,
 }
 
+/// The kernel measures an editable value with its whitespace preserved.
+fn field_style(node: &NodeRef<'_>) -> StyleProps {
+    let mut style = node.computed_style(StyleMask::INHERITED);
+    if !style.white_space.model().preserves() {
+        style.white_space = exact_kernel::WhiteSpace::PreWrap;
+    }
+    style
+}
+
+fn field_decorations(
+    node: &NodeRef<'_>,
+    value: &str,
+    previous: Option<&Rc<FieldDecorations>>,
+) -> Option<Rc<FieldDecorations>> {
+    if value.is_empty() || node.props.str(PropId::SemanticTag) != Some("textarea") {
+        return None;
+    }
+    FieldDecorations::cached(
+        node.props.get(PropId::Decorations)?,
+        node.props.get(PropId::DecorationStyles)?,
+        previous,
+    )
+}
+
 impl PaintedField {
     pub(crate) fn editor_size(kernel: &exact_kernel::Kernel, node: &NodeRef<'_>) -> (f32, f32) {
         node.field_content_rect()
@@ -61,6 +85,7 @@ impl PaintedField {
         let content = Self::editor_size(kernel, node);
         let stamp = node.paragraph_stamp();
         let prior = previous.map(|field| field.paragraph.as_ref());
+        let prior_decorations = previous.and_then(|field| field.decorations.as_ref());
         let previous = previous.filter(|f| {
             f.stamp
                 .as_ref()
@@ -78,10 +103,6 @@ impl PaintedField {
         let value = previous
             .map(|field| field.value.as_str())
             .unwrap_or_else(|| node.props.str(PropId::Value).unwrap_or(""));
-        let mut computed = node.computed_style(StyleMask::INHERITED);
-        if !computed.white_space.model().preserves() {
-            computed.white_space = exact_kernel::WhiteSpace::PreWrap;
-        }
         let shown = if value.is_empty() {
             node.props.str(PropId::Placeholder).unwrap_or("")
         } else {
@@ -91,7 +112,11 @@ impl PaintedField {
         let spec = match previous {
             Some(field) => &field.spec,
             None => {
-                spec = text_spec(&computed, shown);
+                let base = text_spec(&field_style(node), shown);
+                spec = match field_decorations(node, value, prior_decorations) {
+                    Some(decorations) => decorations.project(base, shown).spec,
+                    None => base,
+                };
                 &spec
             }
         };
@@ -482,24 +507,12 @@ impl Painter {
         } else {
             value
         };
-        let mut computed = node.computed_style(StyleMask::INHERITED);
-        // A field's value is never collapsed, as the kernel measures it.
-        if !computed.white_space.model().preserves() {
-            computed.white_space = exact_kernel::WhiteSpace::PreWrap;
-        }
+        let computed = field_style(node);
         let spec = text_spec(&computed, shown);
         let multiline = node.props.str(PropId::SemanticTag) == Some("textarea");
-        let decorations = (!placeholder && multiline)
-            .then(|| {
-                FieldDecorations::cached(
-                    node.props.get(PropId::Decorations)?,
-                    node.props.get(PropId::DecorationStyles)?,
-                    self.field_text
-                        .get(&node.id)
-                        .and_then(|field| field.decorations.as_ref()),
-                )
-            })
-            .flatten();
+        let previous = self.field_text.get(&node.id).map(Rc::as_ref);
+        let decorations =
+            field_decorations(node, value, previous.and_then(|f| f.decorations.as_ref()));
         let (spec, inks, backgrounds, shadows) = match &decorations {
             Some(decorations) => {
                 let projected = decorations.project(spec, shown);
@@ -516,10 +529,7 @@ impl Painter {
             (node.id, 0),
             &spec,
             multiline.then_some(content.2),
-            self.field_text
-                .get(&node.id)
-                .filter(|_| multiline)
-                .map(|f| f.paragraph.as_ref()),
+            previous.filter(|_| multiline).map(|f| f.paragraph.as_ref()),
         );
         walk.text.insert(node.key, paragraph.clone());
         let mut oy = content.1
@@ -597,7 +607,7 @@ impl Painter {
             node.props.str(PropId::Type) == Some("password"),
             ts,
             decorations,
-            self.field_text.get(&node.id).map(Rc::as_ref),
+            previous,
         );
         field.stamp = node.paragraph_stamp();
         field.set_scroll(walk.scene.scroll.get(&node.id).copied().unwrap_or_default());

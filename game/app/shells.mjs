@@ -111,10 +111,11 @@ function renderDeclaration(dir, render) {
   if (render === undefined) return;
   const rustPath = value => typeof value === 'string' && /^[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*$/.test(value);
   if (!render || typeof render !== 'object' || Array.isArray(render)
-      || Object.keys(render).some(key => !['crate', 'hooks', 'shaders'].includes(key))
+      || Object.keys(render).some(key => !['crate', 'hooks', 'shaders', 'workers'].includes(key))
       || typeof render.crate !== 'string' || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*-render$/.test(render.crate)
-      || !rustPath(render.hooks) || ('shaders' in render && !rustPath(render.shaders))) {
-    throw new Error('game.render must contain only a <name>-render crate, its Hooks type path and an optional shaders registry path');
+      || !rustPath(render.hooks) || ('shaders' in render && !rustPath(render.shaders))
+      || ('workers' in render && typeof render.workers !== 'boolean')) {
+    throw new Error('game.render requires a <name>-render crate and its Hooks type path, with optional shaders registry path and boolean workers');
   }
   const folder = resolve(dir, 'render'), manifest = resolve(folder, 'Cargo.toml');
   if (!existsSync(manifest)) throw new Error(`game.render.crate ${render.crate} requires ${manifest}`);
@@ -351,7 +352,7 @@ fn main() {
       ...(kind === 'web' && data ? { [`src/bin/${name}-dev.rs`]: `//! The resident dev driver for the game's web shell: \`${name}-dev <source> <out>\`, baking with its data.\n\nfn main() -> std::process::ExitCode {\n    exact_web::dev::main::<app_data::${data.type}>()\n}\n` } : {}),
       'Cargo.toml': header + dependencies + (tests.length ? `\n[dev-dependencies]\nserde_json.workspace = true\nexact-update = { path = ${JSON.stringify(pathWithin(shell, resolve(gameRoot, '../update')))} }\n` : ''),
       ...Object.fromEntries(tests.map(file => [`tests/${file}`, readFileSync(resolve(appDir, 'linux/tests', file), 'utf8')])),
-      [['linux', 'windows'].includes(kind) ? 'src/main.rs' : 'src/lib.rs']: kind === 'gpu' ? `exact_game_render::module!(game_logic::${type}${app.game.audio === true ? ", audio" : ""}${app.game.assets === true ? ", assets" : ""}${render ? `, hooks = game_render::${render.hooks}${render.shaders ? `, shaders = game_render::${render.shaders}` : ''}` : ''});\n` : (kind === 'windows' ? '#![cfg_attr(\n    all(target_os = "windows", not(debug_assertions)),\n    windows_subsystem = "windows"\n)]\n' : '') + 'include!(concat!(env!("OUT_DIR"), "/entry.rs"));\n',
+      [['linux', 'windows'].includes(kind) ? 'src/main.rs' : 'src/lib.rs']: kind === 'gpu' ? `exact_game_render::module!(game_logic::${type}${app.game.audio === true ? ", audio" : ""}${app.game.assets === true ? ", assets" : ""}${render ? `, hooks = game_render::${render.hooks}${render.shaders ? `, shaders = game_render::${render.shaders}` : ''}${render.workers === true ? ', workers' : ''}` : ''});\n` : (kind === 'windows' ? '#![cfg_attr(\n    all(target_os = "windows", not(debug_assertions)),\n    windows_subsystem = "windows"\n)]\n' : '') + 'include!(concat!(env!("OUT_DIR"), "/entry.rs"));\n',
       'build.rs': kind === 'gpu'
         ? `use exact_game::{Args, Game, Value};
 use std::{env, fs, path::PathBuf};

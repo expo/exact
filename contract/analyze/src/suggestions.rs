@@ -66,7 +66,12 @@ pub fn check_suggestions(
                 let (rule, reason) = match &line.form {
                     PropertyForm::OnlyWrites(observed) => {
                         let found = match &p.kind {
-                            PropertyKind::After(a) => writes.action(a),
+                            PropertyKind::After(_) => {
+                                p.actions.iter().try_fold(BTreeSet::new(), |mut set, name| {
+                                    set.extend(writes.action(name)?);
+                                    Ok(set)
+                                })
+                            }
                             PropertyKind::Clock => writes.clock(),
                             _ => Err("a frame needs an action or the clock".into()),
                         };

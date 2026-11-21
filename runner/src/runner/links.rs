@@ -2,7 +2,7 @@
 
 use super::{canvas2d, router, RunnerError};
 use crate::DataError;
-use exact_plan::{Plan, Value};
+use exact_plan::{Plan, ResourcesRow, Value};
 
 /// What a host links of the answers the runner gives itself (LLP 1047 D3):
 /// each capability's, or `None` when the artifact doesn't link it, so its
@@ -51,8 +51,9 @@ pub type RouterLink = Option<fn(&Plan) -> Result<Option<Box<dyn router::Routing>
 
 /// The runner's answer for a surface resource, when a host links surfaces:
 /// [`crate::surface_record::answer`].
-pub type SurfaceAnswer =
-    Option<fn(&Plan, &exact_kernel::SortedMap<String, String>, usize) -> Result<Value, DataError>>;
+pub type SurfaceAnswer = Option<
+    fn(&Plan, &exact_kernel::SortedMap<String, String>, &ResourcesRow) -> Result<Value, DataError>,
+>;
 
 impl RunnerLinks {
     /// Every capability.

@@ -97,6 +97,8 @@ mod tabs;
 #[cfg(windows)]
 mod windows_field;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use display_frame::PanelImage;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use display_frame::SubmittedFrame;
 #[path = "content_region/presenter.rs"]
 mod content_region;

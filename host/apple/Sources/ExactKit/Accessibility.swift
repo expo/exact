@@ -218,7 +218,7 @@ extension NodeView {
     /// The ARIA roles that make a box an AppKit container of its own
     /// (Core-AAM): a `menu` is `AXMenu`, as WebKit serves one, so VoiceOver
     /// says "menu" as it does for AppKit's.
-    static let containerRoles: [String: NSAccessibility.Role] = ["group": .group, "radiogroup": .radioGroup, "menu": .menu, "menubar": .menuBar]
+    static let containerRoles: [String: NSAccessibility.Role] = ["group": .group, "list": .list, "radiogroup": .radioGroup, "menu": .menu, "menubar": .menuBar]
     /// A pressable's AppKit role when it is no toggle: a link, a menu item, else a button.
     var buttonRole: NSAccessibility.Role { props["accessibilityRole"] == "link" ? .link : isMenuItem ? .menuItem : .button }
     var isMenu: Bool { ["menu", "menubar"].contains(props["accessibilityRole"] ?? "") }

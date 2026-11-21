@@ -216,6 +216,9 @@ impl JobsReport {
     }
 
     pub(crate) fn append_wire(&self, out: &mut String) {
+        if self.wire.is_empty() {
+            return;
+        }
         if let Some(report) = remote::installed_report() {
             WireMetrics::append(out, &self.wire, report);
         }
@@ -553,7 +556,9 @@ impl<J: Job> Jobs<J> {
 
     /// Take ready results by priority and submission order with the `HookGpu` from `prepare`.
     /// Takes from this queue share the hook's allowance. A late unit spent on
-    /// the worker lane stays spent until the next prepare.
+    /// a remote queue stays spent until the next prepare.
+    /// `idleWithWork` counts live, advancing prepares whose first take finds
+    /// a wire job queued and a ready worker with no batch, before posting.
     ///
     /// The iterator borrows the frame's GPU access and view. Keep GPU handles out of jobs.
     ///
@@ -577,7 +582,8 @@ impl<J: Job> Jobs<J> {
                 transport_lane = Some(self.shared.state.lock().unwrap().lane);
             }
         } else {
-            if self.prepare_serial != time.serial {
+            let first_take = self.prepare_serial != time.serial;
+            if first_take {
                 self.prepare_serial = time.serial;
                 self.yielded = 0;
                 self.late_unit_spent = false;
@@ -585,7 +591,7 @@ impl<J: Job> Jobs<J> {
             if let Some(remote) = &mut self.remote {
                 let remote = remote.get_mut().unwrap();
                 let mut state = self.shared.state.lock().unwrap();
-                state.lane = if remote.begin(&mut state, time) {
+                state.lane = if remote.begin(&mut state, time, first_take) {
                     Lane::Worker
                 } else {
                     Lane::Inline
@@ -808,7 +814,7 @@ impl<J: Job> Iterator for Take<'_, J> {
             return None;
         };
         self.jobs.yielded += 1;
-        if self.transport_lane == Some(Lane::Worker)
+        if self.transport_lane.is_some()
             && self.time.deadline.is_some_and(|deadline| deadline.passed())
         {
             self.jobs.late_unit_spent = true;
@@ -825,7 +831,7 @@ impl<J: Job> Iterator for Take<'_, J> {
 
 impl<J: Job> Drop for Take<'_, J> {
     fn drop(&mut self) {
-        if self.time.allowance == 0 || self.time.seekable {
+        if self.time.allowance == 0 {
             return;
         }
         let Some(remote) = &mut self.jobs.remote else {
@@ -835,10 +841,11 @@ impl<J: Job> Drop for Take<'_, J> {
         if self.start_workers {
             remote.start();
         }
+        let shared = &self.jobs.shared;
+        let mut state = shared.state.lock().unwrap();
         if self.transport_lane == Some(Lane::Worker) {
-            let shared = &self.jobs.shared;
             remote.post(
-                &mut shared.state.lock().unwrap(),
+                &mut state,
                 shared.codec.as_ref().unwrap(),
                 shared.limits,
                 &self.time,

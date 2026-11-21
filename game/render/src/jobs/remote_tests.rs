@@ -103,6 +103,7 @@ struct Script {
 #[derive(Default)]
 struct ScriptState {
     workers: BTreeSet<WorkerId>,
+    starting_workers: BTreeSet<WorkerId>,
     next_worker: WorkerId,
     ended: bool,
     starts: usize,
@@ -110,8 +111,9 @@ struct ScriptState {
     ready_zero: bool,
     now_ms: u64,
     fail_replacement: bool,
+    hold_replacement: bool,
     losses: usize,
-    end_pending: bool,
+    replacements: usize,
     wanted: BTreeSet<Attempt>,
     events: BTreeMap<QueueId, Vec<TransportEvent>>,
     batches: BTreeMap<WorkerId, (QueueId, Vec<Attempt>)>,
@@ -119,10 +121,11 @@ struct ScriptState {
     inputs: BTreeMap<Attempt, [u8; 2]>,
     outputs: BTreeMap<Attempt, Vec<u8>>,
     announced: BTreeSet<Attempt>,
-    rejected: BTreeSet<WorkerId>,
     worker_bytes: u64,
     handler_ms: f64,
     peak_buffered_bytes: u64,
+    started_at: Option<u64>,
+    ready_ms: Option<f64>,
     copies: Vec<Attempt>,
     reads: Vec<QueueId>,
     forgets: Vec<QueueId>,
@@ -133,8 +136,14 @@ struct ScriptState {
 
 impl ScriptState {
     fn add_worker(&mut self) {
-        self.next_worker += 1;
-        self.workers.insert(self.next_worker);
+        let id = self.starting_workers.pop_first().unwrap_or_else(|| {
+            self.next_worker += 1;
+            self.next_worker
+        });
+        self.workers.insert(id);
+        if self.ready_ms.is_none() {
+            self.ready_ms = self.started_at.map(|start| (self.now_ms - start) as f64);
+        }
     }
 
     fn idle(&self) -> Option<WorkerId> {
@@ -145,14 +154,11 @@ impl ScriptState {
         self.workers
             .iter()
             .copied()
-            .filter(|id| !self.batches.contains_key(id) && !self.rejected.contains(id))
+            .filter(|id| !self.batches.contains_key(id))
     }
 
     fn answer(&mut self, attempt: Attempt, outcome: Outcome, bytes: Vec<u8>) {
         let worker = self.batches.iter_mut().find_map(|(worker, (_, batch))| {
-            if self.rejected.contains(worker) {
-                return None;
-            }
             let index = batch.iter().position(|&id| id == attempt)?;
             batch.remove(index);
             Some((*worker, batch.is_empty()))
@@ -186,15 +192,10 @@ impl ScriptState {
     }
 
     fn lose(&mut self, worker: WorkerId) {
-        if self.workers.contains(&worker) && !self.rejected.contains(&worker) {
-            self.record_loss();
+        if self.workers.contains(&worker) {
+            self.losses += 1;
             self.close_worker(worker);
         }
-    }
-
-    fn record_loss(&mut self) {
-        self.losses += 1;
-        self.end_pending |= self.losses >= 3;
     }
 
     fn close_worker(&mut self, worker: WorkerId) {
@@ -210,34 +211,34 @@ impl ScriptState {
                     .push(TransportEvent::Lost { worker, attempts });
             }
         }
-        if self.end_pending || self.fail_replacement {
+        if self.losses >= 3 || self.fail_replacement {
             self.end();
         } else {
-            self.add_worker();
+            self.replacements += 1;
         }
     }
 
     fn end(&mut self) {
         self.ended = true;
-        for (queue, _) in &self.postings {
-            if self.retired.contains(queue) {
-                continue;
-            }
-            let events = self.events.entry(*queue).or_default();
-            if !events
-                .iter()
-                .any(|event| matches!(event, TransportEvent::Ended))
-            {
-                events.push(TransportEvent::Ended);
-            }
+        self.replacements = 0;
+        for events in self.events.values_mut() {
+            events.retain(|event| {
+                !matches!(
+                    event,
+                    TransportEvent::Arrived {
+                        outcome: Outcome::Bytes(_),
+                        ..
+                    }
+                )
+            });
         }
         self.outputs.clear();
         self.announced.clear();
         self.workers.clear();
+        self.starting_workers.clear();
         self.batches.clear();
         self.wanted.clear();
         self.asking.clear();
-        self.rejected.clear();
     }
 
     fn forget_attempt(&mut self, attempt: Attempt) {
@@ -261,9 +262,6 @@ impl ScriptState {
     }
 
     fn postable_worker(&self, queue: QueueId) -> Option<WorkerId> {
-        if self.end_pending {
-            return None;
-        }
         let worker = self.idle()?;
         let (&winner, _) = self
             .asking
@@ -277,13 +275,23 @@ impl ScriptState {
 impl Transport for Script {
     fn start(&self, names: &[&str]) {
         assert_eq!(names, [Work::NAME]);
-        self.state.lock().unwrap().starts += 1;
+        let mut state = self.state.lock().unwrap();
+        if !state.ended {
+            state.starts += 1;
+            state.started_at = Some(state.now_ms);
+        }
     }
 
     fn events(&self, queue: QueueId) -> (TransportState, Vec<TransportEvent>) {
         let mut state = self.state.lock().unwrap();
-        for worker in std::mem::take(&mut state.rejected) {
-            state.close_worker(worker);
+        for _ in 0..std::mem::take(&mut state.replacements) {
+            if state.hold_replacement {
+                state.next_worker += 1;
+                let id = state.next_worker;
+                state.starting_workers.insert(id);
+            } else {
+                state.add_worker();
+            }
         }
         assert!(
             state.wanted.iter().all(|attempt| state
@@ -295,7 +303,6 @@ impl Transport for Script {
         state.reads.push(queue);
         let events = state.events.remove(&queue).unwrap_or_default();
         let readiness = if state.ended {
-            state.forget_queue(queue);
             TransportState::Ended
         } else if state.ready_zero {
             TransportState::Ready(0)
@@ -332,6 +339,10 @@ impl Transport for Script {
             .count()
     }
 
+    fn idle_workers(&self) -> usize {
+        self.state.lock().unwrap().idle_workers().count()
+    }
+
     fn set_asking(&self, queue: QueueId, asking: bool) {
         let mut state = self.state.lock().unwrap();
         if asking && !state.ended {
@@ -344,6 +355,11 @@ impl Transport for Script {
 
     fn post(&self, queue: QueueId, jobs: &[Posting]) -> Option<WorkerId> {
         let mut state = self.state.lock().unwrap();
+        if state.ended {
+            return None;
+        }
+        let now_ms = state.now_ms;
+        state.asking.insert(queue, now_ms);
         let worker = state.postable_worker(queue)?;
         if std::mem::take(&mut state.refuse_post) {
             state.lose(worker);
@@ -371,11 +387,10 @@ impl Transport for Script {
 
     fn read_result(&self, _: QueueId, attempt: Attempt, out: &mut [u8]) -> ResultRead {
         let mut state = self.state.lock().unwrap();
-        let announced = state.announced.remove(&attempt);
-        let Some(bytes) = state.outputs.remove(&attempt) else {
+        if !state.announced.remove(&attempt) {
             return ResultRead::Gone;
-        };
-        assert!(announced);
+        }
+        let bytes = state.outputs.remove(&attempt).unwrap();
         if bytes.len() != out.len() {
             return ResultRead::Unreadable;
         }
@@ -389,17 +404,21 @@ impl Transport for Script {
     }
 
     fn reject(&self, worker: WorkerId) {
-        let mut state = self.state.lock().unwrap();
-        if state.workers.contains(&worker) && state.rejected.insert(worker) {
-            state.record_loss();
-        }
+        self.state.lock().unwrap().lose(worker);
     }
 
     fn forget_attempt(&self, queue: QueueId, attempt: Attempt) {
         let mut state = self.state.lock().unwrap();
         state.forget_attempt(attempt);
         if let Some(events) = state.events.get_mut(&queue) {
-            events.retain(|event| !matches!(event, TransportEvent::Arrived { attempt: id, .. } if *id == attempt));
+            events.retain_mut(|event| match event {
+                TransportEvent::Arrived { attempt: id, .. } => *id != attempt,
+                TransportEvent::Lost { attempts, .. } => {
+                    attempts.retain(|&id| id != attempt);
+                    !attempts.is_empty()
+                }
+                TransportEvent::Ended => true,
+            });
         }
     }
 
@@ -424,6 +443,7 @@ impl Transport for Script {
             worker_bytes: state.worker_bytes,
             handler_ms: state.handler_ms,
             peak_buffered_bytes: state.peak_buffered_bytes,
+            ready_ms: state.ready_ms,
         }
     }
 }
@@ -432,6 +452,9 @@ impl Script {
     fn finish_start(&self, outcomes: &[bool]) {
         let mut state = self.state.lock().unwrap();
         assert_eq!(state.starts, 1);
+        if state.ended {
+            return;
+        }
         for _ in outcomes.iter().filter(|&&ready| ready) {
             state.add_worker();
         }
@@ -442,7 +465,7 @@ impl Script {
 
     fn ready(&self, workers: usize) {
         let mut state = self.state.lock().unwrap();
-        while state.workers.len() < workers {
+        while !state.ended && state.workers.len() < workers {
             state.add_worker();
         }
     }
@@ -516,6 +539,117 @@ fn results(jobs: &mut Jobs<Work>, clock: HookTime) -> Vec<u8> {
     jobs.take_with_time(&clock)
         .map(|done| done.result.unwrap())
         .collect()
+}
+
+fn idle_with_work(jobs: &Jobs<Work>, script: &Script) -> u64 {
+    let mut json = String::from(r#"{"test":true"#);
+    WireMetrics::append(&mut json, &jobs.report().wire, script.report());
+    json.push('}');
+    serde_json::from_str::<serde_json::Value>(&json).unwrap()["wire"]["idleWithWork"]
+        .as_u64()
+        .unwrap()
+}
+
+#[test]
+fn idle_worker_counts_work_submitted_after_the_last_take() {
+    let (mut jobs, script, _) = setup(LIMITS, 1);
+    drop(jobs.take_with_time(&live()));
+    submit(&mut jobs, 1, 0);
+    assert_eq!(idle_with_work(&jobs, &script), 0);
+
+    drop(jobs.take_with_time(&live()));
+    assert_eq!(idle_with_work(&jobs, &script), 1);
+}
+
+#[test]
+fn idle_worker_ignores_work_cancelled_after_the_last_take() {
+    let (mut jobs, script, _) = setup(LIMITS, 1);
+    let mut take = jobs.take_with_time(&late());
+    take.mark_late_unit_spent();
+    take.submit(1, 0, 0, Work::new(1)).unwrap();
+    drop(take);
+    assert_eq!(jobs.report().queued, 1);
+    jobs.cancel(1);
+
+    drop(jobs.take_with_time(&live()));
+    assert_eq!(idle_with_work(&jobs, &script), 0);
+}
+
+#[test]
+fn idle_workers_with_wire_backlog_count_once_per_prepare() {
+    for total in [4, 5] {
+        let (mut jobs, script, _) = setup(
+            Limits {
+                running: 2,
+                completed_bytes: 4,
+                ..LIMITS
+            },
+            2,
+        );
+        for value in 1..=3 {
+            submit(&mut jobs, value, 0);
+        }
+        drop(jobs.take_with_time(&live()));
+        for value in 4..=total {
+            submit(&mut jobs, value, 0);
+        }
+        drop(jobs.take_with_time(&late()));
+        assert_eq!(jobs.report().queued, usize::from(total - 4));
+        assert_eq!(script.busy_workers(1), 2);
+        for index in 0..2 {
+            for attempt in script.posting(index).1 {
+                script.complete(attempt);
+            }
+        }
+        assert_eq!(idle_with_work(&jobs, &script), 2);
+        let frame = live();
+        drop(jobs.take_with_time(&frame));
+        assert_eq!(jobs.report().queued, usize::from(total - 4));
+        assert_eq!(results(&mut jobs, frame), [1, 2, 3, 4]);
+        assert_eq!(idle_with_work(&jobs, &script), 2 + u64::from(total == 5));
+    }
+}
+
+#[test]
+fn forgotten_attempts_are_removed_from_pending_losses() {
+    let (mut jobs, script, _) = setup(LIMITS, 1);
+    for value in 1..=3 {
+        submit(&mut jobs, value, 0);
+    }
+    drop(jobs.take_with_time(&live()));
+    let (queue, attempts) = script.posting(0);
+    script.lose_batch_with(attempts[0]);
+    jobs.cancel(1);
+    jobs.cancel(2);
+    assert!(matches!(
+        script.events(queue).1.as_slice(),
+        [TransportEvent::Lost { attempts: remaining, .. }] if remaining == &attempts[2..]
+    ));
+}
+
+#[test]
+fn lost_jobs_wait_in_order_until_the_replacement_is_ready() {
+    let (mut jobs, script, _) = setup(LIMITS, 1);
+    script.state.lock().unwrap().hold_replacement = true;
+    submit(&mut jobs, 1, 0);
+    submit(&mut jobs, 2, 1);
+    drop(jobs.take_with_time(&live()));
+    let (queue, attempts) = script.posting(0);
+    script.lose_batch_with(attempts[0]);
+    let (state, _) = script.events(queue + 1);
+    assert!(matches!(state, TransportState::Starting));
+    assert_eq!(script.state.lock().unwrap().starting_workers.len(), 1);
+    assert!(results(&mut jobs, live()).is_empty());
+    assert_eq!(script.state.lock().unwrap().postings.len(), 1);
+    assert_eq!(jobs.report().queued, 2);
+    script.ready(1);
+    drop(jobs.take_with_time(&live()));
+    let (_, retries) = script.posting(1);
+    assert_eq!(script.posted_values(&retries), [2, 1]);
+    for attempt in retries {
+        script.complete(attempt);
+    }
+    assert_eq!(results(&mut jobs, live()), [2, 1]);
 }
 
 #[test]
@@ -681,13 +815,17 @@ fn loss_retries_unanswered_and_end_requeues_every_place_once() {
     script.complete(ids[1]);
     submit(&mut jobs, 7, 0);
     {
-        let mut state = script.state.lock().unwrap();
+        let state = script.state.lock().unwrap();
         assert_eq!(state.batches.values().next().unwrap().1, [ids[2]]);
         assert_eq!(state.outputs.keys().copied().collect::<Vec<_>>(), ids[..2]);
-        for _ in 0..3 {
+    }
+    for _ in 0..3 {
+        {
+            let mut state = script.state.lock().unwrap();
             let idle = state.idle().unwrap();
             state.lose(idle);
         }
+        script.events(0);
     }
     assert_eq!(results(&mut jobs, live()), [4, 5, 6, 7]);
     assert_eq!(jobs.report().lane, Lane::Inline);
@@ -1043,6 +1181,15 @@ fn check_installation_and_wire_metrics() {
         out.push('}');
         serde_json::from_str::<serde_json::Value>(&out).unwrap()["renderHooks"]["jobs"].take()
     };
+    let mut local = Jobs::<Work>::new(LIMITS).report();
+    let mut output = String::from("{}");
+    local.append_wire(&mut output);
+    assert_eq!(output, "{}");
+    local = local + hooks.jobs().unwrap();
+    output.clear();
+    local.append_wire(&mut output);
+    assert!(output.contains("\"wire\""));
+
     let report = diagnostics(false);
     assert_eq!(report["lane"], "worker");
     assert_eq!(report["wire"]["outBytes"], 2);
@@ -1050,12 +1197,17 @@ fn check_installation_and_wire_metrics() {
     assert_eq!(report["wire"]["workersReady"], 1);
     assert_eq!(report["wire"]["workerBytes"], 65_536);
     assert_eq!(report["wire"]["handlerMs"], 0.25);
+    assert!(report["wire"]["readyMs"].is_null());
+    assert_eq!(report["wire"]["idleWithWork"], 1);
+    script.state.lock().unwrap().ready_ms = Some(12.5);
+    assert_eq!(diagnostics(false)["wire"]["readyMs"], 12.5);
     assert_eq!(report["wire"]["peakBufferedBytes"], 2);
     assert_eq!(report["wire"]["ms"]["p50"], report["wire"]["ms"]["p95"]);
     assert!(report["wire"]["ms"]["p95"].is_number());
     let reset = diagnostics(true);
     assert_eq!(reset["wire"]["outBytes"], 0);
     assert_eq!(reset["wire"]["inBytes"], 0);
+    assert_eq!(reset["wire"]["idleWithWork"], 0);
     assert!(reset["wire"]["ms"]["p50"].is_null());
     assert_eq!(reset["done"], 0);
 }
@@ -1142,4 +1294,66 @@ fn check_empty_remote_queue_diagnostics() {
     assert!(!before.contains("wire"));
     assert!(script.state.lock().unwrap().reads.is_empty());
     assert_eq!(script.report_reads.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn inline_delivery_spends_the_late_unit_before_workers_are_ready() {
+    let (mut jobs, script, _) = setup(LIMITS, 0);
+    submit(&mut jobs, 1, 0);
+    submit(&mut jobs, 2, 0);
+    let frame = late();
+    assert_eq!(results(&mut jobs, frame), [1]);
+    script.ready(1);
+    assert!(results(&mut jobs, frame).is_empty());
+    assert!(script.state.lock().unwrap().postings.is_empty());
+    drop(jobs.take_with_time(&late()));
+    assert_eq!(script.posted_values(&script.posting(0).1), [2]);
+}
+
+#[test]
+fn reject_closes_the_worker_and_ends_the_lane_before_another_snapshot() {
+    let script = Script::default();
+    script.ready(2);
+    script.set_asking(1, true);
+    let posting = |attempt| Posting {
+        attempt,
+        name: Work::NAME,
+        input: vec![1, 0],
+    };
+    assert_eq!(
+        script.post(1, &[posting(1), posting(2), posting(3)]),
+        Some(1)
+    );
+    script.set_asking(1, false);
+    script.complete(1);
+    assert!(matches!(
+        &script.events(1).1[..],
+        [TransportEvent::Arrived { attempt: 1, .. }]
+    ));
+    script.complete(2);
+    for worker in 2..=4 {
+        let attempt = u64::from(worker) * 2;
+        script.set_asking(2, true);
+        assert_eq!(
+            script.post(2, &[posting(attempt), posting(attempt + 1)]),
+            Some(worker)
+        );
+        script.reject(worker);
+        assert_eq!(script.busy_workers(2), 0);
+        if worker < 4 {
+            assert!(matches!(&script.events(2).1[..],
+                [TransportEvent::Lost { worker: id, attempts }] if *id == worker && attempts == &[attempt, attempt + 1]));
+        }
+    }
+    assert!(script.state.lock().unwrap().workers.is_empty());
+    assert!(matches!(
+        script.read_result(1, 1, &mut [0; 2]),
+        ResultRead::Gone
+    ));
+    assert!(script.events(1).1.is_empty());
+    assert!(matches!(&script.events(2).1[..],
+        [TransportEvent::Lost { worker: 4, attempts }] if attempts == &[8, 9]));
+    script.ready(2);
+    assert!(matches!(script.events(1).0, TransportState::Ended));
+    assert!(script.state.lock().unwrap().workers.is_empty());
 }

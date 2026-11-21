@@ -53,6 +53,9 @@ mod jpeg_decode;
 #[path = "image/package.rs"]
 mod package;
 pub(crate) mod sampling;
+#[cfg(windows)]
+#[path = "image/windows_bitmap.rs"]
+mod windows_bitmap;
 pub use package::Ask as PackageAsk;
 #[path = "image/png.rs"]
 mod png_decode;

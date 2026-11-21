@@ -140,7 +140,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/contact/mouse.rs", "Presenter::pointer_down_with_clicks"],
     ["painted:host/painted/src/presenter/control.rs", "Presenter::commit_control_value Presenter::key_click Presenter::toggle_control Presenter::toggle_control_with_press"],
     ["painted:host/painted/src/presenter/desktop_access.rs",
-      "FieldTextLayout::runs FieldTextLayout::same_shape Presenter::access_focus Presenter::access_focus_node Presenter::access_origin Presenter::access_scroll_text_line Presenter::access_select Presenter::access_selection Presenter::access_text Presenter::access_text_layout " +
+      "FieldTextLayout::runs FieldTextLayout::same_shape Presenter::access_focus Presenter::access_focus_node Presenter::access_origin Presenter::access_scroll_text_line Presenter::access_select Presenter::access_selection Presenter::access_editor Presenter::accessible_field_view Presenter::enabled_access_view Presenter::access_text_layout " +
       "Presenter::access_view"],
     ["painted:host/painted/src/text/field.rs", "FieldTextRun::character_metrics FieldTextRun::same_metrics"],
     ["painted:host/painted/src/presenter/drag_out.rs", "Presenter::ask_drag Presenter::drag_of Presenter::drag_source_at Presenter::inside Presenter::lift_source_at"],
@@ -296,7 +296,9 @@ export const classifications = [
     ["painted:host/painted/src/canvas/jni_frames.rs", "Java_dev_exact_canvas_Native_frameIdentity Java_dev_exact_canvas_Native_frameIdle Java_dev_exact_canvas_Native_frameLanded"],
     ["painted:host/painted/src/canvas/surface.rs", "CanvasHost::acquired CanvasHost::display_frame"],
     ["painted:host/painted/src/content_region/presenter.rs", "Presenter::recycle_frame"],
-    ["painted:host/painted/src/presenter/display_frame.rs", "Presenter::display_complete Presenter::display_frame Presenter::display_presented SubmittedFrame::carried"],
+    ["painted:host/painted/src/presenter/display_frame.rs",
+      "Presenter::acknowledge Presenter::display_complete Presenter::display_frame Presenter::display_presented Presenter::panel_complete Presenter::panel_frame Presenter::panel_lost " +
+      "Presenter::submitted_picture SubmittedFrame::carried SubmittedFrame::image SubmittedFrame::mirror"],
   ]),
   group("hatch clocks", ["subscription"], "live hatch attachment and its timer/frame registration", "UI-owned",
     "host/painted/src/presenter/hatch.rs scopes hatches to live nodes, advances registered clocks and retires removed attachments; callbacks can dispatch through the current host.", [
@@ -861,7 +863,7 @@ export const classifications = [
       "background_priority baked baked_canvas_surfaces baked_grants console fast_cores fast_set Handle::send Handle::stop log redirect_stdio release_library_pages release_library_pages_after " +
       "release_module_pages_too section_begin section_end start trace"],
     ["painted:host/painted/src/app.rs",
-      "boot_presenter boot_presenter_with_metal boot_window_presenter Config::from_env Config::from_env_static Config::headless " +
+      "boot_presenter boot_presenter_with_metal boot_scanout_presenter boot_window_presenter Config::from_bake Config::from_env Config::from_env_static Config::headless " +
       "Config::initial_window_background Config::painter Config::use_updates Config::windowed Config::windowed_from_env incoming_location launch_argument launch_location " +
       "prepare_environment prepare_window_painter print_baked_receipt row_reuse_from_env run_headless show_material_look show_neutral_look"],
     ["painted:host/painted/src/canvas/codec.rs", "attach"],
@@ -927,7 +929,7 @@ export const classifications = [
     ["painted:host/painted/src/gpu/images.rs", "ImageCache::begin ImageCache::brush"],
     ["painted:host/painted/src/gpu/present.rs", "current_window set_window"],
     ["painted:host/painted/src/ink.rs", "Ink::from_device Ink::info Ink::new"],
-    ["painted:host/painted/src/ink/images.rs", "Images::begin Images::bitmap Images::pin Images::pixmap Images::unpin"],
+    ["painted:host/painted/src/ink/images.rs", "Images::begin Images::bitmap Images::canvas Images::pin Images::pixmap Images::unpin"],
     ["painted:host/painted/src/ink/stats.rs", "counter_state Ink::statistics StatisticsReader::read"],
     ["painted:host/painted/src/paint.rs",
       "bbox content_size object_fit Painter::backend Painter::flow_failures Painter::last_frame_ms " +

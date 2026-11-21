@@ -11,6 +11,54 @@ impl DataSource for NoData {
     }
 }
 const SOURCE: &str = include_str!("../../../corpus/surface.contract");
+
+#[test]
+fn a_mounted_child_reads_surface_records_and_canvas_metrics() {
+    let source = r#"shape Hud
+  beacons: number
+shape Metrics
+  frames: option<number>
+component App
+  state shown = false
+  action show
+    shown = true
+  view
+    column
+      if shown
+        Readout()
+component Readout
+  resource hud = exactSurface("world") as shape Hud
+  resource metrics = exactCanvasPerformance("world") as shape Metrics
+  view
+    canvas surface=world
+      text `Beacons ${hud.beacons}`
+      match metrics.frames
+        case some(n)
+          text `Frames ${n}`
+        case none
+          text "Waiting"
+"#;
+    let plan = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
+    let mut runner = Runner::boot(
+        plan,
+        NoData,
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    runner.act("show", vec![]).unwrap();
+    runner
+        .set_surface_record("world", Some(r#"{"beacons":3}"#))
+        .unwrap();
+    runner
+        .set_canvas_performance("world", Some(r#"{"frames":12}"#))
+        .unwrap();
+    let tree = exact_runner::agent::tree(&runner);
+    assert!(tree.contains("Beacons 3"), "{tree}");
+    assert!(tree.contains("Frames 12"), "{tree}");
+}
+
 #[test]
 fn bake_defaults_are_the_first_frame_and_never_kept_or_typescript() {
     let p = contract::bake(contract::compile(SOURCE).unwrap(), NoData).unwrap();

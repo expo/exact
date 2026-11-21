@@ -552,7 +552,7 @@ fn tests(args: &[String]) -> ExitCode {
         }
     };
     match contract::tests(&src).and_then(|t| contract::properties(&src).map(|p| (t, p))) {
-        Ok((t, p)) => {
+        Ok((t, mut p)) => {
             let test = std::path::Path::new(input);
             let paired = test.with_file_name(
                 test.file_name()
@@ -565,7 +565,7 @@ fn tests(args: &[String]) -> ExitCode {
             let properties = if p.is_empty() {
                 Ok(())
             } else {
-                contract::check_properties_path(&app, &p)
+                contract::resolve_properties_path(&app, &mut p)
             };
             let states = contract::check_test_states_path(&app, &t);
             let errors: Vec<_> = properties

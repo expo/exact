@@ -174,76 +174,84 @@ queues from one hook. Hooks without a report return `null`.
 
 #### Worker transport
 
-`Jobs::remote` uses the registered `WireJob` codec. The browser adapter must
-call `install_module_transport` once on the owner thread before constructing
-hooks. Queues capture the installed transport at construction. Code holding
-the transport can read its buffers, so the adapter belongs in generated
-code. The worker export will call `run_remote_job`.
+Set `game.render.workers: true` for browser workers (LLP 1182.000 D9).
+Implement `WireJob` with a unique `NAME`, register
+`RemoteJob::of::<YourJob>()` in `Hooks::REMOTE`, and build the queue with
+`Jobs::remote(limits)`. Entries match by type. A value can decline the wire
+with `wire() == false` at submission. Debug pools and inline lanes round-trip
+eligible jobs and outputs, including after the worker lane ends.
 
-Rust owns job values, priorities, generations and limits. A job's wire
-eligibility is decided at submission for transport queues. Debug builds
-round-trip wire-capable jobs on the pool and inline lanes, including after
-the worker lane ends. On the worker lane, a take yields
-arrived answers and queued jobs that decline the wire in priority and
-submission order. Once a take sees a ready worker, a later `Starting`
-snapshot keeps the queue on the worker lane, where it can drain answers
-while a replacement starts. An advancing take on the agent's clock requeues
-work out or arrived and forgets its attempts. A held take leaves worker
-state alone. Submission, cancellation and clear can also discard transport
-buffers or withdraw a queue's ask.
+The generated adapter owns buffer access and installs its transport on the
+owner thread before creating hooks. The ES module loader imports `gpu-jobs.js` on the first
+eligible live take, for that instance. The web lane is inline for unregistered
+types, versioned dev loads, unavailable workers, and the agent's clock. Each
+queue runs inline until its first take sees a ready worker. If an established
+queue loses its only ready worker, wire jobs wait up to five seconds for the
+replacement. Jobs that decline the wire still run on the page. If the
+replacement fails to start, the lane ends and the wire jobs run on the page.
+Unload, a committed swap and quarantine close the transport. A rolled-back
+swap leaves the original instance's lane running. A page restored from the
+back/forward cache keeps its workers. A lost device clears the hook's queue
+while the transport stays available.
 
-A live, advancing take calls `Transport::events` once at entry for a snapshot
-of readiness and events. During the take, transport state changes only in
-calls from the queue. Posting at exit counts the announced answer bytes
-still held, in 64 bits. Posting stops at the completed byte threshold while
-an answer from the snapshot is pending. On the worker lane, a queue has one
-late unit per `prepare`, shared by all its takes. Delivering a result past the
-deadline, encoding a job past the deadline or calling
-`Take::mark_late_unit_spent` spends it. A job encoded late spends the unit even
-if its post is refused and it stays queued. Once the unit is spent, the
-queue delivers and encodes nothing more past the deadline for the rest of
-that prepare, even if the lane ends. A queue that begins and stays on the
-pool or inline lane can still deliver the first result of a late frame.
+Workers import the same build's glue URL and instantiate the page's compiled
+module without a device. Ship build-specific URLs to keep glue and wasm paired.
+A job must depend only on its inputs. Workers share no memory, keep their own
+statics, and always see `Cancel::is_set()` as false. `run_remote_job` tags
+result bytes or a `JobError`. A trap inside `Job::run` fails that job. Codec
+or glue traps in a worker, unknown names, failed input decoding and invalid
+output are transport failures. A page decoder that returns `Err` triggers
+recovery. A panic in `decode_output` traps the page's module. A job can also
+run inline, so return errors by value.
 
-The transport owns the five-second start timeout, the ten-second batch
-timeout since posting or the last answer, worker replacement and the count
-of consecutive losses. A wanted attempt ends once in `Arrived`, `Lost` or
-`Ended`. A trap arrives as `Trapped`. The transport closes and replaces its
-worker without counting a loss and reports the rest of that batch as lost
-for retry. Batch timeouts, worker errors, posts that throw and rejected
-answers count as losses. A rejection immediately stops posts to that worker, stages its
-loss event for the next advancing live take and preserves other answers
-already received. The count resets when the queue accepts a result, a
-`JobError` or `Trapped`. Three consecutive losses or a failed replacement
-end the lane. The transport ignores late messages from lost workers and
-forgotten attempts. A positive `Ready` count
-includes busy workers. Use `Starting` while no worker is ready and a start
-is pending, and `Ended` when none can still start. At end the transport drops
-every answer buffer, including those announced to an open take.
-`Transport::read_result` returns `ResultRead::Gone` for a missing buffer.
-The take runs the retained job in its turn without recording a loss. The
-next take applies arrivals and losses before the end and requeues remaining
-work for inline execution. Known traps are delivered as failures on live
-takes, including after the lane ends. The agent's clock discards all arrived
-results, including traps, and requeues their jobs.
+Rust retains jobs, priorities, generations and limits. A live advancing take
+snapshots readiness and events once. It yields arrivals and declining jobs
+in priority and submission order, copying each buffer only at delivery. A
+missing buffer runs the retained job inline without recording a loss.
+Established queues can drain during replacement startup. At exit, posting
+counts announced bytes still held in 64 bits and stops at the completed
+threshold while an answer is pending. On the worker lane, one late unit per
+`prepare` covers delivery, encoding even if the post is refused, or the hook's
+`mark_late_unit_spent()`. It stays spent across takes even if the lane ends.
+A queue that begins and stays inline or in the pool can deliver its first
+result late. Held takes do nothing. The first advancing agent take forgets
+attempts and requeues out and arrived jobs in original order, including traps.
+Submission, cancellation and clear can discard buffers or withdraw asks.
 
-A worker holds one batch of up to 16 jobs. Encode each `u64` attempt as two
-32-bit words at the JavaScript boundary. A refused post accepts no
-attempts. At the end of a worker take, a queue asks for a worker while it
-has wire work queued, room under its running and completed byte limits,
-and time or a late unit to encode. A queue withdraws its ask when it stops
-for a limit, its deadline or a refused post. An eligible queue that cannot
-get an idle worker stays active for 250 ms on the transport's clock.
-An idle worker goes to the active queue served least recently, with queues
-that have never posted first. A successful batch post updates when the
-queue was last served. Other queues cannot post to that worker on their take.
+Protocol version 1 clones the compiled module and transfers input and output
+buffers. Send each attempt as two 32-bit words. Each worker holds one batch
+of 1–16 jobs. A refused post accepts none. At take exit, queues ask while they
+have wire work, room under both limits, and time or a late unit. An ask lasts
+250 ms unless withdrawn for a limit, deadline or refusal. Posting renews the
+queue's own ask. The idle worker goes
+to the least recently served active queue, with never-served queues first.
+Successful posts update that order.
 
-`Jobs::report()` exposes the queue's own gauges and counts. The renderer adds
-`renderHooks.jobs.wire` for diagnostics with Rust-side wire time percentiles and
-bytes copied, plus the transport's ready worker count, largest worker
-linear memory, total message-handler time and peak buffered answer bytes.
-`perf_reset` resets the Rust-side wire time and bytes. The transport
-readings cover the instance's lifetime.
+The script stores replies without calling the module. A start must match the
+version and names within five seconds. The first start includes the script
+import. Report `Starting` while none are ready
+and one can still start, and `Ready` with a positive count including busy
+workers. Each wanted attempt ends in an arrival, loss or end. Worker errors,
+throwing posts, rejected answers and ten seconds without a batch answer count
+as losses. Rejection stops posts immediately, reports unanswered attempts at
+the next live snapshot and keeps other received answers. A trap replaces its
+worker without counting a loss and retries the unanswered batch. Ignore replies
+from replaced workers or forgotten attempts.
+
+Only accepted answers reset the loss count, including `JobError` and
+`Trapped`. Three consecutive losses, a failed replacement, or no worker able
+to start ends the lane immediately. The transport terminates all workers,
+drops every buffer and returns `Gone` on subsequent reads. Each queue's next
+snapshot keeps traps and losses in order and omits byte arrivals. The queue
+requeues its remaining work and delivers known traps on live takes.
+
+A remote queue reports copy, decode, encode and post timings and bytes in
+`renderHooks.jobs.wire`, reset by `perf_reset`. Its `idleWithWork` counts
+live, advancing prepares whose first take finds a wire job queued and a ready
+worker with no batch, before posting. The transport reports instance-wide ready
+workers, milliseconds from the first start request to the first worker whose
+names matched, largest worker linear memory, time in message and error
+handlers, and peak buffered answer bytes.
 
 ### Render stages
 

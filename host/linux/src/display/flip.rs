@@ -1,4 +1,5 @@
 use drm::control::{crtc, Event};
+#[cfg(test)]
 use tiny_skia::Pixmap;
 
 #[cfg(test)]
@@ -26,20 +27,20 @@ impl<F> Default for FlipState<F> {
         }
     }
 }
-impl<F: AsRef<Pixmap>> FlipState<F> {
+impl<F> FlipState<F> {
     pub(super) fn pending(&self) -> bool {
         self.pending.is_some()
     }
     pub(super) fn submit(
         &mut self,
         frame: F,
-        send: impl FnOnce(usize, bool, &Pixmap) -> Result<(), String>,
+        send: impl FnOnce(usize, bool, &F) -> Result<(), String>,
     ) -> Result<Option<F>, String> {
         if self.pending() {
             return Err("display already has a pending flip".into());
         }
         let back = 1 - self.front;
-        send(back, self.first, frame.as_ref())?;
+        send(back, self.first, &frame)?;
         if self.first {
             self.first = false;
             self.front = back;

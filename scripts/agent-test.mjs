@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:f
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { ROOT, contractTool } from './tools.mjs';
 import { faultRequest as rawFaultRequest, preferGroups } from './agent-prefer.mjs';
 import { open } from './agent.mjs';
 import { duringOp } from './agent-drag.mjs';
@@ -740,7 +740,7 @@ async function propertyFailure(p, line, state, previous, s, file, test, step, in
  * lands: a run's caller says where a long test is and what each test did as it goes, not only at the run's end.
  */
 export async function runTests({ host, browser, file, plan, app, size, env, webDist, device = false, phone, reader, url, seed, locale, formatLocale, timeZone, epoch, failFetch, storage = 'test', touch = 'agent', chrome: bars = 'agent', scale, atEnd, atStep, atLine, atResult, port, running, only, testIndex, replayLaunch, replayShots, ax } = {}) {
-  const root = resolve(fileURLToPath(new URL('..', import.meta.url))), selected = resolveApp(app);
+  const selected = resolveApp(app);
   // The APK carrier runs at the phone's size (agent-stdio.mjs reads `reader` the same way).
   const apk = host === 'android' && (reader ?? !!process.env.EXACT_ANDROID_READER);
   if (apk && size) throw new Error('test android: --size does not reach the APK, which runs at the phone\'s size; --headless takes it');
@@ -757,8 +757,9 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
   try { schema = readFileSync(resolve(selected.dir, '../snapback/schema.q'), 'utf8'); } catch { /* No schema beside this app. */ }
   // What `fresh` resets: every loopback origin the app's web build fetches (its net.fetch grants).
   const backends = url ? [] : loopbackOrigins(resolve(webDist));
-  // Cargo owns target selection and freshness, including CARGO_TARGET_DIR.
-  const c = spawnSync('cargo', ['run', '-q', '-p', 'contract', '--', 'test', resolve(file)], { cwd: root, encoding: 'utf8' });
+  const compiler = contractTool();
+  if (!compiler) throw new Error('cannot compile the authored tests without the Contract compiler');
+  const c = spawnSync(compiler.cmd, [...compiler.pre, 'test', resolve(file)], { cwd: ROOT, env: compiler.env, encoding: 'utf8' });
   if (c.status !== 0) throw new Error(c.stderr?.trim() || c.error?.message || 'contract test compiler failed');
   // Native runs use the origin their build selected (LLP 1142 D13), else the scaffold's declared one, else the grants
   // app.ts names as the build evaluates them, when no web admission file exists.

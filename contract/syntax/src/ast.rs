@@ -202,6 +202,10 @@ pub struct PropertyDecl {
     pub name: String,
     /// Predicates in source order.
     pub lines: Vec<PropertyLine>,
+    /// For `after` and `never refuses`, the expanded root's names of the
+    /// action named: the name as written, until the app resolves a child's
+    /// `Component.action` to the action of each of its instances.
+    pub actions: Vec<String>,
 }
 /// The observations a property quantifies over.
 #[derive(Debug, Clone, PartialEq)]

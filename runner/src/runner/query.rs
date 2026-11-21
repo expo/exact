@@ -135,18 +135,19 @@ impl<D: DataSource> Runner<D> {
                 resource: resource.clone(),
                 error: DataError::Unavailable("this host links no surfaces".into()),
             })?;
+            let row = self.resource_row(i);
             let records = if source == crate::canvas_performance::SOURCE {
-                crate::canvas_performance::validate(&self.plan, self.resource_row(i).ty).map_err(
-                    |error| RunnerError::Data {
+                crate::canvas_performance::validate(&self.plan, row.ty).map_err(|error| {
+                    RunnerError::Data {
                         resource: resource.clone(),
                         error: DataError::Unavailable(error),
-                    },
-                )?;
+                    }
+                })?;
                 &self.canvas_performance
             } else {
                 &self.surface_records
             };
-            return answer(&self.plan, records, i)
+            return answer(&self.plan, records, row)
                 .map(Answer::Now)
                 .map_err(|error| RunnerError::Data { resource, error });
         }

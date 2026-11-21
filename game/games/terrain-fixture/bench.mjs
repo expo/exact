@@ -105,16 +105,25 @@ function reading(before, end, durationMs, browser, refreshHz) {
   const binds = change(start, finish, 'bindsTotal');
   const raf = distribution(browser?.rafIntervals ?? []);
   const frameP50 = perf?.frameMs?.p50;
+  const jobs = hooks?.jobs ?? null;
+  const totals = jobs?.wire, wireBefore = before?.renderHooks?.jobs?.wire;
+  const handlerMs = change(wireBefore, totals, 'handlerMs');
+  const idleWithWork = change(wireBefore, totals, 'idleWithWork');
+  const prepareMs = hooks?.cpuMs?.prepare ?? null;
+  const perFrame = value => value != null && prepareMs?.count > 0 ? value / prepareMs.count : null;
+  const wire = totals && { ...totals, handlerMs, handlerMsPerFrame: perFrame(handlerMs),
+    idleWithWork, idleWithWorkPerFrame: perFrame(idleWithWork) };
   const bufferKeys = ['created', 'reused', 'destroyed', 'bytesWritten'];
   return {
     durationMs, clock: perf?.clock ?? null,
-    tickMs: perf?.tickMs ?? null, prepareMs: hooks?.cpuMs?.prepare ?? null,
+    tickMs: perf?.tickMs ?? null, prepareMs,
     encodeMs: perf?.encodeMs ?? null, frameMs: perf?.frameMs ?? null,
     rafMs: browser ? { p50: raf?.p50 ?? null, p95: raf?.p95 ?? null, count: raf?.count ?? 0 } : null,
     longTasks: browser?.longTasks ?? null,
     displayPeriodsPerFrame: refreshHz != null && Number.isFinite(frameP50) ? frameP50 / (1000 / refreshHz) : null,
     drawMs: hooks ? { opaque: hooks.cpuMs?.opaque, background: hooks.cpuMs?.background, surface: hooks.cpuMs?.surface } : null,
-    budget: hooks?.budget ?? null, jobs: hooks?.jobs ?? null, catchUp: perf?.catchUp ?? null,
+    budget: hooks?.budget ?? null, jobs: wire ? { ...jobs, wire } : jobs, catchUp: perf?.catchUp ?? null,
+    ...(wire ? { wire } : {}),
     uploadBytes: hooks?.frame?.uploadBytes ?? null, draws,
     binds: binds != null && draws?.count > 0 ? binds / draws.count : null,
     itemsDrawn: hooks?.frame?.itemsDrawn ?? null,
@@ -293,6 +302,7 @@ async function run(config) {
   const dist = resolve(app, 'target', 'bench-dist');
   const commit = (await Bun.$`git -C ${root} rev-parse HEAD`.quiet()).text().trim();
   const web = config.host.startsWith('web');
+  const isolationHeaders = process.env.BENCH_NO_ISOLATION !== '1';
   const env = {
     ...process.env, EXACT_UPDATE_TRUST: 'development',
     EXACT_GAME_PROOF_PROFILE: web ? 'release' : 'gpu-dev',
@@ -315,7 +325,7 @@ async function run(config) {
 
   const read = async options => {
     const transport = web
-      ? await openWeb(dist, pollUntil, { ...options, phone: config.host === 'web-android' })
+      ? await openWeb(dist, pollUntil, { ...options, isolationHeaders, phone: config.host === 'web-android' })
       : await openNative(config.host, app, env, config.phone, pollUntil);
     // A loaded machine stretches the frames of a browser or an app it runs; a device's are its own.
     const loaded = () => ['ios', 'android', 'web-android'].includes(config.host) ? null : Math.round(loadavg()[0] * 10) / 10;
@@ -325,6 +335,7 @@ async function run(config) {
       if (await transport.hidden?.())
         row.inconclusive.push({ quantity: 'row', condition: 'the page was hidden during the run' });
       row.browser = transport.browser ?? null;
+      if (web) row.isolationHeaders = isolationHeaders;
       row.machineLoad = before == null ? null : { before, after: loaded(), cores: cpus().length };
       // With more runnable threads than cores, a frame waits for a core.
       if (row.machineLoad && Math.max(before, row.machineLoad.after) > row.machineLoad.cores)
@@ -516,7 +527,7 @@ export function sampleBrowserWindow(durationMs, page = globalThis) {
   }, durationMs));
 }
 
-async function openWeb(dist, poll, { headless, timeoutMs, pollMs, phone }) {
+async function openWeb(dist, poll, { headless, timeoutMs, pollMs, phone, isolationHeaders }) {
   const [{ spawn }, { mkdtemp, rm }, { tmpdir }, { extname }, { chromium }, { cdp, displayReady, stop, track }] =
     await Promise.all([import('node:child_process'), import('node:fs/promises'), import('node:os'),
       import('node:path'), import('../../../scripts/agent-launch.mjs'), import('../../bench/exact.mjs')]);
@@ -547,8 +558,10 @@ async function openWeb(dist, poll, { headless, timeoutMs, pollMs, phone }) {
         if (!path.startsWith(dist + '/') || !await file.exists()) return new Response(null, { status: 404 });
         return new Response(file, { headers: {
           'Content-Type': types[extname(path)] ?? 'application/octet-stream',
-          'Cross-Origin-Opener-Policy': 'same-origin',
-          'Cross-Origin-Embedder-Policy': 'require-corp',
+          ...(isolationHeaders ? {
+            'Cross-Origin-Opener-Policy': 'same-origin',
+            'Cross-Origin-Embedder-Policy': 'require-corp',
+          } : {}),
         } });
       },
     });
@@ -640,7 +653,7 @@ async function openWeb(dist, poll, { headless, timeoutMs, pollMs, phone }) {
 if (import.meta.main) {
   if (process.argv.includes('--help')) {
     console.log('bun game/games/terrain-fixture/bench.mjs web|macos|ios|android|web-android --device=… --os=… --refresh-hz=… [--phone=…] [switch=value ...] [--pair draw] [--warmup-ms=20000] [--window-ms=60000] [--timeout-ms=60000] [--poll-ms=50]');
-    console.log('BENCH_HEADLESS=1 allows a web sanity run without display metadata.');
+    console.log('BENCH_HEADLESS=1 allows a web sanity run without display metadata. BENCH_NO_ISOLATION=1 omits both cross-origin isolation headers.');
   } else {
     await run(parseOptions(process.argv.slice(2))).catch(error => {
       console.error(error.message);

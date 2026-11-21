@@ -251,6 +251,7 @@ final class NodeExtras {
 extension NodeView {
     var authoredContainerType: UIAccessibilityContainerType? {
         if props["accessibilityRole"] == "group" { return .semanticGroup }
+        if props["accessibilityRole"] == "list" { return .list }
         if kind == "native", authoredLabel != nil, presenter?.session?.natives.speaksForItself(self) == true {
             return .semanticGroup
         }
@@ -528,6 +529,17 @@ extension NodeView {
     package var scrollOutset: UIEdgeInsets {
         let band = pageBand, reach = reach
         return UIEdgeInsets(top: max(band.top, reach.top), left: reach.left, bottom: max(band.bottom, reach.bottom), right: reach.right)
+    }
+    /// The part of each of `sv`'s insets it draws its content through (LLP 1123 D13, LLP 1130 D3): with reach, the smaller
+    /// of how far it lies past its box (`scrollOutset`) and its inset less native content room (`scrollPortInsets`), never
+    /// below zero; with none, the page band, which counts whole as it lands, while the inset holding it may still lag. A
+    /// windowed list counts it as port and as padding before its first row and after its last, and the rest of the inset
+    /// narrows its port.
+    package func scrollDrawnThrough(_ sv: UIScrollView) -> UIEdgeInsets {
+        guard reach != .zero else { return pageBand }
+        let o = scrollOutset, a = scrollPortInsets(sv)
+        let t = { (o: CGFloat, a: CGFloat) in max(0, min(o, a)) }
+        return UIEdgeInsets(top: t(o.top, a.top), left: t(o.left, a.left), bottom: t(o.bottom, a.bottom), right: t(o.right, a.right))
     }
     /// The outset a scroll event counts into CSS's scroll position: all of it but what the scroll view's own layout
     /// consumes of a side reach (`BandConsumer`), across which its content stays put, as a grouped list's cards do.

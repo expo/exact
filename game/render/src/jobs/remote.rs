@@ -82,10 +82,12 @@ pub struct TransportReport {
     pub workers_ready: usize,
     /// Largest worker linear memory observed, in bytes.
     pub worker_bytes: u64,
-    /// Total milliseconds spent in message handlers. Must be finite.
+    /// Total milliseconds spent in worker message and error handlers. Must be finite.
     pub handler_ms: f64,
     /// Largest total number of answer bytes buffered at once.
     pub peak_buffered_bytes: u64,
+    /// Milliseconds from start to the first worker whose names matched, if any.
+    pub ready_ms: Option<f64>,
 }
 
 /// Workers and answer buffers for one GPU module instance (LLP 1182.000 D9).
@@ -107,13 +109,14 @@ pub struct TransportReport {
 /// until its batch ends.
 ///
 /// During a synchronous take, transport state changes only in calls from
-/// queues. Apply asynchronous events between takes or within a snapshot call.
+/// queues. Store answers between takes. A call for one queue stores no
+/// answer for another queue.
 /// A live, advancing take snapshots readiness and events once at entry. Posting
 /// at exit counts announced answer bytes still held, using a 64-bit aggregate.
 /// Keep announced buffers readable until read, forgotten or the lane ends.
 /// On end, drop all buffers immediately, including those announced to open
-/// takes. Reads of those buffers return `Gone`. Keep trap notices for live
-/// delivery even in an ended snapshot.
+/// takes. Reads of those buffers return `Gone`. Keep traps and losses for
+/// each queue's next snapshot, and discard byte arrivals still in the transport.
 /// The agent's clock discards arrived results, including traps, and requeues
 /// their jobs in submission order within priority.
 pub trait Transport: Send + Sync + 'static {
@@ -127,6 +130,8 @@ pub trait Transport: Send + Sync + 'static {
     fn can_post(&self, queue: QueueId) -> bool;
     /// Count workers still holding this queue's batches, including forgotten attempts.
     fn busy_workers(&self, queue: QueueId) -> usize;
+    /// Count ready workers holding no batch, regardless of which queue can post.
+    fn idle_workers(&self) -> usize;
     /// At take exit, record an eligible queue's ask with the transport's clock.
     /// It is active for 250 ms. Passing false withdraws the ask immediately.
     /// The queue asks only with wire jobs queued and room under both its
@@ -134,6 +139,7 @@ pub trait Transport: Send + Sync + 'static {
     /// within the deadline or with its remaining late unit.
     fn set_asking(&self, queue: QueueId, asking: bool);
     /// Post a batch of 1–16 jobs if this queue can use the idle worker.
+    /// Posting renews this queue's ask before applying the same assignment rule.
     /// Success updates when the queue was last served. Refusal accepts no attempts.
     fn post(&self, queue: QueueId, jobs: &[Posting]) -> Option<WorkerId>;
     /// Consume one answer. A gone or unreadable answer falls back to the
@@ -142,9 +148,9 @@ pub trait Transport: Send + Sync + 'static {
     /// Reset the consecutive loss count after the queue accepts a result,
     /// a `JobError` or a `Trapped` notice.
     fn accept_answer(&self);
-    /// Count a loss and stop posting to this worker immediately. Report its
-    /// unanswered attempts at the next live snapshot. Keep other answers
-    /// already received for this take. Ignore repeat rejections and
+    /// Close the worker and count a loss immediately. Report its unanswered
+    /// attempts at the next live snapshot. Keep other answers received for
+    /// this take until the lane ends. Ignore repeat rejections and
     /// rejections for worker lifetimes that ended.
     fn reject(&self, worker: WorkerId);
     /// Discard a single answer and ignore it if it arrives later.
@@ -260,7 +266,12 @@ pub(super) struct RemoteQueue<J> {
 }
 
 impl<J: Job> RemoteQueue<J> {
-    pub(super) fn begin(&mut self, state: &mut State<J>, time: &HookTime) -> bool {
+    pub(super) fn begin(
+        &mut self,
+        state: &mut State<J>,
+        time: &HookTime,
+        first_take: bool,
+    ) -> bool {
         if time.seekable {
             if !self.seekable {
                 self.requeue(state, false);
@@ -319,7 +330,15 @@ impl<J: Job> RemoteQueue<J> {
         if state.completed_bytes != completed_before {
             state.record_retained_peak();
         }
-        self.ready |= matches!(readiness, TransportState::Ready(_));
+        if matches!(readiness, TransportState::Ready(_)) {
+            self.ready = true;
+            if first_take
+                && !state.wire_queue.is_empty()
+                && self.handle.transport.idle_workers() > 0
+            {
+                self.metrics.lock().unwrap().idle_with_work += 1;
+            }
+        }
         self.ready
     }
 
@@ -580,6 +599,7 @@ pub(super) struct WireMetrics {
     frames: VecDeque<(u64, f64)>,
     out_bytes: u64,
     in_bytes: u64,
+    idle_with_work: u64,
 }
 
 impl WireMetrics {
@@ -603,13 +623,15 @@ impl WireMetrics {
             worker_bytes,
             handler_ms,
             peak_buffered_bytes,
+            ready_ms,
         } = report;
         let mut times = BTreeMap::<u64, f64>::new();
-        let (mut out_bytes, mut in_bytes) = (0, 0);
+        let (mut out_bytes, mut in_bytes, mut idle_with_work) = (0, 0, 0);
         for source in sources {
             let source = source.lock().unwrap();
             out_bytes += source.out_bytes;
             in_bytes += source.in_bytes;
+            idle_with_work += source.idle_with_work;
             for &(serial, ms) in &source.frames {
                 *times.entry(serial).or_default() += ms;
             }
@@ -622,9 +644,10 @@ impl WireMetrics {
             }
             times[(times.len() * percent).div_ceil(100) - 1].to_string()
         };
+        let ready_ms = ready_ms.map_or_else(|| "null".to_owned(), |ms| ms.to_string());
         write!(
             out,
-            r#","wire":{{"ms":{{"p50":{},"p95":{}}},"outBytes":{out_bytes},"inBytes":{in_bytes},"workersReady":{workers_ready},"workerBytes":{worker_bytes},"handlerMs":{handler_ms},"peakBufferedBytes":{peak_buffered_bytes}}}"#,
+            r#","wire":{{"ms":{{"p50":{},"p95":{}}},"outBytes":{out_bytes},"inBytes":{in_bytes},"workersReady":{workers_ready},"workerBytes":{worker_bytes},"handlerMs":{handler_ms},"peakBufferedBytes":{peak_buffered_bytes},"readyMs":{ready_ms},"idleWithWork":{idle_with_work}}}"#,
             percentile(50),
             percentile(95)
         )

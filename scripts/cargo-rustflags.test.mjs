@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { authoredWorkspace, claimTargetCrates, declaredWorkspace, linkedCrate, physicalPath, targetRustflags } from './cargo-check.mjs';
+import { authoredWorkspace, claimTargetCrates, declaredWorkspace, linkedCrate, physicalPath, targetRustflags, writtenPath } from './cargo-check.mjs';
 import { rustRemapFlags, wasmRemapFlags } from './app.mjs';
 
 // Cargo refuses to merge an array given with --config into a configured string ("expected string, but found array"),
@@ -135,31 +135,33 @@ test('the crate an app\'s own crates link by path is found by its package name',
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-// The source root through a link: remapped by its physical path, a link followed before a later `..`, and as given,
-// last; a string of rustflags leaves out a spaced alias but never a spaced given spelling; an array keeps both.
-test('a linked source root is remapped by its physical path and as given', () => {
+// The source root through a link: remapped by its physical path, and as written, last; a canonical root once; a spaced
+// remap is refused from a string of rustflags and kept in an array. POSIX follows the link before a later `..`, and
+// Windows collapses the `..` first.
+test('a linked source root is remapped by its physical path and as written', () => {
   const dir = realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-source-root-')));
   try {
     const current = resolve(dir, 'opt/project/current'), capture = resolve(dir, 'opt/project/capture'), link = resolve(dir, 'work/link');
-    for (const path of [current, capture, resolve(dir, 'work')]) mkdirSync(path, { recursive: true });
+    const physical = process.platform === 'win32' ? resolve(dir, 'work/capture') : capture;
+    for (const path of [current, capture, resolve(dir, 'work/capture')]) mkdirSync(path, { recursive: true });
     symlinkSync(current, link);
-    assert.equal(physicalPath(`${link}/../capture`), capture);
+    assert.equal(physicalPath(`${link}/../capture`), physical);
+    assert.equal(physicalPath(link), current);
     assert.equal(physicalPath(resolve(dir, 'missing/root')), null);
+    // A relative path joins the working directory as written, its `..` kept and a backslash part of a POSIX name
+    if (process.platform !== 'win32') assert.equal(writtenPath('cache\\alias/../x'), `${process.cwd()}/cache\\alias/../x`);
     const source = (root) => rustRemapFlags(null, null, { ...process.env, EXACT_SOURCE_ROOT: root }).filter(flag => flag.endsWith('=source'));
-    assert.deepEqual(source(`${link}/../capture`), [`--remap-path-prefix=${capture}=source`, `--remap-path-prefix=${resolve(`${link}/../capture`)}=source`]);
+    assert.deepEqual(source(`${link}/../capture`), [`--remap-path-prefix=${physical}=source`, `--remap-path-prefix=${link}/../capture=source`]);
     assert.deepEqual(source(capture), [`--remap-path-prefix=${capture}=source`]);
 
     const env = { CARGO_HOME: resolve(dir, 'home') }, cwd = resolve(dir, 'app'), spaced = resolve(dir, 'Build Cache/capture'), linked = resolve(dir, 'capture');
     mkdirSync(resolve(cwd, '.cargo'), { recursive: true });
     mkdirSync(spaced, { recursive: true });
     symlinkSync(spaced, linked);
-    const flags = [`--remap-path-prefix=${spaced}=source`, `--remap-path-prefix=${linked}=source`];
+    const flags = source(linked);
+    assert.deepEqual(flags, [`--remap-path-prefix=${spaced}=source`, `--remap-path-prefix=${linked}=source`]);
     writeFileSync(resolve(cwd, '.cargo/config.toml'), '[target.wasm32-unknown-unknown]\nrustflags = "--cfg a"\n');
-    assert.deepEqual(targetRustflags('wasm32-unknown-unknown', flags, { cwd, env }), ['--config', `target.wasm32-unknown-unknown.rustflags="--cfg a --remap-path-prefix=${linked}=source"`]);
-    assert.throws(() => targetRustflags('wasm32-unknown-unknown', [flags[0]], { cwd, env }), /rustflags is a string/);
-    const spacedLink = resolve(dir, 'a link');
-    symlinkSync(capture, spacedLink);
-    assert.throws(() => targetRustflags('wasm32-unknown-unknown', [`--remap-path-prefix=${capture}=source`, `--remap-path-prefix=${spacedLink}=source`], { cwd, env }), /rustflags is a string/);
+    assert.throws(() => targetRustflags('wasm32-unknown-unknown', flags, { cwd, env }), /rustflags is a string.*write it as an array/);
     writeFileSync(resolve(cwd, '.cargo/config.toml'), '[target.wasm32-unknown-unknown]\nrustflags = ["--cfg", "a"]\n');
     assert.deepEqual(targetRustflags('wasm32-unknown-unknown', flags, { cwd, env }), ['--config', `target.wasm32-unknown-unknown.rustflags=${JSON.stringify(flags)}`]);
   } finally { rmSync(dir, { recursive: true, force: true }); }

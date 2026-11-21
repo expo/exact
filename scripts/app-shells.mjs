@@ -777,6 +777,21 @@ export const unregisteredSurfaces = (manifest, platform) =>
 /** `gpuModules` with package declarations read now, not when `app` was resolved: a long-lived process (a dev loop)
  * otherwise acts on the declarations it started with. */
 export const currentGpuModules = (app, platform = null) => gpuModules(packageGpuManifest({ gpu: app.manifest.gpu }, app.dir), platform);
+/** The stock web bake reads the Contract directly. An authored build script must run through Cargo. */
+export function authoredWebBake(dir) {
+  const script = resolve(dir, 'build.rs');
+  return existsSync(script) && !/^\s*fn main\(\)\s*\{\s*exact_js_bake::build\w*\(/m.test(readFileSync(script, 'utf8'));
+}
+
+export const webRendererHost = (dir, binary) => ['linux', 'web'].find(host => existsSync(resolve(dir, host, 'src/bin', binary + '.rs')));
+
+/** Whether a normal web build compiles anything belonging to the app as well as the SDK tools. */
+export function webCompilesRust(app) {
+  return !!(app.manifest.game || rustDataOf(app.manifest) || app.manifest.rust?.module?.package ||
+    existsSync(resolve(app.dir, 'gpu/Cargo.toml')) || currentGpuModules(app, 'web').length ||
+    authoredWebBake(resolve(app.dir, 'web')) || webRendererHost(app.dir, app.name + '-render'));
+}
+
 /** Where `ensurePackageGpu` generates a package module's workspace. */
 export const packageGpuDir = (app, module) => resolve(app.dir, '.exact/package-gpu', module.name);
 

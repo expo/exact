@@ -2,7 +2,7 @@ import { expect, mock, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { captureWebProducts, cargoContractReads, changedContractReads, contractReadReceipt, loopWebDist, privateNativeBuild, privateWebBuild } from './web-build.mjs';
 import { appleArtifacts } from '../host/apple/build.mjs';
@@ -405,6 +405,7 @@ test.each([
   [['--release'], 'development', 'development'],
 ])('Windows packaging selects the executable and trust for %j with %s trust', async (args, trust, expected) => {
   const { copyFileSync } = await import('node:fs');
+  const { windowsRuntime, writePackagedReceipt } = await import('../host/windows/build.mjs');
   const { windowsBuild } = await import('./agent-build.mjs');
   const source = readFileSync(resolve(import.meta.dir, '../host/windows/build.mjs'), 'utf8');
   const start = source.indexOf('if (import.meta.main) {') + 'if (import.meta.main) {'.length;
@@ -415,10 +416,17 @@ test.each([
   try {
     process.env.EXACT_WINDOWS_OUTPUT = build.env.EXACT_WINDOWS_OUTPUT;
     const path = resolve(dir, 'fixture-windows.exe'); writeFileSync(path, 'first executable');
+    const redist = resolve(dir, 'redist');
+    for (const arch of ['arm64', 'x64']) {
+      const crt = resolve(redist, arch, 'Microsoft.VC145.CRT');
+      mkdirSync(crt, { recursive: true });
+      for (const dll of ['vcruntime140.dll', 'msvcp140.dll']) writeFileSync(resolve(crt, dll), arch);
+      writeFileSync(resolve(crt, 'runtime.pdb'), 'symbols');
+    }
     const env = { process: { platform: 'win32', argv: [], env: { ...build.env, EXACT_UPDATE_TRUST: trust } }, guardFlags: () => args, resolveApp: () => app, prepareShaders() {},
       bakeTarget: () => 'x86_64-pc-windows-msvc', pickIcon: () => null, resolve, mkdirSync, developmentBuildEnv: () => build.env,
-      copyFileSync, readFileSync, writeFileSync, createHash, windowsFile: () => 'fixture.exe', closeOpened() {}, syncStaticTree() {}, copyShaders() {},
-      writePackagedReceipt() {}, unclaimedNote: () => null, console: { log() {} },
+      copyFileSync, readFileSync, writeFileSync, createHash, windowsFile: (_app, path) => path.endsWith('.exe') ? 'fixture.exe' : basename(path), closeOpened() {}, syncStaticTree() {}, copyShaders() {},
+      windowsRuntime: target => windowsRuntime(target, { VCToolsRedistDir: redist }), writePackagedReceipt, unclaimedNote: () => null, console: { log() {} },
       buildBake(app, kind, target, options) {
         expect(options.env.EXACT_UPDATE_TRUST).toBe(expected);
         const receipt = { products: [{ path, sha256: createHash('sha256').update('first executable').digest('hex') }], compat: {} };
@@ -429,6 +437,17 @@ test.each([
     const selected = windowsBuild(app).bin;
     expect(selected).toBe(resolve(build.env.EXACT_WINDOWS_OUTPUT, 'fixture.exe'));
     expect(readFileSync(selected, 'utf8')).toBe('first executable');
+    const output = build.env.EXACT_WINDOWS_OUTPUT;
+    const receipt = JSON.parse(readFileSync(resolve(output, 'receipt.json'), 'utf8')).build;
+    for (const dll of ['vcruntime140.dll', 'msvcp140.dll']) {
+      const packaged = resolve(output, dll);
+      expect(existsSync(packaged)).toBe(args.includes('--release'));
+      if (args.includes('--release')) {
+        expect(readFileSync(packaged, 'utf8')).toBe('x64');
+        expect(receipt.products).toContainEqual({ path: dll, sha256: createHash('sha256').update('x64').digest('hex') });
+      }
+    }
+    expect(existsSync(resolve(output, 'runtime.pdb'))).toBe(false);
   } finally {
     if (before === undefined) delete process.env.EXACT_WINDOWS_OUTPUT; else process.env.EXACT_WINDOWS_OUTPUT = before;
     build.close(); rmSync(dir, { recursive: true, force: true });

@@ -13,8 +13,8 @@ pub(crate) fn cases(
         return Ok(None);
     }
     let text = std::fs::read_to_string(&test_file).map_err(|e| e.to_string())?;
-    let properties = contract::properties(&text).map_err(|e| e.to_string())?;
-    let checked = contract::check_properties_path(file, &properties);
+    let mut properties = contract::properties(&text).map_err(|e| e.to_string())?;
+    let checked = contract::resolve_properties_path(file, &mut properties);
     if let Some(reason) = directive(source, "refused").first() {
         let errors = checked.err().ok_or_else(|| {
             format!(
@@ -74,7 +74,13 @@ pub(crate) fn check(case: &Case, observation: &[String], announce: bool) -> Resu
         return Ok(());
     }
     let text = std::fs::read_to_string(test_file).map_err(|e| e.to_string())?;
-    let properties = contract::properties(&text).map_err(|e| e.to_string())?;
+    let mut properties = contract::properties(&text).map_err(|e| e.to_string())?;
+    contract::resolve_properties_path(path, &mut properties).map_err(|es| {
+        es.iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
     let report = crate::property::evaluate(&properties, observation);
     let expected = directive(&case.source, "false");
     let false_names: std::collections::BTreeSet<_> = report

@@ -106,7 +106,13 @@ enum Op {
     Island(Arc<Pixmap>, Rect4, Transform, u8),
     PlaneBegin([f32; 9]),
     PlaneEnd,
-    Canvas(Arc<Pixmap>, Rect4, Vec<Shape>, Transform),
+    Canvas(
+        Arc<Pixmap>,
+        Option<CanvasUpdate>,
+        Rect4,
+        Vec<Shape>,
+        Transform,
+    ),
     Text(Rc<Paragraph>, Vec<RunPaint>, (f32, f32), Transform),
     Svg(Box<Svg>, Transform),
     SvgClip(exact_kernel::svg::scene::Clip, Transform),
@@ -341,10 +347,26 @@ impl Backend for Recorder {
     /// A masked SVG island or a placed canvas child, already in the walk's
     /// space: a canvas drawn there.
     fn surface_image(&mut self, pixels: Arc<Pixmap>, dst: Rect4) {
-        self.push(Op::Canvas(pixels, dst, Vec::new(), Transform::identity()));
+        self.push(Op::Canvas(
+            pixels,
+            None,
+            dst,
+            Vec::new(),
+            Transform::identity(),
+        ));
     }
     fn canvas(&mut self, pixels: &Arc<Pixmap>, dst: Rect4, clips: &[Shape], ts: Transform) {
-        self.push(Op::Canvas(pixels.clone(), dst, clips.to_vec(), ts));
+        self.canvas_frame(pixels, None, dst, clips, ts);
+    }
+    fn canvas_frame(
+        &mut self,
+        pixels: &Arc<Pixmap>,
+        update: Option<CanvasUpdate>,
+        dst: Rect4,
+        clips: &[Shape],
+        ts: Transform,
+    ) {
+        self.push(Op::Canvas(pixels.clone(), update, dst, clips.to_vec(), ts));
     }
     fn text(
         &mut self,
@@ -444,7 +466,7 @@ impl Tape {
                 Op::Border(b, ts) => path_bounds(&b.region).and_then(|r| mapped(*ts, r)),
                 Op::Image(_, r, _, ts, _, _)
                 | Op::Island(_, r, ts, _)
-                | Op::Canvas(_, r, _, ts) => mapped(*ts, *r),
+                | Op::Canvas(_, _, r, _, ts) => mapped(*ts, *r),
                 Op::Text(p, _, at, ts) => p
                     .paint_bounds(scale)
                     .and_then(|r| mapped(*ts, grow((r.0 + at.0, r.1 + at.1, r.2, r.3), blur))),
@@ -558,7 +580,9 @@ impl Tape {
                     planes = planes.saturating_sub(1);
                     b.plane_end();
                 }
-                Op::Canvas(pixels, dst, clips, ts) => b.canvas(pixels, *dst, clips, t(*ts)),
+                Op::Canvas(pixels, update, dst, clips, ts) => {
+                    b.canvas_frame(pixels, *update, *dst, clips, t(*ts))
+                }
                 Op::Text(p, palette, origin, ts) => b.text(text, p, palette, *origin, t(*ts)),
                 Op::Svg(s, ts) => {
                     let paint = SvgPaint {

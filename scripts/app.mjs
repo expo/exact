@@ -49,7 +49,7 @@ import { filesystem, installedModules, OFFLINE_MISSING, removePrivateTree, withH
 import { installedFileDependencies } from './file-dependencies.mjs';
 import { holdAppOutput, startSweep } from './sweep.mjs';
 import { WEB_TOOLCHAIN, WEB_STD, WEB_SIZE, WEB_RUSTFLAGS, webToolchainEnv, cargoEnvironment,
-  appCrates, authoredWorkspace, buildCommand, cargoOnPath, claimTargetCrates, physicalPath,
+  appCrates, authoredWorkspace, buildCommand, cargoOnPath, claimTargetCrates, physicalPath, writtenPath,
   wholeProgram, declaredWorkspace, knownWorkspace, refuseLoose, rememberWorkspace, shellsDir, targetRustflags } from './cargo-check.mjs';
 export { WEB_TOOLCHAIN, WEB_STD, WEB_SIZE, webToolchainEnv, cargoEnvironment, cargoOnPath, wholeProgram } from './cargo-check.mjs';
 import { appCrateName, gpuModules, packageGpuInputs, packageGpuManifest, gpuView, joinMetadata, joinsGpu, settleShells } from './app-shells.mjs';
@@ -250,9 +250,9 @@ export function rustRemapFlags(app, toolchain = null, env = process.env) {
   const { commit, sysroot } = rustcFacts.get(key);
   const pairs = [[resolve(env.CARGO_HOME ?? resolve(homedir(), '.cargo')), 'cargo']];
   if (sysroot && commit) pairs.push([resolve(sysroot, 'lib/rustlib/src/rust'), `/rustc/${commit}`]);
-  // The source root by the physical path Cargo names its sources by (/var is /private/var), and as given, last, so
-  // rustc's last matching prefix is the given spelling where both match one path
-  if (env.EXACT_SOURCE_ROOT) for (const root of new Set([physicalPath(env.EXACT_SOURCE_ROOT), resolve(env.EXACT_SOURCE_ROOT)].filter(Boolean))) pairs.push([root, 'source']);
+  // The source root by the physical path Cargo names its sources by (/var is /private/var), and as written, `..` and
+  // all, last, so rustc's last matching prefix is the written spelling where both match one path
+  if (env.EXACT_SOURCE_ROOT) for (const root of new Set([physicalPath(env.EXACT_SOURCE_ROOT), writtenPath(env.EXACT_SOURCE_ROOT)].filter(Boolean))) pairs.push([root, 'source']);
   pairs.push([ROOT, '']);
   if (app && resolve(app.workspace) !== ROOT) pairs.push([resolve(app.workspace), '']);
   if (app) pairs.push([resolve(app.target), 'target']);
@@ -1134,7 +1134,7 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
     const entries=platform==='ios'&&(app.manifest.widgets?.length||app.manifest.live_activities?.length); if(entries)add(resolve(packageRoot,'widget'),true); if(entries||env.EXACT_WIDGET_GALLERY==='1')add(resolve(packageRoot,'Sources/ExactSnapshot'),true);
   }
   if(platform==='web') {
-    for(const path of [...Object.values(webHostFiles('base','rust','gpu',...(gpuModules(app.manifest,'web').length?['gpuModules']:[]))).filter(path => !path.startsWith('target/web-host/')),...hostModuleSources(ROOT),'host/web-js/glue.mjs','host/web-js/agent-gate.mjs','scripts/app.mjs','scripts/rust.mjs',...SHELL_SOURCES,'host/web/build.mjs','package.json','bun.lock']) add(resolve(ROOT,path));
+    for(const path of [...Object.values(webHostFiles('base','rust','gpu',...(gpuModules(app.manifest,'web').length?['gpuModules']:[]),...(app.manifest.game?.render?.workers===true?['gpuJobs']:[]))).filter(path => !path.startsWith('target/web-host/')),...hostModuleSources(ROOT),'host/web-js/glue.mjs','host/web-js/agent-gate.mjs','scripts/app.mjs','scripts/rust.mjs',...SHELL_SOURCES,'host/web/build.mjs','package.json','bun.lock']) add(resolve(ROOT,path));
     if (existsSync(resolve(app.dir, 'app.ts'))) {
       // The TS producer is a build dependency, outside the runtime Cargo graph.
       // Its canonical API declaration still determines the accepted app module.

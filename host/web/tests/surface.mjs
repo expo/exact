@@ -31,7 +31,7 @@ export async function fixture(options = {}) {
       const host = new Element('host'); host.canvas = new Element(); views.set(id, host);
       exact.gpu.surface(id, 'world', []);
     }
-  }, gpu_seekable() {}, gpu_reduced_motion(on) { motion.push(on); }, gpu_shader_names: () => '[]', gpu_shaders_clear() {},
+  }, gpu_child_view() {}, gpu_seekable() {}, gpu_reduced_motion(on) { motion.push(on); }, gpu_shader_names: () => '[]', gpu_shaders_clear() {},
     gpu_create: () => ++next, gpu_bind_at(id) { if (options.initialBindFail === id) return false; changed.set(id, JSON.stringify({ value: id })); return true; },
     gpu_published(id) { const r = changed.get(id); changed.delete(id); return r; },
     gpu_performance_reporting: (id, enabled) => reporting.push([id, enabled]), gpu_performance: id => options.snapshot?.(id),
@@ -41,7 +41,7 @@ export async function fixture(options = {}) {
     gpu_agent: id => JSON.stringify({world:{tick:0,restored:restored.has(id),input:{forwarded:options.forwarded ?? [],controlContacts:options.controlContacts ?? []}}, lines:[], from:0, next:0}),
     gpu_input: (id, json) => { events.push(JSON.parse(json)); return true; }, gpu_shader_check: async () => true,
     gpu_shader: () => true,
-    gpu_assets: () => '{"requests":[],"retired":[]}', gpu_asset: () => true, gpu_lifecycle: () => true, gpu_clock: () => true, gpu_period: () => {},
+    gpu_assets: () => '{"requests":[],"retired":[]}', gpu_asset: () => true, gpu_lifecycle: () => true, gpu_clock: () => true, gpu_period: () => {}, ...options.gpu,
   };
   const glue = readFileSync(process.env.R8A_GLUE_SOURCE || new URL('../glue.js', import.meta.url), 'utf8');
   const applySource = glueDeclarations(glue, ['heldLinks', 'heldOutputs', 'applyBatch', 'holdWake', 'holdOrientation']);
@@ -80,7 +80,10 @@ export async function fixture(options = {}) {
     .replace('import { pacer } from "./pace.js";', 'const pacer = () => Object.assign(now => now, {period_ms: 1000 / 120});') // the frame clock is tested in pace.test.mjs
     .replace('await import(`./gpu.js?g=${version}`)', 'await candidate(version)')
     .replace('await import(`./gpu.js${query}`)', 'await candidate(0)')
-    .replaceAll('await loadModule(version)', 'await candidate(version)');
+    .replace('await import(glue)', 'await candidate(0)')
+    .replace("import('./gpu-jobs.js')", 'loadJobs()')
+    .replaceAll(/await loadModule\(version(?:, false)?\)/g,
+      call => options.loadModule ? call : 'await candidate(version)');
   // Inline style as a plain record, with the two CSSOM methods that reach a custom property.
   const style = () => Object.defineProperties({}, {
     getPropertyValue: {value(name) { return this[name] ?? ''; }},
@@ -117,14 +120,14 @@ export async function fixture(options = {}) {
     }
   }
   await new (Object.getPrototypeOf(async function() {}).constructor)(
-    'padPoller', 'inertAncestor', 'assetDelivery', 'globalThis', 'candidate', 'document', 'Element', 'devicePixelRatio', 'MutationObserver', 'ResizeObserver', 'requestAnimationFrame', 'cancelAnimationFrame', 'location', 'console', 'window', 'performance', 'setTimeout', 'clearTimeout', 'getComputedStyle',
+    'padPoller', 'inertAncestor', 'assetDelivery', 'globalThis', 'candidate', 'document', 'Element', 'devicePixelRatio', 'MutationObserver', 'ResizeObserver', 'requestAnimationFrame', 'cancelAnimationFrame', 'location', 'console', 'window', 'performance', 'setTimeout', 'clearTimeout', 'getComputedStyle', 'loadJobs',
     source + `;exact.finishRestore = (view) => { const e = surfaces.get(view); e.pendingRestore = {bytes:new Uint8Array([7])}; finishRestore(e, gpu); };`
-  )(options.padPoller ?? (() => {}), inertAncestor, settings => assetDelivery({...settings, ...options.delivery}), { exact, matchMedia: options.matchMedia }, async version => version ? nextGpu : gpu, document, Element, 3, class { constructor(fn) { observers.push(fn); } observe() {} disconnect() {} },
-    class { constructor(fn) { resizes.push(fn); } observe() {} disconnect() {} }, fn => { if (fn.name === "frame") frame = fn; return 1; }, () => {}, { search: '' }, { error: (...args) => diagnostics.push(args.join(' ')), info() {} }, window,
+  )(options.padPoller ?? (() => {}), inertAncestor, settings => assetDelivery({...settings, ...options.delivery}), { exact, matchMedia: options.matchMedia, ...options.globals }, async version => version ? nextGpu : gpu, document, Element, 3, class { constructor(fn) { observers.push(fn); } observe() {} disconnect() {} },
+    class { constructor(fn) { resizes.push(fn); } observe() {} disconnect() {} }, fn => { if (fn.name === "frame") frame = fn; return 1; }, () => {}, { search: '' }, { error: (...args) => diagnostics.push(args.join(' ')), warn: (...args) => diagnostics.push(args.join(' ')), info() {} }, window,
     options.performance ?? globalThis.performance, (fn, ms) => {
       if (ms === 1000) { const id = timerId--; metricTimers.set(id, fn); return id; }
       return (options.setTimeout ?? globalThis.setTimeout)(fn, ms);
-    }, id => { if (!metricTimers.delete(id)) clearTimeout(id); }, el => ({position:el.style.position ?? "static"}));
+    }, id => { if (!metricTimers.delete(id)) (options.clearTimeout ?? clearTimeout)(id); }, el => ({position:el.style.position ?? "static"}), options.loadJobs);
   function create(id, name = 'world') {
     const el = new Element("host"); el.canvas = new Element();
     views.set(id, el); exact.gpu.surface(id, name, []); return el;

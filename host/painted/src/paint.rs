@@ -369,6 +369,7 @@ pub struct Scene<'a> {
 }
 
 mod frame;
+pub use crate::canvas2d::CanvasUpdate;
 pub use backend::{Backend, FrameTarget, WindowLayer, POINTER};
 pub use exact_ink::Rotation;
 pub use frame::Frame;
@@ -1165,7 +1166,8 @@ impl Painter {
                         content,
                         &walk.scene.kernel.env_of(node.id),
                     ) {
-                        self.backend.canvas(&c.pixels, rect, &clips, ts);
+                        self.backend
+                            .canvas_frame(&c.pixels, c.update, rect, &clips, ts);
                     }
                 } else {
                     self.native(walk, node, &clips[0], ts);

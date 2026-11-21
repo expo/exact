@@ -559,20 +559,20 @@ mod tests {
 /// Export one game's surface and the native or wasm GPU module ABI.
 #[macro_export]
 macro_rules! module {
-    ($game:ty, hooks = $hooks:ty) => { $crate::module!($game, render_hooks (), false, $hooks, &[]); };
-    ($game:ty, hooks = $hooks:ty, shaders = $shaders:expr) => { $crate::module!($game, render_hooks (), false, $hooks, $shaders); };
-    ($game:ty, assets, hooks = $hooks:ty, shaders = $shaders:expr) => { $crate::module!($game, render_hooks $crate::ModelExecutor, true, $hooks, $shaders); };
-    ($game:ty, assets, hooks = $hooks:ty) => { $crate::module!($game, render_hooks $crate::ModelExecutor, true, $hooks, &[]); };
+    ($game:ty, hooks = $hooks:ty $(, $workers:ident)?) => { $crate::module!($game, render_hooks (), false, $hooks, &[] $(, $workers)?); };
+    ($game:ty, hooks = $hooks:ty, shaders = $shaders:expr $(, $workers:ident)?) => { $crate::module!($game, render_hooks (), false, $hooks, $shaders $(, $workers)?); };
+    ($game:ty, assets, hooks = $hooks:ty, shaders = $shaders:expr $(, $workers:ident)?) => { $crate::module!($game, render_hooks $crate::ModelExecutor, true, $hooks, $shaders $(, $workers)?); };
+    ($game:ty, assets, hooks = $hooks:ty $(, $workers:ident)?) => { $crate::module!($game, render_hooks $crate::ModelExecutor, true, $hooks, &[] $(, $workers)?); };
     ($game:ty) => { $crate::module!($game, hook (), false); };
     ($game:ty, assets) => { $crate::module!($game, hook $crate::ModelExecutor, true); };
     ($game:ty, audio) => { $crate::module!($game, audio_mode false); };
     ($game:ty, audio, assets) => { $crate::module!($game, audio_mode true); };
-    ($game:ty, audio, hooks = $hooks:ty, shaders = $shaders:expr) => { $crate::module!($game, audio_mode false, $hooks, $shaders); };
-    ($game:ty, audio, assets, hooks = $hooks:ty, shaders = $shaders:expr) => { $crate::module!($game, audio_mode true, $hooks, $shaders); };
-    ($game:ty, audio, hooks = $hooks:ty) => { $crate::module!($game, audio_mode false, $hooks, &[]); };
-    ($game:ty, audio, assets, hooks = $hooks:ty) => { $crate::module!($game, audio_mode true, $hooks, &[]); };
+    ($game:ty, audio, hooks = $hooks:ty, shaders = $shaders:expr $(, $workers:ident)?) => { $crate::module!($game, audio_mode false, $hooks, $shaders $(, $workers)?); };
+    ($game:ty, audio, assets, hooks = $hooks:ty, shaders = $shaders:expr $(, $workers:ident)?) => { $crate::module!($game, audio_mode true, $hooks, $shaders $(, $workers)?); };
+    ($game:ty, audio, hooks = $hooks:ty $(, $workers:ident)?) => { $crate::module!($game, audio_mode false, $hooks, &[] $(, $workers)?); };
+    ($game:ty, audio, assets, hooks = $hooks:ty $(, $workers:ident)?) => { $crate::module!($game, audio_mode true, $hooks, &[] $(, $workers)?); };
     ($game:ty, audio_mode $assets:tt) => { $crate::module!($game, audio_mode $assets, (), &[]); };
-    ($game:ty, audio_mode $assets:tt, $hooks:ty, $shaders:expr) => {
+    ($game:ty, audio_mode $assets:tt, $hooks:ty, $shaders:expr $(, $workers:ident)?) => {
         #[derive(Default)]
         struct GameAudio(::exact_game_audio::SurfacePlayer, Option<$crate::exact_game::audio::Sounds>);
         impl $crate::Executor for GameAudio {
@@ -600,21 +600,24 @@ macro_rules! module {
             fn unlock(&mut self) { self.0.unlock(); }
             fn audio_state(&self) -> Option<&'static str> { self.0.state() }
         }
-        $crate::module!($game, audio_hook GameAudio, $assets, $hooks, $shaders);
+        $crate::module!($game, audio_hook GameAudio, $assets, $hooks, $shaders $(, $workers)?);
     };
-    ($game:ty, audio_hook $hook:ty, false, $hooks:ty, $shaders:expr) => { $crate::module!($game, render_hooks $hook, false, $hooks, $shaders); };
-    ($game:ty, audio_hook $hook:ty, true, $hooks:ty, $shaders:expr) => { $crate::module!($game, render_hooks $crate::ModelExecutor<$hook>, true, $hooks, $shaders); };
+    ($game:ty, audio_hook $hook:ty, false, $hooks:ty, $shaders:expr $(, $workers:ident)?) => { $crate::module!($game, render_hooks $hook, false, $hooks, $shaders $(, $workers)?); };
+    ($game:ty, audio_hook $hook:ty, true, $hooks:ty, $shaders:expr $(, $workers:ident)?) => { $crate::module!($game, render_hooks $crate::ModelExecutor<$hook>, true, $hooks, $shaders $(, $workers)?); };
     ($game:ty, hook $hook:ty, $assets:literal) => {
         $crate::module!($game, render_hooks $hook, $assets, (), &[]);
     };
-    ($game:ty, render_hooks $hook:ty, $assets:literal, $hooks:ty, $shaders:expr) => {
+    ($game:ty, render_hooks $hook:ty, $assets:literal, $hooks:ty, $shaders:expr $(, $workers:ident)?) => {
+        $( $crate::module!(@worker_exports $workers, $hooks); )?
         /// The game's sole surface; shaders are embedded in the renderer.
         pub static REGISTRY: $crate::exact_gpu::Registry = $crate::exact_gpu::Registry {
             surfaces: &[(
                 <$game as $crate::exact_game::Game>::NAME,
                 <<$game as $crate::exact_game::Game>::Args as $crate::exact_game::Args>::FIELDS
                     .len(),
-                || Box::new($crate::WorldSurface::<$game, $hook, $assets, $hooks>::default().development_edits($crate::development_build())),
+                $crate::module!(@surface (
+                    Box::new($crate::WorldSurface::<$game, $hook, $assets, $hooks>::default().development_edits($crate::development_build()))
+                ) $(, $workers, $hooks)?),
             )],
             shaders: $shaders,
         };
@@ -639,6 +642,43 @@ macro_rules! module {
             }
             $crate::exact_game::asset::validate_tables::<$game>(text).map_err(|e| ::wasm_bindgen::JsValue::from_str(&e.to_string()))?;
             Ok(text.into())
+        }
+    };
+    (@surface ($make:expr)) => { || $make };
+    (@surface ($make:expr), workers, $hooks:ty) => {
+        || {
+            #[cfg(target_arch = "wasm32")]
+            {
+                std::thread_local! {
+                    static JOBS: () = $crate::web_jobs::install::<$hooks>();
+                }
+                JOBS.with(|()| ());
+            }
+            $make
+        }
+    };
+    (@worker_exports workers, $hooks:ty) => {
+        #[cfg(target_arch = "wasm32")]
+        #[::wasm_bindgen::prelude::wasm_bindgen]
+        pub fn exact_game_worker_module() -> ::wasm_bindgen::JsValue {
+            ::wasm_bindgen::module()
+        }
+        #[cfg(target_arch = "wasm32")]
+        #[::wasm_bindgen::prelude::wasm_bindgen]
+        pub fn exact_game_worker_names() -> Vec<::wasm_bindgen::JsValue> {
+            <$hooks as $crate::Hooks>::REMOTE
+                .iter()
+                .map(|entry| ::wasm_bindgen::JsValue::from_str(entry.name))
+                .collect()
+        }
+        #[cfg(target_arch = "wasm32")]
+        #[::wasm_bindgen::prelude::wasm_bindgen]
+        pub fn exact_game_worker_run(
+            name: &str,
+            input: &[u8],
+            mark: &::wasm_bindgen::JsValue,
+        ) -> Result<Vec<u8>, ::wasm_bindgen::JsValue> {
+            $crate::web_jobs::run::<$hooks>(name, input, mark)
         }
     };
 }
@@ -675,4 +715,214 @@ mod visibility_tests;
 /// this crate.
 pub fn development_build() -> bool {
     env!("EXACT_UPDATE_TRUST") != "production"
+}
+
+#[cfg(target_arch = "wasm32")]
+#[doc(hidden)]
+pub mod web_jobs {
+    use super::*;
+    use web_sys::js_sys::{self, Array, Function, Object, Reflect, Uint8Array, WeakMap};
+    use web_sys::wasm_bindgen::{self, JsCast, JsValue};
+
+    /// Install the browser transport for the generated module.
+    pub fn install<H: Hooks>() {
+        if let Err(error) = install_module_transport::<H>(Browser) {
+            if matches!(error, WireError::DuplicateName(_)) {
+                invoke("discard", &[]);
+            }
+            web_sys::console::error_1(
+                &format!("exact: could not install GPU jobs transport: {error:?}").into(),
+            );
+        }
+    }
+
+    /// Run a worker job, marking the call to the job itself.
+    pub fn run<H: Hooks>(name: &str, input: &[u8], mark: &JsValue) -> Result<Vec<u8>, JsValue> {
+        let mark = mark
+            .dyn_ref::<Function>()
+            .ok_or("missing GPU job run marker")?;
+        run_remote_job(H::REMOTE, name, input, |phase| {
+            let _ = mark.call1(&JsValue::UNDEFINED, &JsValue::from(phase == RunMark::Begin));
+        })
+        .map_err(|error| JsValue::from_str(&format!("GPU job {name}: {error:?}")))
+    }
+
+    struct Browser;
+
+    fn get(value: &JsValue, name: &str) -> Option<JsValue> {
+        Reflect::get(value, &JsValue::from_str(name)).ok()
+    }
+
+    fn invoke(method: &str, args: &[JsValue]) -> JsValue {
+        let result = (|| {
+            let exact = get(&js_sys::global(), "exact")?;
+            let gpu = get(&exact, "gpu")?;
+            let jobs = get(&gpu, "jobs")?.dyn_into::<WeakMap>().ok()?;
+            let memory = wasm_bindgen::memory().unchecked_into::<Object>();
+            let endpoint = jobs.get(&memory);
+            let function = get(&endpoint, method)?.dyn_into::<Function>().ok()?;
+            function.apply(&endpoint, &args.iter().collect()).ok()
+        })();
+        result.unwrap_or(JsValue::UNDEFINED)
+    }
+
+    fn number(value: JsValue) -> f64 {
+        value.as_f64().unwrap_or_default()
+    }
+
+    fn words(attempt: Attempt) -> [JsValue; 2] {
+        [(attempt as u32).into(), ((attempt >> 32) as u32).into()]
+    }
+
+    fn attempt(low: JsValue, high: JsValue) -> Attempt {
+        (u64::from(number(high) as u32) << 32) | u64::from(number(low) as u32)
+    }
+
+    fn event(value: JsValue) -> Option<TransportEvent> {
+        let row = value.dyn_into::<Array>().ok()?;
+        match number(row.get(0)) as u32 {
+            0 => {
+                let size = row.get(3).as_f64()?;
+                let outcome = if size < 0.0 {
+                    Outcome::Trapped
+                } else {
+                    Outcome::Bytes(size as usize)
+                };
+                Some(TransportEvent::Arrived {
+                    attempt: attempt(row.get(1), row.get(2)),
+                    outcome,
+                })
+            }
+            1 => {
+                let attempts = row
+                    .get(2)
+                    .dyn_into::<Array>()
+                    .ok()?
+                    .iter()
+                    .filter_map(|value| {
+                        let words = value.dyn_into::<Array>().ok()?;
+                        Some(attempt(words.get(0), words.get(1)))
+                    })
+                    .collect();
+                Some(TransportEvent::Lost {
+                    worker: number(row.get(1)) as u32,
+                    attempts,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    impl Transport for Browser {
+        fn start(&self, names: &[&str]) {
+            let names: Array = names.iter().map(|name| JsValue::from_str(name)).collect();
+            invoke("start", &[names.into()]);
+        }
+
+        fn events(&self, queue: QueueId) -> (TransportState, Vec<TransportEvent>) {
+            let Ok(snapshot) = invoke("events", &[queue.into()]).dyn_into::<Array>() else {
+                return (TransportState::Ended, Vec::new());
+            };
+            let state = match number(snapshot.get(0)) as i32 {
+                -1 => TransportState::Ended,
+                0 => TransportState::Starting,
+                count => TransportState::Ready(count as usize),
+            };
+            let events = snapshot
+                .get(1)
+                .dyn_into::<Array>()
+                .ok()
+                .map(|events| events.iter().filter_map(event).collect())
+                .unwrap_or_default();
+            (state, events)
+        }
+
+        fn can_post(&self, queue: QueueId) -> bool {
+            invoke("canPost", &[queue.into()]).as_bool() == Some(true)
+        }
+
+        fn busy_workers(&self, queue: QueueId) -> usize {
+            number(invoke("busyWorkers", &[queue.into()])) as usize
+        }
+
+        fn idle_workers(&self) -> usize {
+            number(invoke("idleWorkers", &[])) as usize
+        }
+
+        fn set_asking(&self, queue: QueueId, asking: bool) {
+            invoke("setAsking", &[queue.into(), asking.into()]);
+        }
+
+        fn post(&self, queue: QueueId, jobs: &[Posting]) -> Option<WorkerId> {
+            let jobs: Array = jobs
+                .iter()
+                .map(|job| {
+                    let [low, high] = words(job.attempt);
+                    let row = Object::new();
+                    for (name, value) in [
+                        ("attempt", Array::of2(&low, &high).into()),
+                        ("name", JsValue::from_str(job.name)),
+                        ("input", Uint8Array::from(job.input.as_slice()).into()),
+                    ] {
+                        let _ = Reflect::set(&row, &JsValue::from_str(name), &value);
+                    }
+                    row
+                })
+                .collect();
+            let worker = number(invoke("post", &[queue.into(), jobs.into()])) as u32;
+            (worker != 0).then_some(worker)
+        }
+
+        fn read_result(&self, queue: QueueId, id: Attempt, out: &mut [u8]) -> ResultRead {
+            let [low, high] = words(id);
+            let result = invoke(
+                "readResult",
+                &[queue.into(), low, high, (out.len() as u32).into()],
+            );
+            if result.is_null() || result.is_undefined() {
+                return ResultRead::Gone;
+            }
+            if let Ok(bytes) = result.dyn_into::<Uint8Array>() {
+                if bytes.length() as usize == out.len() {
+                    bytes.copy_to(out);
+                    return ResultRead::Copied;
+                }
+            }
+            ResultRead::Unreadable
+        }
+
+        fn accept_answer(&self) {
+            invoke("acceptAnswer", &[]);
+        }
+
+        fn reject(&self, worker: WorkerId) {
+            invoke("reject", &[worker.into()]);
+        }
+
+        fn forget_attempt(&self, queue: QueueId, id: Attempt) {
+            let [low, high] = words(id);
+            invoke("forgetAttempt", &[queue.into(), low, high]);
+        }
+
+        fn forget(&self, queue: QueueId) {
+            invoke("forget", &[queue.into()]);
+        }
+
+        fn retire(&self, queue: QueueId) {
+            invoke("retire", &[queue.into()]);
+        }
+
+        fn report(&self) -> TransportReport {
+            let Ok(row) = invoke("report", &[]).dyn_into::<Array>() else {
+                return TransportReport::default();
+            };
+            TransportReport {
+                workers_ready: number(row.get(0)) as usize,
+                worker_bytes: number(row.get(1)) as u64,
+                handler_ms: number(row.get(2)),
+                peak_buffered_bytes: number(row.get(3)) as u64,
+                ready_ms: row.get(4).as_f64().filter(|ms| ms.is_finite()),
+            }
+        }
+    }
 }

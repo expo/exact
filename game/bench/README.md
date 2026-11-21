@@ -1992,3 +1992,86 @@ and `prepare` gets 7 ms. The window still does not fill in 60 s with `arena`, an
 does with `off`, though `prepare` runs longer with `arena`: a unit costs more
 there. Why was not read; the allocator and `write_buffer` into a retained buffer
 are what differ.
+
+### The web worker lane, 2026-11-21
+
+Chrome with `jobs=on` on the web worker lane (LLP 1182.000 D9) beside `jobs=off`,
+flying at radius 40, on a page served without cross-origin isolation headers
+(`BENCH_NO_ISOLATION=1`) except where a row says otherwise. The Mac Studio in
+Chrome 159 (a 1280 × 720 page on a display at 60 Hz; another session was building,
+and the one-minute load was 14 to 34 on 36 cores), at `e91832165`, and the lighting
+row with the lane at `15a842770`, which differs in the lane's readings only. The
+Pixel 5 of the rows above in Chrome 155 at `e91832165` (display at 90 Hz at every
+reading; battery 19.6 to 27.7 °C, thermal status 0). Uncalibrated. Three windows of
+60 s; a range is the windows' range.
+
+"Lighting" is `light=96000 vertex=64 blend=window edits=4`: the game guess without
+its reuse compares. Mesh jobs take the wire; compare batches decline it and run on
+the page.
+
+**Mac Studio.**
+
+| Workload | `jobs` | First fill | Refill p50, p95 | `prepare` p50, p95 | Frames past the deadline, a window | Operations a window |
+|---|---|---|---|---|---|---|
+| Meshing alone | `off` | 14.1 s | 183, 183 ms | 0.0, 2.7 ms | 0 | 97,200 |
+| | worker | 14.1 s | 200, 200 ms | 0.1, 0.9 ms | 0 | 97,200 |
+| Lighting | `off` | not in 60 s; 8,878 sections pending | 683, 700 ms | 15.5, 16.2 ms | 2,946–3,108 of 3,504–3,521 | 98,552–100,940 |
+| | worker | 29.2 s | 383, 383 ms | 9.2–9.3, 10.3 ms | 0 | 101,519–101,520 |
+| | worker, isolated page | 29.2 s | 383, 383–517 ms | 9.3–9.7, 10.3–11.5 ms | 0–33 | 101,490–101,521 |
+| Game guess | `off` | not in 60 s; 52,232 pending | none finishes | 14.9, 15.5 ms | every frame | 180,339–662,772 |
+| | worker | not in 60 s; 51,066 pending | none finishes | 14.8, 16.6–17.1 ms | 1,990–2,008 of 3,461–3,477 | 1,447,473–1,528,123 |
+
+(Lighting with `jobs=off` finished its refills in the second and third windows; the
+first was still filling. The isolated page's row was read at a load of 32.)
+
+With lighting the lane fills the window, where the page alone does not in 60 s; the
+refill falls from 683 to 383 ms and `prepare` from 15.5 to 9.2 ms, with no frame
+past its deadline. Meshing alone
+has little to move: the refill is one frame longer (a result is installed the frame
+after it is made, as on the native pool) and `prepare`'s p95 falls from 2.7 to
+0.9 ms. At the game guess neither lane finishes a refill. The lane does 2.2 to 8.5
+times the operations, and the page is then full of what stays on it: the compare
+batches, which decline the wire, and the blended layer's upload (32 GB a window
+against 1 GB).
+
+| Workload, worker lane | First worker ready | Wire p95 a frame | Handlers a frame | Largest worker memory | Peak answers held | Bytes out, in a window |
+|---|---|---|---|---|---|---|
+| Meshing alone | 13 ms | 0.5 ms | 0.025 ms | 1.5 MiB | 0.56 MB | 1.0 MB, 238 MB |
+| Lighting | 387 ms | 0.5 ms | 0.046–0.055 ms | 2.1 MiB | 1.7 MB | 1.0 MB, 924–937 MB |
+| Game guess | 392 ms | 0.7 ms | 0.044–0.051 ms | 2.1 MiB | 2.4 MB | 1.0 MB, 1,256–1,273 MB |
+
+Four workers were ready in every row. "First worker ready" counts from the first
+`take` that wanted one, the script's import included. The wire is the page's time
+in `take` copying, decoding, encoding and posting; a tenth of the display period
+is 1.67 ms. With lighting, 21 to 22 % of `prepare`s began with a worker idle and a
+wire job queued (`idleWithWork`, read at `15a842770`).
+
+With `gpu-jobs-worker.js` removed from the build (at `fd5b3ec16`) the lighting row
+reports `inline`, shows its first picture in 0.4 s and finishes its refills.
+
+**Pixel 5.**
+
+| Workload | `jobs` | First fill | Refill p50, p95 | `prepare` p50, p95 | Frames past the deadline, a window | Operations a window |
+|---|---|---|---|---|---|---|
+| Meshing alone, `fps=45` | `off` | 19.5 s | 267–311, 356 ms | 0.2, 16.2–16.4 ms | 483–567 | 97,200 |
+| | worker | 26.7 s | 333, 378 ms | 0.4, 7.7 ms | 30–37 | 97,200 |
+| Meshing alone, `fps=0` | worker | not in 60 s; 38,060 pending | none finishes | 1.1, 5.6–5.9 ms | 2,950–3,089 | 44,369–47,830 |
+| Lighting, `fps=45` | `off` | not in 60 s; 46,941 pending | none finishes | 21.6–21.7, 26.1–26.2 ms | 2,267–2,296 | 18,764–18,803 |
+| | worker | not in 60 s; 41,936 pending | none finishes | 14.9–15.8, 41.7–43.7 ms | 831–912 | 38,627–39,757 |
+
+| Workload, worker lane | First worker ready | Wire p95 a frame | Handlers a frame | Largest worker memory | Peak answers held |
+|---|---|---|---|---|---|
+| Meshing alone, `fps=45` | 213 ms | 3.4–3.5 ms | 0.64–0.65 ms | 1.5 MiB | 0.47 MB |
+| Meshing alone, `fps=0` | 294 ms | 2.1–2.2 ms | 0.18–0.22 ms | 1.5 MiB | 0.41 MB |
+| Lighting, `fps=45` | 1,919 ms | 1.6–1.8 ms | 0.29–0.34 ms | 2.1 MiB | 0.84–0.95 MB |
+
+On the phone the lane takes work off the page and gives some back as wire time: a
+tenth of its 11.1 ms display period is 1.1 ms, and the wire's p95 is 1.6 to 3.5 ms.
+Capped at 45, meshing alone keeps up either way; with the lane `prepare`'s p95
+halves and frames past the deadline fall from about 500 to about 35 a window, while
+the first fill and the refill are longer (26.7 s against 19.5 s; a p50 of 333 ms
+against 267 to 311 ms). With lighting the lane does twice the operations
+and neither lane finishes a refill; `prepare`'s p50 falls from 21.7 to about 15 ms
+and its p95 rises from 26 to 42 ms. Uncapped, the
+window does not fill with the lane, as it does not without it (the cap's rows
+above): the encode fills the period.

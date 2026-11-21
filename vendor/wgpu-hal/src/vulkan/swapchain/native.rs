@@ -306,6 +306,8 @@ impl Surface for NativeSurface {
             next_acquire_index: 0,
             present_semaphores,
             next_present_time: None,
+            #[cfg(drm)]
+            next_present_id: None,
         }))
     }
 
@@ -375,6 +377,8 @@ pub(crate) struct NativeSwapchain {
     /// This must only be set if [`wgt::Features::VULKAN_GOOGLE_DISPLAY_TIMING`] is enabled, and
     /// so the VK_GOOGLE_display_timing extension is present.
     next_present_time: Option<vk::PresentTimeGOOGLE>,
+    #[cfg(drm)]
+    next_present_id: Option<core::num::NonZeroU64>,
 }
 
 impl Drop for NativeSwapchain {
@@ -632,6 +636,19 @@ impl Swapchain for NativeSwapchain {
             vk_info
         };
 
+        // EXACT (EXACT-PATCHES.md, 19). A direct-display client waits for this
+        // particular page flip after the queue has accepted its frame.
+        #[cfg(drm)]
+        let (ids, mut present_id);
+        #[cfg(drm)]
+        let vk_info = if let Some(id) = self.next_present_id.take() {
+            ids = [id.get()];
+            present_id = vk::PresentIdKHR::default().present_ids(&ids);
+            vk_info.push_next(&mut present_id)
+        } else {
+            vk_info
+        };
+
         let suboptimal = {
             profiling::scope!("vkQueuePresentKHR");
             unsafe { self.functor.queue_present(queue.raw, &vk_info) }.map_err(|error| {
@@ -667,6 +684,20 @@ impl Swapchain for NativeSwapchain {
 impl NativeSwapchain {
     pub(crate) fn as_raw(&self) -> vk::SwapchainKHR {
         self.raw
+    }
+
+    #[cfg(drm)]
+    pub(in crate::vulkan) fn set_next_present_id(&mut self, id: core::num::NonZeroU64) -> bool {
+        if self.next_present_id.is_some()
+            || !self
+                .device
+                .enabled_extensions
+                .contains(&khr::present_id::NAME)
+        {
+            return false;
+        }
+        self.next_present_id = Some(id);
+        true
     }
 
     pub fn set_next_present_time(&mut self, present_timing: vk::PresentTimeGOOGLE) {

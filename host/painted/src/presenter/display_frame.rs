@@ -52,15 +52,15 @@ struct Picture {
 /// The pending pixel owner. ACK consumes its metadata even if a caller retains
 /// the pixel Arc for VNC, so acknowledged paragraph history cannot accumulate.
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
-pub struct SubmittedFrame {
-    pub(crate) pixels: Arc<Pixmap>,
+pub struct SubmittedFrame<P = Arc<Pixmap>> {
+    pub(crate) pixels: P,
     identity: Rc<Identity>,
     picture: RefCell<Option<Picture>>,
     /// What its present starts (LLP 1003.001 D9).
     carried: super::Carried,
 }
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
-impl SubmittedFrame {
+impl<P> SubmittedFrame<P> {
     /// What the picture carries to its present.
     pub fn carried(&self) -> super::Carried {
         self.carried
@@ -77,6 +77,38 @@ impl SubmittedFrame {
 impl AsRef<Pixmap> for SubmittedFrame {
     fn as_ref(&self) -> &Pixmap {
         &self.pixels
+    }
+}
+
+/// The image a Linux carrier shows and optionally mirrors to CPU readers.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub enum PanelImage {
+    /// A CPU-composited or retained-region picture, in panel orientation.
+    Pixels(Arc<Pixmap>),
+    #[cfg(target_os = "linux")]
+    /// Ink’s completed GPU target, ready to copy to the swapchain.
+    Ink {
+        /// The view for the carrier to submit before painting another frame.
+        view: wgpu::TextureView,
+        /// A readback of this target when a CPU reader needs the picture.
+        pixels: Option<Arc<Pixmap>>,
+    },
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl SubmittedFrame<PanelImage> {
+    /// The image to submit to the panel.
+    pub fn image(&self) -> &PanelImage {
+        &self.pixels
+    }
+
+    /// CPU pixels owned by this receipt, if a reader requested them.
+    pub fn mirror(&self) -> Option<&Arc<Pixmap>> {
+        match &self.pixels {
+            PanelImage::Pixels(pixels) => Some(pixels),
+            #[cfg(target_os = "linux")]
+            PanelImage::Ink { pixels, .. } => pixels.as_ref(),
+        }
     }
 }
 
@@ -208,6 +240,48 @@ impl<D: DataSource> Presenter<D> {
     /// while an earlier one is still pending.
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
     pub fn display_frame(&mut self) -> Option<SubmittedFrame> {
+        self.submitted_picture(|p| {
+            p.frame_with_canvas_tick(crate::paint::FrameTarget::Pixels, false)
+                .expect("a display frame requested CPU pixels")
+        })
+    }
+
+    /// Paint one submitted picture for the Linux panel and its active pixel readers.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn panel_frame(
+        &mut self,
+        direct: bool,
+        mirror: bool,
+    ) -> Option<SubmittedFrame<PanelImage>> {
+        self.submitted_picture(|p| {
+            #[cfg(target_os = "linux")]
+            if direct && p.host.content_region().is_none() {
+                p.brush.take_scanout();
+                let pixels = p.frame_with_canvas_tick(
+                    crate::paint::FrameTarget::Scanout { readback: mirror },
+                    false,
+                );
+                if let Some(view) = p.brush.take_scanout().filter(|_| p.last_frame_succeeded) {
+                    return PanelImage::Ink { view, pixels };
+                }
+                return PanelImage::Pixels(
+                    pixels.expect("a CPU display fallback returns its image"),
+                );
+            }
+            #[cfg(target_os = "macos")]
+            let _ = (direct, mirror);
+            PanelImage::Pixels(
+                p.frame_with_canvas_tick(crate::paint::FrameTarget::Pixels, false)
+                    .expect("a display frame requested CPU pixels"),
+            )
+        })
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
+    fn submitted_picture<P>(
+        &mut self,
+        render: impl FnOnce(&mut Self) -> P,
+    ) -> Option<SubmittedFrame<P>> {
         if self.display.blocked() {
             return None;
         }
@@ -223,10 +297,7 @@ impl<D: DataSource> Presenter<D> {
         self.boxes_serial += 1;
         self.display.active = true;
         self.display.rendering = true;
-        let pixels = self
-            .frame_with_canvas_tick(crate::paint::FrameTarget::Pixels, false)
-            .expect("capture has pixels or a CPU fallback");
-        self.display.menu = None;
+        let pixels = render(self);
         self.display.rendering = false;
         let identity = Rc::new(Identity {
             origin: self.display.origin.clone(),
@@ -306,13 +377,42 @@ impl<D: DataSource> Presenter<D> {
     /// The display presented `frame` at `at_ms` on the loop's clock: what
     /// it carried starts there (LLP 1003.001 D9).
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
-    pub fn display_presented(&mut self, frame: &SubmittedFrame, at_ms: f64) -> Option<String> {
+    pub fn display_presented<P>(
+        &mut self,
+        frame: &SubmittedFrame<P>,
+        at_ms: f64,
+    ) -> Option<String> {
         self.picture_presented(frame.carried, at_ms)
     }
 
     /// The display has shown `frame`: whether it was the one pending.
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
     pub fn display_complete(&mut self, frame: &SubmittedFrame) -> bool {
+        self.acknowledge(frame, Some(&frame.pixels))
+    }
+
+    /// Publish the input geometry and any retained region pixels for this flip.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn panel_complete(&mut self, frame: &SubmittedFrame<PanelImage>) -> bool {
+        self.acknowledge(frame, frame.mirror())
+    }
+
+    /// A lost presentation cannot acknowledge geometry or start its carried motion.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn panel_lost(&mut self, frame: &SubmittedFrame<PanelImage>) {
+        if self
+            .display
+            .pending
+            .as_ref()
+            .is_some_and(|id| Rc::ptr_eq(id, &frame.identity))
+        {
+            self.display.pending = None;
+            self.repaint();
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
+    fn acknowledge<P>(&mut self, frame: &SubmittedFrame<P>, pixels: Option<&Arc<Pixmap>>) -> bool {
         if !self
             .display
             .pending
@@ -348,9 +448,9 @@ impl<D: DataSource> Presenter<D> {
                 // A keyboard rose under the field being edited before this
                 // picture: these are the boxes that show where it left it.
                 self.reveal_owed();
-                if self.host.content_region().is_some() {
+                if let Some(pixels) = pixels.filter(|_| self.host.content_region().is_some()) {
                     let before = self.host.content_region().unwrap().publication_painted();
-                    self.last_region_frame = Some(frame.pixels.clone());
+                    self.last_region_frame = Some(pixels.clone());
                     self.last_region_scale = Some(scale);
                     if let Some(e) = self.host.content_region_painted(&self.brush) {
                         self.host.log(e);

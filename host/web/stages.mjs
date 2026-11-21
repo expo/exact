@@ -36,6 +36,19 @@ export const STAGES = [
  * names, so the pair comes from one run of one version; another version
  * builds unsplit rather than guess. */
 export const BINARYEN = 'version 132';
+/** Binaryen release archives append their tag; package-manager builds may omit it. */
+export function binaryenVersion(output) {
+  return /^wasm-opt (version \d+)(?: \([^)]*\))?$/.exec(output.trim())?.[1] ?? output.trim();
+}
+
+export function binaryenArchive(version, os = process.platform, cpu = process.arch) {
+  const platform = {darwin:'macos',linux:'linux',win32:'windows'}[os];
+  const arch = cpu === 'x64' ? 'x86_64' : cpu === 'arm64' && os !== 'win32'
+    ? (os === 'linux' ? 'aarch64' : 'arm64') : null;
+  if (!platform || !arch) throw new Error(`no Binaryen setup for ${os}/${cpu}`);
+  return `binaryen-${version}-${arch}-${platform}.tar.gz`;
+}
+
 /** Where the pinned binaryen comes from on a machine without a package
  * manager (LLP 1054 O2): the release tarball, unpacked, its `bin/` on PATH. */
 export const BINARYEN_DOWNLOAD = `https://github.com/WebAssembly/binaryen/releases/tag/${BINARYEN.replace(' ', '_')}`;

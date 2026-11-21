@@ -202,6 +202,34 @@ fn string_uniform_errors_name_the_declared_type() {
 }
 
 #[test]
+fn a_fragment_pipeline_needs_defaults_for_the_overrides_it_uses() {
+    let app = App::new();
+    let call = r#"fragment(src="assets/override.wgsl")"#;
+    let write = |initializer: &str, value: &str| {
+        app.write(
+            "assets/override.wgsl",
+            &format!("override unused: f32;\n@id(7) override opacity: f32{initializer};\nfn alpha() -> f32 {{ return opacity; }}\n@fragment fn picture() -> @location(0) vec4f {{ return vec4f({value}); }}"),
+        )
+    };
+    write("", "1");
+    app.compile(call).unwrap();
+    write(" = 1", "alpha()");
+    app.compile(call).unwrap();
+    write("", "alpha()");
+    let error = app.compile(call).unwrap_err();
+    assert_eq!(error.id, "analyze-surface-shader", "{error}");
+    assert_eq!(
+        error.file.as_deref(),
+        Some(app.0.join("assets/override.wgsl").as_path())
+    );
+    assert_eq!(error.span.line, 2, "{error}");
+    assert!(
+        error.message.contains("opacity") && error.message.contains("default"),
+        "{error}"
+    );
+}
+
+#[test]
 fn shader_declarations_follow_the_fragment_and_uniform_rules() {
     let app = App::new();
     let fragment = "@fragment fn picture() -> @location(0) vec4f { return vec4f(1); }\n";

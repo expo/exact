@@ -19,7 +19,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHash, createPrivateKey, createPublicKey, sign, verify } from 'node:crypto';
 import { parseArgs } from 'node:util';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -123,18 +123,46 @@ export function fromSet(name, source, env = process.env) {
   return null;
 }
 
+// The checkout pins its producer. A mirror supplies bytes and cannot choose a key.
+const TOOLS_ORIGIN = null;
+const PRODUCER_KEYS = [];
+const fetchMisses = new Map();
+const lookupKey = (env, name) => JSON.stringify([cacheDir(env), env.EXACT_TOOLS_ORIGIN || TOOLS_ORIGIN, name]);
+
+/** A fetched product from the cache or the tools origin, when this machine accepts one. */
+export function fetchedTool(name, env = process.env, download = true) {
+  if (!fetchedAllowed(env)) return null;
+  const cached = fromSet(name, 'fetched', env);
+  if (cached || !download) return cached;
+  const origin = env.EXACT_TOOLS_ORIGIN || TOOLS_ORIGIN;
+  if (!origin) return null;
+  const attempt = lookupKey(env, name);
+  if (Date.now() - (fetchMisses.get(attempt)?.time ?? 0) < 30_000) return null;
+  // Callers choose tools synchronously. Only a cold origin lookup needs a child.
+  const fetch = spawnSync(process.execPath, [fileURLToPath(import.meta.url), 'fetch', name], { env, cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'] });
+  if (fetch.status === 0) {
+    const installed = fromSet(name, 'fetched', env);
+    if (installed) return installed;
+  }
+  const reason = fetch.error?.message || fetch.stderr?.trim().replace(/^tools: /, '') || `the tools origin has no matching ${name} for ${hostTriple()}`;
+  fetchMisses.set(attempt, { time: Date.now(), reason });
+  if (!rustMissing(env)) console.warn(`tools: ${reason}`);
+  return null;
+}
+
 /** The set D5's order takes product `name` from, after this checkout's own fresh build: one built here, else (where a
  * kept product does not answer first) a fetched one where that is allowed. */
-export const fromSets = (name, env = process.env) => fromSet(name, 'built', env) ?? (fetchedAllowed(env) ? fromSet(name, 'fetched', env) : null);
+export const fromSets = (name, env = process.env, download = true) => fromSet(name, 'built', env) ?? fetchedTool(name, env, download);
 
 /** Thrown where product `name` would need Cargo and Rust is missing: says why no set matched, the newest set's commit
  * (and how to check it out, when the tree is clean), then how to install Rust (D5). Its message is one
  * `error [rust-missing]: …` line, the form `contract build --json` keeps the id of. */
 export class RustMissing extends Error {
-  constructor(name, env = process.env) {
+  constructor(name, env = process.env, reason) {
     const newest = sets(env).find(set => set.manifest.products?.[name]);
     let why = `no tool set on this machine has it (${cacheDir(env).replace(home(env), '~')})`, commit = '';
-    if (newest) {
+    if (reason) why = reason;
+    else if (newest) {
       const product = newest.manifest.products[name], built = short(newest.manifest.commit);
       const path = productFile(newest, product), at = path && differs(product);
       if (!path) why = `the tool set built at ${built} is missing ${product.file}`;
@@ -145,6 +173,8 @@ export class RustMissing extends Error {
       if (at && newest.manifest.commit && clean.status === 0 && clean.stdout === '' && git('rev-parse', 'HEAD').stdout.trim() !== newest.manifest.commit)
         commit = `; \`git -C ${ROOT} checkout ${newest.manifest.commit}\` brings this checkout to that set's sources`;
     }
+    const remote = fetchMisses.get(lookupKey(env, name));
+    if (remote) why += `. The tools lookup reported ${remote.reason}`;
     super(`error [rust-missing]: ${name} builds with Rust, which this machine does not have (cargo, with the pinned toolchain ${pin()}), and ${why}${commit}. Install Rust with rustup (https://rustup.rs), then run bun ${resolve(ROOT, 'scripts/exact.mjs')} setup`);
     this.rustMissing = true;
   }
@@ -362,16 +392,29 @@ export function readToolManifest(bytes, id, triple, publicKey) {
   if (manifest.kind !== 'exact-tool-set' || manifest.version !== 1 || manifest.triple !== triple || manifest.source !== 'fetched')
     throw new Error(`tool manifest is not a version 1 set for ${triple}`);
   const signature = Buffer.from(manifest.signature ?? '', 'base64');
-  if (publicKey.asymmetricKeyType !== 'ed25519' || signature.length !== 64 || !verify(null, canonicalBytes(manifest), publicKey, signature))
+  const keys = Array.isArray(publicKey) ? publicKey : [publicKey];
+  const message = canonicalBytes(manifest);
+  if (signature.length !== 64 || !keys.some(key => key.asymmetricKeyType === 'ed25519' && verify(null, message, key, signature)))
     throw new Error('tool manifest signature does not match the producer key');
   return manifest;
 }
 
 const EXECUTABLES = ['contract', 'exact-web-js', 'exact-filesystem'];
+const LEAVES = ['markdown.wasm', 'motion.wasm', 'markup-editor.wasm', 'textflow.wasm'];
+const TOOL_FILES = [...EXECUTABLES, ...LEAVES];
+
+/** A complete web toolchain for a machine without Rust. A setup check reads only its cache. */
+export function prebuiltWebTools({ download = false, env = process.env } = {}) {
+  if (!rustMissing(env)) return false;
+  return TOOL_FILES.every(name => {
+    const match = fromSets(name, env, download);
+    return !!match && (name !== 'exact-web-js' || !!setMetadata(match.set));
+  });
+}
 
 function runProducts({ dir, manifest }, root) {
   const linux = manifest.triple === LINUX_TOOLS && hostTriple() !== LINUX_TOOLS;
-  for (const name of ['markdown.wasm', 'motion.wasm', 'markup-editor.wasm', 'textflow.wasm']) {
+  for (const name of LEAVES) {
     const product = manifest.products[name];
     if (!product || product.file !== name) throw new Error(`missing ${name} in the built tool set`);
     new WebAssembly.Module(readFileSync(resolve(dir, name)));
@@ -464,6 +507,98 @@ function recentSets(bytes) {
   const list = JSON.parse(bytes.toString('utf8'));
   if (!Array.isArray(list)) throw new Error('recent tool lookup must be an array');
   return list.map(manifestId);
+}
+
+function checkToolFiles(manifest) {
+  if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(manifest.commit)) throw new Error('invalid Git commit in signed tool manifest');
+  const inputsValid = inputs => Array.isArray(inputs) && inputs.length > 0 && inputs.every(([file, hash]) =>
+    typeof file === 'string' && !file.includes(':') && !file.split(/[\\/]/).some(part => !part || part === '.' || part === '..') && /^[0-9a-f]{64}$/.test(hash));
+  for (const [name, product] of Object.entries(manifest.products)) {
+    if (!TOOL_FILES.includes(name) || product.file !== name || !Number.isSafeInteger(product.size) || product.size < 1 ||
+        !/^[0-9a-f]{64}$/.test(product.sha256) || !inputsValid(product.inputs)) throw new Error(`invalid product in signed tool manifest: ${name}`);
+  }
+  if (manifest.metadata && !inputsValid(manifest.metadata.inputs)) throw new Error('invalid inputs in signed tool metadata');
+}
+
+/** Another process sees the set only once all its blobs match the signed manifest. */
+async function installSet(origin, cache, id, bytes, manifest) {
+  const { blobPath } = await import('./origin.mjs');
+  mkdirSync(cache, { recursive: true });
+  const entry = resolve(cache, id), temp = mkdtempSync(entry + '.');
+  try {
+    for (const [name, product] of Object.entries(manifest.products)) {
+      const body = await origin.get(blobPath(product.sha256));
+      if (body?.length !== product.size || sha(body) !== product.sha256) throw new Error(`${name} differs from its signed tool manifest`);
+      const path = resolve(temp, product.file);
+      writeFileSync(path, body);
+      if (EXECUTABLES.includes(name)) chmodSync(path, 0o755);
+    }
+    writeFileSync(resolve(temp, 'manifest.json'), bytes);
+    try { renameSync(temp, entry); }
+    catch (error) {
+      // A simultaneous fetch may have published the same complete set.
+      if (!['ENOTEMPTY', 'EEXIST', 'EPERM'].includes(error.code) ||
+          !readFileSync(resolve(entry, 'manifest.json')).equals(bytes)) throw error;
+      // Restore any cached product that disappeared between runs.
+      for (const { file } of Object.values(manifest.products)) {
+        try { linkSync(resolve(temp, file), resolve(entry, file)); }
+        catch (linkError) { if (linkError.code !== 'EEXIST') throw linkError; }
+      }
+    }
+  } finally { rmSync(temp, { recursive: true, force: true }); }
+}
+
+/** Look up HEAD first. Recent sets can match a fork or edits outside the requested product. */
+export async function fetchToolSet(origin, name, keys, env = process.env) {
+  const { streamPath } = await import('./origin.mjs');
+  const triple = hostTriple(), base = streamPath({ channel: 'tools', compatibilityId: triple });
+  if (!TOOL_FILES.includes(name)) throw new Error(`unknown tool ${name}`);
+  if (!keys.length) throw new Error('this checkout has no tools producer public key');
+  const tried = new Set();
+  let firstMismatch;
+  async function take(id) {
+    if (tried.has(id)) return false;
+    tried.add(id);
+    const bytes = await origin.get(`${base}/manifests/${id}.json`);
+    if (!bytes) return false;
+    const manifest = readToolManifest(bytes, id, triple, keys);
+    checkToolFiles(manifest);
+    const product = manifest.products[name];
+    if (!product) return false;
+    const at = differs(product);
+    if (at) {
+      firstMismatch ??= { at, commit: manifest.commit };
+      return false;
+    }
+    await installSet(origin, cacheDir(env, triple), id, bytes, manifest);
+    return true;
+  }
+  const head = spawnSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8', env }).stdout?.trim();
+  let builtHead = false;
+  if (/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(head ?? '')) {
+    const mapped = await origin.get(`${base}/commits/${head}.json`);
+    builtHead = mapped !== null;
+    if (builtHead && await take(manifestId(JSON.parse(mapped.toString('utf8'))))) return true;
+  }
+  for (const id of recentSets(await origin.get(`${base}/recent.json`)).slice(0, 8)) if (await take(id)) return true;
+  if (firstMismatch) {
+    const { at, commit } = firstMismatch;
+    let reason = `${at} differs from the tool set built at ${short(commit)}`;
+    if (head && !builtHead && head !== commit) {
+      const status = spawnSync('git', ['-C', ROOT, 'status', '--porcelain'], { encoding: 'utf8', env });
+      if (status.status === 0 && !status.stdout.trim()) reason += `. Run git -C "${ROOT}" checkout ${commit} to use its sources`;
+    }
+    throw new Error(reason);
+  }
+  return false;
+}
+
+async function fetchProduct(name) {
+  const spec = process.env.EXACT_TOOLS_ORIGIN || TOOLS_ORIGIN;
+  if (!spec || !fetchedAllowed()) return false;
+  if (!/^https?:\/\//.test(spec)) throw new Error('a tools origin needs an HTTP or HTTPS URL');
+  const { HttpsOrigin } = await import('./origin.mjs');
+  return fetchToolSet(new HttpsOrigin(spec), name, PRODUCER_KEYS.map(pem => createPublicKey(pem)));
 }
 
 async function recordCommit(origin, stream, base, commit, id, newer) {
@@ -641,9 +776,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const [verb, ...args] = process.argv.slice(2);
   // Not awaited at the top level: this module is in an import cycle with filesystem.mjs, and with a top-level await
   // a dynamic import of a module in that cycle waits for this module's evaluation, so `keep` never finishes.
-  if (verb === 'keep' || verb === 'publish') {
+  if (verb === 'keep' || verb === 'publish' || verb === 'fetch') {
     const run = async () => {
       if (verb === 'publish') return publish(args);
+      if (verb === 'fetch') { if (!await fetchProduct(args[0])) process.exitCode = 1; return; }
       const { values } = parseArgs({ args, options: { target: { type: 'string' } } });
       return keep(values.target);
     };

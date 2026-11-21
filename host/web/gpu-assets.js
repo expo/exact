@@ -110,7 +110,6 @@ function assets(entry) {
       if (flight.cancelled || getModule() !== module || live(entry.view) !== entry || entry.id !== id) return;
       const ok = failure ? module.gpu_asset_failed(id, name, failure) : module.gpu_asset(id, name, bytes);
       const error = ok ? undefined : module.gpu_error();
-      if (error) console.error("exact gpu:", error);
       delivered(entry, module, error);
     };
   }

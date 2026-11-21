@@ -131,7 +131,7 @@ structs! {
     SoundDecl { source, span }
     FontFaceDecl { weight, italic, source, span }
     TestDecl { name, hosts, steps, span }
-    PropertyDecl { span, kind, name, lines }
+    PropertyDecl { span, kind, name, lines, actions }
     PropertyLine { span, form }
     FnDecl { name, params, ret, body, span }
     SourceDecl { name, params, shape, lines, span }

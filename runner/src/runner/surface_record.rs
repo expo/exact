@@ -59,7 +59,7 @@ impl<D: DataSource> Runner<D> {
             return Ok(None);
         }
         if let Some(bytes) = json.map(str::len).filter(|n| *n > MAX_BYTES) {
-            let resource: String = self.plan.str(self.plan.resources[which[0]].name).into();
+            let resource: String = self.plan.str(self.resource_row(which[0]).name).into();
             let why = oversize(bytes);
             self.log(format!("surface {name} refused: {resource}: {why}"));
             return Err(RunnerError::Data {

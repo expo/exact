@@ -77,6 +77,7 @@ const WEB_HOST_GROUPS = {
   rust: ['rust-glue.js'],
   gpu: ['gpu-glue.js', 'pace.js', 'gpu-assets.js', 'gpu-pads.js', 'gpu-tier.js', 'gpu-refusal.js'],
   gpuModules: ['gpu-modules.js'],
+  gpuJobs: ['gpu-jobs.js', 'gpu-jobs-worker.js'],
   native: ['native-glue.js'],
   // A development page's frame sampler (LLP 1079 D3); a production build ships none.
   development: ['frames.js'],

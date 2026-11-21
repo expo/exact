@@ -646,7 +646,7 @@ pub struct TextEngine {
     pub(crate) field_faces: HashMap<(u16, u16, bool), String>,
     /// Canonical shaped-source builds, independent of width layout.
     pub shape_calls: usize,
-    layout_calls: usize,
+    pub(crate) layout_calls: usize,
     #[cfg(test)]
     before_layout: Option<Box<dyn FnMut()>>,
     #[cfg(test)]

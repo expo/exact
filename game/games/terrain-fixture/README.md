@@ -46,7 +46,9 @@ which must be in front: the page is served from this machine through `adb
 reverse` in a tab the run opens and closes. A device draws at its own size. The
 web builds use the `web` profile, the Android app `release`, and the other
 native ones `host-dev`. `BENCH_HEADLESS=1` runs the web transport without a display and
-marks the row headless.
+marks the row headless. `BENCH_NO_ISOLATION=1` omits the two cross-origin
+isolation headers on web rows. The row records `isolationHeaders` and each
+window records `wire` when the renderer supplies it.
 
 | Switch | Values | Default | Effect |
 |---|---|---|---|
@@ -107,10 +109,11 @@ than cores.
   blended sorting and uploads stay in `prepare`. The frame reserves its
   last unit for section work when sections are pending and none has run.
   Each result costs one unit, even when a compare batch has fewer than 64
-  sections. After the frame's units, the hook refills the pool's queue up
+  sections. After the frame's units, the hook refills the worker or pool queue up
   to 256 KiB, past the deadline if needed. That holds about five frames of
-  radius-40 flight submissions at 60 Hz. Lighting and meshing run on the workers.
-  A pool may be starved if `renderHooks.jobs` shows `queued: 0, running: 0`
+  radius-40 flight submissions at 60 Hz. Browser workers run mesh jobs and
+  the page runs reuse compares. Native pool threads can run both.
+  A worker or pool may be starved if `renderHooks.jobs` shows `queued: 0, running: 0`
   at the end of successive benchmark windows, `sectionsPending` stays above
   zero, and a matched `jobs=off` run completes more operations.
 - With `inflight=keep` on either lane, a kept stale mesh finishes its crossing
@@ -118,15 +121,22 @@ than cores.
 - On a canvas that rests, pending jobs can keep the canvas drawing and ticking
   after a canvas with finished jobs would rest, so later input can land on a
   different tick.
-- The lane uses up to four workers on a live native canvas and runs inline
-  under the agent's clock or on WebAssembly. A hook that uses jobs declares
-  a positive allowance. This fixture takes at most 64 results per frame
-  within its current allowance and takes the first result of a late frame
-  past the deadline. It holds completed outputs at a 32 MiB threshold. The
+- The fixture declares `game.render.workers: true`. With `jobs=on`, a live
+  browser build uses the `worker` lane when ready, and native hosts use
+  `pool`. The dev loop's first load uses an ordinary module and can start
+  workers. A hot-swapped module runs `inline`, as does work before the queue
+  sees its first ready worker, when workers are unavailable and under the
+  agent's clock. If an established queue loses its only ready worker, mesh
+  jobs wait up to five seconds for the replacement and reuse compares
+  continue on the page. If the replacement fails to start, the lane ends
+  and mesh jobs run on the page. The fixture takes
+  at most 64 results per frame within its allowance. A worker queue shares
+  one late unit between encoding and delivery. The completed-output threshold
+  is 32 MiB. The
   queue budget covers metadata and references to already resident padded
   inputs. The completion threshold prevents a radius-40 window of 64-byte vertices
-  from accumulating in CPU memory while uploads wait. Up to four running
-  meshes can finish after the threshold is reached.
+  from accumulating in CPU memory while uploads wait. Up to four batches
+  or native pool jobs can finish after the threshold is reached.
 - `itemsDrawn` counts submitted sections once across the opaque and blended
   draws, using the sections in the blended buffer's last upload.
 

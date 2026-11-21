@@ -44,15 +44,17 @@ if (import.meta.main && process.argv[2] === 'status' && !process.argv.includes('
   console.log(formatStatus(readStatus(resolve(process.argv[3] ?? '.'))));
   process.exit(0);
 }
-const { BINARYEN } = await import('../host/web/stages.mjs');
+const { BINARYEN, binaryenVersion, binaryenArchive } = await import('../host/web/stages.mjs');
+export { binaryenVersion, binaryenArchive };
 const { freeSpace, ROOM_GB } = await import('./filesystem.mjs');
 import { basename, delimiter, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { webCompilesRust } from './app-shells.mjs';
 import { grantAdvice } from './grant-advice.mjs';
 import { checkoutPath, linkCheckout } from './paths.mjs';
 import { installedFileDependencies } from './file-dependencies.mjs';
 import { addOutside, installIn, outsideSpecifier } from './package-manager.mjs';
-import { builtContract, compilerCargo, contractTool, launch, rustMissing } from './tools.mjs';
+import { builtContract, compilerCargo, contractTool, hostTriple, launch, prebuiltWebTools, rustMissing } from './tools.mjs';
 export { grantAdvice, grantLines } from './grant-advice.mjs';
 const { cargoEnvironment, appleExecutableName, HERMES_INSTALLER, hermesBundle, hermesTarget, pathFrom, readManifest, resolveApp, WEB_TOOLCHAIN, webToolchainEnv } = await import('./app.mjs');
 const { applyPattern, createApp, createGame, patternList, rustApp, UNCACHED_CRATES, wireSnapback } = await import('../game/new.mjs');
@@ -313,18 +315,6 @@ function list() {
   console.log(line(['app', 'command', 'installed']));
   for (const row of rows) console.log(line(row));
 }
-/** Binaryen release archives append their tag; package-manager builds may omit it. */
-export function binaryenVersion(output) {
-  return /^wasm-opt (version \d+)(?: \([^)]*\))?$/.exec(output.trim())?.[1] ?? output.trim();
-}
-
-export function binaryenArchive(version, os = process.platform, cpu = process.arch) {
-  const platform = {darwin:'macos',linux:'linux',win32:'windows'}[os];
-  const arch = cpu === 'x64' ? 'x86_64' : cpu === 'arm64' && os !== 'win32'
-    ? (os === 'linux' ? 'aarch64' : 'arm64') : null;
-  if (!platform || !arch) throw new Error(`no Binaryen setup for ${os}/${cpu}`);
-  return `binaryen-${version}-${arch}-${platform}.tar.gz`;
-}
 /** Install the versions declared by the SDK, once per machine. `appDir`: the app whose platform build is checked. */
 export async function setup({check = false, platform = null, device = false, appDir = process.env.EXACT_APP_DIR ?? (existsSync('app.contract') ? process.cwd() : null)} = {}) {
   // Steps only a game needs (its SDK lock, the engine's rustdoc for `game vocab`): a failure is named, not fatal.
@@ -340,11 +330,12 @@ export async function setup({check = false, platform = null, device = false, app
     const result = spawnSync(cmd, args, {cwd: ROOT, encoding: 'utf8'});
     return result.status === 0 ? result.stdout.trim() : '';
   };
-  if (!check && !output('rustup', ['--version'])) throw new Error('rustup is not on PATH, so setup installed nothing: install it from https://rustup.rs, then rerun exact setup');
+  const prebuilt = web && appDir && rustMissing() && !webCompilesRust(resolveApp(resolve(appDir), { useOutput: false })) && prebuiltWebTools({ download: !check });
+  if (!check && !prebuilt && !output('rustup', ['--version'])) throw new Error('rustup is not on PATH, so setup installed nothing: install it from https://rustup.rs, then rerun exact setup');
   // Whether the app links Hermes as its build decides: iOS by app.ts (host/apple/build.mjs), the rest by their crate's cargo graph; null outside an app.
   const app = appDir && ['android', 'ios', 'macos', 'linux'].includes(platform) ? resolveApp(resolve(appDir)) : null, kind = platform === 'macos' ? 'apple' : platform;
   const hermes = !app ? null : platform === 'ios' ? existsSync(resolve(app.dir, 'app.ts')) : app.manifest.game || crateManifest(app, kind) ? usesHermes(app, kind, platform === 'android' ? undefined : hermesTarget()) : null;
-  if (!check) {
+  if (!check && !prebuilt) {
     run('rustup', ['toolchain', 'install', pin.channel, '--profile', pin.profile,
       ...pin.components.flatMap(c => ['--component', c]), ...pin.targets.flatMap(t => ['--target', t])]);
     const proxy = cargoProxyFault(pin.channel);
@@ -373,6 +364,8 @@ export async function setup({check = false, platform = null, device = false, app
         process.env.PATH = `${resolve(binaryen, 'bin')}${delimiter}${process.env.PATH ?? ''}`;
       } finally { rmSync(stage, {recursive: true, force: true}); }
     }
+  }
+  if (!check) {
     run(process.execPath, ['install', '--frozen-lockfile']);
     if (!web) {
       if (!hermesTarget()) throw new Error(`the pinned Hermes release has no host bundle for ${process.platform}/${process.arch}`);
@@ -405,7 +398,7 @@ export async function setup({check = false, platform = null, device = false, app
       if (spawnSync(browsers[0], browsers.slice(1), {cwd: ROOT, stdio: 'inherit'}).status !== 0) console.error("exact setup: Playwright's Chromium did not install");
     }
     // Every bake resolves offline and locked: the checkout's crates, and the game SDK's for a game's shell.
-    run('cargo', [`+${pin.channel}`, 'fetch', '--locked', '--manifest-path', resolve(ROOT, 'Cargo.toml')]);
+    if (!prebuilt) run('cargo', [`+${pin.channel}`, 'fetch', '--locked', '--manifest-path', resolve(ROOT, 'Cargo.toml')]);
     if (!web) {
       console.log('cargo fetch (the game SDK lock, game/app/shells.lock)');
       const fetched = sdkFetch();
@@ -418,12 +411,13 @@ export async function setup({check = false, platform = null, device = false, app
       }
     }
   }
-  const rows = sdkReport(process.env, { only: platform, device });
-  const report = [...(platform ? await platformReport(platform, rows, { device, hermes }) : rows), cratesRow()];
+  const rows = sdkReport(process.env, { only: platform, device, prebuilt });
+  const report = prebuilt ? rows : [...(platform ? await platformReport(platform, rows, { device, hermes }) : rows), cratesRow()];
   if (platform === 'android') report.push(...rows.filter(row => row.name === 'Android JDK JIT'));
   printReport(report);
   const missing = report.filter(row => row.required && !row.ok);
   if (missing.length) throw new Error(`${missing.map(row => row.name).join(', ')} ${missing.length === 1 ? 'is' : 'are'} missing or differ; run exact setup (it installs what it can and names the rest)`);
+  if (prebuilt) { console.log('Web tools ready for this app.'); return; }
   for (const failure of gameFailures) console.error(`exact setup: ${failure}`);
   // "Ready" is said only of what is: a row some apps need is named with the apps it holds back.
   const needed = [...report.filter(row => !row.ok).map(row => `${row.need} (${row.name})`), ...(gameFailures.length ? ['games (the steps named above)'] : [])];
@@ -478,8 +472,8 @@ export async function platformReport(platform, rows, { device = false, hermes = 
 /** Every row, or with `only` a platform's rows alone (`platformRowNames`), the others' checks skipped. `device` and
  * `tv` name the build's destination (a phone's or a simulator's SDK, an Apple TV's); `swift` false, a build that
  * compiles no Swift host. */
-export function sdkReport(env = process.env, { only = null, device = false, tv = false, swift = true } = {}) {
-  const wanted = only ? new Set(platformRowNames(only, { device })) : null;
+export function sdkReport(env = process.env, { only = null, device = false, tv = false, swift = true, prebuilt = false } = {}) {
+  const wanted = prebuilt ? new Set(['Bun', 'node_modules', 'Chrome']) : only ? new Set(platformRowNames(only, { device })) : null;
   const want = (...names) => !wanted || names.some(name => wanted.has(name));
   const pin = Bun.TOML.parse(readFileSync(resolve(ROOT, 'rust-toolchain.toml'), 'utf8')).toolchain;
   const bindgen = Bun.TOML.parse(readFileSync(resolve(ROOT, 'game/Cargo.toml'), 'utf8')).workspace.dependencies['wasm-bindgen'].replace(/^=/, '');
@@ -489,12 +483,15 @@ export function sdkReport(env = process.env, { only = null, device = false, tv =
   };
   const row = (name, have, want, ok, fix, need = null) => ({name, have: have || 'missing', want, ok, fix, required: !need, need});
   const rows = [];
-  const rustup = output('rustup', ['--version']);
-  rows.push(row('rustup', rustup.split(' ')[1], 'any', !!rustup, 'install rustup from https://rustup.rs'));
-  const rust = output('rustc', [`+${pin.channel}`, '--version']).split(' ')[1];
-  // Cargo apart from rustc: a PATH can put another cargo first and leave rustup's rustc.
-  const proxy = cargoProxyFault(pin.channel, env);
-  rows.push(row('Rust', proxy ? "another cargo first on PATH" : rust, pin.channel, rust === pin.channel && !proxy, proxy || 'exact setup'));
+  if (prebuilt) rows.push(row('Prebuilt web tools', hostTriple(), 'matching this checkout', true, ''));
+  else {
+    const rustup = output('rustup', ['--version']);
+    rows.push(row('rustup', rustup.split(' ')[1], 'any', !!rustup, 'install rustup from https://rustup.rs'));
+    const rust = output('rustc', [`+${pin.channel}`, '--version']).split(' ')[1];
+    // Cargo apart from rustc: a PATH can put another cargo first and leave rustup's rustc.
+    const proxy = cargoProxyFault(pin.channel, env);
+    rows.push(row('Rust', proxy ? "another cargo first on PATH" : rust, pin.channel, rust === pin.channel && !proxy, proxy || 'exact setup'));
+  }
   const nightlyRoot = want('web nightly', 'web nightly wasm32', 'web nightly clippy') ? output('rustc', [`+${WEB_TOOLCHAIN}`, '--print', 'sysroot']) : '';
   const nightly = !!nightlyRoot && existsSync(resolve(nightlyRoot, 'lib/rustlib/src/rust/library/Cargo.toml'));
   if (want('web nightly')) rows.push(row('web nightly', nightlyRoot ? (nightly ? WEB_TOOLCHAIN : 'no rust-src') : '', `${WEB_TOOLCHAIN} + rust-src`, nightly, 'exact setup'));
@@ -774,7 +771,8 @@ async function newApp(path, {update = false, without = null, with: platforms = [
   }
   if (game && !path) throw new Error('Usage: exact new <path> --game [--assets] (the last part names the game: lowercase-hyphenated, no host suffix)');
   // The web's rows alone for an app (LLP 1153 D1.6); a native platform's are checked by the verb that first needs it.
-  const report = sdkReport(process.env, game ? {} : { only: 'web' });
+  const prebuilt = !game && !rust && !snapback && prebuiltWebTools();
+  const report = sdkReport(process.env, game ? {} : { only: 'web', prebuilt });
   // An app compiles no Rust to be made, so a machine without it (an agent's sandbox for a build service) can make one;
   // a game resolves its crates now, and a Snapback app wires a device build.
   const noRust = report.some(row => row.name === 'rustup' && !row.ok);
@@ -818,7 +816,8 @@ async function newApp(path, {update = false, without = null, with: platforms = [
   const appleTools = process.platform === 'linux' ? CROSS_IOS_ROWS : ['Xcode', 'iOS SDK'];
   if (!game && (!['darwin', 'linux'].includes(process.platform) || sdkReport(process.env, { only: 'ios', device: true }).some(row => appleTools.includes(row.name) && !row.ok))) console.log(`\nThis machine lacks ${process.platform === 'linux' ? 'the Apple cross SDK and its tools' : 'Xcode'}, so it cannot build the app for iPhone. Exact Build builds it in the cloud, and AppDrop installs it on a phone: https://exact.appdrop.app/agents.md is the guide for an agent, https://exact.appdrop.app/docs the API.`);
   if (note >= 0) console.log(created.slice(note));
-  if (!canBuildTools) console.log('\nA matching prebuilt tool set lets you run `bun exact.mjs contract build app.contract` and build a Contract and TypeScript app for the web. Native builds and apps with Rust code need Rust locally or a build service.');
+  if (prebuilt) console.log('\nMatching prebuilt tools are ready for Contract checks and web builds.');
+  else if (!canBuildTools) console.log('\nA matching prebuilt tool set lets you run `bun exact.mjs contract build app.contract` and build a Contract and TypeScript app for the web. Native builds and apps with Rust code need Rust locally or a build service.');
 }
 
 const USAGE = `exact — run an Exact app from the command line (macOS)

@@ -94,7 +94,7 @@ impl<D: DataSource> Presenter<D> {
         y: f32,
         clicks: u32,
     ) {
-        if crate::PLATFORM != exact_runner::page::Platform::Linux || self.contact_is_direct() {
+        if cfg!(target_os = "android") || self.contact_is_direct() {
             return;
         }
         let anchor = hit.and_then(|key| self.reader_anchor(key, x, y, Unit::for_clicks(clicks)));

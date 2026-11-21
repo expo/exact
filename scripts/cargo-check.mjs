@@ -3,8 +3,8 @@ import { spawn, spawnSync } from '../host/apple/toolchain.mjs';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { OFFLINE_MISSING, withHostDeployment } from './filesystem.mjs';
-import { throwContractErrors } from './contract-diagnosis.mjs';
-import { basename, delimiter, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { BUILD_SCRIPT_FAILED_LINE, buildScriptFailed, throwContractErrors } from './contract-diagnosis.mjs';
+import { basename, delimiter, dirname, isAbsolute, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
@@ -159,11 +159,21 @@ async function streamCargo(args) {
     process.on(signal, handler); return [signal, handler];
   });
   const filter = cargoDiagnosticFilter(text => process.stderr.write(text));
+  // Whether a build script failed, which the caller cannot read from the stderr this streams (contract-diagnosis.mjs),
+  // read from whole lines however the stream splits them
+  let partial = '', failed = false;
   try {
     child.stderr.setEncoding('utf8');
-    for await (const text of child.stderr) filter.write(text);
+    for await (const text of child.stderr) {
+      filter.write(text);
+      const lines = (partial + text).split('\n');
+      partial = lines.pop();
+      failed ||= lines.some(buildScriptFailed);
+    }
     filter.end();
+    failed ||= buildScriptFailed(partial);
     const { code, signal } = await ended;
+    if (failed && (signal || code !== 0)) process.stdout.write(`${BUILD_SCRIPT_FAILED_LINE}\n`);
     for (const [signal, handler] of handlers) process.off(signal, handler);
     if (signal) process.kill(process.pid, signal); else process.exitCode = code;
   } finally { for (const [signal, handler] of handlers) process.off(signal, handler); }
@@ -429,16 +439,28 @@ export function cargoBuildEnv(cwd, env) {
   return result;
 }
 
-/** `path` as the system reaches it, each link followed before a later `..` (which `path.resolve`, and Bun's
- * `realpathSync.native`, collapse first), or null when a part of it cannot be read. */
+/** `path` made absolute as written, a `..` kept: a relative one joins the working directory, a Windows drive's own
+ * for `D:staging`, and a root (a drive, a UNC share) stays whole. */
+export function writtenPath(path) {
+  if (isAbsolute(path)) return path;
+  const { root } = parse(path);
+  return resolve(root || '.') + sep + path.slice(root.length);
+}
+
+/** `path` as the system reaches it, or null when a part of it cannot be read. Windows collapses a `..` before it
+ * opens a path, as `path.resolve` does; POSIX follows each link before a later `..`, which `path.resolve`, and Bun's
+ * `realpathSync.native`, collapse first, so there a path with `..` is followed part by part, split at `/` alone. Bun
+ * 1.4.2's `realpathSync` cannot read a POSIX name that holds a backslash, which the system and Node read, so such a
+ * path gives null here and its root is remapped only as written. */
 export function physicalPath(path) {
-  let at = sep;
-  for (const part of (isAbsolute(path) ? path : process.cwd() + sep + path).split(/[\\/]+/)) {
-    if (part === '' || part === '.') continue;
-    if (part === '..') { at = dirname(at); continue; }
-    try { at = realpathSync.native(resolve(at, part)); } catch { return null; }
-  }
-  return at;
+  const written = writtenPath(path), { root } = parse(written);
+  const parts = written.slice(root.length).split(/\/+/).filter(part => part && part !== '.');
+  try {
+    if (process.platform === 'win32' || !parts.includes('..')) return realpathSync.native(resolve(written));
+    let at = realpathSync.native(root);
+    for (const part of parts) at = part === '..' ? dirname(at) : realpathSync.native(resolve(at, part));
+    return at;
+  } catch { return null; }
 }
 
 /** The `--config` that gives `target` the rustflags `flags` beside those its Cargo configuration gives it. A TOML array
@@ -449,11 +471,6 @@ export function targetRustflags(target, flags, { cwd = process.cwd(), env = proc
   const configured = cargoConfigurations(cwd, env, `pass ${target}'s rustflags`).findLast(({ configuration }) => configuration.target?.[target]?.rustflags !== undefined);
   const value = configured?.configuration.target[target].rustflags;
   if (typeof value !== 'string') return ['--config', `target.${target}.rustflags=${JSON.stringify(flags)}`];
-  // A string cannot carry a remap whose prefix has a space: one whose prefix is the physical path of another flag's,
-  // remapped alike (the alias rustRemapFlags adds for a link), is left out, and a given spelling never is
-  const remap = flag => /^--remap-path-prefix=(.*)=([^=]*)$/.exec(flag);
-  const alias = flag => flags.some(other => other !== flag && !/\s/.test(other) && remap(other)?.[2] === remap(flag)[2] && physicalPath(remap(other)[1]) === remap(flag)[1]);
-  flags = flags.filter(flag => !(/\s/.test(flag) && remap(flag) && alias(flag)));
   const spaced = flags.find(flag => /\s/.test(flag));
   if (spaced) throw new Error(`${configured.path}: [target.${target}] rustflags is a string, which Cargo splits at whitespace, so the build cannot add ${spaced} to it; write it as an array, rustflags = ${JSON.stringify(value.trim().split(/\s+/).filter(Boolean))}`);
   return ['--config', `target.${target}.rustflags=${JSON.stringify([value.trim(), ...flags].filter(Boolean).join(' '))}`];

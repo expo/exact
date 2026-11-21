@@ -17,9 +17,9 @@
   "profiles": [
     "gpu-dev"
   ],
-  "inputs": "27b4c65367c74a77d0a78704ab31a9c77dfa4b325dca96670bea3bb740da096d",
-  "sourceInputs": "6affa07ed72b30a7697e4baea194ab83267f1860cdb86469aa74a033449c5660",
+  "inputs": "9e58b6d8ddbd5063166d4c4a08ff2ef2b77bd56cb0bc9602ea3fbe76d1d8d24c",
+  "sourceInputs": "eeb33aa2061490decbf6c706b8b4d1bba919117991e02c826d4ec77b046f0b63",
   "game": "terrain-fixture-workload",
   "generated": "bun game/prove.mjs terrain-fixture --repin --hosts 'linux,web'",
-  "at": "5ef91c48cab7ae37ac7b8d407f97cf9da1f7741c"
+  "at": "8c68ace4a9e1765ccd86375ebb4a61d105c97c9d"
 }

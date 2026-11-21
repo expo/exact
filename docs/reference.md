@@ -79,9 +79,13 @@ A direct `EXACT_SMOKE=1` development launch uses the app's painter choice.
 `bun exact.mjs windows --release` packages a production binary and omits the
 headless driver. To measure an optimized build under the driver, set
 `EXACT_UPDATE_TRUST=development` when running the same command.
-A hand-written TypeScript app shell can pass the bake's `ADMIT_AGENT` constant
-to `exact_windows::run_baked::<AppData, ADMIT_AGENT>` with its window, plan,
-receipt and composed packages.
+A hand-written Windows shell selects the driver at compile time by calling
+`exact_windows::run_baked::<AppData, ADMIT_AGENT>`. The TypeScript bake supplies
+`ADMIT_AGENT`. A Rust app that bakes its own `compat.json` writes
+`compat.admits_agent()` to a Rust constant in `OUT_DIR` in the same build step.
+`run_composed` always links the driver. The heavy-list app shows the
+[build step](../bench/heavy-list/exact-heavylist/windows/build.rs) and the
+[entry point](../bench/heavy-list/exact-heavylist/windows/src/main.rs).
 A Windows login item started with `--login hidden` paints its offscreen launch
 frame on the CPU and opens the selected painter when its window first draws.
 Linux and Android still opt into ink per platform; Android refuses it until
@@ -1735,9 +1739,9 @@ profile claims neither.
 
 ### Web CI preparation
 
-For a website's `web-build` and `test web` on Linux, install Bun at the version in
-Exact's `package.json` and rustup, then check out the desired Exact commit at the path
-the app's `exact.mjs` uses. From the app directory, run:
+For a website's `web-build` and `test web` on Linux, check out Exact at the path the
+app's `exact.mjs` uses and install Bun at the version in Exact's `package.json`.
+Install rustup if the app or SDK tools will build from source. Run these commands from the app directory.
 
 ```sh
 bun <exact2>/scripts/exact.mjs setup --platform web
@@ -1745,7 +1749,13 @@ bun install --frozen-lockfile
 bun exact.mjs test web
 ```
 
-The scoped setup installs the pinned stable and nightly Rust, the nightly's `rust-src`,
+A Contract and TypeScript site can use matching prebuilt tools for its web build and browser tests.
+Web setup checks the tools and their recorded Cargo metadata against this checkout, then installs
+the JavaScript dependencies and browser. `--check` uses the local cache. Setup can also fetch
+from a tools origin when the checkout pins its producer key. Native builds, games, Rust data or
+GPU crates, custom web build scripts and Rust page renderers require Rust.
+
+For a source build, the scoped setup installs the pinned stable and nightly Rust, the nightly's `rust-src`,
 `llvm-tools`, clippy and `wasm32-unknown-unknown` target, its standard-library dependencies,
 wasm-bindgen, Binaryen, Exact's `node_modules`, Playwright's Chromium and headless shell,
 and Exact's locked crates. The wasm tools serve Markdown, motion, the markup editor,
