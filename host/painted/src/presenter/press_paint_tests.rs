@@ -464,6 +464,29 @@ fn active_translate_none_clears_both_rows_without_an_invalid_value_and_restores_
 }
 
 #[test]
+fn hit_slop_uses_the_current_safe_area() {
+    let mut p = boot_source(
+        r##"component App
+  view
+    view width=400 height=400
+      view position="absolute" left=100 top=100 width=100 height=80 background-color="#cc3300" -exact-hit-slop-left="env(safe-area-inset-left)" testId="slab"
+"##,
+    );
+    let kernel = p.host.kernel();
+    let id = kernel
+        .node_by_key(kernel.find_by_test_id("slab")[0])
+        .unwrap()
+        .id;
+
+    for left in [0., 10., 0.] {
+        assert!(p.set_safe_area([0., 0., 0., left]).is_none());
+        let (x, y, ..) = p.rect_of(id).unwrap();
+        assert_eq!(p.hit(x + 5., y + 5.), Some(id));
+        assert_eq!(p.hit(x - 5., y + 5.) == Some(id), left > 0.);
+    }
+}
+
+#[test]
 fn active_translate_preserves_hit_slop_on_release() {
     for direct in [false, true] {
         let mut p = boot_source(

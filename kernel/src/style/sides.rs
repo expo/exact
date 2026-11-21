@@ -124,25 +124,37 @@ pub const FAMILIES: [[StyleId; 4]; 18] = [
 ];
 
 impl StyleProps {
+    fn hit_slop_sides(&self) -> [&Dimension; 4] {
+        let r = &self.rare;
+        [
+            &r.hit_slop_top,
+            &r.hit_slop_right,
+            &r.hit_slop_bottom,
+            &r.hit_slop_left,
+        ]
+    }
+
+    /// Whether any effective hit slop side can extend the box.
+    pub fn may_have_hit_slop(&self) -> bool {
+        !self.rare.is_initial()
+            && self
+                .hit_slop_sides()
+                .into_iter()
+                .any(|side| !matches!(side, Dimension::Points(points) if *points == 0.0))
+    }
+
     /// How far past each side of its border box, in top, right, bottom,
     /// left order, the node takes a pointer (`-exact-hit-slop`, Charlie,
     /// 2026-11-10): none on a box that clips its overflow, which clips its
     /// own slop as the browser clips the pseudo-element the web draws it
     /// with. A negative length a binding gave is none.
     pub fn hit_slop(&self, env: &super::Env) -> [f32; 4] {
-        let r = &self.rare;
-        let sides = [
-            r.hit_slop_top.clone(),
-            r.hit_slop_right.clone(),
-            r.hit_slop_bottom.clone(),
-            r.hit_slop_left.clone(),
-        ];
         if self.overflow_x != super::Overflow::Visible
             || self.overflow_y != super::Overflow::Visible
         {
             return [0.0; 4];
         }
-        sides.map(|d| d.at_basis(env, 0.0).max(0.0))
+        self.hit_slop_sides().map(|d| d.at_basis(env, 0.0).max(0.0))
     }
 }
 
