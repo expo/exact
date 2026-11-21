@@ -128,11 +128,15 @@ fn style_of(s: &str) -> Option<FontStyle> {
     })
 }
 
-/// `$XDG_CACHE_HOME` or `$HOME/.cache`, `exact/fonts-<dir hash>`.
+/// `exact/fonts-<dir hash>` in the user's cache base.
+/// Windows also has a default when neither `XDG_CACHE_HOME` nor `HOME` is set.
 fn cache_file(dir: &Path) -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")));
+    #[cfg(windows)]
+    let base = base.or_else(|| crate::picker::local_app_data().ok());
+    let base = base?;
     let mut h = std::collections::hash_map::DefaultHasher::new();
     HEADER.hash(&mut h);
     dir.hash(&mut h);
@@ -229,4 +233,32 @@ fn parse(text: &str, key: u64) -> Option<Vec<Described>> {
             })
         })
         .collect()
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_default_cache_file_without_home_or_xdg() {
+        const CHILD: &str = "EXACT_WINDOWS_FONT_CACHE_TEST";
+        if std::env::var_os(CHILD).is_none() {
+            assert!(std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "text::font_cache::tests::windows_default_cache_file_without_home_or_xdg",
+                ])
+                .env(CHILD, "1")
+                .env_remove("HOME")
+                .env_remove("XDG_CACHE_HOME")
+                .status()
+                .unwrap()
+                .success());
+            return;
+        }
+
+        let cache = cache_file(Path::new(r"C:\Windows\Fonts")).unwrap();
+        let base = crate::picker::local_app_data().unwrap().join("exact");
+        assert_eq!(cache.parent(), Some(base.as_path()));
+    }
 }
