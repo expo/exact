@@ -247,7 +247,11 @@ function completeWebInputs(app, js, render, inputRoots, inputs, inputsAt, settin
   const next = webSourceRoots(app, js, render);
   inputRoots.splice(0, inputRoots.length, ...next);
   const current = webInputDigests(app, js, next, settings.sourceInputs);
-  for (const path of Object.keys(inputs)) if (!Object.hasOwn(current,path)) delete inputs[path];
+  // An input the build no longer reads is dropped; one removed while it built is uncertified, as an edit would be.
+  for (const path of Object.keys(inputs)) if (!Object.hasOwn(current, path)) {
+    if (!path.startsWith('import.meta.env.') && !statSync(resolve(SDK_ROOT, path), { throwIfNoEntry: false })) inputs[path] = null;
+    else delete inputs[path];
+  }
   for (const [name,value] of Object.entries(settings.env ?? {})) current[`import.meta.env.${name}`] = JSON.stringify(value);
   for (const [path, value] of Object.entries(current)) {
     if (Object.hasOwn(inputs, path) && !path.startsWith('import.meta.env.')) continue;
