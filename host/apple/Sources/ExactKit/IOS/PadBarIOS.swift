@@ -119,6 +119,12 @@ final class PadBar: UIToolbar {
         self.items = items
         sizeToFit()
     }
+    /// The 26 design's keys are glass as tall as the bar, so they would touch the keyboard's top edge.
+    override func sizeThatFits(_ size: CGSize) -> CGSize {
+        var fit = super.sizeThatFits(size)
+        if #available(iOS 26.0, *), LinkedDesign.liquidGlass { fit.height += 8 }
+        return fit
+    }
     required init?(coder: NSCoder) { nil }
 }
 #else

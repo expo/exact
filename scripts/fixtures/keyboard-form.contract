@@ -78,6 +78,8 @@ component KeyboardForm
                       header
                         text "Bench Press"
                       row
+                        text "8 × 135 lb"
+                      row
                         text "Reps"
                         input appearance="none" value=benchReps input=editBenchReps inputmode="numeric" placeholder="8"
                           aria-label="Bench reps" text-align="end" testId="bench-reps" flex=1 min-width=0
