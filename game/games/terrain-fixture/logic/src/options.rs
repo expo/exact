@@ -15,6 +15,8 @@ pub struct Options {
     draw: String,
     pool: String,
     jobs: String,
+    quality: String,
+    fps: String,
 }
 
 impl Default for Options {
@@ -32,11 +34,29 @@ impl Default for Options {
             draw: "on".into(),
             pool: "off".into(),
             jobs: "off".into(),
+            quality: "high".into(),
+            fps: "0".into(),
         }
     }
 }
 
 impl Options {
+    pub(crate) fn quality(&self) -> Quality {
+        match self.quality.as_str() {
+            "low" => Quality::Low,
+            "medium" => Quality::Mid,
+            _ => Quality::High,
+        }
+    }
+
+    pub(crate) fn max_fps(&self) -> u32 {
+        self.fps
+            .parse()
+            .ok()
+            .filter(|fps| (5..=240).contains(fps))
+            .unwrap_or(0)
+    }
+
     pub(crate) fn motion(&self) -> Motion {
         match self.r#move.as_str() {
             "walk" => Motion::Walk,
@@ -253,6 +273,55 @@ impl Options {
         Self {
             r#move: "fly".into(),
             ..Self::default()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::TerrainFixture;
+
+    #[test]
+    fn decision_display_quality() {
+        assert_eq!(TerrainFixture::quality(&Options::default()), Quality::High);
+        for (quality, expected) in [
+            ("low", Quality::Low),
+            ("medium", Quality::Mid),
+            ("high", Quality::High),
+            ("junk", Quality::High),
+        ] {
+            let args = Options {
+                quality: quality.into(),
+                ..Options::default()
+            };
+            assert_eq!(
+                TerrainFixture::quality(&args),
+                expected,
+                "quality={quality}"
+            );
+        }
+    }
+
+    #[test]
+    fn decision_display_fps() {
+        let mut sim = Sim::<TerrainFixture>::new(Options::default()).unwrap();
+        let world = sim.world_mut();
+        assert_eq!(TerrainFixture::max_fps(world, &Options::default()), 0);
+        for (fps, expected) in [
+            ("45", 45),
+            ("0", 0),
+            ("5", 5),
+            ("240", 240),
+            ("4", 0),
+            ("241", 0),
+            ("junk", 0),
+        ] {
+            let args = Options {
+                fps: fps.into(),
+                ..Options::default()
+            };
+            assert_eq!(TerrainFixture::max_fps(world, &args), expected, "fps={fps}");
         }
     }
 }

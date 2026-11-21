@@ -6,11 +6,13 @@ const resolution = [1280, 720];
 const defaults = {
   radius: 'smoke', move: 'stand', light: '0', edits: '0', inflight: 'discard',
   compare: 'off', vertex: '12', blend: 'off', budget: 'deadline', draw: 'on', pool: 'off', jobs: 'off',
+  quality: 'high', fps: '0',
 };
 const choices = {
   radius: ['smoke', '8', '40'], move: ['stand', 'walk', 'fly'], inflight: ['discard', 'keep'],
   compare: ['off', 'on'], vertex: ['12', '64'], blend: ['off', 'window', 'background', 'surface'],
   draw: ['on', 'off'], pool: ['off', 'on'], jobs: ['off', 'on'],
+  quality: ['low', 'medium', 'high'], fps: ['0', '30', '45', '60'],
 };
 const whole = number => /^\d+$/.test(number) && Number(number) <= 0xffffffff;
 const valid = (key, value) => choices[key]?.includes(value) ??
@@ -150,22 +152,22 @@ function inconclusive(windows, headless) {
   return conditions;
 }
 
+function checkBoundary(world, switches, expectedRung, boundary) {
+  const args = world?.args;
+  for (const [name, expected] of Object.entries(switches)) {
+    const value = args?.[name];
+    if (value !== expected)
+      throw new Error(`Canvas argument ${name} at the ${boundary} is ${value ?? 'missing'}, expected ${expected}`);
+  }
+  const rung = world?.quality?.rung;
+  if (rung !== expectedRung)
+    throw new Error(`Quality rung at the ${boundary} is ${rung ?? 'missing'}, expected ${expectedRung}`);
+}
+
 export async function readBench(session, config, commit) {
   const { host, switches, set, warmupMs, windowMs, timeoutMs, pollMs, headless, device, os, refreshHz } = config;
+  const expectedRung = switches.quality === 'medium' ? 'mid' : switches.quality;
   for (const [name, value] of set) await session.set(name, value);
-
-  let observedSwitches = null;
-  const state = async (reset = false) => {
-    const world = await session.state(reset);
-    if (world?.args && observedSwitches == null) {
-      for (const [name, expected] of Object.entries(switches)) {
-        if (world.args[name] !== expected)
-          throw new Error(`Canvas argument ${name} is ${world.args[name]}; expected ${expected}`);
-      }
-      observedSwitches = world.args;
-    }
-    return world;
-  };
 
   const start = session.now();
   const limit = start + timeoutMs;
@@ -173,7 +175,7 @@ export async function readBench(session, config, commit) {
   await session.play();
   let firstPicture, fullWindow, backlog;
   for (;;) {
-    const world = await state();
+    const world = await session.state(false);
     const observed = game(world);
     const ms = session.now() - start;
     backlog = observed?.pending ?? backlog;
@@ -190,22 +192,25 @@ export async function readBench(session, config, commit) {
   const windows = [];
   let last;
   for (let index = 0; index < 3; index++) {
-    const before = await state(true);
+    const before = await session.state(true);
+    if (index === 0) checkBoundary(before, switches, expectedRung, 'start of window 1');
     const windowStart = session.now();
     const finishBrowserWindow = host.startsWith('web') ? await session.startBrowserWindow(windowMs) : null;
     await session.wait(windowMs);
-    last = await state();
+    last = await session.state(false);
     const durationMs = session.now() - windowStart;
     const browser = await finishBrowserWindow?.();
+    checkBoundary(last, switches, expectedRung, `end of window ${index + 1}`);
     windows.push(reading(before, last, durationMs, browser, host.startsWith('web') ? refreshHz : null));
   }
-  if (observedSwitches == null) throw new Error('The canvas never reported its switches: nothing was measured');
   const empty = windows.findIndex(window => !(window.frameMs?.count > 0));
   if (empty >= 0) throw new Error(`Window ${empty + 1} drew no frame`);
   const terrain = game(last);
   const pixels = await session.pixels?.() ?? last?.perf?.pixels ?? null;
   return {
-    commit, host, switches, observedSwitches, profile: { web: 'web', 'web-android': 'web', android: 'release' }[host] ?? 'host-dev',
+    commit, host, switches, observedSwitches: last.args,
+    profile: { web: 'web', 'web-android': 'web', android: 'release' }[host] ?? 'host-dev',
+    quality: last.quality.rung,
     // A device draws at its own size.
     resolution: ['web', 'macos'].includes(host) ? resolution : pixels, pixels,
     device, os, refreshHz, headless, calibration: 'uncalibrated', warmupMs, windowMs,

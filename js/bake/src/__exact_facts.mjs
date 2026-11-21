@@ -3,6 +3,15 @@ import { bare, lineColumn, propertyName, walkRuntime } from './__exact_portable.
 import { grantsDeclaration } from './__exact_launch_setting.mjs';
 
 const named = node => node?.name ?? node?.value;
+/** The names a declaration's binding pattern binds. */
+const bound = (pattern, names = []) => {
+  if (pattern?.type === 'Identifier') names.push(pattern.name);
+  else if (pattern?.type === 'ObjectPattern') for (const p of pattern.properties) bound(p.type === 'RestElement' ? p.argument : p.value, names);
+  else if (pattern?.type === 'ArrayPattern') for (const p of pattern.elements) bound(p, names);
+  else if (pattern?.type === 'AssignmentPattern') bound(pattern.left, names);
+  else if (pattern?.type === 'RestElement') bound(pattern.argument, names);
+  return names;
+};
 const syntax = "must be a constant the build reads without running the module: a string, a template or + of constants, an array of them .join('\\n'), or a top-level const holding one";
 
 function moduleFacts(file, code, parse, source = code) {
@@ -25,12 +34,17 @@ function moduleFacts(file, code, parse, source = code) {
   for (const statement of parsed.program.body) {
     const s = ['ExportNamedDeclaration', 'ExportDefaultDeclaration'].includes(statement.type) ? statement.declaration ?? statement : statement;
     if (s.type === 'VariableDeclaration') for (const d of s.declarations) {
-      if (d.id.type !== 'Identifier') continue;
+      if (d.id.type !== 'Identifier') {
+        // A destructured export is no constant the build reads, and it is still the module's export of each name
+        // it binds: without an entry, the name would resolve through an `export *` beside it (ECMA-262 ResolveExport).
+        if (statement.type === 'ExportNamedDeclaration') for (const name of bound(d.id)) exported.set(name, { local: name });
+        continue;
+      }
       if (s.kind === 'const') consts.set(d.id.name, d.init);
       if (statement.type === 'ExportNamedDeclaration') exported.set(d.id.name, { local: d.id.name });
     }
     if (statement.type === 'ImportDeclaration' && statement.importKind !== 'type') for (const x of statement.specifiers) {
-      if (x.importKind !== 'type') imports.set(x.local.name, { source: statement.source.value, imported: x.type === 'ImportDefaultSpecifier' ? 'default' : named(x.imported), node: x });
+      if (x.importKind !== 'type') imports.set(x.local.name, { source: statement.source.value, imported: x.type === 'ImportDefaultSpecifier' ? 'default' : named(x.imported), namespace: x.type === 'ImportNamespaceSpecifier', node: x });
     }
     if (statement.type === 'ExportNamedDeclaration' && statement.exportKind !== 'type') {
       if (s.id?.name) exported.set(s.id.name, { local: s.id.name });
@@ -68,7 +82,7 @@ function constantBindings(code, parse, { load, source = code } = {}) {
     if (m.consts.has(local)) return evaluate(m, m.consts.get(local), name);
     const entry = m.imports.get(local);
     if (entry) {
-      if (!entry.imported) refuse(m, entry.node, name, 'cannot read a namespace import; import a named literal constant');
+      if (entry.namespace) refuse(m, entry.node, name, 'cannot read a namespace import whole; read one of its constants, as in ns.NAME');
       return exported(imported(m, entry.source, entry.node, name), entry.imported, name, evaluate);
     }
     refuse(m, node, name, `require a top-level const; ${local} is not one`);
@@ -77,7 +91,7 @@ function constantBindings(code, parse, { load, source = code } = {}) {
   const resolveLocal = (m, local, node, name, resolveSet) => {
     const entry = m.imports.get(local);
     if (!entry) return { m, local, node };
-    if (!entry.imported) refuse(m, entry.node, name, 'cannot read a namespace import; import a named literal constant');
+    if (entry.namespace) refuse(m, entry.node, name, 'cannot read a namespace import whole; read one of its constants, as in ns.NAME');
     return resolveExport(imported(m, entry.source, entry.node, name), entry.imported, name, resolveSet);
   };
   // ECMA-262 ResolveExport: an export path may loop without its initializer cycling.
@@ -117,7 +131,7 @@ function constantBindings(code, parse, { load, source = code } = {}) {
     }
     return target.local ? binding(target.m, target.local, target.node, name, evaluate) : evaluate(target.m, target.node, name);
   };
-  return { root, refuse, binding, exported, resolveBinding };
+  return { root, refuse, imported, binding, exported, resolveBinding };
 }
 
 /** The initializer actually exported as grants, with its authored node for receipt locations. */
@@ -131,7 +145,7 @@ export function grantsInitializer(code, parse, options) {
 
 /** appId stays local; grants may follow imports through `load`, which returns captured app-local syntax. */
 export function staticFacts(code, parse, { load, locations = false, source = code } = {}) {
-  const { root, refuse, binding, exported, resolveBinding } = constantBindings(code, parse, { load, source });
+  const { root, refuse, imported, binding, exported, resolveBinding } = constantBindings(code, parse, { load, source });
   if (root.parsed.errors?.length) return { appId: undefined, grants: undefined, exported: [], ...(locations ? { grantSources: [] } : {}) };
   const literal = (m, node, value) => {
     node = m.original.get(node) ?? node;
@@ -183,6 +197,11 @@ export function staticFacts(code, parse, { load, locations = false, source = cod
       const separator = node.arguments.length ? scalar(m, node.arguments[0], name) : literal(m, node, ',');
       return array.reduce((result, entry, i) => combine(i ? combine(result, { ...separator, value: String(separator.value) }) : result, { ...entry, value: String(entry.value) }), { value: '', parts: [] });
     }
+    // `ns.NAME` through `import * as ns` reads the export NAME, as a named import would. Only the dot form: the
+    // launch-setting walk (__exact_env.mjs `key`) does not read every key this file's `propertyName` does.
+    const namespace = node.type === 'MemberExpression' && !node.computed && bare(node.object)?.type === 'Identifier' ? m.imports.get(bare(node.object).name) : undefined;
+    if (namespace?.namespace && propertyName(node) !== null)
+      return exported(imported(m, namespace.source, namespace.node, name), propertyName(node), name, constant);
     const why = node.type === 'CallExpression' ? 'cannot call code; only a literal array .join(separator) is allowed'
       : node.type === 'ConditionalExpression' ? `${syntax}; conditional expressions are not allowed`
       : node.type === 'MemberExpression' ? 'cannot read a computed value or array element; use literal constants' : syntax;

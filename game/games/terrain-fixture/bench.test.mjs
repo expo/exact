@@ -8,6 +8,7 @@ const ring = (p95, count = 7, p50 = p95, mean = p95) => ({
 // Terrain smoke proof state at tick 36 after perf_reset.
 const recorded = {
   tick: 36, device: true, ready: true, readyReasons: [],
+  quality: { rung: 'high', samples: 1, scale: 1 },
   perf: {
     clock: 'agent', pixels: [1280, 720],
     tickMs: ring(0.19999999925494194, 1),
@@ -46,6 +47,7 @@ const recordedGame = {
 const defaultArgs = {
   radius: 'smoke', move: 'stand', light: '0', edits: '0', inflight: 'discard',
   compare: 'off', vertex: '12', blend: 'off', budget: 'deadline', draw: 'on', pool: 'off', jobs: 'off',
+  quality: 'high', fps: '0',
 };
 
 function double({
@@ -130,7 +132,7 @@ test('records the state rings and refill observations across three windows', asy
   const row = await readBench(host, options('radius=40', 'move=fly', 'light=5', 'budget=deadline'), 'abc');
   expect(host.calls).toEqual([['radius', '40'], ['move', 'fly'], ['light', '5'], ['budget', 'deadline'], 'play']);
   expect(row).toMatchObject({
-    commit: 'abc', host: 'web', profile: 'web', resolution: [1280, 720], pixels: [1280, 720],
+    commit: 'abc', host: 'web', profile: 'web', resolution: [1280, 720], pixels: [1280, 720], quality: 'high',
     device: 'Mac Studio', os: 'macOS 27.2.1', refreshHz: 60, calibration: 'uncalibrated',
     switches: { radius: '40', move: 'fly', light: '5', budget: 'deadline', draw: 'on' },
     firstPicture: { ms: 1 }, fullWindow: { ms: 2 }, mountSampling: 'poll', pollMs: 1, paired: false,
@@ -300,7 +302,8 @@ test('a run that measured nothing fails instead of printing a row', async () => 
   await expect(readBench(idle, options('radius=40'), 'abc')).rejects.toThrow('Window 1 drew no frame');
   const blind = double();
   blind.state = async () => null;
-  await expect(readBench(blind, options('radius=40'), 'abc')).rejects.toThrow('never reported its switches');
+  await expect(readBench(blind, options('radius=40'), 'abc'))
+    .rejects.toThrow('Canvas argument radius at the start of window 1 is missing, expected 40');
 });
 
 test('validates hosts, metadata and switch values before opening a host', async () => {
@@ -316,7 +319,7 @@ test('validates hosts, metadata and switch values before opening a host', async 
   expect(() => parseOptions(['macos'], true)).toThrow('web only');
   expect(() => parseOptions(['web'], false)).toThrow('--refresh-hz');
   await expect(readBench(double({ ignoredSwitch: 'radius' }), options('radius=8'), 'abc'))
-    .rejects.toThrow('Canvas argument radius is smoke; expected 8');
+    .rejects.toThrow('Canvas argument radius at the start of window 1 is smoke, expected 8');
   const mac = parseOptions(['macos', '--device=Mac Studio', '--os=macOS', '--refresh-hz=59.94',
     '--warmup-ms=0', '--window-ms=10', '--poll-ms=1'], false);
   expect(await readBench(double(), mac, 'abc')).toMatchObject({ profile: 'host-dev', refreshHz: 59.94 });
@@ -350,4 +353,104 @@ test('records the jobs switch, counters and lane', async () => {
   const off = await readBench(double(), options(), 'abc');
   expect(off.windows.map(window => window.jobs)).toEqual([null, null, null]);
   expect(off.lane).toBeNull();
+});
+
+test('parses quality rungs and benchmark frame caps', () => {
+  expect(options().switches).toMatchObject({ quality: 'high', fps: '0' });
+  for (const quality of ['low', 'medium', 'high']) {
+    const config = options(`quality=${quality}`);
+    expect(config.switches.quality).toBe(quality);
+    expect(config.set.get('quality')).toBe(quality);
+  }
+  for (const fps of ['0', '30', '45', '60']) {
+    const config = options(`fps=${fps}`);
+    expect(config.switches.fps).toBe(fps);
+    expect(config.set.get('fps')).toBe(fps);
+  }
+  expect(() => options('quality=mid')).toThrow('quality=mid');
+  expect(() => options('fps=5')).toThrow('fps=5');
+  expect(() => options('fps=junk')).toThrow('fps=junk');
+});
+
+test.each([['low', 'low', 0.5], ['medium', 'mid', 0.75]])('records the %s rung and the frame intervals', async (quality, rung, scale) => {
+  const host = double({ intervals: [22.2, 22.3, 22.2] });
+  const state = host.state;
+  host.state = async reset => ({ ...await state(reset), quality: { rung, samples: 1, scale } });
+  const row = await readBench(host, options(`quality=${quality}`, 'fps=45'), 'abc');
+  expect(host.calls).toEqual([['quality', quality], ['fps', '45'], 'play']);
+  expect(row).toMatchObject({
+    switches: { quality, fps: '45' },
+    observedSwitches: { quality, fps: '45' },
+    quality: rung,
+  });
+  expect(row.windows.map(window => window.frameMs.p50)).toEqual([22.2, 22.3, 22.2]);
+});
+
+test('rejects a quality argument the canvas ignored', async () => {
+  await expect(readBench(double({ ignoredSwitch: 'quality' }), options('quality=low'), 'abc'))
+    .rejects.toThrow('Canvas argument quality at the start of window 1 is high, expected low');
+});
+
+const boundaries = [
+  ['start of window 1', 2, true],
+  ['end of window 1', 12, false],
+  ['end of window 2', 22, false],
+  ['end of window 3', 32, false],
+];
+
+test.each(boundaries)('rejects a stale rung at the %s', async (boundary, at, resetAtBoundary) => {
+  const host = double();
+  const state = host.state;
+  host.state = async reset => {
+    const world = await state(reset);
+    if (host.now() !== at || reset !== resetAtBoundary) world.quality = { rung: 'mid', samples: 1, scale: 0.75 };
+    return world;
+  };
+  await expect(readBench(host, options('quality=medium'), 'abc'))
+    .rejects.toThrow(`Quality rung at the ${boundary} is high, expected mid`);
+});
+
+for (const [name, requested, changed] of [['fps', '45', '0'], ['move', 'fly', 'stand']]) {
+  test.each(boundaries)(`rejects a changed canvas argument ${name} at the %s`, async (boundary, at, resetAtBoundary) => {
+    const host = double();
+    const state = host.state;
+    host.state = async reset => {
+      const world = await state(reset);
+      if (host.now() === at && reset === resetAtBoundary) world.args[name] = changed;
+      return world;
+    };
+    await expect(readBench(host, options(`${name}=${requested}`), 'abc'))
+      .rejects.toThrow(`Canvas argument ${name} at the ${boundary} is ${changed}, expected ${requested}`);
+  });
+}
+
+test('rejects a missing canvas argument at the end of the last window', async () => {
+  const host = double();
+  const state = host.state;
+  host.state = async reset => {
+    const world = await state(reset);
+    if (host.now() === 32) delete world.args.fps;
+    return world;
+  };
+  await expect(readBench(host, options('fps=45'), 'abc'))
+    .rejects.toThrow('Canvas argument fps at the end of window 3 is missing, expected 45');
+});
+
+test('records the canvas arguments from the last boundary', async () => {
+  const host = double();
+  const state = host.state;
+  host.state = async reset => {
+    const world = await state(reset);
+    return { ...world, args: { ...world.args, marker: String(host.now()) } };
+  };
+  const row = await readBench(host, options(), 'abc');
+  expect(row.observedSwitches).toEqual({ ...defaultArgs, marker: '32' });
+});
+
+test('rejects a missing rung when the first window starts', async () => {
+  const host = double();
+  const state = host.state;
+  host.state = async reset => ({ ...await state(reset), quality: undefined });
+  await expect(readBench(host, options(), 'abc'))
+    .rejects.toThrow('Quality rung at the start of window 1 is missing, expected high');
 });

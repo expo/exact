@@ -66,8 +66,12 @@ impl Game for TerrainFixture {
         Ok(())
     }
 
-    fn quality(_: &Options) -> Quality {
-        Quality::High
+    fn quality(args: &Options) -> Quality {
+        args.quality()
+    }
+
+    fn max_fps(_: &World, args: &Options) -> u32 {
+        args.max_fps()
     }
 
     fn samples(_: &Options) -> SceneSamples {

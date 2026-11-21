@@ -24,9 +24,9 @@ The Linux leg enables the GPU-backed agent and reads the bake's shader pack.
 On a Mac with Metal and Chrome with WebGPU, record the tick and save baseline
 again with `bun game/prove.mjs terrain-fixture --hosts linux,web --repin`.
 
-The continuation save includes the `jobs` canvas argument. Older saves lack
-that field, so their continuation bytes differ. The smoke tick hash is unchanged, and the save at 1280 × 720 is
-pinned from the device-free simulation. A restore to the same or a later tick
+The saved `jobs`, `quality` and `fps` canvas arguments change the continuation
+pin. The smoke tick hash is unchanged, and the save at 1280 × 720 is pinned from
+the device-free simulation. A restore to the same or a later tick
 with the same seed and settings keeps the window and jobs in flight. Both
 derive from the tick, seed and settings. `jobs=off` keeps its window the
 same way.
@@ -47,6 +47,31 @@ reverse` in a tab the run opens and closes. A device draws at its own size. The
 web builds use the `web` profile, the Android app `release`, and the other
 native ones `host-dev`. `BENCH_HEADLESS=1` runs the web transport without a display and
 marks the row headless.
+
+| Switch | Values | Default | Effect |
+|---|---|---|---|
+| `quality` | `low`, `medium`, `high` | `high` | Sets the renderer's quality rung at mount. Any other setup input uses `high`. |
+| `fps` | `0`, `30`, `45`, `60` in the bench | `0` | The setup screen accepts integers from 5 to 240 as a cap. Any other input, including `0`, leaves the frame rate uncapped. |
+
+For the governor's row, compare `quality=low` with `quality=high` at the same
+settings for every other switch. The scene uses one sample at every rung and
+has no sun. `Low` halves the render scale on each axis (LLP 1182.000 §6).
+Bloom remains enabled and runs on the smaller raster.
+
+Set `fps` to see what a frame cap gives `prepare` on a host whose encode fills
+the display period. The benchmark's hosts honour the cap. Desktop Linux and
+Windows ignore it, and the agent's clock runs uncapped. The row carries the
+requested cap alongside each window's `frameMs`, the interval the host
+achieved. An uncapped workload that takes 33 ms per frame can show the same
+interval as a 30 fps cap.
+
+Changing either switch on a mounted canvas restarts the world. The renderer
+keeps the rung from the first bind, so the bench sets both switches before
+mounting the canvas. The agent's `prefer gpu-tier` re-reads `Game::quality`
+from the current arguments and is the only way to change the rung without
+remounting. The bench checks the canvas arguments and the rendered rung at the
+start of the first window and at the end of every window. The row's `quality`
+reports the rendered rung, with `mid` for `medium`.
 
 The desktop `web` row's browser is the one the drivers launch, or the one `CHROME` names,
 started without Chromium's testing configuration of experiments

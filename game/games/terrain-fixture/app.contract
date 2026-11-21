@@ -15,6 +15,8 @@ component TerrainFixture
   state draw = "on"
   state pool = "off"
   state jobs = "off"
+  state quality = "high"
+  state fps = "0"
   resource hud = exactSurface("world") as shape Hud
   action setRadius(value: string)
     radius = value
@@ -40,12 +42,16 @@ component TerrainFixture
     pool = value
   action setJobs(value: string)
     jobs = value
+  action setQuality(value: string)
+    quality = value
+  action setFps(value: string)
+    fps = value
   action play
     playing = true
   view
     main width="100%" height="100%"
       if playing
-        canvas surface=world(radius=radius, move=movement, light=light, edits=edits, inflight=inflight, compare=compare, vertex=vertex, blend=blend, budget=budget, draw=draw, pool=pool, jobs=jobs) testId="world" width="100%" height="100%" position="relative"
+        canvas surface=world(radius=radius, move=movement, light=light, edits=edits, inflight=inflight, compare=compare, vertex=vertex, blend=blend, budget=budget, draw=draw, pool=pool, jobs=jobs, quality=quality, fps=fps) testId="world" width="100%" height="100%" position="relative"
           if !hud.presented && radius == "smoke" && movement == "stand" && light == "0" && edits == "0" && inflight == "discard" && compare == "off" && vertex == "12" && blend == "off" && budget == "deadline" && draw == "on" && pool == "off"
             column position="absolute" inset=0 align-items="center" justify-content="center" background-color="-exact-background"
               text "Preparing terrain…" testId="terrain-pending"
@@ -87,5 +93,11 @@ component TerrainFixture
           row gap=8 align-items="center"
             text "Jobs (off, on)"
             input value=jobs input=setJobs testId="jobs" aria-label="Jobs (off, on)" width=120
+          row gap=8 align-items="center"
+            text "Quality (low, medium, high)"
+            input value=quality input=setQuality testId="quality" aria-label="Quality (low, medium, high)" width=120
+          row gap=8 align-items="center"
+            text "Frame cap (0 for uncapped)"
+            input value=fps input=setFps testId="fps" aria-label="Frame cap (0 for uncapped)" width=120
           button press=play testId="play"
             text "Show terrain"
