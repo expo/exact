@@ -36,16 +36,16 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
     func sync() {
         guard let presenter else { return }
         var wanted: [UInt32: NodeView] = [:]
-        // None while the agent draws the app itself, as for menus (D4).
+        // None while the agent draws the app itself, as for menus (D4)
         if !ExactEnv.agentPaints {
-            for v in presenter.carrying("draggable") where v.props["draggable"] == "true" { wanted[v.id] = v }
+            for v in presenter.carrying("draggable") where Self.holds(v) { wanted[v.id] = v }
         }
         for (id, interaction) in interactions where wanted[id] == nil || interaction.view !== wanted[id] {
             if let view = interaction.view { detach(interaction, from: view) } else { companions[ObjectIdentifier(interaction)] = nil }
             interactions[id] = nil
         }
         // A parked view lent to a new node keeps its interaction if that node
-        // is draggable too, else it comes off.
+        // holds one too, else it comes off.
         for v in parkedViews.allObjects where presenter.views[v.id] === v {
             parkedViews.remove(v)
             if !wanted.values.contains(where: { $0 === v }) { ours(v).forEach { detach($0, from: v) } }
@@ -81,6 +81,43 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
         ours(view).forEach { detach($0, from: view) }
     }
 
+    /// The drags an assistive technology offers on an element (D9): that of
+    /// the nearest node at or above `view` that holds one of these
+    /// interactions, and, when `view` is the element, each in its subtree, in
+    /// node order, each at its node's activation point (`init(name:view:)`),
+    /// where VoiceOver's touch lands. UIKit leaves out one whose view is
+    /// obscured or out of a visible window (Document:
+    /// `UIAccessibilityLocationDescriptor.h:43-45`), and the lift decides
+    /// whether a drag begins (`lifted`). Nil keeps UIKit's own where it
+    /// offers the same (Document: `UIAccessibility.h:445-450`): the one drag,
+    /// on the element's view or in its subtree, unless a canvas surface
+    /// places its node (LLP 1014 D5), whose activation point follows the
+    /// placement and UIKit's own does not. Each is named by its node's
+    /// accessible name, else by what it carries (`DragItems.name`). Where
+    /// UIKit's own would also find an interaction that cannot lift now, an
+    /// inert node's, the offer is explicit, if empty.
+    func descriptors(of view: UIView, isElement: Bool) -> [UIAccessibilityLocationDescriptor]? {
+        guard let presenter else { return nil }
+        let installed = interactions.sorted { $0.key < $1.key }.compactMap { id, interaction in
+            presenter.views[id].flatMap { $0 === interaction.view ? $0 : nil }
+        }
+        // Read again as asked: a node's inertness can change with no batch for it
+        let held = installed.filter(Self.lifts)
+        let around = held.filter { view.isDescendant(of: $0) }
+        // The nearest is inside every other around it
+        let above = around.first { node in around.allSatisfy { node.isDescendant(of: $0) } }
+        let inside = isElement ? held.filter { $0 !== view && $0.isDescendant(of: view) } : []
+        let nodes = (above.map { [$0] } ?? []) + inside
+        // UIKit's own finds every interaction in the view's subtree, an inert node's too
+        let unliftable = isElement && installed.contains { !Self.lifts($0) && $0.isDescendant(of: view) }
+        if !unliftable, nodes.isEmpty || (isElement && nodes.count == 1 && nodes[0].isDescendant(of: view) && nodes[0].placedAncestor == nil) {
+            return nil
+        }
+        return nodes.map { node in
+            UIAccessibilityLocationDescriptor(name: node.accessibleName.isEmpty ? DragItems.name(of: node) ?? "" : node.accessibleName, view: node)
+        }
+    }
+
     private func ours(_ view: UIView) -> [UIDragInteraction] {
         view.interactions.compactMap { $0 as? UIDragInteraction }.filter { $0.delegate === self }
     }
@@ -108,9 +145,22 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
     // MARK: UIDragInteractionDelegate
 
     func dragInteraction(_ interaction: UIDragInteraction, itemsForBeginning session: UIDragSession) -> [UIDragItem] {
-        guard let presenter, let id = interactions.first(where: { $0.value === interaction })?.key, let node = presenter.views[id],
-              node.props["draggable"] == "true", !Self.startsInControl(node, at: session.location(in: node), in: presenter) else { return [] }
-        return DragItems.items(of: node, in: presenter.session)
+        guard let node = lifted(by: interaction, at: session) else { return [] }
+        return DragItems.items(of: node, in: presenter?.session)
+    }
+
+    /// The node `interaction` lifts at `session`'s touch: where the touch
+    /// lands now, as the window routes it, through a canvas surface's
+    /// placement too, must be the node, able to lift, and the touch not kept
+    /// from it (`keepsContact`). The node is read after the hit test, which
+    /// runs views' own code.
+    private func lifted(by interaction: UIDragInteraction, at session: UIDragSession) -> NodeView? {
+        guard let presenter else { return nil }
+        let root: UIView = interaction.view?.window ?? presenter.viewport
+        guard let hit = root.hitTest(session.location(in: root), with: nil),
+              let id = interactions.first(where: { $0.value === interaction })?.key, let node = presenter.views[id],
+              Self.lifts(node), hit.isDescendant(of: node), !Self.keepsContact(node, from: hit, in: presenter) else { return nil }
+        return node
     }
 
     func dragInteraction(_ interaction: UIDragInteraction, previewForLifting item: UIDragItem, session: UIDragSession) -> UITargetedDragPreview? {
@@ -120,7 +170,8 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
     /// Back to where the node is now; nil, which fades the item in place,
     /// when its view has gone or is another node's.
     func dragInteraction(_ interaction: UIDragInteraction, previewForCancelling item: UIDragItem, withDefault defaultPreview: UITargetedDragPreview) -> UITargetedDragPreview? {
-        guard let lifted = item.localObject as? DragItems.Lifted, let view = lifted.view, presenter?.views[lifted.id] === view else { return nil }
+        guard let lifted = item.localObject as? DragItems.Lifted, let view = lifted.view, presenter?.views[lifted.id] === view,
+              view.incarnation == lifted.incarnation else { return nil }
         return Self.preview(of: view)
     }
 
@@ -136,18 +187,37 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
         return UITargetedDragPreview(view: view, parameters: parameters, target: target)
     }
 
-    /// Whether a touch at `point` lands in a text input, or a control that
-    /// tracks a drag or a held press (a slider, switch, stepper, segmented
-    /// control or date picker), of a node inside `node`, which keeps the
-    /// contact (D8). Any other control is a press, a button or a checkbox: a
-    /// rested finger there lifts the node, as a long press there opens the
-    /// node's context menu. The nodes are the presenter's, by identity.
-    static func startsInControl(_ node: NodeView, at point: CGPoint, in presenter: Presenter) -> Bool {
-        let nodes = Set(presenter.views.values.map(ObjectIdentifier.init))
-        var view = node.hitTest(point, with: nil), control = false
+    /// Whether `node` holds an interaction (D9): draggable, not disabled, and
+    /// carrying something, which UIKit lifts nothing without. Inertness is
+    /// read as a lift begins instead (`lifts`), since a modal makes a node
+    /// inert and takes that back with no batch for the node.
+    static func holds(_ node: NodeView) -> Bool {
+        node.props["draggable"] == "true" && !node.disabled && DragItems.name(of: node) != nil
+    }
+
+    /// Whether `node` can lift now (D8): it holds an interaction and is not
+    /// inert, which takes no touch.
+    static func lifts(_ node: NodeView) -> Bool { holds(node) && !node.inert }
+
+    /// Whether a touch that lands on `hit` keeps its contact from `node`'s
+    /// lift (D8): a disabled node from `hit` up to `node`, or one inside it
+    /// that lifts itself, as the Mac and Android take the innermost that
+    /// carries something; selectable text, `node` itself included, whose selection
+    /// takes the touch (`touchSelectsText`); or a text input, or a control
+    /// that tracks a drag or a held press (a slider, switch, stepper,
+    /// segmented control or date picker), of a node inside `node`. Any other
+    /// control is a press, a button or a checkbox: a rested finger there
+    /// lifts the node, as a long press there opens the node's context menu.
+    /// The nodes are the presenter's, by identity.
+    static func keepsContact(_ node: NodeView, from hit: UIView?, in presenter: Presenter) -> Bool {
+        if node.disabled || (hit === node && node.touchSelectsText) { return true }
+        let nodes = Dictionary(presenter.views.values.map { (ObjectIdentifier($0), $0) }, uniquingKeysWith: { first, _ in first })
+        var view = hit, control = false
         while let v = view, v !== node {
+            let inner = nodes[ObjectIdentifier(v)]
+            if inner?.disabled == true || inner.map(Self.lifts) == true || inner?.touchSelectsText == true { return true }
             control = control || v is UITextInput || v is UISlider || v is UISwitch || v is UIStepper || v is UISegmentedControl || v is UIDatePicker
-            if control, nodes.contains(ObjectIdentifier(v)) { return true }
+            if control, inner != nil { return true }
             view = v.superview
         }
         return false

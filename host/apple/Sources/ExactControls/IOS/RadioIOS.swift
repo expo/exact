@@ -11,8 +11,6 @@ import UIKit
 import ExactKit
 
 final class ExactRadio: ExactCheckbox {
-    weak var owner: NodeView?
-
     /// A custom choice keeps its row's name unless the radio has its own.
     /// Read the row live: a sibling's text can change without a control update.
     override var accessibilityLabel: String? {
