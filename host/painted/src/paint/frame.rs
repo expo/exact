@@ -19,6 +19,18 @@ impl<P> Frame<P> {
 }
 
 impl Painter {
+    pub(crate) fn replaced(&mut self) {
+        self.native_session = native::new_session();
+        // The new kernel can reuse the old tree's epochs, view IDs and node keys.
+        self.paint_epoch = None;
+        self.discard_rows();
+        self.shared = SharedState::default();
+        self.svg_warned.clear();
+        self.ripples.clear();
+        self.zoom.clear();
+        self.reader_highlights.clear();
+    }
+
     /// Place a new shared destination without publishing a stream before its reveal.
     pub(crate) fn flight_probe(
         &mut self,

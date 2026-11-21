@@ -546,6 +546,9 @@ package final class ShortcutHost: NSObject, NSMenuItemValidation {
             for item in viewMenu.items where item.action == #selector(NSSplitViewController.toggleSidebar(_:)) {
                 item.isHidden = presenter?.sidebar.installed != true
             }
+            for item in viewMenu.items where item.action == #selector(NSSplitViewController.toggleInspector(_:)) {
+                item.isHidden = presenter?.navigation.stackSplit.hasInspector != true
+            }
         }
         // Reconcile only our own items. In particular, Open… and Close must
         // survive the next plan batch. Existing command objects stay stable.

@@ -691,7 +691,15 @@ impl<D: DataSource> Bridge<D> {
         // After commit, its paint receipt configures storage before activation
         // and data_ready refreshes its baked/kept external-reading resources.
         let length = self.prepare_plan_carried(
-            plan_len, data, hooks, width, height, delivery, validated, None,
+            plan_len,
+            data,
+            hooks,
+            width,
+            height,
+            delivery,
+            validated,
+            None,
+            TreeBase::Live,
         );
         if let Some(prepared) = &mut self.prepared {
             prepared.module = true;
@@ -713,19 +721,6 @@ impl<D: DataSource> Bridge<D> {
         self.prepare_plan_with_delivery(len, data, hooks, width, height, None)
     }
 
-    /// Prepare with candidate delivery facts, without publishing them globally.
-    pub fn prepare_plan_with_delivery(
-        &mut self,
-        len: usize,
-        data: D,
-        hooks: Hooks,
-        width: f32,
-        height: f32,
-        delivery: Option<exact_runner::Delivery>,
-    ) -> u32 {
-        self.prepare_plan_carried(len, data, hooks, width, height, delivery, None, None)
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub(super) fn prepare_plan_carried(
         &mut self,
@@ -737,6 +732,7 @@ impl<D: DataSource> Bridge<D> {
         delivery: Option<exact_runner::Delivery>,
         carried: Option<exact_runner::Carried>,
         entry: Option<&str>,
+        base: TreeBase,
     ) -> u32 {
         if let Some(refusal) = self.refuse_analysis() {
             return refusal;
@@ -794,7 +790,7 @@ impl<D: DataSource> Bridge<D> {
         let ctx = hooks.ctx;
         let launch = self.launch();
         match exact_runner::time::launching_with(launch, || {
-            Host::boot_stored_after_decode(
+            Host::boot_stored_after_decode_mode(
                 PlanBytes::input(&plan, entry),
                 data,
                 measurer,
@@ -809,6 +805,12 @@ impl<D: DataSource> Bridge<D> {
                 self.launch.as_deref().unwrap_or("/"),
                 self.start_on_frame,
                 self.region,
+                None,
+                self.host.as_ref().filter(|_| {
+                    cfg!(target_os = "macos")
+                        && base == TreeBase::Live
+                        && carried.as_ref().is_some_and(|c| !c.fresh_state)
+                }),
                 self.links.clone(),
                 fonts.map(|callback| (callback, fonts_ctx)),
                 move |runner| {
@@ -1439,6 +1441,7 @@ mod answers;
 mod boot;
 mod canvas_performance;
 use boot::PreparedHost;
+pub(crate) use boot::TreeBase;
 mod colors;
 mod preparation;
 mod pump;

@@ -10,6 +10,12 @@ use exact_plan::{Plan, Value};
 pub struct Carried {
     /// The session plan number (LLP 1029.000.002 D10).
     pub generation: u64,
+    /// Highest view id issued in the session, including views since destroyed.
+    pub last_view_id: exact_kernel::ViewId,
+    /// Views the candidate can keep at matching source places (LLP 1029.000.002 D3).
+    pub views: crate::instance::RetainedViews,
+    /// Reading positions of virtualized lists, by their authored place.
+    pub lists: crate::instance::RetainedLists,
     /// The last published kernel epoch.
     pub epoch: u64,
     /// A fresh reboot keeps the sequence but initializes state and reads the host store anew.
@@ -95,11 +101,9 @@ impl Carried {
 
 impl<D: super::DataSource> super::Runner<D> {
     /// Boot a new plan with the state of an old runner (a dev reload that
-    /// keeps its place — LLP 1007 §6). The tree, ids, timers, and every
-    /// derive are fresh; only slots, matching resources, and the clock are
-    /// taken, and each only where it still fits the new plan, so carried
-    /// state can never be why a boot fails. Nothing compiled into the plan
-    /// is trusted over carried state.
+    /// keeps its place — LLP 1007 §6). The new tree keeps compatible views'
+    /// ids. Timers and derives start fresh, and matching slots and settled
+    /// resources take their carried values.
     pub fn boot_carrying(
         plan: Plan,
         data: D,
@@ -139,6 +143,7 @@ impl<D: super::DataSource> super::Runner<D> {
     pub fn reboot_sequence(&self) -> Carried {
         Carried {
             generation: self.generation,
+            last_view_id: self.ids.last_issued(),
             epoch: self.kernel.epoch(),
             fresh_state: true,
             ..Carried::default()
@@ -149,8 +154,19 @@ impl<D: super::DataSource> super::Runner<D> {
     pub fn carry(&self) -> Carried {
         Carried {
             generation: self.generation,
+            last_view_id: self.ids.last_issued(),
             epoch: self.kernel.epoch(),
             fresh_state: false,
+            views: self
+                .tree
+                .as_ref()
+                .map(|tree| tree.retainable_views(&self.plan, &self.kernel, &self.ids))
+                .unwrap_or_default(),
+            lists: self
+                .tree
+                .as_ref()
+                .map(|tree| tree.carried_lists(&self.plan, &self.kernel))
+                .unwrap_or_default(),
             picked_count: self.picked_count,
             router: self.carry_router(),
             data_revision: self.data.revision().map(str::to_owned),
@@ -282,6 +298,21 @@ impl<D: super::DataSource> Runner<D> {
     /// D9), which `state.replacement.pending` reports.
     pub fn set_replacement_pending(&mut self, pending: Option<&'static str>) {
         self.replacement_pending = pending;
+    }
+
+    pub(crate) fn view_place(
+        &self,
+        view: exact_kernel::ViewId,
+    ) -> Option<Vec<crate::instance::place::Part>> {
+        let mut found = None;
+        self.tree
+            .as_ref()?
+            .visit_places(&self.plan, &self.kernel, |node, path, _| {
+                if node.view == view {
+                    found = Some(path.to_vec());
+                }
+            });
+        found
     }
 
     /// `state.replacement`: the last replacement's report and what a waiting

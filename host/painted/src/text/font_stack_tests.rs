@@ -128,6 +128,39 @@ fn runtime_stack_uses_second_authored_face_before_platform_fallback() {
 }
 
 #[test]
+fn long_clusters_keep_their_fallback_face_glyphs_and_byte_ranges() {
+    let mut catalog = fixture();
+    catalog.install_runtime(8, &["Noto Sans Arabic, Inter".into(), "Inter".into()]);
+    let mut engine = TextEngine::with_catalog(catalog);
+
+    // Both faces cover the digit and the combining grapheme joiner. Only Inter covers the acute.
+    let prefix = format!("1{}", "\u{034f}".repeat(40));
+    assert_face(&engine.paragraph(&spec(8, &prefix), None), 0, ARABIC);
+    assert_face(
+        &engine.paragraph(&spec(8, &(prefix + "\u{0301}")), None),
+        0,
+        SECOND,
+    );
+
+    for marks in [253, 254, 255, 256] {
+        let cluster = format!("b{}", "\u{0301}".repeat(marks));
+        let p = engine.paragraph(&spec(9, &format!("{cluster}!")), None);
+        let glyphs = &p.lines().glyphs;
+        assert_eq!(glyphs.len(), marks + 2);
+        assert!(glyphs.iter().all(|g| g.glyph_id != 0));
+        assert_eq!(glyphs.last().unwrap().start as usize, cluster.len());
+    }
+
+    let arrows = "→".repeat(21_846);
+    let p = engine.paragraph(&spec(9, &format!("{arrows}!")), None);
+    let end = p.lines().glyphs.last().unwrap();
+    assert_eq!(
+        (end.start as usize, end.end as usize),
+        (arrows.len(), arrows.len() + 1)
+    );
+}
+
+#[test]
 fn picture_stack_keeps_families_after_a_generic() {
     let mut catalog = fixture();
     let first = catalog.fonts.collection.family_id("Roboto Flex").unwrap();

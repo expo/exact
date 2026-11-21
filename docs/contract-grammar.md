@@ -767,8 +767,8 @@ only its selected arm. Conditions require booleans.
 Named arguments are accepted only by the corresponding constructs: component
 uses, a native module's sources and sends (the only place a dotted name,
 `apple.desiredAccuracy=`, is one), record construction/copy, localization (`t`), placeholders (`empty`),
-canvas `surface=` bindings, and specialized host commands (`share`,
-`scrollIntoView`). Ordinary function calls are positional. Arrow expressions are admitted
+canvas `surface=` bindings, `dataTransfer=DataTransfer(…)` (LLP 1094.000),
+and specialized host commands (`share`, `scrollIntoView`). Ordinary function calls are positional. Arrow expressions are admitted
 as the callbacks to `map` and `filter`, with at most item and index parameters;
 they are not first-class values or event handlers.
 
@@ -812,6 +812,7 @@ launch        = "size" NUMBER "x" NUMBER NL          (* written 1200x800 *)
               | "before" "data" NL                   (* the first step does not wait for data *)
               | "prefer" IDENT { "." IDENT } ( IDENT | STRING ) NL
                                                      (* media feature, page fact, or permission.<module>; before observations *)
+              | "answer" "source" IDENT "with" json NL (* what a source answers under verify *)
               | "fail" "fetch" STRING [ "times" NUMBER ] NL ; (* armed before the first data load *)
 step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
                                                      (* bytes into an input; or clock ticks: bpm, ms *)
@@ -846,6 +847,7 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
               | "reload" NL
               | "fail" "fetch" STRING [ "times" NUMBER ] NL (* later fetches whose URL starts with it fail *)
               | "pass" "fetch" STRING NL             (* it stops failing *)
+              | "answer" "source" IDENT "with" json NL (* the source answers anew; its readers ask again *)
               | "drop" "stream" STRING NL           (* ends open streams whose URL starts with it *)
               | "prefer" IDENT STRING NL             (* quoted media preference or root-font-size *)
               | "request" METHOD STRING [ json ] [ "as" ( IDENT | STRING ) ] [ "expect" NUMBER ] NL
@@ -874,6 +876,8 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
                   [ "at" NUMBER ] [ "gain" NUMBER ] [ "ends" NUMBER ]
                   [ "playbackRate" NUMBER ] [ "pan" [ "-" ] NUMBER ] [ "by" IDENT ] NL
               | "expect" "wakelock" ( "held" | "released" ) NL
+              | "expect" "drag" STRING ( "none" | "has" STRING [ "==" STRING ] [ "name" STRING ] | "missing" STRING ) NL
+                                                     (* what the node's drag carries, as `tree` shows it (LLP 1094.000) *)
               | "expect" "midi" ( "sent" | "missing" ) STRING HEX { HEX } [ "at" NUMBER ] NL
               | "expect" "mediasession" ( IDENT "==" ( STRING | "none" )
                   | ( "has" | "missing" ) STRING ) NL ;
@@ -977,8 +981,10 @@ frame         = "only" "writes" { IDENT } NL          (* no other root slot chan
 `after`. The braces in the EBNF mean repetition, not written braces. A read names a
 whole root state or derive by its bare identifier; fields and indices are stage 2.
 Before any script runs, verify rejects a derive whose body, dependencies or called
-functions reach a resource, mutation status, clock or geometry read. A mutation's
-result slot is a state and may be named.
+functions reach a mutation status, clock or geometry read, or, outside `always`, a
+resource. An `always` line checks each printed configuration, where the runner and
+Lean print the same oracle answer; an `after` pair could see a resource change on a
+step that commits nothing. A mutation's result slot is a state and may be named.
 
 `always` checks every printed configuration, including boot. `stays v` means that a
 previous observation equal to `v` must remain `v`. `after "action"` reads the value
@@ -1122,6 +1128,19 @@ where `fail fetch` is a rejected connection. These fixtures cover buffered HTTP
 requests, including a worker's; streams, long polls, redirects, `exactBodyTo`,
 delays and response files are not supported.
 
+`answer source pairing with {"phase": "code", "code": "123456"}` supplies a typed
+answer in `contract verify`. It applies to every argument list for that source.
+An omitted record field keeps its previous value for those arguments, or the
+seeded value on the first call. Verify checks the named fields against the
+declared result type before running the test. A failed expectation in a test
+that supplies a source answer fails verification.
+
+A leading line supplies the answer at boot. A test's leading line replaces the
+file's default for that source. After boot the line changes the answer and asks
+the source's live readers again in one commit. Lean and `--js` replay the
+changes in order. On a device, `agent --test` reports tests that require these
+oracle answers as skipped.
+
 `request POST "/polls/1/votes" {"option": 2} as bob`
 (LLP 1116.006 D8) is the driver, not the app, writing through the app's server as
 another person: a method, a path in quotes under the server URL app.ts calls (its
@@ -1195,7 +1214,10 @@ is the slider's accessibility increment or decrement, the call VoiceOver's
 swipe makes; its halves are that step's keydown with the move, then its
 keyup, and a held key's repeats move it again);
 `down` and `up` are the two halves, and `for <ms>` holds it that long on the
-virtual clock (`down` or `up` together with `for` is refused). `reload` restarts the app on the store it had: the
+virtual clock (`down` or `up` together with `for` is refused). `contract verify`
+delivers a key press to a box or text and its ancestors, including the release.
+Tab and keys on controls or elements with `press` stop verification at that step
+(`semantics/README.md`). `reload` restarts the app on the store it had: the
 web page reloads its current URL in the same profile, keeping Back and Forward
 entries; each separate test starts with an isolated history. A native app
 relaunches on the same scratch store with a fresh navigation stack. On Linux,
@@ -2398,8 +2420,8 @@ action wheeled(e: WheelEvent)
 scroll wheel=wheeled …
 ```
 
-`drop` is DOM's `drop` of files dragged in from outside the app (Finder, the
-desktop) onto the innermost node that declares it: its `DragEvent` is
+`drop` is DOM's `drop` of files dragged in from outside the app (Finder, Explorer
+or the desktop) onto the innermost node that declares it: its `DragEvent` is
 `offsetX`, `offsetY`, `files` (a `string[]` of `doc:` handles minted as a
 picker's are, LLP 1069.010
 D1, readable under `fs.read doc:/`) and the modifiers. Files of any type are
@@ -2408,10 +2430,11 @@ taken, and a dropped folder is a folder's handle (`fs.stat` says
 path. A file drag over an `input` or a `textarea` inside such a node (or
 declaring `drop` itself) is the node's, as on the web, where its listener
 prevents the field's own drop: the field inserts no path text. A text drag,
-and a file drag over a field with no `drop` above it, stay the field's. Web
-(a browser without `getAsFileSystemHandle` hands read-only copies) and macOS;
-iOS, Linux, Windows, Android and the terminal have none. The driver's `tap
-<target> drop <path…>` drags files and folders in.
+and a file drag over a field with no `drop` above it, stay the field's. Web,
+macOS and Windows deliver files in the order the source supplies them. A
+browser without `getAsFileSystemHandle` hands the app read-only copies.
+iOS, Linux, Android and the terminal have no external file drops. The
+driver's `tap <target> drop <path…>` drags files and folders in.
 
 `dragenter` and `dragleave` are DOM's, as a node hears them when it ignores
 moves between its own descendants (the `currentTarget.contains(relatedTarget)`
@@ -2440,10 +2463,25 @@ column dragenter=entered dragleave=left drop=took position="relative"
       text "Drop files to attach" role="status"
 ```
 
-Web and macOS, as `drop`. The driver's `tap <target> dragenter <path…>`
-brings a drag of those files over the target and leaves it there (for a
+Web, macOS and Windows support these events. The driver's
+`tap <target> dragenter <path…>` brings a drag of those files over the target and leaves it there (for a
 screenshot); `tap <target> drop <path…>` drops it, and `tap <target>
 dragleave` takes it away undropped.
+
+`draggable` is HTML's attribute: a node a person can lift and drop into
+another app, a boolean that may be bound, on a box, a `link`, a `button` or
+an `image` (LLP 1094.000). `dataTransfer=DataTransfer(text=, url=, files=[…])`
+declares what the drag carries, by `DataTransfer`'s names: `text` as
+`text/plain`, `url` (absolute `http:` or `https:`) as `text/uri-list`, and
+each file as itself, a shipped `assets/` file or an `app:/` path behind
+`fs.read`. Each needs the other. The data is declared on the node, not set in
+a `dragstart` listener, because every platform takes a drag's items as it
+begins; `dragstart`, `drag` and `dragend` are refused for now
+(`lower-handler-later`). The runner admits each file and `url` for the host
+and journals a refusal (`drag: refused: …`); `expect drag` asserts what a node
+carries ([recipe](recipes/drag-out.md)). On iOS, iPadOS and Android a press
+held on the node lifts it into another app, and on the Mac and the web a mouse
+drags it.
 
 `beforeunload` is DOM's: the window is about to close or the app to quit
 (macOS: its close button, File ▸ Close Window, ⌘Q; the web: leaving the page).
@@ -2549,8 +2587,12 @@ once per change. The web and macOS select text; iOS selects text its author
 made selectable (`user-select="text"`), by a long press, a double tap and the
 selection's handles. On Android a long press selects a word in an opted-in
 paragraph. Dragging its handles changes the selected range and Select all
-takes the paragraph's selectable text. Linux has no text selection on a
-`text`, so it never fires there. In a `user-select="all"` element one click (a long press on Android or iOS,
+takes the paragraph's selectable text. On Linux, dragging the mouse selects
+text in opted-in paragraphs. Double-click selects a word and triple-click selects
+a paragraph, including text that wraps onto another line. For Markdown, the offsets count UTF-16 units
+in the rendered text. Ctrl+C copies the visible text, with a newline between
+paragraphs, when the host supplies a clipboard. In a
+`user-select="all"` element one click (a long press on Android or iOS,
 or a double tap on iOS) selects the whole element, and a selection that reaches
 into it takes all of it.
 
@@ -2568,8 +2610,9 @@ an empty rectangle list.
 
 Rectangles are snapshots at that event, not live layout facts. On the web they
 are the paragraph's selected `Range.getClientRects()`; macOS uses the same
-CoreText fragments as its selection highlight and inline-run geometry. Their
-`provisional` and `unavailable` flags are false; an empty selection has no
+CoreText fragments as its selection highlight and inline-run geometry. Linux
+reports the clipped fragments of its painted highlight. The `provisional` and
+`unavailable` flags are false; an empty selection has no
 rectangles. Native paragraphs rendered by the reader worker currently return
 an empty rectangle list: their caret geometry is not available synchronously.
 Scrolling alone does not emit another selection event.
@@ -3191,7 +3234,7 @@ argument validation. Use the working implementation when selecting arguments:
 | `exitFullscreen()`, `setWindowOpacity(opacity)`: what a quit the app holds does to its window before it quits, as Electron's `setFullScreen(false)` and `setOpacity(0)`. `exitFullscreen()` is the web's `document.exitFullscreen()`: on the Mac the session's window leaves its full-screen space (a video's own full screen is `requestFullscreen(id)`'s); nothing happens when nothing is full screen. `setWindowOpacity` draws the session's window at an opacity from 0 (unseen, still key and still hearing keys) to 1 (`NSWindow.alphaValue`); a literal outside 0–1 is refused here (`type-window-opacity`). The Mac's; the web refuses `setWindowOpacity`, and iOS and Linux refuse both, in the journal. The agent's `state.windows` shows each window's `fullScreen` and `opacity` (LLP 1069.010) | [calls tests](../contract/cli/tests/it/calls.rs), [`WindowCommandsMacTests`](../host/apple/tests/ExactKitTests/WindowCommandsMacTests.swift) |
 | `hideWindow()`: the session's window put away with the app still running, as Electron's `BrowserWindow.hide`, for a menu-bar utility whose window goes once its work is done. On the Mac it is what the person's ⌘W does under `host.macos.window.keepRunning` or while a status item is placed: the window is ordered out, its session kept, `exactPage().visibilityState` reads `hidden` and `persisted` `true`, and the next bare `focus()`, Dock click or status-item press shows it as a restore (`restores`). Where the app would end without its window (neither, or a `navigate-new` app), it is refused in the journal and the window stays; `close()` still closes the window and ends the app. On Windows it is what the close button does under `host.windows.window.keepRunning`, and refused in the journal without it. iOS, Linux, Android and the web refuse it in the journal (LLP 1133.025 D4) | [window command tests](../contract/cli/tests/it/window_commands.rs), [`WindowCommandsMacTests`](../host/apple/tests/ExactKitTests/WindowCommandsMacTests.swift) |
 | `startViewTransition()`, `startViewTransition(seconds)`: the action's commit cross-fades the whole window from how it looked before, as the web's `document.startViewTransition()` with the root's default animation, over 0.25 s or the duration given (a number above 0, else `type-view-transition`). For a change that replaces most of the screen with no route of its own, such as a switch of the app's whole data set. The commit's own pushes and pops land without their own animation. iOS runs `UIView.transition(with: window, options: .transitionCrossDissolve)`; a sheet the commit closes slides out while the page beneath it cross-fades, and one that stays fades with the window. The Mac fades the window's content. iOS and the Mac fade under reduced motion too, as UIKit's dissolve does. A duration that is not above 0 at run time is 0.25 s. The web (exact-web-js) runs the commit's tree update inside `document.startViewTransition` and cuts under reduced motion; the wasm web host and the painted hosts (Linux, Android, Windows) cut, with a journal line | [window command tests](../contract/cli/tests/it/window_commands.rs), [`ViewTransitionIOSTests`](../host/apple/tests/ExactKitTests/ViewTransitionIOSTests.swift), [window transition test](../host/web-js/window-transition.test.mjs) |
-| `share(title=, text=, url=, files=)`: the system share sheet by the Web Share API's names, at least one of `text`, `url` and `files`, each its own item of the sheet (pass a picture alone to share only it, as a Share Card button does; `contract vocab share`); `url` absolute `http(s)`. `files=` lists `app:/` files, each behind the app's `fs.read` grant (on Apple a regular file of at most 64 MB, reached through no symbolic link), and `"#id"` entries: a PNG of that element as it is drawn now, at the display's scale, named by the share's `title` (else by the id) (iOS and macOS; the web refuses it, `share: refused: a picture of an element is not available on the web`; Android and Linux refuse files). A literal `#id` no element carries is refused here (`lower-share-picture`), a missing one at run time in the journal. Offer it where `exactPage()`'s `canShareFiles` and `canSharePictures` hold (LLP 1125 D12). The outcome is a journal line | [share corpus](../contract/corpus/share.contract), [Metronome](../apps/metronome/app.contract) |
+| `share(title=, text=, url=, files=)`: the system share sheet by the Web Share API's names, at least one of `text`, `url` and `files`, each its own item of the sheet (pass a picture alone to share only it, as a Share Card button does; `contract vocab share`); `url` absolute `http(s)`. `files=` lists `app:/` files, each behind the app's `fs.read` grant (on Apple a regular file of at most 64 MB, reached through no symbolic link), and `"#id"` entries: a PNG of that element as it is drawn now, at the display's scale, named by the share's `title` (else by the id) (iOS and macOS; the web refuses it, `share: refused: a picture of an element is not available on the web`, and Android refuses it, though it shares `app:/` files; Linux refuses files). A literal `#id` no element carries is refused here (`lower-share-picture`), a missing one at run time in the journal. Offer it where `exactPage()`'s `canShareFiles` and `canSharePictures` hold (LLP 1125 D12). The outcome is a journal line | [share corpus](../contract/corpus/share.contract), [Metronome](../apps/metronome/app.contract) |
 | `showPicker(id)`, export `saveFile(id, from, suggestedName)`: the host copies the `app:/` file `from` to where the person chooses; `change` at `id` carries the chosen name, `cancel` a dismissal. `saveFile(id, text=…, suggestedName=…)` saves the text itself (UTF-8), no file written first and no grant, so "export what's on screen" is one press | [picker tests](../contract/cli/tests/it/picker.rs), [Fieldnotes](../apps/fieldnotes/app.contract), [Linux's save tests](../host/painted/src/presenter/save_tests.rs) |
 | `showOpenFilePicker(id[, multiple])` | [file-picker corpus](../contract/corpus/file-pickers.contract) |
 | `showDirectoryPicker(id)` | Same corpus |

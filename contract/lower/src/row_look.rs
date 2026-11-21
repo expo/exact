@@ -28,6 +28,7 @@ pub(crate) fn yielded(node: &Node) -> Option<Node> {
         children,
         span,
         instance,
+        place,
     } = node
     else {
         return None;
@@ -46,5 +47,6 @@ pub(crate) fn yielded(node: &Node) -> Option<Node> {
         children: children.clone(),
         span: *span,
         instance: *instance,
+        place: *place,
     })
 }

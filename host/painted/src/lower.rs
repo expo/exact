@@ -40,9 +40,48 @@ pub(crate) fn spinner_layer(key: NodeKey) -> u64 {
 }
 
 /// Whether a layer key is an indicator's ([`spinner_layer`]).
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 pub(crate) fn is_spinner(layer: u64) -> bool {
     layer & SPINNER != 0
+}
+
+/// Set in a layer key ([`ripple_layer`]): a press's ripple the reader plays
+/// (LLP 1172.023.002), apart from the node's own layer.
+const RIPPLE: u64 = 1 << 62;
+
+/// The layer key of the ripple on `key` (`paint/ripple.rs`).
+pub(crate) fn ripple_layer(key: NodeKey) -> u64 {
+    node_u64(key) | RIPPLE
+}
+
+/// The node whose ripple a layer key is ([`ripple_layer`]).
+#[cfg(any(target_os = "android", test))]
+pub(crate) fn ripple_node(layer: u64) -> Option<NodeKey> {
+    (layer & (RIPPLE | SPINNER) == RIPPLE).then(|| exact_kernel::motion::node_key(layer & !RIPPLE))
+}
+
+/// A ripple's tracks (`paint/ripple.rs`): its opacity, offset x and y and
+/// scale, `samples` evenly over `duration` seconds from `start` on the
+/// engine's clock, linear between and held at both ends.
+pub(crate) fn ripple_words(start: f64, duration: f64, samples: &[[f32; 4]]) -> Vec<u32> {
+    let mut out = Vec::new();
+    let last = samples.len().saturating_sub(1).max(1) as f64;
+    for (i, code) in [OPACITY, TX, TY, SCALE].into_iter().enumerate() {
+        out.push(code);
+        f(&mut out, start);
+        out.push(0);
+        f(&mut out, 0.0);
+        f(&mut out, 0.0);
+        f(&mut out, duration);
+        f(&mut out, 1.0);
+        out.extend([0, 3, 0, samples.len() as u32]);
+        for (k, sample) in samples.iter().enumerate() {
+            f(&mut out, k as f64 / last);
+            f(&mut out, f64::from(sample[i]));
+            out.push(0);
+        }
+    }
+    out
 }
 
 /// Material's indeterminate indicator, as Compose's `CircularProgressIndicator`
@@ -89,13 +128,9 @@ pub const LOWER_MOVE: u8 = 16;
 pub const LOWER_COLOR: u8 = 32;
 
 /// Track property codes on the wire.
-#[cfg(any(target_os = "android", test))]
 const OPACITY: u32 = 0;
-#[cfg(any(target_os = "android", test))]
 const TX: u32 = 1;
-#[cfg(any(target_os = "android", test))]
 const TY: u32 = 2;
-#[cfg(any(target_os = "android", test))]
 const SCALE: u32 = 3;
 #[cfg(any(target_os = "android", test))]
 const ROTATE: u32 = 4;
@@ -368,7 +403,7 @@ impl<D: DataSource> Host<D> {
 
     /// Bumped whenever a lowered node's plays may have changed: the reader's
     /// tracks are encoded again only then.
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", test))]
     pub(crate) fn lowered_epoch(&self) -> u64 {
         self.lowered_epoch
     }
@@ -376,7 +411,7 @@ impl<D: DataSource> Host<D> {
     /// Whether `key`'s plays changed after `epoch` ([`Host::lowered_epoch`]):
     /// its tracks are encoded again only then, not every layer's at each
     /// change of any (rows mounting in a fling start their own).
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", test))]
     pub(crate) fn lowered_changed_after(&self, key: NodeKey, epoch: u64) -> bool {
         self.lowered_changed
             .get(&node_u64(key))
@@ -707,7 +742,6 @@ fn node_u64(key: NodeKey) -> u64 {
     (key.generation as u64) << 32 | key.index as u64
 }
 
-#[cfg(any(target_os = "android", test))]
 fn f(out: &mut Vec<u32>, v: f64) {
     out.push((v as f32).to_bits());
 }

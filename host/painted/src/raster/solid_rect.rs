@@ -75,7 +75,10 @@ impl Raster {
         let Some(edges) = edges.finish() else {
             return false;
         };
-        let Some(target) = self.target.path_pixels(&path, Transform::identity()) else {
+        let Some(target) = self
+            .target
+            .bounded_pixels(path.bounds(), Transform::identity())
+        else {
             return false;
         };
         target.fill_path(

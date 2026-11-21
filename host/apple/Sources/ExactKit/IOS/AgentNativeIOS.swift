@@ -56,11 +56,12 @@ extension Agent {
     static func presentedOffset(_ sv: UIScrollView) -> CGPoint { sv.layer.presentation()?.bounds.origin ?? sv.bounds.origin }
 
     /// A scroller's `sx`/`sy` (LLP 1012 `layout`): the presented offset, and
-    /// while a running scroll is headed elsewhere, that `target` too. `top`
-    /// is added on y (CSS scrollTop under a list's top inset).
-    static func offset(of sv: UIScrollView, top: CGFloat = 0) -> [String: Any] {
+    /// while a running scroll is headed elsewhere, that `target` too. `left`
+    /// and `top` are added on x and y (CSS scrollLeft and scrollTop under a
+    /// list's insets).
+    static func offset(of sv: UIScrollView, left: CGFloat = 0, top: CGFloat = 0) -> [String: Any] {
         let shown = presentedOffset(sv), model = sv.bounds.origin
-        let sx = r2(shown.x), sy = r2(shown.y + top), tx = r2(model.x), ty = r2(model.y + top)
+        let sx = r2(shown.x + left), sy = r2(shown.y + top), tx = r2(model.x + left), ty = r2(model.y + top)
         return sx == tx && sy == ty ? ["sx": sx, "sy": sy] : ["sx": sx, "sy": sy, "target": ["sx": tx, "sy": ty]]
     }
 }
@@ -90,7 +91,7 @@ extension Agent {
             // A waiting scroll (a closed swipe row's) is at its start, with no range until it scrolls.
             if v.scrollDormant { n["sx"] = 0.0; n["sy"] = 0.0; n["rx"] = 0.0; n["ry"] = 0.0 }
             if let sv = v.scrollView {
-                n.merge(Agent.offset(of: sv, top: v.scrollTopInset(sv))) { _, new in new }
+                n.merge(Agent.offset(of: sv, left: v.scrollLeftInset(sv), top: v.scrollTopInset(sv))) { _, new in new }
                 n.merge(Agent.range(of: sv)) { _, new in new }
                 // A zoomable scroller's zoom and range (LLP 1057.001.000 §6).
                 if v.extras?.zoom != nil, let range = v.zoomRange {

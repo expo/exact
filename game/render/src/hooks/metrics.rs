@@ -183,6 +183,7 @@ pub(crate) fn append_state<H: Hooks>(
     out: &mut String,
     hooks: &H,
     budget: Option<&budget::Budget>,
+    reset: bool,
 ) {
     if let Some(metrics) = metrics {
         metrics.append(
@@ -198,11 +199,25 @@ pub(crate) fn append_state<H: Hooks>(
     } else {
         out.push_str(",\"renderHooks\":{");
     }
+    let mut jobs = hooks.jobs();
+    if reset {
+        if let Some(jobs) = &mut jobs {
+            jobs.reset_counters();
+        }
+    }
     out.push_str("\"game\":");
     match hooks.report() {
         Some(report) if game_object(report).is_ok() => out.push_str(report.trim()),
         Some(_) => out.push_str("null,\"gameError\":\"render hook report must be a JSON object\""),
         None => out.push_str("null"),
+    }
+    out.push_str(",\"jobs\":");
+    if let Some(jobs) = jobs {
+        use std::fmt::Write;
+        write!(out, "{{\"queued\":{},\"queuedBytes\":{},\"running\":{},\"done\":{},\"stale\":{},\"failed\":{},\"lane\":\"{}\"}}",
+            jobs.queued, jobs.queued_bytes, jobs.running, jobs.done, jobs.stale, jobs.failed, jobs.lane.as_str()).unwrap();
+    } else {
+        out.push_str("null");
     }
     out.push('}');
 }
@@ -282,7 +297,7 @@ mod tests {
                 (None, serde_json::Value::Null, false),
             ] {
                 let mut json = String::from("{\"world\":{\"ready\":true");
-                append_state(metrics, &mut json, &GameReport(report), None);
+                append_state(metrics, &mut json, &GameReport(report), None, false);
                 json.push_str("}}");
                 let state: serde_json::Value = serde_json::from_str(&json).unwrap();
                 let hooks = &state["world"]["renderHooks"];

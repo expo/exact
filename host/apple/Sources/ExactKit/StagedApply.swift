@@ -15,9 +15,7 @@ import QuartzCore
 /// read by nothing. Everything else the batch does waits for the reveal,
 /// which applies the whole batch in one turn with the prepared ops done.
 final class StagePlan {
-    /// The kinds preparation makes. Any other kind in a subtree leaves the
-    /// subtree to the reveal: a host that owns its children (a list, a
-    /// table, a dialog) or its own platform object reacts as it is made.
+    /// Native controls and the children they own enter the window at the reveal.
     static let plainKinds: Set<String> = ["view", "text"]
     /// Below this many prepared ops the batch applies in its own turn: on
     /// the Mac, 300 ops of plain boxes apply in about a frame.
@@ -35,8 +33,15 @@ final class StagePlan {
     static let firstAttachSeconds = 0.0005
 
     let batch: Batch
-    /// Per op of `batch`: whether preparation applies it.
+    /// Per op of `batch`: whether preparation applies any of it.
     let prepared: [Bool]
+    /// A mixed child list mounts only the prepared nodes until its complete list can be revealed.
+    private let earlyChildren: [Int: [UInt32]]
+    func preparingOp(_ index: Int) -> BatchOp {
+        var op = batch.ops[index]
+        if let ids = earlyChildren[index] { op.ids = ids }
+        return op
+    }
     /// The ops the reveal applies: the rest, less superseded samples, with
     /// the newest style a passing batch gave. The rest is made in the last
     /// slice, not in the reveal's turn.
@@ -45,7 +50,7 @@ final class StagePlan {
     func prepareReveal() {
         guard rest == nil else { return }
         var reveal = batch
-        reveal.ops = zip(batch.ops, prepared).compactMap { $1 ? nil : $0 }
+        reveal.ops = batch.ops.indices.compactMap { prepared[$0] && earlyChildren[$0] == nil ? nil : batch.ops[$0] }
         rest = reveal
     }
     func reveal() -> Batch {
@@ -121,8 +126,7 @@ final class StagePlan {
             switch op.op {
             case .create: if !Self.plainKinds.contains(op.kind) { refused.insert(op.id) }
             case .children:
-                // A new box that takes a live one in moves it while the box is unseen.
-                for child in op.ids { if kinds[child] != nil { parent[child] = op.id } else if made { refused.insert(op.id) } }
+                for child in op.ids where kinds[child] != nil { parent[child] = op.id }
             case .props, .style, .paragraph, .frame, .flow, .content, .rank: break
             default: if made { refused.insert(op.id) }
             }
@@ -134,23 +138,28 @@ final class StagePlan {
                 if let known = topOf[at] { found = known; break }
                 chain.append(at)
                 // A root, or a box no `children` op places, joins nothing.
-                guard let up = parent[at] else { break }
+                guard !refused.contains(at), let up = parent[at] else { break }
                 if kinds[up] == nil { found = !destroyed.contains(up) && joins(up) ? at : nil; break }
                 at = up
             }
             for id in chain { topOf[id] = found }
             return found
         }
-        let refusedTops = Set(refused.compactMap(top))
+        var earlyChildren: [Int: [UInt32]] = [:]
         var prepared = [Bool](repeating: false, count: ops.count), count = 0
         for (index, op) in ops.enumerated() where kinds[op.id] != nil {
-            guard let t = top(op.id), !refusedTops.contains(t) else { continue }
+            guard let group = top(op.id) else { continue }
+            if op.op == .children {
+                // Moving a live child now would take it off the committed screen.
+                func ready(_ child: UInt32) -> Bool { kinds[child] != nil && top(child) == group }
+                if !op.ids.allSatisfy(ready) { earlyChildren[index] = op.ids.filter(ready) }
+            }
             prepared[index] = true
             count += 1
         }
         guard count >= Self.minimumOps else { return nil }
         var tops: [UInt32: UInt32] = [:], depth: [UInt32: Int] = [:], below: [UInt32: Int] = [:]
-        for (id, found) in topOf where found == id && !refusedTops.contains(id) { tops[id] = parent[id] }
+        for (id, found) in topOf where found == id { tops[id] = parent[id] }
         for (id, found) in topOf {
             guard let found, tops[found] != nil else { continue }
             var at = id, d = 0
@@ -164,6 +173,7 @@ final class StagePlan {
         self.reads = (batch.controlReads ?? [:]).mapValues(\.parts)
         self.styles = styles
         self.batch = batch
+        self.earlyChildren = earlyChildren
         self.prepared = prepared
         self.tops = tops
         self.destroyed = destroyed
@@ -212,6 +222,7 @@ extension StagePlan {
     /// two that carry them keep their order.
     func disjoint(_ other: Batch) -> Bool {
         if other.rootTabs != nil, batch.rootTabs != nil { return false }
+        if other.routeInspectors != nil, batch.routeInspectors != nil { return false }
         if let theirs = other.controlReads, theirs.contains(where: { structural.contains($0.key) || reads[$0.key]?.isDisjoint(with: $0.value.parts) == false }) { return false }
         for op in other.ops {
             switch op.op {
@@ -285,7 +296,7 @@ final class StageFrames: NSObject {
 /// Views a reveal took out, removed a few each turn, innermost first so
 /// that each removal is one view's.
 final class Teardown {
-    private var pending: [PlatformView?] = []
+    private var pending: [NodeView?] = []
     private var next = 0
     private var tops = Set<ObjectIdentifier>()
     /// Released boxes whose caches go as each is removed.
@@ -293,10 +304,11 @@ final class Teardown {
     private var scheduled = false
     private static let turnSeconds = 0.0015
 
-    func add(_ top: PlatformView) {
-        func walk(_ view: PlatformView) {
-            for child in view.subviews { walk(child) }
-            pending.append(view)
+    func add(_ top: NodeView, destroying: Set<UInt32>) {
+        // A control owns its native subviews. A surviving Exact child may move elsewhere at the reveal.
+        func walk(_ node: NodeView) {
+            for child in node.structuralChildren where destroying.contains(child.id) { walk(child) }
+            pending.append(node)
         }
         walk(top)
         tops.insert(ObjectIdentifier(top))
@@ -348,6 +360,9 @@ final class Teardown {
 }
 
 extension ExactSession {
+    /// Whether a batch the runtime made still waits to apply: a stage being prepared or one behind it.
+    package var batchesWaiting: Bool { stage != nil || !pending.isEmpty }
+
     /// Begins preparing a large batch (LLP 1072 T13): true when `batch` is
     /// staged, or was prepared and published here. Under the agent's clock
     /// and `EXACT_FILL_SYNC` the same preparation runs to its end at once
@@ -662,6 +677,7 @@ struct BatchFootprint {
         let sampling = batch.clockWork == .tick && batch.seq == nil
         // A native control's state, as the runtime made it with the batch, and the roots' tabs, which replace all.
         for (id, read) in batch.controlReads ?? [:] { written[id, default: []].formUnion(read.parts) }
+        if batch.routeInspectors != nil { written[.max, default: []].insert("routeInspectors") }
         if batch.rootTabs != nil { written[.max, default: []].insert("rootTabs") }
         for op in batch.ops {
             if op.op == .style { styled.insert(op.id); if sampling { paints.insert(op.id) } }

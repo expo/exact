@@ -135,6 +135,7 @@ impl Lowerer<'_> {
             children,
             span,
             instance,
+            place: None,
         };
         let mut out = Vec::new();
         if let Some(title) = title {

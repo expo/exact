@@ -881,6 +881,8 @@ pub enum Node {
         /// root's own elements are 0, a used component's are its use's;
         /// 0 as parsed. The development map and refusal diagnostics read it.
         instance: u32,
+        /// The local source step in the expansion, absent on a generated element.
+        place: Option<u32>,
     },
     /// `Name(arg=expr, …)`, with the nodes indented under it filling the
     /// component's `slot` (LLP 1017 P4b).

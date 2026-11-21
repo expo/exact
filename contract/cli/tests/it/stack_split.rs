@@ -140,8 +140,19 @@ fn section_labels_do_not_open_a_split_or_own_its_detail() {
                   text "No selection"
                 footer
                   text "Help""#;
-    for appearance in ["", r#"appearance="auto""#] {
-        let source = app("", appearance, labels);
+    let windowed = format!(
+        "              for id in [\"a\"] key=id\n  {}",
+        labels.replace('\n', "\n  ")
+    );
+    for (appearance, rows) in [
+        ("", labels),
+        (r#"appearance="auto""#, labels),
+        (
+            "virtualized=true estimated-item-height=60 height=200",
+            windowed.as_str(),
+        ),
+    ] {
+        let source = app("", appearance, rows);
         let r = boot(&source);
         let list = view(&r, "rows");
         assert_eq!(r.stack_split(view(&r, "home"), None), None);
@@ -152,9 +163,8 @@ fn section_labels_do_not_open_a_split_or_own_its_detail() {
         );
 
         let source = source.replace(
-            "                row\n                  text \"No selection\"",
-            r#"                link href="/item/a" testId="person" aria-current="page"
-                  text "Person""#,
+            "row\n",
+            "link href=\"/item/a\" testId=\"person\" aria-current=\"page\"\n",
         );
         let mut r = boot(&source);
         let root = r.kernel().roots()[0];

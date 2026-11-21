@@ -98,7 +98,7 @@ impl Raster {
         if shapes
             .iter()
             .filter_map(rounded_rect)
-            .any(|p| !reach::within(&p, 0.0, dev))
+            .any(|p| !reach::within(p.bounds(), dev))
         {
             return self.new_clip_mask();
         }

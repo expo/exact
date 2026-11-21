@@ -1223,3 +1223,43 @@ mod contexts;
 
 #[path = "table/place.rs"]
 mod place;
+
+#[test]
+fn a_resized_track_follows_its_header_and_releases_its_cells() {
+    let header = || tag("th", vec![N::Box(10.0, 10.0)]);
+    let mut k = lay_out(tag(
+        "table",
+        vec![
+            tag("thead", vec![tag("tr", vec![header(), header()])]),
+            tag(
+                "tbody",
+                vec![tag(
+                    "tr",
+                    vec![cell(&[], 20.0, 10.0), cell(&[], 30.0, 10.0)],
+                )],
+            ),
+        ],
+    ));
+    // 5 and 7 head the columns; 11 and 13 are the body cells.
+    let widths = |k: &Kernel| [5, 7, 11, 13].map(|id| frame(k, id)[2]);
+    let layout = |k: &mut Kernel| k.compute_layout(1, Offer::definite(400.0, 400.0)).unwrap();
+    assert_eq!(widths(&k), [22.0, 32.0, 22.0, 32.0]);
+    assert!(k.set_table_column_width(5, Some(80.0)).unwrap());
+    assert!(!k.set_table_column_width(5, Some(80.0)).unwrap());
+    layout(&mut k);
+    assert_eq!(widths(&k), [80.0, 32.0, 80.0, 32.0]);
+    k.apply(
+        0,
+        2,
+        &[Op::SetChildren {
+            id: 4,
+            children: vec![7, 5],
+        }],
+    )
+    .unwrap();
+    layout(&mut k);
+    assert_eq!(widths(&k), [80.0, 22.0, 22.0, 80.0]);
+    assert!(k.set_table_column_width(5, None).unwrap());
+    layout(&mut k);
+    assert_eq!(widths(&k), [32.0, 22.0, 22.0, 32.0]);
+}

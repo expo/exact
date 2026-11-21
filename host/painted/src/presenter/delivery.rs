@@ -256,8 +256,14 @@ impl<D: DataSource> Presenter<D> {
 
     /// First pixel (LLP 1026 D11): the selection that booted is good.
     pub fn first_pixel(&mut self) {
+        // A snapshot can succeed while a direct window shows an older picture.
+        #[cfg(windows)]
+        if (self.surfaces.direct_window.as_ref()).is_some_and(|d| !d.presented) {
+            return;
+        }
         if self.display.blocked()
             || self.dirty
+            || self.picture_dirty
             || !self.last_frame_succeeded
             || self.activation_failed.is_some()
         {

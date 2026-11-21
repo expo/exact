@@ -4,6 +4,8 @@ import { proveTerrain, sectionsDrawn } from './proof.mjs';
 function drive({
   presentAt = 37,
   initial = 2312,
+  jobs = false,
+  extraJobs = 0,
   validating = false,
   validationError = false,
   changeLookAt = 0,
@@ -38,7 +40,11 @@ function drive({
           `${pending} sections pending${validating ? ', terrain pipeline validating' : ''}`,
           ...(validationError ? ['render hook: rejected pipeline'] : []),
         ],
-        renderHooks: { frame: { items: 'sections', itemsDrawn } },
+        renderHooks: {
+          frame: { items: 'sections', itemsDrawn },
+          jobs: jobs ? { lane: 'inline', done: initial - pending + (looks > 1 ? extraJobs : 0),
+            stale: 0, failed: 0, running: 0 } : null,
+        },
       } };
     },
   };
@@ -47,7 +53,7 @@ function drive({
     async run(extraLooks = true) {
       const pictures = await proveTerrain(session, (label, ok) => {
         if (!ok) failures.push(label);
-      }, extraLooks);
+      }, extraLooks, jobs);
       return { advances, looks, resetAt, redraws, failures, pictures };
     },
   };
@@ -95,4 +101,9 @@ test('all sampled frames must draw the pinned sections', async () => {
   expect(await run({ count: 0, max: 0, mean: 0 })).toContain('at least one itemsDrawn sample after perf reset');
   expect(await run({ count: 2, ...pinned, max: sectionsDrawn + 1 })).toEqual([`itemsDrawn maximum is ${sectionsDrawn} sections`]);
   expect(await run({ count: 2, ...pinned, mean: sectionsDrawn - 0.5 })).toEqual([`itemsDrawn mean is ${sectionsDrawn} sections`]);
+});
+
+test('the jobs leg requires inline progress and held looks leave its counters unchanged', async () => {
+  expect(await drive({ jobs: true }).run()).toMatchObject({ advances: 38, resetAt: 37, failures: [] });
+  await expect(drive({ jobs: true, extraJobs: 1 }).run()).rejects.toThrow('1152 terrain jobs taken');
 });

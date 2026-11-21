@@ -160,6 +160,46 @@ final class WidgetContainerTests: XCTestCase {
         XCTAssertThrowsError(try next.resolve { throw RefreshFailure.offline })
     }
 
+    func testStoreWritesDuringRefreshRestartItUnderTheNewStoreWhileTimeRemains() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func cache() throws -> WidgetTimelineCache { try WidgetTimelineCache(root: root, kind: "question", generation: "one") }
+        func write(_ counter: Int) throws {
+            try Data("\(counter)".utf8).write(to: root.appendingPathComponent("widget-store-generation"), options: .atomic)
+        }
+        let a = Data("account A".utf8), b = Data("account B".utf8)
+        let begun = try cache()
+        XCTAssertEqual(try begun.resolve { a }, a)
+
+        var attempts = 0
+        let (bytes, revision) = try begun.resolveAcrossWrites(while: { true }) {
+            attempts += 1
+            if attempts < 3 { try write(attempts); return a }
+            return b
+        }
+        XCTAssertEqual(attempts, 3, "each write during a refresh runs it again")
+        XCTAssertEqual(bytes, b, "an answer computed before a write is never returned")
+        XCTAssertTrue(revision.isCurrent)
+        XCTAssertFalse(begun.isCurrent)
+        XCTAssertEqual(try cache().resolve { throw RefreshFailure.offline }, b, "the answer under the new store is kept")
+
+        attempts = 0
+        XCTAssertEqual(try cache().resolveAcrossWrites(while: { true }) {
+            attempts += 1
+            throw RefreshFailure.offline
+        }.bytes, b)
+        XCTAssertEqual(attempts, 1, "a failure other than a store write is not retried")
+
+        attempts = 0
+        XCTAssertThrowsError(try cache().resolveAcrossWrites(while: { attempts < 2 }) {
+            attempts += 1
+            try write(10 + attempts)
+            return a
+        }, "writes that outlast the time fall back")
+        XCTAssertEqual(attempts, 2)
+        XCTAssertThrowsError(try cache().resolve { throw RefreshFailure.offline }, "no answer computed before a write is kept")
+    }
+
     /// The answers a kind keeps in a generation, one file for each configuration.
     private func kept(_ root: URL, _ generation: String, _ kind: String) -> [URL] {
         let directory = root.appendingPathComponent("Library/Caches/widget-timelines/\(generation)/\(kind)")

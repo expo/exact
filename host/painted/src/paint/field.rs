@@ -263,23 +263,23 @@ impl PaintedField {
         !self.multiline && self.spec.direction == exact_kernel::Direction::Rtl
     }
 
-    fn scroll_translation(&self) -> (f32, f32) {
+    fn scroll_translation(&self, scroll: (f32, f32)) -> (f32, f32) {
         let x = if self.scrolls_from_right() {
-            self.scroll.0 - self.right_caret_inset
+            scroll.0 - self.right_caret_inset
         } else {
-            -self.scroll.0
+            -scroll.0
         };
-        (x, -self.scroll.1)
+        (x, -scroll.1)
     }
 
-    fn text_origin(&self) -> (f32, f32) {
-        let translation = self.scroll_translation();
+    fn text_origin(&self, scroll: (f32, f32)) -> (f32, f32) {
+        let translation = self.scroll_translation(scroll);
         (self.origin.0 + translation.0, self.origin.1 + translation.1)
     }
 
     pub(crate) fn reveal_cursor(&self, cursor: Cursor) -> (f32, f32) {
         let caret = self.geometry.caret(cursor);
-        let origin = self.text_origin();
+        let origin = self.text_origin(self.scroll);
         let x = origin.0 - self.content.0 + caret.0;
         let x = self.scroll.0
             + if self.scrolls_from_right() {
@@ -305,20 +305,26 @@ impl PaintedField {
     }
 
     pub(crate) fn hit(&self, x: f32, y: f32) -> Option<Cursor> {
-        let mut point = tiny_skia::Point::from_xy(x, y);
-        self.transform.invert()?.map_point(&mut point);
-        let origin = self.text_origin();
-        Some(self.geometry.hit(point.x - origin.0, point.y - origin.1))
+        let (x, y) = self.selection_point((x, y), None)?;
+        Some(self.geometry.hit(x, y))
     }
 
-    pub(crate) fn hit_character(&self, x: f32, y: f32) -> Option<u32> {
-        let mut point = tiny_skia::Point::from_xy(x, y);
+    /// An autoscroll step selects at the visible edge using the new scroll
+    /// offset, even while the previous picture is still on screen.
+    pub(crate) fn selection_point(
+        &self,
+        point: (f32, f32),
+        autoscroll: Option<(f32, f32)>,
+    ) -> Option<(f32, f32)> {
+        let mut point = tiny_skia::Point::from_xy(point.0, point.1);
         self.transform.invert()?.map_point(&mut point);
-        let origin = self.text_origin();
-        Some(
-            self.geometry
-                .hit_character(point.x - origin.0, point.y - origin.1),
-        )
+        if autoscroll.is_some() {
+            let (x, y, w, h) = self.content;
+            point.x = point.x.clamp(x, x + w);
+            point.y = point.y.clamp(y, y + h);
+        }
+        let origin = self.text_origin(autoscroll.unwrap_or(self.scroll));
+        Some((point.x - origin.0, point.y - origin.1))
     }
 
     pub(crate) fn caret_frame(&self, cursor: Cursor) -> Rect4 {
@@ -351,7 +357,7 @@ impl PaintedField {
     }
 
     pub(super) fn place(&self, r: Rect4) -> Rect4 {
-        let origin = self.text_origin();
+        let origin = self.text_origin(self.scroll);
         (r.0 + origin.0, r.1 + origin.1, r.2, r.3)
     }
 }
@@ -573,7 +579,7 @@ impl Painter {
         );
         field.stamp = node.paragraph_stamp();
         field.set_scroll(walk.scene.scroll.get(&node.id).copied().unwrap_or_default());
-        let translation = field.scroll_translation();
+        let translation = field.scroll_translation(field.scroll);
         ox += translation.0;
         oy += translation.1;
         let padding = inset_sides(outer, computed.border_widths());

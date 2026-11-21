@@ -448,11 +448,12 @@ extension NodeView {
 
     /// Whether the node's own bounds clip its children: its overflow clips and
     /// no clip box holds them. A scroller drawn past its box into a band
-    /// (`setPageBand`) leaves the clip to its scroll view where that holds all
-    /// it draws (`scrollHoldsContent`); the node's own clip would cut the band off.
+    /// (`setPageBand`) or by reach (`setReach`) leaves the clip to its scroll
+    /// view where that holds all it draws (`scrollHoldsContent`); the node's
+    /// own clip would cut off the band or the reached strip.
     package var clipsItself: Bool {
         #if os(iOS) || os(tvOS)
-        if pageBand != .zero, scrollHoldsContent { return false }
+        if pageBand != .zero || reach != .zero, scrollHoldsContent { return false }
         #endif
         return overflowClips && clipBox == nil
     }

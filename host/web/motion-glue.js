@@ -184,6 +184,15 @@ export function motionController({views,now,generation,request,applyBatch,inert,
   // A press handler or control between the contact and an ancestor's
   // recognizer keeps the contact (rule 3's boundary, as AppKit and Linux do).
   const pressable=(e,el)=>{const inner=e.target.closest('button,a[href],select,[data-exact-on~="press"]');return !!inner&&inner!==el&&el.contains(inner);};
+  // By a mouse the innermost draggable node that carries something drags, not a drag recognizer around it (LLP 1094.000 D8).
+  // A press between the contact and that node keeps the contact from the node, and the recognizer treats it as it treats
+  // any press inside it.
+  const lifts=(e,el)=>{
+    const source=e.pointerType==='mouse'&&e.target.closest('[draggable="true"]');
+    if(!source||source===el||!el.contains(source)||!['text','url','files'].some(k=>source.hasAttribute(`data-datatransfer${k}`)))return false;
+    const kept=e.target.closest('button,a[href],[data-exact-on~="press"]');
+    return !(kept&&kept!==source&&source.contains(kept));
+  };
   // @ref LLP 1057.003 D2 — drag timelines. A node's presented
   // translate drives the `animation`s of nodes bound to its named timeline:
   // their CSS animations are paused (css.rs) and seeked here. A held value is
@@ -922,7 +931,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
         if(e.button!==0||interactive(e))return;
         const second=drag&&!drag.wheel&&!drag.gesture&&drag.pointers.size===1&&!drag.pointers.has(e.pointerId);
         if(!second&&!e.isPrimary)return;
-        if(!second&&pressable(e,el))return;
+        if(!second&&(pressable(e,el)||lifts(e,el)))return;
         const d=second?drag:arm(e,{x:e.clientX,y:e.clientY,id,el,deferred:contacts().get(e.pointerId)==='pending'});if(!d)return;
         d.pointers.set(e.pointerId,[e.clientX,e.clientY]);
         if(second&&d.deferred){d.deferred=false;d.unwatch?.();for(const pointer of d.pointers.keys())el.setPointerCapture(pointer);}
@@ -994,7 +1003,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
         d.factor=e.scale;d.gesture={x:e.clientX,y:e.clientY,spread:0};follow(d);
       });
       on('gestureend',e=>{const d=drag;if(!d?.gesture)return;e.preventDefault();release(d);});
-      on('dragstart',e=>{if(transformLocal(transformBindings.get(id))&&!interactive(e))e.preventDefault();});
+      on('dragstart',e=>{if(transformLocal(transformBindings.get(id))&&!interactive(e)&&!e.target.closest?.('[draggable="true"]'))e.preventDefault();});// a draggable node's own drag is the page's (LLP 1094.000 D6)
       on('click',e=>{if(suppressClick){suppressClick=false;e.preventDefault();e.stopPropagation();}});
     },
     attachHeightDrag(el,id,on) {
@@ -1012,7 +1021,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
       drags.set(id,stop);
       on('pointerdown',e=>{
         const binding=heightBindings.get(id);
-        if(!e.isPrimary||e.button!==0||!bindingLive(binding)||e.target.closest('button,a,input,textarea,select,[contenteditable]')) return;
+        if(!e.isPrimary||e.button!==0||!bindingLive(binding)||e.target.closest('button,a,input,textarea,select,[contenteditable]')||lifts(e,el)) return;
         stop(); drag={pointer:e.pointerId,x:e.clientX,y:e.clientY,binding,id,el,deferred:contacts().get(e.pointerId)==='pending'}; active.set(id,stop);
         if(drag.deferred)drag.unwatch=watchEnd(el,finish);
         // A fast first move can already leave a narrow header. Retain delivery
@@ -1091,7 +1100,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
       function stop() {
         const ended=drag; drag=null; active.delete(id);
         if(ended) {
-          ended.unwatch();
+          ended.unwatch(); ended.unhear();
           contacts().delete(ended.pointer);
           if(ended.holds) suppressClick=true;
           for(const h of ended.holds??[]) api.end(h,[0,0],true);
@@ -1102,15 +1111,39 @@ export function motionController({views,now,generation,request,applyBatch,inert,
       drags.set(id,stop);
       on('pointerdown',e=>{
         if(!e.isPrimary||e.button!==0||!eligible(el)||e.target.closest('input,textarea,[contenteditable]')||pressable(e,el))return;
-        stop(); drag={pointer:e.pointerId,x:e.clientX,y:e.clientY}; active.set(id,stop);
+        stop(); drag={pointer:e.pointerId,x:e.clientX,y:e.clientY,mouse:e.pointerType==='mouse'}; active.set(id,stop);
         contacts().set(e.pointerId,'pending');
         drag.unwatch=watchEnd(el,finish);
+        // The drag may be a draggable ancestor's, dispatched outside this node, and the move it decides by may land
+        // outside the node too (Chromium sends it to the element now under the pointer), so both are heard on the document.
+        const doc=el.ownerDocument,contact=drag;
+        const moved=e=>{if(drag===contact&&e.pointerId===contact.pointer&&!contact.holds){contact.lastX=e.clientX;contact.lastY=e.clientY;}};
+        doc.addEventListener('dragstart',dragstart,true); doc.addEventListener('pointermove',moved,true);
+        drag.unhear=()=>{doc.removeEventListener('dragstart',dragstart,true);doc.removeEventListener('pointermove',moved,true);};
       });
+      // @ref LLP 1094.000 D8 — a swipe beside the browser's own drag. The browser starts a draggable node's drag
+      // before the swipe can decide. A contact the swipe holds cancels it, and so does a mouse's whose movement so
+      // far is sideways in a direction the swipe would take, or is not known yet (Firefox starts the drag before the
+      // pointermove of a first move past its threshold), as rule 4 ranks the swipe first. A cancelled drag leaves
+      // the pointer stream to the swipe. A finger lifts by resting, not by moving, so only a hold cancels its drag.
+      // A drag that goes ends the swipe's contact.
+      const dragstart=e=>{
+        // Only a drag on this contact's path: begun inside the row or at a node around it.
+        if(!drag||!(el.contains(e.target)||e.target.contains?.(el)))return;
+        const [right,left]=ways(),shown=sample(el,'translate')?.[0]??0;
+        const takes=dx=>dx>0?right||shown<0:left||shown>0;
+        const dx=drag.lastX===undefined?null:drag.lastX-drag.x,dy=(drag.lastY??drag.y)-drag.y;
+        const sideways=dx===null?right||left||shown!==0:Math.abs(dx)>Math.abs(dy)&&takes(dx);
+        if(drag.holds||drag.mouse&&sideways){e.preventDefault();return;}
+        // Read once the event has run, as another listener may still cancel it (a node that carries nothing).
+        const contact=drag; setTimeout(()=>{if(!e.defaultPrevented&&drag===contact)stop();});
+      };
       const move=e=>{
         if(!drag||e.pointerId!==drag.pointer)return false;
         if(e.type==='pointermove'&&e.pointerType==='mouse'&&e.buttons===0){stop();return false;}
         if(!eligible(el)){stop();return false;}
         const dx=e.clientX-drag.x,dy=e.clientY-drag.y;
+        drag.lastX=e.clientX; drag.lastY=e.clientY;
         if(!drag.holds) {
           const slop=gesture().slop;
           if(Math.abs(dy)>slop&&Math.abs(dy)>=Math.abs(dx)){stop();return false;}
@@ -1149,7 +1182,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
         if(!drag.holds){stop();return;}
         if(e.type==='pointerup'&&!move(e))return;
         const ended=drag; drag=null; active.delete(id); suppressClick=true;
-        contacts().delete(ended.pointer);
+        ended.unhear(); contacts().delete(ended.pointer);
         const [h,...companions]=ended.holds, cancel=e.type!=='pointerup';
         const [right,left]=ways(), past=right&&h.value[0]>=knee||left&&h.value[0]<=-knee;
         api.finish(h,h.value,'measured',!cancel&&past,cancel);

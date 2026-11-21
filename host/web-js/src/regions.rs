@@ -51,11 +51,16 @@ impl Em<'_> {
             .enumerate()
             .filter(|(_, row)| row.unsettled && row.owner.map(|a| a.0) == owner)
             .collect();
-        if owner.is_some() && scope.capture && !rows.is_empty() {
+        if owner.is_some() && !rows.is_empty() {
             let depth = scope.frames.len();
             let names = std::rc::Rc::make_mut(&mut scope.local_derives);
             for (ordinal, &(i, _)) in rows.iter().enumerate() {
-                names.insert(i, format!("d_L{depth}_{ordinal}"));
+                let name = if scope.capture {
+                    format!("d_L{depth}_{ordinal}")
+                } else {
+                    format!("d_{i}")
+                };
+                names.insert(i, (name, self.mount_templates.depth + 1));
             }
         }
         let mut out = String::new();
@@ -71,7 +76,11 @@ impl Em<'_> {
                 &mut self.uses,
             )?;
             let enter = self.uses.budget("$enter");
-            let name = scope.derive(i);
+            let name = scope
+                .local_derives
+                .get(&i)
+                .map(|(name, _)| name.clone())
+                .unwrap_or_else(|| format!("d_{i}"));
             write!(out, "const {name}=($budget={{s:0,n:0,d:0}},$pc)=>{{{enter}($budget,$pc);try{{return ({f})($budget)}}finally{{$budget.d--}}}};").unwrap();
         }
         Ok(out)

@@ -18,10 +18,10 @@ pub(super) enum ReadingPoint {
 }
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ReadingPosition {
-    point: ReadingPoint,
-    within: f64,
-    start: f64,
-    sizes: [f64; 2],
+    pub(super) point: ReadingPoint,
+    pub(super) within: f64,
+    pub(super) start: f64,
+    pub(super) sizes: [f64; 2],
 }
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct KeptPosition {
@@ -311,9 +311,17 @@ impl Collection {
     /// A restored list's anchor is its kept item, `within` into it, until the
     /// reader moves it or that item is measured: its estimate may be
     /// shorter than `within`, so the offset alone would name the next item.
-    pub(super) fn restoring(&mut self, feedback: &CollectionFeedback) -> Option<index::Anchor> {
+    pub(super) fn restoring(
+        &mut self,
+        feedback: &CollectionFeedback,
+        travel: bool,
+    ) -> Option<index::Anchor> {
         let position = self.restored_at.clone()?;
-        let moved = (feedback.offset - self.start_offset).abs() > 0.5 && feedback.offset > 0.5;
+        // A kept scroller may report its old offset before applying the first
+        // correction. A gesture still takes the port over immediately.
+        let moved = (travel || self.geometry.is_some())
+            && (feedback.offset - self.start_offset).abs() > 0.5
+            && feedback.offset > 0.5;
         let measured = match &position.point {
             ReadingPoint::Row(key) => self.index.is_measured(key),
             ReadingPoint::Fixed(_) => true,
@@ -370,6 +378,12 @@ impl Collection {
             0.0
         };
         let offset = start + position.within;
+        self.start_reading(position, offset);
+        self.realize_window(u, frames, false, CollectionFill::default())?;
+        advance(&mut self.revision)?;
+        Ok(())
+    }
+    pub(super) fn start_reading(&mut self, position: ReadingPosition, offset: f64) {
         self.start_offset = offset;
         self.at_end = false;
         self.restored = true;
@@ -380,9 +394,6 @@ impl Collection {
             from: None,
             smooth: false,
         });
-        self.realize_window(u, frames, false, CollectionFill::default())?;
-        advance(&mut self.revision)?;
-        Ok(())
     }
 }
 

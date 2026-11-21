@@ -64,11 +64,17 @@ impl Sites {
     }
 }
 
+#[derive(Clone, Default)]
+pub(super) struct MountShape {
+    pub repeated: bool,
+    pub slot: Option<std::ops::Range<usize>>,
+}
+
 /// Count references to a subtree across distinct parent shapes. Two copies of
 /// one component need a mount for its root. A child used only there is
 /// already shared by that mount. The emitter checks the generated bodies
 /// before sharing them, including bindings and closed-over variables.
-pub(super) fn repeated_nodes(plan: &Plan, sites: &Sites) -> Vec<bool> {
+pub(super) fn repeated_nodes(plan: &Plan, sites: &Sites) -> Vec<MountShape> {
     #[derive(Hash, Eq, PartialEq)]
     enum Kind {
         Node(u8, Vec<(BindingKind, u16)>, Vec<EventKind>),
@@ -132,11 +138,69 @@ pub(super) fn repeated_nodes(plan: &Plan, sites: &Sites) -> Vec<bool> {
     }
     let mut shapes = Shapes::default();
     shapes.visit(plan, sites, Site::Node(sites.root));
-    let mut repeated = vec![false; plan.nodes.len()];
+    // Where the same node surrounds different children, retain its common
+    // leading and trailing subtrees. Each caller mounts the children between them.
+    let mut variants: HashMap<&Kind, Vec<(usize, &[usize])>> = HashMap::new();
+    for ((kind, children), &shape) in &shapes.index {
+        if matches!(kind, Kind::Node(..)) {
+            variants.entry(kind).or_default().push((shape, children));
+        }
+    }
+    let mut slots = vec![None; shapes.uses.len()];
+    for group in variants.values().filter(|group| group.len() > 1) {
+        // Two cards can share their header and footer even when another
+        // container of the same type has different children at both ends.
+        if !share_edges(group, &mut slots) {
+            let mut frames = HashMap::<_, Vec<_>>::new();
+            for &(shape, children) in group {
+                if let (Some(first), Some(last)) = (children.first(), children.last()) {
+                    frames
+                        .entry((first, last))
+                        .or_default()
+                        .push((shape, children));
+                }
+            }
+            for frame in frames.values().filter(|f| f.len() > 1) {
+                share_edges(frame, &mut slots);
+            }
+        }
+    }
+    let mut repeated = vec![MountShape::default(); plan.nodes.len()];
     for (node, shape) in shapes.nodes {
-        repeated[node as usize] = shapes.uses[shape] > 1;
+        repeated[node as usize] = MountShape {
+            repeated: shapes.uses[shape] > 1,
+            slot: slots[shape].clone(),
+        };
     }
     repeated
+}
+
+/// Set the slot between the common children. Return whether any child stays in the frame.
+fn share_edges(group: &[(usize, &[usize])], slots: &mut [Option<std::ops::Range<usize>>]) -> bool {
+    let first = group[0].1;
+    let mut prefix = first.len();
+    let mut suffix = first.len();
+    let mut shortest = first.len();
+    for &(_, children) in &group[1..] {
+        shortest = shortest.min(children.len());
+        prefix = first[..prefix]
+            .iter()
+            .zip(children)
+            .take_while(|(a, b)| a == b)
+            .count();
+        suffix = first
+            .iter()
+            .rev()
+            .take(suffix)
+            .zip(children.iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+    }
+    suffix = suffix.min(shortest - prefix);
+    for &(shape, children) in group {
+        slots[shape] = Some(prefix..children.len() - suffix);
+    }
+    prefix + suffix > 0
 }
 
 /// Mark each arm a resource or task owner crosses when it mounts. A site

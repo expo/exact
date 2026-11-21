@@ -89,8 +89,8 @@ for (const target of ['js', 'rust', 'none', 'wasm']) {
     await s.carrier.call('Emulation.setDeviceMetricsOverride', { width: 1000, height: 900, deviceScaleFactor: 1, mobile: false });
     await read(`dispatchEvent(new Event('resize'))`);
     await s.clock('settle');
-    const sidebar = await read(`(() => { const root = document.querySelector('[data-testid="root"]'), bar = document.querySelector('[data-testid="tabs"]'), tab = document.querySelector('[data-testid="tab-home"]'); return { sidebar: root.hasAttribute('data-exact-sidebar'), width: getComputedStyle(bar).width, direction: getComputedStyle(bar).flexDirection, tabHeight: getComputedStyle(tab).minHeight }; })()`);
-    expect(sidebar).toEqual({ sidebar: true, width: '240px', direction: 'column', tabHeight: '36px' });
+    const sidebar = await read(`(() => { const root = document.querySelector('[data-testid="root"]'), bar = document.querySelector('[data-testid="tabs"]'), tab = document.querySelector('[data-testid="tab-home"]'); return { sidebar: root.hasAttribute('data-exact-sidebar'), width: getComputedStyle(bar).width, direction: getComputedStyle(bar).flexDirection, tabHeight: parseFloat(getComputedStyle(tab).minHeight) / parseFloat(getComputedStyle(document.documentElement).fontSize) }; })()`);
+    expect(sidebar).toEqual({ sidebar: true, width: '240px', direction: 'column', tabHeight: 2.25 });
   }), 120000);
 
   if (target === 'none' || target === 'wasm') check(`${target}: list panels stay unopened until selected`, () => inTarget(target, async (s, read) => {
@@ -113,8 +113,6 @@ for (const target of ['js', 'rust', 'none', 'wasm']) {
     expect(await read(`getComputedStyle(document.querySelector('[data-testid="panel-saved"]')).visibility`)).toBe('visible');
     const colors = await read(`['tab-home', 'tab-saved'].map(id => getComputedStyle(document.querySelector('[data-testid="'+id+'"]')).color)`);
     expect(colors[0]).not.toBe(colors[1]);
-    const sidebar = await read(`(() => { const tab = document.querySelector('[data-testid="tab-saved"]'); tab.closest('[role="tablist"]').parentElement.setAttribute('data-exact-sidebar', ''); return { height: parseFloat(getComputedStyle(tab).minHeight), expected: 2.25 * parseFloat(getComputedStyle(document.documentElement).fontSize) }; })()`);
-    expect(sidebar.height).toBe(sidebar.expected);
   }), 120000);
 
   check(`${target}: grouped list cards retain corners, empty edges and press`, () => inTarget(target, async (s, read) => {

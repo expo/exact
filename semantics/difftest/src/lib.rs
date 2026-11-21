@@ -124,15 +124,16 @@ pub fn prepare(case: &Case, index: usize) -> Result<Prepared, Verdict> {
     }
     .map_err(|e| Verdict::Emit(e.to_string()))?;
     let oracle = oracle::Oracle::for_case(&plan, case);
-    let (rust, data) = observe::run(plan, oracle, &case.events);
-    let oracle = data.map_or_else(String::new, |o| o.text());
+    let events = &case.events;
+    let (rust, data) = observe::run(plan, oracle, events);
+    let oracle = data.as_ref().map_or_else(String::new, |o| o.text());
     Ok(Prepared {
         rust,
         lean: leanrun::LeanCase {
             name,
             program,
             oracle,
-            events: case.events.iter().map(script::Event::lean).collect(),
+            events: script::lean_events(events, data.as_ref()),
         },
     })
 }
@@ -522,7 +523,7 @@ pub fn expectations_on(
             Item::Settle { .. } | Item::Until { .. } => {
                 return Err("clock step was not expanded".into());
             }
-            Item::Expect(e, _) => {
+            Item::Expect(e, span) => {
                 let step = steps.get(k).copied().unwrap_or(&[]);
                 let ok = match e {
                     Expect::State(name, comparison, values) => script::state_holds(
@@ -542,7 +543,9 @@ pub fn expectations_on(
                 };
                 if !ok {
                     return Err(format!(
-                        "after step {k}: {e:?} does not hold; the runner shows:\n  {}",
+                        "line {}:{} after step {k}: {e:?} does not hold; the runner shows:\n  {}",
+                        span.line,
+                        span.col,
                         step.join("\n  ")
                     ));
                 }
@@ -667,6 +670,7 @@ pub fn explore(name: &str, source: &str, path: Option<&Path>) -> Scripted {
         stored: false,
         prerendered: false,
         launch: Default::default(),
+        answers: Vec::new(),
     };
     if let Ok(plan) = compile(&probe) {
         let oracle = oracle::Oracle::new(&plan, seed_of(name));

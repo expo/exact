@@ -740,9 +740,11 @@ at bounded uses
 ([A feature's requests](#a-features-requests)). A child used under `for` owns row state keyed to that row's identity.
 Stable keys matter when content is inserted, removed, filtered, or reordered.
 A child's derive is compiled once per component use and evaluated at each read
-in that instance's frame. Non-atomic prop and inject arguments share that
-representation. These calculations use the reader's list and call budgets;
-a trap belongs to the reader. They are not cached. A root derive evaluates
+in that instance's frame. A computed prop or inject argument shares that
+representation. Each read uses the reader's list and call budgets and can
+trap there. A literal stays inline, so the web compiler can fold
+`size == "sm"` when a component takes the enum argument `size="sm"`.
+A root derive evaluates
 once per settlement, so put a calculation there when its result should be
 shared across readers. Action-body reads, action calls and `fn` calls still
 expand in place. The web build reports its entry's bytes and each component's
@@ -4265,6 +4267,11 @@ main navigationKey=`${top(nav).id}` navigationBack="close" navigate=follow displ
   paints (on iOS only when `scripts/agent.mjs` runs alone: `exact.mjs` shows UIKit's
   bars); `--chrome platform` on `macos` shows the sidebar, and a tap naming a tab
   presses its row (`native: "sidebar-row"`).
+- For a footer pinned below the scrolling tabs, put the root tablist and a `footer`
+  together as the only children of a `nav` directly inside the navigation root. The Mac,
+  iPadOS 18 and later, and the wide web layout show the footer in the sidebar. It can
+  contain an account button or other controls. The bottom bar hides the footer on iPhone,
+  Android and the narrow web layout. An app-drawn tablist keeps its footer in the page.
 - On an iPad (iPadOS 18 and later) the same root tablist, placed as above, is UIKit's
   sidebar-adaptable tab bar (`UITabBarController.mode = .tabSidebar`): a sidebar of the
   tabs where the window is regular-width and wide enough (an iPad in landscape), the
@@ -4312,6 +4319,9 @@ main navigationKey=`${top(nav).id}` navigationBack="close" navigate=follow displ
   detail the window's title and subtitle are the detail's, as in System Settings, and
   the list's heading stays over its rows; beside a sidebar (three columns) the list's
   heading is the title and the detail's stays in its pane, as in Mail.
+- In the Mac's list column, a sectioned list that keeps its rows mounted uses
+  an inset AppKit table. Each section header is a group row. A link in the
+  section body selects its row and opens the detail. The footer has no table row.
 - On the Mac a window toolbar the app declares (`row role="toolbar"
   toolbarPlacement="window"` of action buttons and at most one heading) has Customize
   Toolbar when every button in it has an `id` of its own: the ids are the items'
@@ -5107,7 +5117,9 @@ skipped (except an id-less hit outside its named ancestor's box includes that
 ancestor once). `querySelectorAll("[data-paint~=\"accent\"]")` lists the own ids of
 mounted, displayed, non-inert nodes bearing the declared `data-paint` word in
 tree order. Covered routes and unselected tabs do not answer; a split list
-answers with its detail where the host presents it (the web at desktop widths).
+answers with its detail where the host shows them side by side (the web at desktop
+widths, and iOS where UIKit's split view shows both columns; over the detail only the
+list answers, LLP 1127 D8, and `state window.split` says which shows).
 Closed popovers and dialogs do not answer; open ones do. Point reads skip inert
 subtrees and use the presenter's placement for open top-layer content. Point reads
 also name the front modal dialog or presented route where its native backdrop accepts input,
@@ -6249,7 +6261,7 @@ application, so its local event monitors see them). Other carriers answer
 `delivery: "unsupported"` for forms they cannot carry; Firefox and WebKit carry
 clicks and wheels at a point, including wheels with modifiers. A word a form does
 not use is refused by name. `tap stage wheel 0 -20 modifiers Control`
-is a pinch's wheel; `tap world drop a.board` drags a file in (web, macOS). Plain canvas taps and held contacts are
+is a pinch's wheel; `tap world drop a.board` drags a file in (web, macOS, Windows). Plain canvas taps and held contacts are
 fingers, so their platform pointer identity and retained press history can differ
 from a mouse's; use the intended physical input when comparing game saves.
 
@@ -6944,9 +6956,9 @@ A runtime choice with a bundled-font literal is refused so it cannot silently
 select an installed face with the same name; write bundled choices as literals.
 
 A `text` with `selectionchange=act` hears the reader's real text selection
-on the web, macOS, iOS and Android. `action act(s: Selection)` gets `s.text`, `s.start` and
+on the web, macOS, iOS, Android and Linux. `action act(s: Selection)` gets `s.text`, `s.start` and
 `s.end` in the node's own text ("" at 0, 0 when nothing there is selected).
-On web and macOS, `s.rects` is a list of `Geometry` snapshots for the selected
+On web, macOS and Linux, `s.rects` is a list of `Geometry` snapshots for the selected
 fragments in viewport space. It is empty when cleared. iOS and Android report an empty list.
 `removeAllRanges()` clears the reader selection, and
 `setSelectionRange(id, start, end[, direction])` selects a `text` on web and
@@ -7268,8 +7280,10 @@ selection clears the selection, as in a text view. On Android a long press on
 `user-select="text"` selects a word. The handles adjust the selection within
 one paragraph, and the floating toolbar offers Copy, Share and Select all.
 An inline or enclosing `all` selects its text as a unit. Dragging the paragraph
-away from a handle scrolls its container. Linux, Windows and tvOS have no text
-selection, so `text` and `all` change nothing there. `contain` is refused by
+away from a handle scrolls its container. On Linux, drag across opted-in text,
+double-click a word, or triple-click a paragraph. One click selects a run marked `all`.
+Ctrl+C copies the visible text when the host supplies a clipboard.
+Windows and tvOS have no text selection, so `text` and `all` change nothing there. `contain` is refused by
 name: no native host has it. These rows take literals
 or choices of literals, so unsupported runtime values cannot bypass the check.
 

@@ -735,9 +735,8 @@ impl<D: DataSource> Runner<D> {
             if self.plan.slots[i].persist {
                 let initial = self.eval(self.plan.slots[i].init, &[], &[]).map_err(|e| {
                     e.evaluated(|| {
-                        format!(
-                            "state {:?} initializer",
-                            self.plan.str(self.plan.slots[i].name)
+                        crate::RunnerError::state_initializer(
+                            self.plan.str(self.plan.slots[i].name),
                         )
                     })
                 })?;

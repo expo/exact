@@ -85,8 +85,9 @@ mod tests {
                 assert_eq!(input(r, E::Absolute(x, y)), E::Absolute(x2, y2));
             }
             for event in [
-                E::Button(true),
-                E::Button(false),
+                E::MouseDown(std::time::UNIX_EPOCH),
+                E::TouchDown,
+                E::ButtonUp,
                 E::Aux(8, true),
                 E::Cancel,
                 E::Key {

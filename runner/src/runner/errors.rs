@@ -280,6 +280,10 @@ impl std::fmt::Debug for RunnerError {
 }
 
 impl RunnerError {
+    pub(crate) fn state_initializer(name: &str) -> String {
+        format!("state {:?} initializer", crate::agent::declared_name(name))
+    }
+
     pub(crate) fn evaluated(self, label: impl FnOnce() -> String) -> Self {
         match self {
             Self::Trap(trap @ Trap::Pending { .. }) => Self::Trap(trap),

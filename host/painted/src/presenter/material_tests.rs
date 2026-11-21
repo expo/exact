@@ -1305,6 +1305,19 @@ const LABELS: &str = r##"component App
         text "Bookmark all"
       button buttonStyle="tinted" disabled=true testId="tonal-off"
         text "Bookmark all"
+      button buttonStyle="filled" testId="filled-icon"
+        image "symbol:add"
+        text "Bookmark all"
+      button buttonStyle="plain" testId="text-icon"
+        image "symbol:add"
+        text "Bookmark all"
+      button buttonStyle="filled" testId="trailing"
+        text "Bookmark all"
+        image "symbol:add"
+      column direction="rtl" align-items="flex-start"
+        button buttonStyle="filled" testId="rtl"
+          image "symbol:add"
+          text "Bookmark all"
 "##;
 
 /// A labelled button is Material's for its emphasis (LLP 1115.001 D9): a
@@ -1352,6 +1365,10 @@ fn materials_labelled_buttons_take_their_emphasis() {
     assert_eq!(inside(&mut p, "text"), page, "no container");
     let text = rect(&mut p, "text");
     assert_eq!(text.2, outlined.2 - 24.0, "TextButtonContentPadding");
+    // An 18 dp icon 8 dp from the title; 16 dp beside it, or 12 and 16 for
+    // a text button (`…WithIconContentPadding`).
+    assert_eq!(rect(&mut p, "filled-icon").2, outlined.2 + 18.0);
+    assert_eq!(rect(&mut p, "text-icon").2, text.2 + 30.0);
     let accent = crate::paint::control::accents(None, false).0;
     let frame = (*p.frame()).clone();
     let at = |v: f32| (v * 2.4375) as u32;
@@ -1363,4 +1380,19 @@ fn materials_labelled_buttons_take_their_emphasis() {
         })
         .count();
     assert!(accented > 0, "a text button's label is the accent");
+    // The symbol's side is the narrower one, whichever end the symbol is at:
+    // only there does ink start within the title's 24 dp.
+    let mut ink = |name| {
+        let r = rect(&mut p, name);
+        let y = at(r.1 + r.3 / 2.0);
+        let container = frame.pixel(at(r.0 + 8.0), y).unwrap();
+        let mut across = at(r.0 + 8.0)..at(r.0 + r.2 - 8.0);
+        let inked = |x: &u32| frame.pixel(*x, y).unwrap() != container;
+        let left = across.clone().find(inked).unwrap() as f32 / 2.4375 - r.0;
+        let right = r.0 + r.2 - across.rfind(inked).unwrap() as f32 / 2.4375;
+        (left < 24.0, right < 24.0)
+    };
+    assert_eq!(ink("filled-icon"), (true, false), "a leading symbol");
+    assert_eq!(ink("trailing"), (false, true), "a trailing symbol");
+    assert_eq!(ink("rtl"), (false, true), "a leading symbol, right to left");
 }

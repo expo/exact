@@ -447,6 +447,42 @@ pub(super) fn compile_file(
     if let Err(refused) = check(&file, &styles) {
         errors.extend(refused);
     }
+    let mut families = Vec::new();
+    let mut font_attrs = |attrs: &[Attr]| {
+        for a in attrs.iter().filter(|a| a.name == "font-family") {
+            literal_fonts(&a.value, &mut families);
+        }
+    };
+    for c in &file.components {
+        Node::walk(&c.view).for_each(|n| {
+            if let Node::Element { attrs, .. } = n {
+                font_attrs(attrs);
+            }
+        });
+    }
+    for s in file.styles.iter().filter(|s| styles.contains(&s.name)) {
+        font_attrs(&s.attrs);
+    }
+    // The system decodes and draws the entry in its own process, which has
+    // only installed fonts: a bundled face fails the render on iOS and Android.
+    // The refusal is at the use, since the app's own pages may keep the font.
+    for (family, span) in families {
+        let bundled = file
+            .fonts
+            .iter()
+            .find(|f| f.name.eq_ignore_ascii_case(&family));
+        if let Some(font) = bundled {
+            errors.push(refusal(
+                "snapshot-font-bundled",
+                format!(
+                    "the system draws a widget or Live Activity in a process without the app's fonts; replace `{}` with an installed or generic family such as `system-ui`",
+                    font.name
+                ),
+                span,
+            ));
+        }
+    }
+    file.fonts.clear();
     if !errors.is_empty() {
         return Err(errors);
     }
@@ -495,23 +531,6 @@ pub(super) fn compile_file(
             routes
         });
     }
-    let mut fonts = HashSet::new();
-    let mut font_attrs = |attrs: &[Attr]| {
-        for a in attrs.iter().filter(|a| a.name == "font-family") {
-            literal_fonts(&a.value, &mut fonts);
-        }
-    };
-    for c in &file.components {
-        Node::walk(&c.view).for_each(|n| {
-            if let Node::Element { attrs, .. } = n {
-                font_attrs(attrs);
-            }
-        });
-    }
-    for s in &file.styles {
-        font_attrs(&s.attrs);
-    }
-    file.fonts.retain(|f| fonts.contains(&f.name));
     let mut wrapper = contract_syntax::parse("component Snapshot\n  view\n    view\n")
         .expect("wrapper")
         .components
@@ -771,12 +790,12 @@ fn preview(v: &Value, ty: &TypeExpr, file: &File, depth: usize) -> Result<Expr, 
     })
 }
 
-fn literal_fonts(e: &Expr, fonts: &mut HashSet<String>) {
+fn literal_fonts(e: &Expr, fonts: &mut Vec<(String, Span)>) {
     match e {
-        Expr::Str(stack, _) => fonts.extend(
+        Expr::Str(stack, span) => fonts.extend(
             stack
                 .split(',')
-                .map(|n| n.trim().trim_matches(['"', '\'']).to_string()),
+                .map(|n| (n.trim().trim_matches(['"', '\'']).to_string(), *span)),
         ),
         Expr::Ternary(_, yes, no, _) => {
             literal_fonts(yes, fonts);

@@ -88,8 +88,8 @@ pub use handoff::Handoff;
 pub use id::{AxisOffer, Frame, NodeFlags, NodeKey, Offer, ViewId};
 pub use invocation::Invocation;
 pub use kernel::{
-    credited_edges, decode_registration, encode_registration, BlockAxis, BlockMeasure, HostBlock,
-    HostCover, Kernel, Keyboard, KeyboardPolicy, NodeRef, OwnerMargins, OwnerUpdate,
+    credited_edges, decode_registration, encode_registration, BlockAxis, BlockMeasure, BlockShown,
+    HostBlock, HostCover, Kernel, Keyboard, KeyboardPolicy, NodeRef, OwnerMargins, OwnerUpdate,
     PresentedHeight, ScrollTerms, StickyConstraint, TablePlace,
 };
 pub use layout::LayoutReceipt;

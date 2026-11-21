@@ -113,6 +113,7 @@ fn parts(node: &Node, sheet: &dyn Fn(Attr) -> Attr) -> Option<Parts> {
         children,
         span,
         instance,
+        place,
     } = node
     else {
         return None;
@@ -149,6 +150,7 @@ fn parts(node: &Node, sheet: &dyn Fn(Attr) -> Attr) -> Option<Parts> {
         children: children.clone(),
         span: *span,
         instance: *instance,
+        place: *place,
     };
     let mut button = vec![
         s("id", ACTION, at),
@@ -179,9 +181,11 @@ fn parts(node: &Node, sheet: &dyn Fn(Attr) -> Attr) -> Option<Parts> {
             children: Vec::new(),
             span: at,
             instance: *instance,
+            place: None,
         }],
         span: at,
         instance: *instance,
+        place: None,
     };
     Some(Parts {
         content,
@@ -210,6 +214,7 @@ fn scroll(parts: Parts, rows: Vec<Attr>, span: Span, instance: u32) -> Node {
         children: vec![parts.content, parts.action],
         span,
         instance,
+        place: None,
     }
 }
 
@@ -250,6 +255,7 @@ fn written(node: &Node, row: &dyn Fn(&Node, bool) -> Node) -> Option<Node> {
         children,
         span,
         instance,
+        place,
     } = node
     else {
         return None;
@@ -358,6 +364,7 @@ fn written(node: &Node, row: &dyn Fn(&Node, bool) -> Node) -> Option<Node> {
                     children,
                     span: at,
                     instance,
+                    place,
                 } if count(children, named) == 1 => Node::Element {
                     tag: tag.clone(),
                     positional: positional.clone(),
@@ -365,6 +372,7 @@ fn written(node: &Node, row: &dyn Fn(&Node, bool) -> Node) -> Option<Node> {
                     children: styled(children, named, row, span, outer),
                     span: *at,
                     instance: *instance,
+                    place: *place,
                 },
                 other => other.clone(),
             })
@@ -379,6 +387,7 @@ fn written(node: &Node, row: &dyn Fn(&Node, bool) -> Node) -> Option<Node> {
         children,
         span: *span,
         instance: *instance,
+        place: *place,
     })
 }
 
@@ -395,6 +404,7 @@ fn swiped(content: &Node, row: &dyn Fn(&Node, bool) -> Node, span: Span) -> (Nod
         children,
         span: at,
         instance: own,
+        place,
     } = row(content, true)
     else {
         unreachable!("row keeps an element")
@@ -414,6 +424,7 @@ fn swiped(content: &Node, row: &dyn Fn(&Node, bool) -> Node, span: Span) -> (Nod
         children,
         span: at,
         instance: own,
+        place,
     };
     (content, outer)
 }
@@ -569,6 +580,7 @@ pub fn expand_row_deletes(view: &[Node], styles: &[StyleDecl]) -> Vec<Node> {
                     children,
                     span,
                     instance,
+                    place,
                 } = expanded.as_ref()
                 else {
                     unreachable!("row expansion keeps an element")
@@ -586,6 +598,7 @@ pub fn expand_row_deletes(view: &[Node], styles: &[StyleDecl]) -> Vec<Node> {
                     children: nodes(children, inside, styles),
                     span: *span,
                     instance: *instance,
+                    place: *place,
                 };
                 if let Node::Element { attrs, .. } = &mut element {
                     if let Some(kept) = stray(attrs) {

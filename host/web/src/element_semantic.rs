@@ -24,8 +24,7 @@ const ELEMENTS: &[&str] = &[
 
 /// The tags element.rs `element` can give a node of type `node_type` as data
 /// sets `prop`, where `prop` decides the tag, and none where it does not. The
-/// JS target's compiled module makes such a node with one sample's tag, so its
-/// page's sheet keeps the rules of each (exact-web-js `style::bound_tokens`,
+/// page's sheet keeps the rules for every possible tag (exact-web-js `style::bound_tokens`,
 /// LLP 1047.003 D1). A change to `element` changes this list with it.
 pub fn tags_by_data(node_type: NodeType, prop: PropId) -> Vec<&'static str> {
     match (node_type, prop) {

@@ -9,6 +9,51 @@ use std::collections::BTreeMap;
 
 const NAMES: [&str; 4] = ["a", "b", "o", "p"];
 
+/// The names of Editor's state in rendering order, including both arms of a branch.
+fn editor_names(view: &str) -> Vec<String> {
+    let source = format!("component App\n  view\n    main\n{view}\ncomponent Editor\n  state draft = \"\"\n  view\n    text draft\ncomponent Twice\n  slot\n  view\n    column\n      children\n      children\n");
+    super::expand(&crate::parse(&source).unwrap())
+        .unwrap()
+        .root
+        .states
+        .into_iter()
+        .map(|state| state.name)
+        .collect()
+}
+
+#[test]
+fn component_members_follow_their_source_siblings_and_named_parents() {
+    let plain = "      column\n        Editor()\n      column\n        Editor()";
+    let base = editor_names(plain);
+    assert_ne!(base[0], base[1]);
+    let branch = "      if false\n        column\n          Editor()\n      row\n        text \"label\"\n      column\n        Editor()";
+    assert_eq!(editor_names(branch), base);
+    let named = plain.replacen("column", "column id=\"compose\"", 1);
+    let names = editor_names(&named);
+    assert_ne!(names[0], base[0]);
+    assert_eq!(names[1], base[1]);
+    let reordered =
+        "      column id=\"other\"\n        Editor()\n      row id=\"compose\"\n        Editor()";
+    assert_eq!(editor_names(reordered)[1], names[0]);
+    let duplicate = branch.replace("column", "column id=\"compose\"");
+    assert_eq!(editor_names(&duplicate), base);
+}
+
+#[test]
+fn each_fill_and_each_repetition_gives_its_editor_a_distinct_name() {
+    let uses = "      Twice()\n        Editor()\n      for i in [1] key=i\n        Editor()\n      for i in [1] key=i\n        Editor()";
+    let names = editor_names(uses);
+    assert_eq!(names.len(), 4);
+    assert_eq!(
+        names
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        4
+    );
+    assert_eq!(editor_names(&format!("      Editor()\n{uses}"))[1..], names);
+}
+
 #[test]
 fn a_repeated_computed_prop_is_evaluated_once_per_binding() {
     let file = crate::parse(

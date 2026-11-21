@@ -48,7 +48,7 @@ extension NavigationHost {
     /// Whether `route` is in flight from a pop UIKit committed: any but a
     /// swipe still under way, which commits only at its end.
     private func committed(_ route: RouteController) -> Bool {
-        inFlight(route) && route.lastStack?.transitionCoordinator?.initiallyInteractive != true
+        inFlight(route) && popCoordinator(of: route)?.initiallyInteractive != true
     }
 
     /// The routes UIKit popped that the router has not followed: committed
@@ -96,13 +96,14 @@ extension NavigationHost {
     /// when they agree, or while a transition, a sync or a tap is under way.
     var restDifference: String? {
         guard container != nil, primaryOwner != nil, !syncing, !changing, !pendingSync, !resyncOwed, tapping == nil,
-              !presenter.modalHost.inTransition else { return nil }
+              !presenter.modalHost.inTransition, split?.inTransition != true else { return nil }
         let keys = { (routes: [UIViewController]) in "[" + routes.map { ($0 as? RouteController)?.key ?? "?" }.joined(separator: ", ") + "]" }
         for (index, routes) in routerStacks.enumerated() where !routes.isEmpty {
             let wanted = base(routes)
             guard let holder = tabPanels.isEmpty ? primaryNavigation : routesStack(index),
                   (holder as? UINavigationController)?.transitionCoordinator == nil, !routesInFlight(wanted) else { continue }
-            let held = holder.stackRoutes
+            // A split shows its columns' routes as one stack (`SplitIOS.shown`)
+            let held = tabPanels.isEmpty ? split?.shown ?? holder.stackRoutes : holder.stackRoutes
             if !held.elementsEqual(wanted, by: ===) {
                 return (tabPanels.isEmpty ? "the stack" : "tab \(index)") + " holds \(keys(held)) in UIKit and \(keys(wanted)) in the router"
             }
@@ -233,7 +234,14 @@ extension RouteController {
     /// its navigation controller's child when the pop is asked for, and a
     /// tab tapped in the turn of the pop leaves it a child for good (LLP
     /// 1075.003 §9.16), so the stack is read, not the parent.
-    var inStack: Bool { stack?.stackRoutes.contains { $0 === self } == true }
+    /// A split's detail column keeps its routes as UIKit takes it off the
+    /// list's column for a person's Back collapsed: they are in no stack the
+    /// person sees until UIKit nests the column again or expands the split
+    /// (`SplitIOS.showsDetail`, LLP 1127 D5).
+    var inStack: Bool {
+        guard let stack, stack.stackRoutes.contains(where: { $0 === self }) else { return false }
+        return host?.split.map { $0.detail !== stack || $0.showsDetail } ?? true
+    }
 
     /// The stack it is in: its plain tab, checked first because under More
     /// the plain tab's `navigationController` is More's; else its navigation

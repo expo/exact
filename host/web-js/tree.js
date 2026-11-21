@@ -7,7 +7,7 @@ import { Refusal } from './shape.js';
 import { regions } from './regions.js';
 import { declare } from './declarations.js';
 import { backdropValue as backdropCss } from './backdrop.js';
-import { onEnd, effect, say, inflight, After, Paint, Probes, Media, Links, Scrolls, Selects } from './rt.js';
+import { onEnd, effect, untracked, say, inflight, After, Paint, Probes, Media, Links, Scrolls, Selects } from './rt.js';
 import { Adopt, adopting, PrepareTasks } from './mount.js';
 import { autofocusProp } from './focus.js';
 const SVG = 'http://www.w3.org/2000/svg';
@@ -49,6 +49,13 @@ export function h(p, tag, cls, attrs, text, ns) {
   if (tag === 'video' || tag === 'audio') Media.media(e, attrs);
   Paint?.list(e);
   return e;
+}
+/** A block text takes its HTML tag from its initial role and level. Later changes update the ARIA attributes on that element. */
+export function headingText(p, cls, attrs, text, role, level) {
+  const heading = (role ? untracked(role) : attrs.role) === 'heading';
+  const value = level ? untracked(level) : Number(attrs['aria-level']);
+  const n = Number.isInteger(value) && value >= 1 ? value : 2;
+  return h(p, heading && n <= 6 ? 'h' + n : 'div', cls, attrs, text);
 }
 /** An SVG element (the compiler knows the node's type; element.rs's tag). */
 export const hs = (p, tag, cls, attrs, text) => h(p, tag, cls, attrs, text, SVG);

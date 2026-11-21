@@ -194,7 +194,11 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   (`lower-width-padding`) when the width and the padding are literal; a computed width or
   padding, and `height="100%"` with padding, it does not. Fix: `box-sizing="border-box"`
   on the box, or drop `width`: a box in a block or a `column` already fills the width.
-  Look at a screenshot on each host. (Fresh-agent README trial, 2026-10-04.)
+  On iOS the host pads a route's root clear of the iPhone Duo's side strip and of a
+  split's list beside its detail (LLP 1123 D3, LLP 1127 D9), so a route's root with
+  `width="100%"` runs past the screen by that much: place it with `position="absolute"
+  inset=0`, as the patterns' routes are. Look at a screenshot on each host.
+  (Fresh-agent README trial, 2026-10-04.)
 
 - **A list of buttons is ragged: each is only as wide as its text.** A `button`
   directly in a `scroll` or another block container shrinks to fit, so a row's
@@ -438,11 +442,13 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   round 30's grader named it. Fix: rows under a screen's own content are a
   `listStyle="plain"` list on the page's white, as the Clock's laps are; keep
   inset-grouped for a list that is the whole screen.
-- **A native sidebar separator needs another touch to redraw.** UI Gallery reloaded
-  its static table during row selection and selected the same row again. Keep the
-  cells and update selection only when it changes; reload when the row data changes.
-  The Gallery's native tests check row reuse during selection and compare the sidebar
-  before and after an extra background touch (`apps/ui-gallery/tests/GalleryUITests.swift`).
+- **A native sidebar separator needs another touch to redraw.** Cause: a native
+  module's own sidebar table reloads its rows during a row's selection and selects
+  the same row again. Keep the cells and update selection only when it changes;
+  reload when the row data changes. A list whose rows push needs no table of its own:
+  beside its detail a grouped list is UIKit's sidebar list (LLP 1127), which UI
+  Gallery's tests compare before and after an extra touch
+  (`apps/ui-gallery/tests/GalleryUITests.swift`).
 - **A sideways swipe on a row opens it.** Cause: the row has no swipe actions. A
   `UITableView` or SwiftUI `List` row with none is selected by a horizontal drag of any
   length or speed, and one with trailing actions only is selected by a rightward drag;

@@ -733,7 +733,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${en
       // A corner shape its author wrote wins over the platform's curve, on a sidebar's tab too.
       expect([at('authored corner'), await page.evaluate(() => {
         if (!CSS.supports('corner-shape', 'bevel')) return 'no corner-shape';
-        document.getElementById('exact-root').insertAdjacentHTML('beforeend', '<div data-exact-sidebar><div role="tablist"><button role="tab" id="bevelled-tab" style="corner-shape: bevel">Tab</button></div></div>');
+        document.getElementById('exact-root').insertAdjacentHTML('beforeend', '<div data-exact-sidebar><div data-exact-sidebar-tabs role="tablist"><button role="tab" id="bevelled-tab" style="corner-shape: bevel">Tab</button></div></div>');
         return css('bevelled-tab', 'cornerTopLeftShape');
       })]).toEqual([at('authored corner'), expect.stringMatching(/^(bevel|superellipse\(0\)|no corner-shape)$/)]);
       // A popover of the author's content has the web's margin, a padding its author wrote wins, and a menu keeps its own.

@@ -90,8 +90,7 @@ impl std::ops::Deref for TestDir {
     }
 }
 
-const USAGE: &str =
-    "usage: exact-web-js js <app.contract | app.plan> -o <dir> [--dump] [--sites] [--dev-reload] [--app <dir>]\n       exact-web-js normalize-grants <file>\n       exact-web-js design <app.contract> <design text file, or - for stdin>\n       exact-web-js design-serve <app.contract>\n       exact-web-js inspect-table <app.plan> <out.json>";
+const USAGE: &str = "usage: exact-web-js js <app.contract | app.plan> -o <dir> [--dump] [--sites] [--dev-reload] [--sizes] [--app <dir>]\n       exact-web-js normalize-grants <file>\n       exact-web-js design <app.contract> <design text file, or - for stdin>\n       exact-web-js design-serve <app.contract>\n       exact-web-js inspect-table <app.plan> <out.json>";
 
 /// `inspect-table <app.plan> <out.json>` (LLP 1122 T2b, the JS target): the
 /// plan's inspect table (inspect.rs), made when the dev loop is first asked
@@ -306,6 +305,7 @@ fn main() -> ExitCode {
         }
     }
     let sites = all.iter().any(|a| a == "--sites");
+    let sizes = all.iter().any(|a| a == "--sizes");
     let dev_reload = all.iter().any(|a| a == "--dev-reload");
     // `--app <dir>`: the app a baked plan is of, whose design's `exports`
     // bound the declarations' token union (LLP 1121 D7).
@@ -319,7 +319,7 @@ fn main() -> ExitCode {
         .filter(|a| {
             let dropped = skip || a == "--app";
             skip = a == "--app";
-            !dropped && a != "--sites" && a != "--dev-reload"
+            !dropped && a != "--sites" && a != "--dev-reload" && a != "--sizes"
         })
         .collect();
     let (input, out, dump) = match args.as_slice() {
@@ -606,6 +606,11 @@ fn main() -> ExitCode {
                 let flag = serde_json::json!({ "extensions": plan.package_extensions(), "sources": sources });
                 let _ = std::fs::write(dir.join("modules.flag"), flag.to_string());
             }
+            // A node with `draggable` (drag.js, LLP 1094.000 D2, D3).
+            let _ = std::fs::remove_file(dir.join("drag.flag"));
+            if exact_runner::uses(&plan).has(exact_runner::uses::Capability::DragOut) {
+                let _ = std::fs::write(dir.join("drag.flag"), "");
+            }
             // `wakelock` (wakelock.js, LLP 1125 D11).
             let _ = std::fs::remove_file(dir.join("wakelock.flag"));
             if exact_runner::wakelock::bound(&plan) {
@@ -688,20 +693,38 @@ fn main() -> ExitCode {
             );
             if let Some(map) = &map {
                 let costs = map.component_code_costs(&plan);
-                let top: Vec<_> = costs
-                    .iter()
-                    .take(5)
-                    .map(|(name, instances, bytes)| {
-                        format!(
-                            "{name}: {bytes} B ({instances} instance{})",
-                            if *instances == 1 { "" } else { "s" }
-                        )
-                    })
-                    .collect();
-                println!(
-                    "  own plan code by component (shared bodies counted per use): {}",
-                    top.join(", ")
-                );
+                if sizes {
+                    let total: usize = costs.iter().map(|(_, _, bytes)| bytes).sum();
+                    println!(
+                        "Contract VM bytecode by component (shared bodies counted per use), {total} B across {} {}",
+                        costs.len(), if costs.len() == 1 { "component" } else { "components" }
+                    );
+                    for (name, instances, bytes) in costs {
+                        let unit = if instances == 1 {
+                            "instance"
+                        } else {
+                            "instances"
+                        };
+                        println!("  {bytes} B  {name} ({instances} {unit})");
+                    }
+                } else {
+                    let top: Vec<_> = costs
+                        .iter()
+                        .take(5)
+                        .map(|(name, instances, bytes)| {
+                            format!(
+                                "{name}: {bytes} B ({instances} instance{})",
+                                if *instances == 1 { "" } else { "s" }
+                            )
+                        })
+                        .collect();
+                    println!(
+                        "  own plan code by component (shared bodies counted per use): {}",
+                        top.join(", ")
+                    );
+                }
+            } else if sizes {
+                println!("Build from Contract source to include bytecode by component.");
             }
             ExitCode::SUCCESS
         }

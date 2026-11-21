@@ -17,6 +17,7 @@ fn make_case(source: &str) -> Case {
         stored: false,
         prerendered: false,
         launch: Default::default(),
+        answers: Vec::new(),
     }
 }
 
@@ -57,7 +58,7 @@ fn walk_reobserves_controls_replays_and_keeps_prefix_facts() {
         .contains(&Event::Type("note".into(), "authored".into())));
     assert_eq!(walk.scripted.case.events.len(), 40);
     for (i, event) in walk.scripted.case.events.iter().enumerate() {
-        if matches!(event, Event::Tap(_) | Event::Type(..)) {
+        if event.is_input() {
             assert_eq!(walk.scripted.case.events[i + 1], Event::InputLand);
         }
     }

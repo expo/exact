@@ -406,6 +406,35 @@ fn a_scroller_inside_one_that_takes_the_keyboard_takes_none_of_it() {
         (inner.reach, inner.reserved, inner.keyboard),
         ([0.0; 4], [None; 4], [0.0; 4])
     );
+    // The band reaches 4, which takes it, so it reaches 6 on no edge
+    assert_eq!(terms(&k, 4).band_reaches, [true; 4]);
+    assert_eq!(inner.band_reaches, [false; 4]);
+}
+
+#[test]
+fn a_scroller_passes_the_band_on_an_edge_it_ignores_where_it_reaches_the_area() {
+    // 4 ignores the container region on the top, where its box reaches the band, so the band
+    // reaches 6, inside it, there, and on the other edges 4 takes it
+    let k = owner_with(
+        Some(BAND),
+        &[],
+        &[(
+            4,
+            scroller(&[
+                (StyleId::Display, "flex"),
+                (StyleId::FlexDirection, "column"),
+                (StyleId::SafeAreaIgnore, "container top"),
+            ]),
+        )],
+        &[(
+            4,
+            6,
+            scroller(&[(StyleId::Height, "100"), (StyleId::FlexGrow, "0")]),
+        )],
+        &[],
+        None,
+    );
+    assert_eq!(terms(&k, 6).band_reaches, [true, false, false, false]);
 }
 
 #[test]
@@ -443,8 +472,8 @@ fn with_no_band_a_scroller_reaches_nothing() {
         4,
     );
     assert_eq!(
-        (t.reach, t.reserved, t.container),
-        ([0.0; 4], [None; 4], [true; 4])
+        (t.reach, t.reserved, t.band_reaches, t.container),
+        ([0.0; 4], [None; 4], [false; 4], [true; 4])
     );
 }
 

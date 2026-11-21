@@ -433,3 +433,53 @@ fn basic_clips_cross_as_relative_geometry() {
         })
     );
 }
+
+#[test]
+fn a_scrollers_d14_rows_cross_by_name_in_points_and_words() {
+    // @ref LLP 1123 D14 — as `ScrollInsetsIOS.Rows(style:)` reads them: lengths in points, a
+    // negative one kept, the policies by their words
+    let source = "component App\n  view\n    column testId=\"list\" overflow-y=\"scroll\" -exact-scroll-content-inset=\"10 -20 30 40\" -exact-scroll-inset-adjustment=\"scrollable-axes\" -exact-scroll-indicator-adjustment=\"none\" -exact-scroll-vertical-indicator-insets=\"1 2 3 4\" -exact-scroll-horizontal-indicator-insets=\"5 6 7 8\"\n      text \"a\"\n";
+    let plan = contract::compile(source).unwrap().encode();
+    let (_host, boot) = crate::Host::boot(
+        &plan,
+        NoData,
+        Box::new(exact_kernel::MonospaceMeasurer::default()),
+        400.,
+        800.,
+    )
+    .unwrap();
+    let batch: serde_json::Value = serde_json::from_str(&boot).unwrap();
+    let style = batch["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|op| op.get("style"))
+        .find(|style| style.get("scroll_inset_adjustment").is_some())
+        .unwrap();
+    let insets = ["top", "right", "bottom", "left"]
+        .map(|e| style[format!("scroll_content_inset_{e}")].as_f64());
+    assert_eq!(
+        insets,
+        [Some(10.0), Some(-20.0), Some(30.0), Some(40.0)],
+        "{style}"
+    );
+    let indicators = ["top", "right", "bottom", "left"]
+        .map(|e| style[format!("scroll_vertical_indicator_insets_{e}")].as_f64());
+    assert_eq!(
+        indicators,
+        [Some(1.0), Some(2.0), Some(3.0), Some(4.0)],
+        "{style}"
+    );
+    let horizontal = ["top", "right", "bottom", "left"]
+        .map(|e| style[format!("scroll_horizontal_indicator_insets_{e}")].as_f64());
+    assert_eq!(
+        horizontal,
+        [Some(5.0), Some(6.0), Some(7.0), Some(8.0)],
+        "{style}"
+    );
+    assert_eq!(
+        style["scroll_inset_adjustment"].as_str(),
+        Some("scrollable-axes")
+    );
+    assert_eq!(style["scroll_indicator_adjustment"].as_str(), Some("none"));
+}

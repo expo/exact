@@ -147,6 +147,19 @@ test('a set is taken while its inputs are these bytes, and a miss names the firs
   } finally { miss.done(); }
 }, 60000);
 
+test('when a cached compiler disappears, the next matching set supplies it', () => {
+  const m = machine(['a', 'b'].map(c => ({ source: 'built', inputs: ours, commit: c.repeat(40) })), { rust: false });
+  try {
+    const bin = i => resolve(m.env.HOME, '.cache/exact/tools', hostTriple(), `set${i}`, 'contract');
+    assert.equal(fromSets('contract', m.env)?.path, bin(1));
+    rmSync(bin(1));
+    assert.equal(fromSets('contract', m.env)?.path, bin(0));
+    rmSync(bin(0));
+    assert.equal(fromSets('contract', m.env), null);
+    assert.match(new RustMissing('contract', m.env).message, /tool set built at bbbbbbbbbbbb is missing contract/);
+  } finally { m.done(); }
+});
+
 test('a fetched set runs only without Rust or when an origin is named, and never under EXACT_TOOLS_ORIGIN=none', () => {
   for (const [rust, origin, taken] of [[true, undefined, false], [true, 'https://tools.example', true], [false, undefined, true], [false, 'none', false]]) {
     const m = machine([{ source: 'fetched', inputs: ours, commit: 'd'.repeat(40) }], { rust });

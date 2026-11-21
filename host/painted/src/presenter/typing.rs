@@ -791,6 +791,9 @@ impl<D: DataSource> Presenter<D> {
 
     /// Default keyboard behavior shared by the page and authored top-layer boxes.
     pub(super) fn key_default(&mut self, name: &str, code: &str, repeat: bool, now_ms: f64) {
+        if self.copy_reader_key(name) {
+            return;
+        }
         // Tab's default action moves the focus, from a canvas or a field too,
         // as the browser's does (LLP 1088 D7.3).
         if name == "Tab" {
@@ -922,15 +925,18 @@ impl<D: DataSource> Presenter<D> {
     /// What a field shows and commits: its typed text while its bound
     /// value is the one it had then (`keep_typed`), else that value.
     pub(crate) fn field_text(&self, id: ViewId) -> String {
+        self.field_text_ref(id).to_owned()
+    }
+
+    pub(super) fn field_text_ref(&self, id: ViewId) -> &str {
         if let Some(value) = self.ime_value(id) {
-            return value.to_owned();
+            return value;
         }
         let Some(node) = self.host.kernel().node(id) else {
-            return String::new();
+            return "";
         };
         crate::paint::control::choice(&node, self.chosen.get(&id))
             .unwrap_or_else(|| node.props.str(PropId::Value).unwrap_or(""))
-            .to_string()
     }
 
     /// After an edit's dispatch: a field whose `value` the edit's action did

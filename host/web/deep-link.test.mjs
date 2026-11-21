@@ -100,7 +100,16 @@ const sourceFor = pattern => `routes nav
 
 component App
   view
-    text top(nav).url
+    main
+      text top(nav).url
+      Field()
+      Field()
+component Field
+  state draft = ""
+  action edit(value: string)
+    draft = value
+  view
+    input value=draft input=edit
 `;
 // The plan, and the shell and route table a JS-target build writes beside it (host/web-js/build.mjs).
 function plan(dist, pattern) {

@@ -6,21 +6,17 @@ use icu_normalizer::properties::Decomposed;
 
 use crate::analysis::AnalysisDataSources;
 
-/// The maximum number of characters in a single cluster.
-const MAX_CLUSTER_SIZE: usize = 32;
-
 #[derive(Debug, Default)]
 pub(crate) struct CharCluster {
     pub chars: Vec<Char>,
     pub is_emoji: bool,
-    pub map_len: u8,
+    pub map_len: usize,
     pub start: u32,
     pub end: u32,
     pub force_normalize: bool,
     comp: Form,
     decomp: Form,
-    form: FormKind,
-    best_ratio: f32,
+    best_ratio: f64,
 }
 
 impl CharCluster {
@@ -43,18 +39,14 @@ pub(crate) struct SourceRange {
 pub(crate) struct Char {
     /// The character.
     pub ch: char,
-    /// Whether the character
+    /// Whether the character is a control.
     pub is_control_character: bool,
     /// True if the character should be considered when mapping glyphs.
     pub contributes_to_shaping: bool,
-    /// Nominal glyph identifier.
-    pub glyph_id: GlyphId,
     /// Indexes into the list of styles for the containing text run, to find the style applicable
     /// to this character.
     pub style_index: u16,
 }
-
-pub(crate) type GlyphId = u16;
 
 /// Whitespace content of a cluster.
 #[derive(Copy, Clone, PartialOrd, Ord, PartialEq, Eq, Debug)]
@@ -100,13 +92,7 @@ impl CharCluster {
         self.force_normalize = false;
         self.comp.clear();
         self.decomp.clear();
-        self.form = FormKind::Original;
         self.best_ratio = 0.;
-    }
-
-    #[inline(always)]
-    fn len(&self) -> usize {
-        self.chars.len()
     }
 
     /// Returns the primary style index for the cluster.
@@ -197,74 +183,33 @@ impl CharCluster {
 
     pub(crate) fn map(
         &mut self,
-        f: impl Fn(char) -> GlyphId,
+        has_glyph: impl Fn(char) -> bool,
         analysis_data_sources: &AnalysisDataSources,
     ) -> Status {
-        let len = self.len();
-        if len == 0 {
-            return Status::Complete;
+        let mut ratio = if self.force_normalize && self.composed(analysis_data_sources).is_some() {
+            self.comp.coverage(&has_glyph)
+        } else {
+            0.
+        };
+        if ratio < 1. {
+            ratio = ratio.max(coverage(&self.chars, self.map_len, &has_glyph));
         }
-        let mut glyph_ids = [0_u16; MAX_CLUSTER_SIZE];
-        let prev_ratio = self.best_ratio;
-        let mut ratio;
-        if self.force_normalize && self.composed(analysis_data_sources).is_some() {
-            ratio = self.comp.map(&f, &mut glyph_ids, self.best_ratio);
-            if ratio > self.best_ratio {
-                self.best_ratio = ratio;
-                self.form = FormKind::NFC;
-                if ratio >= 1. {
-                    return Status::Complete;
-                }
+        if ratio < 1. && self.decomposed(analysis_data_sources).is_some() {
+            ratio = ratio.max(self.decomp.coverage(&has_glyph));
+            if ratio < 1. && !self.force_normalize && self.composed(analysis_data_sources).is_some()
+            {
+                ratio = ratio.max(self.comp.coverage(&has_glyph));
             }
         }
-        ratio = Mapper {
-            chars: &mut self.chars[..len],
-            map_len: self.map_len.max(1),
-            has_contributing: self.map_len > 0,
-        }
-        .map(&f, &mut glyph_ids, self.best_ratio);
-        if ratio > self.best_ratio {
+        if ratio >= 1. {
+            Status::Complete
+        } else if ratio > self.best_ratio {
             self.best_ratio = ratio;
-            self.form = FormKind::Original;
-            if ratio >= 1. {
-                return Status::Complete;
-            }
-        }
-        if self.decomposed(analysis_data_sources).is_some() {
-            ratio = self.decomp.map(&f, &mut glyph_ids, self.best_ratio);
-            if ratio > self.best_ratio {
-                self.best_ratio = ratio;
-                self.form = FormKind::NFD;
-                if ratio >= 1. {
-                    return Status::Complete;
-                }
-            }
-            if !self.force_normalize && self.composed(analysis_data_sources).is_some() {
-                ratio = self.comp.map(&f, &mut glyph_ids, self.best_ratio);
-                if ratio > self.best_ratio {
-                    self.best_ratio = ratio;
-                    self.form = FormKind::NFC;
-                    if ratio >= 1. {
-                        return Status::Complete;
-                    }
-                }
-            }
-        }
-        if self.best_ratio > prev_ratio {
             Status::Keep
         } else {
             Status::Discard
         }
     }
-}
-
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-#[allow(clippy::upper_case_acronyms)]
-enum FormKind {
-    #[default]
-    Original,
-    NFD,
-    NFC,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -324,59 +269,24 @@ impl Form {
         self.has_contributing = self.chars().iter().any(|c| c.contributes_to_shaping);
     }
 
-    #[inline(always)]
-    fn map(
-        &mut self,
-        f: &impl Fn(char) -> u16,
-        glyphs: &mut [u16; MAX_CLUSTER_SIZE],
-        best_ratio: f32,
-    ) -> f32 {
-        Mapper {
-            chars: &mut self.chars[..self.len as usize],
-            map_len: self.map_len,
-            has_contributing: self.has_contributing,
-        }
-        .map(f, glyphs, best_ratio)
+    fn coverage(&self, has_glyph: &impl Fn(char) -> bool) -> f64 {
+        let required = if self.has_contributing {
+            self.map_len as usize
+        } else {
+            0
+        };
+        coverage(self.chars(), required, has_glyph)
     }
 }
 
-struct Mapper<'a> {
-    chars: &'a mut [Char],
-    map_len: u8,
-    has_contributing: bool,
-}
-
-impl<'a> Mapper<'a> {
-    fn map(
-        &mut self,
-        f: &impl Fn(char) -> u16,
-        glyphs: &mut [u16; MAX_CLUSTER_SIZE],
-        best_ratio: f32,
-    ) -> f32 {
-        if self.map_len == 0 {
-            return 1.;
-        }
-        let mut mapped = 0;
-        for (c, g) in self.chars.iter().zip(glyphs.iter_mut()) {
-            if !c.contributes_to_shaping {
-                *g = f(c.ch);
-                if !self.has_contributing {
-                    mapped += 1;
-                }
-            } else {
-                let gid = f(c.ch);
-                *g = gid;
-                if gid != 0 {
-                    mapped += 1;
-                }
-            }
-        }
-        let ratio = mapped as f32 / self.map_len as f32;
-        if ratio > best_ratio {
-            for (ch, glyph) in self.chars.iter_mut().zip(glyphs) {
-                ch.glyph_id = *glyph;
-            }
-        }
-        ratio
+// The shaper looks up glyph IDs after choosing the face. Font fallback needs only coverage.
+fn coverage(chars: &[Char], required: usize, has_glyph: &impl Fn(char) -> bool) -> f64 {
+    if required == 0 {
+        return 1.;
     }
+    let covered = chars
+        .iter()
+        .filter(|c| c.contributes_to_shaping && has_glyph(c.ch))
+        .count();
+    covered as f64 / required as f64
 }

@@ -16,6 +16,12 @@ extension NavigationHost {
               presenter.session?.natives.hatchesConnected != true, presenter.session?.natives.firstFrameTags.isEmpty == true,
               p.stacks.flatMap({ $0 }).allSatisfy({ $0.props["navigationBar"] == "none" && ($0.props["navigationPresentation"] ?? "").isEmpty }),
               p.tabs.map({ $0.panels.count <= 5 && $0.tablist.wrote("appearance") && $0.tablist.style["appearance"]?.string == "none" }) ?? true else { return false }
+        // A stack that splits is the split's from its first frame (LLP 1127 D2). One the runner cannot say of
+        // yet stays deferred, and is asked again on the main queue's next turn (`askSplitNextTurn`), whose sync
+        // asks this again (`updateBootOwner`).
+        let splitting = p.tabs == nil ? splits(p.chosen.first) : false
+        if splitting == nil { askSplitNextTurn() }
+        if splitting == true { return false }
         // Offset routes need the native owner's sibling and safe-area projection.
         func frame(_ node: NodeView) -> CGRect {
             guard let op = batch.ops.last(where: { $0.op == .frame && $0.id == node.id }) else { return node.frame }

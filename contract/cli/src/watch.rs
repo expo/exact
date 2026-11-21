@@ -124,6 +124,10 @@ fn attrs<'a>(tag: &str, attrs: impl IntoIterator<Item = &'a Attr>, errors: &mut 
                 "watch-surface",
                 "the watch has no GPU surface or media player; remove it from the watch entry",
             )),
+            Some(AttrTarget::DataTransfer) => errors.push(fail(
+                "watch-surface",
+                "the watch lifts nothing to drag; remove `dataTransfer` from the watch entry",
+            )),
             Some(AttrTarget::Prop(p) | AttrTarget::InvertedBoolProp(p)) if !admits_prop(p) => {
                 errors.push(fail("watch-prop", "the watch driver does not draw this prop; remove it from the watch entry"));
             }

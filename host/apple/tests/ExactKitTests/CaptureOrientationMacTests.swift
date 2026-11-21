@@ -69,6 +69,24 @@ private final class OrientationUpdate: OrientationView {
 // Copies keep each backing store's live flip, including a subtree whose
 // ancestors are outside the capture and a newly mounted, detached layer.
 final class CaptureOrientationMacTests: XCTestCase {
+    func testTheCapturedRootKeepsTheTopOfItsWindowAtTheTopOfTheImage() throws {
+        _ = NSApplication.shared
+        for flipped in [true, false] {
+            let root = OrientationContainer(frame: NSRect(x: 0, y: 0, width: 480, height: 112))
+            root.flipsCoordinates = flipped
+            root.wantsLayer = true
+            root.addSubview(OrientationInk(frame: NSRect(x: 0, y: flipped ? 0 : 56, width: 120, height: 56)))
+            let window = NSWindow(contentRect: root.bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = root
+            window.displayIfNeeded()
+            let image = try XCTUnwrap(Capture.picture(of: root, scale: 1, flipped: root.isFlipped))
+            XCTAssertEqual(marker(image, 0), "upright", "root.isFlipped = \(flipped)")
+            XCTAssertEqual(marker(image, 0, bottom: true), "upright", "root.isFlipped = \(flipped)")
+            window.close()
+        }
+    }
+
     func testCaptureDoesNotBackTheInstalledFieldEditor() throws {
         _ = NSApplication.shared
         let root = OrientationView(frame: NSRect(x: 0, y: 0, width: 480, height: 112))

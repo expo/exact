@@ -273,7 +273,8 @@ const target = ['--js', '--wasm'].find((flag) => process.argv.includes(flag));
 // §7, "Retiring the wasm target on the web", step c).
 const bakeOnly = process.argv.includes('--bake');
 const checkOnly = process.argv.includes('--check');
-process.argv = process.argv.filter((a) => !['--js', '--wasm', '--bake', '--check'].includes(a));
+const sizes = process.argv.includes('--sizes');
+process.argv = process.argv.filter((a) => !['--js', '--wasm', '--bake', '--check', '--sizes'].includes(a));
 // `--render <rust|js|none>`: the JS target's pages at build (host/web-js/build.mjs).
 const renderFlag = process.argv.indexOf('--render');
 const render = renderFlag < 0 ? [] : process.argv.splice(renderFlag, 2);
@@ -314,6 +315,7 @@ const { minifySync } = await import('rolldown/experimental');
 // build, and what it refuses is an error; `--wasm` is internal (below).
 const game = app.manifest.game !== undefined;
 const jsTarget = target !== '--wasm' && !game && !bakeOnly;
+if (sizes && (!jsTarget || checkOnly)) { console.error('web-build: --sizes needs a JS target build'); process.exit(2); }
 let inputRoots;
 try { inputRoots = webSourceRoots(app, jsTarget, render[1] ?? 'rust'); } catch (error) { if (!error.rustMissing) throw error; console.error(error.message); process.exit(1); }
 if (checkOnly) {
@@ -350,7 +352,7 @@ if (target !== '--wasm' && !game && !bakeOnly) {
   // A site to host is a release, as delivery builds one (`--production`): agent mode refused, the app's storage its id
   // alone, its install pages a release's.
   const release = outDir ? { flags: ['--production'], env: { EXACT_UPDATE_TRUST: 'production' } } : { flags: [], env: {} };
-  const js = spawnSync(process.execPath, [fileURLToPath(new URL('../web-js/build.mjs', import.meta.url)), app.name, '--out', stage, ...render, ...release.flags], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', env: { ...process.env, EXACT_APP_DIR: app.dir, EXACT_WEB_DIST:dist, ...release.env } });
+  const js = spawnSync(process.execPath, [fileURLToPath(new URL('../web-js/build.mjs', import.meta.url)), app.name, '--out', stage, ...render, ...release.flags, ...(sizes ? ['--sizes'] : [])], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: 64 << 20, env: { ...process.env, EXACT_APP_DIR: app.dir, EXACT_WEB_DIST:dist, ...release.env } });
   // What it says names the output, not the stage.
   const said = (text) => (text ?? '').replaceAll(stage, dist);
   js.stderr = said(js.stderr);

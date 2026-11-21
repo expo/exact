@@ -477,7 +477,7 @@ fn open_panel(
             let v = match carried.filter(|v| v.conforms(plan, s.ty)) {
                 Some(v) => v,
                 None => u.eval_named(s.init, &inner, || {
-                    format!("state {:?} initializer", plan.str(s.name))
+                    crate::RunnerError::state_initializer(plan.str(s.name))
                 })?,
             };
             if !v.conforms(plan, s.ty) {

@@ -17,6 +17,7 @@ mod card;
 mod concepts;
 mod frames;
 mod recipes;
+mod records;
 mod scroll;
 mod window;
 
@@ -533,7 +534,7 @@ fn one_text(name: &str, shown: &mut Shown) -> bool {
             println!("  on any element (LLP 1133.029). While the element is mounted and displayed (by `wakelock`'s rule) and outside every `dialog` and popover, the window keeps to the orientations it names: a Screen Orientation API lock type (\"portrait\", \"landscape\", \"portrait-primary\", \"portrait-secondary\", \"landscape-primary\", \"landscape-secondary\", \"natural\", \"any\"), or \"current\", the orientation the window has when the lock begins (a game steered by tilt); \"none\", the default, holds nothing. Bind it to state: `orientationlock=(tilt ? \"current\" : \"none\")`. The topmost sheet that holds wins over what it covers, a descendant's lock replaces its ancestor's (\"any\" there frees a subtree), and unrelated locks intersect; locks that share no orientation hold none and are journaled. A type only narrows the manifest's `orientation`: a literal outside it, or one inside a `dialog` or popover, is refused. iOS and Android (on a tablet only \"current\" holds), the web in fullscreen where the browser locks, Windows' auto-rotation preference; macOS, tvOS and Linux have no screen orientation and journal it once. The agent's `state.orientationlock` is `{{held, by, words, lock, conflict, applied}}`, `applied` the host's readback.");
         }
         if name == "navigationSplit" {
-            println!("  on a stack's root route (LLP 1116.004 D1.2). A wide window (900 px and up on the web) shows a stack whose root route is a list whose rows push beside its top, as a split view does, with nothing to write: a row pushes when its press does: a `link` to one of the app's routes, or a `button` or pressable whose action writes the router (`push`, `open`, `go`). A row's `image \"symbol:forward-chevron\"` (the disclosure an iOS list draws) is paint, which neither splits a list nor keeps one from splitting, and a list whose rows only select stays pushed. An action that writes the router only to go back or open a sheet looks the same, so say `navigationSplit=\"none\"` for such a list. The list is a 320-wide column, its chevrons hidden and the row whose press pushed the detail marked; the top route is the detail beside it (a detail a row pushed has no Back), a `navigationPresentation=\"modal\"` route stays a sheet, and a phone pushes. Across a foldable browser's fold, two viewport segments side by side, the list fills the segment at its start and the detail the other, whatever the window's width or a number says. The router is unchanged: a push from a row while a detail shows stacks it, so `replace` there to swap the detail. \"none\" keeps the stack pushed; a number is the column's width off a fold and splits a list the rule does not find. While nothing is selected the detail pane shows the platform's placeholder (\"No Selection\" on a Mac or an iPad, \"Select an item\" on the web, centred, in the secondary label's colour); \"placeholder\" on a box in the root route (an `EmptyState`) is your own instead, shown only there and then and laid out nowhere else. A root `tablist` left as the tabs recipe places it is a sidebar on the same window. docs/recipes/navigation-stack.md");
+            println!("  on a stack's root route (LLP 1116.004 D1.2). A wide window (900 px and up on the web) shows a stack whose root route is a list whose rows push beside its top, as a split view does, with nothing to write: a row pushes when its press does: a `link` to one of the app's routes, or a `button` or pressable whose action writes the router (`push`, `open`, `go`). A row's `image \"symbol:forward-chevron\"` (the disclosure an iOS list draws) is paint, which neither splits a list nor keeps one from splitting, and a list whose rows only select stays pushed. An action that writes the router only to go back or open a sheet looks the same, so say `navigationSplit=\"none\"` for such a list. The list is a 320-wide column, its chevrons hidden and the row whose press pushed the detail marked; the top route is the detail beside it (a detail a row pushed has no Back), a `navigationPresentation=\"modal\"` route stays a sheet, and a narrow window pushes. Across a foldable browser's fold, two viewport segments side by side, the list fills the segment at its start and the detail the other, whatever the window's width or a number says. On iOS the split is UIKit's split view (LLP 1127), outside a tab: a compact width (an iPhone, the iPhone Duo folded) collapses it to one stack, the detail over the list with Back, and a wide one (an iPad, the iPhone Duo open) shows the columns as UIKit decides: the list beside the detail at UIKit's width (a grouped list, `appearance=\"auto\"`, as UIKit's sidebar list, the row of the detail's first route selected), the detail alone, or the list over it; under the agent's own chrome (`--chrome agent`) and on tvOS the stack pushes. The router is unchanged: a push from a row while a detail shows stacks it, so `replace` there to swap the detail. \"none\" keeps the stack pushed; a number is the column's width off a fold and splits a list the rule does not find. While nothing is selected the detail pane shows the platform's placeholder (\"No Selection\" on a Mac or an iPad, \"Select an item\" on the web, centred, in the secondary label's colour); \"placeholder\" on a box in the root route (an `EmptyState`) is your own instead, shown only there and then and laid out nowhere else. A root `tablist` left as the tabs recipe places it is a sidebar on the same window. docs/recipes/navigation-stack.md");
         }
         if matches!(
             name,
@@ -877,7 +878,7 @@ fn kind(a: &AttrTarget) -> &'static str {
         AttrTarget::Flex => "flex",
         AttrTarget::Shorthand => "shorthand",
         AttrTarget::Surface => "surface",
-        AttrTarget::MediaMetadata => "record",
+        AttrTarget::MediaMetadata | AttrTarget::DataTransfer => "record",
     }
 }
 
@@ -919,9 +920,6 @@ const KEEP_MOUNTED: &str = "keep-mounted on a `list virtualized=true`: the keys 
 const NAVIGATE: &str = "on the navigation root: a location from outside the running app (a link, a protocol handler's or a notification's URL, the web's Back and Forward), whose action chooses the verb (LLP 1038 D8). `go` pops to the location when the selected stack holds it, selects the tab whose top it is, and otherwise pushes it on the selected tab, whatever tab declares its route. `open(nav, url)` lands in the route's declared tab, that tab's stack its declared chain. A cold launch's location is no event: it opens there, as `open` does";
 
 const PLAYING: &str = "on video or audio, with no payload: playback is ready to start after a pause or delay for media data (WHATWG: https://html.spec.whatwg.org/multipage/media.html#event-media-playing). The web forwards the browser's event. Apple waits until the item's timebase advances, then reports once per start or resumption; calling play alone does not fire it. Use playing to hand over a feed's volume; timeupdate remains a periodic position report (250 ms on Apple). This is not a guarantee that a speaker has produced sound. Android and the painted hosts do not currently deliver this event (LLP 1042).";
-
-/// What `metadata=` takes (LLP 1098 D1): the Media Session's record.
-const METADATA: &str = "MediaMetadata(title=, artist=, album=, artwork=), each a string";
 
 /// `border-radius` on a sheet route (ModalIOS.swift `cornerRadius(of:)`).
 const SHEET_RADIUS: &str = "on iOS a sheet route's (`navigationPresentation=\"modal\"`) top-left radius is also its sheet's corner radius (`preferredCornerRadius`), which seats a large sheet flat on the bottom edge. Unsaid, the sheet is UIKit's: on iOS 26 and later rounded like the display and inset from the bottom edge, as Apple's own sheets are";
@@ -1074,9 +1072,9 @@ fn attr_json(name: &str, a: &AttrTarget) -> Value {
             }
         }
         AttrTarget::Surface => {}
-        AttrTarget::MediaMetadata => {
-            doc["type"] = METADATA.into();
-            doc["props"] = json!(["mediaTitle", "mediaArtist", "mediaAlbum", "mediaArtwork"]);
+        AttrTarget::MediaMetadata | AttrTarget::DataTransfer => {
+            let h = records::of(a).expect("a hoisted record");
+            (doc["type"], doc["props"]) = (h.construct.into(), json!(h.props));
         }
     }
     if let Some(only) = only_on(name) {
@@ -1357,11 +1355,7 @@ fn attr_detail(name: &str, a: &AttrTarget) -> Vec<String> {
             .chain([format!("event {event}")])
             .collect(),
         AttrTarget::Surface => vec!["a canvas's surface binding: surface=name(args)".into()],
-        AttrTarget::MediaMetadata => vec![
-            format!("record {METADATA}"),
-            "props mediaTitle, mediaArtist, mediaAlbum, mediaArtwork, its fields".into(),
-            "claims the media session (LLP 1098 D1)".into(),
-        ],
+        AttrTarget::MediaMetadata | AttrTarget::DataTransfer => records::detail(a),
     }
 }
 
@@ -1431,7 +1425,9 @@ fn listing() -> String {
         let mut text = match a {
             AttrTarget::Prop(p) => prop_type(*p),
             AttrTarget::InvertedBoolProp(p) => format!("bool (inverse of {})", p.name()),
-            AttrTarget::MediaMetadata => METADATA.into(),
+            AttrTarget::MediaMetadata | AttrTarget::DataTransfer => {
+                records::of(a).map_or_else(String::new, |h| h.construct.into())
+            }
             _ => "surface=name(args), on `canvas`".into(),
         };
         if let Some(only) = only_on(name) {

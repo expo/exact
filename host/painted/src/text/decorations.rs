@@ -356,4 +356,53 @@ mod tests {
             .enumerate()
             .all(|(index, ink)| ink.is_some() == (index % 2 == 0)));
     }
+    #[test]
+    fn editing_a_coloured_multiline_field_keeps_unchanged_rows() {
+        use crate::text::{field::Geometry, fixtures::engine};
+        let mut engine = engine();
+        let styles = json!({"accent":[[StyleId::TextColor as u16,"#db1141"]]}).to_string();
+        let projected = |value: &str, end: usize| {
+            let marks = record(value, json!([{"name":"accent","start":0,"end":end}]));
+            FieldDecorations::read(&marks, &styles)
+                .unwrap()
+                .project(spec(value), value)
+                .spec
+        };
+        let mut value = (0..1024)
+            .map(|i| format!("{i:04} ordinary source"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let width = Some(280.);
+        let mut old = engine.edited_field(&projected(&value, 5), width, None);
+        let mut geometry = Geometry::new(&old, &value, false, 0., 0., None);
+        for key in ['a', 'b', 'c', 'd'] {
+            value.insert(0, key);
+            let next = engine.edited_field(&projected(&value, 5), width, Some(&old));
+            let edited = Geometry::new(&next, &value, false, 0., 0., Some((&old, &geometry)));
+            let (before, after) = (old.lines(), next.lines());
+            assert_eq!(after.lines.len(), 1024);
+            let shared = (1..1024)
+                .filter(|&row| {
+                    before.glyphs_of(&before.lines[row]).as_ptr()
+                        == after.glyphs_of(&after.lines[row]).as_ptr()
+                })
+                .count();
+            let hits = (1..1024)
+                .filter(|&row| edited.shares_spans(row, &geometry, row))
+                .count();
+            assert_eq!((shared, hits), (1023, 1023), "after typing {key}");
+            old = next;
+            geometry = edited;
+        }
+        // Moving only the colour boundary leaves the text intact but changes glyph paint indices.
+        let recoloured = projected(&value, 30);
+        let next = engine.edited_field(&recoloured, width, Some(&old));
+        let fresh = crate::text::fixtures::engine().layout(&recoloured, width);
+        for (line, expected) in next.lines().lines.iter().zip(&fresh.lines().lines) {
+            assert_eq!(
+                next.lines().glyphs_of(line),
+                fresh.lines().glyphs_of(expected)
+            );
+        }
+    }
 }

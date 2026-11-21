@@ -1,0 +1,41 @@
+component App
+  state log = ""
+  action heard(label: string, key: string)
+    log = `${log}${label}:${key};`
+    if label == "inner" and key == "x"
+      stopPropagation()
+  state downShift = false
+  state upShift = false
+  action down(key: string, event: KeyboardEvent)
+    downShift = event.shiftKey
+  action up(key: string, event: KeyboardEvent)
+    upShift = event.shiftKey
+  view
+    column
+      column keycapture=heard("outer-capture") key=heard("outer") keyup=heard("outer-up") testId="outer"
+        column keycapture=heard("inner-capture") key=heard("inner") keyup=heard("inner-up") testId="inner"
+          column testId="target"
+      column key=down keyup=up testId="modifiers"
+      text log testId="log"
+
+test "Escape is heard on the way down, then up"
+  type "target" key "Escape"
+  expect state log == "outer-capture:Escape;inner-capture:Escape;inner:Escape;outer:Escape;inner-up:Escape;outer-up:Escape;"
+
+test "a stop keeps the ancestors from hearing it"
+  type "target" key "x"
+  expect state log == "outer-capture:x;inner-capture:x;inner:x;inner-up:x;outer-up:x;"
+
+test "a key nothing on its path handles does nothing"
+  type "log" key "Escape"
+  expect state log == ""
+
+test "a modifier reports its own down and up edges"
+  type "modifiers" key "Shift"
+  expect state downShift == true
+  expect state upShift == false
+
+test "a chord carries its modifier through the release"
+  type "modifiers" key "Shift+Enter"
+  expect state downShift == true
+  expect state upShift == true

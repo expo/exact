@@ -250,7 +250,7 @@ test('a dev checkpoint restores modal focus past inert ancestors, but not within
   expect(capture.every(Boolean)).toBe(true);
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
-    if (path === '/rt.js') return new Response('export const After = [], PropHooks = {}, Resources = [], inflight = { n: 0 }, clock = {}, data = {}, journal = []; export const carryRouter = null, launchLocation = null, res = null, settled = null, sig = null;', { headers: { 'content-type': 'text/javascript' } });
+    if (path === '/rt.js') return new Response('export const After = [], PropHooks = {}, Resources = [], inflight = { n: 0 }, clock = {}, data = {}, journal = []; export const carryRouter = null, late = null, launchLocation = null, res = null, settled = null, sig = null;', { headers: { 'content-type': 'text/javascript' } });
     if (path === '/navigation.js') return new Response(hostFixtureFile(new URL('../web/navigation.js', import.meta.url)), { headers: { 'content-type': 'text/javascript' } });
     if (['/checkpoint.js', '/focus.js'].includes(path)) return new Response(Bun.file(new URL('.' + path, import.meta.url)));
     return new Response(`<main id="exact-root" inert><dialog data-carry-type="dialog"><div role="listitem" data-exact-list-item style="display:contents"><input data-carry-type="input"></div></dialog></main>

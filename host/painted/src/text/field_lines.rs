@@ -1,4 +1,4 @@
-//! An editable width shares the glyphs of each unchanged hard line. The
+//! An editable width shares longer hard lines and packs short ones together. The
 //! paragraph's visual lines keep global ranges; a painter reads one slice.
 use super::{LayoutGlyph, LayoutLine, Lines};
 use std::collections::HashSet;
@@ -30,8 +30,15 @@ impl Glyphs {
 
     pub(super) fn line(&self, line: &LayoutLine) -> &[LayoutGlyph] {
         let (a, b) = (line.glyphs.0 as usize, line.glyphs.1 as usize);
+        self.slice(line.hard as usize, a, b)
+    }
+
+    fn slice(&self, hard: usize, a: usize, b: usize) -> &[LayoutGlyph] {
+        if a == b {
+            return &[];
+        }
         if let Some(field) = &self.field {
-            let (start, block) = &field.blocks[line.hard as usize];
+            let (start, block) = field.block(hard, a);
             &block.glyphs[a - start..b - start]
         } else {
             &self.flat[a..b]
@@ -132,12 +139,37 @@ impl Block {
 #[derive(Clone, Debug, Default)]
 pub(in crate::text) struct FieldLines {
     blocks: Vec<(usize, Arc<Block>)>,
+    short: Vec<LayoutGlyph>,
     len: usize,
     bytes: usize,
     flat: OnceLock<Vec<LayoutGlyph>>,
 }
 
+// Copying a handful of glyphs costs less space than a separate shared block.
+const SHORT_LINE: usize = 8;
+
 impl FieldLines {
+    fn block(&self, hard: usize, at: usize) -> &(usize, Arc<Block>) {
+        if let Some(entry) = self
+            .blocks
+            .get(hard)
+            .filter(|(start, block)| *start <= at && at - start < block.glyphs.len())
+        {
+            return entry;
+        }
+        &self.blocks[self.blocks.partition_point(|(start, _)| *start <= at) - 1]
+    }
+
+    fn flush_short(&mut self) {
+        if !self.short.is_empty() {
+            let start = self.len - self.short.len();
+            self.short.shrink_to_fit();
+            let block = Arc::new(Block::new(take(&mut self.short)));
+            self.bytes += block.bytes();
+            self.blocks.push((start, block));
+        }
+    }
+
     fn contiguous(&self) -> Vec<LayoutGlyph> {
         let mut all = Vec::with_capacity(self.len);
         for (_, block) in &self.blocks {
@@ -147,6 +179,7 @@ impl FieldLines {
     }
 
     fn push(&mut self, block: Arc<Block>) {
+        self.flush_short();
         let start = self.len;
         self.len += block.glyphs.len();
         self.bytes += block.bytes();
@@ -158,7 +191,12 @@ impl FieldLines {
             line.glyphs.0 += self.len as u32;
             line.glyphs.1 += self.len as u32;
         }
-        self.push(Arc::new(Block::new(take(&mut out.glyphs.flat))));
+        if out.glyphs.flat.len() <= SHORT_LINE {
+            self.len += out.glyphs.flat.len();
+            self.short.append(&mut out.glyphs.flat);
+        } else {
+            self.push(Arc::new(Block::new(take(&mut out.glyphs.flat))));
+        }
     }
 
     pub(in crate::text) fn reuse(
@@ -187,20 +225,6 @@ impl FieldLines {
         }
         let lines = &old.lines[first..*cursor];
         let start = lines[0].glyphs.0;
-        let block = match &old.glyphs.field {
-            Some(field) => field.blocks[from].1.clone(),
-            None => Arc::new(Block::new(
-                old.glyphs.flat[start as usize..lines.last().unwrap().glyphs.1 as usize].to_vec(),
-            )),
-        };
-
-        faces.resize(old.faces.len(), None);
-        let mut remap = false;
-        for &id in &block.faces {
-            let i = id as usize;
-            let target = *faces[i].get_or_insert_with(|| out.face(old.faces[i].clone()));
-            remap |= target != id;
-        }
         for line in lines {
             let (a, b) = line.glyphs;
             out.lines.push(LayoutLine {
@@ -214,6 +238,29 @@ impl FieldLines {
                 .resize(out.lines.len() - metrics.len(), None);
             out.field_metrics.extend_from_slice(metrics);
         }
+        let (a, b) = (start as usize, lines.last().unwrap().glyphs.1 as usize);
+        faces.resize(old.faces.len(), None);
+        let mut face = |id: u16| {
+            let i = id as usize;
+            *faces[i].get_or_insert_with(|| out.face(old.faces[i].clone()))
+        };
+        if b - a <= SHORT_LINE {
+            self.short
+                .extend(old.glyphs.slice(from, a, b).iter().map(|g| LayoutGlyph {
+                    face: face(g.face),
+                    ..*g
+                }));
+            self.len += b - a;
+            return;
+        }
+        let block = match &old.glyphs.field {
+            Some(field) => field.block(from, a).1.clone(),
+            None => Arc::new(Block::new(old.glyphs.flat[a..b].to_vec())),
+        };
+        let mut remap = false;
+        for &id in &block.faces {
+            remap |= face(id) != id;
+        }
         if remap {
             let mut glyphs = block.glyphs.clone();
             for g in &mut glyphs {
@@ -225,7 +272,12 @@ impl FieldLines {
         }
     }
 
-    pub(in crate::text) fn finish(self) -> Glyphs {
+    pub(in crate::text) fn finish(mut self) -> Glyphs {
+        if self.blocks.is_empty() {
+            self.short.shrink_to_fit();
+            return self.short.into();
+        }
+        self.flush_short();
         Glyphs {
             flat: Vec::new(),
             field: Some(Box::new(self)),

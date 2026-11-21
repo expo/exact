@@ -1085,6 +1085,15 @@ fn equal(a: &Spec, b: &Spec) -> bool {
 }
 
 pub(super) fn same_style(a: &Spec, b: &Spec) -> bool {
+    same_paragraph_style(a, b)
+        && a.runs.len() == b.runs.len()
+        && a.runs
+            .iter()
+            .zip(&b.runs)
+            .all(|(a, b)| same_run_style(a, b))
+}
+
+pub(super) fn same_paragraph_style(a: &Spec, b: &Spec) -> bool {
     a.align == b.align
         && a.overflow_wrap == b.overflow_wrap
         && a.white_space == b.white_space
@@ -1094,31 +1103,29 @@ pub(super) fn same_style(a: &Spec, b: &Spec) -> bool {
         && a.text_indent.to_bits() == b.text_indent.to_bits()
         && a.text_box_trim == b.text_box_trim
         && a.text_box_edge == b.text_box_edge
-        && a.runs.len() == b.runs.len()
-        && std::iter::once(&a.strut)
-            .chain(&a.runs)
-            .zip(std::iter::once(&b.strut).chain(&b.runs))
-            .all(|(a, b)| {
-                a.size.to_bits() == b.size.to_bits()
-                    && a.weight == b.weight
-                    && a.family == b.family
-                    && a.italic == b.italic
-                    && a.stretch.to_bits() == b.stretch.to_bits()
-                    && a.variations == b.variations
-                    && a.optical_sizing == b.optical_sizing
-                    && a.line_height.map(f32::to_bits) == b.line_height.map(f32::to_bits)
-                    && a.letter_spacing.to_bits() == b.letter_spacing.to_bits()
-                    && a.font_variant_numeric == b.font_variant_numeric
-                    && a.font_variant_ligatures == b.font_variant_ligatures
-                    && a.font_features == b.font_features
-                    && a.indent.to_bits() == b.indent.to_bits()
-                    && a.hang == b.hang
-                    && a.mark == b.mark
-                    && a.href == b.href
-                    && a.bold_text == b.bold_text
-                    && a.inline == b.inline
-                    && a.edges == b.edges
-            })
+        && same_run_style(&a.strut, &b.strut)
+}
+
+pub(super) fn same_run_style(a: &super::Run, b: &super::Run) -> bool {
+    a.size.to_bits() == b.size.to_bits()
+        && a.weight == b.weight
+        && a.family == b.family
+        && a.italic == b.italic
+        && a.stretch.to_bits() == b.stretch.to_bits()
+        && a.variations == b.variations
+        && a.optical_sizing == b.optical_sizing
+        && a.line_height.map(f32::to_bits) == b.line_height.map(f32::to_bits)
+        && a.letter_spacing.to_bits() == b.letter_spacing.to_bits()
+        && a.font_variant_numeric == b.font_variant_numeric
+        && a.font_variant_ligatures == b.font_variant_ligatures
+        && a.font_features == b.font_features
+        && a.indent.to_bits() == b.indent.to_bits()
+        && a.hang == b.hang
+        && a.mark == b.mark
+        && a.href == b.href
+        && a.bold_text == b.bold_text
+        && a.inline == b.inline
+        && a.edges == b.edges
 }
 
 pub(super) fn capacities(paragraph: &Paragraph) -> usize {

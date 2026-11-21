@@ -136,7 +136,10 @@ extension Presenter {
     /// is not its ancestor.
     package func eventParent(of view: KeyPlatformView) -> KeyPlatformView? {
         #if os(macOS)
-        if let node = view as? NodeView { return menus.authoredParent(of: node) ?? dialogs.authoredParent(of: node) ?? blocks.parent(of: node) }
+        if let node = view as? NodeView {
+            let parent = menus.authoredParent(of: node) ?? dialogs.authoredParent(of: node) ?? blocks.parent(of: node)
+            return (parent as? TableRowCell)?.sectionParent?.container ?? parent
+        }
         #else
         // A node lifted over the tab container bubbles to its parent (LLP 1083.000 D4)
         if let parent = navigation.lifted?.parent(of: view) { return parent }

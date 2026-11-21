@@ -19,6 +19,8 @@ mod cull;
 mod cull_tests;
 mod frame;
 pub mod hooks;
+pub mod jobs;
+pub use jobs::{Cancel, Done, Full, Job, JobError, Jobs, JobsReport, Lane, Limits, Take};
 /// Recipe: blended geometry in a hook stage.
 #[doc = include_str!("../../recipes/blended-hook-geometry.md")]
 pub mod blended_hook_geometry {}

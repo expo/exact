@@ -74,3 +74,10 @@ test "child device facts share declarations and preserve function calls"
   expect text "shown-b" == "waiting"
   tap "relay-b"
   expect text "shown-b" == "true online true online"
+
+test "a page going offline updates both children and their injected labels"
+  answer source exactPage with {"onLine":true}
+  expect text "label-a" == "true online true online"
+  answer source exactPage with {"onLine":false}
+  expect text "direct-a" == "true offline 6"
+  expect text "label-b" == "true offline true offline"

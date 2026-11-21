@@ -65,7 +65,7 @@ extension Agent {
         #if os(iOS) || os(tvOS)
         roots = presenter.accessibilitySurfaces
         #else
-        if presenter.navigation.stackSplit.active { roots = [presenter.navigation.stackSplit.agentRoot] }
+        if presenter.navigation.stackSplit.active || presenter.navigation.stackSplit.hasInspector { roots = [presenter.navigation.stackSplit.agentRoot] }
         if let toolbar = presenter.toolbar.accessibilityRoot { roots.append(toolbar) }
         // A dialog's sheet, the sheets on it, and the popovers AppKit shows (LLP 1115.002 D7).
         for sheet in presenter.sheets(on: view.window) { if case .owned(let content) = presenter.axSheet(sheet) { roots.append(content) } }

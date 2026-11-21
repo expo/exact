@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { faultRequest as rawFaultRequest, preferGroups } from './agent-prefer.mjs';
 import { open } from './agent.mjs';
 import { duringOp } from './agent-drag.mjs';
+import { dragExpectation } from './agent-drag-out.mjs';
 import { equalJson } from '../host/web-js/declared-values.js';
 import { compareBox, samplePoints } from './agent-compare.mjs';
 import { perfDelta } from './agent-inspect.mjs';
@@ -787,6 +788,8 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     const n = t.index;
     if (done) break;
     if (t.hosts && !t.hosts.includes(scope)) { landed({ name: t.name, index: n, failures: [], notes: [], skipped: `on ${t.hosts.join(', ')}` }); continue; }
+    // A device asks the app's own data module; only `contract verify`'s runner takes a test's answers.
+    if (t.steps.some((st) => st.op === 'answer-source')) { landed({ name: t.name, index: n, failures: [], notes: [], skipped: 'answer source: contract verify answers it' }); continue; }
     const failures = [], expectedRefusals = [], index = n;
     const refusalCursors = new Map();
     let end = null;
@@ -1167,6 +1170,11 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
           case 'expect-state': {
             const state = await s.state(undefined, undefined, false, false, { reveal: true });
             const f = stateExpectation(state, st);
+            if (f) await fail(`${at}: ${f.message}`);
+            break;
+          }
+          case 'expect-drag': {
+            const f = dragExpectation(targetNode((await s.tree()).nodes, st.target), st);
             if (f) await fail(`${at}: ${f.message}`);
             break;
           }

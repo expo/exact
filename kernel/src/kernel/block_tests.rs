@@ -132,6 +132,43 @@ fn page(counts: &Rc<RefCell<BTreeMap<char, usize>>>) -> Kernel {
     k
 }
 
+#[test]
+fn a_pane_sizes_its_roots_border_box_and_releases_it_to_the_row() {
+    let mut k = Kernel::with_monospace();
+    let mut ops = Vec::from(view(
+        1,
+        NodeType::View,
+        &[(StyleId::Display, t("flex")), (StyleId::Height, n(400.0))],
+    ));
+    ops.extend(view(
+        2,
+        NodeType::View,
+        &[(StyleId::Width, n(200.0)), (StyleId::PaddingLeft, n(20.0))],
+    ));
+    ops.extend([children(1, [2]), Op::AttachRoot { id: 1 }]);
+    k.apply(0, 1, &ops).unwrap();
+    let size = |k: &mut Kernel| {
+        k.compute_layout(1, OFFER).unwrap();
+        let rect = k.node(2).unwrap().frame;
+        (rect.width, rect.height)
+    };
+    assert_eq!(size(&mut k), (220.0, 400.0));
+    for width in [260.0, 170.0] {
+        k.set_host_block(
+            2,
+            Some(HostBlock {
+                tactic: Default::default(),
+                width: BlockAxis::Fill(width),
+                height: BlockAxis::Fill(500.0),
+            }),
+        )
+        .unwrap();
+        assert_eq!(size(&mut k), (width, 500.0));
+    }
+    k.set_host_block(2, None).unwrap();
+    assert_eq!(size(&mut k), (220.0, 400.0));
+}
+
 /// D8.3: when one block's constraints change, the other subtrees and the
 /// page around them are not laid out again. Counted four ways: paragraphs
 /// measured (by subtree), leaves the engine laid out, nodes publication

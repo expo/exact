@@ -6,12 +6,13 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use tiny_skia::Transform;
 
-struct PresentPaint {
-    name: &'static str,
-    lost: bool,
-    inner: Raster,
-    targets: Rc<RefCell<Vec<FrameTarget>>>,
-    omit_capture: Rc<Cell<bool>>,
+/// Presents a window frame itself and returns pixels only for a capture.
+pub(crate) struct PresentPaint {
+    pub(crate) name: &'static str,
+    pub(crate) lost: bool,
+    pub(crate) inner: Raster,
+    pub(crate) targets: Rc<RefCell<Vec<FrameTarget>>>,
+    pub(crate) omit_capture: Rc<Cell<bool>>,
 }
 impl Backend for PresentPaint {
     crate::paints_nothing!();
@@ -139,6 +140,103 @@ fn window_geometry_and_capture_have_distinct_consumers() {
         p.hit(100., 100.),
         Some(id),
         "failed capture preserves accepted hits"
+    );
+}
+
+#[test]
+fn first_pixel_waits_for_the_picture_a_geometry_query_left_unpresented() {
+    let source = r##"component App
+  view
+    box width=80 height=60 background-color="#003300"
+      :hover
+        background-color = "#cc3300"
+"##;
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(source),
+        (),
+        (80., 60.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none());
+    p.presents_pictures(true);
+    let _ = p.frame();
+    p.pointer_move(10., 10., 1.).unwrap();
+    let _ = p.hit(10., 10.);
+    assert!(p.dirty(), "the hover picture is still owed");
+    p.first_pixel();
+    assert!(
+        p.data_activating(),
+        "geometry alone must not activate the data source"
+    );
+    let _ = p.frame();
+    assert!(!p.dirty());
+    p.first_pixel();
+    assert_eq!(p.data_state(), 1);
+}
+
+#[cfg(windows)]
+#[test]
+fn direct_window_hover_reuses_fresh_hits_until_the_picture_is_presented() {
+    use crate::surfaces::window::{unopened_test_window, DirectWindow};
+
+    let source = r##"component App
+  view
+    box width=80 height=60 background-color="#003300" testId="target"
+      :hover
+        background-color = "#cc3300"
+"##;
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(source),
+        (),
+        (80., 60.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none());
+    let targets = Rc::new(RefCell::new(Vec::new()));
+    p.brush.replace_backend(Box::new(PresentPaint {
+        lost: false,
+        name: "test-presenter",
+        inner: Raster::new(),
+        targets: targets.clone(),
+        omit_capture: Rc::new(Cell::new(false)),
+    }));
+    let window = unopened_test_window();
+    p.surfaces.direct_window = Some(DirectWindow::new(window.clone()));
+    p.window_frame(window.clone()).unwrap();
+    targets.borrow_mut().clear();
+
+    p.pointer_move(10., 10., 1.).unwrap();
+    let key = p.host.kernel().find_by_test_id("target")[0];
+    let id = p.host.kernel().node_by_key(key).unwrap().id;
+    assert_eq!(p.hit(10., 10.), Some(id));
+    assert_eq!(p.hit(10., 10.), Some(id));
+    assert_eq!(*targets.borrow(), [FrameTarget::Geometry]);
+    assert!(p.dirty(), "the window still needs the hover picture");
+    assert!(p.data_activating());
+    p.first_pixel();
+    assert!(
+        p.data_activating(),
+        "geometry alone must not activate the data source"
+    );
+
+    p.window_frame(window).unwrap();
+    assert!(p.last_frame_succeeded());
+    assert!(!p.dirty());
+    assert_eq!(
+        *targets.borrow(),
+        [FrameTarget::Geometry, FrameTarget::Window]
+    );
+    p.first_pixel();
+    assert_eq!(
+        p.data_state(),
+        1,
+        "the presented frame allows data activation"
     );
 }
 
@@ -293,4 +391,126 @@ fn explicit_ink_refuses_paint_errors_but_a_lost_readback_device_repaints_on_cpu(
             }
         );
     }
+}
+
+#[test]
+fn pointer_move_geometry_skips_canvas_drawing_and_preserves_window_damage() {
+    use exact_runner::{Answer, DataError, DataSource, DrawReply, DrawRequest, Drawn, Store};
+
+    #[derive(Default)]
+    struct CountingCanvas {
+        draws: usize,
+        last_x: f64,
+    }
+    impl DataSource for CountingCanvas {
+        fn query(
+            &mut self,
+            name: &str,
+            _: &[exact_runner::Value],
+        ) -> Result<exact_runner::Value, DataError> {
+            Err(DataError::UnknownSource(name.into()))
+        }
+        fn answer(
+            &mut self,
+            _: &mut Store,
+            name: &str,
+            _: &[exact_runner::Value],
+        ) -> Result<Answer, DataError> {
+            Err(DataError::UnknownSource(name.into()))
+        }
+        fn canvas_surfaces(&self) -> Vec<(String, usize)> {
+            vec![("ink".into(), 1)]
+        }
+        fn draw(
+            &mut self,
+            q: &DrawRequest<'_>,
+            ctx: &exact_runner::exact_canvas::Context2d,
+        ) -> Drawn {
+            self.draws += 1;
+            self.last_x = match q.args.first() {
+                Some(exact_runner::Value::Number(n)) => *n,
+                _ => 0.,
+            };
+            ctx.clear_rect(0., 0., 120., 80.);
+            ctx.set_fill_style_str("#2288ff");
+            ctx.fill_rect(self.last_x, 0., 10., 10.);
+            Drawn::Now(DrawReply {
+                lists: ctx.take_lists(),
+                ..Default::default()
+            })
+        }
+    }
+
+    let source = r##"component App
+  state x = 0
+  state shift = 0
+  action moved(e: PointerEvent)
+    x = e.clientX
+    shift = e.clientX > 25 ? e.clientX - 25 : 0
+  view
+    box width=200 height=120 pointermove=moved position="relative"
+      canvas surface=ink(x) position="absolute" left=shift top=0 width=120 height=80 testId="board"
+"##;
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(source),
+        CountingCanvas::default(),
+        (200., 120.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.presents_pictures(true);
+    let targets = Rc::new(RefCell::new(Vec::new()));
+    p.brush.replace_backend(Box::new(PresentPaint {
+        lost: false,
+        name: "test-presenter",
+        inner: Raster::new(),
+        targets: targets.clone(),
+        omit_capture: Rc::new(Cell::new(false)),
+    }));
+
+    // Initial pixel frame draws the canvas once.
+    let _ = p.frame();
+    assert_eq!(p.host.runner().data_ref().draws, 1);
+    assert!(!p.dirty());
+
+    // Repeated pointer moves update Contract state and hit-test via Geometry,
+    // without rasterizing the 2D canvas or repeating redundant Geometry walks.
+    for step in 1..=5 {
+        let x = step as f32 * 10.;
+        let geom_before = targets.borrow().len();
+        p.pointer_move(x, 20., step as f64 * 4.).unwrap();
+        assert_eq!(
+            p.host.runner().data_ref().draws,
+            1,
+            "pointer_move step {step} must not draw the 2D canvas"
+        );
+        assert!(
+            p.dirty(),
+            "step {step} must keep unpresented picture damage"
+        );
+        let _ = p.boxes();
+        let _ = p.hit(x, 20.);
+        let _ = p.boxes();
+        let expected_walks = usize::from(x > 25.);
+        assert_eq!(
+            targets.borrow().len() - geom_before,
+            expected_walks,
+            "step {step}: args-only changes need 0 geometry walks and layout changes at most 1"
+        );
+        assert!(
+            p.dirty(),
+            "geometry queries must leave picture damage pending"
+        );
+    }
+
+    // Presenting one frame draws the canvas once with the latest pointer x.
+    let pixels = p.frame();
+    assert_eq!(p.host.runner().data_ref().draws, 2);
+    assert_eq!(p.host.runner().data_ref().last_x, 50.);
+    // `left=shift` is 25 and the fillRect starts at `x=50`, so device x=80 is filled.
+    assert_eq!(pixels.pixel(80, 5).unwrap().blue(), 255);
+    assert!(!p.dirty());
 }

@@ -622,7 +622,8 @@ final class PlanURL: NSObject, URLSessionDataDelegate, PlanConnection {
                     do {
                         let logic = try DevelopmentModules.combine(javascript: javascript, rust: rustModule)
                         let assetBytes = Dictionary(uniqueKeysWithValues: assets.enumerated().map { ($0.element.name, payloads[$0.offset + 1]) })
-                        let resolver = try AssetResolver(root: FileManager.default.temporaryDirectory, verified: assetBytes)
+                        let digests = Dictionary(uniqueKeysWithValues: assets.map { ($0.name, $0.sha) })
+                        let resolver = try AssetResolver(root: FileManager.default.temporaryDirectory, verified: assetBytes, digests: digests)
                         let candidate = Generation(identity: identity, plan: payloads[0], assets: resolver, module: logic)
                         payloads.removeAll()
                         let fetched = ProcessInfo.processInfo.systemUptime

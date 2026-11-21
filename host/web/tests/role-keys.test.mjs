@@ -45,12 +45,13 @@ const page = withLook(readFileSync(resolve(WEB, 'index.html'), 'utf8')).match(/<
     if (children.length) el.append(...children.map(build)); else el.textContent = id;
     return el;
   };
-  // A button before the group and one after it, to Tab from. When the case's \`axis\` is vertical, the group's parent
-  // has the mark the navigation glue gives a root tab bar's parent when it draws the bar as a sidebar.
+  // A button before the group and one after it, to Tab from. When the case's \`axis\` is vertical, the group
+  // has the mark the navigation glue gives a root tab bar when it draws the bar as a sidebar.
   window.mount = (tree, sidebar) => {
     const holder = document.createElement('div'), button = id => Object.assign(document.createElement('button'), { id, textContent: id });
-    holder.toggleAttribute('data-exact-sidebar', sidebar);
-    holder.append(build(tree));
+    const group = build(tree);
+    group.toggleAttribute('data-exact-sidebar-tabs', sidebar);
+    holder.append(group);
     root.replaceChildren(button('before'), holder, button('after'));
     pressed.length = 0;
   };

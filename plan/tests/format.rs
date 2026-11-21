@@ -714,6 +714,33 @@ fn control_flow_is_forward_only_and_instruction_aligned() {
 }
 
 #[test]
+fn a_source_place_can_only_cross_preceding_component_or_fill_steps() {
+    use exact_plan::{PlaceKind, RegionKind};
+    let mut b = PlanBuilder::new(1, 2);
+    let component = b.place_step(None, PlaceKind::Component, "App", 0, false);
+    let tag = b.place_step(Some(component), PlaceKind::Element, "input", 0, false);
+    let node = b.node(0, None, None, 0, &[], &[], None);
+    b.set_node_place(node, tag);
+    let unit = b.constant(&Value::Unit);
+    let (region, _) = b.region(RegionKind::Each, None, None, 1, unit, unit, 1);
+    let each = b.place_step(None, PlaceKind::Each, "row-key", 0, false);
+    b.set_region_place(region, each);
+    let plan = b.finish().unwrap();
+    let mut invalid = plan.clone();
+    invalid.place_steps[component.0 as usize].outer = Some(component);
+    assert!(Plan::decode(&invalid.encode()).is_err());
+    let mut invalid = plan.clone();
+    invalid.place_steps[each.0 as usize].outer = Some(tag);
+    assert!(Plan::decode(&invalid.encode()).is_err());
+    let mut invalid = plan.clone();
+    invalid.nodes.to_mut()[0].place = Some(each);
+    assert!(Plan::decode(&invalid.encode()).is_err());
+    let mut invalid = plan;
+    invalid.regions[0].place = Some(component);
+    assert!(Plan::decode(&invalid.encode()).is_err());
+}
+
+#[test]
 fn region_topology_and_timer_progress_are_validated() {
     let plan = sample();
     let mut no_arms = plan.clone();
@@ -729,6 +756,7 @@ fn region_topology_and_timer_progress_are_validated() {
     let mut stolen = plan.clone();
     stolen.arms[0].region = exact_plan::RegionsId(0);
     stolen.regions.push(exact_plan::RegionsRow {
+        place: None,
         kind: RegionKind::Each,
         parent: None,
         arm: None,
@@ -1064,11 +1092,14 @@ fn a_plan_without_compiled_values_keeps_every_other_data_range() {
 /// `owner` and `then_args` to mutations (D6): every host rebuilds for them.
 /// Child tasks add `owner` and captured `args` to timers (D6); every
 /// plan-reading host needs a new binary for those rows.
+/// Component member names share their qualifier in the string pool. Elements and
+/// keyed loops carry local source steps. Every plan-reading host must rebuild
+/// for these records (LLP 1029.000.002 D1).
 /// The digest covers all of `tables/format.json`, including comments.
 #[test]
 fn the_format_digest_is_pinned() {
     assert_eq!(
-        FORMAT_DIGEST, 0xf1cf_e1fc_7009_617a,
+        FORMAT_DIGEST, 0x93fe_e3bd_ade5_b5dd,
         "the plan format digest moved: if intended, name the break and the hosts that move"
     );
 }

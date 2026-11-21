@@ -86,7 +86,7 @@ pub(super) fn row_wrapper(
     key: &str,
     reorderable: bool,
 ) -> Result<ViewId, InstanceError> {
-    let view = u.ids.fresh();
+    let view = u.ids.fresh()?;
     u.ops.push(Op::CreateView {
         id: view,
         node_type: NodeType::View,
@@ -168,7 +168,7 @@ fn spacer_rows(axis: ListAxis, size: f64) -> Vec<(&'static str, Value)> {
     }
 }
 fn spacer(u: &mut Update<'_>, axis: ListAxis, size: f64) -> Result<ViewId, InstanceError> {
-    let view = u.ids.fresh();
+    let view = u.ids.fresh()?;
     u.ops.push(Op::CreateView {
         id: view,
         node_type: NodeType::View,

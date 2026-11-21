@@ -303,19 +303,47 @@ extension NavigationHost {
         (tabs as? TabController)?.syncBarAccessibility()
     }
 
-    /// Before installing: a root that gains, loses or changes its tabs gets
-    /// its containers again (the router's stacks are untouched).
+    /// Before installing: a root that gains, loses or changes its tabs, or a
+    /// stack that starts or stops splitting (its list's rows came later, or
+    /// its root says `navigationSplit="none"` now; LLP 1127 D2), gets its
+    /// containers again (the router's stacks are untouched). While the
+    /// runner cannot say whether the stack splits (a sync inside a callback
+    /// it waits on), the containers stay, and the stack is asked again on
+    /// the main queue's next turn.
     func reshape(_ p: Projection) {
         let panels = p.tabs?.panels.map(\.id) ?? []
-        guard primaryOwner != nil, panels != tabPanels || builtTabsChanged(p) else { return }
-        presenter.session?.log("navigation: the tabs changed; the containers are built again")
-        if tabOwner != nil { retireTabs() } else if let nav = primaryNavigation {
+        guard primaryOwner != nil else { return }
+        let tabsChanged = panels != tabPanels || builtTabsChanged(p)
+        var startsOrStops = false
+        if !tabsChanged, p.tabs == nil {
+            guard let rule = splitRule(p.chosen.first) else { return askSplitNextTurn() }
+            if let list = rule?.list { split?.listNode = list }
+            split?.rule = rule
+            startsOrStops = (rule != nil) != (split != nil)
+        }
+        guard tabsChanged || startsOrStops else { return }
+        presenter.session?.log(tabsChanged ? "navigation: the tabs changed; the containers are built again"
+            : "navigation: the stack \(split == nil ? "splits" : "no longer splits"); its containers are built again")
+        if tabOwner != nil { retireTabs() } else if split != nil { retireSplit(releasing: true) } else if let nav = primaryNavigation {
             release(nav)
             nav.willMove(toParent: nil)
             nav.view.removeFromSuperview()
             nav.removeFromParent()
         }
         primaryNavigation = nil
+    }
+
+    /// One sync on the main queue's next turn, which asks the runner again
+    /// whether the stack splits (`reshape`); a turn already owed reads the
+    /// tree as it is then, so a second asks nothing more.
+    func askSplitNextTurn() {
+        guard !splitAskOwed else { return }
+        splitAskOwed = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            splitAskOwed = false
+            resync()
+        }
     }
 
     /// Each batch: every other tab's stack, the selected tab, its items.
@@ -806,6 +834,7 @@ extension NavigationHost {
     /// What holds the tabs goes: its stacks are retired, the authored
     /// tablist paints again.
     func retireTabs() {
+        projectSidebarFooter(nil)
         siblings.putAllBack()
         // The tablist's hold on the bar goes with its container (§3.7).
         tablistRoot = nil
@@ -867,6 +896,80 @@ extension NavigationHost {
         guard tablistAppearanceNone, !syncing, let view = presenter.session?.view,
               let list = adoptedTablist.flatMap({ presenter.views[$0] }) else { return }
         if list.convert(list.bounds, to: view) != measuredTablist { reportCovers() }
+    }
+
+    /// A footer accompanies the root's tabs only while UIKit owns their presentation (LLP 1115.002 item 5).
+    func sidebarFooter() -> NodeView? {
+        guard [.phone, .pad].contains(UIDevice.current.userInterfaceIdiom), let tabs = tabController, tabOwner === tabs,
+              let root = container, let shape = presenter.rootTabs[root.id], let footer = shape.footer,
+              let list = presenter.views[shape.tablist], adopts(tablist: list) else { return nil }
+        return presenter.views[footer]
+    }
+
+    func projectSidebarFooter(_ node: NodeView?) {
+        #if os(iOS)
+        if #available(iOS 18.0, *), let tabs = tabController, tabs.mode == .tabSidebar, let node {
+            hideSidebarFooter(nil)
+            if sidebarFooterPane?.node !== node || sidebarFooterPane?.node.superview !== sidebarFooterPane {
+                releaseSidebarPane()
+                guard let home = node.authoredLine.first(where: { $0 !== node }) else { return }
+                let pane = MeasuredPaneView(node: node, room: { [weak tabs] in tabs?.view.bounds.size ?? .zero })
+                sidebarFooterPane = pane
+                sidebarFooterHome = home
+                pane.addSubview(node)
+                pane.layoutChanged = { [weak presenter] in presenter?.owners.publish() }
+                tabs.sidebar.bottomBarView = pane
+                presenter.owners.publish()
+            }
+            if let pane = sidebarFooterPane, pane.refresh() {
+                pane.invalidateIntrinsicContentSize()
+                pane.superview?.setNeedsLayout()
+            }
+            return
+        }
+        releaseSidebarPane()
+        #endif
+        hideSidebarFooter(node)
+    }
+
+    func sidebarParent(of view: UIView) -> NodeView? {
+        #if os(iOS)
+        if let pane = sidebarFooterPane, pane.node === view, view.superview === pane { return sidebarFooterHome }
+        #endif
+        return nil
+    }
+
+    var sidebarFooterBlock: (id: UInt32, block: HostBlock, placement: BlockPlacement?)? {
+        #if os(iOS)
+        if let pane = sidebarFooterPane, let root = container, presenter.views[pane.node.id] === pane.node {
+            let rect = pane.window == nil ? CGRect.zero : pane.convert(pane.bounds, to: root.container)
+            return (pane.node.id, .size(pane.bounds.size), BlockPlacement(rect: rect, within: root.id))
+        }
+        #endif
+        return nil
+    }
+
+    #if os(iOS)
+    private func releaseSidebarPane() {
+        guard let pane = sidebarFooterPane else { return }
+        let home = sidebarFooterHome
+        pane.layoutChanged = nil
+        sidebarFooterPane = nil
+        sidebarFooterHome = nil
+        if #available(iOS 18.0, *), tabController?.sidebar.bottomBarView === pane { tabController?.sidebar.bottomBarView = nil }
+        if pane.node.superview === pane {
+            if let home, presenter.views[home.id] === home, presenter.views[pane.node.id] === pane.node { siblings.putBack(pane.node, into: home) }
+            else { pane.node.removeFromSuperview() }
+        }
+        presenter.owners.publish()
+    }
+    #endif
+
+    func hideSidebarFooter(_ node: NodeView?) {
+        guard hiddenSidebarFooter !== node else { return }
+        if let old = hiddenSidebarFooter, presenter.views[old.id] === old { old.hiddenByHost = false }
+        node?.hiddenByHost = true
+        hiddenSidebarFooter = node
     }
 
     /// Whether a tab container takes this tablist's place.

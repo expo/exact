@@ -119,7 +119,7 @@ extension Capture {
     }
 
     /// An sRGB picture at the view's backing scale, or the requested pixels per point.
-    static func picture(of view: NSView, scale: CGFloat? = nil, prepared: Bool = false) -> NSBitmapImageRep? {
+    static func picture(of view: NSView, scale: CGFloat? = nil, prepared: Bool = false, flipped: Bool = true) -> NSBitmapImageRep? {
         if !prepared {
             prepareBackingLayers(of: view)
             // Screenshots also sample animations installed this turn. An
@@ -133,7 +133,7 @@ extension Capture {
         defer { CATransaction.commit() }
         let tree = paintOrderLayer(of: view, root: root)
         defer { releasePaintCopy(tree) }
-        guard let image = picture(of: tree, size: view.bounds.size, scale: scale) else { return nil }
+        guard let image = picture(of: tree, size: view.bounds.size, scale: scale, flipped: flipped) else { return nil }
         let rep = NSBitmapImageRep(cgImage: image)
         rep.size = view.bounds.size
         return rep
@@ -149,16 +149,16 @@ extension Capture {
 
     /// A layer tree drawn into a bitmap of `size` points, its first row at
     /// the top, as AppKit's `cacheDisplay` has it.
-    static func picture(of tree: CALayer, size: CGSize, scale: CGFloat) -> CGImage? {
+    static func picture(of tree: CALayer, size: CGSize, scale: CGFloat, flipped: Bool = true) -> CGImage? {
         let width = Int((size.width * scale).rounded()), height = Int((size.height * scale).rounded())
         guard width > 0, height > 0,
               let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
                                   bytesPerRow: width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        // CA renders the root in bottom-up Quartz space; the bitmap's first
-        // row follows AppKit's top-down view coordinates.
-        ctx.translateBy(x: 0, y: CGFloat(height))
-        ctx.scaleBy(x: scale, y: -scale)
+        // Exact's viewport starts at the top left. AppKit's split view starts
+        // at the bottom left and already uses the bitmap context's coordinate system.
+        if flipped { ctx.translateBy(x: 0, y: CGFloat(height)) }
+        ctx.scaleBy(x: scale, y: flipped ? -scale : scale)
         tree.render(in: ctx)
         return ctx.makeImage()
     }

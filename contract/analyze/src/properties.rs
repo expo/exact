@@ -1,11 +1,14 @@
 //! Root property reads closed over derive and function bodies (LLP 1151 D1).
 
 use super::AnalyzeError;
-use contract_syntax::{Component, Expr, FnDecl, PropertyDecl, PropertyForm};
+use contract_syntax::{Component, Expr, FnDecl, PropertyDecl, PropertyForm, PropertyKind};
 use std::collections::BTreeSet;
 
 /// Refuse unknown names and derives whose values depend on the oracle, clock or geometry.
-/// `root` is the expanded component that the plan compiler uses.
+/// An `always` line may read a derive over resources: it checks each printed
+/// configuration, where both sides print the oracle's answer, so it never
+/// pairs a value with a commit as `after` does. `root` is the expanded
+/// component that the plan compiler uses.
 pub fn check_properties(
     root: &Component,
     fns: &[FnDecl],
@@ -29,6 +32,7 @@ pub fn check_properties(
                     root,
                     fns,
                     seen: BTreeSet::new(),
+                    resources: property.kind == PropertyKind::Always,
                 };
                 let reason = if let Some(d) = root.derives.iter().find(|d| d.name == name) {
                     if matches!(line.form, PropertyForm::OnlyWrites(_)) {
@@ -61,6 +65,8 @@ struct Cone<'a> {
     root: &'a Component,
     fns: &'a [FnDecl],
     seen: BTreeSet<(&'static str, String)>,
+    /// Whether a resource's value may be read.
+    resources: bool,
 }
 impl Cone<'_> {
     fn base<'a>(e: &'a Expr, bound: &BTreeSet<String>) -> Option<&'a str> {
@@ -75,7 +81,7 @@ impl Cone<'_> {
         match e {
             Expr::Ident(name, _) if !bound.contains(name) => {
                 if self.root.resources.iter().any(|r| r.name == *name) {
-                    return Some(format!("resource `{name}`"));
+                    return (!self.resources).then(|| format!("resource `{name}`"));
                 }
                 if self.seen.insert(("derive", name.clone())) {
                     if let Some(d) = self.root.derives.iter().find(|d| d.name == *name) {

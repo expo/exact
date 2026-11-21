@@ -51,7 +51,7 @@
 // §4.2.1, a `list` or `scroll` in the row); a platform subview other than the node's glyph, its
 // material or its clip box; a placement; gesture recognizers or
 // interactions (menus, reorder handles, drags) other than a context menu's
-// at rest (LLP 1021 §5.1, `contextual`); a press, drag or swipe in
+// or a drag source's at rest (LLP 1021 §5.1, LLP 1094.000 D4, `contextual`); a press, drag or swipe in
 // progress, or a projected swipe row; focus, a focus ring, editing, a
 // pending focus — on a heavy leaf too; flow shapes, a context transform, a
 // pending scroll; a view kept by a modal's retiring root; a subtree node
@@ -164,7 +164,7 @@ final class NodePool {
         roots.remove(ObjectIdentifier(root))
         if tree.list != nil { innerCount -= 1 } else { count -= 1 }
         #if os(iOS)
-        for case let view? in tree.views { presenter.menus.context.dropped(view) }
+        for case let view? in tree.views { presenter.menus.context.dropped(view); presenter.dragOut?.dropped(view) }
         #endif
         for view in tree.views { view?.forget() }
         root.removeFromSuperview()
@@ -306,6 +306,7 @@ final class NodePool {
             view.incarnation = 0
             #if os(iOS)
             presenter.menus.context.parked(view)
+            presenter.dragOut?.parked(view)
             #endif
             presenter.release(view.id) { $0.recycle() }
         }
@@ -386,13 +387,14 @@ final class NodePool {
         // waiting out its duration): at rest means no touch as well.
         guard recognizer.state == .possible, recognizer.numberOfTouches == 0 else { return false }
         #if os(iOS)
-        if presenter.menus.context.owns(recognizer, on: v) { return true }
+        if presenter.menus.context.owns(recognizer, on: v) || presenter.dragOut?.owns(recognizer, on: v) == true { return true }
         #endif
         return recognizer === v.contextRecognizer
     }
     private func contextual(_ interaction: UIInteraction, of v: NodeView) -> Bool {
         #if os(iOS)
         return presenter.menus.context.owns(interaction, on: v) && presenter.menus.context.open?.source !== v
+            || presenter.dragOut?.owns(interaction, on: v) == true
         #else
         return false
         #endif

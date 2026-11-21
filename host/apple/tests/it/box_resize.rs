@@ -42,6 +42,7 @@ fn drag(host: &mut Host<NoData>, id: &str, size: [Option<f32>; 2]) -> (f32, f32)
         &[],
         &[(view, Restyle::Size(size))],
         &[],
+        &[],
         exact_apple::host::OwnerReports::default(),
     );
     let batch: serde_json::Value = serde_json::from_str(&batch).unwrap();

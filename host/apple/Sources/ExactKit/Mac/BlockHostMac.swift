@@ -96,6 +96,13 @@ package final class BlockHost {
     /// shown: the page a walk of the root does not reach.
     var shown: [NodeView] { entries.values.sorted { $0.turn < $1.turn }.map(\.node) }
 
+    /// The block's visible port when it shares the page's window, as a detail pane or
+    /// a sidebar accessory does. A sheet or popover has its own window for hit testing.
+    func pagePane(holding view: NSView) -> BlockView? {
+        guard !entries.isEmpty, let window = presenter?.viewport.window, view.window === window else { return nil }
+        return sequence(first: view, next: { $0.superview }).first { $0 is BlockView } as? BlockView
+    }
+
     /// Event paths keep the authored parent across a native container.
     /// A home that has disappeared ends the path.
     package func parent(of node: NodeView) -> NSView? {

@@ -591,12 +591,27 @@ export function planRouteTable(bytes) {
   const take = n => { const start = at; at += n; if (at > bytes.length) throw new Error('truncated plan'); return start; };
   const u32 = () => bytes.readUInt32LE(take(4));
   const decoder = new TextDecoder('utf-8', { fatal: true });
-  const string = () => { const n = u32(); return decoder.decode(bytes.subarray(take(n), at)); };
+  const string = (length = u32()) => decoder.decode(bytes.subarray(take(length), at));
   for (const field of planFormat.header) {
     if (field.codec === 'string') string(); else take(4);
   }
-  const count = u32(), strings = [];
-  for (let i = 0; i < count; i++) strings.push(string());
+  const count = u32(), strings = [], members = [], owners = [];
+  for (let i = 0; i < count; i++) {
+    const tag = u32();
+    if (tag < 0x80000000) {
+      strings.push(string(tag));
+      continue;
+    }
+    const owner = tag - 0x80000000, member = u32();
+    if (owner > owners.length || member > members.length) throw new Error('unknown qualified plan name');
+    if (member === members.length) members.push(string());
+    if (owner === owners.length) owners.push(bytes.subarray(take(32), at).toString('hex'));
+    strings.push({member, owner});
+  }
+  const routeString = index => {
+    const ref = strings[index];
+    return typeof ref === 'object' ? `${members[ref.member]}#${owners[ref.owner]}` : ref;
+  };
   take(u32()); // code pool
   take(u32()); // data pool
   const width = codec => {
@@ -616,8 +631,8 @@ export function planRouteTable(bytes) {
       let offset = start + i * size;
       const row = {};
       for (const field of table.fields) {
-        if (field.name === 'name') row.name = strings[bytes.readUInt32LE(offset)];
-        if (field.name === 'pattern') row.pattern = strings[bytes.readUInt32LE(offset)];
+        if (field.name === 'name') row.name = routeString(bytes.readUInt32LE(offset));
+        if (field.name === 'pattern') row.pattern = routeString(bytes.readUInt32LE(offset));
         if (field.name === 'render') { row.render = renderPolicies[bytes[offset]]; if (!row.render) throw new Error('invalid route render policy'); }
         if (field.name === 'notfound') { const value = bytes[offset]; if (value > 1) throw new Error('invalid route'); row.notfound = !!value; }
         offset += width(field.codec);

@@ -16,6 +16,7 @@ pub use retirement::{ModuleIdentity, ModuleInstance};
 mod background;
 mod commit;
 mod console;
+mod drag_files;
 pub use console::Console;
 mod completion;
 mod control;
@@ -86,8 +87,8 @@ mod source;
 mod tabs;
 pub use source::{
     Announce, BackgroundState, DataError, DataSource, DataSourceWrapper, InFlight, Interrupt,
-    Native, NativeCall, NativeHandler, Overlaid, PreloadWake, Report, Reporter, SnapshotModule,
-    Target, Write, BACKGROUND,
+    Native, NativeCall, NativeHandler, Overlaid, PreloadWake, Report, Reporter, ResourceChange,
+    SnapshotModule, Target, Write, BACKGROUND,
 };
 mod delivery;
 mod links;
@@ -189,7 +190,7 @@ pub use checkpoint::Checkpoint;
 use exact_kernel::{CommitReceipt, Kernel, ViewId};
 use exact_plan::{ActionsId, Code, EventKind, MutationMode, MutationsId, NodesId, Plan, Value};
 pub use router::{launch_matches, routing, RouterChange, Routing};
-pub use split::{press_writes_router, StackSplit};
+pub use split::{press_writes_router, RouteInspector, StackSplit};
 pub use uploads::{UploadEnd, UploadMark};
 
 /// A host-facing effect an action asked for; executed after commit, in order.
@@ -915,7 +916,7 @@ impl<D: DataSource> Runner<D> {
             roles: exact_kernel::style::roles::Installed::new(roles.clone()),
             reorder_session: None,
             dropping_from: None,
-            ids: Ids::default(),
+            ids: Ids::from_last(sequence.map_or(0, |c| c.last_view_id)),
             orientation: Default::default(),
             now_ms,
             timers: Vec::new(),
@@ -1123,17 +1124,18 @@ impl<D: DataSource> Runner<D> {
         runner.keep_sent(false);
         let audio = runner.seams.audio;
         audio.transport_stood(&mut runner);
-        // First frame.
         let mut ids = std::mem::take(&mut runner.ids);
         ids.tabs.carried = carried.map(|c| c.panels.clone()).unwrap_or_default();
+        let lists = runner.prepare_view_ids(&mut ids, carried)?;
         let (tree, ops, surfaces, notes, shown) = {
             let mut u = runner.instance_update(&mut ids);
+            u.list_seeds = Some(&lists);
             u.discard = runner.kernel.is_detached();
             let tree = Tree::create(&mut u)?;
             (tree, u.ops, u.surfaces, u.notes, u.shown)
         };
-        runner.notes = notes;
-        runner.shown = shown;
+        ids.finish_first_frame();
+        (runner.notes, runner.shown) = (notes, shown);
         runner.ids = ids;
         runner.tree = Some(tree);
         let mut receipt = runner.apply(ops)?;

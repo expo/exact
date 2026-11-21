@@ -1,5 +1,4 @@
-// A field and a label for ReplacementHoldTests (LLP 1029.000.002 D9);
-// xctest.mjs compiles a second plan whose label reads "after".
+// The replacement inserts OtherNote above the editor (LLP 1029.000.002).
 component App
   state draft = ""
   action edit(value: string)
@@ -8,3 +7,16 @@ component App
     column width="100%" padding=10 gap=6
       input value=draft input=edit aria-label="Draft" testId="draft"
       text "before" testId="label"
+      DraftNote()
+
+component DraftNote
+  state note = ""
+  action edit(value: string)
+    note = value
+  view
+    textarea value=note input=edit aria-label="Note" testId="note" height=60
+
+component OtherNote
+  state note = "Unrelated"
+  view
+    text note testId="unrelated"

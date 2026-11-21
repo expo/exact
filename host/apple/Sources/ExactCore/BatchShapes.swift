@@ -2,6 +2,15 @@
 // readers come from kernel/tables/schema.json (LLP 1172.001 E4, §4 step 4).
 import Foundation
 
+/// The trailing aside that fills a route's flex row and the limits of its column.
+public struct RouteInspector: Equatable {
+    package let route: UInt32
+    package let view: UInt32
+    package let width: Double
+    package let minimum: Double?
+    package let maximum: Double?
+}
+
 extension BatchReader {
     /// A `canvas2d` op's lists, `[address, length]` pairs in the runtime's
     /// memory (LLP 1056 D4), copied out now: the runtime keeps them alive
@@ -23,6 +32,15 @@ extension BatchReader {
     package mutating func batchOrientation() throws -> OrientationRequest? {
         if case .object(let object) = try value() { return OrientationRequest(object) }
         return nil
+    }
+
+    package mutating func batchRouteInspectors() throws -> [RouteInspector] {
+        try array { r -> RouteInspector? in
+            let row = try r.array { try $0.value().number }
+            guard row.count == 5, let route = row[0].flatMap(UInt32.init(exactly:)),
+                  let view = row[1].flatMap(UInt32.init(exactly:)), let width = row[2] else { return nil }
+            return RouteInspector(route: route, view: view, width: width, minimum: row[3], maximum: row[4])
+        }.compactMap { $0 }
     }
 
     package mutating func batchRootTabs() throws -> [RootTabs]? {

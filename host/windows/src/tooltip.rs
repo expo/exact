@@ -8,11 +8,30 @@ use exact_runner::DataSource;
 
 type Tip = (NodeKey, String);
 
+#[cfg_attr(test, derive(Debug, PartialEq))]
+enum TipChange {
+    Keep,
+    Set(Option<Tip>),
+}
+
+fn tip_change<D: DataSource>(
+    p: &mut Presenter<D>,
+    point: Option<(f32, f32)>,
+    moved: bool,
+) -> TipChange {
+    if !moved && point.is_some() && p.dirty() {
+        // The live tree may describe a different picture.
+        return TipChange::Keep;
+    }
+    TipChange::Set(point.and_then(|point| title_at(p, point)))
+}
+
 fn title_at<D: DataSource>(p: &mut Presenter<D>, point: (f32, f32)) -> Option<Tip> {
     let dirty = p.dirty();
     let mut at = p.hit(point.0, point.1);
-    // A geometry query does not present the CPU window's pending picture.
-    if dirty {
+    // In a windowed presenter `FrameTarget::Geometry` already keeps `picture_dirty`
+    // without re-dirtying `boxes()`; preserve damage only for headless CPU tests.
+    if dirty && !p.dirty() {
         p.repaint();
     }
     while let Some(id) = at {
@@ -137,7 +156,9 @@ impl Tooltip {
         let point = point.filter(|_| {
             !(moved && crate::touch::from_touch_or_pen(unsafe { GetMessageExtraInfo() }))
         });
-        let tip = point.and_then(|point| title_at(p, point));
+        let TipChange::Set(tip) = tip_change(p, point, moved) else {
+            return;
+        };
         let Ok(handle) = window.window_handle() else {
             return;
         };
@@ -219,7 +240,7 @@ mod tests {
     #[test]
     fn a_title_query_keeps_a_cpu_timer_update_pending() {
         crate::on_desktop_stack(|| {
-            for title in ["", " title=\"Hint\""] {
+            for title in [" title=\"Hint\"", ""] {
                 let plan = contract::compile(&format!(
                     r#"component App
   state label = "Before"
@@ -228,7 +249,11 @@ mod tests {
   task change_later mount
     after(100, change)
   view
-    text label width=200 height=40{title}
+    column width=200
+      column width=200 height=(label == "Before" ? 48 : 16) flex-shrink=0{title}
+        if label == "Before"
+          text "Busy" width=200 height=48 flex-shrink=0
+      text label title="Second hint" width=200 height=48 flex-shrink=0
 "#
                 ))
                 .unwrap()
@@ -245,10 +270,29 @@ mod tests {
                 assert!(error.is_none(), "{error:?}");
                 let before = p.frame();
                 assert!(!p.dirty());
+                let point = Some((10., 10.));
+                let below = Some((10., 32.));
+                let removed = p.hit(10., 10.).expect("the child is under the pointer");
+                let parent = p.host().kernel().node(removed).unwrap().parent.unwrap();
+                let key = p.host().kernel().node(parent).unwrap().key;
+                let expected = || TipChange::Set((!title.is_empty()).then(|| (key, "Hint".into())));
+                assert_eq!(tip_change(&mut p, point, false), expected());
+                assert_eq!(tip_change(&mut p, below, false), expected());
                 assert!(p.advance(100.).is_none());
-                assert!(p.dirty(), "the timer changed displayed text");
-                let tip = title_at(&mut p, (10., 10.));
-                assert_eq!(tip.is_some(), !title.is_empty());
+                assert!(p.host().kernel().node(removed).is_none());
+                assert!(p.dirty(), "the timer removed the child");
+                assert_eq!(tip_change(&mut p, point, false), TipChange::Keep);
+                assert_eq!(tip_change(&mut p, None, false), TipChange::Set(None));
+                let second =
+                    |tip| matches!(tip, TipChange::Set(Some((_, text))) if text == "Second hint");
+                if title.is_empty() {
+                    assert!(
+                        second(tip_change(&mut p, below, true)),
+                        "a real move resolves the current geometry"
+                    );
+                } else {
+                    assert_eq!(tip_change(&mut p, below, false), TipChange::Keep);
+                }
                 assert!(
                     p.dirty(),
                     "tooltip lookup must leave the new picture pending"
@@ -256,11 +300,9 @@ mod tests {
                 let after = p.frame();
                 assert_ne!(before.data(), after.data());
                 assert!(!p.dirty());
-                title_at(&mut p, (10., 10.));
-                assert!(
-                    !p.dirty(),
-                    "an unchanged tooltip must not request another frame"
-                );
+                assert_eq!(tip_change(&mut p, point, false), expected());
+                assert!(second(tip_change(&mut p, below, false)));
+                assert!(!p.dirty(), "a clean lookup must not request another frame");
             }
         });
     }

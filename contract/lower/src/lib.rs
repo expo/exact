@@ -96,6 +96,7 @@ mod theme;
 mod timers;
 mod tips;
 mod tools;
+mod transfer;
 mod type_tokens;
 mod values;
 pub mod var_tokens;
@@ -174,7 +175,7 @@ pub use theme::retained::{
     with_design_scan, DesignScan,
 };
 pub use theme::{retention, rows, synthetic_candidates};
-pub use warnings::{warnings, MAX_WARNINGS};
+pub use warnings::{warnings, WarningSelection, MAX_WARNINGS};
 
 use contract_analyze::Analysis;
 use contract_syntax::{Attr, Expr, File, FnDecl, Node, Owner, Span};
@@ -232,6 +233,7 @@ pub(crate) fn prop_row(id: exact_kernel::PropId, expr: Code, written: bool) -> B
 
 pub(crate) struct Lowerer<'a> {
     pub b: PlanBuilder,
+    each_steps: &'a BTreeMap<u32, u32>,
     /// The app's theme, resolved (LLP 1095 D4).
     pub theme: Vec<theme::ThemeEntry>,
     sites: Option<Sites>,
@@ -367,17 +369,16 @@ pub fn lower(
         .map_err(|mut all| all.swap_remove(0))
 }
 
-/// Lower, reporting every independent refusal: each element and each of its attributes is
-/// lowered whatever its siblings' fate (at most [`MAX_REFUSALS`]). `mapped` also returns the
-/// development source sites; `profile` is the surface the plan is for. `warned` collects diagnostics
-/// using the plan's control appearance decisions. It links every row's grammar (LLP 1053.000 §2).
+/// Lower every element and attribute, reporting up to [`MAX_REFUSALS`] independent refusals.
+/// `mapped` requests development source sites. Collected warnings use the plan's control
+/// appearance decisions. Every row's grammar is linked (LLP 1053.000 §2).
 pub fn lower_all(
     checked: &Checked<'_>,
     analysis: &Analysis,
     asset_root: Option<&Path>,
     mapped: bool,
     profile: Profile,
-    warned: Option<&mut Vec<LowerError>>,
+    warned: Option<(&WarningSelection, &mut Vec<LowerError>)>,
 ) -> Result<(Plan, Option<Sites>), Vec<LowerError>> {
     exact_kernel::style::link_all();
     if mapped && checked.expanded.instances.is_empty() {
@@ -403,11 +404,12 @@ pub fn lower_all(
         profile,
         warned.as_ref().map(|_| &mut text_styles),
     );
-    if let Some(out) = warned {
+    if let Some((selection, out)) = warned {
         out.extend(warnings::with_text_styles(
             checked,
             &text_styles,
             asset_warnings,
+            selection,
         ));
     }
     let result = match result {
@@ -450,7 +452,8 @@ fn lower_with_sites(
         .map(|f| contract_syntax::share_calls(&f.body, &is_fn))
         .collect();
     let mut l = Lowerer {
-        b: PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, compiler_identity()),
+        b: nodes::builder(ex),
+        each_steps: &ex.each_steps,
         theme: Vec::new(),
         sites: capture_sites.then(|| Sites::declared(ex)),
         text_styles,
@@ -938,21 +941,6 @@ impl<'a> Lowerer<'a> {
         })
     }
 
-    /// A tag's fixed row value as a constant body, built once per compile.
-    fn fixed(&mut self, style: bool, value: &'static str) -> Code {
-        if let Some(code) = self.fixed.get(&(style, value)) {
-            return *code;
-        }
-        // A fixed style is an enum's name or a number in points.
-        let v = match value.parse::<f64>() {
-            Ok(n) if style => Value::Number(n),
-            _ => Value::str(value),
-        };
-        let code = self.b.constant(&v);
-        self.fixed.insert((style, value), code);
-        code
-    }
-
     pub(crate) fn expr_code(
         &mut self,
         e: &Expr,
@@ -1082,9 +1070,13 @@ impl<'a> Lowerer<'a> {
                 let mut inner = scope.clone();
                 inner.push_each_of(var, index.as_deref(), list_ty);
                 let key = self.expr_code(key, &inner, locals)?;
-                let (_r, arms) =
+                let (region, arms) =
                     self.b
                         .region(RegionKind::Each, parent, arm, order, subject, key, 1);
+                if let Some(&step) = self.each_steps.get(tag) {
+                    self.b
+                        .set_region_place(region, exact_plan::PlaceStepsId(step));
+                }
                 if let Some(sites) = &mut self.sites {
                     sites.region(*tag);
                 }
@@ -1475,6 +1467,7 @@ impl<'a> Lowerer<'a> {
                 self.handler(tag, event, control, a, scope, locals, handlers)?;
             }
             tags::AttrTarget::MediaMetadata => self.media_metadata(a, scope, locals, bindings)?,
+            tags::AttrTarget::DataTransfer => self.data_transfer(a, scope, locals, bindings)?,
         }
         Ok(())
     }

@@ -188,8 +188,9 @@ impl Linked {
         // does its own I/O and plays CSS's transitions (LLP 1047.001 D2); its
         // numerals roll in the runtime's text (LLP 1077 D15), its date
         // and time controls are its own pickers (LLP 1115.001.000 D2), and
-        // it shows no tips (LLP 1035.006.000 D4): nothing to link for any
-        // of them.
+        // it shows no tips (LLP 1035.006.000 D4); a drag out of the page is
+        // the browser's own, its data the page's glue (LLP 1094.000 D6):
+        // nothing to link for any of them.
         let mut uses = Uses::NONE
             .with(Capability::GroupedLists)
             .with(Capability::Io)
@@ -197,7 +198,8 @@ impl Linked {
             .with(Capability::Numerals)
             .with(Capability::Dates)
             .with(Capability::Sqlite)
-            .with(Capability::Tips);
+            .with(Capability::Tips)
+            .with(Capability::DragOut);
         if self.markup.is_some() {
             uses = uses.with(Capability::Markdown);
         }
@@ -462,6 +464,18 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A plan that can drag boots on the core alone (LLP 1094.000 D3).
+    #[test]
+    fn a_draggable_plan_needs_nothing_linked() {
+        let plan = contract::compile(
+            "component A\n  view\n    column draggable=true dataTransfer=DataTransfer(text=\"a\")\n      text \"a\"\n",
+        )
+        .unwrap();
+        crate::link(crate::Linked::CORE);
+        let booted = Host::boot(&plan.encode(), (), Default::default(), "/").map(|_| ());
+        assert!(booted.is_ok(), "{booted:?}");
     }
 
     /// The core alone on this test's thread, whatever an earlier test on

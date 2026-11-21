@@ -717,3 +717,62 @@ fn selection_events_name_source_offsets_and_copy_uses_the_visible_spaces() {
     p.reader_select(6, 0., 0., 1.);
     assert_eq!(slot(&p, "part"), "0|0|");
 }
+
+#[test]
+#[cfg(not(any(windows, target_os = "android")))]
+fn mouse_drag_copies_rendered_reader_text_and_leaves_a_focused_editor_its_shortcuts() {
+    use crate::presenter::clipboard::tests::{chord, Memory};
+    use std::{cell::RefCell, rc::Rc};
+    let mut p = boot(
+        r#"component App
+  state selected = ""
+  action changed(s: Selection)
+    selected = `${s.start}|${s.end}|${s.text}|${s.rects.length}`
+  view
+    column
+      text "🐈 Hello **world**." testId="p" markup="markdown" user-select="text" selectionchange=changed
+      text "ignore me"
+      text "Next" testId="next" user-select="text"
+      text selected
+      input testId="editor" value="edit"
+"#,
+    );
+    let caret = |p: &Presenter<()>, name, at| {
+        let id = view(p, name);
+        let ((x, y, _, h), _) = p.brush.inline_text[&id].selection_caret(at, false).unwrap();
+        (x, y + h / 2.)
+    };
+    let (x, y) = caret(&p, "p", 9);
+    let (end, _) = caret(&p, "p", 14);
+    let (next, ny) = caret(&p, "next", 2);
+    let memory = Rc::new(RefCell::new(String::new()));
+    p.set_clipboard(Box::new(Memory(memory.clone())));
+    let before = p.frame();
+    p.pointer_down(x, y, 1.).unwrap();
+    p.pointer_move(end, y, 2.).unwrap();
+    assert_eq!(slot(&p, "selected"), "9|14|world|1");
+    let marked = p.frame();
+    assert!((x.ceil() as u32..end as u32)
+        .any(|px| { before.pixel(px, y as u32) != marked.pixel(px, y as u32) }));
+    p.pointer_up(end, y, 3.).unwrap();
+    chord(&mut p, "c");
+    assert_eq!(*memory.borrow(), "world");
+
+    p.pointer_down(next, ny, 4.).unwrap();
+    p.pointer_up(x, y, 5.).unwrap();
+    chord(&mut p, "c");
+    assert_eq!(*memory.borrow(), "world.\nNe");
+    assert_eq!(slot(&p, "selected"), "9|15|world.|1");
+
+    let editor = view(&p, "editor");
+    p.set_focus(Some(editor), 6.);
+    chord(&mut p, "a");
+    chord(&mut p, "c");
+    assert_eq!(*memory.borrow(), "edit");
+
+    p.pointer_down(x, y, 7.).unwrap();
+    p.pointer_up(x, y, 8.).unwrap();
+    assert_eq!(slot(&p, "selected"), "0|0||0");
+    chord(&mut p, "c");
+    assert_eq!(*memory.borrow(), "edit");
+}

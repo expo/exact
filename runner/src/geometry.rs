@@ -25,6 +25,7 @@
 //! compiler requires `measure`'s id to be a literal, which is what lets the
 //! runner find them all first.
 
+mod hit_order;
 #[cfg(test)]
 mod hit_slop_tests;
 #[cfg(test)]
@@ -1404,18 +1405,8 @@ impl Point<'_> {
         }
         let clipped = (x_clips || y_clips) && !inside(clip);
         if (!clipped || self.escapes.contains(&slot)) && native.is_none() {
-            let mut children: Vec<(i64, usize, u32)> = arena
-                .children(slot)
-                .iter()
-                .enumerate()
-                .map(|(i, &c)| {
-                    let rank = self.ranks.get(&arena.local_id(c)).copied().unwrap_or(0);
-                    (rank, i, c)
-                })
-                .collect();
-            children.sort_unstable();
             above.push((slot, m.filter(|_| !clipped)));
-            for &(_, _, child) in children.iter().rev() {
+            for child in hit_order::hit_order(self.kernel, &self.ranks, slot) {
                 // Where the child is shown, in this box or the one above that
                 // holds it; a top-layer child is tested in the top layer instead
                 let Shown::Parent(holder, local) =

@@ -17,6 +17,8 @@
     { "id": "tonal-button", "placed": true, "component": "FilledTonalButton", "probes": [{ "name": "container", "x": 8, "y": "mid" }] },
     { "id": "tonal-button-disabled", "placed": true, "component": "FilledTonalButton", "probes": [{ "name": "container", "x": 8, "y": "mid" }] },
     { "id": "text-button", "placed": true, "component": "TextButton" },
+    { "id": "filled-button-icon", "placed": true, "component": "Button", "probes": [{ "name": "container", "x": 6, "y": "mid" }] },
+    { "id": "text-button-icon", "placed": true, "component": "TextButton" },
     { "id": "checkbox-checked", "placed": true, "component": "Checkbox", "probes": [{ "name": "box", "x": "mid", "y": 3 }] },
     { "id": "checkbox-unchecked", "placed": true, "component": "Checkbox", "probes": [{ "name": "outline", "x": 1, "y": "mid" }] },
     { "id": "segmented-buttons", "placed": true, "component": "SingleChoiceSegmentedButtonRow", "probes": [{ "name": "selected", "x": "mid", "y": 6 }, { "name": "unselected", "x": 24, "y": 6 }] },

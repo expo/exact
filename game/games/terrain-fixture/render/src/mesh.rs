@@ -50,7 +50,11 @@ impl Light {
     }
 }
 
-fn propagate(steps: u32, solid: impl Fn([i32; 3]) -> bool) -> Light {
+fn propagate<const CANCELLABLE: bool>(
+    steps: u32,
+    solid: impl Fn([i32; 3]) -> bool,
+    cancelled: &impl Fn() -> bool,
+) -> Option<Light> {
     let count = steps.min(terrain_fixture_logic::MAX_LIGHT_CELLS);
     let side = (1..)
         .find(|&side: &i32| side.pow(3) >= count as i32)
@@ -65,6 +69,9 @@ fn propagate(steps: u32, solid: impl Fn([i32; 3]) -> bool) -> Light {
     };
     // The sweep starts at the sky and propagates through cells already visited.
     for i in 0..count as i32 {
+        if CANCELLABLE && i != 0 && i % 4096 == 0 && cancelled() {
+            return None;
+        }
         let x = low + i % side;
         let z = low + i / side % side;
         let y = top - i / (side * side);
@@ -85,7 +92,7 @@ fn propagate(steps: u32, solid: impl Fn([i32; 3]) -> bool) -> Light {
         };
         light.cells.push(level);
     }
-    light
+    Some(light)
 }
 
 #[derive(Default)]
@@ -101,6 +108,28 @@ pub(crate) fn section_with(
     stride: u32,
     steps: u32,
 ) -> Mesh {
+    section_mesh::<false>(origin, height, changed, stride, steps, || false).unwrap()
+}
+
+pub(crate) fn section_with_cancel(
+    origin: [i32; 3],
+    height: impl Fn(i32, i32) -> i32,
+    changed: bool,
+    stride: u32,
+    steps: u32,
+    cancelled: impl Fn() -> bool,
+) -> Option<Mesh> {
+    section_mesh::<true>(origin, height, changed, stride, steps, cancelled)
+}
+
+fn section_mesh<const CANCELLABLE: bool>(
+    origin: [i32; 3],
+    height: impl Fn(i32, i32) -> i32,
+    changed: bool,
+    stride: u32,
+    steps: u32,
+    cancelled: impl Fn() -> bool,
+) -> Option<Mesh> {
     let [x, y, z] = origin;
     let mut heights = [[0; PADDED]; PADDED];
     let (mut lowest, mut highest) = (i32::MAX, i32::MIN);
@@ -116,13 +145,23 @@ pub(crate) fn section_with(
     let solid = |cell @ [x, dy, z]: [usize; 3]| {
         (y + dy as i32 - 1 < heights[z][x]) ^ edited(cell, changed, 1)
     };
-    let light = (steps > 0).then(|| {
-        propagate(steps, |[dx, dy, dz]| {
-            (y + dy < height(x + dx, z + dz)) ^ (changed && [dx, dy, dz] == [8; 3])
-        })
-    });
+    if CANCELLABLE && cancelled() {
+        return None;
+    }
+    let light = if steps > 0 {
+        Some(propagate::<CANCELLABLE>(
+            steps,
+            |[dx, dy, dz]| (y + dy < height(x + dx, z + dz)) ^ (changed && [dx, dy, dz] == [8; 3]),
+            &cancelled,
+        )?)
+    } else {
+        None
+    };
+    if CANCELLABLE && cancelled() {
+        return None;
+    }
     if !changed && (highest <= y || lowest > y + SIDE) {
-        return mesh;
+        return Some(mesh);
     }
 
     for axis in 0..3 {
@@ -189,7 +228,7 @@ pub(crate) fn section_with(
             }
         }
     }
-    mesh
+    Some(mesh)
 }
 
 fn vertex(
@@ -285,16 +324,70 @@ mod tests {
     use super::*;
 
     #[test]
+    fn section_mesh_can_cancel_before_lighting_or_meshing() {
+        for cancel_at in [1, 2] {
+            let checks = std::cell::Cell::new(0);
+            let heights = std::cell::Cell::new(0);
+            let result = section_with_cancel(
+                [0; 3],
+                |_, _| {
+                    heights.set(heights.get() + 1);
+                    8
+                },
+                false,
+                12,
+                4,
+                || {
+                    checks.set(checks.get() + 1);
+                    checks.get() == cancel_at
+                },
+            );
+            assert!(result.is_none());
+            assert_eq!(checks.get(), cancel_at);
+            if cancel_at == 1 {
+                assert_eq!(heights.get(), PADDED * PADDED);
+            } else {
+                assert!(heights.get() > PADDED * PADDED);
+            }
+        }
+    }
+
+    #[test]
+    fn section_mesh_cancels_during_the_light_sweep() {
+        let heights = std::cell::Cell::new(0);
+        let steps = terrain_fixture_logic::MAX_LIGHT_CELLS;
+        let result = section_with_cancel(
+            [0; 3],
+            |_, _| {
+                heights.set(heights.get() + 1);
+                8
+            },
+            false,
+            12,
+            steps,
+            || heights.get() > PADDED * PADDED,
+        );
+        assert!(result.is_none());
+        let lit_cells = heights.get() - PADDED * PADDED;
+        assert!((1..=4096).contains(&lit_cells), "visited {lit_cells} cells");
+    }
+
+    #[test]
     fn decision_light_visits_distinct_cells_up_to_the_tile_cap() {
         use std::cell::RefCell;
         use std::collections::BTreeSet;
 
         for requested in [5, 6000, terrain_fixture_logic::MAX_LIGHT_CELLS + 1] {
             let visited = RefCell::new(BTreeSet::new());
-            let light = propagate(requested, |cell| {
-                assert!(visited.borrow_mut().insert(cell), "{cell:?} visited twice");
-                false
-            });
+            let light = propagate::<false>(
+                requested,
+                |cell| {
+                    assert!(visited.borrow_mut().insert(cell), "{cell:?} visited twice");
+                    false
+                },
+                &|| false,
+            )
+            .unwrap();
             let count = requested.min(terrain_fixture_logic::MAX_LIGHT_CELLS) as usize;
             assert_eq!(visited.into_inner().len(), count);
             assert_eq!(light.cells.len(), count);

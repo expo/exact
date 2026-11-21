@@ -12,6 +12,8 @@ use std::sync::Mutex;
 #[cfg(windows)]
 #[path = "picker_windows.rs"]
 mod windows;
+#[cfg(windows)]
+pub(crate) use windows::local_app_data;
 
 fn identity(name: &str) -> bool {
     !matches!(name, "" | "." | "..")
@@ -146,7 +148,7 @@ pub(crate) fn app_dirs(app_id: &str) -> Result<Option<([PathBuf; 3], Option<Path
         return Err(DataError::Unavailable("unsafe app storage identity".into()));
     }
     #[cfg(windows)]
-    let (mut data, mut cache) = windows::bases(&windows::local_app_data()?, app_id)?;
+    let (mut data, mut cache) = windows::bases(&local_app_data()?, app_id)?;
     #[cfg(not(windows))]
     let (mut data, mut cache) = {
         let base = |variable: &str, fallback: &str| {

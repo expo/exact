@@ -151,7 +151,7 @@ impl<'a, B: Brush> Cluster<'a, B> {
     /// Returns the first style that applies to the cluster. If the cluster contains multiple glyphs
     /// then this style may not apply to all glyphs in the cluster (see the `DIVERGENT_STYLES` flag)
     pub fn first_style(&self) -> &Style<B> {
-        &self.run.layout.styles()[usize::from(self.data.style_index)]
+        &self.run.layout.styles()[usize::from(self.data.info.style_index)]
     }
 
     /// Returns the advance of the cluster.
@@ -205,10 +205,10 @@ impl<'a, B: Brush> Cluster<'a, B> {
 
     /// Returns an iterator over the glyphs in the cluster.
     pub fn glyphs(&self) -> impl Iterator<Item = Glyph> + 'a + Clone {
-        if self.data.glyph_len == 0xFF {
+        if self.data.has_inline_glyph() {
             GlyphIter::Single(Some(Glyph {
                 id: self.data.glyph_offset,
-                style_index: self.data.style_index,
+                style_index: self.data.info.style_index,
                 x: 0.,
                 y: 0.,
                 advance: self.data.advance,
@@ -437,7 +437,7 @@ impl<'a, B: Brush> Cluster<'a, B> {
     /// This is only used for tests, and is *not* part of the public API.
     #[doc(hidden)]
     pub fn text_len(&self) -> u8 {
-        self.data.text_len
+        self.data.info.source_char().len_utf8() as u8
     }
 
     /// Returns this cluster's original character.

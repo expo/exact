@@ -187,7 +187,7 @@ impl Receipt<'_> {
         self.precision.print();
         let count = |class| c.classes.get(class).copied().unwrap_or(0);
         println!("  refusals: {} of the app's own (above); {} of class T; {} of the world's; {} limit; {} poisoned; {} cycle; {} value; {} unclassified", count("app"), count("type"), count("world"), count("limit"), count("poisoned"), count("cycle"), count("value"), count("unclassified"));
-        println!("  world: seeded oracle answering at once and never failing; tap, type, land and clock events only; no reload, no late answer, no host input; {}", crate::settle::HOST_WORLD);
+        println!("  world: seeded oracle answering at once and never failing; tap, type, directed key presses, answer source, land and clock events; host key defaults and reload require a device; {}", crate::settle::HOST_WORLD);
         let cost = format!(
             "runner {:.3}s; semantics {:.3}s; shrink candidates: {} runner, {} two-engine",
             self.runner_seconds, s.seconds, self.candidates, s.candidates

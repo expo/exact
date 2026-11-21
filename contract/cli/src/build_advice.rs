@@ -1,11 +1,50 @@
 //! Compilation and advice share a loaded program while retaining separate diagnostics.
 
 use crate::{
-    app_root, compile_loaded, read_source, sources, surface, warning_rank, CompileError,
-    SurfaceFindings, Warned,
+    app_root, compile_loaded, read_source, sources, surface, CompileError, SurfaceFindings, Warned,
 };
 use contract_syntax::File;
 use std::path::Path;
+
+/// Where a warning stands among a build's: lowering's order
+/// ([`contract_lower::warning_rank::rank`]), which also chose which warnings
+/// its cap kept.
+pub fn warning_rank(warning: &CompileError) -> u8 {
+    contract_lower::warning_rank::rank(&warning.id, &warning.message)
+}
+
+/// A warning only the web's picture shows
+/// ([`contract_lower::warning_rank::web_only`]).
+pub fn web_only(warning: &CompileError) -> bool {
+    contract_lower::warning_rank::web_only(&warning.id, &warning.message)
+}
+
+/// A warning that is information, not a problem
+/// ([`contract_lower::warning_rank::information`]).
+pub fn information(warning: &CompileError) -> bool {
+    contract_lower::warning_rank::information(&warning.id)
+}
+
+/// [`web_only`] for a warning as it is said (`file:line:col warning [id] message`).
+pub fn web_only_said(said: &str) -> bool {
+    said.split_once(" warning [")
+        .and_then(|(_, rest)| rest.split_once("] "))
+        .is_some_and(|(id, message)| contract_lower::warning_rank::web_only(id, message))
+}
+
+/// The one line a build's text says for its [`web_only`] warnings, the
+/// first as said and their number, at the first's place: the euxy port's
+/// 21 of them buried the warnings above them. `contract build --json`
+/// lists each.
+pub fn web_only_line(first: &str, count: usize) -> String {
+    let at = first.split_once(" warning [").map_or("", |(at, _)| at);
+    let one = count == 1;
+    format!(
+        "{at} warning [lower-symbol-platform] {count} SF Symbol use{} draw{} blank on the web, here first: an icon token or a role draws on every host (`contract build --json` says each, and how)",
+        if one { "" } else { "s" },
+        if one { "s" } else { "" },
+    )
+}
 
 type Found<T> = Result<T, Vec<CompileError>>;
 
@@ -32,6 +71,7 @@ pub fn compile_path_advised(
     path: &Path,
     mapped: bool,
     profile: contract_lower::Profile,
+    warning_limit: usize,
 ) -> Advised {
     let mut refused = sources::Refused::default();
     let loaded = read_source(path).map_err(|e| vec![e]).and_then(|src| {
@@ -74,7 +114,7 @@ pub fn compile_path_advised(
         mapped,
         false,
         profile,
-        Some(&mut warnings),
+        Some((warning_limit, &mut warnings)),
     );
     if !refused.errors.is_empty() {
         warnings.clear();
@@ -151,7 +191,7 @@ mod tests {
         ] {
             std::fs::write(&path, source).unwrap();
             sources::LOADS.with(|loads| loads.set(0));
-            let advised = compile_path_advised(&path, true, contract_lower::Profile::Web);
+            let advised = compile_path_advised(&path, true, contract_lower::Profile::Web, contract_lower::MAX_WARNINGS);
             assert_eq!(sources::LOADS.with(|loads| loads.get()), 1);
             let (compiled, warnings) = crate::compile_path_all_warned(&path, true);
             assert_eq!(diagnostics(&warnings), diagnostics(&advised.compiled.1));

@@ -185,7 +185,14 @@ impl<D: DataSource> Presenter<D> {
                 let _ = index.set(kept);
             }
         }
+        // A route the stage still draws (one a push covers, while it slides
+        // out) keeps its pictures, as the painter draws it (`stage_shows`).
+        let shows = self.stage_shows();
         let host = &self.host;
+        let hidden = |id: ViewId| match shows.is_empty() {
+            true => host.route_visibility(id).0,
+            false => host.route_hidden_but(id, &shows),
+        };
         let boxes = |id: &ViewId| {
             let index = index.get_or_init(|| {
                 let mut index = std::collections::HashMap::new();
@@ -221,7 +228,7 @@ impl<D: DataSource> Presenter<D> {
             if status_sizes.contains_key(&id) {
                 return Some(true);
             }
-            if host.route_visibility(id).0 {
+            if hidden(id) {
                 return Some(false);
             }
             let Some((i, b)) = boxes(&id) else {
@@ -263,7 +270,7 @@ impl<D: DataSource> Presenter<D> {
         // mounted where pictures are asked at mount.
         let visible = |id: ViewId| {
             if initial_mounts || *AT_MOUNT {
-                return !host.route_visibility(id).0;
+                return !hidden(id);
             }
             placed(id).unwrap_or(true)
         };

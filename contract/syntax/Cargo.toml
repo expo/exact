@@ -1,5 +1,4 @@
-# Contract syntax: lexer, parser, AST, spans. Depends on `exact-motion` alone,
-# whose word grammar reads an `animation` literal to find its keyframes name.
+# Contract syntax: lexer, parser, AST, spans and component expansion.
 # @ref LLP 1004 D2.
 [package]
 name = "contract-syntax"
@@ -15,3 +14,4 @@ crate-type = ["rlib"]
 
 [dependencies]
 exact-motion = { path = "../../motion" }
+sha2 = "0.10"

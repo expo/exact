@@ -13,7 +13,7 @@ use crate::oracle::Oracle;
 use crate::script::{Case, Event};
 use crate::{compile, observe};
 use exact_plan::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -124,6 +124,21 @@ fn event(e: &Event) -> String {
         Event::Type(t, s) => format!("{{\"type\":[{},{}]}}", string(t), string(s)),
         Event::Clock(ms) | Event::TestClock(ms) => format!("{{\"clock\":{}}}", number(*ms)),
         Event::Land | Event::InputLand => "{\"land\":true}".into(),
+        Event::Answer(source, _) => format!(
+            "{{\"answer\":{},\"label\":{}}}",
+            string(source),
+            string(&e.label())
+        ),
+        Event::Key(target, chord) => {
+            let edges = crate::script::key_press(chord).map(|key| {
+                serde_json::json!({
+                    "key": key.key, "shiftKey": key.held.shift, "ctrlKey": key.held.ctrl,
+                    "altKey": key.held.alt, "metaKey": key.held.meta,
+                    "code": key.code, "repeat": key.repeat, "isComposing": key.is_composing
+                })
+            });
+            serde_json::json!({"target": target, "label": e.label(), "key": edges}).to_string()
+        }
     }
 }
 
@@ -158,7 +173,8 @@ fn prepare(case: &Case, dir: &Path, index: usize) -> Result<Ready, JsVerdict> {
         ));
     }
     let plan = compile(case).map_err(JsVerdict::Refused)?;
-    let (rust, data) = observe::run(plan.clone(), Oracle::for_case(&plan, case), &case.events);
+    let events = &case.events;
+    let (rust, data) = observe::run(plan.clone(), Oracle::for_case(&plan, case), events);
     let data = data.expect("the oracle comes back");
     let file = match &case.path {
         Some(p) if std::fs::read_to_string(p).ok().as_deref() == Some(case.source.as_str()) => {
@@ -178,7 +194,8 @@ fn prepare(case: &Case, dir: &Path, index: usize) -> Result<Ready, JsVerdict> {
         .map(|c| {
             let args: Vec<String> = c.args.iter().map(|(_, a)| value(a)).collect();
             format!(
-                "[{},[{}],{}]",
+                "[{},{},[{}],{}]",
+                c.revision,
                 string(&c.source),
                 args.join(","),
                 value(&c.answer.1)
@@ -191,7 +208,7 @@ fn prepare(case: &Case, dir: &Path, index: usize) -> Result<Ready, JsVerdict> {
         .iter()
         .map(|(name, _, v)| format!("{}:{}", string(name), value(v)))
         .collect();
-    let events: Vec<String> = case.events.iter().map(event).collect();
+    let events: Vec<String> = events.iter().map(event).collect();
     // The device's store at launch, and the persisted states whose `store`
     // lines follow the slots (LLP 1116 D5).
     let stored: Vec<String> = data
@@ -206,10 +223,25 @@ fn prepare(case: &Case, dir: &Path, index: usize) -> Result<Ready, JsVerdict> {
         .filter(|s| s.persist)
         .map(|s| string(plan.str(s.name)))
         .collect();
-    let hosts: Vec<String> = data.host_sources().into_iter().map(string).collect();
+    let launch_answers: Vec<_> = case.answers.iter().map(|(name, _)| name.as_str()).collect();
+    let changes = case.events.iter().filter_map(|e| match e {
+        Event::Answer(name, _) => Some(name.as_str()),
+        _ => None,
+    });
+    let mut host_sources: BTreeSet<_> = data.host_sources().into_iter().collect();
+    host_sources.extend(
+        launch_answers
+            .iter()
+            .copied()
+            .chain(changes)
+            .filter(|s| crate::oracle::platform_source(&plan, s)),
+    );
+    let hosts: Vec<_> = host_sources.into_iter().map(string).collect();
+    let launch_answers: Vec<_> = launch_answers.into_iter().map(string).collect();
     let json = format!(
-        "{{\"hostSources\":[{}],\"file\":{},\"events\":[{}],\"answers\":[{}],\"facts\":{{{}}},\"stored\":{{{}}},\"persisted\":[{}]}}",
+        "{{\"hostSources\":[{}],\"launchAnswers\":[{}],\"file\":{},\"events\":[{}],\"answers\":[{}],\"facts\":{{{}}},\"stored\":{{{}}},\"persisted\":[{}]}}",
         hosts.join(","),
+        launch_answers.join(","),
         string(&file.display().to_string()),
         events.join(","),
         answers.join(","),

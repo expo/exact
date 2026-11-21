@@ -70,7 +70,17 @@ pub(crate) fn expand(script: &mut Scripted, plan: Option<&exact_plan::Plan>) -> 
                     skip_land = false;
                     continue;
                 }
-                let input = matches!(e, Event::Tap(_) | Event::Type(..));
+                if let Event::Key(target, key) = &e {
+                    if let Some(why) = driver.key_default(target, key) {
+                        script.delivery.stopped = Some((
+                            last_span,
+                            crate::script::KEY_DEFAULT.into(),
+                            format!("{why}, which the host does and the runner does not"),
+                        ));
+                        break;
+                    }
+                }
+                let input = e.is_input();
                 let lines = driver.step(&e);
                 skip_land = input && !delivered(&lines);
                 expanded.push(Item::Event(e));

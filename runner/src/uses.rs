@@ -253,11 +253,14 @@ pub enum Capability {
     /// top-layer stack, which a sheet route shares, presents a `dialog` in its
     /// core ([`Uses::MAC_CORE`]).
     Dialogs,
+    /// A drag out of the app (LLP 1094.000 D3): a node with `draggable`,
+    /// whose host lifts it to the system with its data.
+    DragOut,
 }
 
 impl Capability {
     /// Every capability, in bit order.
-    pub const ALL: [Capability; 61] = [
+    pub const ALL: [Capability; 62] = [
         Capability::Markdown,
         Capability::Motion,
         Capability::Collections,
@@ -319,6 +322,7 @@ impl Capability {
         Capability::Widgets,
         Capability::ContentIndex,
         Capability::Dialogs,
+        Capability::DragOut,
     ];
 
     /// The name an entry, a refusal and a report use.
@@ -385,6 +389,7 @@ impl Capability {
             Capability::Widgets => "widgets",
             Capability::ContentIndex => "content_index",
             Capability::Dialogs => "dialogs",
+            Capability::DragOut => "drag_out",
         }
     }
 
@@ -572,6 +577,9 @@ pub fn uses(plan: &Plan) -> Uses {
                 Some(PropId::HeightDragFor | PropId::TransformDragFor | PropId::ReorderFor) => {
                     uses = uses.with(Capability::Motion).with(Capability::Drag);
                 }
+                // A drag's data is admitted for its host whether or not the
+                // node drags now, and `draggable=false` is the web's too.
+                Some(PropId::Draggable) => uses = uses.with(Capability::DragOut),
                 // A shared element flies between its two places (LLP 1013.000).
                 Some(PropId::SharedElement) => uses = uses.with(Capability::Transitions),
                 Some(PropId::Virtualized)

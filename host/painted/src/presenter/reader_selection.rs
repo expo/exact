@@ -1,11 +1,14 @@
-//! Android's floating toolbar and handles work in viewport pixels. The presenter
-//! keeps the range in its paragraph's UTF-16 offsets as layout and scroll change.
+//! Reader selection uses UTF-16 offsets in the painted paragraph.
 use super::*;
 use crate::paint::inline_frame::selection::Shaped;
 use exact_kernel::{NodeKey, UserSelect};
 use std::ops::Range;
 use std::rc::Rc;
 
+mod mouse;
+pub(super) use mouse::MouseSelection;
+
+#[cfg(any(target_os = "android", test))]
 pub(super) struct Selection {
     key: NodeKey,
     value: Rc<str>,
@@ -17,6 +20,7 @@ pub(super) struct Selection {
 struct Report {
     range: Range<u32>,
     text: String,
+    rects: Vec<exact_runner::geometry::GeometryAnswer>,
 }
 
 struct Part {
@@ -104,6 +108,7 @@ impl<D: DataSource> Presenter<D> {
         paragraph: ViewId,
         shaped: &Shaped,
         selected: &[Range<u32>],
+        mut marks: impl FnMut(Range<u32>) -> Vec<exact_runner::geometry::GeometryAnswer>,
     ) -> BTreeMap<NodeKey, Report> {
         let mut listeners = BTreeMap::<NodeKey, Range<u32>>::new();
         let runs = shaped.authored.as_ref().map_or(&shaped.runs, |a| &a.runs);
@@ -151,6 +156,13 @@ impl<D: DataSource> Presenter<D> {
                         report.range.start = start - own.start;
                     }
                     report.range.end = end - own.start;
+                    let visible = |n| {
+                        shaped
+                            .authored
+                            .as_ref()
+                            .map_or(n, |a| a.map.collapsed_utf16(n as usize) as u32)
+                    };
+                    report.rects.extend(marks(visible(start)..visible(end)));
                     report
                         .text
                         .push_str(&value[field::byte_at(value, start)..field::byte_at(value, end)]);
@@ -160,10 +172,20 @@ impl<D: DataSource> Presenter<D> {
             .collect()
     }
 
+    #[cfg(any(target_os = "android", test))]
     fn replace_selection(&mut self, next: Option<Selection>) {
         let old = std::mem::replace(&mut self.reader_selection, next);
-        let was = old.as_ref().map(|s| &s.reports);
-        let now = self.reader_selection.as_ref().map(|s| &s.reports);
+        let events = Self::changed_reports(
+            old.as_ref().map(|s| &s.reports),
+            self.reader_selection.as_ref().map(|s| &s.reports),
+        );
+        self.report_selection(events);
+    }
+
+    fn changed_reports(
+        was: Option<&BTreeMap<NodeKey, Report>>,
+        now: Option<&BTreeMap<NodeKey, Report>>,
+    ) -> Vec<(NodeKey, Event)> {
         let keys: std::collections::BTreeSet<_> = was
             .into_iter()
             .chain(now)
@@ -183,11 +205,15 @@ impl<D: DataSource> Presenter<D> {
                         text,
                         start: f64::from(start),
                         end: f64::from(end),
-                        rects: Vec::new(),
+                        rects: after.map(|r| r.rects.clone()).unwrap_or_default(),
                     },
                 ));
             }
         }
+        events
+    }
+
+    fn report_selection(&mut self, events: Vec<(NodeKey, Event)>) {
         for (key, event) in events {
             if let Some(node) = self.host.kernel().node_by_key(key) {
                 if let Some(e) = self
@@ -203,6 +229,7 @@ impl<D: DataSource> Presenter<D> {
 
     /// 0 long press, 1/2 move the leading/trailing handle, 3 select all,
     /// 4 read geometry, 5 read selected text, 6 dismiss.
+    #[cfg(any(target_os = "android", test))]
     pub(crate) fn reader_select(
         &mut self,
         action: i32,
@@ -247,7 +274,7 @@ impl<D: DataSource> Presenter<D> {
         let old = self.reader_selection.as_ref().filter(|s| {
             s.key == key && (Rc::ptr_eq(&s.value, &shaped.value) || s.value == shaped.value)
         });
-        let mut range = match action {
+        let range = match action {
             0 => {
                 let hit = paragraph.selection_hit(x, y, true)?;
                 let part = parts.iter().find(|p| p.range.contains(&hit))?;
@@ -276,24 +303,7 @@ impl<D: DataSource> Presenter<D> {
             4 | 5 => old?.range.clone(),
             _ => return None,
         };
-        let intersected = |p: &&Part| p.range.start < range.end && range.start < p.range.end;
-        let first = parts.iter().find(intersected)?;
-        let last = parts.iter().rfind(intersected)?;
-        range.start = if first.atomic.is_some() {
-            first.range.start
-        } else {
-            range.start.max(first.range.start)
-        };
-        range.end = if last.atomic.is_some() {
-            last.range.end
-        } else {
-            range.end.min(last.range.end)
-        };
-        let ranges = parts
-            .iter()
-            .map(|p| range.start.max(p.range.start)..range.end.min(p.range.end))
-            .filter(|r| !r.is_empty())
-            .collect::<Vec<_>>();
+        let (range, ranges) = selected_ranges(&parts, range)?;
         if action == 5 {
             let mut text = String::new();
             for r in ranges {
@@ -314,7 +324,7 @@ impl<D: DataSource> Presenter<D> {
         let (start, start_rtl) = paragraph.selection_caret(range.start, false)?;
         let (end, end_rtl) = paragraph.selection_caret(range.end, true)?;
         if action != 4 {
-            let reports = self.selection_reports(id, shaped, &ranges);
+            let reports = self.selection_reports(id, shaped, &ranges, |_| Vec::new());
             self.replace_selection(Some(Selection {
                 key,
                 value: shaped.value.clone(),
@@ -326,4 +336,29 @@ impl<D: DataSource> Presenter<D> {
             serde_json::json!({ "marks": marks, "start": rect(start), "end": rect(end), "startRtl": start_rtl, "endRtl": end_rtl, "clip": rect(clip) }),
         )
     }
+}
+
+fn selected_ranges(parts: &[Part], mut range: Range<u32>) -> Option<(Range<u32>, Vec<Range<u32>>)> {
+    if range.is_empty() {
+        return None;
+    }
+    let intersected = |p: &&Part| p.range.start < range.end && range.start < p.range.end;
+    let first = parts.iter().find(intersected)?;
+    let last = parts.iter().rfind(intersected)?;
+    range.start = if first.atomic.is_some() {
+        first.range.start
+    } else {
+        range.start.max(first.range.start)
+    };
+    range.end = if last.atomic.is_some() {
+        last.range.end
+    } else {
+        range.end.min(last.range.end)
+    };
+    let ranges = parts
+        .iter()
+        .map(|p| range.start.max(p.range.start)..range.end.min(p.range.end))
+        .filter(|r| !r.is_empty())
+        .collect::<Vec<_>>();
+    Some((range, ranges))
 }

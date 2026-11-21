@@ -235,6 +235,7 @@ impl Parser {
                     children: Vec::new(),
                     span,
                     instance: 0,
+                    place: None,
                 },
             );
         }
@@ -246,6 +247,7 @@ impl Parser {
             children,
             span,
             instance: 0,
+            place: None,
         })
     }
 }

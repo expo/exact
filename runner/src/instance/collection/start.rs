@@ -44,6 +44,11 @@ impl Collection {
         if self.at_end {
             return Ok(self.index.len().saturating_sub(self.bootstrap_rows));
         }
+        if let Some(nest::ReadingPoint::Row(key)) = self.restored_at.as_ref().map(|p| &p.point) {
+            if let Some(row) = self.index.position(key) {
+                return Ok(row);
+            }
+        }
         Ok(self
             .index
             .row_at(self.start_offset)

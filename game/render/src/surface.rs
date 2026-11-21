@@ -837,8 +837,10 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
                     }
                 }
             }
-            let (span_since, trace_export) =
-                perf_request.map_or((None, false), |r| (r.span_since, r.trace_export));
+            let (span_since, trace_export, reset) = perf_request
+                .map_or((None, false, false), |r| {
+                    (r.span_since, r.trace_export, r.perf_reset)
+                });
             reply.truncate(reply.len() - 2);
             reply.push_str(if self.device {
                 ",\"device\":true"
@@ -894,6 +896,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
                     &mut reply,
                     &self.hooks,
                     self.hook_clock.budget.as_deref(),
+                    reset,
                 );
             }
             // Only the agent's armed timing is the agent's to report.

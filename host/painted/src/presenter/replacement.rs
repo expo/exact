@@ -236,9 +236,13 @@ impl<D: DataSource> Presenter<D> {
     /// and no up follows it here ([`Presenter::set_touching`] says when the
     /// finger lifts).
     pub fn reader_touch(&mut self, action: i32, x: f32, y: f32, now: f64) -> Result<(), String> {
+        if action != 2 {
+            self.top.lift = None;
+        }
         match action {
             0 => self.pointer_down(x, y, now).map(|_| ()),
             1 => self.pointer_up(x, y, now).map(|_| ()),
+            2 if self.lift_moved(x, y, now) => Ok(()),
             2 => self.pointer_move(x, y, now).map(|_| ()),
             4 => {
                 self.long_press(x, y, now);

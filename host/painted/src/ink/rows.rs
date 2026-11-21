@@ -468,9 +468,15 @@ impl Ink {
             .pre_rotate(base[3])
             .pre_scale(base[2], base[2])
             .pre_translate(-pivot.0, -pivot.1);
-        let transform = space
-            .pre_concat(own)
-            .pre_concat(space.invert().unwrap_or_default());
+        // Conjugating an identity would leave rounding error that keeps
+        // its group from bounding its composite.
+        let transform = if own.is_identity() {
+            own
+        } else {
+            space
+                .pre_concat(own)
+                .pre_concat(space.invert().unwrap_or_default())
+        };
         self.rows.capture.push(Capture {
             kind: CaptureKind::Layer(transform, base[4]),
             origin,

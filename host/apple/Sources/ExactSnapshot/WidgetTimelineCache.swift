@@ -14,7 +14,7 @@ public struct WidgetTimelineCache: Hashable {
     private let counterFile: URL
     /// Nil when the counter file is unreadable: the refresh still answers from
     /// the live store, but nothing is kept or reused under an unknown revision.
-    private let counter: UInt64?
+    private var counter: UInt64?
     private enum Failure: Error { case storeChanged }
     private struct Saved: Codable {
         let counter: UInt64
@@ -81,6 +81,17 @@ public struct WidgetTimelineCache: Hashable {
         }
         guard isCurrent else { throw Failure.storeChanged }
         return bytes
+    }
+
+    /// Each time a store write lands during `refresh`, run it again under the new revision while
+    /// `hasTime()`. Returns the answer and the revision it was computed under, which delivery rechecks.
+    /// Each attempt reads the counter after the write, so no answer from an older revision escapes.
+    public func resolveAcrossWrites(while hasTime: () -> Bool, _ refresh: () throws -> Data) throws -> (bytes: Data, revision: WidgetTimelineCache) {
+        var revision = self
+        while true {
+            do { return (try revision.resolve(refresh), revision) }
+            catch Failure.storeChanged where hasTime() { revision.counter = try? Self.readCounter(counterFile) }
+        }
     }
 
     /// Keep this answer and the `kept - 1` other configurations' written most recently.

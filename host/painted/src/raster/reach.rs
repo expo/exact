@@ -4,26 +4,16 @@
 //! `is_too_big_for_math` check), and an SVG's coordinates, `viewBox` and
 //! `stroke-width` are the file's to choose. Such a path is not drawn.
 
-use tiny_skia::{Path, Rect, Transform};
+use tiny_skia::{Rect, Transform};
 
 /// Half of where tiny-skia was found to panic, in device pixels.
 const REACH: f32 = (1u32 << 30) as f32;
 
-/// Whether `path`, grown by `outset` user units on every side (a stroke's
-/// extent), stays within [`REACH`] once drawn through `dev`. A transform
+/// Whether the paint bounds stay within [`REACH`] when drawn through `dev`. A transform
 /// that makes the bounds non-finite is tiny-skia's to refuse, which it does
 /// without panicking.
-pub(super) fn within(path: &Path, outset: f32, dev: Transform) -> bool {
-    let b = path.bounds();
-    let Some(grown) = Rect::from_ltrb(
-        b.left() - outset,
-        b.top() - outset,
-        b.right() + outset,
-        b.bottom() + outset,
-    ) else {
-        return false;
-    };
-    grown.transform(dev).is_none_or(|r| {
+pub(super) fn within(bounds: Rect, dev: Transform) -> bool {
+    bounds.transform(dev).is_none_or(|r| {
         r.left() >= -REACH && r.top() >= -REACH && r.right() <= REACH && r.bottom() <= REACH
     })
 }

@@ -146,6 +146,32 @@ fn collection_boot_measures_wrappers_in_nested_port_and_scroll_rewindows() {
 }
 
 #[test]
+fn reload_scrolls_the_painted_transcript_to_the_surviving_row() {
+    let source = r#"component App
+  view
+    list virtualized=true width=400 height=300 estimated-item-height=100 testId="feed"
+      for n in range(100) key=n
+        box height=100 testId=`row-${n}`
+"#;
+    let mut p = boot_source(source);
+    settle(&mut p);
+    let feed = p.host.collections()[0].view;
+    p.wheel(feed, 0., 1807.).unwrap();
+    settle(&mut p);
+    assert_eq!(p.scroll_of(feed).1, 1807.);
+    let filtered = source.replace("in range(100) ", "in range(100).filter(n => n % 2 == 1) ");
+    assert_eq!(
+        p.reload(&crate::test_plan(&filtered), Rows).unwrap(),
+        ReloadResult::Applied(None)
+    );
+    let feed = p.host.collections()[0].view;
+    assert!((p.scroll_of(feed).1 - 907.).abs() <= 1.);
+    settle(&mut p);
+    assert!((p.scroll_of(feed).1 - 907.).abs() <= 1.);
+    assert_eq!(p.host.kernel().find_by_test_id("row-19").len(), 1);
+}
+
+#[test]
 fn bidirectional_tiny_edges_reach_the_endpoint_and_become_idle() {
     let mut p = boot_source(
         r#"component App

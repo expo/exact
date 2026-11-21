@@ -106,7 +106,8 @@ object Native {
      * ([scrollers]). After the scrollers: the native module view under the point (0: none), then its painted
      * border box x, y, width and height as float bits, in pixels, its allocation slot and generation, how many long
      * presses a node has taken so far (wrapping), the session token's low and high words, its painted content origin
-     * x and y as float bits, and the Exact context-menu candidate (0: none). Then each scroller's snap, in the same
+     * x and y as float bits, and the node a long press there gives to, a context menu's or a drag's (0: none). Then
+     * each scroller's snap, in the same
      * order (`host/painted/src/presenter/snap.rs`,
      * `reader_snaps`): flags (bit 0 it snaps sideways, bit 1 up and down, bit 2 `mandatory`), then sideways and then up
      * and down its snapport's length as float bits, a count, and per snap area the least and greatest offsets it rests
@@ -187,7 +188,9 @@ object Native {
      * ([android.view.MotionEvent.getToolType]). A finger is reported to the app as a touch that hovers nothing and
      * leaves no focus ring, a mouse as a mouse (LLP 1115.001 D7.4). Action 4 is no new touch: the one that is down
      * has been held still for the system's long-press time ([android.view.ViewConfiguration.getLongPressTimeout]).
-     * What names a context menu there opens it (D10), and that touch then presses nothing when it lifts. */
+     * A node with `draggable` nearer than any menu asks for its drag (request kind 23, LLP 1094.000 D7); else what
+     * names a context menu there opens it (D10), and a move past the touch slop then lifts the node's drag. That touch
+     * presses nothing when it lifts. */
     @JvmStatic external fun touch(action: Int, x: Float, y: Float, tool: Int)
     /** A finger past the touch's first ([Fingers]): 0 down, 1 up, 2 move, 3 cancel, at the view's pixels, by its pointer
      * [id] ([android.view.MotionEvent.getPointerId]). The canvas holding the touch takes it where it lands on that
@@ -231,7 +234,8 @@ object Native {
     @JvmStatic external fun access(again: Boolean): IntArray?
     /** An accessibility service acts on node [id] of the tree last told, on the host's thread: [action] 1 press
      * (the presenter's own press at the node, as a driver's `tap`), 2 hold (its context menu), 3 scroll a scroller
-     * on or step a range up, 4 back or down, 5 set a range to [value]. Whether anything took it. */
+     * on or step a range up, 4 back or down, 5 set a range to [value], 6 start the node's drag out of the app. Whether
+     * anything took it. */
     @JvmStatic external fun accessAct(id: Int, action: Int, value: Float): Boolean
     /** No accessibility service is on any more: exact2 forgets the tree it told and builds none until [access]. */
     @JvmStatic external fun accessOff()
