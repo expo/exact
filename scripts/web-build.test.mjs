@@ -10,10 +10,25 @@ import { buildFirst, failureSummary, nativeBuild, planOverride } from './agent-b
 import { webBuildFailure } from './app-cli.mjs';
 import { linkedBakeDir } from './linked-plan.mjs';
 import { resolveApp } from './app.mjs';
-import { webChanges, webInputDigests } from './agent-launch.mjs';
+import { webChanges, webInputDigests, webInputPresent } from './agent-launch.mjs';
 import { replaceBuild } from '../host/web/serve.mjs';
 let fallbackRoots = [];
 mock.module('../host/web/build.mjs', () => ({ webSourceRoots: () => fallbackRoots }));
+
+// A recorded input in a tree the build copies whole is still one only when no part of its path from the tree's root is a
+// link, as the copy requires; elsewhere the build reads through links.
+test('a copied input behind a link is not one the web build reads', () => {
+  const dir = realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-web-input-'))), app = { dir: resolve(dir, 'app') };
+  try {
+    for (const path of ['app/assets/icons', 'app/src', 'moved/icons']) mkdirSync(resolve(dir, path), { recursive: true });
+    for (const path of ['app/assets/icons/logo.png', 'app/src/real.ts', 'moved/icons/logo.png', 'moved/logo.png']) writeFileSync(resolve(dir, path), 'bytes');
+    const present = (path) => webInputPresent(app, resolve(app.dir, path));
+    expect([present('assets/icons/logo.png'), present('assets/icons/gone.png'), present('src/real.ts')]).toEqual([true, false, true]);
+    rmSync(resolve(app.dir, 'assets/icons/logo.png')); symlinkSync(resolve(dir, 'moved/logo.png'), resolve(app.dir, 'assets/icons/logo.png'));
+    symlinkSync(resolve(dir, 'moved/icons'), resolve(app.dir, 'assets/linked')); symlinkSync(resolve(app.dir, 'src/real.ts'), resolve(app.dir, 'src/link.ts'));
+    expect([present('assets/icons/logo.png'), present('assets/linked/logo.png'), present('src/link.ts')]).toEqual([false, false, true]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 
 // A failed build's summary keeps the compiler's first error, which may be the cause of the rest (#705: the web
 // build said only the last, which blamed another component's action of the same name).

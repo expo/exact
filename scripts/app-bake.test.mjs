@@ -1098,14 +1098,21 @@ impl Game for BuildInputs {
     const script = `
       import { mock } from 'bun:test';
       import { createHash } from 'node:crypto';
-      import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+      import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
       import { resolve } from 'node:path';
       const appPath = ${JSON.stringify(resolve(import.meta.dir, 'app.mjs'))};
       const actual = await import(appPath), resolveOriginal = actual.resolveApp;
       const servePath = ${JSON.stringify(resolve(import.meta.dir, '../host/web/serve.mjs'))};
-      const serve = await import(servePath), cards = serve.publicFileCards;
-      mock.module(servePath, () => ({ ...serve, publicFileCards(stage) {
-        if (${game && edit}) writeFileSync(${JSON.stringify(resolve(dir, 'assets/authored.txt'))}, 'authored after');
+      const serve = await import(servePath), cards = serve.publicFileCards, copyTree = serve.copyStaticTreeIfPresent;
+      mock.module(servePath, () => ({ ...serve, copyStaticTreeIfPresent(from, to, ...rest) {
+        const copied = copyTree(from, to, ...rest);
+        // An authored input the prune removes once the build has copied it, before the build records its inputs; with a
+        // level, a link to that copy, of the same bytes, takes its place, which the static copy refuses
+        if (${operation === 'prune'} && from === ${JSON.stringify(resolve(dir, 'assets'))}) rmSync(${JSON.stringify(resolve(dir, 'assets/authored.txt'))});
+        if (${operation === 'prune' && level} && from === ${JSON.stringify(resolve(dir, 'assets'))}) symlinkSync(resolve(to, 'authored.txt'), ${JSON.stringify(resolve(dir, 'assets/authored.txt'))});
+        return copied;
+      }, publicFileCards(stage) {
+        if (${game && edit && operation !== 'prune'}) writeFileSync(${JSON.stringify(resolve(dir, 'assets/authored.txt'))}, 'authored after');
         if (${operation === 'update'}) writeFileSync(${JSON.stringify(resolve(dir, 'assets', asset))}, 'edited during packaging');
         return cards(stage);
       } }));
@@ -1170,10 +1177,12 @@ impl Game for BuildInputs {
     const finished = new Date(Date.now() + 10_000);
     utimesSync(markerPath, finished, finished);
     const shown = game ? source : relative(resolve(import.meta.dir, '..'), source);
+    // A removed input is listed after the edited ones
     const changed = !edit ? [] : game ? [
-      source, resolve(dir, 'assets/authored.txt'), resolve(dir, 'assets/config.level.json'),
+      source, ...(operation === 'prune' ? [] : [resolve(dir, 'assets/authored.txt')]), resolve(dir, 'assets/config.level.json'),
       ...(['update', 'release'].includes(operation) ? [resolve(dir, 'assets', asset)] : []),
       ...(level ? [resolve(dir, asset)] : []),
+      ...(operation === 'prune' ? [resolve(dir, 'assets/authored.txt')] : []),
     ] : [shown];
     assert.deepEqual(webChanges(dist, app).app, changed);
     if (edit) assert.throws(() => refuseStale('web', markerPath, webChanges(dist, app).all, 'bun host/web/build.mjs --wasm'), /web build is stale/);
@@ -1182,10 +1191,15 @@ impl Game for BuildInputs {
     if (game) assert.equal(marker.inputs[resolve(dir, 'assets/config.level.json')], createHash('sha1').update('{"seed":1}').digest('hex'));
     if (level) assert.equal(marker.inputs[resolve(dir, asset)], createHash('sha1').update(baked).digest('hex'));
     if (operation === 'prune') assert.equal(marker.inputs[resolve(dir, 'assets', asset)], null);
+    // Removed or linked after the build copied it, it keeps what the build read at the start, and the check above lists it
+    if (operation === 'prune') {
+      assert.equal(readFileSync(resolve(dist, 'assets/authored.txt'), 'utf8'), 'authored before');
+      assert.equal(marker.inputs[resolve(dir, 'assets/authored.txt')], createHash('sha1').update('authored before').digest('hex'));
+    }
     if (operation === 'release') assert.equal(marker.inputs[resolve(dir, 'assets', asset)], createHash('sha1').update('{"seed":1}').digest('hex'));
     assert.ok(marker.inputsAt <= JSON.parse(readFileSync(resolve(dist, 'bake.json'), 'utf8')).started);
     writeFileSync(source, before);
-    if (game) writeFileSync(resolve(dir, 'assets/authored.txt'), 'authored before');
+    if (game) { rmSync(resolve(dir, 'assets/authored.txt'), { force: true }); writeFileSync(resolve(dir, 'assets/authored.txt'), 'authored before'); }
     if (game) writeFileSync(resolve(dir, 'assets/config.level.json'), '{"seed":1}');
     if (level) writeFileSync(resolve(dir, asset), baked);
     if (operation === 'update') writeFileSync(resolve(dir, 'assets', asset), baked);

@@ -1188,6 +1188,15 @@ export function webInputDigests(app, js, roots, sourceInputs) {
   return {...Object.fromEntries([...own, ...shared].map(path => [path, contentDigest(path)])), EXACT_BACKEND_ORIGIN: process.env.EXACT_BACKEND_ORIGIN ?? null, PORT: process.env.PORT ?? null, ...settingInputs(app, process.env, appModules(app.dir, sourceInputs))};
 }
 
+/** Whether `path`, an input a web build of `app` recorded, is still a file it reads: in `assets/` and `deck/`, which the
+ * build copies whole and whose copy refuses a link anywhere (host/web/serve.mjs `copyStaticTree`), each part of its path
+ * below the app's folder is itself, directories then a regular file; elsewhere a file read through any links. */
+export function webInputPresent(app, path) {
+  const at = resolve(ROOT, path), parts = relative(app.dir, at).split(sep);
+  if (!['assets', 'deck'].includes(parts[0])) return statSync(at, { throwIfNoEntry: false })?.isFile() ?? false;
+  return parts.every((_, index) => lstatSync(resolve(app.dir, ...parts.slice(0, index + 1)), { throwIfNoEntry: false })?.[index < parts.length - 1 ? 'isDirectory' : 'isFile']() ?? false);
+}
+
 /** Changed inputs of the build in `dist`; modification times nominate candidates, digests compare their bytes. */
 export function webChanges(dist, app) {
   const marker = resolve(dist, '.exact-build.json');
@@ -1214,8 +1223,8 @@ export function webChanges(dist, app) {
   for (const path of sourceInputChanges(built.sourceInputs ?? appSourceInputs(app.dir))) (within(app.dir,path) ? appChanges : shared).push(shown(path));
   if (contract) for (const path of changedContractReads(contract)) (within(app.dir, path) ? appChanges : shared).push(shown(path));
   for (const path of changedContractReads(built.reads?.cargo ?? {})) (within(app.dir, path) ? appChanges : shared).push(shown(path));
-  // A file the build read that is gone since (a source deleted) is a change too: absence is an input.
-  for (const path of Object.keys(built.inputs ?? {})) if (!byContractReceipt(path) && !['EXACT_BACKEND_ORIGIN', 'PORT'].includes(path) && !isSettingInput(path) && built.inputs[path] !== null && !appChanges.includes(path) && !existsSync(resolve(ROOT, path))) (within(app.dir, resolve(ROOT, path)) ? appChanges : shared).push(path);
+  // A file the build read that is no longer one it reads (webInputPresent) is a change too: absence is an input.
+  for (const path of Object.keys(built.inputs ?? {})) if (!byContractReceipt(path) && !['EXACT_BACKEND_ORIGIN', 'PORT'].includes(path) && !isSettingInput(path) && built.inputs[path] !== null && !appChanges.includes(path) && !webInputPresent(app, path)) (within(app.dir, resolve(ROOT, path)) ? appChanges : shared).push(path);
   if ((built.inputs?.EXACT_BACKEND_ORIGIN ?? null) !== (process.env.EXACT_BACKEND_ORIGIN ?? null)) appChanges.push('EXACT_BACKEND_ORIGIN');
   if ((built.inputs?.PORT ?? null) !== (process.env.PORT ?? null)) appChanges.push('PORT');
   // A setting whose value or source moved, one the build read and is no longer declared, or one declared since.
