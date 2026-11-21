@@ -29,8 +29,8 @@ fn tip_change<D: DataSource>(
 fn title_at<D: DataSource>(p: &mut Presenter<D>, point: (f32, f32)) -> Option<Tip> {
     let dirty = p.dirty();
     let mut at = p.hit(point.0, point.1);
-    // A geometry query does not present the CPU window's pending picture.
-    if dirty {
+    // A geometry query must leave a pending window redraw intact.
+    if dirty && !p.dirty() {
         p.repaint();
     }
     while let Some(id) = at {

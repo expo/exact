@@ -142,6 +142,57 @@ fn window_geometry_and_capture_have_distinct_consumers() {
     );
 }
 
+#[cfg(windows)]
+#[test]
+fn direct_window_hover_reuses_fresh_hits_until_the_picture_is_presented() {
+    use crate::surfaces::window::{unopened_test_window, DirectWindow};
+
+    let source = r##"component App
+  view
+    box width=80 height=60 background-color="#003300" testId="target"
+      :hover
+        background-color = "#cc3300"
+"##;
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(source),
+        (),
+        (80., 60.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none());
+    let targets = Rc::new(RefCell::new(Vec::new()));
+    p.brush.replace_backend(Box::new(PresentPaint {
+        lost: false,
+        name: "test-presenter",
+        inner: Raster::new(),
+        targets: targets.clone(),
+        omit_capture: Rc::new(Cell::new(false)),
+    }));
+    let window = unopened_test_window();
+    p.surfaces.direct_window = Some(DirectWindow::new(window.clone()));
+    p.window_frame(window.clone()).unwrap();
+    targets.borrow_mut().clear();
+
+    p.pointer_move(10., 10., 1.).unwrap();
+    let key = p.host.kernel().find_by_test_id("target")[0];
+    let id = p.host.kernel().node_by_key(key).unwrap().id;
+    assert_eq!(p.hit(10., 10.), Some(id));
+    assert_eq!(p.hit(10., 10.), Some(id));
+    assert_eq!(*targets.borrow(), [FrameTarget::Geometry]);
+    assert!(p.dirty(), "the window still needs the hover picture");
+
+    p.window_frame(window).unwrap();
+    assert!(p.last_frame_succeeded());
+    assert!(!p.dirty());
+    assert_eq!(
+        *targets.borrow(),
+        [FrameTarget::Geometry, FrameTarget::Window]
+    );
+}
+
 #[test]
 fn cpu_windows_still_return_complete_pixels() {
     let (mut p, _) = Presenter::boot_with(

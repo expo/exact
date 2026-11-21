@@ -76,13 +76,16 @@ impl<D: DataSource> Presenter<D> {
         if opened {
             self.attach_painter_window(window.clone(), window_pixels(self))?;
         }
-        let (hwnd, hinstance) = (window.hwnd(), window.hinstance());
-        self.surfaces.window_owner = Some(window);
+        self.surfaces.window_owner = Some(window.clone());
         if let Some(mut direct) = self.surfaces.direct_window.take() {
+            if std::mem::take(&mut direct.repaint_owed) {
+                self.repaint();
+            }
             let frame = direct.frame(self);
             self.surfaces.direct_window = Some(direct);
             return frame;
         }
+        let (hwnd, hinstance) = (window.hwnd(), window.hinstance());
         let candidate = (self.brush.backend() == "cpu" && self.host.content_region().is_none())
             .then(|| self.surfaces.window_canvas())
             .flatten();
@@ -318,6 +321,8 @@ impl Startup {
 pub(crate) struct DirectWindow {
     pub(crate) window: exact_ink::device::d3d11::Window,
     pub(crate) recovering: bool,
+    // This window needs pixels even when its hit geometry is current.
+    pub(crate) repaint_owed: bool,
     retry: exact_ink::device::Retry,
     present_due: Option<std::time::Instant>,
     reservation_error_reported: bool,
@@ -337,6 +342,7 @@ impl DirectWindow {
         Self {
             window,
             recovering: false,
+            repaint_owed: false,
             retry: Default::default(),
             present_due: None,
             reservation_error_reported: false,
@@ -662,6 +668,24 @@ impl<D: DataSource> Presenter<D> {
 }
 
 #[cfg(test)]
+#[allow(unsafe_code)]
+pub(crate) fn unopened_test_window() -> exact_ink::device::d3d11::Window {
+    use wgpu::rwh as raw_window_handle;
+    struct UnusedWindow;
+    impl raw_window_handle::HasWindowHandle for UnusedWindow {
+        fn window_handle(
+            &self,
+        ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+            let raw =
+                raw_window_handle::Win32WindowHandle::new(std::num::NonZeroIsize::new(1).unwrap());
+            // The stub backend never passes this handle to a native API.
+            Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(raw.into()) })
+        }
+    }
+    exact_ink::device::d3d11::Window::from_owner(std::rc::Rc::new(UnusedWindow)).unwrap()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::paint::{Backend, GradientPaint, Rect4, Shape};
@@ -885,24 +909,8 @@ mod tests {
     }
 
     #[test]
-    #[allow(unsafe_code)]
     fn reservation_refusal_retries_and_lifecycle_clears_its_deadline() {
-        use wgpu::rwh as raw_window_handle;
-        struct UnusedWindow;
-        impl raw_window_handle::HasWindowHandle for UnusedWindow {
-            fn window_handle(
-                &self,
-            ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError>
-            {
-                let raw = raw_window_handle::Win32WindowHandle::new(
-                    std::num::NonZeroIsize::new(1).unwrap(),
-                );
-                // The stub backend never passes this handle to a native API.
-                Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(raw.into()) })
-            }
-        }
-        let window =
-            exact_ink::device::d3d11::Window::from_owner(std::rc::Rc::new(UnusedWindow)).unwrap();
+        let window = unopened_test_window();
         let mut p = cpu_presenter();
         p.frame();
         p.brush.replace_backend(Box::new(Lost(false, true)));

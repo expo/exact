@@ -824,6 +824,15 @@ impl<D: DataSource> Presenter<D> {
 
     /// Whether the picture is stale.
     pub fn dirty(&self) -> bool {
+        #[cfg(windows)]
+        if self
+            .surfaces
+            .direct_window
+            .as_ref()
+            .is_some_and(|w| w.repaint_owed)
+        {
+            return true;
+        }
         // A hold no picture has carried owes one, to carry it to a present
         // (LLP 1003.001 D9).
         self.dirty || !self.surfaces.captures.is_empty() || self.host.holds_uncarried()

@@ -74,7 +74,7 @@ impl<D: DataSource> Presenter<D> {
         canvas_frame: bool,
     ) -> Option<Arc<Pixmap>> {
         #[cfg(windows)]
-        let window_damage = self.surfaces.direct_window.is_some() && self.dirty();
+        let window_damage = self.dirty();
         // Its session's roles, whatever else lives on the thread (LLP 1121 stage 5).
         let _roles = self.host.runner().bind_roles();
         let frame = crate::text::cache::deferring_eviction(|| {
@@ -118,8 +118,15 @@ impl<D: DataSource> Presenter<D> {
         });
         // A geometry/accessibility snapshot has not submitted the window's new picture.
         #[cfg(windows)]
-        if window_damage {
-            self.repaint();
+        if let Some(window) = self
+            .surfaces
+            .direct_window
+            .as_mut()
+            .filter(|_| window_damage)
+        {
+            window.repaint_owed = true;
+            // A paint that failed kept its previous hit geometry.
+            self.dirty |= !self.last_frame_succeeded;
         }
         frame
     }
