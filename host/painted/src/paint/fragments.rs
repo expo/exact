@@ -262,21 +262,23 @@ pub(crate) fn slop_hits(kernel: &Kernel, b: &PaintedBox, x: f32, y: f32) -> bool
     if !node.style.may_have_hit_slop() {
         return false;
     }
-    let b = b.for_hit();
     let [t, r, bottom, l] = node.style.hit_slop(&kernel.env_of(node.id));
-    if t + r + bottom + l <= 0.0 || b.projective.is_some() {
+    if t + r + bottom + l <= 0.0 {
+        return false;
+    }
+    let mut b = b.for_hit();
+    if b.projective.is_some() {
         return false;
     }
     let grow = |q: Rect4| (q.0 - l, q.1 - t, q.2 + l + r, q.3 + t + bottom);
-    let mut grown = b.clone();
     match b.affine {
         Some((ts, local)) => {
-            grown.affine = Some((ts, grow(local)));
-            grown.rect = bbox(ts, grow(local));
+            b.affine = Some((ts, grow(local)));
+            b.rect = bbox(ts, grow(local));
         }
-        None => grown.rect = grow(b.rect),
+        None => b.rect = grow(b.rect),
     }
-    grown.contains(x, y)
+    b.contains(x, y)
 }
 
 /// Where the agent's `tap` aims on a box with fragments: its first

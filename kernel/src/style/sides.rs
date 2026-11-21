@@ -134,7 +134,8 @@ impl StyleProps {
         ]
     }
 
-    /// Whether any effective hit slop side can extend the box.
+    /// False when all four `-exact-hit-slop` sides are stored as zero
+    /// points, so [`Self::hit_slop`] is zero without resolving them.
     pub fn may_have_hit_slop(&self) -> bool {
         !self.rare.is_initial()
             && self
@@ -265,5 +266,16 @@ mod tests {
         assert_eq!([0, 1, 2, 3].map(|i| pick(3, i)), [0, 1, 2, 1]);
         assert!(elliptical("10px / 20px") && elliptical("10px/20px"));
         assert!(!elliptical("calc(20px / 2) 0"));
+    }
+
+    #[test]
+    fn hit_slop_is_skipped_only_when_every_side_is_zero_points() {
+        let mut p = StyleProps::default();
+        assert!(!p.may_have_hit_slop());
+        p.rare.hit_slop_top = Dimension::Points(-0.);
+        assert!(!p.rare.is_initial());
+        assert!(!p.may_have_hit_slop());
+        p.rare.hit_slop_left = Dimension::Env(crate::style::Edge::Left, 0.);
+        assert!(p.may_have_hit_slop());
     }
 }
