@@ -327,8 +327,9 @@ extension NSView {
 extension UIView {
     /// UIKit adds views of its own after the nodes they draw over, at
     /// depth 0: a scroller's edge effect (iOS 26), and, in a scroller or a
-    /// route's `PresentationMount`, the highlight a context menu grows a node
-    /// from (`LiftTarget.standing`), while UIKit hides the node itself. A child
+    /// route's `PresentationMount`, the highlight a pull-down grows its invoker
+    /// from (`LiftTarget.standing`), while UIKit hides the invoker itself; a
+    /// context menu's `LiftStage` joins the mount the same way. A child
     /// ranked above 0 (a positioned route, one holding a native button, a
     /// `position: relative` card, a `z-index`) would paint over them: the
     /// effect would run sharp under the bar and the node would show blank.
