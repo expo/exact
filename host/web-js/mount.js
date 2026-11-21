@@ -510,6 +510,11 @@ function adoptAt(target) {
   }
 }
 const onLazy = ev => adoptAt(ev.target);
+/** Whether `el` is in a row still waiting for its slice, which shows its rendered values. */
+export function waitingRow(el) {
+  for (let n = el; n && n.nodeType === 1; n = n.parentNode) if (LazyRows.has(n)) return true;
+  return false;
+}
 function slice() {
   LazyTask = null;
   const end = performance.now() + SLICE_MS;

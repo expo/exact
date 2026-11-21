@@ -184,12 +184,12 @@ export function motionController({views,now,generation,request,applyBatch,inert,
   // A press handler or control between the contact and an ancestor's
   // recognizer keeps the contact (rule 3's boundary, as AppKit and Linux do).
   const pressable=(e,el)=>{const inner=e.target.closest('button,a[href],select,[data-exact-on~="press"]');return !!inner&&inner!==el&&el.contains(inner);};
-  // By a mouse the innermost draggable node that carries something drags, not a drag recognizer around it (LLP 1094.000 D8).
-  // A press between the contact and that node keeps the contact from the node, and the recognizer treats it as it treats
-  // any press inside it.
+  // By a mouse the innermost draggable node drags, not a drag recognizer around it (LLP 1094.000 D8): another script's, or
+  // one the app made that carries something. A press between the contact and that node keeps the contact from the node,
+  // and the recognizer treats it as it treats any press inside it.
   const lifts=(e,el)=>{
-    const source=e.pointerType==='mouse'&&e.target.closest('[draggable="true"]');
-    if(!source||source===el||!el.contains(source)||!['text','url','files'].some(k=>source.hasAttribute(`data-datatransfer${k}`)))return false;
+    const source=e.pointerType==='mouse'&&e.target.closest('[draggable="true" i]');
+    if(!source||source===el||!el.contains(source)||source.exactDraggable==='true'&&!['text','url','files'].some(k=>source.getAttribute(`data-datatransfer${k}`)))return false;
     const kept=e.target.closest('button,a[href],[data-exact-on~="press"]');
     return !(kept&&kept!==source&&source.contains(kept));
   };
@@ -931,7 +931,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
         if(e.button!==0||interactive(e))return;
         const second=drag&&!drag.wheel&&!drag.gesture&&drag.pointers.size===1&&!drag.pointers.has(e.pointerId);
         if(!second&&!e.isPrimary)return;
-        if(!second&&(pressable(e,el)||lifts(e,el)))return;
+        if(lifts(e,el)||!second&&pressable(e,el))return;
         const d=second?drag:arm(e,{x:e.clientX,y:e.clientY,id,el,deferred:contacts().get(e.pointerId)==='pending'});if(!d)return;
         d.pointers.set(e.pointerId,[e.clientX,e.clientY]);
         if(second&&d.deferred){d.deferred=false;d.unwatch?.();for(const pointer of d.pointers.keys())el.setPointerCapture(pointer);}
@@ -1003,7 +1003,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
         d.factor=e.scale;d.gesture={x:e.clientX,y:e.clientY,spread:0};follow(d);
       });
       on('gestureend',e=>{const d=drag;if(!d?.gesture)return;e.preventDefault();release(d);});
-      on('dragstart',e=>{if(transformLocal(transformBindings.get(id))&&!interactive(e)&&!e.target.closest?.('[draggable="true"]'))e.preventDefault();});// a draggable node's own drag is the page's (LLP 1094.000 D6)
+      on('dragstart',e=>{if(transformLocal(transformBindings.get(id))&&!interactive(e)&&!e.target.closest?.('[draggable="true" i]'))e.preventDefault();});// a draggable node's own drag is the page's (LLP 1094.000 D6)
       on('click',e=>{if(suppressClick){suppressClick=false;e.preventDefault();e.stopPropagation();}});
     },
     attachHeightDrag(el,id,on) {
@@ -1110,7 +1110,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
       }
       drags.set(id,stop);
       on('pointerdown',e=>{
-        if(!e.isPrimary||e.button!==0||!eligible(el)||e.target.closest('input,textarea,[contenteditable]')||pressable(e,el))return;
+        if(!e.isPrimary||e.button!==0||!eligible(el)||e.target.closest('input,textarea,[contenteditable]')||pressable(e,el)||lifts(e,el))return;
         stop(); drag={pointer:e.pointerId,x:e.clientX,y:e.clientY,mouse:e.pointerType==='mouse'}; active.set(id,stop);
         contacts().set(e.pointerId,'pending');
         drag.unwatch=watchEnd(el,finish);
@@ -1128,8 +1128,8 @@ export function motionController({views,now,generation,request,applyBatch,inert,
       // the pointer stream to the swipe. A finger lifts by resting, not by moving, so only a hold cancels its drag.
       // A drag that goes ends the swipe's contact.
       const dragstart=e=>{
-        // Only a drag on this contact's path: begun inside the row or at a node around it.
-        if(!drag||!(el.contains(e.target)||e.target.contains?.(el)))return;
+        // Only the browser's drag on this contact's path: begun inside the row or at a node around it.
+        if(!e.isTrusted||!drag||!(el.contains(e.target)||e.target.contains?.(el)))return;
         const [right,left]=ways(),shown=sample(el,'translate')?.[0]??0;
         const takes=dx=>dx>0?right||shown<0:left||shown>0;
         const dx=drag.lastX===undefined?null:drag.lastX-drag.x,dy=(drag.lastY??drag.y)-drag.y;

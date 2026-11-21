@@ -1,6 +1,7 @@
 // LLP 1094.000 D6, D8: the browser's drag of a draggable node, through the page's own `drag-out.js`, pan and swipe
-// glue and drag rules, in Chromium, Firefox and WebKit under Playwright's mouse: what the drag carries, which contacts
-// keep it from the node, a swipe beside it, and another script's draggable left its own drag.
+// glue and drag rules, in Chromium, Firefox and WebKit under Playwright's mouse: what the drag carries, what keeps it
+// from the node, a field's down turning it off until the next down, a swipe beside it, and another script's draggable,
+// in any case, left its own drag.
 import { afterAll, beforeAll, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { browserMissing } from '../../../scripts/agent-playwright.mjs';
@@ -18,24 +19,32 @@ ${rules}
   img { width: 40px; height: 40px; }
 </style>
 <main id="exact-root">
-  <button id="card" draggable="true" data-datatransferfiles="assets/a.png" style="top:10px;display:flex;align-items:center"><span id="label" style="display:inline-block;width:150px;height:40px">Card</span><img id="picture"></button>
+  <button id="card" draggable="true" data-datatransferfiles="assets/a.png" style="top:10px;display:flex;align-items:center"><span id="label" style="display:inline-block;width:150px;height:40px">Card</span><img id="picture"><svg id="glyph" draggable="TRUE" data-foreign width="20" height="20"><rect width="20" height="20"></rect></svg></button>
   <div id="box" draggable="true" data-datatransfertext="box" style="top:70px"><button id="press" data-exact-on="press" style="display:inline-block;width:60px;height:40px;background:#aaa">Press<img id="icon" style="width:20px;height:20px"></button><input id="field" data-native value="some words to select" style="display:inline-block;width:110px"><input id="range" data-native type="range" min="0" max="100" value="10" style="display:inline-block;width:110px"></div>
-  <div id="pan" style="top:130px;height:60px;touch-action:none"><div id="inner" draggable="true" data-datatransfertext="inner" style="width:120px;height:40px;background:#aaa">inner</div></div>
+  <div id="pan" style="top:130px;height:60px;touch-action:none"><div id="inner" draggable="true" data-datatransfertext="inner" style="display:inline-block;width:120px;height:40px;background:#aaa">inner<a id="innerlink" href="#y" style="display:inline-block;margin-left:50px;width:30px;height:30px"></a></div><div id="theirs" data-foreign style="display:inline-block;width:120px;height:40px;background:#999">theirs</div><div id="empty" draggable="true" data-datatransfertext="" style="display:inline-block;width:40px;height:40px;background:#777"></div></div>
   <a id="link" href="/landmark/1016" style="top:200px"><img id="linked" draggable="true" data-datatransfertext="the picture"></a>
-  <div id="card2" draggable="true" data-datatransfertext="card" style="top:260px;height:60px"><div id="row" style="width:300px;height:44px;touch-action:pan-y;background:#bbb"></div></div>
+  <div id="card2" draggable="true" data-datatransfertext="card" style="top:260px;height:60px"><div id="row" style="width:300px;height:44px;touch-action:pan-y;background:#bbb"><div id="rowtheirs" draggable="true" data-foreign style="margin-left:250px;width:40px;height:44px;background:#999"></div></div></div>
   <div id="swipe" draggable="true" data-datatransfertext="swipe row" style="position:absolute;left:20px;top:340px;width:300px;height:44px;touch-action:pan-y"></div>
   <div id="foreign" draggable="true" data-foreign style="top:400px;height:40px"></div>
+  <button id="plain" style="top:460px;height:44px"><img id="upper" draggable="TRUE" data-foreign></button>
+  <div id="outer" draggable="true" data-datatransfertext="outer" style="top:520px;height:60px"><div id="pan2" style="width:250px;height:50px;touch-action:none;background:#ccc"><a id="panlink" href="#x" style="display:inline-block;width:80px;height:40px">link</a></div></div>
+  <div id="wrap" draggable="true" data-foreign style="top:10px;left:340px;width:300px;height:60px"><div id="pan3" style="width:250px;height:50px;touch-action:none;background:#ccc"><button id="panbutton" data-exact-on="press" style="display:inline-block;width:80px;height:40px;background:#999">b</button></div></div>
 </main>
 <script type="module">
   import { listen, writeDraggable } from './drag-out.js';
   window.writeDraggable = writeDraggable;
+  // The app's draggable nodes are those it writes through the listener; the rest are another script's.
+  for (const el of document.querySelectorAll('[draggable]:not([data-foreign])')) writeDraggable(el, 'true');
+  // A node the app wrote undraggable, which another script makes draggable
+  writeDraggable(document.getElementById('theirs'), 'false');
+  document.getElementById('theirs').setAttribute('draggable', 'TRUE');
   import { motionController } from './motion-glue.js';
   import { createInputHandlers } from './input-glue.js';
   window.drags = []; window.deltas = []; window.begins = [];
   const c = document.createElement('canvas'); c.width = c.height = 40; c.getContext('2d').fillRect(0, 0, 40, 40);
   await Promise.all([...document.querySelectorAll('img')].map((i) => new Promise((r) => { i.onload = r; i.src = c.toDataURL(); })));
   const byId = (id) => document.getElementById(id);
-  const views = new Map([[1, byId('row')], [2, byId('pan')], [3, byId('swipe')]]);
+  const views = new Map([[1, byId('row')], [2, byId('pan')], [3, byId('swipe')], [4, byId('pan2')], [5, byId('pan3')]]);
   let serial = 0;
   const motion = motionController({ views, now: () => performance.now(), generation: () => 1, inert: () => false, applyBatch() {},
     request(r) {
@@ -50,10 +59,9 @@ ${rules}
   }
   const input = createInputHandlers({ root: byId('exact-root'), views, retiredViews: new Set(), ready: () => true,
     inertAncestor: () => false, dispatch: (id, delta) => deltas.push(delta) });
-  const pan = byId('pan');
-  pan.addEventListener('pointerdown', input.pan(pan, 2, (type, fn) => pan.addEventListener(type, fn)));
-  byId('foreign').addEventListener('dragstart', (e) => e.dataTransfer.setData('text/plain', 'its own'));
-  listen(document, (el) => !el.hasAttribute('data-foreign'));
+  for (const [id, pan] of [[2, byId('pan')], [4, byId('pan2')], [5, byId('pan3')]]) pan.addEventListener('pointerdown', input.pan(pan, id, (type, fn) => pan.addEventListener(type, fn)));
+  for (const el of document.querySelectorAll('[data-foreign]')) el.addEventListener('dragstart', (e) => e.dataTransfer.setData('text/plain', el.id + "'s own"));
+  listen(document);
   window.addEventListener('dragstart', (e) => drags.push({ target: e.target.id, prevented: e.defaultPrevented,
     kinds: [...e.dataTransfer.items].map((i) => i.kind), text: e.dataTransfer.getData('text/plain'),
     uris: e.dataTransfer.getData('text/uri-list') }));
@@ -89,6 +97,7 @@ async function drag(page, selector, by, { from = [0, 0], steps = 15 } = {}) {
   return page.evaluate(() => {
     const field = document.getElementById('field');
     return { drags: [...drags], deltas: deltas.length, begins: [...begins], range: Number(document.getElementById('range').value),
+      pressed: document.getElementById('card').hasAttribute('data-pressed'),
       selection: field.selectionEnd - field.selectionStart, box: document.getElementById('box').getAttribute('draggable') };
   });
 }
@@ -102,43 +111,84 @@ for (const [engine, missing] of [['chromium', chromium().unavailable], ['firefox
       const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
       await page.goto(`http://127.0.0.1:${server.port}/`);
       await page.waitForFunction('window.ready');
-      // On the page as loaded: a field's down holds the node's drag off, what the app writes meanwhile waits, and the
-      // up gives the node the app's last value.
+      // On the page as loaded: a field's down turns the node's drag off, what the app writes meanwhile is kept, and the
+      // next down gives the node the app's last value.
       const fieldBox = await page.locator('#field').boundingBox(), held = () => page.evaluate(() => document.getElementById('box').getAttribute('draggable'));
       await page.mouse.move(fieldBox.x + 10, fieldBox.y + fieldBox.height / 2);
       await page.mouse.down();
       expect(await held()).toBe('false');
       await page.evaluate(() => { writeDraggable(document.getElementById('box'), 'false'); writeDraggable(document.getElementById('box'), 'true'); });
-      expect(await held()).toBe('false');
       await page.mouse.up();
+      expect(await held()).toBe('false');
+      // The node drags on the same page, in each engine.
+      const boxBox = await page.locator('#box').boundingBox(), [x, y] = [boxBox.x + boxBox.width / 2 + 130, boxBox.y + boxBox.height / 2];
+      await page.mouse.move(x, y);
+      await page.mouse.down();
       expect(await held()).toBe('true');
+      await page.mouse.move(x, y + 20, { steps: 15 });
+      await page.mouse.up();
+      expect(await page.evaluate(() => drags.filter((d) => !d.prevented).map((d) => d.text))).toEqual(['box']);
       // The card drags by its label and by its picture, carrying its file as a URL and not the picture's own bytes.
+      // The drag ends the card's press, which WebKit sends no pointerup or pointercancel to end (LLP 1094.000 D8).
       for (const at of ['#label', '#picture']) {
-        const card = went(await drag(page, at, [0, 20]));
+        const seen = await drag(page, at, [0, 20]), card = went(seen);
         expect(card.map((d) => [d.kinds.every((kind) => kind === 'string'), d.uris])).toEqual([[true, `http://127.0.0.1:${server.port}/assets/a.png`]]);
+        expect(seen.pressed).toBe(false);
       }
+      // From an SVG another script marked `draggable`, Firefox, which ignores the attribute there, drags the card with
+      // its data; Chromium and WebKit drag the SVG with its script's data.
+      const glyph = went(await drag(page, '#glyph', [0, 20])).map((d) => [d.text, d.uris]);
+      expect(glyph).toEqual([engine === 'firefox' ? ['', `http://127.0.0.1:${server.port}/assets/a.png`] : ["glyph's own", '']]);
       // A press, a picture in it, a text field and a slider inside the node keep a mouse's contact: the field selects
-      // its text and the slider moves, the node is draggable again at each release, and it drags again after.
+      // its text and the slider moves, the node stays undraggable after a field's or a slider's release, and a press on
+      // the node drags it.
       expect(went(await drag(page, '#press', [0, 20], { from: [-15, 0] }))).toEqual([]);
       expect(went(await drag(page, '#icon', [0, 20]))).toEqual([]);
       const field = await drag(page, '#field', [50, 0], { from: [-40, 0] });
-      expect([went(field), field.selection > 0, field.box]).toEqual([[], true, 'true']);
+      expect([went(field), field.selection > 0, field.box]).toEqual([[], true, 'false']);
       const slider = await drag(page, '#range', [60, 0], { from: [-44, 0] });
-      expect([went(slider), slider.box]).toEqual([[], 'true']);
+      expect([went(slider), slider.box]).toEqual([[], 'false']);
       expect(slider.range).toBeGreaterThan(40);
       expect(went(await drag(page, '#box', [0, 20], { from: [130, 0] })).map((d) => d.text)).toEqual(['box']);
-      // A draggable the app did not make keeps the drag its own script gave it.
-      expect(went(await drag(page, '#foreign', [0, 20])).map((d) => d.text)).toEqual(['its own']);
-      // By a mouse, the innermost draggable node inside a pan drags, and the pan does not.
-      const inner = await drag(page, '#inner', [0, 20]);
-      expect(went(inner).map((d) => d.text)).toEqual(['inner']);
-      expect(inner.deltas).toBe(0);
+      // A draggable the app did not make keeps the drag its own script gave it, and so does one written `TRUE` inside
+      // a button the app made.
+      expect(went(await drag(page, '#foreign', [0, 20])).map((d) => d.text)).toEqual(["foreign's own"]);
+      expect(went(await drag(page, '#upper', [0, 20])).map((d) => d.text)).toEqual(["upper's own"]);
+      // By a mouse, the innermost draggable node inside a pan drags, the app's or another script's, though on a node the
+      // app wrote undraggable, and the pan does not.
+      for (const [id, text] of [['#inner', 'inner'], ['#theirs', "theirs's own"]]) {
+        const inner = await drag(page, id, [0, 20]);
+        expect([went(inner).map((d) => d.text), inner.deltas]).toEqual([[text], 0]);
+      }
+      // A node the app made draggable that carries nothing, its text empty, is the pan's.
+      const empty = await drag(page, '#empty', [0, 20]);
+      expect([went(empty), empty.deltas > 0]).toEqual([[], true]);
+      // A link inside a pan inside a draggable card: a fast move, which Firefox begins a drag on before any pointermove,
+      // pans and drags neither the link nor the card.
+      const linked = await drag(page, '#panlink', [0, 30], { steps: 3 });
+      expect([went(linked).map((d) => d.target), linked.deltas > 0]).toEqual([[], true]);
+      // So does a link inside a draggable card inside a pan, the link keeping the card's drag and the pan the contact.
+      const inside = await drag(page, '#innerlink', [0, 30], { steps: 3 });
+      expect([went(inside).map((d) => d.target), inside.deltas > 0]).toEqual([[], true]);
+      // A pan inside another script's draggable wrapper keeps a fast mouse drag from a press inside it.
+      const wrapped = await drag(page, '#panbutton', [0, 30], { steps: 3 });
+      expect([went(wrapped).map((d) => d.target), wrapped.deltas > 0]).toEqual([[], true]);
+      // A synthetic `dragstart` during a press leaves the press shown.
+      const label = await page.locator('#label').boundingBox();
+      await page.mouse.move(label.x + 10, label.y + 10);
+      await page.mouse.down();
+      const shown = await page.evaluate(() => { document.getElementById('label').dispatchEvent(new DragEvent('dragstart', { bubbles: true })); return new Promise((r) => setTimeout(() => r(document.getElementById('card').hasAttribute('data-pressed')), 20)); });
+      await page.mouse.up();
+      expect(shown).toBe(true);
       // A draggable picture inside a link carries its own declaration.
       expect(went(await drag(page, '#linked', [0, 20])).map((d) => [d.text, d.uris])).toEqual([['the picture', '']]);
       // A swipe inside a draggable card takes a sideways drag; an upright one drags the card.
-      const sideways = await drag(page, '#row', [70, 0]);
+      const sideways = await drag(page, '#row', [70, 0], { from: [-60, 0] });
       expect([went(sideways), sideways.begins]).toEqual([[], [1]]);
-      expect(went(await drag(page, '#row', [0, 30])).map((d) => d.text)).toEqual(['card']);
+      // By a mouse, another script's draggable inside a swipe row drags with its own data, and the row does not swipe.
+      const theirs = await drag(page, '#rowtheirs', [70, 0]);
+      expect([went(theirs).map((d) => d.text), theirs.begins]).toEqual([["rowtheirs's own"], []]);
+      expect(went(await drag(page, '#row', [0, 30], { from: [-60, 0] })).map((d) => d.text)).toEqual(['card']);
       // A fast move whose first step passes the browser's threshold: Firefox starts the drag before its pointermove,
       // so the swipe takes the unknown movement, which swipes sideways and drags nothing upright; Chromium's and
       // WebKit's move comes first, even when it lands off the row, so an upright one drags.

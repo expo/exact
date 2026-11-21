@@ -10,6 +10,7 @@ import * as perf from './perf.js';
 import { resourceKey } from './resource-inspection.js';
 import { deliveryFacts } from './facts.js';
 import { cap } from './timer-observations.js';
+import { waitingRow } from './mount.js';
 // `state.replacement`: the last replacement's report (checkpoint.js), and what a waiting one waits for (LLP
 // 1029.000.002 D9, the dev page's boundary in dev.mjs). Null before any replacement while none waits.
 const replacementState = () => {
@@ -154,6 +155,10 @@ export function install(exact) {
     // are the host's presentation of a modal route, not props (input-glue.js marks them; LLP 1115.000 D4.5).
     const sheet = el.hasAttribute('data-exact-dialog');
     for (const [attr, prop, num] of PROPS) if (el.hasAttribute(attr) && !(hostRole && attr === 'role')) props[prop] = num ? Number(el.getAttribute(attr)) : el.getAttribute(attr);
+    // `draggable` only as the app wrote it: a field's contact turns it off on the page for a time, and another script's
+    // is not the app's (drag-out.js). A row still waiting for its slice shows its rendered value, as it shows the rest.
+    if (el.exactDraggable != null) props.draggable = el.exactDraggable;
+    else if (!waitingRow(el)) delete props.draggable;
     // The intent `tree --ax` reads (LLP 1080.002 D7), as the runner names it.
     if (el.hasAttribute('inert')) props.inert = true;
     // A disabled control, as the runner's tree gives its `disabled` prop (LLP 1116.010 D3: `expect disabled`, and a press refused the same on every host).
