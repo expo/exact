@@ -58,6 +58,7 @@ export const localImports = text => text
   .replaceAll('"../web/symbol-geometry.js"', '"./symbol-geometry.js"')
   .replaceAll("'../web/grant-admission.js'", "'./grant-admission.js'")
   .replaceAll("'../web/faults.js'", "'./faults.js'")
+  .replaceAll("'../web/drag-out.js'", "'./drag-out.js'")
   .replaceAll("'../web/address-space.js'", "'./address-space.js'")
   .replaceAll('"../web/address-space.js"', '"./address-space.js"');
 
@@ -67,7 +68,7 @@ export const localImports = text => text
 // reads storage-environment.js, so it ships in base, not only with storage.
 const WEB_HOST_GROUPS = {
   base: ['glue.js', 'navigation.js', 'audio-session.js', 'frame-messages.js', 'frame-navigation.js', 'textflow-glue.js', 'timer-glue.js', 'timer-waits-glue.js', 'timer-observations.js', 'input-glue.js', 'agent-input.js',
-    'http-body.js', 'grant-admission.js', 'faults.js', 'address-space.js', 'media-glue.js', 'list-selection.js', 'markup-editor.js', 'atoms.js', 'decorations.js', 'live-time-glue.js', 'document-glue.js',
+    'http-body.js', 'grant-admission.js', 'faults.js', 'address-space.js', 'media-glue.js', 'drag-out.js', 'list-selection.js', 'markup-editor.js', 'atoms.js', 'decorations.js', 'live-time-glue.js', 'document-glue.js',
     'motion-glue.js', 'group-glue.js', 'collection-glue.js', 'canvas2d-glue.js', 'presence-glue.js', 'picker-glue.js',
     'documents-glue.js', 'storage-environment.js', 'auth-glue.js', 'image-glue.js', 'geometry-glue.js', 'resize-glue.js', 'intersect-glue.js', 'sound-glue.js', 'midi-glue.js', 'prompt-glue.js', 'alert-message.js', 'wakelock-glue.js', 'orientationlock-glue.js', 'menu-rows.js', 'fragment.js'],
   module: ['module-glue.js', 'module-worker.js', 'module-binary.js', 'module-prelude.js'],

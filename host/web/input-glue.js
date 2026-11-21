@@ -1377,7 +1377,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
       // A child's implicit touch capture, lost when a deferred pan takes it, bubbles here.
       on("lostpointercapture", e => { if (e.target === el) cancel(); });
       el.addEventListener("click", e => { if (suppressClick) { suppressClick = false; e.preventDefault(); e.stopImmediatePropagation(); } }, true);
-      el.addEventListener("dragstart", e => { if (contact?.nested) e.preventDefault(); }); // a link's own drag is not the pan's
+      el.addEventListener("dragstart", e => { if (contact?.nested && !e.target.closest?.('[draggable="true"]')) e.preventDefault(); }); // a link's own drag is not the pan's; a draggable node's is the page's (LLP 1094.000 D6)
       return e => {
         // Only the click right after a pan is suppressed; a drag makes none.
         suppressClick = false;
@@ -1385,6 +1385,11 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
         // A control or editor between the contact and this node keeps it (rule 3).
         const inner = e.target.closest("input,textarea,select,[contenteditable]");
         if (inner && inner !== el && el.contains(inner)) return;
+        // By a mouse the innermost draggable node that carries something drags (LLP 1094.000 D8).
+        const source = e.pointerType === "mouse" && e.target.closest('[draggable="true"]');
+        const carries = source && ["text", "url", "files"].some(k => source.hasAttribute(`data-datatransfer${k}`));
+        const kept = carries && e.target.closest("button,a[href],[data-exact-on~='press']");
+        if (carries && source !== el && el.contains(source) && !(kept && kept !== source && source.contains(kept))) return;
         // A press handler between keeps it only within the slop, as a draggable
         // element hears a drag that starts on a button inside it (kanban F6):
         // nothing is captured or prevented until the pan begins, so a tap stays the button's.

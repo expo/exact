@@ -1439,4 +1439,7 @@ fn a_drags_bound_data_is_written_by_the_names_drag_js_admits() {
     for name in ["data-datatransferfiles", "data-datatransferurl"] {
         assert!(js.contains(&format!("\"{name}\"")), "{name}:\n{js}");
     }
+    // And `draggable` as HTML's own attribute, which the browser drags by.
+    assert!(js.contains("\"draggable\":\"true\""), "{js}");
+    assert!(!js.contains("data-draggable"), "{js}");
 }

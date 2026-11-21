@@ -1154,7 +1154,10 @@ export const navigation = {
     }
     document.addEventListener("click", captureLink, true);
     document.addEventListener("dragstart", (event) => {
-      if (root.contains(event.target) && event.target.matches?.("img[data-symbol-source], :is(button, a[href], [data-exact-on~=\"press\"]) img")) {
+      // A node an author made draggable drags with what is inside it, unless a press lies between (LLP 1094.000 D6, D8).
+      const source = event.target.closest?.('[draggable="true"]'), press = event.target.closest?.('button, a[href], [data-exact-on~="press"]');
+      const spared = source && (!press || press === source || press.contains(source));
+      if (root.contains(event.target) && event.target.matches?.("img[data-symbol-source], :is(button, a[href], [data-exact-on~=\"press\"]) img") && !spared) {
         event.preventDefault();
       }
     });

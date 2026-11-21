@@ -296,3 +296,30 @@ check('a claimed mouse swipe still commits once on its button-up sample', async 
     expect(ops).not.toContain('cancel');
   } finally { await page.context().close(); }
 });
+
+// LLP 1094.000 D8: a swipe beside the browser's own drag. The browser starts a draggable node's drag after a few
+// pixels, before the swipe decides: a sideways contact in a direction the swipe hears cancels the drag, and the
+// pointer stream goes on to the swipe; an upright one lets the drag go.
+check('a draggable swipe row keeps a sideways mouse drag and lets an upright one drag out', async () => {
+  const page = await open();
+  try {
+    await page.evaluate(() => {
+      document.getElementById('row').draggable = true;
+      window.drags = [];
+      window.addEventListener('dragstart', e => drags.push(e.defaultPrevented));
+    });
+    await page.mouse.move(150, 122);
+    await page.mouse.down();
+    await page.mouse.move(220, 124, { steps: 15 });
+    await page.mouse.up();
+    expect(await page.evaluate(() => drags)).toEqual([true]);
+    expect(await operations(page)).toContain('begin');
+    await page.evaluate(() => { calls.length = 0; drags.length = 0; });
+    await page.mouse.move(150, 122);
+    await page.mouse.down();
+    await page.mouse.move(152, 170, { steps: 15 });
+    await page.mouse.up();
+    expect(await page.evaluate(() => drags)).toEqual([false]);
+    expect(await operations(page)).not.toContain('begin');
+  } finally { await page.context().close(); }
+});

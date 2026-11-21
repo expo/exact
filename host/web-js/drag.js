@@ -4,7 +4,8 @@
 // refused, since its bytes cannot be read inside `dragstart`, and so is a `url` that is not absolute `http:` or
 // `https:`. A prop left with nothing is removed. As the runner journals a refusal when a binding writes a new value,
 // the page journals one when the value changes. `install` takes the runtime's hooks and journal, as follow.js
-// does, so the rules load without a page.
+// does, so the rules load without a page. The drag itself is the browser's, its data `drag-out.js`'s.
+import { listen } from '../web/drag-out.js';
 
 const FILES = 'data-datatransferfiles', URL_PROP = 'data-datatransferurl';
 
@@ -39,7 +40,7 @@ export function admitUrl(url, refuse) {
   return '';
 }
 
-export function install({ PropHooks, say }) {
+export function install({ PropHooks, say, document = globalThis.document }) {
   const last = new WeakMap();
   const hook = (name, rule) => (PropHooks[name] = (e, v) => {
     const seen = last.get(e) ?? last.set(e, {}).get(e);
@@ -52,4 +53,5 @@ export function install({ PropHooks, say }) {
   });
   hook(FILES, admit);
   hook(URL_PROP, admitUrl);
+  if (document) listen(document);
 }

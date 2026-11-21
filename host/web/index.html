@@ -67,8 +67,10 @@
   html:not([data-scrolldocument]), html:not([data-scrolldocument]) body { overscroll-behavior-y: none; }
   #exact-root :is(button, a[href], input, select, textarea, summary, [data-exact-on~="press"]) { touch-action: manipulation; }
   /* LLP 1115.000 D4.14: a symbol, and an image in something pressable, is part of the control, not content: no long-press
-     callout and no image drag (the navigation glue cancels the drag where the engine has no property for it). */
-  #exact-root img[data-symbol-source], #exact-root :is(button, a[href], [data-exact-on~="press"]) img { -webkit-touch-callout: none; -webkit-user-drag: none; }
+     callout and no image drag (the navigation glue cancels the drag where the engine has no property for it), unless
+     the image is itself draggable (LLP 1094.000 D6). */
+  #exact-root img[data-symbol-source], #exact-root :is(button, a[href], [data-exact-on~="press"]) img { -webkit-touch-callout: none; }
+  #exact-root :is(img[data-symbol-source], :is(button, a[href], [data-exact-on~="press"]) img):not([draggable="true"]) { -webkit-user-drag: none; }
   /* The unsaid press (LLP 1115.000 D6): a custom `button`, a link or a box
      with a `press` that declares no feedback shows 65% of its opacity, the iOS
      host's dim (PressFeedback.swift), while marked `data-pressed` by the input
@@ -106,6 +108,9 @@
      as the kernel resolves an `em` under no sized ancestor. */
   body { font: 1rem system-ui, sans-serif; }
   button, input, textarea { all: unset; display: block; box-sizing: content-box; cursor: default; }
+  /* The UA's own `-webkit-user-drag: element` for a draggable node, which `all: unset` undid: without it Chromium drags
+     no button (LLP 1094.000 D6). */
+  [draggable="true"] { -webkit-user-drag: element; }
   /* Native text fields keep the UA's chrome and content-box sizing, with
      the common reset's inherited typography (LLP 1104 D4, D8). */
   #exact-root [data-native] { all: revert; display: block; font: inherit; letter-spacing: inherit; color: inherit; }

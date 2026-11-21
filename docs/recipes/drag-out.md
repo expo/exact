@@ -2,10 +2,10 @@
 
 A node a person will lift and drop into another app (Messages, Notes, Photos,
 Files, the other pane of a split screen) says so with HTML's `draggable`
-attribute and declares what the drag carries (LLP 1094.000). On iOS and iPadOS
-a press held on the node lifts it, and on the Mac a mouse drags it; the drop
-gets the file itself. The web and Android lift it in their own stages. The
-declaration, `tree` and `expect drag` work on every host.
+attribute and declares what the drag carries (LLP 1094.000). A press held on
+the node lifts it on iOS and a mouse drags it on the Mac, where the drop gets
+the file itself; on the web the browser drags it, with the file's URL.
+Android's lift is still to come. `tree` and `expect drag` work on every host.
 
 ```contract
 fn thumb(l: Landmark): string = `assets/apple/${l.id}-thumb.jpg`
