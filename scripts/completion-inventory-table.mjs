@@ -126,7 +126,7 @@ export const classifications = [
     ["painted:host/painted/src/height_binding.rs", "Host::dispatch_height_held"],
     ["painted:host/painted/src/holds.rs", "Host::dispatch_held Host::dispatch_retained"],
     ["painted:host/painted/src/host.rs", "Host::boot_decoded Host::dispatch_at Host::dispatch_now"],
-    ["painted:host/painted/src/presenter/access.rs", "Presenter::access_act Presenter::access_pressable Presenter::access_pressed"],
+    ["painted:host/painted/src/presenter/access.rs", "Presenter::access_act Presenter::access_menu_flag Presenter::access_pressable"],
     ["painted:host/painted/src/presenter/addressed_tap.rs", "Presenter::presses_itself Presenter::tap Presenter::tap_at"],
     ["painted:host/painted/src/presenter/back.rs", "Presenter::system_back"],
     ["painted:host/painted/src/presenter/bars.rs", "Presenter::bar_choose"],
@@ -141,6 +141,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/desktop_access.rs",
       "Presenter::access_focus Presenter::access_focus_node Presenter::access_origin Presenter::access_select Presenter::access_selection Presenter::access_text " +
       "Presenter::access_view"],
+    ["painted:host/painted/src/presenter/drag_out.rs", "Presenter::ask_drag Presenter::drag_of Presenter::drag_source_at Presenter::inside Presenter::lift_source_at"],
     ["painted:host/painted/src/presenter/reader_selection.rs",
       "Presenter::reader_select Presenter::report_selection Presenter::selection_policy Presenter::selection_reports"],
     ["painted:host/painted/src/presenter/reader_selection/mouse.rs",
@@ -173,7 +174,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/stage/touch.rs", "Presenter::dismiss_sheet Presenter::nested_sheet_bounds Presenter::reader_sheet_drag"],
     ["painted:host/painted/src/presenter/top.rs", "Presenter::choose Presenter::dispatch_toggles"],
     ["painted:host/painted/src/presenter/top/input.rs", "Presenter::surface_event"],
-    ["painted:host/painted/src/presenter/top/invoke.rs", "Presenter::long_press"],
+    ["painted:host/painted/src/presenter/top/invoke.rs", "Presenter::long_press Presenter::open_context_menu"],
     ["painted:host/painted/src/presenter/transform_geometry.rs", "Presenter::deliver_resizes"],
     ["painted:host/painted/src/presenter/typing.rs", "Presenter::clipboard Presenter::clipboard_event Presenter::commit_text Presenter::key Presenter::key_default Presenter::type_key Presenter::type_text"],
     ["painted:host/painted/src/presenter/unload.rs", "Presenter::before_unload"],
@@ -654,7 +655,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/commands.rs", "Presenter::run_commands"],
     ["painted:host/painted/src/presenter/requests.rs",
       "Presenter::end_auth Presenter::end_packages Presenter::handle_modules Presenter::modules_replaced Presenter::orientation_applied Presenter::orientation_lock " +
-      "Presenter::pick Presenter::serve_packages Presenter::serve_requests Presenter::take_requests Presenter::tell_shell Presenter::wakelock_moved"],
+      "Presenter::pick Presenter::serve_packages Presenter::serve_requests Presenter::serve_share_sheet Presenter::take_requests Presenter::tell_shell Presenter::wakelock_moved"],
     ["painted:host/painted/src/teardown.rs", "finish"],
     ["render:host/render/src/executor.rs",
       "Executor::again Executor::begin_pump Executor::cancel Executor::drain Executor::forget Executor::let_go_started Executor::ordered_idle Executor::resume_ordered " +
@@ -719,6 +720,7 @@ export const classifications = [
     ["apple:host/apple/src/abi/exports.rs", "exact_share exact_share_land"],
     ["painted:host/painted/src/canvas/jni_keys.rs", "Java_dev_exact_canvas_Native_share"],
     ["painted:host/painted/src/canvas/keys.rs", "CanvasHost::share"],
+    ["painted:host/painted/src/presenter/requests.rs", "Presenter::share"],
   ]),
   group("shared tokens", ["one-shot"], "share token in the live router; copying may outlive the initiating view", "UI-owned",
     "runner/src/runner/picker/shared.rs:596-630 updates only a token accepted by router.share. Copied files can survive, but this completion targets the current router token.", [

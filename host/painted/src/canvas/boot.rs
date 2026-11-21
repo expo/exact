@@ -108,6 +108,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
         // The reader takes what the presenter asks of the platform (D5),
         // and makes the top layer's windows (D10) and the bars (D11).
         p.serve_requests();
+        p.serve_share_sheet();
         surface::serve(&mut p);
         if let Some(palette) = &palette {
             p.set_palette(palette);

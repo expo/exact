@@ -51,6 +51,9 @@ mod delivery;
 pub mod desktop_access;
 mod device;
 mod display_frame;
+pub mod drag_out;
+#[cfg(test)]
+mod drag_out_tests;
 pub mod edit_menu;
 mod events;
 mod feedback;
