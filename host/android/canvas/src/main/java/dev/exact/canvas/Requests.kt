@@ -79,14 +79,16 @@ internal class Requests(private val activity: ExactActivity) {
         sound?.apply(body)
     }
 
-    /** Hears the chooser's result broadcast, from this app alone: before Android 13 a receiver registered at run time
-     * is exported, and AndroidX's then requires a permission of the app's signature, which its library manifest declares
-     * in every app that embeds the reader (`ContextCompat.RECEIVER_NOT_EXPORTED`). The chooser sends the result as this
-     * app, which made its `PendingIntent`. */
+    /** Hears the chooser's result broadcast, which the chooser sends as this app, the maker of its `PendingIntent`: from
+     * Android 13 the receiver is not exported, and before it, where a receiver registered at run time is, AndroidX's
+     * requires `<package>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`, a signature permission, so that only an app signed
+     * with this app's certificate and holding it may send it (`ContextCompat.RECEIVER_NOT_EXPORTED`). AndroidX's library
+     * manifest declares and requests it, merged into an app's own by default; an app whose manifest drops either cannot
+     * share before Android 13. */
     private fun listen() {
         if (listening) return
-        listening = true
         ContextCompat.registerReceiver(activity, receiver, IntentFilter(shared), ContextCompat.RECEIVER_NOT_EXPORTED)
+        listening = true
     }
 
     /** The requests in [words]: for each its kind, its id, the count of words that follow, and those words. A kind
@@ -335,7 +337,10 @@ internal class Requests(private val activity: ExactActivity) {
          * else as any type (`image/png`; `image/png` and `image/jpeg` as `image/*`; with `application/pdf` as `*/*`), with a
          * read grant the chooser passes on to the app chosen (`Intent.createChooser`). The text is one `EXTRA_TEXT`, left
          * out where files go without it, whether one file or several: the Sharesheet's preview and AndroidX's
-         * `ShareCompat.IntentReader` read it so, though `ACTION_SEND_MULTIPLE`'s documentation allows a list.
+         * `ShareCompat.IntentReader` read it so, though `ACTION_SEND_MULTIPLE`'s documentation allows a list. With files
+         * the text is in no other place, the clip holding the streams alone, since the Sharesheet takes out only
+         * `EXTRA_TEXT` where the person turns off a link it offers to include; a receiver that reads text only from the
+         * clip, or only as a list, gets none.
          */
         fun sendIntent(title: String?, words: String, files: List<Pair<Uri, String>>): Intent {
             val many = files.size > 1
@@ -348,13 +353,9 @@ internal class Requests(private val activity: ExactActivity) {
             send.type = types.singleOrNull() ?: families.singleOrNull()?.let { "$it/*" } ?: "*/*"
             val uris = ArrayList(files.map { it.first })
             if (many) send.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris) else send.putExtra(Intent.EXTRA_STREAM, uris[0])
-            // The clip says what its streams are, and that it holds text, as a receiver may ask it before reading an item,
-            // and its first item carries the text, as Android's own clip from the extras does
-            // (`Intent.migrateExtraStreamToClipData`).
-            val text = words.ifEmpty { null }
-            val described = (types + listOfNotNull(text?.let { ClipDescription.MIMETYPE_TEXT_PLAIN })).distinct()
-            send.clipData = ClipData(ClipDescription(null, described.toTypedArray()), ClipData.Item(text, null, uris[0]))
-                .apply { uris.drop(1).forEach { addItem(ClipData.Item(it)) } }
+            // The clip, which carries the read grants, holds the streams alone and says what they are, as a receiver may ask
+            // it before opening one.
+            send.clipData = ClipData(ClipDescription(null, types.toTypedArray()), ClipData.Item(uris[0])).apply { uris.drop(1).forEach { addItem(ClipData.Item(it)) } }
             send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             return send
         }

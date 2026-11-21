@@ -94,9 +94,8 @@ class DragOutTest {
     }
 
     /** The sheet's intent: text alone; one file as its stream with its type; files of one family as several streams
-     * typed by the family; files of two families as any type; the text one `EXTRA_TEXT` whatever the files; each with
-     * the clip, which says the streams' types and text and carries the text on its first item, and the read grant the
-     * chooser passes on. */
+     * typed by the family; files of two families as any type; the text one `EXTRA_TEXT` whatever the files, and nowhere
+     * else; each with the clip of the streams and their types, and the read grant the chooser passes on. */
     @Test fun theSheetIsGivenTheFilesAsStreamsWithAReadGrant() {
         val text = Requests.sendIntent("A post", "Read this", emptyList())
         assertEquals(listOf(Intent.ACTION_SEND, "text/plain", "Read this", "A post"),
@@ -108,8 +107,8 @@ class DragOutTest {
         val one = Requests.sendIntent(null, "", listOf(a))
         val clipOf = { send: Intent -> (0 until send.clipData!!.description.mimeTypeCount).map { send.clipData!!.description.getMimeType(it) } }
         val captioned = Requests.sendIntent(null, "A photo", listOf(a))
-        assertEquals(listOf("A photo", "A photo"), listOf(captioned.getStringExtra(Intent.EXTRA_TEXT), captioned.clipData!!.getItemAt(0).text.toString()))
-        assertEquals(listOf("image/png", "text/plain"), clipOf(captioned))
+        assertEquals(listOf("A photo", null), listOf(captioned.getStringExtra(Intent.EXTRA_TEXT), captioned.clipData!!.getItemAt(0).text))
+        assertEquals(listOf("image/png"), clipOf(captioned))
         @Suppress("DEPRECATION")
         assertEquals(listOf(Intent.ACTION_SEND, "image/png", a.first), listOf(one.action, one.type, one.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)))
         assertFalse("no empty text beside a file", one.hasExtra(Intent.EXTRA_TEXT))
@@ -117,11 +116,11 @@ class DragOutTest {
         @Suppress("DEPRECATION")
         assertEquals(listOf(Intent.ACTION_SEND_MULTIPLE, "image/*", listOf(a.first, b.first), "Two photos"),
             listOf(two.action, two.type, two.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM), two.getStringExtra(Intent.EXTRA_TEXT)))
-        assertEquals(listOf("image/png", "image/jpeg", "text/plain"), clipOf(two))
-        assertEquals(listOf("Two photos", null), (0 until two.clipData!!.itemCount).map { two.clipData!!.getItemAt(it).text?.toString() })
+        assertEquals(listOf("image/png", "image/jpeg"), clipOf(two))
+        assertEquals(listOf(null, null), (0 until two.clipData!!.itemCount).map { two.clipData!!.getItemAt(it).text })
         assertEquals(listOf("image/png"), clipOf(one))
         assertEquals("*/*", Requests.sendIntent(null, "", listOf(a, c)).type)
-        for (send in listOf(one, two)) {
+        for (send in listOf(one, captioned, two)) {
             assertTrue(send.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)
             assertEquals(send.getStreams(), (0 until send.clipData!!.itemCount).map { send.clipData!!.getItemAt(it).uri })
         }

@@ -71,9 +71,9 @@ internal object Shares {
     }
 
     /**
-     * The text a share carries: `EXTRA_TEXT`. Several files are `ACTION_SEND_MULTIPLE`, whose text is a list with an
-     * entry for each stream (`Intent.ACTION_SEND_MULTIPLE`); its entries that say something are joined, one to a
-     * line. A sender that gives several files one text is read too.
+     * The text a share carries: `EXTRA_TEXT`. A sender may give several files' text (`ACTION_SEND_MULTIPLE`) as a list
+     * with an entry for each stream, as its documentation allows; its entries that say something are joined, one to a
+     * line. One text for several files, as AndroidX's `ShareCompat.IntentBuilder` and the reader send it, is read too.
      */
     internal fun text(intent: Intent): String? {
         val entries = if (intent.action == Intent.ACTION_SEND_MULTIPLE) intent.getCharSequenceArrayListExtra(Intent.EXTRA_TEXT) else null

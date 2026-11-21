@@ -24,8 +24,10 @@ class SharesTest {
     /** The system killed the process in the background and starts the activity again from its saved state. */
     @Test fun aShareRestoredWithItsActivityIsAPlainLaunch() = assertFalse(Shares.arrived(share, restored = true))
 
-    /** Several files carry their text as a list (`Requests.sendIntent`); a sender that gives them one text is read too. */
+    /** Several files' text, given as one text (`Requests.sendIntent`) or as a list whose entries with words are joined. */
     @Test fun aSharesTextIsReadFromOneTextAndFromSeveralFilesList() {
+        val listed = Intent(Intent.ACTION_SEND_MULTIPLE).putCharSequenceArrayListExtra(Intent.EXTRA_TEXT, arrayListOf<CharSequence>("Two photos", "", "Kyoto"))
+        assertEquals("Two photos\nKyoto", Shares.text(listed))
         val files = listOf("a", "b").map { Uri.parse("content://dev.exact.files/$it.png") to "image/png" }
         assertEquals("a note", Shares.text(share))
         assertEquals("Two photos", Shares.text(Requests.sendIntent(null, "Two photos", files)))
