@@ -257,7 +257,7 @@ impl<D: DataSource> Presenter<D> {
     /// First pixel (LLP 1026 D11): the selection that booted is good.
     pub fn first_pixel(&mut self) {
         if self.display.blocked()
-            || self.dirty
+            || self.picture_dirty()
             || !self.last_frame_succeeded
             || self.activation_failed.is_some()
         {

@@ -822,8 +822,7 @@ impl<D: DataSource> Presenter<D> {
         self.dirty = true;
     }
 
-    /// Whether the picture is stale.
-    pub fn dirty(&self) -> bool {
+    fn picture_dirty(&self) -> bool {
         #[cfg(windows)]
         if self
             .surfaces
@@ -833,9 +832,14 @@ impl<D: DataSource> Presenter<D> {
         {
             return true;
         }
+        self.dirty
+    }
+
+    /// Whether the picture is stale.
+    pub fn dirty(&self) -> bool {
         // A hold no picture has carried owes one, to carry it to a present
         // (LLP 1003.001 D9).
-        self.dirty || !self.surfaces.captures.is_empty() || self.host.holds_uncarried()
+        self.picture_dirty() || !self.surfaces.captures.is_empty() || self.host.holds_uncarried()
     }
 
     /// Where the pointer is drawn (`None` draws none).

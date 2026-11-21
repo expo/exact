@@ -183,6 +183,12 @@ fn direct_window_hover_reuses_fresh_hits_until_the_picture_is_presented() {
     assert_eq!(p.hit(10., 10.), Some(id));
     assert_eq!(*targets.borrow(), [FrameTarget::Geometry]);
     assert!(p.dirty(), "the window still needs the hover picture");
+    assert!(p.data_activating());
+    p.first_pixel();
+    assert!(
+        p.data_activating(),
+        "geometry alone must not activate the data source"
+    );
 
     p.window_frame(window).unwrap();
     assert!(p.last_frame_succeeded());
@@ -190,6 +196,12 @@ fn direct_window_hover_reuses_fresh_hits_until_the_picture_is_presented() {
     assert_eq!(
         *targets.borrow(),
         [FrameTarget::Geometry, FrameTarget::Window]
+    );
+    p.first_pixel();
+    assert_eq!(
+        p.data_state(),
+        1,
+        "the presented frame allows data activation"
     );
 }
 
