@@ -1,4 +1,4 @@
-import { host, loadAfterPaint, localAssetURL, agentMode, now, collections, followOffset, readOut, root, log, pageNative, loadPageNative, pieces, mutate, REPLACE_SETTLE_MS, waiting, encoder, writeIn, loadStage, focus, ask, presence, arrange, motion, views, retiredViews, followedScrolls, followScroll, pendingScrolls, lists, messageFrames, messageViews, controllers, forgettable, inflight, heldAsks, pageFacts, loadGpuIfNeeded, moduleCall, rustImports, dataImports, t0, agentKeepsStore, decoder, assetNamespace, documentsGlue, AGENT_ADMITTED, httpHelpers } from "../glue.js";
+import { host, loadAfterPaint, localAssetURL, agentMode, now, collections, followOffset, readOut, root, log, pageNative, loadPageNative, pieces, mutate, REPLACE_SETTLE_MS, waiting, encoder, writeIn, loadStage, focus, ask, presence, arrange, motion, views, retiredViews, followedScrolls, followScroll, pendingScrolls, lists, messageFrames, messageViews, controllers, forgettable, inflight, heldAsks, pageFacts, loadGpuIfNeeded, moduleCall, rustImports, dataImports, t0, agentKeepsStore, decoder, assetNamespace, documentsGlue, AGENT_ADMITTED, httpHelpers, stageLoaded } from "../glue.js";
 import { send, applyBatch } from "./commit.js";
 import { navigation, launchLocation, launchVisits, reportTime, reportPlace, preferences, updateCode, foldBits, appRootFontSize, releaseAssets, afterPaint, grantOrigins, modalLayers, inertAncestor, editMenu } from "../navigation.js";
 import { setInputReady } from "./input.js";
@@ -39,7 +39,15 @@ function stopModule(error) {
   host.textflow?.dispose();
   host.textflow = null;
   root.dataset.error = String(error);
-  console.error("exact: app.wasm trapped, and the page no longer calls it:", error);
+  // A call through the table into a stage not loaded yet finds an empty slot (LLP 1047.000 §9), a trap that names
+  // neither the stage nor the call: V8's "null function", SpiderMonkey's "indirect call to null", JavaScriptCore's call
+  // to a null table entry. Older V8's "null function or function signature mismatch" may be either, so it names none.
+  const staged = Object.keys(host.stages ?? {}).filter((name) => !stageLoaded(name));
+  const emptySlot = /^null function$|indirect call to null|null table entry/i;
+  const unloaded = error instanceof WebAssembly.RuntimeError && emptySlot.test(error.message) && staged.length
+    ? `; the call may have reached the ${staged.join(" and ")} stage before it loaded, around its gate: a function the build's split (host/web/stages.mjs) put there was called by the core or through the module's exports. A development build, which is unsplit, shows whether the split is the cause`
+    : "";
+  console.error(`exact: app.wasm trapped, and the page no longer calls it${unloaded}:`, error);
   globalThis.exact.onTrap?.(error);
 }
 addEventListener("error", (e) => e.error instanceof ModuleStopped && e.preventDefault());

@@ -48,7 +48,7 @@ import { buildEditor, buildFlow, compilerSet } from '../web-js/module.mjs';
 import { RustMissing, WEB_CRATES, rustMissing, setMetadata } from '../../scripts/tools.mjs';
 import { closeFilesystemReader, offlineMiss } from '../../scripts/filesystem.mjs';
 import { guardFlags, reportBuilt } from '../../scripts/help.mjs';
-import { BINARYEN_DOWNLOAD, optimizeWasm, splitStages, unsplitReason } from './stages.mjs';
+import { BINARYEN_DOWNLOAD, optimizeWasm, splitStages, stripWasm, Unsplittable, unsplitReason } from './stages.mjs';
 import { interfaceStyle, launchBackground, schemeHead, withInterfaceStyle, withLook } from './look.mjs';
 import { webIconLinks, webThemeColors } from '../../scripts/app-icons.mjs';
 import { appManifestDigest, appSources, buildFileCards, copyStaticTreeIfPresent, listAssets, hostingNotes, planRouteTable, publicFileCards, replaceBuild, webEnvelope, moduleCards, MODULE_FILES } from './serve.mjs';
@@ -485,11 +485,20 @@ if (opt.error?.code === 'ENOENT') { copyFileSync(built, out); optNote = `wasm-op
 else if (opt.status !== 0) process.exit(opt.status ?? 1);
 else if (unsplit) optNote = `wasm-opt -Oz${opt.cached ? ' (cached)' : ''}; unsplit: ${unsplit}`;
 else {
-  const split = splitStages(named);
-  writeFileSync(out, split.core);
-  for (const [path, bytes] of split.files) { mkdirSync(resolve(stage, path, '..'), { recursive: true }); writeFileSync(resolve(stage, path), bytes); }
+  let split;
+  try { split = splitStages(named); }
+  catch (e) {
+    // A module the planner cannot show safe to split ships whole.
+    if (!(e instanceof Unsplittable)) throw e;
+    stripWasm(named, out);
+    optNote = `wasm-opt -Oz${opt.cached ? ' (cached)' : ''}; unsplit: ${e.message}`;
+  }
+  if (split) {
+    writeFileSync(out, split.core);
+    for (const [path, bytes] of split.files) { mkdirSync(resolve(stage, path, '..'), { recursive: true }); writeFileSync(resolve(stage, path), bytes); }
+    optNote = `wasm-opt -Oz${opt.cached ? ' (cached)' : ''}; the core, with stages: ${split.report.join('; ')}`;
+  }
   rmSync(named);
-  optNote = `wasm-opt -Oz${opt.cached ? ' (cached)' : ''}; the core, with stages: ${split.report.join('; ')}`;
 }
 }
 
