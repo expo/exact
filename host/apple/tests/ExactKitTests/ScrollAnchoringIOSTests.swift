@@ -69,28 +69,34 @@ final class ScrollAnchoringIOSTests: XCTestCase {
         XCTAssertEqual(sv.contentOffset.x, 296, accuracy: 0.5, "a width the batch passes through clamps nothing")
         p.apply(wireBatch([frame(356)]))
         XCTAssertEqual(sv.contentOffset.x, 244, accuracy: 0.5, "a batch that ends wider clamps it, as CSS does")
+        // The place stays until the scroller shows it: a window turning lays a strip out over several batches
+        p.apply(wireBatch([frame(330)]))
+        XCTAssertEqual(sv.contentOffset.x, 270, accuracy: 0.5, "a later batch shows as much of the place as its range allows")
+        p.apply(wireBatch([frame(300)]))
+        XCTAssertEqual(sv.contentOffset.x, 296, accuracy: 0.5, "and the place once the range gives it back")
+        p.apply(wireBatch([frame(356)]))
+        sv.contentOffset.x = 200
+        p.apply(wireBatch([frame(300)]))
+        XCTAssertEqual(sv.contentOffset.x, 200, accuracy: 0.5, "the reader's scroll after a clamp is a place of its own")
         // An inset the host sets keeps the offset, as UIKit does (`SafeReach.reconcile`)
         let node = try XCTUnwrap(p.views[1])
         sv.contentOffset.x = 100
-        node.captureScrollPosition(focused: nil)
         sv.contentInset.left += 24
-        node.restoreScrollPosition()
+        node.keepScrollLeft()
         XCTAssertEqual(sv.contentOffset.x, 100, accuracy: 0.5, "an inset the host set leaves the offset where it was")
         sv.contentInset.left -= 24
         sv.contentOffset.x = 0
-        node.captureScrollPosition(focused: nil)
         sv.contentInset.left += 24
         sv.contentOffset.x = -24
-        node.restoreScrollPosition()
+        node.keepScrollLeft()
         XCTAssertEqual(sv.contentOffset.x, -24, accuracy: 0.5, "one at its start stays at its new start")
         sv.contentInset.left -= 24
         // A write after a clamp is a place of its own, which stays
         sv.contentOffset.x = 296
-        node.captureScrollPosition(focused: nil)
         sv.frame.size.width = 356
         sv.frame.size.width = 300
         sv.contentOffset.x = 270
-        node.restoreScrollPosition()
+        node.keepScrollLeft()
         XCTAssertEqual(sv.contentOffset.x, 270, accuracy: 0.5, "the host's write after the clamp")
     }
 

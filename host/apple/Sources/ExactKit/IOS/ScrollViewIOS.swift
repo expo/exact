@@ -192,15 +192,20 @@ package class ScrollView: UIScrollView, SafeIndicators {
             presenter.moveOrPlace(node) { super.bounds = newValue }
         }
     }
-    /// The sideways offset UIKit last clamped from, since the batch began (`NodeView.keepScrollLeft`), moved with
-    /// UIKit's own part of the left inset as it was then
+    /// The place UIKit last clamped the sideways offset from (`NodeView.keepScrollLeft`), moved with UIKit's own part
+    /// of the left inset as it was then: kept until the scroller shows it again or anything else writes the offset
     var clampedLeft: CGFloat?
+    /// Whether the host is writing a clamped place as far as the range allows: a write that keeps the place for a
+    /// later range
+    var showingClampedPlace = false
     /// UIKit's clamp of the sideways offset to the range the scroll view has now (`_adjustContentOffsetIfNecessary` as
-    /// a frame, a content size or an inset changes): a write to the range's edge from past it. The first since the
-    /// batch began is the place; later clamps start from a place already clamped. Any other write since (the host's,
-    /// UIKit's for a safe area, the reader's) is a place of its own, and lets the clamp go.
+    /// a frame, a content size or an inset changes): a write to the range's edge from past it. The first is the place;
+    /// later clamps start from a place already clamped. Any other write since (the host's, UIKit's for a safe area,
+    /// the reader's) is a place of its own, and lets the clamp go; so does every write of the reader's scroll, its
+    /// bounce back to an edge included.
     private func noteClamp(from old: CGFloat, to new: CGFloat) {
-        guard abs(new - old) > 0.001 else { return }
+        guard abs(new - old) > 0.001, !showingClampedPlace else { return }
+        if isTracking || isDragging || isDecelerating { clampedLeft = nil; return }
         let i = adjustedContentInset, low = -i.left, high = max(low, contentSize.width + i.right - bounds.width)
         let clamp = (abs(new - high) < 0.001 && old > high) || (abs(new - low) < 0.001 && old < low)
         if !clamp { clampedLeft = nil } else if clampedLeft == nil { clampedLeft = old + i.left - contentInset.left }
@@ -465,6 +470,9 @@ final class PaddedRefreshControl: UIRefreshControl {
 
 extension Presenter {
     func finishScrollPositions(restoring: Bool) {
+        // Every batch shows the places UIKit clamped as far as its range allows, one that only moves boxes too: the
+        // range can come back in any batch after the one that took it (`keepScrollLeft`)
+        for id in scrollers where !collections.owns(id) { views[id]?.keepScrollLeft() }
         let ids = restoring ? scrollers.union(pendingScrolls) : pendingScrolls
         if restoring {
             // What the batch's `scrollIntoView`s will move, and the scrollers it writes `scrollTop` to.
@@ -628,7 +636,6 @@ extension NodeView {
         // Snapshot both from the same layout before preserving the reader.
         if groupedOwner { scrollView?.layoutIfNeeded() }
         beforeLayoutScroll = scrollView.map { ($0.contentOffset, scrollTopInset($0), scrollLeftInset($0), extras?.nativeScrollContentInsets.top ?? 0) }
-        (scrollView as? ScrollView)?.clampedLeft = nil
         followedScroll = nil
         readingAnchors.removeAll(keepingCapacity: true)
         scrollAnchor = nil
@@ -679,30 +686,34 @@ extension NodeView {
         if groupedOwner { readingAnchors = presenter?.groupedLists?.scrollAnchors(for: id) ?? [] }
         else { anchors(in: sv) }
     }
-    /// A sideways offset UIKit clamped to a range a batch passed through (a strip framed wider for a moment as an iPhone
-    /// Duo unfolds) goes back once the batch ends, within the range the batch ends with, as CSS keeps `scrollLeft` through
-    /// a layout; the place is the offset UIKit clamped from, moved with UIKit's own part of the left inset since. Only a
-    /// clamp is undone: a write the batch or the host made (an inset kept in place, a row set back to its start) stays.
-    /// Not while a scroll or zoom is under way, the reader's or an animated one; an authored write
-    /// (`writePendingScrolls`) and an element reveal still move it after. Before iOS 17.4 UIKit's own animated scroll (a
-    /// keyboard's, or an end followed once a fling stops) does not show (`scrollsItself`).
-    private func keepScrollLeft(_ sv: UIScrollView) {
-        guard let scroller = sv as? ScrollView, let place = scroller.clampedLeft else { return }
-        scroller.clampedLeft = nil
-        guard sv.isScrollEnabled, scroller.scrollsX, !groupedOwner, !authoredScrollAnimating, !followingEndAnimated,
-              toTopBegan == nil, !zoomHeld(sv), !scrollUnderWay(sv) else { return }
-        if #available(iOS 17.4, tvOS 17.4, *), sv.isZoomAnimating { return }
+    /// A sideways offset UIKit clamped to a range a layout passed through (a strip framed wider for a moment as an
+    /// iPhone Duo unfolds or turns, over one batch or several) goes back as a batch ends, as far as the range then
+    /// allows, as CSS keeps `scrollLeft` through a layout; the place is the offset UIKit clamped from, moved with
+    /// UIKit's own part of the left inset since. It stays until the scroller shows it, so a later batch that gives the
+    /// range back shows it, or until anything else writes the offset. Only a clamp is undone: a write the batch or the
+    /// host made (an inset kept in place, a row set back to its start) stays. Not while a scroll or zoom is under way,
+    /// the reader's or an animated one; an authored write (`writePendingScrolls`) and an element reveal still move it
+    /// after. Before iOS 17.4 UIKit's own animated scroll (a keyboard's, or an end followed once a fling stops) does
+    /// not show (`scrollsItself`).
+    func keepScrollLeft() {
+        guard let sv = scrollView as? ScrollView, let place = sv.clampedLeft else { return }
+        guard sv.isScrollEnabled, sv.scrollsX, !groupedOwner, !authoredScrollAnimating, !followingEndAnimated,
+              toTopBegan == nil, !zoomHeld(sv), !scrollUnderWay(sv) else { sv.clampedLeft = nil; return }
+        if #available(iOS 17.4, tvOS 17.4, *), sv.isZoomAnimating { sv.clampedLeft = nil; return }
         let i = sv.adjustedContentInset, maximum = max(-i.left, sv.contentSize.width + i.right - sv.bounds.width)
-        let x = min(max(place - (i.left - sv.contentInset.left), -i.left), maximum)
+        let wanted = place - (i.left - sv.contentInset.left)
+        if wanted >= -i.left - 0.01, wanted <= maximum + 0.01 { sv.clampedLeft = nil }
+        let x = PixelGrid.clamp(wanted, -i.left, maximum, scale: presenter?.gridScale ?? 1)
         guard abs(x - sv.contentOffset.x) > 0.01 else { return }
-        sv.contentOffset.x = PixelGrid.clamp(x, -i.left, maximum, scale: presenter?.gridScale ?? 1)
+        sv.showingClampedPlace = true
+        defer { sv.showingClampedPlace = false }
+        sv.contentOffset.x = x
     }
 
     /// `authored`: the batch asks for a scroll of it (a `scrollIntoView` of
     /// something in it, which comes after the batch), which wins over the end-follow.
     func restoreScrollPosition(authored: Bool = false) {
         defer { followedScroll = nil; readingAnchors.removeAll(keepingCapacity: true); scrollAnchor = nil }
-        if let sv = scrollView { keepScrollLeft(sv) }
         guard props["scrollFollowEnd"] == "true", let sv = scrollView else {
             if let sv = scrollView {
                 if groupedOwner, let anchor = readingAnchors.first(where: { presenter?.views[$0.node.id] === $0.node && scrollRect($0.node, in: sv) != nil }),
