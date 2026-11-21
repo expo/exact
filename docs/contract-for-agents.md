@@ -7710,7 +7710,8 @@ an inherited one (`color`, fonts, `fill`…); `inherit` on a row CSS does not
 inherit is refused. `order` places flex and grid items. An image's accessible
 name is `alt` or `aria-label`; `enterkeyhint` labels a soft keyboard's enter
 key on the web, iOS and Android; in a `textarea` that key is Enter, a new line
-unless a `key` handler prevents it. A bare number on a length row is pixels (except
+unless a `key` handler prevents it (on Android only where the hint names an action:
+a textarea with no hint, or `enter`, breaks the line itself). A bare number on a length row is pixels (except
 `line-height`, where it is CSS's multiple of the font size), and the row takes
 CSS's spellings too (`font-size="14px"`, `letter-spacing="-0.5px"`,
 `padding="1.5rem"`; `stroke-width="2px"` but no `rem` there), bound or literal

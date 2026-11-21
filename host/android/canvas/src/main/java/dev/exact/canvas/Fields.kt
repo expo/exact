@@ -423,7 +423,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
                 Exact.fieldComposing(f.id, f.generation, composing, e.toString())
             }
             if (!f.edited && !f.moved) continue
-            val start = max(0, f.text.selectionStart); val end = max(start, f.text.selectionEnd)
+            val (start, end) = ordered(f.text.selectionStart, f.text.selectionEnd)
             if (f.edited) {
                 if (log) Log.i(TAG, "field ${f.id} edit ${f.edits}: ${e.length} units, selection $start..$end, composing " +
                     "${BaseInputConnection.getComposingSpanStart(e)}..${BaseInputConnection.getComposingSpanEnd(e)}")
@@ -950,6 +950,10 @@ internal class Fields(context: Context) : FrameLayout(context) {
 /** [context] with no font weight adjustment, for a field's [EditText]: Bold Text's step is in the weight the kernel
  * gives it (LLP 1115.000 D12.3, UIKit's step, which light weights take too), and a `TextView` would otherwise add the
  * device's adjustment to every typeface it is set in, the one it measures in included. */
+/** An `EditText`'s selection as exact2 reads it, start then end: Android gives a selection made backward (Shift+Left)
+ * its anchor first, and -1 where there is none. */
+internal fun ordered(anchor: Int, edge: Int): Pair<Int, Int> = max(0, min(anchor, edge)) to max(0, max(anchor, edge))
+
 internal fun unadjusted(context: Context): Context = ContextThemeWrapper(context, context.theme).apply {
     if (android.os.Build.VERSION.SDK_INT >= 31) applyOverrideConfiguration(Configuration().apply { fontWeightAdjustment = 0 })
 }
