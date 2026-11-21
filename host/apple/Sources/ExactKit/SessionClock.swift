@@ -40,7 +40,7 @@ extension ExactSession {
             timerAdmissions.check()
             followOffset()
             // Posted, not waited for; one in flight re-arms the clock as it lands.
-            if ExactSession.asyncFills { if !advanceInFlight { sendAdvance(now: now()) }; return }
+            if postsTimerAdvances { if !advanceInFlight { sendAdvance(now: now()) }; return }
             let batch = runtime.advance(now: now())
             guard batch.busy else { applyUnlessEmpty(batch); return }
             guard clockTimer == nil else { return } // a batch since armed its own
@@ -66,7 +66,7 @@ extension ExactSession {
         advancingDue = true
         defer { advancingDue = false }
         followOffset()
-        guard ExactSession.asyncFills else { applyUnlessEmpty(runtime.advance(now: now())); return }
+        guard postsTimerAdvances else { applyUnlessEmpty(runtime.advance(now: now())); return }
         let then = runtime.landThenFirst()
         guard !then.held else { return } // (over a reset: ResetGate replays it)
         applyUnlessEmpty(then)

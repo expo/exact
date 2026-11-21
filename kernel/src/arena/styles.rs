@@ -91,3 +91,26 @@ impl NodeArena {
         self.shared.len()
     }
 }
+
+impl NodeArena {
+    /// Mark the colours its styles hold: the shared table's, which every
+    /// node's style is one of, and the control and document styles.
+    pub(crate) fn wide_colors(&mut self, m: &mut crate::style::wide::WideMark) {
+        use crate::style::wide::Colors;
+        self.shared.wide_colors(m);
+        if let Some(control) = &self.control_styles {
+            control.colors(m);
+        }
+        self.document_style.colors(m);
+    }
+
+    /// The same, visiting every style (for a clone, once).
+    pub(super) fn wide_colors_shared(&self, m: &mut crate::style::wide::WideMark) {
+        use crate::style::wide::Colors;
+        self.shared.visit(m);
+        if let Some(control) = &self.control_styles {
+            control.colors(m);
+        }
+        self.document_style.colors(m);
+    }
+}

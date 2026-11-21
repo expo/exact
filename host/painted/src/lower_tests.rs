@@ -253,11 +253,13 @@ fn a_look_arriving_mid_track_takes_the_readers_track_back() {
     assert_eq!(shown(&h), 0.2);
 }
 
-/// A track of [`spinner_words`], read back as the reader reads it.
+/// A scalar track decoded from the layer stream.
 struct Track {
     prop: u32,
     hold: Option<f64>,
     duration: f64,
+    iterations: f64,
+    easing: Option<Easing>,
     keys: Vec<(f64, f64, Option<Easing>)>,
 }
 
@@ -286,9 +288,9 @@ fn read_tracks(words: &[u32]) -> Vec<Track> {
         let (prop, duration) = (words[i], at(i + 5));
         let hold = (words[i + 2] != 0).then(|| at(i + 3));
         assert_eq!((words[i + 1], at(i + 4), words[i + 7]), (0, 0.0, 0));
-        assert!(at(i + 6).is_infinite(), "endless");
+        let iterations = at(i + 6);
         i += 9;
-        assert!(easing(&mut i).is_none(), "each keyframe names its own");
+        let track_easing = easing(&mut i);
         let n = words[i] as usize;
         i += 1;
         let mut keys = Vec::new();
@@ -301,6 +303,8 @@ fn read_tracks(words: &[u32]) -> Vec<Track> {
             prop,
             hold,
             duration,
+            iterations,
+            easing: track_easing,
             keys,
         });
     }
@@ -315,6 +319,59 @@ fn sample(t: &Track, seconds: f64) -> f64 {
     k[0].1 + (k[1].1 - k[0].1) * eased
 }
 
+#[test]
+fn lowered_translate_keyframes_and_transitions_resolve_the_current_box() {
+    const END: &str = "calc(10px - 50%) calc(25% - 4px)";
+    for transition in [false, true] {
+        let motion = if transition {
+            format!(r#"translate=(moving ? "{END}" : "0px") transition="translate 1s linear""#)
+        } else {
+            r#"animation=(moving ? "slide 1s linear" : "none") animation-timeline=Transport"#
+                .to_owned()
+        };
+        let source = format!(
+            r#"timeline Transport
+keyframes slide
+  from translate="0px"
+  to translate="{END}"
+component App
+  state moving = false
+  action go
+    moving = true
+  view
+    column
+      box testId="strip" width=200 height=100 {motion}
+      button testId="start" press=go
+        text "Start"
+"#
+        );
+        let (mut h, error) = Host::boot(
+            &crate::test_plan(&source),
+            (),
+            Box::new(MonospaceMeasurer::default()),
+            400.,
+            500.,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        h.lowering = true;
+        h.engine.set_lowered_properties(&LOWERED);
+        let strip = h.kernel().find_by_test_id("strip")[0];
+        let button = h.kernel().find_by_test_id("start")[0];
+        let id = h.kernel().node_by_key(button).unwrap().id;
+        assert!(h.dispatch_at(id, Event::Press, 0.).is_none());
+        assert_eq!(h.lowered_mask(strip), LOWER_TRANSFORM);
+        for (size, expected) in [((200., 100.), [-90., 21.]), ((360., 40.), [-170., 6.])] {
+            let tracks = read_tracks(&h.layer_tracks(strip, &Presented::IDENTITY, size));
+            for (code, end) in [TX, TY].into_iter().zip(expected) {
+                let keys = &tracks.iter().find(|t| t.prop == code).unwrap().keys;
+                assert_eq!(keys.first().unwrap().1, 0.);
+                assert_eq!(keys.last().unwrap().1, end);
+            }
+        }
+    }
+}
+
 /// Material's indicator moves as Compose's `CircularProgressIndicator`
 /// draws it, frame by frame: where its tail is and how long its arc is,
 /// from the layer's rotation and dash phase the reader plays.
@@ -323,6 +380,9 @@ fn the_indicator_tracks_move_as_composes_indicator() {
     let tracks = read_tracks(&spinner_words(false));
     let dash = tracks.iter().find(|t| t.prop == DASH).unwrap();
     let rotate = tracks.iter().find(|t| t.prop == ROTATE).unwrap();
+    assert!(tracks
+        .iter()
+        .all(|t| t.iterations.is_infinite() && t.easing.is_none()));
     let ease = Easing::CubicBezier {
         x1: 0.4,
         y1: 0.0,

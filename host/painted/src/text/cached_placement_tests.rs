@@ -3,6 +3,211 @@ use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 const BINS: [u8; 4] = [0, 1, 2, 3];
+
+#[test]
+fn edited_field_ink_matches_full_layout_across_wraps_chunks_and_font_changes() {
+    let mut engine = engine();
+    let paragraph = |engine: &mut TextEngine, value: &str, width: f32, size: f32| {
+        let style = StyleProps::default().with_rows(|rows| {
+            rows.white_space = exact_kernel::WhiteSpace::PreWrap;
+            rows.font_size = size;
+        });
+        let spec = crate::paint::text_spec(&style, value);
+        engine.paragraph(&spec, Some(width))
+    };
+    let long = "w".repeat(257);
+    let body = format!("first\n{long}\n\nעברית\ne\u{301}nd");
+    let edited = body.replacen("first", "1st", 1);
+    let short = edited.replace(&long, "w");
+    let extended = edited.replace(&long, &"z".repeat(258));
+    let reflow = short.replace("1st", &"word ".repeat(23));
+    let mut old = paragraph(&mut engine, &body, 4000., 14.);
+    old.paint_bounds(1.25).unwrap();
+    for (text, width, size, scale, expected) in [
+        (edited.as_str(), 4000., 14., 1.25, Some(3)),
+        (short.as_str(), 4000., 14., 1.25, Some(1)),
+        (extended.as_str(), 4000., 14., 1.25, Some(258)),
+        (reflow.as_str(), 100., 14., 1.25, None),
+        (short.as_str(), 100., 14., 1.25, None),
+        (body.as_str(), 100., 19., 1.25, None),
+        (short.as_str(), 100., 19., 2., None),
+    ] {
+        let next = paragraph(&mut engine, text, width, size);
+        let before = ink::build_work();
+        next.reuse_field_ink(&old);
+        next.paint_bounds(scale).unwrap();
+        let work = delta(before);
+        assert_eq!(work.attempts, 1);
+        if let Some(expected) = expected {
+            assert_eq!(work.glyphs, expected);
+        }
+        let oracle = ink::Index::uncached_oracle(
+            &mut next.source.catalog.borrow_mut(),
+            &next,
+            scale,
+            ink::MAX_BYTES,
+        )
+        .unwrap();
+        next.ink
+            .borrow()
+            .index
+            .as_deref()
+            .unwrap()
+            .assert_same_numeric(&oracle);
+        compare(
+            &mut engine,
+            &next,
+            &palette(),
+            View::at(-12.25, scale),
+            None,
+        );
+        old = next;
+    }
+}
+#[test]
+fn edited_width_matches_fresh_shaping_after_lines_move_wrap_or_change_face() {
+    let mut engine = engine();
+    let spec = |text: &str, size| {
+        let style = StyleProps::default().with_rows(|rows| {
+            rows.white_space = exact_kernel::WhiteSpace::PreWrap;
+            rows.font_size = size;
+        });
+        crate::paint::text_spec(&style, text)
+    };
+    let tail = "unchanged words wrapping here";
+    let mut old = engine.edited_field(&spec(&format!("a\n{tail}"), 13.), Some(65.), None);
+    for (value, width, size, shared) in [
+        (format!("abc\r\n{tail}"), 65., 13., true),
+        (format!("abc\n\nمرحبا\n{tail}"), 65., 13., true),
+        (format!("abc\u{2029}{tail}"), 65., 13., true),
+        (format!("中🙂\n{tail}"), 65., 13., false),
+        (format!("b\n{tail}"), 120., 13., false),
+        (format!("b\ná\n{tail}"), 120., 19., false),
+        (format!("head\nkeep\nx\r{tail}"), 120., 19., false),
+        (format!("head\nkeep\nx\r\n{tail}"), 120., 19., true),
+        (
+            format!("head\nkeep\n🙂\u{85}\u{2029}{tail}"),
+            120.,
+            19.,
+            true,
+        ),
+        ("head\nkeep\n".into(), 120., 19., false),
+        ("".into(), 120., 19., false),
+    ] {
+        let next_spec = spec(&value, size);
+        let next = engine.edited_field(&next_spec, Some(width), Some(&old));
+        let actual = next.lines();
+        if shared {
+            let last_glyphs = |p: &Paragraph| {
+                let lines = p.lines();
+                lines.glyphs_of(lines.lines.last().unwrap()).as_ptr()
+            };
+            assert_eq!(
+                last_glyphs(&next),
+                last_glyphs(&old),
+                "unchanged positioned glyphs"
+            );
+        }
+        let fresh = engine.layout(&next_spec, Some(width));
+        let expected = fresh.lines();
+        assert_eq!((next.width, next.height), (fresh.width, fresh.height));
+        assert_eq!(next.baselines, fresh.baselines);
+        assert_eq!(next.bottoms, fresh.bottoms);
+        assert_eq!(actual.lines, expected.lines);
+        assert_eq!(actual.faces.len(), expected.faces.len());
+        for (a, b) in actual.faces.iter().zip(&expected.faces) {
+            assert_eq!(a.id(), b.id());
+            assert_eq!(a.coords, b.coords);
+        }
+        for (a, b) in actual.lines.iter().zip(&expected.lines) {
+            assert_eq!(actual.glyphs_of(a), expected.glyphs_of(b));
+        }
+        old = next;
+    }
+}
+
+#[test]
+fn a_field_edit_across_styled_runs_keeps_line_offsets_and_glyph_ownership() {
+    let mut engine = engine();
+    let style =
+        StyleProps::default().with_rows(|rows| rows.white_space = exact_kernel::WhiteSpace::Pre);
+    let mut previous = None;
+    for parts in [
+        vec!["one\n", "two\r", "\n🙂\nlast"],
+        vec!["one\n", "two\r", "🙂\nlast"],
+        vec!["one\n", "", "🙂\nlast"],
+        vec!["one\n", "🙂\n", "last", ""],
+        vec!["one\n", "🙂\r", "\n", ""],
+        vec!["one\n", "🙂\r", "\n"],
+    ] {
+        let mut spec = crate::paint::text_spec(&style, "");
+        spec.runs = parts
+            .into_iter()
+            .enumerate()
+            .map(|(i, text)| {
+                let mut run = spec.strut.clone();
+                run.text = text.into();
+                run.weight = if i % 2 == 0 { 400 } else { 700 };
+                run
+            })
+            .collect();
+        let next = engine.edited_field(&spec, Some(100.), previous.as_deref());
+        let fresh = engine.layout(&spec, Some(100.));
+        let lines = |p: &Paragraph| {
+            p.source
+                .data
+                .lines
+                .iter()
+                .map(|line| (line.start, line.text.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(lines(&next), lines(&fresh));
+        assert_eq!(next.lines().lines, fresh.lines().lines);
+        for (a, b) in next.lines().lines.iter().zip(&fresh.lines().lines) {
+            assert_eq!(next.lines().glyphs_of(a), fresh.lines().glyphs_of(b));
+        }
+        previous = Some(next);
+    }
+}
+
+#[test]
+fn short_field_rows_keep_glyph_storage_compact_after_an_edit() {
+    let mut engine = engine();
+    let style =
+        StyleProps::default().with_rows(|rows| rows.white_space = exact_kernel::WhiteSpace::Pre);
+    for (row, glyphs) in [("x\n", 261), ("\n", 5)] {
+        let value = format!("head\n{}", row.repeat(256));
+        let before =
+            engine.edited_field(&crate::paint::text_spec(&style, &value), Some(280.), None);
+        let after = engine.edited_field(
+            &crate::paint::text_spec(&style, &format!("q{value}")),
+            Some(280.),
+            Some(&before),
+        );
+        let split = shaping::SPLIT_BYTES.get();
+        let middle = format!("qhead\n{}Q{}", row.repeat(128), row.repeat(128));
+        let edited = engine.edited_field(
+            &crate::paint::text_spec(&style, &middle),
+            Some(280.),
+            Some(&after),
+        );
+        assert_eq!(shaping::SPLIT_BYTES.get() - split, 1 + row.len());
+        assert_eq!(
+            edited.source.data.lines[129].text,
+            format!("Q{}", row.trim_end())
+        );
+        let mut lines = after.lines().clone();
+        assert_eq!(lines.glyphs.len(), glyphs);
+        let retained = lines.capacity_bytes();
+        lines.glyphs = Default::default();
+        let packed = lines.capacity_bytes() + glyphs * std::mem::size_of::<LayoutGlyph>();
+        assert!(
+            retained <= packed + 1024,
+            "{retained} bytes for a {packed}-byte layout"
+        );
+    }
+}
+
 fn cache_card(p: &Paragraph) -> BTreeMap<GlyphKey, Option<(i32, i32, u32, u32)>> {
     p.source
         .catalog

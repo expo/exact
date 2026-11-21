@@ -16,11 +16,13 @@ public final class WidgetTimelineWaiters<Entry: TimelineEntry>: @unchecked Senda
         waiting[cache, default: []].append((size, completion))
         return first
     }
-    public func finish(_ cache: WidgetTimelineCache, _ timeline: Timeline<Entry>, fallback: Timeline<Entry>) {
+    /// `revision` is the store revision `timeline` was computed under, which can be newer than the
+    /// one `cache` was begun with when a store write restarted the refresh.
+    public func finish(_ cache: WidgetTimelineCache, _ timeline: Timeline<Entry>, revision: WidgetTimelineCache, fallback: Timeline<Entry>) {
         lock.lock()
         let callbacks = waiting.removeValue(forKey: cache) ?? []
         lock.unlock()
-        let answer = cache.isCurrent ? timeline : fallback
+        let answer = revision.isCurrent ? timeline : fallback
         for (size, callback) in callbacks {
             callback(Timeline(entries: answer.entries.map { stamp($0, size) }, policy: answer.policy))
         }

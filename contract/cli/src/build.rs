@@ -249,11 +249,16 @@ fn build(options: &Options) -> ExitCode {
     // A game's surface arguments are checked apart: against a declaration
     // older than the game's Rust they are warnings, never hiding the
     // compile's own refusals (the platformer's diary, R4).
+    let warning_limit = if json {
+        usize::MAX
+    } else {
+        contract_lower::MAX_WARNINGS
+    };
     let contract::Advised {
         compiled: (compiled, mut warnings),
         surfaces,
         clocks,
-    } = contract::compile_path_advised(Path::new(input), true, profile);
+    } = contract::compile_path_advised(Path::new(input), true, profile, warning_limit);
     let mut refused = match &surfaces {
         Ok(s) if s.newer.is_none() => s.findings.clone(),
         Ok(_) => Vec::new(),

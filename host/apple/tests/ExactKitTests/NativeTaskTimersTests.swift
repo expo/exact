@@ -120,9 +120,9 @@ final class NativeTaskTimersTests: XCTestCase {
     /// An idle session whose only work is a task's native timer (NATIVE_RETRY's `every(50, tick)`), on the live clock:
     /// nothing else applies a batch, so only the timer's own queue can deliver it again.
     private func idleTicker(async asynchronous: Bool) throws -> ExactSession {
-        ExactSession.asyncFills = asynchronous
         asks = 0
         let session = ExactApp.shared.makeSession(label: "native-retry")
+        session.postsTimerAdvances = asynchronous
         session.taskTimers = NativeTaskTimers(now: { [weak session] in session?.now() ?? 0 }, ready: { [weak self, weak session] in
             self?.asks += 1
             session?.deliverNativeTimer()
@@ -165,19 +165,15 @@ final class NativeTaskTimersTests: XCTestCase {
     /// LLP 1072 T5: a firing the queue delivers while main serves a callback the owner waits on (a nested run loop
     /// inside it) is answered `busy`.
     func testABusyFiringIsRetriedByItsQueueAndTheTaskKeepsFiring() throws {
-        let previous = ExactSession.asyncFills
-        defer { ExactSession.asyncFills = previous }
         let session = try idleTicker(async: false)
         defer { session.destroy() }
         try assertRetriedAndKeepsFiring(session) { refusing in
             Owner.shared.sync { Owner.shared.callMain { refusing() } }
         }
     }
-    /// A firing the queue delivers while a reset holds the runtime, the native path synchronous (the Mac's) or posted
+    /// A firing the queue delivers while a reset holds the runtime, the native firing synchronous or posted
     /// to the owner, whose held answer lands before the re-queue (`deliverNativeTimer`'s async path).
     func testAHeldFiringIsRetriedByItsQueueAndTheTaskKeepsFiring() throws {
-        let previous = ExactSession.asyncFills
-        defer { ExactSession.asyncFills = previous }
         for asynchronous in [false, true] {
             let session = try idleTicker(async: asynchronous)
             defer { session.destroy() }
@@ -257,12 +253,10 @@ final class NativeTaskTimersTests: XCTestCase {
     }
     #if EXACT_LINKS_CALTRAIN
     func testNativeDeliveryCrossesTheOwnerQueueOnceAndRetainsTheRepeat() throws {
-        let previous = ExactSession.asyncFills
-        defer { ExactSession.asyncFills = previous }
         for asynchronous in [false, true] {
-            ExactSession.asyncFills = asynchronous
             NativeTimerTestClock.shared.set(0)
             let session = ExactApp.shared.makeSession()
+            session.postsTimerAdvances = asynchronous
             defer { session.destroy() }
             session.taskTimers = NativeTaskTimers(now: { NativeTimerTestClock.shared.sample() }, date: { self.date }, ready: { [weak session] in session?.deliverNativeTimer() })
             session.runtime.setLiveClock { NativeTimerTestClock.shared.sample() }
@@ -301,8 +295,7 @@ final class NativeTaskTimersTests: XCTestCase {
     }
     #endif
     func testAdmissionPostsToTheOwnerAndRechecksGatesBeforeTheNextFiring() throws {
-        let bytes = try fixturePlan("TIMER_ADMISSION"), previous = ExactSession.asyncFills
-        defer { ExactSession.asyncFills = previous }
+        let bytes = try fixturePlan("TIMER_ADMISSION")
         enum Replacement { case none, beforeSubmission, afterSubmission }
         let cases: [(Bool, Bool, Bool, Replacement)] = [
             (false, false, false, .none), (true, false, false, .none),
@@ -310,8 +303,8 @@ final class NativeTaskTimersTests: XCTestCase {
             (true, false, false, .beforeSubmission), (true, false, false, .afterSubmission),
         ]
         for (asynchronous, frame, cancelled, replacement) in cases {
-            ExactSession.asyncFills = asynchronous
             let session = ExactApp.shared.makeSession()
+            session.postsTimerAdvances = asynchronous
             defer { session.destroy() }
             session.runtime.setLiveClock { 1_000_000_000 }
             let boot = session.runtime.bootPlan(bytes, width: 390, height: 844)

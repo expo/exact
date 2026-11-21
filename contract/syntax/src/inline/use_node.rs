@@ -1,6 +1,7 @@
 //! Component use expansion has its own frame, separate from each view site.
 
 use super::*;
+use sha2::{Digest, Sha256};
 
 /// The component's names that a read takes as a value: its states, derives,
 /// resources, mutations, and props and injects that are not actions.
@@ -81,7 +82,7 @@ pub(super) fn inline_use(
     ctx.path.push(name.clone());
     let records = ctx.records;
     let mut child = Subst::new(&prepared.subst, records).with_value_only(&prepared.value_only);
-    let body = inline_nodes(&prepared.view, &mut child, ctx);
+    let body = inline_nodes(&prepared.view, &mut child, ctx, None);
     ctx.path.pop();
     ctx.depth -= 1;
     ctx.provides.truncate(outer_provides);
@@ -196,9 +197,8 @@ fn prepare_use(node: &Node, subst: &mut Subst<'_, Expr>, ctx: &mut Ctx<'_>) -> O
         };
         child_subst.insert(p.name.clone(), e);
     }
-    // The child's own `state`, `derive`, and `action` (LLP 1017 P4c):
-    // renamed apart with this use's number and lifted into the
-    // root — a derive as an expression substituted at each read.
+    // Only lexical binders use the expansion counter. A member can survive a
+    // replacement, so its name must follow the use that owns it.
     *ctx.counter += 1;
     let n = *ctx.counter;
     let owner = ctx.arms.last().copied().unwrap_or(Owner::Instance);
@@ -220,10 +220,7 @@ fn prepare_use(node: &Node, subst: &mut Subst<'_, Expr>, ctx: &mut Ctx<'_>) -> O
         .filter(|p| !p.ty.as_ref().is_some_and(is_action))
     {
         let expr = &child_subst[&prop.name];
-        if !matches!(
-            expr,
-            Expr::Ident(..) | Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(..)
-        ) {
+        if computed(expr) {
             ctx.thunks.push(Thunk {
                 name: format!("@argument:{}#{n}", prop.name),
                 expr: expr.clone(),
@@ -233,12 +230,14 @@ fn prepare_use(node: &Node, subst: &mut Subst<'_, Expr>, ctx: &mut Ctx<'_>) -> O
             });
         }
     }
+    let namespace = format!("{:x}", Sha256::digest(ctx.place.as_bytes()));
+    let lifted = |member: &str| format!("{member}#{namespace}");
     let mut names: BTreeMap<String, String> = BTreeMap::new();
     for st in &c.states {
-        names.insert(st.name.clone(), lifted(&st.name, n));
+        names.insert(st.name.clone(), lifted(&st.name));
     }
     for a in &c.actions {
-        names.insert(a.name.clone(), lifted(&a.name, n));
+        names.insert(a.name.clone(), lifted(&a.name));
     }
     for st in &c.states {
         child_subst.insert(st.name.clone(), Expr::Ident(names[&st.name].clone(), *span));
@@ -251,14 +250,14 @@ fn prepare_use(node: &Node, subst: &mut Subst<'_, Expr>, ctx: &mut Ctx<'_>) -> O
         .filter(|r| !super::reads_device(r))
         .collect();
     for r in &owned {
-        let lifted = lifted(&r.name, n);
+        let lifted = lifted(&r.name);
         child_subst.insert(r.name.clone(), Expr::Ident(lifted.clone(), *span));
         names.insert(r.name.clone(), lifted);
     }
     // And its mutations (D6): each instance sends, waits and runs its `then`
     // on its own.
     for m in &c.mutations {
-        let lifted = lifted(&m.name, n);
+        let lifted = lifted(&m.name);
         child_subst.insert(m.name.clone(), Expr::Ident(lifted.clone(), *span));
         names.insert(m.name.clone(), lifted);
     }
@@ -381,7 +380,7 @@ fn prepare_use(node: &Node, subst: &mut Subst<'_, Expr>, ctx: &mut Ctx<'_>) -> O
     };
     for ((derive, _), expr) in derives.iter().zip(resolved) {
         ctx.thunks.push(Thunk {
-            name: lifted(&derive.name, n),
+            name: lifted(&derive.name),
             expr: expr.clone(),
             owner,
             instance,
@@ -426,7 +425,7 @@ fn prepare_use(node: &Node, subst: &mut Subst<'_, Expr>, ctx: &mut Ctx<'_>) -> O
     for t in &c.tasks {
         ctx.extra_tasks.push((
             crate::Task {
-                name: lifted(&t.name, n),
+                name: lifted(&t.name),
                 gate: t.gate.as_ref().map(|e| subst_expr(e, &mut child)),
                 key: t.key.as_ref().map(|e| subst_expr(e, &mut child)),
                 timer: (
@@ -545,7 +544,13 @@ fn prepare_use(node: &Node, subst: &mut Subst<'_, Expr>, ctx: &mut Ctx<'_>) -> O
         })
     });
     // Rename only the view: declarations were lifted above.
-    let mut renamed = rename_nodes(&c.view, &BTreeMap::new(), n, ctx.discarded_slots);
+    let mut renamed = rename_nodes(
+        &c.view,
+        &BTreeMap::new(),
+        n,
+        ctx.discarded_slots,
+        &mut ctx.source_keys,
+    );
     share_instance_props(c, &mut renamed, &child_subst, &derives, &value_names, ctx);
     let provides = c
         .provides

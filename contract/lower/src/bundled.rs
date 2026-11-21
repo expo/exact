@@ -25,6 +25,12 @@ pub(crate) fn check(view: &View<'_>, root: &Path) -> (Vec<LowerError>, Vec<Lower
     sources(
         view.walk().filter_map(|node| node.element()),
         |what, source, span| {
+            if what == "drag file" {
+                if let Some(e) = unshipped(root, &source, span).filter(|e| !out.contains(e)) {
+                    out.push(e);
+                }
+                return;
+            }
             if what == "image source" && !images.contains(&(source.clone(), span)) {
                 images.push((source.clone(), span));
                 image_svg(root, native, &source, span, &mut out, &mut warnings);
@@ -87,6 +93,20 @@ fn sources<'a>(
                     "src" => sources.push((what.unwrap_or_default(), &a.value)),
                     "poster" => sources.push(("video poster", &a.value)),
                     _ => {}
+                }
+            }
+        }
+        // @ref LLP 1094.000 D2 — a drag's literal files, `dataTransfer=DataTransfer(files=[…])`.
+        for a in attrs.iter().filter(|a| a.name == "dataTransfer") {
+            if let Expr::Call(_, args, _) = &a.value {
+                for arg in args {
+                    if let Expr::NamedArg(name, files, _) = arg {
+                        if name == "files" {
+                            if let Expr::List(items, _) = files.as_ref() {
+                                sources.extend(items.iter().map(|e| ("drag file", e)));
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -162,6 +182,17 @@ fn image_svg(
             }
         }
     }
+}
+
+/// A literal shipped file a drag names that the app does not ship.
+fn unshipped(root: &Path, source: &str, span: Span) -> Option<LowerError> {
+    (exact_plan::is_shipped_drag_file(source) && !root.join(source).is_file()).then(|| LowerError {
+        id: "lower-draggable-unreadable",
+        message: format!(
+            "`{source}` is not a file this app ships. Name a file under `assets/`, as an `image` would"
+        ),
+        span,
+    })
 }
 
 fn raster(bytes: &[u8]) -> bool {

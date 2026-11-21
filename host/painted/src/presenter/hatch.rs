@@ -17,15 +17,6 @@ use exact_runner::ControlValue;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-/// The platform a hatch word names for this build, as the plan's row has it.
-const HATCH_PLATFORM: &str = if cfg!(target_os = "windows") {
-    "windows"
-} else if cfg!(target_os = "android") {
-    "android"
-} else {
-    "linux"
-};
-
 /// Where Exact stood before it dispatched an observed event, and who hears it.
 pub(crate) struct Mark {
     seq: u64,
@@ -272,7 +263,7 @@ impl<D: DataSource> Presenter<D> {
     ) {
         // A word the plan does not give this platform, or the module was not
         // built to handle (§4.3): shown, never called, journaled once, listed.
-        if !self.host.plan_gives_hatch(&word, HATCH_PLATFORM) {
+        if !self.host.plan_gives_hatch(&word, crate::PLATFORM.name()) {
             if self.hatches.first_unhandled(&word, "plan") {
                 self.host.log(format!("hatch element {word}: the plan does not give it to this platform; its nodes are shown and never called"));
             }

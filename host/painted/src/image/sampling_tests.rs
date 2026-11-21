@@ -151,6 +151,7 @@ fn retained_pixelated_images_sample_the_viewport_at_replay() {
                     9,
                     Transform::identity(),
                     (0., 0.),
+                    (0., 0.),
                     [0., 37., 1.25, 0., 1., 0., 0.],
                 ));
                 Transform::from_translate(0., 37.).pre_scale(1.25, 1.25)

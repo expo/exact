@@ -54,6 +54,7 @@ public enum ExactEnv {
     /// Whether the agent's world is settled between calls: native animation
     /// applies at once. False under `platform` timing.
     public static let agentFreezes = agentMode && agentTiming != "platform"
+    static let postsLiveWork = !agentFreezes && environment["EXACT_FILL_SYNC"] != "1"
     public static let smoke = environment["EXACT_SMOKE"] == "1"
     /// Milliseconds since the process's `main`: the wall clock for startup stamps.
     public static let t0 = CACurrentMediaTime()
@@ -230,8 +231,8 @@ public final class ExactApp {
     public func reloadConnection() { connection?.reload() }
 
     /// A plan is one app generation: every session accepts before any swaps.
-    /// It waits while a field composes, a pointer is down or a gesture is
-    /// under way, or its module prepares or requests are in flight (LLP
+    /// It waits for marked text unless AppKit can keep its editor. It also
+    /// waits for a press, a gesture, module preparation or requests in flight (LLP
     /// 1029.000.002 D9): the app keeps it, applies it at the first turn
     /// without one, and `lifecycle` hears how it ended.
     @discardableResult
@@ -247,7 +248,7 @@ public final class ExactApp {
     }
 
     /// Prepare and commit in every session now (`applyTogether` holds it first).
-    func commitTogether(_ bytes: Data, label: String, resolver candidateResolver: AssetResolver, token: UInt64, identity: String?, module: ExactModule?, letGo: Bool, commit: () -> Bool) -> ExactApplyResult {
+    func commitTogether(_ bytes: Data, label: String, resolver candidateResolver: AssetResolver, token: UInt64, identity: String?, module: ExactModule?, letGo: Bool, heldFields: (Set<ObjectIdentifier>) -> Void, commit: () -> Bool) -> ExactApplyResult {
         guard !transaction else { return .refused("a replacement is already committing") }
         let module = module ?? lastModule
         let participants = sessions.filter { $0.state != .destroyed }
@@ -266,6 +267,12 @@ public final class ExactApp {
             for session in participants { session.runtime.discardPlan() }
             return pending ? .held(requests ? "requests" : "module") : .refused(participants.lazy.compactMap(\.preparationError).first ?? "the plan was not prepared")
         }
+        let displaced = Set(prepared.flatMap { $0.1.displacedCompositions })
+        if !displaced.isEmpty {
+            for session in participants { session.runtime.discardPlan() }
+            heldFields(displaced)
+            return .held("composition")
+        }
         let surfaces = SurfacesLink.installed
         let shaderSources = surfaces?.shadersLoaded == true ? candidateResolver.shaderSources() : nil
         let shadersAccepted = shaderSources.map { surfaces?.acceptsShaders($0) == true } ?? true
@@ -281,7 +288,7 @@ public final class ExactApp {
             for (session, _) in prepared { session.cancelCommit() }
             return result.pending ? .held(result.requests ? "requests" : "module") : .refused("durable commit refused")
         }
-        let batches = zip(prepared, committed).map { pair, batch in (pair.0, pair.0.commit(pair.1, batch: batch)) }
+        let batches = zip(prepared, committed).map { pair, batch in (pair.0, pair.0.commit(pair.1, batch: batch), pair.1.assetChanges) }
         resolver = candidateResolver
         #if EXACT_WIDGET_GALLERY
         NotificationCenter.default.post(name: Notification.Name("ExactWidgetGeneration"), object: self)
@@ -291,9 +298,9 @@ public final class ExactApp {
         lastModule = module
         selectedToken = token
         if let shaderSources { surfaces?.replaceShaders(shaderSources) }
-        for (session, _) in batches { session.awaitingTree = true; session.runtime.held = true } // each report waits for its own tree: one tree may retint the window; each runtime held till its own reset ends (ResetGate)
+        for (session, _, _) in batches { session.awaitingTree = true; session.runtime.held = true } // each report waits for its own tree: one tree may retint the window; each runtime held till its own reset ends (ResetGate)
         MainActor.assumeIsolated { HeldState.swap() } // the hold let go unsaid before the old tree goes, real input none till after (HeldState.swift)
-        for (session, batch) in batches { session.presentCommitted(batch, label: label) }
+        for (session, batch, assets) in batches { session.presentCommitted(batch, label: label, assetChanges: assets) }
         for session in participants { session.apply(session.runtime.deliverySync()) }
         MainActor.assumeIsolated { HeldState.swapping = false }
         rehold()
@@ -404,6 +411,7 @@ public final class ExactSession {
     var clockDue: Double?
     /// An advance of a deadline already due is running (`advanceIfDue`)
     var advancingDue = false
+    var postsTimerAdvances = ExactEnv.postsLiveWork
     lazy var taskTimers = NativeTaskTimers(now: { [weak self] in self?.now() ?? 0 }, ready: { [weak self] in self?.deliverNativeTimer() })
     lazy var timerAdmissions = TimerAdmissions(session: self)
     /// The agent's clock (milliseconds) when the driver owns time; nil runs
@@ -461,9 +469,8 @@ public final class ExactSession {
     // main instead, and runs after the slice lands, in order.
     private(set) var fillInFlight = false { didSet { releaseWaitingFirings() } }
     typealias IdleWork = (views: Int?, work: () -> Void, cancelled: (() -> Void)?, cause: AnyObject?)
-    /// The work waiting, in the order asked (work asked while a slice lands, while work waits or while it runs joins the
-    /// end, so nothing runs ahead of work asked before it), and whether a drain of it runs (`runWaitingWork`)
-    var afterFill: [IdleWork] = [], draining = false
+    /// Work waiting for a slice or a batch to finish, in request order. A stale slice releases its work next turn.
+    var afterFill: [IdleWork] = [], draining = false, idleScheduled = false
     /// A slice's batch is applying, ahead of the work that waited for it
     var fillLanding = false
     private(set) var viewsEpoch = 0
@@ -520,7 +527,7 @@ public final class ExactSession {
     /// Read when a session wires itself; tests set it to drive the
     /// asynchronous path on macOS.
     #if os(iOS) || os(tvOS)
-    nonisolated(unsafe) static var asyncFills = !ExactEnv.agentFreezes && ExactEnv.environment["EXACT_FILL_SYNC"] != "1"
+    nonisolated(unsafe) static var asyncFills = ExactEnv.postsLiveWork
     #else
     nonisolated(unsafe) static var asyncFills = false
     #endif
@@ -667,11 +674,14 @@ public final class ExactSession {
         // A reply the slices released (`afterFill`) may have left a deadline
         // due: it advances once they have landed, unless a batch waits on them.
         // Sizes measured as they applied are reported as it ends, whether its last batch applied or was skipped (`reportMeasured`).
-        defer { landing = false; if !applying { reportMeasured() }; workEnded(); if !holdingReports { advanceIfDue() } }
+        defer { landing = false; runWaitingWork(); if !applying { reportMeasured() }; workEnded(); if !holdingReports { advanceIfDue() } }
         while true {
-            while let first = published.earliest, first < limit, let next = published.next() { takePublished(next) }
-            guard let index = nextLanding(before: limit) else { break }
-            land(pending.remove(at: index))
+            let first = min(published.earliest ?? limit, limit)
+            if let index = nextLanding(before: first) {
+                land(pending.remove(at: index))
+            } else if first < limit, let next = published.next() {
+                takePublished(next)
+            } else { break }
         }
         // What was made after the batch being applied lands after it, in a turn of its own.
         if published.claimDrain() { DispatchQueue.main.async { [weak self] in self?.landPublished() } }
@@ -733,7 +743,7 @@ public final class ExactSession {
         fillLanding = false
         if state != .destroyed { presenter.collections.landed(view, at: ProcessInfo.processInfo.systemUptime) }
         guard stale else { return runWaitingWork() }
-        DispatchQueue.main.async { [weak self] in self?.runWaitingWork() }
+        scheduleWaitingWork()
     }
 
     /// Land every session's slice in flight.
@@ -942,24 +952,16 @@ public final class ExactSession {
         return batch
     }
 
-    struct Prepared {
-        let text: TextEngine
-        let resolver: AssetResolver
-        let token: UInt64
-    }
-
     private(set) var modulePending = false, requestsPending = false
     private(set) var preparationError: String? // why the last preparation refused the plan
-    /// While a carried restart applies its tree, autofocus waits; the restart
-    /// then puts focus back at its place (`Presenter.restoreFocus`).
+    /// A replacement holds autofocus while it applies the new tree.
     var autofocusHeld = false
     private var keptFocus: FocusPlace?
 
     func prepare(_ bytes: Data, resolver: AssetResolver, token: UInt64 = 0, module: ExactModule? = nil, size: CGSize? = nil, letGo: Bool = false) -> Prepared? {
         modulePending = false; requestsPending = false; preparationError = nil
         guard state != .destroyed else { return nil }
-        // The running tree's focus, read before the candidate replaces it.
-        keptFocus = booted ? presenter.focusPlace(tree: runtime.ask(exact_tree, "{}")) : nil
+        if booted { drainFill() } // The candidate compares against the last fully presented tree.
         let module = module ?? app.lastModule
         runtime.setProfileResolver(resolver)
         defer { runtime.setProfileResolver(app.resolver) }
@@ -974,22 +976,14 @@ public final class ExactSession {
         core.measure(with: text)
         installControlText()
         requestsPending = batch.requests; if batch.pending { modulePending = true; return nil }
-        // Resolve initially used local payloads before first pixel, without
-        // applying a presenter batch or starting an image/web/GPU operation.
-        for op in batch.ops {
-            let props = op.props
-            if let source = props["src"] ?? props["imageSource"], URL(string: source)?.scheme == nil, !source.hasPrefix("//") {
-                let path = source.components(separatedBy: "?")[0].components(separatedBy: "#")[0]
-                let name = path.hasPrefix("/") ? String(path.dropFirst()) : path
-                if !name.isEmpty { _ = resolver.bytes(name) }
-            }
-        }
+        let assets = prepareAssets(batch, resolver: resolver)
         if let error = batch.error ?? resolver.refusal {
             runtime.discardPlan()
             if !batch.requests { fputs("exact: prepare refused: \(error)\n", stderr); preparationError = error }
             return nil
         }
-        return Prepared(text: candidate, resolver: resolver, token: token)
+        keptFocus = booted && !batch.replacesTree ? presenter.focusPlace(tree: runtime.ask(exact_tree, "{}")) : nil
+        return Prepared(text: candidate, resolver: resolver, token: token, assetChanges: assets, displacedCompositions: displacedCompositions(batch))
     }
 
     func commit(_ candidate: Prepared) -> Batch? {
@@ -1025,12 +1019,13 @@ public final class ExactSession {
         return batch
     }
 
-    func presentCommitted(_ batch: Batch, label: String) {
+    func presentCommitted(_ batch: Batch, label: String, assetChanges: [UInt32: Set<String>] = [:]) {
         routerOp = nil
         let restart = booted, kept = keptFocus
         keptFocus = nil
         awaitingTree = true // the tint a reset gives back is reported with the new tree
-        resetHeld(); viewsEpoch += 1 // the teardown reaches no runtime; what it set off waits for `treeIsIn` (ResetGate)
+        if batch.replacesTree { cancelStage(); runtime.held = false } else { resetHeld() }
+        viewsEpoch += 1
         forgetAppearances()
         booted = true; app.buildSessionBooted(self)
         app.lifecycle?.generationStarted(app, token: updateToken)
@@ -1038,13 +1033,14 @@ public final class ExactSession {
         sampler?.reset(); frameHealth.reset() // a new runner numbers its transactions afresh (LLP 1079 D3)
         appFileRoots = AppFiles.learn(runtime)
         apply(batch)
+        reloadAssets(assetChanges)
         treeIsIn()
         tellTime()
         refuseUnheardLaunch()
         ExactLaunch.shared.treeApplied(self, path: label)
         view?.rebooted()
         autofocusHeld = false
-        if restart { presenter.restoreFocus(kept, tree: runtime.ask(exact_tree, "{}")) }
+        if restart && !batch.replacesTree { presenter.restoreFocus(kept, tree: runtime.ask(exact_tree, "{}")) }
         state = .ready
         if restart { fputs("reloaded \(label)\n", stderr) } // a launch generation's first boot is no reload
     }
@@ -1054,8 +1050,10 @@ public final class ExactSession {
     /// while an interaction is under way, where `ExactApp.apply` holds.
     @discardableResult
     public func apply(_ bytes: Data, label: String = "plan") -> Bool {
-        guard app.replacements.interactionHold == nil,
-              let candidate = prepare(bytes, resolver: app.resolver), let batch = commit(candidate) else { return false }
+        guard app.replacements.interactionHold(checkMarked: { $0.presenter?.session === self }) == nil,
+              let candidate = prepare(bytes, resolver: app.resolver) else { return false }
+        guard candidate.displacedCompositions.isEmpty else { runtime.discardPlan(); return false }
+        guard let batch = commit(candidate) else { return false }
         app.invalidateDevGeneration()
         presentCommitted(batch, label: label)
         return true
@@ -1101,6 +1099,7 @@ public final class ExactSession {
         }
         // What the pass did that a scroll moves (`scrolledWithoutPass`).
         if scrolled { presenter.scrolledWithoutPass() }
+        runWaitingWork()
         drainReports()
         workEnded()
         advanceIfDue()
@@ -1108,7 +1107,7 @@ public final class ExactSession {
 
     /// Reports laid-out control sizes after earlier owner batches land (LLP 1034 T4); an in-flight slice leaves the report to its landing.
     func reportMeasured() {
-        guard !holdingReports, !(applying || landing || fillInFlight) || !(ownerInFlight || hasPublished()) else { return }
+        guard !holdingReports, !landing, !(applying || fillInFlight) || !(ownerInFlight || hasPublished()) else { return }
         presenter.controls.reportMeasured()
     }
 
@@ -1158,6 +1157,7 @@ public final class ExactSession {
             guard !drained else { return }
             drained = true; insideApply = false
             if !landing, !pending.isEmpty { landFill() }
+            runWaitingWork()
             if transaction { CATransaction.commit() }
         }
         defer { drain() }

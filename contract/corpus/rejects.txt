@@ -2236,3 +2236,54 @@ component A
   resource time = exactTime() for z in zones as shape T
   view
     text "a"
+---
+== type-data-transfer
+# A drag carries the file itself; a picture of an element is `share`'s (LLP 1094.000 D2).
+component A
+  view
+    column draggable=true dataTransfer=DataTransfer(files=["#card"])
+      text "a"
+---
+== lower-draggable-data
+# A drag's data is declared on the node (LLP 1094.000 D1).
+component A
+  view
+    link href="/a" draggable=true
+      text "a"
+---
+== lower-attr-pair
+# What a drag carries, on a node that never drags (LLP 1094.000 D1).
+component A
+  view
+    column dataTransfer=DataTransfer(text="a")
+      text "a"
+---
+== lower-draggable-gesture
+# A `pan` and a drag's lift claim the same movement (LLP 1094.000 D8).
+component A
+  state dx = 0
+  action moved(x: number, y: number)
+    dx = x
+  view
+    column draggable=true dataTransfer=DataTransfer(text="a") pan=moved
+      text "a"
+---
+== lower-draggable-grouped
+# A grouped list's rows are the platform's cells (LLP 1094.000 D4).
+component A
+  view
+    list appearance="auto"
+      section
+        column
+          link href="/a" draggable=true dataTransfer=DataTransfer(text="a")
+            text "a"
+---
+== lower-handler-later
+# A drag's start is not heard yet (LLP 1094.000 D1).
+component A
+  state n = 0
+  action go
+    n = 1
+  view
+    column dragstart=go
+      text "a"

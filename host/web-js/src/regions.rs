@@ -39,20 +39,32 @@ impl Em<'_> {
                 }
             );
         }
-        body.push_str(&self.unsettled(None, top)?);
+        body.push_str(&self.unsettled(None, &mut top.clone())?);
         Ok(body)
     }
 
-    pub(super) fn unsettled(
-        &mut self,
-        owner: Option<u32>,
-        scope: &Scope,
-    ) -> Result<String, String> {
-        let mut out = String::new();
-        for (i, row) in self.plan.derives.iter().enumerate() {
-            if !row.unsettled || row.owner.map(|a| a.0) != owner {
-                continue;
+    fn unsettled(&mut self, owner: Option<u32>, scope: &mut Scope) -> Result<String, String> {
+        let rows: Vec<_> = self
+            .plan
+            .derives
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.unsettled && row.owner.map(|a| a.0) == owner)
+            .collect();
+        if owner.is_some() && !rows.is_empty() {
+            let depth = scope.frames.len();
+            let names = std::rc::Rc::make_mut(&mut scope.local_derives);
+            for (ordinal, &(i, _)) in rows.iter().enumerate() {
+                let name = if scope.capture {
+                    format!("d_L{depth}_{ordinal}")
+                } else {
+                    format!("d_{i}")
+                };
+                names.insert(i, (name, self.mount_templates.depth + 1));
             }
+        }
+        let mut out = String::new();
+        for (i, row) in rows {
             let mut inner = scope.clone();
             inner.unsettled = true;
             inner.evaluation = None;
@@ -64,7 +76,12 @@ impl Em<'_> {
                 &mut self.uses,
             )?;
             let enter = self.uses.budget("$enter");
-            write!(out, "const d_{i}=($budget={{s:0,n:0,d:0}},$pc)=>{{{enter}($budget,$pc);try{{return ({f})($budget)}}finally{{$budget.d--}}}};").unwrap();
+            let name = scope
+                .local_derives
+                .get(&i)
+                .map(|(name, _)| name.clone())
+                .unwrap_or_else(|| format!("d_{i}"));
+            write!(out, "const {name}=($budget={{s:0,n:0,d:0}},$pc)=>{{{enter}($budget,$pc);try{{return ({f})($budget)}}finally{{$budget.d--}}}};").unwrap();
         }
         Ok(out)
     }
@@ -75,11 +92,11 @@ impl Em<'_> {
         let subject = self
             .f(
                 row.subject,
-                &code::evaluation(
+                &self.site_evaluation(
                     scope,
+                    region_site(plan, r),
                     format!(
-                        "site {} {} subject",
-                        region_site(plan, r),
+                        "{} subject",
                         match row.kind {
                             RegionKind::Each => "each",
                             RegionKind::When => "when",
@@ -94,7 +111,8 @@ impl Em<'_> {
         let arms: Vec<u32> = row.arms.iter().map(|a| a.0).collect();
         match row.kind {
             RegionKind::When | RegionKind::Match => {
-                let bound = (row.kind == RegionKind::Match).then(|| format!("b{r}"));
+                let depth = scope.frames.len();
+                let bound = (row.kind == RegionKind::Match).then(|| format!("b{depth}"));
                 let mut inner = scope.clone();
                 inner.frames.push(Frame {
                     bound: bound.clone(),
@@ -111,6 +129,7 @@ impl Em<'_> {
                         s.frames.push(Frame::default());
                         s
                     };
+                    sc.capture = !self.site_attrs && !self.dev_reload;
                     // The arm's own slots, started from their initializers
                     // each time it shows, dropped when it hides (LLP 1017 P4c).
                     // A tab panel's one arm (LLP 1075.003 §9.14): the dev
@@ -124,13 +143,22 @@ impl Em<'_> {
                     self.out.push_str(&path);
                     let decl = self.owned(*arm, &format!("$a{arm}"), &mut sc, carry.as_deref())?;
                     self.out.push_str(&decl);
-                    self.children(self.sites.of_arm(*arm), "p", &sc)?;
+                    let outer_names = self.next_local_element;
+                    self.next_local_element = (!self.site_attrs && !self.dev_reload).then_some(0);
+                    let binds = !path.is_empty() || !decl.is_empty() || (k == 0 && bound.is_some());
+                    self.template_scope(binds, |em| em.children(em.sites.of_arm(*arm), "p", &sc))?;
+                    self.next_local_element = outer_names;
                     let built = std::mem::replace(&mut self.out, saved);
                     let params = match (&bound, k) {
-                        (Some(b), 0) => format!("(p,{b})"),
+                        (Some(b), 0) => format!("p,{b}"),
                         _ => "p".into(),
                     };
-                    bodies.push(format!("{params}=>{{{built}}}"));
+                    bodies.push(self.mount_templates.mount(
+                        &params,
+                        built,
+                        None,
+                        Some(region_site(plan, r)),
+                    ));
                 }
                 while bodies.len() < 2 {
                     bodies.push("0".into());
@@ -173,6 +201,8 @@ impl Em<'_> {
         carry: Option<&str>,
     ) -> Result<String, String> {
         let plan = self.plan;
+        let local_name = scope.capture.then(|| format!("$a{}", scope.frames.len()));
+        let name = local_name.as_deref().unwrap_or(name);
         // A child's resources this arm's instances own (LLP 1035.005.004 D1).
         let requests: Vec<usize> = (plan.resources.iter().enumerate())
             .filter(|(_, r)| r.owner.is_some_and(|a| a.0 == arm))
@@ -212,13 +242,10 @@ impl Em<'_> {
             let init = code::expression(
                 plan,
                 plan.code(slot.init),
-                &code::evaluation(
+                &self.site_evaluation(
                     scope,
-                    format!(
-                        "site {} state {:?} initializer",
-                        region_site(plan, plan.arms[arm as usize].region.0),
-                        plan.str(slot.name)
-                    ),
+                    region_site(plan, plan.arms[arm as usize].region.0),
+                    format!("state {:?} initializer", plan.str(slot.name)),
                     true,
                 ),
                 &mut self.uses,
@@ -237,7 +264,8 @@ impl Em<'_> {
                 continue;
             }
             let sig = self.uses.rt("sig");
-            let slot_name = string_name(plan, slot);
+            let slot_name = string_name(plan, slot, scope);
+            let k = scope.operand(k.to_string());
             let _ = write!(decl, "{name}[{k}]={sig}({init},{ty}{slot_name});");
         }
         // Asked after the instance's state is initialized (D2).
@@ -268,11 +296,9 @@ impl Em<'_> {
         Ok(decl)
     }
 
-    /// The path of an instance one region deeper, `segment` added, as
-    /// `const $q<arm>=…;`, put in force in `scope`; nothing where the plan
-    /// has no child's resource.
+    /// Extend the path only where a descendant resource or task reads it.
     fn instance_path(&mut self, scope: &mut Scope, segment: String, arm: u32) -> String {
-        if !self.owns_requests {
+        if !self.path_arms[arm as usize] {
             return String::new();
         }
         let outer = scope.path.clone().unwrap_or_else(|| "\"\"".into());
@@ -294,11 +320,11 @@ impl Em<'_> {
         let subject = self
             .f(
                 row.subject,
-                &code::evaluation(
+                &self.site_evaluation(
                     scope,
+                    region_site(plan, r),
                     format!(
-                        "site {} {} subject",
-                        region_site(plan, r),
+                        "{} subject",
                         match row.kind {
                             RegionKind::Each => "each",
                             RegionKind::When => "when",
@@ -311,7 +337,8 @@ impl Em<'_> {
             .map_err(|x| format!("region {r}: {x}"))?;
         let subject = self.status_subject(r, parent, subject);
         let arms: Vec<u32> = row.arms.iter().map(|a| a.0).collect();
-        let (item, index) = (format!("i{r}"), format!("x{r}"));
+        let depth = scope.frames.len();
+        let (item, index) = (format!("i{depth}"), format!("x{depth}"));
         let mut inner = scope.clone();
         inner.frames.push(Frame {
             item: Some(item.clone()),
@@ -333,18 +360,14 @@ impl Em<'_> {
         let pure = crate::reads::pure_key(&key, &item, &index);
         let key = code::called_expression(code::evaluated(
             key,
-            &code::evaluation(
-                &inner,
-                format!("site {} each key", region_site(plan, r)),
-                true,
-            ),
+            &self.site_evaluation(&inner, region_site(plan, r), "each key".into(), true),
             before,
             &mut self.uses,
         ));
         // The row's own slots, started from their initializers when
         // the row is created and kept with its key (LLP 1017 P4c).
         // The row's identity (`$k`, rows.js `rowKey`) names its instances.
-        let path = if self.owns_requests && list.is_none() {
+        let path = if self.path_arms[arms[0] as usize] && list.is_none() {
             let row_path = self.uses.rt("rowPath");
             self.instance_path(&mut inner, format!("\"/{r}=\"+{row_path}($k)"), arms[0])
         } else {
@@ -355,7 +378,9 @@ impl Em<'_> {
         let saved = std::mem::take(&mut self.out);
         self.out.push_str(&path);
         self.out.push_str(&rows_decl);
-        self.children(self.sites.of_arm(arms[0]), "p", &inner)?;
+        self.template_scope(true, |em| {
+            em.children(em.sites.of_arm(arms[0]), "p", &inner)
+        })?;
         let built = std::mem::replace(&mut self.out, saved);
         match list {
             Some(opts) => {
@@ -424,7 +449,7 @@ pub(super) fn root_slot(
         let _ = write!(body, "const s_{i}={make}({quoted},{init},{ty},{declared});");
     } else {
         let make = uses.rt(if r.late { "late" } else { "sig" });
-        let name = string_name(plan, r);
+        let name = string_name(plan, r, top);
         let _ = write!(body, "const s_{i}={make}({init},{ty}{name});");
     }
     if r.persist {
@@ -435,9 +460,12 @@ pub(super) fn root_slot(
 
 /// A string slot's name, as `sig`'s third argument: a write past MAX_STRING
 /// is refused naming it (the runner's StringTooLong, LLP 1090 D6).
-fn string_name(plan: &Plan, slot: &exact_plan::SlotsRow) -> String {
+fn string_name(plan: &Plan, slot: &exact_plan::SlotsRow, scope: &Scope) -> String {
     if type_code(plan, slot.ty) == "s" {
-        format!(",{}", serde_json::to_string(plan.str(slot.name)).unwrap())
+        format!(
+            ",{}",
+            scope.operand(serde_json::to_string(plan.str(slot.name)).unwrap())
+        )
     } else {
         String::new()
     }

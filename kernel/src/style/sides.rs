@@ -5,7 +5,8 @@
 //! Exact's `-exact-hit-slop`, `-exact-additional-safe-area`,
 //! `-exact-safe-area-padding` (LLP 1123 D11), `-exact-layout-margins` and
 //! `-exact-directional-layout-margins` (D8, the latter top, leading, bottom,
-//! trailing), spelled as `padding` is. The
+//! trailing), `-exact-scroll-content-inset`, the two indicator insets (D14)
+//! and `-exact-safe-area-extend-bounds` (D13), spelled as `padding` is. The
 //! compiler splits a literal, or a template at its text's white space, into
 //! its four rows, as the browser expands the shorthand, and refuses another
 //! computed list (LLP 1001 §1): no row splits one.
@@ -16,7 +17,7 @@ use crate::generated::StyleId;
 /// The shorthands' rows, in top, right, bottom, left order, and
 /// `border-radius`'s corners in top-left, top-right, bottom-right,
 /// bottom-left order, which CSS fills from fewer values the same way.
-pub const FAMILIES: [[StyleId; 4]; 14] = [
+pub const FAMILIES: [[StyleId; 4]; 18] = [
     [
         StyleId::PaddingTop,
         StyleId::PaddingRight,
@@ -96,28 +97,65 @@ pub const FAMILIES: [[StyleId; 4]; 14] = [
         StyleId::LayoutMarginBottom,
         StyleId::LayoutMarginTrailing,
     ],
+    [
+        StyleId::ScrollContentInsetTop,
+        StyleId::ScrollContentInsetRight,
+        StyleId::ScrollContentInsetBottom,
+        StyleId::ScrollContentInsetLeft,
+    ],
+    [
+        StyleId::ScrollVerticalIndicatorInsetsTop,
+        StyleId::ScrollVerticalIndicatorInsetsRight,
+        StyleId::ScrollVerticalIndicatorInsetsBottom,
+        StyleId::ScrollVerticalIndicatorInsetsLeft,
+    ],
+    [
+        StyleId::ScrollHorizontalIndicatorInsetsTop,
+        StyleId::ScrollHorizontalIndicatorInsetsRight,
+        StyleId::ScrollHorizontalIndicatorInsetsBottom,
+        StyleId::ScrollHorizontalIndicatorInsetsLeft,
+    ],
+    [
+        StyleId::SafeAreaExtendBoundsTop,
+        StyleId::SafeAreaExtendBoundsRight,
+        StyleId::SafeAreaExtendBoundsBottom,
+        StyleId::SafeAreaExtendBoundsLeft,
+    ],
 ];
 
 impl StyleProps {
+    fn hit_slop_sides(&self) -> [&Dimension; 4] {
+        let r = &self.rare;
+        [
+            &r.hit_slop_top,
+            &r.hit_slop_right,
+            &r.hit_slop_bottom,
+            &r.hit_slop_left,
+        ]
+    }
+
+    /// False when all four `-exact-hit-slop` sides are stored as zero
+    /// points, so [`Self::hit_slop`] is zero without resolving them.
+    pub fn may_have_hit_slop(&self) -> bool {
+        !self.rare.is_initial()
+            && self
+                .hit_slop_sides()
+                .into_iter()
+                .any(|side| !matches!(side, Dimension::Points(points) if *points == 0.0))
+    }
+
     /// How far past each side of its border box, in top, right, bottom,
     /// left order, the node takes a pointer (`-exact-hit-slop`, Charlie,
     /// 2026-11-10): none on a box that clips its overflow, which clips its
     /// own slop as the browser clips the pseudo-element the web draws it
     /// with. A negative length a binding gave is none.
     pub fn hit_slop(&self, env: &super::Env) -> [f32; 4] {
-        let r = &self.rare;
-        let sides = [
-            r.hit_slop_top.clone(),
-            r.hit_slop_right.clone(),
-            r.hit_slop_bottom.clone(),
-            r.hit_slop_left.clone(),
-        ];
         if self.overflow_x != super::Overflow::Visible
             || self.overflow_y != super::Overflow::Visible
         {
             return [0.0; 4];
         }
-        sides.map(|d| d.at_basis(env, 0.0).max(0.0))
+        self.hit_slop_sides().map(|d| d.at_basis(env, 0.0).max(0.0))
     }
 }
 
@@ -228,5 +266,16 @@ mod tests {
         assert_eq!([0, 1, 2, 3].map(|i| pick(3, i)), [0, 1, 2, 1]);
         assert!(elliptical("10px / 20px") && elliptical("10px/20px"));
         assert!(!elliptical("calc(20px / 2) 0"));
+    }
+
+    #[test]
+    fn hit_slop_is_skipped_only_when_every_side_is_zero_points() {
+        let mut p = StyleProps::default();
+        assert!(!p.may_have_hit_slop());
+        p.rare.hit_slop_top = Dimension::Points(-0.);
+        assert!(!p.rare.is_initial());
+        assert!(!p.may_have_hit_slop());
+        p.rare.hit_slop_left = Dimension::Env(crate::style::Edge::Left, 0.);
+        assert!(p.may_have_hit_slop());
     }
 }

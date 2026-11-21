@@ -366,6 +366,7 @@ fn refused_images_do_not_publish_rows_slots_or_layers() {
                 9,
                 Transform::identity(),
                 (0., 0.),
+                (0., 0.),
                 [0., 0., 1., 0., 1., 0., 0.],
             );
         }

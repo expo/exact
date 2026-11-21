@@ -114,7 +114,7 @@ fn both(a: &Expr, b: &Expr, bound: &[String], is_fn: &dyn Fn(&str) -> bool, out:
 }
 
 /// An expression's structure without its source positions.
-fn canonical(e: &Expr) -> String {
+pub(crate) fn canonical(e: &Expr) -> String {
     let mut e = e.clone();
     e.visit_spans(&mut |span| *span = Default::default());
     format!("{e:?}")

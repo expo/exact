@@ -551,8 +551,9 @@ pub fn web_linked(plan: &exact_plan::Plan, inputs: &serde_json::Value) -> String
     // input is the media picker, `auth` below is the sign-in sheet, and its
     // numerals roll in the runtime's text (LLP 1077 D15), its date and
     // time controls are the browser's own (LLP 1115.001.000 D2), and it
-    // shows no tips (LLP 1035.006.000 D4). The native roster's entries are
-    // never the web's.
+    // shows no tips (LLP 1035.006.000 D4); a drag out of the page is the
+    // browser's own, its data in the page's glue (LLP 1094.000 D6). The
+    // native roster's entries are never the web's.
     let names: Vec<&str> = uses
         .iter()
         .filter(|c| !Uses::NATIVE.has(*c))
@@ -569,6 +570,7 @@ pub fn web_linked(plan: &exact_plan::Plan, inputs: &serde_json::Value) -> String
                     | Capability::Dates
                     | Capability::Sqlite
                     | Capability::Tips
+                    | Capability::DragOut
             )
         })
         .map(|c| c.name())
@@ -651,7 +653,8 @@ pub fn web_linked(plan: &exact_plan::Plan, inputs: &serde_json::Value) -> String
             | Capability::TextSelection
             | Capability::Widgets
             | Capability::ContentIndex
-            | Capability::Dialogs => {}
+            | Capability::Dialogs
+            | Capability::DragOut => {}
         }
     }
     entry

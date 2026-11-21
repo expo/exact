@@ -2,6 +2,8 @@
 use super::*;
 use std::ops::Range;
 
+pub(crate) mod selection;
+
 struct InlineRun {
     runs: Range<usize>,
     metrics: (f32, f32),
@@ -11,6 +13,7 @@ struct InlineRun {
 pub(super) struct Captured {
     paragraph: Rc<Paragraph>,
     runs: HashMap<ViewId, InlineRun>,
+    selection: Option<selection::Source>,
 }
 
 impl Captured {
@@ -48,10 +51,14 @@ impl Captured {
                 at = parent;
             }
         }
-        (!runs.is_empty()).then(|| {
+        let selection =
+            selection::Source::capture(kernel, owner, paragraph, palette, runs.keys().copied());
+        let keep = !runs.is_empty() || selection.is_some();
+        keep.then(|| {
             Rc::new(Self {
                 paragraph: paragraph.clone(),
                 runs,
+                selection,
             })
         })
     }

@@ -219,7 +219,7 @@ final class TabEdgeIOSTests: XCTestCase {
         XCTAssertTrue(hit === side || hit.isDescendant(of: side), "the sidebar takes its touches, not \(hit)")
         XCTAssertEqual(try pixel(at: point), [254, 220, 186], "the sidebar paints over the container")
         let owner = try XCTUnwrap(navigation.primaryOwner)
-        XCTAssertEqual(owner.additionalSafeAreaInsets.left, side.bounds.width, accuracy: 0.5, "the container's bars clear the sidebar")
+        waitFor("the container's safe area, UIKit's own inset included, reaches the sidebar") { abs(owner.view.safeAreaInsets.left - side.bounds.width) < 0.5 }
         // Tab: the sidebar's button first, then, among the rest, the route's
         let presenter = session.presenter, sideButton = try node("side-button"), first = try node("grid-first")
         XCTAssertTrue(presenter.moveFocus(backward: false))
@@ -279,25 +279,97 @@ final class TabEdgeIOSTests: XCTestCase {
         let hit = try XCTUnwrap(win.hitTest(point, with: nil))
         XCTAssertTrue(hit === side || hit.isDescendant(of: side), "the sidebar takes its touches, not \(hit)")
         XCTAssertEqual(try pixel(at: point), [254, 220, 186], "the sidebar paints over the container")
-        XCTAssertEqual(try XCTUnwrap(navigation.primaryOwner).additionalSafeAreaInsets.right, side.bounds.width, accuracy: 0.5,
-                       "the container's bars clear the sidebar")
+        let owner = try XCTUnwrap(navigation.primaryOwner)
+        waitFor("the container's safe area, UIKit's own inset included, reaches the sidebar") { abs(owner.view.safeAreaInsets.right - side.bounds.width) < 0.5 }
     }
 
-    /// Rows above and below the panels while the native bars show: neither is beside the routes, so neither
-    /// lifts over the container, and the tab bar keeps its touches (LLP 1083.000 D4).
-    func testRowsAboveAndBelowThePanelsLeaveTheNativeBarsInPlace() throws {
+    /// A sidebar beside the panels set off by a margin, so it reaches neither the container's top nor its leading
+    /// edge: lifted, it grows the container's leading safe area up to where the panels' holder, and so the
+    /// routes, begin, and the bar's contents start there, as the route's header does on the web (LLP 1083.000 D4).
+    /// An inset the container inherits is part of that reach, not added to it.
+    func testASetOffSidebarGrowsTheSafeAreaToWhereTheRoutesBegin() throws {
+        let session = try fixture(wholeScreen: true), navigation = session.presenter.navigationHost
+        try tap("tab-grid", route: "grid")
+        try press("set-off-sidebar", route: "grid")
+        let side = try node("side"), owner = try XCTUnwrap(navigation.primaryOwner)
+        waitFor("the sidebar is lifted over the container") { side.window != nil && side.bounds.width > 0 && navigation.siblings.holds(side) }
+        let area = try XCTUnwrap(owner.view), box = side.convert(side.bounds, to: area)
+        XCTAssertGreaterThan(box.minX, 0.5, "the sidebar is set off from the leading edge")
+        XCTAssertGreaterThan(box.minY, 0.5, "and from the top")
+        let start = try node("panels-holder").convert(try node("panels-holder").bounds, to: area).minX
+        XCTAssertGreaterThan(start, box.maxX + 0.5, "the routes begin past the sidebar's margin")
+        waitFor("the container's leading safe area reaches where the routes begin") { abs(owner.additionalSafeAreaInsets.left - start) < 0.5 }
+        let nav = try XCTUnwrap(navigation.primaryNavigation)
+        waitFor("the bar's layout clears the sidebar and its margin") { nav.navigationBar.safeAreaInsets.left >= start - 0.5 }
+        let host = try XCTUnwrap(window?.rootViewController)
+        host.additionalSafeAreaInsets.left = 20
+        defer { host.additionalSafeAreaInsets.left = 0 }
+        waitFor("the container adds what the inherited inset leaves") { abs(owner.additionalSafeAreaInsets.left - (start - 20)) < 0.5 }
+        waitFor("so the bar's layout still starts where the routes begin") { abs(nav.navigationBar.safeAreaInsets.left - start) < 0.5 }
+    }
+
+    /// A container that defines its presentation context, as an app's may, covers the routes with a presentation in it:
+    /// no route is in the window, while the session still is, and a report then leaves the sidebar's lift and the inset
+    /// it asks of the container as they were, as it leaves the covers, so the bars under the cover keep their layout
+    /// through its dismissal. (A presentation over the whole session takes the session out of the window, which retires
+    /// the containers.)
+    func testASidebarsInsetStandsUnderACoverOverItsContainer() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit presents only from a window a scene holds") }
+        let session = try fixture(wholeScreen: true), navigation = session.presenter.navigationHost
+        try tap("tab-grid", route: "grid")
+        try press("show-sidebar", route: "grid")
+        let side = try node("side"), owner = try XCTUnwrap(navigation.primaryOwner)
+        waitFor("the sidebar insets the container") { navigation.siblings.holds(side) && owner.additionalSafeAreaInsets.left > 0.5 }
+        let inset = owner.additionalSafeAreaInsets
+        let cover = UIViewController()
+        cover.modalPresentationStyle = .currentContext
+        owner.definesPresentationContext = true
+        owner.present(cover, animated: false)
+        waitFor("the cover takes the routes out of the window") { owner.viewIfLoaded?.window == nil }
+        XCTAssertNotNil(session.view?.window, "and leaves the session in it")
+        navigation.reportCovers()
+        XCTAssertEqual(owner.additionalSafeAreaInsets, inset, "the inset stands under the cover")
+        XCTAssertTrue(navigation.siblings.holds(side), "as the lift does")
+        cover.dismiss(animated: false)
+        waitFor("the routes are back in the window") { owner.viewIfLoaded?.window != nil }
+        XCTAssertEqual(owner.additionalSafeAreaInsets, inset)
+    }
+
+    /// Rows above and below the panels while the native bars show (LLP 1083.000 D4). The row above is beside the
+    /// routes: it paints over the container, its content clears the status bar, and the container's top safe area
+    /// reaches where the routes begin, so the navigation bar, and the route's content and cover, start below it. The
+    /// row below is not beside them while the tab bar shows: it stays under the bar, which keeps its touches.
+    func testARowAboveThePanelsTakesTheBarsBelowItAndARowBelowStaysUnderTheTabBar() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "the screen's pixels need a window the system draws") }
         let session = try fixture(wholeScreen: true), navigation = session.presenter.navigationHost
         try tap("tab-grid", route: "grid")
         try press("show-rows", route: "grid")
         let top = try node("top-row"), mini = try node("mini-player"), win = try XCTUnwrap(window)
-        waitFor("the rows are laid out") { top.window != nil && mini.window != nil && top.bounds.height > 0 && mini.bounds.height > 0 }
+        waitFor("the row above the panels is lifted over the container") { navigation.siblings.holds(top) && top.bounds.height > 0 }
+        let nav = try XCTUnwrap(navigation.primaryNavigation)
+        waitFor("the navigation bar starts below the row") { abs(self.box(nav.navigationBar).minY - self.box(top).maxY) < 0.5 }
+        let row = box(top), bar = box(nav.navigationBar)
+        XCTAssertEqual(try pixel(at: CGPoint(x: row.midX, y: row.maxY - 4)), [18, 52, 86], "the row paints over the container")
+        XCTAssertGreaterThanOrEqual(row.height, 44 + win.safeAreaInsets.top - row.minY - 0.5, "its content clears the status bar")
+        XCTAssertGreaterThanOrEqual(box(try node("grid-1")).minY, bar.maxY - 0.5, "the route's content starts below the bar")
+        let route = try node("route-grid")
+        if case .edges(let edges)? = navigation.covers[route.id] {
+            XCTAssertLessThanOrEqual(edges.top, bar.maxY - box(route).minY + 0.5, "the route's cover reaches no further than the bar")
+        }
         navigation.reportCovers()
-        XCTAssertFalse(navigation.siblings.holds(top), "the row above the panels stays in its column")
-        XCTAssertFalse(navigation.siblings.holds(mini), "the row below them too")
-        let bar = try XCTUnwrap(navigation.tabController).tabBar
-        let point = bar.convert(CGPoint(x: bar.bounds.midX, y: bar.bounds.midY), to: win)
-        XCTAssertTrue(win.hitTest(point, with: nil)?.isDescendant(of: bar) == true, "the tab bar keeps its touches")
+        XCTAssertFalse(navigation.siblings.holds(mini), "the row below the panels stays in its column")
+        let tabBar = try XCTUnwrap(navigation.tabController).tabBar
+        let point = tabBar.convert(CGPoint(x: tabBar.bounds.midX, y: tabBar.bounds.midY), to: win)
+        XCTAssertTrue(win.hitTest(point, with: nil)?.isDescendant(of: tabBar) == true, "the tab bar keeps its touches")
+    }
+
+    /// A route offset in its block clears the part of each edge's inset its own box reaches: one below a row above the
+    /// panels, past a sidebar, is covered at the top for the bar alone and at its leading edge for nothing (LLP
+    /// 1083.000 D4).
+    func testARouteOffsetPastARowAndASidebarIsCoveredOnlyForWhatItsBoxDoesNotClear() {
+        let safe = NavigationHost.routeSafe(UIEdgeInsets(top: 160, left: 80, bottom: 34, right: 0),
+                                            box: CGRect(x: 80, y: 106, width: 322, height: 768), in: CGRect(x: 0, y: 0, width: 402, height: 874))
+        XCTAssertEqual(safe, UIEdgeInsets(top: 54, left: 0, bottom: 34, right: 0))
     }
 
     /// A drawer nested after the panels and positioned over the routes, which its column paints after the
@@ -397,8 +469,9 @@ final class TabEdgeIOSTests: XCTestCase {
         XCTAssertFalse(after === button || after.isDescendant(of: button), "the hidden tab's button takes no touch")
     }
 
-    /// A lifted bar that leaves with an exit animation plays it where it is, over the container, while its column
-    /// stacks; once it has gone, the next batch takes the layer that held it away (LLP 1083.000 D4).
+    /// A lifted bar that leaves with an exit animation plays it to its end where it was lifted, over the container,
+    /// and its column stacks as it starts; once it has gone, the next batch takes the layer that held it away (LLP
+    /// 1083.000 D4).
     func testALiftedBarPlaysItsExitOverTheContainer() throws {
         guard #available(iOS 18.0, *) else { throw XCTSkip("setTabBarHidden is iOS 18") }
         let session = try fixture(wholeScreen: true), navigation = session.presenter.navigationHost
@@ -410,11 +483,56 @@ final class TabEdgeIOSTests: XCTestCase {
         waitFor("the bar is lifted") { navigation.siblings.holds(bar) }
         try press("select-grid", route: "grid")
         waitFor("the bar leaves") { session.presenter.isLeaving(bar) }
-        XCTAssertTrue(navigation.siblings.parent(of: bar) === column, "it plays its exit where it was lifted")
-        XCTAssertGreaterThan(column.paintGhosts, 0, "its column stacks while it plays")
-        waitFor("the exit ends", late: 3) { bar.superview == nil }
+        XCTAssertGreaterThan(column.paintGhosts, 0, "its column stacks as it starts")
+        var moved = false
+        waitFor("the exit ends", late: 3) {
+            if bar.superview != nil, navigation.siblings.parent(of: bar) !== column { moved = true }
+            return bar.superview == nil
+        }
+        XCTAssertFalse(moved, "it plays its exit where it was lifted, to its end")
         try press("inset-bar", route: "grid")
         XCTAssertNil(navigation.siblings.layer, "the layer goes with the last node it held")
+    }
+
+    /// A lifted bar that leaves keeps its index among the nodes lifted with it, as its column would keep its ghost's
+    /// (LLP 1083.000 §4 item 3), so the drawer after it in the tree paints over it while it plays.
+    func testALeavingBarKeepsItsPlaceUnderTheNodesLiftedAfterIt() throws {
+        guard #available(iOS 18.0, *) else { throw XCTSkip("setTabBarHidden is iOS 18") }
+        let session = try fixture(wholeScreen: true), navigation = session.presenter.navigationHost
+        try tap("tab-grid", route: "grid")
+        try press("wrap-bar", route: "grid")
+        try press("fade-bar", route: "grid")
+        try press("show-fab", route: "grid")
+        try press("select-grid", route: "grid")
+        let bar = try node("selection-bar"), drawer = try node("fab")
+        waitFor("the bar and the drawer are lifted") { navigation.siblings.holds(bar) && navigation.siblings.holds(drawer) }
+        let stand = try XCTUnwrap(bar.superview)
+        XCTAssertTrue(drawer.superview === stand, "into the stand for what the column paints after the panels")
+        XCTAssertTrue(bar.frame.intersects(drawer.frame), "where they overlap")
+        try press("select-grid", route: "grid")
+        waitFor("the bar leaves") { session.presenter.isLeaving(bar) }
+        navigation.reportCovers()
+        let barAt = try XCTUnwrap(stand.subviews.firstIndex(of: bar)), drawerAt = try XCTUnwrap(stand.subviews.firstIndex(of: drawer))
+        XCTAssertLessThan(barAt, drawerAt, "the drawer still paints over the leaving bar")
+    }
+
+    /// A node put back into its column takes its place among the column's flat boxes at once (LLP 1068 §6.1): the box
+    /// after the sidebar in the tree paints over it again, with no later batch to lay the boxes out.
+    func testASidebarPutBackKeepsTheFlatBoxAfterItOverIt() throws {
+        let session = try fixture(wholeScreen: true), navigation = session.presenter.navigationHost
+        try tap("tab-grid", route: "grid")
+        try press("show-sidebar", route: "grid")
+        let side = try node("side"), column = try node("panels-column"), owner = try XCTUnwrap(navigation.primaryOwner)
+        waitFor("the sidebar is lifted over the container") { navigation.siblings.holds(side) }
+        let flats = session.presenter.flats, order = try XCTUnwrap(flats.children(of: column.id))
+        let at = try XCTUnwrap(order.firstIndex(of: side.id))
+        let strip = try XCTUnwrap(order.indices.contains(at + 1) ? flats.leaves[order[at + 1]] : nil, "the flat box after the sidebar")
+        // A report that lifts nothing, as More's list makes, puts the sidebar back
+        navigation.siblings.apply([], in: navigation.ownerMount(try XCTUnwrap(navigation.container)), after: try XCTUnwrap(owner.view))
+        XCTAssertFalse(navigation.siblings.holds(side), "the sidebar is back in its column")
+        let layers = try XCTUnwrap(column.container.layer.sublayers)
+        let sideAt = try XCTUnwrap(layers.firstIndex(of: side.layer)), stripAt = try XCTUnwrap(layers.firstIndex(of: strip.layer))
+        XCTAssertGreaterThan(stripAt, sideAt, "the flat box paints over the sidebar, as the tree orders them")
     }
 
     /// The window's pixel at `point`, drawn as the screen shows it.

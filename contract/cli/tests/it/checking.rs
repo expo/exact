@@ -49,3 +49,66 @@ fn checking_preserves_baseline_acceptance_and_diagnostic_provenance() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+#[test]
+fn accepted_lowering_warnings_free_places_in_text_and_leave_the_json_inventory() {
+    let dir = Scratch::new(format!("exact-warning-selection-{}", std::process::id()));
+    let path = dir.join("app.contract");
+    let app =
+        "use Icon from \"./icon.contract\"\ncomponent App\n  view\n    column\n      Icon()\n";
+    let icon = "component Icon\n  view\n    column\n      text \"icon\"\n";
+    let image = "      image \"symbol:sf/plus\"\n";
+    let comment = "      // exact-accept lower-symbol-alias\n";
+    // Both files report an alias on line seven. Only the import accepts it.
+    std::fs::write(
+        dir.join("icon.contract"),
+        format!("{icon}\n{comment}{image}{image}"),
+    )
+    .unwrap();
+    std::fs::write(
+        &path,
+        format!(
+            "{app}\n{}      view align-items=\"center\"\n        text \"hello\"\n",
+            format!("{image}{comment}{image}").repeat(24)
+        ),
+    )
+    .unwrap();
+    let build = |flags: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_contract"))
+            .arg("build")
+            .arg(&path)
+            .args(flags)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        output
+    };
+    let json = |flags: &[&str]| {
+        let output = build(flags);
+        assert!(output.stderr.is_empty());
+        serde_json::from_slice::<Vec<Value>>(&output.stdout).unwrap()
+    };
+    let all = json(&["--json"]);
+    assert_eq!(all.len(), 26);
+    assert_eq!(all[0]["id"], "lower-flex-on-block");
+    let lines = |file: &str| {
+        all.iter()
+            .filter(|w| {
+                w["id"] == "lower-symbol-alias" && w["file"].as_str().unwrap().ends_with(file)
+            })
+            .map(|w| w["line"].as_u64().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(lines("icon.contract"), [8]);
+    assert!(lines("app.contract").contains(&7));
+    assert!(json(&["--json", "--errors-only"]).is_empty());
+
+    let text = build(&[]);
+    let text = String::from_utf8(text.stderr).unwrap();
+    assert_eq!(
+        text.matches("warning [lower-symbol-alias]").count(),
+        19,
+        "{text}"
+    );
+    assert_eq!(text.matches("warning [lower-flex-on-block]").count(), 1);
+}

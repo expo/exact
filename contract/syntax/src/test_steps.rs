@@ -72,6 +72,13 @@ steps! {
 /// One step of a `test`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Step {
+    /// Bring a mounted node into view without pressing it.
+    Scroll {
+        /// The target's testId.
+        target: String,
+        /// Where.
+        span: Span,
+    },
     /// `tap "testId"`, or one of the driver's other forms of it
     /// (`modifiers "Shift"` for a press with keys held).
     Tap {
@@ -194,6 +201,18 @@ pub enum Step {
         prefix: String,
         /// Response status, headers and text body, encoded as JSON.
         response: String,
+        /// Where.
+        span: Span,
+    },
+    /// `answer source <name> with <json>`: what the named source answers
+    /// from here on, under `contract verify`'s runner. Leading a test (or the
+    /// file), before boot; later, a step that asks again every resource
+    /// reading the source.
+    AnswerSource {
+        /// The source, as the app's resources and sends name it.
+        source: String,
+        /// The answer as JSON text; a record may leave fields out.
+        value: String,
         /// Where.
         span: Span,
     },
@@ -510,6 +529,23 @@ pub enum Step {
         pan: Option<f64>,
         /// How it ended: `end`, `group`, `cut`, `stop` or `cancelled` (D4).
         by: Option<String>,
+        /// Where.
+        span: Span,
+    },
+    /// `expect drag "<testId>" none | has "<type>" [== "<value>"] [name
+    /// "<name>"] | missing "<type>"`: what the node's drag carries, as its
+    /// admitted props declare it on every host (LLP 1094.000 D10).
+    ExpectDrag {
+        /// The node, by `testId`.
+        target: String,
+        /// The type `has` or `missing` names; none for `none`.
+        kind: Option<String>,
+        /// `has` rather than `missing`.
+        present: bool,
+        /// The string `has … ==` compares.
+        value: Option<String>,
+        /// The file's own name `has … name` compares.
+        name: Option<String>,
         /// Where.
         span: Span,
     },

@@ -288,6 +288,18 @@ pub const STYLE_NAMES: &[(&str, &str, AttrTarget)] = &[
     ("-exact-safe-area-bar", "exact LLP 1123 D12", AttrTarget::Shorthand),
     ("-exact-additional-safe-area", "exact LLP 1123 D11", AttrTarget::Styles(&[ StyleId::AdditionalSafeAreaTop, StyleId::AdditionalSafeAreaRight, StyleId::AdditionalSafeAreaBottom, StyleId::AdditionalSafeAreaLeft, ])),
     ("-exact-safe-area-padding", "exact LLP 1123 D11", AttrTarget::Styles(&[ StyleId::SafeAreaPaddingTop, StyleId::SafeAreaPaddingRight, StyleId::SafeAreaPaddingBottom, StyleId::SafeAreaPaddingLeft, ])),
+    // Where a box paints and takes touches past a safe edge, and what it mirrors into the band
+    // (LLP 1123 D13); a scroller's insets, indicators and edge effects (D14).
+    ("-exact-safe-area-reach", "exact LLP 1123 D13", AttrTarget::Shorthand),
+    ("-exact-safe-area-extend", "exact LLP 1123 D13", AttrTarget::Shorthand),
+    ("-exact-safe-area-extend-bounds", "exact LLP 1123 D13", AttrTarget::Styles(&[ StyleId::SafeAreaExtendBoundsTop, StyleId::SafeAreaExtendBoundsRight, StyleId::SafeAreaExtendBoundsBottom, StyleId::SafeAreaExtendBoundsLeft, ])),
+    ("-exact-scroll-content-inset", "exact LLP 1123 D14", AttrTarget::Styles(&[ StyleId::ScrollContentInsetTop, StyleId::ScrollContentInsetRight, StyleId::ScrollContentInsetBottom, StyleId::ScrollContentInsetLeft, ])),
+    ("-exact-scroll-inset-adjustment", "exact LLP 1123 D14", AttrTarget::Styles(&[StyleId::ScrollInsetAdjustment])),
+    ("-exact-scroll-vertical-indicator-insets", "exact LLP 1123 D14", AttrTarget::Styles(&[ StyleId::ScrollVerticalIndicatorInsetsTop, StyleId::ScrollVerticalIndicatorInsetsRight, StyleId::ScrollVerticalIndicatorInsetsBottom, StyleId::ScrollVerticalIndicatorInsetsLeft, ])),
+    ("-exact-scroll-horizontal-indicator-insets", "exact LLP 1123 D14", AttrTarget::Styles(&[ StyleId::ScrollHorizontalIndicatorInsetsTop, StyleId::ScrollHorizontalIndicatorInsetsRight, StyleId::ScrollHorizontalIndicatorInsetsBottom, StyleId::ScrollHorizontalIndicatorInsetsLeft, ])),
+    ("-exact-scroll-indicator-adjustment", "exact LLP 1123 D14", AttrTarget::Styles(&[StyleId::ScrollIndicatorAdjustment])),
+    ("-exact-scroll-edge-effect-style", "exact LLP 1123 D14", AttrTarget::Shorthand),
+    ("-exact-scroll-edge-effect-hidden", "exact LLP 1123 D14", AttrTarget::Styles(&[StyleId::ScrollEdgeEffectHidden])),
     // A box's margins as a UIView's (LLP 1123 D8): its own, physical or directional
     // (top, leading, bottom, trailing), and how its safe area and superview raise them.
     ("-exact-layout-margins", "exact LLP 1123 D8", AttrTarget::Styles(&[ StyleId::LayoutMarginTop, StyleId::LayoutMarginRight, StyleId::LayoutMarginBottom, StyleId::LayoutMarginLeft, ])),

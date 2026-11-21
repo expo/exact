@@ -29,10 +29,7 @@ impl Ids {
     /// An allocator for views that are never committed, numbered after every
     /// view `live` has given out: none is a live view's id.
     pub fn after(live: &Ids) -> Ids {
-        Ids {
-            next: live.next,
-            ..Default::default()
-        }
+        Self::from_last(live.next)
     }
 }
 

@@ -434,7 +434,8 @@ pub trait Backend {
     fn layer_recolored(&mut self) {}
     /// A node its reader animates (`crate::host::lower`): what follows, to
     /// [`Backend::layer_end`], is its layer `key`, moved and faded about
-    /// `pivot` in `ts`'s space from `base` (translate x, y, scale, rotate,
+    /// `pivot` in `ts`'s space. Percentage translations use the width and height
+    /// of `reference`. The layer starts from `base` (translate x, y, scale, rotate,
     /// opacity, a circle's radius, path units per dash offset unit). False:
     /// drawn where it is.
     fn layer_begin(
@@ -442,6 +443,7 @@ pub trait Backend {
         _key: u64,
         _ts: Transform,
         _pivot: (f32, f32),
+        _reference: (f32, f32),
         _base: [f32; 7],
     ) -> bool {
         false

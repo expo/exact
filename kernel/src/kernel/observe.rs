@@ -272,8 +272,8 @@ impl Kernel {
     /// an edge it takes (D12), or some box reads an observation, ignores the
     /// band (D4) or has bars past what it observes (D12). The update is refused whole,
     /// keeping the last, for
-    /// nonfinite or negative insets, a nonfinite effect, or a
-    /// contribution's identity twice.
+    /// nonfinite insets, a nonfinite effect, or a contribution's identity
+    /// twice (`check_band`).
     /// A host reports this field with the owner's others through
     /// [`Kernel::update_owner`], which applies them whole or not at all.
     pub fn set_owner_band(
@@ -1039,12 +1039,14 @@ fn merge(into: &mut LayoutReceipt, round: LayoutReceipt) {
 mod tests;
 
 /// Why an owner's band and Exact's contributions to it are refused, if they are:
-/// nonfinite or negative insets, a nonfinite effect, or a contribution's identity twice.
+/// nonfinite insets, a nonfinite effect, or a contribution's identity twice. A negative
+/// raw inset is taken: UIKit gives one to a window's root under a negative addition past
+/// its insets (D11), and the incoming band, raw less the effects, is at least 0.
 pub(super) fn check_band(
     band: Option<&[f32; 4]>,
     contributions: &[Contribution],
 ) -> Result<(), KernelError> {
-    if band.is_some_and(|b| !b.iter().all(|v| v.is_finite() && *v >= 0.0)) {
+    if band.is_some_and(|b| !b.iter().all(|v| v.is_finite())) {
         return Err(LayoutError::InvalidEnv.into());
     }
     provenance::check(contributions)

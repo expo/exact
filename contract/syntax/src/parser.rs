@@ -14,6 +14,7 @@ mod color_profile;
 mod component;
 mod decls;
 mod decorations;
+mod drag;
 mod expr;
 mod keyframes;
 mod layout_step;

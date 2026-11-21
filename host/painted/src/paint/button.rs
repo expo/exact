@@ -205,6 +205,10 @@ fn face_typography(
     if icon && !symbol_style.mask.has(StyleId::FontSize) {
         symbol_style.font_size = material_dp(metric::ICON_BUTTON_ICON) * scale;
     }
+    // A Material button's symbol is beside its title (alone, it is an icon button).
+    if material && !declared(&symbol_style, StyleId::FontSize) {
+        symbol_style.font_size = material_dp(metric::FILLED_BUTTON_ICON) * scale;
+    }
     (title_style, subtitle_style, symbol_style)
 }
 
@@ -324,6 +328,29 @@ pub(super) fn face_layout(
     } else {
         look::px(metric::BUTTON_PADDING_INLINE, em)
     };
+    // An icon beside the title has `ButtonDefaults`' `…WithIconContentPadding`:
+    // its own side, Compose's start, and the title's, its end.
+    let with_icon = material_face
+        && !column
+        && (face.title.is_some() || face.subtitle.is_some())
+        && (face.symbol.is_some() || face.raster);
+    let (icon_side, title_side) = match material {
+        Some(MaterialButton::Text) if with_icon => (
+            inline,
+            material_dp(metric::TEXT_BUTTON_PADDING_WITH_ICON) * scale,
+        ),
+        Some(_) if with_icon => (
+            material_dp(metric::FILLED_BUTTON_PADDING_ICON) * scale,
+            inline,
+        ),
+        _ => (inline, inline),
+    };
+    let icon_left = leading != (rows.button.direction == exact_kernel::Direction::Rtl);
+    let (left, right) = if icon_left {
+        (icon_side, title_side)
+    } else {
+        (title_side, icon_side)
+    };
     let block = if tab_root.is_some() {
         tab_length(metric::TABBAR_PADDING_BLOCK, em)
     } else if icon {
@@ -361,7 +388,7 @@ pub(super) fn face_layout(
             StyleId::PaddingRight,
             rows.button.padding_right.clone(),
             9.0,
-            inline,
+            right,
         ),
         (
             StyleId::PaddingBottom,
@@ -373,7 +400,7 @@ pub(super) fn face_layout(
             StyleId::PaddingLeft,
             rows.button.padding_left.clone(),
             9.0,
-            inline,
+            left,
         ),
     ]
     .map(|(id, d, default, look)| {
@@ -438,7 +465,9 @@ pub(super) fn face_layout(
             }
         } else {
             rows.image_gap.unwrap_or_else(|| {
-                if !neutral {
+                if material_face {
+                    material_dp(metric::FILLED_BUTTON_ICON_GAP) * scale
+                } else if !neutral {
                     title_style.font_size * 0.5
                 } else if !rows.neutral_role_floor {
                     look::px(metric::BUTTON_IMAGE_GAP, em)

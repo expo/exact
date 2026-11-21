@@ -314,7 +314,7 @@ impl Collection {
             if s.owner.is_some() && s.owner == arm {
                 let value = u
                     .eval_named(s.init, &inner, || {
-                        format!("state {:?} initializer", plan.str(s.name))
+                        crate::RunnerError::state_initializer(plan.str(s.name))
                     })
                     .map_err(|e| {
                         e.at_view(

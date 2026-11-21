@@ -9,7 +9,8 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 // Also for its PATH: the pinned binaryen (and Cargo) as every web build has
 // them, so a prebuild optimizes and keeps what an app's build would.
@@ -27,6 +28,53 @@ import { buildScriptDir, crateDir, depInfoOf, fresh as cargoFresh, refreshCargoR
 export { buildScriptDir, crateDir, depInfoOf, freshCompiler };
 export const fresh = (product, dep, also = []) => cargoFresh(product, dep, also);
 import { BINARYEN_DOWNLOAD } from '../web/stages.mjs';
+
+// ECMA-426 §6 and §9.2. Only the generated column and source index are needed to charge a span to its module.
+function vlq(segment, at) {
+  const digits = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  let value = 0, place = 1, digit;
+  do {
+    digit = digits.indexOf(segment[at++]);
+    if (digit < 0) throw new Error('invalid source-map VLQ');
+    value += (digit & 31) * place;
+    place *= 32;
+  } while (digit & 32);
+  return [value % 2 ? -Math.floor(value / 2) : value / 2, at];
+}
+
+/** Module shares of the minified launch script. A line ending, a one-field segment or text before a line's first
+ * mapping has no source. Columns count UTF-16 units. A character split by a mapping belongs to its starting span. */
+export function entrySizeReport(chunk, out) {
+  const map = chunk.map, mappings = map.mappings.split(';'), counts = new Map();
+  const lines = chunk.code.split(/(\r\n|[\r\n\u2028\u2029])/);
+  const add = (source, bytes) => { if (bytes) counts.set(source, (counts.get(source) ?? 0) + bytes); };
+  let source = 0;
+  for (let i = 0; i < lines.length; i += 2) {
+    const line = lines[i];
+    let column = 0, start = 0, owner = null;
+    for (const segment of (mappings[i / 2] || '').split(',')) {
+      if (!segment) continue;
+      const [advance, at] = vlq(segment, 0);
+      column += advance;
+      const low = line.charCodeAt(column), high = line.charCodeAt(column - 1);
+      const end = low >= 0xdc00 && low <= 0xdfff && high >= 0xd800 && high <= 0xdbff ? column + 1 : column;
+      add(owner, Buffer.byteLength(line.slice(start, end)));
+      start = end;
+      if (at < segment.length) { source += vlq(segment, at)[0]; owner = map.sources[source]; }
+      else owner = null;
+    }
+    add(owner, Buffer.byteLength(line.slice(start)));
+    if (lines[i + 1]) add(null, Buffer.byteLength(lines[i + 1]));
+  }
+  const gen = realpathSync(resolve(out, '.gen'));
+  const moduleName = source => {
+    const path = resolve(out, source);
+    return relative(gen, existsSync(path) ? realpathSync(path) : path);
+  };
+  const bytes = Buffer.from(chunk.code), rows = [...counts].sort((a, b) => b[1] - a[1]);
+  return [`Launch script ${chunk.fileName}, ${bytes.length} B (${gzipSync(bytes).length} B gzip)`, 'Minified bytes by source module',
+    ...rows.map(([source, n]) => `  ${n} B  ${source == null ? '(unmapped)' : moduleName(source)}`)].join('\n');
+}
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '../..');
@@ -179,7 +227,8 @@ export function moduleMetadata(manifest, env, dev = false) {
 export const APP_JS_WARN_BYTES = 8 << 20;
 /** What a build says of a built `app.js` of `bytes` past that size, with the compiler's line of plan code by component
  * (`costs`) when it gave one; '' below it. Two apps reached 30 MB with no word (LLP 1156.006.000 D4). */
-export const sizeWarning = (name, bytes, costs = '') => (bytes <= APP_JS_WARN_BYTES ? '' : `warning: ${name} is ${(bytes / 2 ** 20).toFixed(1)} MiB: a component's body is compiled in at each place it is used, so a large body used many times multiplies. Draw repeated structure from data in one \`for\`, and keep a many-armed \`if\` out of a component used hundreds of times${costs ? `; ${costs}` : ''}`);
+export const sizeWarning = (name, bytes, costs = '') => bytes <= APP_JS_WARN_BYTES ? ''
+  : `warning: ${name} is ${(bytes / 2 ** 20).toFixed(1)} MiB. The plan expands each component use. Different mount bodies can add launch code. Add --sizes to the web build for bytes by source module.${costs ? ` ${costs}` : ''}`;
 /** What separates two directories of one app name (two worktrees of an app) in the names made from it: twelve hex
  * of the directory's real path, as `host/web/dev.mjs` keys `dev-generations` (LLP 1156.006.000 D13). Every app's
  * module builds into one Cargo target, where one crate name from two directories is one product and one claim. */

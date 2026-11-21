@@ -5,14 +5,14 @@
 #if os(iOS)
 import UIKit
 
-enum LiftTarget {
+package enum LiftTarget {
     /// `view`'s outline in its own coordinates where its corners are rounded,
     /// else nil. One radius, round or Apple's continuous, is UIKit's own
     /// rounded rectangle, which UIKit keeps through the lift's morph: UIKit
     /// applies any other path only after the morph's first frames, which show
     /// the node square (measured, iOS 27.1). One radius within the tolerance the
     /// layer's own (`applyBoxLayer`) has.
-    static func rounded(_ view: UIView) -> UIBezierPath? {
+    package static func rounded(_ view: UIView) -> UIBezierPath? {
         guard let node = view as? NodeView else {
             return view.layer.cornerRadius > 0 ? UIBezierPath(roundedRect: view.bounds, cornerRadius: view.layer.cornerRadius) : nil
         }
@@ -57,7 +57,7 @@ enum LiftTarget {
     /// UIKit's own target for a view carries it (`UITargetedPreview(view:parameters:)`),
     /// and each ancestor's scale and rotation; converting the center takes the
     /// translations.
-    static func target(_ view: UIView, pullDown: Bool = false) -> UIPreviewTarget? {
+    package static func target(_ view: UIView, pullDown: Bool = false) -> UIPreviewTarget? {
         guard let container = pullDown ? pullDownContainer(of: view) : container(of: view), let parent = view.superview else { return nil }
         var transform = view.transform
         for ancestor in sequence(first: parent, next: { $0.superview }) {

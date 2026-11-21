@@ -4,6 +4,28 @@ import XCTest
 /// Work a session runs when idle (`whenIdle`) runs in the order asked (LLP 1072 §3): work that waited for a slice in
 /// flight runs after the slice's batch and before work asked while that batch lands, or after a stale slice lands.
 final class IdleWorkOrderTests: XCTestCase {
+    func testAReportTriggeredByABatchSeesItsAnswerBeforeTheNextReportRuns() {
+        let session = ExactApp.shared.makeSession(label: "idle-report-answer")
+        defer { session.destroy() }
+        var events: [String] = []
+        session.onApplyForTests = { [unowned session] batch in
+            if batch.journal == ["answer"] { events.append("applied"); return }
+            guard batch.journal == ["input"] else { return }
+            session.whenIdle {
+                events.append("report")
+                var answer = wireBatch([])
+                answer.journal = ["answer"]
+                session.apply(answer)
+                events.append("returned")
+            }
+            session.whenIdle { events.append("next report") }
+        }
+        var input = wireBatch([])
+        input.journal = ["input"]
+        session.apply(input)
+        XCTAssertEqual(events, ["report", "applied", "returned", "next report"])
+    }
+
     func testWorkAskedWhileASliceLandsRunsAfterTheWorkThatWaited() throws {
         let session = ExactApp.shared.makeSession(label: "idle-order-landing")
         defer { session.destroy() }

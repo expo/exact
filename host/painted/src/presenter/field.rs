@@ -289,6 +289,7 @@ impl<D: DataSource> Presenter<D> {
                 None => FieldSelection::caret(0),
             };
             self.field_history.invalidate(id);
+            self.field_reveal |= self.focus == Some(id);
             self.mark_field_from(id, &value, before, after, false);
         }
     }
@@ -320,10 +321,10 @@ impl<D: DataSource> Presenter<D> {
     /// The caret used to edit also exists in email and number inputs,
     /// whose DOM selection API cannot read or write it.
     pub(crate) fn field_selection(&self, id: ViewId) -> FieldSelection {
-        let value = self.field_value(id);
+        let value = self.field_text_ref(id);
         match self.fields.get(&id) {
             Some(mark) if mark.value == value => mark.selection,
-            _ => FieldSelection::at_end(&value),
+            _ => FieldSelection::at_end(value),
         }
     }
 
@@ -336,6 +337,7 @@ impl<D: DataSource> Presenter<D> {
         selection: FieldSelection,
         by_command: bool,
     ) {
+        self.field_reveal |= self.focus == Some(id);
         let before = self.field_selection(id);
         self.mark_field_from(id, value, before, selection, by_command);
     }
@@ -351,7 +353,6 @@ impl<D: DataSource> Presenter<D> {
         if before != selection {
             self.field_change_tasks.insert(id);
         }
-        self.field_reveal |= self.focus == Some(id);
         self.fields.insert(
             id,
             FieldMark {
@@ -446,8 +447,9 @@ impl<D: DataSource> Presenter<D> {
         selection: FieldSelection,
         upstream: bool,
     ) {
-        let changed = self.field_selection(id) != selection;
-        self.mark_field(id, value, selection, false);
+        let before = self.field_selection(id);
+        let changed = before != selection;
+        self.mark_field_from(id, value, before, selection, false);
         if let Some(mark) = self.fields.get_mut(&id) {
             mark.upstream = upstream;
         }
@@ -466,8 +468,8 @@ impl<D: DataSource> Presenter<D> {
         {
             return;
         }
-        // Defer any pending caret reveal until after hit-testing against the
-        // text currently visible under the pointer.
+        // Hit-test the displayed text before a keyboard reveal can move it.
+        // A successful pointer placement keeps the scroll position of that picture.
         let deferred_reveal = std::mem::take(&mut self.field_reveal);
         self.boxes();
         let (x, y) = self
@@ -477,15 +479,12 @@ impl<D: DataSource> Presenter<D> {
             .map_or((x, y), |b| b.field_point(x, y));
         let value = self.field_value(id);
         if let Some(cursor) = self.current_field(id, &value).and_then(|f| f.hit(x, y)) {
-            self.mark_field(
+            self.mark_pointer_selection(
                 id,
                 &value,
                 FieldSelection::caret(cursor.offset.min(utf16_len(&value))),
-                false,
+                cursor.upstream,
             );
-            if let Some(mark) = self.fields.get_mut(&id) {
-                mark.upstream = cursor.upstream;
-            }
         } else {
             self.field_reveal |= deferred_reveal;
         }
@@ -691,13 +690,10 @@ impl<D: DataSource> Presenter<D> {
             let id = self.text_field(name)?;
             let node = self.host.kernel().node(id).ok_or("no live field")?;
             let textarea = node.props.str(PropId::SemanticTag) == Some("textarea");
-            if node.props.str(PropId::Markup) == Some("markdown")
-                || (!textarea
-                    && !matches!(
-                        node.props.str(PropId::Type).unwrap_or("text"),
-                        "text" | "search" | "url" | "tel" | "password"
-                    ))
-            {
+            if node.props.str(PropId::Markup) == Some("markdown") {
+                return Err("this host edits Markdown as plain source");
+            }
+            if !self.has_selection_api(id) {
                 return Err("not a plain text field");
             }
             let text = args

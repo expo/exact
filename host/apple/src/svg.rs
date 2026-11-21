@@ -332,6 +332,19 @@ impl SvgState {
         notes
     }
 
+    pub(super) fn withdraw_replaced_animations(
+        &self,
+        old: &Self,
+        batch: &mut Batch,
+        material: impl Fn(ViewId) -> bool,
+    ) {
+        for (id, _) in old.box_sent.iter() {
+            if material(*id) && !batch.creates(*id) && !self.box_sent.contains_key(id) {
+                batch.animations(*id, "[]");
+            }
+        }
+    }
+
     /// The `animations` ops a box's CSS animations and played transitions owe.
     pub(crate) fn emit_boxes(&mut self, kernel: &Kernel, engine: &Engine, batch: &mut Batch) {
         let resized: Vec<ViewId> = self

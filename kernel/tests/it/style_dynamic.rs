@@ -145,7 +145,7 @@ fn scroll_margins_refuse_percentages_without_changing_the_length() {
             let result = style.set_dynamic(id, &value);
             assert!(
                 matches!(result, Err(StyleValueError::WrongKind { style, expected })
-                    if style == id && expected.contains("CSS takes no percentage")),
+                    if style == id && expected.contains("no percentage")),
                 "{id:?}: {value:?}: {result:?}"
             );
             assert_eq!(style, before, "{id:?}: {value:?}");
@@ -625,6 +625,11 @@ fn enum_rows_resolve_names_and_others_do_not() {
                 | StyleId::LayoutMarginsPreserved
                 | StyleId::LayoutMarginsFromSafeArea
                 | StyleId::LayoutMarginsMinimum
+                | StyleId::SafeAreaReachEdges
+                | StyleId::SafeAreaExtend
+                | StyleId::ScrollEdgeEffectSoft
+                | StyleId::ScrollEdgeEffectHard
+                | StyleId::ScrollEdgeEffectHidden
         );
         assert_eq!(
             names.is_empty(),

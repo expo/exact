@@ -65,7 +65,18 @@ impl<D: DataSource> Presenter<D> {
         }
         let id = self.focus?;
         let field = self.brush.field_text.get(&id)?;
-        let next = field.reveal_cursor(self.field_cursor(id));
+        let key = self.host.kernel().node(id)?.key;
+        let next = self
+            .field_drag
+            .as_mut()
+            .and_then(|drag| drag.take_scroll(key, &field.value))
+            .map(|(x, y)| {
+                (
+                    x.clamp(0., field.scroll_max.0),
+                    y.clamp(0., field.scroll_max.1),
+                )
+            })
+            .unwrap_or_else(|| field.reveal_cursor(self.field_cursor(id)));
         if self.scroll_of(id) == next {
             return None;
         }
@@ -117,6 +128,28 @@ mod tests {
             "caret coverage={count}, scroll={:?}",
             p.scroll_of(id)
         );
+    }
+
+    #[test]
+    fn scrolled_selection_keeps_the_visible_parts_of_the_full_range() {
+        let value = "אב 😀 a line long enough to wrap in the field\n\n".repeat(16);
+        let (mut p, id) = fixture("textarea", &value);
+        p.frame();
+        let geometry = &p.brush.field_text[&id].geometry;
+        let len = value.encode_utf16().count() as u32;
+        for (start, end) in [(0, len), (3, len - 5)] {
+            let all = geometry.highlight(start, end, None);
+            let bottom = all.last().unwrap().1;
+            for top in [-100., 0., 57.5, bottom - 24., bottom + 200.] {
+                let clip = top..top + 48.;
+                let expected: Vec<_> = all
+                    .iter()
+                    .copied()
+                    .filter(|r| r.1 + r.3 >= clip.start && r.1 <= clip.end)
+                    .collect();
+                assert_eq!(geometry.highlight(start, end, Some(clip)), expected);
+            }
+        }
     }
 
     #[test]
@@ -390,10 +423,10 @@ mod tests {
     }
 
     #[test]
-    fn a_scrolled_textarea_paints_the_first_glyph_inside_its_horizontal_padding() {
+    fn a_scrolled_textarea_paints_and_hits_its_first_glyph_inside_its_padding() {
         let source = r##"component App
   view
-    textarea id="editor" value="M\n0123456789012345678901234567890123456789" width=200 height=90 box-sizing="border-box" appearance="none" border="none" padding="16px 28px" color="#000000" background-color="#ffffff" font-size=16 line-height=1.6 white-space="pre"
+    textarea id="editor" testId="editor" value="M\n0123456789012345678901234567890123456789" width=200 height=90 box-sizing="border-box" appearance="none" border="none" padding="16px 28px" color="#000000" background-color="#ffffff" font-size=16 line-height=1.6 white-space="pre"
 "##;
         let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(source),
@@ -426,6 +459,32 @@ mod tests {
             };
             assert_eq!(first_line(&mut p), expected, "scroll by {dx}");
         }
+        let k = p.host.kernel();
+        let field = k.node_by_key(k.find_by_test_id("editor")[0]).unwrap().id;
+        p.pointer_down(28., 28., 10.).unwrap();
+        p.pointer_up(28., 28., 20.).unwrap();
+        p.frame();
+        assert_eq!(p.focus, Some(field));
+        assert_eq!(p.field_selection(field), FieldSelection::caret(0));
+        for left in [0., 23.] {
+            p.scroll_to(field, (left, 0.));
+            p.frame();
+            p.pointer_down(6., 28., 30.).unwrap();
+            p.frame();
+            assert_eq!(p.scroll_of(field).0, left, "mouse down");
+            assert_eq!(p.field_selection(field), FieldSelection::caret(0));
+            p.pointer_up(6., 28., 40.).unwrap();
+            p.frame();
+            assert_eq!(p.scroll_of(field).0, left, "mouse up");
+        }
+        // The first line can also end to the left of the visible area.
+        p.scroll_to(field, (95., 0.));
+        p.frame();
+        p.pointer_down(6., 28., 50.).unwrap();
+        p.pointer_up(6., 28., 60.).unwrap();
+        p.frame();
+        assert_eq!(p.field_selection(field), FieldSelection::caret(1));
+        assert_eq!(p.scroll_of(field).0, 95.);
     }
 
     #[test]
@@ -505,6 +564,16 @@ mod tests {
       text `${clicks}`
       textarea testId="editor" value=body input=edit width=260 height=120 font-size=14
 "##;
+        let coloured = format!("decoration accent color=\"#db1141\"\n{source}").replace(
+            "value=body input=edit",
+            "value=body input=edit decorations=TextDecorations(value=body,spans=[TextDecorationSpan(name=\"accent\",start=0,end=5)])",
+        );
+        for source in [source, &coloured] {
+            exercise_field_geometry(source);
+        }
+    }
+
+    fn exercise_field_geometry(source: &str) {
         let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(source),
             (),
@@ -532,12 +601,23 @@ mod tests {
             "unchanged textarea must reuse its cached Geometry across unrelated redraws"
         );
         p.set_focus(Some(editor), 10.);
-        p.type_text(editor, "x").unwrap();
+        p.mark_field(
+            editor,
+            &p.field_text(editor),
+            FieldSelection::caret(0),
+            false,
+        );
+        p.key(Some('x'), false, 11.);
+        assert!(p.field_text(editor).starts_with("xline one"));
         p.frame();
         let third = p.brush.field_text[&editor].geometry.clone();
         assert!(
             !std::rc::Rc::ptr_eq(&first, &third),
-            "editing the textarea must rebuild Geometry"
+            "the edited row changes the field geometry"
         );
+        assert!(!third.shares_spans(0, &first, 0));
+        for row in 1..4 {
+            assert!(third.shares_spans(row, &first, row), "unchanged row {row}");
+        }
     }
 }

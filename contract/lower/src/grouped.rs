@@ -380,6 +380,7 @@ fn section(
         children,
         span,
         instance,
+        place,
     } = node
     else {
         unreachable!("`over` passes elements")
@@ -391,6 +392,14 @@ fn section(
             format!("a grouped list holds `section`s, not `{tag}`: put rows in a `section`"),
             span,
         );
+    }
+    // @ref LLP 1094.000 D4 — nothing written in a grouped list's section drags out.
+    let dragged = Node::walk(std::slice::from_ref(node)).find_map(|n| match n {
+        Node::Element { attrs, .. } => attrs.iter().find(|a| crate::transfer::drags(a)),
+        _ => None,
+    });
+    if let Some(a) = dragged {
+        return Err(crate::transfer::grouped(a));
     }
     // LLP 1116.017 D3, before the label's check: copied only when one folds.
     let fold = |c: &Node| {
@@ -563,6 +572,7 @@ fn section(
             children,
             span,
             instance,
+            place,
         } = node
         else {
             unreachable!("a header or footer is an element")
@@ -627,6 +637,7 @@ fn section(
             children: children.clone(),
             span,
             instance: *instance,
+            place: *place,
         }
     };
     // Plain rows use the list's ground, as UIKit's plain cells and AppKit's table rows do.
@@ -703,6 +714,7 @@ fn section(
         children: body,
         span,
         instance: *instance,
+        place: None,
     });
     out.extend(
         children[children.len() - tail..]
@@ -716,6 +728,7 @@ fn section(
         children: out,
         span,
         instance: *instance,
+        place: *place,
     })
 }
 
@@ -764,27 +777,11 @@ pub(crate) fn accessory(apple: &str) -> Option<&'static str> {
 }
 
 fn with(node: &Node, sheet: Vec<Attr>) -> Node {
-    let Node::Element {
-        tag,
-        positional,
-        attrs,
-        children,
-        span,
-        instance,
-    } = node
-    else {
-        return node.clone();
-    };
-    let mut rows = sheet;
-    rows.extend(attrs.iter().cloned());
-    Node::Element {
-        tag: tag.clone(),
-        positional: positional.clone(),
-        attrs: rows,
-        children: children.clone(),
-        span: *span,
-        instance: *instance,
+    let mut styled = node.clone();
+    if let Node::Element { attrs, .. } = &mut styled {
+        attrs.splice(..0, sheet);
     }
+    styled
 }
 
 /// A field whose authored `flex` is a number alone (`flex=1`, CSS's `1 1
@@ -981,6 +978,7 @@ fn styled(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> N
         let Node::Element {
             positional,
             instance,
+            place,
             ..
         } = node
         else {
@@ -997,6 +995,7 @@ fn styled(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> N
             },
             span,
             instance: *instance,
+            place: *place,
         };
     }
     let stack = text_stack(children);
@@ -1144,6 +1143,7 @@ fn styled(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> N
         positional,
         span,
         instance,
+        place,
         ..
     } = node
     else {
@@ -1159,6 +1159,7 @@ fn styled(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> N
         children: parts.iter().map(disclosure).collect(),
         span: *span,
         instance: *instance,
+        place: *place,
     }
 }
 

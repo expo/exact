@@ -40,10 +40,11 @@ final class ResetGateTests: XCTestCase {
         XCTAssertTrue(done(), what)
     }
 
-    private func boot(_ fixture: String = "RESET_GATE") throws -> (ExactSession, Data) {
+    private func boot(_ fixture: String = "RESET_GATE", postsTimers: Bool = ExactEnv.postsLiveWork) throws -> (ExactSession, Data) {
         let plan = try fixturePlan(fixture)
         let session = ExactApp.shared.makeSession(label: "reset-gate")
         self.session = session
+        session.postsTimerAdvances = postsTimers
         let size = CGSize(width: 400, height: 600)
         #if os(iOS)
         let scene = hostedWindowScene()
@@ -323,14 +324,11 @@ final class ResetGateTests: XCTestCase {
     }
 
     /// A task's native firing held is kept by its own queue, which delivers it after (no replay), on the synchronous
-    /// path (the Mac's) and the one posted to the owner; a firing queued when a real restart commits is dropped with
+    /// path and the one posted to the owner; a firing queued when a real restart commits is dropped with
     /// its generation, whose rows re-arm the task's timer (#1144; ResetGate.dropped). Each delivery is the queue's own.
     func testANativeFiringHeldIsDeliveredAfterAndARestartReArmsIt() throws {
-        let wasAsync = ExactSession.asyncFills
-        defer { ExactSession.asyncFills = wasAsync }
         for asynchronous in [false, true] {
-            ExactSession.asyncFills = asynchronous
-            let (session, plan) = try boot()
+            let (session, plan) = try boot(postsTimers: asynchronous)
             until("the timer runs") { (try? ticks(session)) ?? 0 > 1 }
             // The ticker's layouts wake a reply pump for the route-overflow check (7995abac3), at most once every
             // 100 ms: the held window starts as one lands, so the next cannot be held in the firing's place.
@@ -376,11 +374,8 @@ final class ResetGateTests: XCTestCase {
     /// restart the new generation's next update check admits the firing (ResetGate.dropped). (An update-wait is
     /// admitted on an update by design: the check this test makes is the one the next update callback makes.)
     func testAnAdmissionCheckHeldLeavesNothingPendingAndARestartAdmits() throws {
-        let wasAsync = ExactSession.asyncFills
-        defer { ExactSession.asyncFills = wasAsync }
         for asynchronous in [false, true] {
-            ExactSession.asyncFills = asynchronous
-            let (session, plan) = try boot("RESET_GATE_ADMISSION")
+            let (session, plan) = try boot("RESET_GATE_ADMISSION", postsTimers: asynchronous)
             func count() -> Int? { (try? words(session))?.compactMap { Int($0) }.max() }
             // Wait for the display link to stop as well. A still page's link runs until a tick hears its first present
             // (LLP 1069.000 D2 r7); while it runs, `check` waits for its answer instead of posting it, and a tick that
@@ -416,13 +411,10 @@ final class ResetGateTests: XCTestCase {
     }
 
     /// A timer admission check made while the display link runs, as it does for a still page's first present (LLP
-    /// 1069.000 D2 r7), with posted fills: the check waits for its answer instead of posting it, and a tick held beside
+    /// 1069.000 D2 r7), with posted timers: the check waits for its answer instead of posting it, and a tick held beside
     /// it, as the link's would be, is replayed as an advance; nothing is left pending.
     func testAnAdmissionCheckWhileTheLinkRunsWaitsForItsAnswer() throws {
-        let wasAsync = ExactSession.asyncFills
-        defer { ExactSession.asyncFills = wasAsync }
-        ExactSession.asyncFills = true
-        let (session, _) = try boot("RESET_GATE_ADMISSION")
+        let (session, _) = try boot("RESET_GATE_ADMISSION", postsTimers: true)
         until("booted and presented, with nothing in flight") {
             !session.ownerInFlight && !session.applying && !session.advanceInFlight && session.frames.link == nil
         }

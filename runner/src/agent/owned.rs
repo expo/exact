@@ -5,8 +5,7 @@
 use crate::json::{quote, typed_json};
 use crate::{DataSource, Runner};
 
-/// The name a child's declaration was written with: lifting renames each
-/// use's apart as `name#n`.
+/// The author’s name precedes the component use’s `#` suffix.
 pub(crate) fn declared_name(lifted: &str) -> &str {
     lifted.split('#').next().unwrap_or(lifted)
 }

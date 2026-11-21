@@ -6,7 +6,7 @@ function recordsServer(checkpoint = () => null) {
   return Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
     const js = body => new Response(body, { headers: { 'content-type': 'text/javascript' } });
-    if (path === '/rt.js') return js('export const After = [], PropHooks = {}, Resources = [], inflight = { n: 1 }, clock = {}, data = {}, journal = []; export const settled = () => { for (const f of After) f(); }; export const carryRouter = null, launchLocation = null, res = null, sig = null;');
+    if (path === '/rt.js') return js('export const After = [], PropHooks = {}, Resources = [], inflight = { n: 1 }, clock = {}, data = {}, journal = []; export const settled = () => { for (const f of After) f(); }; export const carryRouter = null, late = null, launchLocation = null, res = null, sig = null;');
     if (path === '/navigation.js') return js(hostFixtureFile(new URL('../web/navigation.js', import.meta.url)));
     if (['/checkpoint.js', '/focus.js'].includes(path)) return js(Bun.file(new URL('.' + path, import.meta.url)));
     const cp = checkpoint();
@@ -61,14 +61,15 @@ test.each(['answer', 'focus', 'scroll', 'expire'])('replacement records survive 
       document.getElementById('above').style.height = '160px';
       document.getElementById('body').setAttribute('data-carry-type', 'Column');
       root.insertAdjacentHTML('beforeend', '<input data-carry-type="Input" id="field" value="Piranesi">');
+      const field = document.getElementById('field');
+      field.setSelectionRange(1, 3, 'forward');
       rt.inflight.n = 0; rt.settled();
       await new Promise(ok => requestAnimationFrame(() => requestAnimationFrame(ok)));
-      const field = document.getElementById('field');
       return { focus: document.activeElement.id, selection: [field.selectionStart, field.selectionEnd, field.selectionDirection],
         top: document.getElementById('port').scrollTop, restoration: history.scrollRestoration, pending: rt.After.length };
     });
     expect(result).toEqual({ focus: mode === 'expire' ? '' : mode === 'focus' ? 'other' : 'field',
-      selection: ['focus', 'expire'].includes(mode) ? [0, 0, 'none'] : [2, 5, 'backward'],
+      selection: ['focus', 'expire'].includes(mode) ? [1, 3, 'forward'] : [2, 5, 'backward'],
       top: mode === 'expire' ? 0 : mode === 'scroll' ? 215 : 190, restoration: 'auto', pending: 0 });
   } finally { await browser?.close(); server.stop(true); }
 }, 30000);
@@ -473,7 +474,7 @@ test.each(['restore', 'focus', 'target-focus', 'scroll', 'wheel', 'boot-scroll',
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
     const js = text => new Response(text, { headers: { 'content-type': 'text/javascript' } });
-    if (path === '/rt.js') return js('export const After = [], Before = [], Hosts = {}, Resources = [{ ticket: { stream: true, messages: 0 }, pending: () => true }], inflight = { n: 0 }, PropHooks = {}, clock = {}, data = {}, journal = []; export const settled = () => { for (const f of After) f(); }; export const carryRouter = null, launchLocation = null, res = null, sig = null;');
+    if (path === '/rt.js') return js('export const After = [], Before = [], Hosts = {}, Resources = [{ ticket: { stream: true, messages: 0 }, pending: () => true }], inflight = { n: 0 }, PropHooks = {}, clock = {}, data = {}, journal = []; export const settled = () => { for (const f of After) f(); }; export const carryRouter = null, late = null, launchLocation = null, res = null, sig = null;');
     if (path === '/navigation.js') return js(hostFixtureFile(new URL('../web/navigation.js', import.meta.url)));
     if (['/checkpoint.js', '/focus.js', '/follow.js'].includes(path)) return js(Bun.file(new URL('.' + path, import.meta.url)));
     return new Response('<main id="exact-root"></main>', { headers: { 'content-type': 'text/html' } });

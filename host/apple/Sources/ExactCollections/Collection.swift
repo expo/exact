@@ -412,6 +412,9 @@ final class CollectionHost: ListHosting {
         #endif
     }
     func beginBatch(_ batch: Batch) {
+        // A kept scroll view has a new collection behind it. Its row epochs,
+        // feedback sequences and correction revisions all start over.
+        if batch.replacesTree { reset() }
         if batchDepth == 0 { for (view, entry) in entries { entry.batchInsets = portInsets(view); entry.batchStart = geometry(view)?.offset } }
         batchDepth += 1
         #if os(iOS) || os(tvOS)

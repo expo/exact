@@ -270,6 +270,7 @@ internal class Access(private val host: View) {
                 AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS -> unfocus(id)
                 AccessibilityNodeInfo.ACTION_CLICK -> n.has(CLICK) && Exact.accessAct(id, PRESS, 0f)
                 AccessibilityNodeInfo.ACTION_LONG_CLICK -> n.has(LONG_CLICK) && Exact.accessAct(id, HOLD, 0f)
+                android.R.id.accessibilityActionDragStart -> n.has(DRAG) && Exact.accessAct(id, DRAG_START, 0f)
                 AccessibilityNodeInfo.ACTION_EXPAND -> n.has(EXPANDABLE) && !n.has(EXPANDED) && n.has(CLICK) && Exact.accessAct(id, PRESS, 0f)
                 AccessibilityNodeInfo.ACTION_COLLAPSE -> n.has(EXPANDED) && n.has(CLICK) && Exact.accessAct(id, PRESS, 0f)
                 AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, android.R.id.accessibilityActionScrollDown, android.R.id.accessibilityActionScrollRight ->
@@ -390,6 +391,7 @@ internal class Access(private val host: View) {
         // What a double tap does. A tab that is selected takes none, as Material's does not.
         if (n.has(CLICK) && !(n.role == TAB && n.has(SELECTED))) { info.isClickable = true; info.addAction(AccessibilityAction.ACTION_CLICK) }
         if (n.has(LONG_CLICK)) { info.isLongClickable = true; info.addAction(AccessibilityAction.ACTION_LONG_CLICK) }
+        if (n.has(DRAG) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S_V2) info.addAction(AccessibilityAction.ACTION_DRAG_START)
         if (n.has(EXPANDABLE) && n.has(CLICK)) info.addAction(if (n.has(EXPANDED)) AccessibilityAction.ACTION_COLLAPSE else AccessibilityAction.ACTION_EXPAND)
         // A range steps forward and back, as a SeekBar does; only a native one is set to a value (a drawn one steps by its author's keys).
         if (n.role == SCROLLER || n.role == LIST_BOX || n.has(RANGE)) {
@@ -490,7 +492,7 @@ internal class Access(private val host: View) {
             when (a.id) {
                 AccessibilityNodeInfo.ACTION_CLICK -> "click"; AccessibilityNodeInfo.ACTION_LONG_CLICK -> "longClick"
                 AccessibilityNodeInfo.ACTION_SCROLL_FORWARD -> "scrollForward"; AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD -> "scrollBackward"
-                android.R.id.accessibilityActionSetProgress -> "setProgress"
+                android.R.id.accessibilityActionSetProgress -> "setProgress"; android.R.id.accessibilityActionDragStart -> "dragStart"
                 AccessibilityNodeInfo.ACTION_EXPAND -> "expand"; AccessibilityNodeInfo.ACTION_COLLAPSE -> "collapse"
                 else -> null
             }
@@ -641,6 +643,7 @@ internal class Access(private val host: View) {
         const val ASSERTIVE = 1 shl 12
         const val RANGE = 1 shl 13
         const val SETTABLE = 1 shl 14
+        const val DRAG = 1 shl 16
 
         /** What changed of a node (`presenter::access::change`). */
         private const val SUBTREE = 1
@@ -655,6 +658,7 @@ internal class Access(private val host: View) {
         private const val ON = 3
         private const val BACK = 4
         private const val SET = 5
+        private const val DRAG_START = 6
 
         /** The class TalkBack knows a role by. A heading, a link and a tab are said by the node, not by a class. */
         fun kind(n: Node): String = when (n.role) {

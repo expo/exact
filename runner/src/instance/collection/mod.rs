@@ -8,6 +8,8 @@ mod into_view;
 mod keep;
 mod nest;
 mod reach;
+mod replacement;
+pub(super) use replacement::ListReading;
 mod rekey;
 mod reorder;
 mod reorder_group;
@@ -483,6 +485,14 @@ impl Collection {
             let anchor = self.committed_anchor(anchor, drop_anchor);
             self.cancel_if_row_left();
             self.restore_unless_unknown(anchor)?;
+        }
+        if fresh {
+            if let Some(seed) = u
+                .list_seeds
+                .and_then(|seeds| seeds.get(u.env.plan.region(self.region).parent?, frames))
+            {
+                self.seed_reading(seed)?;
+            }
         }
         self.start_at_end();
         // A changed set that mounts a row: the host measures it.
@@ -973,7 +983,7 @@ impl Collection {
             if s.owner.is_some() && s.owner == arm {
                 let value = u
                     .eval_named(s.init, &inner, || {
-                        format!("state {:?} initializer", plan.str(s.name))
+                        crate::RunnerError::state_initializer(plan.str(s.name))
                     })
                     .map_err(|e| {
                         e.at_view(
@@ -1125,13 +1135,15 @@ impl Collection {
             .map_or(feedback.port_main, |g| g.port_main);
         self.leave_end_if_moved(fill.velocity);
         let extent = self.index.total_height();
-        let anchor = Some(match self.restoring(&feedback) {
-            Some(anchor) => anchor,
-            None => {
-                let resized = anchor_height != feedback.port_main && fill.velocity == 0.0;
-                self.report_anchor(feedback.offset, anchor_height, padding, resized)?
-            }
-        });
+        let anchor = Some(
+            match self.restoring(&feedback, fill.gesture || fill.velocity != 0.0) {
+                Some(anchor) => anchor,
+                None => {
+                    let resized = anchor_height != feedback.port_main && fill.velocity == 0.0;
+                    self.report_anchor(feedback.offset, anchor_height, padding, resized)?
+                }
+            },
+        );
         self.set_padding(padding);
         self.set_geometry(CollectionFeedback {
             measurements: Vec::new(),

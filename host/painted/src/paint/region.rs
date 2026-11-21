@@ -908,12 +908,6 @@ impl<'a> Replay<'a> {
                                 walk.boxes.last_mut().unwrap().baseline =
                                     p.baseline_at((g.content.0, g.content.1));
                             }
-                            if let Some(inline) = inline {
-                                walk.inline.insert(
-                                    n.id,
-                                    inline.place((g.content.0, g.content.1), &[], parent),
-                                );
-                            }
                             walk.text.insert(n.key, p.clone());
                             for command in commands {
                                 match command {
@@ -944,6 +938,11 @@ impl<'a> Replay<'a> {
                                         }
                                     }
                                 }
+                            }
+                            if let Some(inline) = inline {
+                                let placed = inline.place((g.content.0, g.content.1), &[], parent);
+                                painter.highlight_reader(&placed);
+                                walk.inline.insert(n.id, placed);
                             }
                         }
                     }

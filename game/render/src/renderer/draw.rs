@@ -619,13 +619,13 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
         } else {
             None
         };
-        let gpu = crate::HookGpu {
+        let gpu = crate::HookGpu::new(
             materials,
             device,
-            queue: &self.queue,
-            frame_binding: &binding.bind,
-            frame_layout: &binding.layout,
-        };
+            &self.queue,
+            &binding.bind,
+            &binding.layout,
+        );
         let deadline = view.time.deadline;
         let start = (measure || deadline.is_some()).then(crate::perf::Stamp::now);
         if let Some((deadline, start)) = deadline.zip(start) {

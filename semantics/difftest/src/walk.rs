@@ -16,6 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Default)]
 pub(crate) struct Inputs {
     authored: BTreeMap<String, Vec<String>>,
+    keys: BTreeMap<String, Vec<String>>,
     literals: Vec<String>,
 }
 impl Inputs {
@@ -23,8 +24,23 @@ impl Inputs {
         let mut inputs = Self::default();
         for test in tests {
             for step in test.steps {
-                if let Step::Type { target, text, .. } = step {
-                    inputs.authored.entry(target).or_default().push(text);
+                match step {
+                    Step::Type { target, text, .. } => {
+                        inputs.authored.entry(target).or_default().push(text);
+                    }
+                    Step::Key {
+                        target,
+                        key,
+                        phase: None,
+                        duration: None,
+                        ..
+                    } => {
+                        let keys = inputs.keys.entry(target).or_default();
+                        if !keys.contains(&key) {
+                            keys.push(key);
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -49,6 +65,19 @@ impl Inputs {
             return s.clone();
         }
         crate::gen::input(rng)
+    }
+
+    /// The keys a walk presses at `control`: its tests' first, then the
+    /// strings its key action holds.
+    fn keys(&self, control: &crate::observe::Control) -> Vec<String> {
+        let mut keys = self.keys.get(&control.id).cloned().unwrap_or_default();
+        for key in &control.keys {
+            if !keys.contains(key) {
+                keys.push(key.clone());
+            }
+        }
+        keys.retain(|chord| exact_runner::KeyboardEvent::chord(chord).key != "Tab");
+        keys
     }
 }
 
@@ -81,7 +110,7 @@ pub(crate) fn generate(
     let mut visits = BTreeMap::<String, usize>::new();
     let record = |d: &Driver, rendered: &mut BTreeSet<String>| {
         for c in d.controls() {
-            rendered.extend(c.press.into_iter().chain(c.input));
+            rendered.extend(c.press.into_iter().chain(c.input).chain(c.key_actions));
         }
     };
     record(&driver, &mut rendered);
@@ -123,11 +152,18 @@ pub(crate) fn generate(
             .filter(|c| !tapped.contains(&c.id))
             .collect();
         let types: Vec<_> = controls.iter().filter(|c| c.input.is_some()).collect();
+        let keyed: Vec<_> = controls
+            .iter()
+            .filter(|c| !c.key_actions.is_empty())
+            .map(|c| (c, inputs.keys(c)))
+            .filter(|(_, keys)| !keys.is_empty())
+            .collect();
         let paired = steps - added >= 2;
         let choice = rng.weighted(&[
             if paired && !presses.is_empty() { 6 } else { 0 },
             if paired && !types.is_empty() { 3 } else { 0 },
             2,
+            if paired && !keyed.is_empty() { 3 } else { 0 },
         ]);
         let event = match choice {
             0 => {
@@ -142,9 +178,13 @@ pub(crate) fn generate(
                 *visit += 1;
                 Event::Type(c.id.clone(), value)
             }
-            _ => Event::Clock(if rng.chance(1, 2) { interval } else { 60_000.0 }),
+            2 => Event::Clock(if rng.chance(1, 2) { interval } else { 60_000.0 }),
+            _ => {
+                let (c, keys) = rng.pick(&keyed);
+                Event::Key(c.id.clone(), rng.pick(keys).clone())
+            }
         };
-        let input = matches!(event, Event::Tap(_) | Event::Type(..));
+        let input = event.is_input();
         let lines = driver.step(&event);
         let delivered = crate::settle::delivered(&lines);
         observation.extend(lines);

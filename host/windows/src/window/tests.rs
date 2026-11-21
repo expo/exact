@@ -392,7 +392,10 @@ fn early_redraws_preserve_cadence_and_stalls_resume_without_catch_up() {
     );
 }
 
-fn windowless_app(proxy: EventLoopProxy<crate::accessibility::Event>, plan: &[u8]) -> App<()> {
+pub(super) fn windowless_app(
+    proxy: EventLoopProxy<crate::accessibility::Event>,
+    plan: &[u8],
+) -> App<()> {
     let (p, _) = Presenter::boot_with(
         plan,
         (),
@@ -508,6 +511,7 @@ pub(crate) fn run_carrier_tests(events: EventLoop<crate::accessibility::Event>) 
         app.presenter = Some(p);
         app.wait(events, |_| (Some(retry), Some(retry)));
         assert_eq!(events.control_flow(), ControlFlow::WaitUntil(app.started + Duration::from_secs_f64(wake / 1000.)));
+        file_drop::tests::shell_selection_over_an_editor(events, app.proxy.clone()).unwrap();
         document_title_reaches_the_window_without_drawing(events, app.proxy.clone());
         checked = true;
         events.exit();

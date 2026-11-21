@@ -289,17 +289,20 @@ impl<D: DataSource> Host<D> {
         );
         data.configure_secrets(secret_session.shared.clone())
             .map_err(|error| HostError::Layout(format!("shared secrets: {error:?}")))?;
-        let mut runner = Runner::boot_with_delivery(
-            plan,
-            data,
-            kernel,
-            carried,
-            store_snapshot,
-            delivery.unwrap_or_default(),
-            exact_runner::Viewport::sized(width as f64, height as f64),
-            launch,
-        )
-        .map_err(HostError::Runner)?;
+        let mut runner = crate::PLATFORM
+            .boot(|| {
+                Runner::boot_with_delivery(
+                    plan,
+                    data,
+                    kernel,
+                    carried,
+                    store_snapshot,
+                    delivery.unwrap_or_default(),
+                    exact_runner::Viewport::sized(width as f64, height as f64),
+                    launch,
+                )
+            })
+            .map_err(HostError::Runner)?;
         #[cfg(target_os = "macos")]
         drop(boot_trace);
         #[cfg(any(windows, target_os = "macos"))]
@@ -699,7 +702,7 @@ impl<D: DataSource> Host<D> {
     }
 
     /// Whether any node shows press feedback now.
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", test))]
     pub(crate) fn pressing(&self) -> bool {
         !self.presses.is_empty()
     }

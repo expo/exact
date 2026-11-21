@@ -199,6 +199,27 @@ extension NodeView {
         // The scroller's frame, insets and offset move as one: inside an animation UIKit has open, only if the last frame showed it
         moveOrPlace { bandScroll(band, inset: own) }
     }
+    /// Reach (LLP 1123 D13): the scroll view's frame grows past the box by `reach` on each edge,
+    /// as the kernel's terms give it, keeping CSS `scrollTop` and `scrollLeft` unclamped. D14's
+    /// writer, called next, measures every term from the reached frame, writes the insets that put
+    /// the content back where layout put it, and clamps the offset to the range they make; so
+    /// activation applies reach first and the writer after it, as reach grows and as it shrinks.
+    package func setReach(_ reach: UIEdgeInsets) {
+        // The scroller's frame and offset move as one: inside an animation UIKit has open, only if the last frame showed it
+        moveOrPlace { reachScroll(reach) }
+    }
+    private func reachScroll(_ reach: UIEdgeInsets) {
+        guard let sv = scrollView, reach != self.reach else { return }
+        let top = sv.contentOffset.y + scrollTopInset(sv), left = sv.contentOffset.x + scrollLeftInset(sv), height = sv.bounds.height
+        more.reach = reach
+        // A layout transition's surface that took the clip over keeps it until it ends (`endSurface`)
+        if surface?.clippedSelf != true, clipsToBounds != clipsItself { clipsToBounds = clipsItself }
+        sv.frame = scrollFrame
+        // A list that keeps its end judges it, for the writer next, as it did before reach moved the frame
+        (sv as? ScrollView)?.boundsGrew(by: sv.bounds.height - height)
+        fitScroll()
+        sv.contentOffset = PixelGrid.offset(CGPoint(x: left - scrollLeftInset(sv), y: top - scrollTopInset(sv)), in: sv, clamped: false)
+    }
     private func bandScroll(_ band: UIEdgeInsets, inset own: UIEdgeInsets?) {
         guard let sv = scrollView else { return }
         let own = own ?? band

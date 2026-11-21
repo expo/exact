@@ -492,3 +492,48 @@ test.skipIf(process.platform === 'win32')('TypeScript Android builds require a t
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 30_000);
+
+// A machine without what an iPhone build needs (here, no Rust) is told so in the name of the verb that was run, and an
+// app that already names iOS, whose native workspace Cargo resolves, gets the same one-line refusal, not a stack trace.
+test.skipIf(process.platform === 'win32')('share refuses in its own name on a machine that cannot build for iPhone', async () => {
+  const { createApp } = await import('../game/new.mjs');
+  const { mkdirSync, mkdtempSync, rmSync, symlinkSync } = fs;
+  const { resolve } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const scratch = mkdtempSync(resolve(tmpdir(), 'exact-share-refused-'));
+  try {
+    const bin = resolve(scratch, 'bin');
+    mkdirSync(bin);
+    symlinkSync(process.execPath, resolve(bin, 'bun'));
+    const env = { HOME: scratch, PATH: bin, CARGO_HOME: resolve(scratch, 'cargo'), RUSTUP_HOME: resolve(scratch, 'rustup'), EXACT_FEEDBACK: '0' };
+    const share = (app) => childProcess.spawnSync(process.execPath, [resolve(app, 'exact.mjs'), 'share'], { cwd: app, env, encoding: 'utf8', timeout: 120_000 });
+    const first = resolve(scratch, 'first-share');
+    createApp(first);
+    const refused = share(first);
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toMatch(/^bun exact\.mjs share: this machine lacks what a ios build needs; nothing was written:\n {2}rustup: missing/m);
+    const named = resolve(scratch, 'named-ios');
+    createApp(named, { with: ['ios'] });
+    const crashed = share(named);
+    expect(crashed.status).not.toBe(0);
+    expect(crashed.stderr).toMatch(/^bun exact\.mjs share: cargo was not found on PATH or in ~\/\.cargo\/bin; install Rust with rustup/m);
+    expect(crashed.stderr).not.toMatch(/\n\s+at /);
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
+}, 240_000);
+
+// Without Rust, Chrome or a tool set, an app's table names its missing rows as the web's, not as what every build lacks.
+test("exact new says its table is the web's", async () => {
+  const { mkdirSync, mkdtempSync, rmSync, symlinkSync } = fs;
+  const { resolve } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const scratch = mkdtempSync(resolve(tmpdir(), 'exact-new-web-table-'));
+  try {
+    const bin = resolve(scratch, 'bin');
+    mkdirSync(bin);
+    symlinkSync(process.execPath, resolve(bin, 'bun'));
+    const env = { HOME: scratch, PATH: bin, CARGO_HOME: resolve(scratch, 'cargo'), RUSTUP_HOME: resolve(scratch, 'rustup'), XDG_CACHE_HOME: resolve(scratch, 'cache'), EXACT_FEEDBACK: '0' };
+    const made = childProcess.spawnSync(process.execPath, [resolve(import.meta.dir, 'exact.mjs'), 'new', resolve(scratch, 'web-only')], { encoding: 'utf8', timeout: 120_000, env });
+    expect(made.status).toBe(0);
+    expect(made.stdout).toMatch(/\nFor the web \(bun exact\.mjs web, test web, verify\), this machine still needs \(exact setup --check shows the whole table\):\nMISSING rustup/);
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
+}, 120_000);

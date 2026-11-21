@@ -568,6 +568,8 @@ package final class WindowToolbarHost: NSObject, NSToolbarItemValidation {
         if let said { presenter.session?.log("window header: \(said)") }
     }
 
+    var showsInspector: Bool { presenter.navigation.stackSplit.hasInspector && presenter.navigation.stackSplit.window === window }
+
     package func sync() {
         guard !syncing else { return }
         let adopted = header?.segments
@@ -608,7 +610,8 @@ package final class WindowToolbarHost: NSObject, NSToolbarItemValidation {
         // hiding the tab bar on a screen takes the two away with the
         // sidebar; the toolbar stays, as it stays for a stack.
         let sidebar = presenter.sidebar.installed(in: window), sidebarItems = sidebar && presenter.sidebar.inToolbar(of: window)
-        guard declared != nil || header != nil || beside != nil || held || sidebar else { reset(); return }
+        let inspector = showsInspector
+        guard declared != nil || header != nil || beside != nil || held || sidebar || inspector else { reset(); return }
         // A host that takes its toolbar back wins. Never overwrite it on a tick.
         guard window.toolbar == nil || window.toolbar === toolbar else { refuse("window owner installed another toolbar"); return }
         // Whether a toolbar is customizable is said when it is made, with its identity.
@@ -752,6 +755,10 @@ package final class WindowToolbarHost: NSObject, NSToolbarItemValidation {
         order = (sidebarItems ? [.toggleSidebar, .sidebarTrackingSeparator] : [])
             + (back ? [showsHistory ? Self.historyIdentifier : Self.backIdentifier] : [])
             + nextOrder + appItems.map(\.itemIdentifier)
+        if inspector {
+            if order.last != .flexibleSpace { order.append(.flexibleSpace) }
+            order.append(.toggleInspector)
+        }
         if customizing != nil {
             // The arrangement is the person's, which AppKit makes from the
             // default order or their saved one as the bar is attached: an

@@ -22,7 +22,6 @@ jobs:
       github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    environment: docs
     # A branch's publishes run one at a time, and a newer one waits: a publish stopped after its upload would
     # never check the pull request again, and its preview would outlast a closed pull request. A run this job
     # does not publish gets a group of its own, so it holds nothing up.

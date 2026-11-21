@@ -86,7 +86,7 @@ impl Painter {
         &mut self,
         key: exact_kernel::NodeKey,
         p: &Presented,
-        (x, y, _, _): Rect4,
+        (x, y, w, h): Rect4,
         origin: (f32, f32),
         ts: Transform,
     ) -> Opened {
@@ -94,9 +94,10 @@ impl Painter {
             return Opened { lowered: 0 };
         }
         let [dx, dy, ..] = p.layout;
+        let (tx, ty) = p.translate_at(w, h);
         let base = [
-            p.translate.0,
-            p.translate.1,
+            tx,
+            ty,
             p.scale * p.press,
             p.rotate,
             // The layer's alpha only where its reader plays the opacity: else
@@ -110,7 +111,9 @@ impl Painter {
             0.0,
         ];
         let pivot = (x + origin.0 + dx, y + origin.1 + dy);
-        let taken = self.backend.layer_begin(motion_node(key), ts, pivot, base);
+        let taken = self
+            .backend
+            .layer_begin(motion_node(key), ts, pivot, (w, h), base);
         if taken && p.lowered & LOWER_COLOR != 0 {
             self.backend.layer_recolored();
         }
@@ -152,7 +155,7 @@ impl Painter {
         }
         let (cx, cy, r) = circle.unwrap_or((0.0, 0.0, 0.0));
         let dash = shape.map_or(0.0, |s| s.dash_scale);
-        let (space, pivot, drawn, base) = match item.transform {
+        let (space, pivot, reference, drawn, base) = match item.transform {
             Some(t) if p.lowered & LOWER_TRANSFORM != 0 => {
                 // The individual properties are the layer's; the list stays drawn.
                 let (ox, oy) = t.origin;
@@ -168,18 +171,19 @@ impl Painter {
                     r,
                     dash,
                 ];
-                (ts, t.origin, ts.pre_concat(list), base)
+                (ts, t.origin, t.reference, ts.pre_concat(list), base)
             }
             _ => (
                 own,
                 (cx, cy),
+                (0., 0.),
                 own,
                 [0.0, 0.0, 1.0, 0.0, item.opacity, r, dash],
             ),
         };
         let taken = self
             .backend
-            .layer_begin(motion_node(item.key), space, pivot, base);
+            .layer_begin(motion_node(item.key), space, pivot, reference, base);
         if !taken {
             return closed;
         }

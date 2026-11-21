@@ -377,6 +377,16 @@ impl<D: DataSource> Host<D> {
     }
 
     pub(super) fn create(&mut self, id: ViewId, events: &[EventKind], batch: &mut Batch) {
+        self.create_over(id, events, None, batch);
+    }
+
+    pub(super) fn create_over(
+        &mut self,
+        id: ViewId,
+        events: &[EventKind],
+        old: Option<&Mirror>,
+        batch: &mut Batch,
+    ) {
         // @ref LLP 1055 D4 — an SVG element is in its `svg`'s scene, not a view.
         if self.svg.element(self.runner.kernel(), id).is_some() {
             let key = self.runner.kernel().node(id).expect("live").key;
@@ -447,18 +457,26 @@ impl<D: DataSource> Host<D> {
                 );
             }
         }
-        let pairs: Vec<(&str, String)> = props.iter().map(|(k, v)| (*k, v.clone())).collect();
-        batch.create(id, kind, &pairs, &style, &handlers);
-        // Kept to compare with the next update, as `update` keeps it.
         let style = self.style_texts.share(style);
-        self.mirror.insert(
-            id,
-            Box::new(Mirror {
+        let mirror = if let Some(old) = old.filter(|m| m.kind == Some(kind)) {
+            let mut retained = old.clone();
+            retained.update_props(id, props, batch);
+            if retained.style != style {
+                batch.style(id, &style);
+                retained.style = style;
+            }
+            retained
+        } else {
+            let pairs: Vec<_> = props.iter().map(|(k, v)| (*k, v.clone())).collect();
+            batch.create(id, kind, &pairs, &style, &handlers);
+            Mirror {
+                kind: Some(kind),
                 props,
                 style,
                 ..Mirror::default()
-            }),
-        );
+            }
+        };
+        self.mirror.insert(id, Box::new(mirror));
         self.keys.insert(key, id);
     }
 
@@ -504,30 +522,7 @@ impl<D: DataSource> Host<D> {
             self.queue_layout_subtree(id);
         }
         let m = self.mirror.entry(id).or_default();
-        // What layout derives (`emit_layout`) is layout's to set and clear.
-        // Cleared here as unauthored, a growing list's `flexGrows` went and
-        // came back in every batch that touched the list: each row of a
-        // scrolling list of tasks reconfigured its checkbox for it.
-        for key in super::layout::DERIVED_PROPS {
-            if let (Some(value), false) = (m.props.get(key), props.contains_key(key)) {
-                props.insert(key, value.clone());
-            }
-        }
-        if props != m.props {
-            let set: Vec<(&str, String)> = props
-                .iter()
-                .filter(|(k, v)| m.props.get(*k) != Some(*v))
-                .map(|(k, v)| (*k, v.clone()))
-                .collect();
-            let clear: Vec<&str> = m
-                .props
-                .keys()
-                .filter(|k| !props.contains_key(*k))
-                .copied()
-                .collect();
-            batch.props(id, &set, &clear);
-            m.props = props;
-        }
+        m.update_props(id, props, batch);
         if *m.style != *style {
             batch.style(id, &style);
             m.style = self.style_texts.share(style);

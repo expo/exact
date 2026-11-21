@@ -17,7 +17,7 @@ impl Drop for Folder {
     }
 }
 
-pub(super) fn local_app_data() -> Result<PathBuf, DataError> {
+pub(crate) fn local_app_data() -> Result<PathBuf, DataError> {
     let mut path = Folder(std::ptr::null_mut());
     // SAFETY: valid GUID and output pointer; null token selects current user.
     let status = unsafe {

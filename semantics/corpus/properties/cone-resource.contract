@@ -1,9 +1,14 @@
-// # expect property refused "`outer` -> `inner` -> resource `data`"
-shape Data
+shape Counts
   n: number
+  label: string
+shape Data
+  counts: Counts
 component App
-  resource data = fetchData() as shape Data
-  derive inner = data.n
+  resource data = fetchData(1) as shape Data
+  resource other = fetchData(2) as shape Data
+  derive inner = data.counts.n
   derive outer = inner + 1
   view
-    text `${outer}` testId="value"
+    column
+      text `${outer}` testId="value"
+      text `${other.counts.label} ${other.counts.n}` testId="other"

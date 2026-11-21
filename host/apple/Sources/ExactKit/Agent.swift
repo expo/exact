@@ -172,7 +172,20 @@ public final class Agent {
                     handle(line, completed: { completed.signal() })
                 }
                 CFRunLoopWakeUp(CFRunLoopGetMain())
-                completed.wait()
+                // An asynchronous screenshot or frame capture can take seconds while the UI
+                // stays responsive. Probe the same run-loop modes that deliver the request.
+                while completed.wait(timeout: .now() + 5) == .timedOut {
+                    let pulse = DispatchSemaphore(value: 0)
+                    CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) { pulse.signal() }
+                    CFRunLoopWakeUp(CFRunLoopGetMain())
+                    if pulse.wait(timeout: .now() + 2) == .timedOut {
+                        if completed.wait(timeout: .now()) == .timedOut {
+                            fputs("exact agent: the app’s main thread did not service a run-loop callback for 2 s while this request was pending\n", stderr)
+                            completed.wait()
+                        }
+                        break
+                    }
+                }
             }
         }
         DispatchQueue.main.async { exitAfterLanding() }

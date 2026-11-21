@@ -786,7 +786,7 @@ fn bound_transition_stacking_matches_kernel() {
             expr: Default::default(),
             written: true,
         },
-        crate::paint::transitions,
+        |parser| parser.source(&plan, &crate::paint::motion_words()),
     )
     .unwrap();
     let script = format!(
@@ -914,9 +914,13 @@ fn a_symbols_own_tint_is_its_colour_here_too_a_states_as_well() {
 #[test]
 fn bound_animation_stacking_matches_kernel() {
     let plan = contract::compile(
-        "keyframes EASE\n  from opacity=0\n  to opacity=1\nkeyframes linear\n  to opacity=0\nkeyframes spin\n  to rotate=360\nkeyframes Fade\n  to color=\"red\"\nkeyframes infs\n  to scale=2\nkeyframes MAX_ANIMATIONS\n  to opacity=0\nkeyframes MAX_LINEAR_STOPS\n  to opacity=0\nkeyframes WORDS\n  to opacity=0\nkeyframes NAMES\n  to opacity=0\ncomponent App\n  state a = \"spin 1s\"\n  view\n    view animation=a\n",
+        "keyframes EASE\n  from opacity=0\n  to opacity=1\nkeyframes linear\n  to opacity=0\nkeyframes spin\n  to rotate=360\nkeyframes Fade\n  to color=\"red\"\nkeyframes infs\n  to scale=2\nkeyframes MAX_ANIMATIONS\n  to opacity=0\nkeyframes MAX_LINEAR_STOPS\n  to opacity=0\nkeyframes WORDS\n  to opacity=0\nkeyframes NAMES\n  to opacity=0\ncomponent App\n  state a = \"spin 1s\"\n  state t = \"opacity 1s\"\n  view\n    column\n      view animation=a transition=t\n      view animation=a transition=t\n",
     )
     .unwrap();
+    let js = crate::emit::emit(&plan, false, false).unwrap().js;
+    assert_eq!(js.matches("const maxStops =").count(), 1);
+    assert_eq!(js.matches("const easingWord =").count(), 1);
+    assert_eq!(js.matches("($animationStacks)(v)").count(), 1);
     let mut values: Vec<String> = [
         "1s EASE",
         "EASE 1s",
@@ -1015,7 +1019,7 @@ fn bound_animation_stacking_matches_kernel() {
             expr: Default::default(),
             written: true,
         },
-        crate::paint::transitions,
+        |parser| parser.source(&plan, &crate::paint::motion_words()),
     )
     .unwrap();
     let script = format!(

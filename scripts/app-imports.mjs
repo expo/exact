@@ -40,7 +40,7 @@ export function appSourceFiles(dir, { manifest = JSON.parse(readIn(dir, 'app.jso
 
 /** The latest build's module and checker inputs. Before a first build there is no graph to reuse. */
 export function appSourceInputs(dir) {
-  const real = path => { try { return realpathSync(path); } catch { return resolve(path); } };
+  const real = path => { try { return realpathSync.native(path); } catch { return resolve(path); } };
   try {
     const inputs = JSON.parse(readFileSync(resolve(dir,'.exact/typescript-inputs.json'),'utf8'));
     return inputs.modules?.some(([file,path]) => file === 'app.ts' && real(path) === real(resolve(dir,'app.ts'))) ? inputs : null;

@@ -8,6 +8,11 @@
 //! iterator (6–20× slower per glyph; the spike), and placed as its
 //! `positioned_glyphs` places them: each glyph at the pen plus its offset,
 //! the pen moved by its advance.
+#[path = "field_lines.rs"]
+mod field_lines;
+pub use field_lines::Glyphs;
+pub(super) use field_lines::{Block, FieldLines};
+
 use super::catalog::FaceId;
 use parley::FontData;
 use std::sync::Arc;
@@ -48,8 +53,11 @@ impl super::Paragraph {
                     line
                 })
                 .collect(),
-            glyphs: source.glyphs[glyph_start as usize..glyph_end as usize].to_vec(),
+            glyphs: source.glyphs[glyph_start as usize..glyph_end as usize]
+                .to_vec()
+                .into(),
             faces: source.faces.clone(),
+            field_metrics: Vec::new(),
             boxes: source
                 .boxes
                 .iter()
@@ -191,28 +199,32 @@ pub struct Lines {
     /// Visual lines, top to bottom.
     pub lines: Vec<LayoutLine>,
     /// Every line's glyphs.
-    pub glyphs: Vec<LayoutGlyph>,
+    pub glyphs: Glyphs,
     /// The faces the glyphs name.
     pub faces: Vec<Face>,
     /// Every line's inline boxes, in visual order.
     pub boxes: Vec<LayoutBox>,
     /// Every line's inline-box room, by line.
     pub rooms: Vec<LayoutRoom>,
+    /// The unrounded ascent, descent and explicit-height flag before paragraph trimming.
+    /// Editable lines carry these across revisions even when their vertical origin moves.
+    pub(super) field_metrics: Vec<Option<(f32, f32, bool)>>,
 }
 
 impl Lines {
     /// A line's glyphs.
     pub fn glyphs_of(&self, line: &LayoutLine) -> &[LayoutGlyph] {
-        &self.glyphs[line.glyphs.0 as usize..line.glyphs.1 as usize]
+        self.glyphs.line(line)
     }
     /// Exact accessible capacities, bytes.
     pub fn capacity_bytes(&self) -> usize {
         use std::mem::size_of;
         self.lines.capacity() * size_of::<LayoutLine>()
-            + self.glyphs.capacity() * size_of::<LayoutGlyph>()
+            + self.glyphs.bytes()
             + self.faces.capacity() * size_of::<Face>()
             + self.boxes.capacity() * size_of::<LayoutBox>()
             + self.rooms.capacity() * size_of::<LayoutRoom>()
+            + self.field_metrics.capacity() * size_of::<Option<(f32, f32, bool)>>()
             + self
                 .faces
                 .iter()
@@ -353,6 +365,9 @@ fn place(order: &[Placed], ends: &[usize], rooms: &[Room], rtl: bool) -> Vec<(us
     out
 }
 
+#[cfg(test)]
+thread_local! { pub(super) static EXTRACTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
 /// One Parley line's glyphs, appended in visual order with `shift` added
 /// to every x (`styles` is the layout's, whose brushes are run indices),
 /// and its inline boxes and rooms as the next line's (a box's id is its run
@@ -367,6 +382,8 @@ pub(super) fn extract(
     out: &mut Lines,
 ) -> f32 {
     let m = line.metrics();
+    #[cfg(test)]
+    let before = out.glyphs.len();
     let line_index = out.lines.len() as u32;
     // The rooms shaped on this line, and where each is drawn.
     let mut placed = Vec::new();
@@ -491,5 +508,7 @@ pub(super) fn extract(
             k += 1;
         }
     }
+    #[cfg(test)]
+    EXTRACTED.with(|n| n.set(n.get() + out.glyphs.len() - before));
     content
 }

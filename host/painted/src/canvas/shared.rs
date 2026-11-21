@@ -259,6 +259,7 @@ mod tests {
                 7,
                 Transform::identity(),
                 (0., 0.),
+                (0., 0.),
                 [0., 0., 1., 0., alpha, 0., 0.]
             ));
         };

@@ -651,6 +651,7 @@ impl<D: DataSource> Links<D> {
                 &exact_motion::EngineLinks::SETTLE
             },
             modules: exact_runner::ModuleLinks {
+                source_answer: None,
                 modules: if uses.has(Capability::Modules) {
                     exact_runner::ModuleLinks::<D>::ALL.modules
                 } else {

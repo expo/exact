@@ -194,10 +194,14 @@ impl<D: DataSource> Presenter<D> {
                 name @ ("fastSeek" | "load" | "requestFullscreen") if cfg!(target_os = "android") => {
                     self.media_command(name, &c.args)
                 }
+                "format" => {
+                    let field = c.args.first().and_then(exact_plan::Value::as_str).unwrap_or("");
+                    self.host.log(format!("format \"{field}\" refused: this host edits Markdown as plain source"));
+                }
                 // With no shell there is no clipboard or browser; and no
-                // editor, dev menu or window to close on any Linux host, and
+                // dev menu or window to close on any Linux host, and
                 // no media player (LLP 1042 §8) or floating window (§9): known, and named so.
-                name @ ("copyText" | "openURL" | "format" | "reload" | "close" | "fastSeek"
+                name @ ("copyText" | "openURL" | "reload" | "close" | "fastSeek"
                 | "load" | "exitPictureInPicture") => {
                     eprintln!("exact: {name} unsupported on the headless/DRM host");
                     if name == "openURL" {

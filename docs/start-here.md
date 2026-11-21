@@ -66,7 +66,7 @@ an untouched starter is replaced, but an edited or manually emptied file needs
 Your shell commands have no such help, so keep one directory.
 |`bun exact.mjs …`|What it does|
 |---|---|
-|`contract build app.contract --json --errors-only`|A CI gate: `[]` and exit zero mean no errors (omit `--errors-only` to include warnings); it rewrites the types `app.ts` imports and type-checks it.|
+|`contract build app.contract --json --errors-only`|A CI gate: `[]` and exit zero mean no errors (omit `--errors-only` for every unaccepted lowering warning); it rewrites the types `app.ts` imports and type-checks it.|
 |`verify`, `verify ios`|Builds, runs `app.test.contract` and each other `*.test.contract` beside it, `check`s the first screen and where each test ends (light, dark, two widths), reads each of those screens' accessibility tree once (`tree --ax`: a control with no name, or one a screen reader reaches though hidden or behind an open modal; counted as `check`'s findings are), relaunches once on real time, and reads those screens (on the web, also the ones the tests pass through) at the largest text size, where what spills is the app's layout to fix (the web comparison leaves out content iOS projects into its navigation bar and its tab bar, whose items UIKit keeps at one size), with a remedy that keeps the text's size (no `line-clamp` in a list's row; `hyphens="auto"` only on a text of one word, which a UILabel breaks between syllables when it is longer than its line); `verify ios` also plays real touches on a long list on the first screen, once per build, and says `scrolling: like UIKit` or what a person would notice, each with UIKit's value and its cause, counting only what the app can fix: one report. A clean run on the app's platform is done.|
 |`agent web --storage s1 "clock data" "tap add" "check both"`|Drives the app by hand, to see why something fails; `--keep-storage` reopens saved data.|
 |`web`, `ios --run`, `windows --run`|For a person watching: its URL, rebuilds on save; a simulator; a window (from SSH, on the signed-in desktop). A second web loop of the same target for this app refuses, naming the first URL and PID.|
@@ -80,6 +80,10 @@ including at the largest text size; answer the alert before the test ends to che
 DejaVu Sans with no frame; `verify windows` also captures the app as it opens on the desktop (`windows-window.png`):
 judge the look from that one. Windows uses ink by default, or CPU when the manifest declares `game`; `host.windows.painter: "ink"` or `"cpu"` selects either painter. `EXACT_PAINTER` overrides either choice. Headless drives explicitly use CPU unless overridden ([painter choices](reference.md#windows-painter)). A screenshot path with a space is quoted: `"screenshot 'C:\a b\x.png'"`. A screen you
 want checked or captured is a test's end; a drive takes any others (`resize`, `prefer …`, `screenshot`).
+To accept a lowering warning at one site, put `// exact-accept lower-symbol-alias` on the line
+immediately above the reported line, using the warning’s ID. Separate multiple IDs with spaces.
+Other sites still report that warning. Text builds show the first 20 ranked warnings after acceptance.
+
 Create seam types once with `bun exact.mjs contract types app.contract -o app.contract.d.ts`.
 `contract build`, development web builds, and native development builds (`ios`,
 `mac`, `linux`, `windows`, `android`, and `verify android`) refresh that declaration

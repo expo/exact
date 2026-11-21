@@ -2,6 +2,7 @@
 // changes (`b`'s price), each with a field and a press, and a short repeat
 // whose observed time and next beat a delayed advance pins.
 component App
+  state timing = false
   state armed = false
   state beating = false
   state rows = ["a", "b"]
@@ -9,6 +10,8 @@ component App
   state log = ""
   state beats = 0
   state seen = 0
+  action showTime
+    timing = true
   action arm
     armed = true
   action startBeats
@@ -31,6 +34,9 @@ component App
     every(40, beat)
   view
     column
+      button "Show time" press=showTime testId="show-time"
+      if timing
+        time datetime=0 format="timer" testId="elapsed"
       button press=arm testId="arm"
         text "Arm"
       button press=startBeats testId="beat"

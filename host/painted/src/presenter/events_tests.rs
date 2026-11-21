@@ -589,6 +589,19 @@ fn a_repress_during_release_keeps_the_original_hit_box_and_cancel_never_activate
     assert!(log(&p).ends_with(" 0"));
 }
 
+/// A native button's press eases nothing, so its release ends it at once,
+/// with no frame after it: a press left standing keeps every picture from
+/// being still, and each scroll step paints instead of moving.
+#[test]
+fn a_native_buttons_cancelled_press_leaves_nothing_pressed() {
+    let mut p = boot();
+    let b = p.rect_of(id(&p, "other")).unwrap();
+    p.pointer_down(b.0 + 10., b.1 + 10., 0.).unwrap();
+    assert!(p.host.pressing());
+    p.pointer_cancel(10.).unwrap();
+    assert!(!p.host.pressing());
+}
+
 /// LLP 1005 §3, LLP 1056 §3 stage 3: the pointer's down, moves and up reach
 /// the node hearing them with its record, from its content box; a free
 /// pointer's moves too, with no button down. A native input's content box is

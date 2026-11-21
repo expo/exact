@@ -294,11 +294,13 @@ impl Scope {
 const STALE: &str =
     "a stale generation: a report older than one already taken for this target; send its current one";
 
-/// Why `target`'s insets are refused, if they are.
+/// Why `target`'s insets are refused, if they are: a nonfinite one. A negative raw inset is
+/// taken, as UIKit gives a window's root one under a negative addition past its insets (LLP
+/// 1123 D11); a length that reads it is clamped to its property's range, as a `calc()` is.
 fn insets_refusal(target: &NativeTarget) -> Option<&'static str> {
     (target.insets)
-        .is_some_and(|i| !i.iter().all(|v| v.is_finite() && *v >= 0.0))
-        .then_some("nonfinite or negative insets; report a target without insets as unavailable")
+        .is_some_and(|i| !i.iter().all(|v| v.is_finite()))
+        .then_some("nonfinite insets; report a target without insets as unavailable")
 }
 
 /// Why `target` cannot be registered over `last`, the name's last

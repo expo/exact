@@ -1073,8 +1073,9 @@ export function lockShells(dir, workspace, captured = resolve(dir, 'Cargo.lock')
  * platform's setup rows (`report`: the rows, or `{ error }` when they could not be read) and stop on a missing one,
  * nothing written; then name it, writing an app.json the app lacked. Then keep the generated workspace current unless
  * the app authored one (`ensureShells`). Returns the lines to say, or `{ refused }`. */
-export async function bringPlatform(dir, platform, { report = null, os = process.platform, name = null } = {}) {
-  const lines = [], verb = `bun exact.mjs ${platform === 'macos' ? 'mac' : platform}`;
+export async function bringPlatform(dir, platform, { report = null, os = process.platform, name = null, verb = platform === 'macos' ? 'mac' : platform } = {}) {
+  const lines = [];
+  verb = `bun exact.mjs ${verb}`;
   const manifest = existsSync(resolve(dir, 'app.json')) ? readManifest(dir) : null;
   if (!namesPlatform(manifest ?? {}, platform)) {
     if (platform === 'ios' && !['darwin', 'linux'].includes(os)) return { refused: `${verb}: iOS builds need macOS or Linux (use WSL on Windows); nothing was written` };
@@ -1093,7 +1094,10 @@ export async function bringPlatform(dir, platform, { report = null, os = process
     if (wrote.length) lines.push(`app.json: ${wrote.join(', ')} added: the app now ships ${platform} (bun exact.mjs update --without ${platform} stops it)`);
   }
   if (!authoredWorkspace(dir)) {
-    const { workspace, wrote, crates } = ensureShells(dir, undefined, name);
+    let shells;
+    // Generating the workspace resolves it with Cargo: without Rust, say so as the checks above do.
+    try { shells = ensureShells(dir, undefined, name); } catch (error) { return { refused: `${verb}: ${error.message}` }; }
+    const { workspace, wrote, crates } = shells;
     if (wrote) lines.push(`${workspace}: the native workspace (${crates.join(', ')}), generated from app.json`);
   }
   return { lines };

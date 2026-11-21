@@ -8,6 +8,13 @@ pub(super) struct Group {
     clear: Option<[f64; 4]>,
     opacity: f32,
     pub(super) transform: Option<Transform>,
+    pub(super) drawn: Option<Scissor>,
+}
+
+impl Group {
+    pub(super) fn can_bound_composite(&self) -> bool {
+        self.transform.is_none_or(|ts| ts.is_identity()) && self.opacity.is_finite()
+    }
 }
 
 impl Ink {
@@ -20,6 +27,7 @@ impl Ink {
             clear: self.draw_clear.replace([0.; 4]),
             opacity,
             transform: None,
+            drawn: None,
         });
     }
 
@@ -30,25 +38,30 @@ impl Ink {
         let bounds = mask.map_or(bounds, |mask| {
             bounds.intersect(Scissor::from_rect(mask.rect))
         });
+        // Keep the texels next to the mask bounds for linear filtering.
+        let sample_bounds = bounds.outset(1);
         let mut encoder = self.encoder.fork();
+        let mask_in_first_draw = mask.is_some_and(|mask| {
+            if encoder.push_clip(Clip::Coverage(mask_clip(mask))).is_ok() {
+                true
+            } else {
+                encoder.pop_clip();
+                false
+            }
+        });
+        // Outset, so the fill's own antialiased corners fall outside the target.
+        let cover = [-2., -2., rect[2] + 4., rect[3] + 4.];
         encoder
             .push(
-                Instance::new(Kind::RoundedRect, Brush::Solid, rect),
+                Instance::new(Kind::RoundedRect, Brush::Solid, cover),
                 Bindings::default(),
             )
             .map_err(|_| Error::Invalid("parent clip mask".into()))?;
-        let parent = self.pool.take(&mut self.device)?;
-        self.device
-            .render(&encoder.finish(), parent, Some([0.; 4]))?;
-        exact_ink::counters::add(exact_ink::counters::Counter::ClipMasks, 1);
-        let texture = if let Some(mask) = mask {
+        let parent = self.render_mask(encoder, sample_bounds)?;
+        let texture = if let Some(mask) = mask.filter(|_| !mask_in_first_draw) {
             let mut encoder = Encoder::new(self.size[0], self.size[1]);
             let mut instance = Instance::new(Kind::Layer, Brush::Image, rect);
-            instance.set_mask(CoverageClip {
-                texture: mask.entry.texture,
-                rect: mask.rect,
-                uv: mask.entry.uv,
-            });
+            instance.set_mask(mask_clip(mask));
             encoder
                 .push(
                     instance,
@@ -59,11 +72,7 @@ impl Ink {
                     },
                 )
                 .map_err(|_| Error::Invalid("clip intersection".into()))?;
-            let target = self.pool.take(&mut self.device)?;
-            self.device
-                .render(&encoder.finish(), target, Some([0.; 4]))?;
-            exact_ink::counters::add(exact_ink::counters::Counter::ClipMasks, 1);
-            target
+            self.render_mask(encoder, sample_bounds)?
         } else {
             parent
         };
@@ -77,6 +86,17 @@ impl Ink {
                 bounds.height as f32 / self.size[1] as f32,
             ],
         })
+    }
+
+    fn render_mask(&mut self, encoder: Encoder, bounds: Scissor) -> Result<TextureId> {
+        let mut frame = encoder.finish();
+        for batch in &mut frame.batches {
+            batch.scissor = batch.scissor.intersect(bounds);
+        }
+        let target = self.pool.take(&mut self.device)?;
+        self.device.render(&frame, target, Some([0.; 4]))?;
+        exact_ink::counters::add(exact_ink::counters::Counter::ClipMasks, 1);
+        Ok(target)
     }
 
     pub(super) fn open_clip_group(&mut self, mask: Coverage) -> Result<()> {
@@ -95,6 +115,7 @@ impl Ink {
         }
         let target = self.flush()?;
         let group = self.groups.pop().unwrap();
+        let can_bound = group.can_bound_composite();
         self.encoder = group.parent;
         self.draw_target = group.target;
         self.draw_clear = group.clear;
@@ -115,8 +136,18 @@ impl Ink {
             instance.flags |= flags::LAYER_MASK;
             bindings.color = mask;
         }
+        let viewport = Scissor::full(self.size);
+        let bounds = if can_bound {
+            let Some(drawn) = group.drawn else {
+                return Ok(());
+            };
+            // Keep the neighboring texels used by linear filtering.
+            drawn.outset(1).intersect(viewport)
+        } else {
+            viewport
+        };
         self.encoder
-            .push_unclipped(instance, bindings, self.size)
+            .push_unclipped_in(instance, bindings, bounds)
             .map_err(|_| Error::Invalid("group composition".into()))
     }
 
@@ -158,7 +189,12 @@ impl Ink {
             None => None,
         };
         if let Some(mask) = coverage {
-            self.open_clip_group(mask)?;
+            // Keep the same clip slots available to children as the flattened mask.
+            if self.encoder.is_scissor_only() && dev.kx == 0. && dev.ky == 0. {
+                self.encoder.push_combined_clip(mask_clip(mask));
+            } else {
+                self.open_clip_group(mask)?;
+            }
             self.clips.push(());
         } else {
             self.encoder
@@ -219,4 +255,12 @@ fn simple(shape: &Shape, dev: Transform, size: [u32; 2]) -> Option<Clip> {
         rect: [edges[0], edges[1], edges[2] - edges[0], edges[3] - edges[1]],
         radii,
     }))
+}
+
+pub(super) fn mask_clip(mask: Coverage) -> CoverageClip {
+    CoverageClip {
+        texture: mask.entry.texture,
+        rect: mask.rect,
+        uv: mask.entry.uv,
+    }
 }

@@ -130,6 +130,22 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertNil(update.chain[0].target.insets)
     }
 
+    func testTheKernelTakesAWindowRootsUpdateUnderANegativeContribution() throws {
+        // The window's root under Exact's write past its insets reads below 0, its margins with it
+        let session = try fixture()
+        let (route, _) = try firstRoute(session)
+        let root = try XCTUnwrap(window?.rootViewController)
+        let ledger = ContributionsIOS.of(root)
+        let identity = ContributionsIOS.Identity(node: route.node.id, operation: .additionalInsets)
+        ledger.set(identity, UIEdgeInsets(top: -(root.view.safeAreaInsets.top + 40), left: 0, bottom: 0, right: 0), generation: 1)
+        let update = OwnerUpdateIOS.sample(controller: root, view: root.view, session: nil)
+        XCTAssertEqual(update.band?.top, -40)
+        let batch = session.runtime.ownerReports(updates: [(route.node.id, update.encode())])
+        XCTAssertNil(batch.error, "\(update.margins.map { "margins \($0)" } ?? "no margins")")
+        ledger.set(identity, nil, generation: 2)
+        ledger.apply()
+    }
+
     func testATargetsIdentityIsItsViewsForLife() {
         let (a, b) = (UIView(), UIView())
         XCTAssertEqual(TargetIds.id(of: a), TargetIds.id(of: a))

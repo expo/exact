@@ -42,7 +42,8 @@ impl Kernel {
     /// their natural ratio; a projected tablist or radio group (a segmented
     /// control, LLP 1116.004 D5.2) uses the height as its automatic
     /// minimum (LLP 1059); a form control takes it as its size, with no ratio
-    /// (LLP 1069.001 D3), as does a native module (LLP 1024 D4). Other nodes and nonpositive/nonfinite sizes are refused.
+    /// (LLP 1069.001 D3), as does a native module (LLP 1024 D4). A column header
+    /// takes its native header cell’s dimensions as its automatic minimum.
     pub fn set_intrinsic_size(
         &mut self,
         view: ViewId,
@@ -79,7 +80,11 @@ impl Kernel {
             self.arena.node_type(slot),
             crate::NodeType::Control | crate::NodeType::NativeView
         );
-        if !self.arena.node_type(slot).is_replaced() && !control && !tablist && !clearing_projection
+        if !self.arena.node_type(slot).is_replaced()
+            && !control
+            && !tablist
+            && !clearing_projection
+            && !crate::style::table::column_header(&self.arena, slot)
         {
             return Err(LayoutError::NotAnImage(view).into());
         }

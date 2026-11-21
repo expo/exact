@@ -15,6 +15,19 @@ final class SharedStoreRefresh {
     private var reloads: [() -> Void] = []
     func firstPixel() { drawn = true; let work = reloads; reloads = []; work.forEach { $0() } }
     func reloadAfterPixel(_ work: @escaping () -> Void) { if drawn { work() } else { reloads.append(work) } }
+    /// A launch writes several values within a fraction of a second. Reloading the widgets once the
+    /// store has been quiet for `quiet` seconds starts their refresh after the burst, not inside it,
+    /// where a later write would refuse its answer.
+    var quiet: TimeInterval = 0.5
+    private var settling: DispatchWorkItem?
+    func reloadWhenQuiet(_ work: @escaping () -> Void) {
+        reloadAfterPixel { [self] in
+            settling?.cancel()
+            let item = DispatchWorkItem(block: work)
+            settling = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + quiet, execute: item)
+        }
+    }
 }
 
 extension ExactApp {
@@ -45,8 +58,8 @@ extension ExactApp {
             guard let self else { finished(true); return }
             let after = { (success: Bool) in
                 if success {
-                    self.sharedStore.reloadAfterPixel {
-                        DispatchQueue.main.async {
+                    self.sharedStore.reloadWhenQuiet {
+                        MainActor.assumeIsolated {
                             if let reload { reload(writtenKinds) } else { WidgetLink.publication?.reloadAfterStoreChange(kinds: writtenKinds) }
                         }
                     }

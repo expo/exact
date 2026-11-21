@@ -164,6 +164,7 @@ pub(super) fn boxed(
             children: held,
             span,
             instance,
+            place: None,
         },
     );
     parts

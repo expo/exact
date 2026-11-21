@@ -24,20 +24,23 @@ final class EdgeEffectIOSTests: XCTestCase {
         super.tearDown()
     }
 
-    private func fixture() throws -> ExactSession {
+    /// A session booted from the edge-effect fixture, showing its large-title
+    /// route. Its window fills `scene` and the session boots at that size, so
+    /// the route has the bars and safe area of the screen (docs/testing.md,
+    /// "Safe-area tests fill the screen").
+    private func fixture(in scene: UIWindowScene) throws -> ExactSession {
         let path = try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_EDGE_EFFECT_PLAN"], "build.mjs --test --ios compiles the edge-effect fixture")
         let session = ExactApp.shared.makeSession(label: "edge-effect")
         self.session = session
         let view = ExactView(session: session)
         let host = UIViewController()
-        let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene
-        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
-        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.coordinateSpace.bounds
         window.rootViewController = host
         window.makeKeyAndVisible()
         host.view.addSubview(view)
         self.window = window
-        XCTAssertNil(session.boot(plan: try Data(contentsOf: URL(fileURLWithPath: path)), size: CGSize(width: 402, height: 874)).error)
+        XCTAssertNil(session.boot(plan: try Data(contentsOf: URL(fileURLWithPath: path)), size: window.bounds.size).error)
         view.frame = host.view.bounds
         view.layoutIfNeeded()
         try waitForRoute("large")
@@ -50,15 +53,10 @@ final class EdgeEffectIOSTests: XCTestCase {
 
     private func waitForRoute(_ name: String) throws {
         let session = try XCTUnwrap(session), agent = Agent(session: session)
-        let deadline = Date().addingTimeInterval(5)
-        func ready() -> Bool {
+        waitFor("route \(name) is shown and settled") {
             let top = session.presenter.navigationHost.primaryNavigation?.topViewController as? RouteController
             return top?.node.props["testId"] == "route-\(name)" && !agent.nativeInFlight()
         }
-        while !ready() && Date() < deadline {
-            _ = RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05))
-        }
-        XCTAssertTrue(ready(), "route \(name) is shown and settled")
     }
 
     /// The route's scroller, scrolled under its bar, is the one the bar's
@@ -108,7 +106,8 @@ final class EdgeEffectIOSTests: XCTestCase {
 
     func testAuthoredEffectsStayWithTheNativeContentScroller() throws {
         guard #available(iOS 26.0, *) else { throw XCTSkip("scroll edge effects require iOS 26") }
-        let session = try fixture(), p = session.presenter
+        guard let scene = hostedWindowScene() else { throw missing("scene", "the bar and its edge effect are shown in a scene's window") }
+        let session = try fixture(in: scene), p = session.presenter
         let route = try XCTUnwrap(p.navigationHost.primaryNavigation?.topViewController as? RouteController)
         let node = try node("content-large"), scroll = try XCTUnwrap(p.navigationHost.shownScroll(node))
         for style in ["hard", "none", "soft", "automatic"] {
@@ -137,7 +136,8 @@ final class EdgeEffectIOSTests: XCTestCase {
     }
 
     func testADocumentScrollerRevealsContentOutsideItsInnerScroller() throws {
-        let session = try fixture()
+        guard let scene = hostedWindowScene() else { throw missing("scene", "the bar and its edge effect are shown in a scene's window") }
+        let session = try fixture(in: scene)
         XCTAssertNil(Agent(session: session).tap(["id": Int(try node("tab-mixed").id)])["error"])
         try waitForRoute("mixed")
         let route = try XCTUnwrap(session.presenter.navigationHost.primaryNavigation?.topViewController as? RouteController)
@@ -154,7 +154,8 @@ final class EdgeEffectIOSTests: XCTestCase {
     }
 
     func testTheEdgeEffectDrawsOverRowsUnderALargeTitle() throws {
-        _ = try fixture()
+        guard let scene = hostedWindowScene() else { throw missing("scene", "the bar and its edge effect are shown in a scene's window") }
+        _ = try fixture(in: scene)
         try assertEffectOverContent("large")
     }
 
@@ -162,7 +163,8 @@ final class EdgeEffectIOSTests: XCTestCase {
     /// follows, is the bar's in the agreement walk (LLP 1080.001 D3), as
     /// the edge effect beside it is: not a stray.
     func testTheLargeTitleInTheScrollerIsTheBarsNotAStray() throws {
-        let session = try fixture()
+        guard let scene = hostedWindowScene() else { throw missing("scene", "the bar and its edge effect are shown in a scene's window") }
+        let session = try fixture(in: scene)
         let sv = try XCTUnwrap(session.presenter.navigationHost.shownScroll(try node("content-large")))
         sv.layoutIfNeeded()
         let title = { sv.subviews.first { String(describing: type(of: $0)) == "_UINavigationBarLargeTitleView" } }
@@ -175,7 +177,8 @@ final class EdgeEffectIOSTests: XCTestCase {
     }
 
     func testTheEdgeEffectDrawsOverRowsUnderAnInlineTitle() throws {
-        let session = try fixture()
+        guard let scene = hostedWindowScene() else { throw missing("scene", "the bar and its edge effect are shown in a scene's window") }
+        let session = try fixture(in: scene)
         let reply = Agent(session: session).tap(["id": Int(try node("tab-inline").id)])
         XCTAssertNil(reply["error"], "\(reply)")
         try waitForRoute("inline")

@@ -340,27 +340,47 @@ fn validate_style_hosts(schema: &Schema) {
 }
 
 /// A path's `d` that starts with a move and then draws: each command but a
-/// close takes numbers, and one besides the moves and closes draws a segment.
+/// close takes numbers, and a segment is drawn by a command besides the moves
+/// and closes, or by a move's pairs after its first (SVG 2 §9.3.3: implicit
+/// lines).
 fn drawn_path(d: &str) -> bool {
     let mut commands = Vec::new();
     let mut numbers = 0;
+    let (mut in_number, mut dot) = (false, false);
     for c in d.chars() {
         if c.is_ascii_alphabetic() {
             if !"MmLlHhVvCcSsQqTtAaZz".contains(c) {
                 return false;
             }
             commands.push((c, numbers));
-        } else if !(c.is_ascii_digit() || " .,-".contains(c)) {
-            return false;
+            in_number = false;
         } else if c.is_ascii_digit() {
+            if !in_number {
+                numbers += 1;
+                (in_number, dot) = (true, false);
+            }
+        } else if c == '.' {
+            // A second point starts the next number: `1.5.5` is 1.5 and .5.
+            if !in_number || dot {
+                numbers += 1;
+                in_number = true;
+            }
+            dot = true;
+        } else if c == '-' {
             numbers += 1;
+            (in_number, dot) = (true, false);
+        } else if " ,".contains(c) {
+            in_number = false;
+        } else {
+            return false;
         }
     }
-    let takes_numbers = commands.iter().enumerate().all(|(i, &(c, at))| {
-        let next = commands.get(i + 1).map_or(numbers, |&(_, n)| n);
-        "Zz".contains(c) || next > at
-    });
+    let taken = |i: usize| commands.get(i + 1).map_or(numbers, |&(_, n)| n) - commands[i].1;
+    let draws = |i: usize| {
+        let c = commands[i].0;
+        !"MmZz".contains(c) || "Mm".contains(c) && taken(i) >= 4
+    };
     commands.first().is_some_and(|&(c, _)| "Mm".contains(c))
-        && takes_numbers
-        && commands.iter().any(|&(c, _)| !"MmZz".contains(c))
+        && (0..commands.len()).all(|i| "Zz".contains(commands[i].0) || taken(i) > 0)
+        && (0..commands.len()).any(draws)
 }

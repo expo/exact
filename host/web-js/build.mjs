@@ -38,7 +38,7 @@ import { namesStream } from './stream-names.mjs';
 import { bundleHostModule, localImports, stageHostGlue, writeFalse } from './glue.mjs';
 import { gateAgent } from './agent-gate.mjs';
 import { contentName, contentNames } from './content-names.mjs';
-import { buildEditor, buildFlow, buildMarkdown, buildModule, buildMotion, moduleSourceDirs, undeclaredRustData, fresh, leafTaken, moduleGrants, webCompiler, inspectHooked, withInspectHooks, withoutDev, withRuntimeStamp, sizeWarning } from './module.mjs';
+import { buildEditor, buildFlow, buildMarkdown, buildModule, buildMotion, moduleSourceDirs, undeclaredRustData, fresh, leafTaken, moduleGrants, webCompiler, inspectHooked, withInspectHooks, withoutDev, withRuntimeStamp, sizeWarning, entrySizeReport } from './module.mjs';
 import { appDigest, developmentStore } from '../../scripts/agent-launch.mjs';
 import { settingLines } from '../../js/bake/src/__exact_env.mjs';
 import { colorSchemeMeta, interfaceStyle, launchBackground, schemeHead, withInterfaceStyle, withLook } from '../web/look.mjs';
@@ -83,6 +83,7 @@ if (process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH !== '0') {
 // With no bake (an app that names no native platform, LLP 1153 D3.6), it
 // builds the app's own Contract, links its web manifest, and has no envelope.
 const production = args.includes('--production');
+const sizes = args.includes('--sizes');
 // `--dev` (host/web-js/dev.mjs): typed state checkpoint hooks that ordinary
 // and production builds neither emit nor link.
 const devReload = args.includes('--dev');
@@ -240,7 +241,7 @@ try { compiler = webCompiler(); } catch (error) { rustMissing(error); }
 let planCosts = ''; // the compiler's line of plan code by component, for the size warning at the end
 function compilePlan(undrawn, source = input) {
   rmSync(resolve(gen, 'canvas2d.flag'), { force: true });
-  const cargo = spawnSync(compiler.cmd, [...compiler.pre, 'js', source, '-o', gen, '--app', appDir, ...(production ? [] : ['--sites']), ...(devReload ? ['--dev-reload'] : [])], { cwd: root, stdio: checkOnly ? ['ignore', 'ignore', 'pipe'] : ['inherit', 'pipe', 'inherit'], encoding: 'utf8', maxBuffer: 64 << 20, env: { ...compiler.env, EXACT_JS_GPU_SURFACES: (gpuSurfaces ?? []).join(','), EXACT_JS_UNREGISTERED_SURFACES: undrawn.join(',') } });
+  const cargo = spawnSync(compiler.cmd, [...compiler.pre, 'js', source, '-o', gen, '--app', appDir, ...(production ? [] : ['--sites']), ...(devReload ? ['--dev-reload'] : []), ...(sizes ? ['--sizes'] : [])], { cwd: root, stdio: checkOnly ? ['ignore', 'ignore', 'pipe'] : ['inherit', 'pipe', 'inherit'], encoding: 'utf8', maxBuffer: 64 << 20, env: { ...compiler.env, EXACT_JS_GPU_SURFACES: (gpuSurfaces ?? []).join(','), EXACT_JS_UNREGISTERED_SURFACES: undrawn.join(',') } });
   if (!checkOnly) { process.stdout.write(cargo.stdout ?? ''); planCosts = /^ *own plan code by component[^\n]*/m.exec(cargo.stdout ?? '')?.[0].trim() ?? planCosts; }
   if (cargo.status !== 0) { if (checkOnly) process.stderr.write(cargo.stderr ?? ''); process.exit(cargo.status ?? 1); }
   compiler.done();
@@ -399,6 +400,8 @@ const files = existsSync(resolve(gen, 'files.flag'));
 const soundTable = existsSync(resolve(gen, 'sounds.flag')) ? readFileSync(resolve(gen, 'sounds.flag'), 'utf8') : null;
 // `wakelock` on any element (wakelock.js, LLP 1125 D11).
 const wakelock = existsSync(resolve(gen, 'wakelock.flag'));
+// A node with `draggable` (drag.js, LLP 1094.000 D2, D3).
+const drag = existsSync(resolve(gen, 'drag.flag'));
 // `orientationlock` on any element (orientationlock.js, LLP 1133.029 D7).
 const orientationlock = existsSync(resolve(gen, 'orientationlock.flag'));
 // A dialog, an alertdialog, a menu or a popover (prompt-glue.js, alert-message.js, menu-rows.js; LLP 1047.002 D1).
@@ -606,6 +609,7 @@ writeFileSync(resolve(gen, 'main.js'), [
   ...(files ? ["import './files.js';"] : []),
   ...(soundTable ? [`import { install as sounds } from './sounds.js'; sounds(${soundTable});`] : []),
   ...(wakelock ? ["import { install as wakelock } from './wakelock.js'; wakelock();"] : []),
+  ...(drag ? ["import { install as drag } from './drag.js'; import { PropHooks as dragHooks, say as dragSay } from './rt.js'; drag({ PropHooks: dragHooks, say: dragSay });"] : []),
   ...(orientationlock ? ["import { install as orientationlock } from './orientationlock.js'; orientationlock();"] : []),
   // A prompt's Return, a grouped alert's message box and a menu row's popover (host/web): glue a plan with a dialog, an
   // alert, a menu or a popover needs on the page; until LLP 1047.002 commands.js carried them for every page.
@@ -859,6 +863,8 @@ cpSync(resolve(here, 'auth.js'), resolve(gen, 'auth.js'));
 cpSync(resolve(here, 'files.js'), resolve(gen, 'files.js'));
 cpSync(resolve(here, 'sounds.js'), resolve(gen, 'sounds.js'));
 cpSync(resolve(here, 'wakelock.js'), resolve(gen, 'wakelock.js'));
+writeFileSync(resolve(gen, 'drag.js'), localImports(readFileSync(resolve(here, 'drag.js'), 'utf8')));
+cpSync(resolve(here, '../web/drag-out.js'), resolve(gen, 'drag-out.js'));
 cpSync(resolve(here, 'orientationlock.js'), resolve(gen, 'orientationlock.js'));
 cpSync(resolve(here, 'transport.js'), resolve(gen, 'transport.js'));
 cpSync(resolve(here, 'clockin.js'), resolve(gen, 'clockin.js'));
@@ -1039,7 +1045,7 @@ const replay = ts ? (await import(resolve(root, 'js/bake/src/typescript.mjs'))).
 // but suppress missing-export warnings only at the generated glue's path.
 const optionalHookWarning = (id, message) => generatedRoots.some(root => id === resolve(root, 'ts-data.js'))
   && /Import ["`](?:kept|overlay|tools)["`] will always be undefined because there is no matching export/.test(message);
-const { rolldown } = await import('rolldown');
+const { rolldown, RolldownMagicString } = await import('rolldown');
 const scopedPlugins = () => [...(replay ? [replay.rolldown] : []),
   { name: 'exact-mounts', resolveId: (source, importer) => mounted(source, importer) },
   { name: 'source-grants', transform: scopedModule }, asyncContext()];
@@ -1193,10 +1199,13 @@ const prepareChunks = { name: 'exact-prepare-chunks', renderChunk(code, chunk, _
   if (!chunk.isEntry) return null;
   const eager = eagerChunks(chunk.fileName, name => meta.chunks[name]?.imports);
   const deferred = Object.keys(meta.chunks).filter(name => !eager.includes(name)).sort();
-  for (const place of ['__EXACT_DEFERRED_CHUNKS__', '__EXACT_SHEET__']) {
-    if (code.split(place).length !== 2) throw new Error(`host/web-js/build.mjs: the entry has no one place for ${place}`);
+  const edits = new RolldownMagicString(code);
+  for (const [place, value] of [['__EXACT_DEFERRED_CHUNKS__', JSON.stringify(deferred)], ['__EXACT_SHEET__', cutSheet(Object.values(meta.chunks))]]) {
+    const at = code.indexOf(place);
+    if (at < 0 || code.indexOf(place, at + place.length) >= 0) throw new Error(`host/web-js/build.mjs: the entry has no one place for ${place}`);
+    edits.overwrite(at, at + place.length, value);
   }
-  return code.replace('__EXACT_DEFERRED_CHUNKS__', () => JSON.stringify(deferred)).replace('__EXACT_SHEET__', () => cutSheet(Object.values(meta.chunks)));
+  return sizes ? { code: edits.toString(), map: edits.generateMap({ source: chunk.fileName, hires: 'boundary', includeContent: false }).toString() } : edits.toString();
 } };
 {
   const b = await rolldown({ ...bundleOptions, input: resolve(gen, 'main.js'), ...(ts ? { tsconfig: resolve(tsStage, '__exact_tsconfig.json') } : {}), transform: { ...bundleOptions.transform, define: { ...bundleOptions.transform.define, ...versionDefines, 'globalThis.__exactRender': 'false' } },
@@ -1217,7 +1226,13 @@ const prepareChunks = { name: 'exact-prepare-chunks', renderChunk(code, chunk, _
   // app's mount calls most of them (the Bluesky
   // clone's release page: runtime up at 1.7–1.9 s, 0.5 s with it; ~23 MB
   // more heap). Other browsers read a comment.
-  const built = await b.write({ dir: out, format: 'esm', minify: true, comments: false, entryFileNames: 'app-[hash].js', chunkFileNames: '[name]-[hash].js',
+  const built = await b.write({ dir: out, format: 'esm', minify: true,
+    ...(sizes ? { sourcemap: 'hidden', sourcemapExcludeSources: true, plugins: [{ name: 'exact-launch-sizes', generateBundle(_, bundle) {
+      for (const chunk of Object.values(bundle)) if (chunk.type === 'chunk') {
+        if (chunk.isEntry) console.log(entrySizeReport(chunk, out));
+        delete bundle[chunk.sourcemapFileName];
+      }
+    } }] } : {}), comments: false, entryFileNames: 'app-[hash].js', chunkFileNames: '[name]-[hash].js',
     // The seam's chunk too (LLP 1047.003 D6): a page loads it to answer at once.
     postBanner: (chunk) => chunk.isEntry || chunk.moduleIds.includes(resolve(gen, 'ts-data.js')) ? '//# allFunctionsCalledOnLoad' : undefined,
     ...(devReload && ts ? { manualChunks: (id, { getModuleInfo }) => fromData(id, getModuleInfo) ? 'dev-data' : undefined } : {}) });

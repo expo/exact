@@ -271,7 +271,7 @@ impl Catalog {
     pub(super) fn from_files(paths: &[&Path], sans: &str) -> Self {
         let mut registry = Registry::default();
         for path in paths {
-            registry.add(super::font_cache::scan(path));
+            registry.add(super::font_cache::scan([path]).0);
         }
         let mut catalog =
             Self::with_collection(registry.collection, Arc::new(registry.files), "en-US");

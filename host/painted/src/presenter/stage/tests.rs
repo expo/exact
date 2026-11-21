@@ -551,6 +551,21 @@ fn a_push_and_a_pop_cross_on_the_shared_x_axis() {
 }
 
 #[test]
+fn a_route_a_push_covers_keeps_its_pictures_while_it_slides_out() {
+    let source = APP.replace(
+        r#"text "The page under the sheet" testId="home-body""#,
+        r#"image "pictures/a.png" width=20 height=20 testId="picture""#,
+    );
+    let mut p = phone_source(&source);
+    let picture = id(&p, "picture");
+    assert!(p.images.wanted(picture));
+    tap(&mut p, "open-detail");
+    after(&mut p, 0.0);
+    assert!(p.stage_moving());
+    assert!(p.images.wanted(picture), "the stage still draws it");
+}
+
+#[test]
 fn predictive_back_previews_a_pop_and_a_cancel_puts_it_back() {
     let mut p = phone();
     tap(&mut p, "open-detail");

@@ -22,6 +22,31 @@ pub enum Event {
     Land,
     /// The landing belonging to an input; printed and replayed as `land`.
     InputLand,
+    /// A test's `answer source` line after boot: the source answers this
+    /// JSON from now on, and every resource reading it is asked again.
+    Answer(String, String),
+    /// A key pressed with the element with this `testId` focused, by its
+    /// chord (`"Escape"`, `"Shift+Enter"`). Keydown and keyup each follow
+    /// the receiving element's path (`crate::observe`).
+    Key(String, String),
+}
+
+/// The modifier keys named in a chord stay held through the press. The
+/// pressed modifier itself changes on each edge, as in a host event.
+pub(crate) fn key_press(chord: &str) -> [exact_runner::KeyboardEvent; 2] {
+    let down = exact_runner::KeyboardEvent::chord(chord);
+    let up = down.clone();
+    let mut edges = [down, up];
+    for (event, pressed) in edges.iter_mut().zip([true, false]) {
+        match event.key.as_str() {
+            "Shift" => event.held.shift = pressed,
+            "Control" => event.held.ctrl = pressed,
+            "Alt" => event.held.alt = pressed,
+            "Meta" => event.held.meta = pressed,
+            _ => {}
+        }
+    }
+    edges
 }
 
 /// What a corpus test expects of the runner after the steps before it.
@@ -79,6 +104,9 @@ pub struct Case {
     pub prerendered: bool,
     /// Fixed host facts supplied before boot.
     pub launch: exact_runner::time::Launch,
+    /// What each source a test's leading `answer source` lines name answers
+    /// from boot on, as JSON text, by source.
+    pub answers: Vec<(String, String)>,
 }
 
 /// A corpus case: a [`Case`] whose script also holds expectations.
@@ -115,7 +143,30 @@ pub struct Delivery {
     pub expansion: Option<std::path::PathBuf>,
 }
 
+/// Replay each change with the calls its source answered until its next change.
+pub fn lean_events(events: &[Event], oracle: Option<&crate::oracle::Oracle>) -> Vec<String> {
+    let mut revisions = std::collections::BTreeMap::new();
+    events
+        .iter()
+        .map(|e| {
+            let calls = if let Event::Answer(source, _) = e {
+                let revision = revisions.entry(source).or_insert(0);
+                *revision += 1;
+                oracle.map_or_else(String::new, |o| o.calls_text(Some(source), *revision))
+            } else {
+                String::new()
+            };
+            e.lean(&calls)
+        })
+        .collect()
+}
+
 impl Event {
+    /// Whether a host lands the event's work as an input's (`InputLand`).
+    pub fn is_input(&self) -> bool {
+        matches!(self, Event::Tap(_) | Event::Type(..) | Event::Key(..))
+    }
+
     /// The step's label, exactly as `Contract.Observe.ScriptEvent.label` prints it.
     pub fn label(&self) -> String {
         match self {
@@ -129,11 +180,17 @@ impl Event {
                 format!("clock +{}", exact_runner::stdlib::format_number(*ms))
             }
             Event::Land | Event::InputLand => "land".into(),
+            Event::Answer(source, json) => format!("answer source {source} with {json}"),
+            Event::Key(t, k) => format!(
+                "type {} key {}",
+                crate::observe::quote(t),
+                crate::observe::quote(k)
+            ),
         }
     }
 
     /// The event as a `Contract.Observe.ScriptEvent` term.
-    pub fn lean(&self) -> String {
+    fn lean(&self, calls: &str) -> String {
         use contract::lean::string;
         match self {
             Event::Tap(t) => format!("(.tap {})", string(t)),
@@ -142,6 +199,26 @@ impl Event {
                 format!("(.clock (F64.ofBits 0x{:016x}))", ms.to_bits())
             }
             Event::Land | Event::InputLand => "(.land)".into(),
+            Event::Answer(source, _) => format!(
+                "(.answerSource {} {} (OracleText.parse! {}))",
+                string(source),
+                string(&self.label()),
+                string(calls)
+            ),
+            Event::Key(target, chord) => {
+                let edges = key_press(chord);
+                let name = string(&edges[0].key);
+                let [down, up] = edges.map(|key| {
+                    let held = key.held;
+                    format!("(.record \"KeyboardEvent\" [(.str {name}), (.bool {}), (.bool {}), (.bool {}), (.bool {}), (.str \"\"), (.bool false), (.bool false)])",
+                        held.shift, held.ctrl, held.alt, held.meta)
+                });
+                format!(
+                    "(.keyPress {} {name} {} {down} {up})",
+                    string(target),
+                    string(&self.label())
+                )
+            }
         }
     }
 }
@@ -177,6 +254,25 @@ pub fn scripted(
         .collect()
 }
 
+/// Validate every authored answer, including those after a host-only step.
+pub(crate) fn check_answers(
+    plan: &exact_plan::Plan,
+    test: &contract_syntax::TestDecl,
+) -> Result<(), String> {
+    for step in &test.steps {
+        if let Step::AnswerSource {
+            source,
+            value,
+            span,
+        } = step
+        {
+            crate::oracle::check_answer(plan, source, value)
+                .map_err(|e| format!("{}:{}: test {:?}: {e}", span.line, span.col, test.name))?;
+        }
+    }
+    Ok(())
+}
+
 /// One `test` block as a scripted case over the program `source`, which
 /// may be another file's (an `app.test.contract` beside its
 /// `app.contract`). Inputs include a following `land`; settles expand from
@@ -191,6 +287,7 @@ pub fn test_case(
     let mut items = Vec::new();
     let mut delivery = Delivery::default();
     let (mut epoch, mut zone) = (None, None);
+    let mut answers = Vec::new();
     let mut leading = true;
     let mut launch_steps = 0;
     for step in &t.steps {
@@ -207,6 +304,11 @@ pub fn test_case(
                     continue;
                 }
                 Step::Size { .. } => {
+                    launch_steps += 1;
+                    continue;
+                }
+                Step::AnswerSource { source, value, .. } => {
+                    answers.push((source.clone(), value.clone()));
                     launch_steps += 1;
                     continue;
                 }
@@ -230,7 +332,7 @@ pub fn test_case(
             if matches!(item, Item::Event(_)) {
                 delivery.events.push(step.span());
             }
-            let input = matches!(item, Item::Event(Event::Tap(_) | Event::Type(_, _)));
+            let input = matches!(&item, Item::Event(e) if e.is_input());
             items.push(item);
             if input {
                 items.push(Item::Event(Event::InputLand));
@@ -255,15 +357,25 @@ pub fn test_case(
             stored: false,
             prerendered: false,
             launch: crate::launch::facts(epoch, zone)?,
+            answers,
         },
         items,
         delivery,
     };
-    crate::settle::expand(&mut script, plan)?;
+    let compiled;
+    let plan = match plan {
+        Some(plan) => plan,
+        None => {
+            compiled = crate::compile(&script.case)?;
+            &compiled
+        }
+    };
+    check_answers(plan, t).map_err(|e| format!("{file}:{e}"))?;
+    crate::settle::expand(&mut script, Some(plan))?;
     if let Some((span, kind, _)) = script.delivery.stopped.as_ref().filter(|(_, kind, _)| {
         matches!(
             kind.as_str(),
-            "clock (mutation bound)" | "clock until (not met)"
+            "clock (mutation bound)" | "clock until (not met)" | KEY_DEFAULT
         )
     }) {
         script.delivery.taken = t
@@ -299,6 +411,16 @@ fn deliver(step: &Step) -> Result<Option<Item>, String> {
             append: false,
             ..
         } => Item::Event(Event::Type(target.clone(), text.clone())),
+        Step::AnswerSource { source, value, .. } => {
+            Item::Event(Event::Answer(source.clone(), value.clone()))
+        }
+        Step::Key {
+            target,
+            key,
+            phase: None,
+            duration: None,
+            ..
+        } => Item::Event(Event::Key(target.clone(), key.clone())),
         Step::Clock { arg, span } if arg.starts_with("until ") => until(arg, *span)?,
         Step::Clock { arg, .. } if arg == "data" => Item::Event(Event::Land),
         Step::Clock { arg, .. } => match arg.strip_prefix('+').map(str::parse::<f64>) {
@@ -344,6 +466,8 @@ fn deliver(step: &Step) -> Result<Option<Item>, String> {
         Step::ExpectSound { .. } => Item::Observe(step.span()),
         // Displayed wake-lock holders have no Lean oracle (LLP 1125 D11).
         Step::ExpectWakelock { .. } => Item::Observe(step.span()),
+        // What a drag carries is the host's props, which Lean has no model of (LLP 1094.000 D10).
+        Step::ExpectDrag { .. } => Item::Observe(step.span()),
         // A control's `disabled` and the focus are read from the host's tree (LLP 1116.010 D3), and a box from its
         // layout, which Lean has no model of.
         Step::ExpectDisabled { .. }
@@ -367,6 +491,10 @@ fn deliver(step: &Step) -> Result<Option<Item>, String> {
     }))
 }
 
+/// The kind of a key step whose default at its target is the host's: the
+/// block stops there (`crate::settle::expand`).
+pub(crate) const KEY_DEFAULT: &str = "type key (a control's default)";
+
 fn until(arg: &str, span: contract_syntax::Span) -> Result<Item, String> {
     let (path, rest) = arg
         .strip_prefix("until state ")
@@ -388,12 +516,15 @@ fn delivered_kind(kind: &str) -> bool {
         kind,
         "Tap"
             | "Type"
+            | "AnswerSource"
+            | "Key"
             | "Clock"
             | "ExpectState"
             | "ExpectText"
             | "ExpectTree"
             | "ExpectSound"
             | "ExpectWakelock"
+            | "ExpectDrag"
             | "ExpectDisabled"
             | "ExpectFocused"
             | "ExpectLayout"
@@ -440,6 +571,9 @@ fn step_kind(step: &Step) -> String {
         } if *form != contract_syntax::TapForm::Press || !modifiers.is_empty() => {
             "tap (not a plain press)".into()
         }
+        Step::Key {
+            phase, duration, ..
+        } if phase.is_some() || duration.is_some() => "type key (held)".into(),
         other => kind_name(other.kind()),
     }
 }
@@ -480,9 +614,9 @@ mod tests {
     #[test]
     fn land_printers_use_the_semantics_label() {
         assert_eq!(Event::Land.label(), "land");
-        assert_eq!(Event::Land.lean(), "(.land)");
+        assert_eq!(Event::Land.lean(""), "(.land)");
         assert_eq!(Event::InputLand.label(), Event::Land.label());
-        assert_eq!(Event::InputLand.lean(), Event::Land.lean());
+        assert_eq!(Event::InputLand.lean(""), Event::Land.lean(""));
         // The corpus runs this term and compares the resulting label byte for byte.
         let s = scripted(
             "label",
@@ -537,7 +671,7 @@ mod tests {
             ("pass fetch \"https://example.test\"", "pass fetch"),
             ("back", "back"),
             ("close", "close"),
-            ("type \"add\" key \"Enter\"", "type key"),
+            ("type \"add\" key \"Enter\" down", "type key (held)"),
             ("tap \"add\" hover", "tap (not a plain press)"),
             ("pick \"file\" cancel", "pick"),
             ("resize 800x600", "resize"),

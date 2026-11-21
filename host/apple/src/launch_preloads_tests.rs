@@ -1228,6 +1228,7 @@ fn prepared_generations_disable_names_before_settlement_but_keep_equal_preloads(
                             None,
                             None,
                             None,
+                            crate::abi::TreeBase::Live,
                         ),
                         "module" => bridge.prepare_module(
                             [plan.len(), 0, 0],

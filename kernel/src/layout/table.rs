@@ -49,6 +49,8 @@ struct Placed {
 #[derive(Clone, Debug, Default)]
 struct Formed {
     columns: u32,
+    /// Tracks the host has sized, in column order. Other tracks are auto.
+    widths: Vec<(u32, f32)>,
     context: Option<Context>,
     direction: Option<taffy::style::Direction>,
     spacing: Option<(f32, f32)>,
@@ -260,6 +262,10 @@ impl Tables {
                     if ctx == Some(Context::Table) {
                         let track = GridTemplateComponent::Single(auto());
                         s.rare.grid_template_columns = vec![track; formed.columns as usize];
+                        for &(column, width) in &formed.widths {
+                            s.rare.grid_template_columns[column as usize] =
+                                GridTemplateComponent::Single(length(width));
+                        }
                         s.rare.grid_line_limit = LINES;
                         if formed.padding.as_ref() != Some(&s.padding) {
                             self.stale.insert(slot);
@@ -623,8 +629,22 @@ fn form_grid(
         }
     }
     let parts = out.iter().map(|item| item.slot).collect();
+    let widths = if ctx == Some(Context::Table) && !arena.table_column_widths.is_empty() {
+        out.iter()
+            .filter_map(|item| {
+                let width = *arena.table_column_widths.get(&item.slot)?;
+                (item.area.row == captions
+                    && item.area.columns == 1
+                    && crate::style::table::column_header(arena, item.slot))
+                .then_some((item.area.column, width))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let formed = Formed {
         columns,
+        widths,
         parts,
         context: ctx,
         rows: vec![(captions, y - captions)],
@@ -822,6 +842,7 @@ impl LayoutTree {
         });
         self.tables.stale.extend(children);
         let restyle = first
+            || before.widths != formed.widths
             || before.columns != formed.columns
             || before.anon.is_empty() != formed.anon.is_empty()
             || before.context != formed.context;
@@ -842,6 +863,34 @@ impl LayoutTree {
             }
         }
         true
+    }
+
+    /// Update one track during a drag without forming the table's rows again.
+    pub(crate) fn resize_table_column(
+        &mut self,
+        arena: &NodeArena,
+        table: u32,
+        column: u32,
+        width: Option<f32>,
+    ) {
+        let Some(formed) = self.tables.formed.get_mut(&table) else {
+            return;
+        };
+        let widths = &mut formed.widths;
+        match (
+            widths.binary_search_by_key(&column, |&(index, _)| index),
+            width,
+        ) {
+            (Ok(i), Some(w)) => widths[i].1 = w,
+            (Ok(i), None) => {
+                widths.remove(i);
+            }
+            (Err(i), Some(w)) => widths.insert(i, (column, w)),
+            (Err(_), None) => return,
+        }
+        if let Some(node) = arena.taffy(table) {
+            self.restyle_with(arena, table, node);
+        }
     }
 
     /// Where `slot`, a row or a cell, stands in its table, from the last

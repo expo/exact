@@ -379,8 +379,7 @@ fn a_test_pinches_holds_a_key_and_indexes_state() {
 #[test]
 fn a_test_wheels_back_toward_the_start() {
     // Excord on macOS: a drag selects text there, so its scroll is the agent's wheel.
-    let src =
-        "test \"scroll\"\n  tap \"transcript\" wheel 0 -2500\n  tap \"strip\" wheel -4.5 30\n";
+    let src = "test \"scroll\"\n  tap \"transcript\" wheel 0 -2500\n  tap \"strip\" wheel -4.5 30\n  scroll \"save\"\n";
     let tests = contract::tests(src).unwrap();
     let t = &tests[0];
     assert!(matches!(
@@ -398,10 +397,12 @@ fn a_test_wheels_back_toward_the_start() {
         ),
         "{json}"
     );
-    assert!(
-        json.contains("\"form\":\"wheel\",\"wheel\":[-4.5,30]"),
-        "{json}"
-    );
+    for step in [
+        r#""form":"wheel","wheel":[-4.5,30]"#,
+        r#"{"op":"scroll","target":"save","line":4}"#,
+    ] {
+        assert!(json.contains(step), "{json}");
+    }
     // Both deltas are required, and nothing follows them.
     let e = contract::tests("test \"t\"\n  tap \"a\" wheel 0\n").unwrap_err();
     assert_eq!(e.id, "syntax-expected-step");

@@ -16,6 +16,8 @@ use exact_web::host::template::Parts;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
+#[path = "actions.rs"]
+mod actions;
 #[path = "answers.rs"]
 mod answers;
 #[path = "commands.rs"]
@@ -34,12 +36,16 @@ pub(crate) mod lower;
 mod markdown;
 #[path = "motion.rs"]
 mod motion;
+#[path = "mount_templates.rs"]
+mod mount_templates;
 #[path = "mutations.rs"]
 mod mutations;
 #[path = "named_records.rs"]
 mod named_records;
 #[path = "navigation.rs"]
 mod navigation;
+#[path = "templates.rs"]
+mod templates;
 #[cfg(test)]
 pub(crate) use input::ALL as INPUT;
 #[cfg(test)]
@@ -132,6 +138,9 @@ struct Em<'a> {
     parts: Vec<Option<Parts>>,
     uses: Uses,
     out: String,
+    mount_templates: templates::Templates,
+    next_local_element: Option<u32>,
+    repeated_nodes: Vec<sites::MountShape>,
     classes: Vec<String>,
     /// Each distinct set of state looks (LLP 1121 D8), `data-exact-looks` index plus one.
     looks: Vec<Vec<(u8, String)>>,
@@ -182,9 +191,8 @@ struct Em<'a> {
     /// The tab panels whose contents wait for their first selection
     /// (`exact_runner::instance::panel_sites`; tabs.js).
     panels: Vec<exact_plan::NodesId>,
-    /// Whether a child's resource is in the plan: its instances' paths are
-    /// then kept (LLP 1035.005.004 D8).
-    owns_requests: bool,
+    /// Arms on the instance path of a child resource or task (LLP 1035.005.004 D8).
+    path_arms: Vec<bool>,
 }
 
 /// The runner's reserved sources the JS runtime answers itself: the page's
@@ -252,6 +260,13 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         parts,
         uses: Uses::default(),
         out: String::new(),
+        mount_templates: Default::default(),
+        next_local_element: None,
+        repeated_nodes: if site_attrs || dev_reload {
+            Vec::new()
+        } else {
+            sites::repeated_nodes(plan, &sites)
+        },
         classes: Vec::new(),
         looks: Vec::new(),
         press_paint: false,
@@ -281,16 +296,11 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         site_attrs,
         dev_reload,
         panels: exact_runner::instance::tabs::panel_sites(plan),
-        owns_requests: plan.resources.iter().any(|r| r.owner.is_some())
-            || plan.timers.iter().any(|t| t.owner.is_some()),
+        path_arms: sites::instance_paths(plan),
     };
     em.heights = em.drag_targets(PropId::HeightDragFor);
     em.transforms = em.drag_targets(PropId::TransformDragFor);
     let top = Scope::default();
-    let action = Scope {
-        action: true,
-        ..Scope::default()
-    };
     let mut body = String::new();
     // The route table, and the router slot filled from the location before
     // any initializer (LLP 1038 D5).
@@ -449,67 +459,12 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
     for i in late_mutations {
         body.push_str(&mutations::declaration(plan, i, &mut em.uses));
     }
-    for (i, r) in plan.actions.iter().enumerate() {
-        // An action that touches row slots takes the row in force first.
-        let rows = code::touches_rows(plan, plan.code(r.body));
-        let scope = Scope {
-            rows: rows.then(|| "$r".to_string()),
-            ..action.clone()
-        };
-        let mut f = code::function(
-            plan,
-            plan.code(r.body),
-            &code::evaluation(&scope, format!("action {:?}", plan.str(r.name)), false),
-            r.params.len as usize,
-            &mut em.uses,
-        )
-        .map_err(|e| format!("action {}: {e}", plan.str(r.name)))?;
-        if rows {
-            em.row_actions.insert(i);
-            f = f.replacen('(', "($r,", 1).replace("($r,)", "($r)");
-        }
-        // The parameters' types: an argument outside its type is refused,
-        // as the runner refuses it (ArgumentType), before the body runs. A
-        // hidden parameter (`@capture:…`, a child's captured prop) is the
-        // compiler's argument: its numbers need not be finite.
-        let types: Vec<String> = r
-            .params
-            .iter()
-            .map(|p| {
-                let param = plan.param(p);
-                let code = type_code_numeric(plan, param.ty, plan.str(param.name).starts_with('@'));
-                serde_json::to_string(&code).unwrap()
-            })
-            .collect();
-        // A string parameter's name, which an argument past MAX_STRING
-        // names (the runner's StringTooLong, LLP 1090 D6).
-        let names: Vec<String> = r
-            .params
-            .iter()
-            .map(|p| match type_code(plan, plan.param(p).ty).as_str() {
-                "s" => serde_json::to_string(plan.str(plan.param(p).name)).unwrap(),
-                _ => "0".into(),
-            })
-            .collect();
-        let act = em.uses.rt("act");
-        if types.is_empty() {
-            let _ = write!(body, "const a_{i}={act}({f});");
-        } else {
-            let tail = if names.iter().any(|n| n != "0") {
-                format!(",{},[{}]", rows as u8, names.join(","))
-            } else if rows {
-                ",1".into()
-            } else {
-                String::new()
-            };
-            let _ = write!(body, "const a_{i}={act}({f},[{}]{tail});", types.join(","));
-        }
-    }
+    em.declare_actions(&mut body)?;
     for i in 0..plan.mutations.len() {
         body.push_str(&mutations::root_then(plan, i, &top, &mut em.uses)?);
     }
     em.out.clear();
-    em.node(sites.root, "$R", &top)?;
+    em.template_scope(true, |em| em.mount_node(sites.root, "$R", &top))?;
     let view = std::mem::take(&mut em.out);
     if let Some(m) = &modes {
         body.push_str(&m.js(plan, &em.classes));
@@ -895,14 +850,14 @@ impl Em<'_> {
     fn children(&mut self, list: &[Site], parent: &str, scope: &Scope) -> Result<(), String> {
         for s in list.iter().copied() {
             match s {
-                Site::Node(n) => self.node(n, parent, scope)?,
+                Site::Node(n) => self.mount_node(n, parent, scope)?,
                 Site::Region(r) => self.region(r, parent, scope)?,
             }
         }
         Ok(())
     }
 
-    fn node(&mut self, i: u32, parent: &str, scope: &Scope) -> Result<(), String> {
+    fn node(&mut self, i: u32, parent: &str, scope: &Scope) -> Result<Option<String>, String> {
         let plan = self.plan;
         let row = &plan.node(NodesId(i));
         let node_type = NodeType::from_wire(row.node_type).ok_or("unknown node type")?;
@@ -929,7 +884,7 @@ impl Em<'_> {
             }
             let hd = self.uses.rt("hd");
             let _ = write!(self.out, "{hd}({parent},{{{}}});", fields.join(","));
-            return Ok(());
+            return Ok(None);
         }
         let parts = self.parts[i as usize].clone().ok_or("no parts")?;
         let mut virtualized = false;
@@ -1084,34 +1039,80 @@ impl Em<'_> {
                     .map(|(k, v)| format!(
                         "{}:{}",
                         serde_json::to_string(k).unwrap(),
-                        serde_json::to_string(v).unwrap()
+                        scope.operand(serde_json::to_string(v).unwrap())
                     ))
                     .collect::<Vec<_>>()
                     .join(",")
             )
         };
         let text = content
-            .map(|t| serde_json::to_string(&t).unwrap())
+            .map(|t| scope.operand(serde_json::to_string(&t).unwrap()))
             .unwrap_or("0".into());
-        // An SVG node's element is in SVG's namespace (element.rs's tag).
-        let h = self
-            .uses
-            .rt(if format!("{node_type:?}").starts_with("Svg") {
-                "hs"
-            } else {
-                "h"
-            });
-        let e = format!("e{i}");
-        let _ = write!(
-            self.out,
-            "const {e}={h}({parent},\"{element}\",{class},{attrs_js},{text});"
-        );
+        let status_owner = self.answers.status_owner(i);
+        let e = match &mut self.next_local_element {
+            Some(next) if !status_owner => {
+                let name = format!("v{next}");
+                *next += 1;
+                name
+            }
+            _ => format!("e{i}"),
+        };
+        let style_class = scope.operand(class.clone());
+        let mut heading = [None, None];
+        if node_type == NodeType::Text
+            && matches!(element, "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
+            && answers::role_can(plan, i, &["heading"])
+        {
+            for (k, b) in row.bindings.iter().map(|b| plan.binding(b)).enumerate() {
+                if b.kind != BindingKind::Prop {
+                    continue;
+                }
+                let (slot, name) = match PropId::from_wire(b.id) {
+                    Some(PropId::AccessibilityRole) => (0, "Role"),
+                    Some(PropId::AccessibilityHeadingLevel) => (1, "Level"),
+                    _ => continue,
+                };
+                if style::literal(plan, plan.code(b.expr)).is_some() {
+                    continue;
+                }
+                // A trap belongs to this binding instance even before it has a DOM element.
+                let f = self.binding_value(i, "{}", &b, scope)?;
+                let f = self.counted(i, k, f);
+                let read = format!("{e}{name}");
+                let memo = self.uses.rt("bindingMemo");
+                let _ = write!(self.out, "const {read}={memo}({f});");
+                heading[slot] = Some((k, read));
+            }
+        }
+        if heading.iter().any(Option::is_some) {
+            let [role, level] = heading
+                .each_ref()
+                .map(|row| row.as_ref().map_or("0", |(_, read)| read.as_str()));
+            let make = self.uses.rt("headingText");
+            let _ = write!(
+                self.out,
+                "const {e}={make}({parent},{style_class},{attrs_js},{text},{role},{level});"
+            );
+        } else {
+            let h = self
+                .uses
+                .rt(if format!("{node_type:?}").starts_with("Svg") {
+                    "hs"
+                } else {
+                    "h"
+                });
+            let _ = write!(
+                self.out,
+                "const {e}={h}({parent},\"{element}\",{style_class},{attrs_js},{text});"
+            );
+        }
         // Its children go in the zoom's layer.
         let zoomable = exact_runner::uses::zoomable(plan, NodesId(i));
         let parent_of_children = if zoomable {
             self.zoom = true;
-            let _ = write!(self.out, "const z{i}=$zoom({e});");
-            format!("z{i}")
+            let zoom = format!("z{e}");
+            let _ = write!(self.out, "const {zoom}=$zoom({e});");
+            zoom
         } else {
             e.clone()
         };
@@ -1211,11 +1212,16 @@ impl Em<'_> {
                     continue;
                 }
             }
-            let f = self
-                .bound(i, &e, &b, scope)
-                .map_err(|x| format!("node {i}: {x}"))?;
             let at = self.out.len();
-            let f = self.counted(i, k, f);
+            let f = if let Some((_, read)) = heading.iter().flatten().find(|(index, _)| *index == k)
+            {
+                self.status_read(i, &e, &b, read.clone())
+            } else {
+                let f = self
+                    .bound(i, &e, &b, scope)
+                    .map_err(|x| format!("node {i}: {x}"))?;
+                self.counted(i, k, f)
+            };
             self.paint_binding(node_type, &b, &e, &f);
             match b.kind {
                 BindingKind::Prop if markdown && b.id == PropId::Text as u16 => {
@@ -1295,9 +1301,10 @@ impl Em<'_> {
                 let f = code::expression(
                     plan,
                     plan.code(plan.arg(a).expr),
-                    &code::evaluation(
+                    &self.site_evaluation(
                         scope,
-                        format!("site {i} {} argument {}", h.event.name(), k + 1),
+                        i,
+                        format!("{} argument {}", h.event.name(), k + 1),
                         false,
                     ),
                     &mut self.uses,
@@ -1412,10 +1419,11 @@ impl Em<'_> {
             // Its arguments are evaluated in the action's commit (`.t`): one
             // that traps refuses it, as the runner's handler evaluation does
             // (LLP 1090 D1).
+            let action = scope.operand(format!("a_{}", h.action.0));
             let handler = if args.is_empty() {
-                format!("a_{}", h.action.0)
+                action
             } else {
-                format!("a_{}.t(()=>[{}])", h.action.0, args.join(","))
+                format!("{action}.t(()=>[{}])", args.join(","))
             };
             // The motion and input pieces' events (rt.js), only where used.
             let piece = crate::events::piece(h.event);
@@ -1446,15 +1454,19 @@ impl Em<'_> {
             let tp = self.uses.rt("tp");
             let _ = write!(self.out, "{tp}({e},{e}=>{{");
         }
-        if virtualized {
-            self.collection_children(i, &e, scope, &edges)?;
-        } else {
-            self.children(self.sites.of_node(i), &parent_of_children, scope)?;
-        }
+        let mut slot = None;
+        self.template_scope(status_owner || (panel && self.dev_reload), |em| {
+            if virtualized {
+                em.collection_children(i, &e, scope, &edges)
+            } else {
+                slot = em.mount_children(i, &parent_of_children, scope, !status_owner)?;
+                Ok(())
+            }
+        })?;
         self.live_time(i, element, &e, scope)?;
         if panel {
             self.out.push_str("});");
         }
-        Ok(())
+        Ok(slot)
     }
 }

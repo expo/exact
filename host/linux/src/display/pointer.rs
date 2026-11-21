@@ -2,10 +2,45 @@
 use crate::input::InputEvent;
 use exact_painted::Presenter;
 use exact_runner::DataSource;
+use std::time::{Duration, SystemTime};
+
+pub(super) struct Pointer {
+    position: (f32, f32),
+    previous: Option<(SystemTime, (f32, f32), u32)>,
+}
+
+impl Pointer {
+    pub(super) fn new(position: (f32, f32)) -> Self {
+        Self {
+            position,
+            previous: None,
+        }
+    }
+
+    // The standalone evdev and VNC display has no window toolkit. Use GtkSettings'
+    // default multi-click distance (logical pixels) and interval (milliseconds).
+    fn moved(&mut self) {
+        self.previous = self.previous.filter(|(_, (x, y), _)| {
+            (self.position.0 - x).abs() <= 5. && (self.position.1 - y).abs() <= 5.
+        });
+    }
+
+    fn clicks(&mut self, at: SystemTime) -> u32 {
+        let count = self
+            .previous
+            .filter(|(last, _, _)| {
+                at.duration_since(*last)
+                    .is_ok_and(|d| d <= Duration::from_millis(400))
+            })
+            .map_or(1, |(_, _, n)| n % 3 + 1);
+        self.previous = Some((at, self.position, count));
+        count
+    }
+}
 
 pub(super) fn dispatch<D: DataSource>(
     p: &mut Presenter<D>,
-    pointer: &mut (f32, f32),
+    mouse: &mut Pointer,
     viewport: (f32, f32),
     scale: f32,
     event: InputEvent,
@@ -18,11 +53,13 @@ pub(super) fn dispatch<D: DataSource>(
     {
         // An uncertified physical release must end capture without executing
         // a drop. Refusing its coordinates must not strand a hold or item pin.
-        if matches!(event, InputEvent::Button(false) | InputEvent::Aux(_, false)) {
+        mouse.previous = None;
+        if matches!(event, InputEvent::ButtonUp | InputEvent::Aux(_, false)) {
             p.pointer_lost(now_ms)?;
         }
         return Err("pointer mapping does not match the acknowledged surface".into());
     }
+    let pointer = &mut mouse.position;
     match event {
         InputEvent::Motion(dx, dy) => {
             pointer.0 = (pointer.0 + dx / scale).clamp(0., viewport.0 - 1.);
@@ -31,6 +68,7 @@ pub(super) fn dispatch<D: DataSource>(
             // A canvas sees the device's motion, unbounded by the screen edge.
             p.raw_motion(dx / scale, dy / scale);
             p.pointer_move(pointer.0, pointer.1, now_ms)?;
+            mouse.moved();
         }
         InputEvent::Absolute(fx, fy) => {
             if let Some(fx) = fx {
@@ -41,16 +79,31 @@ pub(super) fn dispatch<D: DataSource>(
             }
             p.set_pointer(Some(*pointer));
             p.pointer_move(pointer.0, pointer.1, now_ms)?;
+            mouse.moved();
         }
-        InputEvent::Button(true) => {
+        InputEvent::MouseDown(at) => {
+            let (x, y) = *pointer;
+            p.pointer_down_with_clicks(x, y, now_ms, mouse.clicks(at))?;
+        }
+        InputEvent::TouchDown => {
+            mouse.previous = None;
             p.pointer_down(pointer.0, pointer.1, now_ms)?;
         }
-        InputEvent::Button(false) => {
+        InputEvent::ButtonUp => {
             p.pointer_up(pointer.0, pointer.1, now_ms)?;
         }
-        InputEvent::Aux(bit, down) => p.pointer_aux(bit, down, pointer.0, pointer.1, now_ms),
-        InputEvent::Cancel => p.pointer_lost(now_ms)?,
-        InputEvent::Wheel(dx, dy) => p.wheel_at(pointer.0, pointer.1, dx, dy),
+        InputEvent::Aux(bit, down) => {
+            mouse.previous = None;
+            p.pointer_aux(bit, down, pointer.0, pointer.1, now_ms)
+        }
+        InputEvent::Cancel => {
+            mouse.previous = None;
+            p.pointer_lost(now_ms)?;
+        }
+        InputEvent::Wheel(dx, dy) => {
+            mouse.previous = None;
+            p.wheel_at(pointer.0, pointer.1, dx, dy);
+        }
         // The report's own time, as the read converted it.
         InputEvent::Pad {
             index,
@@ -124,6 +177,111 @@ mod tests {
             .str(PropId::Text)
             .unwrap()
     }
+    #[test]
+    fn repeated_mouse_clicks_select_and_copy_the_rendered_word_and_paragraph() {
+        use exact_painted::presenter::clipboard::Clipboard;
+        use std::{cell::RefCell, rc::Rc};
+
+        struct CopyBuffer(Rc<RefCell<String>>);
+        impl Clipboard for CopyBuffer {
+            fn read_text(&mut self) -> Result<Option<String>, String> {
+                Ok(Some(self.0.borrow().clone()))
+            }
+            fn write_text(&mut self, text: &str) -> Result<(), String> {
+                *self.0.borrow_mut() = text.into();
+                Ok(())
+            }
+        }
+        let plan = contract::compile(r#"component App
+  state selected = ""
+  action remember(s: Selection)
+    selected = s.text
+  view
+    column
+      text "One.\u2029Hello **world**. More words." testId="reader" markup="markdown" user-select="text" selectionchange=remember
+        width=120 font-size=18
+      text `Selection: ${selected}` testId="count"
+"#).unwrap().encode();
+        let viewport = (320., 200.);
+        let (mut p, err) = Presenter::boot_with(
+            &plan,
+            (),
+            viewport,
+            1.,
+            Default::default(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(err.is_none());
+        let copied = Rc::new(RefCell::new(String::new()));
+        p.set_clipboard(Box::new(CopyBuffer(copied.clone())));
+        let clear = p.frame();
+        let kernel = p.host().kernel();
+        let id = kernel
+            .node_by_key(kernel.find_by_test_id("reader")[0])
+            .unwrap()
+            .id;
+        let paragraph = p.paragraph(id).unwrap();
+        // Click inside the glyph in "world" even when the chosen font wraps the line.
+        let glyph_point = |byte| {
+            let row = paragraph
+                .layout_runs()
+                .find(|r| r.glyphs.iter().any(|g| g.start == byte))
+                .unwrap();
+            let g = row.glyphs.iter().find(|g| g.start == byte).unwrap();
+            (g.x + g.w / 2., row.line_y - 2.)
+        };
+        let point = glyph_point(8);
+        let next_word = glyph_point(14);
+        let mut at = Pointer::new(point);
+        for (ms, selected) in [
+            (0, ""),
+            (120, "world"),
+            (240, "Hello world. More words."),
+            (800, ""),
+        ] {
+            let down = InputEvent::MouseDown(std::time::UNIX_EPOCH + Duration::from_millis(ms));
+            // Several old evdev reports can arrive in one display turn.
+            dispatch(&mut p, &mut at, viewport, 1., down, 1000.).unwrap();
+            dispatch(&mut p, &mut at, viewport, 1., InputEvent::ButtonUp, 1000.).unwrap();
+            assert_eq!(count(&p), format!("Selection: {selected}"));
+            if !selected.is_empty() {
+                for (code, key, down) in [
+                    ("ControlLeft", "Control", true),
+                    ("KeyC", "c", true),
+                    ("KeyC", "c", false),
+                    ("ControlLeft", "Control", false),
+                ] {
+                    p.hardware_key(code, key, down, false);
+                }
+                assert_eq!(copied.borrow().as_str(), selected);
+                let marked = p.frame();
+                assert!((point.0 as u32..point.0 as u32 + 5)
+                    .any(|x| (0..point.1 as u32 + 3)
+                        .any(|y| clear.pixel(x, y) != marked.pixel(x, y))));
+            }
+        }
+        // Leaving the click rectangle breaks the sequence even after returning to the word.
+        for event in [
+            InputEvent::Motion(20., 0.),
+            InputEvent::Motion(-20., 0.),
+            InputEvent::MouseDown(std::time::UNIX_EPOCH + Duration::from_millis(850)),
+            InputEvent::ButtonUp,
+        ] {
+            dispatch(&mut p, &mut at, viewport, 1., event, 1000.).unwrap();
+        }
+        assert_eq!(count(&p), "Selection: ");
+        // Extend the double-click by whole words as the held pointer crosses a soft wrap.
+        for event in [
+            InputEvent::MouseDown(std::time::UNIX_EPOCH + Duration::from_millis(900)),
+            InputEvent::Motion(next_word.0 - point.0, next_word.1 - point.1),
+            InputEvent::ButtonUp,
+        ] {
+            dispatch(&mut p, &mut at, viewport, 1., event, 1000.).unwrap();
+        }
+        assert_eq!(count(&p), "Selection: world. More");
+    }
+
     /// LLP 1115.000 D5.4: a desktop's ways Back as evdev reports them, a
     /// mouse's back button (at its release, D5.5), Alt (56) around Left
     /// (105), and KEY_BACK (158), each popping a pushed route that says
@@ -172,7 +330,7 @@ component App
             down,
             repeat: false,
         };
-        let mut at = (20., 40.);
+        let mut at = Pointer::new((20., 40.));
         let ways = [
             vec![InputEvent::Aux(8, true), InputEvent::Aux(8, false)],
             vec![
@@ -213,9 +371,9 @@ component App
     fn relative_and_absolute_display_events_release_or_escape_once() {
         for cancel in [None, Some(press(1)), Some(InputEvent::Cancel)] {
             let mut p = fixture();
-            let mut at = (20., 40.);
+            let mut at = Pointer::new((20., 40.));
             for (time, event) in [
-                (0., InputEvent::Button(true)),
+                (0., InputEvent::MouseDown(std::time::UNIX_EPOCH)),
                 (10., InputEvent::Motion(20., 0.)), // scale2: recognition at30
                 (30., InputEvent::Absolute(Some(0.275), None)), // logical110
             ] {
@@ -225,15 +383,7 @@ component App
             if let Some(event) = cancel {
                 dispatch(&mut p, &mut at, (400., 500.), 2., event, 40.).unwrap();
             }
-            dispatch(
-                &mut p,
-                &mut at,
-                (400., 500.),
-                2.,
-                InputEvent::Button(false),
-                50.,
-            )
-            .unwrap();
+            dispatch(&mut p, &mut at, (400., 500.), 2., InputEvent::ButtonUp, 50.).unwrap();
             assert_eq!(count(&p), if cancel.is_some() { "0" } else { "1" });
             assert_eq!(p.collection_interaction(), None);
         }
@@ -248,15 +398,15 @@ component App
         let next = contract::compile("component App\n  view\n    text \"next\"\n").unwrap();
         for (abandon, held) in [(press(1), true), (InputEvent::Cancel, false)] {
             let mut p = fixture();
-            let mut at = (20., 40.);
+            let mut at = Pointer::new((20., 40.));
             let mut send = |p: &mut Presenter<()>, event, time| {
                 dispatch(p, &mut at, (400., 500.), 2., event, time).unwrap()
             };
-            send(&mut p, InputEvent::Button(true), 0.);
+            send(&mut p, InputEvent::MouseDown(std::time::UNIX_EPOCH), 0.);
             send(&mut p, abandon, 10.);
             let result = p.reload(&next.encode(), ()).unwrap();
             assert_eq!(result == ReloadResult::Held("pointer"), held);
-            send(&mut p, InputEvent::Button(false), 20.);
+            send(&mut p, InputEvent::ButtonUp, 20.);
             p.run_commands(|| ());
             assert_eq!(p.replacement_pending(), None);
         }
@@ -271,19 +421,23 @@ component App
         let b = p.display_frame().unwrap();
         let b_pixels = b.pixels().data().to_vec();
         assert!(p.resize(800., 1000.).is_none());
-        let mut at = (20., 40.);
+        let mut at = Pointer::new((20., 40.));
         let absolute = InputEvent::Absolute(Some(0.25), Some(0.5));
         assert!(dispatch(&mut p, &mut at, (800., 1000.), 1., absolute, 1.).is_err());
-        assert_eq!(at, (20., 40.), "refusal must not reinterpret a pointer");
+        assert_eq!(
+            at.position,
+            (20., 40.),
+            "refusal must not reinterpret a pointer"
+        );
         dispatch(&mut p, &mut at, (400., 500.), 1., absolute, 1.).unwrap();
-        assert_eq!(at, (100., 250.));
+        assert_eq!(at.position, (100., 250.));
         assert_eq!(b.pixels().data(), b_pixels);
         assert!(p.display_complete(&b));
         // No C paint between ACK and input. B's mapping is now authoritative.
         assert!(dispatch(&mut p, &mut at, (400., 500.), 1., absolute, 2.).is_err());
-        assert_eq!(at, (100., 250.));
+        assert_eq!(at.position, (100., 250.));
         dispatch(&mut p, &mut at, (300., 300.), 1., absolute, 2.).unwrap();
-        assert_eq!(at, (75., 150.));
+        assert_eq!(at.position, (75., 150.));
         assert!(p.dirty());
         assert_eq!(b.pixels().data(), b_pixels);
     }
@@ -293,7 +447,7 @@ component App
         let mut p = fixture();
         let a = p.display_frame().unwrap();
         assert!(p.display_complete(&a));
-        let mut at = (20., 40.);
+        let mut at = Pointer::new((20., 40.));
         for (extent, scale) in [((400., 500.), 2.), ((800., 1000.), 1.)] {
             assert!(dispatch(
                 &mut p,
@@ -304,7 +458,7 @@ component App
                 1.
             )
             .is_err());
-            assert_eq!(at, (20., 40.));
+            assert_eq!(at.position, (20., 40.));
             dispatch(&mut p, &mut at, extent, scale, press(45), 1.).unwrap();
             dispatch(&mut p, &mut at, extent, scale, InputEvent::Cancel, 1.).unwrap();
         }
@@ -321,7 +475,7 @@ component App
             &mut at,
             (400., 500.),
             1.,
-            InputEvent::Button(true),
+            InputEvent::MouseDown(std::time::UNIX_EPOCH),
             2.
         )
         .is_err());
@@ -335,7 +489,7 @@ component App
             3.
         )
         .is_err());
-        assert_eq!(at, (20., 40.));
+        assert_eq!(at.position, (20., 40.));
         mismatched_physical_release_cancels_existing_hold_without_drop();
     }
 
@@ -348,9 +502,9 @@ component App
             let b = p.display_frame().unwrap();
             let b_pixels = b.pixels().data().to_vec();
             assert!(p.resize(800., 1000.).is_none());
-            let mut at = (20., 40.);
+            let mut at = Pointer::new((20., 40.));
             for (time, event) in [
-                (1., InputEvent::Button(true)),
+                (1., InputEvent::MouseDown(std::time::UNIX_EPOCH)),
                 (10., InputEvent::Motion(20., 0.)),
                 (20., InputEvent::Motion(70., 0.)),
             ] {
@@ -361,18 +515,10 @@ component App
                 "recognized hold pins its item"
             );
             assert!(p.contact_position().is_some());
-            let certified_position = at;
-            assert!(dispatch(
-                &mut p,
-                &mut at,
-                extent,
-                scale,
-                InputEvent::Button(false),
-                30.
-            )
-            .is_err());
+            let certified_position = at.position;
+            assert!(dispatch(&mut p, &mut at, extent, scale, InputEvent::ButtonUp, 30.).is_err());
             assert_eq!(
-                at, certified_position,
+                at.position, certified_position,
                 "refusal never guesses new coordinates"
             );
             assert_eq!(
@@ -419,9 +565,9 @@ component App
             )
             .unwrap()
             .0;
-            let mut at = (200., 340.);
+            let mut at = Pointer::new((200., 340.));
             for (time, event) in [
-                (0., InputEvent::Button(true)),
+                (0., InputEvent::MouseDown(std::time::UNIX_EPOCH)),
                 (10., InputEvent::Motion(0., -20.)), // scale2 -> recognition y330
                 (30., InputEvent::Absolute(None, Some(0.42))), // y210 -> height300
             ] {
@@ -444,7 +590,7 @@ component App
                     &mut at,
                     (400., 500.),
                     2.,
-                    InputEvent::Button(false),
+                    InputEvent::ButtonUp,
                     time,
                 )
                 .unwrap();

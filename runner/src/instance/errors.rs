@@ -22,6 +22,7 @@ pub enum InstanceError {
     Trap(Trap),
     Bridge(bridge::BridgeError),
     UnknownNodeType(u8),
+    ViewIdsExhausted,
     List(&'static str),
     SubjectKind {
         region: RegionsId,
@@ -82,6 +83,7 @@ impl std::fmt::Debug for InstanceError {
             }
             Self::Trap(value) => f.debug_tuple("Trap").field(value).finish(),
             Self::Bridge(value) => f.debug_tuple("Bridge").field(value).finish(),
+            Self::ViewIdsExhausted => f.write_str("the session exhausted its view ids"),
             Self::UnknownNodeType(value) => f.debug_tuple("UnknownNodeType").field(value).finish(),
             Self::List(value) => f.debug_tuple("List").field(value).finish(),
             Self::SubjectKind { region } => f

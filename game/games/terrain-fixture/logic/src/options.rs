@@ -14,6 +14,7 @@ pub struct Options {
     budget: String,
     draw: String,
     pool: String,
+    jobs: String,
 }
 
 impl Default for Options {
@@ -30,6 +31,7 @@ impl Default for Options {
             budget: "deadline".into(),
             draw: "on".into(),
             pool: "off".into(),
+            jobs: "off".into(),
         }
     }
 }
@@ -105,6 +107,7 @@ pub struct WorkloadSettings {
     pub budget: Budget,
     pub draw: bool,
     pub pool: bool,
+    pub jobs: bool,
 }
 
 impl Default for WorkloadSettings {
@@ -121,6 +124,7 @@ impl Default for WorkloadSettings {
             budget: Budget::default(),
             draw: true,
             pool: false,
+            jobs: false,
         }
     }
 }
@@ -156,6 +160,7 @@ impl From<&Options> for WorkloadSettings {
                 .map_or(Budget::Deadline, Budget::Count),
             draw: args.draw != "off",
             pool: args.pool == "on",
+            jobs: args.jobs == "on",
         }
     }
 }

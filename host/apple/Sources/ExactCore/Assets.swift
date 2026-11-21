@@ -5,6 +5,7 @@ import Foundation
 public final class AssetResolver {
     package let root: URL
     package let publicationID: String
+    private let digests: [String: String]?
     private let names: [String]?
     private let read: ((String) throws -> Data?)?
     package var isComplete: Bool { names != nil }
@@ -18,15 +19,28 @@ public final class AssetResolver {
     package var refusal: String? { lock.lock(); defer { lock.unlock() }; return lastRefusal }
     package var encodedCacheBytes: Int { lock.lock(); defer { lock.unlock() }; return cache.values.reduce(0) { $0 + $1.count } }
 
+    package func hasSameAssets(as other: AssetResolver) -> Bool {
+        publicationID == other.publicationID || (digests != nil && digests == other.digests)
+    }
+
+    /// Compare with verified contents without reopening an old publication.
+    package func hasSameAsset(_ name: String, as other: AssetResolver, bytes: Data?) -> Bool {
+        if let before = digests?[name], let after = other.digests?[name] { return before == after }
+        guard let bytes else { return false }
+        lock.lock(); let saved = cache[name]; lock.unlock()
+        return saved == bytes
+    }
+
     /// A complete provider never falls through to the embedded directory.
     public init(root: URL, names: [String], generation: String = UUID().uuidString, read: @escaping (String) throws -> Data?) {
-        self.root = root; self.names = names; self.read = read; publicationID = generation
+        self.root = root; self.names = names; self.read = read; publicationID = generation; digests = nil
     }
 
     /// Own verified payloads without retaining texture heap buffers. The private
     /// files live exactly as long as this generation and can be read after loss.
-    package init(root: URL, verified: [String: Data]) throws {
+    package init(root: URL, verified: [String: Data], digests: [String: String]? = nil) throws {
         self.root = root; names = Array(verified.keys); read = nil; publicationID = UUID().uuidString
+        self.digests = digests
         for (name, bytes) in verified {
             guard Self.validAssetName(name.hasPrefix("assets/") ? String(name.dropFirst(7)) : name) else {
                 throw CocoaError(.fileReadInvalidFileName)
@@ -51,7 +65,7 @@ public final class AssetResolver {
     }
 
     package init(root: URL) {
-        self.root = root; names = nil; read = nil
+        self.root = root; names = nil; read = nil; digests = nil
         publicationID = "embedded:" + (Bundle.main.object(forInfoDictionaryKey: "ExactWidgetGeneration") as? String ?? root.path)
     }
 

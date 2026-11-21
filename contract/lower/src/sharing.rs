@@ -399,6 +399,31 @@ mod tests {
     }
 
     #[test]
+    fn literal_enum_arguments_stay_substituted() {
+        let plan = lower(
+            r#"component App
+  state on = true
+  view
+    column
+      Child(size="sm", shown=on)
+      Child(size="md", shown=not on)
+
+component Child
+  props
+    size: enum<"sm", "md">
+    shown: bool
+  view
+    column
+      text size opacity=(shown ? 1 : 0.5)
+      text (size == "sm" ? "small" : "big")
+"#,
+        );
+        let derives: Vec<_> = plan.derives.iter().map(|row| plan.str(row.name)).collect();
+        assert_eq!(derives.len(), 1, "{derives:?}");
+        assert!(derives[0].starts_with("@argument:shown#"), "{derives:?}");
+    }
+
+    #[test]
     fn child_derives_stay_shared_in_for_keys() {
         let plan = lower(
             r#"component App

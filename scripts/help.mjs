@@ -115,9 +115,10 @@ export const HELP = {
   },
   'web-build': {
     line: 'build the web app once',
-    usage: 'bun exact.mjs web-build [--out <dir>] [--render rust|js|none] [--json]',
+    usage: 'bun exact.mjs web-build [--out <dir>] [--render rust|js|none] [--sizes] [--json]',
     flags: [
       ['--out <dir>', 'a release build there (inside the app: dist), as deploy publishes, and how a static host serves it'],
+      ['--sizes', 'show the JS launch script’s minified bytes by source module, its gzip size, and Contract bytecode by component'],
       ['--render rust|js|none', 'pre-rendered pages: rust (the app\'s <app>-render entry; the default where it has one), js (Bun; the default otherwise), none'],
       jsonBuilt(),
     ],

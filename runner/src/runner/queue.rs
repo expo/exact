@@ -474,6 +474,13 @@ impl<D: DataSource> Runner<D> {
         source: &str,
         args: &[Value],
     ) -> Result<super::Answer, DataError> {
+        if let Some(answer) = self
+            .seams
+            .source_answer
+            .and_then(|f| f(&mut self.data, source, args))
+        {
+            return answer.map(super::Answer::Now);
+        }
         if Self::activity_send(source) {
             self.activity_request(source, args)
         } else if self.plan.module_named(source).is_some() {

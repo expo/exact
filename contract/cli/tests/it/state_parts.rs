@@ -378,6 +378,36 @@ fn an_active_part_without_a_press_is_linted() {
     assert!(dead.iter().all(|w| w.message.contains("never holds")));
 }
 
+#[test]
+fn a_component_state_is_dead_only_if_no_use_can_enter_it() {
+    for (first, second, count) in [("", "/read", 0), ("/read", "", 0), ("", "", 1)] {
+        let src = format!(
+            r#"component App
+  view
+    column
+      Link(url="{first}")
+      Link(url="{second}")
+component Link
+  props
+    url: string
+  view
+    link href=url
+      :active
+        opacity = 0.5
+      text "Read"
+"#
+        );
+        let (plan, warnings) = contract::compile_warned(&src);
+        plan.unwrap();
+        let sites: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.id == "lower-state-dead")
+            .map(|w| w.span.line)
+            .collect();
+        assert_eq!(sites, vec![12; count], "{src}");
+    }
+}
+
 /// Review round 1: a state that leaves a row unwritten in some arm keeps
 /// the base's; a link keeps its colour, an `hr` its separator, unless the
 /// state holds; a `:checked` row is no disabled look.

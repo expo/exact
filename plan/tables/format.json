@@ -37,6 +37,7 @@
     }
   ],
   "_about": "The single declaration authority for the plan: its tables, the expression VM's opcodes, the stdlib roster, and the enum vocabularies. plan/build.rs generates the row structs, the canonical encoder, the validating decoder, the opcode and stdlib enums, and FORMAT_DIGEST from this file. Nothing here is hand-mirrored anywhere else. Kernel node types, props, and style rows are NOT declared here: plan rows carry the kernel's ordinals as numbers, and the crates that give them meaning take the vocabulary from exact-kernel (LLP 1004 D2).",
+  "_stringPool": "A u32 count precedes the strings in id order. A record starts with its UTF-8 byte length, or a u32 with bit 31 set for a member qualified by its component use (LLP 1029.000.002 D1). The low 31 bits index its owner digest. The next u32 indexes the member name. Each index first occurs in sequence: that record supplies the new length-prefixed name, then the new 32-byte SHA-256 digest, for whichever is new. The string reads as the member name, #, and the digest in lowercase hexadecimal. Literal records can represent any string.",
   "_codecs": "u8 | u16 | u32 | i32 | f64 | bool | str (u32 index into the string pool) | enum:<Name> (u8 ordinal) | idx:<table> (u32 row index, validated) | opt:<table> (u32 row index or NONE = 0xFFFFFFFF) | range:<table> (u32 start + u32 len, validated) | code (u32 offset + u32 len into the code pool, validated as well-formed bytecode) | bytes (u32 offset + u32 len into the data pool)",
   "_tables": "Document order is significant: nodes and regions with the same parent are ordered by `order`; an arm's content is every node and region whose `arm` names it; a node with no parent inside an arm is one of the arm's roots. A font face is one source path, a weight range (`weight` to `weight_max`; one weight is both), a stretch range in tenths of a percent (`stretch_min` to `stretch_max`; 1000 is normal width) and an italic flag, as an `@font-face` rule's descriptors. The compiler reads a range the declaration leaves unsaid from the file's `fvar` axes (LLP 1019 D2); a host never infers one.",
   "tables": [
@@ -699,8 +700,38 @@
       ]
     },
     {
+      "name": "place_steps",
+      "_comment": "LLP 1029.000.002 D1. A local step from the rendered parent or enclosing row. An outer step records a component or slot boundary erased by inlining.",
+      "fields": [
+        {
+          "name": "outer",
+          "codec": "opt:place_steps"
+        },
+        {
+          "name": "kind",
+          "codec": "enum:PlaceKind"
+        },
+        {
+          "name": "name",
+          "codec": "str"
+        },
+        {
+          "name": "ordinal",
+          "codec": "u32"
+        },
+        {
+          "name": "shared_id",
+          "codec": "bool"
+        }
+      ]
+    },
+    {
       "name": "regions",
       "fields": [
+        {
+          "name": "place",
+          "codec": "opt:place_steps"
+        },
         {
           "name": "kind",
           "codec": "enum:RegionKind"
@@ -773,6 +804,10 @@
     {
       "name": "nodes",
       "fields": [
+        {
+          "name": "place",
+          "codec": "opt:place_steps"
+        },
         {
           "name": "node_type",
           "codec": "u8"
@@ -1155,6 +1190,7 @@
       "list",
       "record"
     ],
+    "PlaceKind": ["element", "component", "each", "children"],
     "RegionKind": [
       "when",
       "match",

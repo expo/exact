@@ -273,6 +273,7 @@ fn wrapper(node: &NodeRef<'_>, uid: u64, matrix: Affine, ctm: Affine, children: 
         key: node.key,
         opacity: 1.0,
         transform: (!tf::is_identity(matrix)).then_some(Transform {
+            reference: (0., 0.),
             origin: (0.0, 0.0),
             translate: (0.0, 0.0),
             rotate: 0.0,

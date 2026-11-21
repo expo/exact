@@ -63,7 +63,7 @@ impl Words {
         }
     }
 
-    fn find(&self, text: &str, at: u32, action: i32) -> Option<u32> {
+    fn load(&self, text: &str) -> Option<WordBreaks<'_>> {
         if text.contains(['\0', '\r']) {
             return None;
         }
@@ -77,23 +77,49 @@ impl Words {
             .ok()
             .filter(|&n| n < i32::MAX as u32)?;
         wide.push(0);
-        // SAFETY: the UTF-16 storage lives through the synchronous messages;
-        // this thread owns the control and empties it before returning.
+        // SAFETY: WM_SETTEXT copies the terminated buffer synchronously.
         #[allow(unsafe_code)]
         unsafe {
             SetWindowTextW(self.window, PCWSTR(wide.as_ptr())).ok()?;
-            let found = SendMessageW(
-                self.window,
+        }
+        #[cfg(test)]
+        LOADS.with(|loads| loads.set(loads.get() + 1));
+        Some(WordBreaks { words: self, len })
+    }
+}
+
+/// All boundaries for one operation use the same Rich Edit document.
+struct WordBreaks<'a> {
+    words: &'a Words,
+    len: u32,
+}
+
+impl WordBreaks<'_> {
+    fn find(&self, at: u32, action: i32) -> Option<u32> {
+        // SAFETY: this thread owns the loaded control. Both message parameters are integers.
+        #[allow(unsafe_code)]
+        let found = unsafe {
+            SendMessageW(
+                self.words.window,
                 EM_FINDWORDBREAK,
                 Some(WPARAM(action as usize)),
-                Some(LPARAM(at.min(len) as isize)),
+                Some(LPARAM(at.min(self.len) as isize)),
             )
-            .0;
-            let _ = SetWindowTextW(self.window, w!(""));
-            u32::try_from(found).ok().map(|n| n.min(len))
+        };
+        u32::try_from(found.0).ok().map(|n| n.min(self.len))
+    }
+}
+
+impl Drop for WordBreaks<'_> {
+    fn drop(&mut self) {
+        // SAFETY: the window stays on its creating thread and outlives this borrow.
+        #[allow(unsafe_code)]
+        unsafe {
+            let _ = SetWindowTextW(self.words.window, w!(""));
         }
     }
 }
+
 impl Drop for Words {
     fn drop(&mut self) {
         // SAFETY: the window is destroyed on its creating thread before the
@@ -106,9 +132,12 @@ impl Drop for Words {
     }
 }
 
-fn with_words<R>(read: impl FnOnce(&Words) -> Option<R>) -> Option<R> {
+#[cfg(test)]
+thread_local! { static LOADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+fn with_words<R>(text: &str, read: impl FnOnce(WordBreaks<'_>) -> Option<R>) -> Option<R> {
     thread_local! { static WORDS: OnceCell<Option<Words>> = const { OnceCell::new() }; }
-    WORDS.with(|words| read(words.get_or_init(Words::new).as_ref()?))
+    WORDS.with(|words| read(words.get_or_init(Words::new).as_ref()?.load(text)?))
 }
 
 pub(super) fn step(text: &str, at: u32, forward: bool) -> Option<u32> {
@@ -117,7 +146,7 @@ pub(super) fn step(text: &str, at: u32, forward: bool) -> Option<u32> {
     } else {
         WB_MOVEWORDLEFT
     };
-    with_words(|words| words.find(text, at, action.0))
+    with_words(text, |words| words.find(at, action.0))
 }
 
 pub(super) fn range(text: &str, at: u32) -> Option<(u32, u32)> {
@@ -144,10 +173,10 @@ pub(super) fn range(text: &str, at: u32) -> Option<(u32, u32)> {
             super::field::utf16_len(&text[..end]),
         ));
     }
-    with_words(|words| {
+    with_words(text, |words| {
         let after = super::field::utf16_len(&text[..byte]) + character.len_utf16() as u32;
-        let start = words.find(text, after, WB_MOVEWORDLEFT.0)?;
-        let end = words.find(text, at, WB_RIGHTBREAK.0)?;
+        let start = words.find(after, WB_MOVEWORDLEFT.0)?;
+        let end = words.find(at, WB_RIGHTBREAK.0)?;
         (start <= at && end > at).then_some((start, end))
     })
 }
@@ -158,13 +187,15 @@ mod tests {
 
     #[test]
     fn rich_edit_word_selection_preserves_unicode_offsets_and_excludes_spaces() {
-        for (text, at, expected) in [
-            ("café two", 2, (0, 4)),
-            ("🦀 two", 4, (3, 6)),
-            ("one  two", 3, (3, 5)),
-            ("one\ntwo", 5, (4, 7)),
+        for (text, at, expected, loads) in [
+            ("café two", 2, (0, 4), 1),
+            ("🦀 two", 4, (3, 6), 1),
+            ("one  two", 3, (3, 5), 0),
+            ("one\ntwo", 5, (4, 7), 1),
         ] {
+            let before = LOADS.get();
             assert_eq!(range(text, at), Some(expected), "{text:?} at={at}");
+            assert_eq!(LOADS.get() - before, loads, "{text:?} at={at}");
         }
         assert_eq!(
             range("🦀 two", 0),

@@ -39,7 +39,7 @@ extension Presenter {
             plan.cursor += 1
             guard plan.prepared[index] else { continue }
             done += 1
-            let op = ops[index], id = op.id
+            let op = plan.preparingOp(index), id = op.id
             if op.op == .children, plan.large.contains(id) { plan.attachments.append(index); continue }
             if op.op == .children { touched(id, children: true) } else if op.op != .create { touched(id, textChanged: op.op == .props || op.op == .style) }
             switch op.op {
@@ -87,7 +87,7 @@ extension Presenter {
             if !plan.attachments.isEmpty { plan.sliceSeconds = StagePlan.firstAttachSeconds; return }
         }
         while let index = plan.attachments.first {
-            let op = ops[index]
+            let op = plan.preparingOp(index)
             if let parent = views[op.id] {
                 let container = parent.container
                 if plan.attachedChildren == 0 { touched(op.id, children: true) }
@@ -158,7 +158,7 @@ extension Presenter {
             window.endEditing(for: nil)
         }
         view.holdOffstage()
-        teardown.add(view)
+        teardown.add(view, destroying: plan.destroyed)
         return true
     }
 }

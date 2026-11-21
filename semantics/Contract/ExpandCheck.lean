@@ -210,7 +210,7 @@ private def idleTie : CProgram :=
 /-- Both checks for one case, as lines: `#expand-error`, `#struct`, `#types`
 (each with what differs, or `ok`), then the flat observation after
 `#flat` and the component-level one after `#comp`. -/
-def report (comp : CProgram) (flat : Program) (o : Oracle) (events : List Observe.Event) :
+def report (comp : CProgram) (flat : Program) (o : Oracle) (events : List Observe.ScriptEvent) :
     List String :=
   let structural := match Expand.expand comp with
     | .error e => ["#expand-error " ++ e]
@@ -221,6 +221,6 @@ def report (comp : CProgram) (flat : Program) (o : Oracle) (events : List Observ
   if comp.components.any (!·.mutations.isEmpty) then
     structural ++ ["#flat", "# a child's mutations: meaning not compared", "#comp"]
   else
-    structural ++ ["#flat"] ++ Observe.run flat o events ++ ["#comp"] ++ CompSem.crun comp o events
+    structural ++ ["#flat"] ++ Observe.runScript flat o events ++ ["#comp"] ++ CompSem.crun comp o events
 
 end Contract.ExpandCheck

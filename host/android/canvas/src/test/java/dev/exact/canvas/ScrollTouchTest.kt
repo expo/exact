@@ -449,7 +449,11 @@ class ScrollTouchTest {
     // Pull to refresh: a scroller that hears `refresh` (flag bit 4), refreshing while bit 5 is set.
 
     private val main get() = org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper())
-    private fun pull(): Refresh? = (view.parent as FrameLayout).let { p -> (0 until p.childCount).map { p.getChildAt(it) } }.filterIsInstance<Refresh>().singleOrNull()
+    private fun pull(): Refresh? {
+        val scrollers = Scrolling::class.java.getDeclaredField("scrollers").apply { isAccessible = true }
+        return (scrollers.get(view.scrolling()) as Map<*, *>).values.filterIsInstance<Scrolling.Scroller>()
+            .mapNotNull { it.pull }.singleOrNull()
+    }
     private fun refreshable(refreshing: Boolean = false) = scroller(1, 0f).also { it[1] = 2 or 16 or (if (refreshing) 32 else 0) }
     private fun statement(refreshing: Boolean) =
         view.scrolling().told(intArrayOf(1, 2 or 16 or (if (refreshing) 32 else 0), 0, 0, 0, 0, 0, 0, 500f.toBits()))

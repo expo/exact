@@ -213,7 +213,6 @@ final class TabContentsIOSTests: XCTestCase {
         XCTAssertEqual(home.viewControllers.count, 2, "with Detail")
         // The tabs' containers built again, as a change to the tabs builds them (`reshape`)
         navigation.retireTabs()
-        navigation.primaryNavigation = nil
         navigation.sync(Batch(ops: [], timers: false, motion: false, clock: nil, error: nil))
         let successor = try XCTUnwrap(navigation.tabOwner, "a successor holds the tabs")
         XCTAssertFalse(successor === owner)

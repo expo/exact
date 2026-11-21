@@ -213,10 +213,42 @@ impl<D: DataSource> Presenter<D> {
     /// time, which the shell measures: the nearest node at or above it that
     /// names a context menu (`contextPopover`) or hears `contextmenu` takes
     /// it. Its `contextmenu` runs first, then its menu opens where the
-    /// finger is, and the touch presses nothing when it lifts. Whether a
-    /// node took it. Nothing on a host with no top layer.
+    /// finger is, and the touch presses nothing when it lifts. A node with
+    /// `draggable` nearer the finger, or with no menu at all, takes it
+    /// instead for the platform's drag (LLP 1094.000 D7, D8). One with both
+    /// opens its menu, and the finger moving on lifts its drag
+    /// ([`Self::lift_moved`]). Whether a node took it. Nothing on a host
+    /// with no top layer.
     pub fn long_press(&mut self, x: f32, y: f32, now_ms: f64) -> bool {
-        let Some((id, names, hears)) = self.context_menu_at(x, y) else {
+        let menu = self.context_menu_at(x, y);
+        let source = self.lift_source_at(x, y);
+        if let Some(source) = source {
+            if menu
+                .as_ref()
+                .is_none_or(|(id, ..)| self.inside(source, *id))
+                && self.drag_out(source, x, y, now_ms, false)
+            {
+                self.top.long_presses = self.top.long_presses.wrapping_add(1);
+                // The platform's own long-click feedback, as the menu's below.
+                self.request(Request::Haptic(Haptic::ImpactHeavy));
+                return true;
+            }
+        }
+        self.top.lift = source.map(|source| (source, x, y));
+        self.open_context_menu(menu, x, y, now_ms)
+    }
+
+    /// The context menu a long press at (`x`, `y`) found, opened: what a
+    /// finger held there opens when no drag takes it, and what an
+    /// assistive service's long click opens. Whether there was one.
+    pub(in crate::presenter) fn open_context_menu(
+        &mut self,
+        menu: Option<(ViewId, Option<String>, bool)>,
+        x: f32,
+        y: f32,
+        now_ms: f64,
+    ) -> bool {
+        let Some((id, names, hears)) = menu else {
             return false;
         };
         self.top.long_presses = self.top.long_presses.wrapping_add(1);

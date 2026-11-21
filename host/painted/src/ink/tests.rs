@@ -366,3 +366,173 @@ fn moving_blends_reuse_completed_snapshot_storage() {
     assert_eq!(peak_targets, 1);
     assert!(peak_bytes <= 1920 * 1080 * 4);
 }
+
+#[test]
+fn fractional_clip_intersections_survive_retained_replay_and_shadows() {
+    let Some(mut ink) = open() else { return };
+    let identity = Transform::identity();
+    let masks = [
+        Shape::new((-2.75, 3.25, 54., 41.), [11., 7., 10., 12.]),
+        Shape::new((2.375, 1.625, 50., 41.5), [9., 6., 12., 8.]),
+        Shape::elliptical((0.125, 5.25, 49., 37.), [(13.5, 8.25); 4]),
+        Shape::elliptical((3.5, 6.375, 44., 36.), [(11., 9.); 4]),
+    ];
+    for scale in [1., 1.25, 2.] {
+        for nested in [false, true] {
+            let mut draw = |order: &[usize], retained: bool| {
+                ink.page([0; 4]);
+                ink.begin(68., 50., scale);
+                if retained {
+                    ink.row_begin(1, (0., 0.), None);
+                }
+                for &index in order {
+                    ink.push_clip(&masks[index], identity);
+                }
+                if nested {
+                    ink.push_clip(&masks[3], identity);
+                }
+                ink.fill(
+                    &Shape::rect((0., 0., 68., 50.)),
+                    [210, 62, 97, 255],
+                    identity,
+                );
+                let shadow = Shape::new((12.25, 13.5, 19., 13.), [4.; 4]);
+                assert!(ink.blurred_shadow(
+                    &shadow,
+                    [81, 101, 163, 128],
+                    3.,
+                    &shadow.inset(1.),
+                    identity
+                ));
+                for _ in 0..order.len() + usize::from(nested) {
+                    ink.pop_clip();
+                }
+                if retained {
+                    let bounds = (0., 0., 68., 50.);
+                    ink.row_end(bounds);
+                    ink.begin(68., 50., scale);
+                    ink.row_draw(1, (0., 0.), bounds);
+                }
+                let pixels = ink.finish().unwrap();
+                if retained {
+                    ink.row_free(1);
+                }
+                pixels
+            };
+            let reference = draw(&[2, 0, 1], false);
+            let actual = draw(&[0, 1, 2], true);
+            assert!(reference
+                .data()
+                .chunks_exact(4)
+                .any(|p| (1..255).contains(&p[3])));
+            let maximum = reference
+                .data()
+                .iter()
+                .zip(actual.data())
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap();
+            assert!(
+                maximum <= 2,
+                "scale {scale}, nested mask {nested}, maximum difference {maximum}/255"
+            );
+        }
+    }
+}
+
+/// A shape clip takes one intermediate draw for each parent clip it cannot
+/// share a draw with, and its mask covers the target's last pixel.
+#[test]
+fn a_shape_clip_draws_only_the_masks_its_parents_need() {
+    let Some(mut ink) = open() else { return };
+    let identity = Transform::identity();
+    let scissor = Shape::rect((0., 0., 64., 64.));
+    let round = Shape::new((1., 1., 80., 80.), [8.; 4]);
+    let ellipse = Shape::elliptical((1., 1., 80., 80.), [(9., 6.); 4]);
+    let clip = Shape::elliptical((2., 2., 80., 80.), [(7., 5.); 4]);
+    for (parents, draws) in [
+        (&[&scissor][..], 0),
+        (&[&round, &round][..], 1),
+        (&[&ellipse][..], 2),
+    ] {
+        ink.page([0; 4]);
+        ink.begin(64., 64., 1.);
+        for parent in parents {
+            ink.push_clip(parent, identity);
+        }
+        let before = ink.pool.used();
+        ink.push_clip(&clip, identity);
+        assert_eq!(ink.pool.used() - before, draws);
+        let fill = Shape::rect((-8., -8., 96., 96.));
+        ink.fill(&fill, [255; 4], identity);
+        for _ in 0..=parents.len() {
+            ink.pop_clip();
+        }
+        let pixels = ink.finish().unwrap();
+        assert_eq!(pixels.data()[(63 * 64 + 63) * 4 + 3], 255);
+    }
+}
+
+#[test]
+fn opacity_layers_preserve_fractional_edges_after_flush_and_replay() {
+    let Some(mut ink) = open() else { return };
+    let viewport = (0., 0., 32., 24.);
+    let identity = Transform::identity();
+    let pixel = |image: &Pixmap, x: usize, y: usize, expected: u8| {
+        let index = (y * image.width() as usize + x) * 4;
+        let rgba = &image.data()[index..index + 4];
+        assert!(
+            rgba.iter().all(|v| v.abs_diff(expected) <= 1),
+            "pixel ({x},{y}): {rgba:?}, expected [{expected}; 4]"
+        );
+    };
+    let mut draw = |retained: bool| {
+        ink.page([0; 4]);
+        ink.begin(viewport.2, viewport.3, 1.);
+        if retained {
+            ink.row_begin(1, (0., 0.), None);
+        }
+        let clip = Shape::new((2.25, 1.25, 34., 28.), [4.; 4]);
+        ink.push_clip(&clip, identity);
+        ink.push_opacity(0.5);
+        ink.fill(&Shape::rect((0., 6., 14.25, 7.)), [255; 4], identity);
+        if !retained {
+            ink.flush().unwrap();
+        }
+        ink.push_opacity(0.5);
+        ink.fill(&Shape::rect((27., 18., 8., 8.)), [255; 4], identity);
+        ink.pop_opacity();
+        ink.pop_opacity();
+        ink.pop_clip();
+
+        if retained {
+            ink.row_end(viewport);
+            ink.begin(viewport.2, viewport.3, 1.);
+            ink.row_draw(1, (0., 0.), viewport);
+        }
+        let image = ink.finish().unwrap();
+        if retained {
+            ink.row_free(1);
+        }
+        image
+    };
+    let fresh = draw(false);
+    let replay = draw(true);
+    for image in [&fresh, &replay] {
+        pixel(image, 1, 8, 0);
+        pixel(image, 2, 8, 96);
+        pixel(image, 6, 8, 128);
+        pixel(image, 14, 8, 32);
+        pixel(image, 15, 8, 0);
+        pixel(image, 24, 16, 0);
+        pixel(image, 31, 23, 64);
+    }
+    assert!(
+        fresh
+            .data()
+            .iter()
+            .zip(replay.data())
+            .all(|(a, b)| a.abs_diff(*b) <= 1),
+        "retained layer differs from the fresh draw"
+    );
+}

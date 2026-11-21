@@ -108,6 +108,17 @@ ${second ? '' : '  state removed = 1\n'}  action bump
       button press=bump testId="bump"
         text "Bump"
       text "${label}" testId="label"
+${second ? '      Other()\n' : ''}      Editor()
+component Editor
+  state note = ""
+  action write(value: string)
+    note = value
+  view
+    input value=note input=write testId="draft"
+component Other
+  state note = "Unrelated"
+  view
+    text note testId="unrelated"
 `;
   writeFileSync(join(dir, 'app.json'), JSON.stringify({ name: 'Replacement', app: { id: 'test.replacement', name: 'Replacement' } }));
   writeFileSync(source, contract('A'));
@@ -122,6 +133,7 @@ ${second ? '' : '  state removed = 1\n'}  action bump
     let before = await read();
     expect(before.generation).toBe(1);
     expect(before.replacement).toBeNull();
+    await page.getByTestId('draft').fill('Piranesi');
     for (const [label, generation] of [['B', 2], ['A', 3], ['reboot', 4]]) {
       await page.getByTestId('bump').click();
       before = await read();
@@ -141,6 +153,8 @@ ${second ? '' : '  state removed = 1\n'}  action bump
       expect(after.epoch).toBeGreaterThanOrEqual(before.epoch);
       expect(after.incarnation).toBe(1);
       expect(after.slots.kept).toBe(before.slots.kept);
+      expect(await page.getByTestId('draft').inputValue()).toBe('Piranesi');
+      if (label === 'B') expect(await page.getByTestId('unrelated').textContent()).toBe('Unrelated');
       if (generation === 2) expect(after.replacement.dropped).toEqual([
         { what: 'state', name: 'retyped', why: 'type changed' },
         { what: 'state', name: 'removed', why: 'no place' },

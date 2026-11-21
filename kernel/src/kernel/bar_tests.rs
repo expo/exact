@@ -954,3 +954,7 @@ fn a_parent_with_a_ratio_and_hairline_borders_keeps_its_content_floor() {
     let k = root(&[], ops);
     assert!(frame(&k, 3).3 > 350.0, "{:?}", frame(&k, 3));
 }
+
+// A scroller beside bars takes them in D14's `reserved` term (D12)
+#[path = "scroll_terms_tests.rs"]
+mod scroll_terms;

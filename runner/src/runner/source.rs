@@ -3,6 +3,21 @@ use crate::request::{Answer, Dispatch, Outcome, Placement, Work};
 use crate::store::Store;
 use exact_plan::{Plan, Value};
 
+/// Selects the resources to refresh after a host announcement.
+#[derive(Clone, Copy)]
+pub enum ResourceChange<'a> {
+    /// Readers watching this topic in their last answer.
+    Topic(&'a str),
+    /// Readers of this source, for every argument list.
+    Source(&'a str),
+}
+
+impl<'a, T: AsRef<str> + ?Sized> From<&'a T> for ResourceChange<'a> {
+    fn from(topic: &'a T) -> Self {
+        Self::Topic(topic.as_ref())
+    }
+}
+
 /// Stops a source's running call from another thread (LLP 1048.000 D10: a
 /// render's deadline). The call ends as a refusal, as one that threw does,
 /// and its resource keeps what it showed. Clones stop the same source.

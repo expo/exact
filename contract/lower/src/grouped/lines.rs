@@ -27,6 +27,7 @@ pub(super) fn stack_of_lines(node: &Node, sheet: Vec<Attr>) -> Node {
             attrs,
             span,
             instance,
+            place,
             ..
         } => Node::Element {
             tag,
@@ -35,6 +36,7 @@ pub(super) fn stack_of_lines(node: &Node, sheet: Vec<Attr>) -> Node {
             children: lines,
             span,
             instance,
+            place,
         },
         other => other,
     }
@@ -51,6 +53,7 @@ pub(super) fn subtitle(node: &Node, padding: Expr) -> Node {
         children,
         span,
         instance,
+        place,
     } = node
     else {
         return node.clone();
@@ -73,6 +76,7 @@ pub(super) fn subtitle(node: &Node, padding: Expr) -> Node {
         children: parts,
         span: at,
         instance: *instance,
+        place: *place,
     }
 }
 

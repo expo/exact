@@ -78,6 +78,8 @@ mod midi;
 mod paint;
 #[path = "paragraph.rs"]
 mod paragraph;
+#[path = "replacement.rs"]
+mod replacement;
 #[path = "root_tabs.rs"]
 mod root_tabs;
 #[cfg(test)]
@@ -189,6 +191,7 @@ impl std::fmt::Display for HostError {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct Mirror {
+    kind: Option<&'static str>,
     props: exact_kernel::SortedMap<&'static str, String>,
     /// The style the presenter last heard, one allocation per text ([`paragraph::StyleTexts`]).
     style: std::rc::Rc<str>,
@@ -352,8 +355,9 @@ pub struct Host<D: DataSource> {
     colors_seen: Option<u64>,
     /// The root font size and the window's modes as a batch last said them (`Host::facts_moved`).
     facts_told: Option<(f64, Vec<(String, String)>)>,
-    /// The navigation roots' tabs as a batch last said them (`Host::root_tabs_moved`).
+    /// The navigation roots' tabs as a batch last said them (`Host::navigation_shapes`).
     root_tabs_told: Option<String>,
+    route_inspectors_told: Vec<(ViewId, exact_runner::RouteInspector)>,
     /// The holds as a batch last said them (`Host::wakelock_moved`, `Host::orientation_moved`, `Host::finish_moved`).
     holds_told: colors::Told,
     /// The top-layer boxes covered while closed (`closed.rs`).
@@ -482,6 +486,7 @@ impl<D: DataSource> Host<D> {
             start_on_frame,
             region,
             None,
+            None,
             links,
             font_hook,
             prepare,
@@ -505,6 +510,7 @@ impl<D: DataSource> Host<D> {
         start_on_frame: bool,
         region: Option<crate::content_region::ContentRegionRegistration>,
         native: Option<crate::content_region::NativeProjectionLimits>,
+        previous: Option<&Self>,
         links: crate::link::Links<D>,
         font_hook: Option<(crate::measure::FontsFn, *mut std::ffi::c_void)>,
         prepare: impl FnOnce(&mut Runner<D>) -> Result<(), HostError>,
@@ -561,18 +567,29 @@ impl<D: DataSource> Host<D> {
         }
         // A display presents its pictures: `presented` waits for the first's.
         let was = exact_runner::page::set_awaits_present(start_on_frame);
-        let runner = Runner::boot_with_delivery_linked(
-            links.runner,
-            links.modules,
-            plan,
-            data,
-            kernel,
-            carried,
-            snapshot,
-            facts,
-            viewport,
-            launch,
-        );
+        let platform = if cfg!(target_os = "macos") {
+            exact_runner::page::Platform::Macos
+        } else if cfg!(target_os = "tvos") {
+            exact_runner::page::Platform::Tvos
+        } else if cfg!(target_os = "watchos") {
+            exact_runner::page::Platform::Watchos
+        } else {
+            exact_runner::page::Platform::Ios
+        };
+        let runner = platform.boot(|| {
+            Runner::boot_with_delivery_linked(
+                links.runner,
+                links.modules,
+                plan,
+                data,
+                kernel,
+                carried,
+                snapshot,
+                facts,
+                viewport,
+                launch,
+            )
+        });
         exact_runner::page::set_awaits_present(was);
         let mut runner = runner.map_err(HostError::Runner)?;
         runner.read_only_store(crate::watch_sync::read_only_names());
@@ -713,6 +730,7 @@ impl<D: DataSource> Host<D> {
             colors_seen: None,
             facts_told: None,
             root_tabs_told: None,
+            route_inspectors_told: Vec::new(),
             holds_told: Default::default(),
             closed: Default::default(),
         };
@@ -722,16 +740,7 @@ impl<D: DataSource> Host<D> {
         host.close_top_layer(&order);
         host.cover_root_tablist();
         host.prepare_flat(&mut batch);
-        let handlers = host.runner.handlers();
-        for id in &order {
-            host.create(*id, handlers.get(id).map_or(&[], Vec::as_slice), &mut batch);
-        }
-        for id in &order {
-            host.emit_children(*id, &mut batch);
-        }
-        host.emit_paragraphs(&mut batch);
-        host.roots = host.runner.roots();
-        batch.roots(&host.roots.clone());
+        host.present_first_tree(previous, &order, &mut batch);
         host.emit_title(&mut batch);
         host.emit_language(&mut batch);
         colors::emit_roles(&mut batch);
@@ -775,6 +784,9 @@ impl<D: DataSource> Host<D> {
             (drag.emit_transforms)(&mut host, &mut batch);
         }
         host.present(&mut batch, true);
+        if let Some(old) = previous {
+            host.finish_replaced_motion(old, &order, &mut batch);
+        }
         let (mut batch, _) = host.resize_rounds(batch, None);
         host.state_onto(&mut batch);
         let batch = host.write(batch, None);

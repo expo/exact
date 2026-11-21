@@ -24,6 +24,8 @@ pub struct Batch {
     /// Deferred store read and data activation still need a retry (LLP 1126.001 WP12).
     pub store_status: Option<(bool, bool)>,
     ops: Vec<String>,
+    /// The first frame updates the native views left by the previous runner.
+    pub(crate) replaces_tree: bool,
     /// The views this batch creates: each starts at its presentation's
     /// identity (`Host::present`).
     created: std::collections::HashSet<u32>,
@@ -92,8 +94,10 @@ pub struct Batch {
     /// changed (`Host::finish_moved`).
     pub must_finish: Option<bool>,
     /// Every navigation root's tabs, a JSON array, when they changed
-    /// (`Host::root_tabs_moved`, LLP 1115.001 D11).
+    /// (`Host::navigation_shapes`, LLP 1115.001 D11).
     pub root_tabs: Option<String>,
+    /// Each Mac route’s full-height trailing aside, when those panes change.
+    pub route_inspectors: Option<String>,
 }
 
 pub use exact_runner::json::quote;
@@ -446,6 +450,7 @@ impl Batch {
             && self.orientationlock.is_none()
             && self.must_finish.is_none()
             && self.root_tabs.is_none()
+            && self.route_inspectors.is_none()
     }
 
     /// Mounted collection metadata from the runner's common JSON array writer.
@@ -860,6 +865,12 @@ impl Batch {
         self.ops.push(s);
     }
 
+    pub(crate) fn prepend(&mut self, other: Self) {
+        let mut ops = other.ops;
+        ops.append(&mut self.ops);
+        self.ops = ops;
+    }
+
     /// This batch's ops, for another batch to carry (`Host::ending`).
     pub(crate) fn into_ops(self) -> Vec<String> {
         self.ops
@@ -1168,6 +1179,9 @@ impl Batch {
         if self.canvas_owed {
             s.push_str(",\"canvasOwed\":true");
         }
+        if self.replaces_tree {
+            s.push_str(",\"replacesTree\":true");
+        }
         if self.layout_provisional {
             s.push_str(",\"layoutProvisional\":true");
         }
@@ -1191,6 +1205,9 @@ impl Batch {
         }
         if let Some(must) = self.must_finish {
             let _ = write!(s, ",\"mustFinish\":{must}");
+        }
+        if let Some(inspectors) = &self.route_inspectors {
+            let _ = write!(s, ",\"routeInspectors\":{inspectors}");
         }
         if let Some(tabs) = &self.root_tabs {
             let _ = write!(s, ",\"rootTabs\":{tabs}");

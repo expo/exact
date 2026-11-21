@@ -50,6 +50,42 @@ fn boot(src: &str) -> Runner<NoData> {
     .unwrap()
 }
 
+#[test]
+fn each_runner_keeps_its_host_through_page_changes_and_nested_boots() {
+    use exact_runner::page::Platform;
+    let src = r#"shape Page
+  platform: string
+  onLine: bool
+component App
+  resource page = exactPage() as shape Page
+  view
+    text page.platform
+"#;
+    let (mut browser, terminal) = Platform::Web.boot(|| {
+        let terminal = Platform::Terminal.boot(|| boot(src));
+        (boot(src), terminal)
+    });
+    browser
+        .set_page(Page {
+            on_line: false,
+            ..Page::default()
+        })
+        .unwrap();
+    let answer = |r: &Runner<NoData>| r.resource("page").cloned().unwrap();
+    assert_eq!(
+        answer(&browser),
+        Value::record(vec![Value::str("web"), Value::Bool(false)])
+    );
+    assert_eq!(
+        answer(&terminal),
+        Value::record(vec![Value::str("terminal"), Value::Bool(true)])
+    );
+    assert_eq!(
+        answer(&boot(src)),
+        Value::record(vec![Value::str("headless"), Value::Bool(true)])
+    );
+}
+
 /// Moves the runner's clock `ms` on (`advance` takes the time itself).
 fn wait(r: &mut Runner<NoData>, clock: &mut f64, ms: f64) {
     *clock += ms;

@@ -8,8 +8,8 @@
 //
 //   bun semantics/difftest/js/drive.mjs <batch.json>
 //
-// The batch: { compiler, work, cases: [{ file, events, hostSources: [name…],
-// answers: [[source, [arg…], answer]…], facts: {resource: value} }] }, every
+// The batch: { compiler, work, cases: [{ file, events, hostSources: [name…], launchAnswers?: [name…],
+// answers: [[revision, source, [arg…], answer]…], facts: {resource: value} }] }, every
 // number as {"$": "<16 hex digits of IEEE bits>"}. Prints one JSON line per
 // case: {lines} (the observation), {outside} (exact-web-js refused the
 // program: outside the JS target) or {error} (the driver failed).
@@ -58,9 +58,16 @@ const untyped = v => typeof v === 'number' ? number(v) : typeof v === 'string' ?
 const probe = createDocument();
 const ElementProto = Object.getPrototypeOf(probe.createElement('div'));
 const NodeProto = Object.getPrototypeOf(ElementProto);
+const captureListener = options => options === true || options?.capture === true;
 Object.assign(NodeProto, {
-  addEventListener(type, f) { ((this.$listeners ??= {})[type] ??= []).push(f); },
-  removeEventListener(type, f) { const l = this.$listeners?.[type]; if (l && l.includes(f)) l.splice(l.indexOf(f), 1); },
+  addEventListener(type, f, options) {
+    const table = captureListener(options) ? (this.$captures ??= {}) : (this.$listeners ??= {});
+    (table[type] ??= []).push(f);
+  },
+  removeEventListener(type, f, options) {
+    const listeners = (captureListener(options) ? this.$captures : this.$listeners)?.[type];
+    if (listeners?.includes(f)) listeners.splice(listeners.indexOf(f), 1);
+  },
   getElementsByClassName(names) {
     const classes = names.split(/\s+/).filter(Boolean), found = [];
     const walk = n => { for (const c of n.childNodes) { if (c.nodeType === 1 && classes.every(k => c.classList.contains(k))) found.push(c); walk(c); } };
@@ -135,6 +142,22 @@ function datetime(e, text) {
   if (kind === 'time' && lo !== null && hi !== null && lo > hi) return !(n < lo && n > hi);
   return !(lo !== null && n < lo) && !(hi !== null && n > hi);
 }
+function fireKey(target, type, key) {
+  const path = [];
+  for (let e = target; e; e = e.parentNode) path.push(e);
+  const event = {
+    ...key, type, target, defaultPrevented: false, composedPath: () => path,
+    preventDefault() { this.defaultPrevented = true; },
+    stopPropagation() { this.$stopped = true; },
+  };
+  for (const capture of [true, false]) {
+    for (const e of capture ? [...path].reverse() : path) {
+      event.currentTarget = e;
+      for (const f of [...((capture ? e.$captures : e.$listeners)?.[type] ?? [])]) f(event);
+      if (event.$stopped) return;
+    }
+  }
+}
 const fire = (e, type) => { for (const f of [...(e.$listeners?.[type] ?? [])]) f({ type, target: e, currentTarget: e, composedPath() { const path = []; for (let n = e; n; n = n.parentNode) path.push(n); return path; }, stopPropagation() {}, preventDefault() {}, key: '' }); };
 
 // ---------------------------------------------------------------- the runtime
@@ -168,8 +191,8 @@ function entry(dir) {
     "import app from './app.js';",
     ...(existsSync(flag) ? [`import { install as sounds } from './sounds.js'; sounds(${readFileSync(flag, 'utf8')});`] : []),
     "import names, { types } from './names.js';",
-    "import { data, journal, clock, advance, Hosts, inflight, Mutations, Sounds } from './rt.js';",
-    'globalThis.__drive = { app, names, types, data, journal, clock, advance, Hosts, inflight, Mutations, Sounds };',
+    "import { data, journal, clock, advance, Hosts, inflight, Mutations, Sounds, Resources, sourceChanged, commit } from './rt.js';",
+    'globalThis.__drive = { app, names, types, data, journal, clock, advance, Hosts, inflight, Mutations, Sounds, Resources, sourceChanged, commit };',
   ].join('\n'));
 }
 
@@ -232,29 +255,38 @@ async function drive(code, c, hostSources) {
   };
   ctx.__trig = { sin: x => answer('sin', x), cos: x => answer('cos', x) };
   vm.runInContext(code, ctx, { filename: 'app.js' });
-  const { app, names, types, data, journal, clock, advance, Hosts, Mutations, Sounds } = ctx.__drive;
+  const { app, names, types, data, journal, clock, advance, Hosts, Mutations, Sounds, Resources, sourceChanged, commit } = ctx.__drive;
   const notes = [];
   // The runner's transcript answers every call; one it never made is a divergence.
-  const answers = new Map(c.answers.map(([source, args, answer]) => [source + key(decode(args)), answer]));
+  const revisions = new Map((c.launchAnswers ?? []).map(source => [source, 0]));
+  const answerKey = (revision, source, args) => JSON.stringify([revision, source, key(args)]);
+  const answers = new Map(c.answers.map(([revision, source, args, answer]) => [answerKey(revision, source, decode(args)), answer]));
   const unanswered = (source, args) => {
     notes.push(`# js: the oracle has no answer for ${source}${key(args)}`);
     const e = new Error(`the oracle has no answer for ${source}`); e.refuse = true; throw e;
   };
   data.answer = (source, args) => {
-    const k = source + key(args);
+    const k = answerKey(revisions.get(source) ?? 0, source, args);
     return answers.has(k) ? { v: decode(answers.get(k)) } : unanswered(source, args);
   };
   // The host's facts (viewport, page, time…) as the runner answered them at
   // boot: the module's own readers of the page (facts.js) assign in vain.
   data.reserved = {};
   for (const s of new Set(hostSources)) {
-    const f = (source, args, name) => name in c.facts ? decode(c.facts[name]) : unanswered(source, args);
+    const f = (source, args, name) => revisions.has(source) ? data.answer(source, args).v
+      : name in c.facts ? decode(c.facts[name]) : unanswered(source, args);
     Object.defineProperty(data.reserved, s, { get: () => f, set() {}, enumerable: true });
   }
   // Every command, in order: the runtime's own and any it does not carry.
   let commands = [];
   const record = name => (...args) => { commands.push(`command ${name}${args.map(a => ' ' + untyped(a)).join('')}`); };
-  for (const k of Object.keys(Hosts)) Hosts[k] = record(k);
+  // A keyboard command acts on the event currently being delivered as well as appearing in the trace.
+  const eventCommand = name => name === 'stopPropagation' || name === 'preventDefault';
+  const recording = (name, f) => {
+    const log = record(name);
+    return eventCommand(name) ? (...args) => { log(...args); return f(...args); } : log;
+  };
+  for (const k of Object.keys(Hosts)) Hosts[k] = recording(k, Hosts[k]);
   // `setMode` is the runtime's own, as the runner's (LLP 1121 D5): no host is
   // told, and the window's mode selects presentation, which no line shows.
   Hosts.setMode = () => {};
@@ -283,8 +315,10 @@ async function drive(code, c, hostSources) {
   });
   Object.setPrototypeOf(Hosts, new Proxy({}, {
     get: (_, name) => typeof name === 'string' ? record(name) : undefined,
-    // Commands linked at boot must keep the recorder instead of running their host effects.
-    set: () => true,
+    set: (_, name, f) => {
+      if (eventCommand(name)) Object.defineProperty(Hosts, name, { value: recording(name, f), configurable: true, writable: true });
+      return true;
+    },
   }));
 
   const out = ['== boot'];
@@ -372,6 +406,20 @@ async function drive(code, c, hostSources) {
       // deliver that press, so it is outside this host comparison.
       if (e?.hasAttribute('disabled')) return { outside: 'a press on a disabled control: the runner dispatches it, the browser does not' };
       if (!e || !e.$listeners?.click?.length) refused = true; else fire(e, 'click');
+    } else if (ev.key !== undefined) {
+      out.push(`== ${ev.label}`);
+      const e = find(ev.target);
+      if (!e) refused = true;
+      else {
+        // Each change yields for the host to apply it. Bound those yields by the scheduler's fire limit.
+        for (let yields = 0; advance(clock.now) === true; yields++) {
+          if (yields >= 4096) return { outside: 'change tasks keep the key pending at the timer fire limit' };
+        }
+        const down = e.isConnected ? e : root.firstElementChild;
+        if (down) fireKey(down, 'keydown', ev.key[0]);
+        const release = e.isConnected ? e : root.firstElementChild;
+        if (release) fireKey(release, 'keyup', ev.key[1]);
+      }
     } else if (ev.type !== undefined) {
       const [id, text] = ev.type;
       out.push(`== type ${quote(id)} ${quote(text)}`);
@@ -390,6 +438,11 @@ async function drive(code, c, hostSources) {
         && (!options || options.some(o => !o.hasAttribute('disabled') && optionValue(o) === text));
       const event = e?.$listeners?.input?.length ? 'input' : 'change';
       if (!deliverable || !e.$listeners?.[event]?.length) refused = true; else { e.value = text; fire(e, event); }
+    } else if (ev.answer !== undefined) {
+      out.push(`== ${ev.label}`);
+      revisions.set(ev.answer, (revisions.get(ev.answer) ?? 0) + 1);
+      const readers = Resources.filter(r => !r.gone && r.source === ev.answer);
+      if (readers.length) commit(() => { for (const r of readers) sourceChanged(r, ev.answer); }, 'changed');
     } else if (ev.land) {
       out.push('== land');
       advance(clock.now, false, undefined, false);

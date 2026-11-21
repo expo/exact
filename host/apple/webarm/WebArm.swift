@@ -1355,7 +1355,11 @@ public func exactWebSetConfiguring(_ handle: UnsafeMutableRawPointer?, _ hook: C
 
 @_cdecl("exact_web_set_document")
 public func exactWebSetDocument(_ handle: UnsafeMutableRawPointer?, _ bytes: UnsafePointer<UInt8>?, _ length: UInt32, _ present: UInt32) {
-    arm(handle)?.suppliedDocument = present == 0 ? nil : Data(UnsafeBufferPointer(start: bytes, count: Int(length)))
+    guard let frame = arm(handle) else { return }
+    frame.suppliedDocument = present == 0 ? nil : Data(UnsafeBufferPointer(start: bytes, count: Int(length)))
+    // The host follows the document with its URL. A new publication can
+    // replace both the document and its subresources under the same URL.
+    frame.srcInitialized = false
 }
 
 /// Before `exact_web_set_src`: `{"app:/cache/a.pdf": "/…/cache"}`, each

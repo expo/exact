@@ -740,9 +740,11 @@ at bounded uses
 ([A feature's requests](#a-features-requests)). A child used under `for` owns row state keyed to that row's identity.
 Stable keys matter when content is inserted, removed, filtered, or reordered.
 A child's derive is compiled once per component use and evaluated at each read
-in that instance's frame. Non-atomic prop and inject arguments share that
-representation. These calculations use the reader's list and call budgets;
-a trap belongs to the reader. They are not cached. A root derive evaluates
+in that instance's frame. A computed prop or inject argument shares that
+representation. Each read uses the reader's list and call budgets and can
+trap there. A literal stays inline, so the web compiler can fold
+`size == "sm"` when a component takes the enum argument `size="sm"`.
+A root derive evaluates
 once per settlement, so put a calculation there when its result should be
 shared across readers. Action-body reads, action calls and `fn` calls still
 expand in place. The web build reports its entry's bytes and each component's
@@ -1836,16 +1838,24 @@ fixture does next: `{"action": "expire-access", "profile": "spec"}`, and
 returns once the app's token request is held, and `release-token` lets it
 go), `deny-authorize`; `fixture.ts`'s `control` lists them all.
 
+The fixture app can exercise a signed-in screen with a fixed backend answer.
+`authorize` completes the nonce-bound code exchange. `reload` reopens the
+app with the session saved in this test's scratch store.
+
 ```contract-test
-test "signs in, shows the person, and is still signed in after a relaunch"
-  request POST "/control" {"action": "reset"}
+test "loads an authenticated screen from a saved OIDC session"
+  answer fetch "http://127.0.0.1:4400/p/spec/api/me" with 200 {"name":"Offline reader"}
+  request POST "/control" {"action":"reset"}
+  clock data
   tap "sign-in"
   authorize
   clock data
-  expect text "name" == "Ada Lovelace"
+  expect text "status" == "Signed in"
+  expect text "name" == "Offline reader"
   reload
   clock data
   expect text "status" == "Signed in"
+  expect text "name" == "Offline reader"
 ```
 
 #### HTTPS callbacks
@@ -4257,6 +4267,11 @@ main navigationKey=`${top(nav).id}` navigationBack="close" navigate=follow displ
   paints (on iOS only when `scripts/agent.mjs` runs alone: `exact.mjs` shows UIKit's
   bars); `--chrome platform` on `macos` shows the sidebar, and a tap naming a tab
   presses its row (`native: "sidebar-row"`).
+- For a footer pinned below the scrolling tabs, put the root tablist and a `footer`
+  together as the only children of a `nav` directly inside the navigation root. The Mac,
+  iPadOS 18 and later, and the wide web layout show the footer in the sidebar. It can
+  contain an account button or other controls. The bottom bar hides the footer on iPhone,
+  Android and the narrow web layout. An app-drawn tablist keeps its footer in the page.
 - On an iPad (iPadOS 18 and later) the same root tablist, placed as above, is UIKit's
   sidebar-adaptable tab bar (`UITabBarController.mode = .tabSidebar`): a sidebar of the
   tabs where the window is regular-width and wide enough (an iPad in landscape), the
@@ -4304,6 +4319,9 @@ main navigationKey=`${top(nav).id}` navigationBack="close" navigate=follow displ
   detail the window's title and subtitle are the detail's, as in System Settings, and
   the list's heading stays over its rows; beside a sidebar (three columns) the list's
   heading is the title and the detail's stays in its pane, as in Mail.
+- In the Mac's list column, a sectioned list that keeps its rows mounted uses
+  an inset AppKit table. Each section header is a group row. A link in the
+  section body selects its row and opens the detail. The footer has no table row.
 - On the Mac a window toolbar the app declares (`row role="toolbar"
   toolbarPlacement="window"` of action buttons and at most one heading) has Customize
   Toolbar when every button in it has an `id` of its own: the ids are the items'
@@ -5099,7 +5117,9 @@ skipped (except an id-less hit outside its named ancestor's box includes that
 ancestor once). `querySelectorAll("[data-paint~=\"accent\"]")` lists the own ids of
 mounted, displayed, non-inert nodes bearing the declared `data-paint` word in
 tree order. Covered routes and unselected tabs do not answer; a split list
-answers with its detail where the host presents it (the web at desktop widths).
+answers with its detail where the host shows them side by side (the web at desktop
+widths, and iOS where UIKit's split view shows both columns; over the detail only the
+list answers, LLP 1127 D8, and `state window.split` says which shows).
 Closed popovers and dialogs do not answer; open ones do. Point reads skip inert
 subtrees and use the presenter's placement for open top-layer content. Point reads
 also name the front modal dialog or presented route where its native backdrop accepts input,
@@ -5429,6 +5449,14 @@ screen is never `high`, nor is any iOS or Android device natively. A game's rend
 read it to offer a quality setting. A native host answers its GPU module's tier
 once the module loads (`high` before it). Under the agent it is `high` from launch, and
 `prefer gpu-tier low` substitutes it and remakes each world's renderer at its rung.
+`exactPage().platform` identifies the host from the first frame. Declare
+`platform: string` or an enum over the following values in the page resource's shape.
+The native hosts report
+`ios`, `macos`, `tvos`, `watchos`, `android`, `linux` or `windows`.
+A browser or server-rendered web page reports `web`, a terminal app reports
+`terminal`, and a runner booted without a host reports `headless`. A browser
+on an Android phone therefore reports `web`.
+
 `exactPage` answers `visibilityState`, `frozen`, `onLine`, `canShare`,
 `canShareFiles` and `canSharePictures` (whether `share(files=…)` takes
 `app:/` files and an element's `"#id"`; the web never takes a picture),
@@ -6233,7 +6261,7 @@ application, so its local event monitors see them). Other carriers answer
 `delivery: "unsupported"` for forms they cannot carry; Firefox and WebKit carry
 clicks and wheels at a point, including wheels with modifiers. A word a form does
 not use is refused by name. `tap stage wheel 0 -20 modifiers Control`
-is a pinch's wheel; `tap world drop a.board` drags a file in (web, macOS). Plain canvas taps and held contacts are
+is a pinch's wheel; `tap world drop a.board` drags a file in (web, macOS, Windows). Plain canvas taps and held contacts are
 fingers, so their platform pointer identity and retained press history can differ
 from a mouse's; use the intended physical input when comparing game saves.
 
@@ -6928,10 +6956,10 @@ A runtime choice with a bundled-font literal is refused so it cannot silently
 select an installed face with the same name; write bundled choices as literals.
 
 A `text` with `selectionchange=act` hears the reader's real text selection
-on the web, macOS and iOS: `action act(s: Selection)` gets `s.text`, `s.start` and
+on the web, macOS, iOS, Android and Linux. `action act(s: Selection)` gets `s.text`, `s.start` and
 `s.end` in the node's own text ("" at 0, 0 when nothing there is selected).
-On web and macOS, `s.rects` is a list of `Geometry` snapshots for the selected
-fragments in viewport space; empty when cleared (and on iOS).
+On web, macOS and Linux, `s.rects` is a list of `Geometry` snapshots for the selected
+fragments in viewport space. It is empty when cleared. iOS and Android report an empty list.
 `removeAllRanges()` clears the reader selection, and
 `setSelectionRange(id, start, end[, direction])` selects a `text` on web and
 macOS using source UTF-16 offsets. Both report changed parts through
@@ -6943,7 +6971,7 @@ long press or a double tap selects a word of text its author made selectable
 selected (under `--touch platform`, `tap <id> drag 0 0 press 900` is a real
 long press).
 
-For a plain text field on the **web, macOS, iOS and Linux**, `setRangeText(id, text[, start,
+For a plain text field on the **web, macOS, iOS, Linux, Windows and Android**, `setRangeText(id, text[, start,
 end[, selectionMode]])` replaces its selection or a UTF-16 range. Selection
 is preserved by default (`select`, `start`, `end` are the other modes).
 Exact deliberately fires one `input` so its action can update the bound
@@ -6953,7 +6981,10 @@ type also covers hatch replacements and browser spelling
 corrections, so it does not uniquely identify this command. `select` follows
 input only when the selection changes. URL inputs trim surrounding ASCII
 whitespace. Markdown editors on web and Apple use source offsets and add one
-undo step. Windows, Android and terminal do not support it yet. Field
+undo step. On Linux, Windows and Android, range replacement requires a plain
+field. To edit and preview Markdown there, bind a plain textarea and a
+`text markup="markdown"` reader to the same string. The terminal host
+refuses `setRangeText`. Field
 `selectionchange` reports caret moves through `InputEvent`, and
 `beforeinput` reports the proposed edit's `inputType` and optional `data`.
 Call `preventDefault()` to reject a cancelable edit; composition events
@@ -7245,9 +7276,14 @@ paragraph (one selection is one paragraph there). An inline run that says
 `all` is selectable in text that is not (a label, a `header`), alone, on
 all three. Text that presses (`press=`) still presses on each click or
 tap; on macOS it does not select, and on iOS a tap while it holds a
-selection clears the selection, as in a text view. Linux, Windows, Android
-and tvOS have no text
-selection, so `text` and `all` change nothing there. `contain` is refused by
+selection clears the selection, as in a text view. On Android a long press on
+`user-select="text"` selects a word. The handles adjust the selection within
+one paragraph, and the floating toolbar offers Copy, Share and Select all.
+An inline or enclosing `all` selects its text as a unit. Dragging the paragraph
+away from a handle scrolls its container. On Linux, drag across opted-in text,
+double-click a word, or triple-click a paragraph. One click selects a run marked `all`.
+Ctrl+C copies the visible text when the host supplies a clipboard.
+Windows and tvOS have no text selection, so `text` and `all` change nothing there. `contain` is refused by
 name: no native host has it. These rows take literals
 or choices of literals, so unsupported runtime values cannot bypass the check.
 

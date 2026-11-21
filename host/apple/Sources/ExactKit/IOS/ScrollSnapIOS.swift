@@ -13,7 +13,7 @@ extension NodeView {
         defer {
             if handlers.contains("scrolldragend"), velocity.x.isFinite, velocity.y.isFinite {
                 let rest = targetContentOffset.pointee
-                presenter?.scrollDrag(id, (velocity, CGPoint(x: rest.x, y: rest.y + scrollTopInset(scrollView))))
+                presenter?.scrollDrag(id, (velocity, CGPoint(x: rest.x + scrollLeftInset(scrollView), y: rest.y + scrollTopInset(scrollView))))
             }
         }
         #if os(iOS)
@@ -84,7 +84,7 @@ extension NodeView {
                                  drag: (dragStart(scrollView), velocity))
         // The rule's rest is recorded either way, for a re-snap after layout (`resnap`).
         guard handlers.contains("scrolldragend") else { return }
-        presenter?.scrollDrag(id, (velocity, CGPoint(x: rest.x, y: rest.y + scrollTopInset(scrollView))))
+        presenter?.scrollDrag(id, (velocity, CGPoint(x: rest.x + scrollLeftInset(scrollView), y: rest.y + scrollTopInset(scrollView))))
         #endif
     }
 

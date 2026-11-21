@@ -92,6 +92,8 @@ pub struct NodeArena {
     /// The kind and font size each standing mark report was made under (`Kernel::mark_withdrawn`).
     pub(crate) mark_reports: IdMap<u32, (crate::ControlKind, u32)>,
     pub(crate) bar_symbols: Vec<(u32, f32)>,
+    /// Column widths chosen in the window, by the header cell that owns them.
+    pub(crate) table_column_widths: IdMap<u32, f32>,
     /// Slots that are `position: sticky` (LLP 1083 D3).
     pub(crate) sticky_slots: SlotSet,
     /// Slots whose node carries `navigationBack`, attached or not (bars.rs).
@@ -208,6 +210,7 @@ impl Clone for NodeArena {
             mark_sizes: self.mark_sizes.clone(),
             mark_reports: self.mark_reports.clone(),
             bar_symbols: self.bar_symbols.clone(),
+            table_column_widths: self.table_column_widths.clone(),
             sticky_slots: self.sticky_slots.clone(),
             navigation_slots: self.navigation_slots.clone(),
             top_layer_slots: self.top_layer_slots.clone(),
@@ -307,6 +310,7 @@ impl NodeArena {
         self.mark_sizes.clear();
         self.mark_reports.clear();
         self.bar_symbols.clear();
+        self.table_column_widths.clear();
         self.sticky_slots.clear();
         self.top_layer_slots.clear();
         self.navigation_slots.clear();
@@ -961,6 +965,7 @@ impl NodeArena {
         self.bar_symbols.retain(|(s, _)| *s != slot);
         self.field_content.remove(&slot);
         self.mark_reports.remove(&slot);
+        self.table_column_widths.remove(&slot);
         self.exclusion_slots.remove(slot);
         self.reserving.remove(slot);
         self.ignoring.remove(slot);
@@ -1473,28 +1478,5 @@ fn bump(counts: &mut Vec<u32>, index: usize, up: bool) {
         counts[index] += 1;
     } else {
         counts[index] = counts[index].saturating_sub(1);
-    }
-}
-
-impl NodeArena {
-    /// Mark the colours its styles hold: the shared table's, which every
-    /// node's style is one of, and the control and document styles.
-    pub(crate) fn wide_colors(&mut self, m: &mut crate::style::wide::WideMark) {
-        use crate::style::wide::Colors;
-        self.shared.wide_colors(m);
-        if let Some(control) = &self.control_styles {
-            control.colors(m);
-        }
-        self.document_style.colors(m);
-    }
-
-    /// The same, visiting every style (for a clone, once).
-    fn wide_colors_shared(&self, m: &mut crate::style::wide::WideMark) {
-        use crate::style::wide::Colors;
-        self.shared.visit(m);
-        if let Some(control) = &self.control_styles {
-            control.colors(m);
-        }
-        self.document_style.colors(m);
     }
 }

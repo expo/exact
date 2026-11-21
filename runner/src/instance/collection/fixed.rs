@@ -66,7 +66,7 @@ pub(super) fn create(
         region,
         Some(Fixed {
             split,
-            views: [u.ids.fresh(), u.ids.fresh()],
+            views: [u.ids.fresh()?, u.ids.fresh()?],
             roots: [roots_of(&children[..split]), roots_of(&children[split..])],
             trail_hidden: true,
             authored_exclusion: authored_exclusion(u, &children[split..]),

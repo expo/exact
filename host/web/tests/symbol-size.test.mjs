@@ -64,7 +64,7 @@ const content = `<div style="font-size:17px;display:flex;flex-direction:column;a
   <div style="display:flex">${['near-a', 'near-b'].map((id) => button(id, role(`${id}-i`, 'add'), 'width:20px;height:20px', 'data-exact-said="width height"')).join('')}</div>
   <div navigationPresentation="modal" style="visibility:hidden"><header>${button('word', role('word-i', 'add'), 'width:50px;height:30px', 'data-exact-said="width height" aria-label="Discard everything"')}${button('titled-word', role('titled-word-i', 'add') + title('Discard'), 'width:120px;height:30px', 'data-exact-said="width height" aria-label="Discard everything"')}</header></div>
   ${twins('bar', (id, image) => `<div role="tablist" style="display:flex;width:200px">${tab(id, image(`${id}-i`, 'home'))}</div>`)}
-  ${twins('side', (id, image) => `<div data-exact-sidebar style="display:flex"><div role="tablist" style="display:flex;flex-direction:column;width:200px">${tab(id, image(`${id}-i`, 'home'))}</div></div>`)}
+  ${twins('side', (id, image) => `<div data-exact-sidebar style="display:flex"><div data-exact-sidebar-tabs role="tablist" style="display:flex;flex-direction:column;width:200px">${tab(id, image(`${id}-i`, 'home'))}</div></div>`)}
   <div role="tablist" style="display:flex">${button('segment', role('segment-i', 'home') + title('Home', ''), '', 'role="tab" aria-selected="false"')}</div>
   <div role="radiogroup" style="display:flex">${button('radio', role('radio-i', 'home') + title('Home', ''), '', 'role="radio" aria-checked="false"')}</div>
   <div role="menu">${button('menu-row', role('menu-row-i', 'home') + title('Home', ''))}</div><div data-exact-chooser>${button('chooser-row', role('chooser-row-i', 'home') + title('Home', ''), '', 'data-exact-on="press"')}</div>

@@ -14,6 +14,7 @@ component TerrainFixture
   state budget = "deadline"
   state draw = "on"
   state pool = "off"
+  state jobs = "off"
   resource hud = exactSurface("world") as shape Hud
   action setRadius(value: string)
     radius = value
@@ -37,12 +38,14 @@ component TerrainFixture
     draw = value
   action setPool(value: string)
     pool = value
+  action setJobs(value: string)
+    jobs = value
   action play
     playing = true
   view
     main width="100%" height="100%"
       if playing
-        canvas surface=world(radius=radius, move=movement, light=light, edits=edits, inflight=inflight, compare=compare, vertex=vertex, blend=blend, budget=budget, draw=draw, pool=pool) testId="world" width="100%" height="100%" position="relative"
+        canvas surface=world(radius=radius, move=movement, light=light, edits=edits, inflight=inflight, compare=compare, vertex=vertex, blend=blend, budget=budget, draw=draw, pool=pool, jobs=jobs) testId="world" width="100%" height="100%" position="relative"
           if !hud.presented && radius == "smoke" && movement == "stand" && light == "0" && edits == "0" && inflight == "discard" && compare == "off" && vertex == "12" && blend == "off" && budget == "deadline" && draw == "on" && pool == "off"
             column position="absolute" inset=0 align-items="center" justify-content="center" background-color="-exact-background"
               text "Preparing terrain…" testId="terrain-pending"
@@ -81,5 +84,8 @@ component TerrainFixture
           row gap=8 align-items="center"
             text "Pool (off, on)"
             input value=pool input=setPool testId="pool" aria-label="Pool (off, on)" width=120
+          row gap=8 align-items="center"
+            text "Jobs (off, on)"
+            input value=jobs input=setJobs testId="jobs" aria-label="Jobs (off, on)" width=120
           button press=play testId="play"
             text "Show terrain"

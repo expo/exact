@@ -542,7 +542,7 @@ extension Agent {
                         // Return the down reply first. Common-mode blocks let
                         // the agent's next request run inside AppKit tracking.
                         CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
-                            NSApp.sendEvent(e)
+                            ExactAgentWindow.sendPointerEvent(e)
                         }
                         CFRunLoopWakeUp(CFRunLoopGetMain())
                     } else {
@@ -557,7 +557,7 @@ extension Agent {
                         }
                     }
                 } else {
-                    NSApp.sendEvent(e)
+                    ExactAgentWindow.sendPointerEvent(e)
                 }
             }
         }
@@ -749,12 +749,11 @@ extension Agent {
         // LLP 1115.002 D7): the point is that window's, and it may stand
         // outside the viewport, as a popover does.
         let page = clip.window, apart = page != nil && win !== page
-        // A node in the detail's pane of a split (LLP 1115.002 D4) stands
-        // beside the viewport, in its window: what shows of it is in its pane.
-        let port: NSView = presenter.navigation.stackSplit.pane(holding: v) ?? clip
+        // An authored subtree mounted beside the page is reachable within its own pane.
+        let port: NSView = presenter.blocks.pagePane(holding: v) ?? clip
         if req["wheel"] == nil, !apart,
            !port.bounds.contains(port.convert(p, from: nil)) {
-            return ["error": "tap #\(v.id): its middle is outside the \(port === clip ? "viewport" : "detail's pane"); scroll it into view first"]
+            return ["error": "tap #\(v.id): its middle is outside the \(port === clip ? "viewport" : "pane"); scroll it into view first"]
         }
         if req["hover"] as? Bool == true {
             // The pointer rests here until the next hover: a layout that moves
@@ -856,7 +855,7 @@ extension Agent {
                 return ["error": "tap #\(v.id): #\(cover.id) (\(cover.layoutPosition)) covers its middle, and no scroll clears it", "covered": Int(cover.id)]
             }
             let window = { [self] (q: CGPoint) in pointerPoint(q, in: win) }
-            switch Agent.addressedAim(v, middle: center, area: apart ? b : b.intersection(CGRect(origin: .zero, size: clip.bounds.size)), landsOutside: { [self] q in landing(at: window(q), in: win) }, reach: { q in pressReach(v, at: window(q), in: win) }) {
+            switch Agent.addressedAim(v, middle: center, area: apart ? b : b.intersection(port === clip ? CGRect(origin: .zero, size: clip.bounds.size) : box(port)), landsOutside: { [self] q in landing(at: window(q), in: win) }, reach: { q in pressReach(v, at: window(q), in: win) }) {
             case .refused(let refusal): return refusal.reply
             case .at(let q, let middle):
                 if let middle { avoided = middle; p = window(q); at = [Agent.r2(q.x), Agent.r2(q.y)] }
@@ -895,14 +894,14 @@ extension Agent {
             presenter.menus.pointer(down)
             // Through the application, as a hand's click comes: its local
             // monitors see it, then the window (#107).
-            NSApp.sendEvent(down)
+            ExactAgentWindow.sendPointerEvent(down)
             // The queue's wrapper identifies the release, but its window location
             // is re-derived from the window server's and lands elsewhere by the
             // window's screen offset: a pointer tap pressed down and released
             // outside its button. Send this click's own release.
             presenter.menus.pointer(up)
             if release.takeQueued(from: NSApp) != nil {
-                NSApp.sendEvent(up)
+                ExactAgentWindow.sendPointerEvent(up)
             }
         }
         var reply: [String: Any] = ["tapped": Int(v.id), "at": at, "delivery": "platform"]
@@ -1274,14 +1273,14 @@ extension Agent {
             case let .success(capture):
                 picture = capture
             case let .failure(error):
-                picture = Capture.withGuests(of: [session]) { Capture.picture(of: v) }
+                picture = Capture.withGuests(of: [session]) { Capture.picture(of: v, flipped: v.isFlipped) }
                 captureNote = "glass was not composited: \(error.message); the viewport layer tree was used"
             }
         } else {
-            picture = Capture.withGuests(of: [session]) { Capture.picture(of: v) }
+            picture = Capture.withGuests(of: [session]) { Capture.picture(of: v, flipped: v.isFlipped) }
         }
         let area = presenter.navigation.stackSplit.agentCaptureArea
-        if presenter.navigation.stackSplit.active, let full = picture, let image = full.cgImage {
+        if presenter.navigation.stackSplit.active || presenter.navigation.stackSplit.hasInspector, let full = picture, let image = full.cgImage {
             let scale = CGFloat(full.pixelsWide) / v.bounds.width
             picture = image.cropping(to: area.applying(CGAffineTransform(scaleX: scale, y: scale))).map(NSBitmapImageRep.init(cgImage:))
             picture?.size = area.size
@@ -1347,10 +1346,23 @@ extension Agent {
     }
 }
 
-/// WebKit reads this public AppKit property when deciding whether to run a
-/// page's frames and timers. At the driver's reserved level, a covered window
-/// and its sheets still have live pages; their window-server order never changes.
 open class ExactAgentWindow: NSWindow {
+    private static weak var pointerWindow: NSWindow?
+
+    /// An inactive process cannot make its window key. AppKit checks the target
+    /// window's key state when a native table receives a primary button event.
+    fileprivate static func sendPointerEvent(_ event: NSEvent) {
+        let previous = pointerWindow
+        pointerWindow = NSApp.isActive ? nil : event.window
+        defer { pointerWindow = previous }
+        NSApp.sendEvent(event)
+    }
+
+    public override var isKeyWindow: Bool { self === Self.pointerWindow || super.isKeyWindow }
+
+    /// WebKit reads this public AppKit property when deciding whether to run a
+    /// page's frames and timers. At the driver's reserved level, a covered window
+    /// and its sheets still have live pages; their window-server order never changes.
     public override var occlusionState: NSWindow.OcclusionState {
         let actual = super.occlusionState
         var parent: NSWindow = self

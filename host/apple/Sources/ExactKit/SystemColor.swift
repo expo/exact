@@ -381,13 +381,6 @@ extension NodeView {
         authoredLine.lazy.map { UIView.TintAdjustmentMode($0.style["tint_adjustment"]) }.first { $0 != .automatic } ?? .automatic
     }
 
-    /// This node and those above it in the authored tree (`Presenter.authoredParent`: a route under its
-    /// tabpanel, a sheet under its invoker)
-    private var authoredLine: some Sequence<NodeView> {
-        sequence(first: self as UIView, next: { [weak presenter] in presenter?.authoredParent(of: $0) ?? $0.superview })
-            .lazy.compactMap { $0 as? NodeView }
-    }
-
     /// The tint a view UIKit draws for this node outside the node's views takes as its own (a bar, a
     /// bar item, a readout, a tab bar, a list row's switch, a route's view, a spinner), as
     /// `applyAccentTint` gives the node's views theirs: the nearest authored `accent-color` at or

@@ -264,6 +264,17 @@ impl<D: DataSource> Host<D> {
         if old.map_or(0., |p| p.to) == to {
             return;
         }
+        // A release no frame eases (`press_settle` waits for none) ends now:
+        // kept, it would stand until some motion frame retired it, and while
+        // a press stands no picture is still, so every scroll step paints.
+        // The next paint draws its row at rest.
+        let eases = (self.runner.kernel().node_by_key(key))
+            .is_some_and(|n| shows(&n) && !native_button(&n));
+        if !down && !eases {
+            self.presses.remove(&key);
+            self.row_dirty.node(key);
+            return;
+        }
         let from = old.map_or(0., |p| p.progress(now));
         self.presses.insert(
             key,

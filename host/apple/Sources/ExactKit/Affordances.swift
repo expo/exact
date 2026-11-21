@@ -50,6 +50,9 @@ extension NodeView {
         if faceSymbol.map(FaceSymbol.isOriginal) == true { view.image = image; return }
         let follows = inkTintShare == 1 || style["symbol_rendering"]?.string == "palette" && style["symbol_palette"]?.namesTint == true
         var ink = follows ? nil : inkTintShare.map(SystemColor.tint) ?? drawnSymbolInk
+        // Draw no ink over an image its configuration colours, which the ink would flatten to one colour: the ink is
+        // its view's tint instead, which a multicolour symbol's tinted layers take
+        if configurationColours { view.tintColor = ink; ink = nil } else if view.tintColor != nil { view.tintColor = nil }
         let path = props["symbolPath"] != nil
         if path, ink != nil {
             if let share = inkTintShare { ink = tintColor.withAlphaComponent(share) }
@@ -107,6 +110,19 @@ extension NodeView {
         #else
         return base
         #endif
+    }
+
+    /// Whether the symbol's configuration colours its image (`symbolConfiguration`): an SF Symbol drawn
+    /// hierarchical, multicolour or in a palette with colours. A path or an asset, or an empty palette, takes
+    /// none of those colours. Ink drawn over such an image (`withTintColor`) flattens its layers to one colour
+    /// (iOS 27.1).
+    var configurationColours: Bool {
+        guard props["symbolPath"] == nil, props["symbolName"]?.isEmpty == false else { return false }
+        switch style["symbol_rendering"]?.string {
+        case "hierarchical", "multicolor": return true
+        case "palette": return style["symbol_palette"]?.array?.isEmpty == false
+        default: return false
+        }
     }
 
     /// The symbol's configuration: its size and weight, then its rendering

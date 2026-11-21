@@ -98,11 +98,14 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     }
     required init?(coder: NSCoder) { nil }
     // The bar's height changed (a push to an inline title, a rotation, a
-    // hatch): the route's content area follows (LLP 1075.003 §3.5).
+    // hatch): the route's content area follows (LLP 1075.003 §3.5), once
+    // Exact's own writes settle (LLP 1123 D11).
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
-        rideBars()
-        host?.coversChanged()
+        SafeAreaSteps.react(self) { [weak self] in
+            self?.rideBars()
+            self?.host?.coversChanged()
+        }
     }
     // Back on a screen whose list pushed the one leaving: the row that was
     // tapped fades with the transition (LLP 1115.000 D11.3).

@@ -7,4 +7,5 @@
     <!-- The channel a notification without a declared one takes (LLP 1133.004.000 D1), as a hand-built app names
          its general channel. -->
     <string name="exact_default_channel">Notifications</string>
+    <string name="exact_share">Share</string>
 </resources>

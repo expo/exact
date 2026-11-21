@@ -204,10 +204,107 @@ fn selection_drag_retires_on_cancel_value_change_or_focus_loss() {
 #[test]
 fn word_and_paragraph_units_preserve_unicode_and_password_privacy() {
     assert_eq!(range("🦀 two", 0, Unit::Word), (0, 2));
-    let value = "café 🦀 two\r\nnext";
+    let value = "café 🦀 two\r\nnext\u{2029}last";
     assert_eq!(range(value, 2, Unit::Word), (0, 4));
     assert_eq!(range(value, 5, Unit::Word), (5, 7));
     assert_eq!(range(value, 9, Unit::Word), (8, 11));
     assert_eq!(range(value, 9, Unit::Paragraph), (0, 13));
+    assert_eq!(range(value, 14, Unit::Paragraph), (13, 18));
     assert_eq!(range(value, 2, Unit::Password), (0, utf16_len(value)));
+}
+
+#[test]
+fn off_edge_mouse_moves_keep_the_scroll_rate_of_a_stationary_drag() {
+    let value = "word word word word\n".repeat(150);
+    let run = |sideways: &[f32]| {
+        let (mut p, id) = fixture(&value, "");
+        let (x, y) = point(&mut p, id, 22, 0.2);
+        let rect = p.rect_of(id).unwrap();
+        let below = rect.1 + rect.3 + 200.;
+        p.pointer_down_with_clicks(x, y, 0., 1).unwrap();
+        p.pointer_move(x, below, 1.).unwrap();
+        p.frame();
+        assert_eq!(p.scroll_of(id).1, 0.);
+        let initial = p.field_selection(id);
+        for frame in 1..=12 {
+            let now = f64::from(frame * 16);
+            p.tick(now);
+            for dx in sideways {
+                p.pointer_move(x + dx, below, now).unwrap();
+            }
+            p.frame();
+        }
+        let end = p.field_selection(id);
+        assert_eq!(end.start, initial.start);
+        assert!(end.end > initial.end && p.scroll_of(id).1 > 0.);
+        (end, p.scroll_of(id))
+    };
+    assert_eq!(run(&[1., 0., 1., 0.]), run(&[]));
+}
+
+#[test]
+fn holding_a_selection_beyond_the_textarea_scrolls_until_the_pointer_returns_or_releases() {
+    let value = (0..150)
+        .map(|n| format!("Line {n} sample text"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (mut p, id) = fixture(&value, "");
+    let (x, y) = point(&mut p, id, 22, 0.5);
+    let rect = p.rect_of(id).unwrap();
+    let below = rect.1 + rect.3 + 14.;
+    p.pointer_down_with_clicks(x, y, 0., 1).unwrap();
+    p.pointer_move(x, below, 10.).unwrap();
+    p.frame();
+    assert!(
+        p.needs_animation_frame(),
+        "the held drag requests its next frame"
+    );
+    let initial = p.field_selection(id);
+    let initial_scroll = p.scroll_of(id);
+    let hold = |p: &mut Presenter<()>, start: u32| {
+        for n in 1..=16 {
+            p.tick(f64::from(start + n * 40));
+            p.frame();
+        }
+    };
+    hold(&mut p, 10);
+    let later = p.field_selection(id);
+    assert_eq!(later.start, initial.start);
+    assert!(
+        later.end > initial.end && p.scroll_of(id).1 > initial_scroll.1,
+        "stationary drag: {initial:?} -> {later:?}"
+    );
+    p.pointer_move(x, y, 660.).unwrap();
+    p.frame();
+    assert!(!p.needs_animation_frame());
+    let inside = (p.field_selection(id), p.scroll_of(id));
+    hold(&mut p, 660);
+    assert_eq!((p.field_selection(id), p.scroll_of(id)), inside);
+    p.pointer_move(x, below, 1310.).unwrap();
+    p.pointer_up(x, below, 1320.).unwrap();
+    p.frame();
+    let released = (p.field_selection(id), p.scroll_of(id));
+    hold(&mut p, 1320);
+    assert_eq!((p.field_selection(id), p.scroll_of(id)), released);
+
+    p.pointer_down_with_clicks(x, y, 1970., 1).unwrap();
+    p.pointer_move(x, rect.1 - 14., 1980.).unwrap();
+    p.frame();
+    let upward = p.field_selection(id);
+    let top = p.scroll_of(id).1;
+    hold(&mut p, 1980);
+    let earlier = p.field_selection(id);
+    assert!(earlier.start < upward.start && p.scroll_of(id).1 < top);
+    assert_eq!(earlier.end, upward.end);
+    hold(&mut p, 2620);
+    assert_eq!(p.scroll_of(id).1, 0.);
+    assert!(
+        !p.needs_animation_frame(),
+        "the top of the document is at rest"
+    );
+    p.pointer_move(x, below, 3270.).unwrap();
+    p.frame();
+    assert!(p.needs_animation_frame());
+    p.pointer_cancel(3280.).unwrap();
+    assert!(!p.needs_animation_frame());
 }

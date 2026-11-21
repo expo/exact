@@ -119,8 +119,10 @@ impl From<Option<f32>> for Width {
 #[derive(Default)]
 struct Payloads {
     sources: HashSet<*const super::shaping::ShapeData>,
+    hard_lines: HashSet<*const super::shaping::LineShape>,
     flows: HashSet<*const ShapedSource>,
     lines: HashSet<*const super::Lines>,
+    glyph_blocks: HashSet<*const super::lines::Block>,
     baselines: HashSet<*const Vec<f32>>,
     indexes: HashSet<*const super::ink::Index>,
     strokes: HashSet<*const Paragraph>,
@@ -134,7 +136,17 @@ impl Payloads {
             0
         };
         flow + if self.sources.insert(Arc::as_ptr(&source.data)) {
-            source.accessible_capacity_bytes
+            let shared: usize = source
+                .data
+                .lines
+                .iter()
+                .filter(|line| {
+                    Arc::strong_count(&line.shape) > 1
+                        && !self.hard_lines.insert(Arc::as_ptr(&line.shape))
+                })
+                .map(|line| line.bytes + size_of::<super::shaping::LineShape>())
+                .sum();
+            source.accessible_capacity_bytes - shared
         } else {
             0
         }
@@ -147,7 +159,10 @@ impl Payloads {
         }
         if let Some(lines) = p.record.get() {
             if self.lines.insert(Arc::as_ptr(lines)) {
-                bytes += lines.capacity_bytes();
+                bytes += lines.capacity_bytes()
+                    - lines
+                        .glyphs
+                        .previously_counted_bytes(&mut self.glyph_blocks);
             }
         }
         // Baselines, bottoms and a flow travel together.
@@ -1064,35 +1079,53 @@ fn fingerprint(spec: &Spec) -> u64 {
     h.finish()
 }
 fn equal(a: &Spec, b: &Spec) -> bool {
+    same_style(a, b)
+        && a.strut.text == b.strut.text
+        && a.runs.iter().zip(&b.runs).all(|(a, b)| a.text == b.text)
+}
+
+pub(super) fn same_style(a: &Spec, b: &Spec) -> bool {
+    same_paragraph_style(a, b)
+        && a.runs.len() == b.runs.len()
+        && a.runs
+            .iter()
+            .zip(&b.runs)
+            .all(|(a, b)| same_run_style(a, b))
+}
+
+pub(super) fn same_paragraph_style(a: &Spec, b: &Spec) -> bool {
     a.align == b.align
         && a.overflow_wrap == b.overflow_wrap
         && a.white_space == b.white_space
         && a.text_wrap_style == b.text_wrap_style
         && a.direction == b.direction
         && a.line_clamp == b.line_clamp
+        && a.text_indent.to_bits() == b.text_indent.to_bits()
         && a.text_box_trim == b.text_box_trim
         && a.text_box_edge == b.text_box_edge
-        && a.runs.len() == b.runs.len()
-        && std::iter::once(&a.strut)
-            .chain(&a.runs)
-            .zip(std::iter::once(&b.strut).chain(&b.runs))
-            .all(|(a, b)| {
-                a.text == b.text
-                    && a.size.to_bits() == b.size.to_bits()
-                    && a.weight == b.weight
-                    && a.family == b.family
-                    && a.italic == b.italic
-                    && a.stretch.to_bits() == b.stretch.to_bits()
-                    && a.variations == b.variations
-                    && a.optical_sizing == b.optical_sizing
-                    && a.line_height.map(f32::to_bits) == b.line_height.map(f32::to_bits)
-                    && a.letter_spacing.to_bits() == b.letter_spacing.to_bits()
-                    && a.font_variant_numeric == b.font_variant_numeric
-                    && a.font_variant_ligatures == b.font_variant_ligatures
-                    && a.font_features == b.font_features
-                    && a.inline == b.inline
-                    && a.edges == b.edges
-            })
+        && same_run_style(&a.strut, &b.strut)
+}
+
+pub(super) fn same_run_style(a: &super::Run, b: &super::Run) -> bool {
+    a.size.to_bits() == b.size.to_bits()
+        && a.weight == b.weight
+        && a.family == b.family
+        && a.italic == b.italic
+        && a.stretch.to_bits() == b.stretch.to_bits()
+        && a.variations == b.variations
+        && a.optical_sizing == b.optical_sizing
+        && a.line_height.map(f32::to_bits) == b.line_height.map(f32::to_bits)
+        && a.letter_spacing.to_bits() == b.letter_spacing.to_bits()
+        && a.font_variant_numeric == b.font_variant_numeric
+        && a.font_variant_ligatures == b.font_variant_ligatures
+        && a.font_features == b.font_features
+        && a.indent.to_bits() == b.indent.to_bits()
+        && a.hang == b.hang
+        && a.mark == b.mark
+        && a.href == b.href
+        && a.bold_text == b.bold_text
+        && a.inline == b.inline
+        && a.edges == b.edges
 }
 
 pub(super) fn capacities(paragraph: &Paragraph) -> usize {

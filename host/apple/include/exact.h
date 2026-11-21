@@ -1057,7 +1057,13 @@ uint32_t exact_intrinsics(ExactRuntime rt, size_t len);
  * kernel refuses, or two for one owner, refuses the call; an update whose
  * view's block the kernel refuses is not applied, and one whose view is
  * gone is not applied and is the batch's error. An update for a view with
- * no block holds its keyboard against no bounds, so it occupies nothing. */
+ * no block holds its keyboard against no bounds, so it occupies nothing.
+ * Kind 23 says how a split shows a block's route against its stack's top
+ * (LLP 1127 D8): float 1 beside it, live (the split's list column beside
+ * its detail), 2 under a pane over it, not live (the detail under the list
+ * that overlays it, the columns under a sheet), 0 in its stack; then three
+ * unused. Kind 24 gives a column header its track width in the first float.
+ * NaN restores automatic sizing. */
 uint32_t exact_host_covers(ExactRuntime rt, size_t len);
 /* What a block's root would measure in another block (a popover's
  * position-area option, LLP 1021 D2): each axis a length and a policy as
@@ -1095,10 +1101,10 @@ uint32_t exact_role_keys(ExactRuntime rt, uint32_t view, uint32_t focused, size_
 /* Whether the stack whose root route is `view` shows that route as a list beside
  * its detail, by the runner's rule (LLP 1115.002 D4), JSON in the output buffer,
  * not a batch: {"list":view|null,"width":number|null,"rows":[[route,row]...],
- * "locations":[[route,url]...],"pressWrites":bool|null}, the list whose row pushes,
+ * "locations":[[route,url]...],"current":view|null,"pressWrites":bool|null}, the list whose row pushes,
  * the list column's width where `navigationSplit` names one, each route above the
  * root that is a row's detail with that row, each route above the root with its
- * location, and whether the press of `pressed` writes the router; null for a stack
+ * location, the current row, and whether the press of `pressed` writes the router; null for a stack
  * that pushes. */
 /* `retained` is a previous list to keep while empty and still eligible, or 0;
  * `pressed` is a view being pressed, or 0. */

@@ -108,6 +108,7 @@ pub(super) fn fold_label(label: &Node) -> Option<Node> {
         children,
         span,
         instance,
+        place,
     } = label
     else {
         return None;
@@ -127,9 +128,11 @@ pub(super) fn fold_label(label: &Node) -> Option<Node> {
             children: Vec::new(),
             span: text_span,
             instance: *instance,
+            place: None,
         }],
         span: *span,
         instance: *instance,
+        place: *place,
     })
 }
 

@@ -8,11 +8,14 @@
 //! And the margins UIKit's own list gives a grouped list's cards and cells,
 //! and which split placeholders a pane shows (LLP 1116.006 D2). And the
 //! size a person dragged a box's `resize` grip to (`Runner::resize_box`).
+//! And how a split shows each column's route against its stack's top (LLP
+//! 1127 D8), which the runner's liveness reads.
 
 use super::Host;
 use exact_kernel::style::targets::NativeTarget;
 use exact_kernel::{
-    BlockMeasure, GroupedMargins, HostBlock, HostCover, KernelError, LayoutError, ViewId,
+    BlockMeasure, BlockShown, GroupedMargins, HostBlock, HostCover, KernelError, LayoutError,
+    ViewId,
 };
 use exact_runner::DataSource;
 
@@ -25,6 +28,8 @@ pub enum Restyle {
     /// The border box's width and height a person dragged its `resize`
     /// grip to; `None` keeps an axis (`Runner::resize_box`).
     Size([Option<f32>; 2]),
+    /// The track of a native table header. Clearing it restores automatic sizing.
+    TableColumn(Option<f32>),
 }
 
 /// What a call reports of content owners and native targets beside its
@@ -45,6 +50,7 @@ impl<D: DataSource> Host<D> {
     pub fn set_covers(&mut self, covers: &[(ViewId, Option<HostCover>)]) -> String {
         self.set_claims(
             covers,
+            &[],
             &[],
             &[],
             &[],
@@ -89,6 +95,7 @@ impl<D: DataSource> Host<D> {
             &[],
             &[],
             &[],
+            &[],
             OwnerReports::default(),
         )
     }
@@ -114,6 +121,7 @@ impl<D: DataSource> Host<D> {
         list_margins: &[(ViewId, Option<[f32; 2]>)],
         restyles: &[(ViewId, Restyle)],
         locals: &[(Option<ViewId>, Option<[f32; 4]>)],
+        shown: &[(ViewId, BlockShown)],
         owners: OwnerReports,
     ) -> String {
         if let Some(why) = self.refused_report(&owners) {
@@ -149,6 +157,18 @@ impl<D: DataSource> Host<D> {
             let restyled = match restyle {
                 Restyle::Placeholder(shown) => self.runner.show_split_placeholder(view, shown),
                 Restyle::Size([width, height]) => self.runner.resize_box(view, width, height),
+                Restyle::TableColumn(width) => {
+                    match self.runner.kernel_mut().set_table_column_width(view, width) {
+                        Ok(changed) => {
+                            needs_layout |= changed;
+                            self.height_targets_dirty |= changed;
+                        }
+                        Err(e) => {
+                            error.get_or_insert(format!("table column: {e:?}"));
+                        }
+                    }
+                    continue;
+                }
             };
             match restyled {
                 Ok(Some(receipt)) => receipts.push(exact_runner::Timed {
@@ -165,6 +185,10 @@ impl<D: DataSource> Host<D> {
             }
         }
         let (blocked, owed) = self.blocks_into(blocks, placements, owners);
+        // Liveness alone, once the blocks stand: the runner reads it, layout does not
+        for &(view, how) in shown {
+            self.runner.kernel_mut().set_host_block_shown(view, how);
+        }
         error = error.or(blocked);
         needs_layout |= owed;
         for &(view, list) in margins {

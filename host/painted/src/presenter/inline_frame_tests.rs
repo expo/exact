@@ -663,3 +663,116 @@ fn anonymous_grid_text_paints_and_hits_at_its_track_width() {
         }
     }
 }
+
+#[test]
+fn selected_word_handles_and_all_use_the_painted_multiline_paragraph() {
+    let mut p = boot("component App\n  view\n    column padding=20\n      text testId=\"p\" white-space=\"pre\" user-select=\"text\" font-size=16 line-height=\"20px\"\n        text \"first line of a log\"\n        text \"\\nsecond line of a log\"\n");
+    let id = view(&p, "p");
+    let (x, y, _, _) = p.rect_of(id).unwrap();
+    let selected = |p: &mut Presenter<()>| p.reader_select(5, 0., 0., 1.).unwrap();
+    let at = p.reader_select(0, x + 12., y + 30., 1.).unwrap();
+    assert_eq!(selected(&mut p), "second");
+    assert_eq!(at["marks"].as_array().unwrap().len(), 1);
+    p.reader_select(1, x, y + 8., 1.).unwrap();
+    assert_eq!(selected(&mut p), "first line of a log\nsecond");
+    p.reader_select(3, 0., 0., 1.).unwrap();
+    assert_eq!(
+        selected(&mut p),
+        "first line of a log\nsecond line of a log"
+    );
+    assert!(p.reader_select(6, 0., 0., 1.).is_none());
+    assert!(p.reader_select(5, 0., 0., 1.).is_none());
+}
+
+#[test]
+fn inline_all_is_atomic_inside_an_unselectable_label() {
+    let mut p = boot("component App\n  view\n    text testId=\"p\" font-size=16\n      text \"No \"\n      text \"🐈 cat\" user-select=\"all\"\n      text \" outside\"\n");
+    let id = view(&p, "p");
+    let (x, y, _, _) = p.rect_of(id).unwrap();
+    assert!(p.reader_select(0, x + 4., y + 8., 1.).is_none());
+    p.reader_select(0, x + 44., y + 8., 1.).unwrap();
+    p.reader_select(3, 0., 0., 1.).unwrap();
+    assert_eq!(p.reader_select(5, 0., 0., 1.).unwrap(), "🐈 cat");
+}
+
+#[test]
+fn selection_events_name_source_offsets_and_copy_uses_the_visible_spaces() {
+    let mut p = boot(
+        r#"component App
+  state part = ""
+  action changed(s: Selection)
+    part = `${s.start}|${s.end}|${s.text}`
+  view
+    text testId="p" selectionchange=changed user-select="text" font-size=16
+      text "🐈  "
+      text "log   file"
+"#,
+    );
+    let id = view(&p, "p");
+    let (x, y, _, _) = p.rect_of(id).unwrap();
+    p.reader_select(0, x + 5., y + 8., 1.).unwrap();
+    p.reader_select(3, 0., 0., 1.).unwrap();
+    assert_eq!(slot(&p, "part"), "0|14|🐈  log   file");
+    assert_eq!(p.reader_select(5, 0., 0., 1.).unwrap(), "🐈 log file");
+    p.reader_select(6, 0., 0., 1.);
+    assert_eq!(slot(&p, "part"), "0|0|");
+}
+
+#[test]
+#[cfg(not(any(windows, target_os = "android")))]
+fn mouse_drag_copies_rendered_reader_text_and_leaves_a_focused_editor_its_shortcuts() {
+    use crate::presenter::clipboard::tests::{chord, Memory};
+    use std::{cell::RefCell, rc::Rc};
+    let mut p = boot(
+        r#"component App
+  state selected = ""
+  action changed(s: Selection)
+    selected = `${s.start}|${s.end}|${s.text}|${s.rects.length}`
+  view
+    column
+      text "🐈 Hello **world**." testId="p" markup="markdown" user-select="text" selectionchange=changed
+      text "ignore me"
+      text "Next" testId="next" user-select="text"
+      text selected
+      input testId="editor" value="edit"
+"#,
+    );
+    let caret = |p: &Presenter<()>, name, at| {
+        let id = view(p, name);
+        let ((x, y, _, h), _) = p.brush.inline_text[&id].selection_caret(at, false).unwrap();
+        (x, y + h / 2.)
+    };
+    let (x, y) = caret(&p, "p", 9);
+    let (end, _) = caret(&p, "p", 14);
+    let (next, ny) = caret(&p, "next", 2);
+    let memory = Rc::new(RefCell::new(String::new()));
+    p.set_clipboard(Box::new(Memory(memory.clone())));
+    let before = p.frame();
+    p.pointer_down(x, y, 1.).unwrap();
+    p.pointer_move(end, y, 2.).unwrap();
+    assert_eq!(slot(&p, "selected"), "9|14|world|1");
+    let marked = p.frame();
+    assert!((x.ceil() as u32..end as u32)
+        .any(|px| { before.pixel(px, y as u32) != marked.pixel(px, y as u32) }));
+    p.pointer_up(end, y, 3.).unwrap();
+    chord(&mut p, "c");
+    assert_eq!(*memory.borrow(), "world");
+
+    p.pointer_down(next, ny, 4.).unwrap();
+    p.pointer_up(x, y, 5.).unwrap();
+    chord(&mut p, "c");
+    assert_eq!(*memory.borrow(), "world.\nNe");
+    assert_eq!(slot(&p, "selected"), "9|15|world.|1");
+
+    let editor = view(&p, "editor");
+    p.set_focus(Some(editor), 6.);
+    chord(&mut p, "a");
+    chord(&mut p, "c");
+    assert_eq!(*memory.borrow(), "edit");
+
+    p.pointer_down(x, y, 7.).unwrap();
+    p.pointer_up(x, y, 8.).unwrap();
+    assert_eq!(slot(&p, "selected"), "0|0||0");
+    chord(&mut p, "c");
+    assert_eq!(*memory.borrow(), "edit");
+}

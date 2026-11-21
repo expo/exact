@@ -27,8 +27,32 @@ pub(super) fn push(out: &mut String, id: StyleId, press: bool) -> bool {
         // A clear is unsaid, as `auto` is (selection.rs): no declaration, so the
         // page's sheet decides.
         UserSelect => {}
-        // Their values write nothing (css.rs, LLP 1123 D4, D8, D11, D12), so neither does a clear.
-        SafeAreaIgnore
+        // Their values write nothing (css.rs, LLP 1123 D4, D8, D11 to D14), so neither does a clear.
+        ScrollContentInsetTop
+        | ScrollContentInsetRight
+        | ScrollContentInsetBottom
+        | ScrollContentInsetLeft
+        | ScrollVerticalIndicatorInsetsTop
+        | ScrollVerticalIndicatorInsetsRight
+        | ScrollVerticalIndicatorInsetsBottom
+        | ScrollVerticalIndicatorInsetsLeft
+        | ScrollHorizontalIndicatorInsetsTop
+        | ScrollHorizontalIndicatorInsetsRight
+        | ScrollHorizontalIndicatorInsetsBottom
+        | ScrollHorizontalIndicatorInsetsLeft
+        | SafeAreaExtendBoundsTop
+        | SafeAreaExtendBoundsRight
+        | SafeAreaExtendBoundsBottom
+        | SafeAreaExtendBoundsLeft
+        | ScrollInsetAdjustment
+        | ScrollIndicatorAdjustment
+        | ScrollEdgeEffectSoft
+        | ScrollEdgeEffectHard
+        | ScrollEdgeEffectHidden
+        | SafeAreaReach
+        | SafeAreaReachEdges
+        | SafeAreaExtend
+        | SafeAreaIgnore
         | SafeAreaIgnoreAlign
         | SafeAreaBar
         | LayoutMarginTop

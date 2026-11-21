@@ -23,7 +23,7 @@ const MOTION: [StyleId; 4] = [
 ];
 
 /// `motion-words.js`, its one placeholder filled.
-fn motion_words() -> String {
+pub(super) fn motion_words() -> String {
     include_str!("../motion-words.js").replace(
         "MAX_LINEAR_STOPS",
         &exact_motion::easing::MAX_LINEAR_STOPS.to_string(),
@@ -32,7 +32,7 @@ fn motion_words() -> String {
 
 /// The transition grammar, its paint policy and the last curve covering layout.
 #[allow(clippy::field_reassign_with_default)]
-pub fn transitions() -> String {
+pub(super) fn transitions(words: &str) -> String {
     exact_motion::link_transitions();
     let properties: std::collections::BTreeMap<_, _> = exact_motion::Property::ALL
         .iter()
@@ -52,8 +52,61 @@ pub fn transitions() -> String {
             "MAX_TRANSITIONS",
             &exact_motion::MAX_TRANSITIONS.to_string(),
         )
-        .replace("WORDS", &motion_words())
+        .replace("WORDS", words)
         .replace("PROPERTIES", &serde_json::to_string(&properties).unwrap())
+}
+
+fn animations(plan: &Plan, words: &str) -> String {
+    let names: Vec<_> = plan
+        .keyframes
+        .iter()
+        .filter(|k| {
+            exact_motion::Keyframes::parse(plan.str(k.css)).is_ok_and(|f| {
+                f.0.iter().any(|k| {
+                    k.values.iter().any(|(p, _)| {
+                        matches!(
+                            p,
+                            exact_motion::Property::Opacity
+                                | exact_motion::Property::Translate
+                                | exact_motion::Property::Scale
+                                | exact_motion::Property::Rotate
+                                | exact_motion::Property::Layout
+                        )
+                    })
+                })
+            })
+        })
+        .map(|k| plan.str(k.name))
+        .collect();
+    // Insert authored names last. A keyframes named MAX_ANIMATIONS must keep its name.
+    include_str!("../animation-paint.js")
+        .replace("MAX_ANIMATIONS", &exact_motion::MAX_ANIMATIONS.to_string())
+        .replace("WORDS", words)
+        .replace("NAMES", &serde_json::to_string(&names).unwrap())
+}
+
+#[derive(Clone, Copy)]
+pub enum Parser {
+    Transition,
+    Animation,
+}
+
+impl Parser {
+    pub(super) fn source(self, plan: &Plan, words: &str) -> String {
+        match self {
+            Self::Transition => transitions(words),
+            Self::Animation => animations(plan, words),
+        }
+    }
+
+    pub fn emit(self, plan: &Plan, uses: &mut crate::code::Uses) -> String {
+        let words = uses.constant("$motionWords", motion_words);
+        let name = match self {
+            Self::Transition => "$parseTransition",
+            Self::Animation => "$animationStacks",
+        };
+        uses.constant(name, || self.source(plan, &words))
+    }
 }
 
 fn own(style: &StyleProps) -> paint_order::Own {
@@ -207,7 +260,7 @@ pub fn needed(plan: &Plan, parts: &[Option<exact_web::host::template::Parts>]) -
                             plan,
                             NodeType::from_wire(plan.nodes.get(i).unwrap().node_type).unwrap(),
                             &b,
-                            transitions,
+                            |_| String::new(),
                         )
                         .is_some()
                 })
@@ -221,7 +274,7 @@ pub fn binding(
     plan: &Plan,
     kind: NodeType,
     b: &BindingsRow,
-    transitions: impl FnOnce() -> String,
+    parser: impl FnOnce(Parser) -> String,
 ) -> Option<(String, String)> {
     let bits = |value: String| Some((format!("data-exact-f-{}-{}", b.kind as u8, b.id), value));
     let flag = |bit: u32, test: &str| bits(format!("({test})?{bit}:0"));
@@ -248,7 +301,7 @@ pub fn binding(
         StyleId::WrapFlow => return flag(WRAP, "v===\"both\""),
         StyleId::TintColor if kind == NodeType::Image => return flag(POLICY, "v!=null"),
         StyleId::Isolation => return flag(ISOLATION | STACK, "v===\"isolate\""),
-        StyleId::LayoutTransition => return flag(LAYOUT | POLICY, &format!("({})(v,false)?.held", transitions())),
+        StyleId::LayoutTransition => return flag(LAYOUT | POLICY, &format!("({})(v,false)?.held", parser(Parser::Transition))),
         // Exits still resolve names and keyframes at build time.
         StyleId::ExitAnimation => {
             let values = crate::presence::exit_animations(plan, plan.code(b.expr), false);
@@ -256,39 +309,10 @@ pub fn binding(
             return flag(POLICY, &format!("typeof v===\"string\"&&{table}.includes(v)"));
         }
         StyleId::Transition => {
-            return flag(POLICY, &format!("({})(v,false)?.stacks", transitions()));
+            return flag(POLICY, &format!("({})(v,false)?.stacks", parser(Parser::Transition)));
         }
         StyleId::Animation => {
-            let names: Vec<_> = plan
-                .keyframes
-                .iter()
-                .filter(|k| {
-                    exact_motion::Keyframes::parse(plan.str(k.css)).is_ok_and(|f| {
-                        f.0.iter().any(|k| {
-                            k.values.iter().any(|(p, _)| {
-                                matches!(
-                                    p,
-                                    exact_motion::Property::Opacity
-                                        | exact_motion::Property::Translate
-                                        | exact_motion::Property::Scale
-                                        | exact_motion::Property::Rotate
-                                        | exact_motion::Property::Layout
-                                )
-                            })
-                        })
-                    })
-                })
-                .map(|k| plan.str(k.name))
-                .collect();
-            // Which word is the name is the shorthand's grammar's to say:
-            // `1s EASE` plays no keyframes `EASE` (LLP 1055 D5). The names
-            // are the author's, so they go in last: a keyframes named
-            // `MAX_ANIMATIONS` must not be read as a placeholder.
-            let predicate = include_str!("../animation-paint.js")
-                .replace("MAX_ANIMATIONS", &exact_motion::MAX_ANIMATIONS.to_string())
-                .replace("WORDS", &motion_words())
-                .replace("NAMES", &serde_json::to_string(&names).unwrap());
-            return flag(POLICY, &format!("({predicate})(v)"));
+            return flag(POLICY, &format!("({})(v)", parser(Parser::Animation)));
         }
         // A number token's name (LLP 1121 D7) stands for its value: one that
         // varies may be below 1; a name no token has is unset, 1.

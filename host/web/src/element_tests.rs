@@ -726,6 +726,43 @@ fn a_local_inset_is_the_browsers_custom_property() {
     for row in reserved {
         style.set_dynamic(row, &StyleValue::Number(20.0)).unwrap();
     }
+    // Nor do reach, extension and a scroller's insets and edge effects yet (D13, D14)
+    let scroll_lengths = [
+        StyleId::ScrollContentInsetTop,
+        StyleId::ScrollContentInsetRight,
+        StyleId::ScrollContentInsetBottom,
+        StyleId::ScrollContentInsetLeft,
+        StyleId::ScrollVerticalIndicatorInsetsTop,
+        StyleId::ScrollVerticalIndicatorInsetsRight,
+        StyleId::ScrollVerticalIndicatorInsetsBottom,
+        StyleId::ScrollVerticalIndicatorInsetsLeft,
+        StyleId::ScrollHorizontalIndicatorInsetsTop,
+        StyleId::ScrollHorizontalIndicatorInsetsRight,
+        StyleId::ScrollHorizontalIndicatorInsetsBottom,
+        StyleId::ScrollHorizontalIndicatorInsetsLeft,
+        StyleId::SafeAreaExtendBoundsTop,
+        StyleId::SafeAreaExtendBoundsRight,
+        StyleId::SafeAreaExtendBoundsBottom,
+        StyleId::SafeAreaExtendBoundsLeft,
+    ];
+    for row in scroll_lengths {
+        style.set_dynamic(row, &StyleValue::Number(20.0)).unwrap();
+    }
+    let scroll_words = [
+        (StyleId::SafeAreaReach, "edges"),
+        (StyleId::SafeAreaReachEdges, "top"),
+        (StyleId::SafeAreaExtend, "top manual"),
+        (StyleId::ScrollInsetAdjustment, "never"),
+        (StyleId::ScrollIndicatorAdjustment, "none"),
+        (StyleId::ScrollEdgeEffectSoft, "top"),
+        (StyleId::ScrollEdgeEffectHard, "bottom"),
+        (StyleId::ScrollEdgeEffectHidden, "left"),
+    ];
+    for (row, words) in scroll_words {
+        style
+            .set_dynamic(row, &StyleValue::Text(words.into()))
+            .unwrap();
+    }
     let (out, skipped) = crate::css::css_text(&style, &[]);
     let own = "--exact-safe-area-inset-bottom:calc(8px + var(--exact-safe-area-inset-top));";
     assert_eq!(out, own);
@@ -733,7 +770,10 @@ fn a_local_inset_is_the_browsers_custom_property() {
     // A clear of the ignore, row 256, past a `u8` style id, writes nothing
     // too, nor does a reservation's
     let ignore = [StyleId::SafeAreaIgnore, StyleId::SafeAreaIgnoreAlign];
-    for row in ignore.into_iter().chain(reserved) {
+    let scroll = scroll_lengths
+        .into_iter()
+        .chain(scroll_words.map(|(row, _)| row));
+    for row in ignore.into_iter().chain(reserved).chain(scroll) {
         style.mask.clear(row);
         style.written.set(row);
     }

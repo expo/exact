@@ -10,6 +10,42 @@ impl<D: DataSource> Runner<D> {
         update
     }
 
+    pub(super) fn prepare_view_ids(
+        &self,
+        ids: &mut Ids,
+        carried: Option<&Carried>,
+    ) -> Result<crate::instance::CandidateLists, RunnerError> {
+        let mut lists = crate::instance::CandidateLists::default();
+        let Some(carried) = carried else {
+            return Ok(lists);
+        };
+        if self.kernel.is_detached() || (carried.views.is_empty() && carried.lists.is_empty()) {
+            return Ok(lists);
+        }
+        // Restoring an outer list may expose inner lists at new places. Match
+        // those too before assigning ids to the rows the first frame will build.
+        loop {
+            let mut preview = Ids::default();
+            preview.tabs.carried = ids.tabs.carried.clone();
+            let mut update = self.instance_update(&mut preview);
+            update.fonts = Some(std::rc::Rc::new(std::cell::RefCell::new(
+                self.fonts.borrow().clone(),
+            )));
+            update.list_seeds = Some(&lists);
+            let tree = Tree::create(&mut update)?;
+            let mut kernel =
+                Kernel::on_demand(Box::new(exact_kernel::MonospaceMeasurer::default()));
+            let _roles = self.bind_roles();
+            kernel.apply(0, 1, &update.ops)?;
+            if lists.match_places(&carried.lists, &tree, &self.plan, &kernel) {
+                continue;
+            }
+            let candidate = tree.retainable_views(&self.plan, &kernel, &preview);
+            carried.views.assign(&candidate, preview.last_issued(), ids);
+            return Ok(lists);
+        }
+    }
+
     /// Re-evaluate every site and apply one batch. A failure here means the
     /// instance tree and the kernel may disagree; the runner is poisoned and
     /// the host restarts it — never a half-applied frame.

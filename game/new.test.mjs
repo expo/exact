@@ -1077,3 +1077,44 @@ test('a game with data of its own gets a web dev bin that bakes with it; one wit
     for (const kind of ['apple', 'linux', 'android']) assert.equal(existsSync(resolve(app, '.shells', kind, 'src/bin')), false, kind);
   } finally { rmSync(parent, {recursive:true, force:true}); }
 });
+
+test('exact new on a machine that cannot build for iPhone names Exact Build', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-new-no-iphone-'));
+  try {
+    const bare = resolve(dir, 'bare'), bin = resolve(bare, 'bin');
+    mkdirSync(bin, { recursive: true });
+    symlinkSync(process.execPath, resolve(bin, 'bun'));
+    // Only Bun on PATH: no Xcode on a Mac, no cross SDK on Linux.
+    const env = { HOME: bare, PATH: bin, CARGO_HOME: resolve(bare, 'cargo'), RUSTUP_HOME: resolve(bare, 'rustup'), XDG_CACHE_HOME: resolve(bare, 'cache'), EXACT_FEEDBACK: '0' };
+    const made = spawnSync(process.execPath, [resolve(import.meta.dir, '../scripts/exact.mjs'), 'new', resolve(dir, 'no-iphone')], { encoding: 'utf8', timeout: 120_000, env });
+    assert.equal(made.status, 0, made.stderr);
+    assert.match(made.stdout, /\nThis machine lacks (Xcode|the Apple cross SDK and its tools), so it cannot build the app for iPhone\. Exact Build builds it in the cloud, and AppDrop installs it on a phone: https:\/\/exact\.appdrop\.app\/agents\.md is the guide for an agent, https:\/\/exact\.appdrop\.app\/docs the API\./);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 120_000);
+
+// The line follows the device build: on Linux, a device-only cross SDK with the tools it needs is enough, and with
+// the same tools and no SDK the line is said.
+test.skipIf(process.platform !== 'linux')('exact new names Exact Build only where a device build lacks its Apple tools', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-new-device-sdk-'));
+  try {
+    const bin = resolve(dir, 'bin'), sdk = resolve(dir, 'sdk'), phone = resolve(sdk, 'iPhoneOS.sdk'), resources = resolve(sdk, 'swift');
+    for (const path of [bin, phone, resolve(resources, 'clang/lib/darwin'), resolve(sdk, 'toolset/bin')]) mkdirSync(path, { recursive: true });
+    symlinkSync(process.execPath, resolve(bin, 'bun'));
+    const say = (name, text) => writeFileSync(resolve(bin, name), `#!/bin/sh\necho '${text}'\n`, { mode: 0o755 });
+    say('swift', 'Swift version 6.4.2');
+    say('rcodesign', 'apple-codesign 0.29.0');
+    for (const tool of ['llvm-lipo', 'dsymutil', 'llvm-ar', 'llvm-otool', 'llvm-nm', 'llvm-size', 'llvm-strip', 'llvm-install-name-tool']) say(tool, 'LLVM version 23.1.0');
+    // The iPhone device SDK alone: no simulator configuration.
+    writeFileSync(resolve(sdk, 'swift-sdk.json'), JSON.stringify({ targetTriples: { 'arm64-apple-ios': { sdkRootPath: 'iPhoneOS.sdk', swiftResourcesPath: 'swift' } } }));
+    writeFileSync(resolve(phone, 'SDKSettings.json'), JSON.stringify({ Version: '27.1' }));
+    for (const file of ['swift/clang/lib/darwin/libclang_rt.ios.a', 'toolset/bin/ld64.lld', 'toolset/bin/llvm-lib']) writeFileSync(resolve(sdk, file), '');
+    const env = { HOME: dir, PATH: bin, CARGO_HOME: resolve(dir, 'cargo'), RUSTUP_HOME: resolve(dir, 'rustup'), XDG_CACHE_HOME: resolve(dir, 'cache'), EXACT_FEEDBACK: '0' };
+    const made = (name, extra) => spawnSync(process.execPath, [resolve(import.meta.dir, '../scripts/exact.mjs'), 'new', resolve(dir, name)], { encoding: 'utf8', timeout: 120_000, env: { ...env, ...extra } });
+    const ready = made('device-sdk', { EXACT_APPLE_SDK: sdk });
+    assert.equal(ready.status, 0, ready.stderr);
+    assert.doesNotMatch(ready.stdout, /Exact Build/);
+    const lacking = made('no-sdk', { EXACT_APPLE_SDK: resolve(dir, 'absent') });
+    assert.equal(lacking.status, 0, lacking.stderr);
+    assert.match(lacking.stdout, /This machine lacks the Apple cross SDK and its tools, so it cannot build the app for iPhone\. Exact Build/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 240_000);

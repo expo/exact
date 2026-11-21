@@ -47,15 +47,51 @@ mod transform_drag;
 mod width;
 pub(crate) use width::horizontal_flex;
 
-/// At most this many warnings from one compile. A blank SF Symbol's uses,
+/// Default number of ranked warnings in a human-readable build. A blank SF Symbol's uses,
 /// `forma-unreachable` and colours that stay one scheme follow, each site briefly: a repair
 /// of the first twenty would only show the next (rules/RULES.md, "Loop shape").
 pub const MAX_WARNINGS: usize = 20;
 
-/// Every warning the checked file earns, in source order of its checks.
-pub fn warnings(checked: &Checked<'_>) -> Vec<LowerError> {
+/// Which lowering warnings a build reports. Acceptance belongs to the source
+/// line where the warning is reported, including lines in imported files.
+pub struct WarningSelection {
+    limit: usize,
+    accepted: BTreeMap<(u32, u32), String>,
+}
+
+impl WarningSelection {
+    /// Read whole-line `// exact-accept <warning-id> …` comments from the
+    /// texts being compiled. A comment applies only to the next physical line.
+    pub fn new<'a>(limit: usize, sources: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut accepted = BTreeMap::new();
+        for (source, text) in sources.into_iter().enumerate() {
+            if !text.contains("exact-accept") {
+                continue;
+            }
+            for (line, text) in text.trim_start_matches('\u{feff}').lines().enumerate() {
+                let Some(comment) = text.trim_start().strip_prefix("//") else {
+                    continue;
+                };
+                if let Some(("exact-accept", ids)) = comment.trim().split_once(char::is_whitespace)
+                {
+                    accepted.insert((source as u32, line as u32 + 2), ids.to_owned());
+                }
+            }
+        }
+        Self { limit, accepted }
+    }
+
+    pub(crate) fn accepts(&self, id: &str, span: Span) -> bool {
+        self.accepted
+            .get(&(span.source_id, span.line))
+            .is_some_and(|ids| ids.split_whitespace().any(|word| word == id))
+    }
+}
+
+/// Warnings from a checked file when analysis refused it.
+pub fn warnings(checked: &Checked<'_>, selection: &WarningSelection) -> Vec<LowerError> {
     crate::control_roles::unlowered();
-    with_text_styles(checked, &TextStyles::new(), Vec::new())
+    with_text_styles(checked, &TextStyles::new(), Vec::new(), selection)
 }
 
 pub(crate) use text_styles::{TextStyle, TextStyles};
@@ -64,6 +100,7 @@ pub(crate) fn with_text_styles(
     checked: &Checked<'_>,
     lowered: &TextStyles,
     mut out: Vec<LowerError>,
+    selection: &WarningSelection,
 ) -> Vec<LowerError> {
     let root = &checked.expanded.root;
     routeless_header::check(checked, &mut out);
@@ -95,7 +132,11 @@ pub(crate) fn with_text_styles(
             let fresh = seen.insert((span.source_id, span.line, span.col, span.end_col));
             // @ref LLP 1116.007 D3.1 — a symbol by another spelling than its role.
             if let (true, "image", Some(source)) = (fresh, tag, positional.first()) {
-                out.extend(crate::symbols::image_source(source, &mut platform));
+                out.extend(crate::symbols::image_source(
+                    source,
+                    &mut platform,
+                    selection,
+                ));
             }
             out.extend(roles::button(tag, attrs, visit, span).filter(|_| fresh));
             out.extend(roles::dialog_role(tag, attrs, span).filter(|_| fresh));
@@ -187,10 +228,12 @@ pub(crate) fn with_text_styles(
             ));
         }
     }
-    crate::warning_rank::keep_first(&mut out);
-    out.extend(platform);
-    crate::control_roles::unreachable(&checked_view, &checked.file.styles, &mut out);
-    crate::style_hosts::undrawn(&checked_view, &checked.file.styles, &mut out);
+    let unaccepted = |w: &LowerError| !selection.accepts(w.id, w.span);
+    out.retain(unaccepted);
+    crate::warning_rank::keep_first(&mut out, selection.limit);
+    crate::control_roles::unreachable(&checked_view, &checked.file.styles, &mut platform);
+    crate::style_hosts::undrawn(&checked_view, &checked.file.styles, &mut platform);
+    out.extend(platform.into_iter().filter(unaccepted));
     one_scheme(
         &checking,
         &checked.file.styles,
@@ -200,6 +243,7 @@ pub(crate) fn with_text_styles(
             one: crate::theme::one_scheme_tokens(checked.file),
             design: checked.file.theme.is_none(),
         },
+        selection,
         &mut out,
     );
     crate::theme::shown_errors(out) // a param by the name its author wrote
@@ -929,6 +973,7 @@ fn one_scheme(
     fns: &[FnDecl],
     theme: Option<&contract_syntax::ThemeDecl>,
     tokens: &Tokens,
+    selection: &WarningSelection,
     out: &mut Vec<LowerError>,
 ) {
     // A game (LLP 1046) reads its world through `exactSurface`: its HUD and
@@ -1061,13 +1106,14 @@ fn one_scheme(
     // A component used twice is inlined twice: one line for its source.
     let mut seen = BTreeSet::new();
     sites.retain(|s| {
-        seen.insert((
-            s.span.source_id,
-            s.span.line,
-            s.span.col,
-            s.span.end_col,
-            s.name.clone(),
-        ))
+        !selection.accepts("lower-colour-one-scheme", s.span)
+            && seen.insert((
+                s.span.source_id,
+                s.span.line,
+                s.span.col,
+                s.span.end_col,
+                s.name.clone(),
+            ))
     });
     let why = "Leave the accent unsaid (the platform's; a brand is an `app.forma`), or write it as a role or one `light-dark(light, dark)` pair on `accent-color`. A forced `color-scheme` is no repair: the app then has no dark mode (docs/contract-for-agents.md, \"Colours: say a role, not a value\")";
     // `#fff` on `color` stays; `#fff`, `#eee` on `background-color` stay.

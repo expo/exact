@@ -94,12 +94,6 @@ pub(crate) fn constant(parts: &[TemplatePart]) -> Option<String> {
     })
 }
 
-/// An image source's warnings: a symbol by another spelling (`aliases`). An SVG file draws
-/// as a picture on every host (LLP 1011.001), so none names one.
-pub(crate) fn image_source(e: &Expr, platform: &mut Vec<LowerError>) -> Vec<LowerError> {
-    aliases(e, platform)
-}
-
 /// `lower-symbol-alias`: a literal source that names a role by another spelling builds as the
 /// role, and says which. The role is what the recipe, `contract vocab` and the refusal's list
 /// name, so the next edit finds it by search.
@@ -108,12 +102,17 @@ pub(crate) fn image_source(e: &Expr, platform: &mut Vec<LowerError>) -> Vec<Lowe
 /// `platform`. The first use of a build says the whole advice and each later one is a line
 /// pointing at it; the caller keeps the group whole and out of [`crate::MAX_WARNINGS`] (the
 /// euxy port's forty paragraphs filled the cap, so the warnings after them were never printed).
-pub(crate) fn aliases(e: &Expr, platform: &mut Vec<LowerError>) -> Vec<LowerError> {
+pub(crate) fn image_source(
+    e: &Expr,
+    platform: &mut Vec<LowerError>,
+    selection: &crate::WarningSelection,
+) -> Vec<LowerError> {
     match e {
         // A template of literals is linted as the literal it folds to.
-        Expr::Template(parts, span) if constant(parts).is_some() => aliases(
+        Expr::Template(parts, span) if constant(parts).is_some() => image_source(
             &Expr::Str(constant(parts).unwrap_or_default(), *span),
             platform,
+            selection,
         ),
         Expr::Str(s, span) => {
             let alias = |message| LowerError {
@@ -139,7 +138,10 @@ pub(crate) fn aliases(e: &Expr, platform: &mut Vec<LowerError>) -> Vec<LowerErro
                 return Vec::new();
             };
             let targets = crate::icons::non_apple_targets();
-            if sf.is_empty() || targets.is_empty() {
+            if sf.is_empty()
+                || targets.is_empty()
+                || selection.accepts("lower-symbol-platform", *span)
+            {
                 return Vec::new();
             }
             let token = sf.replace('.', "-");
@@ -186,8 +188,8 @@ pub(crate) fn aliases(e: &Expr, platform: &mut Vec<LowerError>) -> Vec<LowerErro
             Vec::new()
         }
         Expr::Ternary(_, a, b, _) => {
-            let mut out = aliases(a, platform);
-            out.extend(aliases(b, platform));
+            let mut out = image_source(a, platform, selection);
+            out.extend(image_source(b, platform, selection));
             out
         }
         _ => Vec::new(),

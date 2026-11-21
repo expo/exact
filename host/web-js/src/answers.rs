@@ -33,6 +33,7 @@ pub(super) struct Answers<'a> {
     slots: Vec<Vec<usize>>,
     /// Navigation bindings and regions that can change the page's status.
     status: StatusSites,
+    status_owners: HashSet<u32>,
     /// [`Answers::styles`].
     styles: Option<Vec<(String, String)>>,
     /// [`Answers::accent`].
@@ -54,6 +55,8 @@ impl<'a> Answers<'a> {
                 own.push(k);
             }
         }
+        let status = status_sites(plan, sites);
+        let status_owners = status.bindings.values().flatten().copied().collect();
         Answers {
             plan,
             dependencies: None,
@@ -63,7 +66,8 @@ impl<'a> Answers<'a> {
             }),
             modes: crate::modes::active(plan),
             slots,
-            status: status_sites(plan, sites),
+            status,
+            status_owners,
             styles: None,
             accent: None,
             tokens: None,
@@ -81,6 +85,10 @@ impl<'a> Answers<'a> {
         self.dependencies
             .get_or_insert_with(|| SiteIndex::new(self.plan))
             .row_dependencies(RegionsId(region))
+    }
+
+    pub fn status_owner(&self, node: u32) -> bool {
+        self.status_owners.contains(&node)
     }
 
     pub fn status_binding(&self, node: u32, prop: u16) -> Option<&[u32]> {

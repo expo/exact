@@ -7,6 +7,23 @@ import AppKit
 @testable import ExactKit
 
 final class DocumentOverflowTests: XCTestCase {
+    func testAFractionalRootEndingAtTheViewportDoesNotAddAScroller() throws {
+        #if os(macOS)
+        _ = NSApplication.shared
+        #endif
+        let p = Presenter()
+        p.viewport.frame = CGRect(x: 0, y: 0, width: 500, height: 300)
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view"], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 103.6875, "y": 0, "w": 396.3125, "h": 80],
+            ["op": "content", "id": 1, "w": 396.3125, "h": 80],
+        ]))
+        let root = try XCTUnwrap(p.views[1])
+        XCTAssertEqual(root.documentOverflow(in: p.root).maxX, 500, accuracy: 0.01)
+        p.apply(wireBatch([["op": "content", "id": 1, "w": 398.3125, "h": 80]]))
+        XCTAssertEqual(root.documentOverflow(in: p.root).maxX, 502, accuracy: 0.01)
+    }
+
     func testTransformedDescendantsExtendTheDocumentUntilAClippingBox() throws {
         #if os(macOS)
         _ = NSApplication.shared

@@ -28,7 +28,7 @@ test "a repeat is refused and keeps its text; the list survives a relaunch"
 | `back` | The platform's Back: cancels a dialog, else dismisses a sheet, else pops the route. |
 | `presence allow` (`cancel`, `fail`, `lockout`, `invalidated`) | Answers the user-presence prompt. |
 | `fail fetch`, `pass fetch`, `drop stream "<prefix>"` | Fails; clears; ends streams. |
-| `answer fetch "<prefix>" with 200 {"text":"Hello"}` | Supplies a response; leading the test, before its first load. |
+| `answer fetch "<prefix>" with 200 {…}`, `answer source s with {…}` | HTTP, or source answers in `verify`. |
 | `request POST "/items" {…} as grace expect 409` | Writes as another person through [the app's server](rest-backend.md#where-the-server-lives), empty per test; a status not 2xx fails, or with `expect 409` any other. |
 | `size 390x844`, `at "/item/7#moves"`, `epoch`, `time-zone`, `locale`, `seed`, `before data` | Launch lines, first in a test or atop the file. |
 

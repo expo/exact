@@ -40,7 +40,7 @@ function replacementRecordsServer() {
   return Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
     const js = text => new Response(text, { headers: { 'content-type': 'text/javascript' } });
-    if (path === '/rt.js') return js('export const After = [], PropHooks = {}, Resources = [], inflight = { n: 1 }, clock = {}, data = {}, journal = []; export const settled = () => { for (const f of After) f(); }; export const carryRouter = null, launchLocation = null, res = null, sig = null;');
+    if (path === '/rt.js') return js('export const After = [], PropHooks = {}, Resources = [], inflight = { n: 1 }, clock = {}, data = {}, journal = []; export const settled = () => { for (const f of After) f(); }; export const carryRouter = null, late = null, launchLocation = null, res = null, sig = null;');
     if (path === '/navigation.js') return js(hostFixtureFile(new URL('../web/navigation.js', import.meta.url)));
     if (['/checkpoint.js', '/focus.js'].includes(path)) return js(Bun.file(new URL('.' + path, import.meta.url)));
     return new Response('<!doctype html><main id="exact-root" style="min-height:2000px"></main>', { headers: { 'content-type': 'text/html' } });
@@ -420,7 +420,7 @@ test.each(['plain', 'focused', 'smooth'])('replacement records keep nested scrol
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
     const js = text => new Response(text, { headers: { 'content-type': 'text/javascript' } });
-    if (path === '/rt.js') return js('export const After = [], PropHooks = {}, Resources = [], inflight = { n: 0 }, clock = {}, data = {}, journal = []; export const settled = () => {}; export const carryRouter = null, launchLocation = null, res = null, sig = null;');
+    if (path === '/rt.js') return js('export const After = [], PropHooks = {}, Resources = [], inflight = { n: 0 }, clock = {}, data = {}, journal = []; export const settled = () => {}; export const carryRouter = null, late = null, launchLocation = null, res = null, sig = null;');
     if (path === '/navigation.js') return js(hostFixtureFile(new URL('../web/navigation.js', import.meta.url)));
     if (['/checkpoint.js', '/focus.js'].includes(path)) return js(Bun.file(new URL('.' + path, import.meta.url)));
     return new Response('<main id="exact-root"></main>', { headers: { 'content-type': 'text/html' } });
@@ -776,6 +776,7 @@ test('replacement records end when the document leaves during restoration', asyn
 
 test.each([
   ['self', 'html', 'scale(2)'], ['ancestor', 'html', 'scale(2)'], ['self', 'svg', 'scale(2)'],
+  ['self', 'html', 'scale(0)'], ['ancestor', 'html', 'scale(0)'],
   ['self', 'html', 'scaleY(-1)'], ['self', 'html', 'rotate(180deg)'],
   ['ancestor', 'html', 'scaleY(-1)'], ['ancestor', 'html', 'rotate(180deg)'],
   ['self', 'svg', 'scaleY(-1)'], ['self', 'svg', 'rotate(180deg)'],
@@ -788,20 +789,33 @@ test.each([
   ])),
 ].map(args => [...args, 'chromium']).concat([
   ['ancestor-rotate', 'svg', 'rotate:180deg', 'firefox'],
-]))('replacement records match browser anchoring through a transformed %s with an %s anchor (%s, %s)', async (mode, kind, transform, engine) => {
+  ['ancestor', 'svg-stretch', 'rotate(27deg) scale(1.3,2.5)', 'chromium'],
+  ['ancestor', 'svg-viewbox', 'scaleY(-2)', 'firefox'],
+  ...['chromium', 'firefox'].flatMap(engine => [
+    ['self', 'svg-viewbox', 'rotate(27deg) scale(1.3,2.5)', engine, 'transform:skewX(-5deg);scale:.9 1.2;translate:12px 6px'],
+    ['ancestor', 'svg-stretch', 'scale(-1.1,1.5)', engine, 'rotate:-3deg', 'transform:rotate(5deg);scale:1.3 .9'],
+    ['ancestor', 'svg-collapsed', 'rotate(-15deg)', engine, 'transform:rotate(3deg);scale:0 1'],
+    ['self', 'svg', "scale(1.3);offset-path:path('M0 0L40 40');offset-distance:50%", engine],
+  ]),
+]))('replacement records match browser anchoring through a transformed %s with an %s anchor (%s, %s)', async (mode, kind, transform, engine, svgStyle = '', wrapperStyle = '') => {
   const server = replacementRecordsServer();
   let browser;
   try {
     browser = await suiteBrowser(engine);
     const page = await browser.newPage();
     await page.goto(server.url.href);
-    const result = await page.evaluate(async ({ mode, kind, transform }) => {
+    const result = await page.evaluate(async ({ mode, kind, transform, svgStyle, wrapperStyle }) => {
       const rt = await import('/rt.js'), { prepareDev } = await import('/checkpoint.js');
       const root = document.getElementById('exact-root');
+      const svgHeight = mode.startsWith('anchor') ? 100 : 1000;
+      const viewBox = kind === 'svg-stretch' ? 'viewBox="0 0 400 100" preserveAspectRatio="none"'
+        : kind === 'svg-viewbox' ? 'viewBox="0 0 100 50"' : '';
       const content = height => `<div data-carry-type="Column" style="${mode.startsWith('ancestor') ? `${mode === 'ancestor' ? `transform:${transform}` : transform};transform-origin:top left` : ''}">
         <div data-carry-type="Column" id="port" style="height:100px;width:200px;overflow:auto;${mode.startsWith('self') ? `${mode === 'self' ? `transform:${transform}` : transform};transform-origin:top left` : ''}">
           <div data-carry-type="Column" id="above" style="height:${height}px"></div>
-          ${kind.startsWith('svg') ? `<svg data-carry-type="Svg" width="200" height="100" ${kind === 'svg-viewbox' ? 'viewBox="0 0 100 50"' : ''} style="display:block;${mode.startsWith('anchor') ? `transform:${transform};transform-origin:${mode === 'anchor-origin' ? '20px 10px' : 'top left'}` : ''}"><rect width="200" height="100"/></svg>` : '<div data-carry-type="Column" style="height:100px">Anchor</div>'}
+          ${wrapperStyle ? `<div data-carry-type="Column" style="${wrapperStyle};transform-origin:top left">` : ''}
+          ${kind.startsWith('svg') ? `<svg data-carry-type="Svg" width="200" height="${svgHeight}" ${viewBox} style="display:block;${svgStyle};${mode.startsWith('anchor') ? `transform:${transform};transform-origin:${mode === 'anchor-origin' ? '20px 10px' : 'top left'}` : ''}"><rect width="200" height="${svgHeight}"/></svg>` : '<div data-carry-type="Column" style="height:100px">Anchor</div>'}
+          ${wrapperStyle ? '</div>' : ''}
           <div data-carry-type="Column" style="height:1000px"></div>
         </div></div>`;
       const frame = () => new Promise(ok => requestAnimationFrame(() => requestAnimationFrame(ok)));
@@ -811,6 +825,19 @@ test.each([
       port.scrollTop = 130;
       await frame();
       const cp = globalThis.__exactDevRecords();
+      let anchor;
+      if (svgStyle) {
+        // A second scrollport exposes the same inner geometry directly in viewport coordinates.
+        const copy = root.firstElementChild.cloneNode(true);
+        document.body.append(copy);
+        const portCopy = copy.querySelector('#port');
+        copy.style.transform = portCopy.style.transform = 'none';
+        portCopy.scrollTop = port.scrollTop;
+        const svg = copy.querySelector('svg').getBoundingClientRect(), bounds = portCopy.getBoundingClientRect();
+        const saved = cp.scrolls.find(s => s.axes.top.target === 130)?.axes.top.anchor?.nodes[0];
+        anchor = { type: saved?.type, dx: saved?.x - (svg.left - bounds.left), dy: saved?.y - (svg.top - bounds.top) };
+        copy.remove();
+      }
       document.getElementById('above').style.height = '160px';
       await frame();
       const ordinary = port.scrollTop;
@@ -825,11 +852,18 @@ test.each([
       const restored = port.scrollTop;
       document.getElementById('above').style.height = '220px';
       await frame();
-      return { ordinary, restored, grown: port.scrollTop, pending: rt.After.length };
-    }, { mode, kind, transform });
-    expect(result.ordinary).toBe(190);
+      return { ordinary, restored, grown: port.scrollTop, pending: rt.After.length, anchor };
+    }, { mode, kind, transform, svgStyle, wrapperStyle });
+    if (kind === 'svg-collapsed') expect(result.anchor.type).toBeUndefined();
+    else if (svgStyle) {
+      expect(result.anchor.type).toBe('Svg');
+      // The independent layout and projection can round to adjacent units of browser layout.
+      expect(Math.abs(result.anchor.dx)).toBeLessThan(0.02);
+      expect(Math.abs(result.anchor.dy)).toBeLessThan(0.02);
+    }
+    expect(result.ordinary).toBe(kind === 'svg-collapsed' ? 130 : 190);
     expect(result.restored).toBe(result.ordinary);
-    expect(result.grown).toBe(250);
+    expect(result.grown).toBe(kind === 'svg-collapsed' ? 130 : 250);
     expect(result.pending).toBe(0);
   } finally { await browser?.close(); server.stop(true); }
 }, 30000);

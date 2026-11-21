@@ -12,7 +12,7 @@ const recorded = {
     clock: 'agent', pixels: [1280, 720],
     tickMs: ring(0.19999999925494194, 1),
     encodeMs: ring(0.6000000014901161, 7, 0.19999999925494194, 0.2714285712156977),
-    frameMs: ring(null, 0),
+    frameMs: ring(16.7),
     catchUp: { overloadFrames: 0, clampFrames: 0, clampMs: 0, idleFrames: 0, idleMs: 0 },
   },
   renderHooks: {
@@ -45,7 +45,7 @@ const recordedGame = {
 
 const defaultArgs = {
   radius: 'smoke', move: 'stand', light: '0', edits: '0', inflight: 'discard',
-  compare: 'off', vertex: '12', blend: 'off', budget: 'deadline', draw: 'on', pool: 'off',
+  compare: 'off', vertex: '12', blend: 'off', budget: 'deadline', draw: 'on', pool: 'off', jobs: 'off',
 };
 
 function double({
@@ -293,13 +293,26 @@ test('draw pairing runs on then off and refuses mismatched units or bytes', asyn
   expect(order).toEqual(['on', 'off', 'on', 'off', 'on', 'off']);
 });
 
+test('a run that measured nothing fails instead of printing a row', async () => {
+  const idle = double();
+  const state = idle.state;
+  idle.state = async reset => ({ ...await state(reset), perf: { ...recorded.perf, frameMs: ring(null, 0) } });
+  await expect(readBench(idle, options('radius=40'), 'abc')).rejects.toThrow('Window 1 drew no frame');
+  const blind = double();
+  blind.state = async () => null;
+  await expect(readBench(blind, options('radius=40'), 'abc')).rejects.toThrow('never reported its switches');
+});
+
 test('validates hosts, metadata and switch values before opening a host', async () => {
   expect(() => options('radius=12')).toThrow('radius');
   expect(() => options('light=-1')).toThrow('light');
   expect(() => options('budget=count:0')).toThrow('budget');
-  expect(() => parseOptions(['linux'], true)).toThrow('web (Chrome WebGPU), macos (Metal) or ios');
+  expect(() => parseOptions(['linux'], true)).toThrow('or web-android (Chrome on it)');
   expect(() => parseOptions(['ios', '--device=d', '--os=o', '--refresh-hz=120'], false)).toThrow('--phone');
   expect(parseOptions(['ios', '--device=d', '--os=o', '--refresh-hz=120', '--phone=pad'], false).phone).toBe('pad');
+  for (const host of ['android', 'web-android'])
+    expect(parseOptions([host, '--device=d', '--os=o', '--refresh-hz=90'], false).host).toBe(host);
+  expect(() => parseOptions(['android'], true)).toThrow('web only');
   expect(() => parseOptions(['macos'], true)).toThrow('web only');
   expect(() => parseOptions(['web'], false)).toThrow('--refresh-hz');
   await expect(readBench(double({ ignoredSwitch: 'radius' }), options('radius=8'), 'abc'))
@@ -307,4 +320,34 @@ test('validates hosts, metadata and switch values before opening a host', async 
   const mac = parseOptions(['macos', '--device=Mac Studio', '--os=macOS', '--refresh-hz=59.94',
     '--warmup-ms=0', '--window-ms=10', '--poll-ms=1'], false);
   expect(await readBench(double(), mac, 'abc')).toMatchObject({ profile: 'host-dev', refreshHz: 59.94 });
+});
+
+test('records the jobs switch, counters and lane', async () => {
+  expect(options().switches.jobs).toBe('off');
+  expect(() => options('jobs=yes')).toThrow('jobs');
+  const host = double();
+  const read = host.state;
+  const jobs = { queued: 3, queuedBytes: 32, running: 1, done: 7, stale: 2, failed: 0, lane: 'pool' };
+  let resetAt = 0, window = 0;
+  host.state = async reset => {
+    const world = await read(reset);
+    if (reset) {
+      resetAt = host.now();
+      window++;
+    }
+    world.renderHooks.jobs = { ...jobs, done: (host.now() - resetAt) * window,
+      stale: Number(host.now() > resetAt) * window };
+    return world;
+  };
+  const row = await readBench(host, options('jobs=on'), 'abc');
+  expect(row.observedSwitches.jobs).toBe('on');
+  expect(row.windows.map(window => window.jobs)).toEqual([1, 2, 3].map(window => ({
+    ...jobs, done: window * 10, stale: window,
+  })));
+  expect(row).not.toHaveProperty('renderHooks');
+  expect(row.lane).toBe('pool');
+  expect(tableRow(row)).toContain('| pool |');
+  const off = await readBench(double(), options(), 'abc');
+  expect(off.windows.map(window => window.jobs)).toEqual([null, null, null]);
+  expect(off.lane).toBeNull();
 });

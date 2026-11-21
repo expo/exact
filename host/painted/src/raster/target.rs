@@ -2,7 +2,7 @@
 //! Keeping the storage private makes layer transfers resolve it too.
 use crate::paint::WindowLayer;
 use std::ops::Range;
-use tiny_skia::{Color, Path, Pixmap, Point, Transform};
+use tiny_skia::{Color, Pixmap, Point, Rect, Transform};
 
 #[derive(Default)]
 pub(super) struct Target {
@@ -91,12 +91,18 @@ impl Target {
         self.pixels.as_mut()
     }
 
-    pub(super) fn path_pixels(&mut self, path: &Path, dev: Transform) -> Option<&mut Pixmap> {
+    pub(super) fn svg_pixels(&mut self, bounds: Rect, dev: Transform) -> Option<&mut Pixmap> {
+        if !super::reach::within(bounds, dev) {
+            return None;
+        }
+        self.bounded_pixels(bounds, dev)
+    }
+
+    pub(super) fn bounded_pixels(&mut self, bounds: Rect, dev: Transform) -> Option<&mut Pixmap> {
         let p = self.pixels.as_ref()?;
-        let b = path.bounds();
         let mut corners = [
-            Point::from_xy(b.left(), b.top()),
-            Point::from_xy(b.right(), b.bottom()),
+            Point::from_xy(bounds.left(), bounds.top()),
+            Point::from_xy(bounds.right(), bounds.bottom()),
         ];
         dev.map_points(&mut corners);
         if p.width() > 8191
@@ -253,6 +259,56 @@ mod tests {
                     expected.data(),
                     "scale={scale} case={case}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn svg_stroke_rows_cover_caps_joins_and_hairlines() {
+        for (d, width, cap, join, miter) in [
+            ("M2 8H14", 2., 0, 0, 4.),
+            ("M8 0L24 16", 8., 2, 2, 1.),
+            ("M0 36L16 0L32 36", 10., 0, 0, 8.),
+            ("M0 8C6 -8 18 24 32 8", 0.25, 1, 1, 1.),
+        ] {
+            let path = exact_kernel::svg::parse_d(d);
+            for dev in [
+                Transform::from_row(1.25, 0., 0., 1.5, 20.5, 120.25),
+                Transform::from_row(1.25, 0.125, 0., 1.5, 20.5, 120.25),
+            ] {
+                let mut r = Raster::transparent();
+                r.begin(96., 384., 1.);
+                r.svg_path(
+                    &crate::paint::SvgPaint {
+                        path: &path,
+                        fill: None,
+                        stroke: Some(crate::paint::Ink::Solid([32, 71, 159, 255])),
+                        even_odd: false,
+                        order: [1, 0, 2],
+                        width,
+                        cap,
+                        join,
+                        miter,
+                        dash: if cap == 2 { vec![8., 3.] } else { vec![] },
+                        phase: 0.,
+                    },
+                    dev,
+                );
+                let rows = r.target.rows();
+                if dev.ky == 0. {
+                    assert!(rows.len() < r.height as usize / 2, "{d}: {rows:?}");
+                } else {
+                    assert_eq!(rows, 0..r.height);
+                }
+                let pixels = r.finish().unwrap();
+                let mut ink = pixels
+                    .data()
+                    .chunks_exact(96 * 4)
+                    .enumerate()
+                    .filter(|(_, row)| row.iter().any(|&v| v != 0))
+                    .map(|(y, _)| y as u32);
+                assert!(rows.contains(&ink.next().expect("stroke must paint")));
+                assert!(ink.all(|y| rows.contains(&y)), "{d}: {rows:?}");
             }
         }
     }

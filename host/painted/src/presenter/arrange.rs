@@ -404,6 +404,7 @@ impl<D: DataSource> Presenter<D> {
             || self.wants_frames()
             || self.arrange_edge().is_some()
             || self.group_needs_frame()
+            || self.field_drag_edge().is_some()
             || self.brush.moving()
             || self.bars_ripple_moving()
             || self.surface_ripple_moving()

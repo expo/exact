@@ -43,7 +43,7 @@ struct BarInputs: Equatable {
     var split: [UInt32] = []
     var listOwnsWindow = false
     var modal: UInt32?
-    var sheet = false, sidebar = false, sidebarItems = false
+    var sheet = false, sidebar = false, sidebarItems = false, inspector = false
     /// The page is in the bar's window, and the window's toolbar is still the bar's.
     var placed = false, installed = false
     /// Whether each route the bar shows a header of is shown and live: the
@@ -153,6 +153,7 @@ extension WindowToolbarHost {
         let split = navigation.stackSplit
         if split.active, let shown = split.shownSplit { inputs.split = [shown.root.id, shown.list.id, shown.detail?.id ?? 0] }
         inputs.listOwnsWindow = split.listOwns
+        inputs.inspector = showsInspector
         inputs.modal = presenter.dialogs.active?.id
         let routes = [navigation.headerRoute?.route, navigation.splitHeaderRoutes?.owner, navigation.splitHeaderRoutes?.beside].compactMap { $0 }
         inputs.routes = routes.map { route in route.id << 2 | (visible(route) ? 1 : 0) | (route.inert ? 2 : 0) }

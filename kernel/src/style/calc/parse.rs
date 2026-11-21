@@ -811,6 +811,14 @@ fn number(text: &str) -> Option<(f64, usize)> {
     Some((n.clamp(f64::MIN, f64::MAX), end))
 }
 
+/// What a row that refuses a percentage takes, for its refusal of one.
+pub(crate) fn without_percent(style: crate::StyleId) -> &'static str {
+    match style.admits_auto() {
+        true => "a length or auto: no percentage is taken here, nor one inside calc(), min(), max() or clamp()",
+        false => "a length: no percentage is taken here, nor one inside calc(), min(), max() or clamp()",
+    }
+}
+
 /// Whether CSS gives the row no negative values: a negative number, length or
 /// literal there is invalid however it is spelled (`-4`, `"-4px"`, `"-1rem"`,
 /// `"-1ch"`), and a negative math function is clamped to zero (CSS Values 4
@@ -819,7 +827,11 @@ pub fn nonnegative_row(style: crate::StyleId) -> bool {
     use crate::StyleId::*;
     matches!(
         style,
-        Width
+        SafeAreaExtendBoundsTop
+            | SafeAreaExtendBoundsRight
+            | SafeAreaExtendBoundsBottom
+            | SafeAreaExtendBoundsLeft
+            | Width
             | Height
             | MinWidth
             | MinHeight
@@ -891,7 +903,10 @@ pub(crate) fn signed(
     if negative && !math && nonnegative_row(style) {
         return Err(crate::StyleValueError::WrongKind {
             style,
-            expected: "nonnegative length or percentage (a negative calc() clamps to 0)",
+            expected: match style.refuses_percent() {
+                true => "nonnegative length (a negative calc() clamps to 0)",
+                false => "nonnegative length or percentage (a negative calc() clamps to 0)",
+            },
         });
     }
     let radius = matches!(

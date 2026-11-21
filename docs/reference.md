@@ -803,7 +803,7 @@ On Android 12 and later a row with a `system*` family is a home-screen widget
 same component is laid out at the launcher's size in the system's colours, and
 the same `refresh` keeps its timeline. Accessory families have no Android
 counterpart. What the launcher's views cannot draw yet (a gradient, a rounded or
-styled border, `clip-path`, an `image`, a bundled font, letter spacing) fails
+styled border, `clip-path`, an `image`, letter spacing) fails
 the widget's render, which then shows its last good entry. A tap follows the
 entry's `link` (one at the root takes the whole widget), else opens the app, and
 the app asks its widgets to refresh whenever it leaves the foreground.
@@ -935,11 +935,12 @@ It can return immediately or await `fetch`
 and `storage.fs` reads from `app:/`. File writes, SQLite, document handles and
 native modules are unavailable in stage 1; `secret.keep` values are read from
 the shared Keychain only during refresh. The extension never persists store
-writes. The app reloads widget timelines after a successful write readable by a refresh.
+writes. The app reloads widget timelines after a successful write readable by a refresh, once the store has been quiet for half a second, so a burst of writes asks once.
 Refresh has a 900 ms deadline starting when it begins, including boot. Each JS
 turn gets the time remaining to that deadline, rather than the app's 100 ms
 per-call budget. This leaves 100 ms below LLP 1126 D8's one-second
-line for completion and teardown. Failure or timeout uses the last good timeline
+line for completion and teardown. A store write during a refresh restarts it under
+the new store while the deadline allows. Failure or timeout uses the last good timeline
 cached in the App Group for this kind, generation and configuration, only while the app's store
 has not changed since it was cached (a store write, such as an account switch,
 expires it), or else an “Open app” placeholder,
@@ -1234,8 +1235,10 @@ unused component's inject is not demanded by the app's view. A configured widget
 second fact is its configuration, the `snapshot_configuration` inject above. A `performanceNow()` call is refused everywhere, including
 inside `time` and `progress`; pass instants from refresh for platform time
 presentation. A variable's name imposes no restriction. A class is a style name
-or `class=(condition ? A : B)`. Only literal font families reached through the
-entry are bundled; a dynamic font string selects installed or generic families.
+or `class=(condition ? A : B)`. An entry uses only installed or generic font
+families, such as `system-ui`: the system draws a widget or Live Activity in its
+own process, which has none of the app's fonts, so the bake refuses a bundled
+`font` the entry reaches (`snapshot-font-bundled`).
 Images use a bundle-relative path, an `app:/` path written by the app, or a
 `symbol:` source. Computed paths need a fixed local prefix; refresh downloads
 remote images. A live `time` (`relative`, `timer`, `countdown`) must own its
@@ -1588,7 +1591,7 @@ The generated `--embed` composition lists the capabilities to link.
 | `ExactSound` | Declared sounds, sequences and the voice-table commands | `ExactSound.install()` |
 | `ExactMIDI` | MIDI ports and a sequence's MIDI output | `ExactMIDI.install()` |
 | `ExactAnimations` | What Core Animation plays for a box: its CSS animations (`animation`, `@keyframes`), transitions, drags and spring motion, so any of `animations`, `transitions`, `motion`, `drag` or `timelines` links it; SVG's element animations play through it too | `ExactAnimations.install()` |
-| `ExactNavigation` | Route stacks, tabs and their bars, route modals; on the Mac route sheets, the list beside its detail, Back and Forward, the root tabs as the sidebar | `ExactNavigation.install()` |
+| `ExactNavigation` | Route stacks, tabs and their bars, route modals; on the Mac route sheets, the list beside its detail, Back and Forward, the root tabs as the sidebar, and a route’s trailing full-height `aside` as the window inspector | `ExactNavigation.install()` |
 | `ExactTextSelection` | iOS's selection of text a `user-select` of `text` or `all` makes selectable (the Mac's is in `ExactKit`, and every Mac composition names it) | `ExactTextSelection.install()` |
 | `ExactWidgetPublication` | Widgets and Live Activities: the app's publication of its entries to the App Group and its observation of the store they write | `ExactWidgetPublication.install()` |
 | `ExactDialogs` | iOS and tvOS: a `dialog` shown by `showModal()` as UIKit's sheet, or as the author's box when it paints its surface; any `dialog` in the plan links it. On the Mac the core presents a `dialog` | `ExactDialogs.install()` |
@@ -1601,10 +1604,11 @@ text and drag gestures are unavailable.
 ### Replacing an embedded app's plan
 
 `ExactApp.apply` and `applyGeneration` answer `ExactApplyResult`: `.applied`,
-`.held(reason)` or `.refused(error)`. A replacement waits while a field is
-composing text, a pointer is down or a gesture is under way. The host asks
-the platform, not the app's handlers. On macOS that is marked text in a
-window's first responder, a mouse button down in the app, a trackpad
+`.held(reason)` or `.refused(error)`. AppKit keeps marked text when the replacement
+keeps its native editor. A replacement that removes the field or changes its
+native control waits for composition to end. Marked text in an embedder's
+own editor also holds the replacement. Other macOS holds include a mouse
+button down in the app, a trackpad
 gesture's fingers, a tracking loop AppKit runs (a menu, a control's press, a
 scroller) and a gesture recognizer that has begun in a session's window. On
 iOS and tvOS it is a touch UIKit has not ended, a press of a remote's or a
@@ -2328,8 +2332,19 @@ replacement's clock in milliseconds, and `dropped`, the root slots that could no
 `"gesture"`, `"module"` or `"requests"`), or is null.
 Each entry has `what: "state"`, `name`, and `why`: `"no place"` when the slot is gone,
 or `"type changed"` when its value does not fit the new declaration. The replacement's
-first journal line gives the same report. Component state, view identity, composition
-and Undo preservation are later pieces of that LLP.
+first journal line gives the same report.
+
+A component outside a conditional, loop, or lazy tab panel keeps its state when
+a use of a different component is inserted above it. Uses of the same component
+under one parent are matched in source order. A parent element with a unique
+literal `id` keeps its place when reordered. Moving the component under a new
+parent starts fresh state.
+
+When a native plan reloads, a virtualized list at the same source place opens
+at the row key and offset the reader last saw. If that key is gone, the list
+uses the next surviving key from the old window, then the previous one.
+It returns to the start if none survive. A reader at the start stays there,
+and a list following its end stays at the end.
 
 The JS development reload restores reading anchors and focus, including a field's
 selection range and direction when its text matches. A field may regain focus after
@@ -5558,7 +5573,8 @@ column dragenter=entered dragleave=left drop=took
 | macOS | yes: every file URL Finder drags, a field forwarding the drag to its `drop` node | file URLs, else PNG or TIFF data written as `image.png` |
 | iOS | none (declared; the driver's drag forms answer `unsupported`) | file URLs, else the pasteboard's image as `image.png` |
 | tvOS | none | empty: tvOS has no pasteboard |
-| Linux, Windows, Android, terminal | none (declared; Linux and Windows drivers refuse by name) | empty: these hosts paste text only |
+| Windows | yes, files and folders in Explorer selection order, including over an editable field | empty (text only) |
+| Linux, Android, terminal | none | empty (text only) |
 
 The driver: `tap <target> drop <path…>` (files and folders), `tap <target>
 dragenter <path…>` and `tap <target> dragleave`, `type <target> paste --file

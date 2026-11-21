@@ -194,6 +194,26 @@ pub struct Scissor {
 }
 
 impl Scissor {
+    pub fn full([width, height]: [u32; 2]) -> Self {
+        Self {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        }
+    }
+
+    pub fn outset(self, pixels: u32) -> Self {
+        let x = self.x.saturating_sub(pixels);
+        let y = self.y.saturating_sub(pixels);
+        Self {
+            x,
+            y,
+            width: self.x.saturating_add(self.width).saturating_add(pixels) - x,
+            height: self.y.saturating_add(self.height).saturating_add(pixels) - y,
+        }
+    }
+
     pub fn from_rect([x, y, w, h]: [f32; 4]) -> Self {
         let left = x.floor().max(0.) as u32;
         let top = y.floor().max(0.) as u32;
@@ -202,6 +222,31 @@ impl Scissor {
             y: top,
             width: ((x + w).ceil().max(0.) as u32).saturating_sub(left),
             height: ((y + h).ceil().max(0.) as u32).saturating_sub(top),
+        }
+    }
+
+    pub fn union(self, other: Self) -> Self {
+        if self.width == 0 || self.height == 0 {
+            return other;
+        }
+        if other.width == 0 || other.height == 0 {
+            return self;
+        }
+        let x = self.x.min(other.x);
+        let y = self.y.min(other.y);
+        let right = self
+            .x
+            .saturating_add(self.width)
+            .max(other.x.saturating_add(other.width));
+        let bottom = self
+            .y
+            .saturating_add(self.height)
+            .max(other.y.saturating_add(other.height));
+        Self {
+            x,
+            y,
+            width: right - x,
+            height: bottom - y,
         }
     }
 
@@ -248,6 +293,53 @@ pub struct Frame {
     pub batches: Vec<Batch>,
 }
 
+impl Frame {
+    /// `bounds` grown by the pixels this frame's draws can write, each within
+    /// its batch's scissor. It stops once they cover `limit`.
+    pub fn draw_bounds(&self, mut bounds: Option<Scissor>, limit: Scissor) -> Option<Scissor> {
+        for batch in &self.batches {
+            let range = batch.instances.start as usize..batch.instances.end as usize;
+            // Every backend refuses a frame with a range out of bounds.
+            for instance in self.instances.get(range).unwrap_or_default() {
+                if bounds.is_some_and(|b| b.intersect(limit) == limit) {
+                    return bounds;
+                }
+                let draw = raster_rect(instance).map_or(batch.scissor, |rect| {
+                    batch.scissor.intersect(Scissor::from_rect(rect))
+                });
+                if draw.width != 0 && draw.height != 0 {
+                    bounds = Some(bounds.map_or(draw, |previous| previous.union(draw)));
+                }
+            }
+        }
+        bounds
+    }
+}
+
+fn raster_rect(instance: &Instance) -> Option<[f32; 4]> {
+    let [x, y, w, h] = instance.rect;
+    let [a, b, c, d, tx, ty] = instance.xform;
+    // Use the batch scissor where CPU and shader arithmetic can disagree
+    // by more than the sampling margin.
+    const MAX: f32 = 65536.;
+    if instance.kind_brush & 65535 == Kind::Coverage as u32 {
+        return ((x.abs() + w <= MAX) && (y.abs() + h <= MAX) && w >= 0. && h >= 0.)
+            .then_some(instance.rect);
+    }
+    let extents = [
+        a.abs(),
+        d.abs(),
+        (x.abs() + w.abs()) * a.abs() + tx.abs(),
+        (y.abs() + h.abs()) * d.abs() + ty.abs(),
+    ];
+    // A NaN extent is not within the bound either.
+    if b != 0. || c != 0. || !extents.into_iter().all(|v| v <= MAX) {
+        return None;
+    }
+    let rect = Encoder::device_rect(instance);
+    rect.iter().all(|value| value.is_finite()).then_some(rect)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RoundedClip {
     pub rect: [f32; 4],
@@ -279,6 +371,17 @@ struct ClipState {
     rounded: [Option<RoundedClip>; 2],
     coverage: Option<CoverageClip>,
     needs_layer: bool,
+}
+
+impl ClipState {
+    fn unclipped(scissor: Scissor) -> Self {
+        Self {
+            scissor,
+            rounded: [None; 2],
+            coverage: None,
+            needs_layer: false,
+        }
+    }
 }
 
 pub struct Encoder {
@@ -315,11 +418,26 @@ impl Encoder {
         bindings: Bindings,
         size: [u32; 2],
     ) -> Result<(), NeedsLayer> {
+        self.push_unclipped_in(instance, bindings, Scissor::full(size))
+    }
+
+    /// Draw a composition quad within device bounds without reapplying clips.
+    pub fn push_unclipped_in(
+        &mut self,
+        instance: Instance,
+        bindings: Bindings,
+        scissor: Scissor,
+    ) -> Result<(), NeedsLayer> {
         let saved = self.state;
-        self.state = Self::new(size[0], size[1]).state;
+        self.state = ClipState::unclipped(scissor);
         let result = self.push(instance, bindings);
         self.state = saved;
         result
+    }
+
+    /// Whether the effective clip is only a hardware scissor.
+    pub fn is_scissor_only(&self) -> bool {
+        !self.state.needs_layer && self.state.rounded[0].is_none() && self.state.coverage.is_none()
     }
 
     pub fn scissor(&self) -> Scissor {
@@ -340,8 +458,13 @@ impl Encoder {
         bounds
     }
 
-    /// The vertex shader expands rounded quads in local space before transforming.
     pub fn bounds(&self, instance: &Instance) -> Scissor {
+        self.clip_bounds()
+            .intersect(Scissor::from_rect(Self::device_rect(instance)))
+    }
+
+    /// The vertex shader expands rounded quads in local space before transforming.
+    fn device_rect(instance: &Instance) -> [f32; 4] {
         let kind = instance.kind_brush & 65535;
         let mut rect = instance.rect;
         if kind != Kind::Coverage as u32 {
@@ -366,23 +489,13 @@ impl Encoder {
             let bottom = points.iter().map(|p| p.1).fold(f32::NEG_INFINITY, f32::max);
             rect = [left, top, right - left, bottom - top];
         }
-        self.clip_bounds().intersect(Scissor::from_rect(rect))
+        rect
     }
 
     pub fn new(width: u32, height: u32) -> Self {
         Self {
             frame: Frame::default(),
-            state: ClipState {
-                scissor: Scissor {
-                    x: 0,
-                    y: 0,
-                    width,
-                    height,
-                },
-                rounded: [None; 2],
-                coverage: None,
-                needs_layer: false,
-            },
+            state: ClipState::unclipped(Scissor::full([width, height])),
             stack: Vec::new(),
         }
     }

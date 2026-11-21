@@ -767,8 +767,8 @@ only its selected arm. Conditions require booleans.
 Named arguments are accepted only by the corresponding constructs: component
 uses, a native module's sources and sends (the only place a dotted name,
 `apple.desiredAccuracy=`, is one), record construction/copy, localization (`t`), placeholders (`empty`),
-canvas `surface=` bindings, and specialized host commands (`share`,
-`scrollIntoView`). Ordinary function calls are positional. Arrow expressions are admitted
+canvas `surface=` bindings, `dataTransfer=DataTransfer(…)` (LLP 1094.000),
+and specialized host commands (`share`, `scrollIntoView`). Ordinary function calls are positional. Arrow expressions are admitted
 as the callbacks to `map` and `filter`, with at most item and index parameters;
 they are not first-class values or event handlers.
 
@@ -812,6 +812,7 @@ launch        = "size" NUMBER "x" NUMBER NL          (* written 1200x800 *)
               | "before" "data" NL                   (* the first step does not wait for data *)
               | "prefer" IDENT { "." IDENT } ( IDENT | STRING ) NL
                                                      (* media feature, page fact, or permission.<module>; before observations *)
+              | "answer" "source" IDENT "with" json NL (* what a source answers under verify *)
               | "fail" "fetch" STRING [ "times" NUMBER ] NL ; (* armed before the first data load *)
 step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
                                                      (* bytes into an input; or clock ticks: bpm, ms *)
@@ -846,6 +847,7 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
               | "reload" NL
               | "fail" "fetch" STRING [ "times" NUMBER ] NL (* later fetches whose URL starts with it fail *)
               | "pass" "fetch" STRING NL             (* it stops failing *)
+              | "answer" "source" IDENT "with" json NL (* the source answers anew; its readers ask again *)
               | "drop" "stream" STRING NL           (* ends open streams whose URL starts with it *)
               | "prefer" IDENT STRING NL             (* quoted media preference or root-font-size *)
               | "request" METHOD STRING [ json ] [ "as" ( IDENT | STRING ) ] [ "expect" NUMBER ] NL
@@ -874,6 +876,8 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
                   [ "at" NUMBER ] [ "gain" NUMBER ] [ "ends" NUMBER ]
                   [ "playbackRate" NUMBER ] [ "pan" [ "-" ] NUMBER ] [ "by" IDENT ] NL
               | "expect" "wakelock" ( "held" | "released" ) NL
+              | "expect" "drag" STRING ( "none" | "has" STRING [ "==" STRING ] [ "name" STRING ] | "missing" STRING ) NL
+                                                     (* what the node's drag carries, as `tree` shows it (LLP 1094.000) *)
               | "expect" "midi" ( "sent" | "missing" ) STRING HEX { HEX } [ "at" NUMBER ] NL
               | "expect" "mediasession" ( IDENT "==" ( STRING | "none" )
                   | ( "has" | "missing" ) STRING ) NL ;
@@ -977,8 +981,10 @@ frame         = "only" "writes" { IDENT } NL          (* no other root slot chan
 `after`. The braces in the EBNF mean repetition, not written braces. A read names a
 whole root state or derive by its bare identifier; fields and indices are stage 2.
 Before any script runs, verify rejects a derive whose body, dependencies or called
-functions reach a resource, mutation status, clock or geometry read. A mutation's
-result slot is a state and may be named.
+functions reach a mutation status, clock or geometry read, or, outside `always`, a
+resource. An `always` line checks each printed configuration, where the runner and
+Lean print the same oracle answer; an `after` pair could see a resource change on a
+step that commits nothing. A mutation's result slot is a state and may be named.
 
 `always` checks every printed configuration, including boot. `stays v` means that a
 previous observation equal to `v` must remain `v`. `after "action"` reads the value
@@ -1122,6 +1128,19 @@ where `fail fetch` is a rejected connection. These fixtures cover buffered HTTP
 requests, including a worker's; streams, long polls, redirects, `exactBodyTo`,
 delays and response files are not supported.
 
+`answer source pairing with {"phase": "code", "code": "123456"}` supplies a typed
+answer in `contract verify`. It applies to every argument list for that source.
+An omitted record field keeps its previous value for those arguments, or the
+seeded value on the first call. Verify checks the named fields against the
+declared result type before running the test. A failed expectation in a test
+that supplies a source answer fails verification.
+
+A leading line supplies the answer at boot. A test's leading line replaces the
+file's default for that source. After boot the line changes the answer and asks
+the source's live readers again in one commit. Lean and `--js` replay the
+changes in order. On a device, `agent --test` reports tests that require these
+oracle answers as skipped.
+
 `request POST "/polls/1/votes" {"option": 2} as bob`
 (LLP 1116.006 D8) is the driver, not the app, writing through the app's server as
 another person: a method, a path in quotes under the server URL app.ts calls (its
@@ -1185,7 +1204,9 @@ report unsupported. Scope these tests with `on web`.
 `tap "id" dblclick` and `contextmenu` are the driver's forms of the same names
 (no Linux carrier double-clicks). `tap "list" into "key"` brings a virtualized
 list's row into view by its key, so a row outside the rendered window can be
-tapped by its own id on the next step. `type "id" "text"` sets the field's
+tapped by its own id on the next step. For a mounted target, `scroll "id"`
+brings its middle into view through the enclosing scrollers without pressing it.
+A plain `tap "id"` already asks the host to reveal its target before pressing it. `type "id" "text"` sets the field's
 value, as Playwright's `fill`; `append` adds the text after the value the tree
 shows (a prefilled reply). `type "id" key "Name"` presses the key (on iOS,
 ArrowRight or ArrowLeft at an `input type="range"` that shows its `UISlider`
@@ -1193,7 +1214,10 @@ is the slider's accessibility increment or decrement, the call VoiceOver's
 swipe makes; its halves are that step's keydown with the move, then its
 keyup, and a held key's repeats move it again);
 `down` and `up` are the two halves, and `for <ms>` holds it that long on the
-virtual clock (`down` or `up` together with `for` is refused). `reload` restarts the app on the store it had: the
+virtual clock (`down` or `up` together with `for` is refused). `contract verify`
+delivers a key press to a box or text and its ancestors, including the release.
+Tab and keys on controls or elements with `press` stop verification at that step
+(`semantics/README.md`). `reload` restarts the app on the store it had: the
 web page reloads its current URL in the same profile, keeping Back and Forward
 entries; each separate test starts with an isolated history. A native app
 relaunches on the same scratch store with a fresh navigation stack. On Linux,
@@ -1801,8 +1825,8 @@ makes no network requests.
   on the web, Markdown shown as it reads, with the syntax hidden away from the
   caret; on macOS and iOS, the platform's text view with the syntax dimmed and
   each link's `](destination)` hidden, as the web hides it. Linux, Windows and
-  Android edit it as a plain textarea of the source, and `format` changes
-  nothing there. Without `markup` the same source is a plain textarea: the
+  Android edit the source as plain text. `setSelectionRange` selects source
+  offsets. `format` and `setRangeText` report a refusal in the app log. Without `markup` the same source is a plain textarea: the
   source mode.
 - A thematic break (`---`) is drawn in the colour of the text around it,
   dimmed, so that it reads on a dark ground as on a light one: on the web a
@@ -2396,8 +2420,8 @@ action wheeled(e: WheelEvent)
 scroll wheel=wheeled …
 ```
 
-`drop` is DOM's `drop` of files dragged in from outside the app (Finder, the
-desktop) onto the innermost node that declares it: its `DragEvent` is
+`drop` is DOM's `drop` of files dragged in from outside the app (Finder, Explorer
+or the desktop) onto the innermost node that declares it: its `DragEvent` is
 `offsetX`, `offsetY`, `files` (a `string[]` of `doc:` handles minted as a
 picker's are, LLP 1069.010
 D1, readable under `fs.read doc:/`) and the modifiers. Files of any type are
@@ -2406,10 +2430,11 @@ taken, and a dropped folder is a folder's handle (`fs.stat` says
 path. A file drag over an `input` or a `textarea` inside such a node (or
 declaring `drop` itself) is the node's, as on the web, where its listener
 prevents the field's own drop: the field inserts no path text. A text drag,
-and a file drag over a field with no `drop` above it, stay the field's. Web
-(a browser without `getAsFileSystemHandle` hands read-only copies) and macOS;
-iOS, Linux, Windows, Android and the terminal have none. The driver's `tap
-<target> drop <path…>` drags files and folders in.
+and a file drag over a field with no `drop` above it, stay the field's. Web,
+macOS and Windows deliver files in the order the source supplies them. A
+browser without `getAsFileSystemHandle` hands the app read-only copies.
+iOS, Linux, Android and the terminal have no external file drops. The
+driver's `tap <target> drop <path…>` drags files and folders in.
 
 `dragenter` and `dragleave` are DOM's, as a node hears them when it ignores
 moves between its own descendants (the `currentTarget.contains(relatedTarget)`
@@ -2438,10 +2463,25 @@ column dragenter=entered dragleave=left drop=took position="relative"
       text "Drop files to attach" role="status"
 ```
 
-Web and macOS, as `drop`. The driver's `tap <target> dragenter <path…>`
-brings a drag of those files over the target and leaves it there (for a
+Web, macOS and Windows support these events. The driver's
+`tap <target> dragenter <path…>` brings a drag of those files over the target and leaves it there (for a
 screenshot); `tap <target> drop <path…>` drops it, and `tap <target>
 dragleave` takes it away undropped.
+
+`draggable` is HTML's attribute: a node a person can lift and drop into
+another app, a boolean that may be bound, on a box, a `link`, a `button` or
+an `image` (LLP 1094.000). `dataTransfer=DataTransfer(text=, url=, files=[…])`
+declares what the drag carries, by `DataTransfer`'s names: `text` as
+`text/plain`, `url` (absolute `http:` or `https:`) as `text/uri-list`, and
+each file as itself, a shipped `assets/` file or an `app:/` path behind
+`fs.read`. Each needs the other. The data is declared on the node, not set in
+a `dragstart` listener, because every platform takes a drag's items as it
+begins; `dragstart`, `drag` and `dragend` are refused for now
+(`lower-handler-later`). The runner admits each file and `url` for the host
+and journals a refusal (`drag: refused: …`); `expect drag` asserts what a node
+carries ([recipe](recipes/drag-out.md)). On iOS, iPadOS and Android a press
+held on the node lifts it into another app, and on the Mac and the web a mouse
+drags it.
 
 `beforeunload` is DOM's: the window is about to close or the app to quit
 (macOS: its close button, File ▸ Close Window, ⌘Q; the web: leaving the page).
@@ -2545,9 +2585,15 @@ Nothing selected
 there is `text: ""` with `start == end == 0` and `rects: []`; it fires while a drag moves,
 once per change. The web and macOS select text; iOS selects text its author
 made selectable (`user-select="text"`), by a long press, a double tap and the
-selection's handles; Linux has no text selection on a `text`, so it never
-fires there. In a `user-select="all"` element one click (on iOS a long press
-or a double tap) selects the whole element, and a selection that reaches
+selection's handles. On Android a long press selects a word in an opted-in
+paragraph. Dragging its handles changes the selected range and Select all
+takes the paragraph's selectable text. On Linux, dragging the mouse selects
+text in opted-in paragraphs. Double-click selects a word and triple-click selects
+a paragraph, including text that wraps onto another line. For Markdown, the offsets count UTF-16 units
+in the rendered text. Ctrl+C copies the visible text, with a newline between
+paragraphs, when the host supplies a clipboard. In a
+`user-select="all"` element one click (a long press on Android or iOS,
+or a double tap on iOS) selects the whole element, and a selection that reaches
 into it takes all of it.
 
 On web and macOS, `removeAllRanges()` clears the reader's selection. Each
@@ -2559,13 +2605,14 @@ CSS whitespace collapsing. `backward` puts the anchor at the end,
 as `Selection.setBaseAndExtent` does. The command replaces the page's previous
 selection and fires `selectionchange` for changed parts without focusing a
 field. An unchanged part does not fire again. These two commands on reader
-text remain unsupported on iOS and Linux; iOS selection events carry an empty
-rectangle list.
+text are available on web and macOS. On iOS and Android selection events carry
+an empty rectangle list.
 
 Rectangles are snapshots at that event, not live layout facts. On the web they
 are the paragraph's selected `Range.getClientRects()`; macOS uses the same
-CoreText fragments as its selection highlight and inline-run geometry. Their
-`provisional` and `unavailable` flags are false; an empty selection has no
+CoreText fragments as its selection highlight and inline-run geometry. Linux
+reports the clipped fragments of its painted highlight. The `provisional` and
+`unavailable` flags are false; an empty selection has no
 rectangles. Native paragraphs rendered by the reader worker currently return
 an empty rectangle list: their caret geometry is not available synchronously.
 Scrolling alone does not emit another selection event.
@@ -2696,7 +2743,8 @@ handler of a press that focuses the field stays once the press ends, as in
 Chrome (an address bar selects its URL as a click focuses it); a press that
 drags or double-clicks keeps what it selected.
 
-On **web (JS and wasm), macOS, iOS and Linux**, `setRangeText(id, text)` replaces the
+On **web (JS and wasm), macOS, iOS, Linux, Windows and Android**,
+`setRangeText(id, text)` on a plain text field replaces the
 current selection; `setRangeText(id, text, start, end[, selectionMode])`
 replaces the given UTF-16 range. `selectionMode` is `preserve` by default,
 or `select`, `start`, `end`, following HTML. It does not focus the field or
@@ -2709,8 +2757,9 @@ app's own is, clearing only that field's undo history. On the web it is HTML's,
 which Chrome makes no undo step, and Linux keeps no field undo history. Invalid
 ranges, modes, unsupported input types and missing ids log a refusal without editing. On the Markdown
 editor (web, macOS and iOS) the offsets are the source's and each call is one
-undo step ([Markdown](#markdown-markup-format-select)); Linux refuses it there.
-Windows, Android and terminal do not support this command yet.
+undo step ([Markdown](#markdown-markup-format-select)). Linux, Windows and
+Android refuse range replacement in Markdown textareas. The terminal host
+refuses the command for every field.
 
 **Deliberate deviation (Charlie, 2026-10-12):** unlike the DOM method,
 Exact fires one noncancelable `input` after a successful replacement, even
@@ -3184,7 +3233,7 @@ argument validation. Use the working implementation when selecting arguments:
 | `setPageZoom(factor)`: the window's page zoom, as View ▸ Zoom In sets it and Electron's `webContents.setZoomFactor`: a CSS px is `factor` points, so the viewport, media queries, `px` and `rem` all follow; `setPageZoom(1)` is Actual Size, and a factor is clamped to 0.25–5. For an app whose own ⌘0, ⌘= and ⌘- commands keep their own steps ([The Mac's menu bar](#keys)). The Mac's; iOS, Linux, Windows and the web refuse it in the journal (LLP 1021 §5.3.1) | [`PageZoomMacTests`](../host/apple/tests/ExactKitTests/PageZoomMacTests.swift) |
 | `exitFullscreen()`, `setWindowOpacity(opacity)`: what a quit the app holds does to its window before it quits, as Electron's `setFullScreen(false)` and `setOpacity(0)`. `exitFullscreen()` is the web's `document.exitFullscreen()`: on the Mac the session's window leaves its full-screen space (a video's own full screen is `requestFullscreen(id)`'s); nothing happens when nothing is full screen. `setWindowOpacity` draws the session's window at an opacity from 0 (unseen, still key and still hearing keys) to 1 (`NSWindow.alphaValue`); a literal outside 0–1 is refused here (`type-window-opacity`). The Mac's; the web refuses `setWindowOpacity`, and iOS and Linux refuse both, in the journal. The agent's `state.windows` shows each window's `fullScreen` and `opacity` (LLP 1069.010) | [calls tests](../contract/cli/tests/it/calls.rs), [`WindowCommandsMacTests`](../host/apple/tests/ExactKitTests/WindowCommandsMacTests.swift) |
 | `hideWindow()`: the session's window put away with the app still running, as Electron's `BrowserWindow.hide`, for a menu-bar utility whose window goes once its work is done. On the Mac it is what the person's ⌘W does under `host.macos.window.keepRunning` or while a status item is placed: the window is ordered out, its session kept, `exactPage().visibilityState` reads `hidden` and `persisted` `true`, and the next bare `focus()`, Dock click or status-item press shows it as a restore (`restores`). Where the app would end without its window (neither, or a `navigate-new` app), it is refused in the journal and the window stays; `close()` still closes the window and ends the app. On Windows it is what the close button does under `host.windows.window.keepRunning`, and refused in the journal without it. iOS, Linux, Android and the web refuse it in the journal (LLP 1133.025 D4) | [window command tests](../contract/cli/tests/it/window_commands.rs), [`WindowCommandsMacTests`](../host/apple/tests/ExactKitTests/WindowCommandsMacTests.swift) |
-| `share(title=, text=, url=, files=)`: the system share sheet by the Web Share API's names, at least one of `text`, `url` and `files`, each its own item of the sheet (pass a picture alone to share only it, as a Share Card button does; `contract vocab share`); `url` absolute `http(s)`. `files=` lists `app:/` files, each behind the app's `fs.read` grant (on Apple a regular file of at most 64 MB, reached through no symbolic link), and `"#id"` entries: a PNG of that element as it is drawn now, at the display's scale, named by the share's `title` (else by the id) (iOS and macOS; the web refuses it, `share: refused: a picture of an element is not available on the web`; Android and Linux refuse files). A literal `#id` no element carries is refused here (`lower-share-picture`), a missing one at run time in the journal. Offer it where `exactPage()`'s `canShareFiles` and `canSharePictures` hold (LLP 1125 D12). The outcome is a journal line | [share corpus](../contract/corpus/share.contract), [Metronome](../apps/metronome/app.contract) |
+| `share(title=, text=, url=, files=)`: the system share sheet by the Web Share API's names, at least one of `text`, `url` and `files`, each its own item of the sheet (pass a picture alone to share only it, as a Share Card button does; `contract vocab share`); `url` absolute `http(s)`. `files=` lists `app:/` files, each behind the app's `fs.read` grant (on Apple a regular file of at most 64 MB, reached through no symbolic link), and `"#id"` entries: a PNG of that element as it is drawn now, at the display's scale, named by the share's `title` (else by the id) (iOS and macOS; the web refuses it, `share: refused: a picture of an element is not available on the web`, and Android refuses it, though it shares `app:/` files; Linux refuses files). A literal `#id` no element carries is refused here (`lower-share-picture`), a missing one at run time in the journal. Offer it where `exactPage()`'s `canShareFiles` and `canSharePictures` hold (LLP 1125 D12). The outcome is a journal line | [share corpus](../contract/corpus/share.contract), [Metronome](../apps/metronome/app.contract) |
 | `showPicker(id)`, export `saveFile(id, from, suggestedName)`: the host copies the `app:/` file `from` to where the person chooses; `change` at `id` carries the chosen name, `cancel` a dismissal. `saveFile(id, text=…, suggestedName=…)` saves the text itself (UTF-8), no file written first and no grant, so "export what's on screen" is one press | [picker tests](../contract/cli/tests/it/picker.rs), [Fieldnotes](../apps/fieldnotes/app.contract), [Linux's save tests](../host/painted/src/presenter/save_tests.rs) |
 | `showOpenFilePicker(id[, multiple])` | [file-picker corpus](../contract/corpus/file-pickers.contract) |
 | `showDirectoryPicker(id)` | Same corpus |

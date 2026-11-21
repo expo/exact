@@ -40,21 +40,33 @@ class ScrollingTest {
             f.down()
             f.under(f.reply(0))
             f.indicate()
-            assertEquals(2, f.parent.childCount)
+            assertNotNull(f.scroller().bar?.parent)
             f.down()
             f.under(f.reply(8))
-            assertEquals("none in a hit reply removes an indicator before any statement", 1, f.parent.childCount)
+            assertNull("none in a hit reply removes an indicator before any statement", f.scroller().bar)
             f.indicate()
             assertEquals(1, f.parent.childCount)
             f.told(axis)
             f.indicate()
-            assertEquals(2, f.parent.childCount)
+            assertNotNull(f.scroller().bar?.parent)
             f.told(axis or 8)
-            assertEquals("a live none removes the existing indicator", 1, f.parent.childCount)
+            assertNull("a live none removes the existing indicator", f.scroller().bar)
             f.told(axis)
             f.indicate()
-            assertEquals(2, f.parent.childCount)
+            assertNotNull(f.scroller().bar?.parent)
         }
+    }
+
+    @Test fun retiringAVisibleScrollbarKeepsTheRootsChildrenInPlace() {
+        val f = Fixture(2)
+        f.down(); f.under(f.reply(0)); f.told(2); f.indicate()
+        val bar = requireNotNull(f.scroller().bar)
+        assertNotNull(bar.parent)
+        assertEquals(200, bar.height)
+        assertEquals(1, f.parent.childCount)
+        f.scrolling.told(intArrayOf())
+        assertNull(bar.parent)
+        assertSame(f.view, f.parent.getChildAt(0))
     }
 
     @Test fun anOldAutoReplyCannotOverrideANewerNoneStatement() = oldReply(0, 8)
@@ -71,7 +83,7 @@ class ScrollingTest {
             f.under(old)
             f.indicate()
             assertEquals("the statement's policy survives an older hit reply", newPolicy != 0, f.scroller().barless)
-            assertEquals(if (newPolicy == 0) 2 else 1, f.parent.childCount)
+            assertEquals(newPolicy == 0, f.scroller().bar?.parent != null)
         }
     }
 

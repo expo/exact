@@ -123,6 +123,9 @@ import ExactDialogs
 #if EXACT_LINK_SHARE
 import ExactSharing
 #endif
+#if EXACT_LINK_DRAG_OUT
+import ExactDragOut
+#endif
 public enum ExactComposition {
     public static let app: ExactApp = {
         AgentLink.install()
@@ -255,6 +258,9 @@ public enum ExactComposition {
         #endif
         #if EXACT_LINK_SHARE
         ExactSharing.install()
+        #endif
+        #if EXACT_LINK_DRAG_OUT
+        ExactDragOut.install()
         #endif
     }
 }

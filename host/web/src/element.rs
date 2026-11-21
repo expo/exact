@@ -1104,6 +1104,8 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             PropId::LightY => "y",
             PropId::LightZ => "z",
             PropId::ButtonStyle => "data-button-style",
+            // @ref LLP 1094.000 D6 — the browser's drag; `drag-out.js` fills it.
+            PropId::Draggable => "draggable",
             other if matches!(node.node_type, NodeType::SvgFe | NodeType::SvgFilter) => {
                 other.name()
             }

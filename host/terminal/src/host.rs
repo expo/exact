@@ -306,7 +306,7 @@ impl<D: DataSource> Host<D> {
         let (launch, notes) = crate::zone::launch(start.person, |key| std::env::var(key).ok())?;
         let location = start.location.as_str();
         let mut runner = exact_runner::time::launching_with(launch, ||
-            Runner::boot(plan, data, kernel, viewport, location)).map_err(|e| match e {
+            exact_runner::page::Platform::Terminal.boot(|| Runner::boot(plan, data, kernel, viewport, location))).map_err(|e| match e {
                 // The data module answered another declaration than the
                 // screen's: most often a binary older than the shapes.
                 RunnerError::Shape { resource, why } => format!(
