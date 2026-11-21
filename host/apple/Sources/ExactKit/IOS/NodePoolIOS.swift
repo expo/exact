@@ -598,7 +598,7 @@ extension NodeView {
         sv.delegate = delegate
         content = .zero
         if let e = extras {
-            e.beforeLayoutScroll = nil; e.hiddenScroll = nil; e.followedScroll = nil
+            e.beforeLayoutScroll = nil; e.keptScrollLeft = nil; e.hiddenScroll = nil; e.followedScroll = nil
             e.anchoredScrollTop = nil; e.retainedScrollTop = nil; e.lastScrollEvent = []
             e.readingAnchors.removeAll(); e.activeReadingAnchor = nil; e.scrollAnchor = nil
             e.pendingScrollTop = nil; e.pendingScrollLeft = nil
