@@ -11,6 +11,8 @@ use exact_ink::Wgpu;
 #[derive(Default)]
 pub(crate) struct Output {
     pub rotation: Rotation,
+    #[cfg(target_os = "linux")]
+    scanout: Option<wgpu::TextureView>,
     #[cfg(not(target_arch = "wasm32"))]
     fallback: Option<Pixels>,
 }
@@ -28,6 +30,20 @@ impl Output {
         backend: &mut dyn Backend,
         target: FrameTarget,
     ) -> Result<Option<Pixmap>, String> {
+        #[cfg(target_os = "linux")]
+        let target = {
+            self.scanout = None;
+            if let FrameTarget::Scanout { readback } = target {
+                if let Some(result) = backend.finish_scanout(self.rotation, readback) {
+                    let (view, pixels) = result?;
+                    self.scanout = Some(view);
+                    return Ok(pixels);
+                }
+                FrameTarget::Pixels
+            } else {
+                target
+            }
+        };
         if self.rotation == Rotation::R0 || target == FrameTarget::Geometry {
             return backend.finish_for(target);
         }
@@ -78,6 +94,11 @@ impl Output {
 }
 
 impl Painter {
+    #[cfg(target_os = "linux")]
+    pub(crate) fn take_scanout(&mut self) -> Option<wgpu::TextureView> {
+        self.output.scanout.take()
+    }
+
     pub(crate) fn output_rotation(&self) -> Rotation {
         self.output.rotation
     }

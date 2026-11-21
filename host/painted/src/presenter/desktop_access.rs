@@ -33,6 +33,10 @@ impl<D: DataSource> Presenter<D> {
     /// The live view for an enabled node in the last accessibility statement.
     pub fn access_view(&self, id: i32) -> Option<ViewId> {
         let node = self.access_told().iter().find(|n| n.id == id)?;
+        self.enabled_access_view(node)
+    }
+
+    fn enabled_access_view(&self, node: &access::Node) -> Option<ViewId> {
         (node.flags & access::flag::DISABLED == 0
             && node.view != 0
             && self.host.kernel().node(node.view).is_some()
@@ -84,18 +88,25 @@ impl<D: DataSource> Presenter<D> {
         self.focus == Some(view)
     }
 
-    /// The editor's UTF-16 selection. Password values remain private to the editor.
-    pub fn access_selection(&self, id: i32) -> Option<FieldSelection> {
-        let view = self.access_view(id)?;
-        let node = self.host.kernel().node(view)?;
-        (node.node_type == NodeType::TextInput && node.props.str(PropId::Type) != Some("password"))
-            .then(|| self.field_selection(view))
+    fn accessible_field_view(&self, source: &access::Node) -> Option<ViewId> {
+        let node = self.host.kernel().node(source.view)?;
+        if node.node_type != NodeType::TextInput || node.props.str(PropId::Type) == Some("password")
+        {
+            return None;
+        }
+        self.enabled_access_view(source)
     }
 
-    /// The current editor value, independent of the page statement's cache.
-    pub fn access_text(&self, id: i32) -> Option<String> {
-        self.access_selection(id)?;
-        Some(self.field_text(self.access_view(id)?))
+    /// The current text and UTF-16 selection for a field in the published tree.
+    pub fn access_editor(&self, source: &access::Node) -> Option<(String, FieldSelection)> {
+        let view = self.accessible_field_view(source)?;
+        Some((self.field_text(view), self.field_selection(view)))
+    }
+
+    /// The UTF-16 selection of the field addressed by an accessibility action.
+    pub fn access_selection(&self, id: i32) -> Option<FieldSelection> {
+        let source = self.access_told().iter().find(|n| n.id == id)?;
+        Some(self.field_selection(self.accessible_field_view(source)?))
     }
 
     /// Published geometry for this field value. An accessibility client may keep the
@@ -197,13 +208,19 @@ mod tests {
         assert!(!p.access_focus_node(disabled, 3.));
         assert_eq!(p.access_focus(), Some(draft));
         assert_eq!(p.access_selection(secret), None);
-        assert_eq!(p.access_text(secret), None);
+        let editor = |p: &Presenter<()>, id| {
+            let source = p.access_told().iter().find(|n| n.id == id).unwrap();
+            p.access_editor(source)
+        };
+        assert_eq!(editor(&p, secret), None);
+        assert_eq!(editor(&p, disabled), None);
+        assert_eq!(editor(&p, draft), Some(("a🦀z".into(), selection)));
         assert!(!p.access_select(secret, selection, 4.));
         assert!(p.access_select(readonly, selection, 5.));
         assert_eq!(p.field_text(p.access_view(readonly).unwrap()), "fixed");
         p.type_text(p.access_view(draft).unwrap(), "new 🦀 draft")
             .unwrap();
-        assert_eq!(p.access_text(draft).as_deref(), Some("new 🦀 draft"));
+        assert_eq!(editor(&p, draft).unwrap().0, "new 🦀 draft");
         p.access_reset();
         assert!(!p.access_focus_node(draft, 6.));
         assert!(!p.access_select(draft, selection, 6.));

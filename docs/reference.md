@@ -4354,6 +4354,16 @@ or both, each with its own strings key (LLP 1069.008.000):
   frame never shows last launch's data from the store, and any kept answer
   on disk is forgotten at boot.
 
+### Recording other apps' sound (macOS)
+
+Exact has no API for it: the app's own Swift module (LLP 1067) makes a Core
+Audio process tap ([Capturing system audio with Core Audio
+taps](https://developer.apple.com/documentation/coreaudio/capturing-system-audio-with-core-audio-taps)).
+The grant `device.system-audio-recording purpose.<key>` writes
+`NSAudioCaptureUsageDescription` into a Mac build's Info.plist with the
+strings key's text, which macOS shows when the module first asks. It adds
+no entitlement, and no other platform gets anything.
+
 ### Sounds
 
 A declared WAV (`sound "assets/…wav"`) is played by `playSound(src, at=,

@@ -251,6 +251,7 @@ final class NodeExtras {
 extension NodeView {
     var authoredContainerType: UIAccessibilityContainerType? {
         if props["accessibilityRole"] == "group" { return .semanticGroup }
+        if props["accessibilityRole"] == "list" { return .list }
         if kind == "native", authoredLabel != nil, presenter?.session?.natives.speaksForItself(self) == true {
             return .semanticGroup
         }

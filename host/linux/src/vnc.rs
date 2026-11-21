@@ -11,7 +11,7 @@ use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use tiny_skia::Pixmap;
@@ -82,12 +82,39 @@ impl PixelFormat {
 }
 
 struct Shared {
+    viewers: AtomicUsize,
+    refresh: AtomicBool,
     frame: Mutex<(Option<Arc<Pixmap>>, u64)>,
     changed: Condvar,
     events: Mutex<Vec<InputEvent>>,
     wake: Mutex<UnixStream>,
     width: u32,
     height: u32,
+}
+
+struct Viewer<'a>(&'a Shared);
+
+impl<'a> Viewer<'a> {
+    fn joined(shared: &'a Shared) -> Self {
+        let mut slot = shared.frame.lock().unwrap_or_else(|e| e.into_inner());
+        if shared.viewers.fetch_add(1, Ordering::AcqRel) == 0 {
+            // Frames may have reached the panel with no readback while it was unobserved.
+            slot.0 = None;
+            shared.refresh.store(true, Ordering::Release);
+            drop(slot);
+            wake(shared);
+        }
+        Self(shared)
+    }
+}
+
+impl Drop for Viewer<'_> {
+    fn drop(&mut self) {
+        let mut slot = self.0.frame.lock().unwrap_or_else(|e| e.into_inner());
+        if self.0.viewers.fetch_sub(1, Ordering::AcqRel) == 1 {
+            slot.0 = None;
+        }
+    }
 }
 
 /// The server: frames in, input out.
@@ -108,6 +135,8 @@ impl Vnc {
         let (wake_tx, wake_rx) = UnixStream::pair()?;
         wake_rx.set_nonblocking(true)?;
         let shared = Arc::new(Shared {
+            viewers: AtomicUsize::new(0),
+            refresh: AtomicBool::new(false),
             frame: Mutex::new((None, 0)),
             changed: Condvar::new(),
             events: Mutex::new(Vec::new()),
@@ -138,6 +167,16 @@ impl Vnc {
     /// The descriptor to poll: readable when input arrived.
     pub fn fd(&self) -> RawFd {
         self.wake_rx.as_raw_fd()
+    }
+
+    /// An authenticated viewer is following the display.
+    pub fn has_viewers(&self) -> bool {
+        self.shared.viewers.load(Ordering::Acquire) != 0
+    }
+
+    /// The first viewer after an idle interval needs a current picture.
+    pub fn take_refresh(&self) -> bool {
+        self.shared.refresh.swap(false, Ordering::AcqRel) && self.has_viewers()
     }
 
     /// A new frame for every client.
@@ -182,6 +221,7 @@ fn serve(mut stream: TcpStream, shared: Arc<Shared>, key: [u8; 8]) -> io::Result
     stream.set_nodelay(true)?;
     auth::handshake(&mut stream, &key)?;
     let _shared_flag = read_exact::<1>(&mut stream)?;
+    let _viewer = Viewer::joined(&shared);
     let mut init = Vec::new();
     init.extend_from_slice(&(shared.width as u16).to_be_bytes());
     init.extend_from_slice(&(shared.height as u16).to_be_bytes());
@@ -371,6 +411,10 @@ fn push(shared: &Shared, event: InputEvent) {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .push(event);
+    wake(shared);
+}
+
+fn wake(shared: &Shared) {
     let _ = shared
         .wake
         .lock()
@@ -505,7 +549,9 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let (wake, _rx) = UnixStream::pair().unwrap();
         let shared = Arc::new(Shared {
-            frame: Mutex::new((None, 0)),
+            viewers: AtomicUsize::new(0),
+            refresh: AtomicBool::new(false),
+            frame: Mutex::new((Some(Arc::new(Pixmap::new(1, 1).unwrap())), 1)),
             changed: Condvar::new(),
             events: Mutex::new(Vec::new()),
             wake: Mutex::new(wake),
@@ -527,6 +573,9 @@ mod tests {
             u32::from_be_bytes(init[20..24].try_into().unwrap()).into(),
         )
         .unwrap();
+        assert_eq!(shared.viewers.load(Ordering::Acquire), 1);
+        assert!(shared.refresh.load(Ordering::Acquire));
+        assert!(shared.frame.lock().unwrap().0.is_none());
         for (down, key) in [(true, b'w'), (true, b'w'), (false, b'w'), (true, b'd')] {
             client
                 .write_all(&[4, u8::from(down), 0, 0, 0, 0, 0, key])
@@ -537,6 +586,7 @@ mod tests {
             task.join().unwrap().unwrap_err().kind(),
             io::ErrorKind::UnexpectedEof
         );
+        assert_eq!(shared.viewers.load(Ordering::Acquire), 0);
         assert_eq!(
             *shared.events.lock().unwrap(),
             vec![
@@ -609,6 +659,8 @@ mod contact_tests {
         let address = listener.local_addr().unwrap();
         let (wake, _read) = UnixStream::pair().unwrap();
         let shared = Arc::new(Shared {
+            viewers: AtomicUsize::new(0),
+            refresh: AtomicBool::new(false),
             frame: Mutex::new((None, 0)),
             changed: Condvar::new(),
             events: Mutex::new(Vec::new()),

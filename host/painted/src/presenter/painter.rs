@@ -268,6 +268,17 @@ fn ink_backend(ink: crate::ink::Ink) -> (Box<dyn Backend>, PainterInfo) {
 }
 
 impl<D: DataSource> Presenter<D> {
+    #[cfg(target_os = "linux")]
+    pub(crate) fn install_scanout_painter(&mut self, device: exact_ink::Wgpu) {
+        let (backend, info) = ink_backend(crate::ink::Ink::from_device(
+            exact_ink::device::Selected::from(device),
+        ));
+        self.brush.replace_backend(backend);
+        self.painter = info;
+        self.choice = PainterChoice::Ink;
+        self.repaint();
+    }
+
     /// Attach S1's benchmark carrier. Shipping Apple apps still use native views.
     #[cfg(target_os = "macos")]
     pub fn attach_apple_layer(

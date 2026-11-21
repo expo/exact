@@ -629,6 +629,9 @@ final class AccessibilityTests: XCTestCase {
         box.applyProps(set: ["accessibilityRole": "group"], clear: [])
         XCTAssertEqual(box.accessibilityRole(), .group)
         XCTAssertNil(box.accessibilitySubrole(), "a status become a group")
+        box.applyProps(set: ["accessibilityRole": "list"], clear: [])
+        XCTAssertEqual(box.accessibilityRole(), .list)
+        XCTAssertTrue(box.isAccessibilityElement())
         box.applyProps(set: ["accessibilityRole": "none"], clear: [])
         XCTAssertFalse(box.isAccessibilityElement(), "role=\"none\"")
         withExtendedLifetime(w) {}

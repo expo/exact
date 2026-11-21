@@ -526,7 +526,7 @@ fn raster_demand_follows_the_content_box_fit_and_device_scale() {
     images.sync_visible(&k, &k.roots(), 2., |_| true);
     let view = images.views.get_mut(&1).unwrap();
     assert_eq!(view.desired, (760., 200.));
-    let header = png_decode::Header::jpeg(exact_raster::Metadata {
+    let header = png_decode::Header::platform(exact_raster::Metadata {
         natural: PixelSize {
             width: 1600,
             height: 900,

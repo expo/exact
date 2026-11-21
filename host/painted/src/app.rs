@@ -514,6 +514,23 @@ pub fn boot_presenter<D: DataSource + Default>(
     Ok(result)
 }
 
+/// Boot with the Ink device that owns the selected Linux display.
+#[cfg(target_os = "linux")]
+pub fn boot_scanout_presenter<D: DataSource + Default>(
+    config: &mut Config,
+    viewport: (f32, f32),
+    device: exact_ink::Wgpu,
+) -> Result<(Presenter<D>, Option<String>), String> {
+    let (mut p, warning) = boot_presenter_with_painter(
+        config,
+        viewport,
+        PainterBoot::selected(crate::presenter::PainterChoice::Cpu),
+    )?;
+    p.install_scanout_painter(device);
+    p.set_output_rotation(config.output_rotation);
+    Ok((p, warning))
+}
+
 #[cfg(any(windows, test))]
 /// Decide whether the window starts hidden and start early preparation for a visible launch.
 /// A measured frame run always shows its window. @ref LLP 1133.025 D6.

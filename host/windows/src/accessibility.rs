@@ -239,17 +239,22 @@ impl Access {
         let mut runs = BTreeMap::new();
         let mut changed = Vec::new();
         for source in sources {
-            let mut source = source.clone();
-            if let Some(value) = p.access_text(source.id) {
-                source.value = value;
-            }
             let id = NodeId(source.id as u64);
             let props = p.host().kernel().node(source.view).map(|n| n.props);
             let password = props.is_some_and(|props| props.str(PropId::Type) == Some("password"));
             let multiline =
                 props.is_some_and(|props| props.str(PropId::SemanticTag) == Some("textarea"));
             let readonly = props.is_some_and(|props| props.bool(PropId::Editable) == Some(false));
-            let mut node = map_node(&source, origin, password, multiline, readonly);
+            let mut node = map_node(source, origin, password, multiline, readonly);
+            let field = matches!(source.role, role::EDIT | role::FIELD) && !password;
+            let selection = if field {
+                p.access_editor(source).map(|(value, selection)| {
+                    node.set_value(value);
+                    selection
+                })
+            } else {
+                None
+            };
             if source.role == role::SLIDER {
                 if let Some(props) = props.filter(|p| p.str(PropId::Type) == Some("range")) {
                     let (small, large) = exact_kernel::Range::of(props).keyboard_steps();
@@ -271,15 +276,16 @@ impl Access {
                 node.clear_value();
             }
             node.set_children(children_by_parent.remove(&source.id).unwrap_or_default());
-            if matches!(source.role, role::EDIT | role::FIELD) && !password && !native {
+            if field && !native {
                 let previous = self
                     .nodes
                     .get(&id)
                     .and_then(Node::value)
                     .zip(self.runs.remove(&id));
-                let layout = p.access_text_layout(source.view, &source.value);
-                let field = FieldRuns::update(id, &source.value, layout, previous, &mut changed);
-                if let Some(selection) = p.access_selection(source.id) {
+                let value = node.value().unwrap_or_default();
+                let layout = p.access_text_layout(source.view, value);
+                let field = FieldRuns::update(id, value, layout, previous, &mut changed);
+                if let Some(selection) = selection {
                     let (anchor, focus) = if selection.direction == SelectionDirection::Backward {
                         (selection.end, selection.start)
                     } else {

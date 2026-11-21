@@ -36,7 +36,8 @@ pub(in crate::image) fn decode<R: Read + Seek>(
         let decoder = factory
             .CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnDemand)
             .map_err(|_| Refusal::DecodeFailed)?;
-        let frame = decoder.GetFrame(0).map_err(|_| Refusal::DecodeFailed)?;
+        let index = plan.header.icon.map_or(0, |entry| entry.index);
+        let frame = decoder.GetFrame(index).map_err(|_| Refusal::DecodeFailed)?;
         let (mut width, mut height) = (0, 0);
         frame
             .GetSize(&mut width, &mut height)

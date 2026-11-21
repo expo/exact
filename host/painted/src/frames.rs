@@ -26,7 +26,7 @@ const LATE: usize = 100;
 struct Record {
     t: f64,
     interval: f64,
-    missed: u32,
+    missed: Option<u32>,
     seq: Option<(u64, u64)>,
     paint: Option<f64>,
 }
@@ -50,11 +50,12 @@ pub struct Frames {
     late: VecDeque<Record>,
     dropped: u64,
     presented: u64,
+    vulkan_feedback: u64,
     late_count: u64,
     missed: u64,
     segments: u64,
     /// The previous flip: its vblank sequence and when it completed.
-    last: Option<(u32, f64)>,
+    last: Option<(Option<u32>, f64)>,
     /// When the next frame was first wanted.
     wanted: Option<f64>,
     /// The frame awaiting its flip: when it was wanted, and the runner's
@@ -75,6 +76,7 @@ impl Frames {
             late: VecDeque::new(),
             dropped: 0,
             presented: 0,
+            vulkan_feedback: 0,
             late_count: 0,
             missed: 0,
             segments: 0,
@@ -116,22 +118,32 @@ impl Frames {
     }
 
     /// The submitted frame's flip completed: vblank `sequence` at `t`, with
-    /// its paint time. The journal line when it was late.
-    pub fn flipped(&mut self, sequence: u32, t: f64, paint: Option<f64>) -> Option<String> {
+    /// its paint time. Vulkan reports the completed presentation without a vblank
+    /// sequence. Such frames contribute intervals but cannot count missed flips.
+    pub fn flipped(
+        &mut self,
+        sequence: impl Into<Option<u32>>,
+        t: f64,
+        paint: Option<f64>,
+    ) -> Option<String> {
+        let sequence = sequence.into();
         let r2 = |x: f64| (x * 100.0).round() / 100.0;
         let (wanted, seq) = self.pending.take()?;
         let carried = (seq > self.seq_mark).then_some((self.seq_mark + 1, seq));
         self.seq_mark = seq;
         let (interval, missed) = match self.last.replace((sequence, t)) {
-            Some((before, at)) if wanted <= at + self.period_ms / 2.0 => {
-                (t - at, sequence.wrapping_sub(before).saturating_sub(1))
-            }
+            Some((before, at)) if wanted <= at + self.period_ms / 2.0 => (
+                t - at,
+                sequence
+                    .zip(before)
+                    .map(|(now, before)| now.wrapping_sub(before).saturating_sub(1)),
+            ),
             _ => {
                 self.segments += 1;
                 let since = t - wanted;
                 (
                     since,
-                    ((since / self.period_ms).floor() as u32).saturating_sub(1),
+                    sequence.map(|_| ((since / self.period_ms).floor() as u32).saturating_sub(1)),
                 )
             }
         };
@@ -148,6 +160,8 @@ impl Frames {
             self.dropped += 1;
         }
         self.presented += 1;
+        self.vulkan_feedback += u64::from(sequence.is_none());
+        let missed = missed?;
         if missed == 0 {
             return None;
         }
@@ -187,6 +201,16 @@ impl Frames {
                 "p50": q(0.5), "p95": q(0.95), "p99": q(0.99), "max": xs.last() },
             "late": self.late.iter().rev().take(late.min(LATE)).rev().map(Record::json).collect::<Vec<_>>(),
         });
+        if self.vulkan_feedback > 0 {
+            out["covers"] = if self.vulkan_feedback == self.presented {
+                json!(["vulkan-present-wait"])
+            } else {
+                json!(["vulkan-present-wait", "page-flips"])
+            };
+            out["lifetime"]["withoutVblankSequence"] = json!(self.vulkan_feedback);
+            out["lifetime"]["missed"] = Value::Null;
+            out["lifetime"]["late"] = Value::Null;
+        }
         if all {
             out["records"] = self.ring.iter().map(Record::json).collect();
         }
@@ -262,6 +286,22 @@ pub fn save_trace<D: DataSource>(
 #[cfg(test)]
 mod tests {
     use super::Frames;
+
+    #[test]
+    fn vulkan_completion_records_an_interval_without_inventing_a_vblank_count() {
+        let mut frames = Frames::new(60);
+        for (seq, requested, completed) in [(1, 0., 12.), (2, 13., 62.)] {
+            frames.dirty(requested);
+            frames.submitted(requested, seq, 0);
+            frames.flipped(None, completed, None);
+        }
+        let reply = frames.reply(5, true);
+        assert_eq!(reply["lifetime"]["presented"], 2);
+        assert_eq!(reply["records"][1]["interval"], 50.);
+        assert!(reply["records"][1]["missed"].is_null());
+        assert!(reply["lifetime"]["late"].is_null());
+        assert_eq!(reply["covers"][0], "vulkan-present-wait");
+    }
 
     #[test]
     fn a_flip_is_late_by_its_vblank_gap_a_slow_start_by_its_wait_and_idle_never() {

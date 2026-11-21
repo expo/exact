@@ -449,6 +449,25 @@ fn headless_geometry_is_current_before_the_first_picture() {
     assert!(p.painted);
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_lost_panel_frame_repaints_without_publishing_its_geometry() {
+    let (mut p, _, _) = boot();
+    let lost = p.panel_frame(true, false).unwrap();
+    let target = id(&p, "target");
+    assert!(p.panel_frame(true, false).is_none());
+    p.panel_lost(&lost);
+    assert!(p.dirty());
+    assert!(!p.painted);
+    assert!(!p.panel_complete(&lost));
+    let next = p.panel_frame(false, true).unwrap();
+    assert!(next.mirror().is_some());
+    p.panel_lost(&lost);
+    assert!(p.panel_complete(&next));
+    let (x, y) = point(&p, target);
+    assert_eq!(p.hit(x, y), Some(target));
+}
+
 #[test]
 fn foreign_receipt_does_not_release_or_acknowledge_another_presenter() {
     let (mut a, _, _) = boot();

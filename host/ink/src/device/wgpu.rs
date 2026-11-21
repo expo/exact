@@ -19,6 +19,8 @@ mod cache;
 #[cfg(target_os = "macos")]
 mod present;
 mod programs;
+#[cfg(target_os = "linux")]
+pub mod scanout;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
 
@@ -165,23 +167,32 @@ impl Wgpu {
             })
             .await
             .map_err(|e| Error::NoAdapter(e.to_string()))?;
-        let adapter_info = adapter.get_info();
-        let caching = adapter
-            .features()
-            .contains(::wgpu::Features::PIPELINE_CACHE);
+        let desc = Self::device_descriptor(&adapter)?;
         let (device, queue) = adapter
-            .request_device(&::wgpu::DeviceDescriptor {
-                label: Some("exact-ink"),
-                required_limits: requested_limits(adapter.limits())?,
-                required_features: if caching {
-                    ::wgpu::Features::PIPELINE_CACHE
-                } else {
-                    ::wgpu::Features::empty()
-                },
-                ..Default::default()
-            })
+            .request_device(&desc)
             .await
             .map_err(|e| Error::Device(e.to_string()))?;
+        Self::from_device(instance, adapter, device, queue, started).await
+    }
+
+    fn device_descriptor(adapter: &::wgpu::Adapter) -> Result<::wgpu::DeviceDescriptor<'static>> {
+        Ok(::wgpu::DeviceDescriptor {
+            label: Some("exact-ink"),
+            required_limits: requested_limits(adapter.limits())?,
+            required_features: adapter.features() & ::wgpu::Features::PIPELINE_CACHE,
+            ..Default::default()
+        })
+    }
+
+    async fn from_device(
+        _instance: ::wgpu::Instance,
+        adapter: ::wgpu::Adapter,
+        device: ::wgpu::Device,
+        queue: ::wgpu::Queue,
+        started: Instant,
+    ) -> Result<Self> {
+        let adapter_info = adapter.get_info();
+        let caching = device.features().contains(::wgpu::Features::PIPELINE_CACHE);
         let failures = Arc::new(Mutex::new(None));
         let errors = failures.clone();
         device.on_uncaptured_error(Arc::new(move |error| {
@@ -358,7 +369,7 @@ impl Wgpu {
         upload(&queue, &white_color, [0, 0], [1, 1], &[255; 4]);
         Ok(Self {
             #[cfg(target_os = "macos")]
-            instance,
+            instance: _instance,
             #[cfg(target_os = "macos")]
             adapter,
             #[cfg(target_os = "macos")]
