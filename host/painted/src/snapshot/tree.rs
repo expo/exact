@@ -245,8 +245,8 @@ fn lines(kernel: &Kernel, text: &Shared, n: &NodeRef<'_>, s: &StyleProps) -> Vec
         for g in logical {
             let (a, b) = (g.start as usize - start, g.end as usize - start);
             match spans.last_mut() {
-                Some((run, _, e)) if *run == g.run() => *e = (*e).max(b),
-                _ => spans.push((g.run(), a, b)),
+                Some((run, _, e)) if *run == g.run(line.run_base) => *e = (*e).max(b),
+                _ => spans.push((g.run(line.run_base), a, b)),
             }
         }
         let units = |bytes: usize| {
@@ -264,7 +264,7 @@ fn lines(kernel: &Kernel, text: &Shared, n: &NodeRef<'_>, s: &StyleProps) -> Vec
                 let glyphs = || {
                     line.glyphs
                         .iter()
-                        .filter(move |g| g.run() == run || (takes && g.start == g.end))
+                        .filter(move |g| g.run(line.run_base) == run || (takes && g.start == g.end))
                 };
                 let size = glyphs().next().map_or(r.size, |g| g.font_size);
                 let from = glyphs().map(|g| g.x).fold(f32::INFINITY, f32::min);

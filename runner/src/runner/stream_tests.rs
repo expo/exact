@@ -724,10 +724,10 @@ fn failure(r: &Runner<Scripted>) -> Option<String> {
         crate::vm::Column::rows(&r.resources, |row| &row.failed_why),
         0,
     )?;
-    Some(if f.reason.is_empty() {
+    Some(if f.reason().is_empty() {
         f.message
     } else {
-        f.reason
+        f.reason().to_owned()
     })
 }
 
@@ -1088,7 +1088,7 @@ fn an_update_during_a_burst_asks_again_the_uploads_that_never_left() {
             i,
         )
         .expect("cut off");
-        assert_eq!(f.reason, "interrupted", "photo{}", i + 1);
+        assert_eq!(f.reason(), "interrupted", "photo{}", i + 1);
     }
 }
 

@@ -75,7 +75,17 @@ the build refuses and names the SDK and `"cpu"` remedies.
 `agent windows`, `test windows` and `verify windows` explicitly select CPU
 for their headless drives unless `EXACT_PAINTER` is set. Those screenshots
 do not qualify the window's composition path.
-A direct `EXACT_SMOKE=1` launch uses the app's painter choice.
+A direct `EXACT_SMOKE=1` development launch uses the app's painter choice.
+`bun exact.mjs windows --release` packages a production binary and omits the
+headless driver. To measure an optimized build under the driver, set
+`EXACT_UPDATE_TRUST=development` when running the same command.
+A hand-written Windows shell selects the driver at compile time by calling
+`exact_windows::run_baked::<AppData, ADMIT_AGENT>`. The TypeScript bake supplies
+`ADMIT_AGENT`. A Rust app that bakes its own `compat.json` writes
+`compat.admits_agent()` to a Rust constant in `OUT_DIR` in the same build step.
+`run_composed` always links the driver. The heavy-list app shows the
+[build step](../bench/heavy-list/exact-heavylist/windows/build.rs) and the
+[entry point](../bench/heavy-list/exact-heavylist/windows/src/main.rs).
 A Windows login item started with `--login hidden` paints its offscreen launch
 frame on the CPU and opens the selected painter when its window first draws.
 Linux and Android still opt into ink per platform; Android refuses it until
@@ -799,7 +809,7 @@ each defaults to the humanised `kind` when omitted.
 
 On Android 12 and later a row with a `system*` family is a home-screen widget
 (LLP 1126.003): `systemSmall` is two cells square, `systemMedium` four by two,
-`systemLarge` and `systemExtraLarge` four square, and it resizes from there. The
+`systemLarge`, `systemExtraLarge` and `systemExtraLargePortrait` four square, and it resizes from there. The
 same component is laid out at the launcher's size in the system's colours, and
 the same `refresh` keeps its timeline. Accessory families have no Android
 counterpart. What the launcher's views cannot draw yet (a gradient, a rounded or
@@ -978,8 +988,8 @@ profile to the named one's method, and an Ad Hoc pair must cover the same
 devices.
 
 On macOS, `bun host/apple/build.mjs --run` packages the app's widgets in
-`Contents/PlugIns`. The Mac keeps `systemSmall`, `systemMedium`, `systemLarge`
-and `systemExtraLarge`; if no families remain it builds no extension. Live
+`Contents/PlugIns`. The Mac keeps `systemSmall`, `systemMedium`, `systemLarge`,
+`systemExtraLarge` and `systemExtraLargePortrait`; if no families remain it builds no extension. Live
 Activities do not create a Mac extension. The extension uses the same runtime
 framework and snapshot driver, in its own sandbox with outbound network access.
 The app keeps its existing sandbox policy and loads the reload arm on demand.
@@ -1729,9 +1739,9 @@ profile claims neither.
 
 ### Web CI preparation
 
-For a website's `web-build` and `test web` on Linux, install Bun at the version in
-Exact's `package.json` and rustup, then check out the desired Exact commit at the path
-the app's `exact.mjs` uses. From the app directory, run:
+For a website's `web-build` and `test web` on Linux, check out Exact at the path the
+app's `exact.mjs` uses and install Bun at the version in Exact's `package.json`.
+Install rustup if the app or SDK tools will build from source. Run these commands from the app directory.
 
 ```sh
 bun <exact2>/scripts/exact.mjs setup --platform web
@@ -1739,7 +1749,13 @@ bun install --frozen-lockfile
 bun exact.mjs test web
 ```
 
-The scoped setup installs the pinned stable and nightly Rust, the nightly's `rust-src`,
+A Contract and TypeScript site can use matching prebuilt tools for its web build and browser tests.
+Web setup checks the tools and their recorded Cargo metadata against this checkout, then installs
+the JavaScript dependencies and browser. `--check` uses the local cache. Setup can also fetch
+from a tools origin when the checkout pins its producer key. Native builds, games, Rust data or
+GPU crates, custom web build scripts and Rust page renderers require Rust.
+
+For a source build, the scoped setup installs the pinned stable and nightly Rust, the nightly's `rust-src`,
 `llvm-tools`, clippy and `wasm32-unknown-unknown` target, its standard-library dependencies,
 wasm-bindgen, Binaryen, Exact's `node_modules`, Playwright's Chromium and headless shell,
 and Exact's locked crates. The wasm tools serve Markdown, motion, the markup editor,
@@ -1883,6 +1899,22 @@ So restore that `target/` only under a key that names the Exact commit
 and date only the files the checkout wrote, before any step changes the
 clone. Leave the app's own files their checkout times unless the key names
 the app's commit too.
+
+### Reclaim an idle app's build output
+
+On macOS and Linux, run `bun <exact>/scripts/sweep.mjs clean <app-dir> --dry-run --json`
+to list an outside app’s rebuildable output. Omit `--dry-run` to remove it.
+Exact keeps saved traces, the receipts that the run history points to,
+production bundles and their symbols, build locks, and unrecognized paths.
+A build, dev server or driver using the app’s output keeps it busy. A cleanup
+that starts first holds off new Exact builds until the files have moved.
+The app must own its target directory.
+
+The JSON object has `version: 1`, `status`, `dryRun`, `target` and three lists.
+`remove` gives absolute paths, `kept` gives a path and a reason (`record`,
+`lock` or `unlisted`), and `held` names busy locks or leases. The exit code is
+0 for `ok`, 2 for `refused`, and 1 for `busy` or `failed`. On failure,
+`error` gives the cause and `remove` lists the paths already moved.
 
 ### Import an iOS signing identity on a CI worker
 
@@ -2340,6 +2372,12 @@ under one parent are matched in source order. A parent element with a unique
 literal `id` keeps its place when reordered. Moving the component under a new
 parent starts fresh state.
 
+When a native plan reloads, a virtualized list at the same source place opens
+at the row key and offset the reader last saw. If that key is gone, the list
+uses the next surviving key from the old window, then the previous one.
+It returns to the start if none survive. A reader at the start stays there,
+and a list following its end stays at the end.
+
 The JS development reload restores reading anchors and focus, including a field's
 selection range and direction when its text matches. A field may regain focus after
 its resource answers; reader focus cancels pending focus and selection. Scrolling
@@ -2439,11 +2477,13 @@ and dropped records. An ordinary launch on the wall clock is available on macOS 
 `bun scripts/agent.mjs macos --live --storage latency "tap change-station" "type station-search Palo" state`
 (use `ios --live` on a simulator or `ios --device --live` on a phone). The driver launches and closes this process and keeps input
 available. `--live` uses normal scheduling and the wall clock: `performanceNow()` and
-timers advance in real time between operations, and `perf frames` records real frames
-(with `--touch platform` on the simulator, a drag is a real touch and the `scroll`
-source observes it). The driver never holds the clock, so `clock` is refused; let time
-pass with `perf frames live <ms>`. On a physical iPhone, taps and drags still use the agent input path. A real
-UIKit drag requires an on-device XCTest runner. `--storage` chooses its
+timers advance in real time between operations, and `perf frames` records real frames.
+On iOS, `--touch platform` sends the gesture through XCTest so UIKit delivers the scroll callbacks.
+For example, `bun exact.mjs agent ios --device --live --touch platform "tap s drag 0 -300 over 100" "perf frames health scroll"`
+drags the scroll view named `s` on a phone. Unlock the paired phone, enable Developer Mode and UI Automation,
+and allow local network access if prompted. The Mac needs an Apple Development identity and a provisioning profile
+covering the phone and `com.exact.touches.xctrunner`. On the wall clock use `perf frames live <ms>` to observe an interval.
+`--storage` chooses the drive's
 scratch store. Set
 `EXACT_STORE=real` in the launch environment to use the app's real secret and preference
 stores and secret presence. App files still follow the drive's scratch-store setting
@@ -2686,7 +2726,7 @@ storage write already submitted may finish, so an OOM does not establish
 whether it committed. Its completion is discarded, and queued JavaScript
 writes never start.
 
-On Hermes each turn of an answer has 100 ms of its own time: its call, or its
+On Hermes each turn of an answer has 100 ms of its own time by default: its call, or its
 resumption after a `fetch`, storage step or yield it awaited, until it awaits
 the next. Its own time is the calling thread's CPU clock where the platform keeps
 one, so a turn that waits on a blocked host call spends little of it; a turn may
@@ -2695,9 +2735,20 @@ as an overrun (`Overrun`: `` `work` took 904.5 ms of its own (CPU) time (2283.7 
 of wall), over the 100 ms budget for one turn; … ``), and the message names the
 repair: `await scheduler.yield()` every few thousand items of a long loop
 ([the guide](contract-for-agents.md#data-requests-and-side-effects) shows one).
+For synchronous work that cannot yield, `app.ts` can export a constant map
+such as `export const turnBudgets = { signOrder: 400 }`. A budget is 100 to
+1000 ms inclusive and names a source owned by TypeScript in this app. It
+applies to the source's initial call, continuations and stream messages. Its
+wall-clock limit is ten times its budget. A snapshot keeps its own deadline.
 A resource so refused keeps its last value and reads as pending, and is asked
 again at 250 ms, then at 1 s; a third overrun in a row fails it as any refusal
-does. A mutation's or a stream message's overrun is not asked again.
+does. A mutation fails on its first overrun. `failure(x).code` is `error`
+and `failure(x).reason` is `overrun` for either failure. The app can show a
+retry button for a failed mutation. A development build also reports the
+overrun in the host console (the app’s logcat tag on Android). The Apple
+development window shows it until the next input or plan replacement.
+The runner never retries a stream message
+that overruns.
 The host asks a yielded answer again at once, in its place among the source's
 requests, with no work and no clock, so an agent's `clock settle` runs it to its
 end without moving the clock. The browser keeps no such budget and
@@ -4316,6 +4367,16 @@ or both, each with its own strings key (LLP 1069.008.000):
   frame never shows last launch's data from the store, and any kept answer
   on disk is forgotten at boot.
 
+### Recording other apps' sound (macOS)
+
+Exact has no API for it: the app's own Swift module (LLP 1067) makes a Core
+Audio process tap ([Capturing system audio with Core Audio
+taps](https://developer.apple.com/documentation/coreaudio/capturing-system-audio-with-core-audio-taps)).
+The grant `device.system-audio-recording purpose.<key>` writes
+`NSAudioCaptureUsageDescription` into a Mac build's Info.plist with the
+strings key's text, which macOS shows when the module first asks. It adds
+no entitlement, and no other platform gets anything.
+
 ### Sounds
 
 A declared WAV (`sound "assets/…wav"`) is played by `playSound(src, at=,
@@ -5600,6 +5661,13 @@ attached, without any userinfo: `https://name:password@x.test/trip` arrives as
 from the member and an Android build its intent filters; the web's member takes the
 text members only. `apps/fieldnotes` receives text and files this way.
 
+On iOS and macOS the extension saves the share in an inbox. The app claims each share
+once and removes its inbox record when it delivers the action route. If the action needs
+sign-in or a network connection, save the pending text or URL in persistent app state
+when the route receives it. Restore it after a relaunch and clear it when the action
+succeeds or the person discards it. The extension’s checkmark means the share reached
+the inbox. The app’s submission may still be pending.
+
 `share_target.apple` holds Apple's words:
 
 - **`presentation`** is what the extension shows. `"compose"`, the default, is the
@@ -5656,8 +5724,18 @@ An app's own predicate is used as written. On the iOS 27 simulator, Safari offer
 page to a predicate that accepts only `public.url` and still hands over the details;
 this has not been run on a phone or a Mac.
 
-A device build leaves the share extension out until the team registers the App Group
-and the extension's App ID, and says so; a Mac build signed ad hoc leaves it out too
+On iPhone, register the App IDs `<app id>` and `<app id>.share` on the same Apple
+Developer team and enable the App Group `group.<app id>` for both. Make and install a
+profile for each ID. For `bun exact.mjs ios --device`, both profiles must cover the
+phone and its development signing certificate. For a distribution archive, use profiles
+of the same distribution method. `EXACT_PROFILE` can select the containing app's profile.
+Exact finds the extension's by its ID and reports a missing grant before compiling.
+[Register an App Group](https://developer.apple.com/help/account/identifiers/register-an-app-group/).
+
+An unsigned device build includes `PlugIns/ExactShare.appex`. To install it, the signer
+must provision and sign both bundles for the same App Group. To build without the share
+extension, list the kinds to keep with `--extensions`, or use `--extensions none`.
+A Mac build signed ad hoc leaves out the share extension
 ([Mac development signing](#mac-development-signing)).
 
 ### Clipboard images
@@ -5705,6 +5783,9 @@ local re-exports, arrays and spreads of those arrays:
 import { SECRET_GRANTS } from './src/session';
 export const grants = ['net.fetch https://api.example.com', ...SECRET_GRANTS].join('\n');
 ```
+
+A namespace import reads the same constant: `import * as session` and
+`...session.SECRET_GRANTS`.
 
 The imported bindings follow the same literal grammar. Calls other than the
 array's `.join`, computed arrays, package bindings (including re-exports
@@ -6236,6 +6317,9 @@ An authored GPU module passes a static `&[exact_gpu::grants::Requirements]` as t
 second argument to `exact_gpu::module!`. See [the GPU module recipe](recipes/gpu-module.md)
 for a declaration and [package GPU surfaces](contract-for-agents.md#a-packages-gpu-surfaces)
 for packaging. Packages declare `exactGpu: "0.4"` and depend on `exact-gpu = "0.4"`.
+
+A surface opts into raw input with `Surface::wants_input`. On macOS the canvas
+also dispatches Contract pointer, wheel and context menu events. [GPU module recipe](recipes/gpu-module.md)
 
 ### GPU storage
 

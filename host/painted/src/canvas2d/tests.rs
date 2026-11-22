@@ -288,10 +288,20 @@ fn capture_refuses_an_unheld_generation_without_overwriting_a_file() {
 }
 
 #[test]
-fn a_jpeg_capture_is_the_bitmap_over_opaque_black() {
+fn captures_encode_straight_alpha_in_png_and_flatten_onto_black_for_jpeg() {
     let mut p = Pixmap::new(2, 1).unwrap();
     // Transparent, and red at half alpha (premultiplied).
     p.pixels_mut()[1] = tiny_skia::PremultipliedColorU8::from_rgba(128, 0, 0, 128).unwrap();
+    let (encoded, ty) =
+        super::capture::encode(&p, &exact_runner::canvas_capture::Encoding::default()).unwrap();
+    assert_eq!(ty, "image/png");
+    let mut reader = png::Decoder::new(std::io::Cursor::new(encoded))
+        .read_info()
+        .unwrap();
+    assert!(reader.info().srgb.is_some());
+    let mut straight = [0; 8];
+    reader.next_frame(&mut straight).unwrap();
+    assert_eq!(straight, [0, 0, 0, 0, 255, 0, 0, 128]);
     let flat = super::capture::opaque(&p);
     let rgba: Vec<_> = (flat.pixels().iter())
         .map(|c| [c.red(), c.green(), c.blue(), c.alpha()])
@@ -393,6 +403,23 @@ fn whole_pixel_clear_and_blit_preserve_edge_cases() {
     assert!(at(&frac, 2, 2)[3] > 0 && at(&frac, 2, 2)[3] < 255);
     assert_eq!(at(&frac, 3, 2), [0, 0, 255, 255]);
     assert!(at(&frac, 4, 2)[3] > 0 && at(&frac, 4, 2)[3] < 255);
+}
+
+#[test]
+fn full_canvas_clears_accept_frame_dimensions_rounded_to_f32() {
+    for scale in [1.25_f32, 1.5, 1.75] {
+        let ts = tiny_skia::Transform::from_scale(scale, scale);
+        for pixels in 1..=7680 {
+            let points = f64::from(pixels as f32 / scale);
+            assert!(
+                is_full_clear_rect(ts, 0., 0., points, points, pixels, pixels),
+                "{pixels} px at {scale}"
+            );
+        }
+    }
+    let ts = tiny_skia::Transform::from_scale(1.25, 1.25);
+    let fractional = f64::from(4640.8_f32.next_down());
+    assert!(!is_full_clear_rect(ts, 0., 0., fractional, 8., 5801, 10));
 }
 
 #[test]
@@ -746,4 +773,52 @@ fn prefix_checkpoint_reuses_finished_strokes_and_invalidates_soundly() {
             fresh_reference(&lists_move, &images, dx, &[]).data()
         );
     }
+}
+
+#[test]
+fn moving_a_stroke_restores_only_its_old_bounds_and_keeps_held_frames_intact() {
+    let images = ImageCache::new();
+    let env = Env {
+        images: &images,
+        text: None,
+    };
+    let mut canvas = Replayer::new(5801, 1240, 1.25, 1, 0).unwrap();
+    let width = f64::from(5801_f32 / 1.25);
+    let frame = |x: f64| {
+        let ctx = Context2d::new();
+        ctx.clear_rect(0., 0., width, 992.);
+        ctx.set_fill_style_str("#345");
+        ctx.fill_rect(0., 0., width, 992.);
+        ctx.begin_path();
+        ctx.set_stroke_style_str("#f00");
+        ctx.set_line_width(3.);
+        ctx.move_to(x, 40.);
+        ctx.line_to(x + 8., 44.);
+        ctx.stroke();
+        ctx.take_lists()
+    };
+    canvas.apply_draw(&frame(40.), &env).unwrap();
+    canvas.apply_draw(&frame(50.), &env).unwrap();
+    assert!(canvas.checkpoint.is_some());
+    let storage = canvas.pixmap.data().as_ptr();
+    let next = frame(75.);
+    canvas.apply_draw(&next, &env).unwrap();
+    assert_eq!(canvas.pixmap.data().as_ptr(), storage);
+    let area = canvas.update.area.unwrap();
+    assert!(area.width() < 128 && area.height() < 64, "{area:?}");
+    let mut direct = Replayer::new(5801, 1240, 1.25, 1, 0).unwrap();
+    direct.apply(&next[0], &env).unwrap();
+    assert!(
+        canvas.pixmap.data() == direct.pixmap.data(),
+        "replayed and full frames differ"
+    );
+    let held = canvas.pixmap.clone();
+    let next = frame(65.);
+    canvas.apply_draw(&next, &env).unwrap();
+    assert!(held.data() == direct.pixmap.data(), "held snapshot changed");
+    direct.apply(&next[0], &env).unwrap();
+    assert!(
+        canvas.pixmap.data() == direct.pixmap.data(),
+        "replayed and full frames differ"
+    );
 }

@@ -317,7 +317,7 @@ export function assembleIOS({intents, shared, library, moduleLibraries = [], pac
   const required = appleReach?.entitlements ?? [], appRequired = [...required, ...browserEntitlements({ ...app, widgetTV: tv }, distribution), ...memoryEntitlements({ ...app, widgetTV: tv })];
   const values = grantEntitlementValues(app, appleReach);
   // With entries, the app's and the extension's profiles together, each granting the shared groups (LLP 1126.001 WP13).
-  const provisioned = shared && device && !unsigned ? entryProfiles({ app, udid: ph?.udid, required: appRequired, values }) : null;
+  const provisioned = device && !unsigned && (shared || (!tv && app.manifest.share_target)) ? entryProfiles({ app, udid: ph?.udid, required: appRequired, values }) : null;
   const appProfile = device && !unsigned ? provisioned?.app ?? (allows(prof, appRequired, values) ? prof : profile(ph?.udid, app.id, appRequired, { values })) : null;
   if (distribution && clip && appProfile && !namedClip(app, appProfile)) console.error(`host/apple: the app's profile "${appProfile.name}" does not let the app name its App Clip ${clip.id}, as App Store Connect asks (ITMS-90876). A profile made before the clip's App ID was registered cannot: make it again.`);
   // The clip's profile is for its own App ID, of the app's profile's team, prefix and method, as the extension's is.
@@ -330,7 +330,7 @@ export function assembleIOS({intents, shared, library, moduleLibraries = [], pac
     const keptSymbols = ipa || kind !== 'host' ? symbols : resolve(binDir, `${executable}.dSYMs`);
     const signingProfile = appProfile ? (kind === 'app' ? appProfile : profiles[kind]()) : null;
     const alarmProfile = signingProfile && !shared && alarm && !tv && kind === 'app' ? embeddedProfile(ph?.udid, widgetId(app), signingProfile) : null;
-    const signingIdentity = signingProfile ? identity(signingProfile.team, { profiles: [signingProfile, ...(kind === 'app' ? [provisioned?.extension, alarmProfile, ...companion] : [])].filter(Boolean) }) : sha1;
+    const signingIdentity = signingProfile ? identity(signingProfile.team, { profiles: [signingProfile, ...(kind === 'app' ? [provisioned?.extension, provisioned?.share, alarmProfile, ...companion] : [])].filter(Boolean) }) : sha1;
     const ent = resolve(binDir, kind === 'app' ? 'entitlements.plist' : `${kind}-entitlements.plist`);
     if (signingProfile) copyFileSync(signingProfile.path, resolve(assembled, 'embedded.mobileprovision'));
     // Unsigned, the re-signer's profile decides; ask for no debugger, as a distribution profile grants none.
@@ -369,16 +369,15 @@ export function assembleIOS({intents, shared, library, moduleLibraries = [], pac
       // The extension's identifier and shared Keychain group under its own profile's prefix (entryProfiles refused a pair whose prefixes differ).
       entitlements: entitlements({ ...app, id: widgetId(app), widgetAppId: app.id }, signingProfile?.team, signingProfile?.dev ?? !unsigned, null, { simulator: !device, prefix: provisioned?.extension.prefix ?? signingProfile?.prefix }),
       sign: (extension, ent) => run('codesign', ['--force', '--sign', signingIdentity, '--timestamp=none', ...(device ? ['--entitlements', ent] : []), extension], { stdio: 'ignore' }) });
-    // The share extension (LLP 1133.024 D4): a simulator's group needs no account; a phone's waits for the App Group
-    // and the `.share` App ID on the team, so a device build has no inbox yet and says so.
     if (kind === 'app' && tv && app.manifest.share_target) console.log('Share extension: not built for tvOS, which has no share sheet (LLP 1133.024 D4).');
     if (kind === 'app' && !tv && app.manifest.share_target) {
-      const group = device ? null : widgetGroup(app);
+      const group = widgetGroup(app), share = provisioned?.share;
       for (const [key, value] of Object.entries(shareInfo(app, group))) runApple('plutil', ['-replace', key, '-string', value, resolve(assembled, 'Info.plist')]);
-      if (device) console.log(`Share extension: not built for a device until the team registers the App Group ${widgetGroup(app)} and the App ID ${shareId(app)} (LLP 1133.024 §19).`);
-      else packageShareExtension({ app, bundle: assembled, directory: linkRoot, sdk, triple, group, runApple, production, symbols: keptSymbols ?? linkRoot,
-        entitlements: entitlements({ ...app, id: shareId(app), widgetAppId: app.id }, signingProfile?.team, signingProfile?.dev ?? !unsigned, null, { simulator: true, prefix: signingProfile?.prefix }),
-        sign: (extension) => run('codesign', ['--force', '--sign', signingIdentity, '--timestamp=none', extension], { stdio: 'ignore' }) });
+      // The extension writes the inbox. Only the app and its widgets use the app's Keychain group.
+      const owner = { id: shareId(app), manifest: {} };
+      packageShareExtension({ app, bundle: assembled, directory: linkRoot, sdk, triple, device, group, runApple, production: production || distribution, symbols: keptSymbols ?? linkRoot, profile: share,
+        entitlements: entitlements(owner, share?.team, share?.dev ?? !unsigned, null, { simulator: !device, prefix: share?.prefix, inboxGroup: group }),
+        sign: (extension, ent) => run('codesign', ['--force', '--sign', signingIdentity, '--timestamp=none', ...(device ? ['--entitlements', ent] : []), extension], { stdio: 'ignore' }) });
     }
     if (!shared && alarm && !tv && kind === 'app') packageAlarmExtension({ app, bundle: assembled, directory: linkRoot, sdk, triple, device, runApple, alarm, production, symbols: keptSymbols ?? linkRoot,
       profile: alarmProfile,

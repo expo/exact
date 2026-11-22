@@ -3,6 +3,42 @@ use std::io::Cursor;
 
 #[cfg(windows)]
 #[test]
+fn windows_decodes_bitmaps_and_the_largest_icon_representation() {
+    fn decode(bytes: &[u8], size: (u32, u32)) -> tiny_skia::Pixmap {
+        let header = inspect(&mut Cursor::new(bytes), bytes.len() as u64).unwrap();
+        let plan = DecodePlan::new(header, size).unwrap();
+        assert_eq!(plan.natural(), size);
+        decode_rows(Cursor::new(bytes), &plan, || false).unwrap()
+    }
+
+    // One opaque RGB(17,34,51) pixel in a 24-bit BMP and a 32-bit DIB icon.
+    let bmp = super::assets::data_url("data:image/bmp;base64,Qk06AAAAAAAAADYAAAAoAAAAAQAAAAEAAAABABgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMyIRAA==").unwrap();
+    let dib = super::assets::data_url("data:image/x-icon;base64,AAABAAEAAQEAAAEAIAAwAAAAFgAAACgAAAABAAAAAgAAAAEAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAzIhH/AAAAAA==").unwrap();
+    for bytes in [&bmp, &dib] {
+        assert_eq!(decode(bytes, (1, 1)).data(), &[17, 34, 51, 255]);
+    }
+
+    let png = png(4, 4);
+    let mut icon = vec![0, 0, 1, 0, 2, 0];
+    let mut offset = 38u32;
+    for (side, size) in [(1, dib.len() - 22), (4, png.len())] {
+        icon.extend([side, side, 0, 0, 1, 0, 32, 0]);
+        icon.extend((size as u32).to_le_bytes());
+        icon.extend(offset.to_le_bytes());
+        offset += size as u32;
+    }
+    icon.extend_from_slice(&dib[22..]);
+    icon.extend_from_slice(&png);
+    assert_eq!(decode(&icon, (4, 4)).data(), decode(&png, (4, 4)).data());
+    icon.pop();
+    assert!(matches!(
+        inspect(&mut Cursor::new(&icon), icon.len() as u64),
+        Err(exact_raster::Refusal::DecodeFailed)
+    ));
+}
+
+#[cfg(windows)]
+#[test]
 fn windows_applies_jpeg_exif_orientation_to_dimensions_pixels_and_crops() {
     let source = include_bytes!("../../../../apps/shared-elements/assets/alpine-water.jpg");
     let header = inspect(&mut Cursor::new(source), source.len() as u64).unwrap();

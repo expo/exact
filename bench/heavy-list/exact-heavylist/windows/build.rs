@@ -19,14 +19,6 @@ fn main() {
     let target = std::env::var("TARGET").unwrap_or_default();
     let platform = "windows";
     let manifest = contract::Manifest::read(&app_dir).unwrap_or_else(|e| panic!("app.json: {e}"));
-    std::fs::write(
-        out_dir.join("window.rs"),
-        format!(
-            "fn window() -> exact_windows::Window {{ {} }}",
-            manifest.windows_window().unwrap()
-        ),
-    )
-    .unwrap();
     let source = exact_heavylist_data::Heavy::default();
     let compat = exact_bake::compatibility_id(
         &app_dir,
@@ -37,6 +29,15 @@ fn main() {
         exact_bake::hands_out_work!(source),
     )
     .unwrap_or_else(|e| panic!("compatibility id: {e}"));
+    std::fs::write(
+        out_dir.join("window.rs"),
+        format!(
+            "const ADMIT_AGENT: bool = {};\nfn window() -> exact_windows::Window {{ {} }}",
+            compat.admits_agent(),
+            manifest.windows_window().unwrap()
+        ),
+    )
+    .unwrap();
     std::fs::write(out_dir.join("compat.json"), compat.to_json()).unwrap();
     assert_eq!(
         compat.inputs["store"]["L"], "0",

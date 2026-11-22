@@ -1,3 +1,5 @@
+export const WINDOW_STATE = "exact.state.#window.";
+
 // A store write in the page (LLP 1018 D6, LLP 1116 D5, LLP 1027 D4): a secret or state the quota refuses sets the kept answers aside, a cache the runner bounds together, and is tried once more, the kept answers put back if it fails again; a kept answer it refuses leaves the older one, which the next launch may still match, and is said.
 export function storeInPage(storage, name, value, warn = console.warn) {
   const key = name.startsWith("exact.state.") ? name : "exact.secret." + name, write = () => value == null ? storage.removeItem(key) : storage.setItem(key, value);
@@ -5,7 +7,7 @@ export function storeInPage(storage, name, value, warn = console.warn) {
     try {
       write();
     } catch (e) {
-      if (name.startsWith("exact.kept.") || !/quota/i.test(e?.name ?? "")) {
+      if (name.startsWith("exact.kept.") || name.startsWith(WINDOW_STATE) || !/quota/i.test(e?.name ?? "")) {
         throw e;
       }
       const aside = Array.from({ length: storage.length }, (_, i) => storage.key(i)).filter((k) => k?.startsWith("exact.secret.exact.kept.")).map((k) => [k, storage.getItem(k)]);
@@ -29,7 +31,7 @@ export function storeInPage(storage, name, value, warn = console.warn) {
   }
   return true;
 }
-/** Failed writes retry under the shared lease, against their original durable value. */ export function pageStore(load, storage = () => localStorage, warn = console.warn, locks = globalThis.navigator?.locks) {
+/** Failed writes retry under the shared lease, against their original durable value. */ export function pageStore(load, storage = name => name.startsWith(WINDOW_STATE) ? sessionStorage : localStorage, warn = console.warn, locks = globalThis.navigator?.locks) {
   const pending = new Map();
   return {
     discard(name) {
@@ -60,7 +62,7 @@ export function storeInPage(storage, name, value, warn = console.warn) {
         };
         const write = () => {
           try {
-            const disk = storage(), before = disk.getItem(key);
+            const disk = storage(name), before = disk.getItem(key);
             if (Object.hasOwn(entry, "before") && entry.before !== before) {
               pending.delete(name);
               return;

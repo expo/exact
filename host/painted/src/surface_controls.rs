@@ -952,7 +952,8 @@ impl<D: DataSource> Presenter<D> {
     /// moves there after shows it. A mouse pressing the focus it
     /// does not move leaves its ring as it was, as Chrome's does; a finger
     /// takes it away (LLP 1115.001 D7.6: no focus ring in touch mode). A text
-    /// field keeps its ring and `:focus-visible` look, as in Chrome.
+    /// field keeps its ring and `:focus-visible` look, as in Chrome, except in
+    /// touch mode.
     pub(crate) fn focus_for_press(
         &mut self,
         hit: ViewId,

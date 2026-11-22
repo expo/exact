@@ -1,0 +1,10 @@
+test "tap both counters"
+  tap "a"
+  tap "b"
+  expect state taps == 2
+
+after "Counter.bump" "a tap counts once"
+  expect state taps == old + 1
+  only writes extra last taps
+
+never refuses "Counter.bump"

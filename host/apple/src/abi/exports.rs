@@ -878,8 +878,8 @@ macro_rules! host {
 
         /// The window's name (UTF-8 input) and whether it launches rooted, for the next boot. @ref LLP 1030.004 D2
         #[no_mangle]
-        pub extern "C" fn exact_set_launch_window(rt: u32, len: usize, rooted: u32) -> u32 {
-            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| { b.set_launch_window(len, rooted != 0); 0 }, |n| n)
+        pub extern "C" fn exact_set_launch_window(rt: u32, name: usize, rooted: u32, archive: usize) -> u32 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| { b.set_launch_window(name, rooted != 0, archive); 0 }, |n| n)
         }
 
         /// The platform's layout direction for every boot from here: 0 ltr, 1 rtl, else the strings table's.

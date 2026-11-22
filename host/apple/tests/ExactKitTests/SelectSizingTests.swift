@@ -89,5 +89,51 @@ final class SelectSizingTests: XCTestCase {
         XCTAssertGreaterThan(size().height, 0)
         XCTAssertGreaterThanOrEqual(size().width, 0)
     }
+
+    #if os(iOS)
+    /// Diary acd9fff0: an `aria-label` or `aria-labelledby` on a `select`
+    /// replaces the UIButton's spoken title on iOS, so expose the chosen option
+    /// as `accessibilityValue` while keeping unlabelled selects nil to avoid
+    /// reading the choice twice.
+    func testLabelledSelectExposesItsChosenOptionAsAccessibilityValue() throws {
+        let p = Presenter()
+        var menu = SelectMenu(options: [.init(value: "off", label: "Off", disabled: false),
+                                        .init(value: "stop", label: "Until I stop", disabled: false)], chosen: 0)
+        p.selectOptions = { _ in menu }
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "control", "props": ["type": "select"], "handlers": ["input", "change"]],
+            ["op": "create", "id": 3, "kind": "text", "props": ["id": "lbl", "text": "Course"]],
+            ["op": "children", "id": 1, "ids": [2, 3]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 300.0, "h": 100.0],
+            ["op": "frame", "id": 2, "x": 0.0, "y": 0.0, "w": 200.0, "h": 40.0],
+            ["op": "frame", "id": 3, "x": 0.0, "y": 50.0, "w": 200.0, "h": 30.0],
+            ["op": "roots", "ids": [1]],
+        ]))
+        let node = try XCTUnwrap(p.views[2]), control = try XCTUnwrap(p.controls.controls[2])
+        XCTAssertNil(control.accessibilityLabel)
+        XCTAssertNil(control.accessibilityValue, "unlabelled select keeps value nil so VoiceOver speaks the title once")
+
+        p.apply(wireBatch([["op": "props", "id": 2, "set": ["accessibilityLabel": "Repeat"]]]))
+        XCTAssertEqual(control.accessibilityLabel, "Repeat")
+        XCTAssertEqual(control.accessibilityValue, "Off")
+
+        p.onControlValue = { _, value, _, _ in
+            menu.chosen = menu.options.firstIndex { $0.value == value }
+        }
+        XCTAssertNil(p.controls.type(node, "stop")?["error"])
+        XCTAssertEqual(control.accessibilityLabel, "Repeat")
+        XCTAssertEqual(control.accessibilityValue, "Until I stop")
+
+        p.apply(wireBatch([["op": "props", "id": 2, "clear": ["accessibilityLabel"]]]))
+        XCTAssertNil(control.accessibilityLabel)
+        XCTAssertNil(control.accessibilityValue)
+
+        p.apply(wireBatch([["op": "props", "id": 2, "set": ["accessibilityLabelledBy": "lbl"]]]))
+        p.syncAccessibility()
+        XCTAssertEqual(control.accessibilityLabel, "Course")
+        XCTAssertEqual(control.accessibilityValue, "Until I stop")
+    }
+    #endif
 }
 #endif

@@ -513,3 +513,35 @@ fn a_resize_reads_the_textarea_scroll_extent_before_the_next_paint_or_wheel() {
         p.frame();
     }
 }
+
+#[test]
+fn a_decorated_textarea_measured_on_mount_reuses_its_first_layout_in_paint() {
+    let source = r##"decoration token color="#b92025"
+component App
+  state mounted = false
+  state height = 0
+  derive doc = range(80).map(i => `const value${i} = 42;`).join("\n")
+  action open
+    mounted = true
+  action measure(w: number, h: number)
+    height = match scrollMetrics("source") { case some(m) => m.scrollHeight, case none => 0 }
+  view
+    column
+      button "Open editor" testId="open" press=open
+      if mounted
+        textarea id="source" value=doc resize=measure width=240 height=120 white-space="pre"
+          decorations=TextDecorations(value=doc, spans=[TextDecorationSpan(name="token", start=0, end=5)])
+"##;
+    let opening = |source: &str| {
+        let mut p = boot(source);
+        let before = p.text.borrow().layout_calls;
+        tap(&mut p, "open");
+        p.frame();
+        let layouts = p.text.borrow().layout_calls - before;
+        (layouts, slot(&p, "height"))
+    };
+    let (paint, _) = opening(&source.replace("resize=measure", ""));
+    let (measured_then_painted, height) = opening(source);
+    assert!(height.as_f64().unwrap() > 120.);
+    assert_eq!(measured_then_painted, paint);
+}

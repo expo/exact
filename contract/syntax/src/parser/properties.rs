@@ -28,11 +28,17 @@ impl Parser {
         } else {
             self.block(|p| p.property_line(&kind))?
         };
+        let actions = match &kind {
+            PropertyKind::After(action) => vec![action.clone()],
+            PropertyKind::NeverRefuses => vec![name.clone()],
+            PropertyKind::Always | PropertyKind::Clock => Vec::new(),
+        };
         Ok(PropertyDecl {
             span: token.span,
             kind,
             name,
             lines,
+            actions,
         })
     }
 

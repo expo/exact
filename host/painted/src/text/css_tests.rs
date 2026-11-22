@@ -630,7 +630,7 @@ fn a_markdown_list_items_lines_start_at_its_indent() {
         .layout_runs()
         .filter(|line| !line.glyphs.is_empty())
         .map(|line| {
-            let text = |g: &LayoutGlyph| &s.runs[g.run()];
+            let text = |g: &LayoutGlyph| &s.runs[g.run(line.run_base)];
             let marker = line
                 .glyphs
                 .iter()

@@ -585,6 +585,48 @@ fn the_action_key_does_what_it_says() {
     assert_eq!(p.focus(), Some(email));
 }
 
+/// LLP 1115.000 D9.2: a textarea's action key (its `enterkeyhint`) is
+/// Enter to its `key` handlers, and a new line unless one prevents it.
+#[test]
+fn a_textareas_action_key_is_enter_then_a_new_line() {
+    let (_shell, _hosting) = shell();
+    let mut p = boot(
+        r#"component Chat
+  state draft = ""
+  state sent = ""
+  action edit(v: string)
+    draft = v
+  action keyed(k: string, e: KeyboardEvent)
+    if k == "Enter" and not e.shiftKey and draft == "send"
+      preventDefault()
+      sent = draft
+  view
+    column width=320 height=480
+      textarea testId="composer" value=draft input=edit key=keyed enterkeyhint="send"
+      text `${draft}|${sent}` testId="log" height=20
+"#,
+    );
+    p.serve_requests();
+    p.reader_fields(1.0);
+    let composer = id(&p, "composer");
+    p.reader_field_focused(composer, 0, true, 1.0);
+    p.reader_field_edited(composer, (0, 1), "abc", (3, 3), 2.0);
+    p.reader_field_selected(composer, 0, (1, 2), 2.5);
+    // Not prevented: a new line for the selection, which the reader's
+    // field takes with the caret after it, and the keyboard stays.
+    p.reader_field_action(composer, 0, field_action::SEND, 3.0);
+    assert_eq!(log(&p), "a\nc|");
+    let after = told(&mut p);
+    assert_eq!((after[0].seq, after[0].value.as_str()), (1, "a\nc"));
+    assert_eq!(&after[0].look[15..], &[1, 2, 2]);
+    assert_eq!(p.focus(), Some(composer));
+    // Prevented: the handler sends, and nothing is typed.
+    p.reader_field_edited(composer, (0, 2), "send", (4, 4), 4.0);
+    p.reader_field_action(composer, 0, field_action::SEND, 5.0);
+    assert_eq!(log(&p), "send|send");
+    assert_eq!(p.focus(), Some(composer));
+}
+
 #[test]
 fn a_touch_in_a_hosted_field_is_the_fields() {
     let (_shell, _hosting) = shell();

@@ -612,7 +612,7 @@ pub fn corpus(dirs: &[PathBuf]) -> Result<(Vec<Scripted>, Vec<String>), String> 
 pub fn stored_variants(cases: Vec<Scripted>) -> Vec<Scripted> {
     let mut out = Vec::new();
     for s in cases {
-        let persists = compile(&s.case).is_ok_and(|p| p.slots.iter().any(|r| r.persist));
+        let persists = compile(&s.case).is_ok_and(|p| p.slots.iter().any(|r| r.is_persisted()));
         let variant = persists.then(|| stored_variant(&s));
         out.push(s);
         out.extend(variant);

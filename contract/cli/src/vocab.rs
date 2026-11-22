@@ -19,6 +19,7 @@ mod frames;
 mod recipes;
 mod records;
 mod scroll;
+mod window;
 
 use concepts::Concept;
 use contract::functions::{self, Function};
@@ -853,11 +854,9 @@ fn command_text(name: &str) -> String {
         "setMode" => "; `setMode(\"dark-style\", \"dim\")` sets one of the window's app modes, an axis of the app's design (`app.forma`) and one of its values; a subtree pins its own with `-exact-mode` (LLP 1121 D5)",
         "setPageZoom" => "; `setPageZoom(factor)` sets the window's page zoom, as View ▸ Zoom In does and Electron's `webContents.setZoomFactor`: CSS px per point, so the viewport, media queries, `px` and `rem` all follow (`setPageZoom(1)` is Actual Size). The Mac's own; iOS, Linux, Windows and the web refuse it in the journal (LLP 1021 §5.3.1)",
         "exitFullscreen" => "; `exitFullscreen()`: the document leaves full screen, as the web's `document.exitFullscreen()`; on the Mac the session's window leaves its full-screen space (a video's own full screen is `requestFullscreen(id)`'s). iOS, Linux and Windows refuse it in the journal (LLP 1069.010)",
-        "setWindowOpacity" => "; `setWindowOpacity(opacity)` draws the session's window at that opacity, 0 (unseen, still key and still hearing keys) to 1, as Electron's `BrowserWindow.setOpacity`: what an app's own quit hold does before it quits. The Mac's; iOS, Linux, Windows and the web refuse it in the journal (LLP 1069.010)",
         "setLocale" => "; `setLocale(\"de\")` makes the app's `t(…)` texts read the strings table that tag resolves to (the same lookup as the host's locale: `de-AT`, then `de`, then the base), with `lang`, `dir` and `exactTime().resolvedLocale`; `exactTime().locale` and `formatLocale` stay the device's. The choice is kept across launches and read before the first frame; `setLocale(\"\")` forgets it and follows the host's locale again. An app with strings tables only",
-        "hideWindow" => "; `hideWindow()` puts the session's window away and keeps the app running, as the person's ⌘W does under `host.macos.window.keepRunning` or while a status item is placed, and as Electron's `BrowserWindow.hide`: `exactPage().visibilityState` reads `hidden` and `persisted` `true`, and bare `focus()`, a Dock click or the status item's own press shows it again as a restore (`restores`). For the menu-bar utility whose window goes once its work is done; `close()` still closes and ends the app. The Mac's, refused in the journal where the app would not keep running (no `keepRunning`, no status item placed, a `navigate-new` app); iOS, Linux, Windows, Android and the web refuse it in the journal (LLP 1133.025 D4)",
         "setRootFontSize" => "; `setRootFontSize(px)` sets CSS's `:root { font-size }`, the size every `rem` follows (px above 0), over the host's own; `setRootFontSize(\"125%\")` sets a percentage of the host's size that keeps following it (Dynamic Type, the browser's setting); `setRootFontSize(\"medium\")` hands it back (LLP 1069.000 D3, LLP 1121 D6)",
-        _ => frames::command(name).unwrap_or(""),
+        _ => frames::command(name).or_else(|| window::command(name)).unwrap_or(""),
     };
     format!("host command, an action statement (docs/contract-grammar.md#host-commands){what}")
 }

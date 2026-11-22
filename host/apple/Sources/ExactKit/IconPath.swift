@@ -30,7 +30,9 @@ extension NodeView {
     func layoutSymbol() {
         guard let leaf = symbolView else { return }
         let content = contentBox()
-        leaf.frame = content; leaf.clipsToBounds = !listSymbol
+        // Set the leaf's frame only where the glyph is placed: an interim frame is a change to the image view's
+        // geometry, for which UIKit sets its contents again, in every layout
+        leaf.clipsToBounds = !listSymbol
         let fit = listSymbol ? "none" : style["object_fit"]?.string ?? "fill"
         var shown = image
         if props["symbolPath"] != nil {

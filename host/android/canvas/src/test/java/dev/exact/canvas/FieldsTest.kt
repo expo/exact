@@ -132,4 +132,11 @@ class FieldsTest {
             Fields.context = before
         }
     }
+
+    /** A selection made backward, which Android gives anchor first, is the same range. */
+    @Test fun aBackwardSelectionIsReadStartFirst() {
+        assertEquals(2 to 3, ordered(3, 2))
+        assertEquals(2 to 3, ordered(2, 3))
+        assertEquals(0 to 0, ordered(-1, -1))
+    }
 }

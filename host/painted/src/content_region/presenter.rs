@@ -74,11 +74,10 @@ impl<D: DataSource> Presenter<D> {
         canvas_frame: bool,
     ) -> Option<Arc<Pixmap>> {
         let had_damage = self.dirty || self.picture_dirty;
+        let preserves_picture = target == FrameTarget::Geometry;
         #[cfg(windows)]
-        let preserves_picture = (self.presents && target == FrameTarget::Geometry)
+        let preserves_picture = preserves_picture
             || (self.surfaces.direct_window.is_some() && target != FrameTarget::Window);
-        #[cfg(not(windows))]
-        let preserves_picture = self.presents && target == FrameTarget::Geometry;
         // Its session's roles, whatever else lives on the thread (LLP 1121 stage 5).
         let _roles = self.host.runner().bind_roles();
         let frame = crate::text::cache::deferring_eviction(|| {
@@ -178,6 +177,7 @@ impl<D: DataSource> Presenter<D> {
             self.host.log(error);
         }
         self.refresh_looks(None); // the focus's ring (LLP 1121 D8)
+        self.brush.focus_presses = self.focus.is_some_and(|id| self.presses_itself(id));
         self.restore_scroll_anchors();
         self.arm_scroll_anchors();
         self.scroll_timelines();

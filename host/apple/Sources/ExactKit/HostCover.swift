@@ -20,4 +20,6 @@ package enum HostCover: Equatable {
     case inset(top: CGFloat, bottom: CGFloat)
     /// Space occupied by native scrollers, measured after tiling.
     case gutter(right: CGFloat, bottom: CGFloat)
+    /// Space the native table puts outside this row's rectangle.
+    case rowSpacing(top: CGFloat, bottom: CGFloat)
 }

@@ -47,7 +47,7 @@ pub(super) fn inspect_animated(head: &[u8], encoded_bytes: u64) -> Result<Option
     if u64::from(width) * u64::from(height) > MAX_SOURCE_PIXELS {
         return Err(Refusal::SourcePixels);
     }
-    Ok(Some(Header::jpeg(Metadata {
+    Ok(Some(Header::platform(Metadata {
         natural: PixelSize { width, height },
         encoded_bytes,
         header_bytes: 30.min(encoded_bytes),
@@ -128,7 +128,7 @@ pub(super) fn inspect(
             if u64::from(width) * u64::from(height) > MAX_SOURCE_PIXELS {
                 return Err(Refusal::SourcePixels);
             }
-            let header = Header::jpeg(Metadata {
+            let header = Header::platform(Metadata {
                 natural: PixelSize { width, height },
                 encoded_bytes,
                 header_bytes: at + len,

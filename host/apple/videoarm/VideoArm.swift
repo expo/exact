@@ -528,6 +528,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         configureItem()
         queueLoop()
         if let error = props["sourceError"], error != old["sourceError"] { fail("src-not-supported", error) }
+        applyAccessibility()
         layout()
         NowPlaying.shared.updated(self)
         // The driver's `tap … mediasession` (LLP 1098 D10): `<n> <action> [seconds]`,
@@ -1041,6 +1042,40 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         controller.removeFromParent()
     }
     #endif
+    /// Forward authored `aria-label` / `aria-labelledby` onto the media view:
+    /// a named container for players with controls (keeping Play/scrubber reachable),
+    /// or the inline surface itself when there are no controls.
+    private func applyAccessibility() {
+        let label = props["accessibilityLabel"].flatMap { $0.isEmpty ? nil : $0 }
+        #if os(macOS)
+        presentation.setAccessibilityLabel(label)
+        #else
+        #if os(iOS)
+        if audioControls != nil {
+            container.isAccessibilityElement = false
+            container.accessibilityContainerType = label == nil ? .none : .semanticGroup
+            container.accessibilityLabel = label
+            return
+        }
+        #endif
+        if let controller {
+            container.isAccessibilityElement = false
+            container.accessibilityContainerType = label == nil ? .none : .semanticGroup
+            container.accessibilityLabel = label
+            controller.view.accessibilityLabel = label
+        } else if let inline {
+            container.isAccessibilityElement = false
+            container.accessibilityContainerType = .none
+            container.accessibilityLabel = nil
+            inline.isAccessibilityElement = label != nil
+            inline.accessibilityLabel = label
+        } else {
+            container.isAccessibilityElement = false
+            container.accessibilityContainerType = label == nil ? .none : .semanticGroup
+            container.accessibilityLabel = label
+        }
+        #endif
+    }
     /// CSS `object-fit` as AVFoundation's gravity.
     var gravity: AVLayerVideoGravity {
         let fit = props["objectFit"] ?? "fill"

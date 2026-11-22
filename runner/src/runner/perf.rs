@@ -150,11 +150,22 @@ impl<D: DataSource> Runner<D> {
     /// writes it, and while measuring also queued for the host, which writes
     /// it to its platform's log (the unified log, stderr, the console).
     pub fn alert(&mut self, line: impl Into<String>) {
-        let line = line.into();
+        self.source_alert(line.into(), false);
+    }
+
+    pub(super) fn source_alert(&mut self, line: String, overrun: bool) {
         if !self.ids.work.sites.is_empty() {
+            if overrun {
+                self.ids.work.budget_warning.replace(Some(line.clone()));
+            }
             crate::perf::queue(&self.ids.work.alerts, line.clone());
         }
         self.journal_only(line);
+    }
+
+    /// The latest source turn that exceeded its budget since the host last read it.
+    pub fn take_budget_warning(&self) -> Option<String> {
+        self.ids.work.budget_warning.take()
     }
 
     /// The alert lines queued since the last call, oldest first, each once:

@@ -1,7 +1,7 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, posix, relative, resolve, win32 } from 'node:path';
 import { classify, publishRoot } from './deploy.mjs';
@@ -251,6 +251,13 @@ test('external Rust modules have identical bytes in relocated cold source captur
       if (sources.has(path)) continue;
       const text = readFileSync(resolve(root, path), 'utf8');
       sources.set(path, text);
+      // A JSON module (`with { type: 'json' }`) is copied, and has no imports to follow
+      if (!/\.m?js$/.test(path)) continue;
+      // So is a file a module reads beside itself as it loads, such as host/apple/link.mjs's Package.swift
+      for (const [, , file] of text.matchAll(/new URL\((['"])(\.\.?\/[^'"]+)\1, import\.meta\.url\)/g)) {
+        const at = resolve(root, dirname(path), file);
+        if (existsSync(at) && statSync(at).isFile()) pending.push(relative(root, at));
+      }
       for (const request of parser.scanImports(text.replace(/^#![^\n]*/, ''))) if (request.kind === 'import-statement' && request.path.startsWith('.')) {
         pending.push(relative(root, resolve(root, dirname(path), request.path)));
       }

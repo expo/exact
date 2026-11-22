@@ -209,7 +209,14 @@ fn decision_report_is_bounded_after_a_thousand_crossings() {
     for crossing in 0..1000 {
         work.advance(settings, 27 + 48 * crossing, 60, true, 800.);
     }
-    let report = work.report(settings, 27 + 48 * 999, false, 0, false, Default::default());
+    let report = work.report(
+        settings,
+        27 + 48 * 999,
+        Default::default(),
+        false,
+        Default::default(),
+        Default::default(),
+    );
     assert!(report.len() < 8192, "report grew to {} bytes", report.len());
     assert_eq!(report.matches(r#""ageMs":"#).count(), 4);
     assert!(report.contains(r#""unfinishedCount":1000"#));
@@ -221,7 +228,14 @@ fn decision_report_is_bounded_after_a_thousand_crossings() {
     }
     assert_eq!(work.refills.finished.len(), FINISHED_SAMPLES);
     assert_eq!(work.refills.finished_count, 1000);
-    let report = work.report(settings, 27 + 48 * 999, false, 0, false, Default::default());
+    let report = work.report(
+        settings,
+        27 + 48 * 999,
+        Default::default(),
+        false,
+        Default::default(),
+        Default::default(),
+    );
     assert!(report.len() < 8192, "report grew to {} bytes", report.len());
 }
 
@@ -383,7 +397,14 @@ fn decision_crossings_keep_separate_timers_and_include_the_crossing_frame() {
     assert_eq!(work.refills.started, 2);
     assert_eq!(work.refills.pending[&1].pending, entering - 1);
     assert_eq!(work.refills.pending[&2].pending, entering);
-    let report = work.report(settings, 75, false, 0, true, Default::default());
+    let report = work.report(
+        settings,
+        75,
+        Default::default(),
+        true,
+        Default::default(),
+        Default::default(),
+    );
     assert!(
         report.contains(r#""id":1,"ageMs":28,"pending":135"#),
         "{report}"
@@ -501,7 +522,14 @@ fn decision_report_survives_a_state_read_without_a_device() {
                 destroyed: 1,
                 bytes_written: 7104,
             };
-            Self(work.report(settings, 75, false, 0, false, buffers))
+            Self(work.report(
+                settings,
+                75,
+                Default::default(),
+                false,
+                buffers,
+                Default::default(),
+            ))
         }
     }
     impl Hooks for Reporter {

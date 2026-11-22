@@ -29,7 +29,7 @@ extension Presenter {
     /// Only an open dialog or popover forwards a press to its authored parent.
     func presentationParent(of view: NSView) -> NSView? {
         guard let node = view as? NodeView else { return nil }
-        return dialogs.authoredParent(of: node) ?? menus.authoredParent(of: node)
+        return dialogs.authoredParent(of: node) ?? menus.authoredParent(of: node) ?? dataTables.authoredRow(of: node)?.container
     }
 }
 

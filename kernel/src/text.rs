@@ -1275,6 +1275,15 @@ impl TextRows {
     }
 }
 
+/// The CSS Fonts 4 §2.2.1 `bolder` weight relative to the parent.
+pub(crate) fn css_bolder(weight: u16) -> u16 {
+    match weight {
+        0..350 => 400,
+        350..550 => 700,
+        _ => weight.max(900),
+    }
+}
+
 /// Computed run rows carried down one inline tree. Keep line-height unresolved
 /// until a leaf: an inherited unitless value scales with that leaf's font size.
 #[derive(Clone, Copy)]
@@ -1307,6 +1316,12 @@ impl RunRows {
             out.mask = out.mask.union(mask);
         });
         out
+    }
+
+    pub fn stronger(mut self) -> Self {
+        self.text.font_weight = css_bolder(self.text.font_weight);
+        self.mask.set(StyleId::FontWeight);
+        self
     }
 
     /// Only Text children participate in an inline traversal, so control

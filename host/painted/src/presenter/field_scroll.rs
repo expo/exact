@@ -91,7 +91,11 @@ mod tests {
     use exact_runner::FieldSelection;
 
     fn fixture(tag: &str, value: &str) -> (Presenter<()>, ViewId) {
-        let source = format!("component App\n  view\n    {tag} testId=\"editor\" value={} width=200 height=64 padding=4 appearance=\"none\" outline=\"none\" font-size=16 line-height=\"24px\" caret-color=\"#ff0000\"\n", serde_json::to_string(value).unwrap());
+        fixture_with_padding(tag, value, 4)
+    }
+
+    fn fixture_with_padding(tag: &str, value: &str, padding: u32) -> (Presenter<()>, ViewId) {
+        let source = format!("component App\n  view\n    {tag} testId=\"editor\" value={} width=200 height=64 padding={padding} appearance=\"none\" outline=\"none\" font-size=16 line-height=\"24px\" caret-color=\"#ff0000\"\n", serde_json::to_string(value).unwrap());
         let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(&source),
             (),
@@ -106,6 +110,90 @@ mod tests {
         let id = k.node_by_key(k.find_by_test_id("editor")[0]).unwrap().id;
         p.set_focus(Some(id), 0.);
         (p, id)
+    }
+
+    #[test]
+    fn accessibility_scrolls_a_wrapped_range_to_either_edge_without_moving_the_caret() {
+        let value = "🦀 one two three four ".repeat(32);
+        let (mut p, view) = fixture("textarea", &value);
+        p.set_focus(None, 0.);
+        p.frame();
+        p.reader_access(1., true);
+        let id = p.access_told().iter().find(|n| n.view == view).unwrap().id;
+        let mut starts = Vec::new();
+        for run in p.access_text_layout(view, &value).unwrap().runs() {
+            if run.line == starts.len() {
+                starts.push(run.start);
+            }
+        }
+        assert!(starts.len() > 12);
+        let offset = starts[starts.len() / 2];
+        let frame = |p: &Presenter<()>| {
+            p.brush.field_text[&view]
+                .range_frame(offset, offset + 1)
+                .unwrap()
+        };
+        let rect = p.rect_of(view).unwrap();
+        assert!(frame(&p).1 > rect.1 + rect.3);
+        let selection = p.access_selection(id);
+        for top in [true, false] {
+            assert!(p.access_scroll_text_line(id, offset, top));
+            p.frame();
+            let (_, y, _, height) = frame(&p);
+            assert!(y >= rect.1 && y + height <= rect.1 + rect.3);
+            if top {
+                assert!(y < rect.1 + 24., "{y}, {rect:?}");
+            } else {
+                assert!(y + height > rect.1 + rect.3 - 24., "{y}, {rect:?}");
+            }
+            assert_eq!(p.access_selection(id), selection);
+            assert_eq!(p.access_focus(), None);
+        }
+    }
+
+    #[test]
+    fn accessibility_character_boxes_follow_the_painted_bidi_runs() {
+        use unicode_segmentation::UnicodeSegmentation;
+        let value = "first cedar\nsecond VISIBLE אבגד e\u{301}\nthird oak";
+        let (mut p, view) = fixture("textarea", value);
+        p.frame();
+        let layout = p.access_text_layout(view, value).unwrap();
+        let runs: Vec<_> = layout.runs().collect();
+        assert!(runs.iter().any(|run| run.rtl));
+        let len = value.encode_utf16().count() as u32;
+        let mut boundaries = vec![0];
+        for g in value.graphemes(true) {
+            boundaries.push(boundaries.last().unwrap() + g.encode_utf16().count() as u32);
+        }
+        let [_, _, _, _, tx, ty] = layout.transform.unwrap();
+        for (i, run) in runs.iter().enumerate() {
+            let end = runs.get(i + 1).map_or(len, |next| next.start);
+            let offsets: Vec<_> = boundaries
+                .iter()
+                .copied()
+                .filter(|n| *n >= run.start && *n <= end)
+                .map(|n| n - run.start)
+                .collect();
+            let (positions, widths) = run.character_metrics(run.start, &offsets);
+            let (left, top, width, height) = run.bounds;
+            for (j, pair) in offsets.windows(2).enumerate() {
+                let x = if run.rtl {
+                    left + width - positions[j] - widths[j]
+                } else {
+                    left + positions[j]
+                };
+                let actual = [tx as f32 + x, ty as f32 + top, widths[j], height];
+                let (x, y, w, h) = p.brush.field_text[&view]
+                    .range_frame(run.start + pair[0], run.start + pair[1])
+                    .unwrap();
+                for (got, want) in actual.into_iter().zip([x, y, w, h]) {
+                    assert!(
+                        (got - want).abs() < 0.01,
+                        "run {i}, character {j}: {got}, expected {want}"
+                    );
+                }
+            }
+        }
     }
 
     fn assert_caret_in_field(p: &mut Presenter<()>, id: ViewId) {
@@ -188,6 +276,35 @@ mod tests {
         assert_caret_in_field(&mut p, id);
         assert!(p.field_text(id).ends_with('!'));
         assert_eq!(p.scroll_of(id).1, end);
+    }
+
+    #[test]
+    fn horizontal_arrow_keeps_a_caret_visible_in_textarea_padding() {
+        let value = "row text\n".repeat(16) + "final row";
+        for padding in [16, 64] {
+            let (mut p, id) = fixture_with_padding("textarea", &value, padding);
+            p.frame();
+            p.field_key(id, "Home", 1.);
+            p.frame();
+            p.wheel(id, 0., 10000.).unwrap();
+            p.wheel(id, 0., -(padding as f32)).unwrap();
+            p.frame();
+            let before = p.scroll_of(id).1;
+            let cursor = p.field_cursor(id).offset;
+            assert_eq!(cursor, value.len() as u32 - 9);
+            p.field_key(id, "ArrowRight", 2.);
+            p.frame();
+            assert_eq!(p.field_cursor(id).offset, cursor + 1);
+            assert_eq!(p.scroll_of(id).1, before, "bottom padding {padding}");
+
+            p.wheel(id, 0., -100.).unwrap();
+            p.frame();
+            assert!(p.caret_frame().is_none());
+            p.field_key(id, "ArrowRight", 3.);
+            p.frame();
+            assert!(p.caret_frame().is_some());
+            assert!(p.scroll_of(id).1 > before - 100.);
+        }
     }
 
     #[test]

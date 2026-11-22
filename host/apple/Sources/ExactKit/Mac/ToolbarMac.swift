@@ -392,9 +392,7 @@ package final class WindowToolbarHost: NSObject, NSToolbarItemValidation {
     }
 
     /// A native button's prominent style is a prominent item, tinted by its
-    /// `accent-color`, in the macOS 26 design; every other button, and every
-    /// button in the earlier design, is the plain bordered item (LLP
-    /// 1069.011.000 D2).
+    /// `accent-color`, in the macOS 26 design (LLP 1069.011.000 D2).
     private func prominence(_ item: NSToolbarItem, _ node: NodeView, _ face: ButtonFace?) {
         guard #available(macOS 26.0, *) else { return }
         let prominent = LinkedDesign.liquidGlass
@@ -716,7 +714,8 @@ package final class WindowToolbarHost: NSObject, NSToolbarItemValidation {
                 item.image = FaceSymbol.image(symbol, points: FaceSymbol.toolbarPoints)
                 symbols[node.id] = symbol
             }
-            item.isBordered = true
+            let bordered = face?.macos != "borderless"
+            if item.isBordered != bordered { item.isBordered = bordered }
             // A header's buttons before its heading lead the bar, ahead of the title, as Back does.
             let navigational = node.props["toolbarPlacement"] == "navigation" || over?.leading.contains { $0 === node } == true
             if item.isNavigational != navigational { item.isNavigational = navigational }

@@ -1,4 +1,4 @@
-# The Linux host: the painted host (`exact-painted`) on DRM/KMS dumb buffers
+# The Linux host: the painted host (`exact-painted`) on DRM/KMS
 # with evdev input, the screen served over VNC, or headless. Pure Rust end
 # to end: no system library is linked, so it builds on any Linux (and on
 # macOS, headless, for the seconds-loop).

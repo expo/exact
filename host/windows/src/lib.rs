@@ -132,9 +132,21 @@ pub fn run_composed<D: exact_runner::DataSource + Default + 'static>(
     compat: &str,
     composed: exact_painted::Composed,
 ) -> i32 {
+    run_baked::<D, true>(name, window, plan, compat, composed)
+}
+
+/// Run the composed app with the headless driver linked only when the bake admits it.
+/// A development host also checks the supplied receipt before it accepts driver commands.
+pub fn run_baked<D: exact_runner::DataSource + Default + 'static, const DEVELOPMENT: bool>(
+    name: &str,
+    window: Window,
+    plan: &[u8],
+    compat: &str,
+    composed: exact_painted::Composed,
+) -> i32 {
     #[cfg(windows)]
     {
-        on_desktop_stack(|| window::run::<D>(name, window, plan, compat, composed))
+        on_desktop_stack(|| window::run::<D, DEVELOPMENT>(name, window, plan, compat, composed))
     }
     #[cfg(not(windows))]
     {

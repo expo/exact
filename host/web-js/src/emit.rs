@@ -537,7 +537,9 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
     // shared.js, which loads after first paint when a node asks for it: a
     // plan with one asks at boot, since the route that declares it is
     // seldom mounted then, and its first push would otherwise cut.
-    if em.route_parts {
+    // `startViewTransition()` plays through shared.js too, so an action that
+    // names it loads it at boot.
+    if em.route_parts || commands.iter().any(|c| c == "startViewTransition") {
         let load = em.uses.rt("pr");
         let _ = write!(body, "{load}();");
     }
@@ -749,7 +751,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             (!facts.is_empty(), facts.as_str()),
             (em.symbols.0, "import{symbols as $symbols}from\"./symbols.js\";"),
             (modes.is_some(), "import{modes as $modes,Sx}from\"./modes.js\";"),
-            (plan.slots.iter().any(|s| s.persist), "import{stored as $stored,keep as $keep}from\"./persist.js\";"),
+            (plan.slots.iter().any(|s| s.is_persisted()), "import{stored as $stored,keep as $keep}from\"./persist.js\";"),
             (exact_runner::uses::chooses_locale(plan), "import{localeSlot as $localeSlot,setLocale as $setLocale}from\"./chosen.js\";"),
             (plan.format.is_some(), "import{formats as $formats,formatSlot as $formatSlot}from\"./format-locale.js\";"),
         ]

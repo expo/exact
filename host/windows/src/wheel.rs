@@ -9,7 +9,7 @@ use winit::event::MouseScrollDelta;
 
 // WinUI ScrollPresenter's line-sized change, in logical pixels.
 // https://github.com/microsoft/microsoft-ui-xaml/blob/main/controls/dev/ScrollPresenter/ScrollPresenter.cpp
-const LINE: f32 = 16.;
+pub(super) const LINE: f32 = 16.;
 
 #[cfg(windows)]
 pub(super) fn dispatch<D: DataSource>(

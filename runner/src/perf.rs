@@ -82,6 +82,8 @@ pub struct Work {
     /// Failure lines a development host also writes to its platform's log,
     /// oldest first, and how many were dropped past [`ALERTS`] (D4).
     pub alerts: std::cell::RefCell<(std::collections::VecDeque<String>, u64)>,
+    /// The latest refused source turn for this session's development overlay.
+    pub budget_warning: std::cell::RefCell<Option<String>>,
     /// Every other journal line, kept the same way for a development host's
     /// platform log at a lower level (LLP 1143 open question 1).
     pub journal: std::cell::RefCell<(std::collections::VecDeque<String>, u64)>,

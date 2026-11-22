@@ -1,6 +1,7 @@
 // A request refused while it was out is sent again only as the sign-in it was sent as. The provider issues no ID
 // token, so a sign-in has no subject to tell accounts apart by.
 import { expect, test } from 'bun:test';
+import { handle, signedInSession } from './fixture.ts';
 import { oauth, OAuthError, type OAuthAuthorization, type OAuthStore } from '../index.ts';
 
 const callback = 'com.example.app:/oauth';
@@ -89,4 +90,27 @@ test("a request refused after the same sign-in's refresh is sent again with the 
   release();
   expect((await request).status).toBe(200);
   expect([sent, refreshes]).toEqual([['POST Bearer alice {}', 'POST Bearer alice-renewed {}'], ['alice-refresh-0']]);
+});
+
+test('the first read from a prepared store and its refresh use the selected account', async () => {
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: handle });
+  try {
+    const origin = server.url.origin, key = 'spec.session', clientId = 'client-spec';
+    const p = oauth({ issuer: origin + '/p/spec', key, clientId, apis: [origin], scopes: ['openid', 'offline_access'] });
+    const person = { sub: 'reader-2', name: 'Grace Hopper', email: 'grace@example.test' };
+    const grace = memory(), ada = memory();
+    grace.set(key, await signedInSession(origin, key, { clientId, ...person, token: 'test-reader' }));
+    ada.set(key, await signedInSession(origin, key, { clientId, sub: 'reader-1' }));
+    expect(p.accessToken(grace)).toBe('test-reader');
+    expect(p.claims(grace)).toMatchObject(person);
+    expect((await p.session(grace)).signedIn).toBe(true);
+    const me = (store: OAuthStore) => p.json(store, origin + '/p/spec/userinfo');
+    expect(await me(grace)).toEqual(person);
+    expect((await fetch(origin + '/p/okta/userinfo', { headers: { Authorization: 'Bearer ' + p.accessToken(grace) } })).status).toBe(401);
+    await fetch(origin + '/control', { method: 'POST', body: JSON.stringify({ action: 'expire-access', profile: 'spec' }) });
+    expect(await me(grace)).toEqual(person);
+    expect(p.accessToken(grace)).not.toBe('test-reader');
+    expect(p.claims(grace)).toMatchObject(person);
+    expect(await me(ada)).toMatchObject({ sub: 'reader-1' });
+  } finally { server.stop(true); }
 });

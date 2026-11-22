@@ -189,7 +189,7 @@ impl Parser {
 
     /// `persist` after a state's initializer (LLP 1116 D5): where it is
     /// written. A derive has nothing of its own to keep.
-    pub(super) fn persist_word(&mut self, w: &str, name: &str) -> R<Option<Span>> {
+    pub(super) fn persist_word(&mut self, w: &str, name: &str) -> R<Option<Persist>> {
         if !self.at_ident("persist") {
             return Ok(None);
         }
@@ -202,7 +202,16 @@ impl Parser {
                 ),
             );
         }
-        Ok(Some(self.next().span))
+        let span = self.next().span;
+        let window = self.at_ident("window");
+        if window {
+            self.next();
+        }
+        Ok(Some(Persist {
+            name: name.to_string(),
+            window,
+            span,
+        }))
     }
 
     /// A name a binder introduces, or one that refers to a binder's name: any

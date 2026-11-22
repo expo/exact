@@ -1,5 +1,6 @@
 //! Split the changed part of a field between hard-line boundaries in its previous layout.
 use super::{cache, HardLine, Run, ShapedSource, Spec, PARAGRAPH_BREAKS};
+use std::borrow::Cow;
 use std::ops::Range;
 
 /// Whole lines before and after the replacement keep their shapes. Only
@@ -30,8 +31,8 @@ impl<'a> LineEdit<'a> {
         let old_len = len(&old.spec);
         let pairs = old.spec.runs.iter().zip(&spec.runs);
         let prefix = matching_bytes(pairs.clone(), false);
-        // Each glyph names its run by index. A suffix at different run
-        // indices must be shaped again even when its text and style match.
+        // These slices keep their run bases. The per-line matcher can also
+        // reuse a line whose runs moved within the paragraph.
         let suffix = if prefix < old_len.min(new_len) && old.spec.runs.len() == spec.runs.len() {
             matching_bytes(pairs.rev(), true)
                 .min(old_len - prefix)
@@ -95,26 +96,25 @@ thread_local! {
 }
 
 /// A hard line's runs: (range in the line, run index).
-pub(super) type Pieces = Vec<(Range<usize>, usize)>;
+type Pieces = Vec<(Range<usize>, usize)>;
 /// A hard line's inline boxes: (byte offset in the line, run index).
-pub(super) type Boxes = Vec<(usize, usize)>;
+type Boxes = Vec<(usize, usize)>;
 /// A hard line's runs with no text: (byte offset in the line, run index).
-pub(super) type Empties = Vec<(usize, usize)>;
+type Empties = Vec<(usize, usize)>;
+
+pub(super) type SplitLine<'a> = (usize, Cow<'a, str>, Pieces, Boxes, Empties);
 
 /// The paragraph's text split into hard lines as cosmic-text split it: at
 /// each paragraph separator (`\r\n` one), the last empty piece dropped,
 /// and one empty line for no text. Each line keeps its byte offset and
 /// pieces: (range in the line, run index). An inline box's run has no text,
 /// only its place in the line (LLP 1011.002), and so has a run with no text.
-pub(super) fn hard_lines(
-    spec: &Spec,
-    bytes: Range<usize>,
-) -> Vec<(usize, String, Pieces, Boxes, Empties)> {
+pub(super) fn hard_lines(spec: &Spec, bytes: Range<usize>) -> Vec<SplitLine<'_>> {
     #[cfg(test)]
     SPLIT_BYTES.set(SPLIT_BYTES.get() + bytes.len());
-    let mut out: Vec<(usize, String, Pieces, Boxes, Empties)> = vec![(
+    let mut out: Vec<SplitLine<'_>> = vec![(
         bytes.start,
-        String::new(),
+        Cow::Borrowed(""),
         Vec::new(),
         Vec::new(),
         Vec::new(),
@@ -161,7 +161,11 @@ pub(super) fn hard_lines(
                 after_cr = false;
                 let (_, text, pieces, _, _) = out.last_mut().expect("one line");
                 let start = text.len();
-                text.push_str(piece);
+                if text.is_empty() {
+                    *text = Cow::Borrowed(piece);
+                } else {
+                    text.to_mut().push_str(piece);
+                }
                 pieces.push((start..text.len(), index));
             }
             match sep {
@@ -171,7 +175,7 @@ pub(super) fn hard_lines(
                     if ch == '\n' && after_cr && piece.is_empty() {
                         out.last_mut().expect("one line").0 = next;
                     } else {
-                        out.push((next, String::new(), Vec::new(), Vec::new(), Vec::new()));
+                        out.push((next, Cow::Borrowed(""), Vec::new(), Vec::new(), Vec::new()));
                     }
                     after_cr = ch == '\r';
                     rest = &rest[at + ch.len_utf8()..];

@@ -9,7 +9,7 @@
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, dirname, resolve } from 'node:path';
+import { basename, delimiter, dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { bakeTarget, buildBake, copyShaders, developmentBuildEnv, resolveApp, windowsFile } from '../../scripts/app.mjs';
 import { guardFlags, reportBuilt } from '../../scripts/help.mjs';
@@ -31,6 +31,31 @@ export function prepareShaders(manifest, env = process.env) {
   if (newest) env.PATH = `${resolve(bin, newest, 'x64')}${delimiter}${env.PATH ?? ''}`;
   else if (painter !== 'cpu')
     throw new Error('Windows Ink requires fxc.exe: install the Windows SDK, or select host.windows.painter: "cpu".');
+}
+
+/** App-local Visual C++ runtime for the release target. The CRT directory in
+ * VC/Redist contains Microsoft's redistributable DLLs, including those loaded
+ * by a C++ dependency such as Hermes. See https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files. */
+export function windowsRuntime(target, env = process.env) {
+  const arch = { x86_64: 'x64', aarch64: 'arm64', i686: 'x86' }[target.split('-')[0]];
+  if (!arch || !target.endsWith('-windows-msvc')) throw new Error(`unsupported Windows runtime target ${target}`);
+  const marker = `${arch}/Microsoft.VC*.CRT/vcruntime140.dll`;
+  let paths = [];
+  if (env.VCToolsRedistDir && existsSync(env.VCToolsRedistDir))
+    paths = [...new Bun.Glob(marker).scanSync({ cwd: env.VCToolsRedistDir, absolute: true })];
+  if (!paths.length) {
+    const vswhere = resolve(env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)', 'Microsoft Visual Studio', 'Installer', 'vswhere.exe');
+    const found = spawnSync(vswhere, ['-products', '*', '-utf8', '-find', `VC/Redist/MSVC/*/${marker}`.replaceAll('/', '\\')], { encoding: 'utf8', windowsHide: true });
+    if (found.status === 0) paths = found.stdout.trim().split(/\r?\n/).filter(Boolean);
+  }
+  if (!paths.length) throw new Error(`Windows release packaging needs the Visual C++ Redistributable files for ${arch}. Install the C++ redistributable component in Visual Studio Installer.`);
+  const version = path => basename(resolve(dirname(path), '../..'));
+  paths.sort((a, b) => version(b).localeCompare(version(a), 'en', { numeric: true }));
+  const crt = dirname(paths[0]);
+  return readdirSync(crt, { withFileTypes: true }).filter(f => f.isFile() && /\.dll$/i.test(f.name)).map(f => {
+    const path = resolve(crt, f.name);
+    return { path, sha256: createHash('sha256').update(readFileSync(path)).digest('hex') };
+  });
 }
 
 /** Whether this process has no desktop of its own: an SSH session's windows are never shown. */
@@ -117,8 +142,8 @@ public static class ExactDesktop {
 /** Beside a packaged copy in `output`, the backend `build` was baked for and each executable and DLL it copied there,
  * by digest: the driver reads it there (agent-launch.mjs `refuseBinaryBackend`), as the bake cache keeps only the
  * latest build of the target and another package would replace it. */
-export function writePackagedReceipt(app, build, output) {
-  const products = build.products.filter((product) => /\.(exe|dll)$/.test(product.path))
+export function writePackagedReceipt(app, build, output, runtime = []) {
+  const products = build.products.filter((product) => /\.(exe|dll)$/.test(product.path)).concat(runtime)
     .map((product) => ({ path: windowsFile(app, product.path), sha256: product.sha256 }));
   writeFileSync(resolve(output, 'receipt.json'), JSON.stringify({ build: { backendOrigin: build.backendOrigin ?? null, products } }, null, 2) + '\n');
 }
@@ -134,7 +159,9 @@ if (import.meta.main) {
   prepareShaders(app.manifest);
   const target = bakeTarget('windows');
   const profile = args.includes('--release') ? 'release' : 'gpu-dev';
-  // The executable's icon (LLP 1163 D6), which the app crate's build script links (`exact_js_bake`). Made again only
+  const runtime = profile === 'release' ? windowsRuntime(target) : [];
+  const trust = process.env.EXACT_UPDATE_TRUST ?? (profile === 'release' ? 'production' : 'development');
+  // The executable's icon (LLP 1163 D6), which the app crate's build script links. Made again only
   // when the picked file changes, since a new file relinks the executable; its source's digest is kept beside it.
   let icon;
   try { icon = pickIcon(app.manifest, app.dir, { purposes: ['any', 'maskable'], px: 256, formats: ['png'], native: true, name: 'the Windows icon' }); }
@@ -151,19 +178,19 @@ if (import.meta.main) {
   // A running copy holds its executable and DLL open, so another directory lets
   // a second copy be packaged beside it.
   const output = outAt >= 0 ? resolve(args[outAt + 1]) : resolve(process.env.EXACT_WINDOWS_OUTPUT ?? resolve(app.dir, 'dist-windows'));
-  const build = buildBake(app, 'windows', target, { profile, env: { ...developmentBuildEnv(app), EXACT_WINDOWS_ICON_RES: iconRes }, capture(build) {
+  const build = buildBake(app, 'windows', target, { profile, env: { ...developmentBuildEnv(), EXACT_UPDATE_TRUST: trust, EXACT_WINDOWS_ICON_RES: iconRes }, capture(build) {
     mkdirSync(output, { recursive: true });
     const exe = build.products.find(product => product.path.endsWith(`${app.crate('windows')}.exe`));
     if (!exe) throw new Error('Windows bake produced no executable');
     closeOpened(resolve(output, windowsFile(app, exe.path)));
-    for (const product of build.products.filter(p => /\.(exe|dll)$/.test(p.path))) {
+    for (const product of build.products.filter(p => /\.(exe|dll)$/.test(p.path)).concat(runtime)) {
       const destination = resolve(output, windowsFile(app, product.path));
       try { copyFileSync(product.path, destination); }
       catch (error) {
         if (!['EBUSY', 'EPERM'].includes(error.code)) throw error;
         throw new Error(`${destination} is in use: quit it, or package into another directory with --out <dir> (drive that copy with EXACT_WINDOWS_BIN)`);
       }
-      if (createHash('sha256').update(readFileSync(destination)).digest('hex') !== product.sha256) throw new Error(`Cargo product changed before Windows capture: ${product.path}`);
+      if (createHash('sha256').update(readFileSync(destination)).digest('hex') !== product.sha256) throw new Error(`Product changed before Windows capture: ${product.path}`);
     }
   } });
   mkdirSync(output, {recursive:true});
@@ -175,7 +202,7 @@ if (import.meta.main) {
   }
   copyShaders(app, resolve(output, 'shaders'), {replace:true});
   writeFileSync(resolve(output, 'compat.json'), JSON.stringify(build.compat, null, 2) + '\n');
-  writePackagedReceipt(app, build, output);
+  writePackagedReceipt(app, build, output, runtime);
   console.log(`Windows: ${executable}`);
   const unclaimed = unclaimedNote(app.manifest, 'windows');
   if (unclaimed) console.log(`Windows: ${unclaimed}`);

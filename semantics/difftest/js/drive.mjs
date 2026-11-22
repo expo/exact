@@ -220,15 +220,18 @@ async function drive(code, c, hostSources) {
   const document = createDocument();
   // The page's storage: the device's store at launch (LLP 1116 D5), which
   // persist.js reads as a slot is made and writes after each commit.
-  const kept = new Map(Object.entries(c.stored ?? {}));
-  const localStorage = {
-    get length() { return kept.size; }, key: i => [...kept.keys()][i] ?? null,
-    getItem: k => kept.has(k) ? kept.get(k) : null, setItem: (k, v) => { kept.set(k, String(v)); }, removeItem: k => { kept.delete(k); },
+  const storage = windowScoped => {
+    const kept = new Map(Object.entries(c.stored ?? {}).filter(([key]) => key.startsWith('exact.state.#window.') === windowScoped));
+    return {
+      get length() { return kept.size; }, key: i => [...kept.keys()][i] ?? null,
+      getItem: k => kept.get(k) ?? null, setItem: (k, v) => kept.set(k, String(v)), removeItem: k => kept.delete(k),
+    };
   };
+  const localStorage = storage(false), sessionStorage = storage(true);
   const ctx = vm.createContext({
     // Agent mode owns the clock without prerender's eager tab construction.
     document, location: { pathname: '/', search: '?agent', href: 'http://difftest.invalid/?agent', origin: 'http://difftest.invalid' },
-    history: { replaceState() {}, pushState() {}, go() {}, state: null }, localStorage,
+    history: { replaceState() {}, pushState() {}, go() {}, state: null }, localStorage, sessionStorage,
     addEventListener() {}, removeEventListener() {}, navigator: {},
     matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} }),
     getComputedStyle: () => ({ getPropertyValue: () => '' }),
@@ -361,8 +364,9 @@ async function drive(code, c, hostSources) {
   const revive = (v, t) => t === 'n' && typeof v === 'string' ? Number(v) : Array.isArray(t) && t[0] === '?' ? (v === null ? null : revive(v, t[1]))
     : Array.isArray(t) && Array.isArray(v) ? v.map(x => revive(x, t[1])) : v;
   const storeLines = () => {
-    for (const name of c.persisted ?? []) {
-      const i = names[0].indexOf(name), text = localStorage.getItem('exact.state.' + name);
+    for (const [name, windowScoped] of c.persisted ?? []) {
+      const i = names[0].indexOf(name);
+      const text = windowScoped ? sessionStorage.getItem('exact.state.#window.' + name) : localStorage.getItem('exact.state.' + name);
       let shown = '-';
       try { if (text != null) shown = typed(revive(JSON.parse(text), types[0][i]), types[0][i]); } catch {}
       out.push(`store ${name} ${shown}`);

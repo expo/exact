@@ -332,8 +332,8 @@ test('a reload: the persisted states, and the evidence that something saved was 
   assert.deepEqual(persistedStates('/no/such/app'), []);
   const dir = mkdtempSync(resolve(tmpdir(), 'verify-persist-'));
   try {
-    writeFileSync(resolve(dir, 'app.contract'), 'component App\n  state goal = 2000 persist\n  state last-seen = "" persist // kept\n  state draft = ""\n  state label = "persist"\n  state note = "x" // persist\n  state tab = "home"  persist  \n  state typed-goal: number = 8 persist\n  state saved: string[] = [] persist\n  state typed: string = "persist"\n  view\n    text "x"\n');
-    assert.deepEqual(persistedStates(dir), ['goal', 'last-seen', 'tab', 'typed-goal', 'saved']);
+    writeFileSync(resolve(dir, 'app.contract'), 'component App\n  state goal = 2000 persist\n  state last-seen = "" persist // kept\n  state draft = ""\n  state label = "persist"\n  state note = "x" // persist\n  state tab = "home"  persist  \n  state typed-goal: number = 8 persist\n  state saved: string[] = [] persist\n  state conversation = "" persist window // per tab\n  state typed: string = "persist"\n  view\n    text "x"\n');
+    assert.deepEqual(persistedStates(dir), ['goal', 'last-seen', 'tab', 'typed-goal', 'saved', 'conversation']);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 
   const node = (testId, value, extra = {}) => ({ id: 1, type: 'TextInput', depth: 1, props: { testId, value }, ...extra });
@@ -1151,6 +1151,11 @@ test('scrolling: like UIKit in one line; each tell or bad the app can fix a coun
   const hosted = run({ ms: 21000, out, result: host, load: { avg: 4, cores: 18 } });
   assert.equal(hosted.problems, 0);
   assert.match(hosted.lines[2], /^ {2}Exact's own .*: hitch ratio 30 ms\/s \(bad; UIKit 0 ms\/s\); deceleration τ 600 ms \(tell; UIKit 502 ms\); report with/);
+
+  const unmeasured = run({ ms: 1200, error: 'the touch runner did not start' });
+  assert.equal(unmeasured.problems, 0);
+  assert.equal(unmeasured.lines[1], 'scrolling: could not measure: the touch runner did not start');
+  assert.match(unmeasured.lines.at(-1), /^verify: clean, but scrolling was not measured in /);
   const busy = run({ ms: 21000, out, result: live, load: { avg: 40.2, cores: 18 } });
   assert.equal(busy.problems, 1);
   assert.match(busy.lines[1], /^scrolling: 1 finding against UIKit/);

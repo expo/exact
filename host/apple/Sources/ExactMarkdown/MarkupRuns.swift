@@ -85,6 +85,7 @@ enum MarkupRuns {
                 }
                 if let detail = atom {
                     let kind = detail["kind"] as? String ?? ""
+                    let plainLabel = run.text
                     // One line, as a pill is (D4): its spaces and hyphens do not break.
                     let unbroken = run.text.replacingOccurrences(of: " ", with: "\u{00A0}").replacingOccurrences(of: "-", with: "\u{2011}")
                     // One box in the line, as the web's is: isolated in the direction its
@@ -108,7 +109,7 @@ enum MarkupRuns {
                     boxes += 1
                     run.backgroundBox = 0xA700_0000 | boxes
                     run.backgroundRadii = Array(repeating: InlineRadius(px: Double(rows?.radius ?? run.size * 0.3)), count: 4)
-                    let press: [Any] = [kind, detail["source"] ?? "", detail["href"] ?? "", detail["start"] ?? 0, detail["end"] ?? 0, detail["role"] ?? "button", detail["title"] ?? ""]
+                    let press: [Any] = [kind, detail["source"] ?? "", detail["href"] ?? "", detail["start"] ?? 0, detail["end"] ?? 0, detail["role"] ?? "button", detail["title"] ?? "", detail["ariaLabel"] ?? "", plainLabel]
                     if let json = try? JSONSerialization.data(withJSONObject: press), let value = String(data: json, encoding: .utf8) {
                         run.href = atomScheme + (value.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "")
                     }

@@ -71,6 +71,7 @@ pub(super) fn dispatch<D: DataSource>(
             mouse.moved();
         }
         InputEvent::Absolute(fx, fy) => {
+            let previous = *pointer;
             if let Some(fx) = fx {
                 pointer.0 = (fx * viewport.0).clamp(0., viewport.0 - 1.);
             }
@@ -78,8 +79,10 @@ pub(super) fn dispatch<D: DataSource>(
                 pointer.1 = (fy * viewport.1).clamp(0., viewport.1 - 1.);
             }
             p.set_pointer(Some(*pointer));
-            p.pointer_move(pointer.0, pointer.1, now_ms)?;
-            mouse.moved();
+            if *pointer != previous {
+                p.pointer_move(pointer.0, pointer.1, now_ms)?;
+                mouse.moved();
+            }
         }
         InputEvent::MouseDown(at) => {
             let (x, y) = *pointer;

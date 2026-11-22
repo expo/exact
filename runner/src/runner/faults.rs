@@ -91,6 +91,10 @@ impl<D: DataSource> Runner<D> {
 pub struct Fault {
     /// Matches a URL that starts with it.
     pub prefix: String,
+    /// The HTTP method selected by this response fixture.
+    pub method: Option<String>,
+    /// Delay before this fixture answers, in milliseconds on the session clock.
+    pub after_ms: u32,
     /// The count given at arming, if any.
     pub times: Option<u32>,
     /// What is left of it.
@@ -105,13 +109,28 @@ pub struct Fault {
     pub response: Option<Arc<Response>>,
 }
 
-fn response_json(response: &Response) -> serde_json::Value {
-    serde_json::json!({"status": response.status,
+fn response_json(response: &Response, after_ms: u32) -> serde_json::Value {
+    let mut value = serde_json::json!({"status": response.status,
         "headers": response.headers.iter().cloned().collect::<std::collections::BTreeMap<_, _>>(),
-        "body": String::from_utf8_lossy(&response.body)})
+        "body": String::from_utf8_lossy(&response.body)});
+    if after_ms != 0 {
+        value["afterMs"] = after_ms.into();
+    }
+    value
 }
 
-fn parse_response(value: &serde_json::Value) -> Result<Response, String> {
+fn check_method(method: &str) -> Result<String, String> {
+    if method.is_empty()
+        || !method
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
+    {
+        return Err("answer fetch: method must be an HTTP token".into());
+    }
+    Ok(method.into())
+}
+
+fn parse_response(value: &serde_json::Value) -> Result<(Response, u32), String> {
     let bad = || {
         "answer fetch needs a status (200–599, excluding redirects), string headers and a text body of at most 64 KiB".to_string()
     };
@@ -149,11 +168,23 @@ fn parse_response(value: &serde_json::Value) -> Result<Response, String> {
             ))
         })
         .collect::<Result<Vec<_>, String>>()?;
-    Ok(Response {
-        status,
-        headers,
-        body: body.as_bytes().to_vec(),
-    })
+    let after_ms = value
+        .get("afterMs")
+        .map(|v| {
+            v.as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| "answer fetch: invalid delay in milliseconds".to_string())
+        })
+        .transpose()?
+        .unwrap_or(0);
+    Ok((
+        Response {
+            status,
+            headers,
+            body: body.as_bytes().to_vec(),
+        },
+        after_ms,
+    ))
 }
 
 fn table_spec(entries: &[Fault]) -> String {
@@ -162,7 +193,7 @@ fn table_spec(entries: &[Fault]) -> String {
         .iter()
         .map(|f| {
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}{}\n",
                 f.prefix,
                 n(f.times),
                 n(f.left),
@@ -170,9 +201,13 @@ fn table_spec(entries: &[Fault]) -> String {
                 u8::from(f.armed),
                 f.response
                     .as_ref()
-                    .map(|r| response_json(r).to_string())
+                    .map(|r| response_json(r, f.after_ms).to_string())
                     .unwrap_or_default(),
-                f.failure_hits
+                f.failure_hits,
+                f.method
+                    .as_ref()
+                    .map(|m| format!("\t{m}"))
+                    .unwrap_or_default()
             )
         })
         .collect()
@@ -191,6 +226,17 @@ fn table_fits(entries: &[Fault]) -> Result<(), String> {
 }
 
 impl Fault {
+    fn matches(&self, url: &str, method: &str, answers: bool) -> bool {
+        self.live()
+            && (answers || self.response.is_none())
+            && url.starts_with(&self.prefix)
+            && self.method.as_deref().is_none_or(|m| m == method)
+    }
+
+    fn priority(&self) -> (usize, bool) {
+        (self.prefix.len(), self.method.is_some())
+    }
+
     fn live(&self) -> bool {
         self.armed && self.left != Some(0)
     }
@@ -201,6 +247,10 @@ impl Fault {
 pub struct Faults {
     entries: Arc<Mutex<Vec<Fault>>>,
     lines: Arc<Mutex<std::collections::VecDeque<String>>>,
+}
+
+fn counts_as_failure(response: Option<&Response>) -> bool {
+    response.is_none_or(|r| r.status >= 400)
 }
 
 impl Faults {
@@ -257,11 +307,22 @@ impl Faults {
                         .and_then(|v| parse_response(&v))
                 })
                 .transpose()?;
+            let (response, after_ms) = response.map_or((None, 0), |(r, ms)| (Some(r), ms));
             let failure_hits =
-                count(fields.next())?.unwrap_or(if response.is_none() { hits } else { 0 });
-            faults.retain(|f| f.prefix != prefix);
+                count(fields.next())?.unwrap_or(if counts_as_failure(response.as_ref()) {
+                    hits
+                } else {
+                    0
+                });
+            let method = fields.next().map(check_method).transpose()?;
+            if fields.next().is_some() || method.is_some() && response.is_none() {
+                return Err("answer fetch: invalid method in launch fixture".into());
+            }
+            faults.retain(|f| f.prefix != prefix || f.method != method);
             faults.push(Fault {
                 prefix: prefix.to_string(),
+                method,
+                after_ms,
                 times,
                 left,
                 hits,
@@ -297,15 +358,17 @@ impl Faults {
         }
         let mut table = self.table();
         let mut next = table.clone();
-        next.retain(|f| f.prefix != prefix);
+        next.retain(|f| f.prefix != prefix || f.method.is_some());
         next.push(Fault {
             prefix: prefix.to_string(),
+            method: None,
+            after_ms: 0,
             times,
             left: times,
             hits: 0,
             failure_hits: table
                 .iter()
-                .find(|f| f.prefix == prefix)
+                .find(|f| f.prefix == prefix && f.method.is_none())
                 .map_or(0, |f| f.failure_hits),
             armed: true,
             response: None,
@@ -317,13 +380,24 @@ impl Faults {
 
     /// Replace a prefix with an immediate response. Validation precedes mutation.
     pub fn answer(&self, prefix: &str, value: &serde_json::Value) -> Result<(), String> {
-        let response = parse_response(value)?;
+        self.answer_method(prefix, None, value)
+    }
+
+    /// Install a response for a prefix and an optional HTTP method.
+    pub fn answer_method(
+        &self,
+        prefix: &str,
+        method: Option<&str>,
+        value: &serde_json::Value,
+    ) -> Result<(), String> {
+        let method = method.map(check_method).transpose()?;
+        let (response, after_ms) = parse_response(value)?;
         if prefix.is_empty() || prefix.contains(['\t', '\r', '\n']) {
             return Err("answer fetch needs a URL prefix without tabs or newlines".into());
         }
         let mut table = self.table();
         let mut next = table.clone();
-        next.retain(|f| f.prefix != prefix);
+        next.retain(|f| f.prefix != prefix || f.method != method);
         next.push(Fault {
             prefix: prefix.into(),
             times: None,
@@ -331,9 +405,11 @@ impl Faults {
             hits: 0,
             failure_hits: table
                 .iter()
-                .find(|f| f.prefix == prefix)
+                .find(|f| f.prefix == prefix && f.method == method)
                 .map_or(0, |f| f.failure_hits),
             armed: true,
+            method,
+            after_ms,
             response: Some(Arc::new(response)),
         });
         table_fits(&next)?;
@@ -345,8 +421,12 @@ impl Faults {
     /// it was in the table.
     pub fn pass(&self, prefix: &str) -> bool {
         let mut table = self.table();
-        let entry = table.iter_mut().find(|f| f.prefix == prefix);
-        entry.map(|f| f.armed = false).is_some()
+        let mut found = false;
+        for entry in table.iter_mut().filter(|f| f.prefix == prefix) {
+            entry.armed = false;
+            found = true;
+        }
+        found
     }
 
     /// Whether a fetch of `url` fails, counting it: the longest live prefix
@@ -356,15 +436,19 @@ impl Faults {
     }
 
     fn take_response(&self, url: &str, answers: bool) -> Option<Option<Response>> {
+        self.take_method(url, "GET", answers)
+    }
+
+    fn take_method(&self, url: &str, method: &str, answers: bool) -> Option<Option<Response>> {
         let mut table = self.table();
         let hit = table
             .iter_mut()
-            .filter(|f| f.live() && (answers || f.response.is_none()) && url.starts_with(&f.prefix))
-            .max_by_key(|f| f.prefix.len());
+            .filter(|f| f.matches(url, method, answers))
+            .max_by_key(|f| f.priority());
         match hit {
             Some(f) => {
                 f.hits += 1;
-                if f.response.is_none() {
+                if counts_as_failure(f.response.as_deref()) {
                     f.failure_hits += 1;
                 }
                 f.left = f.left.map(|n| n - 1);
@@ -399,6 +483,10 @@ impl Faults {
             }
             out.push_str("{\"prefix\":");
             crate::json::quote(&f.prefix, &mut out);
+            if let Some(method) = &f.method {
+                out.push_str(",\"method\":");
+                crate::json::quote(method, &mut out);
+            }
             out.push_str(&format!(
                 ",\"times\":{},\"left\":{},\"hits\":{},\"armed\":{}",
                 n(f.times),
@@ -408,7 +496,10 @@ impl Faults {
             ));
             out.push_str(&format!(",\"failureHits\":{}", f.failure_hits));
             if let Some(response) = &f.response {
-                out.push_str(&format!(",\"response\":{}", response_json(response)));
+                out.push_str(&format!(
+                    ",\"response\":{}",
+                    response_json(response, f.after_ms)
+                ));
             }
             out.push('}');
         }
@@ -476,16 +567,15 @@ impl<D: DataSource> Runner<D> {
         let answers = self.links.grants.is_some_and(|link| {
             (link.admitting)(&self.grants(), request.grants.as_deref(), &request.url).is_some()
         });
-        let (prefix, response) = self
+        let (prefix, response, after_ms) = self
             .faults
             .table()
             .iter()
-            .filter(|f| {
-                f.live() && (answers || f.response.is_none()) && request.url.starts_with(&f.prefix)
-            })
-            .max_by_key(|f| f.prefix.len())
-            .map(|f| (f.prefix.clone(), f.response.clone()))?;
+            .filter(|f| f.matches(&request.url, &request.method, answers))
+            .max_by_key(|f| f.priority())
+            .map(|f| (f.prefix.clone(), f.response.clone(), f.after_ms))?;
         if let Some(fixture) = response {
+            self.delay_fetch_fixture(r.ticket, self.now_ms, after_ms, request.timeout_ms);
             let (faults, request) = (self.faults.clone(), request.clone());
             return Some(Dispatch::Run(Work::HttpResponse(Arc::new(move || {
                 let mut response = (*fixture).clone();
@@ -520,6 +610,9 @@ impl<D: DataSource> Runner<D> {
                             .is_some_and(|r| Arc::ptr_eq(r, &fixture))
                 }) {
                     entry.hits += 1;
+                    if counts_as_failure(Some(&fixture)) {
+                        entry.failure_hits += 1;
+                    }
                 }
                 let mut lines = faults.lines.lock().unwrap_or_else(|e| e.into_inner());
                 lines.push_back(format!("fetch answered (driver fixture): {}", request.url));
@@ -529,7 +622,8 @@ impl<D: DataSource> Runner<D> {
                 Outcome::Response(response)
             }))));
         }
-        self.faults.take_response(&request.url, answers)?;
+        self.faults
+            .take_method(&request.url, &request.method, answers)?;
         let message = format!("fetch failed (driver fault): {}", request.url);
         self.log(message.clone());
         Some(Dispatch::Run(Work::Now(Box::new(move || {
@@ -544,6 +638,31 @@ impl<D: DataSource> Runner<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn method_specific_answers_share_a_prefix_and_survive_reload() {
+        let f = Faults::default();
+        let url = "https://goals.example.test/goal";
+        for (method, text) in [
+            (Some("GET"), "old"),
+            (Some("PUT"), "saved"),
+            (None, "fallback"),
+        ] {
+            f.answer_method(
+                url,
+                method,
+                &serde_json::json!({"status":200,"headers":{},"body":text}),
+            )
+            .unwrap();
+        }
+        let f = Faults::parse(&f.spec()).unwrap();
+        for (method, text) in [("GET", "old"), ("PUT", "saved"), ("POST", "fallback")] {
+            let response = f.take_method(url, method, true).unwrap().unwrap();
+            assert_eq!(response.body, text.as_bytes());
+        }
+        assert!(f.pass(url));
+        assert!(f.take_method(url, "GET", true).is_none());
+    }
 
     #[test]
     fn failure_counts_survive_replacement_and_reload() {
@@ -855,5 +974,109 @@ mod tests {
         assert!(launch
             .json()
             .contains("\"prefix\":\"https://d.test/\",\"times\":2,\"left\":2"));
+    }
+
+    #[test]
+    fn error_status_response_fixtures_count_as_failures_in_both_paths() {
+        let mut builder = exact_plan::builder::PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+        builder.node(
+            exact_kernel::NodeType::View as u8,
+            None,
+            None,
+            0,
+            &[],
+            &[],
+            None,
+        );
+        struct Granted;
+        impl DataSource for Granted {
+            fn query(
+                &mut self,
+                source: &str,
+                _: &[exact_plan::Value],
+            ) -> Result<exact_plan::Value, crate::DataError> {
+                Err(crate::DataError::UnknownSource(source.into()))
+            }
+            fn grants(&self) -> &str {
+                "net.fetch https://api.test"
+            }
+        }
+        let mut runner = Runner::boot(
+            builder.finish().unwrap(),
+            Granted,
+            exact_kernel::Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        let faults = runner.faults().clone();
+        faults
+            .answer(
+                "https://api.test/ok",
+                &serde_json::json!({"status": 200, "headers": {}, "body": "ok"}),
+            )
+            .unwrap();
+        faults
+            .answer(
+                "https://api.test/missing",
+                &serde_json::json!({"status": 404, "headers": {}, "body": "nope"}),
+            )
+            .unwrap();
+        faults
+            .answer(
+                "https://api.test/broken",
+                &serde_json::json!({"status": 500, "headers": {}, "body": "boom"}),
+            )
+            .unwrap();
+        // Path 1: `take_response`.
+        assert_eq!(
+            faults
+                .take_response("https://api.test/ok", true)
+                .unwrap()
+                .unwrap()
+                .status,
+            200
+        );
+        assert_eq!(
+            faults
+                .take_response("https://api.test/missing", true)
+                .unwrap()
+                .unwrap()
+                .status,
+            404
+        );
+        // Path 2: `Runner::fault_dispatch` (the normal HTTP dispatch closure).
+        let out = RequestOut {
+            completion: None,
+            ticket: 7,
+            target: "items".into(),
+            request: crate::Request::get("https://api.test/broken"),
+            class: Default::default(),
+            forced: false,
+        };
+        let work = runner.fault_dispatch(&out).expect("matched 500 answer");
+        match work {
+            Dispatch::Run(Work::HttpResponse(run)) => match run() {
+                Outcome::Response(response) => assert_eq!(response.status, 500),
+                other => panic!("expected Response outcome, got {other:?}"),
+            },
+            _ => panic!("expected Dispatch::Run(Work::HttpResponse)"),
+        }
+        let table = faults.table();
+        let counts: Vec<_> = table
+            .iter()
+            .map(|f| (f.prefix.as_str(), f.hits, f.failure_hits))
+            .collect();
+        assert_eq!(
+            counts,
+            vec![
+                ("https://api.test/ok", 1, 0),
+                ("https://api.test/missing", 1, 1),
+                ("https://api.test/broken", 1, 1),
+            ]
+        );
+        drop(table);
+        let carried = Faults::parse(&faults.spec()).unwrap();
+        assert_eq!(carried.json(), faults.json());
     }
 }

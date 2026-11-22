@@ -14,31 +14,36 @@ impl<D: DataSource> Runner<D> {
         &self,
         ids: &mut Ids,
         carried: Option<&Carried>,
-    ) -> Result<(), RunnerError> {
-        let Some(views) = carried
-            .map(|carry| &carry.views)
-            .filter(|views| !views.is_empty())
-        else {
-            return Ok(());
+    ) -> Result<crate::instance::CandidateLists, RunnerError> {
+        let mut lists = crate::instance::CandidateLists::default();
+        let Some(carried) = carried else {
+            return Ok(lists);
         };
-        if self.kernel.is_detached() {
-            return Ok(());
+        if self.kernel.is_detached() || (carried.views.is_empty() && carried.lists.is_empty()) {
+            return Ok(lists);
         }
-        // Only evaluate the settled first frame. Asking the data source and
-        // publishing surfaces belong to the runner that commits the frame.
-        let mut preview = Ids::default();
-        preview.tabs.carried = ids.tabs.carried.clone();
-        let mut update = self.instance_update(&mut preview);
-        update.fonts = Some(std::rc::Rc::new(std::cell::RefCell::new(
-            self.fonts.borrow().clone(),
-        )));
-        let tree = Tree::create(&mut update)?;
-        let mut kernel = Kernel::on_demand(Box::new(exact_kernel::MonospaceMeasurer::default()));
-        let _roles = self.bind_roles();
-        kernel.apply(0, 1, &update.ops)?;
-        let candidate = tree.retainable_views(&self.plan, &kernel, &preview);
-        views.assign(&candidate, preview.last_issued(), ids);
-        Ok(())
+        // Restoring an outer list may expose inner lists at new places. Match
+        // those too before assigning ids to the rows the first frame will build.
+        loop {
+            let mut preview = Ids::default();
+            preview.tabs.carried = ids.tabs.carried.clone();
+            let mut update = self.instance_update(&mut preview);
+            update.fonts = Some(std::rc::Rc::new(std::cell::RefCell::new(
+                self.fonts.borrow().clone(),
+            )));
+            update.list_seeds = Some(&lists);
+            let tree = Tree::create(&mut update)?;
+            let mut kernel =
+                Kernel::on_demand(Box::new(exact_kernel::MonospaceMeasurer::default()));
+            let _roles = self.bind_roles();
+            kernel.apply(0, 1, &update.ops)?;
+            if lists.match_places(&carried.lists, &tree, &self.plan, &kernel) {
+                continue;
+            }
+            let candidate = tree.retainable_views(&self.plan, &kernel, &preview);
+            carried.views.assign(&candidate, preview.last_issued(), ids);
+            return Ok(lists);
+        }
     }
 
     /// Re-evaluate every site and apply one batch. A failure here means the

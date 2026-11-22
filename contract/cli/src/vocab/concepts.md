@@ -425,7 +425,10 @@ component App
   as its own text field, macOS's `NSAlert` beneath its message; each keystroke is the input's
   `input`, so the action's `press` reads `draft`. Return presses the first action that is not
   destructive (nothing while it is disabled), unless the field has a `submit`, which then has
-  Return alone. `disabled=(draft == "")` on Save dims it while the field is empty.
+  Return alone. `disabled=(draft == "")` on Save dims it while the field is empty. If Save's
+  `press` action clears `draft` (so the button becomes `disabled`), HTML skips its `command="close"`
+  and the alert stays open: call `close("id")` from the action instead of `commandfor`/`command="close"`,
+  or clear `draft` in the mutation's `then` or the dialog's `close` handler.
 - An alert that only tells ("Couldn't save.") is a `text` and one closing button, no action:
   the platform's one-button alert. Set the message in state, then `showModal(id)`
   (`contract vocab error-alert`). Leave `closedby` unwritten: iOS has no dismissible form of it.

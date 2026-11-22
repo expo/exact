@@ -28,7 +28,7 @@ impl Startup {
         )
     }
 
-    /// A hidden launch gets its device budget when the first redraw is admitted.
+    /// A hidden window gets a fresh device budget when it is asked to show.
     pub fn start_for_first_present(force_warp: bool) -> Result<Self> {
         Self::start_with(
             force_warp,

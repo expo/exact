@@ -82,12 +82,11 @@ png = "=0.18.1"
 libc = "0.2"
 getrandom = "0.3"
 iana-time-zone = "0.1"
-# The GPU painter: vello over wgpu, rendering the same display list into a
-# texture the host reads back. vello 0.10 pins wgpu 29; the on-demand GPU
-# module (`gpu/`) is on 30 — two builds of wgpu until vello moves, never one
-# device shared (the module is a separate artifact).
-vello = "0.10"
-wgpu = { version = "29", default-features = false, features = ["wgsl", "metal", "vulkan"] }
+# Vello and Ink use the same wgpu version in the painted host.
+# The native presenter requests Backends::PRIMARY. Enabling Vello's wgpu
+# defaults would also link OpenGL, which that adapter request excludes.
+vello = { version = "0.12", default-features = false, features = ["wgpu"] }
+wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "wgsl", "dx12", "metal", "vulkan"] }
 
 # Android presents into the window's swapchain (gpu/present.rs).
 [target.'cfg(target_os = "android")'.dependencies]
@@ -111,9 +110,7 @@ exact-listen = { path = "../listen" }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Imaging", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_LibraryLoader", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_Controls_RichEdit", "Win32_UI_WindowsAndMessaging", "UI_ViewManagement"] }
-chrono = "0.4"
-chrono-tz = "0.10"
-windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_UI_Shell", "Win32_System_Com", "Win32_Globalization", "Win32_System_SystemServices"] }
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_UI_Shell", "Win32_System_Com", "Win32_Globalization", "Win32_System_SystemServices", "Win32_System_Time"] }
 
 [features]
 # Integration tests only: each test thread owns its executor worker budget.

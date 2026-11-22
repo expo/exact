@@ -28,6 +28,8 @@ pub enum Restyle {
     /// The border box's width and height a person dragged its `resize`
     /// grip to; `None` keeps an axis (`Runner::resize_box`).
     Size([Option<f32>; 2]),
+    /// The track of a native table header. Clearing it restores automatic sizing.
+    TableColumn(Option<f32>),
 }
 
 /// What a call reports of content owners and native targets beside its
@@ -155,6 +157,18 @@ impl<D: DataSource> Host<D> {
             let restyled = match restyle {
                 Restyle::Placeholder(shown) => self.runner.show_split_placeholder(view, shown),
                 Restyle::Size([width, height]) => self.runner.resize_box(view, width, height),
+                Restyle::TableColumn(width) => {
+                    match self.runner.kernel_mut().set_table_column_width(view, width) {
+                        Ok(changed) => {
+                            needs_layout |= changed;
+                            self.height_targets_dirty |= changed;
+                        }
+                        Err(e) => {
+                            error.get_or_insert(format!("table column: {e:?}"));
+                        }
+                    }
+                    continue;
+                }
             };
             match restyled {
                 Ok(Some(receipt)) => receipts.push(exact_runner::Timed {

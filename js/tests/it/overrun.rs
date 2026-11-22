@@ -190,8 +190,15 @@ fn a_mutations_overrun_is_not_asked_again() {
     m.bind(&plan);
     m.activate().unwrap();
     let mut r = Runner::boot(plan, m, Kernel::with_monospace(), Default::default(), "/").unwrap();
-    let _ = r.act("invoke", vec![Value::str("busy"), Value::str("30000000")]);
+    r.measure(true, false);
+    r.data()
+        .set_turn_step(std::time::Duration::from_millis(150));
+    r.act("invoke", vec![Value::str("busy"), Value::str("1")])
+        .unwrap();
     drive(&mut r);
+    assert!(r.take_alerts().iter().any(|line| {
+        line.contains("mutation output") && line.contains("work") && line.contains("100 ms budget")
+    }));
     let journal: Vec<String> = r.journal().map(str::to_owned).collect();
     assert!(
         !journal.iter().any(|l| l.contains("asked again in")),

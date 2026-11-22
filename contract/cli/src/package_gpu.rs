@@ -329,7 +329,7 @@ fn check_shader(
             .map_or(Span::point(1, 1), |at| wgsl_span(&source, at.offset));
         shader_error(Some(&path), at, e.message)
     });
-    let module = exact_gpu_reflect::inspect(&source).map_err(|e| {
+    let mut module = exact_gpu_reflect::inspect(&source).map_err(|e| {
         if e.validation {
             if let Err(member) = &layout {
                 return member.clone();
@@ -346,6 +346,19 @@ fn check_shader(
     check_interface(&module, &source)
         .map_err(|(span, message)| shader_error(Some(&path), span, message))?;
     check_layout(&path, &source, &module, &layout)?;
+    if module.overrides.iter().any(|(_, o)| o.init.is_none()) {
+        // The surface supplies no pipeline constants. Only overrides the fragment uses need defaults.
+        naga::compact::compact(&mut module, naga::compact::KeepUnused::No);
+        if let Some((handle, missing)) = module.overrides.iter().find(|(_, o)| o.init.is_none()) {
+            let at = module.overrides.get_span(handle).location(&source);
+            let name = missing.name.as_deref().unwrap_or("<unnamed>");
+            return Err(shader_error(
+                Some(&path),
+                Span::point(at.line_number, at.line_position),
+                format!("shader override `{name}` needs a default value"),
+            ));
+        }
+    }
     let mut findings = Vec::new();
     for arg in args {
         let Expr::NamedArg(name, value, _) = arg else {

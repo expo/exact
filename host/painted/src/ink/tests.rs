@@ -536,3 +536,69 @@ fn opacity_layers_preserve_fractional_edges_after_flush_and_replay() {
         "retained layer differs from the fresh draw"
     );
 }
+
+#[test]
+fn canvas_upload_changes_only_its_rectangle_and_preserves_retained_revisions() {
+    let Some(mut ink) = open() else { return };
+    let mut image = Pixmap::new(17, 9).unwrap();
+    let mut images = images::Images::default();
+    let mut update = CanvasUpdate {
+        previous: 0,
+        revision: 1,
+        area: None,
+    };
+    let device = &mut ink.device;
+    let texture = images.canvas(device, &image, update, false).unwrap();
+    images.end(device).unwrap();
+    images.begin(device).unwrap();
+
+    // Mark a pixel outside the update so readback can detect a full upload.
+    device
+        .upload_texture(texture, [0, 0], [1, 1], &[0, 80, 0, 255])
+        .unwrap();
+    let rect = tiny_skia::IntRect::from_xywh(4, 2, 3, 5).unwrap();
+    for y in rect.top()..rect.bottom() {
+        let start = y as usize * 17 + 4;
+        image.pixels_mut()[start..start + 3]
+            .fill(tiny_skia::PremultipliedColorU8::from_rgba(100, 0, 0, 255).unwrap());
+    }
+    update = CanvasUpdate {
+        previous: 1,
+        revision: 2,
+        area: Some(rect),
+    };
+    assert_eq!(
+        images.canvas(device, &image, update, false).unwrap(),
+        texture
+    );
+    let mut expected = image.data().to_vec();
+    expected[..4].copy_from_slice(&[0, 80, 0, 255]);
+    assert_eq!(device.readback(texture).unwrap(), expected);
+
+    images.pin(texture);
+    images.end(device).unwrap();
+    images.begin(device).unwrap();
+    image.fill(tiny_skia::Color::BLACK);
+    update = CanvasUpdate {
+        previous: 2,
+        revision: 3,
+        area: tiny_skia::IntRect::from_xywh(0, 0, 17, 9),
+    };
+    let next = images.canvas(device, &image, update, false).unwrap();
+    assert_ne!(next, texture);
+    assert_eq!(device.readback(texture).unwrap(), expected);
+    assert_eq!(device.readback(next).unwrap(), image.data());
+
+    // A skipped revision has no matching texture and requires a full upload.
+    images.end(device).unwrap();
+    images.begin(device).unwrap();
+    update = CanvasUpdate {
+        previous: 4,
+        revision: 5,
+        area: Some(rect),
+    };
+    let skipped = images.canvas(device, &image, update, false).unwrap();
+    assert_eq!(device.readback(skipped).unwrap(), image.data());
+    images.unpin(texture);
+    images.trim(device).unwrap();
+}

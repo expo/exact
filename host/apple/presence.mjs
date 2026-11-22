@@ -225,7 +225,7 @@ export function shareStoreProfile(app, team, { installed, find = macProfile } = 
  * `{ provisioning, widgets, sha1, sandbox?, shareTeam?, shareProfile? }`. A null identity is resolved from fitting
  * profiles before deciding which extensions to build. With widgets one profile serves both their shared groups and the
  * grants. Explicit ad hoc signing (EXACT_IDENTITY=-) omits extensions and signs no profile's entitlements. */
-export function macSigning(app, compat, { current, widgets = null, release = false, distribution = false, store = null, sandboxed = false, log = console.log,
+export function macSigning(app, compat, { current, widgets = null, release = false, distribution = false, store = null, sandboxed = false, preflight = false, log = console.log,
   find = macProfile, widgetProfiles = macWidgetProfiles, identityFor = macProfileIdentity, teamOf = certificateTeam,
   signWidgets = macWidgetSigning, namedWidgetProfile, identities = developmentIdentities, adHoc = current === '-' && (!distribution || !!store),
   shareProfile = shareStoreProfile } = {}) {
@@ -234,8 +234,9 @@ export function macSigning(app, compat, { current, widgets = null, release = fal
   const method = store ?? (distribution ? 'developerid' : 'development');
   const values = grantEntitlementValues(app, compat?.reach);
   // A store build signs the App Sandbox, as `mac --sandbox` does with the dev server's connection besides (LLP 1030.005
-  // D4); a line the sandbox cannot take refuses either before any profile is looked for.
-  const sandbox = store || sandboxed ? { ...sandboxEntitlements(compat), ...(store ? {} : { 'com.apple.security.network.client': true }) } : null;
+  // D4); a line the sandbox cannot take refuses either before any profile is looked for. A pre-bake preflight has no
+  // `compat` yet, so sandbox checks wait for the post-bake call.
+  const sandbox = !preflight && (store || sandboxed) ? { ...sandboxEntitlements(compat), ...(store ? {} : { 'com.apple.security.network.client': true }) } : null;
   const kind = { distribution, store };
   const teamOfKind = (sha1) => teamOf(sha1, distribution, store);
   const ambiguous = !current && !distribution && new Set(identities().map(id => id.team)).size > 1;

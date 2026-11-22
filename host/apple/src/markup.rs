@@ -153,7 +153,7 @@ pub fn pieces(
                 "role": if a.role == exact_markdown::AtomRole::Link { "link" } else { "button" },
                 "start": range.start, "end": range.end,
                 "color": face_paint(&a.color), "background": face_paint(&a.background_color),
-                "direction": a.direction,
+                "direction": a.direction, "ariaLabel": a.aria_label,
             })
             .to_string(),
             _ => String::new(),

@@ -19,7 +19,7 @@
 //! to 0.5 px (fixture `table`).
 
 use crate::arena::NodeArena;
-use crate::generated::{Direction, Display, NodeType, PropId, StyleId, VerticalAlign};
+use crate::generated::{Display, NodeType, PropId, StyleId, VerticalAlign};
 use crate::style::{cells, Dimension};
 use taffy::prelude::{auto, length, zero, Rect};
 
@@ -42,11 +42,19 @@ pub(crate) fn spacing(style: &crate::StyleProps, env: &crate::Env) -> (f32, f32)
     )
 }
 
+/// A column header in an authored header group.
+pub(crate) fn column_header(arena: &NodeArena, slot: u32) -> bool {
+    let props = arena.props(slot);
+    props.str(PropId::SemanticTag) == Some("th")
+        && props.str(PropId::Scope) != Some("row")
+        && arena
+            .parent(slot)
+            .and_then(|row| arena.parent(row))
+            .is_some_and(|group| arena.props(group).str(PropId::SemanticTag) == Some("thead"))
+}
+
 /// HTML's UA padding of a `th` and a `td`, on each side where none is said.
 const CELL_PADDING: f32 = 1.0;
-
-/// HTML's UA `margin-inline-start` of a `dd`.
-const DD_INDENT: f32 = 40.0;
 
 /// What a node is to its table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,17 +82,6 @@ impl Part {
             _ => return None,
         })
     }
-}
-
-/// Whether [`apply`] gives `slot` anything: it is a table's part or a
-/// description list or its description.
-pub(crate) fn styled(arena: &NodeArena, slot: u32) -> bool {
-    Part::of(arena, slot).is_some()
-        || (arena.node_type(slot) == NodeType::View
-            && matches!(
-                arena.props(slot).str(PropId::SemanticTag),
-                Some("dl" | "dd")
-            ))
 }
 
 /// Whether `table` lays out as a table: CSS's `display: table`, which a
@@ -177,32 +174,6 @@ pub(crate) fn table_of(arena: &NodeArena, slot: u32) -> Option<u32> {
 /// grid placement is `layout/table.rs`'s, which only the table's tree knows.
 pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
     let style = arena.style(slot);
-    match arena.props(slot).str(PropId::SemanticTag) {
-        // `margin-block: 1em`.
-        Some("dl") if arena.node_type(slot) == NodeType::View => {
-            let em = arena.computed_source(slot, StyleId::FontSize).font_size;
-            if !style.mask.has(StyleId::MarginTop) {
-                s.margin.top = length(em);
-            }
-            if !style.mask.has(StyleId::MarginBottom) {
-                s.margin.bottom = length(em);
-            }
-            return;
-        }
-        // `margin-inline-start`, where its author said none: the right
-        // right to left. This runs after `sides::mirror_unsaid`, so the side
-        // written is the side the box has.
-        Some("dd") if arena.node_type(slot) == NodeType::View => {
-            let rtl = arena.computed_source(slot, StyleId::Direction).direction == Direction::Rtl;
-            if rtl && !style.mask.has(StyleId::MarginRight) {
-                s.margin.right = length(DD_INDENT);
-            } else if !rtl && !style.mask.has(StyleId::MarginLeft) {
-                s.margin.left = length(DD_INDENT);
-            }
-            return;
-        }
-        _ => {}
-    }
     let Some(part) = Part::of(arena, slot) else {
         return;
     };
@@ -338,6 +309,31 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
             s.margin = zero();
             cell_padding(style, env, s);
             least(style, env, s);
+            if let Some((width, height)) =
+                arena.intrinsic(slot).filter(|_| column_header(arena, slot))
+            {
+                // AppKit measured the entire header cell, including its text insets.
+                // A drag can make it narrower; the native header truncates the title.
+                if !style.mask.has(StyleId::Width)
+                    && !style.mask.has(StyleId::MinWidth)
+                    && !arena.table_column_widths.contains_key(&slot)
+                {
+                    s.min_size.width = length(width);
+                }
+                if !style.mask.has(StyleId::Height) && !style.mask.has(StyleId::MinHeight) {
+                    s.min_size.height = length(height);
+                }
+                for (id, edge) in [
+                    (StyleId::PaddingLeft, &mut s.padding.left),
+                    (StyleId::PaddingRight, &mut s.padding.right),
+                    (StyleId::PaddingTop, &mut s.padding.top),
+                    (StyleId::PaddingBottom, &mut s.padding.bottom),
+                ] {
+                    if !style.mask.has(id) {
+                        *edge = zero();
+                    }
+                }
+            }
             // `vertical-align: middle`, the UA's for a cell; any other
             // keyword aligns a cell at its baseline (CSS 2.1 §17.5.4), its
             // first line's at the top of the cell's content.

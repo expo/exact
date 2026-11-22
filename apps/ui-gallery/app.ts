@@ -134,6 +134,13 @@ export const answer: Answer = ((source: string, args: unknown[], _secrets: unkno
   if (source === 'textSample') {
     return Array.from({ length: 180 }, (_, index): string => `Line group ${index + 1}: The quick brown fox jumps over the lazy dog. Café, naïve and Ångström keep their accents as the paragraph scrolls.`).join(' ');
   }
+  // The list column's inline navigation bar height while the split is expanded, which the gallery's module measures
+  // on iOS, else 0; watch the module's topic so that a change asks again
+  if (source === 'sidebarBarHeight') {
+    if (args[args.length - 1] !== 'ios' || !native?.available) return 0;
+    native.watch('gallery-sidebar-bar');
+    return (native.call({ op: 'sidebarBarHeight' }) as { height: number }).height;
+  }
   // rec2100 white where an Apple host draws it; SDR white on the web and the Android preview
   if (source === 'hdrWhite') return APPLE.has(String(args[args.length - 1])) ? `color(rec2100-linear ${args[0]} ${args[0]} ${args[0]})` : '#ffffff';
   if (source === 'hdrPictures') return HDR.filter((p) => shows(p.src, web));

@@ -1123,7 +1123,7 @@ impl<const CONSTANT: bool> Host<Value> for Run<'_, '_, CONSTANT> {
             None => self.env.failed_why.get(i as usize).and_then(Option::as_ref),
         };
         let (code, message, reason) = why.map_or(("error", "it failed", ""), |w| {
-            (w.exposed_code(), w.message.as_str(), w.reason.as_str())
+            (w.exposed_code(), w.message.as_str(), w.reason())
         });
         let record = Value::Record(
             [Value::str(code), Value::str(message), Value::str(reason)]
@@ -1152,7 +1152,7 @@ impl<const CONSTANT: bool> Host<Value> for Run<'_, '_, CONSTANT> {
                 [
                     Value::str(why.exposed_code()),
                     Value::str(&why.message),
-                    Value::str(&why.reason),
+                    Value::str(why.reason()),
                 ]
                 .into_iter()
                 .collect(),

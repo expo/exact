@@ -48,8 +48,7 @@ if requestedRTL && !directionLaunchOverride {
     directionArguments["NSForceRightToLeftWritingDirection"] = true
     UserDefaults.standard.setVolatileDomain(directionArguments, forName: UserDefaults.argumentDomain)
 }
-// Nothing restores this app: a session boots its plan, and the window below is
-// not restorable. AppKit still saves the application's own state some fifteen
+// Even without restorable windows, AppKit saves the application's own state some fifteen
 // seconds after launch, and to do that it asks the window server for the order
 // of its windows and waits for the reply on the main thread: 20 to 34 ms while
 // a scroll keeps the server busy, a dropped frame. Encoding nothing in an
@@ -250,7 +249,7 @@ final class ExactWindow: ExactDrivenWindow {
 /// and every File ▸ New Window, gets one of these (LLP 1069.010 D4) — a ⌘N
 /// window shows no document until one lands in it — and the windows share one
 /// `tabbingIdentifier`, so AppKit's window tabs come with them.
-final class DocumentWindow: NSObject, NSWindowDelegate {
+final class DocumentWindow: NSObject, NSWindowDelegate, NSWindowRestoration {
     /// The agent's label: the window's name (`main`, or a link's `target`),
     /// or `window-<n>` for one that has none (LLP 1030.004 D3).
     let label: String
@@ -299,12 +298,15 @@ final class DocumentWindow: NSObject, NSWindowDelegate {
         // have windows of their own (LLP 1115.000 D7.9).
         ExactDocuments.furnish(window)
         checkLayoutDirection(window)
-        // Nothing restores this window — a session boots its plan and the frame has
-        // its own autosave below — so AppKit's restoration has nothing to keep for it.
-        // Left on, a scroll view invalidates restorable state as it scrolls and AppKit
-        // flushes it every so often on the main thread, waiting on the window server
-        // as it does: 19 and 25 ms, measured, at the same second of two scrolls.
+        // Unused restoration makes AppKit wait on the window server during scrolls.
         window.isRestorable = false
+        window.identifier = NSUserInterfaceItemIdentifier(first ? "Exact.MainWindow" : UUID().uuidString)
+        window.restorationClass = DocumentWindow.self
+        session.windowStateDidChange = { [weak self] in
+            guard let self else { return }
+            window.isRestorable = !session.windowState.isEmpty
+            window.invalidateRestorableState()
+        }
         // An embedder's window is released by its owner; this one is held by
         // `windows` until it closes.
         window.isReleasedWhenClosed = false
@@ -543,8 +545,27 @@ final class DocumentWindow: NSObject, NSWindowDelegate {
     func windowDidChangeOcclusionState(_ notification: Notification) {
         session.occlusionChanged()
     }
-    /// A closed window takes its session with it (LLP 1031 D2): its runner,
-    /// its views, its label on the carrier.
+    func window(_ window: NSWindow, willEncodeRestorableState coder: NSCoder) {
+        coder.encode(session.windowState, forKey: "ExactWindowState")
+        coder.encode(name, forKey: "ExactWindowName")
+        coder.encode(session.location, forKey: "ExactWindowLocation")
+    }
+
+    static func restoreWindow(withIdentifier identifier: NSUserInterfaceItemIdentifier, state: NSCoder,
+                              completionHandler: @escaping (NSWindow?, Error?) -> Void) {
+        let archive = state.decodeObject(of: [NSDictionary.self, NSString.self], forKey: "ExactWindowState") as? [String: String] ?? [:]
+        if firstWindow.window.identifier == identifier {
+            firstWindow.session.restoreWindowState(archive)
+            completionHandler(firstWindow.window, nil)
+            return
+        }
+        let name = state.decodeObject(of: NSString.self, forKey: "ExactWindowName") as String?
+        let location = state.decodeObject(of: NSString.self, forKey: "ExactWindowLocation") as String?
+        let restored = openWindow(named: name?.isEmpty == false ? name : nil, at: location, restoring: (identifier, archive))
+        completionHandler(restored.window, nil)
+    }
+
+    /// Closing a window releases its runner, views and agent label (LLP 1031 D2).
     func windowWillClose(_ notification: Notification) {
         AgentLink.route(label, nil)
         if rooted, let location = session.location { lastLocation[label] = location }
@@ -623,10 +644,15 @@ func frontWindow() -> DocumentWindow? {
 /// is the whole app, and keeps its frame under that name; `_blank` and
 /// File ▸ New Window have none.
 @discardableResult
-func openWindow(asTab: Bool = false, named: String? = nil, at location: String? = nil) -> DocumentWindow {
+func openWindow(asTab: Bool = false, named: String? = nil, at location: String? = nil,
+                restoring: (NSUserInterfaceItemIdentifier, [String: String])? = nil) -> DocumentWindow {
     let beside = frontWindow()
     let label = named ?? { windowCount += 1; return "window-\(windowCount)" }()
     let w = DocumentWindow(label: label, first: false, rooted: named != nil && named != "main")
+    if let (identifier, archive) = restoring {
+        w.window.identifier = identifier
+        w.session.restoreWindowState(archive)
+    }
     w.session.launchWindow(name: w.name, at: location, rooted: w.rooted)
     if named == "settings" {
         // Apple's Settings window: no minimize, no zoom, never a tab (LLP 1030.004 D5).
@@ -645,6 +671,7 @@ func openWindow(asTab: Bool = false, named: String? = nil, at location: String? 
     w.coverChrome()
     windows.append(w)
     AgentLink.route(w.label, w.session)
+    if restoring != nil { return w } // AppKit positions and orders restored windows.
     // A named window is where the person left it, as `main` is.
     let frame = scripted || named == nil ? nil : (ExactEnv.appMetadata["CFBundleIdentifier"] as? String).map { $0 + "." + label }
     if let frame, w.window.setFrameUsingName(frame) {
@@ -728,8 +755,7 @@ AgentLink.hostState = {
 }
 
 final class Delegate: NSObject, NSApplicationDelegate {
-    /// What AppKit saves of the application is decoded securely; nothing of
-    /// it restores a window (`isRestorable` is off on every window here).
+    /// AppKit decodes the window's property-list archive with secure coding.
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
     func applicationWillFinishLaunching(_ notification: Notification) {
         LaunchKind.install()

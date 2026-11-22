@@ -1104,10 +1104,17 @@ each `tr` holding `th` header cells (`scope="col"` or `"row"`) and `td`
 cells, any cell with `colspan` and `rowspan` (`rowspan=0` reaches the end of
 its row group). Rows and cells may come from a `for`. A sortable
 column's `th` takes `aria-sort` (`"ascending"`, `"descending"`, `"none"` or
-`"other"`; no bool), which only the web exposes. Terms and their descriptions
-are a `dl` of `dt` terms each followed by its `dd` descriptions. On the web
-these are the elements, laid out by the browser; on the native hosts the
-kernel lays a table out as a grid of `auto` columns as wide as its content.
+`"other"`). The web and macOS expose the sort direction to assistive technology.
+On the Mac, unstyled rows with one row of text headers and unspanned cells
+give the table AppKit column headers. Put `press` on a `th` to sort the rows in your
+app and set `aria-sort` to show their order. People can drag a divider to
+resize a column. Its contents wrap at that width, which a named window
+restores when reopened. Use `appearance="none"` on the table to keep the
+authored presentation.
+
+Terms and their descriptions are a `dl` of `dt` terms each followed by its `dd`
+descriptions. The browser lays out the HTML elements. On native hosts the kernel
+lays a table out as a grid. Its columns size to their content until resized.
 Where columns share width (a span wider than the columns it covers, a table
 narrower than its content), the grid shares it equally and the browser in
 proportion to the columns' widths, so unequal columns can differ by a few
@@ -1754,7 +1761,7 @@ for the app to honor, not automatic engine policy. `displayMode: string` reads
 CSS's current `display-mode`: the browser's media query on the web (in Chrome,
 an agent's `prefer display-mode` replaces the reading and leaves the query
 alone), `fullscreen` or `standalone` for the window on macOS, and `standalone`
-on other native hosts. `navigationType` is how the browser loaded the page
+on other native hosts. On `exactPage`, `navigationType` is how the browser loaded the page
 (`navigate`, `reload` or `back_forward`), and empty in a native app. Available fields are documented beside their source validation (LLP 1039); start with [the viewport corpus](../contract/corpus/viewport.contract).
 
 Localized strings live in the app's `strings/<locale>.json` files. Author calls

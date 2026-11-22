@@ -389,3 +389,94 @@ fn the_agents_back_is_system_back() {
     let reply = crate::agent::handle(&mut p, r#"{"op":"tap","back":true,"id":3}"#);
     assert!(reply.contains("takes no other input fields"), "{reply}");
 }
+
+/// Diary 1ef6ac05: scrolling a plain `<scroll>` inside a pushed route must keep
+/// `Request::Back(true)` enabled and let system Back pop back to the root.
+#[test]
+fn back_works_after_scrolling_a_pushed_route() {
+    let source = r#"routes nav
+  home "/"
+    detail "/detail"
+component App
+  state pressed = 0
+  action open
+    nav = push(nav, "/detail")
+  action back
+    pressed = pressed + 1
+    nav = back(nav)
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}` position="absolute" inset=0
+          if e.name == "home"
+            button press=open testId="open"
+              text "Open"
+          if e.name == "detail"
+            scroll testId="reader" width="100%" height="100%"
+              column
+                header
+                  button id="back" press=back testId="back"
+                    text "Back"
+                box height=2400
+                  text "Detail" testId="detail"
+"#;
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(source),
+        (),
+        (400., 800.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let back_request = |words: Option<Vec<i32>>| -> Option<bool> {
+        let words = words?;
+        let mut at = 0;
+        let mut last = None;
+        while at + 3 <= words.len() {
+            let (kind, len) = (words[at], words[at + 2] as usize);
+            if kind == 5 && len == 1 {
+                last = Some(words[at + 3] != 0);
+            }
+            at += 3 + len;
+        }
+        last
+    };
+    p.serve_requests();
+    // First visit: open then back.
+    open(&mut p);
+    p.tell_shell();
+    assert_eq!(back_request(p.take_requests()), Some(true));
+    assert!(p.system_back(1.));
+    assert!(!on_detail(&p));
+    p.tell_shell();
+    assert_eq!(back_request(p.take_requests()), Some(false));
+    // Second visit: touch-scroll the plain `<scroll>` via `reader_under` + `reader_scrolled`, then system Back.
+    open(&mut p);
+    p.frame();
+    p.tell_shell();
+    assert_eq!(back_request(p.take_requests()), Some(true));
+    let scroller = id(&p, "reader").unwrap();
+    let under = p.reader_under(200., 400., 1.);
+    assert_eq!(under[3], scroller as i32);
+    assert_eq!(
+        p.reader_scrolled(scroller, (0., 120.), under[5] as u32),
+        Some((0., 120.))
+    );
+    p.tell_shell();
+    assert_eq!(
+        back_request(p.take_requests()),
+        None,
+        "Back stays enabled after scrolling"
+    );
+    assert!(p.back_goes());
+    assert!(p.system_back(2.));
+    assert!(
+        !on_detail(&p),
+        "Back must still pop after scrolling the route"
+    );
+    assert_eq!(slot(&p, "pressed"), 2.0);
+    p.tell_shell();
+    assert_eq!(back_request(p.take_requests()), Some(false));
+}

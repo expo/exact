@@ -2,7 +2,10 @@
 
 Run `bun exact.mjs add @exact/shader`. In `app.contract`, import the package and give the
 canvas the shader's asset path. A surface reports its first draw and any error through
-`exactSurface("shader")`.
+`exactSurface("shader")`. If the browser rejects a shader while you run `bun exact.mjs web`,
+the development page shows the file and the error. Click the message to dismiss it.
+With a literal `src`, the build also checks that any WGSL `override` used by the fragment
+has a default value.
 
 ```text
 use ShaderState from "@exact/shader"

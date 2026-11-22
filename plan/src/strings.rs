@@ -249,7 +249,7 @@ impl Plan {
                 if self.type_(slot.ty).kind != TypeKind::String
                     || slot.owner.is_some()
                     || slot.late
-                    || slot.persist
+                    || slot.is_persisted()
                     || self.locale == Some(id)
                     || formats != self.locales.len()
                     || formats == 0

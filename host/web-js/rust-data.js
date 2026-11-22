@@ -392,7 +392,7 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
       const call = req[CALL];
       if (!call) return run(req, controller?.signal, controller).catch(failed);
       // A held request's reply, a failure too, is a held reply for `clock held` (the runner's `held_replies`).
-      return run(req, controller?.signal, controller).catch(failed).then(o => {
+      return run(req, controller?.signal, controller, call).catch(failed).then(o => {
         if (call.held) { call.held = 0; heldReply(call); }
         o[CALL] = call;
         return o;

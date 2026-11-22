@@ -50,12 +50,11 @@ pub struct Batch {
     /// The kernel transactions this batch carries, `"seq":[first,last]`,
     /// when the runner measures (LLP 1079 D3): the frame sampler's join.
     pub seq: Option<(u64, u64)>,
-    /// Failure lines for the platform's log, `"alerts":[…]`, each carried
-    /// once (LLP 1142 D4: [`exact_runner::Runner::take_alerts`]).
+    /// Failure lines for the platform log, each carried once (LLP 1142 D4).
     pub alerts: Vec<String>,
-    /// The journal's other lines, `"journal":[…]`, for the platform's log at
-    /// a lower level (LLP 1143 open question 1:
-    /// [`exact_runner::Runner::take_journal`]).
+    /// The latest overrun for the session's development overlay.
+    pub budget_warning: Option<String>,
+    /// Other journal lines for the platform log at a lower level (LLP 1143).
     pub journal: Vec<String>,
     /// A 2D canvas asked for another frame (LLP 1056 D5).
     canvas: bool,
@@ -78,11 +77,11 @@ pub struct Batch {
     /// A timer's continuation an advance released is still out
     /// (`Runner::data_timer_landing`): the agent's jump waits for its reply.
     pub landing: bool,
-    /// A store write the batch's commits made has landed (`Host::persist`):
-    /// the app's other sessions refresh (LLP 1030.004 D2).
+    /// A shared write landed. Other sessions refresh (LLP 1030.004 D2).
     pub stored: bool,
-    /// Topics the batch's durable writes announced, for the app's other
-    /// sessions (LLP 1030.004 D2).
+    /// The window's restorable slots as JSON, at boot and whenever they change.
+    pub window_state: Option<String>,
+    /// Topics this batch's durable writes announced to other sessions (LLP 1030.004 D2).
     pub announced: Vec<String>,
     /// Whether a displayed element holds the wake lock, when that changed
     /// (`Host::wakelock_moved`, LLP 1125 D11).
@@ -439,12 +438,14 @@ impl Batch {
             && self.images.is_empty()
             && self.seq.is_none()
             && self.alerts.is_empty()
+            && self.budget_warning.is_none()
             && self.journal.is_empty()
             && self.announced.is_empty()
             && self.store_status.is_none()
             && !self.controls
             && !self.layout_provisional
             && !self.facts
+            && self.window_state.is_none()
             && !self.stored
             && self.wakelock.is_none()
             && self.orientationlock.is_none()
@@ -453,11 +454,10 @@ impl Batch {
             && self.route_inspectors.is_none()
     }
 
-    /// Mounted collection metadata from the runner's common JSON array writer.
-    /// An empty array clears previously published collections on the presenter.
-    pub fn collections(&mut self, items: &str) {
+    /// Publish collection snapshots or changes to a split table's section index.
+    pub fn collections(&mut self, field: &'static str, records: &str) {
         self.ops
-            .push(format!("{{\"op\":\"collections\",\"items\":{items}}}"));
+            .push(format!(r#"{{"op":"collections","{field}":{records}}}"#));
     }
 
     /// `{"op":"create","id":…,"kind":…,"props":{…},"style":{…},"handlers":[…]}`;
@@ -1167,35 +1167,24 @@ impl Batch {
             }
             s.push(']');
         }
-        if self.spatial {
-            s.push_str(",\"spatial\":true");
+        for (key, present) in [
+            ("spatial", self.spatial),
+            ("frames", self.frames),
+            ("presentOnly", self.present_only),
+            ("canvasOwed", self.canvas_owed),
+            ("replacesTree", self.replaces_tree),
+            ("layoutProvisional", self.layout_provisional),
+            ("controls", self.controls),
+            ("facts", self.facts),
+            ("landing", self.landing),
+            ("stored", self.stored),
+        ] {
+            if present {
+                let _ = write!(s, r#","{key}":true"#);
+            }
         }
-        if self.frames {
-            s.push_str(",\"frames\":true");
-        }
-        if self.present_only {
-            s.push_str(",\"presentOnly\":true");
-        }
-        if self.canvas_owed {
-            s.push_str(",\"canvasOwed\":true");
-        }
-        if self.replaces_tree {
-            s.push_str(",\"replacesTree\":true");
-        }
-        if self.layout_provisional {
-            s.push_str(",\"layoutProvisional\":true");
-        }
-        if self.controls {
-            s.push_str(",\"controls\":true");
-        }
-        if self.facts {
-            s.push_str(",\"facts\":true");
-        }
-        if self.landing {
-            s.push_str(",\"landing\":true");
-        }
-        if self.stored {
-            s.push_str(",\"stored\":true");
+        if let Some(archive) = &self.window_state {
+            let _ = write!(s, r#","windowState":{archive}"#);
         }
         if let Some(held) = self.wakelock {
             let _ = write!(s, ",\"wakelock\":{held}");
@@ -1205,6 +1194,10 @@ impl Batch {
         }
         if let Some(must) = self.must_finish {
             let _ = write!(s, ",\"mustFinish\":{must}");
+        }
+        if let Some(warning) = &self.budget_warning {
+            s.push_str(",\"budgetWarning\":");
+            quote(warning, &mut s);
         }
         if let Some(inspectors) = &self.route_inspectors {
             let _ = write!(s, ",\"routeInspectors\":{inspectors}");
@@ -1383,7 +1376,7 @@ mod finish_bytes_tests {
                             batch.command("focus", &[exact_plan::Value::Number(1.)], None);
                             batch.destroy(3);
                             batch.roots(&[1]);
-                            batch.collections("[]");
+                            batch.collections("items", "[]");
                             batch.ops.truncate(count);
                             let mut expected = old_finish(&batch, timers, motion, clock, error);
                             let deadline = timers.then_some(16.0);

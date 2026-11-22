@@ -24,11 +24,8 @@ impl Surfaces {
         c.owner
     }
 
-    /// The host was replaced (a reload, an activated update) and its runner
-    /// numbers views from 1 again, so a view id no longer names the canvas
-    /// that made its surface. Every surface goes, as the Apple presenter's
-    /// `reset` and the web's `gpu.reset` have it; the new tree's
-    /// canvases make their own at the next sync.
+    /// Native surfaces belong to the replaced host. A canvas in the new
+    /// tree gets a fresh surface on its first sync, even if it kept its view ID.
     pub(crate) fn replaced<D: DataSource>(&mut self, host: &mut Host<D>) {
         self.captures.clear();
         let views: Vec<_> = self.canvases.keys().copied().collect();

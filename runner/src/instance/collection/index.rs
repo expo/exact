@@ -71,7 +71,7 @@ struct RowHeight {
 /// at the same within-row offset. If no old key survives, restore to the start.
 /// The JS target ports this anchor (`host/web-js/list.js` `SizeIndex`
 /// `anchor`, `anchorAt`, `restoreAnchor`): a change here is made there too.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Anchor {
     order: Rc<[Rc<str>]>,
     row: Option<usize>,
@@ -92,6 +92,30 @@ pub(crate) struct Anchor {
     /// port is kept there, past the end too (a rubber band on a list shorter
     /// than its port).
     raw: f64,
+}
+
+impl Anchor {
+    /// Only the mounted neighbors travel to the next plan (LLP 1029.000.002 D5).
+    pub(super) fn keep_window(&mut self, mut positions: Vec<usize>) {
+        if let Some(row) = self.row {
+            let i = positions.binary_search(&row).unwrap_or_else(|i| {
+                positions.insert(i, row);
+                i
+            });
+            self.row = Some(i);
+        }
+        self.order = positions
+            .into_iter()
+            .map(|i| self.order[i].clone())
+            .collect();
+    }
+
+    pub(super) fn fixed_position(&self) -> Option<usize> {
+        self.fixed
+    }
+    pub(super) fn within(&self) -> f64 {
+        self.within
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -594,6 +618,16 @@ impl SizeIndex {
             size
         }
     }
+    /// A previous plan's measured size estimates a surviving row until the new
+    /// layout measures it. A zero estimate would keep changed content offscreen.
+    pub(super) fn seed_height(&mut self, key: &str, size: f64) -> Result<(), IndexError> {
+        if let Some(i) = self.position(key).filter(|_| size > 0.0) {
+            self.tree.set(i, size)?;
+            self.rows[i].height = size;
+        }
+        Ok(())
+    }
+
     pub(crate) fn set_measured_height(
         &mut self,
         key: &str,
@@ -914,17 +948,21 @@ impl SizeIndex {
                     },
             );
         }
-        let old = anchor.row?;
-        let row = self.position(&anchor.order[old]).or_else(|| {
-            anchor.order[old + 1..]
-                .iter()
-                .chain(anchor.order[..old].iter().rev())
-                .find_map(|key| self.position(key))
-        })?;
+        let row = self.surviving_row(anchor)?;
         Some(if anchor.bottom {
             self.prefix(row + 1)? + anchor.within - viewport
         } else {
             self.prefix(row)? + anchor.within
+        })
+    }
+
+    pub(super) fn surviving_row(&self, anchor: &Anchor) -> Option<usize> {
+        let old = anchor.row?;
+        self.position(&anchor.order[old]).or_else(|| {
+            anchor.order[old + 1..]
+                .iter()
+                .chain(anchor.order[..old].iter().rev())
+                .find_map(|key| self.position(key))
         })
     }
 

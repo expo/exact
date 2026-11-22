@@ -8,7 +8,7 @@
 // put aside under 15 minutes ago, within 2 GiB (the oldest unleased first; leased ones are never reaped).
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { BESIDE } from './beside.mjs';
 import { lockHeld } from './build-lock.mjs';
@@ -136,16 +136,17 @@ export function leaseGeneration(dist, id) {
   return () => { rmSync(file, { force: true }); try { if (!readdirSync(dir).length) rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ } };
 }
 /** The generations of `dist` some live process leases (dead ones' leases removed). */
-export function leasedGenerations(dist) {
+export function leasedGenerations(dist, { prune = true } = {}) {
   const leased = new Set();
   let ids = [];
   try { ids = readdirSync(leasesOf(dist)); } catch { return leased; }
   for (const id of ids) {
     const dir = resolve(leasesOf(dist), id);
+    if (!GENERATION.test(id) || !realDirectory(dir)) continue;
     let names = [];
     try { names = readdirSync(dir); } catch { continue; }
-    for (const name of names) if (live(dir, name)) leased.add(id); else rmSync(resolve(dir, name), { force: true });
-    try { if (!readdirSync(dir).length) rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ }
+    for (const name of names) if (live(dir, name)) leased.add(id); else if (prune) rmSync(resolve(dir, name), { force: true });
+    if (prune) try { rmdirSync(dir); } catch { /* occupied or gone */ }
   }
   return leased;
 }

@@ -190,6 +190,48 @@ final class GroupedCustomRowsIOSTests: GroupedListFixture {
         XCTAssertEqual(line.minX - frame.minX, 16, accuracy: 0.5, "the line where the content now starts")
     }
 
+    /// A carried row's leading symbol laid out again in the same box leaves its image view's geometry as it was:
+    /// a fling lays out again each row it carries into a cell or takes home (`symbolGeometryChanges`).
+    func testACarriedRowsSymbolLaidOutAgainLeavesItsViewWhereItIs() throws {
+        let p = presenter { self.customFirst() }
+        p.apply(wireBatch([
+            ["op": "create", "id": 30, "kind": "image", "props": ["imageSource": "symbol:person", "symbolName": "person.circle"], "style": ["font_size": 17.0, "object_fit": "contain"]],
+            ["op": "children", "id": 21, "ids": [30]],
+            ["op": "frame", "id": 21, "x": 0.0, "y": 0.0, "w": 370.0, "h": 61.0],
+            ["op": "frame", "id": 30, "x": 16.0, "y": 20.5, "w": 24.0, "h": 20.0],
+        ]))
+        let row = try XCTUnwrap(p.views[21]), leaf = try XCTUnwrap(p.views[30])
+        p.apply(wireBatch([["op": "props", "id": 21, "set": ["testId": "custom"]]]))
+        try list(p).collection.layoutIfNeeded()
+        XCTAssertTrue(row.superview === (try cell(p, 21)).contentView, "the row is carried into its cell")
+        XCTAssertTrue(leaf.listSymbol, "its first child is its leading symbol")
+        let view = try XCTUnwrap(leaf.symbolView)
+        // At its own size, centred in its box, as UIKit draws a standard cell's image
+        func assertPlaced(_ step: String) {
+            let box = leaf.contentBox()
+            XCTAssertNotNil(view.image, step)
+            XCTAssertFalse(view.frame.isEmpty, "\(step): the symbol is placed")
+            XCTAssertEqual(view.frame.size, view.image?.size ?? .zero, "\(step): at the symbol's own size")
+            XCTAssertNotEqual(view.frame.size, box.size, "\(step): not at its box's")
+            XCTAssertEqual(view.frame.midX, box.midX, accuracy: 0.001, "\(step): centred in its box")
+            XCTAssertEqual(view.frame.midY, box.midY, accuracy: 0.001, step)
+        }
+        assertPlaced("carried")
+        let resized = symbolGeometryChanges(of: view) {
+            p.apply(wireBatch([["op": "frame", "id": 30, "x": 16.0, "y": 19.5, "w": 26.0, "h": 22.0]]))
+            leaf.layoutIfNeeded()
+        }
+        assertPlaced("in a new box")
+        XCTAssertTrue(resized.contains { $0.hasPrefix("position") }, "a new box moves the symbol's view: \(resized)")
+        XCTAssertTrue(leaf.listSymbol)
+        let moves = symbolGeometryChanges(of: view) {
+            leaf.setNeedsLayout()
+            leaf.layoutIfNeeded()
+        }
+        assertPlaced("laid out again")
+        XCTAssertEqual(moves, [], "laid out again in the same box, the symbol's view stays where it is")
+    }
+
     /// A leading symbol stands at the row's inset, its content's edge, and the
     /// line starts at the text after it, as UIKit's does beside a cell's image;
     /// an accessory after the symbol is no text.

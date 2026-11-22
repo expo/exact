@@ -1,17 +1,8 @@
-//! The display: DRM/KMS with two dumb buffers and a page flip per frame,
-//! and the frame loop that owns the process when there is a screen.
-//!
-//! @ref LLP 1015 §6; LLP 1009 D5 as LLP 1015 §7 amends it (the GPU painter
-//! compiles its shaders on the first launch on a machine and reads them
-//! from the cache after; the display itself is dumb buffers and a readback
-//! until the KMS surface lands)
-//!
-//! The card's first connected connector at its preferred mode; two
-//! XRGB8888 dumb buffers; the first frame by `set_crtc`, every later one by
-//! one pending page flip whose FD is polled alongside input and worker wakes.
-//! Its completion releases the back buffer, pacing paint to the display refresh. Frames are painted only when something changed:
-//! input, a timer, a motion frame, an image, a reload. Needs DRM master —
-//! a VT, or a card nobody else holds — and the `video` group.
+//! The Linux display uses the connected panel at its preferred mode. Ink
+//! presents directly when Vulkan supports the connector and presentation
+//! feedback. Other painters and failed Vulkan surfaces use KMS dumb buffers.
+//! One frame can be outstanding while the host services input and worker wakes.
+//! @ref LLP 1015 §6; expo/exact#145.
 
 #![allow(unsafe_code)]
 
@@ -24,8 +15,9 @@ use drm::control::{
     ModeTypeFlags, PageFlipFlags,
 };
 use drm::Device;
+use event_loop::{Completion, PanelFrame};
 use exact_painted::app::Config;
-use exact_painted::presenter::{Presenter, SubmittedFrame};
+use exact_painted::presenter::{PainterChoice, Presenter};
 use exact_runner::DataSource;
 use std::fs::{File, OpenOptions};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
@@ -36,6 +28,7 @@ use tiny_skia::Pixmap;
 mod clock_set;
 mod flip;
 mod pointer;
+mod scanout;
 use flip::FlipState;
 #[cfg(test)]
 mod tests;
@@ -50,14 +43,15 @@ impl AsFd for Card {
 impl Device for Card {}
 impl ControlDevice for Card {}
 
-/// A KMS output with two dumb buffers.
+/// One DRM connector and the resources its selected output uses.
 pub struct Display {
     card: Card,
     crtc: crtc::Handle,
     connector: connector::Handle,
     mode: Mode,
     buffers: Vec<(DumbBuffer, framebuffer::Handle)>,
-    flips: FlipState<SubmittedFrame>,
+    flips: FlipState<PanelFrame>,
+    direct: Option<scanout::Direct>,
     width: u32,
     height: u32,
     /// The connector's name (`eDP-1`), the one display's `label` (LLP 1178 D6).
@@ -113,22 +107,13 @@ impl Display {
         let rotation = crate::rotation::requested()?
             .map_or_else(|| crate::rotation::panel(&card, con.handle()), Ok)?;
         let label = con.to_string();
-        let mut buffers = Vec::new();
-        for _ in 0..2 {
-            let db = card
-                .create_dumb_buffer((width, height), DrmFourcc::Xrgb8888, 32)
-                .map_err(|e| format!("dumb buffer: {e}"))?;
-            let fb = card
-                .add_framebuffer(&db, 24, 32)
-                .map_err(|e| format!("framebuffer: {e}"))?;
-            buffers.push((db, fb));
-        }
         Ok(Display {
             card,
             crtc,
             connector: con.handle(),
             mode,
-            buffers,
+            buffers: Vec::new(),
+            direct: None,
             flips: FlipState::default(),
             width,
             height,
@@ -138,6 +123,34 @@ impl Display {
         })
     }
 
+    fn open_dumb_buffers(&mut self) -> Result<(), String> {
+        if self.buffers.is_empty() {
+            // Releasing a Vulkan display can drop master on this open file description.
+            let _ = self.card.acquire_master_lock();
+        }
+        while self.buffers.len() < 2 {
+            let db = self
+                .card
+                .create_dumb_buffer((self.width, self.height), DrmFourcc::Xrgb8888, 32)
+                .map_err(|e| format!("dumb buffer: {e}"))?;
+            match self.card.add_framebuffer(&db, 24, 32) {
+                Ok(fb) => self.buffers.push((db, fb)),
+                Err(error) => {
+                    let _ = self.card.destroy_dumb_buffer(db);
+                    return Err(format!("framebuffer: {error}"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn finish_direct(&mut self, result: Completion) -> Completion {
+        if matches!(result, Completion::Retry(_)) {
+            self.direct = None;
+        }
+        result
+    }
+
     /// The mode's size, pixels.
     pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
@@ -145,6 +158,9 @@ impl Display {
 }
 
 impl event_loop::Output for Display {
+    fn direct(&self) -> bool {
+        self.direct.is_some()
+    }
     /// The mode's refresh rate, Hz.
     fn refresh(&self) -> u32 {
         self.mode.vrefresh()
@@ -163,9 +179,14 @@ impl event_loop::Output for Display {
     }
 
     fn pending(&self) -> bool {
-        self.flips.pending()
+        self.direct
+            .as_ref()
+            .map_or_else(|| self.flips.pending(), |d| d.pending())
     }
     /// The vblank sequence of the last completed flip (LLP 1079 D3).
+    fn observed(&self) -> Option<Instant> {
+        self.direct.as_ref().and_then(|d| d.observed)
+    }
     fn sequence(&self) -> Option<u32> {
         self.flips.sequence
     }
@@ -174,46 +195,64 @@ impl event_loop::Output for Display {
         self.flips.at
     }
     fn fd(&self) -> i32 {
-        self.card.0.as_raw_fd()
+        self.direct
+            .as_ref()
+            .map_or_else(|| self.card.0.as_raw_fd(), |d| d.fd())
     }
 
     // Copy/submit only when neither scanout nor an outstanding flip owns back.
     // The first set_crtc is synchronous; later calls never wait for a vblank.
-    fn submit(&mut self, frame: SubmittedFrame) -> Result<Option<SubmittedFrame>, String> {
+    fn submit(&mut self, frame: PanelFrame) -> Result<Completion, String> {
+        if let Some(direct) = &mut self.direct {
+            let result = direct.submit(frame);
+            return Ok(self.finish_direct(result));
+        }
+        self.open_dumb_buffers()?;
         let Self {
             card,
             buffers,
             flips,
             ..
         } = self;
-        flips.submit(frame, |back, first, pixels| {
-            let (db, fb) = &mut buffers[back];
-            let pitch = db.pitch() as usize;
-            {
-                let mut map = card.map_dumb_buffer(db).map_err(|e| format!("map: {e}"))?;
-                copy_xrgb(pixels, map.as_mut(), pitch, self.width, self.height);
-            }
-            if first {
-                card.set_crtc(
-                    self.crtc,
-                    Some(*fb),
-                    (0, 0),
-                    &[self.connector],
-                    Some(self.mode),
-                )
-                .map_err(|e| format!("set_crtc: {e}"))
-            } else {
-                card.page_flip(self.crtc, *fb, PageFlipFlags::EVENT, None)
-                    .map_err(|e| format!("page flip: {e}"))
-            }
-        })
+        flips
+            .submit(frame, |back, first, frame| {
+                let pixels = frame
+                    .mirror()
+                    .ok_or("KMS dumb buffer requires panel pixels")?;
+                let (db, fb) = &mut buffers[back];
+                let pitch = db.pitch() as usize;
+                {
+                    let mut map = card.map_dumb_buffer(db).map_err(|e| format!("map: {e}"))?;
+                    copy_xrgb(pixels, map.as_mut(), pitch, self.width, self.height);
+                }
+                if first {
+                    card.set_crtc(
+                        self.crtc,
+                        Some(*fb),
+                        (0, 0),
+                        &[self.connector],
+                        Some(self.mode),
+                    )
+                    .map_err(|e| format!("set_crtc: {e}"))
+                } else {
+                    card.page_flip(self.crtc, *fb, PageFlipFlags::EVENT, None)
+                        .map_err(|e| format!("page flip: {e}"))
+                }
+            })
+            .map(|f| f.map_or(Completion::Pending, Completion::Shown))
     }
 
-    fn ready(&mut self) -> Result<Option<SubmittedFrame>, String> {
+    fn ready(&mut self) -> Result<Completion, String> {
+        if let Some(direct) = &mut self.direct {
+            let result = direct.ready()?;
+            return Ok(self.finish_direct(result));
+        }
+
         self.flips
             .ready(self.crtc, || {
                 self.card.receive_events().map(|events| events.collect())
             })
+            .map(|f| f.map_or(Completion::Pending, Completion::Shown))
             .map_err(|e| format!("events: {e}"))
     }
 }
@@ -278,7 +317,48 @@ pub fn run<D: DataSource + Default>(config: &mut Config, started: Instant) -> i3
     marks.launch_end();
     // The page is presented at its first picture's present, not its first commit (LLP 1069.000 D2).
     exact_runner::page::set_awaits_present(true);
-    let (mut p, error) = match exact_painted::app::boot_presenter::<D>(config, viewport) {
+    let mut ink = None;
+    if config.painter() == PainterChoice::Ink {
+        let refresh = (1_000_000.0 / display.period_ms() / f64::from(display.mode.vscan().max(1)))
+            .round() as u32;
+        let opened = display
+            .card
+            .0
+            .try_clone()
+            .map_err(|e| e.to_string())
+            .and_then(|card| {
+                // SAFETY: this is the selected connector and mode of our master
+                // descriptor. Only Vulkan reads its events until Direct is dropped.
+                unsafe {
+                    exact_painted::ink::scanout::Scanout::open(
+                        card.into(),
+                        display.connector.into(),
+                        [pw, ph],
+                        refresh,
+                    )
+                }
+                .map_err(|e| e.to_string())
+            })
+            .and_then(|(device, surface)| {
+                scanout::Direct::new(surface)
+                    .map(|direct| (device, direct))
+                    .map_err(|e| e.to_string())
+            });
+        match opened {
+            Ok((device, direct)) => {
+                display.direct = Some(direct);
+                ink = Some(device);
+            }
+            Err(e) => {
+                eprintln!("exact: direct Vulkan display unavailable: {e}; using KMS dumb buffers")
+            }
+        }
+    }
+    let boot = match ink {
+        Some(device) => exact_painted::app::boot_scanout_presenter::<D>(config, viewport, device),
+        None => exact_painted::app::boot_presenter::<D>(config, viewport),
+    };
+    let (mut p, error) = match boot {
         Ok(v) => v,
         Err(e) => {
             eprintln!("exact: boot: {e}");
@@ -319,9 +399,14 @@ pub fn run<D: DataSource + Default>(config: &mut Config, started: Instant) -> i3
         trace_on_signal();
     }
     println!(
-        "exact: {pw}x{ph} @{}Hz on {}, scale {}, {} input device(s){}, boot {:.1} ms",
+        "exact: {pw}x{ph} @{}Hz on {} ({}), scale {}, {} input device(s){}, boot {:.1} ms",
         display.refresh(),
         config.card,
+        if display.direct() {
+            "direct Vulkan"
+        } else {
+            "KMS dumb buffers"
+        },
         config.scale,
         input.len(),
         match (&vnc, config.vnc.as_deref()) {
@@ -388,8 +473,11 @@ impl<D: DataSource> event_loop::Events<D> for Events {
     fn idle(&self) -> bool {
         self.input.is_empty() && self.vnc.is_none()
     }
+    fn mirror(&self) -> bool {
+        self.vnc.as_ref().is_some_and(Vnc::has_viewers)
+    }
     fn publish(&mut self, pixels: std::sync::Arc<Pixmap>) {
-        if let Some(vnc) = &self.vnc {
+        if let Some(vnc) = self.vnc.as_ref().filter(|vnc| vnc.has_viewers()) {
             vnc.publish(pixels);
         }
     }
@@ -397,6 +485,9 @@ impl<D: DataSource> event_loop::Events<D> for Events {
         let mut events = self.input.read(wall());
         if let Some(vnc) = &mut self.vnc {
             events.extend(vnc.take_events());
+            if vnc.take_refresh() {
+                p.repaint();
+            }
         }
         for event in events {
             if let Err(error) = pointer::dispatch(

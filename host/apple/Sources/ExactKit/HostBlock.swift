@@ -6,11 +6,13 @@ import CExact
 
 /// The containing block a native container gives one subtree, in points.
 package struct HostBlock: Equatable {
-    /// One axis: a size, a maximum, a limit for automatic content fitting, or
+    /// One axis: a size, a maximum, a limit for automatic content fitting,
     /// the region a `position-area` option places the box in (fit-content
-    /// across, min-content winning; its content's height down).
+    /// across, min-content winning; its content's height down), or the axis
+    /// a container sizes to the content, measured as a region with the box's
+    /// own percentages there cyclic (`BlockAxis::Content`, LLP 1123 D7).
     package enum Axis: Equatable {
-        case size(CGFloat), fill(CGFloat), atMost(CGFloat), fit(CGFloat), region(CGFloat)
+        case size(CGFloat), fill(CGFloat), atMost(CGFloat), fit(CGFloat), region(CGFloat), content(CGFloat)
         fileprivate var wire: (length: CGFloat, policy: CGFloat) {
             switch self {
             case .size(let length): (length, 0)
@@ -18,6 +20,7 @@ package struct HostBlock: Equatable {
             case .atMost(let length): (length, 1)
             case .fit(let length): (length, 2)
             case .region(let length): (length, 3)
+            case .content(let length): (length, 5)
             }
         }
     }

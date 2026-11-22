@@ -29,13 +29,16 @@ static STARTS: LazyLock<Vec<[StyleProps; 4]>> = LazyLock::new(|| {
                     rows.line_height =
                         style.leadings[column].map_or(LineHeight::Normal, LineHeight::Number);
                 });
-                rows.mask.set(StyleId::FontWeight);
-                rows.mask.set(StyleId::LineHeight);
+                rows.mask = start_rows();
                 rows
             })
         })
         .collect()
 });
+
+pub(super) fn start_rows() -> StyleMask {
+    StyleMask::of(StyleId::FontWeight).union(StyleMask::of(StyleId::LineHeight))
+}
 
 use crate::style::relative::column_index as index;
 
@@ -56,6 +59,15 @@ pub fn bolder(weight: u16) -> u16 {
 }
 
 impl NodeArena {
+    /// HTML's strong importance increases the inherited weight when the
+    /// element leaves its own weight unsaid (HTML §15.3.4).
+    pub(super) fn strong_text(&self, slot: u32) -> bool {
+        self.props(slot).str(crate::PropId::SemanticTag) == Some("strong")
+            && !self.style(slot).mask.has(StyleId::FontWeight)
+            && !self.style(slot).written.has(StyleId::FontWeight)
+            && self.text_style_start(slot).is_none()
+    }
+
     /// The text style `slot`'s own `font-size` names, and whether the `font`
     /// shorthand named it.
     pub(crate) fn named_text_style(&self, slot: u32) -> Option<(u8, bool)> {
@@ -206,6 +218,9 @@ impl NodeArena {
         slot: u32,
         id: StyleId,
     ) -> Option<(u32, &'static StyleProps)> {
+        if !start_rows().has(id) {
+            return None;
+        }
         let mut cur = Some(slot);
         while let Some(s) = cur {
             if let Some(rows) = self.bare_style_rows(s) {
@@ -317,5 +332,17 @@ impl crate::NodeRef<'_> {
         mask.set(id);
         rows.copy_rows(self.arena.computed_source(self.slot, id), mask);
         Some(rows)
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shorthand_mask_matches_every_platform_column() {
+        for style in STARTS.iter().flatten() {
+            assert_eq!(start_rows(), style.mask);
+        }
     }
 }

@@ -1,9 +1,122 @@
-//! Windows keeps the preferred UI language apart from the regional format.
+//! Windows locale preferences and time-zone rules.
 use windows_sys::Win32::Globalization::{
     GetLocaleInfoEx, GetUserDefaultLocaleName, GetUserPreferredUILanguages, LOCALE_NOUSEROVERRIDE,
     LOCALE_SSHORTTIME, MUI_LANGUAGE_NAME,
 };
 use windows_sys::Win32::System::SystemServices::LOCALE_NAME_MAX_LENGTH;
+
+/// The live offset in minutes east of UTC, including the user's daylight-saving setting.
+pub fn local_offset_minutes() -> f64 {
+    use windows_sys::Win32::System::{
+        SystemServices::{TIME_ZONE_ID_DAYLIGHT, TIME_ZONE_ID_STANDARD, TIME_ZONE_ID_UNKNOWN},
+        Time::{GetTimeZoneInformation, TIME_ZONE_INFORMATION},
+    };
+    let mut zone = TIME_ZONE_INFORMATION::default();
+    let adjustment = match unsafe { GetTimeZoneInformation(&mut zone) } {
+        TIME_ZONE_ID_DAYLIGHT => zone.DaylightBias,
+        TIME_ZONE_ID_STANDARD => zone.StandardBias,
+        TIME_ZONE_ID_UNKNOWN => 0,
+        _ => return 0.0,
+    };
+    -f64::from(zone.Bias) - f64::from(adjustment)
+}
+
+/// ICU also recognizes custom offsets such as GMT+04:00. Only system IDs
+/// can name a zone in the launch place. Keep the caller's spelling of aliases.
+pub(super) fn system_zone_id(name: &str) -> Option<Vec<u16>> {
+    use windows_sys::Win32::Globalization::{
+        ucal_getCanonicalTimeZoneID, U_BUFFER_OVERFLOW_ERROR, U_ZERO_ERROR,
+    };
+    // ICU treats an embedded NUL as the end of the ID even with an explicit length.
+    if name.as_bytes().contains(&0) {
+        return None;
+    }
+    crate::com::ensure_mta().ok()?;
+    let id: Vec<_> = name.encode_utf16().collect();
+    let mut canonical = [0; 64];
+    let mut system = 0;
+    let mut status = U_ZERO_ERROR;
+    unsafe {
+        ucal_getCanonicalTimeZoneID(
+            id.as_ptr(),
+            id.len().try_into().ok()?,
+            canonical.as_mut_ptr(),
+            canonical.len() as i32,
+            &mut system,
+            &mut status,
+        );
+    }
+    (system != 0 && (status <= U_ZERO_ERROR || status == U_BUFFER_OVERFLOW_ERROR)).then_some(id)
+}
+
+struct Calendar {
+    zone: String,
+    raw: std::ptr::NonNull<*mut std::ffi::c_void>,
+}
+
+impl Calendar {
+    fn open(zone: &str) -> Option<Self> {
+        use windows_sys::Win32::Globalization::{ucal_open, UCAL_GREGORIAN, U_ZERO_ERROR};
+        let id = system_zone_id(zone)?;
+        let mut status = U_ZERO_ERROR;
+        let raw = unsafe {
+            ucal_open(
+                id.as_ptr(),
+                id.len() as i32,
+                c"en_US_POSIX".as_ptr().cast(),
+                UCAL_GREGORIAN,
+                &mut status,
+            )
+        };
+        let calendar = Self {
+            zone: zone.to_owned(),
+            raw: std::ptr::NonNull::new(raw)?,
+        };
+        (status <= U_ZERO_ERROR).then_some(calendar)
+    }
+
+    fn offset_minutes(&mut self, epoch_ms: f64) -> f64 {
+        use windows_sys::Win32::Globalization::{
+            ucal_get, ucal_setMillis, UCAL_DST_OFFSET, UCAL_ZONE_OFFSET, U_ZERO_ERROR,
+        };
+        let mut status = U_ZERO_ERROR;
+        let cal = self.raw.as_ptr();
+        let (base, dst) = unsafe {
+            ucal_setMillis(cal, epoch_ms, &mut status);
+            (
+                ucal_get(cal.cast(), UCAL_ZONE_OFFSET, &mut status),
+                ucal_get(cal.cast(), UCAL_DST_OFFSET, &mut status),
+            )
+        };
+        if status > U_ZERO_ERROR {
+            return 0.0;
+        }
+        (f64::from(base) + f64::from(dst)) / 60_000.0
+    }
+}
+
+impl Drop for Calendar {
+    fn drop(&mut self) {
+        unsafe { windows_sys::Win32::Globalization::ucal_close(self.raw.as_ptr()) };
+    }
+}
+
+pub(crate) fn offset_minutes_at(zone: &str, epoch_ms: f64) -> f64 {
+    if matches!(zone, "UTC" | "Etc/UTC") {
+        return 0.0;
+    }
+    // A frame can format many instants in the same zone. ICU calendars are mutable.
+    thread_local! {
+        static LAST: std::cell::RefCell<Option<Calendar>> = const { std::cell::RefCell::new(None) };
+    }
+    LAST.with_borrow_mut(|last| {
+        if last.as_ref().is_none_or(|calendar| calendar.zone != zone) {
+            *last = Calendar::open(zone);
+        }
+        last.as_mut()
+            .map_or(0.0, |calendar| calendar.offset_minutes(epoch_ms))
+    })
+}
 
 pub(super) fn locales() -> (String, String) {
     let regional = regional_locale().unwrap_or_else(|| "en-US".into());
@@ -111,6 +224,32 @@ fn format_locale(locale: &str, pattern: &str, regional_pattern: &str) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_zones_keep_aliases_and_follow_transitions_at_the_given_instant() {
+        use crate::zone::zone_name;
+        assert_eq!(zone_name(":US/Eastern").as_deref(), Some("US/Eastern"));
+        for invalid in ["Etc/Unknown", "GMT+04:00", "Invalid/Zone", "UTC\0extra"] {
+            assert_eq!(zone_name(invalid), None, "{invalid}");
+            assert_eq!(offset_minutes_at(invalid, 0.0), 0.0, "{invalid}");
+        }
+        for (zone, epoch_ms, minutes) in [
+            ("US/Eastern", 1_710_053_999_999., -300.),
+            ("US/Eastern", 1_710_054_000_000., -240.),
+            ("US/Eastern", 1_730_613_599_999., -240.),
+            ("US/Eastern", 1_730_613_600_000., -300.),
+            ("Asia/Kathmandu", 1_710_054_000_000., 345.),
+            ("Australia/Lord_Howe", 1_712_415_599_999., 660.),
+            ("Australia/Lord_Howe", 1_712_415_600_000., 630.),
+            ("America/Toronto", -15_854_400_000., -240.),
+        ] {
+            assert_eq!(
+                offset_minutes_at(zone, epoch_ms),
+                minutes,
+                "{zone} at {epoch_ms}"
+            );
+        }
+    }
 
     #[test]
     fn only_a_changed_hour_cycle_enters_the_regional_tag() {

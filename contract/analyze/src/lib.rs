@@ -16,7 +16,7 @@ mod arity;
 mod calls;
 mod gates;
 mod properties;
-pub use properties::check_properties;
+pub use properties::{check_properties, resolve_actions};
 mod suggestions;
 pub use suggestions::{check_suggestions, SuggestionCheck};
 mod rereads;

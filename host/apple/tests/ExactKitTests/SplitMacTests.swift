@@ -11,7 +11,7 @@ import XCTest
 @testable import ExactNavigation
 
 final class SplitMacTests: XCTestCase {
-    private var window: NSWindow?
+    var window: NSWindow?
     private var session: ExactSession?
     override func tearDown() {
         window?.close(); window = nil
@@ -21,7 +21,7 @@ final class SplitMacTests: XCTestCase {
     /// A library of books under a root tab bar: its rows link to a book,
     /// a book pushes its notes, and + opens a sheet. `tabs: false` is the
     /// same stack with no tab bar.
-    private func app(tabs: Bool) -> String {
+    func app(tabs: Bool) -> String {
         let routes = """
                       if e.name == "library"
                         column navigationKey=`${e.id}` position="absolute" inset=0 display="flex" flex-direction="column" testId="route-library"
@@ -108,7 +108,7 @@ final class SplitMacTests: XCTestCase {
         """
     }
 
-    private func boot(tabs: Bool, size: CGSize, source: String? = nil, location: String? = nil) throws -> ExactSession {
+    func boot(tabs: Bool, size: CGSize, source: String? = nil, location: String? = nil) throws -> ExactSession {
         _ = NSApplication.shared
         let dir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
             .appendingPathComponent("../../target/split-test-" + UUID().uuidString).standardizedFileURL
@@ -129,14 +129,14 @@ final class SplitMacTests: XCTestCase {
         return session
     }
 
-    private func node(_ testId: String) throws -> NodeView {
+    func node(_ testId: String) throws -> NodeView {
         try XCTUnwrap(session?.presenter.views.values.first { $0.props["testId"] == testId }, testId)
     }
     /// The node `testId` names, nil while there is none (`node`'s XCTUnwrap would record a failure)
     private func view(_ testId: String) -> NodeView? { session?.presenter.views.values.first { $0.props["testId"] == testId } }
-    private func has(_ testId: String) -> Bool { view(testId) != nil }
+    func has(_ testId: String) -> Bool { view(testId) != nil }
     /// Pumps the presenter's settle and the session's fill, a turn at a time, until `done`
-    private func settle(_ what: String, until done: () -> Bool) {
+    func settle(_ what: String, until done: () -> Bool) {
         guard let session else { return XCTFail("\(what): no session") }
         waitFor(what) { session.presenter.settlePump(); session.drainFill(); return done() }
     }
@@ -147,7 +147,7 @@ final class SplitMacTests: XCTestCase {
 
     /// The window's owner, as ExactMac composes it: a full-size-content
     /// window whose content is the split view, and the window's toolbar.
-    private func compose(_ view: ExactView, width: CGFloat, sidebar: Bool, minimum: CGFloat = 320, autosave: String? = nil,
+    func compose(_ view: ExactView, width: CGFloat, sidebar: Bool, minimum: CGFloat = 320, autosave: String? = nil,
                          window kind: NSWindow.Type = NSWindow.self) -> ExactSidebarController {
         let window = kind.init(contentRect: NSRect(x: 0, y: 0, width: width, height: 500),
                                styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
@@ -1178,7 +1178,7 @@ final class SplitMacTests: XCTestCase {
 
     /// `source` with each line that contains `marker` replaced by `lines`,
     /// written at that line's indent.
-    private func replacing(_ marker: String, with lines: [String], in source: String) -> String {
+    func replacing(_ marker: String, with lines: [String], in source: String) -> String {
         source.components(separatedBy: "\n").flatMap { line -> [String] in
             guard line.contains(marker) else { return [line] }
             let indent = String(line.prefix { $0 == " " })

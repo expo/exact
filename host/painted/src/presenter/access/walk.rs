@@ -127,7 +127,7 @@ impl<D: DataSource> Presenter<D> {
         {
             let (role, mut flags, range, value) = self.access_control(&target, kind);
             if target.props.bool(PropId::Disabled) == Some(true) {
-                flags = (flags | flag::DISABLED) & !(flag::CLICK | flag::LONG_CLICK);
+                flags = (flags | flag::DISABLED) & !(flag::CLICK | flag::LONG_CLICK | flag::DRAG);
             }
             if let Some(said) = target.props.bool(PropId::AccessibilityDisabled) {
                 scope.disabled = said;
@@ -183,6 +183,26 @@ impl<D: DataSource> Presenter<D> {
             let (role, flags) = self.access_pressed(&node);
             let name = || Some((self.access_name(&node), String::new()));
             let Some(own) = self.access_emit(b, &scope, &node, role, flags, [0.0; 3], name) else {
+                return;
+            };
+            scope.parent = own;
+            scope.inside = true;
+        } else if Self::drags(&node)
+            && self.lifts()
+            && !matches!(
+                node.node_type,
+                NodeType::Text | NodeType::Image | NodeType::Svg
+            )
+            && !self.access_name(&node).trim().is_empty()
+        {
+            // @ref LLP 1094.000 D9 — a box a held press drags, on a host that
+            // lifts it, is one element named by its words, as a pressable
+            // is, so a service can start its drag; a text or an image is an
+            // element already.
+            let name = || Some((self.access_name(&node), String::new()));
+            let flags = self.access_menu_flag(&node);
+            let Some(own) = self.access_emit(b, &scope, &node, role::GROUP, flags, [0.0; 3], name)
+            else {
                 return;
             };
             scope.parent = own;

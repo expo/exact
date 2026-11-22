@@ -808,8 +808,9 @@ extension ExactSession {
     /// unified log (`log show --predicate 'subsystem == "com.exact.app"'`)
     /// and stderr, which `build.mjs --run` shows. The runner queues them only
     /// while it measures, so a production bake has none.
-    func logAlerts(_ lines: [String]) {
-        for line in lines {
+    func reportAlerts(_ batch: Batch) {
+        if let warning = batch.budgetWarning { showBudgetWarning(warning) }
+        for line in batch.alerts {
             Self.journal.error("\(self.label, privacy: .public): \(line, privacy: .public)")
             FileHandle.standardError.write(Data("exact: \(line)\n".utf8))
         }

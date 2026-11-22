@@ -76,6 +76,10 @@ internal class FieldText(context: Context) : EditText(unadjusted(context)) {
 
     override fun onCreateInputConnection(info: EditorInfo): InputConnection? {
         val own = super.onCreateInputConnection(info) ?: return null
+        // The framework gives every multi-line field a new-line key; a textarea with an action (its `enterkeyhint`)
+        // shows that action instead, as a Compose text field with an `ImeAction` does.
+        if ((info.imeOptions and EditorInfo.IME_MASK_ACTION) > EditorInfo.IME_ACTION_NONE)
+            info.imeOptions = info.imeOptions and EditorInfo.IME_FLAG_NO_ENTER_ACTION.inv()
         val say = { what: String -> heard?.invoke(what) }
         val done = { did: Boolean -> asked?.invoke(); did }
         return object : InputConnectionWrapper(own, false) {
@@ -359,8 +363,9 @@ internal class Fields(context: Context) : FrameLayout(context) {
             }
         }
         text.setOnEditorActionListener { _, id, event ->
-            // A textarea's Enter breaks its line, which is the field's own to do.
-            if (f.multiline) return@setOnEditorActionListener false
+            // A textarea's Enter breaks its line, which is the field's own to do; the action key its `enterkeyhint`
+            // names (no key event) is told, and its line break, unless prevented, is exact2's.
+            if (f.multiline && (event != null || f.action == 0)) return@setOnEditorActionListener false
             // A hardware keyboard's Enter arrives down and then up: the down acts.
             if (event != null && event.action != KeyEvent.ACTION_DOWN) return@setOnEditorActionListener true
             val action = when (id) {
@@ -418,7 +423,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
                 Exact.fieldComposing(f.id, f.generation, composing, e.toString())
             }
             if (!f.edited && !f.moved) continue
-            val start = max(0, f.text.selectionStart); val end = max(start, f.text.selectionEnd)
+            val (start, end) = ordered(f.text.selectionStart, f.text.selectionEnd)
             if (f.edited) {
                 if (log) Log.i(TAG, "field ${f.id} edit ${f.edits}: ${e.length} units, selection $start..$end, composing " +
                     "${BaseInputConnection.getComposingSpanStart(e)}..${BaseInputConnection.getComposingSpanEnd(e)}")
@@ -502,9 +507,8 @@ internal class Fields(context: Context) : FrameLayout(context) {
         // Its type after its input type, which sets a password in a monospace face.
         face(text, fl(w[at + 11]), w[at + 12], what and ITALIC != 0, fl(w[at + 13]), fl(w[at + 14]), family, axes, features)
         f.action = when {
-            f.multiline -> 0
             enter in DONE..SEND -> enter
-            enter == 1 -> 0
+            f.multiline || enter == 1 -> 0
             // Unsaid: a search field searches and a field that submits goes; else the platform's own default for a
             // field, Next where another field follows it and Done where none does.
             keyboard == SEARCHES -> SEARCH
@@ -946,6 +950,10 @@ internal class Fields(context: Context) : FrameLayout(context) {
 /** [context] with no font weight adjustment, for a field's [EditText]: Bold Text's step is in the weight the kernel
  * gives it (LLP 1115.000 D12.3, UIKit's step, which light weights take too), and a `TextView` would otherwise add the
  * device's adjustment to every typeface it is set in, the one it measures in included. */
+/** An `EditText`'s selection as exact2 reads it, start then end: Android gives a selection made backward (Shift+Left)
+ * its anchor first, and -1 where there is none. */
+internal fun ordered(anchor: Int, edge: Int): Pair<Int, Int> = max(0, min(anchor, edge)) to max(0, max(anchor, edge))
+
 internal fun unadjusted(context: Context): Context = ContextThemeWrapper(context, context.theme).apply {
     if (android.os.Build.VERSION.SDK_INT >= 31) applyOverrideConfiguration(Configuration().apply { fontWeightAdjustment = 0 })
 }

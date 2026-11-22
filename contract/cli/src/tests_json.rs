@@ -191,9 +191,23 @@ fn step_json(step: &Step, s: &mut String) {
         Step::Seed { seed, .. } => {
             s.push_str(&format!("{{\"op\":\"seed\",\"value\":{seed}"));
         }
-        Step::Stored { name, value, .. } => {
+        Step::SignedIn { key, account, .. } => {
+            s.push_str("{\"op\":\"signed-in\",\"key\":");
+            q(key, s);
+            s.push_str(",\"account\":");
+            s.push_str(account);
+        }
+        Step::Stored {
+            name,
+            value,
+            window,
+            ..
+        } => {
             s.push_str("{\"op\":\"stored\",\"name\":");
             q(name, s);
+            if *window {
+                s.push_str(",\"window\":true");
+            }
             s.push_str(",\"json\":");
             q(value, s);
         }
@@ -229,10 +243,17 @@ fn step_json(step: &Step, s: &mut String) {
             }
         }
         Step::AnswerFetch {
-            prefix, response, ..
+            prefix,
+            method,
+            response,
+            ..
         } => {
             s.push_str("{\"op\":\"answer-fetch\",\"prefix\":");
             q(prefix, s);
+            if let Some(method) = method {
+                s.push_str(",\"method\":");
+                q(method, s);
+            }
             s.push_str(",\"response\":");
             s.push_str(response);
         }

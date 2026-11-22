@@ -1396,3 +1396,72 @@ fn materials_labelled_buttons_take_their_emphasis() {
     assert_eq!(ink("trailing"), (false, true), "a trailing symbol");
     assert_eq!(ink("rtl"), (false, true), "a leading symbol, right to left");
 }
+
+/// A key's focus under the Material look is Compose's: a bare field shows
+/// its caret alone, and what presses its state layer (its content's colour
+/// at 10 % over its shape, a checkbox's round its mark), never a ring.
+/// `outline: none` takes it off.
+#[test]
+fn materials_key_focus_is_a_state_layer_not_a_ring() {
+    if !material_process() {
+        return;
+    }
+    let source = r##"component App
+  state n = 0
+  action go
+    n = n + 1
+  view
+    column padding=16 gap=16 align-items="flex-start" accent-color="#ff0000"
+      input testId="field" appearance="none" width=200 height=30
+      button testId="button"
+        text "Save"
+      button outline="none" testId="unmarked"
+        text "Save"
+      input type="checkbox" testId="checkbox"
+      column press=go width=200 height=40 color="#000000" testId="card"
+        text "Card"
+"##;
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &crate::test_plan(source),
+        (),
+        (400., 600.),
+        2.4375,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.key_down("Tab", 1.);
+    assert_eq!(p.focus, Some(id(&p, "field")));
+    // The ring's edge, and a point the state layer covers.
+    let points = |r: Rect4, name| match name {
+        "checkbox" => ((r.0 + r.2 / 2., r.1 + 0.5), (r.0 + r.2 / 2., r.1 - 4.)),
+        _ => (
+            (r.0 + r.2 / 2., r.1 + 0.5),
+            (r.0 + r.2 - 8., r.1 + r.3 / 2.),
+        ),
+    };
+    let page = pixel(&mut p, 2.0, 2.0);
+    let names = ["field", "button", "unmarked", "checkbox", "card"];
+    for (n, name) in names.into_iter().enumerate() {
+        let target = id(&p, name);
+        let (edge, inside) = points(p.rect_of(target).unwrap(), name);
+        assert!(p.set_focus(None, 2. + n as f64).is_none());
+        let before = (
+            pixel(&mut p, edge.0, edge.1),
+            pixel(&mut p, inside.0, inside.1),
+        );
+        assert!(p.set_focus(Some(target), 2.5 + n as f64).is_none());
+        let after = (
+            pixel(&mut p, edge.0, edge.1),
+            pixel(&mut p, inside.0, inside.1),
+        );
+        assert_ne!(after.0, [255, 0, 0, 255], "{name}: no ring");
+        assert_eq!(before.1, page, "{name}");
+        match name {
+            // `outline: none` takes the state layer off, as it did the ring.
+            "field" | "unmarked" => assert_eq!(after.1, page, "{name}: no state layer"),
+            _ => assert_ne!(after.1, page, "{name}: the state layer"),
+        }
+    }
+}

@@ -52,11 +52,32 @@ struct Frame {
 pub(crate) struct Suggestions {
     values: BTreeMap<String, Values>,
     frames: BTreeMap<String, Frame>,
+    child_actions: BTreeMap<String, String>,
     scripts: usize,
     steps: usize,
 }
 impl Suggestions {
-    pub fn new(plan: &Plan, file: &Path) -> Self {
+    pub fn new(plan: &Plan, path: &Path) -> Result<Self, String> {
+        let (file, expanded) = contract::property_program(path).map_err(|es| {
+            es.iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        })?;
+        let child_actions = expanded
+            .component_actions()
+            .filter(|(i, _)| i.parent.is_some())
+            .map(|(i, name)| {
+                (
+                    name.to_owned(),
+                    format!(
+                        "{}.{}",
+                        i.component,
+                        contract_syntax::inline::calls::shown(name)
+                    ),
+                )
+            })
+            .collect();
         let names: Vec<_> = plan
             .slots
             .iter()
@@ -69,7 +90,7 @@ impl Suggestions {
                 })
             })
             .collect();
-        let properties: Vec<_> = names
+        let mut properties: Vec<_> = names
             .iter()
             .enumerate()
             .map(|(i, (name, _))| PropertyDecl {
@@ -83,9 +104,10 @@ impl Suggestions {
                         test: PropertyTest::Whole,
                     },
                 }],
+                actions: Vec::new(),
             })
             .collect();
-        let refused: BTreeSet<_> = contract::check_properties_path(file, &properties)
+        let refused: BTreeSet<_> = contract::check_properties(&file, &expanded, &mut properties)
             .err()
             .unwrap_or_default()
             .into_iter()
@@ -115,10 +137,11 @@ impl Suggestions {
                 )
             })
             .collect();
-        Self {
+        Ok(Self {
             values,
+            child_actions,
             ..Self::default()
-        }
+        })
     }
 
     pub fn observe(&mut self, observation: &[String]) {
@@ -180,6 +203,10 @@ impl Suggestions {
     }
 
     fn frame(&mut self, action: &str, before: &Step<'_>, after: &Step<'_>) {
+        let action = self
+            .child_actions
+            .get(action)
+            .map_or(action, String::as_str);
         let frame = self.frames.entry(action.to_string()).or_default();
         frame.count += 1;
         frame.changed.extend(changed(Some(before), after));

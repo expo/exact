@@ -147,6 +147,8 @@ extension NodeView {
         case "table": return (.table, nil)
         case "tr": return (.row, nil)
         case "th", "td": return (.cell, nil)
+        case "ul", "ol": return (.list, nil)
+        case "li", "blockquote": return (.group, nil)
         case "dl": return (.list, NSAccessibility.Subrole(rawValue: "AXDescriptionList"))
         case "dt": return (.group, NSAccessibility.Subrole(rawValue: "AXTerm"))
         case "dd": return (.group, NSAccessibility.Subrole(rawValue: "AXDescription"))
@@ -213,6 +215,23 @@ extension NodeView {
         guard isTableCell, let place = tablePlace else { return super.accessibilityColumnIndexRange() }
         return place.columnRange
     }
+    /// Core-AAM maps a custom sort order to AppKit's unknown direction.
+    /// An unsorted header omits the attribute.
+    private var headerSort: (direction: NSAccessibilitySortDirection, value: NSAccessibility.SortDirectionValue)? {
+        guard let sort = props["accessibilitySort"] else { return nil }
+        if let role = props["accessibilityRole"] {
+            guard role == "columnheader" || role == "rowheader" else { return nil }
+        } else if semanticTag != "th" { return nil }
+        switch sort {
+        case "ascending": return (.ascending, .ascending)
+        case "descending": return (.descending, .descending)
+        case "other": return (.unknown, .unknown)
+        default: return nil
+        }
+    }
+    package override func accessibilitySortDirection() -> NSAccessibilitySortDirection {
+        headerSort?.direction ?? super.accessibilitySortDirection()
+    }
     // What another process (VoiceOver) is served goes through AppKit's
     // attribute protocol, which does not serve a view's table accessors by
     // themselves (measured on macOS 27: none of them in
@@ -222,18 +241,20 @@ extension NodeView {
         .rows, .visibleRows, .columns, .visibleColumns, .rowCount, .columnCount, .header,
         .columnHeaderUIElements, .rowHeaderUIElements, .index, .rowIndexRange, .columnIndexRange,
     ]
-    private static let tableAttributeNames = Set(tableAttributes.map(\.rawValue))
+    private static let tableAttributeNames = Set((tableAttributes + [.sortDirection]).map(\.rawValue))
     /// `names` with the table attributes this node has, and none it lacks.
     /// AppKit asks for the names at every accessibility setter and getter
     /// of a view that overrides them, so this filter runs thousands of
     /// times when a batch makes thousands of views: one hash per name, not
     /// a comparison with each table attribute.
     func withTableAttributes(_ names: [NSAccessibility.Attribute]) -> [NSAccessibility.Attribute] {
-        let kept = names.filter { !Self.tableAttributeNames.contains($0.rawValue) }
+        var kept = names.filter { !Self.tableAttributeNames.contains($0.rawValue) }
+        if headerSort != nil { kept.append(.sortDirection) }
         guard tableSize != nil || tablePlace != nil else { return kept }
         return kept + Self.tableAttributes.filter { tableAttribute($0) != nil }
     }
     func tableAttribute(_ attribute: NSAccessibility.Attribute) -> Any? {
+        if attribute == .sortDirection { return headerSort?.value.rawValue }
         if tableSize != nil {
             switch attribute {
             case .rows: return accessibilityRows()
@@ -338,7 +359,7 @@ extension NodeView {
     var tableContainerType: UIAccessibilityContainerType? {
         switch semanticTag {
         case "table": return .dataTable
-        case "dl": return .list
+        case "dl", "ul", "ol": return .list
         default: return nil
         }
     }

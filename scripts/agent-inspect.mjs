@@ -906,12 +906,12 @@ export async function pidTrace(pid, dest, run = spawnSync, timeout = 10000) {
 
 /** The trace a phone's dev menu saved last (`ExactSession.latestTrace`,
  * `tmp/trace-latest.json` in the app's container), copied into the app's
- * `target/traces/` (LLP 1079 D5): from a simulator's container, which
+ * `.exact/traces/` (LLP 1079 D5) from a simulator's container, which
  * devicectl cannot copy, else off the phone as its screenshots are. */
 export function phoneTrace(ph, a, run = spawnSync) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const file = resolve(a.target, 'traces', `trace-${String(ph.name ?? ph.udid).replace(/[^\w.-]/g, '_')}-${stamp}.json`);
-  mkdirSync(resolve(a.target, 'traces'), { recursive: true });
+  const file = resolve(a.dir, '.exact', 'traces', `trace-${String(ph.name ?? ph.udid).replace(/[^\w.-]/g, '_')}-${stamp}.json`);
+  mkdirSync(dirname(file), { recursive: true });
   const unsaved = `no trace saved in ${a.id} on ${ph.name ?? ph.udid}: Save Trace in its dev menu first (four fingers tapped once)`;
   const container = run('xcrun', ['simctl', 'get_app_container', ph.udid, a.id, 'data'], { encoding: 'utf8' });
   // simctl's 148: no simulator by that id, so a phone. A simulator it knows

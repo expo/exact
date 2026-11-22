@@ -1,0 +1,23 @@
+component App
+  state last = ""
+  state taps = 0
+  state extra = false
+  action count(label: string)
+    last = label
+    taps = taps + 1
+  action countOther(label: string)
+    count(label)
+    extra = true
+  view
+    column
+      Counter(label="a", tapped=count)
+      Counter(label="b", tapped=countOther)
+
+component Counter
+  props
+    label: string
+    tapped: action
+  action bump
+    tapped(label)
+  view
+    button label press=bump testId=(label)

@@ -72,7 +72,8 @@ impl Tree {
     ) -> RetainedViews {
         let mut views = RetainedViews::default();
         let mut depths = BTreeMap::new();
-        self.visit_places(plan, kernel, |id, path| {
+        self.visit_places(plan, kernel, |instance, path, _| {
+            let id = instance.view;
             let (Some(node), Some(site)) = (kernel.node(id), ids.site(id)) else {
                 return;
             };

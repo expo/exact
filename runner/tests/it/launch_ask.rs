@@ -258,6 +258,65 @@ fn answered(r: &mut Runner<Feed>, ticket: u64) {
 }
 
 #[test]
+fn a_mutation_exposes_a_turn_overrun_until_the_person_retries() {
+    let plan = contract::compile(
+        r#"component App
+  mutation saved as shape string
+  derive code = match failure(saved) { case some(f) => f.code, case none => "" }
+  derive reason = match failure(saved) { case some(f) => f.reason, case none => "" }
+  action submit
+    send saved = save()
+  view
+    text reason
+"#,
+    )
+    .unwrap();
+    for first_turn in [true, false] {
+        let mut r = Runner::boot(
+            plan.clone(),
+            Feed {
+                ready: true,
+                overruns: usize::from(first_turn),
+                reply_overruns: usize::from(!first_turn),
+                chains: 0,
+            },
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        r.measure(true, false);
+        r.act("submit", vec![]).unwrap();
+        if !first_turn {
+            let request = one_request(&mut r);
+            r.fulfill(request.ticket, Outcome::Response(empty()))
+                .unwrap();
+        }
+        assert_eq!(r.derive("code"), Some(&Value::str("error")));
+        assert_eq!(r.derive("reason"), Some(&Value::str("overrun")));
+        let warning = r
+            .take_budget_warning()
+            .expect("the development overlay's warning");
+        assert!(
+            warning.contains("mutation saved")
+                && warning.contains("turn budget")
+                && warning.contains("not retried")
+        );
+        assert!(r.take_alerts().contains(&warning));
+        assert_eq!(r.take_budget_warning(), None);
+        r.advance(5_000.).unwrap();
+        assert!(r.take_requests().is_empty());
+        assert_eq!(r.mutation_requests(), 1);
+
+        r.act("submit", vec![]).unwrap();
+        let retry = one_request(&mut r);
+        r.fulfill(retry.ticket, Outcome::Response(empty())).unwrap();
+        assert_eq!(r.derive("code"), Some(&Value::str("")));
+        assert_eq!(r.mutation_requests(), 2);
+    }
+}
+
+#[test]
 fn the_ask_made_when_the_source_becomes_ready_is_not_a_refresh() {
     let mut r = launch();
     r.data().ready = true;

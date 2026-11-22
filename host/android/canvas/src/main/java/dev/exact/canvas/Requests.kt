@@ -4,6 +4,7 @@ import android.app.PendingIntent
 import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.ClipData
+import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -14,6 +15,8 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.Choreographer
 import android.view.HapticFeedbackConstants
+import androidx.core.content.ContextCompat
+import java.io.File
 
 /**
  * What exact2 asks of the platform, acted on (LLP 1115.001 D5): the one channel out. exact2 queues a request and
@@ -76,11 +79,16 @@ internal class Requests(private val activity: ExactActivity) {
         sound?.apply(body)
     }
 
+    /** Hears the chooser's result broadcast, which the chooser sends as this app, the maker of its `PendingIntent`: from
+     * Android 13 the receiver is not exported, and before it, where a receiver registered at run time is, AndroidX's
+     * requires `<package>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`, a signature permission, so that only an app signed
+     * with this app's certificate and holding it may send it (`ContextCompat.RECEIVER_NOT_EXPORTED`). AndroidX's library
+     * manifest declares and requests it, merged into an app's own by default; an app whose manifest drops either cannot
+     * share before Android 13. */
     private fun listen() {
         if (listening) return
+        ContextCompat.registerReceiver(activity, receiver, IntentFilter(shared), ContextCompat.RECEIVER_NOT_EXPORTED)
         listening = true
-        if (Build.VERSION.SDK_INT >= 33) activity.registerReceiver(receiver, IntentFilter(shared), Context.RECEIVER_NOT_EXPORTED)
-        else activity.registerReceiver(receiver, IntentFilter(shared))
     }
 
     /** The requests in [words]: for each its kind, its id, the count of words that follow, and those words. A kind
@@ -104,7 +112,7 @@ internal class Requests(private val activity: ExactActivity) {
                     AUTH_END -> Auth.end(words[body])
                     HAPTIC -> haptic(words[body])
                     COPY -> copy(string(words, body).first)
-                    SHARE -> share(id, words, body)
+                    SHARE -> share(id, words, body, i)
                     BACK -> back(words[body] != 0)
                     PAD_INPUT -> padInput = words[body] != 0
                     // The second word, from D8 on: the hosted field the keyboard is for (0: one exact2 paints).
@@ -123,11 +131,13 @@ internal class Requests(private val activity: ExactActivity) {
                     FILES -> files(id, words, body)
                     ASSETS -> { sound?.reroot(); activity.assetsMoved() }
                     WINDOW_TITLE -> activity.title = if (body == i) appTitle else string(words, body).first
+                    DRAG -> drag(words, body)
                 }
             } catch (e: RuntimeException) {
                 // The platform refused (no activity to start from, a full clipboard transaction): the app goes on.
                 Log.w(TAG, "request $id kind $kind: $e")
-                if (kind == FILES || (kind == SHARE && sharing.remove(id))) Exact.answer(id, e.message ?: e.javaClass.simpleName)
+                // A share answers whether or not its sheet was up: one refused before it opened is waited for too.
+                if (kind == FILES || kind == SHARE) { sharing.remove(id); Exact.answer(id, e.message ?: e.javaClass.simpleName) }
             }
         }
     }
@@ -238,14 +248,23 @@ internal class Requests(private val activity: ExactActivity) {
      * sheet says something was chosen ([receiver]) and `dismissed` when the person is back here and it said nothing
      * ([resumed]): the platform tells no more, and never that the share was finished in the app chosen.
      */
-    private fun share(id: Int, w: IntArray, at: Int) {
+    private fun share(id: Int, w: IntArray, at: Int, end: Int) {
         val given = w[at]
         val (title, afterTitle) = string(w, at + 1)
         val (text, afterText) = string(w, afterTitle)
-        val url = string(w, afterText).first
-        val send = Intent(Intent.ACTION_SEND).setType("text/plain")
-        send.putExtra(Intent.EXTRA_TEXT, listOfNotNull(text.takeIf { given and 2 != 0 }, url.takeIf { given and 4 != 0 }).joinToString(" "))
-        if (given and 1 != 0) { send.putExtra(Intent.EXTRA_SUBJECT, title); send.putExtra(Intent.EXTRA_TITLE, title) }
+        var (url, i) = string(w, afterText)
+        // The files, each an `app:/` path the runner admitted, as content URIs of the app's provider (LLP 1094.000 D7).
+        val files = ArrayList<Pair<Uri, String>>()
+        while (i < end) {
+            val (src, next) = string(w, i)
+            i = next
+            val file = Native.appFile(src)?.let(::File)?.takeIf(Files::regular)
+            val uri = file?.let { Files.uri(activity, it) }
+                ?: return Exact.answer(id, "$src could not be read: the app has no such file; write it before sharing it")
+            files += uri to Files.type(file)
+        }
+        val words = listOfNotNull(text.takeIf { given and 2 != 0 }, url.takeIf { given and 4 != 0 }).joinToString(" ")
+        val send = sendIntent(title.takeIf { given and 1 != 0 }, words, files)
         // The sheet fills in what was chosen, so the intent is mutable; it names this package, so only this app gets it.
         val chosen = PendingIntent.getBroadcast(
             activity, id, Intent(shared).setPackage(activity.packageName).putExtra(ID, id),
@@ -254,6 +273,16 @@ internal class Requests(private val activity: ExactActivity) {
         listen()
         sharing.add(id)
         activity.startActivity(Intent.createChooser(send, null, chosen.intentSender))
+    }
+
+    /** A node's drag out of the app ([DragOut]): the node, its box and the finger in the view's pixels, 1 when an
+     * assistive service started it, its text and URL, then its files' count and each file as the node names it. */
+    private fun drag(w: IntArray, at: Int) {
+        val view = view ?: return
+        val ask = DragOut.read(w, at)
+        if (!DragOut.start(activity, view, ask.box, ask.finger, ask.service, ask.text, ask.url, ask.files)) {
+            Exact.journal("drag: nothing to drag: the node carries no text, no URL and no file the app has")
+        }
     }
 
     /** The activity is in front again. A share sheet that was up and has said nothing was dismissed: answered so a
@@ -302,8 +331,37 @@ internal class Requests(private val activity: ExactActivity) {
             }
         }
 
+        /**
+         * The Sharesheet's intent: the text and the URL as its text, the title as its subject, and [files] (content URIs
+         * and their types) as its streams, typed by the one type they share, else by their one family with any subtype,
+         * else as any type (`image/png`; `image/png` and `image/jpeg` as `image/*`; with `application/pdf` as `*/*`), with a
+         * read grant the chooser passes on to the app chosen (`Intent.createChooser`). The text is one `EXTRA_TEXT`, left
+         * out where files go without it, whether one file or several: the Sharesheet's preview and AndroidX's
+         * `ShareCompat.IntentReader` read it so, though `ACTION_SEND_MULTIPLE`'s documentation allows a list. With files
+         * the text is in no other place, the clip holding the streams alone, since the Sharesheet takes out only
+         * `EXTRA_TEXT` where the person turns off a link it offers to include; a receiver that reads text only from the
+         * clip, or only as a list, gets none.
+         */
+        fun sendIntent(title: String?, words: String, files: List<Pair<Uri, String>>): Intent {
+            val many = files.size > 1
+            val send = Intent(if (many) Intent.ACTION_SEND_MULTIPLE else Intent.ACTION_SEND).setType("text/plain")
+            if (words.isNotEmpty() || files.isEmpty()) send.putExtra(Intent.EXTRA_TEXT, words)
+            if (title != null) { send.putExtra(Intent.EXTRA_SUBJECT, title); send.putExtra(Intent.EXTRA_TITLE, title) }
+            if (files.isEmpty()) return send
+            val types = files.map { it.second }.distinct()
+            val families = types.map { it.substringBefore('/') }.toSet()
+            send.type = types.singleOrNull() ?: families.singleOrNull()?.let { "$it/*" } ?: "*/*"
+            val uris = ArrayList(files.map { it.first })
+            if (many) send.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris) else send.putExtra(Intent.EXTRA_STREAM, uris[0])
+            // The clip, which carries the read grants, holds the streams alone and says what they are, as a receiver may ask
+            // it before opening one.
+            send.clipData = ClipData(ClipDescription(null, types.toTypedArray()), ClipData.Item(uris[0])).apply { uris.drop(1).forEach { addItem(ClipData.Item(it)) } }
+            send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            return send
+        }
+
         /** The string at [at]: its bytes' count, then UTF-8 padded to whole words. And the index after it. */
-        private fun string(w: IntArray, at: Int): Pair<String, Int> {
+        internal fun string(w: IntArray, at: Int): Pair<String, Int> {
             val n = w[at]
             val bytes = ByteArray(n) { k -> (w[at + 1 + k / 4] ushr (8 * (k % 4))).toByte() }
             return String(bytes, Charsets.UTF_8) to at + 1 + (n + 3) / 4
@@ -335,6 +393,7 @@ internal class Requests(private val activity: ExactActivity) {
         const val FILES = 18
         const val ASSETS = 20
         const val WINDOW_TITLE = 22
+        const val DRAG = 23
         /** How long after the activity is in front again a share sheet's choice is still waited for. */
         private const val DISMISSED_MS = 500L
     }

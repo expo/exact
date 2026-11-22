@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 /// The current runner reads only its acknowledged picture. `session` counts
 /// runners, which can reuse view ids; `shown` identifies the picture's runner.
-/// Perspective-projected fields are retained but never read.
+/// A perspective projection rules out an affine range rectangle.
 #[derive(Debug, Default)]
 pub(crate) struct Painted {
     text: RefCell<std::rc::Weak<RefCell<TextEngine>>>,
@@ -20,6 +20,10 @@ pub(crate) struct Painted {
 }
 
 impl Painted {
+    pub(super) fn published_field(&self, view: ViewId) -> Option<(Rc<PaintedField>, bool)> {
+        self.fields.borrow().get(&view).cloned()
+    }
+
     /// The runner painting now.
     pub(crate) fn session(&self) -> u64 {
         self.session.get()
@@ -100,9 +104,8 @@ impl InlineGeometry for Painted {
         if cfg!(target_os = "android") {
             return GeometryAnswer::UNAVAILABLE;
         }
-        let fields = self.fields.borrow();
-        let Some((x, y, width, height)) = fields
-            .get(&view)
+        let Some((x, y, width, height)) = self
+            .published_field(view)
             .filter(|(_, projected)| !projected)
             .and_then(|(field, _)| field.range_frame(start, end))
         else {

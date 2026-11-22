@@ -16,11 +16,15 @@ final class CoverCorrectionsIOSTests: XCTestCase {
         session.presenter.onCovers = { _ in
             told += 1
             guard told < 40 else { return }
-            session.whenIdle(bound: true) { session.apply(wireBatch([])) }
+            session.whenIdle(bound: true) {
+                var answer = wireBatch([])
+                answer.journal = ["scroll cover answer"]
+                session.apply(answer)
+            }
         }
-        // The runtime's answer moves the scroller, which changes its cover again
-        session.onApplyForTests = { _ in
-            guard session.coversCause != nil else { return }
+        // Applying the answer moves the scroller even if the session lost the correction's identity.
+        session.onApplyForTests = { batch in
+            guard batch.journal == ["scroll cover answer"] else { return }
             navigation.covers = [1: told % 2 == 0 ? .whole : edge(1)]
             navigation.countReport()
             navigation.deliverCovers()

@@ -823,7 +823,7 @@ test("the JS loop: an edit to theme-fixture's `when` token builds with setMode a
   const page = '  surface.page = light-dark(#ffffff, #000000)\n    when dark-style=dim: light-dark(#ffffff, #15202b)\n';
   expect(design).toContain(page);
   writeFileSync(join(dir, 'app.forma'), design);
-  let loop = null;
+  let loop, browser;
   try {
     loop = await devLoop(dir);
     const { said, base } = loop;
@@ -837,13 +837,23 @@ test("the JS loop: an edit to theme-fixture's `when` token builds with setMode a
     await until(() => count(/edit → checked|edit → batch ready .*built in|edit → plan ready/g) > checks || said().includes('build failed'), 300_000);
     expect(said()).not.toContain('build failed');
     expect(JSON.stringify(await (await fetch(`${base}/__dev/design`)).json())).toContain('#16212c');
+    browser = await suiteBrowser();
+    const preview = await browser.newPage();
+    await preview.goto(base);
+    await preview.waitForFunction(() => globalThis.exact?.replacementBoundary);
+    await preview.evaluate(() => exact.devError('assets/avatar.wgsl failed', 'shader'));
     // The default's light side alone, which `under scheme=dark` refuses:
     // the build says so, and not that the design declares no axes.
     writeFileSync(join(dir, 'app.forma'), design.replace(page, page.replace('#ffffff, #000000', '#fefefe, #000000')));
     await until(() => said().includes('build failed') && said().includes('[forma-'), 300_000);
     expect(said()).toContain('forma-under-light');
     expect(said()).not.toContain('declares no axes');
+    const overlay = preview.locator('pre').filter({ hasText: 'forma-under-light' });
+    expect(await overlay.textContent()).toContain('assets/avatar.wgsl failed');
+    await overlay.click();
+    expect(await overlay.count()).toBe(0);
   } finally {
+    await browser?.close();
     await loop?.stop().catch(() => {});
     rmSync(dir, { recursive: true, force: true });
   }

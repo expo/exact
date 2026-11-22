@@ -568,6 +568,8 @@ impl super::Instance {
         super::Surface {
             swapchain: RwLock::new(None),
             inner: Box::new(native_surface),
+            #[cfg(drm)]
+            drm_display: None,
         }
     }
 

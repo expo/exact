@@ -54,6 +54,14 @@ internal object Sources {
         }
     }
 
+    /** A file a drag carries (LLP 1094.000 D7): an `app:/data|cache|tmp/…` path ([appFile]) or a shipped name under
+     * [assets]; null for any other. */
+    fun file(src: String, assets: File, appFile: (String) -> File?): File? = when {
+        src.startsWith("app:/") -> appFile(src)
+        scheme(src) == null -> (asset(src, assets) as? Source.Local)?.file
+        else -> null
+    }
+
     /** Whether a guest's navigation to [scheme] and [path] stays in its frame: a web URL, or a file under [assets]. */
     fun navigable(scheme: String?, path: String?, assets: File): Boolean = when (scheme?.lowercase()) {
         "http", "https", "data", "about", "blob" -> true

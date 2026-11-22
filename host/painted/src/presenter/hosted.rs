@@ -660,10 +660,13 @@ impl<D: DataSource> Presenter<D> {
     /// does:
     ///
     /// - Enter first, as a key: the `key` handlers hear it, and unless one
-    ///   prevents it a single-line field commits (`change`) and submits;
-    /// - then `next` and `previous` move to the field after or before this
-    ///   one, and with none there the focus leaves; `done`, `go`, `search`
-    ///   and `send` leave the field, which puts the keyboard away;
+    ///   prevents it a single-line field commits (`change`) and submits,
+    ///   and a textarea breaks its line under any label, which is all the
+    ///   key does there (LLP 1115.000 D9.2);
+    /// - then, in a single-line field, `next` and `previous` move to the
+    ///   field after or before this one, and with none there the focus
+    ///   leaves; `done`, `go`, `search` and `send` leave the field, which
+    ///   puts the keyboard away;
     /// - Tab and Shift+Tab are the page's own Tab.
     pub fn reader_field_action(&mut self, id: ViewId, generation: u32, action: i32, now_ms: f64) {
         if !self.hosted_live(id, generation) || !self.focusable(id) {
@@ -691,8 +694,12 @@ impl<D: DataSource> Presenter<D> {
         }
         let textarea = (self.host.kernel().node(id))
             .is_some_and(|n| n.props.str(PropId::SemanticTag) == Some("textarea"));
-        if !textarea {
-            self.field_key(id, "Enter", now_ms);
+        self.field_key(id, "Enter", now_ms);
+        if textarea {
+            // The reader's field takes the new text, and the caret from here:
+            // its own mapping would leave a replaced range's line break selected.
+            self.hosted_commanded(id, self.field_selection(id));
+            return;
         }
         if self.focus != Some(id) {
             return;

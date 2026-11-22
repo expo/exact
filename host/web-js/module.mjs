@@ -16,12 +16,12 @@ import { fileURLToPath } from 'node:url';
 // them, so a prebuild optimizes and keeps what an app's build would.
 import { awaitBuildOutput, WEB_STD, WEB_SIZE, WEB_TOOLCHAIN, injectedProfiles, resolveApp, wasmRemapFlags, webToolchainEnv } from '../../scripts/app.mjs';
 import { rustDataOf, undeclaredDataCrate } from '../../scripts/app-shells.mjs';
-import { appCrates } from '../../scripts/cargo-check.mjs';
+import { appCrates, linkedCrate } from '../../scripts/cargo-check.mjs';
 import { SETUP_FETCHES, withHostDeployment } from '../../scripts/filesystem.mjs';
 import { replaceBuild } from '../web/serve.mjs';
 import { proofInputs } from '../../game/inputs.mjs';
 import { keptProducts } from '../../scripts/kept.mjs';
-import { RustMissing, fromSet, fromSets, fetchedAllowed, launch, rustMissing, freshCompiler } from '../../scripts/tools.mjs';
+import { RustMissing, fromSet, fromSets, fetchedTool, launch, rustMissing, freshCompiler } from '../../scripts/tools.mjs';
 import { EXE } from '../../scripts/paths.mjs';
 export { EXE };
 import { buildScriptDir, crateDir, depInfoOf, fresh as cargoFresh, refreshCargoRustBindings } from '../../scripts/cargo-dep-info.mjs';
@@ -307,8 +307,9 @@ export function buildModule(app, out, draw = false, dir = resolve(root, 'apps', 
     } finally { release(); }
   }
 
-  const dataCrate = appCrates(dir).find(crate => crate.name === data.krate)?.dir;
-  if (!dataCrate) throw new Error(`${app}: app.json's rust.data.crate is ${data.krate}, which is not a crate beside app.json`);
+  // The one the app's own host crates link by path, which they build, else the one beside app.json
+  const dataCrate = linkedCrate(resolved.dir, data.krate) ?? appCrates(resolved.dir).find(crate => crate.name === data.krate)?.dir;
+  if (!dataCrate) throw new Error(`${app}: app.json's rust.data.crate is ${data.krate}, which neither its host crates link by path nor is a crate beside app.json; name the data crate its host crates link, or link it by path from one of them`);
   const packageName = `exact-js-module-${app}-${key}${dev ? '-dev' : ''}`;
   // A stable path lets Cargo keep the dev wrapper fresh across stages. Its
   // own package name keeps Cargo from reusing a stage-local wrapper's artifact.
@@ -476,7 +477,7 @@ function taken(name, at) {
   const missing = rustMissing();
   const kept = missing ? null : at().find();
   if (kept) return { path: kept, kept: true };
-  const fetched = fetchedAllowed() ? fromSet(name, 'fetched') : null;
+  const fetched = fetchedTool(name);
   if (fetched) return { path: fetched.path, kept: true };
   if (missing) throw new RustMissing(name);
   return null;
@@ -609,7 +610,7 @@ export function webCompiler() {
   const missing = rustMissing(), at = compilerKept();
   const taken = missing ? null : at.find();
   if (taken) return launch(taken);
-  const fetched = fetchedAllowed() ? fromSet('exact-web-js', 'fetched') : null;
+  const fetched = fetchedTool('exact-web-js');
   if (fetched) return launch(fetched.path);
   if (missing) throw new RustMissing('exact-web-js');
   const started = Date.now();

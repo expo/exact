@@ -318,22 +318,35 @@ impl Config {
     /// Read the environment; `baked` is the plan compiled into the binary
     /// and `compat` its `compat.json` (LLP 1030 D3a).
     pub fn from_env(baked: &[u8], compat: &str) -> Config {
-        Self::from_env_lent(baked, None, compat)
+        Self::from_bake::<true>(baked, compat)
+    }
+
+    /// A shell that knows its baked trust can omit the unsigned plan loaders
+    /// from a production executable. Development shells also check the receipt.
+    pub fn from_bake<const DEVELOPMENT: bool>(baked: &[u8], compat: &str) -> Config {
+        Self::from_env_lent::<DEVELOPMENT>(baked, None, compat)
     }
 
     /// [`Config::from_env`] of a plan linked into the binary: booting it
     /// copies none of it (its data pool, a baked app's largest part, is
     /// read in place).
     pub fn from_env_static(baked: &'static [u8], compat: &str) -> Config {
-        Self::from_env_lent(baked, Some(baked), compat)
+        Self::from_env_lent::<true>(baked, Some(baked), compat)
     }
 
-    fn from_env_lent(baked: &[u8], lent: Option<&'static [u8]>, compat: &str) -> Config {
+    fn from_env_lent<const DEVELOPMENT: bool>(
+        baked: &[u8],
+        lent: Option<&'static [u8]>,
+        compat: &str,
+    ) -> Config {
         // Drop development overrides before reading plans, storage or launch mode (LLP 1069.007 D2).
         prepare_environment(compat);
         let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
-        let exact_plan = env("EXACT_PLAN");
-        let exact_dev_plan = env("EXACT_DEV_PLAN");
+        let (exact_plan, exact_dev_plan) = if DEVELOPMENT {
+            (env("EXACT_PLAN"), env("EXACT_DEV_PLAN"))
+        } else {
+            (None, None)
+        };
         let mut dev_said = None;
         let from_url = [exact_plan.as_deref(), exact_dev_plan.as_deref()]
             .into_iter()
@@ -499,6 +512,23 @@ pub fn boot_presenter<D: DataSource + Default>(
     let mut result = boot_presenter_with_painter(config, viewport, painter)?;
     result.0.set_output_rotation(rotation);
     Ok(result)
+}
+
+/// Boot with the Ink device that owns the selected Linux display.
+#[cfg(target_os = "linux")]
+pub fn boot_scanout_presenter<D: DataSource + Default>(
+    config: &mut Config,
+    viewport: (f32, f32),
+    device: exact_ink::Wgpu,
+) -> Result<(Presenter<D>, Option<String>), String> {
+    let (mut p, warning) = boot_presenter_with_painter(
+        config,
+        viewport,
+        PainterBoot::selected(crate::presenter::PainterChoice::Cpu),
+    )?;
+    p.install_scanout_painter(device);
+    p.set_output_rotation(config.output_rotation);
+    Ok((p, warning))
 }
 
 #[cfg(any(windows, test))]
@@ -1097,6 +1127,20 @@ mod scale_tests {
         ] {
             assert!(std::env::var_os(name).is_none(), "{name}");
         }
+
+        let path =
+            std::env::temp_dir().join(format!("exact-baked-plan-{}.plan", std::process::id()));
+        std::fs::write(&path, b"local").unwrap();
+        std::env::set_var("EXACT_PLAN", &path);
+        let development = r#"{"embedded":{"trust":"development"}}"#;
+        let baked = super::Config::from_bake::<false>(b"baked", development);
+        let editable = super::Config::from_bake::<true>(b"baked", development);
+        let production =
+            super::Config::from_bake::<true>(b"baked", r#"{"embedded":{"trust":"production"}}"#);
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(baked.plan.as_ref(), b"baked");
+        assert_eq!(editable.plan.as_ref(), b"local");
+        assert_eq!(production.plan.as_ref(), b"baked");
     }
 
     #[test]

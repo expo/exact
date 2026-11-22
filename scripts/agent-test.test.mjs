@@ -830,7 +830,8 @@ test('expect refusal asserts an observed mutation failure and preserves unrelate
     'refused reply other; wall 1 ms: Not permitted',
     'showModal absent refused: no dialog has that id',
   ]);
-  expect(refusalExpectation({lines},'resource').message).toContain('no refused reply was observed');
+  expect(refusalExpectation({lines},'resource')).toEqual({expected:[lines[7]]});
+  expect(refusalExpectation({lines},'absent').message).toContain('no refused reply was observed');
   expect(refusalExpectation({lines:[]},'saved').message).toContain('clock data');
   // The same assertion cannot consume a refusal before the preceding assertion of the same slot's log cursor.
   expect(refusalExpectation({lines:lines.slice(2)},'saved').expected).toEqual([lines[3],lines[2]]);
@@ -845,7 +846,6 @@ test('expect refusal asserts an observed mutation failure and preserves unrelate
   expect(refusalsOf({lines:lines.slice(0,2),host:[mirror,mirror]},first.expected)).toEqual(['refused reply saved; wall 3 ms: Not permitted']);
   expect(refusalsOf({lines:repeated,host:[mirror,mirror,mirror]},[...first.expected,...first.expected])).toEqual(['refused reply saved; wall 3 ms: Not permitted']);
 });
-
 
 test('an authored expected refusal keeps a prior send value, skips then, and is accepted by verify', async () => {
   const {refusalsOf} = await import('./verify.mjs');
@@ -1285,7 +1285,7 @@ test('a module setting leaves native literal fetch grants available to faults', 
     mkdirSync(join(dir,'.exact'),{recursive:true});
     writeFileSync(join(dir,'.exact/typescript-inputs.json'),JSON.stringify({modules:['app.ts','src/api.ts'].map(file=>[file,join(dir,file)]),types:[]}));
     const origins = nativeFetchOrigins(dir, {});
-    expect(origins).toEqual(['http://127.0.0.1:9123']);
+    expect(origins).toEqual(['https:', 'http://127.0.0.1:9123']);
     expect(backendFetchPrefixes([{ steps: [{ op: 'fail-fetch', prefix: '/items' }] }], origins)[0].steps[0].prefix).toBe('http://127.0.0.1:9123/items');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -1479,3 +1479,22 @@ test('single-value page facts replay by canonical name and drive-only forms are 
     expect(r.status, r.stdout + r.stderr).toBe(0);
   } finally {rmSync(dir, {recursive:true, force:true});}
 }, 30000);
+
+test('scheme net.fetch grants match fault prefixes on that scheme without warning (LLP 1156.007 §5.2)', async () => {
+  const { faultRequest, fetchOrigins, nativeFetchOrigins } = await import('./agent-test.mjs');
+  const warnings = [], dir = mkdtempSync(join(tmpdir(), 'exact-scheme-origins-'));
+  try {
+    mkdirSync(join(dir, '.gen'), { recursive: true }); mkdirSync(join(dir, '.exact'), { recursive: true });
+    writeFileSync(join(dir, 'app.json'), '{}'); writeFileSync(join(dir, '.exact/typescript-inputs.json'), JSON.stringify({ modules: [['app.ts', join(dir, 'app.ts')]], types: [] }));
+    writeFileSync(join(dir, '.gen/admission-data.js'), 'export const tsGrantSet = { entries: [[1, "net.fetch https:", ["fetch-scheme", "https"]]] };');
+    writeFileSync(join(dir, 'app.ts'), "export const grants = 'net.fetch https:';\n");
+    expect(fetchOrigins(dir)).toEqual(['https:']);
+    expect(nativeFetchOrigins(dir, {})).toEqual(['https:']);
+    expect(faultRequest('fail', ['fetch', 'https://'], ['https:'], s => warnings.push(s))).toEqual({ op: 'prefer', faults: { fail: 'https://' } });
+    expect(faultRequest('fail', ['fetch', 'https://social.example/api'], ['https:'], s => warnings.push(s))).toEqual({ op: 'prefer', faults: { fail: 'https://social.example/api' } });
+    expect(warnings).toEqual([]);
+    faultRequest('fail', ['fetch', 'http://wrong'], ['https:'], s => warnings.push(s));
+    expect(warnings).toHaveLength(1);
+    expect(() => faultRequest('pass', ['fetch', 'backend'], ['https:'])).toThrow(/exactly one/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

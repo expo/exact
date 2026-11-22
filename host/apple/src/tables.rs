@@ -6,6 +6,24 @@ use super::*;
 use std::fmt::Write as _;
 
 impl<D: DataSource> Host<D> {
+    /// The list owns the counter. One change to its children can change
+    /// every following item's label, including retained native views.
+    pub(super) fn emit_prose_markers(&mut self, batch: &mut Batch) {
+        for id in self.changed_prose_lists.drain() {
+            let Some(list) = self.runner.kernel().node(id) else {
+                continue;
+            };
+            let Some(items) = list.list_markers() else {
+                continue;
+            };
+            for (item, label) in items {
+                if let Some(mirror) = self.mirror.get_mut(&item.id) {
+                    mirror.derived_prop(item.id, "listMarker", label, batch);
+                }
+            }
+        }
+    }
+
     /// Each `table`'s size and drawn order and each `tr`, `td` and `th`'s
     /// place, when they changed. A part another box placed (a row outside
     /// any `table`, in an anonymous one) is sent too: the presenter keeps a

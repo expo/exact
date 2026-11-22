@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { checkpointFaults, drivenCheckpoint, faultSpecOf, faultMatches, faultOp, faultsJson, parseFaults, setFaultLog, takeFault } from './faults.js';
 import { request } from './http-body.js';
 import { fetchWith } from '../web-js/admission.js';
+import { rt } from '../web-js/rt-link.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const target = resolve(process.env.CARGO_TARGET_DIR || resolve(ROOT, 'target'), `debug/exact-web-js${process.platform === 'win32' ? '.exe' : ''}`);
@@ -49,6 +50,68 @@ test('HTTP fixtures answer both web executors without a request and survive relo
     expect(await (await fetchWith(set, prefix)).text()).toBe('live');
     expect(hits).toBe(1);
   } finally { server.stop(true); }
+});
+
+test('delayed fixtures preserve other I/O and stop on abort or the earlier timeout', async () => {
+  const url = 'https://goals.example.test/goal', set = normalized('net.fetch https://goals.example.test');
+  const response = { status: 200, headers: {}, body: 'old', afterMs: 200 };
+  expect(faultOp({ answer: url, response }).error).toBeUndefined();
+  const previous = rt.clock;
+  const clock = rt.clock = { now: 40, agent: true, timers: [] };
+  try {
+    const wasm = await request({ method: 'GET', url, headers: [] }, { grantSet: set, controllers: new Set() });
+    expect([wasm.afterMs, new TextDecoder().decode(wasm.body)]).toEqual([200, 'old']);
+    for (const kind of ['plain', 'held']) {
+      const call = { plain: 1, [kind]: kind === 'plain' ? 2 : 1 };
+      const abort = new AbortController();
+      let waiting;
+      const parked = new Promise(resolve => { waiting = resolve; });
+      call.recount = () => { if (call.timers) waiting(); };
+      const result = fetchWith(set, url, { exactTimeout: 90, signal: abort.signal },
+        null, undefined, undefined, 'app', false, undefined, { call, kind }).catch(e => e);
+      await parked;
+      expect(call.plain).toBe(1);
+      const [entry] = clock.timers;
+      expect(entry.due).toBe(130);
+      if (kind === 'held') {
+        abort.abort('cancelled');
+        expect(await result).toBe('cancelled');
+      } else {
+        clock.now = entry.due;
+        entry.action();
+        expect((await result).kind).toBe('Timeout');
+        clock.now = 40;
+      }
+      expect(clock.timers).toHaveLength(0);
+      expect(call.timers).toBe(0);
+    }
+  } finally { rt.clock = previous; }
+});
+
+test('a request-time render leaves delayed fixture delivery for the driven page', async () => {
+  const url = 'https://goals.example.test/goal', set = normalized('net.fetch https://goals.example.test');
+  faultOp({ answer: url, response: { status: 200, headers: {}, body: 'old', afterMs: 100 } });
+  globalThis.__exactRender = true;
+  try {
+    expect(await fetchWith(set, url).catch(e => e)).toMatchObject({renderDeferred: true});
+    expect(faultsJson()[0].hits).toBe(0);
+  } finally { delete globalThis.__exactRender; }
+});
+
+test('one URL can answer GET and PUT independently on both web executors after reload', async () => {
+  const url = 'https://goals.example.test/goal', set = normalized('net.fetch https://goals.example.test');
+  for (const [method, body] of [['GET', 'old'], ['PUT', 'saved'], [undefined, 'fallback']]) {
+    expect(faultOp({ answer: url, method, response: {status: 200, headers: {}, body} }).error).toBeUndefined();
+  }
+  const {faultSpec} = await import('../../scripts/agent-launch.mjs');
+  globalThis.__exactFaults.entries = parseFaults(faultSpec(faultSpecOf(faultsJson())));
+  for (const [method, body] of [['GET', 'old'], ['PUT', 'saved'], ['POST', 'fallback']]) {
+    expect(await (await fetchWith(set, new Request(url, {method}))).text()).toBe(body);
+    const wasm = await request({ method, url, headers: [] }, {grantSet: set, controllers: new Set()});
+    expect([wasm.status, new TextDecoder().decode(wasm.body)]).toEqual([200, body]);
+  }
+  expect(faultsJson().map(f => f.hits)).toEqual([2, 2, 2]);
+  expect(faultOp({pass: url}).faults.every(f => !f.armed)).toBe(true);
 });
 
 test('fixture response clones keep the URL used by an app to resolve relative links', async () => {
@@ -359,6 +422,24 @@ test('failure evidence survives replacement and reload independently of response
   faultOp({fail: prefix});
   takeFault(prefix);
   expect(parseFaults(faultSpecOf(faultsJson()))[0]).toMatchObject({hits: 1, failureHits: 2});
+});
+
+test('answer fetch 4xx and 5xx responses increment failureHits across reload while 2xx does not (LLP 1156.007)', async () => {
+  const set = normalized('net.fetch https://api.test');
+  faultOp({answer: 'https://api.test/ok', response: {status: 200, headers: {}, body: 'ok'}});
+  faultOp({answer: 'https://api.test/missing', response: {status: 404, headers: {}, body: 'nope'}});
+  faultOp({answer: 'https://api.test/broken', response: {status: 500, headers: {}, body: 'boom'}});
+  expect((await fetchWith(set, 'https://api.test/ok')).status).toBe(200);
+  expect((await fetchWith(set, 'https://api.test/missing')).status).toBe(404);
+  expect((await fetchWith(set, 'https://api.test/broken')).status).toBe(500);
+  const byPrefix = Object.fromEntries(faultsJson().map(f => [f.prefix, {hits: f.hits, failureHits: f.failureHits}]));
+  expect(byPrefix).toEqual({
+    'https://api.test/ok': {hits: 1, failureHits: 0},
+    'https://api.test/missing': {hits: 1, failureHits: 1},
+    'https://api.test/broken': {hits: 1, failureHits: 1},
+  });
+  const reloaded = Object.fromEntries(parseFaults(faultSpecOf(faultsJson())).map(f => [f.prefix, {hits: f.hits, failureHits: f.failureHits}]));
+  expect(reloaded).toEqual(byPrefix);
 });
 
 test('Chromium gives fixtures the real response properties and request-mode refusals', async () => {

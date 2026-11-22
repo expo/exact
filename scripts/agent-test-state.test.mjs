@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runTests, stateExpectation, stateHolds } from './agent-test.mjs';
+import { failureMark, runTests, stateExpectation, stateHolds, unarranged } from './agent-test.mjs';
 import { serveBuildTree } from '../host/web/serve.mjs';
 import { fileURLToPath } from 'node:url';
 import { engineTests } from './coverage.mjs';
@@ -186,4 +186,38 @@ test('state relations share comparisons and report both operands', () => {
   expect(stateExpectation(state, { name: 'absent', comparison: 'equal', value: null })).toBeUndefined();
   expect(stateHolds(2, { comparison: 'at-most', value: '3' })).toBe(false);
   expect(stateHolds(2, { comparison: 'in', value: 2 })).toBe(false);
+});
+
+test('unarranged accepts expected resource refusals and 4xx/5xx answer fetch fixtures (LLP 1156.007)', async () => {
+  const base = { failures: {}, failed: {}, mutations: {}, faults: { 'https://api.test/ok': 0, 'https://api.test/err': 0 }, journal: 0 };
+  const withResourceFailure = { ...base, failures: { feed: 1 }, failed: { feed: 'HTTP 404' } };
+  expect(unarranged(base, withResourceFailure)).toEqual(['resource feed was refused once (HTTP 404)']);
+  expect(unarranged(base, withResourceFailure, { refusals: ['feed'] })).toEqual([]);
+  const failedOnly = { ...base, failed: { feed: 'HTTP 500' } };
+  expect(unarranged(base, failedOnly)).toEqual(['resource feed failed (HTTP 500)']);
+  expect(unarranged(base, failedOnly, { refusals: ['feed'] })).toEqual([]);
+  // A 4xx/5xx answer fetch fault counts as an arranged failure, whereas a 200 fixture does not silence unrelated resource refusals.
+  const mark = await failureMark({
+    state: async () => ({
+      failures: { feed: { count: 1 } },
+      failed: { feed: 'HTTP 404' },
+      faults: [
+        { prefix: 'https://api.test/ok', hits: 2, response: { status: 200 } },
+        { prefix: 'https://api.test/err', hits: 1, response: { status: 404 } },
+      ],
+    }),
+    op: async () => ({ next: 5 }),
+  });
+  expect(mark.faults).toEqual({ 'https://api.test/ok': 0, 'https://api.test/err': 1 });
+  expect(unarranged(base, mark)).toEqual([]);
+  const okOnly = await failureMark({
+    state: async () => ({
+      failures: { feed: { count: 1 } },
+      failed: { feed: 'HTTP 500' },
+      faults: [{ prefix: 'https://api.test/ok', hits: 2, response: { status: 200 } }],
+    }),
+    op: async () => ({ next: 5 }),
+  });
+  expect(okOnly.faults).toEqual({ 'https://api.test/ok': 0 });
+  expect(unarranged(base, okOnly)).toEqual(['resource feed was refused once (HTTP 500)']);
 });

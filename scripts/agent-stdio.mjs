@@ -11,6 +11,7 @@ import { resolveApp, executableName, linuxBinary, bakeOutput, bakeTarget } from 
 import { linuxRebuild, macSandboxed, nativeBuild, ownVerb, planOverride, rebuildCommand, refuseBuild } from './agent-build.mjs';
 import { refuseStale, refuseBackendOrigin, refuseBinaryBackend, proofProductChanges, unchecked, packagedBuildChanges, depInfoChanges, depInfoNewer, newerThan, shown, bakedSettingChanges, watchedNewer } from './agent-launch.mjs';
 import { androidBinary, androidDeploy, apkRecord } from './agent-android.mjs';
+import { iosTouchInput, openTouches } from '../host/apple/touches.mjs';
 import { nativeKey, mouseContact } from './agent-keys.mjs';
 import { activateIOS, backgroundIOS, jsonLines, hangup, waitAtMost, bootRefusal, REPLY_MS } from './agent-wire.mjs';
 import { platformWheel } from './agent-wheel.mjs';
@@ -91,7 +92,7 @@ export async function phoneScreenshot({ ask, udid, appId, container, path, windo
 /** One JSON-lines protocol over stdio on desktop hosts, or a phone's outbound socket. `reader`: on Android, the app
  * on the Canvas reader (its APK), not the Linux host headless; unsaid, EXACT_ANDROID_READER decides (how a script
  * that opens a drive says it). */
-export async function openStdio({ host, plan, world, size, app, env: extra = {}, session, documents = [], device = false, phone: pick, reader = !!process.env.EXACT_ANDROID_READER, onProcess }) {
+export async function openStdio({ host, plan, world, size, app, env: extra = {}, session, documents = [], device = false, phone: pick, touch = 'agent', reader = !!process.env.EXACT_ANDROID_READER, onProcess }) {
   const a = resolveApp(app);
   const linux = host === 'linux', android = host === 'android'; // @ref LLP 1107 — Android: the Linux host on a phone, under adb
   const windows = host === 'windows', portable = linux || windows || android;
@@ -128,7 +129,7 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
   else if (!device && process.env.EXACT_MAC_BIN) unchecked(host, 'EXACT_MAC_BIN');
   if (device && (plan || extra.EXACT_PLAN || extra.EXACT_ASSETS)) throw new Error('a phone cannot read host-local plan/assets paths; use --url or its embedded app');
   const ph = device ? phone(pick) : null;
-  if (device) {
+  const installPhoneApp = () => {
     const installed = spawnSync('xcrun', ['devicectl', 'device', 'install', 'app', '--device', ph.udid, deviceBundle], { encoding: 'utf8' });
     if (installed.status !== 0) throw new Error(`device install: ${installed.stderr || installed.stdout || installed.error?.message}`);
     if (world) {
@@ -137,7 +138,7 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
       if (copied.status !== 0) throw new Error(`phone world copy: ${copied.stderr || copied.error || copied.stdout}`);
       extra = { ...extra, EXACT_WORLD: '~/tmp/exact-agent.world' };
     }
-  }
+  };
   // A Mac bundle carries its own assets (bundle.mjs copies the capture into Contents/Resources); a bare binary
   // reads the capture of this target directory, which another one's build did not write.
   const assets = windows ? dirname(bin) : linux || android ? a.dir
@@ -160,6 +161,12 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
   }
   Object.assign(env, extra);
   const bridge = device ? await phoneBridge() : null, droid = android ? androidDeploy(a, bin, { ...env, ...extra }) : null;
+  let touches = null;
+  try {
+    if (device && touch !== 'agent') {
+      touches = await openTouches({ udid: ph.udid, appId: a.id, device: true, installApp: installPhoneApp });
+    } else if (device) installPhoneApp();
+  } catch (error) { bridge?.close(); throw error; }
   const launched = Date.now(); let closing = false;
   const child = device
     ? spawn('xcrun', ['devicectl', 'device', 'process', 'launch', '--quiet', '--console', '--terminate-existing', '--device', ph.udid,
@@ -194,7 +201,7 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
       child.stdin.on('error', () => {});
       try { child.stdin.end(); if (device) child.kill('SIGTERM'); } catch {}
     }
-    return closingPromise = closeStdio(child, closed, droid?.cleanup);
+    return closingPromise = closeStdio(child, closed, droid?.cleanup).finally(() => touches?.close());
   };
   const cleanupAfterExit = () => { if (!closing) void close().catch(error => console.error(`app cleanup: ${error.message}`)); };
   child.on('error', error => { fail(`launch failed: ${error.message}`); cleanupAfterExit(); });
@@ -234,7 +241,7 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
       });
     };
     return {
-      host, reader: android && bin.endsWith('.apk'), boot: ready.boot, hostLines, gpuMs: () => null, sessions: ready.sessions ?? null, state, plan,
+      host, touches, touch, reader: android && bin.endsWith('.apk'), boot: ready.boot, hostLines, gpuMs: () => null, sessions: ready.sessions ?? null, state, plan,
       background: device ? ms => backgroundIOS(lines, ms, a.id, bundle => activateIOS(['devicectl', 'device', 'process', 'launch', '--device', ph.udid], bundle)) : undefined,
       ask, reveal: (id) => ask({ op: 'reveal', id }),
       async input(id, kind, opts) {
@@ -244,6 +251,8 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
         }
         if (kind === 'pictureinpicture') { const r = await ask({ op: 'tap', id, pictureInPicture: opts.pictureInPicture }); if (r.error) throw new Error(r.error); return r; }
         const guest = { selector: opts.selector, x: opts.x, y: opts.y, entity: opts.entity, world: opts.world, under: opts.under, phase: opts.phase };
+        const gesture = iosTouchInput({ ask, touches, touch, id, kind, opts, guest, abandon: why => lines.fail(why) });
+        if (gesture) return gesture;
         const phase = ['down', 'move', 'hold', 'up', 'cancel'].includes(kind);
         // A contact that went down with `mouse` (a drag's) holds the left button through its phases (review A1).
         // A button's point and the modifiers held, as the request says them (#107).

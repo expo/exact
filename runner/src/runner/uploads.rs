@@ -48,23 +48,19 @@ pub struct UploadMark {
 
 /// The failure of an upload cut off before its reply.
 pub(super) fn interrupted() -> Failure {
-    Failure {
-        code: FailureCode::Error,
-        message: "the upload was cut off before its reply; it is not sent again at these arguments"
-            .into(),
-        reason: "interrupted".into(),
-    }
+    Failure::source(
+        FailureCode::Error,
+        "the upload was cut off before its reply; it is not sent again at these arguments".into(),
+        "interrupted".into(),
+    )
 }
 
 /// The failure of an upload asked again whose answer is no longer kept.
 fn already_sent() -> Failure {
-    Failure {
-        code: FailureCode::Error,
-        message: format!(
+    Failure::source(FailureCode::Error, format!(
             "already sent: the upload went out at these arguments, and of a resource's uploads only the newest {ANSWERS_KEPT} keep their answers; give new arguments to send it again"
         ),
-        reason: "already-sent".into(),
-    }
+        "already-sent".into())
 }
 
 /// The marks, oldest first, shared with the checkpoints that copy them
@@ -294,18 +290,15 @@ impl<D: DataSource> Runner<D> {
         let failed = |f: &Failure| {
             Err(super::RunnerError::Data {
                 resource: self.plan.str(self.resource_row(i).name).to_string(),
-                error: super::DataError::Failed(f.code, f.message.clone(), f.reason.clone()),
+                error: f.clone().into(),
             })
         };
         Some(match mark? {
             UploadEnd::Answered(v) if self.check_shape(i, v).is_ok() => {
                 Ok(crate::Answer::Now(v.clone()))
             }
-            UploadEnd::Answered(_) => failed(&Failure {
-                code: FailureCode::Shape,
-                message: "the upload's answer no longer fits the resource's shape; it is not sent again at these arguments".into(),
-                reason: "interrupted".into(),
-            }),
+            UploadEnd::Answered(_) => failed(&Failure::source(FailureCode::Shape, "the upload's answer no longer fits the resource's shape; it is not sent again at these arguments".into(),
+                "interrupted".into())),
             UploadEnd::Failed(f) => failed(f),
             UploadEnd::Sent(_) => failed(&interrupted()),
             UploadEnd::Gone => failed(&already_sent()),

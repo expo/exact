@@ -21,9 +21,7 @@ pub fn local_offset_minutes() -> f64 {
 }
 
 #[cfg(windows)]
-pub fn local_offset_minutes() -> f64 {
-    chrono::Local::now().offset().local_minus_utc() as f64 / 60.0
-}
+pub use windows::local_offset_minutes;
 
 /// Under the agent, the date at the clock's zero (`EXACT_AGENT_EPOCH`, Unix
 /// milliseconds; default 2026-01-01T00:00:00Z) and the agent zone's offset
@@ -70,15 +68,7 @@ pub(crate) fn offset_minutes_at(zone: &str, epoch_ms: f64) -> f64 {
 }
 
 #[cfg(windows)]
-pub(crate) fn offset_minutes_at(zone: &str, epoch_ms: f64) -> f64 {
-    use chrono::{Offset, TimeZone};
-    let Ok(zone) = zone.parse::<chrono_tz::Tz>() else {
-        return 0.0;
-    };
-    zone.timestamp_millis_opt(epoch_ms as i64)
-        .single()
-        .map_or(0.0, |at| at.offset().fix().local_minus_utc() as f64 / 60.0)
-}
+pub(crate) use windows::offset_minutes_at;
 
 /// Place and entropy are sampled at launch. Agent mode bypasses every
 /// platform input, including the system's entropy source.
@@ -144,9 +134,7 @@ fn zone_name(value: &str) -> Option<String> {
         .filter(|meta| meta.is_file())
         .map(|_| name.into());
     #[cfg(windows)]
-    name.parse::<chrono_tz::Tz>()
-        .ok()
-        .map(|zone| zone.name().into())
+    windows::system_zone_id(name).map(|_| name.to_owned())
 }
 
 #[cfg(test)]

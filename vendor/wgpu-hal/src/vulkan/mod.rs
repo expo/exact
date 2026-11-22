@@ -223,6 +223,9 @@ pub struct Instance {
 pub struct Surface {
     swapchain: RwLock<Option<Box<dyn swapchain::Swapchain>>>,
     inner: Box<dyn swapchain::Surface>,
+    // Drop the swapchain and surface before releasing their display.
+    #[cfg(drm)]
+    drm_display: Option<drm::AcquiredDisplay>,
 }
 
 impl Surface {

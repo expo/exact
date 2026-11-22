@@ -774,7 +774,9 @@ impl<D: DataSource> Presenter<D> {
             (session >> 32) as i32,
             origin(content.0),
             origin(content.1),
-            (self.context_menu_at(x / scale, y / scale)).map_or(0, |v| v.0 as i32),
+            (self.context_menu_at(x / scale, y / scale).map(|v| v.0))
+                .or_else(|| self.lift_source_at(x / scale, y / scale))
+                .map_or(0, |id| id as i32),
         ]
     }
 }

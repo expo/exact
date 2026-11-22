@@ -269,6 +269,7 @@ fn census_finds_cross_file_recursion_within_each_crate() {
     assert_eq!(
         walks,
         ["lower/src/lib.rs::node", "lower/src/sharing.rs::nodes"]
+            .map(|path| path.replace('/', std::path::MAIN_SEPARATOR_STR))
     );
 }
 

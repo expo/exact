@@ -1294,18 +1294,26 @@ impl<D: DataSource> Runner<D> {
             .is_some_and(|c| c.owed(ready, on_screen, &style))
     }
 
+    /// Release source recorders and image handles for generations that have ended.
+    /// A hidden window can retire them without requesting another drawing.
+    pub fn retire_canvas_generations(&mut self) {
+        if let Some(canvases) = self.canvases.as_mut() {
+            let retired = canvases.take_retired(&|view| self.kernel.node(view).is_some());
+            if !retired.is_empty() {
+                self.data.canvases_retired(&retired);
+            }
+        }
+    }
+
     /// Run every due draw, in tree order, after this turn's commits and
     /// geometry. `on_screen` is the host's judgement; a frame request waits
     /// for it, every other cause draws regardless (D4).
     pub fn draw_canvases(&mut self, on_screen: &dyn Fn(ViewId) -> bool) {
+        self.retire_canvas_generations();
         let (kernel, dark) = (&self.kernel, self.page_dark());
         let Some(c) = self.canvases.as_mut() else {
             return;
         };
-        let retired = c.take_retired(&|v| kernel.node(v).is_some());
-        if !retired.is_empty() {
-            self.data.canvases_retired(&retired);
-        }
         let ready = self.data.ready();
         let now = self.now_ms;
         let identity = self

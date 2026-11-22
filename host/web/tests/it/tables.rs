@@ -146,3 +146,71 @@ fn a_table_renders_ahead_as_its_elements() {
         }
     }
 }
+
+#[test]
+fn prose_keeps_its_html_structure_and_native_text_runs() {
+    let plan = contract::compile(
+        r#"component Story
+  view
+    article
+      p testId="paragraph" font-weight=500
+        text "Plain "
+        strong
+          text "bold "
+          em "both "
+          strong "heaviest "
+          text "light " font-weight=300
+        em "emphasis"
+      blockquote
+        p "Quoted words"
+      ul list-style="none" testId="list"
+        li "One"
+        li
+          ol
+            li "First"
+"#,
+    )
+    .unwrap();
+    exact_web::link(exact_web_capabilities::ALL);
+    let (host, _) = Host::boot(
+        &plan.encode(),
+        caltrain_data::Caltrain,
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let doc = host.document().unwrap().root;
+    for tag in [
+        "article",
+        "p",
+        "strong",
+        "em",
+        "blockquote",
+        "ul",
+        "ol",
+        "li",
+    ] {
+        assert!(doc.contains(&format!("<{tag} ")), "{tag} in {doc}");
+    }
+    let kernel = host.runner().kernel();
+    let paragraph = kernel
+        .node_by_key(kernel.find_by_test_id("paragraph")[0])
+        .unwrap();
+    let runs = paragraph.text_runs();
+    let styles: Vec<_> = runs
+        .iter()
+        .map(|r| (r.text.as_ref(), r.style.font_weight, r.style.font_style))
+        .collect();
+    use exact_kernel::FontStyle::{Italic, Normal};
+    assert_eq!(
+        styles,
+        [
+            ("Plain ", 500, Normal),
+            ("bold ", 700, Normal),
+            ("both ", 700, Italic),
+            ("heaviest ", 900, Normal),
+            ("light ", 300, Normal),
+            ("emphasis", 500, Italic),
+        ]
+    );
+}

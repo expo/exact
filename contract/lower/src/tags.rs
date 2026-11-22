@@ -92,6 +92,7 @@ pub fn tag(name: &str) -> Option<Tag> {
         "nav" => view(&[], &[(PropId::SemanticTag, "nav")]),
         "section" => view(&[], &[(PropId::SemanticTag, "section")]),
         "footer" => view(&[], &[(PropId::SemanticTag, "footer")]),
+        "p" | "strong" | "em" | "blockquote" | "ul" | "ol" | "li" => crate::prose::tag(name),
         "article" => view(&[], &[(PropId::SemanticTag, "article")]),
         "aside" => view(&[], &[(PropId::SemanticTag, "aside")]),
         "list" => Tag {
@@ -393,14 +394,6 @@ pub fn attr_valued(name: &str, value: &contract_syntax::Expr) -> Option<AttrTarg
     use contract_syntax::Expr;
     if name == "resize" && matches!(value, Expr::Ident(..) | Expr::Call(..)) {
         return Some(AttrTarget::Handler("resize"));
-    }
-    // No `::marker` (CSS Lists 3 §3): every list is already `list-style: none`, so the
-    // reset a stylesheet writes on a `ul` is taken and writes nothing (`lint::unknown_attr`
-    // names the bullet for any other value).
-    if matches!(name, "list-style" | "list-style-type")
-        && matches!(value, Expr::Str(v, _) if v.trim().eq_ignore_ascii_case("none"))
-    {
-        return Some(AttrTarget::Styles(&[]));
     }
     attr(name)
 }
@@ -1145,7 +1138,7 @@ pub(crate) use crate::spelling::{similar_attr, similar_tag};
 pub(crate) fn html_tag(name: &str) -> Option<&'static str> {
     Some(match name {
         "div" => "a flex container is `column` or `row`, and a plain box `view`",
-        "span" | "p" | "strong" | "em" | "b" | "i" => "text is `text`",
+        "span" | "b" | "i" => "text is `text`",
         "label" => {
             "a label is `text` beside its field, and the field is named by `aria-label` (or `aria-labelledby` with the text's `id`)"
         }
@@ -1171,7 +1164,6 @@ pub(crate) fn html_tag(name: &str) -> Option<&'static str> {
         "img" | "picture" => "an image is `image`",
         "a" => "a link is `link`",
         "title" | "meta" => "a page's title and description are `head title=… description=…`",
-        "ul" | "ol" | "li" => "a list is `list` (or a `column` of rows)",
         _ => return None,
     })
 }
@@ -1449,14 +1441,15 @@ impl crate::Lowerer<'_> {
         // Texts and images alone, an `if` or a `for` of them included.
         fn words(node: &Node) -> bool {
             match node {
-                Node::Element { tag, .. } => tag == "text" || tag == "image",
+                Node::Element { tag, .. } => crate::prose::phrasing(tag) || tag == "image",
                 Node::Use { .. } | Node::Children { .. } => false,
                 node => node.children().all(words),
             }
         }
         let has = |name: &str| attrs.iter().any(|a| a.name == name);
         let href = attrs.iter().rev().find(|a| a.name == "href");
-        let run = tag == "text" && parent_tag == Some("text") && href.is_some();
+        let run =
+            tag == "text" && parent_tag.is_some_and(crate::prose::text_container) && href.is_some();
         let block = tag == "link"
             && self.profile != crate::Profile::Terminal
             && !has("role")

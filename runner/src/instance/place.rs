@@ -1,6 +1,6 @@
 //! Source places at the current row keys and element ids (LLP 1029.000.002 D1).
 use super::{Active, Child, NodeInst, Row, Tree};
-use exact_kernel::{Kernel, PropId, ViewId};
+use exact_kernel::{Kernel, PropId};
 use exact_plan::{PlaceKind, PlaceStepsId, Plan, RegionsId, Value};
 use std::collections::BTreeMap;
 
@@ -55,10 +55,11 @@ struct Walk<'a, F> {
     plan: &'a Plan,
     kernel: &'a Kernel,
     path: Vec<Part>,
+    rows: Vec<usize>,
     visit: F,
 }
 
-impl<F: FnMut(ViewId, &[Part])> Walk<'_, F> {
+impl<F: FnMut(&NodeInst, &[Part], &[usize])> Walk<'_, F> {
     fn append(&mut self, step: PlaceStepsId) {
         let start = self.path.len();
         let mut next = Some(step);
@@ -105,7 +106,7 @@ impl<F: FnMut(ViewId, &[Part])> Walk<'_, F> {
                     } else {
                         self.append(step);
                     }
-                    (self.visit)(node.view, &self.path);
+                    (self.visit)(node, &self.path, &self.rows);
                     self.siblings(&node.children);
                     if let Some(list) = node.list() {
                         list.visit_rows(&mut |region, row| self.row(region, row));
@@ -126,7 +127,9 @@ impl<F: FnMut(ViewId, &[Part])> Walk<'_, F> {
             let parent = self.path.len();
             self.append(step);
             self.path.push(Part::Row(row.key.clone(), row.dup));
+            self.rows.push(row.frame.index.expect("row position"));
             self.siblings(&row.roots);
+            self.rows.pop();
             self.path.truncate(parent);
         }
     }
@@ -137,12 +140,13 @@ impl Tree {
         &self,
         plan: &Plan,
         kernel: &Kernel,
-        visit: impl FnMut(ViewId, &[Part]),
+        visit: impl FnMut(&NodeInst, &[Part], &[usize]),
     ) {
         Walk {
             plan,
             kernel,
             path: Vec::new(),
+            rows: Vec::new(),
             visit,
         }
         .siblings(&self.children);

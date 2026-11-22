@@ -34,7 +34,12 @@ extension NodeView {
     /// Every node box among `views`, held or not.
     static func structural(_ views: [PlatformView]) -> [NodeView] { views.compactMap { $0 as? NodeView } }
     /// The children a reader of this box finds (`committed`).
-    package var childNodes: [NodeView] { Self.committed(container.subviews, reader: self) }
+    package var childNodes: [NodeView] {
+        #if os(macOS)
+        if semanticTag == "tr", let cells = presenter?.dataTables.children(of: self) { return cells }
+        #endif
+        return Self.committed(container.subviews, reader: self)
+    }
     /// Every child box, held or not (`structural`).
     var structuralChildren: [NodeView] { Self.structural(container.subviews) }
 
@@ -42,7 +47,12 @@ extension NodeView {
     /// past the containers and scroll views a box holds its children in.
     var nodeSuperview: NodeView? {
         var at = superview
-        while let v = at, !(v is NodeView) { at = v.superview }
+        while let v = at, !(v is NodeView) {
+            #if os(macOS)
+            if let cell = v as? DataTableCell { return cell.home }
+            #endif
+            at = v.superview
+        }
         return at as? NodeView
     }
 
@@ -130,6 +140,7 @@ extension NodeView {
     func invalidateText() {
         #if os(macOS)
         readerParagraph?.invalidatePaint()
+        inlineAccessibility = nil
         #else
         if let presenter, presenter.applying { presenter.changedText.insert(id) }
         #endif

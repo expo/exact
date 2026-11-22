@@ -31,6 +31,7 @@ public struct Batch {
     public var landing = false
     /// A store write this batch's commits made has landed: the app's other sessions refresh (LLP 1030.004 D2).
     public var stored = false
+    public var windowState: [String: String]?
     public var announced: [String] = []
     /// Store refresh acknowledged no runner commit; keep the current timers.
     public var unchanged = false
@@ -88,6 +89,7 @@ public struct Batch {
     public var input: Double? = nil
     /// Failure lines the session writes to the unified log, each once (LLP 1142 D4).
     public var alerts: [String] = []
+    public var budgetWarning: String?
     /// The journal's other lines, for the unified log at a lower level (LLP 1143).
     public var journal: [String] = []
     package var frameWorkTiming: FrameWorkTiming?
@@ -175,6 +177,8 @@ package typealias TopLayerGeometry = (frames: [TopLayerFrame], modal: Int?, back
 /// one-shot at the C boundary; a call after it is refused by the library by
 /// name, never a trap.
 package final class Runtime {
+    private var launchWindowName = "main"
+    private var launchWindowRooted = false
     package let rt: ExactRuntime
     private(set) package var destroyed = false
     package let completions = RuntimeDoor()
@@ -830,7 +834,24 @@ package final class Runtime {
         return on { read(exact_host_back_to(rt, source, destination, now)) }
     }
     package func launch(_ location: String) { on { () -> Void in let n = write(location); _ = exact_set_launch_location(rt, n) } }
-    package func launchWindow(_ name: String, rooted: Bool) { on { () -> Void in let n = write(name); _ = exact_set_launch_window(rt, n, rooted ? 1 : 0) } }
+    package func restoreWindowState(_ archive: [String: String]) {
+        guard let state = try? JSONEncoder().encode(archive) else { return }
+        on { () -> Void in
+            var bytes = Data(launchWindowName.utf8)
+            let nameLength = bytes.count
+            bytes.append(state)
+            _ = write(bytes)
+            _ = exact_set_launch_window(rt, nameLength, launchWindowRooted ? 1 : 0, state.count)
+        }
+    }
+    package func launchWindow(_ name: String, rooted: Bool) {
+        on { () -> Void in
+            launchWindowName = name
+            launchWindowRooted = rooted
+            let n = write(name)
+            _ = exact_set_launch_window(rt, n, rooted ? 1 : 0, 0)
+        }
+    }
     /// `rtl` nil: the strings table's direction.
     package func launchDirection(rtl: Bool?) { on { () -> Void in _ = exact_set_launch_direction(rt, rtl.map { $0 ? 1 : 0 } ?? 2) } }
     package func naturalText(_ natural: Bool) { on { () -> Void in _ = exact_set_natural_text(rt, natural ? 1 : 0) } }

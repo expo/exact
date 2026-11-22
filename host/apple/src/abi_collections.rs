@@ -50,8 +50,10 @@ impl<D: DataSource> Bridge<D> {
     /// bottom) — and f32 top, right, bottom, left), one layout. And the
     /// containing blocks they give subtrees (LLP 1115.002 D8.2): kind 4
     /// with f32 width, height and, for each, 0 for a size, 1 for a maximum,
-    /// 2 for a content-fit limit that an authored size may exceed, or 3 for a
-    /// position-area's region (`BlockAxis::Region`), or 4 to fit the root's border box to the allocation;
+    /// 2 for a content-fit limit that an authored size may exceed, 3 for a
+    /// position-area's region (`BlockAxis::Region`), 4 to fit the root's
+    /// border box to the allocation, or 5 for the axis a host sizes to the
+    /// content (`BlockAxis::Content`);
     /// then a u32 tactic: four two-bit side indices, top/right/bottom/left
     /// (28 bytes including view and kind). Kind 5 takes a block back.
     /// Kinds 6 and 13 place a block (LLP 1123 D2):
@@ -75,7 +77,8 @@ impl<D: DataSource> Bridge<D> {
     /// `exact_kernel::encode_registration` writes it, refused as an update is.
     /// Kind 23 says how a split shows a block's route against its stack's
     /// top (LLP 1127 D8): its first f32 1 beside it, 2 under a pane over
-    /// it, 0 in its stack.
+    /// it, 0 in its stack. Kind 24 sizes a table header’s column in points.
+    /// NaN restores automatic sizing.
     pub fn covers(&mut self, len: usize) -> u32 {
         let bytes = self.input.get(..len).unwrap_or(&[]);
         let out = if let Ok(records) = records(bytes) {
@@ -121,6 +124,13 @@ impl<D: DataSource> Bridge<D> {
                             _ => exact_kernel::BlockShown::InStack,
                         },
                     )),
+                    24 => {
+                        let width = edge(8);
+                        restyles.push((
+                            view,
+                            Restyle::TableColumn((!width.is_nan()).then_some(width)),
+                        ));
+                    }
                     10 => lists.push((view, Some([edge(8), edge(12)]))),
                     11 => lists.push((view, None)),
                     1 => {
@@ -131,6 +141,10 @@ impl<D: DataSource> Bridge<D> {
                     12 => covers.push((
                         view,
                         Some(exact_kernel::HostCover::Gutter([edge(12), edge(16)])),
+                    )),
+                    25 => covers.push((
+                        view,
+                        Some(exact_kernel::HostCover::RowSpacing([edge(8), edge(16)])),
                     )),
                     3 => {
                         let inset = exact_kernel::HostCover::Inset([edge(8), edge(16)]);
@@ -353,13 +367,15 @@ impl<D: DataSource> Bridge<D> {
 }
 
 /// One axis of a host block from its wire length and policy: 0 a size, 1 a
-/// maximum, 2 a content-fit limit, 3 a position-area's region, 4 a pane's border box.
+/// maximum, 2 a content-fit limit, 3 a position-area's region, 4 a pane's
+/// border box, 5 the axis a container sizes to the content.
 fn block_axis(length: f32, policy: f32) -> exact_kernel::BlockAxis {
     match policy {
         0.0 => exact_kernel::BlockAxis::Is(length),
         2.0 => exact_kernel::BlockAxis::Fit(length),
         3.0 => exact_kernel::BlockAxis::Region(length),
         4.0 => exact_kernel::BlockAxis::Fill(length),
+        5.0 => exact_kernel::BlockAxis::Content(length),
         _ => exact_kernel::BlockAxis::AtMost(length),
     }
 }

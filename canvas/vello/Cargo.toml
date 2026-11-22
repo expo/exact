@@ -22,8 +22,7 @@ exact-canvas = { path = ".." }
 # vello 0.10, patched (vendor/vello): precompiled pipelines, bump buffers
 # sized to the scene, a backdrop and premultiplied output in the fine stage.
 vello = { package = "exact-vello", path = "../../vendor/vello" }
-# vello 0.10 pins wgpu 29, as the Linux host's painter has it. No `wgsl`:
-# the module carries no WGSL front end.
+# The vendored Vello uses wgpu 29. Its precompiled shaders need no WGSL front end.
 wgpu = { version = "29", default-features = false, features = ["std", "metal"] }
 wgpu-hal = { version = "29", default-features = false, features = ["metal"] }
 objc2 = "0.6"

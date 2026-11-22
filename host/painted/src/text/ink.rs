@@ -491,12 +491,13 @@ impl Index {
             + self.leaf_inputs.capacity() * size_of::<f32>()
     }
 
-    pub fn glyphs<'a>(&self, p: &'a Paragraph, chunk: usize) -> (&'a [LayoutGlyph], f32) {
+    pub fn glyphs<'a>(&self, p: &'a Paragraph, chunk: usize) -> (&'a [LayoutGlyph], f32, u32) {
         let (line, first) = self.chunks.get(chunk).copied().unwrap_or((chunk, 0));
         let glyphs = p.layouts().glyphs_of(&p.layouts().lines[line]);
         (
             &glyphs[first..(first + GLYPHS_PER_CHUNK).min(glyphs.len())],
             p.baselines[line],
+            p.layouts().lines[line].run_base,
         )
     }
 

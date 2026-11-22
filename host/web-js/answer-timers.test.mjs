@@ -29,6 +29,30 @@ export const fetchWith = (grants, input, init) => { const armed = signalDeadline
   return { dir, tsf, held };
 }
 
+test('a browser promise runs its reactions under the answer that attached them', async () => {
+  const { dir, tsf } = await load();
+  try {
+    const browser = Promise.resolve('ready'), resolve = Promise.resolve, call = {};
+    let reaction;
+    try {
+      // WebKit 26 returns the browser promise unchanged when a Promise subclass resolves it.
+      Promise.resolve = function (value) {
+        return this === tsf.Promise && value === browser ? browser : resolve.call(this, value);
+      };
+      tsf.answering.call = call;
+      const answer = tsf.owned(browser);
+      expect(tsf.Promise.resolve(answer)).toBe(answer);
+      reaction = answer.then(value => [value, tsf.answering.promiseCall]);
+    } finally {
+      tsf.answering.call = null;
+      Promise.resolve = resolve;
+    }
+    const [value, owner] = await reaction;
+    expect(value).toBe('ready');
+    expect(owner).toBe(call);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("an answer's timer is a clock entry it owns, and only timers out count for no clock", async () => {
   const { dir, tsf, held } = await load();
   try {

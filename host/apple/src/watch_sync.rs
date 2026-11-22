@@ -499,7 +499,7 @@ fn validated(
 fn state_type(plan: &Plan, name: &str) -> Result<exact_plan::TypesId, Refusal> {
     plan.slots
         .iter()
-        .find(|s| s.persist && plan.str(s.name) == name)
+        .find(|s| s.persist == exact_plan::PersistScope::App && plan.str(s.name) == name)
         .map(|s| s.ty)
         .ok_or(Refusal::Invalid)
 }

@@ -73,7 +73,7 @@ pub(crate) fn check_node(
     let find = |name: &str| attrs.iter().find(|a| a.name == name);
     let (draggable, data) = (find("draggable"), find("dataTransfer"));
     if let Some(d) = draggable {
-        let run = matches!(parent_tag, Some("text" | "time"));
+        let run = parent_tag.is_some_and(crate::prose::text_container);
         let boxed = tags::tag(tag).is_some_and(|t| {
             matches!(
                 t.node_type,

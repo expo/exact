@@ -233,9 +233,13 @@ pub(crate) fn empty_fresh_tree(app_id: &str) -> Result<(), DataError> {
         _ => {}
     }
     let kv = ibex2::kv::FileStore::new(tree.join("kv"));
-    exact_data::storage::seed_persisted(|name, value| {
-        ibex2::kv::KvStore::set(&kv, exact_data::storage::PERSISTED_SCOPE, name, value)
-    })?;
+    exact_data::storage::seed_persisted(
+        &tree,
+        |name, value| {
+            ibex2::kv::KvStore::set(&kv, exact_data::storage::PERSISTED_SCOPE, name, value)
+        },
+        |name, value| crate::host::system::secret_backend(&tree).write(name, Some(value)),
+    )?;
     emptied.push(tree);
     Ok(())
 }

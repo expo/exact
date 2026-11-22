@@ -95,7 +95,7 @@ export const checkoutLine = (exact2) => {
 /** What a failed JS-target web build (`host/web-js/build.mjs`) said that is the app's to act on, from its stderr: the
  * types app.ts imports when rewritten, warnings, the diagnostics, then the compiler's warnings. Every compiler error is
  * kept with its quoted line and caret, as `contract build` prints them. Cargo's progress, a rustc warning's excerpt and
- * Bun's trace (a frame and its version line) are left out; with no diagnostic, the last three lines stand for one. */
+ * Bun's trace are omitted. Without a recognized diagnostic, keep the last three lines of raw stderr. */
 export function webBuildFailure(stderr) {
   const ambientDiagnostic = (l) => /^.+:\d+:\d+: .+ is unavailable in data sources[;:]/.test(l);
   const all = (stderr ?? '').trim().split('\n').filter((l) => ambientDiagnostic(l) || !/^\s*(Compiling|Finished|Running)/.test(l) && !compilerWarnings(l).length);
@@ -131,9 +131,17 @@ export function webBuildFailure(stderr) {
     i = last = end - 1;
   }
   // The bundler's refusal, in the words the type check uses (`Error: ` is its wrapper).
-  const reason = (message.length ? message : lines.slice(-3)).map((l) => l.replace(/^Error: (?=module outside captured app: )/, '')).join('\n');
   const types = all.filter((l) => /^app\.contract\.d\.ts: /.test(l));
-  return [...types, ...warnings, reason, ...compilerWarnings(stderr)];
+  const compiler = compilerWarnings(stderr);
+  if (!message.length) {
+    const raw = (stderr ?? '').trimEnd();
+    if (!raw) return [];
+    const tail = raw.split(/\r?\n/).slice(-3);
+    const earlier = [...types, ...warnings, ...compiler].filter((l) => !tail.includes(l));
+    return [...earlier, ...tail];
+  }
+  const reason = message.map((l) => l.replace(/^Error: (?=module outside captured app: )/, '')).join('\n');
+  return [...types, ...warnings, reason, ...compiler];
 }
 
 /** A drive's lines for the compiler's `warnings` (`compilerWarnings`) of the app in `dir` built for `host`: the

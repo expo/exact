@@ -77,6 +77,7 @@ pub struct Bridge<D: DataSource> {
     /// The date and place last told before a boot (`set_launch_time`,
     /// `set_launch_place`): a runner booted later reads them from its first settle.
     launch_facts: exact_runner::time::Launch,
+    restore_window: Vec<(String, Vec<u8>)>,
     /// A share claimed before the boot, and whether its files move from an inbox (`share_land`).
     cold_share: Option<(exact_runner::share_in::Claimed, bool)>,
     /// The host's live clock while it owns time, kept for every boot (`set_live_clock`)
@@ -131,6 +132,7 @@ impl<D: DataSource> Bridge<D> {
             preferences: exact_runner::Preferences::NONE,
             launch_layout: crate::host::LaunchLayout::NONE,
             launch_facts: exact_runner::time::Launch::NONE,
+            restore_window: Vec::new(),
             cold_share: None,
             live_clock: None,
             wait_kinds: 0,
@@ -782,6 +784,10 @@ impl<D: DataSource> Bridge<D> {
             Some(io) => (io.endow)(data.grants(), data.app_id(), carried.is_none()),
             None => crate::store::Endowed::none(),
         };
+        let mut snapshot = snapshot;
+        if carried.as_ref().is_none_or(|c| c.fresh_state) {
+            self.seed_window_state(&mut snapshot);
+        }
         let fonts = self.fonts;
         let fonts_ctx = self.fonts_ctx;
         let control_text = self.control_text;
@@ -914,6 +920,7 @@ impl<D: DataSource> Bridge<D> {
         self.presenter_hooks(&mut candidate.host, &candidate.hooks);
         self.wake = candidate.hooks.wake.map(|w| (w, candidate.hooks.wake_ctx));
         self.executor = executor;
+        self.restore_window.clear();
         let batch = Host::ending(self.host.replace(candidate.host), candidate.batch);
         self.launch_layout.insets = None;
         self.adopt_app_module();

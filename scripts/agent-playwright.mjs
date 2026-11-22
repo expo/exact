@@ -411,8 +411,17 @@ export async function openPlaywrightWeb({ browser: name, plan, world, size, url:
         mouseAt = null;
         for (const keys of heldKeys.values()) for (const key of [...keys].reverse()) await page.keyboard.up(key).catch(() => {});
         heldKeys.clear();
-        await page.evaluate(async (keep) => { sessionStorage.clear(); if (keep) return; localStorage.clear(); await Promise.all((await indexedDB.databases?.() ?? []).map(x => x.name && new Promise(ok => { const r = indexedDB.deleteDatabase(x.name); r.onsuccess = r.onerror = r.onblocked = ok; }))); }, keep);
-        if (!keep) await context.clearCookies();
+        if (!keep) {
+          await page.evaluate(async () => {
+            sessionStorage.clear();
+            localStorage.clear();
+            await Promise.all((await indexedDB.databases?.() ?? []).map(({ name }) => name && new Promise(done => {
+              const request = indexedDB.deleteDatabase(name);
+              request.onsuccess = request.onerror = request.onblocked = done;
+            })));
+          });
+          await context.clearCookies();
+        }
         const destination = withEpoch(withFaults(keep ? page.url() : address.href, failFetch), epoch);
         await installFaults(failFetch ?? (keep ? undefined : facts.failFetch ?? ''));
         hostLines.length = 0;

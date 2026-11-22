@@ -246,7 +246,7 @@ export const draftFields = (before, after, touched, states) => typedFields(befor
 export function persistedStates(dir) {
   const names = [];
   for (const line of (readIn(dir, 'app.contract') ?? '').split('\n')) {
-    const m = line.replace(/\s\/\/.*$/, '').match(/^\s*state\s+([A-Za-z_][\w-]*)\s*(?::[^=]*)?=.*\spersist\s*$/);
+    const m = line.replace(/\s\/\/.*$/, '').match(/^\s*state\s+([A-Za-z_][\w-]*)\s*(?::[^=]*)?=.*\spersist(?:\s+window)?\s*$/);
     if (m) names.push(m[1]);
   }
   return names;
@@ -1036,7 +1036,8 @@ export function report({ host, built, compiler = [], server, tested, checks, ax 
     ...(many ? [`${plural(findings + largeCount, 'finding')}: ${kindsSaid}`] : [findings && plural(findings, 'finding'), largeCount && `${largeCount} at the largest text size`])].filter(Boolean);
   const [top, topCount] = byKind[0] ?? [];
   if (many && acceptable.has(top) && topCount * 2 > findings + largeCount) out.push(`most findings are ${top} (${topCount}): fix them, or, where the design means them, app.json's verify.accept takes each by its kind and testId (docs/recipes/tests.md)`);
-  out.push(problems ? `verify: ${plural(problems, 'problem')} (${why.join(', ')}${failedTests || broken ? '' : '; the tests passed'})${axSaid.tree ? `, and ${axSaid.tree}` : ''} in ${secs(ms)}` : `verify: clean${axSaid.tree ? `, but ${axSaid.tree}` : ''} in ${secs(ms)}`);
+  const caveats = [axSaid.tree, scrolled?.error && 'scrolling was not measured'].filter(Boolean).join('; ');
+  out.push(problems ? `verify: ${plural(problems, 'problem')} (${why.join(', ')}${failedTests || broken ? '' : '; the tests passed'})${caveats ? `, and ${caveats}` : ''} in ${secs(ms)}` : `verify: clean${caveats ? `, but ${caveats}` : ''} in ${secs(ms)}`);
   // Counted problems never fail a run (LLP 1116.020 D4) unless the caller gates on them: `--strict` (LLP 1156.001 D1). A
   // finding verify.accept takes is not counted; a compiler warning is, and is fixed in the source, never accepted.
   return { lines: out, problems, exit: failedTests || broken || (strict && problems) ? 1 : 0, full: grouped ? full : [], axUnread: axSaid.unread };

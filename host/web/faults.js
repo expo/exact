@@ -18,7 +18,43 @@ export function fixtureResponse(response) {
     if (['set-cookie', 'set-cookie2'].includes(name.toLowerCase())) throw new Error('answer fetch: set-cookie and set-cookie2 headers are not exposed on every host');
     if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) || typeof value !== 'string' || /[^\t\x20-\x7e\x80-\xff]/.test(value)) throw new Error('answer fetch: invalid header name or value');
   }
-  return { status: response.status, headers: { ...response.headers }, body: response.body };
+  const after = response.afterMs;
+  if (after !== undefined && (!Number.isInteger(after) || after < 0 || after > 0xffffffff)) throw new Error('answer fetch: invalid delay in milliseconds');
+  return { status: response.status, headers: { ...response.headers }, body: response.body, ...(after ? {afterMs: after} : {}) };
+}
+
+/** Once the body is ready, its owner waits on the session clock. Other fetches by the same
+ * answer keep their original counts. An abort wakes this fetch even with the clock frozen. */
+export function delayFixture(runtime, wait, due, signal) {
+  const { clock } = runtime;
+  if (!clock) throw new Error('a delayed fetch fixture requires the session clock');
+  if (signal?.aborted) return Promise.reject(signal.reason);
+  if (clock.now >= due) return Promise.resolve();
+  const { call, kind, loose } = wait ?? {};
+  const counted = kind && call?.[kind] > 0;
+  function timer(delta) {
+    if (call) {
+      if (counted) call[kind] -= delta;
+      call.timers = (call.timers ?? 0) + delta;
+    }
+    loose?.(-delta);
+    call?.recount?.();
+  }
+  return new Promise((resolve, reject) => {
+    const live = () => !call?.settled && (call?.wanted?.() ?? true);
+    const entry = { due, once: true, data: true, call, live, action() { finish(); resolve(); return true; } };
+    const abort = () => { finish(); reject(signal.reason); };
+    function finish() {
+      signal?.removeEventListener('abort', abort);
+      const index = clock.timers.indexOf(entry);
+      if (index >= 0) clock.timers.splice(index, 1);
+      timer(-1);
+    }
+    clock.timers.push(entry);
+    timer(1);
+    signal?.addEventListener('abort', abort, { once: true });
+    if (!clock.agent) runtime.drive?.();
+  });
 }
 
 /** A synthetic final response still passes the executor's normal body reader. */
@@ -46,8 +82,15 @@ export function answeredFetch(fixture, request) {
   return wrap(opaque ? Response.error() : new Response(request.method === 'HEAD' || [204, 205, 304].includes(fixture.status) ? null : new TextEncoder().encode(fixture.body), fixture));
 }
 
+const isFailureResponse = response => !response || response.status >= 400;
+
 /** Launch lines carry the current table through a reload. */
-export const faultSpecOf = faults => (faults ?? []).map(f => [f.prefix, f.times ?? '-', f.left ?? '-', f.hits, f.armed ? 1 : 0, f.response ? JSON.stringify(f.response) : '', f.failureHits ?? (f.response ? 0 : f.hits)].join('\t')).join('\n');
+export const faultSpecOf = faults => (faults ?? []).map(f => [f.prefix, f.times ?? '-', f.left ?? '-', f.hits, f.armed ? 1 : 0, f.response ? JSON.stringify(f.response) : '', f.failureHits ?? (isFailureResponse(f.response) ? f.hits : 0), ...(f.method === undefined ? [] : [f.method])].join('\t')).join('\n');
+
+function fixtureMethod(method) {
+  if (method !== undefined && (typeof method !== 'string' || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(method))) throw new Error('answer fetch: method must be an HTTP token');
+  return method;
+}
 
 function tableFits(entries) {
   // Keep room for hit counts to grow without making a later reload fail.
@@ -65,13 +108,16 @@ export function parseFaults(spec) {
   const entries = [];
   for (const line of String(spec).split('\n')) {
     if (!line.trim()) continue;
-    const [prefix, times, left, hits, armed, response, failures] = line.split('\t');
+    const [prefix, times, left, hits, armed, response, failures, method, ...extra] = line.split('\t');
     if (!prefix) throw new Error('fail fetch: each line names a non-empty prefix');
     const n = count(times);
     if (n === 0) throw new Error('fail fetch: `times` is a positive integer');
-    const at = entries.findIndex(f => f.prefix === prefix);
+    fixtureMethod(method);
+    if (extra.length || method !== undefined && !response) throw new Error('answer fetch: invalid method in launch fixture');
+    const at = entries.findIndex(f => f.prefix === prefix && f.method === method);
     if (at >= 0) entries.splice(at, 1);
-    entries.push({ prefix, times: n, left: left === undefined ? n : count(left), hits: count(hits) ?? 0, failureHits: count(failures) ?? (response ? 0 : count(hits) ?? 0), armed: armed !== '0', ...(response ? { response: fixtureResponse(JSON.parse(response)) } : {}) });
+    const parsedResponse = response ? fixtureResponse(JSON.parse(response)) : null;
+    entries.push({ prefix, ...(method === undefined ? {} : {method}), times: n, left: left === undefined ? n : count(left), hits: count(hits) ?? 0, failureHits: count(failures) ?? (isFailureResponse(parsedResponse) ? count(hits) ?? 0 : 0), armed: armed !== '0', ...(parsedResponse ? { response: parsedResponse } : {}) });
   }
   tableFits(entries);
   return entries;
@@ -88,19 +134,26 @@ function launchTable() {
 
 const state = () => globalThis.__exactFaults ??= { entries: launchTable(), log: null, pending: [] };
 const live = f => f.armed && f.left !== 0;
-const longest = (url, answers = true) => state().entries.filter(f => live(f) && (answers || !f.response) && String(url).startsWith(f.prefix)).sort((a, b) => b.prefix.length - a.prefix.length)[0];
+function longest(url, answers = true, method = 'GET') {
+  let best;
+  for (const rule of state().entries) {
+    if (!live(rule) || !answers && rule.response || !url.startsWith(rule.prefix) || rule.method !== undefined && rule.method !== method) continue;
+    if (!best || rule.prefix.length > best.prefix.length || rule.prefix === best.prefix && rule.method !== undefined) best = rule;
+  }
+  return best;
+}
 
 /** Where an injected failure's journal line goes: each host's own journal; lines from before it was set follow. */
 export function setFaultLog(log) { const s = state(); s.log = log; for (const line of s.pending.splice(0)) log(line); }
 const say = line => { const s = state(), log = s.log ?? globalThis.__exactFaultLog; if (log) log(line); else s.pending.push(line); };
 
 /** Select without consuming: admission and response reads can still refuse a fixture. */
-export const matchFault = (url, answers = false) => AGENT_ADMITTED && longest(url, answers);
+export const matchFault = (url, answers = false, method = 'GET') => AGENT_ADMITTED && longest(String(url), answers, method);
 
 /** Count the selected entry only when it supplies the request's outcome. */
 export function countFault(url, entry) {
   entry.hits += 1;
-  if (!entry.response) entry.failureHits = (entry.failureHits ?? 0) + 1;
+  if (isFailureResponse(entry.response)) entry.failureHits = (entry.failureHits ?? 0) + 1;
   if (entry.left !== null) entry.left -= 1;
   say(entry.response ? `fetch answered (driver fixture): ${url}` : faultMessage(url));
   return entry.response ?? true;
@@ -139,23 +192,24 @@ export function faultOp(req) {
   const { entries } = state();
   if (req.answer !== undefined) {
     if (typeof req.answer !== 'string' || !req.answer || /[\t\r\n]/.test(req.answer)) return { malformed: true, error: 'answer fetch needs a URL prefix without tabs or newlines' };
-    let response;
-    try { response = fixtureResponse(req.response); } catch (e) { return { malformed: true, error: e.message }; }
-    const next = entries.filter(f => f.prefix !== req.answer);
-    next.push({ prefix: req.answer, times: null, left: null, hits: 0, failureHits: entries.find(f => f.prefix === req.answer)?.failureHits ?? 0, armed: true, response });
+    let response, method;
+    try { response = fixtureResponse(req.response); method = fixtureMethod(req.method); } catch (e) { return { malformed: true, error: e.message }; }
+    const same = f => f.prefix === req.answer && f.method === method;
+    const next = entries.filter(f => !same(f));
+    next.push({ prefix: req.answer, ...(method === undefined ? {} : {method}), times: null, left: null, hits: 0, failureHits: entries.find(same)?.failureHits ?? 0, armed: true, response });
     try { tableFits(next); } catch (e) { return { malformed: true, error: e.message }; }
     entries.splice(0, entries.length, ...next);
   } else if (req.fail !== undefined) {
     if (typeof req.fail !== 'string' || !req.fail) return { malformed: true, error: 'fail fetch needs a URL prefix' };
     if (req.times !== undefined && !(Number.isInteger(req.times) && req.times >= 1 && req.times <= 0xffffffff)) return { malformed: true, error: 'fail fetch: `times` is a positive integer' };
-    const next = entries.filter(f => f.prefix !== req.fail), times = req.times ?? null;
-    next.push({ prefix: req.fail, times, left: times, hits: 0, failureHits: entries.find(f => f.prefix === req.fail)?.failureHits ?? 0, armed: true });
+    const next = entries.filter(f => f.prefix !== req.fail || f.method !== undefined), times = req.times ?? null;
+    next.push({ prefix: req.fail, times, left: times, hits: 0, failureHits: entries.find(f => f.prefix === req.fail && f.method === undefined)?.failureHits ?? 0, armed: true });
     try { tableFits(next); } catch (e) { return { malformed: true, error: e.message }; }
     entries.splice(0, entries.length, ...next);
   } else if (req.pass !== undefined) {
-    const f = entries.find(f => f.prefix === req.pass);
-    if (!f) return { error: `pass fetch "${req.pass}": no fault was armed for it` };
-    f.armed = false;
+    const matching = entries.filter(f => f.prefix === req.pass);
+    if (!matching.length) return { error: `pass fetch "${req.pass}": no fault was armed for it` };
+    for (const rule of matching) rule.armed = false;
   }
   return { faults: faultsJson() };
 }

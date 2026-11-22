@@ -1,9 +1,8 @@
 //! Why a resource failed, as `failure(x)` answers it (LLP 1109 D3): a code
 //! from a closed vocabulary an app can branch on, the same on every host,
 //! the message the agent's `state.failed` shows, which says more and
-//! differs by host, and the `reason` the source's error named, empty when it
-//! named none: a Snapback refusal's code (`SLOT_FULL`, `E_RULE`), which the
-//! snapback4 driver sets (the author's ruling of 2026-10-12).
+//! differs by host, and a reason. A module turn over budget sets `overrun`.
+//! A source can supply its own reason, such as a Snapback refusal's `SLOT_FULL`.
 //!
 //! A code names what reached the runner. A request's failure (`offline`,
 //! `timeout`, `refused`) or a storage call's (`storage`) is the source's
@@ -95,60 +94,93 @@ impl FailureCode {
     }
 }
 
-/// Why a resource's latest request failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Reason {
+    Source(String),
+    Overrun,
+}
+
+/// Why a resource or mutation's latest request failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Failure {
-    /// Infrastructure class; `exposed_code` supplies Contract's domain code when present.
+    /// The infrastructure class. A source can supply a more specific domain code.
     pub code: FailureCode,
     /// What `failure(x).message` and `state.failed` read.
     pub message: String,
-    /// What `failure(x).reason` reads: the reason the source's error named
-    /// (a Snapback refusal's code), else empty.
-    pub reason: String,
+    reason: Reason,
 }
 
 impl Failure {
+    pub(crate) fn source(code: FailureCode, message: String, reason: String) -> Self {
+        Self {
+            code,
+            message,
+            reason: Reason::Source(reason),
+        }
+    }
+
+    /// The reason the source supplied, or the host's typed refusal.
+    pub fn reason(&self) -> &str {
+        match &self.reason {
+            Reason::Source(value) => value,
+            Reason::Overrun => "overrun",
+        }
+    }
+
+    pub(crate) fn is_overrun(&self) -> bool {
+        matches!(self.reason, Reason::Overrun)
+    }
+
     /// A domain refusal keeps the source's typed code; infrastructure keeps its class.
     pub fn exposed_code(&self) -> &str {
-        if self.reason.is_empty() {
-            self.code.name()
-        } else {
-            &self.reason
+        match &self.reason {
+            Reason::Source(value) if !value.is_empty() => value,
+            _ => self.code.name(),
         }
     }
 
     /// The failure a reply's error makes.
-    pub fn of(error: &RunnerError) -> Failure {
-        let (code, message, reason) = match error {
-            RunnerError::Data { error, .. } => match error {
-                DataError::Failed(code, s, reason) => (*code, s.clone(), reason.clone()),
-                DataError::UnknownSource(s)
-                | DataError::BadArguments(s)
-                | DataError::Unavailable(s)
-                | DataError::DeferredAtBake { message: s, .. }
-                | DataError::Interface(s)
-                | DataError::Overrun(s) => (FailureCode::Error, s.clone(), String::new()),
-            },
-            RunnerError::Shape { resource, why } => (
+    pub fn of(error: &RunnerError) -> Self {
+        match error {
+            RunnerError::Data { error, .. } => Self::from_data(error),
+            RunnerError::Shape { resource, why } => Self::source(
                 FailureCode::Shape,
                 format!("`{resource}` answered outside its shape: {why}"),
                 String::new(),
             ),
-            other => (FailureCode::Error, format!("{other:?}"), String::new()),
-        };
-        Failure {
-            code,
-            message,
-            reason,
+            other => Self::error(format!("{other:?}")),
+        }
+    }
+
+    pub(crate) fn from_data(error: &DataError) -> Self {
+        match error {
+            DataError::Failed(code, message, reason) => {
+                Self::source(*code, message.clone(), reason.clone())
+            }
+            DataError::Overrun(message) => Self {
+                code: FailureCode::Error,
+                message: message.clone(),
+                reason: Reason::Overrun,
+            },
+            DataError::UnknownSource(message)
+            | DataError::BadArguments(message)
+            | DataError::Unavailable(message)
+            | DataError::DeferredAtBake { message, .. }
+            | DataError::Interface(message) => Self::error(message.clone()),
         }
     }
 
     /// An `error` saying `message`, naming no reason.
-    pub fn error(message: String) -> Failure {
-        Failure {
-            code: FailureCode::Error,
-            message,
-            reason: String::new(),
+    pub fn error(message: String) -> Self {
+        Self::source(FailureCode::Error, message, String::new())
+    }
+}
+
+impl From<Failure> for DataError {
+    fn from(failure: Failure) -> Self {
+        match failure.reason {
+            Reason::Overrun => Self::Overrun(failure.message),
+            Reason::Source(reason) => Self::Failed(failure.code, failure.message, reason),
         }
     }
 }

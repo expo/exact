@@ -113,6 +113,7 @@ extension Presenter {
     /// page; else its superview. What inerts or hides a node from
     /// assistive technology is read up it.
     func authoredSuperview(of view: NSView) -> NSView? {
+        if let cell = view as? DataTableCell { return cell.home }
         if let pane = navigation.stackSplit.detailPane, view.superview === pane, navigation.stackSplit.active, let node = view as? NodeView {
             return blocks.parent(of: node)
         }

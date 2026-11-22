@@ -16,7 +16,7 @@ test('the first trap stops the clock and every later call, and is said once', as
   const host = {}, root = { dataset: {} }, said = [], told = [];
   const exact = { onTrap: (error) => told.push(error) };
   const { guardedExports, ModuleStopped } = new Function('host', 'root', 'globalThis', 'console',
-    `${glueDeclarations(boot, ['ModuleStopped', 'guardedExports', 'stopModule'])}\nreturn { guardedExports, ModuleStopped };`)(
+    `${glueDeclarations(boot, ['ModuleStopped', 'StageNotLoaded', 'guardedExports', 'stopModule'])}\nreturn { guardedExports, ModuleStopped };`)(
     host, root, { exact }, { error: (...args) => said.push(args) });
   const wasm = guardedExports(instance.exports);
   expect(wasm.one()).toBe(1);

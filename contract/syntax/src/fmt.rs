@@ -543,8 +543,12 @@ impl<'a> Layout<'a> {
         let indent = self.indents[span.line as usize - 1];
         let mut one = String::new();
         let mut previous = None;
-        for t in self.tokens[start..end].iter().filter(|t| ordinary(t)) {
-            self.append(&mut one, previous, t);
+        let mut tokens = self.tokens[start..end]
+            .iter()
+            .filter(|t| ordinary(t))
+            .peekable();
+        while let Some(t) = tokens.next() {
+            self.append(&mut one, previous, t, tokens.peek().copied());
             previous = Some(t);
         }
         if indent * 2 + one.chars().count() > WIDTH {
@@ -594,7 +598,13 @@ impl<'a> Layout<'a> {
         }
     }
 
-    fn append(&self, out: &mut String, previous: Option<&Token>, token: &Token) {
+    fn append(
+        &self,
+        out: &mut String,
+        previous: Option<&Token>,
+        token: &Token,
+        next: Option<&Token>,
+    ) {
         if let Some(previous) = previous {
             let a = text(previous, self.lines);
             let b = text(token, self.lines);
@@ -604,6 +614,20 @@ impl<'a> Layout<'a> {
                     .position(previous.span)
                     .and_then(|i| self.tokens[..i].iter().rfind(|t| ordinary(t)))
                     .is_some_and(|t| self.attributes.contains(&t.span));
+            // Keep `.` tight after a numeric path index (`tabs.0.stack`) when no digit follows
+            // (lexer.rs only parses a decimal point before an ASCII digit; LLP 1156.007 §5.4).
+            let indexed_dot = b == "."
+                && matches!(previous.kind, TokenKind::Number(_))
+                && self
+                    .position(previous.span)
+                    .and_then(|i| self.tokens[..i].iter().rfind(|t| ordinary(t)))
+                    .is_some_and(|t| t.kind == TokenKind::Punct("."))
+                && !next.is_some_and(|n| {
+                    text(n, self.lines)
+                        .as_bytes()
+                        .first()
+                        .is_some_and(u8::is_ascii_digit)
+                });
             let tight = attr_equals
                 || after_attr_equals
                 || self.type_angles.contains(&token.span)
@@ -613,6 +637,7 @@ impl<'a> Layout<'a> {
                 || matches!(a, "(" | "[")
                 || (self.prefixes.contains(&previous.span) && !(a == "-" && b == "-"))
                 || a == "."
+                || indexed_dot
                 || (b == "." && !matches!(previous.kind, TokenKind::Number(_)))
                 || (b == "("
                     && matches!(previous.kind, TokenKind::Ident(_))
@@ -657,7 +682,8 @@ impl<'a> Layout<'a> {
             let mut printed = String::new();
             let mut previous = None;
             let mut indent = self.indents[line];
-            for &i in &self.by_line[line] {
+            let line_tokens = &self.by_line[line];
+            for (pos, &i) in line_tokens.iter().enumerate() {
                 let t = &self.tokens[i];
                 if let Some(&level) = self.breaks.get(&t.span) {
                     if !printed.is_empty() {
@@ -669,7 +695,11 @@ impl<'a> Layout<'a> {
                     indent = level;
                     previous = None;
                 }
-                self.append(&mut printed, previous, t);
+                let next = line_tokens
+                    .get(pos + 1)
+                    .map(|&j| &self.tokens[j])
+                    .filter(|n| !self.breaks.contains_key(&n.span));
+                self.append(&mut printed, previous, t, next);
                 previous = Some(t);
             }
             let suffix = if let Some(last) = previous {

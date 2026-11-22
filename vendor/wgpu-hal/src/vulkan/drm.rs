@@ -1,8 +1,8 @@
 #![cfg(drm)]
 
-use alloc::{string::ToString, vec::Vec};
-use core::{mem::MaybeUninit, num::NonZeroU32};
-use std::os::fd::{AsFd, BorrowedFd};
+use alloc::{format, string::ToString, sync::Arc};
+use core::num::NonZeroU32;
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 
 use ash::{ext, khr, vk};
 
@@ -20,13 +20,54 @@ impl AsFd for Card {
 impl control::Device for Card {}
 impl drm::Device for Card {}
 
-macro_rules! to_u64 {
-    ($expr:expr) => {{
-        #[allow(trivial_numeric_casts)]
-        let expr = $expr as u64;
-        assert!(size_of_val(&expr) <= size_of::<u64>());
-        expr
-    }};
+// EXACT (EXACT-PATCHES.md, 18). A display can be driven by a different DRM
+// device from the one that renders. Vulkan answers for the connector itself.
+fn connector_display(
+    devices: impl IntoIterator<Item = vk::PhysicalDevice>,
+    connector: u32,
+    mut lookup: impl FnMut(vk::PhysicalDevice) -> Result<vk::DisplayKHR, vk::Result>,
+) -> Result<(vk::PhysicalDevice, vk::DisplayKHR), crate::InstanceError> {
+    let mut failure = None;
+    for device in devices {
+        match lookup(device) {
+            Ok(display) if display != vk::DisplayKHR::null() => return Ok((device, display)),
+            // VK_EXT_acquire_drm_display specifies NULL for an unknown connector
+            // and ERROR_UNKNOWN for another device's fd. The Vulkan loader can
+            // also enumerate an ICD without the display extension (e.g. llvmpipe).
+            Ok(_) | Err(vk::Result::ERROR_UNKNOWN | vk::Result::ERROR_EXTENSION_NOT_PRESENT) => {}
+            Err(error @ vk::Result::ERROR_INITIALIZATION_FAILED) => failure = Some(error),
+            Err(error) => {
+                return Err(crate::InstanceError::with_source(
+                    "Query DRM display".into(),
+                    error,
+                ))
+            }
+        }
+    }
+    let message = format!("No Vulkan display for DRM connector {connector}");
+    Err(match failure {
+        Some(error) => crate::InstanceError::with_source(message, error),
+        None => crate::InstanceError::new(message),
+    })
+}
+
+pub(super) struct AcquiredDisplay {
+    instance: Arc<super::InstanceShared>,
+    device: vk::PhysicalDevice,
+    display: vk::DisplayKHR,
+    // vkAcquireDrmDisplayEXT requires this descriptor to stay open until release.
+    _fd: OwnedFd,
+}
+
+impl Drop for AcquiredDisplay {
+    fn drop(&mut self) {
+        let direct =
+            ext::direct_mode_display::Instance::new(&self.instance.entry, &self.instance.raw);
+        let result = unsafe { (direct.fp().release_display_ext)(self.device, self.display) };
+        if result != vk::Result::SUCCESS {
+            log::warn!("vkReleaseDisplayEXT: {result}");
+        }
+    }
 }
 
 impl super::Instance {
@@ -125,96 +166,34 @@ impl super::Instance {
             ));
         }
 
-        let drm_stat = {
-            let mut stat = MaybeUninit::<libc::stat>::uninit();
-
-            if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } != 0 {
-                return Err(crate::InstanceError::new(
-                    "Unable to fstat drm device".to_string(),
-                ));
-            }
-
-            unsafe { stat.assume_init() }
+        let fd = Card(fd).as_fd().try_clone_to_owned().map_err(|error| {
+            crate::InstanceError::with_source("Duplicate DRM display descriptor".into(), error)
+        })?;
+        let drm = ext::acquire_drm_display::Instance::new(&self.shared.entry, &self.shared.raw);
+        let devices = unsafe { self.shared.raw.enumerate_physical_devices() }.map_err(|error| {
+            crate::InstanceError::with_source("Enumerate Vulkan physical devices".into(), error)
+        })?;
+        let (physical_device, display) =
+            connector_display(devices, connector_id, |device| unsafe {
+                drm.get_drm_display(device, fd.as_raw_fd(), connector_id)
+            })?;
+        unsafe { drm.acquire_drm_display(physical_device, fd.as_raw_fd(), display) }.map_err(
+            |error| crate::InstanceError::with_source("Acquire DRM display".into(), error),
+        )?;
+        let acquired = AcquiredDisplay {
+            instance: Arc::clone(&self.shared),
+            device: physical_device,
+            display,
+            _fd: fd,
         };
-
-        let raw_devices = match unsafe { self.shared.raw.enumerate_physical_devices() } {
-            Ok(devices) => devices,
-            Err(err) => {
-                log::error!("enumerate_adapters: {err}");
-                Vec::new()
-            }
-        };
-
-        let mut physical_device = None;
-
-        for device in raw_devices {
-            let properties2 = vk::PhysicalDeviceProperties2KHR::default();
-
-            let mut drm_props = vk::PhysicalDeviceDrmPropertiesEXT::default();
-            let mut properties2 = properties2.push_next(&mut drm_props);
-
-            unsafe {
-                self.shared
-                    .raw
-                    .get_physical_device_properties2(device, &mut properties2)
-            };
-
-            /*
-                The makedev call is just bit manipulation to combine major and minor device numbers into a Unix device ID.
-                It doesn't perform any filesystem operations, only bitshifting.
-                See: https://github.com/rust-lang/libc/blob/268e1b3810ac07ed637d9005bc1a54e49218c958/src/unix/linux_like/linux/mod.rs#L6049
-                We use the resulting device IDs to check if the Vulkan raw device from enumerate_physical_devices
-                matches the DRM device referred to by our file descriptor.
-            */
-
-            let primary_devid =
-                libc::makedev(drm_props.primary_major as _, drm_props.primary_minor as _);
-            let render_devid =
-                libc::makedev(drm_props.render_major as _, drm_props.render_minor as _);
-
-            // On most platforms, both `*_devid`s and `st_rdev` are `dev_t`s (which is generally
-            // observed to be an unsigned integral type no greater than 64 bits). However, on some
-            // platforms, there divergences from this pattern:
-            //
-            // - `armv7-linux-androideabi`: `dev_t` is `c_ulong`, and `*_devid`s are `dev_t`, but
-            //   `st_rdev` is `c_ulonglong`. So, we can't just do a `==` comparison.
-            // - OpenBSD has `dev_t` on both sides, but is `i32` (N.B., unsigned). Therefore, we
-            //   can't just use `u64::from`.
-            #[allow(clippy::useless_conversion)]
-            if [primary_devid, render_devid]
-                .map(|devid| to_u64!(devid))
-                .contains(&to_u64!(drm_stat.st_rdev))
-            {
-                physical_device = Some(device)
-            }
-        }
-
-        let physical_device = physical_device.ok_or(crate::InstanceError::new(
-            "Failed to find suitable drm device".to_string(),
-        ))?;
-
-        let acquire_drm_display_instance =
-            ext::acquire_drm_display::Instance::new(&self.shared.entry, &self.shared.raw);
-
-        let display = unsafe {
-            acquire_drm_display_instance
-                .get_drm_display(physical_device, fd, connector_id)
-                .expect("Failed to get drm display")
-        };
-
-        unsafe {
-            acquire_drm_display_instance
-                .acquire_drm_display(physical_device, fd, display)
-                .expect("Failed to acquire drm display")
-        }
 
         let display_instance = khr::display::Instance::new(&self.shared.entry, &self.shared.raw);
 
-        let modes = unsafe {
-            display_instance
-                .get_display_mode_properties(physical_device, display)
-                .expect("Failed to get display modes")
-        };
+        let modes =
+            unsafe { display_instance.get_display_mode_properties(physical_device, display) }
+                .map_err(|error| {
+                    crate::InstanceError::with_source("Get DRM display modes".into(), error)
+                })?;
 
         let mut mode = None;
 
@@ -237,16 +216,99 @@ impl super::Instance {
             "Failed to find suitable display mode".to_string(),
         ))?;
 
+        let planes = unsafe {
+            display_instance.get_physical_device_display_plane_properties(physical_device)
+        }
+        .map_err(|e| crate::InstanceError::with_source("Get Vulkan display planes".into(), e))?;
+        let selected = planes.get(plane as usize).ok_or_else(|| {
+            crate::InstanceError::new(format!("Unknown Vulkan display plane {plane}"))
+        })?;
+        let caps = unsafe {
+            display_instance.get_display_plane_capabilities(
+                physical_device,
+                mode.display_mode,
+                plane,
+            )
+        }
+        .map_err(|e| {
+            crate::InstanceError::with_source("Get Vulkan display plane capabilities".into(), e)
+        })?;
+        if !caps
+            .supported_alpha
+            .contains(vk::DisplayPlaneAlphaFlagsKHR::OPAQUE)
+        {
+            return Err(crate::InstanceError::new(
+                "Display plane lacks opaque scanout".into(),
+            ));
+        }
         let create_info = vk::DisplaySurfaceCreateInfoKHR::default()
             .display_mode(mode.display_mode)
             .image_extent(mode.parameters.visible_region)
             .transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
             .alpha_mode(vk::DisplayPlaneAlphaFlagsKHR::OPAQUE)
-            .plane_index(plane);
+            .plane_index(plane)
+            .plane_stack_index(selected.current_stack_index);
 
-        let surface = unsafe { display_instance.create_display_plane_surface(&create_info, None) }
-            .expect("Failed to create DRM surface");
+        let raw = unsafe { display_instance.create_display_plane_surface(&create_info, None) }
+            .map_err(|error| {
+                crate::InstanceError::with_source("Create DRM plane surface".into(), error)
+            })?;
+        let mut surface = self.create_surface_from_vk_surface_khr(raw, None);
+        surface.drm_display = Some(acquired);
+        Ok(surface)
+    }
+}
 
-        Ok(self.create_surface_from_vk_surface_khr(surface, None))
+impl super::Surface {
+    /// Label the next queue presentation on this swapchain for `vkWaitForPresentKHR`.
+    /// Returns false if the swapchain is unconfigured, lacks the extension, or
+    /// already has a label waiting for a presentation.
+    ///
+    /// # Safety
+    ///
+    /// The device must have the `presentId` feature enabled. Each ID must be
+    /// greater than every ID previously presented on this swapchain.
+    pub unsafe fn set_next_present_id(&self, id: core::num::NonZeroU64) -> bool {
+        self.swapchain.write().as_mut().is_some_and(|chain| {
+            chain
+                .as_any_mut()
+                .downcast_mut::<super::swapchain::NativeSwapchain>()
+                .is_some_and(|chain| chain.set_next_present_id(id))
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ash::vk::Handle;
+    use core::error::Error as _;
+
+    #[test]
+    fn query_each_device_for_the_connector() {
+        let devices = [1, 2, 3, 4, 5].map(vk::PhysicalDevice::from_raw);
+        let display = vk::DisplayKHR::from_raw(9);
+        let answer = connector_display(devices, 38, |device| match device.as_raw() {
+            1 => Err(vk::Result::ERROR_UNKNOWN),
+            2 => Ok(vk::DisplayKHR::null()),
+            3 => Err(vk::Result::ERROR_INITIALIZATION_FAILED),
+            4 => Err(vk::Result::ERROR_EXTENSION_NOT_PRESENT),
+            5 => Ok(display),
+            _ => unreachable!(),
+        });
+        assert_eq!(answer.unwrap(), (devices[4], display));
+
+        let absent = connector_display(devices, 38, |_| Ok(vk::DisplayKHR::null())).unwrap_err();
+        assert!(absent.to_string().contains("connector 38"));
+        assert!(absent.source().is_none());
+        let fatal = connector_display(devices, 38, |device| {
+            assert_eq!(device, devices[0]);
+            Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY)
+        })
+        .unwrap_err();
+        assert_eq!(
+            fatal.source().unwrap().to_string(),
+            vk::Result::ERROR_OUT_OF_HOST_MEMORY.to_string()
+        );
     }
 }

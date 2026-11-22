@@ -431,7 +431,7 @@ function refuseInRender(api, owner, unavailable = 'storage') {
 // well before its render starts).
 if (globalThis.__exactRender) {
   answering.refuseStorage = refuseInRender;
-  answering.refuseVisitor = (api, owner) => refuseInRender(api, owner, 'visitor credentials');
+  answering.refuseFetch = (api, owner, unavailable = 'visitor credentials') => refuseInRender(api, owner, unavailable);
 }
 function renderStorage(owner) {
   // What the device rejects before asking storage it rejects here too, so a source that catches it answers alike.

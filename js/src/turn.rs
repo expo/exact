@@ -7,6 +7,7 @@
 //! never ends a turn, an interrupt does (LLP 1048.000 D10). A test times
 //! turns on a ticking clock instead ([`Module::set_turn_step`]).
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -39,7 +40,28 @@ pub(crate) struct Took {
     loading_ms: f64,
 }
 
+pub(crate) fn source_budgets(text: &str) -> Result<BTreeMap<String, f64>, String> {
+    if text.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let budgets: BTreeMap<String, f64> = serde_json::from_str(text)
+        .map_err(|error| format!("exact-js: invalid turnBudgets: {error}"))?;
+    for (source, ms) in &budgets {
+        if !(crate::DEFAULT_BUDGET_MS..=1000.).contains(ms) {
+            return Err(format!(
+                "exact-js: turnBudgets for `{source}` must be 100 to 1000 ms"
+            ));
+        }
+    }
+    Ok(budgets)
+}
+
 impl crate::Module {
+    /// Per-source Hermes turn budgets frozen into this generation's bytecode.
+    pub fn source_budgets(&self) -> &BTreeMap<String, f64> {
+        &self.source_budgets
+    }
+
     /// Times every turn on a clock that moves `step` as each turn starts, and
     /// at no other time: each turn takes one step, of its own time and of
     /// wall, and the steps add up across turns, spending the time a snapshot
@@ -56,9 +78,12 @@ impl crate::Module {
     /// The budget of a turn that starts at `started`: the module's own, or the
     /// time left to a snapshot's deadline; on the ticking clock, what the
     /// snapshot had when it was prepared less the turns' steps.
-    pub(crate) fn turn_budget_ms(&self, started: Instant) -> f64 {
+    pub(crate) fn turn_budget_ms(&self, source: &str, started: Instant) -> f64 {
         let Some((deadline, given)) = self.snapshot_deadline else {
-            return self.budget_ms;
+            return self
+                .budget_ms
+                .or_else(|| self.source_budgets.get(source).copied())
+                .unwrap_or(crate::DEFAULT_BUDGET_MS);
         };
         match self.turn_time.elapsed_ms() {
             Some(ticked) => (given.as_secs_f64() * 1e3 - ticked).max(0.0),
@@ -194,7 +219,7 @@ impl Took {
         let wall_ms = (self.wall_ms - self.loading_ms).max(0.0);
         (wall_ms > backstop).then(|| {
             format!(
-                "waited {:.1} ms of wall ({:.1} ms of its own), over the {backstop} ms a turn may take",
+                "waited {:.1} ms of wall ({:.1} ms of CPU), over the {backstop} ms a turn may take with a {budget_ms} ms turn budget",
                 wall_ms, self.own_ms
             )
         })
@@ -270,6 +295,11 @@ mod tests {
             .over(100.0, false)
             .unwrap()
             .contains("over the 1000 ms a turn may take"));
+        assert!(took(2.0, 4000.0).over(400.0, false).is_none());
+        assert_eq!(
+            took(2.0, 4001.0).over(400.0, false).as_deref(),
+            Some("waited 4001.0 ms of wall (2.0 ms of CPU), over the 4000 ms a turn may take with a 400 ms turn budget")
+        );
         // A snapshot's deadline is wall time.
         assert!(took(10.0, 300.0).over(250.0, true).is_some());
         assert!(took(10.0, 200.0).over(250.0, true).is_none());

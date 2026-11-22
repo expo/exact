@@ -196,3 +196,93 @@ fn focus() -> Result<()> {
         Ok(())
     })
 }
+
+#[test]
+fn scroll_an_overflowing_pane_through_uia() -> Result<()> {
+    use accesskit::{ActionData, Point, Rect, ScrollUnit};
+    use std::{sync::mpsc, time::Duration};
+
+    struct Pane;
+    impl ActivationHandler for Pane {
+        fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
+            let mut tree = get_initial_state();
+            let mut pane = Node::new(Role::ScrollView);
+            pane.set_label("Notes scroller");
+            pane.set_bounds(Rect::new(0., 0., 200., 120.));
+            pane.set_scroll_y_min(0.);
+            pane.set_scroll_y(54.);
+            pane.set_scroll_y_max(216.);
+            pane.add_action(Action::SetScrollOffset);
+            pane.add_action(Action::ScrollDown);
+            pane.add_action(Action::ScrollUp);
+            tree.nodes[1] = (BUTTON_1_ID, pane);
+            Some(tree)
+        }
+    }
+    struct Actions(mpsc::Sender<ActionRequest>);
+    impl ActionHandler for Actions {
+        fn do_action(&mut self, request: ActionRequest) {
+            if request.action != Action::Focus {
+                self.0.send(request).unwrap();
+            }
+        }
+    }
+
+    let (tx, rx) = mpsc::channel();
+    super::scope(WINDOW_TITLE, Pane, Actions(tx), |s| unsafe {
+        let root = s.uia.ElementFromHandle(s.window.0)?;
+        let walker = s.uia.ControlViewWalker()?;
+        let mut pane = walker.GetFirstChildElement(&root)?;
+        while pane.CurrentName()?.to_string() != "Notes scroller" {
+            pane = walker.GetNextSiblingElement(&pane)?;
+        }
+        let pattern: IUIAutomationScrollPattern = pane.GetCurrentPatternAs(UIA_ScrollPatternId)?;
+        assert!(pattern.CurrentVerticallyScrollable()?.as_bool());
+        assert!(!pattern.CurrentHorizontallyScrollable()?.as_bool());
+        assert_eq!(
+            pattern.CurrentHorizontalScrollPercent()?,
+            UIA_ScrollPatternNoScroll
+        );
+        assert_eq!(pattern.CurrentHorizontalViewSize()?, 100.);
+        assert_eq!(pattern.CurrentVerticalScrollPercent()?, 25.);
+        assert!((pattern.CurrentVerticalViewSize()? - 120. / 336. * 100.).abs() < 1e-9);
+
+        pattern.SetScrollPercent(UIA_ScrollPatternNoScroll, 50.)?;
+        let next = || rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let request = next();
+        assert_eq!(request.target_node, BUTTON_1_ID);
+        assert_eq!(request.action, Action::SetScrollOffset);
+        assert_eq!(
+            request.data,
+            Some(ActionData::SetScrollOffset(Point::new(0., 108.)))
+        );
+
+        for (amount, action, unit) in [
+            (
+                ScrollAmount_SmallIncrement,
+                Action::ScrollDown,
+                ScrollUnit::Item,
+            ),
+            (
+                ScrollAmount_LargeDecrement,
+                Action::ScrollUp,
+                ScrollUnit::Page,
+            ),
+        ] {
+            pattern.Scroll(ScrollAmount_NoAmount, amount)?;
+            let request = next();
+            assert_eq!(
+                (request.action, request.data),
+                (action, Some(ActionData::ScrollUnit(unit)))
+            );
+        }
+        assert!(pattern.SetScrollPercent(50., 0.).is_err());
+        assert!(
+            pattern
+                .SetScrollPercent(UIA_ScrollPatternNoScroll, 101.)
+                .is_err()
+        );
+        assert!(rx.try_recv().is_err());
+        Ok(())
+    })
+}

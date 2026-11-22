@@ -732,7 +732,7 @@ impl<D: DataSource> Runner<D> {
             return Ok(change);
         }
         for i in 0..self.slots.len() {
-            if self.plan.slots[i].persist {
+            if self.plan.slots[i].persist == exact_plan::PersistScope::App {
                 let initial = self.eval(self.plan.slots[i].init, &[], &[]).map_err(|e| {
                     e.evaluated(|| {
                         crate::RunnerError::state_initializer(

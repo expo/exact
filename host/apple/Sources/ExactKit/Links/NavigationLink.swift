@@ -280,6 +280,10 @@ package protocol NavigationHosting: AnyObject {
     var transitioning: Bool { get }
     var hasInteractiveTransition: Bool { get }
     var unanimated: Bool { get set }
+    /// A batch inside `startViewTransition()`'s cross-fade: its pushes, pops and presentations land unanimated.
+    var crossFading: Bool { get set }
+    /// Whether `controller` presents a route that is closed and yet to be dismissed.
+    func retires(_ controller: UIViewController) -> Bool
     func isArriving(_ node: NodeView) -> Bool
 
     // The boot owner: `bootOwnerDrawn` answers true only when it holds `ready`.
@@ -461,6 +465,8 @@ package final class NoNavigation: NavigationHosting {
     private var windowless = false, settled = false
     package weak var scrollsToTopSelection: UIScrollView?
     package var unanimated = false
+    package var crossFading = false
+    package func retires(_ controller: UIViewController) -> Bool { false }
 
     package init(_ presenter: Presenter) { self.presenter = presenter }
 

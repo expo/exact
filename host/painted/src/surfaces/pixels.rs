@@ -99,6 +99,7 @@ impl Surfaces {
                         view,
                         crate::canvas2d::CanvasPaint {
                             pixels: Arc::new(pixels),
+                            update: None,
                         },
                     );
                 }

@@ -16,7 +16,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
         let (x, y) = (self.viewport.0 / 2.0, self.viewport.1 / 2.0);
         let _s = Section::begin(c"exact scroll");
         self.driven();
-        self.scrolled = self.prefetching;
+        self.scroll_hold.note_scroll(self.prefetching);
         self.scrolled_at = self.now();
         self.travel.scrolled(dy / self.scale, self.scrolled_at);
         self.p.hold_collections(self.prefetching);
@@ -54,6 +54,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// touch then presses nothing when it lifts.
     pub fn touch(&mut self, action: i32, x: f32, y: f32, tool: i32) {
         let _s = Section::begin(c"exact touch");
+        self.scroll_hold.touch(action);
         self.p.set_pointer_kind(match tool {
             3 => PointerKind::Mouse,
             2 | 4 => PointerKind::Pen,

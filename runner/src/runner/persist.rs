@@ -11,16 +11,17 @@
 //! only when it changes.
 
 use super::*;
-use exact_plan::{TypeKind, TypesId};
+use exact_plan::{PersistScope, TypeKind, TypesId};
 
 /// The most a persisted value's text may hold.
 pub const PERSIST_LIMIT: usize = 16 * 1024;
 
-/// The store's name for persisted state `name`.
-pub(crate) fn state_name(name: &str) -> String {
-    let mut key = String::from(Store::STATE);
-    key.push_str(name);
-    key
+fn state_prefix(scope: PersistScope) -> Option<&'static str> {
+    match scope {
+        PersistScope::None => None,
+        PersistScope::App => Some(Store::STATE),
+        PersistScope::Window => Some(Store::WINDOW_STATE),
+    }
 }
 
 impl<D: DataSource> Runner<D> {
@@ -33,11 +34,12 @@ impl<D: DataSource> Runner<D> {
     /// stored text decodes to its type; else `v`, the initializer's.
     pub(super) fn restore_persisted(&mut self, i: usize, v: Value) -> Value {
         let row = &self.plan.slots[i];
-        if !row.persist {
+        let Some(prefix) = state_prefix(row.persist) else {
             return v;
-        }
+        };
         let name = self.plan.str(row.name);
-        let Some(text) = self.store.kept(&state_name(name)) else {
+        let key = format!("{prefix}{name}");
+        let Some(text) = self.store.kept(&key) else {
             return v;
         };
         let stored = (text.len() <= PERSIST_LIMIT)
@@ -61,12 +63,13 @@ impl<D: DataSource> Runner<D> {
     /// oversized ones once until they change.
     pub(super) fn persist_slots(&mut self) {
         for i in 0..self.plan.slots.len() {
-            if !self.plan.slots[i].persist {
+            let row = &self.plan.slots[i];
+            let Some(prefix) = state_prefix(row.persist) else {
                 continue;
-            }
+            };
+            let name = self.plan.str(row.name);
             let mut text = String::new();
             encode(&self.slots[i], &mut text);
-            let name = self.plan.str(self.plan.slots[i].name);
             if text.len() > PERSIST_LIMIT {
                 if self.persist_oversized.get(&i) == Some(&text) {
                     continue;
@@ -81,7 +84,7 @@ impl<D: DataSource> Runner<D> {
                 continue;
             }
             self.persist_oversized.remove(&i);
-            let key = state_name(name);
+            let key = format!("{prefix}{name}");
             if self.store.kept(&key) == Some(text.as_bytes()) {
                 continue;
             }
@@ -96,6 +99,22 @@ impl<D: DataSource> Runner<D> {
         self.log_store_writes(since);
     }
 
+    /// The archive a host may give the window system. A removed declaration
+    /// may still have a store entry, but no longer belongs in the archive.
+    pub fn window_state(&self) -> std::collections::BTreeMap<&str, &str> {
+        self.plan
+            .slots
+            .iter()
+            .filter(|row| row.persist == PersistScope::Window)
+            .filter_map(|row| {
+                let name = self.plan.str(row.name);
+                let key = format!("{}{name}", Store::WINDOW_STATE);
+                let text = std::str::from_utf8(self.store.kept(&key)?).ok()?;
+                Some((name, text))
+            })
+            .collect()
+    }
+
     /// What the store keeps for persisted state `name`, decoded: `None` when
     /// `name` is not a persisted root slot, or nothing decodable is kept.
     pub fn persisted(&self, name: &str) -> Option<Value> {
@@ -103,8 +122,13 @@ impl<D: DataSource> Runner<D> {
             .plan
             .slots
             .iter()
-            .find(|s| s.persist && self.plan.str(s.name) == name)?;
-        decode(&self.plan, row.ty, self.store.kept(&state_name(name))?)
+            .find(|s| s.is_persisted() && self.plan.str(s.name) == name)?;
+        let prefix = state_prefix(row.persist)?;
+        decode(
+            &self.plan,
+            row.ty,
+            self.store.kept(&format!("{prefix}{name}"))?,
+        )
     }
 }
 

@@ -93,6 +93,8 @@ struct App<D: DataSource> {
     keep_running: bool,
     /// The window is not shown: hidden by a close, or since a hidden launch.
     hidden: bool,
+    /// DWM is composing this window for its first frame after a show request.
+    pending_show: Option<lifecycle::PendingShow>,
     /// The app's one instance, which later launches reach.
     instance: Option<crate::instance::Instance>,
     cold_documents: Vec<String>,
@@ -166,7 +168,7 @@ pub(crate) fn boot_phase(name: &str) {
     }
 }
 
-pub(super) fn run<D: DataSource + Default + 'static>(
+pub(super) fn run<D: DataSource + Default + 'static, const DEVELOPMENT: bool>(
     name: &str,
     opening: crate::Window,
     plan: &[u8],
@@ -248,7 +250,7 @@ pub(super) fn run<D: DataSource + Default + 'static>(
     {
         std::thread::sleep(Duration::from_millis(200));
     }
-    let mut config = Config::from_env(plan, compat);
+    let mut config = Config::from_bake::<DEVELOPMENT>(plan, compat);
     config.preferences = Some(exact_runner::Preferences {
         screen_reader: if config.agent {
             exact_runner::ScreenReader::Unknown
@@ -268,7 +270,7 @@ pub(super) fn run<D: DataSource + Default + 'static>(
         eprintln!("exact-windows: EXACT_AGENT_WINDOW_TAP requires a measured window run");
         return 1;
     }
-    if !config.windowed() {
+    if DEVELOPMENT && !config.windowed() {
         crate::displays::install_headless();
         return crate::clipboard::run_headless::<D>(&mut config, started);
     }
@@ -378,6 +380,7 @@ pub(super) fn run<D: DataSource + Default + 'static>(
         closing: false,
         keep_running: opening.keep_running,
         hidden,
+        pending_show: None,
         instance,
         cold_documents,
         tray: None,
@@ -680,6 +683,9 @@ impl<D: DataSource + Default + 'static> App<D> {
         }
         if !p.last_frame_succeeded() {
             return Ok(());
+        }
+        if let Some(pending) = self.pending_show.take() {
+            pending.reveal()?;
         }
         if painting && handed {
             self.presents.drew(p, direct, self.started);

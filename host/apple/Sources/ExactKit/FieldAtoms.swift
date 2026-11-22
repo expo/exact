@@ -519,7 +519,113 @@ extension NodeView {
                   range: range, held: held)
         return true
     }
+
+    /// Each inline atom in a read-only `markup="markdown"` paragraph, deduplicated
+    /// by source range so an icon + label pair yields one accessible element.
+    struct ReaderAtomRun {
+        let url: String
+        let range: NSRange
+        let role: String
+        let label: String
+        let title: String
+    }
+
+    func readerAtomRuns() -> [ReaderAtomRun] {
+        guard props["markup"] == "markdown", props["atoms"] != nil, isParagraph else { return [] }
+        var out: [ReaderAtomRun] = []
+        var seen: [NSRange] = []
+        for run in paragraphSpec().runs {
+            guard run.href.hasPrefix(Self.readerAtomScheme),
+                  let (detail, range) = Self.readerAtom(run.href),
+                  !seen.contains(range) else { continue }
+            seen.append(range)
+            let role = detail.count > 5 ? (detail[5] as? String ?? "button") : "button"
+            let title = detail.count > 6 ? (detail[6] as? String ?? "") : ""
+            let aria = detail.count > 7 ? (detail[7] as? String ?? "") : ""
+            let shown = detail.count > 8 ? (detail[8] as? String ?? "") : ""
+            let label = !aria.isEmpty ? aria : (!shown.isEmpty ? shown : (detail[1] as? String ?? ""))
+            out.append(ReaderAtomRun(url: run.href, range: range, role: role, label: label, title: title))
+        }
+        return out
+    }
+
+    var hasReaderAtoms: Bool {
+        guard props["markup"] == "markdown", props["atoms"] != nil, isParagraph else { return false }
+        return paragraphSpec().runs.contains { $0.href.hasPrefix(Self.readerAtomScheme) }
+    }
+
+    #if os(macOS)
+    func readerAtomElements() -> [NSAccessibilityElement] {
+        readerAtomRuns().map { ReaderAtomAccessibility(owner: self, atom: $0) }
+    }
+    #else
+    func readerAtomElements() -> [UIAccessibilityElement] {
+        readerAtomRuns().map { ReaderAtomAccessibility(owner: self, atom: $0) }
+    }
+    #endif
 }
+
+#if os(macOS)
+private final class ReaderAtomAccessibility: NSAccessibilityElement, InspectionOwned {
+    weak var owner: NodeView?
+    let atom: NodeView.ReaderAtomRun
+    var inspectionViewId: UInt32? { owner?.id }
+    init(owner: NodeView, atom: NodeView.ReaderAtomRun) {
+        self.owner = owner; self.atom = atom
+        super.init()
+        setAccessibilityParent(owner)
+        setAccessibilityRole(atom.role == "link" ? .link : .button)
+        setAccessibilityLabel(atom.label)
+        if !atom.title.isEmpty { setAccessibilityHelp(atom.title) }
+    }
+    override func accessibilityAttributeNames() -> [NSAccessibility.Attribute] {
+        super.accessibilityAttributeNames() + [NSAccessibility.Attribute(rawValue: "AXLanguage"), .enabled]
+    }
+    override func accessibilityAttributeValue(_ attribute: NSAccessibility.Attribute) -> Any? {
+        if attribute.rawValue == "AXLanguage" { return owner?.presenter?.documentLanguage }
+        if attribute == .enabled, let owner, owner.disabled || owner.inert || owner.ariaUnavailable { return false }
+        return super.accessibilityAttributeValue(attribute)
+    }
+    override func accessibilityFrame() -> NSRect {
+        guard let owner, let window = owner.window,
+              let rect = owner.readerAtomFrame(atom.range.location, NSMaxRange(atom.range)) else { return .zero }
+        return window.convertToScreen(owner.convert(rect, to: nil))
+    }
+    override func accessibilityPerformPress() -> Bool {
+        guard let owner, !owner.disabled, !owner.inert, owner.handlers.contains("atompress") else { return false }
+        let url = atom.url
+        DispatchQueue.main.async { [weak owner] in _ = owner?.pressReaderAtom(url) }
+        return true
+    }
+}
+#else
+private final class ReaderAtomAccessibility: UIAccessibilityElement, InspectionOwned {
+    weak var owner: NodeView?
+    let atom: NodeView.ReaderAtomRun
+    var inspectionViewId: UInt32? { owner?.id }
+    init(owner: NodeView, atom: NodeView.ReaderAtomRun) {
+        self.owner = owner; self.atom = atom
+        super.init(accessibilityContainer: owner)
+        accessibilityLanguage = owner.presenter?.documentLanguage
+        accessibilityLabel = atom.label
+        accessibilityHint = atom.title.isEmpty ? nil : atom.title
+        var traits: UIAccessibilityTraits = atom.role == "link" ? .link : .button
+        if owner.disabled || owner.inert || owner.ariaUnavailable { traits.insert(.notEnabled) }
+        accessibilityTraits = traits
+    }
+    override var accessibilityFrame: CGRect {
+        get {
+            guard let owner, let rect = owner.readerAtomFrame(atom.range.location, NSMaxRange(atom.range)) else { return .zero }
+            return UIAccessibility.convertToScreenCoordinates(rect, in: owner)
+        }
+        set {}
+    }
+    override func accessibilityActivate() -> Bool {
+        guard let owner, !owner.disabled, !owner.inert, owner.handlers.contains("atompress") else { return false }
+        return owner.pressReaderAtom(atom.url)
+    }
+}
+#endif
 
 extension ExactSession {
     /// An atom's press, to a node that hears `atompress` (host kind 59, LLP 1045.000 D7).

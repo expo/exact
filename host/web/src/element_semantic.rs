@@ -12,14 +12,41 @@ pub(super) fn element(tag: &str) -> Option<&'static str> {
 }
 
 const ELEMENTS: &[&str] = &[
-    "time", "main", "header", "nav", "section", "footer", "article", "aside", "dialog",
+    // HTML grouping and phrasing content.
+    "p",
+    "strong",
+    "em",
+    "blockquote",
+    "ol",
+    "ul",
+    "li",
+    // Landmarks, time and dialog.
+    "time",
+    "main",
+    "header",
+    "nav",
+    "section",
+    "footer",
+    "article",
+    "aside",
+    "dialog",
     // @ref LLP 1021 D1 — HTML's separator, void: the kernel gives it no
     // children, and its UA rows are the node's own.
     "hr",
     // @ref LLP 1153 D7 — HTML's own elements, laid out by the browser's
     // table algorithm and its UA sheet (`display: table` and the rest);
     // the plan carries no grid rows for them.
-    "table", "caption", "thead", "tbody", "tfoot", "tr", "th", "td", "dl", "dt", "dd",
+    "table",
+    "caption",
+    "thead",
+    "tbody",
+    "tfoot",
+    "tr",
+    "th",
+    "td",
+    "dl",
+    "dt",
+    "dd",
 ];
 
 /// The tags element.rs `element` can give a node of type `node_type` as data
@@ -49,7 +76,7 @@ pub fn tags_by_data(node_type: NodeType, prop: PropId) -> Vec<&'static str> {
 pub(super) fn not_block(tag: &str) -> bool {
     matches!(
         tag,
-        "table" | "caption" | "thead" | "tbody" | "tfoot" | "tr" | "th" | "td"
+        "li" | "table" | "caption" | "thead" | "tbody" | "tfoot" | "tr" | "th" | "td"
     )
 }
 

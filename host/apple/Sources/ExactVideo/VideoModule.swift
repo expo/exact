@@ -259,6 +259,7 @@ final class VideoView: VideoPlaying, VisibilityRefreshing {
         guard let owner, let module = VideoModule.shared, let handle,
               owner.presenter?.elements.waits(owner) != true else { return }
         var props = owner.props
+        if let label = owner.authoredLabel { props["accessibilityLabel"] = label } else { props.removeValue(forKey: "accessibilityLabel") }
         if props["src"] != autoplaySource {
             autoplaySource = props["src"]
             autoplay.load(autoplay: props["autoplay"] == "true")

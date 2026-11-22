@@ -123,6 +123,27 @@ test("an aborted write's catch keeps its store write when the aborting commit is
 }, 180_000);
 
 // A `seen` body that reads the store, asks `/slow` with `options`, and says whether an earlier ask was still out.
+test('a saved goal is visible before the original GET delivers its captured reply', async () => {
+  await drive("return fetch(origin + '/value').then(r => r.text());", origin => `test "an old read completes after a save"
+  answer fetch "${origin}/value" method GET with 200 "10" after 200
+  answer fetch "${origin}/value" method PUT with 200 "20"
+  clock data
+  expect text "seen" == ""
+  tap "renew"
+  clock data
+  expect text "other" == "20"
+  answer fetch "${origin}/value" method GET with 200 "30"
+  clock +100
+  expect text "seen" == ""
+  clock +100
+  expect text "seen" == "10"
+  expect text "other" == "20"
+  tap "next"
+  clock data
+  expect text "seen" == "30"
+`, "return store.get('readers.value') ?? '';", { method: 'PUT' });
+}, 180_000);
+
 function slowReader(options) {
   return `store.get('readers.value');
     if (out > 0) overlapped = true;
@@ -134,7 +155,7 @@ function slowReader(options) {
 // module's) and whose `other` source is `other`'s, with `renew` as above, and run `steps` on the web host. How many
 // times `/slow` was asked: the server holds the first until `/release`, or answers it at once after one. With `gate`,
 // it answers `/value` only once a `/slow` has arrived.
-async function drive(seen, steps, other = "return 'none';", { gate = false } = {}) {
+async function drive(seen, steps, other = "return 'none';", { gate = false, method = 'GET' } = {}) {
   if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
   const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/store-readers-test-'));
   const cors = { headers: { 'Access-Control-Allow-Origin': '*' } }, held = [];
@@ -186,7 +207,7 @@ export function answer(name: string, _args: unknown[], store: Store): any {
     ${other}
   }
   if (name === 'renew') return (async () => {
-    const reply = await fetch(${JSON.stringify(server.url.origin + '/value')});
+    const reply = await fetch(origin + '/value', { method: ${JSON.stringify(method)} });
     store.set('readers.value', await reply.text());
     await fetch(origin + '/release');
     return { ok: true };
@@ -195,7 +216,7 @@ export function answer(name: string, _args: unknown[], store: Store): any {
 }
 `);
   const file = resolve(dir, 'app.test.contract');
-  writeFileSync(file, steps);
+  writeFileSync(file, typeof steps === 'function' ? steps(server.url.origin) : steps);
   let page;
   try {
     const build = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'readers', '--out', resolve(dir, 'dist'), '--render', 'none'], {

@@ -81,6 +81,36 @@ final class GalleryUITests: XCTestCase {
                            try XCTUnwrap(reading["controlCenter"] as? CGFloat), accuracy: 0.5,
                            "The label is vertically centered beside the control")
         }
+        // Beside the list, once it is scrolled too, the docked range bar ends level with the list's inline bar
+        if sidebarIsBesideThePage(app) {
+            let rangeBar = app.otherElements["range-bar-css"].firstMatch, sidebarBar = app.navigationBars["UI Gallery"]
+            let large = sidebarBar.frame.height
+            sidebar.swipeUp(velocity: .slow)
+            XCTAssertLessThan(sidebarBar.frame.height, large, "The list's title is inline once it is scrolled")
+            XCTAssertEqual(rangeBar.frame.minY, sidebarBar.frame.minY, accuracy: 0.5, "The range bar is docked where the list's bar starts")
+            XCTAssertEqual(rangeBar.frame.maxY, sidebarBar.frame.maxY, accuracy: 0.5, "The two headers end on one line")
+            let docked = rangeBar.frame, row = sidebar.cells["sidebar-css"]
+            // UIKit keeps a hidden list hidden at the next launch, so show it again from the page's bar, at the
+            // page's top, however this test ends
+            addTeardownBlock {
+                let scroll = app.otherElements["gallery"].firstMatch, show = app.buttons["Show Sidebar"]
+                for _ in 0..<3 where !row.isHittable && !show.isHittable { scroll.swipeDown(velocity: .fast) }
+                if show.isHittable { show.tap() }
+                XCTAssertTrue(row.isHittable, "The list shows beside the page again")
+            }
+            app.buttons["Hide Sidebar"].tap()
+            XCTAssertFalse(row.isHittable, "The list is hidden")
+            XCTAssertEqual(rangeBar.frame.minY, docked.minY, accuracy: 0.5, "Hiding the list moves nothing in the page's header")
+            XCTAssertEqual(rangeBar.frame.height, docked.height, accuracy: 0.5, "Hiding the list keeps the range bar's height")
+            // The scrolled page hides its bar and the list's button with it, so drag the list in from the left edge
+            let edge = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.002, dy: 0.5))
+            edge.press(forDuration: 0.1, thenDragTo: edge.withOffset(CGVector(dx: 320, dy: 0)))
+            XCTAssertTrue(row.isHittable, "The list shows again")
+            XCTAssertEqual(rangeBar.frame.minY, docked.minY, accuracy: 0.5, "Dragging the list in moves nothing in the page's header")
+            XCTAssertEqual(rangeBar.frame.height, docked.height, accuracy: 0.5, "Dragging the list in keeps the range bar's height")
+            // Hide it again, as a tap on the page would only dismiss a list laid over it
+            app.buttons["Hide Sidebar"].tap()
+        }
         range.buttons["standard"].tap()
         XCTAssertTrue(range.buttons["standard"].isSelected, "The control takes a tap over the scrolled page")
         // A compact window collapses the split to one stack, whose back button returns to the list

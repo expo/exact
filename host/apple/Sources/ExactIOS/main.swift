@@ -265,10 +265,25 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
 }
 
 final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
+    private static let restorationActivity = "dev.exact.window-state"
     var window: UIWindow?
+
+    func stateRestorationActivity(for scene: UIScene) -> NSUserActivity? {
+        let archive = ExactIOS.session.windowState
+        guard !archive.isEmpty else { return nil }
+        let activity = NSUserActivity(activityType: Self.restorationActivity)
+        activity.isEligibleForHandoff = false
+        activity.addUserInfoEntries(from: ["windowState": archive])
+        return activity
+    }
+
     func sceneWillEnterForeground(_ scene: UIScene) { ExactLaunch.shared.opened() }
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
         guard let ws = scene as? UIWindowScene else { return }
+        if let activity = session.stateRestorationActivity, activity.activityType == Self.restorationActivity,
+           let archive = activity.userInfo?["windowState"] as? [String: String] {
+            ExactIOS.session.restoreWindowState(archive)
+        }
         ExactEnv.stamp("scene")
         ExactLaunch.shared.sceneConnected()
         // @ref LLP 1038 D8 — consume the launch URL before constructing the view.

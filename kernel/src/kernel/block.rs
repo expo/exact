@@ -35,8 +35,8 @@ use crate::error::{KernelError, LayoutError};
 use crate::generated::SafeAreaIgnore;
 use crate::id::{NodeFlags, Offer, ViewId};
 use crate::layout::{self, LayoutMirror, LayoutReceipt};
-use crate::style::resolve_calc;
-use taffy::style::{BoxSizing, LengthPercentageAuto as Lpa, Position};
+use crate::style::{calc_has_percent, resolve_calc};
+use taffy::style::{BoxSizing, CompactLength, LengthPercentageAuto as Lpa, Position};
 use taffy::util::{MaybeResolve, ResolveOrZero};
 
 #[path = "reservation.rs"]
@@ -61,13 +61,25 @@ pub enum BlockAxis {
     /// overflow it (whether it does is what picks the option). Percentages
     /// use it, and an authored size is the author's.
     Region(f32),
+    /// The axis a host sizes to the box's content (an arranged pane's, LLP
+    /// 1123 D7), measured as `Region` is. The size this answers is the basis
+    /// of the box's own percentages on the axis, so they are cyclic (CSS
+    /// Sizing 3 §5.2.1): `auto` for a preferred size and `none` for a maximum
+    /// that holds one, and a minimum's percentage terms resolved against
+    /// zero; the size the host then gives is their basis.
+    Content(f32),
 }
 
 impl BlockAxis {
     /// The length the host gave, the size or the maximum.
     pub fn length(self) -> f32 {
         match self {
-            Self::Is(v) | Self::Fill(v) | Self::AtMost(v) | Self::Fit(v) | Self::Region(v) => v,
+            Self::Is(v)
+            | Self::Fill(v)
+            | Self::AtMost(v)
+            | Self::Fit(v)
+            | Self::Region(v)
+            | Self::Content(v) => v,
         }
     }
 
@@ -80,6 +92,7 @@ impl BlockAxis {
             BlockAxis::AtMost(_) => BlockAxis::AtMost(v),
             BlockAxis::Fit(_) => BlockAxis::Fit(v),
             BlockAxis::Region(_) => BlockAxis::Region(v),
+            BlockAxis::Content(_) => BlockAxis::Content(v),
         }
     }
 }
@@ -475,6 +488,7 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
     let block = block.less(clearance(arena, slot));
     block.tactic.apply(s);
     let _env = crate::style::LayoutEnv::set(arena.env());
+    cyclic(block, s);
     let in_flow = s.position != Position::Absolute;
     if s.position == Position::Static {
         s.position = Position::Relative;
@@ -513,9 +527,15 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
     let capped = |axis: BlockAxis, auto: bool| match axis {
         BlockAxis::AtMost(_) => true,
         BlockAxis::Fit(_) => auto,
-        BlockAxis::Is(_) | BlockAxis::Fill(_) | BlockAxis::Region(_) => false,
+        BlockAxis::Is(_) | BlockAxis::Fill(_) | BlockAxis::Region(_) | BlockAxis::Content(_) => {
+            false
+        }
     };
-    if let BlockAxis::AtMost(most) | BlockAxis::Fit(most) | BlockAxis::Region(most) = block.width {
+    if let BlockAxis::AtMost(most)
+    | BlockAxis::Fit(most)
+    | BlockAxis::Region(most)
+    | BlockAxis::Content(most) = block.width
+    {
         unplaced(&mut s.inset.left, &mut s.margin.left);
         unplaced(&mut s.inset.right, &mut s.margin.right);
         if in_flow {
@@ -526,12 +546,57 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
             s.max_size.width = ceiling(most, edges.horizontal_axis_sum(), s.max_size.width, most);
         }
     }
-    if let BlockAxis::AtMost(most) | BlockAxis::Fit(most) | BlockAxis::Region(most) = block.height {
+    if let BlockAxis::AtMost(most)
+    | BlockAxis::Fit(most)
+    | BlockAxis::Region(most)
+    | BlockAxis::Content(most) = block.height
+    {
         unplaced(&mut s.inset.top, &mut s.margin.top);
         unplaced(&mut s.inset.bottom, &mut s.margin.bottom);
         if capped(block.height, s.size.height.is_auto()) {
             s.max_size.height = ceiling(most, edges.vertical_axis_sum(), s.max_size.height, most);
         }
+    }
+}
+
+/// A `Content` axis's root percentages, which its answer would decide, as
+/// CSS takes a cyclic percentage (CSS Sizing 3 §5.2.1): `auto` for a
+/// preferred size and `none` for a maximum that holds one, and a minimum's
+/// percentage terms resolved against zero. A length and a sizing keyword
+/// keep theirs.
+fn cyclic(block: HostBlock, s: &mut taffy::style::Style) {
+    let cyclic = |d: taffy::Dimension| {
+        let raw = d.into_raw();
+        raw.tag() == CompactLength::PERCENT_TAG
+            || (raw.is_calc() && calc_has_percent(raw.calc_value()))
+    };
+    let clear =
+        |size: &mut taffy::Dimension, min: &mut taffy::Dimension, max: &mut taffy::Dimension| {
+            if cyclic(*size) {
+                *size = taffy::Dimension::auto();
+            }
+            if cyclic(*min) {
+                // A length, zero included: `auto` would let an aspect ratio's automatic minimum grow the box to its content
+                let floor = min.maybe_resolve(Some(0.0), resolve_calc).unwrap_or(0.0);
+                *min = taffy::Dimension::length(floor.max(0.0));
+            }
+            if cyclic(*max) {
+                *max = taffy::Dimension::auto();
+            }
+        };
+    if let BlockAxis::Content(_) = block.width {
+        clear(
+            &mut s.size.width,
+            &mut s.min_size.width,
+            &mut s.max_size.width,
+        );
+    }
+    if let BlockAxis::Content(_) = block.height {
+        clear(
+            &mut s.size.height,
+            &mut s.min_size.height,
+            &mut s.max_size.height,
+        );
     }
 }
 
@@ -1159,7 +1224,7 @@ fn used_in(block: HostBlock, clear: [f32; 4], l: &taffy::tree::Layout) -> (f32, 
     let axis = |axis: BlockAxis, end: f32| match axis {
         BlockAxis::Is(length) | BlockAxis::Fill(length) => length,
         BlockAxis::AtMost(most) => end.clamp(0.0, most),
-        BlockAxis::Fit(_) | BlockAxis::Region(_) => end.max(0.0),
+        BlockAxis::Fit(_) | BlockAxis::Region(_) | BlockAxis::Content(_) => end.max(0.0),
     };
     (
         axis(

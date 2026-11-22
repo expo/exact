@@ -124,6 +124,48 @@ fn the_next_launch_reads_back_what_the_last_kept() {
 }
 
 #[test]
+fn window_state_is_restored_only_from_its_window_and_survives_a_peer_refresh() {
+    let source = SRC.replace("18 persist", "18 persist window");
+    let new_window = |snapshot| {
+        Runner::boot_stored(
+            contract::compile(&source).unwrap().redecode().unwrap(),
+            (),
+            Kernel::with_monospace(),
+            snapshot,
+            Default::default(),
+            "/",
+        )
+        .unwrap()
+    };
+    let shared = pair("tipPercent", "40");
+    let window = pair("#window.tipPercent", "25");
+    let mut first = new_window(vec![shared.clone(), window.clone()]);
+    let mut second = new_window(vec![shared]);
+    assert_eq!(first.slot("tipPercent"), Some(&Value::Number(25.0)));
+    assert_eq!(second.slot("tipPercent"), Some(&Value::Number(18.0)));
+
+    second.act("tip", vec![Value::Number(30.0)]).unwrap();
+    second.act("convert", vec![]).unwrap();
+    first.take_store_writes();
+    first.adopt_store(second.store().snapshot()).unwrap();
+    assert_eq!(first.slot("units"), Some(&Value::str("imperial")));
+    assert_eq!(first.slot("tipPercent"), Some(&Value::Number(25.0)));
+    assert!(first.store().snapshot().contains(&window));
+    assert!(first.take_store_writes().is_empty());
+    first.adopt_store(Vec::new()).unwrap();
+    assert_eq!(first.slot("units"), Some(&Value::str("metric")));
+    assert_eq!(first.persisted("tipPercent"), Some(Value::Number(25.0)));
+    assert_eq!(
+        kept(first.take_store_writes()),
+        [
+            pair("units", r#""metric""#),
+            pair("seen", "null"),
+            pair("recent", "[1,2]")
+        ]
+    );
+}
+
+#[test]
 fn a_stored_value_of_another_shape_keeps_the_initial_value_and_says_so() {
     let mut r = boot(vec![
         ("exact.state.tipPercent", "\"eighteen\""),

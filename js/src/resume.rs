@@ -133,7 +133,7 @@ impl Module {
             self.host.socket_buffered = socket::snapshot(&self.streams, store);
         }
         let started = Instant::now();
-        let budget_ms = self.turn_budget_ms(started);
+        let budget_ms = self.turn_budget_ms(source, started);
         // (its own time on this thread's CPU clock, a wall backstop beside it: turn.rs)
         let clock = TurnClock::start(&self.turn_time);
         let result: Result<Step, DataError> = (|| {
@@ -352,7 +352,7 @@ impl Module {
         self.host.answer_ops.clear();
         self.host.store = Some(store as *mut Store);
         let started = Instant::now();
-        let budget_ms = self.turn_budget_ms(started);
+        let budget_ms = self.turn_budget_ms(source, started);
         // (its own time on this thread's CPU clock, a wall backstop beside it: turn.rs)
         let clock = TurnClock::start(&self.turn_time);
         let mut mapper = None;

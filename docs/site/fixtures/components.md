@@ -85,7 +85,7 @@ hello/assets/
 
 ## Image
 
-![The Exact mark](../../../assets/brand/exact-mark.svg "A golden rectangle, split into a square and a smaller golden rectangle.")
+![The Exact mark](../../../assets/brand/exact-mark.svg "A rectangle split into a large panel and a column of smaller panels.")
 
 ## Cards
 

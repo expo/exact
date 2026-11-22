@@ -51,6 +51,8 @@ pub enum HostCover {
     /// Space occupied by native scrollers on the right and bottom edges.
     /// Overlay scrollers report zero; authored padding stays unchanged.
     Gutter([f32; 2]),
+    /// Space the native table leaves above and below this row, outside its cell.
+    RowSpacing([f32; 2]),
 }
 
 impl Kernel {
@@ -74,7 +76,7 @@ impl Kernel {
             .ok_or(LayoutError::UnknownView(view))?;
         let edges: &[f32] = match &cover {
             Some(HostCover::Edges(e)) => e,
-            Some(HostCover::Inset(e) | HostCover::Gutter(e)) => e,
+            Some(HostCover::Inset(e) | HostCover::Gutter(e) | HostCover::RowSpacing(e)) => e,
             _ => &[],
         };
         if !edges.iter().all(|e| e.is_finite() && *e >= 0.0) {
@@ -248,6 +250,10 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
             lay_gutter(s, [0.0, top + bottom]);
         }
         Some(HostCover::Gutter(gutter)) => lay_gutter(s, gutter),
+        Some(HostCover::RowSpacing([top, bottom])) => {
+            s.margin.top = table_margin(s.margin.top, top);
+            s.margin.bottom = table_margin(s.margin.bottom, bottom);
+        }
         None => {}
     }
     // The solver sizes and places absolute descendants inside the cleared
@@ -423,6 +429,24 @@ pub(crate) fn added_padding(arena: &NodeArena, slot: u32) -> [f32; 4] {
         }
         _ => [0.0; 4],
     }
+}
+
+/// AppKit leaves this distance between row rectangles regardless of their content.
+fn table_margin(
+    margin: taffy::style::LengthPercentageAuto,
+    spacing: f32,
+) -> taffy::style::LengthPercentageAuto {
+    use taffy::style::{ExpandedLengthPercentageAuto as Margin, LengthPercentage as Length};
+    if spacing == 0.0 {
+        return margin;
+    }
+    let length = match margin.expand() {
+        Margin::Length(v) => Length::length(v),
+        Margin::Percent(v) => Length::percent(v),
+        Margin::Calc(v) => Length::calc(v),
+        Margin::Auto => Length::length(0.0),
+    };
+    crate::style::plus(length, spacing).into()
 }
 
 /// The edges, as bits top 1, right 2, bottom 4 and left 8, whose padding in

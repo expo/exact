@@ -1,24 +1,16 @@
-// The touch runner (LLP 1080.000 D1/D2): real touches on iOS through XCTest's
-// event synthesis, from an XCTest UI test (`touches.swift`) that stays alive
-// across agent sessions. Built from Xcode's own XCTRunner.app — no Xcode
-// project — installed on the destination, and started by xcodebuild, so
-// nothing is installed or relaunched under a running app. The runner connects
-// out over the phone carrier's token bridge, answers JSON lines, and is kept
-// for the next session on a loopback port (a connection instead of
-// xcodebuild's 5 s start). One session per device at a time, held by a lock
-// file.
-//
-// Simulator only so far; a phone is LLP 1080.000 stage 4.
+// Real touches on iOS through an XCTest UI test in Xcode's XCTRunner.app (LLP 1080.000 D1/D2).
+// The runner starts before the app and connects to the Mac's authenticated bridge. Each phone drive
+// starts its own runner. A simulator keeps one over loopback. A lock admits one drive per device.
 import { spawn, spawnSync } from 'node:child_process';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomBytes } from 'node:crypto';
-import { closeSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { iosTriple } from './build.mjs';
 import { claimLive } from '../../scripts/app.mjs';
-import { phoneBridge } from './devices.mjs';
+import { decodeProfile, identity, installedProfiles, phoneBridge, profile } from './devices.mjs';
 import { watchCloak } from './cloak.mjs';
 import { retainCleanupError, simulatorDisplay } from '../../scripts/agent-launch.mjs';
 import { fileURLToPath } from 'node:url';
@@ -32,25 +24,25 @@ const must = (cmd, args) => {
   return r.stdout;
 };
 
-/** The runner's identity (D1's key): its source as read now, the arch, the
- * selected Xcode and its simulator SDK, each by its own file where it has
- * one (a launch compares it, so it costs a file read, not a tool's start). */
-export function runnerKey() {
+/** Compile a runner for its destination SDK and architecture. Signing profiles can change independently. */
+export function runnerKey(device = false) {
   const developer = must('xcode-select', ['-p']).trim();
-  const platform = resolve(developer, 'Platforms/iPhoneSimulator.platform/Developer');
-  const text = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
+  const name = device ? 'iPhoneOS' : 'iPhoneSimulator', sdk = name.toLowerCase();
+  const platform = resolve(developer, `Platforms/${name}.platform/Developer`);
+  const triple = device ? 'arm64-apple-ios17.0' : iosTriple;
+  const text = path => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
   const source = readFileSync(resolve(ROOT, 'host/apple/touches.swift'), 'utf8');
   const key = createHash('sha256').update(JSON.stringify({
-    source, destination: 'iphonesimulator', arch: process.arch, developer,
-    sdk: text(resolve(platform, 'SDKs/iPhoneSimulator.sdk/SDKSettings.json')) ?? must('xcrun', ['--sdk', 'iphonesimulator', '--show-sdk-version']).trim(),
+    source, build: buildRunner.toString(), signing: signRunner.toString(), sdk, triple, developer,
+    settings: text(resolve(platform, `SDKs/${name}.sdk/SDKSettings.json`)) ?? must('xcrun', ['--sdk', sdk, '--show-sdk-version']).trim(),
     xcode: text(resolve(developer, '../version.plist')) ?? must('xcodebuild', ['-version']).trim(),
   })).digest('hex').slice(0, 16);
-  return { key, platform, source };
+  return { key, platform, source, sdk, triple, device };
 }
 
-/** The runner for a simulator, built once per `runnerKey()`, from the source the key was made of, installed on `udid`. */
-export function touchRunner(udid, { key, platform, source } = runnerKey()) {
-  const dir = resolve(ROOT, 'target/touch-runner', key);
+/** The compiled test bundle and runner, before installation and before applying a phone's profile. */
+export function compiledTouchRunner(build) {
+  const dir = resolve(ROOT, 'target/touch-runner', build.key);
   const app = resolve(dir, 'ExactTouches-Runner.app');
   // Built in a directory of its own, then published by one rename: a
   // published runner is complete and never rewritten, so sessions on other
@@ -58,16 +50,15 @@ export function touchRunner(udid, { key, platform, source } = runnerKey()) {
   if (!existsSync(dir)) {
     const stage = `${dir}.build-${process.pid}-${randomBytes(4).toString('hex')}`;
     try {
-      buildRunner(platform, source, stage);
+      buildRunner(build, stage);
       try { renameSync(stage, dir); } catch (e) { if (!['EEXIST', 'ENOTEMPTY'].includes(e.code)) throw e; } // another build published first: use it
     } finally { rmSync(stage, { recursive: true, force: true }); }
   }
-  must('xcrun', ['simctl', 'install', udid, app]);
   return { dir, app };
 }
 
 /** Assemble the runner in `dir`: Xcode's XCTRunner.app, the frameworks it loads, the test bundle compiled from `text`, signed ad hoc. */
-function buildRunner(platform, text, dir) {
+function buildRunner({ platform, source: text, sdk, triple, device }, dir) {
   const app = resolve(dir, 'ExactTouches-Runner.app');
   mkdirSync(dir, { recursive: true });
   const source = resolve(dir, 'touches.swift');
@@ -84,16 +75,61 @@ function buildRunner(platform, text, dir) {
   }
   const bundle = resolve(app, 'PlugIns/ExactTouches.xctest');
   mkdirSync(bundle, { recursive: true });
-  must('xcrun', ['--sdk', 'iphonesimulator', 'swiftc', '-emit-library', '-O', '-module-name', 'ExactTouches', '-target', iosTriple,
+  must('xcrun', ['--sdk', sdk, 'swiftc', '-emit-library', '-O', '-module-name', 'ExactTouches', '-target', triple,
     '-F', resolve(platform, 'Library/Frameworks'), '-F', resolve(platform, 'Library/PrivateFrameworks'), '-I', resolve(platform, 'usr/lib'), '-L', resolve(platform, 'usr/lib'),
     '-framework', 'XCTest', '-framework', 'XCUIAutomation', '-Xlinker', '-rpath', '-Xlinker', '@executable_path/Frameworks',
     '-module-cache-path', resolve(dir, 'cache'), '-o', resolve(bundle, 'ExactTouches'), source]);
-  writeFileSync(resolve(bundle, 'Info.plist'), plist({ CFBundleExecutable: 'ExactTouches', CFBundleIdentifier: 'com.exact.touches', CFBundlePackageType: 'BNDL', CFBundleName: 'ExactTouches', CFBundleVersion: '1', CFBundleSupportedPlatforms: ['iPhoneSimulator'] }));
-  must('codesign', ['--force', '--sign', '-', bundle]);
-  for (const name of readdirSync(frameworks)) must('codesign', ['--force', '--sign', '-', resolve(frameworks, name)]);
-  must('codesign', ['--force', '--sign', '-', '--entitlements', resolve(app, 'RunnerEntitlements.plist'), app]);
+  writeFileSync(resolve(bundle, 'Info.plist'), plist({ CFBundleExecutable: 'ExactTouches', CFBundleIdentifier: 'com.exact.touches', CFBundlePackageType: 'BNDL', CFBundleName: 'ExactTouches', CFBundleVersion: '1', CFBundleSupportedPlatforms: [device ? 'iPhoneOS' : 'iPhoneSimulator'] }));
+  signRunner(app, '-');
   rmSync(resolve(dir, 'cache'), { recursive: true, force: true });
   rmSync(source, { force: true });
+}
+
+function signRunner(app, certificate) {
+  const sign = (path, ...args) => must('codesign', ['--force', '--sign', certificate, ...args, path]);
+  sign(resolve(app, 'PlugIns/ExactTouches.xctest'));
+  const frameworks = resolve(app, 'Frameworks');
+  for (const name of readdirSync(frameworks)) sign(resolve(frameworks, name));
+  sign(app, '--entitlements', resolve(app, 'RunnerEntitlements.plist'));
+}
+
+export function touchRunner(udid, build = runnerKey()) {
+  if (!build.device) {
+    const product = compiledTouchRunner(build);
+    must('xcrun', ['simctl', 'install', udid, product.app]);
+    return product;
+  }
+  // EXACT_PROFILE may name the app's profile. Only a profile covering the runner and this phone can sign it.
+  const installed = installedProfiles();
+  const named = process.env.EXACT_PROFILE && decodeProfile(process.env.EXACT_PROFILE);
+  const runnerProfile = profile(udid, RUNNER_ID, [], { named: null, installed: named ? [named, ...installed] : installed });
+  const certificate = identity(runnerProfile.team, { profiles: [runnerProfile] });
+  const product = compiledTouchRunner(build);
+  const stage = mkdtempSync(resolve(tmpdir(), 'exact-phone-touches-'));
+  try {
+    const app = resolve(stage, 'ExactTouches-Runner.app');
+    cpSync(product.app, app, { recursive: true });
+    copyFileSync(runnerProfile.path, resolve(app, 'embedded.mobileprovision'));
+    const entitlements = resolve(app, 'RunnerEntitlements.plist');
+    const grants = JSON.parse(must('plutil', ['-convert', 'json', '-o', '-', entitlements]));
+    writeFileSync(entitlements, plist({ ...grants,
+      'application-identifier': `${runnerProfile.prefix}.${RUNNER_ID}`,
+      'com.apple.developer.team-identifier': runnerProfile.team,
+    }));
+    signRunner(app, certificate);
+    must('xcrun', ['devicectl', 'device', 'install', 'app', '--device', udid, app]);
+  } finally { rmSync(stage, { recursive: true, force: true }); }
+  return product;
+}
+
+/** A phone runs the installed bundles. A simulator requires host paths and uses the runner as its install target,
+ * leaving the driver's app available to launch after XCTest connects (LLP 1080.000 D1). */
+export function touchTestTarget({ device, app, appId }) {
+  const bundle = '__TESTHOST__/PlugIns/ExactTouches.xctest';
+  return device
+    ? { IsUITestBundle: true, UseDestinationArtifacts: true, TestHostBundleIdentifier: RUNNER_ID,
+        TestBundleDestinationRelativePath: bundle, UITargetAppBundleIdentifier: appId }
+    : { IsUITestBundle: true, TestHostPath: app, TestBundlePath: bundle, UITargetAppPath: app };
 }
 
 /** A plist from a flat object of strings, booleans, arrays of strings and nested objects. */
@@ -316,9 +352,9 @@ export async function restoreAccessibility(udid, found, run = simDefaults) {
 }
 
 /**
- * The runner for `appId` on simulator `udid`: the device's kept one when it
+ * The runner for `appId` on `udid`: the simulator's kept one when it
  * answers (a connection, milliseconds), else a new one, started and waited
- * for (its hello, 30 s; xcodebuild's start is most of 5 s). A runner outlives
+ * for (its hello, 30 s; xcodebuild's start is most of 5 s). A simulator runner outlives
  * the drive that started it: closing hangs up and the runner waits
  * KEPT_IDLE for the next session. Returns `{ ask(req), close(), pid, started,
  * kept, cloak, handoff() }`: `ask` sends one line and resolves with its reply, or with an error
@@ -329,11 +365,11 @@ export async function restoreAccessibility(udid, found, run = simDefaults) {
  * ends (`AX_KEYS`). `handoff` awaits this connection's close and returns the port and token
  * for a hosted XCTest to connect; ownership and accessibility stay held until `close` or `end`.
  */
-export async function openTouches({ udid, appId, foldable }) {
+export async function openTouches({ udid, appId, foldable, device = false, installApp }) {
   const lockRelease = lock(udid);
   const started = Date.now();
-  const cloak = watchCloak(udid, foldable);
-  const axRecord = resolve(homedir(), '.cache/exact/simulator-accessibility', `${udid}.json`), axFound = foundAccessibility(udid, axRecord);
+  const cloak = device ? null : watchCloak(udid, foldable);
+  const axRecord = resolve(homedir(), '.cache/exact/simulator-accessibility', `${udid}.json`), axFound = device ? Promise.resolve(null) : foundAccessibility(udid, axRecord);
   let restored = null;
   // Unread keys were never turned on: the session ends before a write or a runner's start (`readKeys`).
   const putBack = () => (restored ??= axFound.then(async (keys) => {
@@ -348,9 +384,10 @@ export async function openTouches({ udid, appId, foldable }) {
   // process's child is waited for (3 s, then SIGKILL) and the lock kept if it
   // will not exit.
   const teardown = async () => {
-    cloak.close();
+    cloak?.close();
     try { socket?.destroy(); } catch {}
     bridge?.close();
+    if (device && socket && exited) await within(exited, 3000, () => null);
     try {
       if (child && child.exitCode == null && child.signalCode == null) {
         let gone = false;
@@ -368,7 +405,9 @@ export async function openTouches({ udid, appId, foldable }) {
   // as they are: with no record, the next session could not tell a person's setting from what this one left.
   const readKeys = async () => { if (!(await axFound)) throw new Error("the simulator's accessibility settings (com.apple.Accessibility) could not be read, so a session could not put them back after it; is the simulator booted?"); };
   try {
-    const identity = runnerKey();
+    // xcodebuild resolves a phone's target by bundle ID. Hold the device lock before installing that app.
+    installApp?.();
+    const identity = runnerKey(device);
     const found = await keptRunner(udid, appId, identity.key);
     if (found) {
       ({ socket, talk, kept } = found), reused = true;
@@ -379,21 +418,18 @@ export async function openTouches({ udid, appId, foldable }) {
       if (failed.length) throw new Error(`the simulator's accessibility, which the kept touch runner needs, could not be turned on: ${failed.join('; ')}`);
     }
     else {
-      await readKeys();
+      if (!device) await readKeys();
       const { app } = touchRunner(udid, identity);
       bridge = await phoneBridge();
       const run = resolve(tmpdir(), `exact-touches-${udid}.xctestrun`), log = resolve(tmpdir(), `exact-touches-${udid}.log`);
+      rmSync(run, { force: true });
       writeFileSync(run, plist({
         ExactTouches: {
-          // A simulator refuses `UseDestinationArtifacts` (device only), so
-          // xcodebuild installs the target here: the runner itself, so one
-          // runner serves every app (each session names its own) and the
-          // driver's app is never installed or launched by it (D1's order).
-          IsUITestBundle: true, TestHostPath: app, TestBundlePath: '__TESTHOST__/PlugIns/ExactTouches.xctest', UITargetAppPath: app,
+          ...touchTestTarget({ device, app, appId }),
           TestingEnvironmentVariables: { EXACT_TOUCH_CONNECT: bridge.env.EXACT_AGENT_CONNECT, EXACT_TOUCH_TOKEN: bridge.env.EXACT_AGENT_TOKEN, EXACT_TOUCH_APP: appId },
         },
         __xctestrun_metadata__: { FormatVersion: 1 },
-      }));
+      }), { flag: 'wx', mode: 0o600 });
       // Its own session and its output in a file: it outlives this process.
       const out = openSync(log, 'w');
       // Turn parallel testing off: the runner drives this simulator itself, not a clone, and the iOS
@@ -408,7 +444,7 @@ export async function openTouches({ udid, appId, foldable }) {
       if (!first?.x) throw new Error(`the touch runner did not start (${first === 'timeout' ? 'no hello in 30 s' : `xcodebuild exited ${first.code}`}):\n${logTail(log)}`);
       socket = first.x.socket;
       talk = conversation(socket, () => logTail(log, 10));
-      kept = { ...kept, port: first.x.announcement.listen };
+      kept = { ...kept, port: first.x.announcement.listen ?? null };
       writeFileSync(keptPath(udid), JSON.stringify(kept), { mode: 0o600 });
       child.unref();
     }
@@ -428,11 +464,12 @@ export async function openTouches({ udid, appId, foldable }) {
       });
     };
     // Start reading before the app's launch can bring a transition or a cloak
-    await cloak.ready();
+    await cloak?.ready();
     return {
       ask, pid: kept.pid, started: Date.now() - started, kept: reused, cloak,
       end,
       async handoff() {
+        if (device) throw new Error('A phone touch session has one outbound connection.');
         if (closing || handedOff || talk.broken()) throw new Error('the touch connection is no longer available for handoff');
         handedOff = true;
         // The hosted xcodebuild blocks this event loop, so flush the EOF before it starts.
@@ -441,12 +478,12 @@ export async function openTouches({ udid, appId, foldable }) {
         if (!(await within(hungUp, 3000, () => false))) throw new Error('the initial touch connection did not close for handoff');
         return { port: kept.port, token: kept.token };
       },
-      // A session that ends well hangs up and leaves the runner for the next.
+      // A simulator keeps its runner. A phone runner ends its test when the connection closes.
       async close() {
         if (closing) { const failed = await closing; if (failed) throw failed; return; }
-        if (!handedOff && talk.broken()) { const failed = await end(); if (failed) throw failed; return; }
+        if (device || (!handedOff && talk.broken())) { const failed = await end(); if (failed) throw failed; return; }
         closing = Promise.resolve(null);
-        cloak.close();
+        cloak?.close();
         socket.end();
         await release();
       },
@@ -856,4 +893,21 @@ export function realPinch({ ask, touches, id, at, scale, abandon }) {
 export function realDoubleTap({ ask, touches, id, at, abandon }) {
   return twoTouches({ ask, touches, id, at, what: `dblclick touch #${id}`, abandon, ms: 300, reply: { dblclick: 'touch' },
     request: (a) => ({ op: 'tap', double: true, point: a.point, screen: a.fixed, display: a.display }) });
+}
+
+
+/** Route a complete XCTest gesture on either iOS carrier. Other input stays with the app. */
+export function iosTouchInput({ ask, touches, touch, id, kind, opts, guest, abandon }) {
+  if (!touches) return null;
+  const target = { ask, touches, id, abandon };
+  if (kind === 'drag') return realTap({ ...target, at: opts.at, drag: opts.drag });
+  if (touch !== 'platform') return null;
+  if (kind === 'press') {
+    if (Object.values(guest).some(v => v != null))
+      throw new Error('unsupported under --touch platform: a press into an iframe guest or a world entity reaches no real touch yet (LLP 1080.000 stage 1)');
+    return realTap({ ...target, rel: opts.at });
+  }
+  if (kind === 'dblclick' && opts.touch) return realDoubleTap({ ...target, at: opts.at });
+  if (kind === 'pinch') return realPinch({ ...target, at: opts.at, scale: opts.pinch });
+  return null;
 }

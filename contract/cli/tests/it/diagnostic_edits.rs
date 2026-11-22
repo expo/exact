@@ -209,12 +209,6 @@ const CASES: &[Case] = &[
         leads: "`display=\"list-item\"` is not a `display` here",
         fixed: &[("", "view role=\"list\"\n  row role=\"listitem\" gap=4\n    text \"•\"\n    text \"a\"")],
     },
-    Case {
-        wrote: ("", "view role=\"list\" list-style-type=\"disc\"\n  text role=\"listitem\" \"a\""),
-        id: "lower-unknown-attr",
-        leads: "`view` has no attribute `list-style-type`; a list here draws no marker",
-        fixed: &[("", "view role=\"list\"\n  text role=\"listitem\" \"a\"")],
-    },
 ];
 
 #[test]
@@ -242,40 +236,18 @@ fn what_builders_wrote_is_refused_with_the_edit_leading_and_the_edit_builds() {
     }
 }
 
-/// A list draws no marker, so the reset a stylesheet writes on a `ul`, `list-style: none`, is taken on a node and
-/// in a style, and compiles to what writing nothing does.
 #[test]
-fn a_list_style_of_none_is_taken_and_writes_nothing() {
-    let plan = |style: &str, list: &str| {
+fn list_style_resets_reach_list_items_through_a_class_or_a_longhand() {
+    let compile = |style: &str, list: &str| {
         let source = format!(
             "style Bare\n  margin=0{style}\n\n{}",
-            app(
-                "",
-                &format!("view role=\"list\" class=Bare{list}\n  text role=\"listitem\" \"a\"")
-            )
+            app("", &format!("ul class=Bare{list}\n  li \"a\""))
         );
-        contract::compile(&source).unwrap_or_else(|e| panic!("{} ({})\n{source}", e.message, e.id))
+        contract::compile(&source).unwrap()
     };
-    let bare = plan("", "");
-    assert_eq!(plan("\n  list-style=\"none\"", ""), bare);
-    assert_eq!(plan("", " list-style-type=\"none\""), bare);
-    // Any other marker is refused with the same words in a `style` as on an element.
-    let source = |style: &str, list: &str| {
-        format!(
-            "style Bare\n  margin=0{style}\n\n{}",
-            app(
-                "",
-                &format!("view role=\"list\" class=Bare{list}\n  text \"a\"")
-            )
-        )
-    };
-    let refused = |s: String| contract::compile(&s).unwrap_err().message;
-    let (styled, inline) = (
-        refused(source("\n  list-style-type=\"disc\"", "")),
-        refused(source("", " list-style-type=\"disc\"")),
-    );
-    assert!(styled.contains("a bullet is a `text \"•\"`"), "{styled}");
-    assert_eq!(styled.split("; ").nth(1), inline.split("; ").nth(1));
+    let reset = compile("", " list-style-type=\"none\"");
+    assert_eq!(compile("\n  list-style=\"none\"", ""), reset);
+    assert_ne!(compile("", ""), reset);
 }
 
 /// A message that names an edit never edits what is not wrong: a role that is

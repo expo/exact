@@ -91,6 +91,7 @@ extension NodeView {
     /// (CSS Backgrounds 3 §4.2, §4.3). Laid out with the view, it waits with
     /// its frame and content box wherever those wait.
     func layoutContent() {
+        if props["listMarker"] != nil { layoutProseMarker() }
         guard kind == "svg" || kind == "canvas2d", let presenter else { return }
         let box = contentBox()
         if kind == "svg" { presenter.svg?.place(id, in: box); return }

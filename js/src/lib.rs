@@ -100,7 +100,7 @@ use exact_runner::{
     Answer, DataError, DataSource, Dispatch, InFlight, Interrupt, Outcome, Request, Store, Target,
     Work,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
 use std::sync::Arc;
 use std::time::Instant;
@@ -393,7 +393,8 @@ pub struct Module {
     overlays_encoded: u64,
     /// Whether the module had an `exact.overlay` when it loaded.
     has_overlay: bool,
-    budget_ms: f64,
+    budget_ms: Option<f64>,
+    source_budgets: BTreeMap<String, f64>,
     turn_time: TurnTime,
     max_heap: u32,
     /// How long a storage step is waited for: a snapshot's deadline shortens it.
@@ -485,7 +486,8 @@ impl Module {
             waiters: Vec::new(),
             overlays_encoded: 0,
             has_overlay: true,
-            budget_ms: DEFAULT_BUDGET_MS,
+            budget_ms: None,
+            source_budgets: BTreeMap::new(),
             turn_time: TurnTime::default(),
             max_heap: DEFAULT_MAX_HEAP,
             storage_wait: storage::WAIT,
@@ -605,7 +607,7 @@ impl Module {
             if let Some(factory) = native_factory {
                 module = module.with_native(factory);
             }
-            module.set_budget_ms(budget_ms);
+            module.budget_ms = budget_ms;
             module.turn_time = turn_time;
             module.set_max_heap(max_heap);
             module.set_document_owner(document_owner);
@@ -707,6 +709,7 @@ impl Module {
 
     /// `load`'s and `inspect`'s last step: the overlay is decided once, here, alike (a failed read keeps it asked).
     fn install(&mut self, mut engine: Watched) -> Result<(), String> {
+        self.source_budgets = turn::source_budgets(&engine.string("turnBudgetsJson")?)?;
         let overlay = engine.call("__exact_has_overlay", ["", "", ""]);
         if engine.out_of_memory() {
             return Err(overlay.expect_err("terminal OOM fails the call"));
@@ -901,7 +904,7 @@ impl Module {
     /// over it is `DataError::Overrun`, and a resource keeps its last value
     /// while the runner asks it again (`runner/src/runner/overrun.rs`).
     pub fn set_budget_ms(&mut self, ms: f64) {
-        self.budget_ms = ms;
+        self.budget_ms = Some(ms);
     }
 
     /// Native storage operations started and not yet returned: a test of
@@ -1043,7 +1046,7 @@ impl Module {
         };
         self.host.turn = Some(Module::reporter(target, source));
         let started = Instant::now();
-        let budget_ms = self.turn_budget_ms(started);
+        let budget_ms = self.turn_budget_ms(source, started);
         // (its own time on this thread's CPU clock, a wall backstop beside it: turn.rs)
         let clock = TurnClock::start(&self.turn_time);
         let mut begun = None;
@@ -1248,7 +1251,7 @@ impl Module {
         }
         let payload = serde_json::json!({ "answer": json(answer, &sig.result)?, "writes": list });
         let started = Instant::now();
-        let budget_ms = self.turn_budget_ms(started);
+        let budget_ms = self.turn_budget_ms(source, started);
         // (its own time on this thread's CPU clock, a wall backstop beside it: turn.rs)
         let clock = TurnClock::start(&self.turn_time);
         let engine = self.engine.as_mut().expect("checked above");

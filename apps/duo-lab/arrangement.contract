@@ -23,18 +23,22 @@ component ArrangementScreen
   derive down = viewport.verticalViewportSegments == 2
   derive direction = paneDirection(viewport)
   derive anchored = active == "css" and (across or down)
+  // Turn the route's side clearance off in Authored mode on a book fold with one row of segments, so on iOS the panes'
+  // container spans the viewport's width as the segments do; its top and bottom stay cleared
+  derive sidesOff = anchored and across and viewport.verticalViewportSegments == 1
   action layout(value: string)
     mode = value
   view
-    column navigationKey=routeKey navigationBar=(anchored ? "none" : "auto") testId=`screen-${routeName}` position="absolute" inset=0
+    column navigationKey=routeKey navigationBar=(anchored ? "none" : "auto") -exact-safe-area=(sidesOff ? "left right" : none) testId=`screen-${routeName}` position="absolute" inset=0
       if not anchored
         ArrangementChrome(title=title, nextTitle=nextTitle, prefix=prefix, mode=mode, controls=nativeArrangement, openNext=openNext, showSplit=layout("split"), showOverlay=layout("overlay"), showAuthored=layout("css"))
-      // Segment edges are viewport-relative. Keep chrome inside the first pane so this container starts at the same origin.
+      // Segment edges are viewport-relative. Keep the chrome inside the first pane whenever the panes anchor, so it adds no
+      // offset above them.
       column id=`${prefix}-container` hatch="arranged-panes" data-pane-layout=active testId=`${prefix}-container` flex=1 min-height=0 position="relative" display="flex" flex-direction=(anchored ? "column" : direction) gap=(anchored ? 0 : 12)
-        Pane(name="Workspace", prefix=`${prefix}-workspace`, anchored=anchored, leading=true, across=across, down=down)
+        Pane(name="Workspace", prefix=`${prefix}-workspace`, anchored=anchored, leading=true, across=across, down=down, sidesOff=sidesOff)
           if anchored
             ArrangementChrome(title=title, nextTitle=nextTitle, prefix=prefix, mode=mode, controls=nativeArrangement, openNext=openNext, showSplit=layout("split"), showOverlay=layout("overlay"), showAuthored=layout("css"))
-        Pane(name="Activity", prefix=`${prefix}-activity`, anchored=anchored, leading=false, across=across, down=down)
+        Pane(name="Activity", prefix=`${prefix}-activity`, anchored=anchored, leading=false, across=across, down=down, sidesOff=sidesOff)
 
 component ArrangementChrome
   props
@@ -69,6 +73,7 @@ component Pane
     leading: bool
     across: bool
     down: bool
+    sidesOff: bool
   slot
   derive paneTop = anchored ? (down and not leading ? "env(viewport-segment-top 0 1)" : "0px") : "auto"
   derive paneLeft = anchored and not across ? "0px" : "auto"
@@ -76,8 +81,10 @@ component Pane
   derive paneHeight = anchored ? (down and leading ? "env(viewport-segment-height 0 0)" : "auto") : "100%"
   derive paddingTop = anchored and (across or leading) ? "calc(16px + max(env(safe-area-inset-top), env(-exact-safe-area-corners-inset-top)))" : "16px"
   derive paddingBottom = anchored and (across or not leading) ? "calc(16px + max(env(safe-area-inset-bottom), env(-exact-safe-area-corners-inset-bottom)))" : "16px"
-  derive paddingLeft = anchored ? "calc(16px + max(env(safe-area-inset-left), env(-exact-safe-area-corners-inset-left)))" : "16px"
-  derive paddingRight = anchored ? "calc(16px + max(env(safe-area-inset-right), env(-exact-safe-area-corners-inset-right)))" : "16px"
+  // Pad the sides by the route's insets where the route leaves them uncleared: an agent's explicit size zeros `env()`'s
+  // while UIKit still reports the route's
+  derive paddingLeft = anchored ? (sidesOff ? "calc(16px + max(var(--exact-safe-area-inset-left), env(-exact-safe-area-corners-inset-left)))" : "calc(16px + max(env(safe-area-inset-left), env(-exact-safe-area-corners-inset-left)))") : "16px"
+  derive paddingRight = anchored ? (sidesOff ? "calc(16px + max(var(--exact-safe-area-inset-right), env(-exact-safe-area-corners-inset-right)))" : "calc(16px + max(env(safe-area-inset-right), env(-exact-safe-area-corners-inset-right)))") : "16px"
   state draft = ""
   state count = 0
   derive rows = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40]
@@ -96,7 +103,9 @@ component Pane
         text name role="heading" aria-level=2
         text "Edit, scroll, switch layouts, and fold. Your place and draft should stay."
         input id=`${prefix}-draft` value=draft input=write placeholder="A draft to keep" aria-label=`${name} draft` testId=`${prefix}-draft`
-        text draft testId=`${prefix}-echo`
+        // Wrap a long word anywhere so the echo stays inside its pane, where on a book fold only the padding keeps it off
+        // the strip (`break-word` can draw a dictionary hyphen on iOS)
+        text draft overflow-wrap="anywhere" testId=`${prefix}-echo`
         row gap=12 align-items="center" flex-wrap="wrap"
           button press=increment testId=`${prefix}-increment`
             text "Add one"

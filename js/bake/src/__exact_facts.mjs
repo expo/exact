@@ -3,6 +3,15 @@ import { bare, lineColumn, propertyName, walkRuntime } from './__exact_portable.
 import { grantsDeclaration } from './__exact_launch_setting.mjs';
 
 const named = node => node?.name ?? node?.value;
+/** The names a declaration's binding pattern binds. */
+const bound = (pattern, names = []) => {
+  if (pattern?.type === 'Identifier') names.push(pattern.name);
+  else if (pattern?.type === 'ObjectPattern') for (const p of pattern.properties) bound(p.type === 'RestElement' ? p.argument : p.value, names);
+  else if (pattern?.type === 'ArrayPattern') for (const p of pattern.elements) bound(p, names);
+  else if (pattern?.type === 'AssignmentPattern') bound(pattern.left, names);
+  else if (pattern?.type === 'RestElement') bound(pattern.argument, names);
+  return names;
+};
 const syntax = "must be a constant the build reads without running the module: a string, a template or + of constants, an array of them .join('\\n'), or a top-level const holding one";
 
 function moduleFacts(file, code, parse, source = code) {
@@ -25,12 +34,17 @@ function moduleFacts(file, code, parse, source = code) {
   for (const statement of parsed.program.body) {
     const s = ['ExportNamedDeclaration', 'ExportDefaultDeclaration'].includes(statement.type) ? statement.declaration ?? statement : statement;
     if (s.type === 'VariableDeclaration') for (const d of s.declarations) {
-      if (d.id.type !== 'Identifier') continue;
+      if (d.id.type !== 'Identifier') {
+        // A destructured export is no constant the build reads, and it is still the module's export of each name
+        // it binds: without an entry, the name would resolve through an `export *` beside it (ECMA-262 ResolveExport).
+        if (statement.type === 'ExportNamedDeclaration') for (const name of bound(d.id)) exported.set(name, { local: name });
+        continue;
+      }
       if (s.kind === 'const') consts.set(d.id.name, d.init);
       if (statement.type === 'ExportNamedDeclaration') exported.set(d.id.name, { local: d.id.name });
     }
     if (statement.type === 'ImportDeclaration' && statement.importKind !== 'type') for (const x of statement.specifiers) {
-      if (x.importKind !== 'type') imports.set(x.local.name, { source: statement.source.value, imported: x.type === 'ImportDefaultSpecifier' ? 'default' : named(x.imported), node: x });
+      if (x.importKind !== 'type') imports.set(x.local.name, { source: statement.source.value, imported: x.type === 'ImportDefaultSpecifier' ? 'default' : named(x.imported), namespace: x.type === 'ImportNamespaceSpecifier', node: x });
     }
     if (statement.type === 'ExportNamedDeclaration' && statement.exportKind !== 'type') {
       if (s.id?.name) exported.set(s.id.name, { local: s.id.name });
@@ -50,7 +64,7 @@ function constantBindings(code, parse, { load, source = code } = {}) {
   const root = moduleFacts('app.ts', code, parse, source), modules = new Map([['app.ts', root]]);
   const refuse = (m, node, name, why = syntax) => { throw new Error(`${m.file}:${m.at((m.original.get(node) ?? node)?.start ?? 0)}: ${name} ${why}`); };
   const imported = (m, source, node, name) => {
-    if (!load || name !== 'grants') refuse(m, node, name);
+    if (!load || !['grants', 'turnBudgets'].includes(name)) refuse(m, node, name);
     const next = load(source, m.file, message => refuse(m, node, name, message));
     if (!modules.has(next.file)) modules.set(next.file, moduleFacts(next.file, next.code, parse, next.source ?? next.code));
     const result = modules.get(next.file);
@@ -68,7 +82,7 @@ function constantBindings(code, parse, { load, source = code } = {}) {
     if (m.consts.has(local)) return evaluate(m, m.consts.get(local), name);
     const entry = m.imports.get(local);
     if (entry) {
-      if (!entry.imported) refuse(m, entry.node, name, 'cannot read a namespace import; import a named literal constant');
+      if (entry.namespace) refuse(m, entry.node, name, 'cannot read a namespace import whole; read one of its constants, as in ns.NAME');
       return exported(imported(m, entry.source, entry.node, name), entry.imported, name, evaluate);
     }
     refuse(m, node, name, `require a top-level const; ${local} is not one`);
@@ -77,7 +91,7 @@ function constantBindings(code, parse, { load, source = code } = {}) {
   const resolveLocal = (m, local, node, name, resolveSet) => {
     const entry = m.imports.get(local);
     if (!entry) return { m, local, node };
-    if (!entry.imported) refuse(m, entry.node, name, 'cannot read a namespace import; import a named literal constant');
+    if (entry.namespace) refuse(m, entry.node, name, 'cannot read a namespace import whole; read one of its constants, as in ns.NAME');
     return resolveExport(imported(m, entry.source, entry.node, name), entry.imported, name, resolveSet);
   };
   // ECMA-262 ResolveExport: an export path may loop without its initializer cycling.
@@ -117,7 +131,69 @@ function constantBindings(code, parse, { load, source = code } = {}) {
     }
     return target.local ? binding(target.m, target.local, target.node, name, evaluate) : evaluate(target.m, target.node, name);
   };
-  return { root, refuse, binding, exported, resolveBinding };
+  return { root, refuse, imported, binding, exported, resolveBinding };
+}
+
+/** Freeze the optional source budgets into the bytecode. The checker's source
+ * roster covers every Contract entry and excludes sources owned by Rust. */
+export function moduleMetadata(code, parse, options, declaration) {
+  return async (checker, type, _api, program) => {
+    const names = (await checker.getPropertiesOfType(type)).map(symbol => symbol.name);
+    if (!names.includes('turnBudgets')) return { names };
+    const file = await program.getSourceFile(declaration);
+    const exports = await checker.getExportsOfModule(await checker.getSymbolAtLocation(file));
+    const sources = exports.find(symbol => symbol.name === 'TypeScriptSources');
+    const rows = await checker.getPropertiesOfType(await checker.getDeclaredTypeOfSymbol(sources));
+    return { names, budgets: sourceTurnBudgets(code, parse, options, new Set(rows.map(row => row.name))) };
+  };
+}
+
+export function sourceTurnBudgets(code, parse, options, sources) {
+  const { root, binding, exported, refuse } = constantBindings(code, parse, options);
+  const read = (module, expression, name) => {
+    const node = bare(expression);
+    if (node?.type === 'Identifier') {
+      if (node.name === 'NaN' || node.name === 'Infinity') refuse(module, node, name, 'requires finite milliseconds from 100 to 1000');
+      return binding(module, node.name, node, name, read);
+    }
+    if (node?.type === 'Literal' && typeof node.value === 'number') return node.value;
+    if (node?.type !== 'ObjectExpression') refuse(module, node, name, 'must be a constant map of source names to milliseconds');
+    const budgets = Object.create(null);
+    for (const property of node.properties) {
+      if (property.type === 'SpreadElement') {
+        const part = read(module, property.argument, name);
+        if (typeof part !== 'object') refuse(module, property, name, 'can only spread a source budget map');
+        Object.assign(budgets, part);
+        continue;
+      }
+      const source = propertyName(property);
+      if (!sources.has(source)) refuse(module, property, name, `names unknown TypeScript source ${source ?? '(computed name)'}`);
+      const value = read(module, property.value, name);
+      if (!Number.isFinite(value) || value < 100 || value > 1000)
+        refuse(module, property, name, `requires a finite budget from 100 to 1000 ms for ${source}`);
+      budgets[source] = value;
+    }
+    return budgets;
+  };
+  const result = exported(root, 'turnBudgets', 'turnBudgets', read);
+  if (typeof result !== 'object') throw new Error('app.ts: turnBudgets must map source names to milliseconds');
+  return result;
+}
+
+/** Native exports retained by the bundle after its module metadata is checked. */
+export function nativeModuleEntry({ names: exported, budgets }) {
+  const draws = exported.includes('draw');
+  if (draws !== exported.includes('surfaces'))
+    throw new Error('app.ts exports `draw` and `surfaces` together, or neither (LLP 1056 D1)');
+  const entry = draws ? `import { canvasSeam } from './__exact_canvas.js';
+export const abi = 2;
+export const surfacesJson = JSON.stringify(app.surfaces);
+const seam = canvasSeam(app.draw);
+export const drawCanvas = (request: string, host?: unknown): string => seam.draw(JSON.parse(request), host);
+export const retireCanvases = (retired: string): void => seam.retire(JSON.parse(retired));
+` : 'export const abi = 1;\n';
+  const policy = budgets && Object.keys(budgets).length ? 'export const turnBudgetsJson = '+JSON.stringify(JSON.stringify(budgets))+';\n' : '';
+  return entry + policy;
 }
 
 /** The initializer actually exported as grants, with its authored node for receipt locations. */
@@ -131,7 +207,7 @@ export function grantsInitializer(code, parse, options) {
 
 /** appId stays local; grants may follow imports through `load`, which returns captured app-local syntax. */
 export function staticFacts(code, parse, { load, locations = false, source = code } = {}) {
-  const { root, refuse, binding, exported, resolveBinding } = constantBindings(code, parse, { load, source });
+  const { root, refuse, imported, binding, exported, resolveBinding } = constantBindings(code, parse, { load, source });
   if (root.parsed.errors?.length) return { appId: undefined, grants: undefined, exported: [], ...(locations ? { grantSources: [] } : {}) };
   const literal = (m, node, value) => {
     node = m.original.get(node) ?? node;
@@ -183,6 +259,11 @@ export function staticFacts(code, parse, { load, locations = false, source = cod
       const separator = node.arguments.length ? scalar(m, node.arguments[0], name) : literal(m, node, ',');
       return array.reduce((result, entry, i) => combine(i ? combine(result, { ...separator, value: String(separator.value) }) : result, { ...entry, value: String(entry.value) }), { value: '', parts: [] });
     }
+    // `ns.NAME` through `import * as ns` reads the export NAME, as a named import would. Only the dot form: the
+    // launch-setting walk (__exact_env.mjs `key`) does not read every key this file's `propertyName` does.
+    const namespace = node.type === 'MemberExpression' && !node.computed && bare(node.object)?.type === 'Identifier' ? m.imports.get(bare(node.object).name) : undefined;
+    if (namespace?.namespace && propertyName(node) !== null)
+      return exported(imported(m, namespace.source, namespace.node, name), propertyName(node), name, constant);
     const why = node.type === 'CallExpression' ? 'cannot call code; only a literal array .join(separator) is allowed'
       : node.type === 'ConditionalExpression' ? `${syntax}; conditional expressions are not allowed`
       : node.type === 'MemberExpression' ? 'cannot read a computed value or array element; use literal constants' : syntax;

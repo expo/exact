@@ -34,6 +34,20 @@ pub(super) enum Geom<'a> {
 }
 
 impl Geom<'_> {
+    fn bounds(&self) -> Option<Rect> {
+        match self {
+            Geom::Fill(path, _, ts) => path.bounds().transform(*ts),
+            Geom::Stroke(path, stroke, ts) => {
+                // Bound a miter join and the corners of a square cap before
+                // transforming. Hairlines and antialiasing are in device pixels.
+                let reach = 0.5 * stroke.width * stroke.miter_limit.max(std::f32::consts::SQRT_2);
+                path.bounds()
+                    .outset(reach, reach)
+                    .and_then(|r| r.transform(*ts))
+            }
+        }
+    }
+
     fn ts(&self) -> Transform {
         match self {
             Geom::Fill(_, _, ts) | Geom::Stroke(_, _, ts) => *ts,
@@ -421,6 +435,7 @@ impl Replayer {
         let (w, h) = (self.pixmap.width(), self.pixmap.height());
         let clip = self.state.clip.clone();
         if self.shadowed() || extent {
+            self.damage_all();
             let Some(mut layer) = Pixmap::new(w, h) else {
                 return;
             };
@@ -459,6 +474,8 @@ impl Replayer {
                 );
                 return;
             }
+        } else {
+            self.damage_path(geom.bounds());
         }
         let mask = intersect(clip.as_ref(), band);
         render(
@@ -568,13 +585,14 @@ impl Replayer {
         if !near(scale_x, 1.0) || !near(scale_y, 1.0) {
             return false;
         }
-        let dx0 = dx * f64::from(ts.sx) + f64::from(ts.tx);
-        let dy0 = dy * f64::from(ts.sy) + f64::from(ts.ty);
-        let dx1 = (dx + dw) * f64::from(ts.sx) + f64::from(ts.tx);
-        let dy1 = (dy + dh) * f64::from(ts.sy) + f64::from(ts.ty);
-        if ![sx, sy, sx + sw, sy + sh, dx0, dy0, dx1, dy1]
+        let dx0 = super::device_edge(dx, ts.sx, ts.tx);
+        let dy0 = super::device_edge(dy, ts.sy, ts.ty);
+        let dx1 = super::device_edge(dx + dw, ts.sx, ts.tx);
+        let dy1 = super::device_edge(dy + dh, ts.sy, ts.ty);
+        if ![sx, sy, sx + sw, sy + sh]
             .into_iter()
             .all(|v| near(v, v.round()))
+            || ![dx0, dy0, dx1, dy1].into_iter().all(|v| v.fract() == 0.)
         {
             return false;
         }
@@ -595,6 +613,7 @@ impl Replayer {
         if x0 >= x1 || y0 >= y1 {
             return true;
         }
+        self.damage_edges(x0 as usize, y0 as usize, x1 as usize, y1 as usize);
         let replace = cached.opaque || self.cleared;
         let full = x0 == 0 && y0 == 0 && x1 == pw && y1 == ph;
         let to = if replace && (full || self.cleared) {
@@ -646,6 +665,12 @@ impl Replayer {
         if sx0 >= sx1 || sy0 >= sy1 {
             return;
         }
+        self.damage_edges(
+            (x0 + sx0) as usize,
+            (y0 + sy0) as usize,
+            (x0 + sx1) as usize,
+            (y0 + sy1) as usize,
+        );
         let full = x0 <= 0 && y0 <= 0 && x0 + w >= pw && y0 + h >= ph;
         let px = if full || self.cleared {
             self.overwrite_all_pixmap().pixels_mut()

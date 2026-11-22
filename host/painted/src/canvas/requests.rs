@@ -55,7 +55,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
         if let Some(names) = crate::canvas::jni::jni_extensions::take_bound() {
             self.bind_extensions(&names);
         }
-        if !self.scrolled {
+        if !self.scroll_hold.take_request_skip() {
             // The reader takes its requests once it has the turn's frame:
             // after first pixel (a displayed frame activates it), the
             // hatches connect, once (LLP 1075.003.000.001 §2.1).

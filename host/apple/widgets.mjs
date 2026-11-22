@@ -11,14 +11,14 @@ import { linkedPlanArgs } from '../../scripts/linked-plan.mjs';
 import { fitLinkedSections, reserveLinkedPlan } from './sections.mjs';
 import { appleLinkArgs } from '../../scripts/package-libraries.mjs';
 import { constValueArgs, intentsMetadata } from './intents.mjs';
-import { appexArgs, keepMain, extensionModuleCache } from './extensions.mjs';
+import { appexArgs, keepMain, extensionModuleCache, shareId } from './extensions.mjs';
 import { coveringProfiles, missingDevelopmentProfile, installedProfiles, decodeProfile, profilesFor, profileMisfit, byExpiry, METHODS, iosProfile, allowsEntitlement, macHardwareID } from './devices.mjs';
 import { fileURLToPath } from 'node:url';
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url))), pkg = resolve(root, 'host/apple');
 export const accessoryFamilies = ['accessoryCircular', 'accessoryRectangular', 'accessoryInline', 'accessoryCorner'];
 export function platformWidgetEntries(app, platform = 'ios') {
   return widgetEntries(app).flatMap(entry => {
-    const families = (platform === 'watchos' ? entry.watchFamilies ?? entry.families : entry.families).filter(family => platform === 'watchos' ? accessoryFamilies.includes(family) : platform === 'macos' ? ['systemSmall', 'systemMedium', 'systemLarge', 'systemExtraLarge'].includes(family) : family !== 'accessoryCorner');
+    const families = (platform === 'watchos' ? entry.watchFamilies ?? entry.families : entry.families).filter(family => platform === 'watchos' ? accessoryFamilies.includes(family) : platform === 'macos' ? ['systemSmall', 'systemMedium', 'systemLarge', 'systemExtraLarge', 'systemExtraLargePortrait'].includes(family) : family !== 'accessoryCorner');
     return families.length ? [{ ...entry, families }] : [];
   });
 }
@@ -146,15 +146,9 @@ export function macWidgetEntitlements({ app, team, profiles = null, extension = 
   });
 }
 
-/** The two profiles a device build of an app with entries embeds, the app's and its extension's (LLP 1126.001
- * WP13): of one team, App ID prefix and method, each granting the App Group and the one Keychain group both sign
- * (`<prefix>.<app id>`, or the team wildcard), the app's also `aps-environment` (as its method signs it) when an
- * activity takes pushes and `required` (the grants' signing entitlements, which the extension never signs); or
- * one refusal naming, for each App ID, the profiles that were close and what each lacked or failed. A build for a
- * phone (`udid`) takes development profiles, signed with the Apple Development identity; an archive (no phone)
- * takes distribution ones, the extension's of the named one's method and, for Ad Hoc, its devices. EXACT_PROFILE
- * names the app's, under the same conditions; the extension's is found by its own id, since a team wildcard
- * grants no App Group. `installed` and `named` are the decoded profiles, which a test replaces. */
+/** Pick an iOS profile for the app and each extension that uses its App Group. Widgets also share
+ * a Keychain group. A device requires development profiles covering the phone. An archive requires
+ * distribution profiles of the same method covering the app's devices. EXACT_PROFILE pins the app's. */
 export function entryProfiles({ app, udid, required = [], values = {}, installed = installedProfiles(), named = process.env.EXACT_PROFILE ? decodeProfile(process.env.EXACT_PROFILE) : null, team = process.env.DEVELOPMENT_TEAM?.trim(), phoneName = udid }) {
   // installedProfiles also finds native Mac profiles; they cannot provision iOS.
   installed = installed.filter(iosProfile);
@@ -162,11 +156,12 @@ export function entryProfiles({ app, udid, required = [], values = {}, installed
     installed = installed.filter(p => p.team === team);
     if (!coveringProfiles(udid, app.id, installed).length) throw missingDevelopmentProfile(udid, app.id, team, phoneName);
   }
-  const group = widgetGroup(app), extension = widgetId(app), push = activityEntries(app).some(entry => entry.push === true);
+  const group = widgetGroup(app), widgets = hasEntries(app), push = activityEntries(app).some(entry => entry.push === true);
+  const extensions = [...(widgets ? [['extension', widgetId(app)]] : []), ...(app.manifest.share_target ? [['share', shareId(app)]] : [])];
   const shared = prefix => `${prefix}.${app.id}`;
   const wants = (id, prefix) => [
     { has: p => p.groups.includes(group), missing: `the App Group ${group}`, portal: `App Groups (${group})` },
-    { has: p => p.keychain.includes(`${p.prefix}.*`) || p.keychain.includes(shared(p.prefix)), missing: `the Keychain group ${shared(prefix)}`, portal: `Keychain Sharing (the group ${shared(prefix)}, or the team's ${prefix}.*)` },
+    ...(widgets && id !== shareId(app) ? [{ has: p => p.keychain.includes(`${p.prefix}.*`) || p.keychain.includes(shared(p.prefix)), missing: `the Keychain group ${shared(prefix)}`, portal: `Keychain Sharing (the group ${shared(prefix)}, or the team's ${prefix}.*)` }] : []),
     ...(id === app.id && push && !required.includes('aps-environment') ? [{ has: p => allowsEntitlement(p, 'aps-environment'), missing: 'aps-environment (development on a development profile, production otherwise; an activity takes pushes)', portal: 'Push Notifications' }] : []),
     ...(id === app.id ? required.map(name => ({ has: p => allowsEntitlement(p, name, values), missing: name === 'aps-environment' ? 'aps-environment (development on a development profile, production otherwise)' : name, portal: name === 'aps-environment' ? 'Push Notifications' : name })) : []),
   ];
@@ -182,8 +177,8 @@ export function entryProfiles({ app, udid, required = [], values = {}, installed
       if (why) misfits.push([p, why]); else fits.push(p);
     }
     fits.sort(byExpiry);
-    const found = fits.find(p => needs.every(want => want.has(p)));
-    if (found) return { found };
+    const matching = fits.filter(p => needs.every(want => want.has(p)));
+    if (matching.length) return { found: matching[0], matching };
     // What to register: a grant no profile for the id makes, fit or not (a misfit profile already has the rest).
     const lacking = needs.filter(want => !candidates.some(p => want.has(p)));
     const fitsLack = needs.filter(want => !fits.some(p => want.has(p)));
@@ -195,16 +190,27 @@ export function entryProfiles({ app, udid, required = [], values = {}, installed
   const forApp = named
     ? assess(app.id, [named], null, { label: p => `EXACT_PROFILE (${p.name})`, reject: p => !iosProfile(p) ? 'is not an iOS profile' : profilesFor(app.id, [p]).length ? null : `is for ${p.appId}, not ${app.id}` })
     : assess(app.id, profilesFor(app.id, installed), null);
+  const choices = owner => extensions.map(([kind, id]) => [kind, id, assess(id, profilesFor(id, installed), owner)]);
+  for (const owner of forApp.matching ?? []) {
+    const available = choices(owner);
+    for (const certificate of owner.certificates ?? [null]) {
+      const result = { app: owner };
+      for (const [kind, , candidates] of available) {
+        result[kind] = candidates.matching?.find(p => !certificate || p.certificates?.includes(certificate));
+      }
+      if (available.every(([kind]) => result[kind])) return result;
+    }
+  }
   const like = forApp.found ?? null;
-  const forExtension = assess(extension, profilesFor(extension, installed), like);
-  if (like && forExtension.found) return { app: like, extension: forExtension.found };
+  const rows = [[app.id, forApp], ...choices(like).map(([, id, choice]) => [id, choice])];
   const method = like ? METHODS[like.method] : udid ? 'development' : 'distribution';
-  const register = [[app.id, forApp], [extension, forExtension]].filter(([, choice]) => !choice.found && choice.lacking?.length)
+  const register = rows.filter(([, choice]) => !choice.found && choice.lacking?.length)
     .map(([id, choice]) => `the App ID ${id} with ${[...new Set(choice.lacking.map(w => w.portal))].join(' and ')}`);
-  throw new Error(`host/apple: a device build of an app with widgets or Live Activities embeds one ${method} profile in the app and one in its extension, of one team, App ID prefix and method, each granting the App Group and the Keychain group they share (LLP 1126.001 WP13). On this Mac${udid ? `, for this phone (${udid})` : ', for an archive'}:
-  ${app.id}: ${forApp.found ? 'provisioned' : forApp.why}
-  ${extension}: ${forExtension.found ? 'provisioned' : forExtension.why}
-${register.length ? `In the Apple Developer portal, register ${register.join(', and ')}; then make` : 'Make'} one ${method} profile for each App ID${udid ? ' that includes this phone' : like?.devices.length ? ' naming the same devices' : ''}; install both (open the files, or Xcode ▸ Settings ▸ Accounts ▸ Download Manual Profiles). EXACT_PROFILE names the app's.`);
+  const reasons = rows.map(([id, choice]) => `  ${id}: ${choice.found ? 'provisioned' : choice.why}`).join('\n');
+  const certificate = rows.every(([, choice]) => choice.found) ? ' The profiles need a common signing certificate.' : '';
+  throw new Error(`host/apple: an iOS device build embeds one ${method} profile in the app and one in ${extensions.length === 1 ? 'its extension' : 'each extension'}. All profiles must authorize the shared App Group under the same team and App ID prefix. On this Mac${udid ? `, for this phone (${udid})` : ', for an archive'}:
+${reasons}
+${register.length ? `In the Apple Developer portal, register ${register.join(', and ')}; then make` : 'Make'} one ${method} profile for each App ID${udid ? ' that includes this phone' : like?.devices.length ? ' naming the same devices' : ''}; install ${rows.length === 2 ? 'both' : 'all profiles'} (open the files, or Xcode ▸ Settings ▸ Accounts ▸ Download Manual Profiles). EXACT_PROFILE names the app's.${certificate}`);
 }
 const tree = dir => readdirSync(dir, { withFileTypes: true }).flatMap(e => e.isDirectory() ? tree(resolve(dir, e.name)) : [resolve(dir, e.name)]);
 
@@ -427,6 +433,11 @@ struct ${name}: WidgetConfigurationIntent, ExactConfigurationIntent {
   };
   const generated = entries.map((entry, i) => {
     const offered = offeredParameters(entry, platform), configured = offered.length > 0 && intentName(entry);
+    const portraitXL = entry.families.includes('systemExtraLargePortrait');
+    const baseFamilies = entry.families.filter(f => f !== 'systemExtraLargePortrait').map(f => `.${f}`).join(', ');
+    const supported = portraitXL
+      ? `{ var families: [WidgetFamily] = [${baseFamilies}]; if #available(iOS 27.0, macOS 27.0, *) { families.append(.systemExtraLargePortrait) }; return families }()`
+      : `[${baseFamilies}]`;
     return `${configured ? intent(entry.configuration, configured, offered) : ''}struct ${names[i]}: Widget {
     let kind = ${literal(entry.kind)}
     var body: some WidgetConfiguration {
@@ -436,7 +447,7 @@ struct ${name}: WidgetConfigurationIntent, ExactConfigurationIntent {
             ExactWidgetView(entry: entry)${gamut}
         }
         .configurationDisplayName(${literal(entry.title ?? human(entry.kind))}).description(${literal(entry.description ?? human(entry.kind))})
-        .supportedFamilies([${entry.families.map(f => `.${f}`).join(', ')}]).contentMarginsDisabled()
+        .supportedFamilies(${supported}).contentMarginsDisabled()
     }
 }`;
   }).join('\n');

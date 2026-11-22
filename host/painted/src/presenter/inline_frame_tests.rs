@@ -719,7 +719,7 @@ fn selection_events_name_source_offsets_and_copy_uses_the_visible_spaces() {
 }
 
 #[test]
-#[cfg(not(any(windows, target_os = "android")))]
+#[cfg(not(target_os = "android"))]
 fn mouse_drag_copies_rendered_reader_text_and_leaves_a_focused_editor_its_shortcuts() {
     use crate::presenter::clipboard::tests::{chord, Memory};
     use std::{cell::RefCell, rc::Rc};

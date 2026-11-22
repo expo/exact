@@ -53,7 +53,8 @@ impl Rotation {
         }
     }
 
-    fn affine(self, [w, h]: [u32; 2]) -> [f32; 6] {
+    /// Map a logical pixel edge into the rotated framebuffer.
+    pub fn affine(self, [w, h]: [u32; 2]) -> [f32; 6] {
         let (w, h) = (w as f32, h as f32);
         match self {
             Self::R0 => [1., 0., 0., 1., 0., 0.],

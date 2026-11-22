@@ -2,23 +2,38 @@
 //! Hardware opens outside this loop so headless tests use the same wake dispatch.
 use exact_painted::app::Config;
 use exact_painted::launch_marks::LaunchMarks;
-use exact_painted::presenter::{Presenter, SubmittedFrame};
+use exact_painted::presenter::{PanelImage, Presenter, SubmittedFrame};
 use exact_runner::DataSource;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 use tiny_skia::Pixmap;
 
+pub(crate) type PanelFrame = SubmittedFrame<PanelImage>;
+
+pub(crate) enum Completion {
+    Pending,
+    Shown(PanelFrame),
+    Retry(PanelFrame),
+}
+
 pub(crate) trait Output {
+    fn direct(&self) -> bool {
+        false
+    }
     fn refresh(&self) -> u32;
     fn period_ms(&self) -> f64;
     fn pending(&self) -> bool;
     fn sequence(&self) -> Option<u32>;
     #[cfg(target_os = "linux")]
+    fn observed(&self) -> Option<Instant> {
+        None
+    }
+    #[cfg(target_os = "linux")]
     fn last_flip(&self) -> Option<Duration>;
     fn fd(&self) -> i32;
-    fn submit(&mut self, frame: SubmittedFrame) -> Result<Option<SubmittedFrame>, String>;
-    fn ready(&mut self) -> Result<Option<SubmittedFrame>, String>;
+    fn submit(&mut self, frame: PanelFrame) -> Result<Completion, String>;
+    fn ready(&mut self) -> Result<Completion, String>;
     fn wait(&self, fds: &[i32], timeout: i32) -> Result<bool, String> {
         poll(fds, self.fd(), timeout)
     }
@@ -27,6 +42,9 @@ pub(crate) trait Output {
 pub(crate) trait Events<D: DataSource> {
     fn fds(&self) -> Vec<i32>;
     fn idle(&self) -> bool;
+    fn mirror(&self) -> bool {
+        true
+    }
     fn publish(&mut self, pixels: Arc<Pixmap>);
     fn turn(&mut self, p: &mut Presenter<D>, wall: impl Fn() -> f64);
     fn date_jumped(&self) -> bool;
@@ -89,7 +107,7 @@ pub(crate) fn run<D: DataSource>(
             }
         }
         if p.dirty() && !display.pending() {
-            let Some(frame) = p.display_frame() else {
+            let Some(frame) = p.panel_frame(display.direct(), events.mirror()) else {
                 eprintln!("exact: display/presenter submission ownership mismatch");
                 return 1;
             };
@@ -103,8 +121,11 @@ pub(crate) fn run<D: DataSource>(
             match submitted {
                 // The first picture's synchronous modeset has no flip event:
                 // it is presented when `set_crtc` returns (LLP 1003.001 D9).
-                Ok(Some(frame)) => presented(&mut p, frame, wall(), events, &mut first_pixel),
-                Ok(None) => {}
+                Ok(Completion::Shown(frame)) => {
+                    presented(&mut p, frame, wall(), events, &mut first_pixel)
+                }
+                Ok(Completion::Pending) => {}
+                Ok(Completion::Retry(frame)) => p.panel_lost(&frame),
                 Err(e) => {
                     eprintln!("exact: {e}");
                     return 1;
@@ -169,12 +190,17 @@ pub(crate) fn run<D: DataSource>(
         fds.push(display.fd());
         match display.wait(&fds, timeout) {
             Ok(true) => match display.ready() {
-                Ok(Some(frame)) => {
+                Ok(Completion::Shown(frame)) => {
                     // The flip's kernel timestamp, else when it was heard.
                     #[cfg(target_os = "linux")]
-                    let at = display
-                        .last_flip()
-                        .map_or_else(wall, |at| monotonic_ms(at, wall()));
+                    let at = display.last_flip().map_or_else(
+                        || {
+                            display.observed().map_or_else(wall, |t| {
+                                t.duration_since(started).as_secs_f64() * 1000.
+                            })
+                        },
+                        |at| monotonic_ms(at, wall()),
+                    );
                     #[cfg(not(target_os = "linux"))]
                     let at = wall();
                     #[cfg(target_os = "linux")]
@@ -190,15 +216,14 @@ pub(crate) fn run<D: DataSource>(
                     }
                     presented(&mut p, frame, at, events, &mut first_pixel);
                     let paint = p.last_frame_ms().map(|(ms, _)| ms);
-                    if let Some(line) = display
-                        .sequence()
-                        .filter(|_| measured)
-                        .and_then(|s| frames.flipped(s, wall(), paint))
-                    {
-                        p.host_mut().log(line);
+                    if measured {
+                        if let Some(line) = frames.flipped(display.sequence(), at, paint) {
+                            p.host_mut().log(line);
+                        }
                     }
                 }
-                Ok(None) => {}
+                Ok(Completion::Pending) => {}
+                Ok(Completion::Retry(frame)) => p.panel_lost(&frame),
                 Err(e) => {
                     eprintln!("exact: {e}");
                     return 1;
@@ -362,14 +387,16 @@ fn monotonic_ms(at: Duration, wall: f64) -> f64 {
 
 fn presented<D: DataSource>(
     p: &mut Presenter<D>,
-    frame: SubmittedFrame,
+    frame: PanelFrame,
     at: f64,
     events: &mut impl Events<D>,
     first: &mut Option<Instant>,
 ) {
     // Pixels belong to this receipt, even if input/reload changed the live Host.
-    events.publish(frame.pixels().clone());
-    p.display_complete(&frame);
+    if let Some(pixels) = frame.mirror() {
+        events.publish(pixels.clone());
+    }
+    p.panel_complete(&frame);
     // What the picture carried starts at its present (LLP 1003.001 D9).
     if let Some(e) = p.display_presented(&frame, at) {
         eprintln!("exact: {e}");

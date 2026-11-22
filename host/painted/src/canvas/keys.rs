@@ -27,6 +27,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// A key typed at the focused node: a character, Enter (`'\n'`), or
     /// Backspace (`backspace`). Nothing when nothing holds the focus.
     pub fn key(&mut self, ch: Option<char>, backspace: bool) {
+        self.end_scroll();
         let now = self.now();
         self.p.key(ch, backspace, now);
         self.force = true;
@@ -61,6 +62,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// held for this key alone, as a field's Shift+Tab holds it
     /// (`Presenter::reader_field_action`).
     pub fn named_key(&mut self, code: &str, key: &str, down: bool, repeat: bool, shift: bool) {
+        self.end_scroll();
         let held = self.p.held & 1;
         self.p.hold_modifier("ShiftLeft", shift);
         self.p.hardware_key(code, key, down, repeat);
@@ -72,6 +74,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// app took it; when it did not, it has nowhere to go back to and the
     /// activity goes.
     pub fn back(&mut self) -> bool {
+        self.end_scroll();
         let now = self.now();
         let taken = self.p.system_back(now);
         self.force |= taken;
@@ -92,6 +95,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// an activity made again in a running process), as a link's location
     /// (LLP 1133.023 D15 item 3). The one at launch is `EXACT_LAUNCH_URL`.
     pub fn open(&mut self, href: &str) {
+        self.end_scroll();
         let now = self.now();
         if exact_runner::auth::receive_callback(self.p.host_mut().runner_mut(), href) {
             self.force = true;
@@ -107,6 +111,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// LLP 1133.024 D5): `{"target", "share"}`, its files descriptors the
     /// reader opened. The one at launch is `EXACT_SHARE`.
     pub fn share(&mut self, request: &str) {
+        self.end_scroll();
         let now = self.now();
         let received = serde_json::from_str(request)
             .map_err(|e| e.to_string())
@@ -121,6 +126,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// host booted with none (`Headless`, LLP 1133.017 D7): the launch
     /// location, which that boot had no `EXACT_LAUNCH_URL` to read.
     pub fn launch(&mut self, href: &str) {
+        self.end_scroll();
         let now = self.now();
         if let Some(error) = self.p.launch_location(href, now) {
             eprintln!("exact: {error}");
@@ -131,6 +137,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// The share in that intent, `{"target", "share"}`, which that boot had
     /// no `EXACT_SHARE` to claim.
     pub fn launch_share(&mut self, request: &str) {
+        self.end_scroll();
         let now = self.now();
         let launched = serde_json::from_str(request)
             .map_err(|e| e.to_string())

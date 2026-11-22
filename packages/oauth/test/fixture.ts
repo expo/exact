@@ -12,6 +12,7 @@
 // app's server when the app's `app.json` names it in `commands.server`.
 import { createHash, randomBytes } from 'node:crypto';
 import process from 'node:process';
+import { oauth } from '../index.ts';
 
 export interface Profile {
   /** Discovery at `<issuer>/.well-known/openid-configuration`; false: none (endpoints are configured). */
@@ -148,7 +149,8 @@ export const PROFILES: Record<string, Profile> = {
 };
 
 interface Grant { profile: string; client: string; redirect: string; challenge: string | null; nonce: string | null; offline: boolean; used: boolean; family: string }
-interface Family { profile: string; client: string; scope: string; subject: string; revoked: boolean; refresh: string; spent: Map<string, number>; access: Map<string, number> }
+interface Person { sub: string; name: string; email: string }
+interface Family { profile: string; client: string; scope: string; person: Person; firstAccess?: string; revoked: boolean; refresh: string; spent: Map<string, number>; access: Map<string, number> }
 
 // `--port <n>` (an app's `commands.server` passes it), else PORT, else 4400.
 const flag = process.argv.indexOf('--port');
@@ -177,9 +179,7 @@ let marks: Record<string, Record<string, number>> = {};
 let clock = Date.now();
 const now = (): number => clock;
 
-const PEOPLE: Record<string, { sub: string; name: string; email: string }> = {
-  default: { sub: 'user-1', name: 'Ada Lovelace', email: 'ada@example.com' },
-};
+const defaultPerson: Person = { sub: 'user-1', name: 'Ada Lovelace', email: 'ada@example.com' };
 // The person's password at an authentication tree, and the SSO tokens it issued.
 const PASSWORD = 'lovelace';
 let ssoTokens = new Set<string>();
@@ -195,19 +195,20 @@ const token = (prefix: string): string => `${prefix}.${b64url(randomBytes(18))}`
 const baseOf = (origin: string, profile: string): string => `${origin}/p/${profile}`;
 const issuerOf = (origin: string, profile: string): string => PROFILES[profile].issuer.replace('{base}', baseOf(origin, profile));
 
-function idToken(origin: string, profile: string, client: string, sub: string, nonce: string | null): string {
+function idToken(origin: string, profile: string, client: string, person: Person, nonce: string | null, email: boolean): string {
   const p = PROFILES[profile], seconds = Math.floor(now() / 1000);
   const tid = '72f988bf-0000-0000-0000-000000000000';
   const claims: Record<string, unknown> = {
     iss: p.issNoScheme ? 'accounts.google.com' : issuerOf(origin, profile).replace('{tenantid}', tid),
-    sub,
+    sub: person.sub,
     aud: p.audArray ? [client, 'https://api.example.test'] : client,
     ...(p.audArray ? { azp: client } : {}),
     iat: seconds,
     exp: seconds + 3600,
     ...(nonce ? { nonce } : {}),
     ...(p.issuer.includes('{tenantid}') ? { tid } : {}),
-    name: PEOPLE.default.name,
+    name: person.name,
+    ...(email ? { email: person.email } : {}),
     ...idClaims[profile],
   };
   delete idClaims[profile];
@@ -240,7 +241,8 @@ function tokenError(p: Profile, req: Request, status: number, error: string, des
 
 function issue(profile: string, req: Request, id: string, nonce: string | null, refresh: string | null): Response {
   const p = PROFILES[profile], family = families.get(id)!;
-  const access = token('at');
+  const access = family.firstAccess ?? token('at');
+  delete family.firstAccess;
   family.access.set(access, now() + p.accessSeconds * 1000);
   byAccess.set(access, id);
   const scopes = family.scope.split(' ').filter(Boolean);
@@ -250,7 +252,7 @@ function issue(profile: string, req: Request, id: string, nonce: string | null, 
   if (p.scopeFormat === 'space') body.scope = scopes.join(' ');
   if (p.scopeFormat === 'comma') body.scope = scopes.join(',');
   if (refresh) body.refresh_token = refresh;
-  if (p.idToken && scopes.includes('openid')) body.id_token = idToken(new URL(req.url).origin, profile, family.client, family.subject, nonce);
+  if (p.idToken && scopes.includes('openid')) body.id_token = idToken(new URL(req.url).origin, profile, family.client, family.person, nonce, scopes.includes('email'));
   return reply(p, req, 200, body);
 }
 
@@ -393,7 +395,7 @@ async function tokenEndpointInner(profile: string, req: Request): Promise<Respon
   return tokenError(p, req, 400, 'unsupported_grant_type', String(grant));
 }
 
-function authorize(profile: string, url: URL): Response {
+function authorize(profile: string, url: URL, person = defaultPerson, firstAccess?: string): Response {
   const p = PROFILES[profile], q = url.searchParams;
   count(profile, 'authorize');
   const redirect = q.get('redirect_uri') ?? '';
@@ -417,18 +419,58 @@ function authorize(profile: string, url: URL): Response {
   const when = p.refreshTokenWhen;
   const offline = when === 'always' || (when !== 'never' && ((when.scope !== undefined && scope.split(' ').includes(when.scope)) || (when.param !== undefined && q.get(when.param[0]) === when.param[1])));
   const familyId = token('fam');
-  families.set(familyId, { profile, client, scope, subject: PEOPLE.default.sub, revoked: false, refresh: '', spent: new Map(), access: new Map() });
+  if (firstAccess) {
+    if (byAccess.has(firstAccess)) return new Response('this test access token was already issued', { status: 409 });
+    byAccess.set(firstAccess, familyId);
+  }
+  families.set(familyId, { profile, client, scope, person, firstAccess, revoked: false, refresh: '', spent: new Map(), access: new Map() });
   const code = token('code');
   codes.set(code, { profile, client, redirect, challenge, nonce: q.get('nonce'), offline, used: false, family: familyId });
   return back({ code });
 }
 
-function bearer(req: Request): Family | 'expired' | null {
+interface SignedInAccount {
+  clientId: string;
+  sub: string;
+  name?: string;
+  email?: string;
+  token?: string;
+}
+
+/** Run the code exchange before the app starts. Only the client's OAuthStore knows how to serialize its session. */
+export async function signedInSession(origin: string, key: string, account: SignedInAccount): Promise<string> {
+  const base = new URL(origin);
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(base.hostname) || base.protocol !== 'http:' || base.username || base.password)
+    throw new Error('signed-in requires the local OAuth fixture server');
+  if (!account || typeof account.clientId !== 'string' || !account.clientId || typeof account.sub !== 'string' || !account.sub)
+    throw new Error('signed-in requires clientId and sub');
+  const issuer = base.origin + '/p/spec';
+  const localFetch = async (url: string, init: RequestInit) => {
+    if (new URL(url).origin !== base.origin) throw new Error('signed-in fixture endpoint left its origin');
+    return fetch(url, { ...init, redirect: 'manual', signal: AbortSignal.timeout(10_000) });
+  };
+  const provider = oauth({ issuer, clientId: account.clientId, scopes: ['openid', 'profile', 'email', 'offline_access'], key,
+    callback: 'dev.exact.fixture:/callback', apis: [], fetch: localFetch });
+  let record: string | null = null;
+  const person = { sub: account.sub, name: account.name ?? account.sub, email: account.email ?? '' };
+  const result = await provider.signIn({ get: () => record, set: (_, value) => { record = value; }, forget: () => { record = null; } }, {
+    authorize: async ({ url }) => {
+      const reply = await localFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ person, token: account.token }) });
+      if (reply.status !== 302) throw new Error(`fixture authorization answered ${reply.status}`);
+      return reply.headers.get('location') ?? '';
+    },
+  });
+  if (!result.ok || !record) throw new Error(`signed-in: ${result.error || 'fixture issued no session'}`);
+  return record;
+}
+
+function bearer(profile: string, req: Request): Family | 'expired' | null {
   const auth = req.headers.get('authorization') ?? '';
   const m = /^Bearer (.+)$/i.exec(auth);
   if (!m) return null;
   const id = byAccess.get(m[1]), family = id ? families.get(id) : undefined;
-  if (!family || family.revoked) return null;
+  if (!family || family.profile !== profile || family.revoked) return null;
   const until = family.access.get(m[1]);
   if (until === undefined) return null;
   return until < now() ? 'expired' : family;
@@ -436,7 +478,7 @@ function bearer(req: Request): Family | 'expired' | null {
 
 function resource(profile: string, req: Request): Response {
   count(profile, 'api');
-  const f = bearer(req);
+  const f = bearer(profile, req);
   if (!f || f === 'expired') {
     return new Response(JSON.stringify({ error: 'invalid_token' }), {
       status: f === 'expired' ? PROFILES[profile].expiredStatus ?? 401 : 401,
@@ -444,7 +486,7 @@ function resource(profile: string, req: Request): Response {
     });
   }
   count(profile, 'api-ok');
-  return Response.json({ sub: f.subject, name: PEOPLE.default.name, email: PEOPLE.default.email }, { headers: { 'Access-Control-Allow-Origin': '*' } });
+  return Response.json(f.person, { headers: { 'Access-Control-Allow-Origin': '*' } });
 }
 
 async function control(req: Request): Promise<Response> {
@@ -557,7 +599,7 @@ async function authenticate(profile: string, req: Request): Promise<Response> {
     return Response.json({ authId: token('auth'), callbacks: [callback('NameCallback', 'User Name', 'IDToken1'), callback('PasswordCallback', 'Password', 'IDToken2')] });
   }
   const [name, password] = (body.callbacks ?? []).map((c) => c.input?.[0]?.value);
-  if (name !== PEOPLE.default.email || password !== PASSWORD) return Response.json({ code: 401, reason: 'Unauthorized', message: 'Login failure' }, { status: 401 });
+  if (name !== defaultPerson.email || password !== PASSWORD) return Response.json({ code: 401, reason: 'Unauthorized', message: 'Login failure' }, { status: 401 });
   const sso = token('sso');
   ssoTokens.add(sso);
   return Response.json({ tokenId: sso, successUrl: '/console', realm: '/' });
@@ -615,6 +657,15 @@ export function handle(req: Request): Response | Promise<Response> {
   const rest = (m[2] ?? '/').replace(/^\/(common|organizations|consumers)\/v2\.0/, '').replace(/^\/oidc\/2/, '');
   if (rest === '/.well-known/openid-configuration' || rest === '//.well-known/openid-configuration') return discovery(url.origin, profile);
   if (rest === '/authorize' && req.method === 'GET') return authorize(profile, url);
+  if (rest === '/authorize' && req.method === 'POST' && profile === 'spec') {
+    return req.json().catch(() => null).then(body => {
+      const p = body?.person, access = body?.token;
+      if (!p || typeof p.sub !== 'string' || !p.sub || typeof p.name !== 'string' || typeof p.email !== 'string'
+          || (access !== undefined && (typeof access !== 'string' || !/^[A-Za-z0-9._~-]{1,128}$/.test(access))))
+        return new Response('invalid test account or access token', { status: 400 });
+      return authorize(profile, url, { sub: p.sub, name: p.name, email: p.email }, access);
+    });
+  }
   if (rest === '/authorize' && req.method === 'POST' && PROFILES[profile].authenticationTree) return authorizeWithSession(profile, req);
   if (rest === '/json/authenticate' && req.method === 'POST' && PROFILES[profile].authenticationTree) return authenticate(profile, req);
   if (rest === '/token' && req.method === 'POST') return tokenEndpoint(profile, req);

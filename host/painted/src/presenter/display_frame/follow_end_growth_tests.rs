@@ -309,30 +309,36 @@ fn future_b_paint_does_not_become_a_wheel_base_or_override_newer_input() {
 }
 
 #[test]
-fn replacement_runtime_cannot_adopt_pending_old_model_scroll() {
-    let (mut p, before) = boot_end(true, true);
-    grow_before_adapter(&mut p, &before);
-    assert!(p.after_commit().is_none());
-    let b = submit(&mut p).unwrap();
-    p.reload(&crate::test_plan(SOURCE), GrowthRows).unwrap();
-    let replacement = boundary(&p, "replacement-before-old-B-ACK");
-    assert_eq!(
-        replacement.snapshot.count, 200,
-        "reload carries compatible state"
-    );
-    assert_eq!(
-        replacement.offset, 0.,
-        "replacement owns a fresh scroll offset"
-    );
-    assert!(complete(&mut p, &b));
-    assert_eq!(p.scroll_of(replacement.snapshot.view).1, replacement.offset);
-    settle(&mut p, true);
-    let after = boundary(&p, "replacement-after-new-ACK");
-    assert_eq!(after.snapshot.count, 200);
-    assert_eq!(
-        after.offset, replacement.offset,
-        "old B cannot restore its pending tail"
-    );
+fn an_old_frame_cannot_scroll_the_replacement_list() {
+    for (source, same_list) in [
+        (SOURCE.to_owned(), true),
+        (
+            SOURCE.replace("list virtualized", "list id=\"other\" virtualized"),
+            false,
+        ),
+    ] {
+        let (mut p, before) = boot_end(true, true);
+        grow_before_adapter(&mut p, &before);
+        assert!(p.after_commit().is_none());
+        let pending = submit(&mut p).unwrap();
+        p.reload(&crate::test_plan(&source), GrowthRows).unwrap();
+        let replacement = boundary(&p, "replacement-before-old-ack");
+        assert_eq!(replacement.snapshot.count, 200);
+        assert!(complete(&mut p, &pending));
+        assert_eq!(
+            p.scroll_of(replacement.snapshot.view).1,
+            replacement.offset,
+            "acknowledging the retired frame cannot move the new presenter"
+        );
+        settle(&mut p, true);
+        let after = boundary(&p, "replacement-after-new-ack");
+        assert_eq!(after.snapshot.count, 200);
+        if same_list {
+            assert!(at_end(&after), "the same list carries its reading anchor");
+        } else {
+            assert_eq!(after.offset, 0., "another list starts at its own beginning");
+        }
+    }
 }
 
 #[test]

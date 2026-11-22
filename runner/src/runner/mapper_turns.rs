@@ -11,7 +11,7 @@
 //! earlier one's. Each is handed back through a request of its own
 //! ([`HELD`]), one per landing, and commits as it would have on arrival.
 use super::{CommitReceipt, DataSource, Runner, RunnerError};
-use crate::failure::{Failure, FailureCode};
+use crate::failure::Failure;
 use crate::request::{Dispatch, Outcome, Request, RequestOut};
 use std::collections::{BTreeMap, VecDeque};
 use std::ops::ControlFlow::{self, Break, Continue};
@@ -223,11 +223,7 @@ impl<D: DataSource> Runner<D> {
         else {
             return Continue(outcome);
         };
-        let why = Failure {
-            code: FailureCode::Error,
-            message,
-            reason: String::new(),
-        };
+        let why = Failure::error(message);
         Break(self.release_failed_as_asked(ticket, target, why))
     }
 

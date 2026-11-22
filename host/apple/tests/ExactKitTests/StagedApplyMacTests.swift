@@ -243,6 +243,32 @@ final class StagedApplyMacTests: XCTestCase {
         XCTAssertEqual(session.presenter.views[9004]?.props["title"], "later", "and lands after the earlier one's")
     }
 
+    func testTheRevealPublishesTooltipsAndCursorRectsOnlyWhereRequested() throws {
+        let p = Presenter()
+        show(p.viewport)
+        p.apply(wireBatch(tree))
+        var batch = replacement(row: ["title": "Open details", "href": "#details"])
+        batch.ops += wireBatch([
+            paint(9204, ["cursor": "crosshair"]),
+            ["op": "paragraph", "id": 9207, "runs": [
+                ["id": 9901, "parent": 9207, "paint": true, "props": ["text": "Help", "href": "#help"]],
+            ]],
+        ]).ops
+        let plan = try XCTUnwrap(p.stagePlan(batch))
+        while !plan.preparedAll { p.prepare(plan, until: .infinity) }
+        let link = try XCTUnwrap(plan.made[9202])
+        XCTAssertNotNil(link.window)
+        XCTAssertNil(link.toolTip)
+        XCTAssertEqual(plan.tips.map(\.id), [9202])
+        XCTAssertEqual(Set(plan.cursorRects.map(\.id)), [9202, 9204, 9207])
+
+        p.revealing = plan
+        p.apply(plan.reveal())
+        p.revealing = nil
+        XCTAssertEqual(link.toolTip, "Open details")
+        XCTAssertFalse(link.held)
+    }
+
     func testAButtonNamedByItsContentIsNamedAtTheReveal() throws {
         let p = Presenter()
         show(p.viewport)
@@ -314,6 +340,9 @@ final class StagedApplyMacTests: XCTestCase {
             }
             p.apply(original)
             let live = try XCTUnwrap(p.views[9004]), retiring = try XCTUnwrap(p.views[9002])
+            let oldText = try XCTUnwrap(p.views[9003])
+            let native = NSView()
+            oldText.addSubview(native)
             var batch = replacement(rows: rows)
             let into = try XCTUnwrap(batch.ops.firstIndex { $0.op == .children && $0.id == 9100 })
             let from = try XCTUnwrap(batch.ops.firstIndex { $0.op == .children && $0.id == 9001 })
@@ -328,7 +357,14 @@ final class StagedApplyMacTests: XCTestCase {
             p.revealing = plan
             p.apply(plan.reveal())
             p.revealing = nil
+            XCTAssertTrue(oldText.superview === retiring.container)
+            XCTAssertTrue(live.superview === top.container)
+            XCTAssertTrue(retiring.held)
             p.teardown.finish()
+            XCTAssertNil(retiring.superview)
+            XCTAssertNil(oldText.superview)
+            XCTAssertNil(oldText.presenter)
+            XCTAssertTrue(native.superview === oldText)
             XCTAssertTrue(live.superview === top.container)
             XCTAssertEqual(top.structuralChildren.map(\.id), batch.ops[into].ids)
         }

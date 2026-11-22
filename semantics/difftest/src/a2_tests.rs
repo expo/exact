@@ -207,7 +207,7 @@ fn suggestions_parse_hold_and_deduplicate_predicates_not_titles() {
         Event::Clock(1.0),
     ];
     let observation = observe::run(plan.clone(), Oracle::for_case(&plan, &case), &case.events).0;
-    let mut suggestions = Suggestions::new(&plan, &path);
+    let mut suggestions = Suggestions::new(&plan, &path).unwrap();
     suggestions.observe(&observation);
     let blocks = suggestions.blocks(&[], &path).unwrap().0;
     let properties = contract::properties(&blocks.join("\n")).unwrap();
@@ -231,7 +231,7 @@ fn suggestions_parse_hold_and_deduplicate_predicates_not_titles() {
             .join(file);
         let source = std::fs::read_to_string(&path).unwrap();
         let plan = compile(&make_case(&source)).unwrap();
-        let mut suggestions = Suggestions::new(&plan, &path);
+        let mut suggestions = Suggestions::new(&plan, &path).unwrap();
         let observations = [
             "== boot",
             "outcome ok",

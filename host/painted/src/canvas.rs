@@ -1072,10 +1072,9 @@ pub struct CanvasHost<D: DataSource> {
     settling: bool,
     /// A touch began or ended: paint the next frame.
     force: bool,
-    /// A scroll came since the last collection pass: the frame drawing it
-    /// leaves the pass for [`CanvasHost::refine`], after the frame. Only once
-    /// the reader calls `refine` (`prefetching`).
-    scrolled: bool,
+    /// Scroll deferral state across `frame`, `requests`, `refine`, and input
+    /// (`scroll::ScrollHold`). Only active once the reader calls `refine` (`prefetching`).
+    scroll_hold: scroll::ScrollHold,
     prefetching: bool,
     /// The kernel epoch a collection pass left, when nothing else changed
     /// since the paint: rows mounted or retired out of view, which the next
@@ -1151,6 +1150,11 @@ const MOVES_MOUNTED: u32 = 6;
 
 #[cfg(target_os = "android")]
 impl<D: DataSource + Default> CanvasHost<D> {
+    /// End any deferred scroll turn so non-scroll input pumps and tells the shell.
+    pub(super) fn end_scroll(&mut self) {
+        self.scroll_hold.end();
+    }
+
     /// One turn: the presenter's work, then a recording when anything
     /// changed. `Some` is the new op stream (valid until the next call).
     pub fn frame(&mut self, vsync: bool) -> Option<Vec<u32>> {
@@ -1164,7 +1168,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
         let now = self.now();
         let p = &mut self.p;
         let _frame = Section::begin(c"exact frame");
-        p.hold_collections(self.scrolled);
+        p.hold_collections(self.scroll_hold.holding_collections());
         let frame = self.frame_held(now, vsync);
         self.p.hold_collections(false);
         if std::mem::take(&mut self.responding) {
@@ -1176,7 +1180,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
     fn frame_held(&mut self, now: f64, vsync: bool) -> Option<Vec<u32>> {
         // A frame a scroll step asks for: replies and pictures arrive through
         // [`CanvasHost::poll`] when their fds wake, so this one skips them.
-        let quick = self.scrolled;
+        let quick = self.scroll_hold.quick();
         let p = &mut self.p;
         p.tick_development(); // a quick frame too: a due dev poll waits on none
         if !quick {
@@ -1227,7 +1231,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
                 self.owed_surfaces = true;
             } else {
                 self.owed_surfaces = false;
-                if !self.scrolled {
+                if !quick {
                     self.p.sync_surfaces();
                 }
                 self.surfaces = self.p.render_surfaces(now);
@@ -1286,6 +1290,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// Drain the wakes (executor replies, decoded images, the update store's
     /// line) without painting; whether a frame is now wanted.
     pub fn poll(&mut self) -> bool {
+        self.scroll_hold.poll();
         let now = self.now();
         if let Some(e) = self.p.pump(now) {
             eprintln!("exact: {e}");

@@ -316,6 +316,7 @@ name = "contract-syntax"
 version = "0.1.0"
 dependencies = [
  "exact-motion",
+ "sha2",
 ]
 
 [[package]]

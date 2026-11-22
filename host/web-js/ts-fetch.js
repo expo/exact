@@ -19,7 +19,7 @@ export const STREAM_REFUSAL = null;
 export function fetch(input, options) {
   const call = currentContext();
   return owned(fetchInCall(input, options)).then(responseFor, error => {
-    if (globalThis.__exactRender && error?.renderDeferred) return answering.refuseVisitor(error.message, call);
+    if (globalThis.__exactRender && error?.renderDeferred) return answering.refuseFetch(error.message, call, error.unavailable);
     throw error;
   });
 }
@@ -76,7 +76,9 @@ function fetchInCall(input, options) {
   // In a render a body from a file or to one is storage, refused there (ts-body-from.js): it is no work to count.
   if (globalThis.__exactRender && (options?.exactBodyFrom !== undefined || options?.exactBodyTo !== undefined)) return fetchNow(input, options);
   // An upload or a download to a file is never held (Request::is_held).
-  return counting(held && options.exactBodyFrom === undefined && options.exactBodyTo === undefined ? 'held' : 'plain', () => fetchNow(input, options));
+  const kind = held && options.exactBodyFrom === undefined && options.exactBodyTo === undefined ? 'held' : 'plain';
+  const wait = answering.call ? { call: answering.call, kind } : { call: currentContext(), loose: answering.loose };
+  return counting(kind, () => fetchNow(input, options, protocols, wait));
 }
 /** Work an answer awaits that is no held fetch (a fetch, `crypto.subtle`, `native.later`, a kept key): counted on
  * its answer (`call.plain`), so the answer is never held while it is out (LLP 1016.000 D9). */
@@ -96,7 +98,7 @@ function counting(kind, start, background) {
   try { out = start(); } catch (e) { end(); throw e; }
   return owned(AnswerPromise.resolve(out).finally(end), background);
 }
-function fetchNow(input, options, protocols) {
+function fetchNow(input, options, protocols, wait) {
   if (overlaying.on) return Promise.reject(inOverlay('fetch()'));
   // A mapper makes no fetch (D7), in any turn of its call.
   if (answering.mapper || answering.mapperCall) return Promise.reject(new Error(answering.mapper ? "fetch() is unavailable in a socket's mapper: it answers each frame now" : "fetch() is unavailable in a stream's mapper: fetch in the answer that opens the stream"));
@@ -130,7 +132,7 @@ function fetchNow(input, options, protocols) {
         } else target = String(input);
       } catch (e) { return Promise.reject(e); }
       return new Promise((go, no) => (call.waiting ??= []).push(Object.assign(go, { refused: why => no(new Error(`fetch(): the commit that asked this answer was refused: ${why}`)) })))
-        .then(() => asCall(call, () => fetchNow(target, init, protocols)));
+        .then(() => asCall(call, () => fetchNow(target, init, protocols, wait)));
     }
     if (!later && (call.socketConflict || call.socketOps?.length)) { call.socketConflict = true; return Promise.reject(new Error(SOCKET_AND_FETCH)); }
     call.fetched = true;
@@ -143,12 +145,12 @@ function fetchNow(input, options, protocols) {
         if (call.socketConflict) throw new Error(SOCKET_AND_FETCH);
         arming(lease, target, init);
         // As the mutation's own, so a deadline its signal gives aborts in its turn
-        return asCall(call, () => fetchWith(tsGrantSet, target, init, null, undefined, undefined, call.origin));
+        return asCall(call, () => fetchWith(tsGrantSet, target, init, null, undefined, undefined, call.origin, false, call.forced, wait));
       });
     }
-    return armed(lease, input, options) ?? fetchOf(input, options, call, protocols);
+    return armed(lease, input, options) ?? fetchOf(input, options, call, protocols, wait);
   }
-  return armed(lease, input, options) ?? fetchOf(input, options, call, protocols);
+  return armed(lease, input, options) ?? fetchOf(input, options, call, protocols, wait);
 }
 // A request with effects arms its answer's lease's recovery as it goes, once its own options are checked, as the
 // native prelude's `fetch` arms it (LLP 1146 D5); `armed` answers the rejection of a request refused here or of a
@@ -190,8 +192,8 @@ function held(options) {
 // traced, the least privileged of the answers in flight (LLP 1133.002 D12).
 export const activeCall = () => answering.call ?? [...answering.untraced].find(c => !c.settled);
 export const fetchOrigin = () => activeCall()?.origin ?? 'app';
-function fetchOf(input, options, call, protocols) {
-  if (options?.exactStream === undefined && options?.exactBodyFrom === undefined && options?.exactBodyTo === undefined) return fetchWith(tsGrantSet, input, options, null, undefined, undefined, fetchOrigin(), false, !!activeCall()?.forced);
+function fetchOf(input, options, call, protocols, wait) {
+  if (options?.exactStream === undefined && options?.exactBodyFrom === undefined && options?.exactBodyTo === undefined) return fetchWith(tsGrantSet, input, options, null, undefined, undefined, fetchOrigin(), false, !!activeCall()?.forced, wait);
   if (options.exactStream !== undefined && options.exactBodyTo !== undefined) return Promise.reject(new TypeError("exactBodyTo: a stream's body is its messages, not a file"));
   let redirect;
   try { redirect = redirectOf(input, options); } catch (e) { return Promise.reject(e); }
@@ -228,7 +230,7 @@ function fetchOf(input, options, call, protocols) {
     const origin = fetchOrigin(), forced = !!activeCall()?.forced;
     return Promise.race([import('./ts-body-from.js'), ended]).finally(stop).then(m => {
       if (call?.socketConflict) throw new Error(SOCKET_AND_FETCH);
-      return m.fromFile(input, init, redirect, started, origin, armed, forced);
+      return m.fromFile(input, init, redirect, started, origin, armed, forced, wait);
     }).finally(() => armed?.cancel());
   }
   return options.exactTimeout !== undefined && options.exactUploadProgress !== true ? Promise.reject(new TypeError('exactTimeout: a stream has no timeout')) : stream(input, options, redirect, protocols);
@@ -257,6 +259,12 @@ class AnswerPromise extends Promise {
     const own = {}, mark = settle => value => { own.bg ??= currentContext() === backgroundCall; settle(value); };
     super(typeof run == 'function' ? (yes, no) => run(mark(yes), mark(no)) : run);
     this.own = own;
+  }
+  static resolve(value) {
+    const promise = super.resolve(value);
+    // WebKit 26 can return the page's promise here. Adopt it so its reactions run through this class's then.
+    if (promise === value && !(promise instanceof this)) return new this(resolve => resolve(value));
+    return promise;
   }
   then(yes, no) {
     const at = currentContext();

@@ -128,6 +128,20 @@ fn runtime_stack_uses_second_authored_face_before_platform_fallback() {
 }
 
 #[test]
+fn a_pair_without_a_composed_character_checks_both_glyphs_for_fallback() {
+    let mut catalog = fixture();
+    catalog.install_runtime(8, &["Noto Sans Arabic, Inter".into()]);
+    let mut engine = TextEngine::with_catalog(catalog);
+
+    // Noto Sans Arabic covers the digit, but neither the Latin letter nor the acute.
+    for text in ["1\u{0301}", "b\u{0301}"] {
+        let p = engine.paragraph(&spec(8, text), None);
+        assert_face(&p, 0, SECOND);
+        assert!(p.lines().glyphs.iter().all(|g| g.glyph_id != 0));
+    }
+}
+
+#[test]
 fn long_clusters_keep_their_fallback_face_glyphs_and_byte_ranges() {
     let mut catalog = fixture();
     catalog.install_runtime(8, &["Noto Sans Arabic, Inter".into(), "Inter".into()]);

@@ -41,6 +41,11 @@ impl<D: DataSource> Host<D> {
         for e in self.canvas2d.apply(lists) {
             self.runner.log(e);
         }
+        self.prune_canvas_pixels();
+        changed
+    }
+
+    pub(super) fn prune_canvas_pixels(&mut self) {
         let live = self.runner.canvas_views();
         self.canvas2d.retain(&live);
         // An image no mounted canvas's latest draw asked for is let go.
@@ -52,7 +57,6 @@ impl<D: DataSource> Host<D> {
             }
             named
         });
-        changed
     }
 
     /// A canvas capture (`exact_runner::canvas_capture`), carried out on
@@ -77,10 +81,13 @@ impl<D: DataSource> Host<D> {
         self.runner.canvas_wants_frame()
     }
 
-    /// Whether the decoded `src` is held for the canvases.
+    /// The decoded pixels the canvases share.
     #[cfg(test)]
-    pub(crate) fn canvas_image_cached(&self, src: &str) -> bool {
-        self.canvas2d.images.contains_key(src)
+    pub(crate) fn cached_canvas_image(
+        &self,
+        src: &str,
+    ) -> Option<&std::sync::Arc<tiny_skia::Pixmap>> {
+        self.canvas2d.images.get(src).map(|image| &image.pixels)
     }
 
     /// `source` changed: forgotten, decoded or not, and decoded again

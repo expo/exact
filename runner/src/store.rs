@@ -405,6 +405,9 @@ impl Store {
     /// owned by the runner as a kept answer is. A host keeps these in the
     /// platform's preference store, never its secret store.
     pub const STATE: &'static str = "exact.state.";
+    /// Window restoration owns this part of the state namespace. A Contract
+    /// state name cannot start with `#`.
+    pub const WINDOW_STATE: &'static str = "exact.state.#window.";
 
     fn is_kept(name: &str) -> bool {
         Store::runner_owned(name)
@@ -647,12 +650,13 @@ impl Store {
         let mut next: exact_kernel::SortedMap<_, _> = snapshot
             .into_iter()
             .filter(|(name, _)| {
-                self.is_granted(name)
-                    || (Self::runner_owned(name) && !name.starts_with(Store::PRESENCE))
+                !name.starts_with(Store::WINDOW_STATE)
+                    && (self.is_granted(name)
+                        || (Self::runner_owned(name) && !name.starts_with(Store::PRESENCE)))
             })
             .collect();
         for (name, value) in self.values.iter() {
-            if name.starts_with(Store::PRESENCE) {
+            if name.starts_with(Store::PRESENCE) || name.starts_with(Store::WINDOW_STATE) {
                 next.insert(name.clone(), value.clone());
             }
         }

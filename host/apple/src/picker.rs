@@ -110,11 +110,27 @@ pub(crate) fn empty_fresh_tree(app_id: &str) -> Result<(), DataError> {
         _ => {}
     }
     let kv = ibex2::kv::FileStore::new(tree.join("kv"));
-    exact_data::storage::seed_persisted(|name, value| {
-        ibex2::kv::KvStore::set(&kv, exact_data::storage::PERSISTED_SCOPE, name, value)
-    })?;
+    exact_data::storage::seed_persisted(
+        &tree,
+        |name, value| {
+            ibex2::kv::KvStore::set(&kv, exact_data::storage::PERSISTED_SCOPE, name, value)
+        },
+        |name, value| {
+            ibex2::secrets::SecretStore::set(
+                &ibex2::secrets::FileStore::new(tree.join("secrets")),
+                name,
+                value,
+            )
+        },
+    )?;
     emptied.push(tree);
     Ok(())
+}
+
+pub(crate) fn seed_first_window(app_id: &str, snapshot: &mut Vec<(String, Vec<u8>)>) {
+    if let Some(tree) = agent_secret_root(app_id) {
+        snapshot.extend(exact_data::storage::take_window_seed(&tree));
+    }
 }
 
 /// Refuses to empty a scratch tree (`<cache base>/exact/<app id>/agent/<name>`)

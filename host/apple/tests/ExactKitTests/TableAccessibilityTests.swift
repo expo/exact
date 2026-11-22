@@ -30,8 +30,8 @@ final class TableAccessibilityTests: XCTestCase {
         super.tearDown()
     }
 
-    private func boot() throws -> Presenter {
-        let plan = try fixturePlan("TABLE_ACCESS")
+    private func boot(_ key: String = "TABLE_ACCESS") throws -> Presenter {
+        let plan = try fixturePlan(key)
         session = ExactApp.shared.makeSession(label: "table-access")
         let size = CGSize(width: 400, height: 600)
         let view = session.presenter.viewport
@@ -64,6 +64,28 @@ final class TableAccessibilityTests: XCTestCase {
         return elements.compactMap { $0["name"] as? String }.filter { !$0.isEmpty }
     }
     private static let drawn = ["Moves", "Move", "Power", "Tackle", "40", "Ember", "50", "60", "Foot 2", "Foot 1"]
+
+    func testProseListMarkersFollowTheItemAndRenumberAfterAnInsertion() throws {
+        let p = try boot("PROSE_LIST")
+        let retained = try node(p, "retained")
+        func label(_ item: NodeView) -> String? {
+            (item.proseMarker?.string as? NSAttributedString)?.string
+        }
+        XCTAssertEqual(label(retained), "2.")
+        let left = try XCTUnwrap(retained.proseMarker)
+        XCTAssertLessThan(left.frame.maxX, retained.bounds.minX)
+        XCTAssertNil(try node(p, "bare").proseMarker)
+        let right = try node(p, "right")
+        XCTAssertEqual(label(right), "•")
+        let bullet = try XCTUnwrap(right.proseMarker)
+        XCTAssertGreaterThan(bullet.frame.minX, right.bounds.maxX)
+        XCTAssertEqual(label(try node(p, "nested")), "◦")
+        let change = try node(p, "change")
+        session.apply(session.runtime.press(change.id, now: session.now()))
+        XCTAssertEqual(label(retained), "3.")
+        session.apply(session.runtime.press(change.id, now: session.now()))
+        XCTAssertEqual(label(retained), "2.")
+    }
 
     #if os(macOS)
     func testATableServesItsRowsColumnsAndHeadersAndEachCellItsPlace() throws {
