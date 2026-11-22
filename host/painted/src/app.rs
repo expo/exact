@@ -21,7 +21,7 @@
 //! - `EXACT_SCALE=n` — device pixels per point (1 otherwise): what the frame is
 //!   drawn at and what the kernel is told the display's scale is, so a
 //!   hairline is one of those pixels (LLP 1115.000 D10.3).
-//! - `EXACT_PAINTER=auto|gpu|ink|cpu` — overrides the app's baked painter choice.
+//! - `EXACT_PAINTER=auto|gpu|ink|cpu` selects the painter. Windows accepts this override with development trust.
 //!   Windows defaults to ink for apps, CPU for declared games; Linux uses auto (LLP 1149 D12).
 //! - `EXACT_CACHE=<dir>` — where the GPU's pipeline cache lives (`~/.cache/exact`).
 //! - `EXACT_DRM=<card>` — the KMS device (`/dev/dri/card0` otherwise).
@@ -521,11 +521,7 @@ pub fn boot_scanout_presenter<D: DataSource + Default>(
     viewport: (f32, f32),
     device: exact_ink::Wgpu,
 ) -> Result<(Presenter<D>, Option<String>), String> {
-    let (mut p, warning) = boot_presenter_with_painter(
-        config,
-        viewport,
-        PainterBoot::selected(crate::presenter::PainterChoice::Cpu),
-    )?;
+    let (mut p, warning) = boot_presenter_with_painter(config, viewport, PainterBoot::cpu())?;
     p.install_scanout_painter(device);
     p.set_output_rotation(config.output_rotation);
     Ok((p, warning))
@@ -550,11 +546,7 @@ pub(crate) fn boot_window_with_painter<D: DataSource + Default>(
     hidden: bool,
     painter: PainterBoot,
 ) -> Result<(Presenter<D>, Option<String>), String> {
-    let boot = if hidden {
-        PainterBoot::selected(crate::presenter::PainterChoice::Cpu)
-    } else {
-        painter
-    };
+    let boot = if hidden { PainterBoot::cpu() } else { painter };
     let (mut presenter, warning) = boot_presenter_with_painter(config, viewport, boot)?;
     presenter.set_output_rotation(config.output_rotation);
     presenter.deferred_painter = hidden.then_some(painter);
@@ -594,27 +586,23 @@ pub fn boot_window_presenter<D: DataSource + Default>(
     config: &mut Config,
     viewport: (f32, f32),
     hidden: bool,
+    painter: PainterBoot,
     preparing: Option<exact_ink::device::d3d11::Startup>,
     prepare_after_layout: bool,
 ) -> Result<(Presenter<D>, Option<String>), String> {
     if hidden || (preparing.is_none() && !prepare_after_layout) {
-        let painter = PainterBoot::selected(config.painter());
         return boot_window_with_painter(config, viewport, hidden, painter);
     }
-    let (mut presenter, warning) = boot_presenter_with_painter(
-        config,
-        viewport,
-        PainterBoot::selected(crate::presenter::PainterChoice::Cpu),
-    )?;
+    let (mut presenter, warning) =
+        boot_presenter_with_painter(config, viewport, PainterBoot::cpu())?;
     let preparing = match preparing {
         Some(preparing) => preparing,
-        None => {
-            let device = std::env::var("EXACT_INK_DEVICE").ok();
-            exact_ink::device::d3d11::Startup::start(
-                exact_ink::device::direct_d3d11(device.as_deref()).unwrap_or(false),
-            )
-            .map_err(|error| error.to_string())?
-        }
+        None => exact_ink::device::d3d11::Startup::start(
+            painter
+                .direct_d3d11()
+                .ok_or("only the Direct3D painter can prepare after layout")?,
+        )
+        .map_err(|error| error.to_string())?,
     };
     presenter.install_prepared_painter(preparing)?;
     Ok((presenter, warning))
@@ -627,11 +615,8 @@ pub fn boot_presenter_with_metal<D: DataSource + Default>(
     viewport: (f32, f32),
     preparing: exact_ink::device::apple::Startup,
 ) -> Result<(Presenter<D>, Option<String>), String> {
-    let (mut presenter, warning) = boot_presenter_with_painter(
-        config,
-        viewport,
-        PainterBoot::selected(crate::presenter::PainterChoice::Cpu),
-    )?;
+    let (mut presenter, warning) =
+        boot_presenter_with_painter(config, viewport, PainterBoot::cpu())?;
     presenter.install_apple_painter(preparing)?;
     Ok((presenter, warning))
 }

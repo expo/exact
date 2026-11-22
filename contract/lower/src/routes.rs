@@ -2,6 +2,8 @@
 
 use super::*;
 
+pub(crate) mod tab_accessory;
+
 impl Lowerer<'_> {
     pub(super) fn declare_routes(&mut self, file: &File) {
         let Some(routes) = &file.routes else { return };
@@ -322,6 +324,43 @@ impl NavPlace {
             && !has("navigationBack")
     }
 
+    /// @ref LLP 1075.003 §9.17 — `navigationTabAccessory` is the navigation
+    /// root's tablist's word: on anything else no host reads it, and the
+    /// accessory the author meant never shows.
+    fn check_accessory_place(&self, tag: &str, attrs: &[Attr]) -> Result<(), LowerError> {
+        let Some(a) = attrs
+            .iter()
+            .rev()
+            .find(|a| a.name == "navigationTabAccessory")
+        else {
+            return Ok(());
+        };
+        let tablist = match attrs
+            .iter()
+            .rev()
+            .find(|a| a.name == "role")
+            .map(|a| &a.value)
+        {
+            Some(Expr::Str(role, _)) => role == "tablist",
+            Some(_) => true,
+            None => false,
+        };
+        let on = if !tablist {
+            format!("a `{tag}` that is not a `role=\"tablist\"`")
+        } else {
+            match self {
+                NavPlace::Outside => "a tablist outside every navigation root".into(),
+                NavPlace::InRoute => "a tablist inside a route".into(),
+                _ => return Ok(()),
+            }
+        };
+        err(
+            "lower-tab-accessory",
+            format!("`navigationTabAccessory` is on {on}, where no host reads it, so no accessory shows. It belongs on the navigation root's tablist, the one whose tabs name the root's tab panels, which iOS 26 and later show as a tab bar with this accessory: move it there (docs/recipes/mini-player.md)"),
+            a.span,
+        )
+    }
+
     /// The place of `tag`'s children, or the refusal of a route `tag` that
     /// no host would find here.
     pub(crate) fn enter(
@@ -335,6 +374,7 @@ impl NavPlace {
         let has = |name: &str| attrs.iter().any(|a| a.name == name);
         let path = |p: &[String]| [p, &[tag.to_string()]].concat();
         let root = self.is_root(first_root, attrs);
+        self.check_accessory_place(tag, attrs)?;
         if has("navigationKey") && has("navigationBack") && !root {
             return err(
                 "lower-route-place",

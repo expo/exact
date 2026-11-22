@@ -290,6 +290,7 @@ mod svg_use_foreign_object;
 mod symbol_ink;
 mod symbol_tint;
 mod symbols;
+mod tab_accessory;
 mod tables;
 mod target_names;
 mod tests_decl;

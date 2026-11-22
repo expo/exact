@@ -2,21 +2,18 @@
 // same refusals journaled as `contract/cli/tests/it/drag_out.rs` asserts of the runner booted as the web, through
 // the hooks `install` registers, which journal a value once while it stands and remove a prop left with nothing.
 import { test, expect } from 'bun:test';
-import { absolute, admit, admitUrl, install, shipped } from './drag.js';
+import { admit, admitUrl, install, shipped } from './drag.js';
 
 test('the rules keep shipped files and absolute URLs, and refuse the rest in the runner words', () => {
   for (const ok of ['assets/1016.jpg', 'assets/apple/1016-thumb.jpg', `assets/${'a'.repeat(128)}`]) expect(shipped(ok)).toBe(true);
   for (const no of ['assets/', 'assets/../x.jpg', 'assets/./x.jpg', 'assets//x.jpg', 'assets/a?.jpg', 'assets/é.jpg', `assets/${'a'.repeat(129)}`, 'img/x.jpg', 'app:/data/x.pdf']) expect(shipped(no)).toBe(false);
-  for (const ok of ['https://example.com/a', 'HTTP://example.com']) expect(absolute(ok)).toBe(true);
-  for (const no of ['/landmark/1016', 'https://', 'https:///a', 'https://exa mple.com', 'ftp://example.com', 'https://example.com/\u0085']) expect(absolute(no)).toBe(false);
-  expect(absolute('https://example.com/\ufeff')).toBe(true);
   const said = [];
   expect(admit('assets/1016.jpg\napp:/data/export.pdf\n\nhttps://example.com/a.jpg', (r) => said.push(r))).toBe('assets/1016.jpg');
   expect(admitUrl('/landmark/1016', (r) => said.push(r))).toBe('');
   expect(said).toEqual([
     'app:/data/export.pdf: an app:/ file cannot be dragged on the web',
     'https://example.com/a.jpg is neither a shipped assets/ file nor an app:/ path',
-    '/landmark/1016 is not an absolute http: or https: URL',
+    "url is not an absolute http: or https: URL: another app cannot open this app's path",
   ]);
 });
 
@@ -33,6 +30,16 @@ test('the hooks write what is admitted, remove an empty prop and journal a value
   url(el, 'https://example.com/1016');
   expect(attrs.get('data-datatransferurl')).toBe('https://example.com/1016');
   expect(journal).toEqual(['drag: refused: app:/data/b.pdf: an app:/ file cannot be dragged on the web', 'drag: refused: app:/data/b.pdf: an app:/ file cannot be dragged on the web']);
+});
+
+test('a render on the server admits the data and hears no drag', () => {
+  const PropHooks = {}, journal = [];
+  install({ PropHooks, say: (line) => journal.push(line), document: null });
+  const attrs = new Map(), el = { setAttribute: (k, v) => attrs.set(k, v), removeAttribute: (k) => attrs.delete(k) };
+  PropHooks['data-datatransferurl'](el, 'https://:443/');
+  expect(attrs.has('data-datatransferurl')).toBe(false);
+  expect(journal).toEqual(['drag: refused: url is not an absolute http: or https: URL: it names no host; write the host after `https://`']);
+  expect(PropHooks.draggable).toBeUndefined();
 });
 
 test('install hears the contacts and the drags on the page\'s document', () => {

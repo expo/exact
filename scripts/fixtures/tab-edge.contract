@@ -12,7 +12,10 @@
 // no area over them whose button shows outside it, a button that straddles
 // its bottom edge while it clips only x, and the grid's panel a button
 // beside its routes, which iOS lifts over its tab container; the column can
-// set an accent and keep its tint from greying.
+// set an accent and keep its tint from greying. The tablist can name the
+// mini player below the panels as its tab bar's accessory, inside a pressable
+// area, its title a run that hears a long press, a bare row beside the panels,
+// or a row with an authored exit (LLP 1075.003 §9.17).
 routes nav
   tab scrolls "/"
     scrollsPushed "/scrolls/pushed"
@@ -25,6 +28,10 @@ routes nav
 
 keyframes barOut
   from opacity=1
+  to opacity=0
+
+keyframes playerOut
+  from opacity=0
   to opacity=0
 
 component TabEdge
@@ -42,6 +49,21 @@ component TabEdge
   state trailingSidebar = false
   state sidebarSetOff = false
   state extraRows = false
+  state accessory = false
+  state bareAccessory = false
+  state bareRow = false
+  state playing = false
+  state areaPresses = 0
+  state probed = "unread"
+  state playerHidden = false
+  state playerColor = "#654321"
+  state areaHidden = false
+  state exitRow = false
+  state exitAccessory = false
+  state midRow = false
+  state areaMenu = false
+  state speedRow = false
+  state speedAccessory = false
   state accented = false
   state keptTint = false
   action accentColumn
@@ -50,6 +72,48 @@ component TabEdge
     keptTint = true
   action showRows
     extraRows = true
+  action useAccessory
+    accessory = true
+  action dropAccessory
+    accessory = false
+    bareAccessory = false
+  action useBareAccessory
+    bareRow = true
+    bareAccessory = true
+  action switchAccessory
+    accessory = false
+    bareRow = true
+    bareAccessory = true
+  action hidePlayer
+    playerHidden = true
+    playerColor = "#000000"
+  action hideArea
+    areaHidden = true
+  action useExitAccessory
+    exitRow = true
+    exitAccessory = true
+  action dropExitRow
+    exitRow = false
+    exitAccessory = false
+  action showMidRow
+    midRow = true
+  action giveAreaMenu
+    areaMenu = true
+  action useSpeedAccessory
+    speedRow = true
+    speedAccessory = true
+  action togglePlay
+    playing = not playing
+  action pressArea
+    areaPresses = areaPresses + 1
+  action probeAccessory
+    let f = frame("mini-player")
+    let hit = match elementFromPoint(f.x + f.width - 8, f.y + f.height / 2) { case some(id) => id, case none => "none" }
+    probed = `${f.x},${f.y},${f.width},${f.height} ${hit}`
+  action probeBare
+    let f = frame("bare-player")
+    let hit = match elementFromPoint(f.x + f.width - 8, f.y + f.height / 2) { case some(id) => id, case none => "none" }
+    probed = `${f.x},${f.y},${f.width},${f.height} ${hit}`
   action showTrailingSidebar
     sidebar = true
     trailingSidebar = true
@@ -141,6 +205,32 @@ component TabEdge
                         text "Trailing sidebar"
                       button press=showRows testId="show-rows"
                         text "Rows"
+                      button press=useAccessory testId="use-accessory"
+                        text "Accessory"
+                      button press=dropAccessory testId="drop-accessory"
+                        text "No accessory"
+                      button press=useBareAccessory testId="use-bare-accessory"
+                        text "Bare accessory"
+                      button press=probeAccessory testId="probe-accessory" aria-label=probed
+                        text "Probe"
+                      button press=probeBare testId="probe-bare" aria-label=probed
+                        text "Probe bare"
+                      button press=switchAccessory testId="switch-accessory"
+                        text "Switch"
+                      button press=hidePlayer testId="hide-player"
+                        text "Hide player"
+                      button press=hideArea testId="hide-area"
+                        text "Hide area"
+                      button press=useExitAccessory testId="use-exit-accessory"
+                        text "Exit accessory"
+                      button press=dropExitRow testId="drop-exit-row"
+                        text "Drop exit row"
+                      button press=showMidRow testId="show-mid-row"
+                        text "Mid row"
+                      button press=giveAreaMenu testId="give-area-menu"
+                        text "Area menu"
+                      button press=useSpeedAccessory testId="use-speed-accessory"
+                        text "Speed accessory"
                       button press=showFab testId="show-fab"
                         text "Add"
                       button press=showWrappedFab testId="show-wrapped-fab"
@@ -215,8 +305,37 @@ component TabEdge
                   height="3.5rem"
                   background-color="#00ff00"
                   text "+"
-        if extraRows
-          row testId="mini-player" height=60 flex-shrink=0 position="relative" background-color="#654321"
+        if bareRow
+          row id="bare-player" testId="bare-player" height=60 flex-shrink=0 background-color="#123123"
+            text "Bare"
+        if midRow
+          row testId="mid-row" height=8 flex-shrink=0 background-color="#888888"
+        // A radio group shown as a segmented control, one of whose radios the tablist can name
+        if speedRow
+          row role="radiogroup" aria-label="Speed" testId="speed" flex-shrink=0
+            button role="radio" id="speed-1x" testId="speed-1x" aria-checked="true" press=pressArea
+              text "1x"
+            button role="radio" testId="speed-2x" aria-checked="false" press=pressArea
+              text "2x"
+        // A row whose exit begins with a frame unlike it
+        if exitRow
+          row id="exit-player" testId="exit-player" height=60 flex-shrink=0 background-color="#654321" -exact-exit-animation="playerOut 600ms"
+            text "Exit"
+        if extraRows or accessory
+          column press=pressArea testId="player-area" flex-shrink=0 aria-label=`Presses ${areaPresses}` aria-hidden=areaHidden contextPopover=(areaMenu ? "area-menu" : "")
+            row id="mini-player" testId="mini-player" height=60 position="relative" background-color=playerColor
+              display=(playerHidden ? "none" : "flex")
+              text testId="mini-title"
+                text "Song title" contextmenu=pressArea
+              button press=togglePlay testId="mini-play" aria-label=(playing ? "Pause" : "Play")
+                text (playing ? "Pause" : "Play")
+            if midRow
+              button press=pressArea testId="area-after"
+                text "After"
+          // The area's menu, which a long press on the accessory opens
+          column id="area-menu" popover="auto" role="menu" aria-label="Track" testId="area-menu"
+            button press=pressArea testId="area-menu-first"
+              text "Add to queue"
         if selecting and wrappedBar and not fadingBar
           row testId="selection-bar"
             height=46
@@ -277,6 +396,7 @@ component TabEdge
           background-color="#eeeeee"
           text "Select photos"
       row role="tablist" testId="tabs" appearance=(authoredTabs ? "none" : "auto") display=(selecting ? "none" : "flex")
+        navigationTabAccessory=(accessory ? "mini-player" : bareAccessory ? "bare-player" : exitAccessory ? "exit-player" : speedAccessory ? "speed-1x" : "")
         button role="tab"
           aria-controls="panel-scrolls"
           aria-selected=(nav.tab == "scrolls")

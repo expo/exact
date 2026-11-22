@@ -4320,11 +4320,31 @@ main navigationKey=`${top(nav).id}` navigationBack="close" navigate=follow displ
   the other hosts keep it where it is written. A header field on a list is that list's
   filter; a search tab searches the app. `contract vocab search` has the details;
   Expo's `role="search"` trigger and SwiftUI's `Tab(role: .search)` are `rel="search"`.
-- A tab bar that minimizes as content scrolls (`tabBarMinimizeBehavior`) and an accessory
-  view above it (`bottomAccessory`, iOS 26) are not Contract words: unsaid, the bar is
-  UIKit's default, and an app that wants them sets them from the `tabs` hatch, which
-  hands it the `UITabBarController` (docs/reference.md, "Access hatches"). The routes
-  follow the safe area a minimizing bar changes.
+- **A mini player above the tab bar** (docs/recipes/mini-player.md):
+  `navigationTabAccessory="now-playing"` on the root tablist names an element, written
+  after every tab panel the tablist links (usually just before the tablist), that iOS 26
+  and later show as UIKit's tab bar accessory (`bottomAccessory`): a glass capsule on
+  every tab, on an iPhone above the bar and inline where the bar was while it hides, on
+  an iPad at the bottom of the page. UIKit places and sizes it (48 points high on an
+  iPhone 18 Pro with iOS 27), the element's box is UIKit's whatever `height` it says,
+  and the routes clear it. Show and remove it with `if` or `display`. The web, the Mac
+  and Android lay the element out where CSS puts it, above the tab strip; iOS 17 to 25,
+  which have no accessory, leave it there, hidden under the shown tab bar. Where the
+  compiler can prove it, a literal id that names nothing, or an element inside the
+  tablist, a tab panel, a route, a `list`, a popover or a `dialog`, a run of text or a
+  part of an `svg` or a `select`, is refused (`lower-tab-accessory`, for example
+  "`navigationTabAccessory="player"` names an element inside a tab panel, but the tab
+  bar's accessory is shared by every tab"); its message says what to change. On the
+  live tree, where the compiler cannot tell (an element written before a panel the
+  tablist links, in the `footer` the sidebar shows, or a radio or a tab of its group), a
+  development build on iOS 26 and later writes the reason to `logs` while Exact's own
+  tab container shows the tabs. To see it, drive iOS with `--chrome platform`.
+- A tab bar that minimizes as content scrolls (`tabBarMinimizeBehavior`) is not a
+  Contract word: unsaid, the bar is UIKit's default, and an app that wants it sets it
+  from the `tabs` hatch, which hands it the `UITabBarController` (docs/reference.md,
+  "Access hatches"). The routes follow the safe area a minimizing bar changes, and an
+  accessory goes inline beside the minimized bar. The hatch owns `bottomAccessory`
+  while Exact shows no accessory.
 - A box written beside the routes in the navigation root (a column the routes are offset
   past) shows on iOS as on the web: the native container that stands for the routes
   paints under a child no route's box meets, and UIKit lays the navigation bar's title

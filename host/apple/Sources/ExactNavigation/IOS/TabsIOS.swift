@@ -34,15 +34,25 @@ final class TabController: UITabBarController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         syncBarAccessibility()
+        // The accessory's place can move with no change to its size, which its content view's layout would report
+        #if os(iOS)
+        if #available(iOS 26.0, *) { (bottomAccessory?.contentView as? TabAccessoryContent)?.layoutChanged?() }
+        #endif
     }
 
     func syncBarAccessibility() {
         let hidden: Bool
         if #available(iOS 18.0, tvOS 18.0, *) { hidden = isTabBarHidden } else { hidden = tabBar.isHidden }
         guard hidden else { restoreBarAccessibility(); return }
+        // Stop before the branch that holds the accessory too, which UIKit keeps where the bar was
+        var accessory: UIView?
+        #if os(iOS)
+        if #available(iOS 26.0, *) { accessory = bottomAccessory?.contentView }
+        #endif
         var group: UIView = tabBar
         while let parent = group.superview, parent !== view,
-              !children.contains(where: { $0.viewIfLoaded?.isDescendant(of: parent) == true }) {
+              !children.contains(where: { $0.viewIfLoaded?.isDescendant(of: parent) == true }),
+              accessory?.isDescendant(of: parent) != true {
             group = parent
         }
         guard group !== tabBar else { restoreBarAccessibility(); return }

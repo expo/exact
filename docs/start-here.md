@@ -225,6 +225,7 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |dice, a shuffle, a random pick or name (Contract has no `random()`: copy the recipe's `roll`)|`random-rolls`, `random-and-shuffle`|
 |location, or anything the person must allow|`permissions`|
 |another wide layout, a chart|`web-look`, `responsive-columns`, `content-design`|
+|a mini player above the tab bar (UIKit's tab bar accessory on iOS 26 and later)|`mini-player`|
 |a video, a looping hero clip, a song (the `video` and `audio` elements, with a `poster`)|["Sound, MIDI and media"](contract-for-agents.md#sound-midi-and-media)|
 |a map, the camera (drawing is boxes and SVG, not Swift)|`native-views`|
 |calibration for an open camera track, from a package|[`camera-calibration`](recipes/camera-calibration.md)|

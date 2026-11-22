@@ -860,6 +860,7 @@ cpSync(resolve(here, 'ts-stream.js'), resolve(gen, 'ts-stream.js'));
 cpSync(resolve(here, 'ts-sqlite.js'), resolve(gen, 'ts-sqlite.js'));
 cpSync(resolve(here, 'auth.js'), resolve(gen, 'auth.js'));
 cpSync(resolve(here, 'files.js'), resolve(gen, 'files.js'));
+cpSync(resolve(here, 'url.js'), resolve(gen, 'url.js'));
 cpSync(resolve(here, 'sounds.js'), resolve(gen, 'sounds.js'));
 cpSync(resolve(here, 'wakelock.js'), resolve(gen, 'wakelock.js'));
 writeFileSync(resolve(gen, 'drag.js'), localImports(readFileSync(resolve(here, 'drag.js'), 'utf8')));
@@ -875,6 +876,8 @@ writeFileSync(resolve(gen, 'main-server.js'), [
   ...(ts ? ["import './held-hooks.js';"] : []),
   `import app${rustLinked || declared ? `, { ${[rustLinked && 'sources', declared && 'prepareSources'].filter(Boolean).join(', ')} }` : ''} from './app.js';`,
   ...(soundTable ? [`import { install as sounds } from './sounds.js'; sounds(${soundTable});`] : []),
+  // A drag's data is admitted before the page is written, as the browser entry admits it (drag.js).
+  ...(drag ? ["import { install as drag } from './drag.js'; import { PropHooks as dragHooks, say as dragSay } from './rt.js'; drag({ PropHooks: dragHooks, say: dragSay, document: null });"] : []),
   "import { data, clock, inflight, Resources, Mutations, routeAt, Head, canSetStatus, resolvedLanguage, res, commit, refused } from './rt.js'; import { answersAtWork, looseOut } from './held.js';",
   "import { types, sourceTypes, pages, viewportMedia, activation, markdownPaths } from './names.js';",
   "import { segmentOf } from './router.js';",

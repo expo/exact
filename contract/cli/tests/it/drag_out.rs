@@ -133,19 +133,29 @@ fn the_runner_admits_files_by_the_grants_and_the_host_reach_and_journals_a_refus
 
 #[test]
 fn bound_entries_and_urls_are_refused_by_the_same_rules() {
-    let src = "component A\n  state files = [\"assets/a.jpg\", \"img/x.jpg\", \"app:/data/../x.pdf\"]\n  state link = \"/card/1\"\n  view\n    column draggable=true dataTransfer=DataTransfer(files=files, url=link) testId=\"odd\"\n      text \"a\"\n";
-    let r = boot_source(src, Platform::Ios, "fs.read app:/data\n");
+    // A template of literals is a constant the compiler folds, admitted as a bound value is.
+    let src = "component A\n  state files = [\"assets/a.jpg\", \"img/x.jpg\", \"app:/data/../x.pdf\"]\n  state link = \"/card/1\"\n  view\n    column\n      column draggable=true dataTransfer=DataTransfer(files=files, url=link) testId=\"odd\"\n        text \"a\"\n      column draggable=true dataTransfer=DataTransfer(url=`https://${\"example.com\"}/a b`) testId=\"folded\"\n        text \"b\"\n";
+    let mut r = boot_source(src, Platform::Ios, "fs.read app:/data\n");
+    // A render with no kernel folds the same admitted URL into its document.
+    let folded = view(&r, "folded");
+    let doc = r.document_tree().unwrap();
+    assert_eq!(
+        doc.node(folded).unwrap().props.str(PropId::DataTransferUrl),
+        None
+    );
     assert_eq!(
         held(&r, "odd", PropId::DataTransferFiles).as_deref(),
         Some("assets/a.jpg")
     );
     assert_eq!(held(&r, "odd", PropId::DataTransferUrl), None);
+    assert_eq!(held(&r, "folded", PropId::DataTransferUrl), None);
     assert_eq!(
         refusals(&r),
         [
             "drag: refused: img/x.jpg is neither a shipped assets/ file nor an app:/ path",
             "drag: refused: app:/data/../x.pdf is not a plain app:/ path",
-            "drag: refused: /card/1 is not an absolute http: or https: URL",
+            "drag: refused: url is not an absolute http: or https: URL: another app cannot open this app's path",
+            "drag: refused: url is not an absolute http: or https: URL: it holds a space, a tab, a line break or another control character; write a space as `%20` and remove the rest",
         ]
     );
 }
@@ -176,6 +186,11 @@ fn each_refusal_names_what_to_write_instead() {
             "draggable=true dataTransfer=DataTransfer(url=\"/card/1\")",
             "type-data-transfer",
             "another app cannot open this app's path",
+        ),
+        (
+            "draggable=true dataTransfer=DataTransfer(url=\"https://:443/\")",
+            "type-data-transfer",
+            "it names no host; write the host after `https://`",
         ),
         (
             "draggable=true dataTransfer=DataTransfer(files=[\"https://example.com/a.jpg\"])",

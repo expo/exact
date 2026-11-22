@@ -10,14 +10,6 @@
 use super::*;
 use exact_painted::presenter::Carried;
 
-pub(super) fn direct_device(
-    painter: exact_painted::presenter::PainterChoice,
-    device: Option<&str>,
-) -> bool {
-    painter == exact_painted::presenter::PainterChoice::Ink
-        && exact_ink::device::direct_d3d11(device).is_some()
-}
-
 /// The picture presented and not yet heard on screen.
 #[derive(Default)]
 pub(super) struct Presents {

@@ -489,7 +489,7 @@ fn string_name(plan: &Plan, slot: &exact_plan::SlotsRow, scope: &Scope) -> Strin
     if type_code(plan, slot.ty) == "s" {
         format!(
             ",{}",
-            scope.operand(serde_json::to_string(plan.str(slot.name)).unwrap())
+            scope.operand(serde_json::to_string(slot.declared_name(plan)).unwrap())
         )
     } else {
         String::new()

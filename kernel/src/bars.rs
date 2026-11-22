@@ -571,40 +571,132 @@ pub struct RootTabs {
     /// tab with the search role. Known from the first frame, before the tab's
     /// panel is built.
     pub search: Option<usize>,
+    /// The element the tablist names as its tab bar's accessory
+    /// (`navigationTabAccessory`, LLP 1075.003 §9.17): the one eligible
+    /// element that carries the id and has a box.
+    pub accessory: Option<ViewId>,
+    /// Why the tablist's `navigationTabAccessory` gives no accessory though
+    /// an element carries its id; `None` when it gives one, names nothing,
+    /// or names an element with no box, which is how an author hides it.
+    pub accessory_refused: Option<AccessoryRefusal>,
+    /// The tablist names an accessory that no element outside the routes
+    /// carries: none is mounted, or the name is wrong.
+    pub accessory_missing: bool,
+}
+
+impl RootTabs {
+    /// The line a development build writes when the tablist's
+    /// `navigationTabAccessory="{id}"` shows no accessory for a reason the
+    /// author may not mean, else `None`.
+    pub fn accessory_note(&self, id: &str) -> Option<String> {
+        if let Some(refused) = self.accessory_refused {
+            return Some(refused.message(id));
+        }
+        self.accessory_missing.then(|| format!("`navigationTabAccessory=\"{id}\"` names no element outside the routes now, so the tab bar shows no accessory until one with `id=\"{id}\"` is mounted; if the id is right and the element is left out on purpose, write `navigationTabAccessory=\"\"` while it is (docs/recipes/mini-player.md)"))
+    }
+}
+
+/// Why an element a root tablist names with `navigationTabAccessory` cannot
+/// be its tab bar's accessory (LLP 1075.003 §9.17). One accessory serves
+/// every tab and stands beside the tab bar, so the element lies outside the
+/// tablist, the routes and the panels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccessoryRefusal {
+    /// The element is a route.
+    Route,
+    /// The element lies in a tab panel.
+    InPanel,
+    /// The element lies in the tablist.
+    InTablist,
+    /// The element is the tablist or a panel, or holds one.
+    HoldsTabs,
+    /// The element is or lies in the footer a root `nav` gives the sidebar
+    /// (LLP 1115.002 item 5).
+    Footer,
+    /// The element is or lies in a popover or a `dialog`, which HTML's top
+    /// layer shows.
+    TopLayer,
+    /// The element comes before a tab panel the tablist links, where the web
+    /// shows it above that panel's content and UIKit below it.
+    BeforePanels,
+    /// The element is a run in a paragraph, which has no box of its own.
+    Inline,
+    /// The element lies in a `list`, whose cells hold its rows.
+    InList,
+    /// The element is a part of a control, which the control shows with its
+    /// other parts: a shape in an `svg`, an option in a `select`, a radio of
+    /// a `radiogroup` or a tab of another `tablist` (a choice of its group,
+    /// a segment of a segmented control on iOS), or what lies in one.
+    Part,
+    /// More than one eligible element carries the id.
+    Duplicate,
+}
+
+impl AccessoryRefusal {
+    /// What happened, why the platform shows no accessory, and what to write
+    /// instead, for the tablist's `navigationTabAccessory="{id}"`.
+    pub fn message(self, id: &str) -> String {
+        let named = format!("`navigationTabAccessory=\"{id}\"`");
+        let instead = format!("give `id=\"{id}\"` to an element of its own outside the tablist and the tab panels, such as a row written after every tab panel the tablist links (docs/recipes/mini-player.md)");
+        match self {
+            Self::Route => format!("{named} names a route, but the tab bar's accessory is shared by every tab, so it shows no accessory; {instead}"),
+            Self::InPanel => format!("{named} names an element inside a tab panel, but the tab bar's accessory is shared by every tab, so it shows no accessory; {instead}"),
+            Self::InTablist => format!("{named} names an element inside the tablist, whose place the tab bar takes, so it shows no accessory; {instead}"),
+            Self::HoldsTabs => format!("{named} names an element that is or holds the tablist or a tab panel, but the accessory is one bar beside the tabs, so it shows no accessory; {instead}"),
+            Self::Footer => format!("{named} names an element that is or lies in the `footer` its `nav` gives the sidebar, so it shows no accessory; {instead}"),
+            Self::TopLayer => format!("{named} names an element that is or lies in a popover or a `dialog`, which shows over the page, not beside the tab bar, so it shows no accessory; {instead}"),
+            Self::BeforePanels => format!("{named} names an element written before a tab panel the tablist links, where the web shows it above that panel's content but UIKit shows the accessory below it, beside the tab bar, so it shows no accessory; write the element after every tab panel the tablist links (docs/recipes/mini-player.md)"),
+            Self::Inline => format!("{named} names a run inside a paragraph, which has no box of its own for UIKit to hold, so it shows no accessory; put `id=\"{id}\"` on a row that holds the text, written after every tab panel the tablist links (docs/recipes/mini-player.md)"),
+            Self::InList => format!("{named} names an element inside a `list`, whose cells hold its rows, so it shows no accessory; {instead}"),
+            Self::Part => format!("{named} names a part of a control (a shape in an `svg`, an option in a `select`, a radio or a tab of its group), which the control shows with its other parts, so it shows no accessory; put `id=\"{id}\"` on the control itself, or on a row that holds it, written after every tab panel the tablist links (docs/recipes/mini-player.md)"),
+            Self::Duplicate => format!("{named} names more than one element outside the tablist, the routes and the panels, so it shows no accessory; an id names one element: keep `id=\"{id}\"` on the accessory alone"),
+        }
+    }
 }
 
 impl RootTabs {
     /// Whether the platform may place this horizontal bar in a sidebar (LLP 1116.004 D1.1).
     /// A root-level `nav` may group it with its in-flow footer (LLP 1115.002 item 5).
     pub fn allows_sidebar(&self, kernel: &Kernel, root: ViewId) -> bool {
-        let (Some(node), Some(bar)) = (kernel.node(root), kernel.node(self.tablist)) else {
+        let arena = kernel.arena();
+        let (Some(root), Some(list)) = (arena.slot_of(root), arena.slot_of(self.tablist)) else {
             return false;
         };
+        arena.allows_sidebar(root, list, self.footer.and_then(|id| arena.slot_of(id)))
+    }
+}
+
+impl crate::arena::NodeArena {
+    /// [`RootTabs::allows_sidebar`] over the arena's slots, for the rule that
+    /// builds the root's tabs: the root tablist `list` and its `nav`'s
+    /// `footer`, which the sidebar shows below its tabs only when this holds.
+    pub(crate) fn allows_sidebar(&self, root: u32, list: u32, footer: Option<u32>) -> bool {
         let column = |d| matches!(d, FlexDirection::Column | FlexDirection::ColumnReverse);
-        let in_flow = |p| matches!(p, PositionType::Static | PositionType::Relative);
-        if node.style.display != Display::Flex
-            || !column(node.style.flex_direction)
-            || column(bar.style.flex_direction)
-            || !in_flow(bar.layout_position())
-            || bar.props.str(PropId::AccessibilityOrientation) == Some("vertical")
+        let in_flow = |slot| {
+            matches!(
+                crate::style::top_layer::layout_position(self, slot),
+                PositionType::Static | PositionType::Relative
+            )
+        };
+        let (node, bar) = (self.style(root), self.style(list));
+        if node.display != Display::Flex
+            || !column(node.flex_direction)
+            || column(bar.flex_direction)
+            || !in_flow(list)
+            || self.props(list).str(PropId::AccessibilityOrientation) == Some("vertical")
         {
             return false;
         }
-        if bar.parent == Some(root) {
+        if self.parent(list) == Some(root) {
             return true;
         }
-        self.footer
-            .and_then(|id| kernel.node(id))
-            .is_some_and(|footer| in_flow(footer.layout_position()))
-            && bar
-                .parent
-                .and_then(|id| kernel.node(id))
-                .is_some_and(|nav| {
-                    in_flow(nav.layout_position())
-                        && (nav.style.display == Display::Block
-                            || nav.style.display == Display::Flex
-                                && column(nav.style.flex_direction))
-                })
+        footer.is_some_and(in_flow)
+            && self.parent(list).is_some_and(|nav| {
+                let style = self.style(nav);
+                in_flow(nav)
+                    && (style.display == Display::Block
+                        || style.display == Display::Flex && column(style.flex_direction))
+            })
     }
 }
 
@@ -751,13 +843,177 @@ impl crate::arena::NodeArena {
                     child != list && self.props(child).str(PropId::SemanticTag) == Some("footer")
                 })
             });
-            (!named.is_empty()).then_some(RootTabs {
+            if named.is_empty() {
+                return None;
+            }
+            // The footer holds the sidebar's own rows only where the sidebar may show it
+            let sidebar_footer = footer.filter(|_| self.allows_sidebar(root, list, footer));
+            let (accessory, accessory_refused, accessory_missing) =
+                self.tab_accessory(root, list, sidebar_footer, &panels, &named);
+            Some(RootTabs {
                 footer: footer.map(|slot| self.local_id(slot)),
                 tablist: self.local_id(list),
                 tabs,
                 panels: named,
                 search,
+                accessory: accessory.map(|slot| self.local_id(slot)),
+                accessory_refused,
+                accessory_missing,
             })
         })
+    }
+
+    /// The element root tablist `list` names with `navigationTabAccessory`
+    /// (LLP 1075.003 §9.17), why it refuses one that carries the id, and
+    /// whether no element outside the routes carries it. Only
+    /// a tablist that says the attribute pays for the walk, which goes
+    /// through the root's own boxes, its panels and its tablist, and stops at
+    /// each route as the root-tab rule does: an id carried only inside a
+    /// route reads as no element, which the compiler refuses where it can
+    /// see the route. An eligible element with no box, `display: none` on
+    /// it or an ancestor, gives none and no reason: that is how an author
+    /// hides it.
+    fn tab_accessory(
+        &self,
+        root: u32,
+        list: u32,
+        footer: Option<u32>,
+        panels: &[u32],
+        linked: &[ViewId],
+    ) -> (Option<u32>, Option<AccessoryRefusal>, bool) {
+        let Some(name) = self
+            .props(list)
+            .str(PropId::NavigationTabAccessory)
+            .filter(|name| !name.is_empty())
+        else {
+            return (None, None, false);
+        };
+        // The tablist, the panels and every box between them and the root
+        let mut tabs = std::collections::HashSet::new();
+        for &start in panels.iter().chain([&list]) {
+            let mut at = Some(start);
+            while let Some(slot) = at.filter(|&s| s != root) {
+                if !tabs.insert(slot) {
+                    break;
+                }
+                at = self.parent(slot);
+            }
+        }
+        // Where a box lies, as the walk passes into it
+        #[derive(Clone, Copy, Default)]
+        struct Within {
+            panel: bool,
+            list: bool,
+            footer: bool,
+            top: bool,
+            rows: bool,
+            drawn: bool,
+        }
+        let mut carriers: Vec<(u32, Option<AccessoryRefusal>)> = Vec::new();
+        // The panels the tablist links, which the element comes after: once all are met
+        let mut unmet: std::collections::HashSet<u32> =
+            linked.iter().filter_map(|&id| self.slot_of(id)).collect();
+        let mut stack: Vec<(u32, Within)> = self
+            .children(root)
+            .iter()
+            .rev()
+            .map(|&c| (c, Within::default()))
+            .collect();
+        // A radio of a `radiogroup` or a tab of another `tablist`: one choice of its group, which stands with
+        // the group whatever shows it (a segmented control on iOS)
+        let segment = |slot: u32| {
+            let Some(group) = self.parent(slot) else {
+                return false;
+            };
+            let member = match self.props(group).str(PropId::AccessibilityRole) {
+                Some("radiogroup") => "radio",
+                Some("tablist") if group != list => "tab",
+                _ => return false,
+            };
+            self.props(slot).str(PropId::AccessibilityRole) == Some(member)
+        };
+        // In tree order, so a carrier met before a linked panel comes before the panels
+        while let Some((slot, within)) = stack.pop() {
+            let props = self.props(slot);
+            let route = props.str(PropId::NavigationKey).is_some();
+            let panel = props.str(PropId::AccessibilityRole) == Some("tabpanel");
+            let within = Within {
+                panel: within.panel,
+                list: within.list,
+                footer: within.footer || footer == Some(slot),
+                top: within.top
+                    || props.str(PropId::Popover).is_some()
+                    || props.str(PropId::SemanticTag) == Some("dialog"),
+                rows: within.rows,
+                drawn: within.drawn,
+            };
+            if props.str(PropId::Id) == Some(name) {
+                let refused = if route {
+                    Some(AccessoryRefusal::Route)
+                } else if within.list {
+                    Some(AccessoryRefusal::InTablist)
+                } else if within.panel {
+                    Some(AccessoryRefusal::InPanel)
+                } else if tabs.contains(&slot) {
+                    Some(AccessoryRefusal::HoldsTabs)
+                } else if within.footer {
+                    Some(AccessoryRefusal::Footer)
+                } else if within.top {
+                    Some(AccessoryRefusal::TopLayer)
+                } else if self.in_paragraph(slot) {
+                    Some(AccessoryRefusal::Inline)
+                } else if within.rows {
+                    Some(AccessoryRefusal::InList)
+                } else if within.drawn || segment(slot) {
+                    Some(AccessoryRefusal::Part)
+                } else if !unmet.is_empty() {
+                    // Last, so an element no place could take is told so before where to move it
+                    Some(AccessoryRefusal::BeforePanels)
+                } else {
+                    None
+                };
+                carriers.push((slot, refused));
+            }
+            unmet.remove(&slot);
+            if !route {
+                // The tablist itself is one of the boxes that hold the tabs; what lies in it is in the tablist
+                let within = Within {
+                    panel: within.panel || panel,
+                    list: within.list || slot == list,
+                    rows: within.rows || self.node_type(slot) == NodeType::List,
+                    // An `svg` draws its shapes, a `select` its options, a group's choice what it holds
+                    drawn: within.drawn
+                        || self.node_type(slot) == NodeType::Svg
+                        || props.str(PropId::Type) == Some("select")
+                        || segment(slot),
+                    ..within
+                };
+                stack.extend(self.children(slot).iter().rev().map(|&c| (c, within)));
+            }
+        }
+        let eligible: Vec<u32> = carriers
+            .iter()
+            .filter(|(_, r)| r.is_none())
+            .map(|(s, _)| *s)
+            .collect();
+        match eligible.as_slice() {
+            [] => (
+                None,
+                carriers.first().and_then(|(_, r)| *r),
+                carriers.is_empty(),
+            ),
+            [one] => {
+                let mut at = Some(*one);
+                while let Some(slot) = at {
+                    if self.style(slot).display == Display::None {
+                        return (None, None, false);
+                    }
+                    // Up to the navigation root, whose own `display: none` hides it too
+                    at = (slot != root).then(|| self.parent(slot)).flatten();
+                }
+                (Some(*one), None, false)
+            }
+            _ => (None, Some(AccessoryRefusal::Duplicate), false),
+        }
     }
 }

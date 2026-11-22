@@ -221,15 +221,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         if gestureRecognizer === swipeRecognizer, gestureRecognizer.numberOfTouches == 0 { swipeDownX = touch.location(in: window).x }
         if stopsAtPress(gestureRecognizer), pressBoundary(touch, presses: gestureRecognizer !== layoutPanRecognizer) { return false } // LLP 1057.001 rule 3
         #if os(iOS)
-        if gestureRecognizer === contextRecognizer {
-            guard presenter?.menus.eligible(self, contextMenu: true) == true,
-                  hasOwnContextMenu || inlineContextTarget(at: touch.location(in: self)) != nil else { return false }
-            if !ExactEnv.agentMode {
-                let run = inlineContextTarget(at: touch.location(in: self))
-                if (run?.props["contextPopover"] ?? (run == nil ? props["contextPopover"] : nil))?.isEmpty == false { return false }
-            }
-            if let hit = touch.view as? NodeView, let source = hit.contextMenuSource(at: touch.location(in: hit)), source !== self { return false }
-        }
+        if gestureRecognizer === contextRecognizer, !hearsLongPress(on: touch.view, at: touch.location(in: self)) { return false }
         #endif
         if hitsNativeEditor(touch.view) { return false }
         var hit = touch.view

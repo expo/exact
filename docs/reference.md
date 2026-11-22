@@ -66,12 +66,13 @@ the warning reports the affected version even with a JIT workaround enabled.
 
 An app with no `host.windows.painter` uses ink on a DirectX 11 composition
 swap chain, except an app declaring `game`, which keeps the CPU painter so
-its module presents directly. Explicit `"ink"` or `"cpu"` selects that painter;
-CPU keeps the `softbuffer` window. `EXACT_PAINTER` overrides either choice.
-`EXACT_INK_DEVICE=wgpu` selects ink's wgpu device (DirectX 12 with
-`WGPU_BACKEND=dx12`, as the measurements set); `warp` selects software
-DirectX 11. An Ink build requires the Windows SDK's `fxc`; without it,
-the build refuses and names the SDK and `"cpu"` remedies.
+its module presents directly. Explicit `"ink"` or `"cpu"` selects that painter.
+CPU keeps the `softbuffer` window. With development trust, `EXACT_PAINTER`
+overrides the choice and `EXACT_INK_DEVICE=wgpu` selects Ink's wgpu device
+(DirectX 12 with `WGPU_BACKEND=dx12`). A production bake uses the manifest
+choice. With either trust, `EXACT_INK_DEVICE=warp` selects software DirectX 11
+for Ink. An Ink build requires the Windows SDK's `fxc`. If it is missing,
+the build names the SDK and the CPU option.
 `agent windows`, `test windows` and `verify windows` explicitly select CPU
 for their headless drives unless `EXACT_PAINTER` is set. Those screenshots
 do not qualify the window's composition path.
@@ -79,11 +80,11 @@ A direct `EXACT_SMOKE=1` development launch uses the app's painter choice.
 `bun exact.mjs windows --release` packages a production binary and omits the
 headless driver. To measure an optimized build under the driver, set
 `EXACT_UPDATE_TRUST=development` when running the same command.
-A hand-written Windows shell selects the driver at compile time by calling
+A hand-written Windows shell selects the driver and development painters at link time with
 `exact_windows::run_baked::<AppData, ADMIT_AGENT>`. The TypeScript bake supplies
 `ADMIT_AGENT`. A Rust app that bakes its own `compat.json` writes
 `compat.admits_agent()` to a Rust constant in `OUT_DIR` in the same build step.
-`run_composed` always links the driver. The heavy-list app shows the
+`run_composed` always links the driver and development painters. The heavy-list app shows the
 [build step](../bench/heavy-list/exact-heavylist/windows/build.rs) and the
 [entry point](../bench/heavy-list/exact-heavylist/windows/src/main.rs).
 A Windows login item started with `--login hidden` paints its offscreen launch
@@ -2411,7 +2412,10 @@ box width=(320 * z) height=(200 * z) overflow="hidden"
 
 For sharp text, `iframe "https://example.com/" width=320 height=200 zoom=z` enlarges
 the frame's own lengths and tells WebKit to render the page at that zoom. Line breaks
-can change even when the guest still reports a 320 × 200 CSS pixel viewport.
+can change even when the guest still reports a 320 × 200 CSS pixel viewport. On macOS,
+the time of the first displayed frame at the new size or zoom remains unknown to
+Exact. A WebKit snapshot completes when its image is ready, even in a hidden window.
+[Apple’s snapshot API](https://developer.apple.com/documentation/webkit/wksnapshotconfiguration/afterscreenupdates)
 
 On the web (same-origin frames), macOS and iOS, `tap live at 40 80` presses
 40 points right and 80 down from the top left of the iframe named `live`.

@@ -263,7 +263,16 @@ package protocol NavigationHosting: AnyObject {
     /// Each route shown beside its stack's top or under a pane over it, by
     /// its node (LLP 1127 D8): a split's columns. The others show in their stack.
     var routesShown: [UInt32: BlockShown] { get }
-    var sidebarFooterBlock: (id: UInt32, block: HostBlock, placement: BlockPlacement?)? { get }
+    /// The blocks of the nodes UIKit holds in views of their own (the sidebar's footer, the tab bar's accessory).
+    var paneBlocks: [(id: UInt32, block: HostBlock, placement: BlockPlacement?)] { get }
+    /// The boxes UIKit draws above the routes without presenting them (the tab bar's accessory), which the runner
+    /// tests before the page, as it does a presentation's.
+    var topLayerBoxes: [TopLayerBox] { get }
+    #if os(iOS)
+    /// The views that hold an element out of its parent (the tab bar's accessory), with the element: a menu an
+    /// ancestor of it gives reaches a long press there, as one reaches a presentation's mount.
+    var relayMounts: [(mount: any RelayMount, node: NodeView)] { get }
+    #endif
     /// Whether a grouped list shows as UIKit's sidebar: in a split's list column while the split is expanded (LLP 1127 D7).
     func showsAsSidebar(_ list: UIView) -> Bool
     /// The row of a sidebar list whose detail shows, which stays selected;
@@ -372,6 +381,9 @@ package protocol NavigationHosting: AnyObject {
 package protocol LiftedNodes: AnyObject {
     /// The parent a lifted node, or a view in its place, is under in the authored tree.
     func parent(of view: UIView) -> NodeView?
+    /// Whether UIKit holds `view` away from its parent's box (the tab bar's
+    /// accessory), so a press on it lands in its own box, as in a presentation.
+    func heldApart(_ view: UIView) -> Bool
     /// Whether `parent` lifted `node`, which `parent`'s children op then leaves where it is.
     func holds(_ node: NodeView, under parent: NodeView) -> Bool
     /// A children op on `parent`, before the presenter places it.
@@ -540,7 +552,11 @@ package final class NoNavigation: NavigationHosting {
     package func isInactiveRoute(containing view: UIView, layout: Bool) -> Bool { false }
     package func resolve(route key: String, id: String) -> NodeView? { nil }
     package var routesShown: [UInt32: BlockShown] { [:] }
-    package var sidebarFooterBlock: (id: UInt32, block: HostBlock, placement: BlockPlacement?)? { nil }
+    package var paneBlocks: [(id: UInt32, block: HostBlock, placement: BlockPlacement?)] { [] }
+    package var topLayerBoxes: [TopLayerBox] { [] }
+    #if os(iOS)
+    package var relayMounts: [(mount: any RelayMount, node: NodeView)] { [] }
+    #endif
     package func showsAsSidebar(_ list: UIView) -> Bool { false }
     package func sidebarSelection(_ list: UIView) -> UInt32?? { .some(nil) }
     package func listPress(_ row: UInt32, in list: UIView, _ press: () -> Void) { press() }

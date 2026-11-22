@@ -24,6 +24,8 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod http_url;
+pub use http_url::http_url_refusal;
 pub mod asm;
 pub mod builder;
 pub mod bytes;
@@ -73,6 +75,15 @@ pub mod generated {
 pub use generated::*;
 
 impl SlotsRow {
+    /// The state name to show in a diagnostic. Component uses add a namespace after the name.
+    pub fn declared_name<'a>(&self, plan: &'a Plan) -> &'a str {
+        let key = plan.str(self.name);
+        match key.split_once('#') {
+            Some((name, _)) if !name.is_empty() => name,
+            _ => key,
+        }
+    }
+
     /// Whether a host restores this slot at boot.
     pub fn is_persisted(&self) -> bool {
         self.persist != PersistScope::None

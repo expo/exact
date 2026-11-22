@@ -21,7 +21,7 @@
 import UIKit
 
 /// A glass a batch removed, as it was drawn in its group.
-struct GlassDeparture {
+package struct GlassDeparture {
     weak var group: GlassGroupView?
     /// Its box in the group's content view.
     let frame: CGRect
@@ -175,7 +175,7 @@ extension GlassDeparture {
     /// `render(in:)` draws each layer's own values, not a running
     /// animation's, so a descendant mid-animation is given its shown values
     /// for the drawing (`shown`) and its own back before the batch commits.
-    static func picture(of content: UIView) -> UIView {
+    package static func picture(of content: UIView) -> UIView {
         let format = UIGraphicsImageRendererFormat.preferred()
         format.scale = content.traitCollection.displayScale > 0 ? content.traitCollection.displayScale : format.scale
         format.opaque = false

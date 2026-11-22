@@ -69,25 +69,6 @@ fn an_early_image_or_window_redraw_survives_until_the_next_tick() {
     assert!(!schedule.defer(tick, &mut pending));
     assert_eq!(schedule.redraw(tick, pending), None);
 }
-#[test]
-fn only_direct_ink_devices_prepare_asynchronously() {
-    use exact_painted::presenter::PainterChoice;
-    use exact_painted::presenter::PainterChoice::*;
-    assert!(direct_device(PainterChoice::from_baked("{}"), None));
-    assert!(!direct_device(
-        PainterChoice::from_baked(r#"{"painter":"cpu"}"#),
-        None
-    ));
-    assert!(direct_device(Ink, None));
-    assert!(!direct_device(Ink, Some("wgpu")));
-    assert!(direct_device(Ink, Some("d3d11")));
-    assert!(direct_device(Ink, Some("warp")));
-    for painter in [Auto, Cpu, Gpu, Custom] {
-        assert!(!direct_device(painter, None));
-        assert!(!direct_device(painter, Some("d3d11")));
-    }
-}
-
 fn present<D: DataSource>(p: &mut Presenter<D>, window: &exact_ink::device::d3d11::Window) {
     let limit = Instant::now() + Duration::from_secs(5);
     loop {
@@ -160,6 +141,7 @@ fn direct_window_blinks_without_a_softbuffer_surface() {
         preparing: None,
         jump_list_started: false,
         direct: true,
+        painter: PainterBoot::windows::<true>("{}"),
         presenter: Some(p),
         timers: crate::timers::Timers::new(|_| {}),
         started,
@@ -312,7 +294,8 @@ fn hiding_a_resident_window_releases_its_painter_and_preserves_its_canvas_and_ed
         app.window = Some(window);
         app.keep_running = true;
         app.direct = direct;
-        app.config.compat = serde_json::json!({"painter": name}).to_string();
+        app.painter =
+            PainterBoot::windows::<false>(&serde_json::json!({"painter": name}).to_string());
         let verify = |p: &mut Presenter<Picture>| {
             let editor = p
                 .access_tree()
@@ -483,6 +466,7 @@ fn test_app<D: DataSource>(
         preparing: None,
         jump_list_started: false,
         direct: true,
+        painter: PainterBoot::windows::<true>("{}"),
         presenter: Some(p),
         timers: crate::timers::Timers::new(|_| {}),
         started,

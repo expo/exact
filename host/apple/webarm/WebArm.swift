@@ -536,6 +536,8 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     /// back to it.
     func applyOptions(to web: WKWebView) {
         let said = { (key: String) in self.options[key] != nil || self.applied.contains(key) }
+        // On macOS a snapshot can complete offscreen. Public WebKit API leaves the first
+        // displayed frame after a zoom unobservable (LLP 1020.002 D6).
         if said("zoom") { web.pageZoom = CGFloat((options["zoom"] as? NSNumber)?.doubleValue ?? 1) }
         if said("allowsBackForwardNavigationGestures") { web.allowsBackForwardNavigationGestures = options["allowsBackForwardNavigationGestures"] as? Bool ?? false }
         #if os(macOS)

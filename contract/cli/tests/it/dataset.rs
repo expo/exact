@@ -96,6 +96,12 @@ fn a_word_a_host_writes_or_html_cannot_spell_is_refused() {
             "lower-data-word",
             "written by the web host",
         ),
+        // A drag's carrier, which `drag.js` admits before the page drags it (LLP 1094.000 D1).
+        (
+            "data-datatransferurl=\"x\"",
+            "lower-data-word",
+            "written by the web host",
+        ),
         (
             "data-time-shown=\"x\"",
             "lower-data-word",
