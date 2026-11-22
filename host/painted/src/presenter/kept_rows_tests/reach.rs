@@ -327,11 +327,14 @@ fn a_column_of_text_reaches_only_as_far_as_its_clips_show_it() {
     // right, from 120 to 340.
     let text = r#"text "one\ntwo\nthree\nfour\nfive\nsix" white-space="pre" width=100 height=20 column-count=2 column-gap=20 column-fill="auto" flex-shrink=0"#;
     let right = |b: Rect4| b.0 + b.2;
+    let seven = text.replace(r#"six""#, r#"six\nseven""#);
     let clipped_x = row_bounds(&format!("        {text} overflow-x=\"clip\"\n"));
     assert!(right(clipped_x) <= 200. + 48., "{clipped_x:?}");
-    // Turned, the clip still cuts the columns: its unbounded y does not.
+    // Turned, the clip still cuts the columns past the box away; its
+    // unbounded y does not cover them. A seventh column, cut to an empty
+    // edge at 360, would reach past the limit if an empty cut were kept.
     let turned = row_bounds(&format!(
-        "        {text} overflow-x=\"clip\" rotate=\"45deg\"\n"
+        "        {seven} overflow-x=\"clip\" rotate=\"45deg\"\n"
     ));
     assert!(right(turned) <= 200. + 48., "{turned:?}");
     let clipped_y = row_bounds(&format!("        {text} overflow-y=\"clip\"\n"));

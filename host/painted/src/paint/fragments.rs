@@ -11,8 +11,8 @@ use super::*;
 impl Painter {
     /// A `Text` node: its runs' backgrounds, decorations and glyphs, once,
     /// or once in each of its fragments.
-    /// `clips`: what clips the box's lines, its own overflow clip in its
-    /// coordinates and its ancestors' in the walk's.
+    /// `own`: the box's overflow clip, in its coordinates; `ancestors`: the
+    /// clip its ancestors put on it, in the walk's.
     pub(super) fn text_node(
         &mut self,
         walk: &mut Walk<'_, '_>,
