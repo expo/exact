@@ -246,9 +246,6 @@ package struct ButtonFace: Equatable {
         var size: CGSize?
     }
     var image: Image?
-    /// A second line or a picture, which a bar item's title and image do not
-    /// show (LLP 1141.004 D1).
-    package var hasSubtitleOrPicture: Bool { subtitle != nil || image != nil }
     package var raster = false
     var leading = true
     package var label: String?

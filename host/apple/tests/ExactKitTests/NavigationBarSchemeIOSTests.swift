@@ -5,9 +5,9 @@ import XCTest
 @testable import ExactNavigation
 
 extension NavigationBarIOSTests {
-    /// A pressable box of a text in an authored size and ink is no button UIKit's item
-    /// draws: it is hosted, its own views in the bar, which take the window's scheme as the
-    /// page's do, though the app sends no batch (LLP 1141.004 D1).
+    /// A readout of a text in an authored size and ink is hosted, its own views in the bar,
+    /// which take the window's scheme as the page's do, though the app sends no batch (LLP
+    /// 1141.004 D1).
     func testAHostedFaceFollowsTheSchemeAsThePageDoes() throws {
         let session = try fixture("scheme-face", module: false, plan: "BAR_FACE_SCHEME")
         let nav = try XCTUnwrap(session.presenter.navigationHost.primaryNavigation)

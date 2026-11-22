@@ -17,8 +17,8 @@ import UIKit
 
 /// A route's header as the shared rule reads it: its heading and level (none
 /// for a header of buttons alone, whose bar has no title), its
-/// items before and after the heading (buttons and hosted elements, LLP
-/// 1141.004 D1),
+/// items before and after the heading (buttons and readouts, LLP 1141.004
+/// D1),
 /// its buttons with the stack's Back control, its search field, its tablist
 /// and the pressable around the heading. Each platform's bar is made from it.
 package struct HeaderRule {
@@ -28,8 +28,8 @@ package struct HeaderRule {
     package let search: NodeView?, segments: NodeView?, tap: NodeView?
 
     /// The hosted elements among the leading and trailing items, which
-    /// nothing presses as a whole and the bar shows as written (LLP 1141.004
-    /// D1).
+    /// nothing presses as a whole and the bar shows as written: the readouts
+    /// (LLP 1141.004 D1).
     package var hosted: [NodeView] { (leading + trailing).filter { node in !items.contains { $0 === node } } }
     /// The readouts among them (`role="status"`, LLP 1075.003 §9.15).
     package var readouts: [NodeView] { hosted.filter { $0.props["accessibilityRole"] == "status" } }

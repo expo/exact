@@ -1,6 +1,7 @@
-// @ref LLP 1141.004 D3 — a hosted item: an element of a header that the bar
-// has no object of its own for, shown in `UIBarButtonItem(customView:)` by
-// the element's own views, lifted out of the header while the bar shows it.
+// @ref LLP 1141.004 D3 — a hosted item: a header's readout (`role="status"`),
+// the one element the bar has no object of its own for, shown in
+// `UIBarButtonItem(customView:)` by its own views, lifted out of the header
+// while the bar shows it.
 //
 // The element is given a block that fits its content inside the room the bar
 // gives an item (`barItemBlocks`, told with the other blocks by `OwnersIOS`),
@@ -23,15 +24,10 @@ final class HostedStand: UIView, HoldsLiftedNodes {
     weak var parent: NodeView?
 }
 
-/// A hosted item's custom view: the element at its laid-out size, inside
-/// UIKit's title-item inset where the item shares the bar's glass and shows
-/// words.
+/// A readout's custom view: the element at its laid-out size.
 final class HostedItemView: UIView {
     let stand = HostedStand()
     let node: NodeView
-    var inset: CGFloat = 0 {
-        didSet { if inset != oldValue { resize() } }
-    }
     /// The element's laid-out size as last shown: its frame's far edges in
     /// the block. The bridge sends no margins, so a trailing or bottom
     /// margin is not kept (LLP 1141.004 D3).
@@ -113,17 +109,16 @@ final class HostedItemView: UIView {
     /// UIKit sizes a bar item's custom view by its frame where it has no
     /// constraints, and reads `intrinsicContentSize` where it does: both.
     private func resize() {
-        let width = size.width + 2 * inset
-        if frame.size != CGSize(width: width, height: size.height) { frame.size = CGSize(width: width, height: size.height) }
+        if frame.size != size { frame.size = size }
         invalidateIntrinsicContentSize()
         setNeedsLayout()
     }
 
-    override var intrinsicContentSize: CGSize { CGSize(width: size.width + 2 * inset, height: size.height) }
+    override var intrinsicContentSize: CGSize { size }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        let frame = CGRect(x: inset, y: (bounds.height - size.height) / 2, width: size.width, height: size.height)
+        let frame = CGRect(x: 0, y: (bounds.height - size.height) / 2, width: size.width, height: size.height)
         if stand.frame != frame { stand.frame = frame }
         readout?.accessibilityFrameInContainerSpace = bounds
     }
@@ -140,7 +135,7 @@ final class BarHosted: LiftedNodes {
         let view: HostedItemView
         weak var route: RouteController?
         var room: CGSize
-        /// What the overflow menu's entry was made from (`name`).
+        /// The name the overflow menu's entry was made from (`name`).
         var menu = ""
     }
     private var hosted: [UInt32: Hosted] = [:]
@@ -168,7 +163,7 @@ final class BarHosted: LiftedNodes {
         view.stand.addSubview(node)
         NodeView.containerMoves -= 1
         presenter.flats.containerChanged(parent.id)
-        let entry = Hosted(item: UIBarButtonItem(customView: view), view: view, route: c, room: room(in: c, inset: i.hostedInset))
+        let entry = Hosted(item: UIBarButtonItem(customView: view), view: view, route: c, room: room(in: c))
         hosted[i.id] = entry
         style(i)
         _ = view.refit()
@@ -179,84 +174,30 @@ final class BarHosted: LiftedNodes {
     private func style(_ i: HeaderShape.Item) {
         guard let entry = hosted[i.id] else { return }
         entry.item.accessibilityIdentifier = i.testId
-        entry.view.inset = i.hostedInset
-        if #available(iOS 26.0, *) { entry.item.hidesSharedBackground = !i.hostedGlass }
+        // A readout presses nothing: it is content on the bar, with no glass
+        // (D4); a material it writes is its own.
+        if #available(iOS 26.0, *) { entry.item.hidesSharedBackground = true }
         name(i.id)
     }
 
-    /// What the overflow menu does for a hosted element: press it, or flip
-    /// a switch in it.
-    private struct Entry {
-        let node: NodeView, name: String, on: Bool?, disabled: Bool, invokes: String
-        var source: String { "\(node.id)/\(name)/\(on.map(String.init) ?? "")/\(disabled)/\(invokes)" }
-    }
-
-    /// What the overflow menu does for the element: its own action, where it
-    /// is a switch or presses (a `press` or a link's `href`); else nothing,
-    /// and its entry is its name, dimmed. A command (`commandfor`,
-    /// `popovertarget`) opens from the item in the bar, where the item has a
-    /// window, so an element that invokes one is dimmed too, its `press`
-    /// with it. What is inside an element is reached in the bar.
-    private func entries(_ node: NodeView) -> [Entry] {
-        let disabled = node.disabled || node.inert || node.cssVisibilityHidden, invocation = presenter.invocation(of: node)
-        // Everything a press may do: a link `presenter.press` follows first, and a command.
-        let invokes = "\(node.defaultLink ?? "") \(invocation.map { "\($0.target.id) \($0.action)" } ?? "")"
-        if let s = presenter.controls.controls[node.id] as? UISwitch {
-            return [Entry(node: node, name: node.accessibleName, on: s.isOn, disabled: disabled || !s.isEnabled, invokes: invokes)]
-        }
-        guard node.handlers.contains("press") || node.defaultLink != nil else { return [] }
-        return [Entry(node: node, name: node.accessibleName, on: nil, disabled: disabled || invocation != nil, invokes: invokes)]
-    }
-
-    /// In UIKit's overflow menu a custom view shows nothing: the item is
-    /// there by its element's name (LLP 1141.004 D3), an entry that does
-    /// what the element itself does, else a dimmed line. Made again as the
-    /// element changes, and an entry chosen acts only while it is still
-    /// what the bar that shows offers.
+    /// In UIKit's overflow menu a custom view shows nothing: a readout is
+    /// there by its name, dimmed (D3), made again as the name changes.
     private func name(_ id: UInt32) {
         guard let entry = hosted[id] else { return }
-        let node = entry.view.node, name = node.accessibleName
-        let entries = entries(node)
-        let source = offered(node, entries)
-        guard source != entry.menu else { return }
-        hosted[id]?.menu = source
-        let actions = entries.map { e in
-            UIAction(title: e.name.isEmpty ? name : e.name, attributes: e.disabled ? .disabled : [], state: e.on == true ? .on : .off) { [weak self, weak presenter, weak root = node, weak node = e.node, disabled = e.disabled] _ in
-                // Still the item of the bar that shows, its element shown, and
-                // offering what was offered: an entry chosen from a menu made
-                // before a change does nothing.
-                guard let self, let presenter, let root, let node, presenter.views[node.id] === node,
-                      let held = self.hosted[root.id], held.view.node === root, root.style["display"]?.string != "none",
-                      let route = held.route, route.navigationController?.topViewController === route, route.viewIfLoaded?.window != nil,
-                      !self.navigation.isInactiveRoute(containing: route.node, layout: false),
-                      self.offered(root, self.entries(root)) == source, !disabled else { return }
-                if let s = presenter.controls.controls[node.id] as? UISwitch {
-                    // As a tap flips it: the switch's own change.
-                    guard s.isEnabled else { return }
-                    s.setOn(!s.isOn, animated: false)
-                    s.sendActions(for: .valueChanged)
-                } else {
-                    presenter.press(node.id)
-                }
-            }
-        }
-        if let one = actions.first { entry.item.menuRepresentation = one }
-        else { entry.item.menuRepresentation = name.isEmpty ? nil : UIAction(title: name, attributes: .disabled) { _ in } }
+        let name = entry.view.node.accessibleName
+        guard name != entry.menu else { return }
+        hosted[id]?.menu = name
+        entry.item.menuRepresentation = name.isEmpty ? nil : UIAction(title: name, attributes: .disabled) { _ in }
     }
 
-    /// What the overflow menu offers for `root`: its name and its entries.
-    private func offered(_ root: NodeView, _ entries: [Entry]) -> String {
-        ([root.accessibleName] + entries.map(\.source)).joined(separator: "\u{1F}")
-    }
-
-    /// The room the bar gives a hosted item: a third of its width, so a
-    /// leading and a trailing one leave a third for an inline title, and a
-    /// bar item's height.
-    private func room(in c: RouteController?, inset: CGFloat) -> CGSize {
+    /// The room the bar gives a readout: a third of its width, so a leading
+    /// and a trailing one leave a third for an inline title, and a bar
+    /// item's height.
+    private func room(in c: RouteController?) -> CGSize {
         // A bar not laid out yet has no width: the viewport's stands in.
         let bar = c?.navigationController?.navigationBar.bounds.width ?? 0
         let width = bar > 0 ? bar : presenter.viewport.bounds.width
-        return CGSize(width: max(0, width / 3 - 2 * inset), height: Self.height)
+        return CGSize(width: max(0, width / 3), height: Self.height)
     }
 
     /// `c`'s bar shows the hosted items `ids`: each other one of its own goes
@@ -267,7 +208,7 @@ final class BarHosted: LiftedNodes {
         var moved = false
         for id in ids {
             guard let entry = hosted[id] else { continue }
-            let room = room(in: c, inset: entry.view.inset)
+            let room = room(in: c)
             if room != entry.room { hosted[id]?.room = room; moved = true }
             if entry.view.refit() { c.navigationController?.navigationBar.setNeedsLayout() }
         }
@@ -342,7 +283,7 @@ final class BarHosted: LiftedNodes {
         }
     }
 
-    /// Read the switch state once the control host has applied the batch.
+    /// Name each readout's overflow entry again once the batch is applied.
     func refreshOverflow() {
         for id in hosted.keys { name(id) }
     }

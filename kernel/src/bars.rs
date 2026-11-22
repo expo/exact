@@ -14,22 +14,20 @@
 //! Back control is the platform's own Back where the platform has one for
 //! that route, and an item like the others where it has not.
 //!
-//! **Everything else is hosted** (LLP 1141.004 D1): each outermost element
-//! that holds none of those parts is an item on its side of the heading,
-//! placed as a button is, which nothing presses as a whole and which a host
-//! shows as written, in views of its own: a spinner, a picture, two lines
-//! of text. A readout (an element whose role is `status`, a "● Clock",
-//! LLP 1075.003 §9.15) is one whatever it holds. What a box around the
-//! heading holds besides the bar's parts is the title's (iOS's subtitle and
-//! avatar), never hosted, and a host may take a hosted item for its title
-//! too (the text after the heading). A host that shows only buttons leaves
-//! the rest out.
+//! **A readout** (an element whose role is `status`, a "● Clock", LLP
+//! 1075.003 §9.15) is an item too, placed as a button is, which nothing
+//! presses as a whole and which a host shows as written, in views of its
+//! own (LLP 1141.004 D1). What a box around the heading holds besides the
+//! bar's parts is the title's (iOS's subtitle and avatar). Any other
+//! element is no item: the compiler refuses one in the header of an app
+//! that ships iOS, and one it cannot see stays out of the bar. A host that
+//! shows only buttons leaves the readouts out.
 //!
 //! **A header with no heading** is the bar too, with no title, when the bar
 //! places everything it shows: buttons, readouts, a search field, a
 //! tablist, and plain boxes around them or empty between them (issue #364).
-//! Any other hosted element keeps such a header in the page as written
-//! rather than give its place to a bar with no title. With no heading to
+//! Any other element keeps such a header in the page as written rather
+//! than give its place to a bar with no title. With no heading to
 //! stand between them, its items trail, as SwiftUI's
 //! `ToolbarItemPlacement.automatic` places an action in a bar, except the
 //! stack's Back control, which leads.
@@ -243,14 +241,14 @@ pub struct HeaderShape<N> {
     /// The heading's level: 1 is the screen's own title (UIKit's large
     /// title), any other an inline one; 0 with no heading.
     pub level: u32,
-    /// The items before the heading, in order: its buttons and its hosted
-    /// elements, readouts (`role="status"`) among them.
+    /// The items before the heading, in order: its buttons and its
+    /// readouts (`role="status"`).
     pub leading: Vec<N>,
     /// The items after it, in order.
     pub trailing: Vec<N>,
     /// Every button of the header, the stack's Back control among them
     /// (which is in neither list where the platform's own Back stands for
-    /// it). A hosted element is not one: nothing presses it as a whole.
+    /// it). A readout is not one: nothing presses it as a whole.
     pub items: Vec<N>,
     /// Its `input type="search"`, the first.
     pub search: Option<N>,
@@ -329,7 +327,7 @@ fn empty<T: Tree>(tree: &T, node: T::Node, facts: u32) -> bool {
 
 /// What the bar decides itself, so that a node holding one is walked: the
 /// heading, a search field, a tablist, a button (pressed or not, so a box
-/// around one is never hosted for want of a `press`) and a readout.
+/// around one is walked for it) and a readout.
 const PARTS: u32 = fact::HEADING
     | fact::SEARCH
     | fact::TABLIST
@@ -342,8 +340,9 @@ const PARTS: u32 = fact::HEADING
 struct Walk<N> {
     headings: Vec<N>,
     /// A shown node no button, readout, search field or tablist stands for:
-    /// a hosted element, a second search field or tablist, a button that
-    /// presses nothing. With no heading, the header is not the bar.
+    /// an element the bar has no object for, a second search field or
+    /// tablist, a button that presses nothing. With no heading, the header
+    /// is not the bar.
     unplaced: bool,
     leading: Vec<N>,
     trailing: Vec<N>,
@@ -363,7 +362,7 @@ impl<N: Copy + PartialEq> Walk<N> {
     }
 
     /// `title`: `node` holds the heading, so what it holds besides the bar's
-    /// parts is the title's (iOS's subtitle and avatar), never hosted.
+    /// parts is the title's (iOS's subtitle and avatar).
     fn walk<T: Tree<Node = N>>(&mut self, tree: &T, node: N, back_is_platforms: bool, title: bool) {
         for child in tree.children(node) {
             let facts = tree.facts(child);
@@ -400,17 +399,16 @@ impl<N: Copy + PartialEq> Walk<N> {
                 }
                 self.place(child);
             } else if facts & fact::STATUS != 0 && !holds_heading(tree, child) {
-                // A readout: hosted, whatever it holds.
+                // A readout: an item, placed as a button is, whatever it holds.
                 self.place(child);
             } else if holds(tree, child, PARTS) {
                 self.unplaced |= facts & fact::BOX == 0;
                 let title = title || holds_heading(tree, child);
                 self.walk(tree, child, back_is_platforms, title);
             } else if !title && facts & fact::BUTTON == 0 && !empty(tree, child, facts) {
-                // An element the bar has no object for: hosted, placed as a
-                // button is, nothing pressing it as a whole.
+                // An element the bar has no object for (a spinner, a
+                // picture, a second text) is no item: out of the bar.
                 self.unplaced = true;
-                self.place(child);
             } else {
                 self.unplaced |= facts & fact::BOX == 0;
             }

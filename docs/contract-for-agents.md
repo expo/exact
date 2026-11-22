@@ -2700,7 +2700,7 @@ lists any literal colour, font size or weight an app's `.contract` files still w
 | `role="tablist"`: each tab a symbol over a label / one text or image | `UITabBar` / `UISegmentedControl`, the tablist at least its native height unless `min-height` says otherwise (LLP 1059) |
 | `role="radiogroup"` of `button role="radio" aria-checked=…`, each one text or image (a value chosen from a few) | `UISegmentedControl`, as a tablist's; never a tab bar (LLP 1116.004 D5.2). Android draws Material's segmented buttons (two or more radios: equal shares of the row, the checked one filled with a check), and the Linux desktop and Windows the web's track with the checked radio raised on it. Keys of your own design: a radio that paints itself (its own background, border or radius, LLP 1104 D2), or `appearance="none"` on the `radiogroup`, keeps its buttons as you paint them; on the web, iOS, the Mac and the painted hosts (Linux, Windows and Android’s reader), the group keeps one Tab stop (the checked eligible radio, else the first) and arrow keys that press the next or previous eligible radio (Left and Right swapped right to left); on tvOS the focus engine moves between them |
 | a route whose first child is a `header` holding one heading (`text role="heading"`; an `aria-level` alone is not one), a text after it and its buttons | the navigation bar; a level-1 heading (`aria-level=1`) is a large title, in a sheet too, and any other level an inline one; the text after it the subtitle |
-| any other element of that header, outside a box around the heading (a `progress` and its words, a picture, two lines of text) | a hosted item on its side of the heading: `UIBarButtonItem(customView:)` holding the element's own views, laid out as written and live (LLP 1141.004), with its press; no glass unless something in it presses, `backgroundMaterial` its own. A box of nothing but boxes (a spacer, a dot alone) is no item: a dot that means something says `role="status"` and an `aria-label`. Only a button of one symbol, one text or a symbol beside a text, and a one-part badge, are UIKit's own items. Its limits: Android's top app bar and tvOS's bar leave it out and the Mac draws the header in the page, but for a readout of words, symbols and dots, which its toolbar draws (warning `header-item-left-out` for the targets an app ships); an automatic size at most a third of the bar wide and 44 points high; in UIKit's "⋯" menu only its own action; desktop Linux and the web draw the header as written |
+| a readout of that header, outside a box around the heading (`role="status"`: words, symbols, dots and one `progress`) | an item on its side of the heading: `UIBarButtonItem(customView:)` holding the element's own views, laid out as written and live (LLP 1141.004), with no glass (`backgroundMaterial` its own) and in UIKit's "⋯" menu its name, dimmed. Any other element there (a spinner or a picture alone, a second text, a switch) fails the build of an app that ships iOS (`lower-header-item`), naming the repair. Android's top app bar and tvOS's bar leave a readout out, and the Mac draws the header in the page for one holding a spinner (warning `header-item-left-out` for the targets an app ships); an automatic size at most a third of the bar wide and 44 points high; desktop Linux and the web draw the header as written |
 | a route whose first child is a `header` holding buttons and no heading (readouts, a search field, a tablist and plain boxes around them too, nothing else) | the navigation bar with no title, its buttons trailing and the root's `navigationBack` control leading; a text or an image in it keeps the whole header in the page (`lower-header-no-bar`) |
 | a pushed route with no such `header` | a bar holding the system Back button alone (LLP 1115.000 D5.2) |
 | a route with `navigationBar="none"` | no navigation bar: a full-bleed screen that draws its own way back; the edge swipe still goes back unless the route's control named by `navigationBack` is disabled; [disable that control during a run](recipes/navigation-stack.md) to refuse Back |
@@ -4241,76 +4241,70 @@ main navigationKey=`${top(nav).id}` navigationBack="close" navigate=follow displ
   later neighbouring bar items share one glass capsule, as UIKit groups them;
   `buttonStyle="glass"` on a header button gives that item a capsule of its own
   (`sharesBackground = false`).
-- A header `button` (or `link`) whose own children are one symbol, one plain text, or a
-  symbol beside a plain text (no box around them; a text with no span, link, Markdown,
-  `press` or `backgroundMaterial`, that writes nothing but its `color`, with no font,
-  opacity or filter on it or the button; beside a symbol, which the item shows alone, not
-  even a `color`) is UIKit's own bar item: a symbol is its image and a text its title, in the bar's
-  type, the platform's, and the text's `color` the item's tint; with both, the symbol is the image and the text its spoken name,
-  as a hand-built bar's item has them. The button's own fill, border and padding give way
-  to the bar's glass. On a native button a `font-size` or `font-weight` sets that title's
-  font, a `color` on its symbol or text the item's tint, and its glass fits the words (`buttonStyle="glass" font-size=12` is a small
-  "● Clock" chip); a text in a font of your own on a button the compiler draws as a box
-  is hosted instead. A button whose one child is a filled box
-  holding one text, one symbol or one picture (an avatar, a badge) is UIKit's item too,
-  drawn from the box without the capsule; on a button that says
-  `backgroundMaterial="glass"` (or `"glass-clear"`) it sits in a glass capsule of its own.
-  A picture (`image url`, an avatar's photo) fills the box by its `object-fit`, clipped to
-  its corners; until it loads the face is the box's fill. Any other pressable element (a
-  `row press=`, a button with a dot beside its label, two texts, a picture or a link
-  inline, a badge with a second part, a border, a material, a press, or an opacity or filter on it) is a hosted item: drawn as written, its
-  own views, in the bar's shared glass, with its press. Leave the font unsaid
-  for an ordinary Edit or Done.
-- Any element of the header besides the heading, the text after it, its buttons, its
-  search field and its tablist is an item on its side of the heading: the element's own
-  views in a custom view, laid out as written and following the state in place, so a
-  `progress` turns there and a picture loads (LLP 1141.004). An item nothing in which
-  presses sits on the bar with no glass; one with a control the bar has no object for (a
-  switch, a slider, a field) shares the bar's glass; `backgroundMaterial` written on it
-  is drawn as its own. Where the bar is too narrow, UIKit's "⋯" menu lists an item by its
-  accessible name (give it an `aria-label`): the entry does what the element itself does
-  (presses it, follows its link, flips it when it is a switch), and is dimmed when the
-  element does nothing of its own; what is inside a row or a readout is reached in the
-  bar. Outside a readout, a button or a link is never inside an item: the
-  bar walks a box that holds one, and the button is an item of its own when it presses. A
-  readout nothing presses (a "● Clock", "Updating" beside a spinner) says
-  `role="status"`, so VoiceOver speaks a change of it, and its texts are never the
-  subtitle. (A `button disabled=true` is a dimmed bar item, UIKit's disabled one, which
-  VoiceOver reads as a button that cannot be pressed, not as a status.) The web and the
-  agent's own chrome draw it where it stands in the header; the Mac's toolbar draws a
-  readout of words, symbols and dots, and keeps a header holding any other such element
-  in the page; Android's top app bar and tvOS's bar leave it out. A row after the heading
-  that is a symbol and words is the subtitle, and the same row holding a spinner instead
-  is an item: give a row that changes so `role="status"` to keep it an item.
-- What a hosted item does not do, so plan for it:
-  - **Android and tvOS leave out an element the bar has no object for** (a spinner, a
-    picture, a text, a readout). A button whose face iOS hosts (a dot beside its label) is
-    still an action there, shown by its words or symbol. The Mac's toolbar takes a header
-    only when it has a place for every part: the heading, the first text after it (in a
-    box or not) as the window's subtitle, buttons whose face is words, symbols, dots and
-    at most one picture, readouts of words, symbols and dots, one search field and a
-    tablist of two or more tabs that each show a title alone. Anything else (a spinner, a
-    picture, a second text, a pressable title, a button holding a spinner, a tablist of
-    one tab, a second search field) sends the whole header to the page. Where an `if` or
-    a `match` decides which text is the subtitle or which search field is the second,
-    the compiler gives it the benefit and says nothing. Android's bar also leaves out the title's
-    own parts: the subtitle, the avatar and the tap on the title. For the targets your
-    app ships, the compiler names each hosted element and readout Android or tvOS leaves
-    out, and the first part the Mac has no place for, once a header
-    (`header-item-left-out`, information); it does not name the title's own parts. To
-    show something on every target, put it below the `header`, in the route's content.
-  - **An automatic size is held to a third of the bar's width and 44 points of height**,
-    and UIKit shrinks or hides the title before the items; a `width`, `height` or minimum
-    you write wins, and the item takes that size. A trailing or bottom `margin` on the
-    element is not kept; use `padding`.
-  - **UIKit's "⋯" menu holds its own action only**: a switch flips, a `press` or a link
-    presses; a row, a readout, a field or a slider is its name, dimmed, and a command
-    (`commandfor`, `popovertarget`) opens only from the item in the bar.
+- A header `button` (or `link`) is UIKit's own bar item (LLP 1141.004 D1). Its own children
+  are one symbol, one text, or a symbol and a text, and they write only where they sit
+  (a size, `flex`, a margin or padding): the symbol is the item's image and the text its
+  title, in the bar's type, the platform's; with both, the symbol is the image and the
+  text its spoken name, as a hand-built bar's item has them. Write its colour on the
+  button (`color`, the item's tint), and on a native button its `font-size` or
+  `font-weight` (`buttonStyle="glass" font-size=12` is a small "● Clock" chip, its glass
+  fitting the words). The button's own fill, border and padding give way to the bar's
+  glass. A button whose one child is a filled box holding one text, one symbol or one
+  picture (an avatar, a badge) is UIKit's item too, drawn from the box without the
+  capsule; the box writes its fill, corners, size and layout, the part its type, colour
+  and fit. On a button that says `backgroundMaterial="glass"` (or `"glass-clear"`) the
+  badge sits in a glass capsule of its own. A picture (`image url`, an avatar's photo)
+  fills the box by its `object-fit`, clipped to its corners; until it loads the face is
+  the box's fill. Leave the font unsaid for an ordinary Edit or Done.
+- A readout (`role="status"`) of words, symbols, dots and one `progress`, holding nothing
+  that presses, is an item on its side of the heading: its own views in a custom view,
+  laid out as written and following the state in place, so its `progress` turns there
+  (LLP 1141.004 D3). It sits on the bar with no glass; `backgroundMaterial` written on it
+  is drawn as its own. VoiceOver speaks a change of it, its texts are never the subtitle,
+  and where the bar is too narrow UIKit's "⋯" menu lists it by its accessible name,
+  dimmed (give it an `aria-label`). (A `button disabled=true` is a dimmed bar item,
+  UIKit's disabled one, which VoiceOver reads as a button that cannot be pressed, not as
+  a status.) A row after the heading that is a symbol and words is the subtitle; one
+  that changes says `role="status"` to be a readout.
+- **The iOS bar holds a closed set, and the compiler refuses the rest.** In an app that
+  ships iOS, a route's `header` that is the bar holds its heading; the first text after
+  it as the subtitle (or the first text in a plain box after it, or a line of symbols and
+  words); an avatar before the heading in its box; buttons, links and badges as above;
+  readouts; one search field; and one tablist of titled tabs. Plain boxes around them,
+  or empty between them, lay them out. Anything else (a spinner or a picture beside the
+  heading, a second text, a switch, a pressed row of more than words, a button with a
+  dot beside its label or a coloured text, a button inside a readout) fails the build
+  (`lower-header-item`), and the error names the repair: make it one of those, move it
+  below the `header` into the route's content, or say `navigationBar="none"` on the
+  route's element and draw the header yourself. The compiler reads each arm of an `if`
+  or a `match` as if taken, so a branch does not get past it. An app that does not ship
+  iOS, and a header that is not the bar (no heading, two headings, `appearance="none"`
+  on it), draw the header as written. What the compiler cannot see (a value computed as
+  the app runs) iOS keeps out of the bar.
+- On the other targets:
+  - **Android's top app bar and tvOS's bar leave out a readout**, and Android the title's
+    own parts too: the subtitle, the avatar and the tap on the title. The Mac's toolbar
+    takes a header only when it has a place for every part: the heading, the first text
+    after it (in a box or not) as the window's subtitle, buttons whose face is words,
+    symbols, dots and at most one picture, readouts of words, symbols and dots, one
+    search field and a tablist of two or more tabs that each show a title alone.
+    Anything else (a readout holding a spinner, a pressable title, a tablist of one tab,
+    a second search field) sends the whole header to the page. For the targets your app
+    ships, the compiler names each readout Android or tvOS leaves out and the first part
+    the Mac has no place for, once a header (`header-item-left-out`, information); it
+    does not name the title's own parts, and where an `if` or a `match` decides which
+    text is the subtitle or which search field is the second, it gives it the benefit.
+    The web and desktop Linux draw the header as written. To show something on every
+    target, put it below the `header`, in the route's content.
+  - **A readout's automatic size is held to a third of the bar's width and 44 points of
+    height**, and UIKit shrinks or hides the title before the items; a `width`, `height`
+    or minimum you write wins, and the item takes that size. A trailing or bottom
+    `margin` on it is not kept; use `padding`.
   - **Inside the heading's own box only the title shows**: the rest is hidden
     (`lower-header-unplaced`). Put an item outside that box.
-  - A hosted item is drawn as the page draws it, so it takes the page's type and colour,
-    not the bar's: write the `font-size` and `color` you want (`-exact-secondary-label`
-    for a quiet label).
+  - A readout is drawn as the page draws it, so it takes the page's type and colour, not
+    the bar's: write the `font-size` and `color` you want (`-exact-secondary-label` for a
+    quiet label).
 
   ```
   header display="flex" align-items="center"

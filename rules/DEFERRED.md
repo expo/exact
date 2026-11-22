@@ -432,16 +432,18 @@ Schroeder implements it. Take: none offered; waived by Charlie. Still out:
 D7's `automatic` and `fitted`, which stay in stage 6.
 **Expanded (James, 2026-11-21: "We ideally can support any view and any role
 each host platform supports to be uncompromising in UX and aligned with the
-host platforms"):** on iOS, a header element the bar has no object of its own
-for is a bar item holding the element's own views, drawn as written and live
-(LLP 1141.004): a spinner beside its words, a picture, two lines of text, a
-switch. The readout's redrawn face (`ReadoutView`, `ChipFace`'s readout mode)
-goes. Lexy's "Updating" spinner in its bar is the consumer. Take: none
-offered; waived by James, whom Charlie gave the call (James, 2026-11-21:
-"Charlie has given us permission to make decisions"). Still out: such an
-item on the Mac, Android and tvOS; a passive box that holds a button as one
-item (a readout, or an element that hears `press` and whose face UIKit
-cannot draw, is one); the heading's own box drawn as written.
+host platforms"), then narrowed (James, 2026-11-22: "on iOS we need to have
+more constraints ideally statically checkable and then allow more flexible UI
+on other platforms"):** on iOS a header readout (`role="status"`) of words,
+symbols, dots and a spinner is a bar item holding the element's own views,
+drawn as written and live (LLP 1141.004); the bar holds a closed set, and in
+an app that ships iOS the compiler refuses any other element in a header that
+is the bar (`lower-header-item`). The readout's redrawn face (`ReadoutView`,
+`ChipFace`) goes. Lexy's "Updating" spinner in its bar is the consumer. Take:
+none offered; waived by James, whom Charlie gave the call (James, 2026-11-21:
+"Charlie has given us permission to make decisions"). Still out: a readout as
+an item on the Mac, Android and tvOS; a header per platform in an app that
+ships iOS; the heading's own box drawn as written.
 **Expanded (Charlie, 2026-10-03: "A native grouped-list role mapped to
 UICollectionView list layout"):** `list appearance="auto"` is a grouped list
 (LLP 1084): sections with a header and footer, rows read by shape, UIKit's

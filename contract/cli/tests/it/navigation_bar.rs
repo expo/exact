@@ -233,15 +233,15 @@ fn a_header_element_a_targets_bar_has_no_place_for_is_named() {
             .map(|w| w.message.clone())
             .collect()
     };
-    let all = "\"ios\": {}, \"android\": {}, \"macos\": {}";
+    let all = "\"android\": {}, \"macos\": {}";
     // A readout of words the Mac draws, and a spinner it has no place for:
     // each left out on Android, and the spinner sends the Mac's header to
     // the page, said once.
     let words = app("            row role=\"status\" aria-label=\"Live\"\n              text \"Live\"\n            progress\n");
     assert_eq!(
-        said("apple", "\"ios\": {}, \"web\": {}", &words),
+        said("web", "\"web\": {}", &words),
         Vec::<String>::new(),
-        "iOS hosts both; the web draws them"
+        "the web draws them"
     );
     let both = said("all", all, &words);
     assert_eq!(both.len(), 3, "{both:?}");
@@ -284,13 +284,13 @@ fn a_header_element_a_targets_bar_has_no_place_for_is_named() {
     // `progress` that is itself the readout is no face for its toolbar.
     let boxed = said(
         "boxed",
-        "\"ios\": {}, \"macos\": {}",
+        "\"macos\": {}",
         &app("            column\n              text \"On time\"\n"),
     );
     assert_eq!(boxed, Vec::<String>::new(), "the window's subtitle");
     let spun = said(
         "spun",
-        "\"ios\": {}, \"macos\": {}",
+        "\"macos\": {}",
         &app("            progress role=\"status\" aria-label=\"Updating\"\n"),
     );
     assert_eq!(spun.len(), 1, "{spun:?}");
@@ -315,7 +315,7 @@ fn a_header_element_a_targets_bar_has_no_place_for_is_named() {
             .map(|w| (w.id.to_string(), w.message.clone()))
             .collect()
     };
-    let phones = "\"ios\": {}, \"android\": {}";
+    let phones = "\"android\": {}";
     let searches = arms("search", phones, "            text \"Car\" role=\"heading\" aria-level=1\n            if on\n              input type=\"search\" value=q input=typed\n            else\n              input type=\"search\" value=q input=typed\n");
     assert_eq!(
         searches,
@@ -337,7 +337,7 @@ fn a_header_element_a_targets_bar_has_no_place_for_is_named() {
             && second[0].1.contains("a second `input type=\"search\"`"),
         "{second:?}"
     );
-    let mac = "\"ios\": {}, \"macos\": {}";
+    let mac = "\"macos\": {}";
     let subtitled = arms("subtitled", mac, "            text \"Car\" role=\"heading\" aria-level=1\n            if on\n              text \"On time\"\n            else\n              text \"Late\"\n");
     assert_eq!(
         subtitled,
@@ -438,4 +438,98 @@ fn a_header_element_a_targets_bar_has_no_place_for_is_named() {
     assert!(contract_lower::warning_rank::information(
         "header-item-left-out"
     ));
+}
+
+/// LLP 1141.004 D1: in an app that ships iOS, a route's header that is the
+/// navigation bar holds the bar's closed set, and the compiler refuses the
+/// rest (`lower-header-item`), naming the repair. An app that does not ship
+/// iOS, or a header that is not the bar, is drawn as written elsewhere.
+#[test]
+fn an_element_the_ios_bar_has_no_place_for_is_refused() {
+    let refused = |name: &str, targets: &str, header: &str| -> Vec<String> {
+        let dir =
+            crate::scratch::Scratch::new(format!("exact2-refused-{name}-{}", std::process::id()));
+        std::fs::write(dir.join("app.json"), format!("{{\"app\": {{\"id\": \"dev.test.bar\", \"name\": \"Bar\"}}, \"host\": {{{targets}}}}}")).unwrap();
+        std::fs::write(dir.join("app.contract"), format!("routes nav\n  home \"/\"\ncomponent App\n  state q = \"\"\n  action go\n    q = \"\"\n  action typed(v: string)\n    q = v\n  view\n    main navigationKey=`${{top(nav).id}}` width=\"100%\" height=\"100%\"\n      for e in stack(nav) key=e.id\n        column navigationKey=`${{e.id}}` position=\"absolute\" inset=0\n          header display=\"flex\"\n{header}          text \"body\"\n")).unwrap();
+        let (plan, _) = contract::compile_path_all_warned(&dir.at("app.contract"), false);
+        match plan {
+            Ok(_) => Vec::new(),
+            Err(errors) => errors
+                .iter()
+                .map(|e| {
+                    assert_eq!(e.id, "lower-header-item", "{e:?}");
+                    e.message.clone()
+                })
+                .collect(),
+        }
+    };
+    let ios = "\"ios\": {}";
+    let heading = "            text \"Car\" role=\"heading\" aria-level=1\n";
+    // The closed set: a subtitle, a symbol button, a filled button of one
+    // text, a link of a symbol, a badge, readouts of a dot and words and of a
+    // spinner and words, one search field and one tablist of titled tabs.
+    let closed = format!("{heading}            text \"On time\"\n            button press=go aria-label=\"Add\"\n              image \"symbol:add\" width=20 height=20\n            button press=go padding=6 background-color=\"-exact-fill\" color=\"-exact-system-red\"\n              text \"Stop\"\n            link href=\"/\" aria-label=\"Home\"\n              image \"symbol:add\"\n            button press=go aria-label=\"Me\"\n              column width=32 height=32 border-radius=16 background-color=\"#e3e3fe\"\n                text \"AB\" font-size=13 color=\"#3838f5\"\n            row role=\"status\" aria-label=\"Live\" gap=6\n              column width=7 height=7 border-radius=4 background-color=\"#0a0\"\n              text \"Live\"\n            row role=\"status\" aria-label=\"Updating\"\n              progress\n              text \"Updating\"\n            input type=\"search\" value=q input=typed\n            row role=\"tablist\"\n              button role=\"tab\" press=go\n                text \"All\"\n              button role=\"tab\" press=go\n                text \"Missed\"\n");
+    assert_eq!(
+        refused("closed", ios, &closed),
+        Vec::<String>::new(),
+        "the closed set"
+    );
+    // A plain box after the heading is read for its words: the subtitle.
+    let boxed = format!("{heading}            column\n              text \"On time\"\n");
+    assert_eq!(
+        refused("boxed", ios, &boxed),
+        Vec::<String>::new(),
+        "the subtitle in a box"
+    );
+    // A line of a symbol and words beside a readout is the subtitle, the
+    // readout its own item.
+    let line = format!("{heading}            row\n              image \"symbol:add\"\n              text \"Muted\"\n              text \"Live\" role=\"status\"\n");
+    assert_eq!(
+        refused("line", ios, &line),
+        Vec::<String>::new(),
+        "the glyph line and a readout"
+    );
+    // Each other element is refused, the repair named.
+    for (name, header, what) in [
+        ("spinner", format!("{heading}            progress\n"), "this `progress`"),
+        ("picture", format!("{heading}            image \"https://example.com/logo.png\" width=20 height=20\n"), "this `image`"),
+        ("switch", format!("{heading}            input type=\"checkbox\" role=\"switch\" checked=true aria-label=\"Live\"\n"), "this `input`"),
+        ("dot", format!("{heading}            button press=go aria-label=\"Live\"\n              column width=6 height=6 background-color=\"#0a0\"\n              text \"Live\"\n"), "this button, whose face holds more than one symbol and one text"),
+        ("ink", format!("{heading}            button press=go\n              text \"Stop\" color=\"-exact-system-red\"\n"), "this button, whose face writes on its text more than where it sits"),
+        ("bordered", format!("{heading}            button press=go aria-label=\"Me\"\n              column width=32 height=32 background-color=\"#e3e3fe\" border=\"1px solid #000\"\n                text \"AB\"\n"), "this button, whose face is a badge whose box writes more"),
+        ("pressing", format!("{heading}            row role=\"status\" aria-label=\"Offline\"\n              text \"Offline\"\n              button press=go\n                text \"Retry\"\n"), "a button in a readout"),
+        ("third", format!("{heading}            text \"On time\"\n            text \"Platform 2\"\n"), "this text"),
+        ("pressed switch", format!("{heading}            input type=\"checkbox\" role=\"switch\" checked=true press=go aria-label=\"Alerts\"\n"), "this `input`, which presses"),
+    ] {
+        let said = refused(name, ios, &header);
+        assert_eq!(said.len(), 1, "{name}: {said:?}");
+        assert!(said[0].starts_with(what) && said[0].contains("has no place in the iOS navigation bar") && said[0].contains("below the `header`"), "{name}: {}", said[0]);
+    }
+    // Refused in an app that ships iOS and Android, an element is not also
+    // named as one Android leaves out.
+    let dir = crate::scratch::Scratch::new(format!("exact2-refused-both-{}", std::process::id()));
+    std::fs::write(dir.join("app.json"), "{\"app\": {\"id\": \"dev.test.bar\", \"name\": \"Bar\"}, \"host\": {\"ios\": {}, \"android\": {}}}").unwrap();
+    std::fs::write(dir.join("app.contract"), format!("routes nav\n  home \"/\"\ncomponent App\n  view\n    main navigationKey=`${{top(nav).id}}` width=\"100%\" height=\"100%\"\n      for e in stack(nav) key=e.id\n        column navigationKey=`${{e.id}}` position=\"absolute\" inset=0\n          header display=\"flex\"\n{heading}            progress\n          text \"body\"\n")).unwrap();
+    let (plan, warnings) = contract::compile_path_all_warned(&dir.at("app.contract"), false);
+    assert!(plan.is_err(), "refused");
+    assert!(
+        !warnings.iter().any(|w| w.id == "header-item-left-out"),
+        "{warnings:?}"
+    );
+    // An app that does not ship iOS, and a header that is not the bar, draw
+    // it as written.
+    let picture =
+        format!("{heading}            image \"https://example.com/logo.png\" width=20 height=20\n");
+    assert_eq!(
+        refused("android", "\"android\": {}, \"web\": {}", &picture),
+        Vec::<String>::new()
+    );
+    let twice = format!(
+        "{heading}{heading}            image \"https://example.com/logo.png\" width=20 height=20\n"
+    );
+    assert_eq!(
+        refused("twice", ios, &twice),
+        Vec::<String>::new(),
+        "two headings: no bar"
+    );
 }

@@ -414,6 +414,7 @@ pub fn lower_all(
             selection,
         ));
     }
+    asset_errors.extend(warnings::header_bar::refused(checked));
     let result = match result {
         Ok(built) if asset_errors.is_empty() => Ok(built),
         Ok(_) => {
@@ -519,8 +520,7 @@ fn lower_with_sites(
         library_nodes: Vec::new(),
     };
     // A refusal that stops lowering is said after those collected before it
-    // (a refused token, then a statement no plan can hold), never in their
-    // place.
+    // (a refused token, then a statement no plan can hold), never in their place.
     match lower_body(&mut l, checked, asset_root) {
         Ok(()) => {
             let mut plan = l.b.finish().map_err(|e| LowerError {

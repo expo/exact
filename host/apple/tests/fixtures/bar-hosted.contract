@@ -1,37 +1,26 @@
-// A header's items that UIKit has no object of its own for (LLP 1141.004,
-// BarHostedIOSTests): link items, which follow their `href`; a row of a
-// label and a switch, a readout that holds a Retry button, a command and the
-// dialog it opens, and a switch that hears `press`, each hosted, whose
-// entries in UIKit's overflow menu are what the element itself does; on
-// History, a native button whose words' colour is its item's tint, and a
-// filled button of one text, UIKit's own item.
+// A header's items in the iOS bar's closed set (LLP 1141.004 D1,
+// BarHostedIOSTests): a readout before the heading, link items, which follow
+// their `href`, and a readout of a spinner and its words, each readout hosted,
+// its entry in UIKit's overflow menu its name, in a header that hears `press`;
+// on History, a native button whose `color` is its item's tint, and a filled
+// button of one text, UIKit's own item.
 routes nav
   home "/"
     history "/history"
       about "/history/about"
 
 component BarHosted
-  state live = false
   state retried = 0
-  state alerts = false
   state noted = 0
   state headerPresses = 0
   action follow(url: string)
     nav = go(nav, url)
-  action flip(on: bool)
-    live = on
   action retry
     retried = retried + 1
-  action setAlerts(on: bool)
-    alerts = on
-  action enableAlerts
-    alerts = true
   action note
     noted = noted + 1
   action pressHeader
     headerPresses = headerPresses + 1
-  action wipe
-    retried = 0
   view
     main navigationKey=`${top(nav).id}` navigate=follow width="100%" height="100%"
       for e in stack(nav) key=e.id
@@ -39,37 +28,22 @@ component BarHosted
           header display="flex" align-items="center" press=pressHeader
             if e.name == "home"
               row role="status" testId="sync-status"
-                text (retried == 0 ? "Ready" : "Retrying") font-size=13
+                text (retried == 0 ? "Ready" : "Retrying") font-size=13 testId="sync-text"
             text (e.name == "home" ? "Inbox" : e.name == "history" ? "History" : "About") role="heading" aria-level=2 flex=1
             if e.name == "home"
               link href="/history" aria-label="History" testId="history-link"
                 image "symbol:history" width=20 height=20
-              row gap=6 align-items="center" testId="live-row"
-                text "Live" font-size=13
-                input type="checkbox" role="switch" checked=live change=flip aria-label="Live" testId="live-switch"
-              row role="status" aria-label=`Offline, retried ${retried}` gap=6 align-items="center" testId="offline"
-                text "Offline" font-size=13 testId="offline-text"
-                button press=retry aria-label="Retry" testId="retry"
-                  text "Retry"
-                button commandfor="details" command="show-modal" aria-label="Details" testId="details-button"
-                  text "Details"
-                dialog id="details" aria-label="Details" testId="details"
-                  button press=wipe aria-label="Delete" testId="delete"
-                    text "Delete"
-                  button commandfor="details" command="close" aria-label="Close" testId="close-details"
-                    text "Close"
-              input type="checkbox" role="switch" checked=alerts change=setAlerts press=note aria-label="Alerts" testId="alerts-switch"
+              row role="status" aria-label="Syncing" gap=6 align-items="center" testId="syncing"
+                progress
+                text "Syncing" font-size=13
             if e.name == "history"
               link href="/history/about" aria-label="About" testId="about-link"
                 image "symbol:info" width=20 height=20
-              button buttonStyle="glass" press=note testId="stop"
-                text "Stop" color="-exact-system-red"
+              button buttonStyle="glass" press=note color="-exact-system-red" testId="stop"
+                text "Stop"
               button press=note background-color="-exact-fill" testId="note-button"
                 text "Note"
-          text (live ? "on" : "off") testId="live"
-          text `${retried}` testId="retried"
-          text (alerts ? "on" : "off") testId="alerts"
           text `${noted}` testId="noted"
           text `${headerPresses}` testId="header-presses"
-          button press=enableAlerts testId="enable-alerts"
-            text "Enable alerts"
+          button press=retry testId="retry"
+            text "Retry"

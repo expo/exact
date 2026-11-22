@@ -51,10 +51,9 @@ struct HeaderTitle: Equatable {
     let accessibilityDisabled: Bool
 
     /// `apart`: the nodes the title never reads (the items, the readouts, the
-    /// search field, the tablist); `atomic`: the hosted elements (LLP
-    /// 1141.004 D1), which it takes whole as the subtitle or not at all;
-    /// `kept`: the opted-out nodes, which stay in the page.
-    init?(header: NodeView, heading: NodeView, tap: NodeView?, apart: [NodeView], atomic: [NodeView] = [], kept: [NodeView] = []) {
+    /// search field, the tablist); `kept`: the opted-out nodes, which stay in
+    /// the page.
+    init?(header: NodeView, heading: NodeView, tap: NodeView?, apart: [NodeView], kept: [NodeView] = []) {
         // The heading's ancestors below the header, innermost first.
         var chain: [NodeView] = [], at = heading.superview
         while let view = at, view !== header {
@@ -144,12 +143,6 @@ struct HeaderTitle: Equatable {
                 if headingImages.contains(where: { $0 === child }) { placed.append(child); continue }
                 // A bar item, a readout among them, is not the title's to read.
                 if control(child) || apart.contains(where: { $0 === child }) { continue }
-                // A hosted element is the subtitle whole, else its own item: the title reads nothing inside it.
-                if atomic.contains(where: { $0 === child }) {
-                    if passed, subtitle.isEmpty, child.isParagraph, !child.accessibleText.isEmpty { subtitle = child.accessibleText; placed.append(child) }
-                    else if passed, subtitle.isEmpty, let pieces = line(child) { take(child, pieces) }
-                    continue
-                }
                 // A box holding one is no avatar; a row of glyphs beside a
                 // readout is still the glyph line, without it; else what it
                 // holds is read alone.

@@ -23,7 +23,7 @@ mod container;
 mod counts;
 mod fixed_beside;
 mod geometry;
-mod header_bar;
+pub(crate) mod header_bar;
 mod launch;
 pub(crate) mod line_height;
 mod miswiring;

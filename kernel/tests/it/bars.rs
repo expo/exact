@@ -450,15 +450,13 @@ fn a_readout_is_an_item_that_is_no_button() {
     );
 }
 
-/// LLP 1141.004 D1: an element the bar has no object for is a hosted item on
-/// its side of the heading, the outermost one that holds none of the bar's
-/// parts, so a row of a progress and its words is one item. A box holding a
-/// button, pressed or not, is walked, and the rest of it hosted beside the
-/// button. A button that presses nothing is no item, and a box of spacers
-/// none. Inside the heading's wrapper what is not a part is the title's,
-/// never hosted.
+/// LLP 1141.004 D1: an element the bar has no object for (a row of a
+/// progress and its words, a picture, a second text) is no item. A box
+/// holding a button, pressed or not, is walked for it. A button that presses
+/// nothing is no item, and a box of spacers none. Inside the heading's
+/// wrapper what is not a part is the title's.
 #[test]
-fn an_element_the_bar_has_no_object_for_is_a_hosted_item() {
+fn an_element_the_bar_has_no_object_for_is_no_item() {
     const IDLE: Props = &[
         (PropId::Type, "button"),
         (PropId::AccessibilityRole, "button"),
@@ -482,8 +480,8 @@ fn an_element_the_bar_has_no_object_for_is_a_hosted_item() {
                 text(72, &[]),
                 Node(73, NodeType::Control, IDLE, vec![]),
                 view(74, vec![]),
-                // A box around a button that presses nothing is walked, not
-                // hosted: the button is an item once it presses, or nothing.
+                // A box around a button that presses nothing is walked: the
+                // button is an item once it presses, or nothing.
                 view(75, vec![Node(76, NodeType::Control, IDLE, vec![])]),
                 // A box of spacers shows nothing.
                 view(77, vec![view(78, vec![])]),
@@ -507,13 +505,9 @@ fn an_element_the_bar_has_no_object_for_is_a_hosted_item() {
         )],
     ));
     let shape = tree.header_shape(10, None, true, &pressed).unwrap();
-    assert_eq!(shape.leading, vec![60], "the row whole");
-    assert_eq!(
-        shape.trailing,
-        vec![13, 71, 72, 79],
-        "beside the button, as written"
-    );
-    assert_eq!(shape.items, vec![13, 79], "nothing presses a hosted item");
+    assert_eq!(shape.leading, Vec::<u32>::new(), "the row is no item");
+    assert_eq!(shape.trailing, vec![13, 79], "the buttons alone");
+    assert_eq!(shape.items, vec![13, 79]);
     // The heading's wrapper: its picture and its second line are the title's.
     let wrapped = kernel(view(
         10,
@@ -536,7 +530,7 @@ fn an_element_the_bar_has_no_object_for_is_a_hosted_item() {
     ));
     let shape = wrapped.header_shape(10, None, true, &pressed).unwrap();
     assert_eq!((shape.leading, shape.trailing), (vec![], vec![41]));
-    // With no heading, one hosted item keeps the header in the page.
+    // With no heading, such an element keeps the header in the page.
     let untitled = kernel(view(
         10,
         vec![Node(
@@ -560,10 +554,10 @@ fn an_element_the_bar_has_no_object_for_is_a_hosted_item() {
         fact::BUTTON,
         0,
     ];
-    // One trailing item, the image; no button.
+    // No item: the image is none, the idle button none.
     assert_eq!(
         bars::header_shape_words(&words, 0),
-        Some(vec![1, 3, 2, 0, 0, 0, 0, 1, 0, 3])
+        Some(vec![1, 3, 2, 0, 0, 0, 0, 0, 0])
     );
 }
 
