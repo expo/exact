@@ -35,14 +35,12 @@ test('the hooks write what is admitted, remove an empty prop and journal a value
   expect(journal).toEqual(['drag: refused: app:/data/b.pdf: an app:/ file cannot be dragged on the web', 'drag: refused: app:/data/b.pdf: an app:/ file cannot be dragged on the web']);
 });
 
-test('install hears the contacts and the drags on the page\'s document', () => {
+test('install hears the downs and the drags on the page\'s document, and writes `draggable` through the listener', () => {
   const heard = [], PropHooks = {};
-  install({ PropHooks, say() {}, document: { addEventListener: (type, _, options) => heard.push([type, !!options?.capture]),
-    defaultView: { addEventListener: (type) => heard.push([`window ${type}`, false]) } } });
-  expect(heard).toEqual([['pointerdown', true], ['pointerup', true], ['pointercancel', true], ['pointermove', true],
-    ['window blur', false], ['dragend', true], ['dragstart', false]]);
-  // The page writes `draggable` through the listener, which holds a node's drag off for a field's contact.
+  install({ PropHooks, say() {}, document: { addEventListener: (type, _, options) => heard.push([type, !!options?.capture]) } });
+  expect(heard).toEqual([['pointerdown', true], ['mousedown', true], ['dragstart', true]]);
+  // The listener keeps the app's value on the node, which a field's down turns off on the page for a time.
   const el = { setAttribute: (name, value) => heard.push([name, value]) };
   expect(PropHooks.draggable(el, 'true')).toBe(true);
-  expect(heard.at(-1)).toEqual(['draggable', 'true']);
+  expect([heard.at(-1), el.exactDraggable]).toEqual([['draggable', 'true'], 'true']);
 });

@@ -1154,8 +1154,9 @@ export const navigation = {
     }
     document.addEventListener("click", captureLink, true);
     document.addEventListener("dragstart", (event) => {
-      // A node an author made draggable drags with what is inside it, unless a press lies between (LLP 1094.000 D6, D8).
-      const source = event.target.closest?.('[draggable="true"]'), press = event.target.closest?.('button, a[href], [data-exact-on~="press"]');
+      // A node an author made draggable, an SVG element's mark skipped as drag-out.js skips it, drags with what is inside it, unless a press lies between (LLP 1094.000 D6, D8).
+      let source = event.target.closest?.('[draggable="true" i]'), press = event.target.closest?.('button, a[href], [data-exact-on~="press"]');
+      while (source?.namespaceURI === "http://www.w3.org/2000/svg") source = source.parentElement?.closest('[draggable="true" i]');
       const spared = source && (!press || press === source || press.contains(source));
       if (root.contains(event.target) && event.target.matches?.("img[data-symbol-source], :is(button, a[href], [data-exact-on~=\"press\"]) img") && !spared) {
         event.preventDefault();

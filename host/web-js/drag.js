@@ -53,7 +53,7 @@ export function install({ PropHooks, say, document = globalThis.document }) {
   });
   hook(FILES, admit);
   hook(URL_PROP, admitUrl);
-  // The listener holds a node's drag off while a field in it keeps a contact, so it writes `draggable` (drag-out.js).
+  // The listener keeps the app's `draggable` on the node, which a field's contact turns off for a time (drag-out.js).
   PropHooks.draggable = (e, v) => (writeDraggable(e, v), true);
-  if (document) listen(document, (e) => e.$exactTree === true);
+  if (document) listen(document);
 }

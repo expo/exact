@@ -15,6 +15,8 @@ const SVG = 'http://www.w3.org/2000/svg';
 export function h(p, tag, cls, attrs, text, ns) {
   if (Adopt) {
     const e = adopt(p, tag, cls, attrs);
+    // A literal `draggable` is the app's too (drag.js `writeDraggable`)
+    if (attrs?.draggable !== undefined) PropHooks.draggable?.(e, attrs.draggable);
     if (tag === 'video' || tag === 'audio') Media.media(e, attrs);
     if (tag === 'iframe') Hooks.frame(e, attrs?.['data-app-src']);
     if (tag === 'button') oneActivation(e);
@@ -32,6 +34,7 @@ export function h(p, tag, cls, attrs, text, ns) {
     for (const k in attrs)
       if (NOT_DOM.test(k)) e['$' + k] = attrs[k];
       else if (k === 'autofocus') autofocusProp(e, attrs[k] !== 'false');
+      else if (k === 'draggable' && PropHooks.draggable) PropHooks.draggable(e, attrs[k]);
       else {
         e.setAttribute(k, rel(k, attrs[k]));
         if (k === 'data-exact-f' || k.startsWith('data-exact-f-')) bits |= Number(attrs[k]);

@@ -6,8 +6,10 @@
 // receiver reads the URL. A node that carries nothing begins no drag. The JS target loads it from
 // `drag.js`; the wasm target's glue loads it when a node first turns draggable.
 
-/** What makes a node the drag's source: the attribute `element.rs` writes for `draggable=true`. */
-export const SOURCE = '[draggable="true"]';
+/** Whether `el` is a drag's source by its own `draggable`, HTML's enumerated attribute, read in any case. Firefox ignores
+ * it on an SVG element and begins the drag of the draggable node around it; Chromium and WebKit begin the drag at the
+ * SVG element, which the listener leaves to its script as an element inside the node (Measured). */
+const explicit = (el) => el.namespaceURI !== 'http://www.w3.org/2000/svg' && el.matches('[draggable="true" i]');
 
 /** A file's type by its extension, as `expect drag` reads it (`scripts/share-target.mjs`); anything else is bytes. */
 const TYPES = {
@@ -23,20 +25,10 @@ export function typeOf(name) {
 }
 
 /** What keeps a contact from the draggable node around it (LLP 1094.000 D8, rule 3): a control or a text input for
- * every pointer, and for a mouse also a press, a button or a link, as AppKit's mouse chain keeps it. */
-const KEEPS = 'input,select,textarea,[contenteditable]:not([contenteditable="false"])';
+ * every pointer, a read-only Markdown field among them (`markup-editor.js`), and for a mouse also a press, a button or a
+ * link, as AppKit's mouse chain keeps it. */
+const KEEPS = 'input,select,textarea,[contenteditable]:not([contenteditable="false"]),.exact-markdown-editor';
 const KEEPS_A_MOUSE = `${KEEPS},button,a[href],[data-exact-on~="press"]`;
-
-/** The innermost draggable node at or above `target` when it is the app's (`owns`), or the `given` one, and what
- * between them keeps a contact begun there. A draggable another script made, such as an extension's, keeps its own
- * drag. A node a contact holds off is draggable as its app says. */
-export function sourceOf(target, mouse, owns = () => true, given) {
-  let found = given ?? null;
-  for (let at = target?.closest && given === undefined ? target : null; at && !found; at = at.parentElement) if (authored(at) === 'true') found = at;
-  const node = found && owns(found) ? found : null;
-  const keeper = node && target.closest(mouse ? KEEPS_A_MOUSE : KEEPS);
-  return { node, kept: !!keeper && keeper !== node && node.contains(keeper) ? keeper : null };
-}
 
 /** What `node`'s drag carries, `{ text, uris, html, download }`, or null when it carries nothing. Its files are
  * shipped `assets/` paths (the page admits nothing else), made absolute against `base`. */
@@ -59,32 +51,58 @@ export function carried(node, base) {
   };
 }
 
-/** A `dragstart` during a contact that began at `down` (its target, whether a mouse's, and the `source` it found
- * there), or at the event's target: the innermost draggable node under the contact gives the drag its data, its
- * picture when the browser began the drag at another element (an image inside it, or a link around it), and a copy. A
- * contact something inside the node keeps begins no drag of the node, and leaves the keeper's own drag (a link's,
- * selected text's) to the browser. */
-export function start(event, base = globalThis.document?.baseURI, down = null, owns) {
-  // A swipe on the contact took it first (`motion-glue.js`, LLP 1094.000 D8).
-  if (event.defaultPrevented) return;
-  // Another script's draggable that the browser began the drag at, such as a link around the app's image, is its own.
-  if (owns && event.target?.matches?.(SOURCE) && !owns(event.target)) return;
-  // Only a contact on the drag's path: another pointer's down names another source.
-  const related = down?.target?.isConnected && (down.target === event.target || event.target?.contains?.(down.target) || down.target.contains(event.target));
-  // The source the down found, which a field's hold has since made undraggable, while the app still has it draggable
-  const recorded = related ? down.source : null;
-  const current = recorded?.node?.isConnected && authored(recorded.node) === 'true' && recorded.node.contains(down.target)
-    && (owns?.(recorded.node) ?? true);
-  const { node, kept } = current ? recorded : sourceOf(related ? down.target : event.target, related ? down.mouse : true, owns);
-  if (kept) {
-    // The keeper's own drag (a link's, selected text's) is the browser's; a picture in it drags no more than one in any
-    // press does (LLP 1115.000 D4.14).
-    const own = kept.contains(event.target) && event.target.localName !== 'img';
-    if (!own && node.contains(event.target)) event.preventDefault();
-    return;
+/** A `dragstart` as the browser began it: decided from the event and the last primary `down`, then done. */
+export function start(event, base = globalThis.document?.baseURI, owns = () => true, down = null) {
+  give(event, decide(event, owns, down), base);
+}
+
+/** What the drag the browser began is, read from the event and the last primary `down` ({ target, x, y, mouse }): the
+ * node whose data it carries, `CANCEL`, or nothing for a drag that is not the app's. The listener decides and gives the
+ * data as the event begins, before the target's own listeners can change what it reads or stop the event.
+ *
+ * The browser starts a drag at the nearest draggable element around the contact, at an image or a link inside it, or
+ * at selected text; Firefox may start it at a link around a draggable image. Each engine gives `dragstart` the point
+ * the contact went down at (Measured), so what the contact went down on is the down's target when the drag begins at
+ * its point, else the element at the point, either when it is in the browser's choice. The drag is the node's when the
+ * nearest draggable around that element is one the app made (`exactDraggable`) and `owns`. Another script's draggable
+ * keeps its own drag, and so do a selection, a link inside the node and what keeps the contact (rule 3): a field, and
+ * for a mouse's down a press, between the element and the node keeps the node's drag from starting, and leaves the
+ * keeper's own drag (a link's, a field's text) to the browser. A node that carries nothing begins no drag. */
+function decide(event, owns, down) {
+  // A script's `dragstart` is no drag, and a selection's begins at its text, not an element (Firefox). A shadow root's
+  // content is its host's, as the document sees it.
+  const target = event.isTrusted !== false && event.target?.nodeType === 1 ? event.target : null;
+  // Another script's draggable the browser began the drag at is its own, whatever is inside it, an SVG element too where
+  // the engine honors its mark.
+  if (!target || (target.matches('[draggable="true" i]') && !declared(target))) return;
+  // The down's target outlasts a pressed look that moves it from under the point.
+  const pressed = atPoint(down, event) && target.contains(down.target);
+  const point = pressed ? down.target : target.ownerDocument.elementFromPoint?.(event.clientX, event.clientY);
+  const at = point && target.contains(point) ? point : target;
+  // The nearest draggable, or a node the app has draggable that a field's down turned off, whose field keeps the drag
+  let node = at;
+  while (node && !(off.has(node) && declared(node)) && !explicit(node)) node = node.parentElement;
+  if (!node || !declared(node) || !owns(node)) return;
+  const keeper = at.closest(down?.mouse === false ? KEEPS : KEEPS_A_MOUSE);
+  if (keeper && keeper !== node && node.contains(keeper)) {
+    // A picture in a keeper drags no more than one in any press does (LLP 1115.000 D4.14).
+    return !keeper.contains(target) || target.localName === 'img' ? CANCEL : undefined;
   }
-  if (!node) return;
-  const data = carried(node, base);
+  // The browser began the drag at an element inside the node: an image is the node's drag, but for one in a link
+  // there; anything else, a link's, is its own.
+  const link = target.closest('a[href]');
+  if (target !== node && node.contains(target) && (target.localName !== 'img' || (link !== node && node.contains(link)))) return;
+  return node;
+}
+
+/** A drag that begins nothing. */
+const CANCEL = Symbol('cancel');
+
+/** Does what `decide` said: gives the drag the node's data, pictured as the node when the browser began it at another
+ * element, as a copy, or cancels it. A drag an earlier listener cancelled is left alone. */
+function give(event, decision, base = globalThis.document?.baseURI) {
+  if (!decision || event.defaultPrevented) return;
+  const data = decision === CANCEL ? null : carried(decision, base);
   if (!data) {
     event.preventDefault();
     return;
@@ -97,134 +115,78 @@ export function start(event, base = globalThis.document?.baseURI, down = null, o
   if (data.html) transfer.setData('text/html', data.html);
   if (data.download) transfer.setData('DownloadURL', data.download);
   transfer.effectAllowed = 'copy';
-  if (event.target !== node) {
-    const box = node.getBoundingClientRect();
-    transfer.setDragImage(node, event.clientX - box.left, event.clientY - box.top);
+  if (event.target !== decision) {
+    const box = decision.getBoundingClientRect();
+    transfer.setDragImage(decision, event.clientX - box.left, event.clientY - box.top);
   }
 }
 
-/** The nodes whose drag a contact holds off, each with the `draggable` its app last wrote (null: none) and the
- * pointers of the contacts holding it. */
-const held = new Map();
+/** Whether `event` is at the point of `down`, within the half pixel Chromium rounds a down's. */
+const atPoint = (down, event) => Math.abs(down?.x - event.clientX) <= 1 && Math.abs(down?.y - event.clientY) <= 1;
 
-/** `node`'s `draggable` as its app last wrote it, which a contact's hold keeps. */
-function authored(node) {
-  return held.get(node)?.value ?? node.getAttribute?.('draggable') ?? null;
-}
+/** Whether the app made `node` draggable: both targets write its `draggable` through `writeDraggable`, which keeps the
+ * value on the node. Another script's `draggable`, on its own element or on one of the app's, is not the app's. */
+const declared = (node) => node.exactDraggable === 'true';
 
-/** The field each contact under way went down in, by its pointer, and whether a node is the app's, as the listener
- * hears them. */
-const fields = new Map();
-let owned = () => true;
+/** The nodes whose drag a field's down turned off, until the next primary down, each with whether the down wrote its
+ * `false`. */
+let off = new Map();
 
-/** Writes `node`'s `draggable` as the app says, which both targets' renderers do through here: while a contact holds
- * the node's drag off, the value waits for the hold's end, and a node made draggable around a field a contact is in
- * is held for that contact from the write. */
+/** Writes `node`'s `draggable` as the app says, which both targets' renderers do through here, and keeps the value on
+ * the node: a node a field's contact turned off gets it at the next primary down. */
 export function writeDraggable(node, value) {
-  const holding = held.get(node);
-  if (holding) return void (holding.value = value);
-  const around = value === 'true' && owned(node) ? [...fields].filter(([, field]) => field !== node && node.contains?.(field)) : [];
-  for (const [pointer] of around) hold(node, pointer, value);
-  if (around.length) return;
-  if (value == null) node.removeAttribute('draggable');
-  else node.setAttribute('draggable', value);
+  node.exactDraggable = value;
+  if (!off.has(node)) write(node, value);
 }
 
-/** Turns `node`'s drag off for the contact of `pointer`, keeping `value` as the app's. */
-function hold(node, pointer, value = authored(node)) {
-  const holding = held.get(node) ?? held.set(node, { value, by: new Set() }).get(node);
-  holding.by.add(pointer);
-  node.setAttribute('draggable', 'false');
-}
+const write = (node, value) => (value == null ? node.removeAttribute('draggable') : node.setAttribute('draggable', value));
 
-/** Ends the holds of `pointer`'s contact: a node no contact holds now has the `draggable` its app last wrote. */
-function release(pointer) {
-  for (const [node, holding] of [...held]) {
-    if (!holding.by.delete(pointer) || holding.by.size) continue;
-    held.delete(node);
-    writeDraggable(node, holding.value);
+/** Turns off the drag of the nodes `now`, writing `false` where it reads otherwise, and gives every other node it turned
+ * off its app's `draggable`: a node the app still has draggable gets it whatever another script wrote meanwhile, and one
+ * the app has since turned undraggable only while it reads a `false` written here. */
+function turnOff(now) {
+  const next = new Map();
+  for (const node of now) {
+    const writes = node.getAttribute('draggable')?.toLowerCase() !== 'false';
+    if (writes) node.setAttribute('draggable', 'false');
+    // The `false` is still the one written here only while it reads exactly that
+    next.set(node, writes || ((off.get(node) ?? false) && node.getAttribute('draggable') === 'false'));
   }
+  for (const [node, wrote] of off) {
+    if (!next.has(node) && (declared(node) || (wrote && node.getAttribute('draggable') === 'false'))) write(node, node.exactDraggable);
+  }
+  off = next;
 }
 
-/** Listens for every drag in `root`'s document from a node the app made draggable (`owns`: whether an element is the
- * app's), and for the down of each contact a drag may begin from, `downs` being those of the contacts already under
- * way; `signal` removes every listener. A control or a text input a contact goes down in turns the drag of every
- * draggable node around it off until the contact ends: Firefox selects no text by a mouse in a field inside a node it
- * may drag, and moves no slider there. */
-export function listen(root = globalThis.document, owns = () => true, downs = [], { signal } = {}) {
-  // Each primary contact by its pointer: where it went down, whether a mouse's, and the source it found there. Any
-  // pointer's contact holds the nodes around its field.
-  const contacts = new Map();
-  owned = owns;
-  // The pointer whose contact the drag under way began from, and the drag's source
-  let dragging = null, source = null;
-  const end = (pointer) => {
-    if (pointer === dragging) dragging = source = null;
-    contacts.get(pointer)?.unheard?.();
-    contacts.delete(pointer);
-    fields.delete(pointer);
-    release(pointer);
+/** Listens for every drag in `root`'s document from a node the app made draggable (`owns`: whether it is still the
+ * app's), and for each primary down; `signal` removes the listeners. A primary down in a control or a text input turns
+ * the drag of every draggable node around it off until the next primary down, since Firefox selects no text by a mouse
+ * in a field inside a node it may drag. The down is kept for the drag it may begin. */
+export function listen(root = globalThis.document, owns = () => true, { signal } = {}) {
+  // The last primary down, and the target of a `pointerdown` whose own `mousedown` is still to come
+  let last = null, paired = null;
+  signal?.addEventListener('abort', () => turnOff(new Set()));
+  const down = (event) => {
+    if (event.isPrimary === false || event.isTrusted === false) return;
+    // A press's `mousedown` after its own `pointerdown` adds nothing: a pen's or a finger's would read as a mouse's.
+    const own = event.type === 'mousedown' && paired === event.target;
+    paired = event.type === 'mousedown' ? null : event.target;
+    if (own) return;
+    last = { target: event.target, x: event.clientX, y: event.clientY, mouse: (event.pointerType ?? 'mouse') === 'mouse' };
+    const now = new Set(), field = event.target?.closest?.(KEEPS);
+    for (let at = field?.parentElement; at; at = at.parentElement) if (declared(at) && owns(at)) now.add(at);
+    turnOff(now);
   };
-  // Every pointer the listener knows of: a primary contact's, a field's, or a hold's
-  const known = () => new Set([...contacts.keys(), ...fields.keys(), ...pointersHolding()]);
-  signal?.addEventListener('abort', () => { for (const pointer of known()) end(pointer); });
-  const pointerdown = (event) => {
-    // A pointer's new down ends its last contact, whose up went elsewhere
-    end(event.pointerId);
-    // Every draggable node around a field the contact went down in, and one another contact holds whatever the app has
-    // since written
-    const field = event.target?.closest?.(KEEPS);
-    if (field) fields.set(event.pointerId, field);
-    for (let at = field?.parentElement; at; at = at.parentElement) {
-      if ((held.has(at) || authored(at) === 'true') && owns(at)) hold(at, event.pointerId);
-    }
-    if (!event.isPrimary) return;
-    // A down handed over from before the listener names the node that was the source then (`source`).
-    const mouse = event.pointerType === 'mouse';
-    contacts.set(event.pointerId, { target: event.target, mouse, source: sourceOf(event.target, mouse, owns, event.source) });
-  };
-  const on = (target, type, fn, capture = false) => target?.addEventListener(type, fn, { capture, signal });
-  on(root, 'pointerdown', pointerdown, true);
-  for (const down of downs) pointerdown(down);
-  // A contact ends at its up or its cancellation, which Chromium and Firefox send after a drag's start; at the end of
-  // the drag it began, which is all WebKit sends; and, its up gone to another app, when its mouse moves with no button
-  // down or the window loses focus.
-  on(root, 'pointerup', (event) => end(event.pointerId), true);
-  on(root, 'pointercancel', (event) => end(event.pointerId), true);
-  on(root, 'pointermove', (event) => { if (event.pointerType === 'mouse' && !event.buttons) end(event.pointerId); }, true);
-  on(root.defaultView, 'blur', () => { for (const pointer of known()) end(pointer); });
-  on(root, 'dragend', (event) => { if (event.target === source) end(dragging); }, true);
-  on(root, 'dragstart', (event) => {
-    // A drag an earlier listener cancelled is no drag.
-    if (event.defaultPrevented) return;
-    // The contact on the drag's path began it. Which of two such contacts did is not known, so the drag is read from
-    // the browser's own target, and its end ends neither: each ends at its own up, or a mouse's at its next move or
-    // down. WebKit, which sends a drag's contact only its end, gives nothing to tell them apart by, so there a hold of
-    // the other one's lasts until then.
-    const onPath = [...contacts].filter(([, contact]) => contact.target.isConnected && (contact.target === event.target
-      || event.target?.contains?.(contact.target) || contact.target.contains(event.target)));
-    const [pointer, contact] = onPath.length === 1 ? onPath[0] : [null, null];
-    start(event, undefined, contact, owns);
-    [dragging, source] = contact && !event.defaultPrevented ? [pointer, event.target] : [null, null];
-    // WebKit sends `dragend` to the drag's source even once it is out of the document, where `root` does not hear it.
-    // The listener is the contact's and this drag's: it hears only the source's own end, and goes with the contact or
-    // once another listener has cancelled the drag.
-    if (!contact || event.defaultPrevented || !event.target.addEventListener) return;
-    const from = event.target, heard = (ended) => { if (ended.target === from && contacts.get(pointer) === contact) end(pointer); };
-    from.addEventListener('dragend', heard, { signal });
-    contact.unheard = () => from.removeEventListener?.('dragend', heard);
-    // A drag another listener cancelled has no end to hear.
-    setTimeout(() => {
-      if (!event.defaultPrevented) return;
-      contact.unheard();
-      if (source === from) dragging = source = null;
-    });
-  });
-}
-
-/** The pointers that hold a node now. */
-function pointersHolding() {
-  return new Set([...held.values()].flatMap((holding) => [...holding.by]));
+  // A `mousedown` alone too: WebKit sends a press after a drag no `pointerdown` (Measured under Playwright).
+  for (const type of ['pointerdown', 'mousedown']) root.addEventListener(type, down, { capture: true, signal });
+  // Heard first, before any listener can stop the drag's event or change what it reads: a press's own `mousedown` is
+  // past by its drag, if another listener kept it from the document, and the drag is decided and given its data as it
+  // begins, while the transfer is writable; a listener after may still cancel it, a swipe's on the contact among them.
+  root.addEventListener('dragstart', (event) => {
+    if (event.isTrusted === false) return;
+    paired = null;
+    give(event, decide(event, owns, last));
+  }, { capture: true, signal });
 }
 
 // Loaded as a page script by the wasm target's glue (`loadAfterPaint`), which reads what it registers.

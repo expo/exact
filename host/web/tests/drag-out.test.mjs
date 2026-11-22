@@ -1,6 +1,7 @@
 // LLP 1094.000 D6, D8: the browser's drag of a draggable node, through the page's own `drag-out.js`, pan and swipe
-// glue and drag rules, in Chromium, Firefox and WebKit under Playwright's mouse: what the drag carries, which contacts
-// keep it from the node, a swipe beside it, and another script's draggable left its own drag.
+// glue and drag rules, in Chromium, Firefox and WebKit under Playwright's mouse: what the drag carries, what keeps it
+// from the node, a field's down turning it off until the next down, a swipe beside it, and another script's draggable,
+// in any case, left its own drag.
 import { afterAll, beforeAll, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { browserMissing } from '../../../scripts/agent-playwright.mjs';
@@ -18,17 +19,20 @@ ${rules}
   img { width: 40px; height: 40px; }
 </style>
 <main id="exact-root">
-  <button id="card" draggable="true" data-datatransferfiles="assets/a.png" style="top:10px;display:flex;align-items:center"><span id="label" style="display:inline-block;width:150px;height:40px">Card</span><img id="picture"></button>
+  <button id="card" draggable="true" data-datatransferfiles="assets/a.png" style="top:10px;display:flex;align-items:center"><span id="label" style="display:inline-block;width:150px;height:40px">Card</span><img id="picture"><svg id="glyph" draggable="TRUE" data-foreign width="20" height="20"><rect width="20" height="20"></rect></svg></button>
   <div id="box" draggable="true" data-datatransfertext="box" style="top:70px"><button id="press" data-exact-on="press" style="display:inline-block;width:60px;height:40px;background:#aaa">Press<img id="icon" style="width:20px;height:20px"></button><input id="field" data-native value="some words to select" style="display:inline-block;width:110px"><input id="range" data-native type="range" min="0" max="100" value="10" style="display:inline-block;width:110px"></div>
   <div id="pan" style="top:130px;height:60px;touch-action:none"><div id="inner" draggable="true" data-datatransfertext="inner" style="width:120px;height:40px;background:#aaa">inner</div></div>
   <a id="link" href="/landmark/1016" style="top:200px"><img id="linked" draggable="true" data-datatransfertext="the picture"></a>
   <div id="card2" draggable="true" data-datatransfertext="card" style="top:260px;height:60px"><div id="row" style="width:300px;height:44px;touch-action:pan-y;background:#bbb"></div></div>
   <div id="swipe" draggable="true" data-datatransfertext="swipe row" style="position:absolute;left:20px;top:340px;width:300px;height:44px;touch-action:pan-y"></div>
   <div id="foreign" draggable="true" data-foreign style="top:400px;height:40px"></div>
+  <button id="plain" style="top:460px;height:44px"><img id="upper" draggable="TRUE" data-foreign></button>
 </main>
 <script type="module">
   import { listen, writeDraggable } from './drag-out.js';
   window.writeDraggable = writeDraggable;
+  // The app's draggable nodes are those it writes through the listener; the rest are another script's.
+  for (const el of document.querySelectorAll('[draggable]:not([data-foreign])')) writeDraggable(el, 'true');
   import { motionController } from './motion-glue.js';
   import { createInputHandlers } from './input-glue.js';
   window.drags = []; window.deltas = []; window.begins = [];
@@ -52,8 +56,8 @@ ${rules}
     inertAncestor: () => false, dispatch: (id, delta) => deltas.push(delta) });
   const pan = byId('pan');
   pan.addEventListener('pointerdown', input.pan(pan, 2, (type, fn) => pan.addEventListener(type, fn)));
-  byId('foreign').addEventListener('dragstart', (e) => e.dataTransfer.setData('text/plain', 'its own'));
-  listen(document, (el) => !el.hasAttribute('data-foreign'));
+  for (const el of document.querySelectorAll('[data-foreign]')) el.addEventListener('dragstart', (e) => e.dataTransfer.setData('text/plain', el.id + "'s own"));
+  listen(document);
   window.addEventListener('dragstart', (e) => drags.push({ target: e.target.id, prevented: e.defaultPrevented,
     kinds: [...e.dataTransfer.items].map((i) => i.kind), text: e.dataTransfer.getData('text/plain'),
     uris: e.dataTransfer.getData('text/uri-list') }));
@@ -102,33 +106,47 @@ for (const [engine, missing] of [['chromium', chromium().unavailable], ['firefox
       const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
       await page.goto(`http://127.0.0.1:${server.port}/`);
       await page.waitForFunction('window.ready');
-      // On the page as loaded: a field's down holds the node's drag off, what the app writes meanwhile waits, and the
-      // up gives the node the app's last value.
+      // On the page as loaded: a field's down turns the node's drag off, what the app writes meanwhile is kept, and the
+      // next down gives the node the app's last value.
       const fieldBox = await page.locator('#field').boundingBox(), held = () => page.evaluate(() => document.getElementById('box').getAttribute('draggable'));
       await page.mouse.move(fieldBox.x + 10, fieldBox.y + fieldBox.height / 2);
       await page.mouse.down();
       expect(await held()).toBe('false');
       await page.evaluate(() => { writeDraggable(document.getElementById('box'), 'false'); writeDraggable(document.getElementById('box'), 'true'); });
-      expect(await held()).toBe('false');
       await page.mouse.up();
+      expect(await held()).toBe('false');
+      // The node drags on the same page, in each engine.
+      const boxBox = await page.locator('#box').boundingBox(), [x, y] = [boxBox.x + boxBox.width / 2 + 130, boxBox.y + boxBox.height / 2];
+      await page.mouse.move(x, y);
+      await page.mouse.down();
       expect(await held()).toBe('true');
+      await page.mouse.move(x, y + 20, { steps: 15 });
+      await page.mouse.up();
+      expect(await page.evaluate(() => drags.filter((d) => !d.prevented).map((d) => d.text))).toEqual(['box']);
       // The card drags by its label and by its picture, carrying its file as a URL and not the picture's own bytes.
       for (const at of ['#label', '#picture']) {
         const card = went(await drag(page, at, [0, 20]));
         expect(card.map((d) => [d.kinds.every((kind) => kind === 'string'), d.uris])).toEqual([[true, `http://127.0.0.1:${server.port}/assets/a.png`]]);
       }
+      // From an SVG another script marked `draggable`, Firefox, which ignores the attribute there, drags the card with
+      // its data; Chromium and WebKit drag the SVG with its script's data.
+      const glyph = went(await drag(page, '#glyph', [0, 20])).map((d) => [d.text, d.uris]);
+      expect(glyph).toEqual([engine === 'firefox' ? ['', `http://127.0.0.1:${server.port}/assets/a.png`] : ["glyph's own", '']]);
       // A press, a picture in it, a text field and a slider inside the node keep a mouse's contact: the field selects
-      // its text and the slider moves, the node is draggable again at each release, and it drags again after.
+      // its text and the slider moves, the node stays undraggable after a field's or a slider's release, and a press on
+      // the node drags it.
       expect(went(await drag(page, '#press', [0, 20], { from: [-15, 0] }))).toEqual([]);
       expect(went(await drag(page, '#icon', [0, 20]))).toEqual([]);
       const field = await drag(page, '#field', [50, 0], { from: [-40, 0] });
-      expect([went(field), field.selection > 0, field.box]).toEqual([[], true, 'true']);
+      expect([went(field), field.selection > 0, field.box]).toEqual([[], true, 'false']);
       const slider = await drag(page, '#range', [60, 0], { from: [-44, 0] });
-      expect([went(slider), slider.box]).toEqual([[], 'true']);
+      expect([went(slider), slider.box]).toEqual([[], 'false']);
       expect(slider.range).toBeGreaterThan(40);
       expect(went(await drag(page, '#box', [0, 20], { from: [130, 0] })).map((d) => d.text)).toEqual(['box']);
-      // A draggable the app did not make keeps the drag its own script gave it.
-      expect(went(await drag(page, '#foreign', [0, 20])).map((d) => d.text)).toEqual(['its own']);
+      // A draggable the app did not make keeps the drag its own script gave it, and so does one written `TRUE` inside
+      // a button the app made.
+      expect(went(await drag(page, '#foreign', [0, 20])).map((d) => d.text)).toEqual(["foreign's own"]);
+      expect(went(await drag(page, '#upper', [0, 20])).map((d) => d.text)).toEqual(["upper's own"]);
       // By a mouse, the innermost draggable node inside a pan drags, and the pan does not.
       const inner = await drag(page, '#inner', [0, 20]);
       expect(went(inner).map((d) => d.text)).toEqual(['inner']);
