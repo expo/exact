@@ -2399,6 +2399,14 @@ zone's `utcOffset` at that instant, answered again when the virtual date crosses
 or `open({host, seed: 42, locale: "fr-CA", timeZone: "America/Toronto", epoch: "2026-09-21T14:13:20Z"})`;
 a test file writes them as launch lines (`epoch "2026-09-21T14:13:20Z"`, `time-zone "America/Toronto"`,
 [authored tests](contract-grammar.md#authored-tests)), which override the flags.
+
+On the web (same-origin frames), macOS and iOS, `tap live at 40 80` presses
+40 points right and 80 down from the top left of the iframe named `live`.
+The driver converts that point to the guest viewport at its current scale.
+Use `tap live {"x":20,"y":40}` for guest viewport CSS pixels, or
+`tap live {"selector":"#save"}` to press an element. These taps report
+`delivery: "synthetic"`. Guest listeners see `event.isTrusted === false`.
+
 A drive can fail fetches by URL prefix (LLP 1103): `--fail-fetch <prefix>` (repeatable) arms one before the
 first data load, `fail fetch <prefix> [times <n>]` and `pass fetch <prefix>` arm and clear one mid-drive (a form of `prefer`:
 `{"op":"prefer","faults":{"fail":…,"times":…}}` or `{…{"pass":…}}`), and `state.faults` lists each prefix's `times`, `left`, `hits` and

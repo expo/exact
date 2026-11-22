@@ -13,6 +13,53 @@ import AppKit
 import UIKit
 #endif
 
+struct GuestEvaluation: Decodable {
+    let script: String
+    let viewPoint: [Double]?
+}
+
+extension WebArm {
+    func evaluate(token: UInt32, request: GuestEvaluation) {
+        guard pdf == nil else { return sendReply(token: token, kind: 2, text: "a PDF frame has no document to script") }
+        guard direct ? !serving : guestFrame != nil else {
+            return sendReply(token: token, kind: 2, text: "guest frame is not ready")
+        }
+        let web = webView, frame = direct ? nil : guestFrame
+        guard let point = request.viewPoint else {
+            web.evaluateJavaScript(request.script, in: frame, in: world) { [weak self] in self?.evaluated(token: token, $0) }
+            return
+        }
+        guard point.count == 2 else { return sendReply(token: token, kind: 2, text: "guest tap needs two coordinates") }
+        #if os(macOS)
+        let left = 0.0, top = 0.0
+        let scale = Double(web.pageZoom * web.magnification)
+        #else
+        let inset = web.scrollView.adjustedContentInset
+        let left = Double(inset.left), top = Double(inset.top)
+        let scale = Double(web.pageZoom * web.scrollView.zoomScale)
+        #endif
+        // WebKit's visual viewport may be panned. Measure it in the main
+        // document, which also owns the sandbox wrapper's iframe rectangle.
+        let arguments: [String: Any] = ["x": (point[0] - left) / scale, "y": (point[1] - top) / scale, "wrapped": !direct]
+        let map = """
+        const x0 = x + visualViewport.pageLeft - scrollX, y0 = y + visualViewport.pageTop - scrollY;
+        if (!wrapped) return [x0, y0];
+        const box = document.getElementById('exact-frame').getBoundingClientRect();
+        return [x0 - box.left, y0 - box.top];
+        """
+        web.callAsyncJavaScript(map, arguments: arguments, in: nil, in: world) { [weak self, weak web] result in
+            guard let self, let web else { return }
+            guard self.built === web, frame === (self.direct ? nil : self.guestFrame),
+                  case .success(let value) = result, let mapped = value as? [Double], mapped.count == 2 else {
+                return self.sendReply(token: token, kind: 2, text: "guest tap could not map the point into the frame")
+            }
+            web.callAsyncJavaScript("return " + request.script, arguments: ["guestPoint": mapped], in: frame, in: self.world) {
+                [weak self] in self?.evaluated(token: token, $0)
+            }
+        }
+    }
+}
+
 /// The arms automation can reach: each knows its element id and the
 /// temporary folder of its session's module (`owner`), which the package's
 /// context resolves `app:/tmp/` in: the app's, so another app's frames are

@@ -98,7 +98,7 @@ extension Agent {
             guard let e = windowEvent(cg, at: p, in: win, flags: flags) else { return false }
             events.append(e)
         }
-        for e in events { NSApp.sendEvent(e) }
+        for e in events { ExactAgentWindow.sendPointerEvent(e) }
         return true
     }
 

@@ -178,6 +178,15 @@ extension NodeView {
     /// AppKit asks this of every click it sends. A test that sends a click
     /// through the application says so too, for the same reason.
     nonisolated(unsafe) static var everyClickCounts = ExactEnv.agentMode
+    /// AppKit asks a background window whether the down should reach its view.
+    /// A live drive addresses that view even while another app has focus.
+    static func countsFirstMouse(_ event: NSEvent?) -> Bool {
+        #if EXACT_AGENT
+        if let event, event === ExactAgentWindow.pointerEvent { return true }
+        #endif
+        return everyClickCounts
+    }
+
     /// A bare button is ringed even when only its ancestor handles the press.
     var ringsFocus: Bool { !isNativeButton && (isButton || pressable) }
 

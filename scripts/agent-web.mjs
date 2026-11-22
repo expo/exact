@@ -750,7 +750,7 @@ async function openWebUnlocked({
         if (kind === 'press' || kind === 'key' || kind === 'type') {
           const request =
             kind === 'press'
-              ? { op: 'tap', id, selector: opts.selector, x: opts.x, y: opts.y }
+              ? { op: 'tap', id, selector: opts.selector, x: opts.x, y: opts.y, at: opts.at }
               : {
                   op: 'type',
                   id,

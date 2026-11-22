@@ -34,7 +34,7 @@ beforeAll(async () => {
   server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
     if (path.endsWith('/modes.js')) return new Response((path.startsWith('/release/') || path.startsWith('/built-release/')) ? withoutDev(source) : source, { headers: { 'content-type': 'text/javascript' } });
-    if (/^\/(full|release)\/rt\.js$/.test(path)) return new Response('export const After = [], PropHooks = {}, inflight = { n: 0 }, say = console.error;', { headers: { 'content-type': 'text/javascript' } });
+    if (/^\/(full|release)\/rt\.js$/.test(path)) return new Response('export const After = [], PropHooks = {}, say = console.error;', { headers: { 'content-type': 'text/javascript' } });
     if (/^\/built(-release)?\/$/.test(path)) return new Response('<link rel="stylesheet" href="app.css"><div id="exact-root"></div><script type="module">import app from "./app.js";app();</script>', { headers: { 'content-type': 'text/html' } });
     if (/^\/built(-release)?\//.test(path) || path.startsWith('/web/')) {
       const name = path.replace(/^\/built(-release)?\//, '');
@@ -52,12 +52,12 @@ async function fixture(copy) {
   await page.goto(new URL(copy + '/', server.url).href);
   await page.evaluate(async () => {
     const { modes } = await import('./modes.js');
-    const { After, inflight } = await import('./rt.js');
+    const { After } = await import('./rt.js');
     const root = document.getElementById('exact-root');
     const classes = Object.fromEntries(Array.from({ length: 254 }, (_, i) => ['c' + i, ['color']]));
     classes.c1 = ['background-color'];
     window.install = (vars = classes) => modes([['density', ['regular', 'compact']]], { c0: { 0: 0 } }, ['color:var(--x-ink)'], vars, []);
-    window.commit = async () => { for (const f of After) f(); while (inflight.n) await Promise.resolve(); };
+    window.commit = () => { for (const f of After) f(); };
     window.add = (parent = root, attrs = {}) => {
       const e = document.createElement('div');
       for (const [name, value] of Object.entries(attrs)) e.setAttribute(name, value);
@@ -159,7 +159,7 @@ for (const copy of ['built', 'built-release']) test(`${copy}: an exit completion
     await page.evaluate(async () => { const { pieces } = await import('./rt.js'); await pieces(); });
     await page.waitForFunction(() => globalThis.exact?.presenceLive);
     const result = await page.evaluate(async () => {
-      const { After, inflight } = await import('./rt.js');
+      const { After } = await import('./rt.js');
       const { retained } = await import('./modes.js');
       const panel = document.querySelector('[data-testid="panel"]');
       exact.modes.set([]);
@@ -167,7 +167,7 @@ for (const copy of ['built', 'built-release']) test(`${copy}: an exit completion
       let commits = 0;
       After.push(() => commits++);
       document.querySelector('[data-testid="drop"]').click();
-      while (inflight.n) await Promise.resolve();
+      await Promise.resolve();
       const atRemoval = commits;
       const animations = panel.getAnimations();
       const during = { connected: panel.isConnected, bounds: retained().bounds, animations: animations.length };

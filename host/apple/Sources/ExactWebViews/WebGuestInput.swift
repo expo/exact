@@ -20,6 +20,8 @@ enum GuestInput {
         return call(tapScript, arguments)
     }
 
+    static var tapAtViewPoint: String { "(\(tapScript))({}, guestPoint)" }
+
     /// `text` into the editable `selector` names, else the focused one, else
     /// the first shown; or the key chord `key` (`Meta+s`, `Shift+Tab`, `Plus`).
     static func type(selector: String?, key: String?, text: String) -> String {
@@ -35,12 +37,12 @@ enum GuestInput {
     }
 
     private static let tapScript = """
-    (a) => {
+    (a, point) => {
       const named = a.selector ? document.querySelector(a.selector) : null;
       const box = named?.getBoundingClientRect();
-      const x = a.x ?? (box ? box.left + box.width / 2 : innerWidth / 2);
-      const y = a.y ?? (box ? box.top + box.height / 2 : innerHeight / 2);
-      const target = named || document.elementFromPoint(x, y) || document.body;
+      const x = point?.[0] ?? a.x ?? (box ? box.left + box.width / 2 : innerWidth / 2);
+      const y = point?.[1] ?? a.y ?? (box ? box.top + box.height / 2 : innerHeight / 2);
+      const target = named || document.elementFromPoint(x, y) || (!point && document.body);
       if (!target) return JSON.stringify({ok:false, error:'guest tap found no target'});
       const base = {bubbles:true, cancelable:true, composed:true, clientX:x, clientY:y, button:0, view:window};
       const pointer = {pointerId:1, pointerType:'mouse', isPrimary:true};

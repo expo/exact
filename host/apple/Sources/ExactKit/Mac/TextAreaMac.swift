@@ -93,7 +93,7 @@ package final class TextArea: NSTextView {
         fields.pressing(owner, event) { owner.tracksPointer(event) { super.mouseDown(with: event) } }
     }
     // The agent's window is never key: its every click counts, as at a node (`NodeView.everyClickCounts`).
-    package override func acceptsFirstMouse(for event: NSEvent?) -> Bool { NodeView.everyClickCounts || super.acceptsFirstMouse(for: event) }
+    package override func acceptsFirstMouse(for event: NSEvent?) -> Bool { NodeView.countsFirstMouse(event) || super.acceptsFirstMouse(for: event) }
 
     // The ARIA states AppKit has no property for (`NodeView.ariaAttribute`).
     package override func accessibilityAttributeNames() -> [NSAccessibility.Attribute] {
@@ -694,7 +694,7 @@ final class Field: NSTextField {
 /// hears one (#125).
 final class FieldEditor: NSTextView {
     override func mouseDown(with event: NSEvent) { pressingField(owner, event, self) { super.mouseDown(with: event) } }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { NodeView.everyClickCounts || super.acceptsFirstMouse(for: event) }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { NodeView.countsFirstMouse(event) || super.acceptsFirstMouse(for: event) }
     override func doCommand(by selector: Selector) {
         let types = ["deleteBackward:": "deleteContentBackward", "deleteForward:": "deleteContentForward", "deleteWordBackward:": "deleteWordBackward", "deleteWordForward:": "deleteWordForward", "deleteToBeginningOfLine:": "deleteSoftLineBackward", "deleteToEndOfLine:": "deleteSoftLineForward", "deleteToBeginningOfParagraph:": "deleteHardLineBackward", "deleteToEndOfParagraph:": "deleteHardLineForward"]
         if let type = types[NSStringFromSelector(selector)], let fields = owner?.presenter?.fieldSelections {
