@@ -159,7 +159,7 @@ impl Kernel {
             return Vec::new();
         }
         let arena = &self.arena;
-        let tolerance = arena.observations.tolerance();
+        let tolerance = super::area::tolerance(arena);
         // Two agree where both extend or both move the box, by frames within tolerance
         let near = |a: Option<Taken>, b: Option<Taken>| match (a, b) {
             (Some(a), Some(b)) => {
@@ -303,7 +303,7 @@ fn taking(kernel: &Kernel, slot: u32) -> (Option<Taken>, bool) {
     let [x, y, width, height] = stored.map_or([0.0; 4], |t| t.frame());
     let placed = [top - y, right + x + width, bottom + y + height, left - x];
     let margins = (arena.observations.takings.margins.get(&slot)).map_or([0.0; 4], |m| *m);
-    let tolerance = arena.observations.tolerance();
+    let tolerance = super::area::tolerance(arena);
     let at: [f32; 4] = std::array::from_fn(|e| placed[e] - margins[e]);
     let by: [f32; 4] = std::array::from_fn(|e| {
         let [outer, inner] = sides[e];

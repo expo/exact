@@ -751,7 +751,7 @@ fn a_local_inset_is_the_browsers_custom_property() {
     let scroll_words = [
         (StyleId::SafeAreaReach, "edges"),
         (StyleId::SafeAreaReachEdges, "top"),
-        (StyleId::SafeAreaExtend, "top manual"),
+        (StyleId::SafeAreaExtend, "top"),
         (StyleId::ScrollInsetAdjustment, "never"),
         (StyleId::ScrollIndicatorAdjustment, "none"),
         (StyleId::ScrollEdgeEffectSoft, "top"),
