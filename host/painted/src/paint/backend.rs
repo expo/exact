@@ -379,8 +379,10 @@ pub trait Backend {
         false
     }
 
-    /// Whether rows can be kept separately within a sticky section and
-    /// their saved metadata reused in a geometry-only walk.
+    /// Whether a sticky section's children are rows of their own, and a walk
+    /// that paints nothing moves a kept row's saved hits instead of walking
+    /// it. A row moved thousands of points is walked again where it can be
+    /// hit, as its moved hits would round.
     fn independent_section_rows(&self) -> bool {
         false
     }

@@ -264,19 +264,27 @@ pub(crate) fn hits(kernel: &Kernel, b: &PaintedBox, x: f32, y: f32) -> bool {
 /// grown in its own space, under the clips it was painted with. A box placed
 /// by a perspective takes none.
 pub(crate) fn slop_hits(kernel: &Kernel, b: &PaintedBox, x: f32, y: f32) -> bool {
-    let Some(node) = kernel.node(b.id) else {
-        return false;
-    };
+    slopped(kernel, b).is_some_and(|b| b.contains(x, y))
+}
+
+/// Where `b`'s hit slop takes hits, before its clips; none without slop.
+pub(crate) fn slop_bounds(kernel: &Kernel, b: &PaintedBox) -> Option<Rect4> {
+    slopped(kernel, b).map(|b| b.rect)
+}
+
+/// `b` grown by its hit slop, for a hit test.
+fn slopped(kernel: &Kernel, b: &PaintedBox) -> Option<PaintedBox> {
+    let node = kernel.node(b.id)?;
     if !node.style.may_have_hit_slop() {
-        return false;
+        return None;
     }
     let [t, r, bottom, l] = node.style.hit_slop(&kernel.env_of(node.id));
     if t + r + bottom + l <= 0.0 {
-        return false;
+        return None;
     }
     let mut b = b.for_hit();
     if b.projective.is_some() {
-        return false;
+        return None;
     }
     let grow = |q: Rect4| (q.0 - l, q.1 - t, q.2 + l + r, q.3 + t + bottom);
     match b.affine {
@@ -286,7 +294,7 @@ pub(crate) fn slop_hits(kernel: &Kernel, b: &PaintedBox, x: f32, y: f32) -> bool
         }
         None => b.rect = grow(b.rect),
     }
-    b.contains(x, y)
+    Some(b)
 }
 
 /// Where the agent's `tap` aims on a box with fragments: its first

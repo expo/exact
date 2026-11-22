@@ -90,6 +90,8 @@ struct Row {
     boxes: Vec<PaintedBox>,
     text: Vec<(NodeKey, Rc<Paragraph>)>,
     inline: Vec<(ViewId, Rc<inline_frame::PaintedInline>)>,
+    /// Where its buttons' titles were painted, for an inspector.
+    labels: Vec<(ViewId, material::FieldText)>,
     images: Vec<(ViewId, Option<std::sync::Weak<Bitmap>>)>,
     /// Where each picture kept apart from the row is drawn.
     slots: Vec<Slot>,
@@ -100,7 +102,8 @@ struct Row {
     scrolls: Vec<(ViewId, (f32, f32))>,
     /// A fresh geometry walk can translate these hits without consulting descendants.
     can_translate_hits: bool,
-    may_have_hit_slop: bool,
+    /// Where its hit slop takes hits, relative to its origin.
+    hit_reach: Option<Rect4>,
     /// Kept through a clipped fractional move. Re-record its glyphs before drawing.
     paint_stale: bool,
     unsupported: bool,
@@ -122,15 +125,19 @@ impl Row {
     }
 
     fn can_translate_geometry_to(&self, origin: (f32, f32), viewport: (f32, f32)) -> bool {
-        let (width, height) = viewport;
-        if (origin.0 - self.origin.0).abs() <= width && (origin.1 - self.origin.1).abs() <= height {
+        let (dx, dy) = (origin.0 - self.origin.0, origin.1 - self.origin.1);
+        if dx.abs() <= MAX_TRANSLATION && dy.abs() <= MAX_TRANSLATION {
             return true;
         }
-        // A long translation can round a hit to the old box's exclusive edge.
-        // Walk rows that can be seen at the new position in their current space.
-        let (_, _, w, h) = intersect(self.bounds_at(origin), (0., 0., width, height));
-        // A box with hit slop can take hits beyond the drawing's bounds.
-        !self.may_have_hit_slop && (w <= 0. || h <= 0.)
+        // Further, a hit can round onto the old box's exclusive edge: walk a
+        // row that can take hits at its new position, its drawing's or its
+        // hit slop's.
+        let (x, y, w, h) = self
+            .hit_reach
+            .map_or(self.bounds, |r| union(Some(self.bounds), r));
+        let at = (x + origin.0, y + origin.1, w, h);
+        let (_, _, w, h) = intersect(at, (0., 0., viewport.0, viewport.1));
+        w <= 0. || h <= 0.
     }
 }
 
@@ -170,6 +177,7 @@ struct Capture {
     slots: Vec<Slot>,
     text: Vec<(NodeKey, Rc<Paragraph>)>,
     inline: Vec<(ViewId, Rc<inline_frame::PaintedInline>)>,
+    labels: Vec<(ViewId, material::FieldText)>,
     frames: Vec<RowFrame>,
     scrolls: Vec<(ViewId, (f32, f32))>,
 }
@@ -223,6 +231,11 @@ impl Rows {
 
 /// Room around a row's boxes for what paints outside them (shadows).
 const MARGIN: f32 = 48.0;
+
+/// How far a kept row's hits may be moved by translation: in `f32`, a
+/// coordinate within a few thousand points rounds by under a thousandth of
+/// a point.
+const MAX_TRANSLATION: f32 = 4096.0;
 
 /// Whether `node` is a column with a sticky heading, whose children a backend
 /// that splits sections keeps as rows ([`Backend::independent_section_rows`]).
@@ -737,6 +750,15 @@ impl Painter {
         }
     }
 
+    /// Publish where a button's title was painted, and keep it with the
+    /// recording row so a replay publishes it moved.
+    pub(super) fn row_label(&mut self, id: ViewId, text: material::FieldText) {
+        self.labels.label(id, text);
+        if let Some(c) = &mut self.rows.recording {
+            c.labels.push((id, text));
+        }
+    }
+
     /// What a recording row paints past its boxes.
     pub(super) fn row_reach(&mut self, r: Rect4) {
         if let Some(c) = &mut self.rows.recording {
@@ -886,6 +908,16 @@ impl Painter {
             for (id, inline) in &row.inline {
                 walk.inline.insert(*id, inline.translated(d.0, d.1));
             }
+            for &(id, text) in &row.labels {
+                let (x, y, w, h) = text.rect;
+                self.labels.label(
+                    id,
+                    material::FieldText {
+                        rect: (x + d.0, y + d.1, w, h),
+                        baseline: text.baseline + d.1,
+                    },
+                );
+            }
             self.damage.unsupported |= row.unsupported;
             let bounds = row.bounds_at(origin);
             let rid = row.id;
@@ -893,9 +925,16 @@ impl Painter {
                 let row = self.rows.kept.get_mut(&node.key).expect("kept");
                 row.seen = frame;
                 row.paint_stale |= metadata_only;
-                // The pixel replay permits small shifts inside a suspect row.
-                // Its old hit boxes are no longer safe for geometry reuse.
-                row.can_translate_hits &= !suspect;
+                // The pixel replay permits small shifts inside a suspect row;
+                // after one, its old hit boxes are no longer safe to translate.
+                let shifted = suspect
+                    && row.frames.iter().any(|saved| {
+                        walk.scene.kernel.node_by_key(saved.node).is_some_and(|n| {
+                            n.frame.x - node.frame.x != saved.frame.x
+                                || n.frame.y - node.frame.y != saved.frame.y
+                        })
+                    });
+                row.can_translate_hits &= !shifted;
             }
             if can_draw && !self.backend.row_culled(bounds) {
                 self.backend.row_draw(rid, origin, bounds);
@@ -1061,6 +1100,16 @@ impl Painter {
             return;
         }
         let (x0, y0) = (node.frame.x, node.frame.y);
+        let hit_reach = capture
+            .may_have_hit_slop
+            .then(|| {
+                boxes
+                    .iter()
+                    .filter_map(|b| super::fragments::slop_bounds(walk.scene.kernel, b))
+                    .fold(None, |u, r| Some(union(u, r)))
+            })
+            .flatten()
+            .map(|(x, y, w, h)| (x - origin.0, y - origin.1, w, h));
         self.rows.kept.insert(
             node.key,
             Row {
@@ -1070,11 +1119,12 @@ impl Painter {
                 scale,
                 size: (node.frame.width, node.frame.height),
                 can_translate_hits: boxes.iter().all(|b| b.hit.is_none()),
-                may_have_hit_slop: capture.may_have_hit_slop,
+                hit_reach,
                 paint_stale: false,
                 boxes,
                 text: capture.text,
                 inline: capture.inline,
+                labels: capture.labels,
                 images: capture.images,
                 slots: capture.slots,
                 frames: capture
