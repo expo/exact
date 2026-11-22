@@ -411,7 +411,8 @@ pub trait Surface {
     fn opaque(&self) -> bool {
         false
     }
-    /// Raw input inside this canvas (LLP 1046.002 S1); app gestures elsewhere are untouched.
+    /// Deliver raw device events inside the canvas to [`Surface::input`] (LLP 1046.002 S1).
+    /// On macOS, the canvas's Contract pointer, wheel and context menu handlers also run.
     fn wants_input(&self) -> bool {
         false
     }

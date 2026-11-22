@@ -40,12 +40,12 @@ fn points(values: [f32; 4]) -> [Dimension; 4] {
 
 #[test]
 fn the_reach_and_scroll_forms_lower_to_their_rows() {
-    let source = "component A\n  view\n    column testId=\"reach\" -exact-safe-area-reach=\"top end\" -exact-safe-area-extend=\"start bottom manual\" -exact-safe-area-extend-bounds=\"1 2 3 4\"\n      column testId=\"scroller\" overflow-y=\"scroll\" -exact-scroll-content-inset=\"10 -20 30 40\" -exact-scroll-inset-adjustment=\"never\" -exact-scroll-vertical-indicator-insets=\"1 2 3\" -exact-scroll-horizontal-indicator-insets=\"5 6 7 8\" -exact-scroll-indicator-adjustment=\"none\" -exact-scroll-edge-effect-style=\"top start hard\" -exact-scroll-edge-effect-hidden=\"bottom end\"\n      column testId=\"soft\" overflow-y=\"scroll\" -exact-scroll-edge-effect-style=\"left soft\"\n      column testId=\"none\" -exact-safe-area-reach=\"none\" -exact-safe-area-extend=\"none\"\n      column testId=\"auto\" -exact-safe-area-reach=\"auto\"\n      column testId=\"plain\"\n";
+    let source = "component A\n  view\n    column testId=\"reach\" -exact-safe-area-reach=\"top end\" -exact-safe-area-extend=\"start bottom\" -exact-safe-area-extend-bounds=\"1 2 3 4\"\n      column testId=\"scroller\" overflow-y=\"scroll\" -exact-scroll-content-inset=\"10 -20 30 40\" -exact-scroll-inset-adjustment=\"never\" -exact-scroll-vertical-indicator-insets=\"1 2 3\" -exact-scroll-horizontal-indicator-insets=\"5 6 7 8\" -exact-scroll-indicator-adjustment=\"none\" -exact-scroll-edge-effect-style=\"top start hard\" -exact-scroll-edge-effect-hidden=\"bottom end\"\n      column testId=\"soft\" overflow-y=\"scroll\" -exact-scroll-edge-effect-style=\"left soft\"\n      column testId=\"none\" -exact-safe-area-reach=\"none\" -exact-safe-area-extend=\"none\"\n      column testId=\"auto\" -exact-safe-area-reach=\"auto\"\n      column testId=\"plain\"\n";
     let mut r = boot(source);
     let [reach, scroller, soft, none, auto, plain] =
         ["reach", "scroller", "soft", "none", "auto", "plain"].map(|t| style(&mut r, t));
     // D13: reach on its edges, `none` as `edges` naming none, a written `auto` as the initial
-    // value; the extension's edges with `manual`; and its bounds, `auto` where unsaid
+    // value; the extension's edges; and its bounds, `auto` where unsaid
     assert_eq!(format!("{:?}", reach.rare.safe_area_reach), "Edges");
     assert_eq!(
         SafeAreaEdges::css(reach.rare.safe_area_reach_edges),
@@ -59,7 +59,7 @@ fn the_reach_and_scroll_forms_lower_to_their_rows() {
     assert_eq!(reach.rare.safe_area_reach_edges, 0b100001);
     assert_eq!(
         SafeAreaExtend::css(reach.rare.safe_area_extend),
-        "bottom start manual"
+        "bottom start"
     );
     assert_eq!(SafeAreaExtend::css(none.rare.safe_area_extend), "none");
     let b = &reach.rare;
@@ -223,10 +223,10 @@ fn a_malformed_reach_or_scroll_form_is_refused_saying_what_to_write() {
             "the edges it reaches on",
         ),
         ("-exact-safe-area-reach=\"auto top\"", "`auto`, `none`"),
-        // `manual` needs an edge
+        // The host places an extension by hand, so no placement word is taken
         (
-            "-exact-safe-area-extend=\"manual\"",
-            "then `manual` if wanted",
+            "-exact-safe-area-extend=\"top manual\"",
+            "takes no `manual`",
         ),
         (
             "-exact-safe-area-extend=\"none top\"",
@@ -263,7 +263,7 @@ fn vocab_prints_each_forms_grammar_under_its_rows() {
     // The rows show their storage, the edge sets, and not the grammar an author writes
     for (name, says) in [
         ("-exact-safe-area-reach", "`auto` (the initial value"),
-        ("-exact-safe-area-extend", "then `manual` if wanted"),
+        ("-exact-safe-area-extend", "Mirrors the box's picture"),
         ("-exact-scroll-edge-effect-style", "`top soft, bottom hard`"),
         (
             "-exact-scroll-edge-effect-hidden",
@@ -305,4 +305,26 @@ fn a_scrollers_node_reply_carries_its_terms() {
         "{list}"
     );
     assert!(!exact_runner::agent::node(&r, id(&r, "plain")).contains("scrollTerms"));
+}
+
+#[test]
+fn an_extending_boxs_node_reply_carries_its_extension() {
+    // @ref LLP 1123 D13 — a box at the inner side of the session's 47-point top band extends on its
+    // top: `auto` goes as far as reach would, the band's 47; a box that extends nothing has none
+    let source = "component A\n  view\n    column\n      column padding-top=47\n        column testId=\"hero\" height=100 -exact-safe-area-extend=\"top\"\n      column testId=\"plain\"\n";
+    let mut r = boot(source);
+    let root = r.roots()[0];
+    let k = r.kernel_mut();
+    k.set_session_band([47.0, 0.0, 34.0, 0.0]).unwrap();
+    k.compute_layout(root, exact_kernel::Offer::definite(390.0, 844.0))
+        .unwrap();
+    let id = |r: &Runner<NoData>, t: &str| {
+        r.kernel()
+            .node_by_key(r.kernel().find_by_test_id(t)[0])
+            .unwrap()
+            .id
+    };
+    let hero = exact_runner::agent::node(&r, id(&r, "hero"));
+    assert!(hero.contains("\"extension\":[47,0,0,0]"), "{hero}");
+    assert!(!exact_runner::agent::node(&r, id(&r, "plain")).contains("\"extension\""));
 }

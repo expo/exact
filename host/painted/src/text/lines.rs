@@ -128,11 +128,11 @@ impl LayoutGlyph {
         self.start as usize..self.end as usize
     }
     /// Where the CPU raster places it with the pen at `offset` (device
-    /// pixels) at `scale`: whole pixel x, its quarter-pixel phase, and
-    /// whole pixel y.
+    /// pixels) at `scale`: whole pixel x and its quarter-pixel phase, and
+    /// whole pixel y rounded down.
     pub fn pixel(&self, offset: (f32, f32), scale: f32) -> (i32, u8, i32) {
         let (x, bin) = super::catalog::subpixel(self.x.mul_add(scale, offset.0));
-        let (y, _) = super::catalog::subpixel(self.y.mul_add(scale, offset.1).trunc());
+        let (y, _) = super::catalog::subpixel(self.y.mul_add(scale, offset.1).floor());
         (x, bin, y)
     }
 }

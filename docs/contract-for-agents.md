@@ -1848,25 +1848,25 @@ fixture does next: `{"action": "expire-access", "profile": "spec"}`, and
 returns once the app's token request is held, and `release-token` lets it
 go), `deny-authorize`; `fixture.ts`'s `control` lists them all.
 
-The fixture app can exercise a signed-in screen with a fixed backend answer.
-`authorize` completes the nonce-bound code exchange. `reload` reopens the
-app with the session saved in this test's scratch store.
+To open a fresh test already signed in, configure the app's provider with the
+local fixture's `/p/spec` issuer. Give `signed-in` the provider's plain
+`secret.keep` name, its `clientId`, and the test person's `sub`. The fixture
+completes the code exchange before launch. The first data read, a token refresh
+and a relaunch all see the same person. Signing out clears the test's session.
 
 ```contract-test
-test "loads an authenticated screen from a saved OIDC session"
+test "opens the reader's profile"
+  signed-in "oauth.spec" {"clientId":"client-spec","sub":"reader-2","name":"Grace Hopper"}
   answer fetch "http://127.0.0.1:4400/p/spec/api/me" with 200 {"name":"Offline reader"}
-  request POST "/control" {"action":"reset"}
-  clock data
-  tap "sign-in"
-  authorize
-  clock data
-  expect text "status" == "Signed in"
-  expect text "name" == "Offline reader"
-  reload
-  clock data
   expect text "status" == "Signed in"
   expect text "name" == "Offline reader"
 ```
+
+`name` defaults to `sub`, and `email` defaults to the empty string. The
+fixture generates a bearer token. Give `token` a test value to choose the
+first bearer, for example `"token":"reader-2-test"`. The fixture refuses a
+value it already issued until reset. To exercise the sign-in button and the
+callback itself, start signed out, tap the button and use `authorize`.
 
 #### HTTPS callbacks
 
@@ -3790,6 +3790,17 @@ creates it; an existing destination of the other kind is refused, as is a path t
 leads through a symbolic link. The result is a path, not an open handle, so a package
 opens or empties it promptly (LLP 1133.009 D10).
 
+### A package source on the web
+
+When a package has no web implementation, a source in its `exact.json` can
+still answer with `substitute.default`. An optional source can declare
+`"default": null` to answer `none`. A source that lists `"web"` in
+`substitute.unsupported` fails with `NotSupportedError` even if it has a default.
+
+For a status that stays readable, use `"targets": {"web": {"available": false}}`
+inside its `substitute`. The other fields keep their default values. List
+`"web"` in `unsupported` on the operations that require the missing platform feature.
+
 ### A package's native module, library and web assets
 
 A package fills the data module's one native module (`native.call` in `app.ts`) from the
@@ -4309,11 +4320,31 @@ main navigationKey=`${top(nav).id}` navigationBack="close" navigate=follow displ
   the other hosts keep it where it is written. A header field on a list is that list's
   filter; a search tab searches the app. `contract vocab search` has the details;
   Expo's `role="search"` trigger and SwiftUI's `Tab(role: .search)` are `rel="search"`.
-- A tab bar that minimizes as content scrolls (`tabBarMinimizeBehavior`) and an accessory
-  view above it (`bottomAccessory`, iOS 26) are not Contract words: unsaid, the bar is
-  UIKit's default, and an app that wants them sets them from the `tabs` hatch, which
-  hands it the `UITabBarController` (docs/reference.md, "Access hatches"). The routes
-  follow the safe area a minimizing bar changes.
+- **A mini player above the tab bar** (docs/recipes/mini-player.md):
+  `navigationTabAccessory="now-playing"` on the root tablist names an element, written
+  after every tab panel the tablist links (usually just before the tablist), that iOS 26
+  and later show as UIKit's tab bar accessory (`bottomAccessory`): a glass capsule on
+  every tab, on an iPhone above the bar and inline where the bar was while it hides, on
+  an iPad at the bottom of the page. UIKit places and sizes it (48 points high on an
+  iPhone 18 Pro with iOS 27), the element's box is UIKit's whatever `height` it says,
+  and the routes clear it. Show and remove it with `if` or `display`. The web, the Mac
+  and Android lay the element out where CSS puts it, above the tab strip; iOS 17 to 25,
+  which have no accessory, leave it there, hidden under the shown tab bar. Where the
+  compiler can prove it, a literal id that names nothing, or an element inside the
+  tablist, a tab panel, a route, a `list`, a popover or a `dialog`, a run of text or a
+  part of an `svg` or a `select`, is refused (`lower-tab-accessory`, for example
+  "`navigationTabAccessory="player"` names an element inside a tab panel, but the tab
+  bar's accessory is shared by every tab"); its message says what to change. On the
+  live tree, where the compiler cannot tell (an element written before a panel the
+  tablist links, in the `footer` the sidebar shows, or a radio or a tab of its group), a
+  development build on iOS 26 and later writes the reason to `logs` while Exact's own
+  tab container shows the tabs. To see it, drive iOS with `--chrome platform`.
+- A tab bar that minimizes as content scrolls (`tabBarMinimizeBehavior`) is not a
+  Contract word: unsaid, the bar is UIKit's default, and an app that wants it sets it
+  from the `tabs` hatch, which hands it the `UITabBarController` (docs/reference.md,
+  "Access hatches"). The routes follow the safe area a minimizing bar changes, and an
+  accessory goes inline beside the minimized bar. The hatch owns `bottomAccessory`
+  while Exact shows no accessory.
 - A box written beside the routes in the navigation root (a column the routes are offset
   past) shows on iOS as on the web: the native container that stands for the routes
   paints under a child no route's box meets, and UIKit lays the navigation bar's title
@@ -6414,6 +6445,8 @@ During a reorder `state.reorder` reads `{ item, from, to, before, phase,
 ending }`; a grouped grip also takes `type <grip> key Space` and the arrows. `clock +N` moves the virtual clock without
 waiting for a store's or the network's reply on real time (unless a timer fires
 first); its reply says what is still in flight (`inflight`, on every host), and `clock settle` lands it.
+On the web JS target, a single jump can deliver several timer-driven DOM edits together
+to a `MutationObserver`. To observe an intermediate value, advance to that time in a separate clock step.
 A request the server holds, marked `exactHeld: true` (a long poll, LLP 1016.000 D9), is the exception: no
 clock waits on it, neither a jump nor `clock settle` nor `clock data`, and each of their replies names it
 (`held`, `heldTargets`; `state.pending` marks it `held: true`). Its answer must be safe to supersede.

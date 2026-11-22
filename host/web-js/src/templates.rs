@@ -8,9 +8,9 @@ enum Value {
     /// The getter ignores its caller's instruction. Any other use may supply it.
     NoPc,
     Param(usize),
-    /// A parameter of the function being rendered, bound inside the enclosing template.
+    /// A name bound within the function being rendered.
     Local(Rc<str>),
-    /// A lexical getter passed between mounts within the scope that declared it.
+    /// A getter or state object captured from an enclosing arm.
     Binding(usize, Rc<str>),
 }
 
@@ -78,6 +78,13 @@ struct Column {
 }
 
 impl Template {
+    fn captures(&self) -> impl Iterator<Item = usize> + '_ {
+        self.columns
+            .iter()
+            .enumerate()
+            .filter_map(|(i, column)| (column.fixed.is_none() && column.first == i).then_some(i))
+    }
+
     fn observe(&mut self, args: &[Value]) {
         let mut firsts = HashMap::new();
         for (i, (column, arg)) in self.columns.iter_mut().zip(args).enumerate() {
@@ -95,7 +102,11 @@ impl Template {
 
 #[derive(Default)]
 pub(super) struct Templates {
-    pub(super) depth: usize,
+    /// Shared functions are declared here. A deeper binding must come from their caller.
+    declaration_depth: usize,
+    pub(super) scope_depth: usize,
+    /// A shared computation takes this argument at the point it is evaluated.
+    argument: Option<&'static str>,
     bodies: Vec<Template>,
     index: HashMap<Option<Rc<str>>, HashMap<Rc<[Part]>, usize>>,
     calls: Vec<Call>,
@@ -128,6 +139,21 @@ impl Base {
 }
 
 impl Templates {
+    pub fn mounts(depth: usize) -> Self {
+        Self {
+            declaration_depth: depth,
+            scope_depth: depth,
+            ..Self::default()
+        }
+    }
+
+    pub fn computations(depth: usize, argument: &'static str) -> Self {
+        Self {
+            argument: Some(argument),
+            ..Self::mounts(depth)
+        }
+    }
+
     // The JS writer quotes authored strings, so source NULs arrive escaped.
     fn parts(&self, source: &str) -> Vec<Part> {
         let mut result = Vec::new();
@@ -146,7 +172,7 @@ impl Templates {
                 } else if let Some(binding) = op.strip_prefix('l') {
                     let (depth, name) = binding.split_once(':').expect("lexical binding");
                     let depth = depth.parse().expect("binding depth");
-                    if self.depth < depth {
+                    if self.scope_depth < depth {
                         // The surrounding arm introduces this name in its own body.
                         Part::Js(name.into())
                     } else {
@@ -218,6 +244,16 @@ impl Templates {
 
         let mut args = Vec::new();
         for value in body.iter_mut().flat_map(Part::values) {
+            if let Value::Binding(depth, name) = value {
+                if *depth > self.scope_depth {
+                    // The parent declares this binding before calling the child.
+                    *value = Value::Local(name.clone());
+                    continue;
+                }
+            }
+            if matches!(value, Value::Local(_)) {
+                continue;
+            }
             let i = args.len();
             args.push(std::mem::replace(value, Value::Param(i)));
         }
@@ -236,7 +272,10 @@ impl Templates {
                     columns: args
                         .iter()
                         .map(|js| Column {
-                            fixed: Some(js.clone()),
+                            fixed: match js {
+                                Value::Binding(depth, _) if *depth > self.declaration_depth => None,
+                                _ => Some(js.clone()),
+                            },
                             first: 0,
                         })
                         .collect(),
@@ -325,7 +364,8 @@ impl Templates {
                     params.push("$site".to_string());
                 }
                 let mut captures = HashMap::new();
-                let env = format!("$c{}", self.depth);
+                let single = t.captures().take(2).count() == 1;
+                let env = format!("$c{}", self.declaration_depth);
                 let values: Vec<_> = t
                     .columns
                     .iter()
@@ -335,13 +375,19 @@ impl Templates {
                         } else {
                             let next = captures.len();
                             let index = captures.entry(column.first).or_insert(next);
-                            Value::Local(format!("{env}[{index}]").into())
+                            let operand = if single {
+                                env.clone()
+                            } else {
+                                format!("{env}[{index}]")
+                            };
+                            Value::Local(operand.into())
                         }
                     })
                     .collect();
                 if !captures.is_empty() {
                     params.push(env);
                 }
+                params.extend(self.argument.map(str::to_owned));
                 params.extend(t.params.iter().map(ToString::to_string));
                 write!(declarations, "const {name}=({})=>", params.join(",")).unwrap();
                 if t.params.is_some() {
@@ -383,7 +429,9 @@ impl Render<'_> {
     fn operand(&self, value: &Value) -> Rc<str> {
         match value {
             Value::Js(js) if self.enclosing => format!("\0v:{js}\0").into(),
-            Value::Binding(depth, js) if self.enclosing && self.templates.depth > *depth => {
+            Value::Binding(depth, js)
+                if self.enclosing && self.templates.declaration_depth > *depth =>
+            {
                 crate::code::lexical_operand(js, *depth).into()
             }
             Value::Binding(_, js) => js.clone(),
@@ -460,14 +508,13 @@ impl Render<'_> {
             out.push_str(name);
             let mut inputs: Vec<_> = call.base.map(|n| base.plus(n).js()).into_iter().collect();
             let captures: Vec<_> = t
-                .columns
-                .iter()
-                .enumerate()
-                .filter(|(i, column)| column.fixed.is_none() && column.first == *i)
-                .map(|(i, _)| self.operand(call.args[i].resolve(args)))
+                .captures()
+                .map(|i| self.operand(call.args[i].resolve(args)))
                 .collect();
-            if !captures.is_empty() {
-                inputs.push(format!("[{}]", captures.join(",")));
+            match captures.as_slice() {
+                [] => {}
+                [one] => inputs.push(one.to_string()),
+                many => inputs.push(format!("[{}]", many.join(","))),
             }
             if let Some(parent) = parent {
                 inputs.push(parent.to_string());
@@ -478,6 +525,7 @@ impl Render<'_> {
                 }
                 out.push_str(");");
             } else if t.params.is_none() {
+                inputs.extend(self.templates.argument.map(str::to_owned));
                 write!(out, "({})", inputs.join(",")).unwrap();
             } else if !inputs.is_empty() {
                 write!(out, ".bind(null,{})", inputs.join(",")).unwrap();

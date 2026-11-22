@@ -38,6 +38,7 @@ impl Painter {
             ((paragraph.width * scale + (device.0 - x)).ceil() + 2.0 * reach) / scale,
             ((paragraph.height * scale + (device.1 - y)).ceil() + 2.0 * reach) / scale,
         );
+        self.row_reach(super::bbox(ts, rect));
         if let Some(band) = paragraph
             .strokes
             .borrow_mut()
@@ -431,7 +432,7 @@ mod tests {
         let mut unpainted = Painter::new(
             painter.text.clone(),
             3.0,
-            Box::new(crate::paint::layer::Unpainted),
+            Box::new(crate::paint::layer::Unpainted::<false>),
         );
         unpainted.stroke_pass(&paragraph, &palette, 5.0, (0.0, 0.0), Transform::identity());
         assert_eq!(

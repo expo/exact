@@ -1225,9 +1225,14 @@ public struct RootTabs: Equatable {
     /// out as `display: none`, as the boot covers one a tab bar replaces
     /// (host/apple/src/closed.rs); the first install reads it (`adoptBootCover`).
     public let covered: Bool
+    /// The element the tablist names as its tab bar's accessory
+    /// (`navigationTabAccessory`, LLP 1075.003 §9.17), and why it names none,
+    /// for a development build's journal.
+    public let accessory: UInt32?, accessoryNote: String?
 
-    public init(root: UInt32, tablist: UInt32, tabs: [UInt32], panels: [UInt32], footer: UInt32? = nil, navigation: [Bool] = [], unsaid: Bool, covered: Bool = false) {
-        self.footer = footer
+    public init(root: UInt32, tablist: UInt32, tabs: [UInt32], panels: [UInt32], footer: UInt32? = nil, navigation: [Bool] = [], unsaid: Bool, covered: Bool = false,
+                accessory: UInt32? = nil, accessoryNote: String? = nil) {
+        (self.footer, self.accessory, self.accessoryNote) = (footer, accessory, accessoryNote)
         (self.root, self.tablist, self.tabs, self.panels, self.navigation, self.unsaid, self.covered) = (root, tablist, tabs, panels, navigation, unsaid, covered)
     }
 
@@ -1236,7 +1241,8 @@ public struct RootTabs: Equatable {
         let ids = { (key: String) in (o[key]?.array ?? []).compactMap { $0.number.map { UInt32($0) } } }
         self.init(root: UInt32(root), tablist: UInt32(tablist), tabs: ids("tabs"), panels: ids("panels"),
                   footer: o["footer"]?.number.map { UInt32($0) }, navigation: (o["navigation"]?.array ?? []).map { $0 == .bool(true) },
-                  unsaid: o["unsaid"] == .bool(true), covered: o["covered"] == .bool(true))
+                  unsaid: o["unsaid"] == .bool(true), covered: o["covered"] == .bool(true),
+                  accessory: o["accessory"]?.number.map { UInt32($0) }, accessoryNote: o["accessoryNote"]?.string)
     }
 }
 

@@ -25,12 +25,14 @@ export const tg = (e, site, row, f) => () => {
   try { const v = f(); e.$tg?.delete(row); return v; }
   catch (x) { if (!(x instanceof Trap)) throw x; const t = (e.$tg ??= new Set); if (!t.has(row)) { t.add(row); say(`site ${site}: ${row} trapped Trap(${x.kind} { pc: ${x.pc} })${bound(x)}; unset`); } return null; }
 };
-/** Enter an at-read body on the reader's list and call budget. */
-export function $enter(b, pc) {
-  if (++b.n > 65536) $T("CallLimit", pc);
-  if (b.d >= 64) $T("CallDepth", pc);
-  b.d++;
-}
+/** Nested reads share the outermost reader's list, call count and call depth. */
+export const $atRead = evaluate => (budget = {s: 0, n: 0, d: 0}, pc) => {
+  if (++budget.n > 65536) $T("CallLimit", pc);
+  if (budget.d >= 64) $T("CallDepth", pc);
+  budget.d++;
+  try { return evaluate(budget); }
+  finally { budget.d--; }
+};
 /** A string's UTF-8 bytes, as Rust's `str::len`; a lone surrogate is U+FFFD's 3 (LLP 1088 D2). */
 export function utf8(s, limit = Infinity) {
   let n = s.length;

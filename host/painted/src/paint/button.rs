@@ -1161,7 +1161,7 @@ impl Painter {
         }
         if let Some(p) = &layout.title {
             let painted = super::material::FieldText::painted(p, (tx, ty), ts);
-            self.labels.label(node.id, painted);
+            self.row_field_text(node.id, super::material::Part::Label, painted);
             let palette = [crate::text::RunPaint {
                 color: color(&layout.title_style, ink, presented_ink(texts.first())),
                 source: node.id,

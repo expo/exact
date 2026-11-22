@@ -332,6 +332,17 @@ object Native {
 
     /** The file an `app:/data|cache|tmp/…` path names, or null (`ExtensionContext.file`). */
     @JvmStatic external fun appFile(path: String): String?
+    /** The regular file an `app:/data|cache|tmp/…` path names, opened for reading as the app's own `fs.read` opens it,
+     * below its root and through no symbolic link ([Files]); null where it names none, and in a process whose reader
+     * has not booted, which knows no `app:/` root. */
+    @JvmStatic fun openApp(path: String): android.os.ParcelFileDescriptor? =
+        appDescriptor(path).takeIf { it >= 0 }?.let(android.os.ParcelFileDescriptor::adoptFd)
+    /** [openApp]'s descriptor for the caller to adopt, or -1. */
+    @JvmStatic external fun appDescriptor(path: String): Int
+    /** The reader's regular file [source] renamed to the `app:/` path [path], its missing directories made, each
+     * directory reached through no symbolic link and a link found at [path] refused: whether [source] is now the file
+     * at [path]. [source] is on the same file system. */
+    @JvmStatic external fun publishApp(path: String, source: String): Boolean
     /** The running generation's asset directory when a signed update's is running, else null ([AssetRoot]). */
     @JvmStatic external fun assetRoot(): String?
     /** The app's directory [index] names: 0 `data`, 1 `cache`, 2 `tmp` ([ExtensionContext.data]). */

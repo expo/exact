@@ -93,6 +93,34 @@ final class SwipeActionsIOSTests: XCTestCase {
         XCTAssertTrue(p.swipeHost.ownsAction(4), "an unprojected row's controls are still its actions")
     }
 
+    /// A labelled button body is projected into a cell that speaks for it,
+    /// which VoiceOver visits instead: with the row's owner draggable, the
+    /// cell is given the owner's drag (LLP 1094.000 D9).
+    func testAProjectedButtonRowsCellIsGivenItsOwnersDrag() throws {
+        if ExactEnv.agentPaints { throw XCTSkip("no drag while the agent paints (LLP 1094.000 D4)") }
+        let p = Presenter()
+        window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        p.viewport.frame = window.bounds
+        window.addSubview(p.viewport)
+        window.makeKeyAndVisible()
+        var roots = BatchOp(op: .roots); roots.ids = [1]
+        apply(p, [
+            create(1, "view", props: ["swipeContent": "body", "swipeTrailing": "delete", "draggable": "true", "dataTransferText": "Mount Fuji", "accessibilityLabel": "Fuji"],
+                   style: ["overflow_x": "scroll", "overflow_y": "hidden"]),
+            create(2, "view"),
+            create(3, "button", props: ["id": "body", "accessibilityLabel": "Open"]),
+            create(4, "button", props: ["id": "delete", "accessibilityLabel": "Delete"]),
+            children(1, [2]), children(2, [3, 4]), roots,
+        ] + geometry(80))
+        let owner = try XCTUnwrap(p.views[1])
+        p.swipeHost.touch(owner)
+        let cell = try XCTUnwrap(p.swipeHost.cell(of: owner))
+        XCTAssertTrue(cell.isAccessibilityElement, "the cell speaks for the labelled button")
+        let drag = try XCTUnwrap(cell.accessibilityDragSourceDescriptors?.first)
+        XCTAssertTrue(drag.view === owner)
+        XCTAssertEqual(drag.name, "Fuji")
+    }
+
     /// A row projected inside an animation UIKit has open: the table made
     /// for it and the content moved into its cell take their place at once,
     /// as views made or put in a new parent do (`NodeView.moveOrPlace`).

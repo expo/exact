@@ -166,11 +166,11 @@ export async function main(argv, injected = {}) {
   const browser = flags.browser ?? (host === 'web' ? process.env.EXACT_WEB_BROWSER : undefined),
     help = argv.includes('--help') || argv.includes('-h'); // help before any work
   if (host && flags.test && !help) {
-    // A test's `drag` on an iOS simulator is a real gesture by itself; `--touch platform` makes every tap one too
+    // A test's `drag` on iOS is a real gesture by itself; `--touch platform` makes every tap one too
     // (LLP 1080.000).
     if (flags.touch && !['agent', 'platform'].includes(flags.touch))
       throw new Error(
-        `--touch ${flags.touch} is not taken with --test: a test's \`drag\` is a real gesture by itself on an iOS simulator; --touch platform makes every tap one too (LLP 1080.000)`,
+        `--touch ${flags.touch} is not taken with --test: a test's \`drag\` is a real gesture by itself on iOS; --touch platform makes every tap one too (LLP 1080.000)`,
       );
     // Each test's line as it ends, and, while one runs past HEARTBEAT_MS, where it is every HEARTBEAT_MS: a run of
     // long tests (a few hundred drags) said nothing after the server's line until the last test ended.

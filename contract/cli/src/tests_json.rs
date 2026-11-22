@@ -191,6 +191,12 @@ fn step_json(step: &Step, s: &mut String) {
         Step::Seed { seed, .. } => {
             s.push_str(&format!("{{\"op\":\"seed\",\"value\":{seed}"));
         }
+        Step::SignedIn { key, account, .. } => {
+            s.push_str("{\"op\":\"signed-in\",\"key\":");
+            q(key, s);
+            s.push_str(",\"account\":");
+            s.push_str(account);
+        }
         Step::Stored {
             name,
             value,

@@ -42,7 +42,7 @@ Everything in Exact is built around three priorities:
 | **Web** | Works | Browser DOM (~20 KB runtime, zero layout engine shipped) |
 | **iOS** | Works (Simulator & device) | UIKit views, native controls, and system bars |
 | **macOS** | Works | AppKit views and native controls (no SwiftUI) |
-| **Linux** | Works | Exact's GPU/CPU painter on DRM/KMS consoles or headless |
+| **Linux** | Works | Exact's painter draws in a Wayland window, full-screen on a DRM/KMS console, or into a headless buffer. |
 | **Android** | [Works](#android) (Material 3 polish in progress) | Hardware-accelerated Android Canvas (`RenderNode`) with Material 3 styling, native `EditText`, dialogs, and Compose date pickers |
 | **Windows** | [Early](#early-windows) | DirectX 11 (`ink`) or CPU painter (neutral look + Fluent symbols) with native file dialogs, IME, and UI Automation |
 
@@ -185,7 +185,7 @@ bun exact.mjs ios --run                     # iOS Simulator (--device --run for 
 bun host/web/dev.mjs                    # Web at http://127.0.0.1:8765/
 bun host/apple/build.mjs --run          # macOS
 bun host/apple/build.mjs --ios --run    # iOS Simulator
-bun scripts/build-linux.mjs caltrain    # Linux (DRM/KMS console or headless)
+bun scripts/build-linux.mjs caltrain    # Linux (Wayland window, DRM/KMS console, or headless)
 ```
 
 Add `--lan` to `dev.mjs` to open the page from a phone on your local network (unrecognized `Host` headers receive `421` against DNS rebinding; use `--allow-host <name>` for tunnels). For Linux KMS rotation (`EXACT_ROTATE`) and VNC (`EXACT_VNC`), see [`docs/reference.md`](docs/reference.md#linux-kms-rotation-and-vnc).

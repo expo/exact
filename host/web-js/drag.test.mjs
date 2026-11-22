@@ -4,7 +4,7 @@
 import { test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { absolute, admit, admitUrl, install, shipped } from './drag.js';
+import { admit, admitUrl, install, shipped } from './drag.js';
 import { createDocument } from './dom.js';
 import { listen } from '../web/drag-out.js';
 import { listOwner, viewChildren } from '../web/navigation/lists.js';
@@ -16,16 +16,13 @@ const declarations = (file, names) => glueDeclarations(readFileSync(new URL(file
 test('the rules keep shipped files and absolute URLs, and refuse the rest in the runner words', () => {
   for (const ok of ['assets/1016.jpg', 'assets/apple/1016-thumb.jpg', `assets/${'a'.repeat(128)}`]) expect(shipped(ok)).toBe(true);
   for (const no of ['assets/', 'assets/../x.jpg', 'assets/./x.jpg', 'assets//x.jpg', 'assets/a?.jpg', 'assets/é.jpg', `assets/${'a'.repeat(129)}`, 'img/x.jpg', 'app:/data/x.pdf']) expect(shipped(no)).toBe(false);
-  for (const ok of ['https://example.com/a', 'HTTP://example.com']) expect(absolute(ok)).toBe(true);
-  for (const no of ['/landmark/1016', 'https://', 'https:///a', 'https://exa mple.com', 'ftp://example.com', 'https://example.com/\u0085']) expect(absolute(no)).toBe(false);
-  expect(absolute('https://example.com/\ufeff')).toBe(true);
   const said = [];
   expect(admit('assets/1016.jpg\napp:/data/export.pdf\n\nhttps://example.com/a.jpg', (r) => said.push(r))).toBe('assets/1016.jpg');
   expect(admitUrl('/landmark/1016', (r) => said.push(r))).toBe('');
   expect(said).toEqual([
     'app:/data/export.pdf: an app:/ file cannot be dragged on the web',
     'https://example.com/a.jpg is neither a shipped assets/ file nor an app:/ path',
-    '/landmark/1016 is not an absolute http: or https: URL',
+    "url is not an absolute http: or https: URL: another app cannot open this app's path",
   ]);
 });
 
@@ -42,6 +39,16 @@ test('the hooks write what is admitted, remove an empty prop and journal a value
   url(el, 'https://example.com/1016');
   expect(attrs.get('data-datatransferurl')).toBe('https://example.com/1016');
   expect(journal).toEqual(['drag: refused: app:/data/b.pdf: an app:/ file cannot be dragged on the web', 'drag: refused: app:/data/b.pdf: an app:/ file cannot be dragged on the web']);
+});
+
+test('a render on the server admits the data and hears no drag', () => {
+  const PropHooks = {}, journal = [];
+  install({ PropHooks, say: (line) => journal.push(line), document: null });
+  const attrs = new Map(), el = { setAttribute: (k, v) => attrs.set(k, v), removeAttribute: (k) => attrs.delete(k) };
+  PropHooks['data-datatransferurl'](el, 'https://:443/');
+  expect(attrs.has('data-datatransferurl')).toBe(false);
+  expect(journal).toEqual(['drag: refused: url is not an absolute http: or https: URL: it names no host; write the host after `https://`']);
+  expect(PropHooks.draggable).toBeUndefined();
 });
 
 test('install hears the downs and the drags on the page\'s document, and writes `draggable` through the listener', () => {
@@ -64,7 +71,7 @@ test.each(['created', 'adopted'])('a literal draggable node goes through the pro
   }
   const ctx = vm.createContext({ document, Adopt, listOwner, Paint: null, Links: null, rel: (_, value) => value });
   vm.runInContext(declarations('./tree.js', ['h', 'at', 'adopt', 'NOT_DOM', 'PropHooks']) + '\nthis.PropHooks = PropHooks;', ctx);
-  install({ PropHooks: ctx.PropHooks, say() {}, document: null });
+  install({ PropHooks: ctx.PropHooks, say() {}, document: { addEventListener() {} } });
   const card = ctx.h(root, 'div', 0, attrs, 0);
   expect(card).toBe(root.firstChild);
   if (Adopt) expect(card).toBe(serverNode);
@@ -75,7 +82,7 @@ test('the JS agent reports the card’s drag after a field release and omits a c
   const document = createDocument(), root = document.root, handlers = new Map();
   const PropHooks = {}, controller = new AbortController();
   document.addEventListener = (type, handler) => handlers.set(type, handler);
-  install({ PropHooks, say() {}, document: null });
+  install({ PropHooks, say() {}, document: { addEventListener() {} } });
   const card = document.createElement('div'), field = document.createElement('input'), foreign = document.createElement('img');
   field.closest = (selector) => field.matches(selector) ? field : null;
   root.append(card, foreign);

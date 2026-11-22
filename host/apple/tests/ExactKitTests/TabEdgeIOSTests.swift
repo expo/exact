@@ -363,6 +363,581 @@ final class TabEdgeIOSTests: XCTestCase {
         XCTAssertTrue(win.hitTest(point, with: nil)?.isDescendant(of: tabBar) == true, "the tab bar keeps its touches")
     }
 
+    /// The mini player the tablist names (`navigationTabAccessory`) as UIKit's tab bar accessory (LLP 1075.003 §9.17).
+    @available(iOS 26.0, *)
+    private func accessory(_ name: String = "mini-player", by button: String = "use-accessory") throws -> (tabs: UITabBarController, content: UIView, mini: NodeView) {
+        let navigation = try XCTUnwrap(session).presenter.navigationHost
+        try tap("tab-grid", route: "grid")
+        try press(button, route: "grid")
+        let tabs = try XCTUnwrap(navigation.tabController), mini = try node(name)
+        waitFor("UIKit holds the mini player as its tab bar's accessory, laid out in its box", facts: { "\(String(describing: mini.superview)), \(mini.frame)" }) {
+            guard let content = tabs.bottomAccessory?.contentView, mini.superview === content, content.bounds.height > 0 else { return false }
+            return mini.frame.size == content.bounds.size
+        }
+        return (tabs, try XCTUnwrap(tabs.bottomAccessory?.contentView), mini)
+    }
+
+    func testTheNamedRowIsTheTabBarsAccessoryInUIKitsBox() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("bottomAccessory is iOS 26") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit lays the accessory out as in an app only in a scene's window") }
+        let session = try fixture(wholeScreen: true), navigation = session.presenter.navigationHost
+        let (tabs, content, mini) = try accessory()
+        XCTAssertNotEqual(mini.frame.height, 60, "UIKit's box, not the row's authored height: \(content.bounds)")
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            XCTAssertLessThan(box(content).maxY, box(tabs.tabBar).minY + 0.5, "above the bar on the iPhone")
+        }
+        // The runner's frame and hit test find the row where UIKit shows it
+        try probeAgrees(content, "mini-player", "above the bar")
+        // An authored ancestor's double tap and long press reach a touch on the accessory
+        let relay = try XCTUnwrap((content as? TabAccessoryContent)?.relay, "the content view carries a relay")
+        let area = try node("player-area")
+        area.handlers.formUnion(["contextmenu", "dblclick"])
+        XCTAssertTrue(relay.listener(mini) { $0.handlers.contains("dblclick") } === area, "the area hears a double tap on the row")
+        XCTAssertTrue(relay.listener(mini) { $0.handlers.contains("contextmenu") } === area, "and a long press")
+        area.handlers.subtract(["contextmenu", "dblclick"])
+        XCTAssertFalse(navigation.siblings.holds(mini), "the accessory is not lifted over the container")
+        XCTAssertTrue(nodeParent(mini) === (try node("player-area")), "its authored parent is still its parent")
+        // A window's snapshot leaves out UIKit's tab bar group, so the accessory's content is drawn on its own
+        let drawn = UIGraphicsImageRenderer(bounds: content.bounds).image { content.layer.render(in: $0.cgContext) }
+        let paint = try XCTUnwrap(SharePictureCase.rgba(try XCTUnwrap(drawn.cgImage), x: Int((content.bounds.maxX - 20) * drawn.scale), y: Int(content.bounds.midY * drawn.scale)))
+        XCTAssertEqual([Int(paint.0), Int(paint.1), Int(paint.2)], [101, 67, 33], "the row paints in the accessory")
+        let (_, last) = try end(of: "grid")
+        XCTAssertLessThanOrEqual(last.maxY, box(content).minY + 0.5, "the grid's last row clears the accessory: \(last), accessory \(box(content))")
+        let play = try node("mini-play")
+        let reply = Agent(session: session).tap(["id": Int(play.id)])
+        XCTAssertNil(reply["error"], "\(reply)")
+        waitFor("the accessory's button takes its tap") { play.props["accessibilityLabel"] == "Pause" }
+        // A point in the row clear of its button, relative to the row's box
+        let empty: [Double] = [Double(mini.bounds.width - 8), Double(mini.bounds.height / 2)]
+        XCTAssertNil(Agent(session: session).tap(["id": Int(mini.id), "at": empty])["error"])
+        waitFor("a press on the accessory reaches its authored ancestor's listener") { area.props["accessibilityLabel"] == "Presses 1" }
+        // The runner follows the accessory inline, where the bar was, as UIKit moves it
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            let above = box(content)
+            try press("select-grid", route: "grid")
+            waitFor("the accessory goes inline", facts: { "\(self.box(content))" }) { self.box(content) != above && mini.frame.size == content.bounds.size }
+            try probeAgrees(content, "mini-player", "inline")
+        }
+        // The column's accent and tint adjustment reach the accessory, which UIKit's tab container would tint otherwise
+        try press("accent-column", route: "grid")
+        try press("keep-tint", route: "grid")
+        func rgb(_ color: UIColor) -> [Int] {
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            color.getRed(&r, green: &g, blue: &b, alpha: &a)
+            return [r, g, b].map { Int(($0 * 255).rounded()) }
+        }
+        waitFor("the accessory takes the column's accent and tint adjustment", facts: { "\(rgb(content.tintColor)), \(content.tintAdjustmentMode.rawValue)" }) {
+            content.tintAdjustmentMode == .normal && rgb(content.tintColor) == [255, 136, 0]
+        }
+        // An authored ancestor's `aria-hidden` hides the accessory from VoiceOver, though its view no longer holds it
+        try press("hide-area", route: "grid")
+        waitFor("the accessory follows the area's aria-hidden") { content.accessibilityElementsHidden }
+        XCTAssertTrue(content.isUserInteractionEnabled, "hidden from VoiceOver, still touchable")
+        // An inert authored ancestor makes the accessory inert, and an editor in it stops editing
+        let field = UITextField(frame: CGRect(x: 0, y: 0, width: 40, height: 20))
+        mini.addSubview(field)
+        defer { field.removeFromSuperview() }
+        XCTAssertTrue(field.becomeFirstResponder(), "the field edits")
+        try press("inert-column", route: "grid")
+        waitFor("the accessory follows the column's inertness") { !content.isUserInteractionEnabled && content.accessibilityElementsHidden }
+        XCTAssertFalse(field.isFirstResponder, "the field stops editing")
+    }
+
+    /// Presses `button`, whose action writes `frame(id)` and what `elementFromPoint` finds near the box's trailing
+    /// edge into its label, and checks both against where UIKit shows the accessory's content view.
+    private func probeAgrees(_ content: UIView, _ id: String, by button: String = "probe-accessory", _ when: String) throws {
+        let probe = try node(button), before = probe.props["accessibilityLabel"]
+        try press(button, route: "grid")
+        waitFor("the runner reads the accessory's frame \(when)", facts: { probe.props["accessibilityLabel"] ?? "" }) { probe.props["accessibilityLabel"] != before }
+        let probed = (probe.props["accessibilityLabel"] ?? "").split(separator: " "), shown = box(content)
+        let frame = probed.first.map { $0.split(separator: ",").compactMap { Double($0) } } ?? []
+        XCTAssertEqual(frame.count, 4, "\(when): \(probed)")
+        if frame.count == 4 {
+            for (read, seen) in zip(frame, [shown.minX, shown.minY, shown.width, shown.height]) { XCTAssertEqual(read, Double(seen), accuracy: 0.5, "\(when): frame \(frame), shown \(shown)") }
+        }
+        XCTAssertEqual(probed.last.map(String.init), id, "\(when): elementFromPoint finds the row over the routes")
+    }
+
+    /// A row in flow after the positioned panels, which CSS paints under them: the runner finds it where UIKit draws
+    /// it, above the routes, as it finds a presentation.
+    func testTheRunnerFindsARowInFlowWhereUIKitDrawsIt() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("bottomAccessory is iOS 26") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit lays the accessory out as in an app only in a scene's window") }
+        _ = try fixture(wholeScreen: true)
+        let (_, content, _) = try accessory("bare-player", by: "use-bare-accessory")
+        try probeAgrees(content, "bare-player", by: "probe-bare", "for a row in flow")
+    }
+
+    func testTheAccessoryGoesInlineWhereTheBarWasAndStaysReadable() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("bottomAccessory is iOS 26") }
+        guard UIDevice.current.userInterfaceIdiom == .phone else { throw XCTSkip("an iPhone's bottom tab bar, where the accessory goes inline") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit lays the accessory out as in an app only in a scene's window") }
+        let navigation = try fixture(wholeScreen: true).presenter.navigationHost
+        // A row beside the panels, which the walk that lifts rows below them while the bar hides reaches, once
+        // another row of their column lifts and the walk reads the column's children
+        try tap("tab-grid", route: "grid")
+        try press("show-rows", route: "grid")
+        let (tabs, content, mini) = try accessory("bare-player", by: "use-bare-accessory")
+        let above = content.bounds.size
+        try press("select-grid", route: "grid")
+        waitFor("the tab bar hides and the accessory goes inline", facts: { "\(content.bounds), \(mini.frame)" }) {
+            tabs.isTabBarHidden && content.bounds.size != above && mini.frame.size == content.bounds.size
+        }
+        XCTAssertEqual(content.traitCollection.tabAccessoryEnvironment, .inline)
+        navigation.reportCovers()
+        XCTAssertTrue(navigation.siblings.holds(try node("player-area")), "the area below the panels lifts")
+        XCTAssertTrue(mini.superview === content && !navigation.siblings.holds(mini), "UIKit still holds it; nothing lifts it")
+        let hidden = sequence(first: content as UIView, next: \.superview).filter(\.accessibilityElementsHidden)
+        XCTAssertTrue(hidden.isEmpty, "VoiceOver still reaches the accessory while the bar is hidden: \(hidden)")
+    }
+
+    func testANameThatGoesPutsTheRowBackAndClearsTheAccessoryItTook() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("bottomAccessory is iOS 26") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit lays the accessory out as in an app only in a scene's window") }
+        let session = try fixture(wholeScreen: true), tabs = try XCTUnwrap(session.presenter.navigationHost.tabController)
+        let hatched = UIView()
+        tabs.bottomAccessory = UITabAccessory(contentView: hatched)
+        try tap("tab-grid", route: "grid")
+        // The row stays once its name goes
+        try press("show-rows", route: "grid")
+        let (_, content, mini) = try accessory()
+        XCTAssertFalse(tabs.bottomAccessory?.contentView === hatched, "naming one replaces the hatch's accessory")
+        try press("drop-accessory", route: "grid")
+        let area = try node("player-area")
+        waitFor("the row is back in its parent at its authored height", facts: { "\(String(describing: mini.superview)), \(mini.frame)" }) {
+            tabs.bottomAccessory == nil && mini.superview === area.container && abs(mini.frame.height - 60) < 0.5
+        }
+        let left = content.subviews.filter { !($0 is NodeView) }
+        XCTAssertTrue(left.count == 1 && left[0].accessibilityElementsHidden && !left[0].isUserInteractionEnabled,
+                      "the leaving accessory shows a snapshot of the row that takes no input: \(content.subviews)")
+        // The runner's frame follows the row back into the page
+        let probe = try node("probe-accessory"), before = probe.props["accessibilityLabel"]
+        try press("probe-accessory", route: "grid")
+        waitFor("the runner reads the row's frame", facts: { probe.props["accessibilityLabel"] ?? "" }) { probe.props["accessibilityLabel"] != before }
+        let frame = (probe.props["accessibilityLabel"] ?? "").split(separator: " ").first.map { $0.split(separator: ",").compactMap { Double($0) } } ?? []
+        let page = box(mini)
+        XCTAssertEqual(frame.count, 4)
+        if frame.count == 4 {
+            for (read, seen) in zip(frame, [page.minX, page.minY, page.width, page.height]) { XCTAssertEqual(read, Double(seen), accuracy: 0.5, "frame \(frame), page \(page)") }
+        }
+    }
+
+    func testAnElementThatGoesLeavesItsPictureForTheExit() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("bottomAccessory is iOS 26") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit lays the accessory out as in an app only in a scene's window") }
+        let session = try fixture(wholeScreen: true), tabs = try XCTUnwrap(session.presenter.navigationHost.tabController)
+        let (_, content, mini) = try accessory()
+        // The batch destroys the row, which the accessory drew before its ops ran
+        try press("drop-accessory", route: "grid")
+        waitFor("the accessory goes with its row") { tabs.bottomAccessory == nil && session.presenter.views[mini.id] == nil }
+        let left = content.subviews.filter { !($0 is NodeView) }
+        XCTAssertTrue(left.count == 1 && left[0] is UIImageView && left[0].accessibilityElementsHidden, "the row's picture stays for UIKit's exit: \(content.subviews)")
+        XCTAssertTrue(!content.isUserInteractionEnabled && content.accessibilityElementsHidden, "the leaving accessory takes no touch and VoiceOver passes it")
+    }
+
+    /// A row with an authored exit leaves UIKit's exit a picture of it as the exit began, before the exit's first frame
+    /// changes it.
+    func testARowWithAnAuthoredExitLeavesItsPictureAsTheExitBegan() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("bottomAccessory is iOS 26") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit lays the accessory out as in an app only in a scene's window") }
+        let tabs = try XCTUnwrap(try fixture(wholeScreen: true).presenter.navigationHost.tabController)
+        let (_, content, _) = try accessory("exit-player", by: "use-exit-accessory")
+        try press("drop-exit-row", route: "grid")
+        waitFor("the accessory goes as the row's exit begins") { tabs.bottomAccessory == nil }
+        let picture = try XCTUnwrap(content.subviews.compactMap { $0 as? UIImageView }.first, "\(content.subviews)")
+        let image = try XCTUnwrap(picture.image?.cgImage), scale = try XCTUnwrap(picture.image?.scale)
+        let paint = try XCTUnwrap(SharePictureCase.rgba(image, x: Int((picture.bounds.maxX - 20) * scale), y: Int(picture.bounds.midY * scale)))
+        XCTAssertEqual([Int(paint.0), Int(paint.1), Int(paint.2)], [101, 67, 33], "the row as it was, not its exit's first frame")
+    }
+
+    /// The picture is the content view's layers as shown, the row's own transform included.
+    func testThePictureKeepsTheRowsTransform() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("bottomAccessory is iOS 26") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit lays the accessory out as in an app only in a scene's window") }
+        _ = try fixture(wholeScreen: true)
+        let (_, content, mini) = try accessory()
+        let accessory = try XCTUnwrap(content as? TabAccessoryContent)
+        mini.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
+        accessory.freeze()
+        mini.transform = .identity
+        defer { accessory.thaw() }
+        let picture = try XCTUnwrap(content.subviews.compactMap { $0 as? UIImageView }.first, "\(content.subviews)")
+        let image = try XCTUnwrap(picture.image?.cgImage), scale = try XCTUnwrap(picture.image?.scale)
+        let edge = try XCTUnwrap(SharePictureCase.rgba(image, x: Int((picture.bounds.maxX - 20) * scale), y: Int(picture.bounds.midY * scale)))
+        let middle = try XCTUnwrap(SharePictureCase.rgba(image, x: Int(picture.bounds.midX * scale), y: Int(picture.bounds.midY * scale)))
+        XCTAssertEqual(edge.3, 0, "outside the row at half its size")
+        XCTAssertEqual([Int(middle.0), Int(middle.1), Int(middle.2)], [101, 67, 33], "inside it")
+    }
+
+    /// While UIKit's content view is out of the window, the claimed row shows nowhere: it stays an open box with no
+    /// area, so the runner finds it neither in the page nor over it.
+    func testADetachedAccessoryShowsNowhereToTheRunner() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("bottomAccessory is iOS 26") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit lays the accessory out as in an app only in a scene's window") }
+        let navigation = try fixture(wholeScreen: true).presenter.navigationHost
+        let (_, content, mini) = try accessory()
+        content.removeFromSuperview()
+        let box = try XCTUnwrap(navigation.topLayerBoxes.first?.frame, "the row is still an open box")
+        XCTAssertEqual(box.0, mini.id)
+        XCTAssertTrue(box.1.isEmpty && box.2?.isEmpty == true, "with no area: \(box)")
+    }
+
+    /// A batch that projects nothing claims a named row that was held back (here by a handoff), with no change to the
+    /// tabs or the name.
+    func testABatchThatProjectsNothingClaimsANamedRowOnceItIsFree() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("bottomAccessory is iOS 26") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit lays the accessory out as in an app only in a scene's window") }
+        let presenter = try fixture(wholeScreen: true).presenter, navigation = presenter.navigationHost
+        let tabs = try XCTUnwrap(navigation.tabController)
+        try tap("tab-grid", route: "grid")
+        navigation.tabAccessoryHandingOff = true
+        defer { navigation.tabAccessoryHandingOff = false }
+        try press("use-accessory", route: "grid")
+        let mini = try node("mini-player")
+        XCTAssertNil(tabs.bottomAccessory, "held back, the row is not claimed")
+        navigation.tabAccessoryHandingOff = false
+        presenter.apply(Batch(ops: [], timers: false, motion: false, clock: nil, error: nil))
+        XCTAssertTrue(mini.superview === tabs.bottomAccessory?.contentView, "the pass after the batch claims it: \(String(describing: mini.superview))")
+    }
+
+    /// A menu an authored ancestor gives (`contextPopover`) answers a long press on the accessory, as one answers a
+    /// press on a presentation's mount, from the pass that first shows it.
+    func testAnAncestorsMenuReachesTheAccessory() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("bottomAccessory is iOS 26") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit lays the accessory out as in an app only in a scene's window") }
+        let presenter = try fixture(wholeScreen: true).presenter, navigation = presenter.navigationHost
+        try tap("tab-grid", route: "grid")
+        try press("show-rows", route: "grid")
+        try press("give-area-menu", route: "grid")
+        try press("use-accessory", route: "grid")
+        waitFor("a pass claims the row") { navigation.tabAccessory?.holds == true }
+        let content = try XCTUnwrap(navigation.tabAccessory)
+        let interaction = try XCTUnwrap(content.interactions.lazy.compactMap { $0 as? UIContextMenuInteraction }.first,
+                                        "the claim takes the area's menu interaction at once")
+        waitFor("UIKit lays the row out") { content.bounds.height > 0 }
+        // A native view in the row, which a touch there hits rather than the row's node
+        let mini = try node("mini-player"), native = UIView(frame: CGRect(x: mini.bounds.maxX - 40, y: 0, width: 40, height: mini.bounds.height))
+        mini.addSubview(native)
+        defer { native.removeFromSuperview() }
+        let point = CGPoint(x: content.bounds.maxX - 20, y: content.bounds.midY)
+        XCTAssertTrue(content.hitTest(point, with: nil) === native, "the touch lands on the native view")
+        XCTAssertNotNil(interaction.delegate?.contextMenuInteraction(interaction, configurationForMenuAtLocation: point),
+                        "the area's menu answers a long press on the row")
+        // A run that hears a long press is nearer than every node: its paragraph's own recognizer takes a press on it
+        let title = try node("mini-title"), onRun = title.convert(CGPoint(x: title.bounds.midX, y: title.bounds.midY), to: content)
+        XCTAssertNotNil(title.inlineContextTarget(at: content.convert(onRun, to: title)), "the run lies under the touch")
+        do {
+            // A native view over the run, which the touch hits rather than the paragraph
+            let cover = UIView(frame: title.bounds)
+            title.addSubview(cover)
+            defer { cover.removeFromSuperview() }
+            XCTAssertTrue(content.hitTest(onRun, with: nil) === cover, "the touch lands on the view over the run")
+            XCTAssertNil(interaction.delegate?.contextMenuInteraction(interaction, configurationForMenuAtLocation: onRun),
+                         "the run's long press answers, not the area's menu")
+        }
+        // A nearer node that hears a long press takes it from the farther menu
+        mini.handlers.insert("contextmenu")
+        XCTAssertNil(interaction.delegate?.contextMenuInteraction(interaction, configurationForMenuAtLocation: point),
+                     "the row's own long press answers instead")
+        mini.handlers.remove("contextmenu")
+        do {
+            // A menu the row gives itself takes the press from a farther plain listener, which the relay leaves idle
+            let area = try node("player-area"), relay = try XCTUnwrap(content.relay), areaMenu = area.props["contextPopover"]
+            area.props["contextPopover"] = nil
+            area.handlers.insert("contextmenu")
+            defer { area.handlers.remove("contextmenu"); area.props["contextPopover"] = areaMenu }
+            XCTAssertTrue(relay.longPressListener(native, at: point) === area, "the area hears a long press on the row")
+            XCTAssertNil(relay.longPressListener(title, at: onRun), "but not one on the run, which hears it itself")
+            mini.props["contextPopover"] = "area-menu"
+            defer { mini.props["contextPopover"] = nil }
+            XCTAssertNil(relay.longPressListener(native, at: point), "the row's own menu takes it")
+        }
+        let context = presenter.menus.context
+        do {
+            // A menu on the root, whose view holds the tab bar's, opens from the accessory through the mount's
+            // interaction, as the root's own leaves it the press, and yields to a nearer menu
+            let root = try XCTUnwrap(navigation.container), rootInteraction = UIContextMenuInteraction(delegate: context)
+            let area = try node("player-area"), rootMenu = root.props["contextPopover"], areaMenu = area.props["contextPopover"]
+            root.addInteraction(rootInteraction)
+            root.props["contextPopover"] = "area-menu"
+            area.props["contextPopover"] = nil
+            defer { root.removeInteraction(rootInteraction); root.props["contextPopover"] = rootMenu; area.props["contextPopover"] = areaMenu }
+            let rootPoint = content.convert(point, to: root)
+            XCTAssertTrue(root.hitTest(rootPoint, with: nil) === native, "the root's hit test reaches the row")
+            XCTAssertNil(context.contextMenuInteraction(rootInteraction, configurationForMenuAtLocation: rootPoint),
+                         "the root's own interaction leaves the press")
+            XCTAssertNotNil(interaction.delegate?.contextMenuInteraction(interaction, configurationForMenuAtLocation: point))
+            XCTAssertTrue(context.open?.source === root, "the mount's opens the root's menu")
+            area.props["contextPopover"] = areaMenu
+            XCTAssertNotNil(interaction.delegate?.contextMenuInteraction(interaction, configurationForMenuAtLocation: point))
+            XCTAssertTrue(context.open?.source === area, "a nearer menu takes the press")
+            // The root's own long press, where it only listens, leaves the press to that nearer menu
+            let rootHandlers = root.handlers
+            root.props["contextPopover"] = rootMenu
+            root.handlers.insert("contextmenu")
+            defer { root.handlers = rootHandlers }
+            XCTAssertFalse(root.hearsLongPress(on: native, at: rootPoint), "the root's long press leaves it to the area's menu")
+            area.props["contextPopover"] = nil
+            XCTAssertTrue(root.hearsLongPress(on: native, at: rootPoint), "and hears it where nothing nearer listens")
+        }
+        // The shown menu ends with the accessory and gives the focus back, as UIKit calls no `willEnd` for an
+        // interaction it no longer holds, and gives no rows or preview when UIKit asks after that
+        let configuration = try XCTUnwrap(interaction.delegate?.contextMenuInteraction(interaction, configurationForMenuAtLocation: point))
+        let owner = try XCTUnwrap(context.open, "the area's menu opens")
+        context.contextMenuInteraction(interaction, willDisplayMenuFor: configuration, animator: nil)
+        XCTAssertTrue(presenter.menus.focus.suspended, "the shown menu sets the focus aside")
+        try press("drop-accessory", route: "grid")
+        waitFor("the pass lets the row go") { navigation.tabAccessory == nil }
+        XCTAssertNil(context.open, "the menu ended with the accessory")
+        XCTAssertFalse(presenter.menus.focus.suspended, "the focus is back")
+        XCTAssertNil(context.menu(owner), "it gives no rows")
+        XCTAssertNil(context.lift(owner), "or preview")
+    }
+
+    /// A field editing in a row that the tablist comes to name goes on editing: UIKit holds the content view in the
+    /// window before the row moves into it.
+    func testAFieldInARowThatComesToBeNamedKeepsEditing() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("bottomAccessory is iOS 26") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit lays the accessory out as in an app only in a scene's window") }
+        _ = try fixture(wholeScreen: true)
+        try tap("tab-grid", route: "grid")
+        try press("show-rows", route: "grid")
+        let mini = try node("mini-player")
+        let field = UITextField(frame: CGRect(x: 0, y: 0, width: 40, height: 20)), ending = EditEnd {}
+        field.delegate = ending
+        mini.addSubview(field)
+        defer { field.removeFromSuperview() }
+        XCTAssertTrue(field.becomeFirstResponder(), "the field edits")
+        _ = try accessory()
+        XCTAssertTrue(field.isFirstResponder && ending.count == 0, "the field still edits: \(ending.count) edits ended")
+    }
+
+    /// A radio its group shows as a segment has no view of its own in the page: the tab bar shows no accessory, and the
+    /// segmented control keeps both its segments.
+    func testARadioShownAsASegmentIsNoAccessory() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("bottomAccessory is iOS 26") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit lays the accessory out as in an app only in a scene's window") }
+        let tabs = try XCTUnwrap(try fixture(wholeScreen: true).presenter.navigationHost.tabController)
+        try tap("tab-grid", route: "grid")
+        try press("use-speed-accessory", route: "grid")
+        let group = try node("speed")
+        func segmented(in view: UIView) -> UISegmentedControl? {
+            (view as? UISegmentedControl) ?? view.subviews.lazy.compactMap(segmented(in:)).first
+        }
+        var control: UISegmentedControl?
+        waitFor("the group shows as a segmented control") { control = segmented(in: group); return control != nil }
+        XCTAssertNil(tabs.bottomAccessory, "no accessory")
+        XCTAssertEqual(control?.numberOfSegments, 2, "both segments stay")
+    }
+
+    func testSwitchingTheNamedRowMovesTheAccessoryOnce() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("bottomAccessory is iOS 26") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit lays the accessory out as in an app only in a scene's window") }
+        let tabs = try XCTUnwrap(try fixture(wholeScreen: true).presenter.navigationHost.tabController)
+        try tap("tab-grid", route: "grid")
+        try press("show-rows", route: "grid")
+        let (_, _, mini) = try accessory()
+        // One batch names the other row: the release's UIKit callbacks run the covers while the pass replaces it
+        try press("switch-accessory", route: "grid")
+        let bare = try node("bare-player"), area = try node("player-area")
+        waitFor("the other row shows and the mini player is back", facts: { "\(String(describing: mini.superview)), \(String(describing: bare.superview))" }) {
+            bare.superview === tabs.bottomAccessory?.contentView && mini.superview === area.container
+        }
+        let held = (tabs.bottomAccessory?.contentView.subviews ?? []).filter { $0 is NodeView }
+        XCTAssertEqual(held.count, 1, "one row in the accessory: \(held)")
+    }
+
+    func testARowHiddenAndRestyledInOneBatchLeavesItsPictureAsItWas() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("bottomAccessory is iOS 26") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit lays the accessory out as in an app only in a scene's window") }
+        let tabs = try XCTUnwrap(try fixture(wholeScreen: true).presenter.navigationHost.tabController)
+        let (_, content, _) = try accessory()
+        // The batch hides the row and paints it black: the picture is drawn before its ops ran
+        try press("hide-player", route: "grid")
+        waitFor("the accessory goes with the row's box") { tabs.bottomAccessory == nil }
+        let picture = try XCTUnwrap(content.subviews.compactMap { $0 as? UIImageView }.first, "\(content.subviews)")
+        let image = try XCTUnwrap(picture.image?.cgImage), scale = try XCTUnwrap(picture.image?.scale)
+        let paint = try XCTUnwrap(SharePictureCase.rgba(image, x: Int((picture.bounds.maxX - 20) * scale), y: Int(picture.bounds.midY * scale)))
+        XCTAssertEqual([Int(paint.0), Int(paint.1), Int(paint.2)], [101, 67, 33], "the row as it was, before the batch")
+    }
+
+    /// A batch that projects nothing (a scroller's rows) still reaches the accessory once it ends: a picture drawn for
+    /// it goes, and the accessory follows its authored ancestors' `aria-hidden` and inertness.
+    func testABatchThatProjectsNothingStillReachesTheAccessory() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("bottomAccessory is iOS 26") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit lays the accessory out as in an app only in a scene's window") }
+        let presenter = try fixture(wholeScreen: true).presenter
+        let (_, content, mini) = try accessory()
+        let area = try node("player-area"), nothing = Batch(ops: [], timers: false, motion: false, clock: nil, error: nil)
+        let pictured = { content.subviews.contains { $0 is UIImageView } }
+        try XCTUnwrap(content as? TabAccessoryContent).freeze()
+        XCTAssertTrue(pictured(), "a picture covers the row")
+        presenter.apply(nothing)
+        XCTAssertFalse(pictured(), "the pass after the batch takes it away")
+        // As a batch's props ops leave the area under a scroller
+        area.props["accessibilityElementsHidden"] = "true"
+        presenter.apply(nothing)
+        XCTAssertTrue(content.accessibilityElementsHidden, "the accessory follows the area's aria-hidden")
+        let field = UITextField(frame: CGRect(x: 0, y: 0, width: 40, height: 20))
+        mini.addSubview(field)
+        defer { field.removeFromSuperview() }
+        XCTAssertTrue(field.becomeFirstResponder(), "the field edits")
+        area.props["inert"] = "true"
+        presenter.apply(nothing)
+        XCTAssertFalse(content.isUserInteractionEnabled, "and its inertness")
+        XCTAssertFalse(field.isFirstResponder, "which ends the field's editing")
+    }
+
+    /// A callback that retires the tabs while a pass keeps the accessory (an editor in it ending its edit as it goes
+    /// inert) leaves the retired controller without Exact's accessory: the edit ends before the pass decides.
+    func testTabsRetiredByACallbackDuringAPassKeepTheirPropertyClear() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("bottomAccessory is iOS 26") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit lays the accessory out as in an app only in a scene's window") }
+        let presenter = try fixture(wholeScreen: true).presenter, navigation = presenter.navigationHost
+        let (tabs, _, mini) = try accessory()
+        let field = UITextField(frame: CGRect(x: 0, y: 0, width: 40, height: 20)), ending = EditEnd { navigation.retireTabs() }
+        field.delegate = ending
+        mini.addSubview(field)
+        defer { field.removeFromSuperview() }
+        XCTAssertTrue(field.becomeFirstResponder(), "the field edits")
+        try node("player-area").props["inert"] = "true"
+        presenter.apply(Batch(ops: [], timers: false, motion: false, clock: nil, error: nil))
+        XCTAssertEqual(ending.count, 1, "the pass ended the field's edit")
+        XCTAssertNil(tabs.bottomAccessory, "the retired controller has no accessory: \(String(describing: tabs.bottomAccessory?.contentView))")
+    }
+
+    /// The runner is told the accessory's box only where UIKit's hit test reaches it: within every view that holds it,
+    /// each taking touches.
+    func testTheAccessorysBoxIsClippedWhereUIKitsHitTestReachesIt() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("bottomAccessory is iOS 26") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit lays the accessory out as in an app only in a scene's window") }
+        let navigation = try fixture(wholeScreen: true).presenter.navigationHost
+        let (tabs, content, _) = try accessory()
+        func shown() throws -> TopLayerFrame { try XCTUnwrap(navigation.topLayerBoxes.first?.frame, "the accessory's box") }
+        let whole = try shown(), rest = try XCTUnwrap(whole.2)
+        for (clip, box) in zip([rest.minX, rest.minY, rest.width, rest.height], [whole.1.minX, whole.1.minY, whole.1.width, whole.1.height]) {
+            XCTAssertEqual(clip, box, accuracy: 0.5, "nothing clips it at rest: \(whole)")
+        }
+        // A root that ends halfway down the row, which stays on screen: a touch reaches the half outside where the
+        // root's overflow is visible (`NodeView.hitTest`), and only the half within, inside its padding edge, where
+        // it clips
+        let root = try XCTUnwrap(navigation.container), mini = try node("mini-player")
+        XCTAssertTrue(tabs.view.superview === root, "the root holds the tab container")
+        let frame = root.frame, mask = tabs.view.autoresizingMask, overflow = root.style["overflow_y"], border = root.style["border_width_bottom"]
+        tabs.view.autoresizingMask = []
+        root.frame.size.height = content.convert(content.bounds, to: root).midY
+        let outside = content.convert(CGPoint(x: content.bounds.midX, y: content.bounds.height * 0.75), to: root)
+        let half = try shown(), reachesOutside = root.hitTest(outside, with: nil)?.isDescendant(of: mini) == true
+        root.style["overflow_y"] = .string("clip")
+        let clipped = try shown()
+        root.style["border_width_bottom"] = .number(10)
+        let bordered = try shown()
+        root.style["overflow_y"] = overflow
+        root.style["border_width_bottom"] = border
+        root.frame = frame
+        tabs.view.autoresizingMask = mask
+        XCTAssertTrue(reachesOutside, "a touch reaches the half outside the root")
+        XCTAssertEqual(half.2?.height ?? 0, whole.1.height, accuracy: 1, "so the runner is told all of it: \(half)")
+        XCTAssertEqual(clipped.2?.height ?? 0, whole.1.height / 2, accuracy: 1, "and the half within a root that clips: \(clipped)")
+        XCTAssertEqual(bordered.2?.height ?? 0, whole.1.height / 2 - 10, accuracy: 1, "inside its padding edge: \(bordered)")
+        // A view that holds it and refuses touches
+        tabs.view.isUserInteractionEnabled = false
+        let refused = try shown()
+        tabs.view.isUserInteractionEnabled = true
+        XCTAssertEqual(refused.2?.isEmpty, true, "UIKit's hit test does not reach it: \(refused)")
+        // A faded navigation root, whose CSS opacity leaves it taking touches (`NodeView.hitTest`)
+        let point = CGPoint(x: content.bounds.midX, y: content.bounds.midY), opacity = root.alpha
+        root.alpha = 0
+        let faded = try shown(), reaches = root.hitTest(content.convert(point, to: root), with: nil)?.isDescendant(of: mini) == true
+        root.alpha = opacity
+        XCTAssertTrue(reaches, "a touch still reaches the row")
+        XCTAssertEqual(faded.2?.height ?? 0, whole.1.height, accuracy: 0.5, "and the runner is told so: \(faded)")
+        // The content view is no target of its own: a touch the row lets through passes on
+        XCTAssertTrue(content.hitTest(point, with: nil)?.isDescendant(of: mini) == true, "the row takes a touch on it")
+        mini.isHidden = true
+        defer { mini.isHidden = false }
+        XCTAssertNil(content.hitTest(point, with: nil), "the content view takes none")
+    }
+
+    /// On the iPad, the accessory follows UIKit's tab sidebar as it shows: the same row stays claimed, laid out in
+    /// UIKit's narrower box, and the route clears it.
+    func testTheAccessoryFollowsTheIPadSidebar() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("bottomAccessory is iOS 26") }
+        guard UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("the iPad's tab sidebar") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit lays the accessory out as in an app only in a scene's window") }
+        _ = try fixture(wholeScreen: true)
+        let (tabs, content, mini) = try accessory()
+        XCTAssertEqual(tabs.mode, .tabSidebar, "an unsaid tablist adapts to the sidebar")
+        let without = content.bounds.size
+        tabs.sidebar.isHidden = false
+        waitFor("the sidebar shows and the accessory narrows beside it", facts: { "\(content.bounds), \(mini.frame)" }) {
+            content.bounds.width < without.width && mini.frame.size == content.bounds.size
+        }
+        XCTAssertTrue(mini.superview === content && tabs.bottomAccessory?.contentView === content, "the same row stays claimed")
+        let (_, last) = try end(of: "grid")
+        XCTAssertLessThanOrEqual(last.maxY, box(content).minY + 0.5, "the grid's last row clears the accessory: \(last), \(box(content))")
+    }
+
+    /// A field in a row whose name goes keeps editing as the row returns to the page, since the row never left the
+    /// document.
+    func testAFieldInARowWhoseNameGoesKeepsEditing() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("bottomAccessory is iOS 26") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit lays the accessory out as in an app only in a scene's window") }
+        _ = try fixture(wholeScreen: true)
+        try tap("tab-grid", route: "grid")
+        // The row stays once its name goes
+        try press("show-rows", route: "grid")
+        let (tabs, _, mini) = try accessory()
+        let field = UITextField(frame: CGRect(x: 0, y: 0, width: 40, height: 20))
+        mini.addSubview(field)
+        defer { field.removeFromSuperview() }
+        XCTAssertTrue(field.becomeFirstResponder(), "the field edits")
+        try press("drop-accessory", route: "grid")
+        let area = try node("player-area")
+        waitFor("the row is back in its parent") { tabs.bottomAccessory == nil && mini.superview === area.container }
+        XCTAssertTrue(field.isFirstResponder, "the field still edits")
+    }
+
+    /// An edit that ends as the row goes inert runs its callbacks before the pass reads what to show: a callback that
+    /// takes the row leaves no accessory without it.
+    func testAnEditEndingAsTheRowGoesInertComesBeforeThePassDecides() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("bottomAccessory is iOS 26") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit lays the accessory out as in an app only in a scene's window") }
+        let presenter = try fixture(wholeScreen: true).presenter
+        let (tabs, _, mini) = try accessory()
+        let holder = UIView(), field = UITextField(frame: CGRect(x: 0, y: 0, width: 40, height: 20))
+        let ending = EditEnd { holder.addSubview(mini) }
+        field.delegate = ending
+        mini.addSubview(field)
+        defer { field.removeFromSuperview() }
+        XCTAssertTrue(field.becomeFirstResponder(), "the field edits")
+        try node("player-area").props["inert"] = "true"
+        presenter.apply(Batch(ops: [], timers: false, motion: false, clock: nil, error: nil))
+        XCTAssertEqual(ending.count, 1, "the pass ended the field's edit")
+        let shown = tabs.bottomAccessory?.contentView
+        XCTAssertTrue(shown == nil || mini.superview === shown, "no accessory shows without the row: \(String(describing: shown?.subviews))")
+    }
+
+    func testARowWhoseNameGoesReturnsToItsPlaceAmongItsSiblings() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("bottomAccessory is iOS 26") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit lays the accessory out as in an app only in a scene's window") }
+        let tabs = try XCTUnwrap(try fixture(wholeScreen: true).presenter.navigationHost.tabController)
+        try tap("tab-grid", route: "grid")
+        try press("show-rows", route: "grid")
+        let (_, content, mini) = try accessory()
+        // A sibling written just after it comes while UIKit holds it, in an area whose children are all views, which
+        // keeps no order of its own for a child that is not in its view
+        try press("show-mid-row", route: "grid")
+        _ = try node("area-after")
+        XCTAssertTrue(mini.superview === content, "UIKit still holds the row")
+        try press("drop-accessory", route: "grid")
+        let area = try node("player-area")
+        waitFor("the row is back in its area", facts: { "\(String(describing: mini.superview))" }) { tabs.bottomAccessory == nil && mini.superview === area.container }
+        XCTAssertNotNil((content as? TabAccessoryContent)?.picture, "UIKit's exit shows a picture of the row")
+        let order = area.container.subviews.compactMap { ($0 as? NodeView)?.props["testId"] }
+        XCTAssertEqual(Array(order.prefix(2)), ["mini-player", "area-after"], "before the button that came after it while it was held")
+    }
+
     /// A route offset in its block clears the part of each edge's inset its own box reaches: one below a row above the
     /// panels, past a sidebar, is covered at the top for the bar alone and at its leading edge for nothing (LLP
     /// 1083.000 D4).
@@ -781,4 +1356,16 @@ final class TabEdgeIOSTests: XCTestCase {
         XCTAssertTrue(route.edgeScroll === content)
     }
 }
+
+/// A text field's delegate that counts the edits that end and runs `ended` for each.
+private final class EditEnd: NSObject, UITextFieldDelegate {
+    private let ended: () -> Void
+    private(set) var count = 0
+    init(_ ended: @escaping () -> Void) { self.ended = ended }
+    func textFieldDidEndEditing(_ textField: UITextField) {
+        count += 1
+        ended()
+    }
+}
+
 #endif

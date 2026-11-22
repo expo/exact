@@ -2,7 +2,11 @@ use super::*;
 
 /// The boot choice; both layers consume the same core's frames and resources.
 pub enum Selected {
+    #[cfg(not(windows))]
     Wgpu(Box<wgpu::Wgpu>),
+    // Only the Windows constructor for the wgpu override links its device implementation.
+    #[cfg(windows)]
+    Wgpu(Box<dyn Device<Buffer = wgpu::Buffer>>),
     #[cfg(windows)]
     D3d11(Box<d3d11::D3d11>),
     #[cfg(exact_ink_metal)]

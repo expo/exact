@@ -776,6 +776,15 @@ pub fn node<D: DataSource>(runner: &Runner<D>, id: u32) -> String {
             t.container.map(|c| c.to_string()).join(",")
         );
     }
+    // A box's extension (LLP 1123 D13): how far its picture is mirrored past its border box, each
+    // top right bottom left
+    if let Some(e) = kernel.extension(node.key) {
+        let _ = write!(
+            s,
+            ",\"extension\":[{}]",
+            e.map(|x| num(x as f64).to_string()).join(",")
+        );
+    }
     // LLP 1056 §5: a 2D canvas's last list, readable (bounded: 200 lines,
     // 16 KiB), wherever inspection is linked.
     {

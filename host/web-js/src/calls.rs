@@ -25,7 +25,7 @@ pub fn tools(plan: &Plan, body: &mut String) -> String {
                     let p = plan.param(p);
                     format!(
                         "{}:{}",
-                        text(plan.str(p.name)),
+                        text(p.declared_name(plan)),
                         surface_type_json(plan, p.ty)
                     )
                 })

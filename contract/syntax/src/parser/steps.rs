@@ -542,7 +542,7 @@ impl Parser {
                 return self.err(
                     "syntax-expected-step",
                     format!(
-                    "expected `tap`, `scroll`, `type`, `pick`, `authorize`, `presence`, `clock`, `resize`, `reload`, `close`, `back`, `screenshot`, `fail fetch`, `answer fetch`, `answer source`, `pass fetch`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `stored`, `fresh`, `before data`, `fail fetch`), found {}",
+                    "expected `tap`, `scroll`, `type`, `pick`, `authorize`, `presence`, `clock`, `resize`, `reload`, `close`, `back`, `screenshot`, `fail fetch`, `answer fetch`, `answer source`, `pass fetch`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `signed-in`, `stored`, `fresh`, `before data`, `fail fetch`), found {}",
                     describe(&other)
                 ),
                 )
@@ -1019,6 +1019,11 @@ impl Parser {
                 }
                 Step::At { location, span }
             }
+            "signed-in" => Step::SignedIn {
+                key: self.launch_str("signed-in", "the provider's secret.keep name")?,
+                account: self.json_value()?,
+                span,
+            },
             "stored" => Step::Stored {
                 name: self.ident()?.0,
                 window: false,
@@ -1312,7 +1317,7 @@ impl Parser {
                 return Err(SyntaxError {
                     id: "syntax-expected-step",
                     message: format!(
-                    "expected `tap`, `scroll`, `type`, `pick`, `authorize`, `presence`, `clock`, `resize`, `reload`, `close`, `back`, `screenshot`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `stored`, `fresh`, `before data`), found `{other}`"
+                    "expected `tap`, `scroll`, `type`, `pick`, `authorize`, `presence`, `clock`, `resize`, `reload`, `close`, `back`, `screenshot`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `signed-in`, `stored`, `fresh`, `before data`), found `{other}`"
                 ),
                     span,
                 })
@@ -1353,13 +1358,14 @@ fn during_read(op: &str) -> bool {
 
 /// The words of a test's launch lines, which a test file may also write at
 /// its top level for every test in it (habits F7, calendar F13).
-pub(super) const LAUNCH: [&str; 12] = [
+pub(super) const LAUNCH: [&str; 13] = [
     "size",
     "at",
     "epoch",
     "time-zone",
     "locale",
     "seed",
+    "signed-in",
     "stored",
     "fresh",
     "before",
@@ -1378,6 +1384,7 @@ pub(super) fn launch_word(step: &Step) -> &'static str {
         Step::TimeZone { .. } => "time-zone",
         Step::Locale { .. } => "locale",
         Step::Seed { .. } => "seed",
+        Step::SignedIn { .. } => "signed-in",
         Step::Stored { .. } => "stored",
         Step::Fresh { .. } => "fresh",
         Step::BeforeData { .. } => "before data",
@@ -1407,6 +1414,9 @@ pub fn same_launch(a: &Step, b: &Step) -> bool {
         return x == y;
     }
     if let (Step::AnswerSource { source: x, .. }, Step::AnswerSource { source: y, .. }) = (a, b) {
+        return x == y;
+    }
+    if let (Step::SignedIn { key: x, .. }, Step::SignedIn { key: y, .. }) = (a, b) {
         return x == y;
     }
     if let (Step::Stored { name: x, .. }, Step::Stored { name: y, .. }) = (a, b) {

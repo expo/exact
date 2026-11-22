@@ -153,6 +153,40 @@ fn cleanup(p: &mut Presenter<Source>) {
     }
 }
 #[test]
+fn surface_sync_reuses_the_painted_bitmap_until_a_reader_holds_it() {
+    use std::sync::Arc;
+    let app = APP
+        .replace("width=width", "width=40")
+        .replace("width = 80", "width = 120 - width");
+    let mut p = boot_source("bitmap-reuse", &app);
+    p.frame();
+    let bitmap = |p: &Presenter<Source>| {
+        p.host
+            .canvas_snapshots()
+            .borrow()
+            .values()
+            .next()
+            .unwrap()
+            .pixels
+            .clone()
+    };
+    let first = Arc::as_ptr(&bitmap(&p));
+    press(&mut p, "resize");
+    p.sync_surfaces();
+    let held = bitmap(&p);
+    assert_eq!(Arc::as_ptr(&held), first);
+    assert_eq!(held.pixel(1, 1).unwrap().blue(), 255);
+
+    p.frame();
+    press(&mut p, "resize");
+    p.sync_surfaces();
+    let next = bitmap(&p);
+    assert!(!Arc::ptr_eq(&held, &next));
+    assert_eq!(held.pixel(1, 1).unwrap().blue(), 255);
+    assert_eq!(next.pixel(1, 1).unwrap().red(), 255);
+}
+
+#[test]
 fn a_display_turn_delivers_a_capture_after_drawing() {
     let mut p = boot("display");
     press(&mut p, "capture");

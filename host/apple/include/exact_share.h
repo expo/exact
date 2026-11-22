@@ -13,7 +13,9 @@
 extern "C" {
 #endif
 
-/* Copy the app file a share names ({"path":P,"to":T}) for the sheet. */
+/* Copy the app file a share names ({"path":P,"to":T}) for the sheet. With
+ * {"op":"shareOpen","path":P}, open it as the copy would, for a drag, and
+ * answer {"fd":N}: a descriptor the caller then owns and must close. */
 uint32_t exact_share_file(ExactRuntime rt, size_t len);
 
 #ifdef __cplusplus

@@ -785,27 +785,28 @@ impl NodeArena {
                 // current value. HTML's default character width is 20; a
                 // textarea's default is two rows. Explicit CSS dimensions
                 // still win in layout. Content sizing measures the live value.
-                let text = if self.styles[s].field_sizing == FieldSizing::Fixed {
-                    if props.str(PropId::SemanticTag) == Some("textarea") {
-                        "00000000000000000000\n00000000000000000000"
+                let textarea = props.str(PropId::SemanticTag) == Some("textarea");
+                let content_sizing = self.styles[s].field_sizing == FieldSizing::Content;
+                let text = if content_sizing {
+                    let value = crate::control::bound_field_value(props);
+                    if value.is_empty() {
+                        props
+                            .str(PropId::Placeholder)
+                            .filter(|p| !p.is_empty())
+                            .unwrap_or(" ")
+                            .into()
                     } else {
-                        "00000000000000000000"
+                        value
                     }
+                } else if textarea {
+                    "00000000000000000000\n00000000000000000000".into()
                 } else {
-                    props
-                        .str(PropId::Value)
-                        .filter(|v| !v.is_empty())
-                        .or_else(|| props.str(PropId::Placeholder).filter(|p| !p.is_empty()))
-                        .unwrap_or(" ")
+                    "00000000000000000000".into()
                 };
+                let caret_line = content_sizing && textarea && text.ends_with('\n');
                 out.push(TextRun::new(text, style));
-                // A textarea's final Return creates a caret line. Paragraph
-                // shapers can omit a terminal break, so retain that line with
-                // zero-width measurement content, never in the field's value.
-                if self.styles[s].field_sizing == FieldSizing::Content
-                    && props.str(PropId::SemanticTag) == Some("textarea")
-                    && text.ends_with('\n')
-                {
+                // Shapers can omit a terminal break. Keep the final caret line in the measurement.
+                if caret_line {
                     out.push(TextRun::new("\u{200b}", style));
                 }
             }

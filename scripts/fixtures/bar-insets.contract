@@ -3,14 +3,18 @@
 // sidebar's background reaches up under the navigation bar and its content
 // starts below it, without a hard-coded bar height (expo/exact#36); the list
 // beside it already clears the bar and stays. A box outside every route reads
-// the session root's insets, the status bar's, which `env()` leaves at 0.
+// the session root's insets, the status bar's, which `env()` leaves at 0. A
+// pushed route lets the first come back in a pop.
 routes nav
   home "/"
   sheet "/sheet"
+  detail "/detail"
 
 component BarInsets
   action open
     nav = push(nav, "/sheet")
+  action more
+    nav = push(nav, "/detail")
   view
     main navigationKey=`${top(nav).id}` width="100%" height="100%"
       for e in stack(nav) key=e.id
@@ -19,14 +23,21 @@ component BarInsets
             header
               text "Inbox" role="heading" aria-level=1
             box position="absolute" top="var(--exact-safe-area-inset-top)" right=0 width=4 height=4 testId="absolute-probe"
+            box position="absolute" bottom=0 left=0 width="var(--exact-safe-area-inset-left)" height=4 testId="left-probe"
             row flex=1 min-height=0
               column width=290 margin-top="calc(-1 * var(--exact-safe-area-inset-top))" padding-top="var(--exact-safe-area-inset-top)" background-color="-exact-system-orange" testId="sidebar"
                 text "Sidebar" testId="sidebar-first"
                 button press=open testId="open"
                   text "Open"
+                button press=more testId="more"
+                  text "More"
               scroll id="list" flex=1 min-height=0 testId="list"
                 for i in range(30) key=i
                   text `Row ${i}` padding=12
+        if e.name == "detail"
+          column navigationKey=`${e.id}` testId="detail" position="absolute" inset=0
+            header
+              text "Detail" role="heading" aria-level=1
         if e.name == "sheet"
           column navigationKey=`${e.id}` navigationPresentation="modal" testId="sheet" display="flex" flex-direction="column"
             column height="var(--exact-safe-area-inset-bottom)" testId="sheet-probe"

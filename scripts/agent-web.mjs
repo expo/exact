@@ -84,8 +84,12 @@ export function storedScript(env, origin) {
   const entries = JSON.parse(env.EXACT_AGENT_STORED);
   const install = (origin, entries) => {
     if (window !== window.top || location.origin !== origin) return;
-    globalThis.__exactSeedStored = prefix => {
+    globalThis.__exactSeedStored = (prefix, secret) => {
       for (const [name, json] of entries) {
+        if (name.startsWith('#oauth.')) {
+          localStorage.setItem(secret + name.slice('#oauth.'.length), json);
+          continue;
+        }
         const storage = name.startsWith('#window.') ? sessionStorage : localStorage;
         storage.setItem(prefix + name, json);
       }
@@ -746,7 +750,7 @@ async function openWebUnlocked({
         if (kind === 'press' || kind === 'key' || kind === 'type') {
           const request =
             kind === 'press'
-              ? { op: 'tap', id, selector: opts.selector, x: opts.x, y: opts.y }
+              ? { op: 'tap', id, selector: opts.selector, x: opts.x, y: opts.y, at: opts.at }
               : {
                   op: 'type',
                   id,

@@ -148,6 +148,14 @@ pub struct FieldText {
 }
 
 impl FieldText {
+    pub(super) fn translated(self, dx: f32, dy: f32) -> Self {
+        let (x, y, w, h) = self.rect;
+        Self {
+            rect: (x + dx, y + dy, w, h),
+            baseline: self.baseline + dy,
+        }
+    }
+
     pub(super) fn painted(
         paragraph: &crate::text::Paragraph,
         at: (f32, f32),
@@ -232,15 +240,22 @@ impl Labels {
         self.texts.get(&id).copied()
     }
 
-    /// The walk painted `id`'s value.
-    pub(super) fn value(&mut self, id: ViewId, text: FieldText) {
-        self.walking.entry(id).or_default().value = Some(text);
+    /// The walk painted `id`'s `part`.
+    pub(super) fn put(&mut self, id: ViewId, part: Part, text: FieldText) {
+        let texts = self.walking.entry(id).or_default();
+        match part {
+            Part::Label => texts.label = Some(text),
+            Part::Value => texts.value = Some(text),
+        }
     }
+}
 
-    /// The walk painted `id`'s label: a button's title.
-    pub(super) fn label(&mut self, id: ViewId, text: FieldText) {
-        self.walking.entry(id).or_default().label = Some(text);
-    }
+/// Which of a field's [`FieldTexts`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Part {
+    /// A field's label, or a button's title.
+    Label,
+    Value,
 }
 
 /// What a field showing a value has at its end.
@@ -367,7 +382,7 @@ impl super::Painter {
             None => resting_label(dark),
         };
         let painted = FieldText::painted(&paragraph, (ox, oy), ts);
-        self.labels.walking.entry(node.id).or_default().label = Some(painted);
+        self.row_field_text(node.id, Part::Label, painted);
         self.backend.push_clip(
             &Shape::rect((x + inset(), y, (w - 2.0 * inset()).max(0.0), h)),
             ts,
@@ -438,7 +453,7 @@ impl super::Painter {
             (x + inset, y, room, h)
         };
         let painted = FieldText::painted(&paragraph, (ox, oy), ts);
-        self.labels.value(node.id, painted);
+        self.row_field_text(node.id, Part::Value, painted);
         self.backend.push_clip(&Shape::rect(clip), ts);
         self.backend.text(
             &mut self.text.borrow_mut(),

@@ -868,7 +868,7 @@ export const DEVELOPMENT_STORE = null;
  * state's kind is "state" (persist.js); the durable store's (LLP 1018, `Store`: name → text, kept after a commit
  * stands) is "secret". */
 export const Kept = kind => `exact.${kind}.${DEVELOPMENT_STORE ? `@${DEVELOPMENT_STORE}/` : ''}`;
-if (DEVELOPMENT_STORE) globalThis.__exactSeedStored?.(Kept('state'));
+if (DEVELOPMENT_STORE) globalThis.__exactSeedStored?.(Kept('state'), Kept('secret'));
 export const Store = {
   map: new Map(),
   writes: [],
@@ -980,7 +980,8 @@ export const Store = {
 export const Inspections = DEVELOPMENT_STORE
   ? resourceInspection(true, () => clock.now)
   : { track() {}, begin() {}, placeholder() {}, stoodIn() {}, take() {}, fail() {} };
-// Requests in flight, for the agent's `clock settle`.
+// Each new request can interrupt an agent clock jump so its reply lands before the next timer.
+// A queued style refresh runs at the browser's microtask checkpoint without interrupting the jump.
 export const inflight = { n: 0 };
 // A development build's only: the dev page's hold asks for it so, as a bundled page serves no rt.js; not on `exact`,
 // which says the runtime is up.

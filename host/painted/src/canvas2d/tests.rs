@@ -330,7 +330,7 @@ fn a_redraw_copies_the_bitmap_only_while_a_painter_holds_the_last_one() {
             settings: Default::default(),
         }
     };
-    let shown = |c: &Canvases| c.snapshots()[&7].pixels.clone();
+    let shown = |c: &Canvases| c.snapshots.borrow()[&7].pixels.clone();
     let mut canvases = Canvases::default();
     assert!(canvases.apply(vec![draw(true, 0.)]).is_empty());
     let first = Arc::as_ptr(&shown(&canvases));

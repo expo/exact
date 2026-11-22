@@ -165,7 +165,7 @@ required tool, device or simulator is unavailable, report that target as unteste
 |Android|`bun exact.mjs verify android`|Start `bun exact.mjs web`, then run `bun exact.mjs android --run --url http://127.0.0.1:8765/` in another terminal.|
 |Windows|`bun exact.mjs verify windows`|`bun exact.mjs windows --run`|
 |macOS|`bun exact.mjs test macos`, then `bun exact.mjs agent macos --chrome platform "clock data" "screenshot .exact/mac.png window"` (`check` is the web's and iOS's)|`bun exact.mjs mac --run`|
-|Linux|`bun exact.mjs linux`, then `bun exact.mjs test linux`|The Linux host is headless; inspect it with `bun exact.mjs agent linux tree` after building.|
+|Linux|`bun exact.mjs linux`, then `bun exact.mjs test linux`|Run the binary the build prints from a Wayland desktop to open a window, or from a DRM/KMS console for full screen. For a headless screenshot, run `bun exact.mjs agent linux "screenshot .exact/linux.png"`.|
 
 For Android live iteration, use the port the web loop prints. Saving a Contract
 or `app.ts` edit updates the running app without rebuilding the APK.
@@ -225,6 +225,7 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |dice, a shuffle, a random pick or name (Contract has no `random()`: copy the recipe's `roll`)|`random-rolls`, `random-and-shuffle`|
 |location, or anything the person must allow|`permissions`|
 |another wide layout, a chart|`web-look`, `responsive-columns`, `content-design`|
+|a mini player above the tab bar (UIKit's tab bar accessory on iOS 26 and later)|`mini-player`|
 |a video, a looping hero clip, a song (the `video` and `audio` elements, with a `poster`)|["Sound, MIDI and media"](contract-for-agents.md#sound-midi-and-media)|
 |a map, the camera (drawing is boxes and SVG, not Swift)|`native-views`|
 |calibration for an open camera track, from a package|[`camera-calibration`](recipes/camera-calibration.md)|

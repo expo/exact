@@ -11,12 +11,15 @@ use super::*;
 impl Painter {
     /// A `Text` node: its runs' backgrounds, decorations and glyphs, once,
     /// or once in each of its fragments.
+    /// `own`: the box's overflow clip, in its coordinates; `ancestors`: the
+    /// clip its ancestors put on it, in the walk's.
     pub(super) fn text_node(
         &mut self,
         walk: &mut Walk<'_, '_>,
         node: &NodeRef<'_>,
         geometry: &BoxGeometry,
         rect: Rect4,
+        (own, ancestors): (Option<Rect4>, Option<Rect4>),
         ts: Transform,
     ) -> Option<(f32, f32)> {
         let mut content = geometry.content;
@@ -82,8 +85,9 @@ impl Painter {
         self.row_text(node.key, &paragraph);
         // CSS `text-overflow: ellipsis` in a clipping box: an over-wide line
         // ends in "…" (LLP 1053 G5; paint only).
+        let (ox, oy) = effective_overflow(node);
         let shown = (s.text_overflow == exact_kernel::TextOverflow::Ellipsis
-            && effective_overflow(node).0 != Overflow::Visible)
+            && ox != Overflow::Visible)
             .then(|| paragraph.ellipsized(width))
             .flatten()
             .unwrap_or_else(|| paragraph.clone());
@@ -105,8 +109,17 @@ impl Painter {
                     && !control::ringless(n)
             });
         let focus = focus.map(|focused| (focused.id, control::ring(&focused, self.dark)));
+        let can_overflow = frags.is_empty() && (ox == Overflow::Visible || oy == Overflow::Visible);
         let mut baseline = None;
         let mut at = |painter: &mut Self, shown: &Paragraph, origin: (f32, f32)| {
+            if can_overflow {
+                painter.row_text_reach(shown, origin, geometry.content, ts);
+            }
+            if let Some((roll, _)) = &roll {
+                // The outgoing number rolls out past the new one's lines.
+                let (x, y, w, h) = roll.bounds();
+                painter.row_reach(super::bbox(ts, (x + origin.0, y + origin.1, w, h)));
+            }
             if baseline.is_none() {
                 baseline = shown.baseline_at(origin);
             }
@@ -130,6 +143,9 @@ impl Painter {
                         })
                         .collect();
                     for paint in shown.inline_backgrounds(&backgrounds, &kernel.env_of(node.id)) {
+                        // Vertical padding paints past the line box.
+                        let (x, y, w, h) = paint.shape().rect;
+                        painter.row_reach(super::bbox(ts, (x + origin.0, y + origin.1, w, h)));
                         inline::paint_inline(&mut *painter.backend, &paint, origin, ts);
                     }
                 }
@@ -176,8 +192,18 @@ impl Painter {
                 continue;
             }
             let shown = shown.line_fragment(g.lines.0 as usize..g.lines.1 as usize);
-            let clip = Shape::rect((rect.0 + g.x, rect.1 + g.y, g.width, g.height));
-            self.backend.push_clip(&clip, ts);
+            let column = Shape::rect((rect.0 + g.x, rect.1 + g.y, g.width, g.height));
+            // A column past the box's own is drawn outside it, as far as
+            // the clips around its lines let it. The box's own is cut before
+            // it is transformed: it reaches a million points on a visible
+            // axis, which a rotation would turn onto both.
+            let kept = own.map_or(column.rect, |o| super::intersect(column.rect, o));
+            let drawn = super::bbox(ts, kept);
+            let drawn = ancestors.map_or(drawn, |c| super::intersect(drawn, c));
+            if kept.2 > 0. && kept.3 > 0. && drawn.2 > 0. && drawn.3 > 0. {
+                self.row_reach(drawn);
+            }
+            self.backend.push_clip(&column, ts);
             at(self, &shown, (content.0 + g.dx, content.1 + g.dy));
             self.backend.pop_clip();
         }
@@ -234,6 +260,8 @@ impl Painter {
             };
             let x = rect.0 + (left + right) / 2.0 - width / 2.0;
             let shape = Shape::rect((x, rect.1 + a.y, width, a.height.max(b.height)));
+            // A rule wider than its gap paints past the box.
+            self.row_reach(super::bbox(ts, shape.rect));
             self.backend.fill(&shape, color, ts);
         }
     }
@@ -256,19 +284,27 @@ pub(crate) fn hits(kernel: &Kernel, b: &PaintedBox, x: f32, y: f32) -> bool {
 /// grown in its own space, under the clips it was painted with. A box placed
 /// by a perspective takes none.
 pub(crate) fn slop_hits(kernel: &Kernel, b: &PaintedBox, x: f32, y: f32) -> bool {
-    let Some(node) = kernel.node(b.id) else {
-        return false;
-    };
+    slopped(kernel, b).is_some_and(|b| b.contains(x, y))
+}
+
+/// Where `b`'s hit slop takes hits, before its clips; none without slop.
+pub(crate) fn slop_bounds(kernel: &Kernel, b: &PaintedBox) -> Option<Rect4> {
+    slopped(kernel, b).map(|b| b.rect)
+}
+
+/// `b` grown by its hit slop, for a hit test.
+fn slopped(kernel: &Kernel, b: &PaintedBox) -> Option<PaintedBox> {
+    let node = kernel.node(b.id)?;
     if !node.style.may_have_hit_slop() {
-        return false;
+        return None;
     }
     let [t, r, bottom, l] = node.style.hit_slop(&kernel.env_of(node.id));
     if t + r + bottom + l <= 0.0 {
-        return false;
+        return None;
     }
     let mut b = b.for_hit();
     if b.projective.is_some() {
-        return false;
+        return None;
     }
     let grow = |q: Rect4| (q.0 - l, q.1 - t, q.2 + l + r, q.3 + t + bottom);
     match b.affine {
@@ -278,7 +314,7 @@ pub(crate) fn slop_hits(kernel: &Kernel, b: &PaintedBox, x: f32, y: f32) -> bool
         }
         None => b.rect = grow(b.rect),
     }
-    b.contains(x, y)
+    Some(b)
 }
 
 /// Where the agent's `tap` aims on a box with fragments: its first

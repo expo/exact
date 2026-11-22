@@ -1188,9 +1188,11 @@ export function webInputDigests(app, js, roots, sourceInputs) {
   return {...Object.fromEntries([...own, ...shared].map(path => [path, contentDigest(path)])), EXACT_BACKEND_ORIGIN: process.env.EXACT_BACKEND_ORIGIN ?? null, PORT: process.env.PORT ?? null, ...settingInputs(app, process.env, appModules(app.dir, sourceInputs))};
 }
 
-/** Whether `path`, an input a web build of `app` recorded, is still a file it reads: in `assets/` and `deck/`, which the
- * build copies whole and whose copy refuses a link anywhere (host/web/serve.mjs `copyStaticTree`), each part of its path
- * below the app's folder is itself, directories then a regular file; elsewhere a file read through any links. */
+/** Whether `path`, an input a web build of `app` recorded, is still one it reads: in `assets/` and `deck/` as spelled,
+ * which the build copies whole and whose copy refuses a link anywhere (host/web/serve.mjs `copyStaticTree`), each part
+ * below the app's folder is itself, directories then a regular file; elsewhere a regular file through any links. The
+ * next copy refuses what can pass: a link or special file beside the inputs or at an input recorded `null`, and a
+ * link on an input's path still reaching a file in the wasm modules' folder or `Deck/` on a case-insensitive volume. */
 export function webInputPresent(app, path) {
   const at = resolve(ROOT, path), parts = relative(app.dir, at).split(sep);
   if (!['assets', 'deck'].includes(parts[0])) return statSync(at, { throwIfNoEntry: false })?.isFile() ?? false;

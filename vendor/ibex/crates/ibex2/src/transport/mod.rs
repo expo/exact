@@ -61,6 +61,18 @@ pub mod websocket;
 #[cfg(windows)]
 mod windows_connect;
 
+pub(crate) struct NoNetwork;
+
+impl crate::stdlib::fetch::Transport for NoNetwork {
+    fn open(
+        &self,
+        _: &crate::stdlib::fetch::Request,
+        _: &crate::stdlib::abort::AbortSignal,
+    ) -> Result<crate::stdlib::fetch::StreamingResponse, crate::boundary::HostError> {
+        Err(crate::boundary::HostError::Unavailable { feature: "fetch" })
+    }
+}
+
 /// The transport this build uses by default.
 ///
 /// Apple platforms get `NSURLSession`; everything else gets rustls through

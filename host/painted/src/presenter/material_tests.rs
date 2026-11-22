@@ -27,7 +27,7 @@ const APP: &str = r##"component App
 
 /// Whether this is the child process that shows the Material look; the
 /// parent runs the test there and returns false.
-pub(super) fn material_process() -> bool {
+pub(in crate::presenter) fn material_process() -> bool {
     const CHILD: &str = "EXACT_MATERIAL_LOOK_TEST";
     if std::env::var_os(CHILD).is_some() {
         crate::app::show_material_look();

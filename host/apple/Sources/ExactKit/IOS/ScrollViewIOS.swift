@@ -464,7 +464,7 @@ extension NodeView {
             }
         }
         let moved = sv.contentOffset.y - before
-        if var followed = followedScroll { followed.top += moved; followedScroll = followed }
+        if var followed = followedScroll { followed.top += moved; followed.port -= moved; followedScroll = followed }
         if var saved = beforeLayoutScroll { saved.offset.y += moved; saved.topInset -= moved; beforeLayoutScroll = saved }
         if let mark { presenter?.collections.portMoved(id, since: mark) }
     }
@@ -505,7 +505,7 @@ extension NodeView {
         // UIKit may have pending row geometry and its own offset adjustment.
         // Snapshot both from the same layout before preserving the reader.
         if groupedOwner { scrollView?.layoutIfNeeded() }
-        beforeLayoutScroll = scrollView.map { ($0.contentOffset, scrollTopInset($0), scrollLeftInset($0)) }
+        beforeLayoutScroll = scrollView.map { ($0.contentOffset, scrollTopInset($0), scrollLeftInset($0), extras?.nativeScrollContentInsets.top ?? 0) }
         followedScroll = nil
         readingAnchors.removeAll(keepingCapacity: true)
         scrollAnchor = nil
@@ -530,7 +530,8 @@ extension NodeView {
         let capturedTop = retainedScrollTop ?? sv.contentOffset.y
         followedScroll = (capturedTop,
                           (retainedScrollTop == nil && sv.contentOffset.y >= maximum - 1) || followingEndAnimated,
-                          abs(capturedTop + sv.adjustedContentInset.top) <= 0.5)
+                          abs(capturedTop + sv.adjustedContentInset.top) <= 0.5,
+                          scrollPortInsets(sv).top)
         guard let followedScroll, !followedScroll.end, followedScroll.top + sv.adjustedContentInset.top > 0.5 else { return }
         // A scroll by the reader invalidates the prior choice. Anchoring's
         // own adjustment does not: keep the same surviving row across batches.
@@ -565,9 +566,14 @@ extension NodeView {
                    let rect = scrollRect(anchor.node, in: sv) {
                     let shift = rect.minY - anchor.y
                     let i = sv.adjustedContentInset
-                    // Native layout may already have moved the offset. Restore
-                    // the captured reading position, counting the row shift once.
-                    let top = (beforeLayoutScroll?.offset.y ?? sv.contentOffset.y) + shift
+                    // Native layout may already have moved the offset. Restore the captured reading position, counting the
+                    // row shift once, and at rest keep CSS `scrollTop` across a change of the port's start inset, as UIKit
+                    // keeps a grouped collection's row in its port when a large title turns inline (LLP 1123 D14, "Inset
+                    // adoption"); the list's own padding is content, across which the row stays put
+                    let port = { (inset: CGFloat, room: CGFloat) in inset - room }
+                    let resting = !sv.scrollsItself && !authoredScrollAnimating
+                    let moved = resting ? beforeLayoutScroll.map { port($0.topInset, $0.room) - port(scrollTopInset(sv), extras?.nativeScrollContentInsets.top ?? 0) } ?? 0 : 0
+                    let top = (beforeLayoutScroll?.offset.y ?? sv.contentOffset.y) + moved + shift
                     let y = sv.isTracking || sv.isDecelerating ? top : min(max(top, -i.top), max(-i.top, sv.contentSize.height + i.bottom - sv.bounds.height))
                     // An element reveal heads for where its target now is instead (`IntoView.swift`).
                     if presenter?.elementScrolls.revealing(sv) != nil { presenter?.elementScrolls.retarget(sv) }
@@ -583,7 +589,8 @@ extension NodeView {
         // capture: the port stays where it is), and once it settles only
         // where it rests at the end (LLP 1070.000 §15).
         let owned = authored || authorOwnsScroll(sv)
-        let prior = followedScroll ?? (owned ? (top: sv.contentOffset.y, end: false, start: false) : (top: maximum, end: true, start: false))
+        let port = scrollPortInsets(sv).top
+        let prior = followedScroll ?? (owned ? (top: sv.contentOffset.y, end: false, start: false, port: port) : (top: maximum, end: true, start: false, port: port))
         let follows = prior.end && !owned
         // At rest at the start, UIKit's new minimum follows an inset change.
         // A captured physical offset would replay the obsolete inset instead.
@@ -596,10 +603,15 @@ extension NodeView {
             activeReadingAnchor = anchor.node
             top += (scrollRect(anchor.node, in: sv)?.minY ?? anchor.y) - anchor.y
         }
-        let y = Self.followedTop(current: sv.contentOffset.y, minimum: minimum, maximum: maximum, end: follows, top: top,
-                                 moving: sv.isTracking || sv.isDragging || sv.isDecelerating)
+        // At rest mid-list, CSS `scrollTop` is kept across a change of the port's start inset, as UIKit keeps it (LLP 1123
+        // D14): not at the end it was at, which D14 puts first, nor while the scroller moves, by the reader or by an
+        // animation UIKit or a smooth write runs, which keep the offset as they find it
+        let moving = sv.isTracking || sv.isDragging || sv.isDecelerating
+        let kept = restingStart || prior.end || sv.scrollsItself || authoredScrollAnimating ? top : top + prior.port - port
+        let y = Self.followedTop(current: sv.contentOffset.y, minimum: minimum, maximum: maximum, end: follows, top: kept,
+                                 moving: moving)
         let inactive = window == nil || presenter?.navigation.isInactiveRoute(containing: self, layout: true) == true
-        retainedScrollTop = !prior.end && top > maximum && (inactive || retainedScrollTop != nil) ? top : nil
+        retainedScrollTop = !prior.end && kept > maximum && (inactive || retainedScrollTop != nil) ? kept : nil
         // While the reader's finger is down or the fling is running, an
         // absolute write would cut the pan, the deceleration or the rubber
         // band (a batch every 250 ms yanked a bottom overscroll back to the

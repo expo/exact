@@ -6,18 +6,14 @@ A `canvas surface=name(…)` that no data module draws uses `gpu/` beside `app.j
 loaded after first pixel. Implement `exact_gpu::Surface`; see `apps/caltrain/gpu`.
 `exact_gpu::wgpu` is wgpu 30; `gpu/README.md` covers its use.
 
-**It joins a workspace exact2 generates for the app's GPU crates** (LLP 1153.003 D5.1), `.exact/gpu/`, apart
-from the host's: write no root `Cargo.toml` and copy nothing up.
+Name the crate after the app plus `-gpu`. Use the workspace versions for all
+three web dependencies that `module!` exports through.
 
-1. Write `gpu/` (below). Its `package.workspace = "../.exact/gpu"` makes it a member.
-2. Draw it from the view (below), then `bun exact.mjs web-build`, or `mac`, as any app. The first build
-   writes `.exact/gpu/`, whose lock is exact2's.
-3. When `gpu/` depends on a crate, or a version, that exact2's lock does not hold, the build stops and says
-   to run `bun exact.mjs lock`, which captures `Cargo.gpu.lock` beside app.json. Commit it.
-
-`gpu/Cargo.toml`. Its package is the app's name plus `-gpu`; `module!` exports through the three web
-dependencies, so they are required, at the workspace's versions (the web build's wasm-bindgen CLI
-refuses others):
+1. Create `gpu/Cargo.toml` as below. Exact generates its workspace at
+   `.exact/gpu/` (LLP 1153.003 D5.1). The app needs no root `Cargo.toml`.
+2. Add the canvas and run `bun exact.mjs web-build` or `bun exact.mjs mac`.
+3. The workspace uses Exact's lockfile. If a dependency needs another version
+   or crate, run `bun exact.mjs lock` and commit the resulting `Cargo.gpu.lock` beside `app.json`.
 
 ```toml
 [package]
@@ -77,6 +73,10 @@ exact_gpu::module!(REGISTRY);
 canvas surface=clear() width=200 height=120 testId="sky"
 ```
 
-Native files: [implement `Surface::storage`](../reference.md#gpu-storage) for the session's paths.
-The web does not receive these paths or an Exact storage bridge; persistence there
-requires the GPU module's own browser API integration.
+Return `true` from `Surface::wants_input` for raw events in `Surface::input`.
+On macOS, Contract's `pointerdown` runs before the surface receives the press.
+`pointermove`, `pointerup`, `wheel` and `contextmenu` handlers also run.
+Update a camera in one handler so each gesture moves it once.
+
+Native surfaces get file paths through [`Surface::storage`](../reference.md#gpu-storage).
+On the web, use browser storage APIs.

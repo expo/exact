@@ -1633,6 +1633,12 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   default capture. Use `screenshot out.png window` to read the composited
   window; `layout` also reports the transformed bounds. (#609, 2026-11-14.)
 
+- **Use `screenshot out.png window` to check how an `iframe` appears on macOS.**
+  The default viewport capture paints a fresh guest snapshot into the frame's
+  box. It can show page content while the window is still blank, or miss a
+  hatch's magnification or added layers. The window capture shows what the
+  window server composited. (#1282.)
+
 - **A macOS `screenshot` shows no focus ring on a native field or button.** AppKit
   draws its focus ring only in the key window of the active app, and the driver's
   window is never key; nor is the ring in any picture a process can make of its own

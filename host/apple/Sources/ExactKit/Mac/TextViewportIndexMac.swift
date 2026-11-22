@@ -42,8 +42,8 @@ struct TextViewportIndex {
 
     /// Paragraphs within `reach`, nearest each scroll document's visible rect
     /// first. A tall distant paragraph must not delay a short imminent one.
-    func candidates(reach: CGFloat = 0) -> [NodeView] {
-        var result: [(CGFloat, NodeView)] = []
+    func candidates(reach: CGFloat = 0) -> [(distance: CGFloat, node: NodeView)] {
+        var result: [(distance: CGFloat, node: NodeView)] = []
         for group in groups {
             let shown = group.document.visibleRect
             guard !shown.isEmpty else { continue }
@@ -67,9 +67,10 @@ struct TextViewportIndex {
                 index += 1
             }
         }
-        return result.sorted {
-            $0.0 == $1.0 ? $0.1.id < $1.1.id : $0.0 < $1.0
-        }.map { $0.1 }
+        result.sort {
+            $0.distance == $1.distance ? $0.node.id < $1.node.id : $0.distance < $1.distance
+        }
+        return result
     }
 }
 #endif

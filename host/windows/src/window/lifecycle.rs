@@ -212,7 +212,7 @@ impl<D: DataSource + Default + 'static> App<D> {
         });
         self.surface = None;
         if let Some(p) = &mut self.presenter {
-            p.suspend_window_painter(self.config.painter());
+            p.suspend_window_painter(self.painter);
         }
     }
 

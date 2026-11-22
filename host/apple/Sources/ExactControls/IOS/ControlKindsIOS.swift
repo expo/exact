@@ -26,6 +26,16 @@ class ExactCheckbox: UIControl {
         get { placedActivationPoint(from: super.accessibilityActivationPoint) ?? super.accessibilityActivationPoint }
         set { super.accessibilityActivationPoint = newValue }
     }
+    #if os(iOS)
+    /// The drag of a draggable node around it, which a rested finger on a
+    /// checkbox lifts (LLP 1094.000 D8, D9)
+    override var accessibilityDragSourceDescriptors: [UIAccessibilityLocationDescriptor]? {
+        get { super.accessibilityDragSourceDescriptors ?? owner?.presenter?.dragOut?.descriptors(of: self, isElement: true) }
+        set { super.accessibilityDragSourceDescriptors = newValue }
+    }
+    #endif
+    /// The node the checkbox is the control of.
+    weak var owner: NodeView?
     var isOn = false { didSet { if isOn != oldValue { setNeedsDisplay(); updateAccessibility() } } }
     var ariaUnavailable = false { didSet { if ariaUnavailable != oldValue { updateAccessibility() } } }
     var accent: UIColor? { didSet { setNeedsDisplay() } }
@@ -181,6 +191,7 @@ final class BuiltInControlKinds: ControlKinding {
         }
         #endif
         if let c = control as? ExactCheckbox {
+            c.owner = owner
             if let on { c.isOn = on }
             assign(c, \.accent, owner.accentShare)
             c.ariaUnavailable = owner.ariaUnavailable

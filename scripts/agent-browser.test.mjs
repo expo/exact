@@ -4,12 +4,46 @@ import { once } from 'node:events';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { need, notApplicable } from './coverage.mjs';
+import { engineTests, need, notApplicable } from './coverage.mjs';
 import { chromium, driveStore, exclusiveWebStore, launchFacts, removeDriveStore, webNeeds, quitBrowser, pollUntil } from './agent-launch.mjs';
 import { resolveApp } from './app.mjs';
 import { open, webFrame } from './agent.mjs';
 import { crop, decodePng } from './png.mjs';
 import { glueDeclarations } from '../host/web/tests/glue-fixture.mjs';
+import { bundleHostModule } from '../host/web-js/glue.mjs';
+
+const engineTest = await engineTests();
+let guestInputModule;
+for (const browser of ['chrome', 'firefox', 'webkit']) {
+  engineTest[browser](`iframe taps reach the guest at the displayed point (${browser})`, async () => {
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) {
+      if (new URL(req.url).pathname === '/agent-input.js') {
+        guestInputModule ??= bundleHostModule(resolve(import.meta.dir, '..'), 'agent-input.js');
+        return new Response(await guestInputModule, { headers: { 'content-type': 'text/javascript' } });
+      }
+      return new Response(`<!doctype html><div id="exact-root" data-boot-ms="1">
+        <iframe id="guest" style="border:4px solid;padding:2px;transform:scale(1.5);transform-origin:0 0"
+          srcdoc="<button style='position:absolute;left:12px;top:45px;width:16px;height:12px'
+          onclick='this.textContent=[event.clientX,event.clientY,event.isTrusted].join()'>ready</button>"></iframe>
+        </div><script>
+        const frame = document.getElementById('guest');
+        globalThis.exact = { ready: Promise.resolve(), views: new Map([[1, frame]]), async agentSettled(req) {
+          if (req.op === 'tap') return (await import('/agent-input.js')).guestTap(frame, req);
+          const {x, y, width, height} = frame.getBoundingClientRect();
+          return { nodes: [{id:1, x, y, w:width, h:height}] };
+        } };
+        </script>`, { headers: { 'content-type': 'text/html' } });
+    } });
+    let session;
+    try {
+      session = await open({ host: 'web', browser, url: server.url.href });
+      const carrier = session.carrier;
+      expect(await carrier.input(1, 'press', { at: [39, 84] })).toMatchObject({ delivery: 'synthetic', inputPath: 'dispatchEvent' });
+      expect(await carrier.evaluate("document.querySelector('iframe').contentDocument.querySelector('button').textContent")).toBe('20,50,false');
+      await expect(carrier.input(1, 'press', { at: [1, 1] })).rejects.toThrow("outside the frame's viewport");
+    } finally { await session?.close(); await server.stop(true); }
+  }, 30000);
+}
 
 need('chrome', chromium().unavailable)('scaled avatars keep identical pixels after loading and remounting', async () => {
   const style = readFileSync(new URL('../host/web/index.html', import.meta.url), 'utf8').match(/<style>([\s\S]*?)<\/style>/)[1];

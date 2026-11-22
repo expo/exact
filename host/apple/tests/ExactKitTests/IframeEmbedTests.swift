@@ -76,6 +76,37 @@ final class IframeEmbedTests: XCTestCase {
         ]))
     }
 
+    func testTapAtAFramePointReachesTheZoomedGuestButton() throws {
+        let session = try session("frame-point")
+        let name = "app:/tmp/frame-point-\(UUID().uuidString).html"
+        let file = try XCTUnwrap(AppFiles.url(name))
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: file) }
+        try Data("""
+        <!doctype html><meta name="viewport" content="width=device-width, initial-scale=1">
+        <button style="position:absolute;left:10px;top:10px;width:25px;height:15px"
+          onclick="parent.postMessage([event.clientX,event.clientY,event.isTrusted].join(','), '*')">ready</button>
+        """.utf8).write(to: file)
+        let loaded = expectation(description: "guest loaded")
+        session.presenter.onLoad = { if $0 == 7001 { loaded.fulfill() } }
+        let pressed = expectation(description: "guest button received the click")
+        session.presenter.onMessage = { id, value in
+            if id == 7001 {
+                XCTAssertEqual(value, "20,15,false")
+                pressed.fulfill()
+            }
+        }
+        mount(session, ["src": name])
+        let node = try XCTUnwrap(session.presenter.views[7001])
+        node.handlers.formUnion(["load", "message"])
+        wait(for: [loaded], timeout: 30)
+        let web = try XCTUnwrap(node.web as? WKWebView)
+        web.pageZoom = 2
+        let reply = session.webviews.tap(node, request: ["at": [40.0, 30.0]], at: [40, 30])
+        XCTAssertEqual(reply["delivery"] as? String, "synthetic", "\(reply)")
+        wait(for: [pressed], timeout: 5)
+    }
+
     func testEmptySourcesLoadBlankAndPathlessSourcesShowMissingFiles() throws {
         let session = try session("frame-empty-source")
         let sources: [String?] = ["", "#", "?", "#missing.html", "?missing.html", "", nil]

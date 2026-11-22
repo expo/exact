@@ -500,7 +500,10 @@ fn a_computed_transition_is_checked_as_an_authors() {
         "animation-trigger 1s, --exact-π 1s",
     ];
     assert_eq!(
-        run(TRANSITION_MAP.as_str(), &values),
+        run(
+            &transition_map(&transition_entries(), false, false),
+            &values
+        ),
         serde_json::json!([
             "--exact-tint 1s",
             "opacity 1s",
@@ -515,7 +518,7 @@ fn a_computed_transition_is_checked_as_an_authors() {
 #[test]
 fn bound_spring_transitions_match_the_static_css_writer() {
     exact_kernel::style::link_all();
-    assert_spring_transitions(&TRANSITION_MAP, false);
+    assert_spring_transitions(&transition_map(&transition_entries(), false, false), false);
 }
 
 pub(crate) fn assert_spring_transitions(map: &str, pressed: bool) {

@@ -22,7 +22,9 @@ use draw::Geom;
 use exact_canvas::list::{self, text_at, Op};
 use exact_kernel::ViewId;
 use exact_runner::CanvasList;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 use std::sync::Arc;
 use text::{CanvasText, RunStyle};
 use tiny_skia::{
@@ -38,6 +40,30 @@ pub(crate) struct CanvasPaint {
     /// Pixels as last replayed.
     pub pixels: Arc<Pixmap>,
     pub update: Option<CanvasUpdate>,
+}
+
+pub(crate) type CanvasSnapshots = Rc<RefCell<BTreeMap<ViewId, CanvasPaint>>>;
+
+/// Painted surfaces own their GPU readbacks. For 2D draws every painter reads
+/// the replayer's snapshot table, so a finished paint holds no bitmap reference.
+#[derive(Clone, Default)]
+pub(crate) struct CanvasPictures {
+    pub(crate) drawings: CanvasSnapshots,
+    pub(crate) readbacks: BTreeMap<ViewId, CanvasPaint>,
+}
+
+impl CanvasPictures {
+    pub(crate) fn get(&self, view: &ViewId) -> Option<CanvasPaint> {
+        self.readbacks
+            .get(view)
+            .cloned()
+            .or_else(|| self.drawings.borrow().get(view).cloned())
+    }
+
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.readbacks.is_empty() && self.drawings.borrow().is_empty()
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -865,7 +891,7 @@ pub(crate) fn replay(
 pub(crate) struct Canvases {
     completed: BTreeMap<ViewId, u64>,
     replayers: BTreeMap<ViewId, Replayer>,
-    snapshots: BTreeMap<ViewId, CanvasPaint>,
+    pub(crate) snapshots: CanvasSnapshots,
     pub(crate) images: ImageCache,
     pub(crate) text: Option<Arc<CanvasText>>,
 }
@@ -880,12 +906,11 @@ impl Canvases {
             images: &self.images,
             text: self.text.as_deref(),
         };
+        let mut snapshots = self.snapshots.borrow_mut();
         for c in lists {
             if c.fresh {
                 self.completed.remove(&c.view);
-            }
-            if c.fresh {
-                self.snapshots.remove(&c.view);
+                snapshots.remove(&c.view);
                 match Replayer::new(
                     c.pixel_width,
                     c.pixel_height,
@@ -909,7 +934,7 @@ impl Canvases {
                 continue;
             }
             // Its snapshot is replaced below: it holds the bitmap no longer.
-            self.snapshots.remove(&c.view);
+            snapshots.remove(&c.view);
             if let Err(e) = r.apply_draw(&c.lists, &env) {
                 errors.push(format!("canvas {}: {e}", c.view));
             }
@@ -921,7 +946,7 @@ impl Canvases {
         touched.dedup();
         for view in touched {
             if let Some(r) = self.replayers.get(&view) {
-                self.snapshots.insert(
+                snapshots.insert(
                     view,
                     CanvasPaint {
                         pixels: r.pixmap.clone(),
@@ -937,12 +962,7 @@ impl Canvases {
     pub(crate) fn retain(&mut self, live: &[ViewId]) {
         self.completed.retain(|v, _| live.contains(v));
         self.replayers.retain(|v, _| live.contains(v));
-        self.snapshots.retain(|v, _| live.contains(v));
-    }
-
-    /// The painters' view of every canvas.
-    pub(crate) fn snapshots(&self) -> BTreeMap<ViewId, CanvasPaint> {
-        self.snapshots.clone()
+        self.snapshots.borrow_mut().retain(|v, _| live.contains(v));
     }
 }
 

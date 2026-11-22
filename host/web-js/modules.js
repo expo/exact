@@ -146,6 +146,11 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     }
     return v;
   };
+  // An option source can declare null as its default and answer none.
+  const sourceAnswer = row => {
+    const value = valueOf(row);
+    return value === undefined ? { error: "NotSupportedError" } : value;
+  };
   // A denied permission may gate only an option (`continues`: Face ID denied still leaves the passcode, D12).
   const denialFails = (permission, args) => typeof permission?.continues !== "string" || args?.[permission.continues] === true;
   // A read of the app's own item under the agent: no dialog, the implementation opens it as the app's own or fails. On a
@@ -206,8 +211,7 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     if (send && row.sub.ceremony) return ceremonies.decide(row, args);
     if (send && row.sub.records) return { now: null }; // a signal the substitute records (LLP 1133.011 §9)
     if (send && row.sub.shortcuts === "pin") return { now: rc.pin(row, args) };
-    // A `default` written `null` is a value: an option source's none, as the runner's `value_of`.
-    if (!send) return { now: valueOf(row) ?? ("default" in row.sub ? null : { error: "NotSupportedError" }) };
+    if (!send) return { now: sourceAnswer(row) };
     // A send that raises another source's value when `raise.when` matches and its optional `raise.grant` is declared.
     const answers = sibling(row, row.sub.answers);
     if (answers) {
@@ -629,9 +633,8 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
   };
   const viaOwn = (row, args, reader, how = {}, as = null) => implementation(row)?.then(async impl => {
     const name = as ?? declaredOf(row);
-    // An extension with no web implementation reads its declared default, as the runner answers a target with none
-    // (LLP 1133.028 D17); its sends refuse.
-    if (impl === null && !row.send) return valueOf(row) ?? { error: "NotSupportedError" };
+    // A package without a web implementation can still declare an answer for a supported source (LLP 1133.028 D17).
+    if (impl === null && !row.send && !unsupported(row)) return sourceAnswer(row);
     if (!impl?.[name]) return { error: "NotSupportedError" };
     // A call not the app's that would ask is refused while the platform's state is `prompt` (LLP 1133.002 D12).
     const p = row.sub.permission;

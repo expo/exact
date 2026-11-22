@@ -1453,7 +1453,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// The click that activates a window presses a control and nothing else,
     /// as in AppKit (LLP 1115.000 D7.9; `clicksThrough`, FocusMac.swift).
     /// The agent's window is never key, so its every click counts.
-    package override func acceptsFirstMouse(for event: NSEvent?) -> Bool { Self.everyClickCounts || clicksThrough }
+    package override func acceptsFirstMouse(for event: NSEvent?) -> Bool { Self.countsFirstMouse(event) || clicksThrough }
 
     // Press: down and up inside the bounds. A click on a button or a
     // pressable leaves the first responder where it is, as a click on an

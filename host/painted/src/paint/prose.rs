@@ -46,6 +46,10 @@ impl Painter {
             .map_or(rect.1, |child| rect.1 + child.frame.y - item.frame.y);
         let color = presented_color(walk, item, self.dark)
             .unwrap_or_else(|| rgba(item.text_color().resolve(self.dark)));
+        // An outside marker is drawn beside the item's box, and its lines
+        // where its indent puts them.
+        let (lx, ly, lw, lh) = super::text_shadow::line_bounds(&p);
+        self.row_reach(super::bbox(ts, (x + lx, y + ly, lw, lh)));
         self.backend.text(
             &mut self.text.borrow_mut(),
             &p,

@@ -59,13 +59,20 @@ final class ExactTouches: XCTestCase {
         let parts = endpoint.split(separator: ":")
         guard parts.count == 2, let port = UInt16(parts[1]) else { XCTFail("bad endpoint \(endpoint)"); return }
         signal(SIGPIPE, SIG_IGN) // a driver that hung up mid-reply ends its session, not the runner
-        let listener = try Listener()
+        #if targetEnvironment(simulator)
+        let listener: Listener? = try Listener()
+        #else
+        // The paired Mac cannot reconnect to a phone's loopback listener.
+        let listener: Listener? = nil
+        #endif
         var link: Link? = try Link(host: String(parts[0]), port: port)
-        link?.send(["ready": true, "token": token, "pid": getpid(), "listen": Int(listener.port)])
+        var hello: [String: Any] = ["ready": true, "token": token, "pid": getpid()]
+        if let listener { hello["listen"] = Int(listener.port) }
+        link?.send(hello)
         while true {
             guard let session = link else {
                 // The next session's first line is the token and its app.
-                guard let next = listener.accept(idle: 600) else { return }
+                guard let listener, let next = listener.accept(idle: 600) else { return }
                 guard let line = next.next(), let hello = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any],
                       hello["token"] as? String == token, let named = hello["app"] as? String else { next.close(); continue }
                 app = named

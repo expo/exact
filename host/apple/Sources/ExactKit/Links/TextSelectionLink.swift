@@ -17,6 +17,9 @@ package protocol TextSelecting: AnyObject {
     /// The view that takes a touch hit-tested to `node`: the surface a
     /// selectable container's paragraphs share, else nil.
     func surface(for node: NodeView) -> UIView?
+    /// Whether a touch hit-tested to `node` would go to such a surface, as
+    /// `touched` would install it, installing nothing.
+    func routesToSurface(_ node: NodeView) -> Bool
     /// The node is leaving (destroyed, or parked for another row).
     func remove(_ node: NodeView)
     /// A batch was applied.
@@ -47,6 +50,7 @@ package final class NoTextSelection: TextSelecting {
     package init() {}
     package func touched(_ node: NodeView) {}
     package func surface(for node: NodeView) -> UIView? { nil }
+    package func routesToSurface(_ node: NodeView) -> Bool { false }
     package func remove(_ node: NodeView) {}
     package func batchEnded() {}
     package func hasSelection(in node: NodeView) -> Bool { false }

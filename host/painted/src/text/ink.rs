@@ -262,8 +262,8 @@ pub(super) fn slots(catalog: &mut Catalog, lines: &Lines) -> Vec<u32> {
 }
 
 /// A glyph's raster key and whole-pixel origin at `scale`, the pen at
-/// `offset` (device pixels): x in quarter-pixel phases, y truncated to the
-/// pixel row, as cosmic-text's `LayoutGlyph::physical` placed them.
+/// `offset` (device pixels): x in quarter-pixel phases, y rounded down to
+/// its pixel row.
 pub(super) fn physical(
     g: &LayoutGlyph,
     slot: u32,
@@ -271,7 +271,7 @@ pub(super) fn physical(
     scale: f32,
 ) -> (GlyphKey, i32, i32) {
     let (x, x_bin) = subpixel(g.x.mul_add(scale, offset.0));
-    let (y, y_bin) = subpixel(g.y.mul_add(scale, offset.1).trunc());
+    let (y, y_bin) = subpixel(g.y.mul_add(scale, offset.1).floor());
     (
         GlyphKey {
             slot,
@@ -602,8 +602,8 @@ impl Index {
 }
 
 /// The union of a glyph's ink over the four x phases. The CPU places every
-/// finite glyph on a whole-pixel row (y truncated): the y phase is always
-/// zero. Tiny-skia applies transforms after this raster choice.
+/// finite glyph on a whole-pixel row (y rounded down): the y phase is
+/// always zero. Tiny-skia applies transforms after this raster choice.
 fn envelope(engine: &mut Catalog, mut key: GlyphKey) -> Bounds {
     if !f32::from_bits(key.size_bits).is_finite() {
         return Bounds::ALL;

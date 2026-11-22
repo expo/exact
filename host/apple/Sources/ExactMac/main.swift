@@ -72,13 +72,14 @@ app.appearance = ExactEnv.fixedAppearance
 // activation, so a running smoke never takes the focus from whoever is
 // typing; its window is made key for a `type` when one comes (`AgentMac`).
 // A menu-bar app (`LSUIElement`) stays one: no Dock tile (LLP 1133.025 D4).
-app.setActivationPolicy(agentMode || LaunchKind.accessory ? .accessory : .regular)
+app.setActivationPolicy(ExactEnv.agentCarried || LaunchKind.accessory ? .accessory : .regular)
 ExactEnv.stamp("setActivationPolicy")
 // EXACT_AGENT_ACTIVATE=1 (set only by scripts/measure-controls.mjs, never by
 // default): this one run is activated and its window made key, as AppKit
 // draws a control's accent only in a key window; the app in front before it
 // is put back when it quits (LLP 1121 stage 9 F2).
-let agentActivates = agentMode && ExactEnv.environment["EXACT_AGENT_ACTIVATE"] == "1"
+let agentActivates = ExactEnv.agentActivates
+let keepsFrontmostApp = ExactEnv.agentCarried && !agentActivates
 let frontBefore = agentActivates ? NSWorkspace.shared.frontmostApplication : nil
 /// The app in front before an activated agent run, in front again: at every
 /// exit (the agent's own `exit` at the end of its input, AppKit's quit, an
@@ -491,7 +492,8 @@ final class DocumentWindow: NSObject, NSWindowDelegate, NSWindowRestoration {
     /// macOS 14's cooperative activation may refuse; nothing more then.
     func front() {
         if AgentLink.windowsBehind { window.orderFront(nil); return } // in front of its own windows, in its level
-        if agentMode && !agentActivates { window.orderFrontRegardless(); return }
+        // A covered canvas stops rendering (LLP 1009 D4). Keep live frames visible while the person types elsewhere.
+        if keepsFrontmostApp { window.orderFrontRegardless(); return }
         if app.isHidden { app.unhide(nil) }
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil)
@@ -1021,15 +1023,19 @@ func finishLaunching() {
     // A launch with no window (LLP 1133.025 D6): made, not shown; its first
     // pixel is the first commit and its status items.
     let withoutWindow = LaunchKind.withoutWindow
-    if withoutWindow { launchWithoutWindow() } else { window.makeKeyAndOrderFront(nil) }
+    if withoutWindow {
+        launchWithoutWindow()
+    } else if keepsFrontmostApp {
+        firstWindow.front()
+    } else {
+        window.makeKeyAndOrderFront(nil)
+    }
     if let url = launchDevelopmentURL {
         launchDevelopmentURL = nil
         DispatchQueue.main.async { ExactDevelopmentLink.open(url) }
     }
     ExactEnv.stamp("makeKeyAndOrderFront")
-    // Under a script on the platform's timing: in front regardless, so the window is
-    // seen (a covered window's canvases render nothing, LLP 1009 D4) — but never activated.
-    if withoutWindow || AgentLink.windowsBehind {} else if agentMode && !agentActivates { window.orderFrontRegardless() } else { app.activate(ignoringOtherApps: true) }
+    if !withoutWindow && !keepsFrontmostApp { app.activate(ignoringOtherApps: true) }
     ExactEnv.stamp("activate")
 
     /// Agent mode: the driver owns the process from here — one JSON line in,

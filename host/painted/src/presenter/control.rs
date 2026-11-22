@@ -364,6 +364,7 @@ impl<D: DataSource> Presenter<D> {
         // changes, as the web build's does (`paint::control::choice`; LLP
         // 1069.001 D4, amended 2026-10-04; kanban2 #5).
         self.forget_replaced_choices();
+        let before = self.chosen.get(&id).cloned();
         if shown != value {
             self.host.values.watch(id, Some(shown.clone()));
             self.chosen.insert(id, (value.to_owned(), shown.clone()));
@@ -371,6 +372,10 @@ impl<D: DataSource> Presenter<D> {
         } else {
             self.host.values.watch(id, None);
             self.chosen.remove(&id);
+        }
+        // A choice nothing binds shows without a commit.
+        if self.chosen.get(&id) != before.as_ref() {
+            self.dirty = true;
         }
         Ok(format!(
             "{{\"typed\":{id},\"value\":{},\"delivery\":\"recognized\"}}",
@@ -997,7 +1002,7 @@ mod tests {
 
 #[cfg(test)]
 #[path = "material_tests.rs"]
-mod material_tests;
+pub(super) mod material_tests;
 
 #[cfg(test)]
 #[path = "range_tests.rs"]

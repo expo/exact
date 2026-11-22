@@ -6,6 +6,10 @@ import Foundation
 package protocol InspectionOwned { var inspectionViewId: UInt32? { get } }
 
 public extension ExactEnv {
+    #if os(macOS)
+    /// The drive opted in to taking keyboard focus to measure active controls.
+    package static let agentActivates = agentCarried && environment["EXACT_AGENT_ACTIVATE"] == "1"
+    #endif
     /// `EXACT_AGENT_CHROME=platform` (opt-in; splitter rough 4, 11): under
     /// the agent, the native navigation bar and tab bar show as a person
     /// sees them, their items pressing the authored controls they stand for.

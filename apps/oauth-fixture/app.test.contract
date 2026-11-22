@@ -1,3 +1,20 @@
+test "opens signed in and stays signed out after sign-out"
+  signed-in "oauth.spec" {"clientId":"client-spec","sub":"reader-2","name":"Grace Hopper","token":"test-reader"}
+  expect text "status" == "Signed in"
+  expect text "name" == "Grace Hopper"
+  reload
+  expect text "name" == "Grace Hopper"
+  tap "sign-out"
+  clock data
+  reload
+  expect text "status" == "Signed out"
+
+test "answers the first private read on a fresh launch"
+  signed-in "oauth.spec" {"clientId":"client-spec","sub":"reader-3","token":"test-reader"}
+  answer fetch "http://127.0.0.1:4400/p/spec/api/me" with 200 {"name":"Offline reader"}
+  expect text "status" == "Signed in"
+  expect text "name" == "Offline reader"
+
 test "signs in, reads the person, and stays signed in after a relaunch"
   request POST "/control" {"action": "reset"}
   expect text "status" == "Signed out"

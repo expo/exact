@@ -466,7 +466,7 @@ export async function openPlaywrightWeb({ browser: name, plan, world, size, url:
           ? await page.evaluate(pagePoint, { id }) : null;
         let x = line ? line[0] : box ? box.x + (point?.[0] ?? box.w / 2) : undefined, y = line ? line[1] : box ? box.y + (point?.[1] ?? box.h / 2) : undefined;
         if (kind === 'press' || kind === 'key' || kind === 'type') {
-          const request = kind === 'press' ? { op: 'tap', id, selector: opts.selector, x: opts.x, y: opts.y }
+          const request = kind === 'press' ? { op: 'tap', id, selector: opts.selector, x: opts.x, y: opts.y, at: opts.at }
             : { op: 'type', id, selector: opts.selector, ...(kind === 'key' ? { key: opts.key } : { text: opts.text }) };
           const guest = await ask(request);
           if (guest.guest === true || guest.handled === true) { if (guest.error) throw new Error(guest.error); await frame(); return { ...guest, at: [x, y] }; }

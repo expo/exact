@@ -1262,3 +1262,10 @@ handle while `fs.rm` removes the file's name and its parent directory.
 A recursive removal visits the other entries even when one is locked. It
 retries a sharing violation or a nonempty directory for five short intervals
 before returning the Windows error (expo/exact#1096).
+
+## Local storage without a network transport
+
+`Host::without_network` keeps the stores, filesystem providers and grants of
+a local consumer. Its HTTP and WebSocket bindings report the capability as
+unavailable. Exact gives this host to its Hermes storage context. The runner
+executes the app’s network work on a separate host with its own transports.

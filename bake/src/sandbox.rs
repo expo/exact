@@ -237,6 +237,27 @@ mod tests {
     }
 
     #[test]
+    fn a_local_video_can_load_a_remote_poster() {
+        let app = r#"component App
+  state cover = "assets/cover.png"
+  view
+    video src="assets/clip.mp4" poster=POSTER
+"#;
+        for (poster, remote) in [
+            ("\"assets/cover.png\"", false),
+            ("\"Https://example.com/cover.png\"", true),
+            ("cover", true),
+        ] {
+            let reach = bake("", &app.replace("POSTER", poster), "{}");
+            assert_eq!(
+                reach["sandboxSources"]["com.apple.security.network.client"].is_array(),
+                remote,
+                "{poster}"
+            );
+        }
+    }
+
+    #[test]
     fn only_the_mac_reports_the_column() {
         let mut compat = compat("net.fetch https://x");
         derive(Path::new("/nonexistent"), "ios", None, &mut compat);

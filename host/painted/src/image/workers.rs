@@ -206,7 +206,7 @@ impl Backend {
         } else if let Some(next) = state.next_source.checked_add(1) {
             // A URL downloads now, off the workers; one reads its header
             // once it is settled (`prepare`).
-            let remote = if remote::is_remote(name) {
+            let remote = if exact_plan::has_http_scheme(name) {
                 let me = self.me.clone();
                 self.downloads
                     .load(name, urgent, move || {

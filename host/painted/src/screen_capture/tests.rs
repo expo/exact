@@ -312,6 +312,7 @@ fn a_replaced_still_refreshes_image_and_canvas_handles() {
             p.images().bitmaps.values().next().unwrap().pixels().data()[..4].to_vec(),
             p.host()
                 .canvas_snapshots()
+                .borrow()
                 .values()
                 .next()
                 .unwrap()
@@ -366,7 +367,7 @@ fn a_canvas_whose_still_was_missing_draws_it_once_captured() {
     assert!(error.is_none(), "{error:?}");
     let pixel = |p: &mut Presenter<StillCanvas>| {
         p.host.sync_canvases(1., true, &p.assets);
-        let canvases = p.host().canvas_snapshots();
+        let canvases = p.host().canvas_snapshots().borrow();
         canvases.values().next().unwrap().pixels.data()[..4].to_vec()
     };
     assert_eq!(pixel(&mut presenter), [0; 4]);
@@ -409,7 +410,7 @@ fn a_still_reloads_only_for_mounted_canvases_and_a_remount_draws_it() {
     };
     let pixel = |p: &mut Presenter<StillCanvas>| {
         p.host.sync_canvases(1., true, &p.assets);
-        let canvases = p.host().canvas_snapshots();
+        let canvases = p.host().canvas_snapshots().borrow();
         canvases[&named(p, "still")].pixels.data()[..4].to_vec()
     };
     let tap = |p: &mut Presenter<StillCanvas>, id: &str| {
@@ -437,8 +438,8 @@ fn a_still_reloads_only_for_mounted_canvases_and_a_remount_draws_it() {
     drop(presenter.frame());
     let id = named(&presenter, "still");
     let blank = named(&presenter, "blank");
-    let bitmap = Arc::downgrade(&presenter.host().canvas_snapshots()[&id].pixels);
-    let kept = Arc::downgrade(&presenter.host().canvas_snapshots()[&blank].pixels);
+    let bitmap = Arc::downgrade(&presenter.host().canvas_snapshots().borrow()[&id].pixels);
+    let kept = Arc::downgrade(&presenter.host().canvas_snapshots().borrow()[&blank].pixels);
     let image = Arc::downgrade(presenter.host().cached_canvas_image(still).unwrap());
     presenter.timer_visibility(true);
     toggle(&mut presenter);
@@ -491,7 +492,7 @@ fn a_retained_pattern_keeps_its_image_across_draws() {
         for frame in 0..4 {
             presenter.host.advance(16. * frame as f64);
             presenter.host.sync_canvases(1., true, &presenter.assets);
-            let canvases = presenter.host().canvas_snapshots();
+            let canvases = presenter.host().canvas_snapshots().borrow();
             let pixel = &canvases.values().next().unwrap().pixels.data()[..4];
             assert_eq!(pixel, [192, 64, 128, 255], "{surface}, frame {frame}");
         }

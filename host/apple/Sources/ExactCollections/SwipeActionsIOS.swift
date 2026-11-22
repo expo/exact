@@ -390,6 +390,14 @@ final class SwipeActionsHost: SwipeActionsHosting {
         override func accessibilityActivate() -> Bool {
             control?.accessibilityActivate() ?? super.accessibilityActivate()
         }
+        #if os(iOS)
+        /// The drag of a draggable node around the row, which UIKit's own
+        /// search from the cell does not reach (LLP 1094.000 D9)
+        override var accessibilityDragSourceDescriptors: [UIAccessibilityLocationDescriptor]? {
+            get { super.accessibilityDragSourceDescriptors ?? control?.presenter?.dragOut?.descriptors(of: self, isElement: true) }
+            set { super.accessibilityDragSourceDescriptors = newValue }
+        }
+        #endif
     }
 
     /// Recognizes nothing and prevents nothing: sees a projected row's

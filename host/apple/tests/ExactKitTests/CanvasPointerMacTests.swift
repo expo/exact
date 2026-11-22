@@ -62,6 +62,34 @@ final class CanvasPointerMacTests: XCTestCase {
         pointerEvents.map { ($0["phase"] as? String ?? "", $0["buttons"] as? Int ?? -1, $0["dx"] as? Double ?? .nan, $0["dy"] as? Double ?? .nan) }
     }
 
+    func testDrivenClickReachesCanvasInputWhileAnOrdinaryFirstClickStillActivates() {
+        let (session, canvas, window) = fixture()
+        let allClicks = NodeView.everyClickCounts
+        NodeView.everyClickCounts = false
+        defer { NodeView.everyClickCounts = allClicks; window.orderOut(nil); session.destroy() }
+        window.orderBack(nil)
+        let point = at(canvas, window, 20, 20)
+        let ordinary = mouse(.leftMouseDown, window, at: point)
+        canvas.handlers = ["pointerdown", "pointerup"]
+        var contract: [PointerKind] = []
+        session.presenter.onPointer = { _, phase, _ in contract.append(phase) }
+        let monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { event in
+            if event.window === window {
+                XCTAssertTrue(canvas.acceptsFirstMouse(for: event))
+                XCTAssertFalse(canvas.acceptsFirstMouse(for: ordinary))
+            }
+            return event
+        }
+        defer { if let monitor { NSEvent.removeMonitor(monitor) } }
+        ExactAgentWindow.sendPointerEvent(mouse(.leftMouseDown, window, at: point))
+        let end = at(canvas, window, 35, 25)
+        ExactAgentWindow.sendPointerEvent(mouse(.leftMouseDragged, window, at: end))
+        ExactAgentWindow.sendPointerEvent(mouse(.leftMouseUp, window, at: end))
+        XCTAssertFalse(canvas.acceptsFirstMouse(for: ordinary))
+        XCTAssertEqual(contract, [.down, .up])
+        XCTAssertEqual(rows.map(\.0), ["down", "move", "up"])
+    }
+
     func testRemovedPopoverSourceSendsNoBubbledCanvasOrSurfaceControlInput() throws {
         let (session, canvas, window) = fixture()
         defer { session.destroy() }

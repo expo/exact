@@ -146,7 +146,7 @@ extension NavigationHost {
 
     /// Whether another host holds `node`'s view now: a flight, the top layer, a context
     /// menu's preview, an arrangement.
-    private func heldElsewhere(_ node: NodeView, under parent: NodeView) -> Bool {
+    func heldElsewhere(_ node: NodeView, under parent: NodeView) -> Bool {
         if presenter.menus.lifted(node) || presenter.flightHost.isFlying(node) { return true }
         #if os(iOS)
         if #available(iOS 27.1, *), presenter.arrangements.owns(node, under: parent) { return true }
@@ -184,7 +184,15 @@ final class PanelSiblings: LiftedNodes {
     var isEmpty: Bool { lifted.isEmpty }
 
     /// The parent a view in a stand is under in the authored tree.
-    func parent(of view: UIView) -> NodeView? { (view.superview as? PanelSiblingsStand)?.parent ?? navigation.sidebarParent(of: view) }
+    func parent(of view: UIView) -> NodeView? { (view.superview as? PanelSiblingsStand)?.parent ?? navigation.paneParent(of: view) }
+
+    func heldApart(_ view: UIView) -> Bool {
+        #if os(iOS)
+        navigation.tabAccessoryParent(of: view) != nil
+        #else
+        false
+        #endif
+    }
 
     /// Whether a stand holds `node`.
     func holds(_ node: NodeView) -> Bool { node.superview is PanelSiblingsStand && lifted[node.id]?.node === node }
@@ -192,7 +200,7 @@ final class PanelSiblings: LiftedNodes {
     /// Whether `parent` lifted `node`, which `parent`'s children op then leaves where it is;
     /// another parent's op that takes it moves it there.
     func holds(_ node: NodeView, under parent: NodeView) -> Bool {
-        holds(node) && lifted[node.id]?.parent === parent || navigation.sidebarParent(of: node) === parent
+        holds(node) && lifted[node.id]?.parent === parent || navigation.paneParent(of: node) === parent
     }
 
     /// The nodes `parent` lifted.
@@ -229,6 +237,9 @@ final class PanelSiblings: LiftedNodes {
     /// the op removes it by its own rules, unless it is leaving: an exit ghost stays in its
     /// stand until its `destroy`.
     func children(_ parent: NodeView, _ ids: [UInt32], _ want: [NodeView]) {
+        #if os(iOS)
+        navigation.followTabAccessoryHome(parent, ids)
+        #endif
         guard !navigation.tabPanels.isEmpty, parent !== navigation.container else { return }
         if records[parent.id] != nil || navigation.holdsPanel(parent) { records[parent.id] = ids }
         guard !lifted.isEmpty else { return }
@@ -392,9 +403,9 @@ final class PanelSiblings: LiftedNodes {
     /// Back into its parent's view, before the next of its siblings there in the parent's
     /// order, else after its last node; no children op runs, so a parent that is an exit ghost
     /// keeps it, with its flat leaves, which are laid in again over it.
-    func putBack(_ node: NodeView, into parent: NodeView) {
+    func putBack(_ node: NodeView, into parent: NodeView, order: [UInt32]? = nil) {
         let content = parent.container
-        let ids = placedIDs(of: parent)
+        let ids = order ?? placedIDs(of: parent)
         // Its siblings by id among the nodes in the parent's view, where an exit ghost's nodes
         // stay after the presenter releases them
         let there = Dictionary(Self.nodes(in: content).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })

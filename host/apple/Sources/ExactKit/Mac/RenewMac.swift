@@ -74,6 +74,8 @@ extension Presenter {
         pointerPath.removeAll { $0 == id }
         mouseSwipe.retire(id)
         mouseLayoutPan.retire(id)
+        // A drag not yet begun from inside the row would lift the next item (LLP 1094.000 D5)
+        if let drag = mouseDragOut, !drag.engaged, let armed = drag.armed, armed.isDescendant(of: view) { drag.cancel() }
         mouseDrags.height.retire(id)
         mouseDrags.transform.retire(id)
         reorders.mouse.retire(id)

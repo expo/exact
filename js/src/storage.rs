@@ -58,7 +58,9 @@ impl Session {
     ) -> Result<Self, String> {
         let hold = hold.map(SessionHold::new);
         let grants = GrantSet::parse(grants).map_err(|e| e.to_string())?;
-        let context = Context::new(grants);
+        // The runner handles app fetches and sockets. This context runs the module’s storage operations.
+        let bindings = ibex2::host::Host::without_network().endow(grants);
+        let context = Context::from_bindings(&bindings);
         context
             .set_storage_limits(ibex2::stdlib::fs::ResultLimits {
                 bytes: exact_data::storage::MAX_BYTES,

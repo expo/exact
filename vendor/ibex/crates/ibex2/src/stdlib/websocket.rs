@@ -745,11 +745,7 @@ pub(crate) fn sha1(input: &[u8]) -> [u8; 20] {
     out
 }
 
-#[cfg(not(feature = "websocket"))]
-struct UnavailableSocketTransport;
-
-#[cfg(not(feature = "websocket"))]
-impl SocketTransport for UnavailableSocketTransport {
+impl SocketTransport for crate::transport::NoNetwork {
     fn connect(
         &self,
         _: &url::Url,
@@ -775,7 +771,7 @@ pub fn default_transport() -> Box<dyn SocketTransport> {
     }
     #[cfg(not(feature = "websocket"))]
     {
-        Box::new(UnavailableSocketTransport)
+        Box::new(crate::transport::NoNetwork)
     }
 }
 

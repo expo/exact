@@ -109,7 +109,7 @@ for (const stateful of [false, true]) {
     if (stateful) source = source.replace('  derive label', '  state suffix = "!"\n  derive label').replace('value + "!"', 'value + suffix');
     await pageFor(source, async (page, js) => {
       // The wrapper belongs to the owning arm, before its deeper when arm.
-      expect(js).toMatch(/(?:p|\(p\))=>\{(?:const \$a\d+=\{\};)?const d_L\d+_\d+=\(\$budget/);
+      expect(js).toMatch(/(?:p|\(p\))=>\{(?:const \$a\d+=\{\};)?const d_L\d+_\d+=\$atRead\(\$budget=>/);
       expect(await page.locator('#exact-root').textContent()).toContain('first!');
       expect(await page.locator('#exact-root').textContent()).toContain('a!');
       await page.getByTestId('change').click();
@@ -321,6 +321,53 @@ component Suffix
     }, sites ? ['--sites'] : []);
   }
   expect(reports[0]).toEqual(reports[1]);
+}, 60000);
+
+test('a shared list reads state from the panel that mounted it', async () => {
+  await pageFor(`component App
+  state shown = true
+  state items = [1, 2]
+  action toggle
+    shown = !shown
+  view
+    column
+      button "Toggle" press=toggle testId="toggle"
+      if shown
+        Panel(id="left", numbers=items)
+      if shown
+        Panel(id="right", numbers=items)
+          text "Extra" testId="extra"
+
+component Panel
+  props
+    id: string
+    numbers: number[]
+  slot
+  state count = 0
+  derive label = id + " row"
+  action advance
+    count = count + 1
+  view
+    column testId=id
+      for n in numbers key=n
+        button press=advance aria-label="Increase row count"
+          text \`\${label} \${n}: \${count}\`
+      if count >= 0
+        children
+`, async (page, js) => {
+    expect(js.split('"Increase row count"')).toHaveLength(2);
+    const rows = id => page.getByTestId(id).getByRole('button', { name: 'Increase row count' });
+    await rows('left').nth(1).click();
+    expect(await rows('left').allTextContents()).toEqual(['left row 1: 1', 'left row 2: 1']);
+    expect(await rows('right').allTextContents()).toEqual(['right row 1: 0', 'right row 2: 0']);
+    expect(await page.getByTestId('right').getByTestId('extra').count()).toBe(1);
+    await rows('right').first().click();
+    expect(await rows('right').allTextContents()).toEqual(['right row 1: 1', 'right row 2: 1']);
+    await page.getByTestId('toggle').click();
+    expect(await rows('left').count()).toBe(0);
+    await page.getByTestId('toggle').click();
+    expect(await rows('left').allTextContents()).toEqual(['left row 1: 0', 'left row 2: 0']);
+  });
 }, 60000);
 
 test.each([true, false])('repeated components bind their own props, actions and state (conditional %s)', async conditional => {

@@ -19,6 +19,7 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
     private var originY = 0f
     private var downX = 0f
     private var downY = 0f
+    private var downTime = 0L
     private var tool = 0
     private var claims = 0
     private var longPresses = 0
@@ -47,7 +48,7 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
                         if (pending.any { it.actionMasked == MotionEvent.ACTION_POINTER_DOWN }) {
                             finishHold(null)
                         } else {
-                            view.forward(4, downX, downY, tool, -1L)
+                            DragOut.held(downTime); view.forward(4, downX, downY, tool, -1L)
                             view.ask(downX, downY) { words ->
                                 if (token == serial && !stopped) finishHold(words)
                             }
@@ -75,7 +76,7 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
     /** The long press to exact2. One it took (its menu, or a drag that lifts as the finger moves on, LLP 1094.000 D7) keeps
      * the rest of the contact from a scroller, which would otherwise claim the finger's next move along its axis. */
     private fun longPress() {
-        view.forward(4, downX, downY, tool, -1L)
+        DragOut.held(downTime); view.forward(4, downX, downY, tool, -1L)
         val token = serial
         // The moves that come meanwhile wait for the answer ([drain]), so a scroller cannot claim one first.
         waiting = true
@@ -167,7 +168,7 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
         val down = e.actionMasked == MotionEvent.ACTION_DOWN
         if (down) {
             module.clear(); dropCandidate(); hold(null); releaseInterception()
-            downX = e.x; downY = e.y; tool = e.getToolType(0)
+            downX = e.x; downY = e.y; downTime = e.downTime; tool = e.getToolType(0)
             engine = false; field = false
             view.fingers.began(e)
             val caughtFling = scrolling.touch(e)

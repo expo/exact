@@ -36,7 +36,7 @@ const DRIVE = [
   ['--scale <n>', 'screenshots at n pixels per point (exact.mjs agent on ios, macos: 1; an iPhone\'s own: 3)'],
   ['--chrome platform|agent', 'UIKit\'s bars (exact.mjs on iOS); agent paints the header'],
   ['--live · --timing platform · --bind <extension>', 'wall clock on macOS, iOS and Android reader · Apple native transitions · use a module implementation'],
-  ['--touch platform', 'iOS simulator: every tap a real touch, through the XCTest runner'],
+  ['--touch platform', 'iOS simulator or paired iPhone: send taps and drags through XCTest'],
   ['--epoch <ISO|ms|now> · --login [hidden]', 'the date at the clock\'s zero (default 2026-01-01) · a launch the login item made, hidden: with no window'],
   ['--locale <tag> · --format-locale <tag> · --time-zone <zone> · --seed <n>', 'default en-US, the locale (the Region\'s format, exactTime().formatLocale), UTC, 1'],
   ['--fail-fetch <prefix> · --permission <name>=<state> · --notification <entry> · --wake <entry> · --call \'<tool> <json>\'', 'each fetch whose URL starts with it fails, from the first data load · a module\'s permission at the start (geolocation=granted) · a relaunch handed a listed entry, as state.notifications printed it · a cold wake for a registration, as state.backgroundSync printed it · a cold call of a tool, as a system\'s call that started the app'],

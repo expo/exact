@@ -24,10 +24,10 @@ pub struct Executor {
 }
 /// The Linux host's transports: rustls over ureq and the portable WebSocket.
 fn portable_host() -> ibex2::host::Host {
-    ibex2::host::Host::with_transport(Box::new(ibex2::transport::RustlsHttpTransport::new()))
-        .with_socket_transport(Box::new(
-            ibex2::transport::websocket::TcpSocketTransport::new(),
-        ))
+    ibex2::host::Host::with_transports(
+        Box::new(ibex2::transport::RustlsHttpTransport::new()),
+        Box::new(ibex2::transport::websocket::TcpSocketTransport::new()),
+    )
 }
 
 impl Executor {

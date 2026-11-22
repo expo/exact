@@ -762,7 +762,7 @@ impl Images {
                     if let Some(after) = (view.on_screen
                         && view.retry_at.is_none()
                         && view.retries < RETRY_AFTER.len()
-                        && remote::is_remote(&view.source))
+                        && exact_plan::has_http_scheme(&view.source))
                     .then(|| self.backend.transient(source))
                     .flatten()
                     {
@@ -777,8 +777,8 @@ impl Images {
                     // Its `error`, once its failure is final: at once if asking
                     // again cannot mend it; else once a showing's retries are
                     // spent on screen (off screen it waits until it has shown).
-                    let transient =
-                        remote::is_remote(&view.source) && self.backend.transient(source).is_some();
+                    let transient = exact_plan::has_http_scheme(&view.source)
+                        && self.backend.transient(source).is_some();
                     let spent = view.on_screen
                         && view.retry_at.is_none()
                         && view.retries >= RETRY_AFTER.len();
@@ -1037,7 +1037,9 @@ impl Images {
     pub fn retry_due_in(&self) -> Option<Duration> {
         let now = Instant::now();
         (self.views.values())
-            .filter(|v| v.on_screen && v.source_id.is_some() && remote::is_remote(&v.source))
+            .filter(|v| {
+                v.on_screen && v.source_id.is_some() && exact_plan::has_http_scheme(&v.source)
+            })
             .filter_map(|v| v.retry_at)
             .min()
             .map(|at| at.saturating_duration_since(now))
@@ -1062,7 +1064,7 @@ impl Images {
                 v.source.is_empty()
                     || is_symbol(&v.source)
                     || self.package.serves(&v.source)
-                    || remote::is_remote(&v.source)
+                    || exact_plan::has_http_scheme(&v.source)
                     || matches!(
                         v.source_id
                             .as_ref()

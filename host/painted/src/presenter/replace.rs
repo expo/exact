@@ -232,6 +232,7 @@ impl<D: DataSource> Presenter<D> {
         self.modules_replaced();
         self.auth_replaced();
         self.brush.replaced();
+        self.brush.canvases.drawings = self.host.canvas_snapshots().clone();
         self.brush.lift = Default::default();
         // A picker's answer or a GPU surface is not the new tree's.
         self.picks_replaced();

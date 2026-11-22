@@ -24,6 +24,8 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod http_url;
+pub use http_url::{has_http_scheme, http_url_refusal};
 pub mod asm;
 pub mod builder;
 pub mod bytes;
@@ -72,7 +74,29 @@ pub mod generated {
 
 pub use generated::*;
 
+impl ParamsRow {
+    /// An action call appends `@c` and a serial to the caller's parameter to keep
+    /// it distinct from the callee's bindings (LLP 1089 D8). Tool schemas and
+    /// diagnostics use the name in the declaration.
+    pub fn declared_name<'a>(&self, plan: &'a Plan) -> &'a str {
+        let key = plan.str(self.name);
+        match key.split_once("@c") {
+            Some((name, serial)) if !name.is_empty() && serial.parse::<u32>().is_ok() => name,
+            _ => key,
+        }
+    }
+}
+
 impl SlotsRow {
+    /// The state name to show in a diagnostic. Component uses add a namespace after the name.
+    pub fn declared_name<'a>(&self, plan: &'a Plan) -> &'a str {
+        let key = plan.str(self.name);
+        match key.split_once('#') {
+            Some((name, _)) if !name.is_empty() => name,
+            _ => key,
+        }
+    }
+
     /// Whether a host restores this slot at boot.
     pub fn is_persisted(&self) -> bool {
         self.persist != PersistScope::None

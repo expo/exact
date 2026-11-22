@@ -8,7 +8,7 @@
 //! fragment is never normalized on its own: an empty `find` splits `"😀"`
 //! into its halves, and `replaceAll("😀", "", "")` joins them again.
 
-use std::cmp::Ordering;
+use std::{borrow::Cow, cmp::Ordering, ops::Range};
 
 /// JavaScript's `IsLessThan` for two Strings: UTF-16 code units in order,
 /// a proper prefix first, no locale and no normalization (LLP 1088 D1).
@@ -117,19 +117,59 @@ pub(crate) fn clamp(index: f64, len: usize) -> usize {
     }
 }
 
-/// `String.prototype.slice(start, end)`, well formed (LLP 1088 D2). An
-/// omitted `end` is `Number.MAX_VALUE`, which clamps as `undefined` does. A slice
-/// never grows its input — a cut half's U+FFFD is 3 bytes of its pair's 4 —
-/// so it needs no bound of its own.
-pub fn slice(s: &str, start: f64, end: f64) -> String {
-    let units: Vec<u16> = s.encode_utf16().collect();
-    let (from, to) = (clamp(start, units.len()), clamp(end, units.len()));
-    if from >= to {
-        return String::new();
+/// An empty byte range at a UTF-16 boundary, or the four bytes of an astral
+/// scalar when the boundary falls between its surrogate halves.
+fn slice_boundary(s: &str, index: f64) -> Range<usize> {
+    fn walk(chars: impl Iterator<Item = char>, mut units: usize) -> Range<usize> {
+        let mut bytes = 0;
+        for c in chars {
+            if units == 0 {
+                break;
+            }
+            if units < c.len_utf16() {
+                return bytes..bytes + c.len_utf8();
+            }
+            units -= c.len_utf16();
+            bytes += c.len_utf8();
+        }
+        bytes..bytes
     }
-    let mut b = Built::new(usize::MAX);
-    let _ = b.units(&units[from..to]);
-    b.finish().unwrap_or_default()
+
+    let units = (index.abs() as usize).min(s.len());
+    // The byte length bounds the UTF-16 length. Within ASCII the offsets agree.
+    if index.trunc() < 0.0 {
+        let byte = s.len() - units;
+        if byte == 0 || s.as_bytes()[byte..].is_ascii() {
+            return byte..byte;
+        }
+        let edge = walk(s.chars().rev(), units);
+        s.len() - edge.end..s.len() - edge.start
+    } else if units == s.len() || s.as_bytes()[..units].is_ascii() {
+        units..units
+    } else {
+        walk(s.chars(), units)
+    }
+}
+
+/// `String.prototype.slice(start, end)`, well formed (LLP 1088 D2). An
+/// omitted `end` is `Number.MAX_VALUE`, which clamps as `undefined` does.
+pub fn slice(s: &str, start: f64, end: f64) -> String {
+    slice_text(s, start, end).into_owned()
+}
+
+/// Borrow aligned slices so the VM can store a short result inline. Replacing
+/// a cut half uses three bytes of its pair's four, preserving the byte bound.
+pub(crate) fn slice_text(s: &str, start: f64, end: f64) -> Cow<'_, str> {
+    let start = slice_boundary(s, start);
+    let end = slice_boundary(s, end);
+    let Some(body) = s.get(start.end..end.start) else {
+        return Cow::Borrowed("");
+    };
+    if start.is_empty() && end.is_empty() {
+        return Cow::Borrowed(body);
+    }
+    let half = |edge: Range<usize>| if edge.is_empty() { "" } else { "\u{FFFD}" };
+    Cow::Owned([half(start), body, half(end)].concat())
 }
 
 /// A `replaceAll` replacement, read once: ECMA-262's `GetSubstitution` for
@@ -308,12 +348,28 @@ mod tests {
             ("a😀b", 1.0, 2.0, "\u{FFFD}"),
             ("a😀b", 2.0, 4.0, "\u{FFFD}b"),
             ("a😀b", 0.0, -1.0, "a😀"),
+            ("😀😀", 1.0, -1.0, "\u{FFFD}\u{FFFD}"),
+            ("a😀b", -2.0, -2.0, ""),
+            ("a😀b", -2.0, -1.0, "\u{FFFD}"),
+            ("é😀中", -0.9, 1.9, "é"),
+            ("é😀中", -100.0, f64::MAX, "é😀中"),
+            ("é😀中", 1.0, f64::NAN, ""),
             ("ab", -0.0, 1.0, "a"),
             ("calc", 0.0, -1.0, "cal"),
             ("", 0.0, inf, ""),
         ] {
             assert_eq!(slice(s, a, b), want, "{s:?}.slice({a}, {b})");
         }
+    }
+
+    #[test]
+    fn a_short_aligned_slice_borrows_its_source() {
+        let source = "😀é".repeat(4096);
+        assert!(matches!(slice_text(&source, 2.0, 3.0), Cow::Borrowed("é")));
+        assert!(matches!(
+            slice_text(&source, -3.0, -1.0),
+            Cow::Borrowed("😀")
+        ));
     }
 
     #[test]

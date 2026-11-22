@@ -131,9 +131,10 @@ pub fn save_test_window<D: exact_runner::DataSource>(
 }
 
 /// Populate a fresh drive's preferences and reserve its per-window fixtures for the first boot.
-pub fn seed_persisted<E: std::fmt::Display>(
+pub fn seed_persisted<E: std::fmt::Display, S: std::fmt::Display>(
     tree: &std::path::Path,
     mut write: impl FnMut(&str, &[u8]) -> Result<(), E>,
+    mut session: impl FnMut(&str, &str) -> Result<(), S>,
 ) -> Result<(), exact_runner::DataError> {
     let Some(raw) = std::env::var_os("EXACT_AGENT_STORED") else {
         return Ok(());
@@ -146,6 +147,17 @@ pub fn seed_persisted<E: std::fmt::Display>(
     .map_err(|e| invalid(e.to_string()))?;
     let mut window = Vec::new();
     for (key, json) in entries {
+        if let Some(name) = key.strip_prefix("#oauth.") {
+            let valid = exact_runner::grants::parse(&format!("secret.keep {name}"))
+                .is_ok_and(|set| set.secrets().eq(std::iter::once(name)));
+            if !valid || std::env::var("EXACT_STORE").as_deref() != Ok("memory") {
+                return Err(invalid(
+                    "signed-in needs a plain secret in the test store".into(),
+                ));
+            }
+            session(name, &json).map_err(|e| invalid(format!("{name}: {e}")))?;
+            continue;
+        }
         let scoped = key.strip_prefix("#window.");
         let name = scoped.unwrap_or(&key);
         if name.is_empty()

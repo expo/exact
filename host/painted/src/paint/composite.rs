@@ -160,7 +160,7 @@ mod tests {
         painter.composites.canvases.insert(glass);
         let mut green = Pixmap::new(20, 20).unwrap();
         green.fill(tiny_skia::Color::from_rgba8(0, 255, 0, 255));
-        painter.canvases.insert(
+        painter.canvases.drawings.borrow_mut().insert(
             inner,
             crate::canvas2d::CanvasPaint {
                 pixels: Arc::new(green),

@@ -53,9 +53,24 @@ impl Host {
     }
 
     pub fn with_transport(transport: Box<dyn Transport>) -> Self {
+        Self::with_transports(transport, websocket::default_transport())
+    }
+
+    /// Storage and other local services for a consumer whose network requests run elsewhere.
+    pub fn without_network() -> Self {
+        Self::with_transports(
+            Box::new(crate::transport::NoNetwork),
+            Box::new(crate::transport::NoNetwork),
+        )
+    }
+
+    pub fn with_transports(
+        transport: Box<dyn Transport>,
+        sockets: Box<dyn SocketTransport>,
+    ) -> Self {
         Self {
             transport: Arc::from(transport),
-            sockets: Arc::from(websocket::default_transport()),
+            sockets: Arc::from(sockets),
             secrets: Arc::from(secrets::default_store()),
             kv: Arc::from(kv::default_store()),
             app_directories: None,
@@ -728,6 +743,30 @@ impl Sqlite {
             provider.open(crate::stdlib::sqlite::Location { path })?,
         ))
     }
+}
+
+#[test]
+fn storage_only_hosts_leave_granted_network_operations_to_the_executor() {
+    let grants =
+        GrantSet::parse("net.fetch http://127.0.0.1:1\nnet.websocket ws://127.0.0.1:1").unwrap();
+    let bindings = Host::without_network().endow(grants);
+    assert_eq!(
+        bindings.fetch.get("http://127.0.0.1:1/").err(),
+        Some(HostError::Unavailable { feature: "fetch" })
+    );
+    assert_eq!(
+        bindings
+            .websocket
+            .open(
+                "ws://127.0.0.1:1/",
+                1024,
+                &crate::stdlib::abort::AbortSignal::default()
+            )
+            .err(),
+        Some(HostError::Unavailable {
+            feature: "websocket"
+        })
+    );
 }
 
 #[cfg(test)]

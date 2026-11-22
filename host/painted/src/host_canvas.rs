@@ -71,9 +71,8 @@ impl<D: DataSource> Host<D> {
         crate::canvas2d::capture(&self.canvas2d, found, roots, &grants, scope)
     }
 
-    /// Each 2D canvas's latest bitmap, for the painters.
-    pub(crate) fn canvas_snapshots(&self) -> BTreeMap<ViewId, crate::canvas2d::CanvasPaint> {
-        self.canvas2d.snapshots()
+    pub(crate) fn canvas_snapshots(&self) -> &crate::canvas2d::CanvasSnapshots {
+        &self.canvas2d.snapshots
     }
 
     /// Whether a 2D canvas asked for another frame (LLP 1056 D5).

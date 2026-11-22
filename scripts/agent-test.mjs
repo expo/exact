@@ -19,7 +19,7 @@ import { driveStore, faultSpecOf, launchFacts } from './agent-launch.mjs';
 import { macSandboxed } from './agent-build.mjs';
 import { resolveApp, webDist as defaultWebDist } from './app.mjs';
 import { onThisMachine, serverUrl } from './app-server.mjs';
-import { backendOrigin, backendOriginSelection, literalBackendOrigin, staticFacts } from '../js/bake/src/typescript.mjs';
+import { backendOrigin, backendOriginSelection, injectBackendOrigin, literalBackendOrigin, staticFacts } from '../js/bake/src/typescript.mjs';
 import { declaredSettings, settingValues } from '../js/bake/src/__exact_env.mjs';
 import { appSettings } from './app-imports.mjs';
 import { createRequire } from 'node:module';
@@ -804,7 +804,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     // A test's launch lines lead its steps and override the drive's flags (habits F7).
     // The drive's `--fail-fetch` is every test's, with its own leading `fail fetch` lines added (LLP 1103 D3).
     const facts = { size, seed, locale, formatLocale, timeZone, epoch, failFetch };
-    const lines = [], preferences = [], stored = [];
+    const lines = [], preferences = [], stored = [], sessions = [];
     const media = {}, permissions = {}; // the latest of each, which a `reload` applies again
     let beforeData = false, leading = 0, reset = null, opensAt = null; // `at`'s location, where the app opens (LLP 1153 D5)
     // `fail fetch` lines that lead the steps are armed before the app's first data load (LLP 1103 D3).
@@ -817,6 +817,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     for (const st of t.steps) {
       if (st.op === 'before-data') beforeData = true;
       else if (st.op === 'fresh') reset = st;
+      else if (st.op === 'signed-in') sessions.push(st);
       else if (st.op === 'stored') stored.push([st.window ? '#window.' + st.name : st.name, st.json]);
       else if (st.op === 'fail-fetch') { early(st); facts.failFetch = [facts.failFetch, st.times == null ? st.prefix : `${st.prefix}\t${st.times}`].filter(Boolean).join('\n'); if (st.times != null) armed.set(st.prefix, st.line); }
       else if (st.op === 'answer-fetch') facts.failFetch = [facts.failFetch, faultSpecOf([{prefix: st.prefix, method: st.method, hits: 0, armed: true, response: st.response}])].filter(Boolean).join('\n');
@@ -827,11 +828,6 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       else break;
       lines.push(st.line);
       leading++;
-    }
-    if (stored.length) {
-      // A fixture and its reload share the named scratch store, even under a live driver's EXACT_STORE=real.
-      fixture.EXACT_STORE = 'memory';
-      Object.assign(fresh, fixture, { EXACT_AGENT_STORED: JSON.stringify(stored) });
     }
     if (host === 'web' && opensAt && /^https?:\/\//.test(url ?? '')) opensAt = new URL(opensAt, url).href;
     // Replay uses the already-resolved facts, including an authored `epoch now` (LLP 1116.007 D3.4).
@@ -860,11 +856,36 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       landed({ name: t.name, index: n, failures: [`${t.name}: line ${reset.line}: ${e.message}`], notes });
       continue;
     }
+    if (sessions.length) {
+      try {
+        if (!server) throw new Error('signed-in needs the local OAuth fixture as the app server');
+        const parse = createRequire(import.meta.url)('rolldown/utils').parseSync;
+        const settings = appSettings(selected.dir, launched);
+        const source = settings.modules.get('app.ts');
+        const options = { source, load: settings.load };
+        const code = injectBackendOrigin(settings.code, chosen, parse, launched, options);
+        const grants = staticFacts(code, parse, options).grants ?? '';
+        const plain = new Set(grants.split('\n').map(line => line.trim().split(/\s+/))
+          .map(words => words[0] === 'development' ? words.slice(1) : words)
+          .filter(words => words.length === 2 && words[0] === 'secret.keep').map(words => words[1]));
+        const { signedInSession } = await import('../packages/oauth/test/fixture.ts');
+        for (const st of sessions) {
+          if (!plain.has(st.key)) throw new Error(`line ${st.line}: signed-in requires a plain secret.keep grant for ${st.key}`);
+          stored.push(['#oauth.' + st.key, await signedInSession(server, st.key, st.account)]);
+        }
+      } catch (e) {
+        landed({ name: t.name, index: n, failures: [`${t.name}: ${e.message}`], notes });
+        continue;
+      }
+    }
+    if (stored.length) {
+      // A fixture and its reload share the named scratch store, even under a live driver's EXACT_STORE=real.
+      fixture.EXACT_STORE = 'memory';
+      Object.assign(fresh, fixture, { EXACT_AGENT_STORED: JSON.stringify(stored) });
+    }
     const heads = await Promise.all(shared.map((o) => backendHead(o)));
-    // A drag on an iOS simulator is the touch runner's real gesture (LLP 1080.000 §11; chat2 diary: an authored
-    // test could not drag there); every other step stays the agent's. A phone has no runner yet: its drag says so.
-    // `--touch platform` makes every tap a real touch too (splitter rough 12: a test of what a finger reaches).
-    const drags = !device && ['ios', 'host-ios'].includes(host) && t.steps.some((st) => st.op === 'drag');
+    // An authored drag uses XCTest on iOS. Other taps opt in with `--touch platform` (LLP 1080.000 §11).
+    const drags = ['ios', 'host-ios'].includes(host) && t.steps.some((st) => st.op === 'drag');
     const fingers = touch !== 'agent' ? touch : drags ? 'drag' : 'agent';
     // The date a relaunch starts at: this launch's date at the clock's zero plus the virtual time the test has reached
     // (every `clock +N`, settle and timer), as the runner reports it; whole milliseconds, which every host takes.
@@ -1017,7 +1038,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
         if (INPUTS.has(st.op)) await settleFired();
         if (st.op === 'type') { typed.add(st.target); touched.add(st.target); } else if (INPUTS.has(st.op) || st.op === 'reload') typed.clear();
         switch (st.op) {
-          case 'size': case 'at': case 'epoch': case 'time-zone': case 'locale': case 'seed': case 'before-data': case 'fresh': case 'stored': break; // the session opened with it
+          case 'size': case 'at': case 'epoch': case 'time-zone': case 'locale': case 'seed': case 'before-data': case 'fresh': case 'stored': case 'signed-in': break; // the session opened with it
           case 'prefer': if (n >= leading) await prefer(st); break;
           // A driver fault (LLP 1103): a leading one was a launch line; a later one arms (or re-arms) now, a `pass` stops it.
           case 'fail-fetch': {

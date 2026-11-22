@@ -56,6 +56,10 @@ final class TextSelectionHost: TextSelecting {
         install(node)
     }
     func surface(for node: NodeView) -> UIView? { text(for: node)?.document?.surface }
+    func routesToSurface(_ node: NodeView) -> Bool {
+        if let held = text(for: node) { return held.document != nil }
+        return admits(node) && documentParagraphs(for: node) != nil
+    }
     func hasSelection(in node: NodeView) -> Bool { text(for: node)?.selected.length ?? 0 > 0 }
     func interactionHolds(_ gesture: UIGestureRecognizer, on paragraph: NodeView) -> Bool {
         text(for: paragraph)?.interaction.gesturesForFailureRequirements.contains { $0 === gesture } == true
@@ -64,16 +68,18 @@ final class TextSelectionHost: TextSelecting {
     func install(_ node: NodeView) -> SelectableText {
         if let held = text(for: node) { return held }
         while texts.count >= Self.kept, let old = texts.first(where: { !$0.busy }) { drop(old) }
-        var document: SelectionDocument?
-        if let owner = SelectionDocument.container(of: node) {
-            let paragraphs = SelectionDocument.paragraphs(in: owner, host: self)
-            if paragraphs.count > 1, paragraphs.allSatisfy({ $0.contextMenuSource == nil && !$0.hasInlineContextMenu }) {
-                document = SelectionDocument(owner: owner, paragraphs: paragraphs, host: self)
-            }
-        }
+        let document = documentParagraphs(for: node).map { SelectionDocument(owner: $0.owner, paragraphs: $0.paragraphs, host: self) }
         let made = SelectableText(node: node, host: self, document: document)
         texts.append(made)
         return made
+    }
+    /// The container and paragraphs a selection document of `node`'s would
+    /// span: more than one paragraph, none with a menu of its own.
+    private func documentParagraphs(for node: NodeView) -> (owner: NodeView, paragraphs: [NodeView])? {
+        guard let owner = SelectionDocument.container(of: node) else { return nil }
+        let paragraphs = SelectionDocument.paragraphs(in: owner, host: self)
+        guard paragraphs.count > 1, paragraphs.allSatisfy({ $0.contextMenuSource == nil && !$0.hasInlineContextMenu }) else { return nil }
+        return (owner, paragraphs)
     }
     func remove(_ node: NodeView) { if let held = text(for: node) { drop(held) } }
     private func drop(_ held: SelectableText) {

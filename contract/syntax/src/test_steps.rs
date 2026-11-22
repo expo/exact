@@ -259,6 +259,15 @@ pub enum Step {
         /// Where.
         span: Span,
     },
+    /// A local OIDC fixture session in the test's initial store.
+    SignedIn {
+        /// The provider's secret.keep name.
+        key: String,
+        /// The fixture account as JSON.
+        account: String,
+        /// Where.
+        span: Span,
+    },
     /// A persisted state in the test's initial store (LLP 1116 D5).
     Stored {
         /// The state name, including names used by earlier builds.

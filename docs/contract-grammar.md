@@ -1619,6 +1619,10 @@ whatever is declared. A capitalized name is a component use, not a
 built-in tag. Platform support can further restrict an admitted tag, notably
 native `foreignObject`.
 
+On an `iframe`, `zoom` multiplies the frame's own lengths and the guest's page zoom.
+A frame sized by its container keeps that size. On macOS, `zoom` can change where text
+wraps. `scale` preserves the guest's layout and can soften text when enlarged.
+
 `contract vocab` lists every tag and attribute the compiler admits, including
 `h1`–`h6` and the compile-time attributes `class`, `part` and `-exact-row-look`,
 with each style row's codec, values and default, the renamed spellings and the

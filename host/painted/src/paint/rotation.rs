@@ -1,11 +1,11 @@
 //! Rotate the completed output, leaving paint geometry in logical coordinates.
 use super::*;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(windows, target_arch = "wasm32")))]
 use exact_ink::device::{Device, TextureDesc};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(windows, target_arch = "wasm32")))]
 use exact_ink::instance::TextureId;
 use exact_ink::Rotation;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(windows, target_arch = "wasm32")))]
 use exact_ink::Wgpu;
 
 #[derive(Default)]
@@ -13,11 +13,11 @@ pub(crate) struct Output {
     pub rotation: Rotation,
     #[cfg(target_os = "linux")]
     scanout: Option<wgpu::TextureView>,
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(windows, target_arch = "wasm32")))]
     fallback: Option<Pixels>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(windows, target_arch = "wasm32")))]
 struct Pixels {
     device: Wgpu,
     source: TextureId,
@@ -56,7 +56,7 @@ impl Output {
         self.rotate(&pixels).map(Some)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(windows, target_arch = "wasm32")))]
     fn rotate(&mut self, pixels: &Pixmap) -> Result<Pixmap, String> {
         let size = [pixels.width(), pixels.height()];
         let rotated = self.rotation.size(size);
@@ -87,6 +87,27 @@ impl Output {
         )
         .ok_or_else(|| "invalid rotated pixels".into())
     }
+    #[cfg(windows)]
+    fn rotate(&mut self, pixels: &Pixmap) -> Result<Pixmap, String> {
+        // Ink rotates on its own device before readback. The other Windows painters already returned host pixels.
+        let size = [pixels.width(), pixels.height()];
+        let [width, height] = self.rotation.size(size);
+        let [a, b, c, d, tx, ty] = self.rotation.affine(size);
+        let mut output = Pixmap::new(width, height).ok_or("invalid rotated pixels")?;
+        output.draw_pixmap(
+            0,
+            0,
+            pixels.as_ref(),
+            &tiny_skia::PixmapPaint {
+                blend_mode: tiny_skia::BlendMode::Source,
+                ..Default::default()
+            },
+            tiny_skia::Transform::from_row(a, b, c, d, tx, ty),
+            None,
+        );
+        Ok(output)
+    }
+
     #[cfg(target_arch = "wasm32")]
     fn rotate(&mut self, _: &Pixmap) -> Result<Pixmap, String> {
         Err("panel rotation requires a native GPU device".into())
@@ -122,7 +143,17 @@ mod tests {
     use crate::presenter::{PainterChoice, Presenter};
 
     #[test]
-    fn captures_and_submitted_frames_rotate_after_layout_on_each_painter() {
+    fn cpu_captures_and_submitted_frames_rotate_after_layout() {
+        check_rotation(PainterChoice::Cpu);
+    }
+
+    #[test]
+    fn gpu_captures_and_submitted_frames_rotate_after_layout() {
+        check_rotation(PainterChoice::Ink);
+        check_rotation(PainterChoice::Gpu);
+    }
+
+    fn check_rotation(choice: PainterChoice) {
         let plan = contract::compile(
             r##"component App
   view
@@ -132,11 +163,11 @@ mod tests {
         )
         .unwrap()
         .encode();
-        let path = std::env::temp_dir().join(format!("exact-rotation-{}.png", std::process::id()));
-        for (choice, scale) in [PainterChoice::Cpu, PainterChoice::Ink, PainterChoice::Gpu]
-            .into_iter()
-            .flat_map(|choice| [(choice, 1.), (choice, 2.)])
-        {
+        let path = std::env::temp_dir().join(format!(
+            "exact-rotation-{choice:?}-{}.png",
+            std::process::id()
+        ));
+        for scale in [1., 2.] {
             let mut p = Presenter::boot_with(&plan, (), (48., 32.), scale, ".".into(), choice)
                 .unwrap()
                 .0;
@@ -184,6 +215,7 @@ mod tests {
                     assert_eq!(reply["w"], rw as f32 / scale);
                     assert_eq!(reply["h"], rh as f32 / scale);
                     assert_eq!(reply["rotation"], degrees);
+                    #[cfg(not(any(windows, target_arch = "wasm32")))]
                     if matches!(choice, PainterChoice::Ink) {
                         assert!(p.brush.output.fallback.is_none());
                     }

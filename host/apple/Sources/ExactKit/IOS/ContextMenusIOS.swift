@@ -316,10 +316,12 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     private func log(_ line: String) { presenter?.session?.log(line) }
 
     /// A mount takes an interaction while one of `sources` is a logical
-    /// ancestor of its route, and gives it back when none is.
+    /// ancestor of its route, and gives it back when none is: a sheet's,
+    /// and the tab bar's accessory, whose element stands for the route.
     private func syncMounts(_ presenter: Presenter, sources: [NodeView]) {
         var live: Set<ObjectIdentifier> = []
-        for (mount, route) in presenter.modals.mounted {
+        let mounts = presenter.modals.mounted.map { ($0.mount as any RelayMount, $0.route) } + presenter.navigation.relayMounts.map { ($0.mount, $0.node) }
+        for (mount, route) in mounts {
             guard sources.contains(where: { $0 !== route && presenter.logicallyWithin(route, $0) }) else { continue }
             let key = ObjectIdentifier(mount)
             live.insert(key)
@@ -330,6 +332,15 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
             }
         }
         for (key, interaction) in mountInteractions where !live.contains(key) {
+            // A menu open from it ends now, a shown one giving the focus back: UIKit may never call `willEnd`
+            // for an interaction it no longer holds
+            if open?.interaction === interaction, let owner = open {
+                let shown = owner.toggled
+                restore(owner)
+                open = nil
+                if shown { menus?.focus.restore() }
+            }
+            interaction.dismissMenu()
             interaction.view?.removeInteraction(interaction)
             mountInteractions[key] = nil
         }
@@ -340,11 +351,19 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         let source: NodeView, point: CGPoint, hit: UIView?
         if let node = view as? NodeView {
             source = node; point = location; hit = node.hitTest(location, with: nil)
+            // A press on a mount inside the node, the tab bar's accessory, is the mount's own interaction's (`MountRelay`)
+            if let hit, presenter?.navigation.relayMounts.contains(where: { hit.isDescendant(of: $0.mount) && $0.mount.isDescendant(of: node) }) == true {
+                return nil
+            }
         } else if let cell = view as? (UIView & GroupedMenuSurface), let found = cell.menuSource {
             source = found; point = location; hit = cell
-        } else if let mount = view as? PresentationMount, let found = mount.relay?.listener(mount.hitTest(location, with: nil), contextMenu: true, { $0.props["contextPopover"]?.isEmpty == false }) {
-            // A sheet's mount: its route's nearest logical ancestor with a
-            // menu, unless a node in the sheet is nearer (`MountRelay`)
+        } else if let mount = view as? any RelayMount, let relay = mount.relay, !relay.runAnswers(mount.hitTest(location, with: nil), at: location),
+                  let found = relay.listener(mount.hitTest(location, with: nil), contextMenu: true, holders: true, { $0.props["contextPopover"]?.isEmpty == false }),
+                  relay.listener(mount.hitTest(location, with: nil), contextMenu: true, holders: true, { $0.handlers.contains("contextmenu") || $0.props["contextPopover"]?.isEmpty == false }) === found {
+            // A sheet's mount or the tab bar's accessory: its content's nearest
+            // logical ancestor with a menu, one whose view holds the mount
+            // included, unless a node or run nearer the touch gives a menu or
+            // hears a long press, in it or above it (`MountRelay`)
             source = found; point = mount.convert(location, to: found); hit = mount.hitTest(location, with: nil)
         } else { return nil }
         var run = source.inlineContextTarget(at: point)
@@ -399,10 +418,10 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         }
         let owner = Open(source: source, popover: pop, name: name, point: point)
         owner.fired = true // The keyboard dispatcher has already delivered contextmenu.
-        guard menu(owner) != nil else { return false }
+        open = owner
+        guard menu(owner) != nil else { open = nil; return false }
         let configuration = UIEditMenuConfiguration(identifier: NSNumber(value: source.id), sourcePoint: point)
         owner.keyboardConfiguration = configuration
-        open = owner
         source.addInteraction(keyboardInteraction)
         menus.focus.setAside()
         keyboardInteraction.presentEditMenu(with: configuration)
@@ -438,7 +457,8 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
             return linkMenu(owner, owner.name)
         }
         fire(owner)
-        guard let menus, let pop = current(owner) else { return nil }
+        // A menu that ended gives none: a batch, its `contextmenu`'s included, may end it before UIKit asks
+        guard open === owner, let menus, let pop = current(owner) else { return nil }
         let items = menus.items(of: pop, opener: owner.source) // a row's popover opens from the pressed node (LLP 1021)
         return items.isEmpty ? nil : UIMenu(title: pop.props["accessibilityLabel"] ?? "", children: items)
     }
@@ -448,6 +468,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     func lift(_ owner: Open) -> UIViewController? {
         guard !owner.isLink else { return nil }
         fire(owner)
+        guard open === owner else { return nil }
         // Asked again, the same controller: the row is already in it.
         if owner.preview != nil, let controller = owner.controller { return controller }
         guard let pop = current(owner) else { return nil }
@@ -1294,6 +1315,12 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
             if let view = interaction.view { detach(interaction, from: view); (view as? NodeView)?.contextRecognizer?.isEnabled = true }
         }
         interactions.removeAll()
+        // A mount's interaction goes with the views of the tree being replaced
+        for interaction in mountInteractions.values {
+            interaction.dismissMenu()
+            interaction.view?.removeInteraction(interaction)
+        }
+        mountInteractions.removeAll()
         // Parked views are no node's and out of the map: theirs come off too,
         // with what UIKit added beside them, before the records go.
         for case let view as NodeView in parkedViews.allObjects { ours(view).forEach { detach($0, from: view) } }

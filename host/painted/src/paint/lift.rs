@@ -77,6 +77,8 @@ impl Painter {
         let rows = self.has_rows(walk, node);
         let group = rows && !self.rows_wrapper(node.key);
         let wrap = group && self.wraps_rows(walk, &children);
+        let split_sections = rows && self.backend.independent_section_rows();
+        let sections = (split_sections && !wrap).then(|| self.row_sections(walk.scene.kernel));
         if group {
             self.group_begin(walk, node.id);
         }
@@ -84,7 +86,7 @@ impl Painter {
         let (last, count) = (self.stage_after(&children), children.len());
         for (at, child) in children.into_iter().enumerate() {
             self.replay_kept(walk.scene, &kept, at, space);
-            if wrap {
+            if wrap || Self::is_row_section(walk, sections.as_deref(), child) {
                 self.wrapped(walk, child, ts, child_offset, child_rect);
             } else if rows {
                 self.row(walk, child, ts, child_offset, child_rect);

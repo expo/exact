@@ -173,7 +173,7 @@ extension NodeView {
         #else
         let children: [Any] = inlineElements() + readerAtomElements()
         guard !children.isEmpty else { return nil }
-        let paragraph = UIAccessibilityElement(accessibilityContainer: self)
+        let paragraph = ParagraphAccessibility(owner: self)
         paragraph.accessibilityLabel = props["accessibilityLabel"] ?? visibleParagraphText
         paragraph.accessibilityValue = spokenValue
         paragraph.accessibilityLanguage = presenter?.documentLanguage
@@ -329,5 +329,25 @@ private final class InlineAccessibility: UIAccessibilityElement, InspectionOwned
         set { }
     }
     override func accessibilityActivate() -> Bool { owner?.activateInline(id) ?? false }
+    #if os(iOS)
+    /// A draggable node's drag around its paragraph (D9)
+    override var accessibilityDragSourceDescriptors: [UIAccessibilityLocationDescriptor]? {
+        get { owner.flatMap { $0.presenter?.dragOut?.descriptors(of: $0, isElement: false) } }
+        set { }
+    }
+    #endif
+}
+
+/// A paragraph's words beside its links, which UIKit makes no view for.
+private final class ParagraphAccessibility: UIAccessibilityElement {
+    weak var owner: NodeView?
+    init(owner: NodeView) { self.owner = owner; super.init(accessibilityContainer: owner) }
+    #if os(iOS)
+    /// A draggable node's drag around the paragraph (D9)
+    override var accessibilityDragSourceDescriptors: [UIAccessibilityLocationDescriptor]? {
+        get { owner.flatMap { $0.presenter?.dragOut?.descriptors(of: $0, isElement: false) } }
+        set { }
+    }
+    #endif
 }
 #endif

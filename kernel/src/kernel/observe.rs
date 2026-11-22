@@ -171,12 +171,6 @@ impl Observations {
         self.readouts.len() != before
     }
 
-    /// Half a device pixel at the last solve, within which a measurement is
-    /// settled.
-    pub(super) fn tolerance(&self) -> f32 {
-        self.tolerance
-    }
-
     /// The session view's band, in the document's space.
     pub(super) fn session(&self) -> [f32; 4] {
         self.session

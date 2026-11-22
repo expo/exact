@@ -406,6 +406,7 @@ impl Painter {
             }
             pixel[3] = alpha as u8;
         }
+        self.row_reach(super::bbox(ts, rect));
         self.backend.island_image(Arc::new(pixels), rect, ts, 0);
     }
 }
@@ -413,7 +414,7 @@ impl Painter {
 /// The paragraph's box widened to where its lines sit. `width` is the widest
 /// line's advance, but a centred or right-aligned line (or one in a wider
 /// field) starts past zero, so its glyphs can lie beyond `width`.
-fn line_bounds(paragraph: &Paragraph) -> Rect4 {
+pub(super) fn line_bounds(paragraph: &Paragraph) -> Rect4 {
     let (mut left, mut right) = (0.0f32, paragraph.width);
     for line in paragraph.layout_runs() {
         // Glyphs are in visual order: the first is leftmost, the last rightmost.
