@@ -6,6 +6,13 @@
 //! link opens is the receiving app's parser's to decide; Exact carries the
 //! URL as written.
 
+/// Whether a resource names the HTTP or HTTPS scheme.
+pub fn has_http_scheme(name: &str) -> bool {
+    name.split_once(':').is_some_and(|(scheme, _)| {
+        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+    })
+}
+
 /// Why `url` is no web link a drag or a share carries (LLP 1094.000 D1), or
 /// `None` when it is one: it starts with `http://` or `https://`, in any
 /// case, a host follows, and it holds no space or ASCII control character.
@@ -27,7 +34,7 @@ pub fn http_url_refusal(url: &str) -> Option<&'static str> {
                     .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
         });
         return Some(match scheme {
-            _ if lower.starts_with("http:") || lower.starts_with("https:") => NO_HOST,
+            _ if has_http_scheme(url) => NO_HOST,
             true => "its scheme is not `http:` or `https:`",
             false => "another app cannot open this app's path",
         });

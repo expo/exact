@@ -63,15 +63,17 @@ impl Em<'_> {
                 } else {
                     format!("d_{i}")
                 };
-                names.insert(i, (name, self.mount_templates.depth + 1));
+                names.insert(i, (name, self.mount_templates.scope_depth + 1));
             }
         }
         let mut inner = scope.clone();
         inner.unsettled = true;
         inner.evaluation = None;
         inner.capture = !self.site_attrs && !self.dev_reload;
-        let mut templates =
-            super::templates::Templates::computations(self.mount_templates.depth + 1, "$budget");
+        let mut templates = super::templates::Templates::computations(
+            self.mount_templates.scope_depth + 1,
+            "$budget",
+        );
         let read = self.uses.budget("$atRead");
         let mut out = String::new();
         for (i, row) in rows {
@@ -162,7 +164,18 @@ impl Em<'_> {
                     let outer_names = self.next_local_element;
                     self.next_local_element = (!self.site_attrs && !self.dev_reload).then_some(0);
                     let binds = !path.is_empty() || !decl.is_empty() || (k == 0 && bound.is_some());
-                    self.template_scope(binds, |em| em.children(em.sites.of_arm(*arm), "p", &sc))?;
+                    if binds && sc.capture && path.is_empty() && (k != 0 || bound.is_none()) {
+                        // This arm binds only getters and the row state object. A mount shared
+                        // outside the arm takes either binding from the instance that calls it.
+                        self.mount_templates.scope_depth += 1;
+                        let children = self.children(self.sites.of_arm(*arm), "p", &sc);
+                        self.mount_templates.scope_depth -= 1;
+                        children?;
+                    } else {
+                        self.template_scope(binds, |em| {
+                            em.children(em.sites.of_arm(*arm), "p", &sc)
+                        })?;
+                    }
                     self.next_local_element = outer_names;
                     let built = std::mem::replace(&mut self.out, saved);
                     let params = match (&bound, k) {
@@ -247,7 +260,11 @@ impl Em<'_> {
             Some(outer) => format!("const {name}={{...{outer}}};"),
             None => format!("const {name}={{}};"),
         };
-        scope.rows = Some(name.to_string());
+        scope.rows = Some(if scope.capture {
+            code::lexical_operand(name, self.mount_templates.scope_depth + 1)
+        } else {
+            name.to_string()
+        });
         scope
             .row_slots
             .extend(self.answers.slots(arm).iter().copied());
@@ -417,9 +434,16 @@ impl Em<'_> {
                     (true, p) => format!("{p},{r}"),
                     (false, p) => p.to_string(),
                 };
+                let params = format!("p,{item},{index}{row_key}");
+                let row = if inner.capture && self.next_local_element.is_some() {
+                    self.mount_templates
+                        .mount(&params, built, None, Some(region_site(plan, r)))
+                } else {
+                    format!("({params})=>{{{built}}}")
+                };
                 let _ = write!(
                     self.out,
-                    "{each}({parent},{subject},({item},{index})=>{key},(p,{item},{index}{row_key})=>{{{built}}}{pure});"
+                    "{each}({parent},{subject},({item},{index})=>{key},{row}{pure});"
                 );
             }
         }

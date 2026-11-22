@@ -8,9 +8,9 @@ enum Value {
     /// The getter ignores its caller's instruction. Any other use may supply it.
     NoPc,
     Param(usize),
-    /// A parameter of the function being rendered, bound inside the enclosing template.
+    /// A name bound within the function being rendered.
     Local(Rc<str>),
-    /// A lexical getter passed between mounts within the scope that declared it.
+    /// A getter or state object captured from an enclosing arm.
     Binding(usize, Rc<str>),
 }
 
@@ -102,7 +102,9 @@ impl Template {
 
 #[derive(Default)]
 pub(super) struct Templates {
-    pub(super) depth: usize,
+    /// Shared functions are declared here. A deeper binding must come from their caller.
+    declaration_depth: usize,
+    pub(super) scope_depth: usize,
     /// A shared computation takes this argument at the point it is evaluated.
     argument: Option<&'static str>,
     bodies: Vec<Template>,
@@ -137,11 +139,18 @@ impl Base {
 }
 
 impl Templates {
+    pub fn mounts(depth: usize) -> Self {
+        Self {
+            declaration_depth: depth,
+            scope_depth: depth,
+            ..Self::default()
+        }
+    }
+
     pub fn computations(depth: usize, argument: &'static str) -> Self {
         Self {
-            depth,
             argument: Some(argument),
-            ..Self::default()
+            ..Self::mounts(depth)
         }
     }
 
@@ -163,7 +172,7 @@ impl Templates {
                 } else if let Some(binding) = op.strip_prefix('l') {
                     let (depth, name) = binding.split_once(':').expect("lexical binding");
                     let depth = depth.parse().expect("binding depth");
-                    if self.depth < depth {
+                    if self.scope_depth < depth {
                         // The surrounding arm introduces this name in its own body.
                         Part::Js(name.into())
                     } else {
@@ -235,6 +244,16 @@ impl Templates {
 
         let mut args = Vec::new();
         for value in body.iter_mut().flat_map(Part::values) {
+            if let Value::Binding(depth, name) = value {
+                if *depth > self.scope_depth {
+                    // The parent declares this binding before calling the child.
+                    *value = Value::Local(name.clone());
+                    continue;
+                }
+            }
+            if matches!(value, Value::Local(_)) {
+                continue;
+            }
             let i = args.len();
             args.push(std::mem::replace(value, Value::Param(i)));
         }
@@ -253,7 +272,10 @@ impl Templates {
                     columns: args
                         .iter()
                         .map(|js| Column {
-                            fixed: Some(js.clone()),
+                            fixed: match js {
+                                Value::Binding(depth, _) if *depth > self.declaration_depth => None,
+                                _ => Some(js.clone()),
+                            },
                             first: 0,
                         })
                         .collect(),
@@ -343,7 +365,7 @@ impl Templates {
                 }
                 let mut captures = HashMap::new();
                 let single = t.captures().take(2).count() == 1;
-                let env = format!("$c{}", self.depth);
+                let env = format!("$c{}", self.declaration_depth);
                 let values: Vec<_> = t
                     .columns
                     .iter()
@@ -407,7 +429,9 @@ impl Render<'_> {
     fn operand(&self, value: &Value) -> Rc<str> {
         match value {
             Value::Js(js) if self.enclosing => format!("\0v:{js}\0").into(),
-            Value::Binding(depth, js) if self.enclosing && self.templates.depth > *depth => {
+            Value::Binding(depth, js)
+                if self.enclosing && self.templates.declaration_depth > *depth =>
+            {
                 crate::code::lexical_operand(js, *depth).into()
             }
             Value::Binding(_, js) => js.clone(),

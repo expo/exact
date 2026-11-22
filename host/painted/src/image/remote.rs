@@ -78,13 +78,6 @@ pub(crate) fn without_queries(text: &str) -> String {
     out
 }
 
-/// Whether `name` is fetched rather than read: an `http:` or `https:` URL.
-pub(super) fn is_remote(name: &str) -> bool {
-    name.split_once(':').is_some_and(|(scheme, _)| {
-        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
-    })
-}
-
 /// How many downloads run at once in the process: a browser's connections
 /// to one host over HTTP/1.1, which is what this transport speaks.
 const THREADS: usize = 6;

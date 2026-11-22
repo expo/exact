@@ -111,8 +111,11 @@ impl Em<'_> {
         if !new_scope {
             return render(self);
         }
-        let outer = std::mem::take(&mut self.mount_templates);
-        self.mount_templates.depth = outer.depth + 1;
+        let depth = self.mount_templates.scope_depth + 1;
+        let outer = std::mem::replace(
+            &mut self.mount_templates,
+            super::templates::Templates::mounts(depth),
+        );
         let saved = std::mem::take(&mut self.out);
         render(self)?;
         let built = std::mem::replace(&mut self.out, saved);

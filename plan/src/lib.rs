@@ -25,7 +25,7 @@
 #![deny(missing_docs)]
 
 mod http_url;
-pub use http_url::http_url_refusal;
+pub use http_url::{has_http_scheme, http_url_refusal};
 pub mod asm;
 pub mod builder;
 pub mod bytes;

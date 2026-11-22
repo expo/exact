@@ -877,19 +877,16 @@ pub fn uses_picture_in_picture(plan: &Plan) -> bool {
     runs_command(plan, &["requestPictureInPicture"])
 }
 
-/// Whether an image's, a media element's or a frame's source can be remote:
-/// an `http:` or `https:` literal, or one computed at run time, which this
-/// cannot read. The Mac App Store sandbox loads such a source only with
-/// `network.client` (LLP 1030.005 D2).
+/// A remote or computed image, media source, video poster or iframe URL
+/// requires the Mac App Store sandbox's `network.client` (LLP 1030.005 D2).
 pub fn sources_can_be_remote(plan: &Plan) -> bool {
     plan.bindings.iter().any(|binding| {
         binding.kind == BindingKind::Prop
             && matches!(
                 PropId::from_wire(binding.id),
-                Some(PropId::Src | PropId::ImageSource)
+                Some(PropId::Src | PropId::ImageSource | PropId::Poster)
             )
-            && constant_str(plan, plan.code(binding.expr))
-                .is_none_or(|src| src.starts_with("http:") || src.starts_with("https:"))
+            && constant_str(plan, plan.code(binding.expr)).is_none_or(exact_plan::has_http_scheme)
     })
 }
 
