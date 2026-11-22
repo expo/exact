@@ -163,7 +163,8 @@ struct Capture {
     refused: bool,
     split_sections: bool,
     may_have_hit_slop: bool,
-    /// What its boxes' filters paint, in the walk's coordinates (`box_filter.rs`).
+    /// What it paints past its boxes, in the walk's coordinates: filters
+    /// (`box_filter.rs`), shadows, overflowing lines and inline backgrounds.
     reach: Option<Rect4>,
     images: Vec<(ViewId, Option<std::sync::Weak<Bitmap>>)>,
     slots: Vec<Slot>,
@@ -222,6 +223,22 @@ impl Rows {
 
 /// Room around a row's boxes for what paints outside them (shadows).
 const MARGIN: f32 = 48.0;
+
+/// Whether `node` is a column with a sticky heading, whose children a backend
+/// that splits sections keeps as rows ([`Backend::independent_section_rows`]).
+fn row_section(node: &NodeRef<'_>) -> bool {
+    node.node_type == NodeType::View
+        && node.style.flex_direction == exact_kernel::FlexDirection::Column
+        && node.layout_position() != exact_kernel::PositionType::Sticky
+        && !scrolls(effective_overflow(node).0)
+        && !scrolls(effective_overflow(node).1)
+        && {
+            let mut children = node.child_nodes();
+            children.len() >= 3
+                && children
+                    .any(|child| child.layout_position() == exact_kernel::PositionType::Sticky)
+        }
+}
 
 pub(super) fn union(a: Option<Rect4>, b: Rect4) -> Rect4 {
     match a {
@@ -319,9 +336,20 @@ impl Painter {
             }
             found
         };
+        let split = self.backend.independent_section_rows();
         for key in dirty.hard {
             if let Some(row) = row_of(&self.rows, key) {
                 self.rows.kept.get_mut(&row).expect("found").stale = true;
+            } else if let Some(section) =
+                kernel.node_by_key(key).filter(|n| split && row_section(n))
+            {
+                // A split section is in none of its rows, though they paint
+                // what they take from it, such as a pressed or moving color.
+                for child in section.child_nodes() {
+                    if let Some(row) = self.rows.kept.get_mut(&child.key) {
+                        row.stale = true;
+                    }
+                }
             }
         }
         // A row bound to another item is a new row (LLP 1078): its kept
@@ -538,20 +566,10 @@ impl Painter {
 
     /// A column with a sticky heading keeps its body rows apart.
     pub(super) fn is_row_section(walk: &Walk<'_, '_>, id: ViewId) -> bool {
-        walk.scene.kernel.node(id).is_some_and(|node| {
-            node.node_type == NodeType::View
-                && node.style.flex_direction == exact_kernel::FlexDirection::Column
-                && node.layout_position() != exact_kernel::PositionType::Sticky
-                && !scrolls(effective_overflow(&node).0)
-                && !scrolls(effective_overflow(&node).1)
-                && {
-                    let mut children = node.child_nodes();
-                    children.len() >= 3
-                        && children.any(|child| {
-                            child.layout_position() == exact_kernel::PositionType::Sticky
-                        })
-                }
-        })
+        walk.scene
+            .kernel
+            .node(id)
+            .is_some_and(|node| row_section(&node))
     }
 
     /// A container walked with its children as the rows.
@@ -719,7 +737,7 @@ impl Painter {
         }
     }
 
-    /// What a box's filter paints in a recording row, past the box.
+    /// What a recording row paints past its boxes.
     pub(super) fn row_reach(&mut self, r: Rect4) {
         if let Some(c) = &mut self.rows.recording {
             c.reach = Some(union(c.reach, r));
@@ -799,8 +817,6 @@ impl Painter {
             return;
         };
         let split_sections = self.backend.independent_section_rows();
-        // The outer scroller already owns the backend's open row group.
-        // A sticky root on Ink can draw directly because it never reuses a row.
         let geometry = self.backend.geometry_rows();
         if !(self.backend.rows() || geometry)
             || walk.hit_space.is_some()
@@ -809,9 +825,16 @@ impl Painter {
             || (walk.scene.hidden)(id)
             || (split_sections && node.layout_position() == exact_kernel::PositionType::Sticky)
         {
-            let paused = self.rows_pause(None);
-            self.node(walk, id, ts, offset, clip_rect);
-            self.rows_resume(paused);
+            // A backend that splits sections keeps one row group, the outer
+            // scroller's, and none opens inside a layer capture. Another
+            // keeps a nested scroller's group, which a move-only frame shows.
+            if split_sections || !(self.backend.rows() || geometry) {
+                let paused = self.rows_pause(None);
+                self.node(walk, id, ts, offset, clip_rect);
+                self.rows_resume(paused);
+            } else {
+                self.node(walk, id, ts, offset, clip_rect);
+            }
             return;
         }
         let r = paint_rect(node.frame, offset);
@@ -1017,7 +1040,7 @@ impl Painter {
             covered.2 + 2.0 * MARGIN,
             covered.3 + 2.0 * MARGIN,
         );
-        // And what its filters paint, which can pass the margin.
+        // And what it paints past its boxes, which can pass the margin.
         let shift = if local { (0.0, 0.0) } else { origin };
         let bounds = match capture.reach {
             Some(r) => union(Some(bounds), (r.0 - shift.0, r.1 - shift.1, r.2, r.3)),

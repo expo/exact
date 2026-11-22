@@ -135,6 +135,9 @@ impl Painter {
                         })
                         .collect();
                     for paint in shown.inline_backgrounds(&backgrounds, &kernel.env_of(node.id)) {
+                        // Vertical padding paints past the line box.
+                        let (x, y, w, h) = paint.shape().rect;
+                        painter.row_reach(super::bbox(ts, (x + origin.0, y + origin.1, w, h)));
                         inline::paint_inline(&mut *painter.backend, &paint, origin, ts);
                     }
                 }
