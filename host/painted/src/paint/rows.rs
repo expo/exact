@@ -141,7 +141,7 @@ impl Row {
         }
         // Further, a hit can round onto the old box's exclusive edge: walk a
         // row that can take hits at its new position, by its drawing or by
-        // its hit slop, read now because `env()` changes it without a commit.
+        // its hit slop.
         let (x, y, w, h) = self.bounds;
         let drawn = (x + self.origin.0, y + self.origin.1, w, h);
         let (x, y, w, h) = self

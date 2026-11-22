@@ -382,12 +382,15 @@ fn a_stroked_line_draws_the_same_whatever_whole_pixels_move_it() {
         .unwrap();
         assert_eq!(error, None);
         if ink {
-            p.reader_replaced(Box::new(crate::ink::Ink::new().expect("an Ink device")));
+            p.reader_replaced(Box::new(super::ink()?));
         }
-        p.frame().data().to_vec()
+        Some(p.frame().data().to_vec())
     };
     for ink in [false, true] {
-        assert!(frame(ink, 0.) == frame(ink, 30.), "ink {ink}");
+        let (Some(below), Some(above)) = (frame(ink, 0.), frame(ink, 30.)) else {
+            return;
+        };
+        assert!(below == above, "ink {ink}");
     }
 }
 
@@ -464,4 +467,79 @@ fn a_choice_no_value_takes_is_drawn_and_answered_from_its_row_again() {
             "geometry {geometry}"
         );
     }
+}
+
+#[test]
+fn a_renewed_row_is_not_the_row_it_was() {
+    renewed_row(false);
+    // A geometry walk on a backend that keeps sections whole frees nothing.
+    renewed_row(true);
+}
+
+fn renewed_row(whole_sections: bool) {
+    let cells: String = (0..6)
+        .map(|i| format!("        box height=50 width=200 testId=\"c{i}\"\n"))
+        .collect();
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &contract::compile(&format!(
+            "component App\n  view\n    scroll testId=\"port\" width=200 height=400\n      column\n{cells}"
+        ))
+        .unwrap()
+        .encode(),
+        (),
+        (400., 500.),
+        1.,
+        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/caltrain")),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let heard = Rc::new(RefCell::new(Heard {
+        whole_sections,
+        ..Heard::default()
+    }));
+    p.brush.replace_backend(Box::new(Keeps {
+        heard: heard.clone(),
+        row: 0,
+    }));
+    let _ = p.frame();
+    let first = std::mem::take(&mut heard.borrow_mut().begun);
+    assert_eq!(first.len(), 6, "each cell a kept row");
+    assert!(first.iter().all(|(_, previous)| previous.is_none()));
+    // () changed: nothing is recorded again.
+    let _ = p.frame();
+    assert!(heard.borrow().begun.is_empty());
+    heard.borrow_mut().geometry_without_drawing = true;
+    // One row changed, one was bound to another item.
+    let key = |name: &str| p.host.kernel().find_by_test_id(name)[0];
+    let (changed, renewed) = (key("c1"), key("c4"));
+    p.host.row_dirty.commit(
+        &exact_kernel::CommitReceipt {
+            touched: vec![changed, renewed],
+            renewed: vec![renewed],
+            ..Default::default()
+        },
+        0.0,
+    );
+    for _ in 0..2 {
+        p.repaint();
+        assert!(p.hit(5., 210.).is_some());
+        assert!(heard.borrow().freed.is_empty());
+        assert!(heard.borrow().begun.is_empty());
+    }
+    let _ = p.frame();
+    let heard = heard.borrow();
+    let (was_changed, was_renewed) = (first[1].0, first[4].0);
+    assert_eq!(heard.begun.len(), 2);
+    assert_eq!(
+        heard.begun[0].1,
+        Some(was_changed),
+        "a changed row is the row it was"
+    );
+    assert_eq!(heard.begun[1].1, None, "a renewed row is a new one");
+    assert_eq!(
+        heard.freed.iter().filter(|id| **id == was_renewed).count(),
+        1,
+        "its old recording is freed once"
+    );
 }

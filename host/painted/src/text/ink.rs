@@ -602,8 +602,8 @@ impl Index {
 }
 
 /// The union of a glyph's ink over the four x phases. The CPU places every
-/// finite glyph on a whole-pixel row (y truncated): the y phase is always
-/// zero. Tiny-skia applies transforms after this raster choice.
+/// finite glyph on a whole-pixel row (y rounded down): the y phase is
+/// always zero. Tiny-skia applies transforms after this raster choice.
 fn envelope(engine: &mut Catalog, mut key: GlyphKey) -> Bounds {
     if !f32::from_bits(key.size_bits).is_finite() {
         return Bounds::ALL;
