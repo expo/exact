@@ -295,9 +295,9 @@ fn a_number_its_indent_moves_before_its_start_still_rolls() {
     );
 }
 
-/// The bounds of the rows a scroller's only column holds, on a backend that
-/// keeps rows.
-fn row_bounds(rows: &str) -> Vec<Rect4> {
+/// The bounds of the one row a scroller's only column holds, on a backend
+/// that keeps rows.
+fn row_bounds(rows: &str) -> Rect4 {
     let source =
         format!("component App\n  view\n    scroll width=200 height=100\n      column\n{rows}");
     let (mut p, error) = Presenter::boot_with_fixture_fonts(
@@ -317,7 +317,8 @@ fn row_bounds(rows: &str) -> Vec<Rect4> {
     }));
     p.frame();
     let bounds = heard.borrow().bounds.clone();
-    bounds
+    assert_eq!(bounds.len(), 1, "{source}");
+    bounds[0]
 }
 
 #[test]
@@ -325,15 +326,19 @@ fn a_column_of_text_reaches_only_as_far_as_its_clips_show_it() {
     // One line a column, two columns in the box: the other four are past its
     // right, from 120 to 340.
     let text = r#"text "one\ntwo\nthree\nfour\nfive\nsix" white-space="pre" width=100 height=20 column-count=2 column-gap=20 column-fill="auto" flex-shrink=0"#;
-    let right = |b: &[Rect4]| b.iter().map(|b| b.0 + b.2).fold(f32::MIN, f32::max);
+    let right = |b: Rect4| b.0 + b.2;
     let clipped_x = row_bounds(&format!("        {text} overflow-x=\"clip\"\n"));
-    assert!(right(&clipped_x) <= 200. + 48., "{clipped_x:?}");
+    assert!(right(clipped_x) <= 200. + 48., "{clipped_x:?}");
+    // Turned, the clip still cuts the columns: its unbounded y does not.
+    let turned = row_bounds(&format!(
+        "        {text} overflow-x=\"clip\" rotate=\"45deg\"\n"
+    ));
+    assert!(right(turned) <= 200. + 48., "{turned:?}");
     let clipped_y = row_bounds(&format!("        {text} overflow-y=\"clip\"\n"));
-    assert!(right(&clipped_y) >= 340., "{clipped_y:?}");
+    assert!(right(clipped_y) >= 340., "{clipped_y:?}");
     // The text clips itself far below a row its ancestor clips to 20 points.
     let far = row_bounds(&format!(
         "        column height=20 overflow=\"clip\" flex-shrink=0\n          {text} overflow=\"clip\" margin-top=10000\n"
     ));
-    let bottom = far.iter().map(|b| b.1 + b.3).fold(f32::MIN, f32::max);
-    assert!(bottom <= 20. + 48., "{far:?}");
+    assert!(far.1 + far.3 <= 20. + 48., "{far:?}");
 }
