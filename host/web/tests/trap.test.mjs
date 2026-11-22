@@ -48,7 +48,7 @@ test('a picker hold is asked with the inspection stage unloaded, and other reque
   const glue = readFileSync(new URL('../glue.js', import.meta.url), 'utf8'), asked = [];
   const host = { wasm: { exact_agent: (len) => { asked.push(len); return 0; } } };
   const ask = new Function('host', 'stageLoaded', 'readOut', 'writeIn', `${glueDeclarations(glue, ['ask'])}\nreturn ask;`)(
-    host, () => false, () => '{"ticket":1}', (text) => text.length);
+    host, (name) => name !== 'inspection', () => '{"ticket":1}', (text) => text.length);
   expect(ask({ op: 'showPicker', view: 3 })).toEqual({ ticket: 1 });
   expect(() => ask({ op: 'tree' })).toThrow('has not loaded');
   expect(asked).toHaveLength(1);

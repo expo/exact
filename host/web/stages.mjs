@@ -96,12 +96,13 @@ export class Unsplittable extends Error {}
  * section: what its seam reaches and the core does not. Throws an `Error`,
  * which fails the build, when no function matches a seam or the call graph
  * shows the core, a start function included, calling one directly; where the
- * pattern matches two crates' functions, calling each crate's, the other's
- * counted as the core's (LLP 1047.000 §9). Throws `Unsplittable` when the call graph cannot be read, or
- * cannot show that the seam is the one way into the stage that the glue gates:
- * the seam is exported or not in exactly one table slot, its pattern matches
- * functions of two crates, or the module has a start function, which runs at
- * instantiation and may call through the table before any stage loads. */
+ * pattern matches more than one crate's functions, calling each crate's with
+ * the others' unblocked but for another stage's (LLP 1047.000 §9). Throws
+ * `Unsplittable` when the call graph cannot be read, or cannot show that the
+ * seam is the one way into the stage that the glue gates: the seam is exported
+ * or not in exactly one table slot, its pattern matches functions of more than
+ * one crate, or the module has a start function, which runs at instantiation
+ * and may call through the table before any stage loads. */
 export function planStages(named, stages = STAGES) {
   const { nodes, calls, callers, start } = callGraph(named), raw = [...nodes.keys()];
   const plain = run('c++filt', [], { input: raw.join('\n') }).stdout.replaceAll('\r\n', '\n').split('\n');
@@ -126,20 +127,26 @@ export function planStages(named, stages = STAGES) {
     const seam = seams.get(stage.name);
     if (!seam.length) throw new Error(`stage ${stage.name}: no function matches its seam ${stage.seam}`);
     // A seam the core calls directly may be in no slot, once nothing takes its address, which would otherwise ship the
-    // module whole. Where the pattern matches two crates' functions either may be the seam, the other's then the
-    // core's own, so the core calls the seam when it calls each crate's as if that crate's were the seam.
-    const direct = [];
+    // module whole. Where the pattern matches more than one crate's functions any may be the seam, so each crate's is
+    // checked as if it were, the others' unblocked: the core calls the seam when it calls each crate's. Each stage is
+    // checked on its own, every other stage's matches blocked but the start function, a root whatever its name, so a
+    // direct call from a function that only some crate's reading puts in the core can ship the module whole rather
+    // than fail the build.
+    const direct = [], others = new Set(stages.filter(other => other !== stage).flatMap(other => seams.get(other.name)));
     for (const crate of crates.get(stage.name)) {
       const entries = seam.filter(entry => stage.seam.exec(entry)[1] === crate);
-      const blocked = new Set([...all].filter(name => name !== start && (!seam.includes(name) || entries.includes(name))));
+      const blocked = new Set([...all].filter(name => name !== start && (entries.includes(name) || others.has(name))));
       const reached = crates.get(stage.name).size > 1 ? reach(raw.filter(name => nodes.get(name).root && !blocked.has(name)), blocked) : core;
-      const hit = entries.map(entry => ({ entry, from: [...callers.get(entry) ?? []].filter(caller => reached.has(caller)) }))
+      const hit = entries.map(entry => ({ crate, entry, from: [...callers.get(entry) ?? []].filter(caller => reached.has(caller)) }))
         .find(({ from }) => from.length);
       if (!hit) break;
       direct.push(hit);
     }
     if (direct.length === crates.get(stage.name).size) {
-      const said = direct.map(({ entry, from }) => `${demangled.get(entry)} directly from ${from.slice(0, 3).map(c => demangled.get(c)).join(', ')}`);
+      // Name each crate's candidate with its disambiguator, which the printed name drops, as two crates' print alike
+      const candidate = ({ crate, entry }) => direct.length === 1 ? demangled.get(entry)
+        : `${demangled.get(entry)} (${crate === undefined ? 'no crate disambiguator' : `crate disambiguator "${crate}"`})`;
+      const said = direct.map(hit => `${candidate(hit)} directly from ${hit.from.slice(0, 3).map(c => demangled.get(c)).join(', ')}`);
       throw new Error(`stage ${stage.name}: the core calls its seam ${said.length > 1 ? `whichever crate's it is: ${said.join('; ')}` : said[0]}`);
     }
   }

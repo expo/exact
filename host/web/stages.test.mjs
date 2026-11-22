@@ -215,8 +215,13 @@ test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('a seam that may 
 // build though an earlier stage's seam is exported, and so does one from a start function that is another stage's
 // seam. Where a seam's pattern matches two crates' functions, a direct call to one ships the module whole, and the build
 // fails when the core calls each crate's, the other's counted as the core's: from a root, or one through the other.
+// The error names each crate's candidate with its disambiguator, as handlers of two crates print alike. Another stage's
+// matches stay blocked in each crate's check, so overlapping patterns can ship the module whole.
 test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('every stage is checked for a direct call first', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-stage-order-'));
+  // Two crates' handlers that print alike, by a pattern whose group takes the disambiguator's digits: none for one
+  const first = HANDLE.replace('C12exact_runner', 'Cs_12exact_runner'), handle = 'exact_runner::agent::handle::<caltrain::AppData>';
+  const digits = [{ name: 'inspection', seam: /^_RINvNtC(?:s([0-9A-Za-z]*)_)?12exact_runner5agent6handle/ }];
   const cases = [
     ['directly from boot', false, [{ name: 'one', seam: /^one(.*)$/ }, { name: 'two', seam: /^two(.*)$/ }],
       `(table 1 funcref) (elem (i32.const 0) $two) (func $one (export "one") (result i32) i32.const 0)
@@ -227,13 +232,17 @@ test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('every stage is c
     ['2 crates', true, [{ name: 'two', seam: /^two(_a|_b)$/ }],
       `(table 2 funcref) (elem (i32.const 0) $two_a $two_b) (func $two_a (type $read) (result i32) i32.const 0)
       (func $two_b (type $read) (result i32) i32.const 1) (func $boot (export "boot") (result i32) call $two_a)`],
-    ['two_a directly from boot; two_b directly from boot', false, [{ name: 'two', seam: /^two(_a|_b)$/ }],
-      `(table 2 funcref) (elem (i32.const 0) $two_a $two_b) (func $two_a (type $read) (result i32) i32.const 0)
-      (func $two_b (type $read) (result i32) i32.const 1)
-      (func $boot (export "boot") (result i32) (i32.add (call $two_a) (call $two_b)))`],
-    ['two_a directly from boot; two_b directly from two_a', false, [{ name: 'two', seam: /^two(_a|_b)$/ }],
+    [`${handle} (no crate disambiguator) directly from boot; ${handle} (crate disambiguator "") directly from boot`, false,
+      digits, `(table 2 funcref) (elem (i32.const 0) $${HANDLE} $${first}) (func $${HANDLE} (type $read) (result i32) i32.const 0)
+      (func $${first} (type $read) (result i32) i32.const 1)
+      (func $boot (export "boot") (result i32) (i32.add (call $${HANDLE}) (call $${first})))`],
+    ['two_a (crate disambiguator "_a") directly from boot; two_b (crate disambiguator "_b") directly from two_a', false,
+      [{ name: 'two', seam: /^two(_a|_b)$/ }],
       `(table 2 funcref) (elem (i32.const 0) $two_a $two_b) (func $two_a (type $read) (result i32) call $two_b)
       (func $two_b (type $read) (result i32) i32.const 1) (func $boot (export "boot") (result i32) call $two_a)`],
+    ['2 crates', true, [{ name: 'one', seam: /^(a|b)$/ }, { name: 'two', seam: /^(a)$/ }],
+      `(table 2 funcref) (elem (i32.const 0) $a $b) (func $a (type $read) (result i32) call $b)
+      (func $b (type $read) (result i32) call $a)`],
   ];
   try {
     for (const [refusal, unsplittable, stages, body] of cases) {
