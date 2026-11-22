@@ -295,19 +295,13 @@ fn a_number_its_indent_moves_before_its_start_still_rolls() {
     );
 }
 
-#[test]
-fn a_column_of_text_its_box_clips_adds_no_reach() {
-    // One line a column: the other five columns are past the box's right,
-    // where `overflow-x` clips them.
+/// The bounds of the rows a scroller's only column holds, on a backend that
+/// keeps rows.
+fn row_bounds(rows: &str) -> Vec<Rect4> {
+    let source =
+        format!("component App\n  view\n    scroll width=200 height=100\n      column\n{rows}");
     let (mut p, error) = Presenter::boot_with_fixture_fonts(
-        &crate::test_plan(
-            r#"component App
-  view
-    scroll width=200 height=100
-      column
-        text "one\ntwo\nthree\nfour\nfive\nsix" white-space="pre" width=100 height=20 column-count=2 column-gap=20 column-fill="auto" overflow-x="clip" flex-shrink=0
-"#,
-        ),
+        &crate::test_plan(&source),
         (),
         (200., 120.),
         1.,
@@ -323,7 +317,23 @@ fn a_column_of_text_its_box_clips_adds_no_reach() {
     }));
     p.frame();
     let bounds = heard.borrow().bounds.clone();
-    assert_eq!(bounds.len(), 1);
-    // The column's box and margin; the clipped columns would reach past 300.
-    assert!(bounds[0].0 + bounds[0].2 <= 200. + 48., "{bounds:?}");
+    bounds
+}
+
+#[test]
+fn a_column_of_text_reaches_only_as_far_as_its_clips_show_it() {
+    // One line a column, two columns in the box: the other four are past its
+    // right, from 120 to 340.
+    let text = r#"text "one\ntwo\nthree\nfour\nfive\nsix" white-space="pre" width=100 height=20 column-count=2 column-gap=20 column-fill="auto" flex-shrink=0"#;
+    let right = |b: &[Rect4]| b.iter().map(|b| b.0 + b.2).fold(f32::MIN, f32::max);
+    let clipped_x = row_bounds(&format!("        {text} overflow-x=\"clip\"\n"));
+    assert!(right(&clipped_x) <= 200. + 48., "{clipped_x:?}");
+    let clipped_y = row_bounds(&format!("        {text} overflow-y=\"clip\"\n"));
+    assert!(right(&clipped_y) >= 340., "{clipped_y:?}");
+    // The text clips itself far below a row its ancestor clips to 20 points.
+    let far = row_bounds(&format!(
+        "        column height=20 overflow=\"clip\" flex-shrink=0\n          {text} overflow=\"clip\" margin-top=10000\n"
+    ));
+    let bottom = far.iter().map(|b| b.1 + b.3).fold(f32::MIN, f32::max);
+    assert!(bottom <= 20. + 48., "{far:?}");
 }

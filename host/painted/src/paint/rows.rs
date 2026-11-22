@@ -203,12 +203,13 @@ impl Rows {
 const MARGIN: f32 = 48.0;
 
 /// Whether `node` may hold rows split under a sticky child, a section's
-/// or a scroller's only child's (`wraps_rows`, whatever its overflow),
-/// where a change to it reaches them. Looser than [`can_split`]: it only
-/// marks more rows.
+/// or a scroller's only child's (`wraps_rows`, which reads only y), where
+/// a change to it reaches them. Looser than [`can_split`]: it only marks
+/// more rows. A scroller is not one: its children are rows of their own.
 fn holds_split_rows(node: &NodeRef<'_>) -> bool {
     node.node_type == NodeType::View
         && node.style.flex_direction == exact_kernel::FlexDirection::Column
+        && !scrolls(effective_overflow(node).1)
         && node
             .child_nodes()
             .any(|child| child.layout_position() == exact_kernel::PositionType::Sticky)
@@ -256,7 +257,7 @@ pub(super) fn union(a: Option<Rect4>, b: Rect4) -> Rect4 {
     }
 }
 
-fn within(a: Option<Rect4>, outer: Option<Rect4>) -> Option<Rect4> {
+pub(super) fn within(a: Option<Rect4>, outer: Option<Rect4>) -> Option<Rect4> {
     match (a, outer) {
         (Some(a), Some(b)) => Some(intersect(a, b)),
         (a, None) => a,

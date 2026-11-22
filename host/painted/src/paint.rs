@@ -1149,8 +1149,8 @@ impl Painter {
                 if let Some(clip) = &clip {
                     self.backend.push_clip(clip, ts);
                 }
-                let overflow = clip.as_ref().map(|clip| clip.rect);
-                let baseline = self.text_node(walk, node, &geometry, rect, overflow, ts);
+                let lines = rows::within(clip.as_ref().map(|c| bbox(ts, c.rect)), clip_rect);
+                let baseline = self.text_node(walk, node, &geometry, rect, lines, ts);
                 walk.boxes[owner].baseline = baseline;
                 if clip.is_some() {
                     self.backend.pop_clip();
