@@ -329,8 +329,10 @@ export function syncMarkup(el) {
 }
 // @ref LLP 1094.000 D6 — the first node that turns draggable loads the drag-out glue, which then hears every drag from
 // the app's live views. Until it listens, a node the app made draggable waits, written `false`, and a drag that begins
-// in it or at an element around it, as a link's around its image, is cancelled, a field's drag of text too, so no drag
-// begins without the node's data. Another script's draggable keeps its own drag. A load that fails, or a listener that fails as it starts, is logged and tried again, from
+// in it, or at an element around it where its point, the down's, is in it, as a link's around its image pressed on the
+// image, is cancelled, a field's drag of text too, so no drag begins without the node's data. Another script's
+// draggable keeps its own drag. The downs it hears are the listener's once it listens, so a field's down keeps its node
+// off. A load that fails, or a listener that fails as it starts, is logged and tried again, from
 // a URL of its own since a browser may keep a module's failure, on one timer while a live node waits.
 const liveView = (el) => views.get(Number(el.dataset?.view)) === el && !retiredViews.has(el);
 export function loadDragOut() {
@@ -339,7 +341,7 @@ export function loadDragOut() {
   host.dragOutModule ??= loadAfterPaint(tries ? `./drag-out.js?try=${tries}` : "./drag-out.js", "listenDragOut").then((listen) => {
     const controller = new AbortController(), live = [...(host.dragOutWaiting ?? [])].filter(liveView);
     try {
-      listen(document, liveView, { signal: controller.signal });
+      listen(document, liveView, { signal: controller.signal, downs: host.dragOutDowns ?? [] });
       for (const el of live) globalThis.exact.writeDraggable(el, el.exactDraggable);
     } catch (e) {
       // Nothing of a listener that failed stays: its listeners go, the nodes wait again, and the next try loads anew.
@@ -350,7 +352,8 @@ export function loadDragOut() {
     }
     host.dragOutListening = true;
     document.removeEventListener("dragstart", waitingDrag, true);
-    host.dragOutWaiting = null;
+    for (const type of ["pointerdown", "mousedown"]) document.removeEventListener(type, waitingDown, true);
+    host.dragOutWaiting = host.dragOutDowns = null;
   }).catch((e) => {
     host.dragOutModule = null;
     host.dragOutTries = tries + 1;
@@ -372,15 +375,23 @@ function waits(el) {
   }
   return false;
 }
-/** Cancels a drag that begins in a waiting node, whatever another script marked on it, or at an element around one, as a
- * link's around its image, unless that element is another script's draggable, whose drag the browser began, an SVG
- * element's in Chromium and WebKit too. */
+/** Cancels a drag that begins in a waiting node, whatever another script marked on it, or at an element around one
+ * where the drag's point, the down's in every engine (drag-out.js), is in it, as a link's around its image pressed on
+ * the image, unless that element is another script's draggable, whose drag the browser began, an SVG element's in
+ * Chromium and WebKit too. */
 function waitingDrag(event) {
   // A script's `dragstart` is no drag.
   if (event.isTrusted === false) return;
   const target = event.target;
   if (target.matches?.('[draggable="true" i]') && !host.dragOutWaiting.has(target)) return;
-  if (waits(target) || [...host.dragOutWaiting].some((el) => target.contains?.(el) && liveView(el))) event.preventDefault();
+  const at = document.elementFromPoint?.(event.clientX, event.clientY);
+  if (waits(target) || (at && target.contains?.(at) && waits(at))) event.preventDefault();
+}
+/** Keeps the last downs for the listener, which reads them as its own when it listens. */
+function waitingDown(event) {
+  if (event.isTrusted === false) return;
+  (host.dragOutDowns ??= []).push(event);
+  host.dragOutDowns.splice(0, host.dragOutDowns.length - 2);
 }
 
 /** Writes `el`'s `draggable` through the drag-out glue, which keeps the app's value on the node (drag-out.js). Until
@@ -390,7 +401,10 @@ export function writeDraggable(el, value) {
   if (host.dragOutListening) return void globalThis.exact.writeDraggable(el, value);
   el.exactDraggable = value;
   if (value === "true") {
-    if (!host.dragOutWaiting) document.addEventListener("dragstart", waitingDrag, true);
+    if (!host.dragOutWaiting) {
+      document.addEventListener("dragstart", waitingDrag, true);
+      for (const type of ["pointerdown", "mousedown"]) document.addEventListener(type, waitingDown, true);
+    }
     (host.dragOutWaiting ??= new Set()).add(el);
     el.setAttribute("draggable", "false");
     loadDragOut();

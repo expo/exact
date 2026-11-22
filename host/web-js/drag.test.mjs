@@ -38,7 +38,7 @@ test('the hooks write what is admitted, remove an empty prop and journal a value
 test('install hears the downs and the drags on the page\'s document, and writes `draggable` through the listener', () => {
   const heard = [], PropHooks = {};
   install({ PropHooks, say() {}, document: { addEventListener: (type, _, options) => heard.push([type, !!options?.capture]) } });
-  expect(heard).toEqual([['pointerdown', true], ['mousedown', true], ['dragstart', true]]);
+  expect(heard).toEqual([['pointerdown', true], ['mousedown', true], ['dragstart', true], ['dragstart', false]]);
   // The listener keeps the app's value on the node, which a field's down turns off on the page for a time.
   const el = { setAttribute: (name, value) => heard.push([name, value]) };
   expect(PropHooks.draggable(el, 'true')).toBe(true);

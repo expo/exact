@@ -83,7 +83,9 @@ function decide(event, owns, down) {
   let node = at;
   while (node && !(off.has(node) && declared(node)) && !explicit(node)) node = node.parentElement;
   if (!node || !declared(node) || !owns(node)) return;
-  const keeper = at.closest(down?.mouse === false ? KEEPS : KEEPS_A_MOUSE);
+  // A drag begun where a mouse last went down is a mouse's, though another input's primary down came since
+  const mouse = down?.mouse !== false || atPoint(down.mouseAt, event);
+  const keeper = at.closest(mouse ? KEEPS_A_MOUSE : KEEPS);
   if (keeper && keeper !== node && node.contains(keeper)) {
     // A picture in a keeper drags no more than one in any press does (LLP 1115.000 D4.14).
     return !keeper.contains(target) || target.localName === 'img' ? CANCEL : undefined;
@@ -129,14 +131,21 @@ const atPoint = (down, event) => Math.abs(down?.x - event.clientX) <= 1 && Math.
 const declared = (node) => node.exactDraggable === 'true';
 
 /** The nodes whose drag a field's down turned off, until the next primary down, each with whether the down wrote its
- * `false`. */
-let off = new Map();
+ * `false`; the field the last primary down went down in; and whether a node is still the app's (`listen`'s `owns`). */
+let off = new Map(), field = null, owned = () => true;
 
 /** Writes `node`'s `draggable` as the app says, which both targets' renderers do through here, and keeps the value on
- * the node: a node a field's contact turned off gets it at the next primary down. */
+ * the node: a node a field's down turned off gets it at the next primary down, and so does one made draggable around
+ * that field meanwhile, which the down turns off as it turned off those it found. */
 export function writeDraggable(node, value) {
   node.exactDraggable = value;
-  if (!off.has(node)) write(node, value);
+  if (off.has(node)) return;
+  if (value === 'true' && field && node !== field && node.contains?.(field) && owned(node)) {
+    write(node, 'false');
+    off.set(node, true);
+    return;
+  }
+  write(node, value);
 }
 
 const write = (node, value) => (value == null ? node.removeAttribute('draggable') : node.setAttribute('draggable', value));
@@ -162,31 +171,48 @@ function turnOff(now) {
  * app's), and for each primary down; `signal` removes the listeners. A primary down in a control or a text input turns
  * the drag of every draggable node around it off until the next primary down, since Firefox selects no text by a mouse
  * in a field inside a node it may drag. The down is kept for the drag it may begin. */
-export function listen(root = globalThis.document, owns = () => true, { signal } = {}) {
+export function listen(root = globalThis.document, owns = () => true, { signal, downs = [] } = {}) {
   // The last primary down, and the target of a `pointerdown` whose own `mousedown` is still to come
   let last = null, paired = null;
-  signal?.addEventListener('abort', () => turnOff(new Set()));
+  owned = owns;
+  signal?.addEventListener('abort', () => {
+    field = null;
+    turnOff(new Set());
+  });
   const down = (event) => {
     if (event.isPrimary === false || event.isTrusted === false) return;
     // A press's `mousedown` after its own `pointerdown` adds nothing: a pen's or a finger's would read as a mouse's.
     const own = event.type === 'mousedown' && paired === event.target;
     paired = event.type === 'mousedown' ? null : event.target;
     if (own) return;
-    last = { target: event.target, x: event.clientX, y: event.clientY, mouse: (event.pointerType ?? 'mouse') === 'mouse' };
-    const now = new Set(), field = event.target?.closest?.(KEEPS);
+    const mouse = (event.pointerType ?? 'mouse') === 'mouse', at = { x: event.clientX, y: event.clientY };
+    last = { target: event.target, ...at, mouse, mouseAt: mouse ? at : last?.mouseAt };
+    const now = new Set();
+    field = event.target?.closest?.(KEEPS) ?? null;
     for (let at = field?.parentElement; at; at = at.parentElement) if (declared(at) && owns(at)) now.add(at);
     turnOff(now);
   };
   // A `mousedown` alone too: WebKit sends a press after a drag no `pointerdown` (Measured under Playwright).
   for (const type of ['pointerdown', 'mousedown']) root.addEventListener(type, down, { capture: true, signal });
+  // The downs a wait heard before the listener, as if it had heard them
+  for (const event of downs) down(event);
   // Heard first, before any listener can stop the drag's event or change what it reads: a press's own `mousedown` is
   // past by its drag, if another listener kept it from the document, and the drag is decided and given its data as it
   // begins, while the transfer is writable; a listener after may still cancel it, a swipe's on the contact among them.
+  let given = null;
   root.addEventListener('dragstart', (event) => {
     if (event.isTrusted === false) return;
     paired = null;
-    give(event, decide(event, owns, last));
+    const decision = decide(event, owns, last);
+    give(event, decision);
+    given = decision === CANCEL ? null : decision && { event, node: decision };
   }, { capture: true, signal });
+  // Given again where the event reaches the document, over what a listener at the node wrote: the drag carries the
+  // node's declaration
+  root.addEventListener('dragstart', (event) => {
+    if (given?.event === event) give(event, given.node);
+    given = null;
+  }, { signal });
 }
 
 // Loaded as a page script by the wasm target's glue (`loadAfterPaint`), which reads what it registers.

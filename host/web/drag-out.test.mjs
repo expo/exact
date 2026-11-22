@@ -172,6 +172,10 @@ test('what a mouse went down on keeps the node\'s drag from starting, and a keep
   const other = dragstart(card, card);
   start(other, BASE, undefined, { target: press, x: 90, y: 70, mouse: true });
   expect([moved.defaultPrevented, other.defaultPrevented]).toEqual([true, false]);
+  // A touch's primary down elsewhere since a mouse went down at the drag's point leaves the drag a mouse's.
+  const mixed = dragstart(card, press);
+  start(mixed, BASE, undefined, { target: field, x: 5, y: 5, mouse: false, mouseAt: { x: 50, y: 70 } });
+  expect(mixed.defaultPrevented).toBe(true);
 });
 
 test('an image the browser begins the drag at is the node\'s, but for one in a link inside it', () => {
@@ -214,7 +218,7 @@ test('a primary down in a field turns the drag of every node the app made dragga
   const range = new El('input', {}, unowned);
   listen(root, (el) => el !== unowned, { signal: controller.signal });
   expect(root.heard.map(([type, , capture, signal]) => [type, capture, signal === controller.signal]))
-    .toEqual([['pointerdown', true, true], ['mousedown', true, true], ['dragstart', true, true]]);
+    .toEqual([['pointerdown', true, true], ['mousedown', true, true], ['dragstart', true, true], ['dragstart', false, true]]);
   const draggable = () => [outer, card, foreign, unowned].map((el) => el.getAttribute('draggable'));
   root.fire('pointerdown', { isPrimary: true, pointerType: 'mouse', target: field });
   root.fire('pointerdown', { isPrimary: true, pointerType: 'mouse', target: range });
@@ -285,6 +289,17 @@ test('a primary down in a field turns the drag of every node the app made dragga
   expect(draggable()).toEqual([null, 'false', 'true', 'true']);
   controller.abort();
   expect(draggable()).toEqual([null, 'true', 'true', 'true']);
+});
+
+test('a node the app makes draggable around the last primary down\'s field is off until the next primary down', () => {
+  const root = page(), card = declared('div'), field = new El('input', {}, card), other = new El('div');
+  writeDraggable(card, 'false');
+  listen(root);
+  root.fire('pointerdown', { isPrimary: true, pointerType: 'mouse', target: field });
+  writeDraggable(card, 'true');
+  expect(card.getAttribute('draggable')).toBe('false');
+  root.fire('pointerdown', { isPrimary: true, pointerType: 'mouse', target: other });
+  expect(card.getAttribute('draggable')).toBe('true');
 });
 
 test('a field\'s down keeps a held node the source, so an image in its field drags no more than one in any press', () => {
@@ -392,6 +407,13 @@ test('the target\'s mark is read as the drag began, before its own listener chan
   stoppedThere.type = 'dragstart';
   for (const [type, fn, capture] of root.heard) if (type === 'dragstart' && capture) fn(stoppedThere);
   expect(stoppedThere.dataTransfer.data.get('text/plain')).toBe('card');
+  // What a listener at the node writes over the node's data is written over again where the event reaches the document.
+  const overwritten = dragstart(card, card);
+  overwritten.type = 'dragstart';
+  for (const [type, fn, capture] of root.heard) if (type === 'dragstart' && capture) fn(overwritten);
+  overwritten.dataTransfer.setData('text/plain', 'theirs');
+  for (const [type, fn, capture] of root.heard) if (type === 'dragstart' && !capture) fn(overwritten);
+  expect(overwritten.dataTransfer.data.get('text/plain')).toBe('card');
   const again = dragstart(card, card);
   again.type = 'dragstart';
   for (const [type, fn] of root.heard) if (type === 'dragstart') fn(again);
@@ -422,7 +444,7 @@ test('the primary down says whether the drag it begins is a mouse\'s', () => {
   expect([touch, drag()]).toEqual([false, true]);
 });
 
-const DECLARATIONS = glueDeclarations(source, ['liveView', 'loadDragOut', 'waits', 'waitingDrag', 'writeDraggable']);
+const DECLARATIONS = glueDeclarations(source, ['liveView', 'loadDragOut', 'waits', 'waitingDrag', 'waitingDown', 'writeDraggable']);
 /** The wasm glue's drag-out declarations in a context of their own, with its page's doubles. */
 function wasmGlue(loadAfterPaint) {
   const logs = [], written = [], timers = [], guards = [], views = new Map(), retiredViews = new Set();
@@ -462,21 +484,25 @@ test('the wasm glue keeps a node made draggable waiting, `false`, until the list
   context.writeDraggable(plain, 'true');
   context.writeDraggable(plain, null);
   expect([card.attrs, link.attrs, plain.attrs, card.exactDraggable, plain.exactDraggable]).toEqual([{ draggable: 'false' }, { draggable: 'false' }, {}, 'true', null]);
-  expect([loads, guards.map(([type, , capture]) => [type, capture])]).toEqual([[['./drag-out.js', 'listenDragOut']], [['dragstart', true]]]);
+  const WAIT = [['dragstart', true], ['pointerdown', true], ['mousedown', true]];
+  expect([loads, guards.map(([type, , capture]) => [type, capture])]).toEqual([[['./drag-out.js', 'listenDragOut']], WAIT]);
   // A failed load is tried again on one timer, from a URL of its own, while a live node waits; a node made draggable
   // meanwhile waits for it, and a retired one waits no more.
   loading.reject(new Error('import failed'));
   await settle();
   context.writeDraggable(link, 'true');
   retiredViews.add(gone);
-  expect([logs, timers.map(([, ms]) => ms), loads.length, guards.length]).toEqual([['drag-out module: Error: import failed'], [1000], 1, 1]);
+  expect([logs, timers.map(([, ms]) => ms), loads.length, guards.length]).toEqual([['drag-out module: Error: import failed'], [1000], 1, 3]);
   loading = deferred();
   timers[0][0]();
   expect(loads.at(-1)).toEqual(['./drag-out.js?try=1', 'listenDragOut']);
-  // The listener listens for the app's live views, then each waiting live node gets the app's value through it.
-  loading.resolve((root, owns, options) => heard.push([root, owns(card), owns(gone), owns({ dataset: { view: '1' } }), !!options.signal, written.length]));
+  // The listener listens for the app's live views, reading the downs the wait heard as its own, the last two a page's,
+  // then each waiting live node gets the app's value through it.
+  const downs = ['a', 'b', 'c'].map((id) => ({ type: 'pointerdown', target: element(id, null) }));
+  for (const event of [...downs, { type: 'mousedown', isTrusted: false }]) for (const [type, fn] of guards) if (type === event.type) fn(event);
+  loading.resolve((root, owns, options) => heard.push([root, owns(card), owns(gone), owns({ dataset: { view: '1' } }), !!options.signal, written.length, options.downs]));
   await settle();
-  expect([loads.length, heard, written, guards]).toEqual([2, [[document, true, false, false, true, 0]], [['card', 'true'], ['link', 'true']], []]);
+  expect([loads.length, heard, written, guards]).toEqual([2, [[document, true, false, false, true, 0, downs.slice(1)]], [['card', 'true'], ['link', 'true']], []]);
   // Once it listens, every write is the listener's.
   context.writeDraggable(plain, 'true');
   context.loadDragOut();
@@ -491,9 +517,10 @@ test('a drag that begins in a waiting node, or at an element around one, is canc
   expect(guards).toEqual([]);
   context.writeDraggable(card, 'true');
   context.writeDraggable(linked, 'true');
-  // A drag begun in a waiting node, or at an element around one, as the link around a waiting image, is cancelled,
-  // wherever the image has moved to.
-  expect([cancelled(card), cancelled(image), cancelled(field), cancelled(elsewhere), cancelled(link)]).toEqual([true, true, true, false, true]);
+  // A drag begun in a waiting node, or at an element around one where its point is in the node, as the link around a
+  // waiting image pressed on the image, is cancelled; pressed elsewhere on the link, the drag is the link's.
+  expect([cancelled(card), cancelled(image), cancelled(field), cancelled(elsewhere), cancelled(link, linked), cancelled(link)])
+    .toEqual([true, true, true, false, true, false]);
   // Another script's draggable, in any case, inside the waiting card keeps its drag, and so does an image in it.
   const wrapper = element('wrapper', null, card, 'div', { draggable: 'TRUE' }), wrapped = element('wrapped', 10, wrapper, 'img');
   expect([cancelled(wrapper), cancelled(wrapped)]).toEqual([false, false]);
@@ -524,5 +551,5 @@ test('a listener that fails as it starts leaves nothing of itself, and the next 
   context.writeDraggable(card, 'true');
   await settle();
   expect([logs, context.host.dragOutModule, context.host.dragOutListening, timers.length, signal.aborted, card.attrs.draggable,
-    'listenDragOut' in exact, guards.length]).toEqual([['drag-out module: Error: no document'], null, undefined, 1, true, 'false', false, 1]);
+    'listenDragOut' in exact, guards.length]).toEqual([['drag-out module: Error: no document'], null, undefined, 1, true, 'false', false, 3]);
 });
