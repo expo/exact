@@ -1113,7 +1113,7 @@ impl Painter {
         // and a text node still walks its runs so a visible inline paints.
         if paints_self {
             surface.bleed = self.bleed(walk.scene.kernel, node.id, &surface.outer, ts);
-            self.row_shadows(&paint.shadows, surface.outer.rect, ts);
+            self.row_box_reach(&paint.shadows, surface.outer.rect, geometry.outer.rect, ts);
             paint.paint(self.backend.as_mut(), &surface, ts);
             self.column_rules(walk.scene.kernel, node, rect, ts);
             self.prose_marker(walk, node, rect, ts);

@@ -112,6 +112,11 @@ impl Painter {
             if can_overflow {
                 painter.row_text_reach(shown, origin, geometry.content, ts);
             }
+            if let Some((roll, _)) = &roll {
+                // The outgoing number rolls out past the new one's lines.
+                let (x, y, w, h) = roll.bounds();
+                painter.row_reach(super::bbox(ts, (x + origin.0, y + origin.1, w, h)));
+            }
             if baseline.is_none() {
                 baseline = shown.baseline_at(origin);
             }

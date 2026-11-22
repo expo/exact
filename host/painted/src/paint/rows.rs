@@ -141,7 +141,8 @@ struct Capture {
     refused: bool,
     refuse_sticky: bool,
     /// What it paints past its boxes, in the walk's coordinates: filters
-    /// (`box_filter.rs`), shadows, overflowing lines, text strokes and inline
+    /// (`box_filter.rs`), shadows, a surface a layout transition holds
+    /// larger, overflowing lines, rolling numerals, text strokes and inline
     /// backgrounds.
     reach: Option<Rect4>,
     images: Vec<(ViewId, Option<std::sync::Weak<Bitmap>>)>,
@@ -214,6 +215,16 @@ fn row_section(node: &NodeRef<'_>) -> bool {
                 && children
                     .any(|child| child.layout_position() == exact_kernel::PositionType::Sticky)
         }
+}
+
+/// The parents of every sticky node: the only columns [`row_section`] can
+/// take, found without reading each column's children on every paint.
+pub(super) fn sticky_parents(kernel: &exact_kernel::Kernel) -> IdSet<ViewId> {
+    kernel
+        .sticky_nodes()
+        .into_iter()
+        .filter_map(|key| kernel.node_by_key(key)?.parent)
+        .collect()
 }
 
 pub(super) fn union(a: Option<Rect4>, b: Rect4) -> Rect4 {
@@ -542,11 +553,18 @@ impl Painter {
     }
 
     /// A column with a sticky heading keeps its body rows apart.
-    pub(super) fn is_row_section(walk: &Walk<'_, '_>, id: ViewId) -> bool {
-        walk.scene
-            .kernel
-            .node(id)
-            .is_some_and(|node| row_section(&node))
+    /// `sections`: [`sticky_parents`].
+    pub(super) fn is_row_section(
+        walk: &Walk<'_, '_>,
+        sections: &IdSet<ViewId>,
+        id: ViewId,
+    ) -> bool {
+        sections.contains(&id)
+            && walk
+                .scene
+                .kernel
+                .node(id)
+                .is_some_and(|node| row_section(&node))
     }
 
     /// A container walked with its children as the rows.
@@ -696,14 +714,20 @@ impl Painter {
         within(clip, self.rows.recording.as_ref().and_then(|c| c.clip))
     }
 
-    /// The shadow can reach the port while its box is outside it.
-    pub(super) fn row_shadows(
+    /// What a box paints past its layout box, which can reach the port while
+    /// the box is outside it: its shadows, and its surface while a layout
+    /// transition holds it larger (LLP 1063).
+    pub(super) fn row_box_reach(
         &mut self,
         shadows: &[shadow::ShadowPaint],
         rect: Rect4,
+        layout: Rect4,
         ts: Transform,
     ) {
         if let Some(c) = &mut self.rows.recording {
+            if rect != layout {
+                c.reach = Some(union(c.reach, bbox(ts, rect)));
+            }
             for bounds in shadows
                 .iter()
                 .filter_map(|shadow| shadow.outer_bounds(rect))

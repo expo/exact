@@ -621,7 +621,7 @@ fn a_lowered_sticky_section_paints_its_body_inside_the_layer() {
     assert_eq!(p.advance(250.), None);
     assert_eq!(p.host.lowered_mask(section), LOWER_OPACITY);
     // The press changed the body too, so it paints again inside the layer,
-    // where a row recording would nest in the scroller's and panic.
+    // where a row recording would nest in the layer capture and panic.
     let pixel = p.frame().pixel(80, (y + h / 2.0) as u32).unwrap();
     assert!(
         pixel.blue() > pixel.red() && pixel.red() > 0,
@@ -839,51 +839,6 @@ fn overflowing_lines_still_draw_when_their_sticky_section_row_is_offscreen() {
             .zip(expected)
             .any(|(pixel, expected)| expected && red(pixel)),
         "Ink draws the text that overflows its row"
-    );
-}
-
-#[test]
-fn an_inline_background_still_draws_when_its_sticky_section_row_is_offscreen() {
-    let plan = crate::test_plan(
-        r#"component App
-  view
-    scroll width=200 height=100
-      column
-        box width=200 height=5
-        column width=200
-          box position="sticky" top=0 width=200 height=20
-          box width=200 height=150
-          text width=200 height=20 font-size=16 line-height="20px"
-            text "MMMM" background-color="red" padding-top=100
-          box width=200 height=300
-"#,
-    );
-    let (mut p, error) = Presenter::boot_with_fixture_fonts(
-        &plan,
-        (),
-        (200., 120.),
-        1.,
-        PathBuf::new(),
-        PainterChoice::Cpu,
-    )
-    .unwrap();
-    assert!(error.is_none(), "{error:?}");
-    let red = |pixel: &tiny_skia::PremultipliedColorU8| {
-        pixel.red() > 200 && pixel.green() < 50 && pixel.blue() < 50
-    };
-    let expected: Vec<_> = p.frame().pixels().iter().map(red).collect();
-    assert!(
-        expected.iter().any(|red| *red),
-        "the padding reaches into the port"
-    );
-    p.reader_replaced(Box::new(crate::ink::Ink::new().expect("an Ink device")));
-    assert!(
-        p.frame()
-            .pixels()
-            .iter()
-            .zip(expected)
-            .any(|(pixel, expected)| expected && red(pixel)),
-        "Ink draws the background that reaches past its row"
     );
 }
 
@@ -1256,43 +1211,4 @@ fn a_removed_pages_rows_scale_in_pixels() {
     }
 }
 
-#[test]
-fn a_wide_text_stroke_still_draws_when_its_row_is_offscreen() {
-    let plan = crate::test_plan(
-        r#"component App
-  view
-    scroll width=200 height=100
-      column
-        box width=200 height=175
-        text "MMMM" width=200 height=20 font-size=16 line-height="20px" -webkit-text-stroke="200px #ff0000"
-        box width=200 height=300
-"#,
-    );
-    let (mut p, error) = Presenter::boot_with_fixture_fonts(
-        &plan,
-        (),
-        (200., 120.),
-        1.,
-        PathBuf::new(),
-        PainterChoice::Cpu,
-    )
-    .unwrap();
-    assert!(error.is_none(), "{error:?}");
-    let red = |pixel: &tiny_skia::PremultipliedColorU8| {
-        pixel.red() > 200 && pixel.green() < 50 && pixel.blue() < 50
-    };
-    let expected: Vec<_> = p.frame().pixels().iter().map(red).collect();
-    assert!(
-        expected.iter().any(|red| *red),
-        "the stroke reaches into the port"
-    );
-    p.reader_replaced(Box::new(crate::ink::Ink::new().expect("an Ink device")));
-    assert!(
-        p.frame()
-            .pixels()
-            .iter()
-            .zip(expected)
-            .any(|(pixel, expected)| expected && red(pixel)),
-        "Ink draws the stroke that reaches past its row"
-    );
-}
+mod reach;
