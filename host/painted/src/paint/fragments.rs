@@ -190,6 +190,8 @@ impl Painter {
             }
             let shown = shown.line_fragment(g.lines.0 as usize..g.lines.1 as usize);
             let clip = Shape::rect((rect.0 + g.x, rect.1 + g.y, g.width, g.height));
+            // A column past the box's own is drawn outside it.
+            self.row_reach(super::bbox(ts, clip.rect));
             self.backend.push_clip(&clip, ts);
             at(self, &shown, (content.0 + g.dx, content.1 + g.dy));
             self.backend.pop_clip();

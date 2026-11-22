@@ -191,10 +191,9 @@ struct Capture {
     refused: bool,
     split_sections: bool,
     may_have_hit_slop: bool,
-    /// What it paints past its boxes, in the walk's coordinates: filters
-    /// (`box_filter.rs`), shadows, a surface a layout transition holds
-    /// larger, overflowing lines, rolling numerals, text strokes and inline
-    /// backgrounds.
+    /// What it paints past its boxes, in the walk's coordinates, such as
+    /// filters (`box_filter.rs`), shadows, overflowing lines and a surface
+    /// a layout transition holds larger: every `row_reach` call.
     reach: Option<Rect4>,
     images: Vec<(ViewId, Option<std::sync::Weak<Bitmap>>)>,
     slots: Vec<Slot>,
@@ -286,18 +285,25 @@ const MAX_TRANSLATION: f32 = 4096.0;
 /// that splits sections keeps as rows ([`Backend::independent_section_rows`]).
 /// A list is kept whole: an item's number counts its siblings.
 fn row_section(node: &NodeRef<'_>) -> bool {
+    can_split(node)
+        && node
+            .child_nodes()
+            .any(|child| child.layout_position() == exact_kernel::PositionType::Sticky)
+}
+
+/// [`row_section`] but for its sticky child. Not a scroll container, which
+/// `hidden` makes too: a sticky child would stick to it, not to the
+/// scroller.
+fn can_split(node: &NodeRef<'_>) -> bool {
+    let unscrolled = |o| matches!(o, Overflow::Visible | Overflow::Clip);
+    let (x, y) = effective_overflow(node);
     node.node_type == NodeType::View
         && node.style.flex_direction == exact_kernel::FlexDirection::Column
         && node.layout_position() != exact_kernel::PositionType::Sticky
-        && !scrolls(effective_overflow(node).0)
-        && !scrolls(effective_overflow(node).1)
+        && unscrolled(x)
+        && unscrolled(y)
         && node.list_markers().is_none()
-        && {
-            let mut children = node.child_nodes();
-            children.len() >= 3
-                && children
-                    .any(|child| child.layout_position() == exact_kernel::PositionType::Sticky)
-        }
+        && node.child_nodes().len() >= 3
 }
 
 /// The parents of every sticky node: the only columns [`row_section`] can
@@ -685,15 +691,16 @@ impl Painter {
     /// `sections`: [`Painter::row_sections`].
     pub(super) fn is_row_section(
         walk: &Walk<'_, '_>,
-        sections: &IdSet<ViewId>,
+        sections: Option<&IdSet<ViewId>>,
         id: ViewId,
     ) -> bool {
-        sections.contains(&id)
+        // A sticky node's parent has a sticky child.
+        sections.is_some_and(|s| s.contains(&id))
             && walk
                 .scene
                 .kernel
                 .node(id)
-                .is_some_and(|node| row_section(&node))
+                .is_some_and(|node| can_split(&node))
     }
 
     /// A container walked with its children as the rows.
