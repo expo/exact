@@ -2400,14 +2400,18 @@ or `open({host, seed: 42, locale: "fr-CA", timeZone: "America/Toronto", epoch: "
 a test file writes them as launch lines (`epoch "2026-09-21T14:13:20Z"`, `time-zone "America/Toronto"`,
 [authored tests](contract-grammar.md#authored-tests)), which override the flags.
 
-On macOS, `zoom` on an `iframe` sets WebKit's page zoom, which can change line breaks.
-To enlarge a guest while keeping its layout, give the iframe its original width and height
-and set `scale` on it. To reserve the enlarged space on the page, size its containing box too.
+On macOS, `scale` enlarges the pixels of an `iframe` after WebKit lays out its guest.
+Line breaks stay fixed, but enlarged text can look soft. Size the containing box to
+reserve space for the transformed frame.
 
 ```text
 box width=(320 * z) height=(200 * z) overflow="hidden"
   iframe "https://example.com/" width=320 height=200 scale=z transform-origin="0% 0%" border="none"
 ```
+
+For sharp text, `iframe "https://example.com/" width=320 height=200 zoom=z` enlarges
+the frame's own lengths and tells WebKit to render the page at that zoom. Line breaks
+can change even when the guest still reports a 320 × 200 CSS pixel viewport.
 
 On the web (same-origin frames), macOS and iOS, `tap live at 40 80` presses
 40 points right and 80 down from the top left of the iframe named `live`.

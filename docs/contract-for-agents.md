@@ -3790,6 +3790,17 @@ creates it; an existing destination of the other kind is refused, as is a path t
 leads through a symbolic link. The result is a path, not an open handle, so a package
 opens or empties it promptly (LLP 1133.009 D10).
 
+### A package source on the web
+
+When a package has no web implementation, a source in its `exact.json` can
+still answer with `substitute.default`. An optional source can declare
+`"default": null` to answer `none`. A source that lists `"web"` in
+`substitute.unsupported` fails with `NotSupportedError` even if it has a default.
+
+For a status that stays readable, use `"targets": {"web": {"available": false}}`
+inside its `substitute`. The other fields keep their default values. List
+`"web"` in `unsupported` on the operations that require the missing platform feature.
+
 ### A package's native module, library and web assets
 
 A package fills the data module's one native module (`native.call` in `app.ts`) from the
