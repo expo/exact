@@ -271,7 +271,7 @@ pub(super) fn physical(
     scale: f32,
 ) -> (GlyphKey, i32, i32) {
     let (x, x_bin) = subpixel(g.x.mul_add(scale, offset.0));
-    let (y, y_bin) = subpixel(g.y.mul_add(scale, offset.1).trunc());
+    let (y, y_bin) = subpixel(g.y.mul_add(scale, offset.1).floor());
     (
         GlyphKey {
             slot,

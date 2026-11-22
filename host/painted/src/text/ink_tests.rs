@@ -344,7 +344,7 @@ fn physical_cpu_placement_uses_all_x_bins_and_only_zero_y_bin() {
             let (key, _, y) = ink::physical(&g, 0, offset, scale);
             x_bins.insert(key.x_bin);
             assert_eq!(key.y_bin, 0);
-            assert_eq!(y, g.y.mul_add(scale, offset.1).trunc() as i32);
+            assert_eq!(y, g.y.mul_add(scale, offset.1).floor() as i32);
         }
     }
     assert_eq!(x_bins.len(), 4);

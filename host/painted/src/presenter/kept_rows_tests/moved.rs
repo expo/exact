@@ -361,3 +361,63 @@ fn rows_freed_at_a_geometry_walk_are_freed_by_the_backend_that_kept_them() {
         );
     }
 }
+
+#[test]
+fn a_stroked_line_draws_the_same_whatever_whole_pixels_move_it() {
+    // The same place twice: a pen above the transform's origin, then below.
+    let frame = |ink: bool, lift: f32| {
+        let source = format!(
+            "component App\n  view\n    box width=200 height=60 transform=\"translateY({}px)\"\n      text \"Ag\" margin-top={} font-size=16 color=\"#0000ff\" -webkit-text-stroke=\"2px #ff0000\"\n",
+            10. + lift,
+            -0.25 - lift
+        );
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
+            &crate::test_plan(&source),
+            (),
+            (200., 60.),
+            1.,
+            PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert_eq!(error, None);
+        if ink {
+            p.reader_replaced(Box::new(crate::ink::Ink::new().expect("an Ink device")));
+        }
+        p.frame().data().to_vec()
+    };
+    for ink in [false, true] {
+        assert!(frame(ink, 0.) == frame(ink, 30.), "ink {ink}");
+    }
+}
+
+#[test]
+fn a_row_is_walked_again_when_an_env_value_it_reads_changes() {
+    // The radius clips the child at the row's corner.
+    let source = r#"component App
+  view
+    scroll testId="port" width=100 height=80
+      column
+        box width=100 height=10 flex-shrink=0
+        box width=100 height=40 flex-shrink=0 overflow="clip" border-top-left-radius="env(safe-area-inset-bottom)"
+          box width=100 height=40
+        box width=100 height=400 flex-shrink=0
+"#;
+    let hits = |fresh: bool| {
+        let (mut p, heard) = kept(source);
+        let port = view_id(&p, "port");
+        p.frame();
+        assert_eq!(p.set_safe_area([0., 0., 24., 0.]), None);
+        if fresh {
+            p.brush.forget_rows();
+        }
+        heard.borrow_mut().geometry_without_drawing = true;
+        p.scroll_to(port, (0., 0.25));
+        let before = p.hit(1., 10.8);
+        heard.borrow_mut().geometry_without_drawing = false;
+        p.scroll_to(port, (0., 1.));
+        p.frame();
+        (before, p.hit(1., 10.8))
+    };
+    assert_eq!(hits(false), hits(true));
+}

@@ -213,6 +213,8 @@ pub(super) struct Rows {
     pub(super) frame: u64,
     /// [`sticky_parents`] and the walk it was found for.
     sections: Option<(u64, Rc<IdSet<ViewId>>)>,
+    /// The environment the kept rows resolved `env()` against.
+    env: Option<exact_kernel::Env>,
     active: bool,
     recording: Option<Capture>,
     freed: Vec<u32>,
@@ -494,6 +496,16 @@ impl Painter {
             self.rows.world = Some(world);
             let all: Vec<u32> = self.rows.kept.drain().map(|(_, r)| r.id).collect();
             self.rows.freed.extend(all);
+        }
+        // `Kernel::set_env` restyles the boxes that read `env()` in place,
+        // and no receipt names them, so any kept row may paint and hit by
+        // the old values.
+        let env = walk.scene.kernel.arena().env();
+        if self.rows.env.as_ref() != Some(env) {
+            for row in self.rows.kept.values_mut() {
+                row.stale = true;
+            }
+            self.rows.env = Some(env.clone());
         }
     }
 

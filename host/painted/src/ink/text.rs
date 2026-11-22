@@ -34,8 +34,9 @@ impl Ink {
             for (id, x, y) in run.glyphs {
                 self.observe_glyph(x, y, transform);
                 let (x, phase) = subpixel(x);
-                // Down, as for a negative position too: a whole-pixel move of
-                // a kept row then moves each glyph by the same pixels.
+                // Down, as the CPU raster places it and so a text stroke's
+                // band: a whole-pixel move then moves a glyph above the
+                // origin by the same pixels as one below it.
                 let y = y.floor() as i32;
                 let Some(glyph) = self.glyphs.get(
                     &mut self.device,

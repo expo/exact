@@ -339,9 +339,9 @@ fn renewed_row(whole_sections: bool) {
         row: 0,
     }));
     let _ = p.frame();
-    let first = std::mem::take(&mut *heard.borrow_mut());
-    assert_eq!(first.begun.len(), 6, "each cell a kept row");
-    assert!(first.begun.iter().all(|(_, previous)| previous.is_none()));
+    let first = std::mem::take(&mut heard.borrow_mut().begun);
+    assert_eq!(first.len(), 6, "each cell a kept row");
+    assert!(first.iter().all(|(_, previous)| previous.is_none()));
     // () changed: nothing is recorded again.
     let _ = p.frame();
     assert!(heard.borrow().begun.is_empty());
@@ -365,7 +365,7 @@ fn renewed_row(whole_sections: bool) {
     }
     let _ = p.frame();
     let heard = heard.borrow();
-    let (was_changed, was_renewed) = (first.begun[1].0, first.begun[4].0);
+    let (was_changed, was_renewed) = (first[1].0, first[4].0);
     assert_eq!(heard.begun.len(), 2);
     assert_eq!(
         heard.begun[0].1,
@@ -1181,6 +1181,11 @@ fn fractional_row_scroll_matches_a_fresh_walk_with_clips_and_hinted_text() {
     assert_eq!(p.brush.retained_row_id(row), Some(clipped_id));
     p.scroll_to(port, (0., 0.75)).unwrap();
     let revealed = p.frame();
+    assert_ne!(
+        p.brush.retained_row_id(row),
+        Some(clipped_id),
+        "recorded again"
+    );
     p.brush.forget_rows();
     p.repaint();
     let before = p.frame();
