@@ -102,6 +102,17 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     #if os(iOS)
     var sidebarFooterPane: MeasuredPaneView?
     weak var sidebarFooterHome: NodeView?
+    /// The tab bar's accessory content while it holds the element the root
+    /// tablist names (LLP 1075.003 §9.17).
+    var tabAccessory: TabAccessoryContent?
+    /// What a development build wrote about the root tablist's accessory.
+    var tabAccessoryNoted: Set<String> = []
+    /// A pass over the accessory is owed once the batch being applied ends.
+    var tabAccessoryOwed = false
+    /// Exact's container is going, to the app's `tabContainer` or with the tabs, and may show no accessory.
+    var tabAccessoryHandingOff = false
+    /// A pass over the accessory is running, and whether a call during it, from UIKit's callbacks, owes another.
+    var tabAccessoryProjecting = false, tabAccessoryRerun = false
     #endif
     var tablistAppearanceNone = false
     /// Where the authored tablist was when its covers were last measured.
@@ -1195,6 +1206,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         for nav in presentedNavigations { retireNavigation(nav, preserving: false) }
         for c in controllers.values { end(c) }
         retireTabs()
+        #if os(iOS)
+        tabAccessoryNoted = []
+        #endif
         retireSplit()
         if let primaryNavigation { retireStack(primaryNavigation) }
         if !covers.isEmpty || !delivered.isEmpty || !localInsets.wanted.isEmpty {

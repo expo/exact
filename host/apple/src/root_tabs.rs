@@ -7,7 +7,7 @@
 
 use super::Host;
 use crate::batch::Batch;
-use exact_kernel::{HostCover, ViewId};
+use exact_kernel::{HostCover, PropId, ViewId};
 use exact_runner::DataSource;
 
 impl<D: DataSource> Host<D> {
@@ -149,6 +149,9 @@ impl<D: DataSource> Host<D> {
     /// for a tab not built yet. `unsaid` follows `RootTabs::allows_sidebar`. An
     /// optional `footer` names the view below those tabs. `covered` says the
     /// boot has removed the tablist from layout for a platform bar (`closed.rs`).
+    /// An optional `accessory` names the element the tablist names as its tab
+    /// bar's accessory, and an optional `accessoryNote` says why it names
+    /// none, for a development build's journal (LLP 1075.003 §9.17).
     fn root_tabs_json(&self, root: ViewId, tabs: &exact_kernel::RootTabs) -> String {
         let list = |ids: &[ViewId]| ids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
         let kernel = self.runner.kernel();
@@ -164,8 +167,22 @@ impl<D: DataSource> Host<D> {
             .collect::<Vec<_>>()
             .join(",");
         let footer = footer.map_or_else(String::new, |id| format!(",\"footer\":{id}"));
+        let accessory = tabs
+            .accessory
+            .map_or_else(String::new, |id| format!(",\"accessory\":{id}"));
+        let note = kernel
+            .node(tabs.tablist)
+            .and_then(|list| {
+                list.props
+                    .str(PropId::NavigationTabAccessory)
+                    .map(str::to_owned)
+            })
+            .and_then(|name| tabs.accessory_note(&name))
+            .map_or_else(String::new, |note| {
+                format!(",\"accessoryNote\":{}", serde_json::Value::String(note))
+            });
         format!(
-            "{{\"root\":{root},\"tablist\":{},\"tabs\":[{}],\"panels\":[{}],\"navigation\":[{navigation}],\"unsaid\":{unsaid},\"covered\":{covered}{footer}}}",
+            "{{\"root\":{root},\"tablist\":{},\"tabs\":[{}],\"panels\":[{}],\"navigation\":[{navigation}],\"unsaid\":{unsaid},\"covered\":{covered}{footer}{accessory}{note}}}",
             tabs.tablist,
             list(&tabs.tabs),
             list(&tabs.panels)

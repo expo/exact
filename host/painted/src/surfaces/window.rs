@@ -420,18 +420,9 @@ impl DirectWindow {
         if let Some((previous, _)) = self.fallback.take() {
             device.retire_after_present(previous);
         }
-        let ink =
-            crate::ink::Ink::from_device(exact_ink::device::Selected::D3d11(Box::new(device)));
-        let info = ink.info();
-        p.painter = crate::presenter::PainterInfo {
-            name: "ink",
-            adapter: Some(format!("{} ({})", info.adapter, info.api)),
-            api: Some(info.api.clone()),
-            device_ms: info.device_ms,
-            shaders_ms: info.shaders_ms,
-            cached: info.cached,
-        };
-        p.brush.replace_backend(Box::new(ink));
+        let (backend, info) = crate::presenter::d3d11_backend(device);
+        p.brush.replace_backend(backend);
+        p.painter = info;
         self.retire_due = Some(std::time::Instant::now());
         self.recovering = false;
         p.repaint();

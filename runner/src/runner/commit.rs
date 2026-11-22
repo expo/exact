@@ -540,7 +540,7 @@ impl<D: DataSource> Runner<D> {
                 ))
             } else if too_long(value) {
                 Some(RunnerError::StringTooLong {
-                    name: self.plan.str(row.name).to_string(),
+                    name: row.declared_name(&self.plan).to_owned(),
                 })
             } else {
                 None

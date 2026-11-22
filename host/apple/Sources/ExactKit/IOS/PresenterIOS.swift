@@ -142,6 +142,12 @@ package final class Presenter {
     lazy var accent = AppAccent(self)
     /// The native menu arm (LLP 1021 D3).
     package lazy var menus = MenuHost(presenter: self)
+    /// The menus' interactions again, outside a batch: a view that came to hold authored content out of its parent
+    /// (the tab bar's accessory) takes the menu an ancestor of it gives (`ContextMenuHost.syncMounts`).
+    package func mountsChanged() {
+        guard !resetting else { return }
+        menus.sync()
+    }
     #if os(iOS)
     /// The drag sources (LLP 1094.000 D4), when the module is linked.
     package lazy var dragOut: DragOutSources? = DragOutLink.installed?.sources(self)

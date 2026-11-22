@@ -110,6 +110,14 @@ fn act_names_its_string_parameters() {
         js.contains("sig(\"\",\"s\",\"t\")"),
         "a string slot is named: {js}"
     );
+    assert!(
+        js.contains(r#""got""#),
+        "the row state names its declaration: {js}"
+    );
+    assert!(
+        !js.contains(r#""got#"#),
+        "the row state shipped its namespace: {js}"
+    );
 }
 
 /// Every check names the pc of the instruction the VM checks at.

@@ -79,13 +79,17 @@ export function replacement() {
   return Replacement;
 }
 
+// A checkpoint key identifies the component use and, for a panel, its mounted instance.
+// String write failures display the state name as the production build does.
+const stringSlotName = (type, key) => type === "s" ? key.split(/[#@]/, 1)[0] || key : undefined;
+
 /** A root slot carried by authored name and full declared shape. */
 export function devSignal(name, initial, type, declared, router = false) {
   // The launch locale must reach newly added initializers before language().
   Slots.set(name, { type: declared, router });
   const cp = dev(), kept = name === '#locale' ? null : cp?.slots?.find(s => s[0] === name);
   const value = kept && (router || shape(kept[1], declared)) ? (router ? carryRouter(decode(kept[2]), launchLocation()) : decode(kept[2])) : initial;
-  const out = sig(value, type, type === "s" ? name : undefined); out.n.devName = name; out.n.devType = declared;
+  const out = sig(value, type, stringSlotName(type, name)); out.n.devName = name; out.n.devType = declared;
   if (name.includes('@')) { Panels.live.add(out); Panels.used.add(name); }
   return out;
 }
@@ -95,7 +99,7 @@ export function devLate(name, init, type, declared) {
   const kept = dev()?.slots?.find(s => s[0] === name);
   if (kept && shape(kept[1], declared)) return devSignal(name, decode(kept[2]), type, declared);
   Slots.set(name, { type: declared, router: false });
-  const out = late(init, type, type === "s" ? name : undefined); out.n.devName = name; out.n.devType = declared;
+  const out = late(init, type, stringSlotName(type, name)); out.n.devName = name; out.n.devType = declared;
   return out;
 }
 /** A tab panel's state, `slot@panel`, made when the panel is built (emit's `owned`; LLP 1075.003 §9.14): the capture

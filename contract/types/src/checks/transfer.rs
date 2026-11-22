@@ -81,27 +81,18 @@ fn arguments(args: &[Expr], scope: &Scope, shapes: &Shapes, span: Span) -> Resul
     Ok(())
 }
 
-/// A literal `url=`: absolute `http:` or `https:`, with a host, as `share`'s
-/// runner rule reads one.
+/// A literal `url=`: absolute `http:` or `https:`, with a host, by the
+/// runner's rule (`exact_plan::http_url_refusal`, LLP 1094.000 D1).
 fn url(value: &Expr) -> Result<(), TypeError> {
     let Expr::Str(s, at) = value else {
         return Ok(());
     };
-    let lower = s.to_ascii_lowercase();
-    let rest = lower
-        .strip_prefix("https://")
-        .or_else(|| lower.strip_prefix("http://"));
-    let absolute = rest.is_some_and(|r| {
-        !r.is_empty()
-            && !r.starts_with(['/', '?', '#'])
-            && !s.chars().any(|c| c.is_whitespace() || c.is_control())
-    });
-    if absolute {
+    let Some(why) = exact_plan::http_url_refusal(s) else {
         return Ok(());
-    }
+    };
     err(
         "type-data-transfer",
-        format!("`url=` is an absolute `http:` or `https:` URL, not \"{s}\": another app cannot open this app's path"),
+        format!("`url=` is an absolute `http:` or `https:` URL, not \"{s}\": {why}"),
         *at,
     )
 }

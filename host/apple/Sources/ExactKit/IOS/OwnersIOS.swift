@@ -99,7 +99,7 @@ extension Presenter {
         while let cur = at, cur !== target {
             let up = listenerParent(of: cur)
             // A node lifted over the tab container stays inside its parent's box on the page
-            crossed = crossed || (up !== cur.superview && up !== navigation.lifted?.parent(of: cur))
+            crossed = crossed || (up !== cur.superview && (up !== navigation.lifted?.parent(of: cur) || navigation.lifted?.heldApart(cur) == true))
             at = up
         }
         return at != nil && crossed ? start : target
@@ -344,7 +344,7 @@ package final class OwnerBlocks {
               !Owner.shared.isServingMain, let session = presenter.session,
               session.state != .destroyed, !session.fillInFlight else { return Data() }
         var now: [UInt32: (block: HostBlock, placement: BlockPlacement?)] = [:]
-        if let footer = presenter.navigation.sidebarFooterBlock { now[footer.id] = (footer.block, footer.placement) }
+        for pane in presenter.navigation.paneBlocks { now[pane.id] = (pane.block, pane.placement) }
         for (id, block) in presenter.dialogs.containingBlocks { now[id] = (block, nil) }
         for (route, view, block, shown, presented) in routes {
             let id = route.node.id
@@ -439,7 +439,7 @@ extension Presenter {
     /// one opened earlier or outside the dialog stays beneath its card.
     /// The last modal boundary leaves only it and what is above it live.
     package var openTopLayer: TopLayerGeometry {
-        let boxes = owners.presented + dialogs.presented + menus.presented.map {
+        let boxes = navigation.topLayerBoxes + owners.presented + dialogs.presented + menus.presented.map {
             // Reported by its block, the viewport's (stage 14 B), as a dialog's sheet is.
             TopLayerBox(view: $0, frame: ($0.id, $0.topLayerFrame(in: viewport, containingBlock: owners.blockRects[$0.id]), nil), modal: nil)
         }

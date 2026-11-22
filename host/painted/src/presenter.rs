@@ -184,7 +184,9 @@ pub use device::{touch_only, Device, Pointing};
 pub use exact_runner::ScreenReader;
 pub use hosted::action as field_action;
 use painter::cpu_info;
-pub(crate) use painter::PainterBoot;
+#[cfg(windows)]
+pub(crate) use painter::d3d11_backend;
+pub use painter::PainterBoot;
 #[cfg(target_os = "macos")]
 pub use painter::SubmittedAppleFrame;
 pub use painter::{set_custom_painter, PainterChoice, PainterFactory, PainterInfo};

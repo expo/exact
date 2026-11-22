@@ -95,6 +95,17 @@ extension NodeView {
         }
         return nil
     }
+    /// Whether this node's own long press (its `contextmenu` recognizer) takes a press at `point` that lands on
+    /// `touched`: it listens there, gives no menu there that its interaction opens, and no node nearer the touch
+    /// gives a menu or hears a long press, counted from the node that holds a native view the touch lands on.
+    func hearsLongPress(on touched: UIView?, at point: CGPoint) -> Bool {
+        guard presenter?.menus.eligible(self, contextMenu: true) == true else { return false }
+        let run = inlineContextTarget(at: point)
+        guard hasOwnContextMenu || run != nil else { return false }
+        if !ExactEnv.agentMode, (run?.props["contextPopover"] ?? (run == nil ? props["contextPopover"] : nil))?.isEmpty == false { return false }
+        guard let hit = touched.flatMap(NodeView.innermost), let source = hit.contextMenuSource(at: convert(point, to: hit)) else { return true }
+        return source === self
+    }
     /// Dynamic failure ordering follows the current row, including a menu
     /// added or removed after this paragraph took its text interaction.
     package func gestureRecognizer(_ gesture: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {

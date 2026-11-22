@@ -951,7 +951,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/clock.rs", "wall_since"],
     ["painted:host/painted/src/presenter/display_frame.rs", "SubmittedFrame::pixels"],
     ["painted:host/painted/src/presenter/edit_menu.rs", "EditMenu::enabled"],
-    ["painted:host/painted/src/presenter/painter.rs", "PainterChoice::from_baked PainterChoice::from_env set_custom_painter"],
+    ["painted:host/painted/src/presenter/painter.rs", "PainterBoot::direct_d3d11 PainterBoot::windows PainterChoice::from_baked PainterChoice::from_env set_custom_painter"],
     ["painted:host/painted/src/presenter/palette.rs", "material Palette::from_words Palette::report Palette::tell"],
     ["painted:host/painted/src/presenter/requests.rs", "Haptic::named"],
     ["painted:host/painted/src/presenter/snap.rs", "area flicked resnap rest"],

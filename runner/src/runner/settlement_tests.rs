@@ -791,7 +791,8 @@ fn strings_past_the_limit_are_refused_where_they_would_be_built_or_kept() {
     let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
     let string = b.primitive(TypeKind::String);
     let init = b.constant(&Value::str("ab"));
-    let text = b.slot("text", string, init);
+    let key = "text#component-use";
+    let text = b.slot(key, string, init);
     // text = text + text, 26 times: 2 << 26 bytes, past MAX_STRING.
     let mut body = Asm::new();
     body.load_slot(text);
@@ -811,6 +812,12 @@ fn strings_past_the_limit_are_refused_where_they_would_be_built_or_kept() {
         .op(exact_plan::Opcode::Unit, &[]);
     let keep = b.code(keep);
     b.action("keep", &[("value", string)], &[text], keep);
+    let record = b.record("Draft", &[("text", string)]);
+    let mut unpack = Asm::new();
+    unpack.load_param(0).field(0);
+    unpack.store_slot(text).op(exact_plan::Opcode::Unit, &[]);
+    let unpack = b.code(unpack);
+    b.action("unpack", &[("draft", record)], &[text], unpack);
     b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
     let mut r = boot(b.finish().unwrap(), Data::new(Value::Unit));
     assert!(matches!(
@@ -818,12 +825,16 @@ fn strings_past_the_limit_are_refused_where_they_would_be_built_or_kept() {
         Err(RunnerError::Evaluation { ref error, .. }) if matches!(**error, RunnerError::Trap(crate::vm::Trap::StringTooLong { .. }),
         )
     ));
-    let long = "x".repeat(crate::vm::MAX_STRING + 1);
+    let long = Value::str(&"x".repeat(crate::vm::MAX_STRING + 1));
     assert!(matches!(
-        r.act("keep", vec![Value::str(&long)]),
-        Err(RunnerError::StringTooLong { .. })
+        r.act("keep", vec![long.clone()]),
+        Err(RunnerError::StringTooLong { name }) if name == "value"
     ));
-    assert_eq!(r.slot("text"), Some(&Value::str("ab")));
+    assert!(matches!(
+        r.act("unpack", vec![Value::record(vec![long])]),
+        Err(RunnerError::StringTooLong { name }) if name == "text"
+    ));
+    assert_eq!(r.slot(key), Some(&Value::str("ab")));
     assert!(!r.is_poisoned());
     r.act("keep", vec![Value::str("fits")]).unwrap();
 }

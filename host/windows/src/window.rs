@@ -2,7 +2,7 @@ use crate::keyboard::key_names;
 use exact_ink::counters;
 use exact_painted::{
     app::{self, Config},
-    presenter::PointerKind,
+    presenter::{PainterBoot, PointerKind},
     window_title::WindowTitle,
     Presenter,
 };
@@ -32,7 +32,6 @@ mod presents;
 mod service;
 mod tray;
 use frames::{next_frame_deadline, presentation_resumes, FrameSchedule};
-use presents::direct_device;
 
 struct App<D: DataSource> {
     service_causes: u8,
@@ -42,6 +41,7 @@ struct App<D: DataSource> {
     title: WindowTitle,
     min_size: (f32, f32),
     config: Config,
+    painter: PainterBoot,
     window: Option<Rc<Window>>,
     surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
     preparing: Option<exact_ink::device::d3d11::Startup>,
@@ -205,24 +205,17 @@ pub(super) fn run<D: DataSource + Default + 'static, const DEVELOPMENT: bool>(
         Err(_) => None,
     };
     let login = crate::desktop::login_launch(&std::env::args().collect::<Vec<_>>());
-    let device = std::env::var("EXACT_INK_DEVICE").ok();
-    let direct = direct_device(
-        exact_painted::presenter::PainterChoice::from_env(
-            exact_painted::presenter::PainterChoice::from_baked(compat),
-        ),
-        device.as_deref(),
-    );
+    let painter = PainterBoot::windows::<DEVELOPMENT>(compat);
     let launch = app::prepare_window_painter(login, frame_limit.is_some(), || {
+        let Some(warp) = painter.direct_d3d11() else {
+            return Ok(None);
+        };
         if !Config::windowed_from_env()
-            || !direct
             || exact_ink::device::d3d11::startup_watchdog::after_layout()
         {
             return Ok(None);
         }
-        exact_ink::device::d3d11::Startup::start(
-            exact_ink::device::direct_d3d11(device.as_deref()).unwrap(),
-        )
-        .map(Some)
+        exact_ink::device::d3d11::Startup::start(warp).map(Some)
     });
     let (hidden, preparing) = match launch {
         Ok(launch) => launch,
@@ -334,11 +327,12 @@ pub(super) fn run<D: DataSource + Default + 'static, const DEVELOPMENT: bool>(
         title: WindowTitle::default(),
         min_size: (opening.min_width, opening.min_height),
         config,
+        painter,
         window: None,
         surface: None,
         preparing,
         jump_list_started: false,
-        direct,
+        direct: painter.direct_d3d11().is_some(),
         presenter: None,
         timers,
         started,
@@ -990,6 +984,7 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
             &mut self.config,
             viewport,
             self.hidden,
+            self.painter,
             self.preparing.take(),
             self.direct && exact_ink::device::d3d11::startup_watchdog::after_layout(),
         );
