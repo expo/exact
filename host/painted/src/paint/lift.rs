@@ -78,8 +78,8 @@ impl Painter {
         let group = rows && !self.rows_wrapper(node.key);
         let wrap = group && self.wraps_rows(walk, &children);
         let split_sections = rows && self.backend.independent_section_rows();
-        let sections = if split_sections {
-            super::rows::sticky_parents(walk.scene.kernel)
+        let sections = if split_sections && !wrap {
+            self.row_sections(walk.scene.kernel)
         } else {
             Default::default()
         };

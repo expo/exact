@@ -53,14 +53,13 @@ pub(super) struct Roll {
 }
 
 impl Roll {
+    /// Where both numbers' lines are drawn, which alignment can move past
+    /// their widths, and a glyph's size around them for the roll.
     pub(super) fn bounds(&self) -> Rect4 {
         let size = self.to.runs().first().map_or(16.0, |r| r.size);
-        (
-            -size,
-            -size,
-            self.from.width.max(self.to.width) + 2.0 * size,
-            self.from.height.max(self.to.height) + 2.0 * size,
-        )
+        let lines = super::text_shadow::line_bounds;
+        let (x, y, w, h) = super::rows::union(Some(lines(&self.from)), lines(&self.to));
+        (x - size, y - size, w + 2.0 * size, h + 2.0 * size)
     }
 }
 

@@ -695,6 +695,40 @@ fn a_rotated_sticky_section_does_not_open_nested_row_groups() {
 }
 
 #[test]
+fn a_list_with_a_sticky_item_is_one_row() {
+    let plan = crate::test_plan(
+        r#"component App
+  view
+    scroll width=200 height=100
+      column
+        box width=200 height=5
+        ol display="flex" flex-direction="column"
+          li "One" position="sticky" top=0
+          li "Two"
+          li "Three"
+"#,
+    );
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &plan,
+        (),
+        (200., 120.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let heard = Rc::new(RefCell::new(Heard::default()));
+    p.reader_replaced(Box::new(Keeps {
+        heard: heard.clone(),
+        row: 0,
+    }));
+    p.frame();
+    // An item's number counts its siblings, which its own row would not see.
+    assert_eq!(heard.borrow().begun.len(), 2, "the box and the list");
+}
+
+#[test]
 fn a_pressed_split_section_records_its_body_rows_again() {
     let plan = crate::test_plan(
         r#"component App
