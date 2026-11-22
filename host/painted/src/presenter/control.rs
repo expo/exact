@@ -997,7 +997,7 @@ mod tests {
 
 #[cfg(test)]
 #[path = "material_tests.rs"]
-mod material_tests;
+pub(super) mod material_tests;
 
 #[cfg(test)]
 #[path = "range_tests.rs"]

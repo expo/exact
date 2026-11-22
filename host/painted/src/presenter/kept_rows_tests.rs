@@ -1083,9 +1083,10 @@ fn inline_frame_retained_rows_keep_initial_and_scrolled_viewport_origins() {
         p.scroll_to(port, (0., 20.25)).unwrap();
         let moved_before = p.brush.geometry_rows_replayed();
         p.boxes();
-        assert!(
-            p.brush.geometry_rows_replayed() > moved_before,
-            "the links' row is moved, not walked"
+        assert_eq!(
+            p.brush.geometry_rows_replayed() - moved_before,
+            3,
+            "the links' rows and the box are moved, not walked"
         );
         let first = p.ranges.frame(runs[0]);
         let shift_fractional = 20.25 * if transform.is_empty() { 1. } else { 1.25 };
@@ -1170,7 +1171,7 @@ fn fractional_row_scroll_matches_a_fresh_walk_with_clips_and_hinted_text() {
 
     // Ink truncates negative glyph positions toward zero. An integer
     // translation across zero can put the saved glyph one pixel too low.
-    // The jump fits inside the viewport used by the long-scroll guard.
+    // The jump is within the long-scroll guard's `MAX_TRANSLATION`.
     p.brush.forget_rows();
     p.scroll_to(port, (0., 200.75)).unwrap();
     p.frame();

@@ -721,7 +721,7 @@ impl Painter {
         }
         if !placeholder {
             let painted = material::FieldText::painted(&paragraph, (ox, oy), ts);
-            self.labels.value(node.id, painted);
+            self.row_field_text(node.id, material::Part::Value, painted);
         }
         if let Some(shadows) = shadows {
             let ink = self.capture_field_ink(

@@ -92,8 +92,9 @@ struct Row {
     boxes: Vec<PaintedBox>,
     text: Vec<(NodeKey, Rc<Paragraph>)>,
     inline: Vec<(ViewId, Rc<inline_frame::PaintedInline>)>,
-    /// Where its buttons' titles were painted, for an inspector.
-    labels: Vec<(ViewId, material::FieldText)>,
+    /// Where its buttons' titles and fields' values were painted, for an
+    /// inspector.
+    field_texts: Vec<(ViewId, material::Part, material::FieldText)>,
     images: Vec<(ViewId, Option<std::sync::Weak<Bitmap>>)>,
     /// Where each picture kept apart from the row is drawn.
     slots: Vec<Slot>,
@@ -126,7 +127,10 @@ impl Row {
         (x + origin.0, y + origin.1, w, h)
     }
 
-    fn can_translate_geometry_to(&self, origin: (f32, f32), viewport: (f32, f32)) -> bool {
+    /// Whether a walk that paints nothing may move this row's hits to
+    /// `origin`; `shown`: where hits can land, the viewport within the row's
+    /// clip.
+    fn can_translate_geometry_to(&self, origin: (f32, f32), shown: Rect4) -> bool {
         let (dx, dy) = (origin.0 - self.origin.0, origin.1 - self.origin.1);
         if dx.abs() <= MAX_TRANSLATION && dy.abs() <= MAX_TRANSLATION {
             return true;
@@ -138,7 +142,7 @@ impl Row {
             .hit_reach
             .map_or(self.bounds, |r| union(Some(self.bounds), r));
         let at = (x + origin.0, y + origin.1, w, h);
-        let (_, _, w, h) = intersect(at, (0., 0., viewport.0, viewport.1));
+        let (_, _, w, h) = intersect(at, shown);
         w <= 0. || h <= 0.
     }
 }
@@ -179,7 +183,7 @@ struct Capture {
     slots: Vec<Slot>,
     text: Vec<(NodeKey, Rc<Paragraph>)>,
     inline: Vec<(ViewId, Rc<inline_frame::PaintedInline>)>,
-    labels: Vec<(ViewId, material::FieldText)>,
+    field_texts: Vec<(ViewId, material::Part, material::FieldText)>,
     frames: Vec<RowFrame>,
     scrolls: Vec<(ViewId, (f32, f32))>,
 }
@@ -755,12 +759,17 @@ impl Painter {
         }
     }
 
-    /// Publish where a button's title was painted, and keep it with the
-    /// recording row so a replay publishes it moved.
-    pub(super) fn row_label(&mut self, id: ViewId, text: material::FieldText) {
-        self.labels.label(id, text);
+    /// Publish where a button's title or a field's value was painted, and
+    /// keep it with the recording row so a replay publishes it moved.
+    pub(super) fn row_field_text(
+        &mut self,
+        id: ViewId,
+        part: material::Part,
+        text: material::FieldText,
+    ) {
+        self.labels.put(id, part, text);
         if let Some(c) = &mut self.rows.recording {
-            c.labels.push((id, text));
+            c.field_texts.push((id, part, text));
         }
     }
 
@@ -868,10 +877,13 @@ impl Painter {
         let origin = (ts.sx * r.0 + ts.tx, ts.sy * r.1 + ts.ty);
         let scale = (ts.sx, ts.sy);
         let frame = self.rows.frame;
-        let kept =
-            self.rows.kept.get(&node.key).filter(|row| {
-                !split_sections || row.can_translate_geometry_to(origin, self.viewport)
-            });
+        let port = (0., 0., self.viewport.0, self.viewport.1);
+        let shown = clip_rect.map_or(port, |c| intersect(c, port));
+        let kept = self
+            .rows
+            .kept
+            .get(&node.key)
+            .filter(|row| !split_sections || row.can_translate_geometry_to(origin, shown));
         let suspect = self.rows.suspect.contains(&node.key);
         let can_draw = !geometry
             && kept
@@ -913,15 +925,8 @@ impl Painter {
             for (id, inline) in &row.inline {
                 walk.inline.insert(*id, inline.translated(d.0, d.1));
             }
-            for &(id, text) in &row.labels {
-                let (x, y, w, h) = text.rect;
-                self.labels.label(
-                    id,
-                    material::FieldText {
-                        rect: (x + d.0, y + d.1, w, h),
-                        baseline: text.baseline + d.1,
-                    },
-                );
+            for &(id, part, text) in &row.field_texts {
+                self.labels.put(id, part, text.translated(d.0, d.1));
             }
             self.damage.unsupported |= row.unsupported;
             let bounds = row.bounds_at(origin);
@@ -1049,6 +1054,10 @@ impl Painter {
                     *published = inline.clone();
                 }
             }
+            for (id, part, text) in &mut capture.field_texts {
+                *text = text.translated(origin.0, origin.1);
+                self.labels.put(*id, *part, *text);
+            }
         }
         let row_unsupported = std::mem::replace(&mut self.damage.unsupported, unsupported);
         self.damage.unsupported |= row_unsupported;
@@ -1114,7 +1123,9 @@ impl Painter {
                     .fold(None, |u, r| Some(union(u, r)))
             })
             .flatten()
-            .map(|(x, y, w, h)| (x - origin.0, y - origin.1, w, h));
+            // A point more each way: recorded far from the viewport, its edges
+            // round by half an `f32` step, under a point below 2^24.
+            .map(|(x, y, w, h)| (x - origin.0 - 1., y - origin.1 - 1., w + 2., h + 2.));
         self.rows.kept.insert(
             node.key,
             Row {
@@ -1129,7 +1140,7 @@ impl Painter {
                 boxes,
                 text: capture.text,
                 inline: capture.inline,
-                labels: capture.labels,
+                field_texts: capture.field_texts,
                 images: capture.images,
                 slots: capture.slots,
                 frames: capture
