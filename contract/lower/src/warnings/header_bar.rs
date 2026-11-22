@@ -325,29 +325,41 @@ fn route_headers(children: Structure<'_>) -> Vec<(Visit<'_>, Rc<[Visit<'_>]>)> {
 /// cannot see (an `if` it cannot settle, a computed source) is given the
 /// benefit, and the host keeps such an element out of the bar.
 /// `refusals`, in an app that ships iOS. Lowering has read its targets by
-/// the time this runs.
-pub(crate) fn refused(checked: &contract_types::Checked<'_>) -> Vec<LowerError> {
-    if !crate::icons::shipped().iter().any(|t| t.name == "ios") {
+/// the time this runs. A terminal entry is not checked: that host has no
+/// navigation bar, whatever else the app ships.
+pub(crate) fn refused(
+    checked: &contract_types::Checked<'_>,
+    profile: crate::Profile,
+) -> Vec<LowerError> {
+    if matches!(profile, crate::Profile::Terminal)
+        || !crate::icons::shipped().iter().any(|t| t.name == "ios")
+    {
         return Vec::new();
     }
-    refusals(&contract_checking::Checking::new(checked).expanded())
+    refusals(
+        &contract_checking::Checking::new(checked).expanded(),
+        &checked.file.styles,
+    )
 }
 
-fn refusals(view: &contract_checking::View<'_>) -> Vec<LowerError> {
+fn refusals(
+    view: &contract_checking::View<'_>,
+    styles: &[contract_syntax::StyleDecl],
+) -> Vec<LowerError> {
     let mut out = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
-    let visits = view.walk_with(false, |node, &in_root| {
-        in_root
-            || node
-                .element()
-                .is_some_and(|(_, _, a)| has(a, "navigationKey"))
+    // Inside a navigation root, with the `id` its `navigationBack` names.
+    let visits = view.walk_with(None, |node, root: &Option<Option<&str>>| {
+        root.or_else(|| {
+            let (_, _, attrs) = node.element()?;
+            has(attrs, "navigationKey").then(|| literal(attrs, "navigationBack"))
+        })
     });
-    for (visit, in_root) in visits {
-        let Some((_, _, attrs)) = visit.element() else {
+    for (visit, root) in visits {
+        let (Some((_, _, attrs)), Some(back)) = (visit.element(), root) else {
             continue;
         };
-        let route = in_root
-            && has(attrs, "navigationKey")
+        let route = has(attrs, "navigationKey")
             && !has(attrs, "navigationBack")
             && literal(attrs, "navigationBar") != Some("none");
         if !route {
@@ -355,16 +367,56 @@ fn refusals(view: &contract_checking::View<'_>) -> Vec<LowerError> {
         }
         for (header, _) in route_headers(visit.regions()[0]) {
             let span = header.span();
-            if seen.insert((span.source_id, span.line, span.col)) {
-                refuse(header, &mut out);
+            if !class_says_no_bar(header, styles)
+                && seen.insert((span.source_id, span.line, span.col))
+            {
+                refuse(header, back, &mut out);
             }
         }
     }
     out
 }
 
+/// Whether the header's `class` hides it or has it draw itself
+/// (`nested_header::no_bar`, which reads what the header writes). A class
+/// that is not one style or a choice of two has the benefit.
+fn class_says_no_bar(header: Visit<'_>, styles: &[contract_syntax::StyleDecl]) -> bool {
+    let Some((_, _, attrs)) = header.element() else {
+        return false;
+    };
+    let Some(class) = attrs.iter().find(|a| a.name == "class") else {
+        return false;
+    };
+    let names: Vec<&str> = match &class.value {
+        Expr::Ident(name, _) => vec![name],
+        Expr::Ternary(_, yes, no, _) => match (&**yes, &**no) {
+            (Expr::Ident(a, _), Expr::Ident(b, _)) => vec![a, b],
+            _ => return true,
+        },
+        _ => return true,
+    };
+    styles
+        .iter()
+        .filter(|style| names.contains(&style.name.as_str()))
+        .any(|style| {
+            ["appearance", "display"]
+                .iter()
+                .any(|row| !has(attrs, row) && literal(&style.attrs, row) == Some("none"))
+        })
+}
+
+/// Whether `node` or anything in it has a `class`. The refusal reads what an
+/// element writes, not its class's rows, so a face styled by one has the
+/// benefit.
+fn classed(node: Visit<'_>) -> bool {
+    let own = |k: Visit<'_>| k.element().is_some_and(|(_, _, a)| has(a, "class"));
+    own(node) || node.regions().into_iter().any(|r| r.walk().any(own))
+}
+
 /// The parts of `header`, when it is the bar, that the bar has no place for.
-fn refuse(header: Visit<'_>, out: &mut Vec<LowerError>) {
+/// `back` is the `id` of the root's `navigationBack` control: on a pushed
+/// route UIKit's back button stands for it whatever its face (`exact_kernel::bars`).
+fn refuse(header: Visit<'_>, back: Option<&str>, out: &mut Vec<LowerError>) {
     let mut bar = Bar::default();
     walk(header, &mut bar);
     if !bar.is_the_bar() {
@@ -372,6 +424,10 @@ fn refuse(header: Visit<'_>, out: &mut Vec<LowerError>) {
     }
     let mut found: Vec<(Span, String)> = bar.hosted.clone();
     for button in &bar.buttons {
+        let id = button.element().and_then(|(_, _, a)| literal(a, "id"));
+        if back.is_some() && id == back {
+            continue;
+        }
         // A bar item is a `button` or a `link`, or a box that presses; a
         // field, a picture or a control that presses is none.
         let tag = button.element().map_or("", |e| e.0);
@@ -415,7 +471,10 @@ fn face(button: Visit<'_>) -> Option<&'static str> {
         .children()
         .filter(|k| !matches!(part(*k), Part::Hidden))
         .collect();
-    if kids.iter().any(|k| matches!(part(*k), Part::Doubt)) {
+    if kids
+        .iter()
+        .any(|k| matches!(part(*k), Part::Doubt) || classed(*k))
+    {
         return None;
     }
     if let [only] = kids[..] {

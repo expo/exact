@@ -414,7 +414,7 @@ pub fn lower_all(
             selection,
         ));
     }
-    asset_errors.extend(warnings::header_bar::refused(checked));
+    asset_errors.extend(warnings::header_bar::refused(checked, profile));
     let result = match result {
         Ok(built) if asset_errors.is_empty() => Ok(built),
         Ok(_) => {

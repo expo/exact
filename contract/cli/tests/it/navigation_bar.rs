@@ -533,3 +533,58 @@ fn an_element_the_ios_bar_has_no_place_for_is_refused() {
         "two headings: no bar"
     );
 }
+
+/// The refusal reads what an element writes, not a class's rows, and the
+/// kernel leaves the root's `navigationBack` control to UIKit on a pushed
+/// route. So a face styled by a class, a header its class takes out of the
+/// bar, and the Back control are not refused; a class elsewhere excuses
+/// nothing.
+#[test]
+fn a_class_and_the_back_control_are_given_the_benefit() {
+    let refused = |name: &str, header: &str| -> usize {
+        let dir =
+            crate::scratch::Scratch::new(format!("exact2-benefit-{name}-{}", std::process::id()));
+        std::fs::write(
+            dir.join("app.json"),
+            "{\"app\": {\"id\": \"dev.test.bar\", \"name\": \"Bar\"}, \"host\": {\"ios\": {}}}",
+        )
+        .unwrap();
+        std::fs::write(dir.join("app.contract"), format!("routes nav\n  home \"/\"\nstyle Label\n  margin-left=4\nstyle Avatar\n  background-color=\"#e3e3fe\"\nstyle Site\n  appearance=\"none\"\nstyle Padded\n  padding=8\ncomponent App\n  state q = \"\"\n  action go\n    q = \"\"\n  view\n    main navigationKey=`${{top(nav).id}}` navigationBack=\"back\" width=\"100%\" height=\"100%\"\n      for e in stack(nav) key=e.id\n        column navigationKey=`${{e.id}}` position=\"absolute\" inset=0\n{header}          text \"body\"\n")).unwrap();
+        match contract::compile_path_all_warned(&dir.at("app.contract"), false).0 {
+            Ok(_) => 0,
+            Err(errors) => {
+                for e in &errors {
+                    assert_eq!(e.id, "lower-header-item", "{name}: {e:?}");
+                }
+                errors.len()
+            }
+        }
+    };
+    let heading = "            text \"Car\" role=\"heading\" aria-level=1\n";
+    let bar = "          header display=\"flex\"\n";
+    for (name, header, count) in [
+        ("label", format!("{bar}{heading}            button press=go\n              text \"Save\" class=Label\n"), 0),
+        ("avatar", format!("{bar}{heading}            button press=go aria-label=\"Me\"\n              column class=Avatar width=32 height=32\n                text \"AB\"\n"), 0),
+        ("site", format!("          header display=\"flex\" class=Site\n{heading}            progress\n"), 0),
+        ("back", format!("{bar}            button id=\"back\" press=go\n              image \"symbol:back\"\n              text \"Back\" color=\"-exact-label\"\n{heading}"), 0),
+        ("padded", format!("          header display=\"flex\" class=Padded\n{heading}            progress\n"), 1),
+        ("beside", format!("{bar}{heading}            button press=go\n              text \"Save\" class=Label\n            button press=go\n              text \"Stop\" color=\"-exact-label\"\n"), 1),
+    ] {
+        assert_eq!(refused(name, &header), count, "{name}");
+    }
+    // The same app's terminal entry is no iOS bar.
+    let dir =
+        crate::scratch::Scratch::new(format!("exact2-benefit-terminal-{}", std::process::id()));
+    std::fs::write(
+        dir.join("app.json"),
+        "{\"app\": {\"id\": \"dev.test.bar\", \"name\": \"Bar\"}, \"host\": {\"ios\": {}}}",
+    )
+    .unwrap();
+    std::fs::write(dir.join("terminal.contract"), format!("routes nav\n  home \"/\"\ncomponent App\n  view\n    main navigationKey=`${{top(nav).id}}`\n      for e in stack(nav) key=e.id\n        column navigationKey=`${{e.id}}`\n{bar}{heading}            progress\n          text \"body\"\n")).unwrap();
+    if let Err(errors) = contract::compile_path_terminal(&dir.at("terminal.contract")) {
+        assert!(
+            errors.iter().all(|e| e.id != "lower-header-item"),
+            "{errors:?}"
+        );
+    }
+}
