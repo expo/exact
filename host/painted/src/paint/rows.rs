@@ -141,7 +141,8 @@ struct Capture {
     refused: bool,
     refuse_sticky: bool,
     /// What it paints past its boxes, in the walk's coordinates: filters
-    /// (`box_filter.rs`), shadows, overflowing lines and inline backgrounds.
+    /// (`box_filter.rs`), shadows, overflowing lines, text strokes and inline
+    /// backgrounds.
     reach: Option<Rect4>,
     images: Vec<(ViewId, Option<std::sync::Weak<Bitmap>>)>,
     slots: Vec<Slot>,
@@ -322,10 +323,16 @@ impl Painter {
                 kernel.node_by_key(key).filter(|n| split && row_section(n))
             {
                 // A split section is in none of its rows, though they paint
-                // what they take from it, such as a pressed or moving color.
-                for child in section.child_nodes() {
-                    if let Some(row) = self.rows.kept.get_mut(&child.key) {
-                        row.stale = true;
+                // what they take from it, such as a pressed or moving color;
+                // nor is a section split within it.
+                let mut open = vec![section];
+                while let Some(section) = open.pop() {
+                    for child in section.child_nodes() {
+                        if let Some(row) = self.rows.kept.get_mut(&child.key) {
+                            row.stale = true;
+                        } else if row_section(&child) {
+                            open.push(child);
+                        }
                     }
                 }
             }
