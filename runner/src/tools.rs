@@ -94,7 +94,7 @@ pub fn mcp_tools(plan: &Plan, door: &str) -> Vec<Json> {
         let mut required = Vec::new();
         for p in action.params.iter() {
             let p = plan.param(p);
-            let name = plan.str(p.name);
+            let name = p.declared_name(plan);
             let words = &face["parameters"][name];
             properties.insert(name.into(), schema(plan, p.ty, words));
             required.push(json!(name));
@@ -308,7 +308,9 @@ component App
   tool clear destroys idempotent "Remove every item." = clear
   tool hidden writes "Not on this door." = hide
   action add(item: Item, note: option<string>, count: number, aisle: enum<"produce", "dairy">)
-    items = items.concat([item])
+    append(item)
+  action append(next: Item)
+    items = items.concat([next])
   action look
     focus("n")
   action clear

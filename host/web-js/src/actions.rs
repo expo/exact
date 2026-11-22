@@ -37,7 +37,7 @@ impl Em<'_> {
                 .iter()
                 .map(|p| {
                     let param = plan.param(p);
-                    let name = plan.str(param.name);
+                    let name = param.declared_name(plan);
                     let hidden = name.starts_with('@');
                     let code = type_code_numeric(plan, param.ty, hidden);
                     let label = if !hidden && code == "s" {

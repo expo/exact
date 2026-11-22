@@ -359,15 +359,16 @@ impl<D: DataSource> Runner<D> {
         }
         for (i, p) in row.params.iter().enumerate() {
             let param = self.plan.param(p);
+            let name = param.declared_name(&self.plan);
             // A hidden parameter (`@capture:…`, a child's captured prop; `@`
             // begins no authored name) is the compiler's argument, not the
             // host's: it has its type, but its numbers need not be finite
             // nor its strings short, as a prop read in place needs neither.
-            if self.plan.str(param.name).starts_with('@') {
+            if name.starts_with('@') {
                 if !args[i].typed(&self.plan, param.ty) {
                     return Err(RunnerError::ArgumentType {
                         action: self.plan.str(row.name).to_string(),
-                        param: self.plan.str(param.name).to_string(),
+                        param: name.to_string(),
                     });
                 }
                 continue;
@@ -375,17 +376,17 @@ impl<D: DataSource> Runner<D> {
             if !args[i].conforms(&self.plan, param.ty) {
                 if args[i].typed(&self.plan, param.ty) {
                     return Err(RunnerError::NonFiniteValue {
-                        name: self.plan.str(param.name).to_string(),
+                        name: name.to_string(),
                     });
                 }
                 return Err(RunnerError::ArgumentType {
                     action: self.plan.str(row.name).to_string(),
-                    param: self.plan.str(param.name).to_string(),
+                    param: name.to_string(),
                 });
             }
             if too_long(&args[i]) {
                 return Err(RunnerError::StringTooLong {
-                    name: self.plan.str(param.name).to_string(),
+                    name: name.to_string(),
                 });
             }
         }

@@ -129,7 +129,7 @@ impl<D: DataSource> Runner<D> {
         let mut fields = Vec::new();
         for p in action.params.iter() {
             let param = self.plan.param(p);
-            let name = self.plan.str(param.name).to_owned();
+            let name = param.declared_name(&self.plan).to_owned();
             match exact_js_value::Shape::from_plan(&self.plan, param.ty) {
                 Ok(shape) => fields.push((name, shape)),
                 Err(e) => return Ok(self.refuse_call("arguments", &e)),
@@ -143,7 +143,7 @@ impl<D: DataSource> Runner<D> {
         let mut args = Vec::new();
         for p in action.params.iter() {
             let param = self.plan.param(p);
-            let json = &call_args[self.plan.str(param.name)];
+            let json = &call_args[param.declared_name(&self.plan)];
             match self.event_arg(param.ty, json) {
                 Ok(v) => args.push(v),
                 Err(why) => return Ok(self.refuse_call("arguments", &why)),
