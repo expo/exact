@@ -272,8 +272,27 @@ impl PaintValues {
 }
 
 impl BoxPaint {
+    /// A grouped section's card takes the section's shadow; the section
+    /// itself draws none.
+    pub(super) fn grouped(
+        mut self,
+        walk: &super::Walk<'_, '_>,
+        id: exact_kernel::ViewId,
+        dark: bool,
+    ) -> Self {
+        let kernel = walk.scene.kernel;
+        if let Some(section) = kernel.grouped_card_section(id) {
+            if let Some(owner) = kernel.node(section) {
+                return self.section_shadow(&owner, &(walk.scene.presented)(section), dark);
+            }
+        } else if kernel.grouped_section_card(id).is_some() {
+            self.shadows.clear();
+        }
+        self
+    }
+
     /// Only the shadow projects from a grouped section onto its card.
-    pub(super) fn section_shadow(
+    fn section_shadow(
         mut self,
         section: &exact_kernel::NodeRef<'_>,
         shown: &Presented,
