@@ -225,13 +225,13 @@ final class TextGeometryTests: XCTestCase {
             nodes.append(node)
         }
         let index = TextViewportIndex(nodes)
-        XCTAssertEqual(index.candidates().map(\.id), Array(1...10).map(UInt32.init))
+        XCTAssertEqual(index.candidates().map(\.node.id), Array(1...10).map(UInt32.init))
         presenter.viewport.contentView.scroll(to: NSPoint(x: 0, y: 15_000))
-        XCTAssertEqual(index.candidates().map(\.id), Array(501...510).map(UInt32.init))
+        XCTAssertEqual(index.candidates().map(\.node.id), Array(501...510).map(UInt32.init))
         presenter.viewport.contentView.scroll(to: NSPoint(x: 0, y: 29_700))
-        XCTAssertEqual(index.candidates().map(\.id), Array(991...1000).map(UInt32.init))
+        XCTAssertEqual(index.candidates().map(\.node.id), Array(991...1000).map(UInt32.init))
         presenter.viewport.contentView.scroll(to: .zero)
-        XCTAssertEqual(index.candidates().map(\.id), Array(1...10).map(UInt32.init))
+        XCTAssertEqual(index.candidates().map(\.node.id), Array(1...10).map(UInt32.init))
     }
 
     func testUpcomingParagraphsAreOrderedByDistanceInsteadOfHeight() {
@@ -249,10 +249,14 @@ final class TextGeometryTests: XCTestCase {
         let far = node(3, 1500, 1000)
         let index = TextViewportIndex([far, near, above])
         presenter.viewport.contentView.scroll(to: NSPoint(x: 0, y: 1000))
-        XCTAssertEqual(index.candidates(reach: 1600).map(\.id), [1, 2, 3])
+        let ranked = index.candidates(reach: 1600)
+        XCTAssertEqual(ranked.map(\.node.id), [1, 2, 3])
+        let edge = near.frame.minY - presenter.root.visibleRect.maxY
+        XCTAssertEqual(ranked.prefix { $0.distance < edge }.map(\.node.id), [1])
+        XCTAssertEqual(index.candidates(reach: edge).map(\.node.id), [1])
         // Reverse movement changes priority without rebuilding the index.
         presenter.viewport.contentView.scroll(to: NSPoint(x: 0, y: 1400))
-        XCTAssertEqual(index.candidates(reach: 1600).map(\.id), [3, 2, 1])
+        XCTAssertEqual(index.candidates(reach: 1600).map(\.node.id), [3, 2, 1])
     }
 
     func testParagraphVisibilityIncludesTallOverlapsAndNestedScrollers() {
@@ -274,11 +278,11 @@ final class TextGeometryTests: XCTestCase {
         document.addSubview(inner)
         let index = TextViewportIndex([tall, short, inner])
         presenter.viewport.contentView.scroll(to: NSPoint(x: 0, y: 1500))
-        XCTAssertEqual(index.candidates().map(\.id), [1])
+        XCTAssertEqual(index.candidates().map(\.node.id), [1])
         nested.contentView.scroll(to: NSPoint(x: 0, y: 1000))
-        XCTAssertEqual(Set(index.candidates().map(\.id)), [1, 3])
+        XCTAssertEqual(Set(index.candidates().map(\.node.id)), [1, 3])
         presenter.viewport.contentView.scroll(to: NSPoint(x: 0, y: 2000))
-        XCTAssertEqual(index.candidates().map(\.id), [1])
+        XCTAssertEqual(index.candidates().map(\.node.id), [1])
     }
     #endif
 

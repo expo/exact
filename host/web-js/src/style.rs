@@ -704,8 +704,8 @@ fn ramp_rem(text: &str) -> Option<String> {
 /// non-physics properties become `linear()`; an entry naming the host's
 /// `--exact-*` or an old spelling is dropped, as the native parser refuses it.
 /// `-exact-tint-color` becomes the property the browser animates,
-/// `--exact-tint`. `p` is the list of kept entries.
-pub static TRANSITION_ENTRIES: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+/// `--exact-tint`.
+pub(super) fn transition_entries() -> String {
     use exact_motion::Property;
     let mut properties: std::collections::BTreeMap<_, Vec<&str>> = Property::ALL
         .into_iter()
@@ -740,16 +740,8 @@ pub static TRANSITION_ENTRIES: std::sync::LazyLock<String> = std::sync::LazyLock
     let spring = include_str!("../transition-spring.js")
         .replace("ALL_PROPERTIES", &serde_json::to_string(&all).unwrap())
         .replace("PROPERTIES", &serde_json::to_string(&properties).unwrap());
-    format!("const spring={spring};const p=v.replace(/\\/\\*[\\s\\S]*?\\*\\//g,\" \").split(/,(?![^(]*\\))/).map(t=>t.trim().replace(/[A-Z]+/g,c=>c.toLowerCase())).filter(t=>t&&!/(^|\\s)(--exact-\\S*|tint-color|exit-animation|layout-transition|press-scale|drag-timeline|symbol-rendering|symbol-palette|symbol-value|symbol-effect|press-haptic|content-transition|scroll-edge-effect|hover-effect|smart-invert|animation-trigger)(?=\\s|$)/i.test(t)).flatMap(t=>/spring\\(/i.test(t)?spring(t):[t]).map(t=>t.replace(/(^|\\s)-exact-tint-color(?=\\s|$)/i,\"$1--exact-tint\"));")
-});
-
-/// A computed `transition`, as the browser takes it: [`TRANSITION_ENTRIES`].
-pub static TRANSITION_MAP: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    format!(
-        "v=>{{if(v==null)return v;{}return p.join(\",\")||\"none\"}}",
-        TRANSITION_ENTRIES.as_str()
-    )
-});
+    format!("v=>{{const spring={spring};return v.replace(/\\/\\*[\\s\\S]*?\\*\\//g,\" \").split(/,(?![^(]*\\))/).map(t=>t.trim().replace(/[A-Z]+/g,c=>c.toLowerCase())).filter(t=>t&&!/(^|\\s)(--exact-\\S*|tint-color|exit-animation|layout-transition|press-scale|drag-timeline|symbol-rendering|symbol-palette|symbol-value|symbol-effect|press-haptic|content-transition|scroll-edge-effect|hover-effect|smart-invert|animation-trigger)(?=\\s|$)/i.test(t)).flatMap(t=>/spring\\(/i.test(t)?spring(t):[t]).map(t=>t.replace(/(^|\\s)-exact-tint-color(?=\\s|$)/i,\"$1--exact-tint\"))}}")
+}
 
 /// `text` with each `-exact-platform-color()` in it as its CSS (its `web` colour or
 /// its fallback), as the kernel writes a literal's.
@@ -1181,12 +1173,6 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
             "justify-items",
             "v=>gridValue(\"justify\",v)",
         )],
-        // A spring on a physics property is the engine's (motion.js); on
-        // any other it is its `linear()`, as css.rs `transition_css` writes.
-        StyleId::Transition => vec![with(
-            "transition",
-            TRANSITION_MAP.as_str(),
-        )],
         // CSS shapes and paths are drawn by the browser.
         StyleId::ClipPath => vec![with(
             "clip-path",
@@ -1459,15 +1445,17 @@ pub(crate) fn unset_mirrors(
 #[cfg(test)]
 pub(crate) mod tests;
 
-/// Transition authored bases independently of host press feedback.
-pub(crate) fn composed_transition_map(press: bool, shift: bool) -> String {
+/// Map a bound transition to CSS, including the base properties of a composed scale or translation.
+pub(super) fn transition_map(entries: &str, press: bool, shift: bool) -> String {
+    if !press && !shift {
+        return format!(r#"v=>v==null?v:({entries})(v).join(",")||"none""#);
+    }
     let names: Vec<_> = [(press, "scale"), (shift, "translate")]
         .into_iter()
         .filter_map(|(yes, name)| yes.then_some(name))
         .collect();
     format!(
-        r#"v=>{{if(v==null)return v;{}let o=[...p];for(const n of {}){{const bases=n==='scale'?['--exact-scale']:['--exact-translate-x','--exact-translate-y','--exact-translate-z'],m=p.filter(t=>new RegExp('^('+n+'|all)(\\s|$)').test(t)).pop();o=o.map(t=>t.replace(new RegExp('^'+n+'(?=\\s)'),bases[0]));if(m)o.push(n+' 0s',...bases.map(base=>m.replace(new RegExp('^('+n+'|all)'),base)));}}return o.join(',')||'none'}}"#,
-        crate::style::TRANSITION_ENTRIES.as_str(),
+        r#"v=>{{if(v==null)return v;const p=({entries})(v);let o=[...p];for(const n of {}){{const bases=n==='scale'?['--exact-scale']:['--exact-translate-x','--exact-translate-y','--exact-translate-z'],m=p.filter(t=>new RegExp('^('+n+'|all)(\\s|$)').test(t)).pop();o=o.map(t=>t.replace(new RegExp('^'+n+'(?=\\s)'),bases[0]));if(m)o.push(n+' 0s',...bases.map(base=>m.replace(new RegExp('^('+n+'|all)'),base)));}}return o.join(',')||'none'}}"#,
         serde_json::to_string(&names).unwrap()
     )
 }
