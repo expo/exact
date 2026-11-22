@@ -701,7 +701,8 @@ fn a_list_with_a_sticky_item_is_one_row() {
 #[test]
 fn a_pressed_split_section_records_its_body_rows_again() {
     // A split section, and a section a scroller wraps as its only child,
-    // whose `hidden` clip, on both axes or on y, does not let it split.
+    // whose `hidden` clip, on both axes or on y, does not let it split; a
+    // scroller's own background is in none of its rows.
     for (source, recorded) in [
         (
             r#"component App
@@ -756,6 +757,21 @@ fn a_pressed_split_section_records_its_body_rows_again() {
 "#,
             2,
         ),
+        (
+            r#"component App
+  state presses = 0
+  action go
+    presses = presses + 1
+  view
+    column testId="section" width=200 height=100 overflow-y="auto" press=go background-color="white"
+      :active
+        background-color = "gray"
+      text "Heading" position="sticky" top=0 width=200 height=20
+      text "First" width=200 height=30
+      text "Second" width=200 height=30
+"#,
+            0,
+        ),
     ] {
         let plan = crate::test_plan(source);
         let (mut p, error) = Presenter::boot_with_fixture_fonts(
@@ -780,7 +796,7 @@ fn a_pressed_split_section_records_its_body_rows_again() {
         let before = heard.borrow().begun.len();
         assert!(p.pointer_down(x + 10., y + 30., 0.).unwrap());
         // The body text takes the section's `:active` color: First, and Third
-        // and Fourth in the section split within it; First and Second.
+        // and Fourth in the section split within it; First and Second; none.
         assert_eq!(heard.borrow().begun.len() - before, recorded, "{source}");
     }
 }

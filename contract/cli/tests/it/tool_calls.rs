@@ -29,7 +29,9 @@ component App
     fails when match logged { case some(a) => not a.ok, case none => false }
   tool look reads "Look." = look
   action bump(by: number)
-    send logged = add(by)
+    addCount(by)
+  action addCount(amount: number)
+    send logged = add(amount)
   action turn
     send changed = add(1)
   action recount

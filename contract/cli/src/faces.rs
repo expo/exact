@@ -16,7 +16,7 @@ pub fn tool_signature(plan: &Plan, i: usize) -> Value {
     let params: Vec<Value> = (action.params.iter())
         .map(|p| {
             let p = plan.param(p);
-            json!([plan.str(p.name), type_text(plan, p.ty)])
+            json!([p.declared_name(plan), type_text(plan, p.ty)])
         })
         .collect();
     let returns = t
