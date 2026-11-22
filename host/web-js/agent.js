@@ -96,7 +96,7 @@ const typed = (v, t) => v == null || typeof t === 'string' ? v : Array.isArray(t
 const masked = (req, reply) => { const secrets = req.reveal ? [] : [...document.querySelectorAll('#exact-root input[type=password]')].map(e => e.value).filter(Boolean), hide = v => typeof v === 'string' ? secrets.includes(v) ? '•••' : v : Array.isArray(v) ? v.map(hide) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, hide(x)])) : v; return secrets.length ? { ...reply, slots: hide(reply.slots), derives: hide(reply.derives), resources: hide(reply.resources) } : reply; };
 const PROPS = [['aria-live', 'accessibilityLive'], ['role', 'accessibilityRole'], ['data-alertpart', 'alertPart'], ['aria-controls', 'accessibilityControls'], ['aria-activedescendant', 'accessibilityActiveDescendant'], ['id', 'id'], ['aria-description', 'accessibilityHint'], ['aria-keyshortcuts', 'accessibilityKeyShortcuts'], ['aria-orientation', 'accessibilityOrientation'], ['aria-pressed', 'accessibilityPressed'], ['aria-current', 'accessibilityCurrent'], ['aria-sort', 'accessibilitySort'], ['colspan', 'colSpan', 1], ['rowspan', 'rowSpan', 1], ['scope', 'scope'], ['aria-level', 'accessibilityHeadingLevel', 1], ['aria-posinset', 'accessibilityPosInSet', 1], ['aria-setsize', 'accessibilitySetSize', 1], ['aria-valuenow', 'accessibilityValueNow'], ['aria-valuemin', 'accessibilityValueMin'], ['aria-valuemax', 'accessibilityValueMax'], ['aria-valuetext', 'accessibilityValueText'], ['placeholder', 'placeholder'], ['autocomplete', 'autocomplete'], ['viewportFit', 'viewportFit'], ['interactiveWidget', 'interactiveWidget'], ['data-hatch', 'hatch'], ['data-nativeviewmodulename', 'nativeViewModuleName'], ['data-nativeviewprops', 'nativeViewProps'],
   ['aria-invalid', 'accessibilityInvalid'],
-  ['draggable', 'draggable'], ['data-datatransfertext', 'dataTransferText'], ['data-datatransferurl', 'dataTransferUrl'], ['data-datatransferfiles', 'dataTransferFiles'],
+  ['data-datatransfertext', 'dataTransferText'], ['data-datatransferurl', 'dataTransferUrl'], ['data-datatransferfiles', 'dataTransferFiles'],
   ['navigationKey', 'navigationKey'], ['navigationBack', 'navigationBack'], ['data-navigationbar', 'navigationBar'],
   ['navigationPresentation', 'navigationPresentation'], ['type', 'type'], ['popover', 'popover'],
   ['popovertarget', 'popovertarget'], ['popovertargetaction', 'popovertargetaction'], ['commandfor', 'commandfor'], ['command', 'command'],
@@ -154,6 +154,8 @@ export function install(exact) {
     // are the host's presentation of a modal route, not props (input-glue.js marks them; LLP 1115.000 D4.5).
     const sheet = el.hasAttribute('data-exact-dialog');
     for (const [attr, prop, num] of PROPS) if (el.hasAttribute(attr) && !(hostRole && attr === 'role')) props[prop] = num ? Number(el.getAttribute(attr)) : el.getAttribute(attr);
+    const draggable = el.exactDraggable === undefined ? el.getAttribute('draggable') : el.exactDraggable;
+    if (draggable != null) props.draggable = draggable;
     // The intent `tree --ax` reads (LLP 1080.002 D7), as the runner names it.
     if (el.hasAttribute('inert')) props.inert = true;
     // A disabled control, as the runner's tree gives its `disabled` prop (LLP 1116.010 D3: `expect disabled`, and a press refused the same on every host).

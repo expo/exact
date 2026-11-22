@@ -2,7 +2,16 @@
 // same refusals journaled as `contract/cli/tests/it/drag_out.rs` asserts of the runner booted as the web, through
 // the hooks `install` registers, which journal a value once while it stands and remove a prop left with nothing.
 import { test, expect } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 import { absolute, admit, admitUrl, install, shipped } from './drag.js';
+import { createDocument } from './dom.js';
+import { listen } from '../web/drag-out.js';
+import { listOwner, viewChildren } from '../web/navigation/lists.js';
+import { glueDeclarations } from '../web/tests/glue-fixture.mjs';
+import { dragExpectation } from '../../scripts/agent-drag-out.mjs';
+
+const declarations = (file, names) => glueDeclarations(readFileSync(new URL(file, import.meta.url), 'utf8'), names);
 
 test('the rules keep shipped files and absolute URLs, and refuse the rest in the runner words', () => {
   for (const ok of ['assets/1016.jpg', 'assets/apple/1016-thumb.jpg', `assets/${'a'.repeat(128)}`]) expect(shipped(ok)).toBe(true);
@@ -38,9 +47,60 @@ test('the hooks write what is admitted, remove an empty prop and journal a value
 test('install hears the downs and the drags on the page\'s document, and writes `draggable` through the listener', () => {
   const heard = [], PropHooks = {};
   install({ PropHooks, say() {}, document: { addEventListener: (type, _, options) => heard.push([type, !!options?.capture]) } });
-  expect(heard).toEqual([['pointerdown', true], ['mousedown', true], ['dragstart', true], ['dragstart', false]]);
+  expect(heard).toEqual([['pointerdown', true], ['mousedown', true], ['pointerup', true], ['pointercancel', true],
+    ['mouseup', true], ['dragstart', true], ['dragend', true], ['dragstart', true], ['dragstart', false]]);
   // The listener keeps the app's value on the node, which a field's down turns off on the page for a time.
   const el = { setAttribute: (name, value) => heard.push([name, value]) };
   expect(PropHooks.draggable(el, 'true')).toBe(true);
   expect([heard.at(-1), el.exactDraggable]).toEqual([['draggable', 'true'], 'true']);
+});
+
+test.each(['created', 'adopted'])('a literal draggable node goes through the prop hook when %s', (mode) => {
+  const document = createDocument(), Adopt = mode === 'adopted', root = document.root;
+  const attrs = { draggable: 'true' }, serverNode = document.createElement('div');
+  if (Adopt) {
+    serverNode.setAttribute('draggable', 'true');
+    root.append(serverNode);
+  }
+  const ctx = vm.createContext({ document, Adopt, listOwner, Paint: null, Links: null, rel: (_, value) => value });
+  vm.runInContext(declarations('./tree.js', ['h', 'at', 'adopt', 'NOT_DOM', 'PropHooks']) + '\nthis.PropHooks = PropHooks;', ctx);
+  install({ PropHooks: ctx.PropHooks, say() {}, document: null });
+  const card = ctx.h(root, 'div', 0, attrs, 0);
+  expect(card).toBe(root.firstChild);
+  if (Adopt) expect(card).toBe(serverNode);
+  expect([card.getAttribute('draggable'), card.exactDraggable]).toEqual(['true', 'true']);
+});
+
+test('the JS agent reports the card’s drag after a field release and omits a cleared declaration', async () => {
+  const document = createDocument(), root = document.root, handlers = new Map();
+  const PropHooks = {}, controller = new AbortController();
+  document.addEventListener = (type, handler) => handlers.set(type, handler);
+  install({ PropHooks, say() {}, document: null });
+  const card = document.createElement('div'), field = document.createElement('input'), foreign = document.createElement('img');
+  field.closest = (selector) => field.matches(selector) ? field : null;
+  root.append(card, foreign);
+  card.append(field);
+  card.setAttribute('data-datatransfertext', 'card');
+  foreign.setAttribute('draggable', 'true');
+  PropHooks.draggable(card, 'true');
+  const views = new Map([[1, card], [2, field], [3, foreign]]);
+  const exact = { views, viewId: (node) => [...views].find(([, el]) => el === node)[0], After: [], clock: { now: 0 } };
+  const ctx = vm.createContext({ document, setFaultLog() {}, viewChildren, routeFlags: () => () => 0,
+    unopened: () => false, HTMLIFrameElement: class {}, animationClock: () => ({ register() {}, seek() {} }), pieces() {} });
+  vm.runInContext(declarations('./agent.js', ['PROPS', 'SEMANTIC_TAGS', 'TYPES', 'targetOf', 'install']), ctx);
+  ctx.install(exact);
+  try {
+    listen(document, undefined, { signal: controller.signal });
+    for (const type of ['pointerdown', 'pointerup']) handlers.get(type)({ type, target: field, pointerType: 'mouse' });
+    expect(card.getAttribute('draggable')).toBe('false');
+    const tree = () => exact.agentSettled({ op: 'tree' });
+    const { nodes } = await tree();
+    expect(dragExpectation(nodes[0], { target: 'card', kind: 'text/plain', present: true, value: 'card' })).toBeNull();
+    expect(nodes[2].props.draggable).toBe('true');
+    PropHooks.draggable(card, null);
+    expect(card.getAttribute('draggable')).toBe('false');
+    expect((await tree()).nodes[0].props).not.toHaveProperty('draggable');
+  } finally {
+    controller.abort();
+  }
 });

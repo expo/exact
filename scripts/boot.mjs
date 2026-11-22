@@ -19,6 +19,7 @@ const MODULES = {
     'host/web/wasm/flow.js',
     'host/web/wasm/input.js',
     'host/web/wasm/views.js',
+    'host/web/drag-input.js',
     'host/web/symbol-geometry.js',
     'host/web/engagement.js',
   ],

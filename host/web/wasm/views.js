@@ -1,4 +1,5 @@
 import { symbolBox, symbolSize, symbolPlaceholder, syncSymbolPlaceholder, symbolFit, tintFit } from "../symbol-geometry.js";
+import { downForDrag, elementOf, observeDragInput, pressedAt } from "../drag-input.js";
 import { picker, track, iframeLoading, localAssetURL, host, loadAfterPaint, moduleReady, views, writeIn, now, afterNativePaint, log, retiredViews, lists, root, encoder, readOut, imageProbes, inflight, IMAGE_ERROR, CORS_ERROR, heldValues, composing, loadDecorations, markupPending, scrollDocs, followScroll, pendingScrolls, DATA_LIMIT, authoredDisabled, holdWake, holdOrientation } from "../glue.js";
 import { pageGivenFiles, commitGuestOrigin, frameURL, refuseURL, valuedControl, renderMarkup, editMenu, inertAncestor, contextAt, liveById, navigates, navigableURL, dataURL, settleValue } from "../navigation.js";
 import { send } from "./commit.js";
@@ -329,19 +330,30 @@ export function syncMarkup(el) {
 }
 // @ref LLP 1094.000 D6 — the first node that turns draggable loads the drag-out glue, which then hears every drag from
 // the app's live views. Until it listens, a node the app made draggable waits, written `false`, and a drag that begins
-// in it, or at an element around it where its point, the down's, is in it, as a link's around its image pressed on the
-// image, is cancelled, a field's drag of text too, so no drag begins without the node's data. Another script's
-// draggable keeps its own drag. The downs it hears are the listener's once it listens, so a field's down keeps its node
-// off. A load that fails, or a listener that fails as it starts, is logged and tried again, from
-// a URL of its own since a browser may keep a module's failure, on one timer while a live node waits.
+// in it, or at an element around it where the down's point is in it, as a link's around its image pressed on the image,
+// is cancelled, a field's drag of text too, so no drag begins without the node's data. Another script's draggable keeps
+// its own drag. The presses followed from the glue's load are the listener's once it listens, so a field held then
+// keeps its node off. A load that fails, or a listener that fails as it starts, is logged and tried again, from a URL
+// of its own since a browser may keep a module's failure, on one timer while a live node waits.
 const liveView = (el) => views.get(Number(el.dataset?.view)) === el && !retiredViews.has(el);
+const dragOutWait = new AbortController();
+const waitingInput = typeof document === "object" ? observeDragInput(document, dragOutWait.signal) : undefined;
+
+/** Whether `el` waits; a node no longer a live view stops waiting. */
+function waitingView(el) {
+  if (!host.dragOutWaiting?.has(el)) return false;
+  if (liveView(el)) return true;
+  host.dragOutWaiting.delete(el);
+  return false;
+}
+
 export function loadDragOut() {
   if (host.dragOutTimer) return;
   const tries = host.dragOutTries ?? 0;
   host.dragOutModule ??= loadAfterPaint(tries ? `./drag-out.js?try=${tries}` : "./drag-out.js", "listenDragOut").then((listen) => {
-    const controller = new AbortController(), live = [...(host.dragOutWaiting ?? [])].filter(liveView);
+    const controller = new AbortController(), live = new Set([...(host.dragOutWaiting ?? [])].filter(waitingView));
     try {
-      listen(document, liveView, { signal: controller.signal, downs: host.dragOutDowns ?? [] });
+      listen(document, liveView, { signal: controller.signal, input: waitingInput, waiting: live });
       for (const el of live) globalThis.exact.writeDraggable(el, el.exactDraggable);
     } catch (e) {
       // Nothing of a listener that failed stays: its listeners go, the nodes wait again, and the next try loads anew.
@@ -351,16 +363,15 @@ export function loadDragOut() {
       throw e;
     }
     host.dragOutListening = true;
-    document.removeEventListener("dragstart", waitingDrag, true);
-    for (const type of ["pointerdown", "mousedown"]) document.removeEventListener(type, waitingDown, true);
-    host.dragOutWaiting = host.dragOutDowns = null;
+    dragOutWait.abort();
+    host.dragOutWaiting = null;
   }).catch((e) => {
     host.dragOutModule = null;
     host.dragOutTries = tries + 1;
     log(`drag-out module: ${e}`);
     host.dragOutTimer = setTimeout(() => {
       host.dragOutTimer = null;
-      for (const el of host.dragOutWaiting ?? []) if (!liveView(el)) host.dragOutWaiting.delete(el);
+      for (const el of host.dragOutWaiting ?? []) waitingView(el);
       if (host.dragOutWaiting?.size) loadDragOut();
     }, Math.min(30000, 1000 * 2 ** tries));
   });
@@ -369,29 +380,23 @@ export function loadDragOut() {
 /** Whether the nearest node the app made draggable at or above `el` waits: another script's draggable nearer to it
  * keeps its own drag. An SVG element's `draggable` is read as the listener reads it, not at all (drag-out.js). */
 function waits(el) {
-  for (let at = el?.nodeType === 1 ? el : el?.parentElement; at; at = at.parentElement) {
-    if (host.dragOutWaiting?.has(at)) return liveView(at);
+  for (let at = elementOf(el); at; at = at.parentElement) {
+    if (waitingView(at)) return true;
     if (at.namespaceURI !== "http://www.w3.org/2000/svg" && at.matches('[draggable="true" i]')) return false;
   }
   return false;
 }
-/** Cancels a drag that begins in a waiting node, whatever another script marked on it, or at an element around one
- * where the drag's point, the down's in every engine (drag-out.js), is in it, as a link's around its image pressed on
- * the image, unless that element is another script's draggable, whose drag the browser began, an SVG element's in
- * Chromium and WebKit too. */
+/** Cancels a waiting view's drag even when the browser starts it at an ancestor, such as a link around a pressed
+ * image. Another script's draggable keeps its own drag, including an SVG drag in Chromium or WebKit. */
 function waitingDrag(event) {
   // A script's `dragstart` is no drag.
   if (event.isTrusted === false) return;
   const target = event.target;
-  if (target.matches?.('[draggable="true" i]') && !host.dragOutWaiting.has(target)) return;
-  const at = document.elementFromPoint?.(event.clientX, event.clientY);
+  if (target.matches?.('[draggable="true" i]') && !waitingView(target)) return;
+  const element = elementOf(target);
+  const down = downForDrag(waitingInput, event, element);
+  const at = (element && pressedAt(down, event, element)) ?? document.elementFromPoint?.(event.clientX, event.clientY);
   if (waits(target) || (at && target.contains?.(at) && waits(at))) event.preventDefault();
-}
-/** Keeps the last downs for the listener, which reads them as its own when it listens. */
-function waitingDown(event) {
-  if (event.isTrusted === false) return;
-  (host.dragOutDowns ??= []).push(event);
-  host.dragOutDowns.splice(0, host.dragOutDowns.length - 2);
 }
 
 /** Writes `el`'s `draggable` through the drag-out glue, which keeps the app's value on the node (drag-out.js). Until
@@ -401,10 +406,7 @@ export function writeDraggable(el, value) {
   if (host.dragOutListening) return void globalThis.exact.writeDraggable(el, value);
   el.exactDraggable = value;
   if (value === "true") {
-    if (!host.dragOutWaiting) {
-      document.addEventListener("dragstart", waitingDrag, true);
-      for (const type of ["pointerdown", "mousedown"]) document.addEventListener(type, waitingDown, true);
-    }
+    if (!host.dragOutWaiting) document.addEventListener("dragstart", waitingDrag, { capture: true, signal: dragOutWait.signal });
     (host.dragOutWaiting ??= new Set()).add(el);
     el.setAttribute("draggable", "false");
     loadDragOut();
