@@ -336,7 +336,7 @@ pub(super) fn union(a: Option<Rect4>, b: Rect4) -> Rect4 {
     }
 }
 
-pub(super) fn within(a: Option<Rect4>, outer: Option<Rect4>) -> Option<Rect4> {
+fn within(a: Option<Rect4>, outer: Option<Rect4>) -> Option<Rect4> {
     match (a, outer) {
         (Some(a), Some(b)) => Some(intersect(a, b)),
         (a, None) => a,

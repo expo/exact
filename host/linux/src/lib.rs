@@ -3,8 +3,8 @@
 //! @ref LLP 1015 (Linux host v1)
 //!
 //! The painted host (`exact-painted`) lays the kernel tree out and paints
-//! it; this crate shows it on Linux. The pixels go to DRM/KMS dumb buffers
-//! with evdev input, or into a buffer with no display at all, which is how
+//! it; this crate shows it in a Wayland window, through DRM/KMS with evdev
+//! input, or into a buffer with no display at all, which is how
 //! the host is tested: the agent API (LLP 1012) over stdio, a screenshot, a
 //! smoke run — on a fleet Linux box with no GPU, or on macOS in the
 //! seconds-loop.
@@ -36,6 +36,8 @@ pub mod vnc;
 #[cfg(all(test, unix, not(any(target_os = "linux", target_os = "android"))))]
 #[path = "vnc/auth.rs"]
 mod vnc_auth;
+#[cfg(target_os = "linux")]
+mod window;
 
 use exact_painted::app::{print_baked_receipt, row_reuse_from_env, Config};
 use exact_painted::content_region::ContentRegionRegistration;
@@ -128,6 +130,11 @@ pub fn run_config<D: DataSource + Default>(config: &mut Config, started: Instant
         eprintln!("exact: {why}");
         return 1;
     }
+    exact_painted::app::show_neutral_look();
+    #[cfg(target_os = "linux")]
+    if !config.headless() && use_wayland(config) {
+        return window::run::<D>(config, started);
+    }
     let rotation = match rotation::requested() {
         Ok(value) => value,
         Err(error) => {
@@ -135,7 +142,6 @@ pub fn run_config<D: DataSource + Default>(config: &mut Config, started: Instant
             return 1;
         }
     };
-    exact_painted::app::show_neutral_look();
     if config.headless() {
         config.output_rotation = rotation.unwrap_or_default();
         let [w, h] = config.output_rotation.size([config.size.0, config.size.1]);
@@ -153,6 +159,15 @@ pub fn run_config<D: DataSource + Default>(config: &mut Config, started: Instant
     {
         1
     }
+}
+
+#[cfg(target_os = "linux")]
+fn use_wayland(config: &Config) -> bool {
+    config.vnc.is_none()
+        && std::env::var_os("EXACT_DRM").is_none_or(|card| card.is_empty())
+        && ["WAYLAND_DISPLAY", "WAYLAND_SOCKET"]
+            .into_iter()
+            .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty()))
 }
 
 #[cfg(test)]

@@ -75,6 +75,57 @@ fn mtime(path: &Path) -> Option<ReloadStamp> {
     Some(rows)
 }
 
+pub(super) struct LocalPlan {
+    path: std::path::PathBuf,
+    seen: Option<ReloadStamp>,
+}
+
+impl LocalPlan {
+    pub(super) fn new(path: &Path) -> Self {
+        Self {
+            path: path.to_owned(),
+            seen: mtime(path),
+        }
+    }
+
+    pub(super) fn poll<D: DataSource>(&mut self, p: &mut Presenter<D>, data: fn() -> D) {
+        let current = mtime(&self.path);
+        if current.is_none() || current == self.seen {
+            return;
+        }
+        self.seen = current;
+        let Ok(bytes) = std::fs::read(&self.path) else {
+            return;
+        };
+        let started = Instant::now();
+        let name = self
+            .path
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let module = exact_painted::delivery::Module::local(&self.path, p.compat());
+        // A held candidate is the presenter's until its hold clears.
+        let later = name.clone();
+        match module
+            .map_err(exact_painted::host::HostError::Asset)
+            .and_then(|module| {
+                p.reload_with_outcome(&bytes, data(), module, false, move |outcome| {
+                    println!("reload of {later}, held: {outcome:?}")
+                })
+            }) {
+            Ok(exact_painted::presenter::ReloadResult::Held(reason)) => {
+                println!("reload of {name} held: {reason}")
+            }
+            Ok(exact_painted::presenter::ReloadResult::Applied(warning)) => println!(
+                "reloaded {name} in {:.1} ms{}",
+                started.elapsed().as_secs_f64() * 1000.0,
+                warning.map(|e| format!(" — {e}")).unwrap_or_default()
+            ),
+            Err(error) => eprintln!("exact: reload: {error}"),
+        }
+    }
+}
+
 pub(crate) fn run<D: DataSource>(
     config: &Config,
     started: Instant,
@@ -92,7 +143,7 @@ pub(crate) fn run<D: DataSource>(
     let mut frames = exact_painted::frames::Frames::new(display.refresh());
     // A GPU canvas's `Frame::period_ms` (LLP 1009).
     p.set_frame_period(display.period_ms());
-    let mut plan_seen = config.dev_plan.as_deref().and_then(mtime);
+    let mut local_plan = config.dev_plan.as_deref().map(LocalPlan::new);
     // First pixel is the first frame presented (LLP 1026 D11). It asks for
     // the launch's update check; the presenter's cadence asks for the rest
     // (LLP 1030.006 D5). The window counts as in the foreground throughout:
@@ -290,39 +341,8 @@ pub(crate) fn run<D: DataSource>(
         if let Some(woke) = woke.filter(|_| p.dirty()) {
             frames.dirty(woke);
         }
-        if let Some(path) = &config.dev_plan {
-            let m = mtime(path);
-            if m.is_some() && m != plan_seen {
-                plan_seen = m.clone();
-                if let Ok(bytes) = std::fs::read(path) {
-                    let t = Instant::now();
-                    let name = path
-                        .file_name()
-                        .map(|f| f.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    let module = exact_painted::delivery::Module::local(path, &config.compat);
-                    // A held candidate is the presenter's until its hold
-                    // clears (LLP 1029.000.002 D9); its end is said then.
-                    let later = name.clone();
-                    match module
-                        .map_err(exact_painted::host::HostError::Asset)
-                        .and_then(|module| {
-                            p.reload_with_outcome(&bytes, data(), module, false, move |outcome| {
-                                println!("reload of {later}, held: {outcome:?}")
-                            })
-                        }) {
-                        Ok(exact_painted::presenter::ReloadResult::Held(reason)) => {
-                            println!("reload of {name} held: {reason}")
-                        }
-                        Ok(exact_painted::presenter::ReloadResult::Applied(e)) => println!(
-                            "reloaded {name} in {:.1} ms{}",
-                            t.elapsed().as_secs_f64() * 1000.0,
-                            e.map(|e| format!(" — {e}")).unwrap_or_default()
-                        ),
-                        Err(e) => eprintln!("exact: reload: {e}"),
-                    }
-                }
-            }
+        if let Some(plan) = &mut local_plan {
+            plan.poll(&mut p, data);
         }
     }
 }

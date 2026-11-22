@@ -11,15 +11,15 @@ use super::*;
 impl Painter {
     /// A `Text` node: its runs' backgrounds, decorations and glyphs, once,
     /// or once in each of its fragments.
-    /// `clip`: what clips the box's lines, its own overflow clip and its
-    /// ancestors', in the walk's coordinates.
+    /// `clips`: what clips the box's lines, its own overflow clip in its
+    /// coordinates and its ancestors' in the walk's.
     pub(super) fn text_node(
         &mut self,
         walk: &mut Walk<'_, '_>,
         node: &NodeRef<'_>,
         geometry: &BoxGeometry,
         rect: Rect4,
-        clip: Option<Rect4>,
+        (own, ancestors): (Option<Rect4>, Option<Rect4>),
         ts: Transform,
     ) -> Option<(f32, f32)> {
         let mut content = geometry.content;
@@ -194,10 +194,13 @@ impl Painter {
             let shown = shown.line_fragment(g.lines.0 as usize..g.lines.1 as usize);
             let column = Shape::rect((rect.0 + g.x, rect.1 + g.y, g.width, g.height));
             // A column past the box's own is drawn outside it, as far as
-            // the clips around its lines let it.
-            let drawn = super::bbox(ts, column.rect);
-            let drawn = clip.map_or(drawn, |c| super::intersect(drawn, c));
-            if drawn.2 > 0. && drawn.3 > 0. {
+            // the clips around its lines let it. The box's own is cut before
+            // it is transformed: it reaches a million points on a visible
+            // axis, which a rotation would turn onto both.
+            let kept = own.map_or(column.rect, |o| super::intersect(column.rect, o));
+            let drawn = super::bbox(ts, kept);
+            let drawn = ancestors.map_or(drawn, |c| super::intersect(drawn, c));
+            if kept.2 > 0. && kept.3 > 0. && drawn.2 > 0. && drawn.3 > 0. {
                 self.row_reach(drawn);
             }
             self.backend.push_clip(&column, ts);

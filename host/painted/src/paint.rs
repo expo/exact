@@ -1150,8 +1150,8 @@ impl Painter {
                 if let Some(clip) = &clip {
                     self.backend.push_clip(clip, ts);
                 }
-                let lines = rows::within(clip.as_ref().map(|c| bbox(ts, c.rect)), clip_rect);
-                let baseline = self.text_node(walk, node, &geometry, rect, lines, ts);
+                let clips = (clip.as_ref().map(|c| c.rect), clip_rect);
+                let baseline = self.text_node(walk, node, &geometry, rect, clips, ts);
                 walk.boxes[owner].baseline = baseline;
                 if clip.is_some() {
                     self.backend.pop_clip();

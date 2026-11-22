@@ -165,6 +165,9 @@ pub(crate) fn emit(
     compat.embedded = json!({"seq":0,"plan":plan_card,"assets":assets,"entryDigest":null,
         "genesis":true,"trust":trust,
         "version":compat.embedded["version"],"buildNumber":compat.embedded["buildNumber"]});
+    if platform == "linux" {
+        compat.embedded["displayName"] = json!(manifest.name);
+    }
     if plans.as_object().is_some_and(|p| !p.is_empty()) {
         compat.embedded["plans"] = plans;
     }
