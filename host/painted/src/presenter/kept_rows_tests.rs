@@ -848,7 +848,9 @@ fn a_pressed_split_section_records_its_body_rows_again() {
         let before = heard.borrow().begun.len();
         assert!(p.pointer_down(x + 10., y + 30., 0.).unwrap());
         // The body text takes the section's `:active` color: First, and Third
-        // and Fourth in the section split within it; First and Second; none.
+        // and Fourth in the section split within it; in either clipped
+        // section, First and Second. The scroller's `:active` background is
+        // in none of its rows.
         assert_eq!(heard.borrow().begun.len() - before, recorded, "{source}");
     }
 }
