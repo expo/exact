@@ -159,6 +159,8 @@ pub(super) struct Rows {
     suspect: IdSet<NodeKey>,
     next: u32,
     pub(super) frame: u64,
+    /// [`sticky_parents`] and the walk it was found for.
+    sections: Option<(u64, Rc<IdSet<ViewId>>)>,
     active: bool,
     recording: Option<Capture>,
     freed: Vec<u32>,
@@ -203,12 +205,14 @@ const MARGIN: f32 = 48.0;
 
 /// Whether `node` is a column with a sticky heading, whose children a backend
 /// that splits sections keeps as rows ([`Backend::split_sticky_sections`]).
+/// A list is kept whole: an item's number counts its siblings.
 fn row_section(node: &NodeRef<'_>) -> bool {
     node.node_type == NodeType::View
         && node.style.flex_direction == exact_kernel::FlexDirection::Column
         && node.layout_position() != exact_kernel::PositionType::Sticky
         && !scrolls(effective_overflow(node).0)
         && !scrolls(effective_overflow(node).1)
+        && node.list_markers().is_none()
         && {
             let mut children = node.child_nodes();
             children.len() >= 3
@@ -219,7 +223,7 @@ fn row_section(node: &NodeRef<'_>) -> bool {
 
 /// The parents of every sticky node: the only columns [`row_section`] can
 /// take, found without reading each column's children on every paint.
-pub(super) fn sticky_parents(kernel: &exact_kernel::Kernel) -> IdSet<ViewId> {
+fn sticky_parents(kernel: &exact_kernel::Kernel) -> IdSet<ViewId> {
     kernel
         .sticky_nodes()
         .into_iter()
@@ -553,7 +557,19 @@ impl Painter {
     }
 
     /// A column with a sticky heading keeps its body rows apart.
-    /// `sections`: [`sticky_parents`].
+    /// [`sticky_parents`], found once a walk and shared by every row group in
+    /// it, a split section's too.
+    pub(super) fn row_sections(&mut self, kernel: &exact_kernel::Kernel) -> Rc<IdSet<ViewId>> {
+        let frame = self.rows.frame;
+        if let Some((_, sections)) = self.rows.sections.as_ref().filter(|(at, _)| *at == frame) {
+            return sections.clone();
+        }
+        let sections = Rc::new(sticky_parents(kernel));
+        self.rows.sections = Some((frame, sections.clone()));
+        sections
+    }
+
+    /// `sections`: [`Painter::row_sections`].
     pub(super) fn is_row_section(
         walk: &Walk<'_, '_>,
         sections: &IdSet<ViewId>,

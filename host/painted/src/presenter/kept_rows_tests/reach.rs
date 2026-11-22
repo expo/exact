@@ -3,8 +3,8 @@
 use super::*;
 
 /// Ink, keeping rows, draws red where the CPU painter does in the frame
-/// after `drive`, at 200 by 120 points.
-fn ink_draws_the_red_the_cpu_draws(source: &str, drive: impl Fn(&mut Presenter<()>)) {
+/// after `drive`, at 200 by 120 points; Ink's red pixels, row by row.
+fn ink_draws_the_red_the_cpu_draws(source: &str, drive: impl Fn(&mut Presenter<()>)) -> Vec<bool> {
     let boot = || {
         let (p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(source),
@@ -31,14 +31,15 @@ fn ink_draws_the_red_the_cpu_draws(source: &str, drive: impl Fn(&mut Presenter<(
     let mut ink = boot();
     ink.reader_replaced(Box::new(crate::ink::Ink::new().expect("an Ink device")));
     drive(&mut ink);
+    let drawn: Vec<_> = ink.frame().pixels().iter().map(red).collect();
     assert!(
-        ink.frame()
-            .pixels()
+        drawn
             .iter()
             .zip(expected)
-            .any(|(pixel, expected)| expected && red(pixel)),
+            .any(|(drawn, expected)| *drawn && expected),
         "Ink draws it"
     );
+    drawn
 }
 
 fn scroll(p: &mut Presenter<()>, y: f32) {
@@ -151,10 +152,75 @@ fn a_pinned_and_a_pushed_off_heading_draw_over_their_section() {
           box width=200 height=80 background-color="blue"
         box width=200 height=120
 "#;
-    for at in [80., 205.] {
-        ink_draws_the_red_the_cpu_draws(source, |p| {
+    // Pinned, the heading covers y = 17; pushed off by 205, it ends at 15.
+    for (at, covers) in [(80., true), (205., false)] {
+        let red = ink_draws_the_red_the_cpu_draws(source, |p| {
             p.frame();
             scroll(p, at);
         });
+        assert_eq!(red[17 * 200 + 100], covers, "scrolled {at}");
     }
+}
+
+#[test]
+fn an_outgoing_number_aligned_away_from_its_start_still_draws() {
+    // One commit narrows the box and shortens the number: the old digits
+    // roll out at the old right edge, past the new number's width.
+    ink_draws_the_red_the_cpu_draws(
+        r#"component App
+  state n = 123
+  task bump mount
+    after(1000, step)
+  action step
+    n = 4
+  view
+    scroll width=200 height=100
+      column
+        box width=200 height=10 flex-shrink=0
+        text `${n}` width=(n > 100 ? 400 : 30) margin-left=-250 text-align="right" font-size=24 color="red" flex-shrink=0 -exact-content-transition="numeric"
+        box width=200 height=300 flex-shrink=0
+"#,
+        |p| {
+            p.frame();
+            p.clock(1000.);
+            p.frame();
+            p.clock(1050.);
+        },
+    );
+}
+
+#[test]
+fn a_column_rule_wider_than_its_gap_still_draws_when_its_row_is_offscreen() {
+    // The rule is centred on the gap at x = 310 and reaches back to 160.
+    ink_draws_the_red_the_cpu_draws(
+        r#"component App
+  view
+    scroll width=200 height=100
+      column
+        box width=200 height=10 flex-shrink=0
+        view width=100 height=20 margin-left=260 flex-shrink=0 column-count=2 column-gap=20 column-fill="auto" column-rule-style="solid" column-rule-width=300 column-rule-color="red"
+          text "one\ntwo\nthree\nfour" white-space="pre"
+"#,
+        |p| {
+            p.frame();
+        },
+    );
+}
+
+#[test]
+fn an_outside_list_marker_still_draws_when_its_row_is_offscreen() {
+    // The number is drawn before its item, which starts at x = 260.
+    ink_draws_the_red_the_cpu_draws(
+        r#"component App
+  view
+    scroll width=200 height=120
+      column
+        box width=200 height=10 flex-shrink=0
+        ol width=100 margin-left=260 padding-left=0 flex-shrink=0 font-size=80 color="red"
+          li "One"
+"#,
+        |p| {
+            p.frame();
+        },
+    );
 }

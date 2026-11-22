@@ -46,6 +46,8 @@ impl Painter {
             .map_or(rect.1, |child| rect.1 + child.frame.y - item.frame.y);
         let color = presented_color(walk, item, self.dark)
             .unwrap_or_else(|| rgba(item.text_color().resolve(self.dark)));
+        // An outside marker is drawn beside the item's box.
+        self.row_reach(super::bbox(ts, (x, y, p.width, p.height)));
         self.backend.text(
             &mut self.text.borrow_mut(),
             &p,

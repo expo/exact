@@ -247,6 +247,8 @@ impl Painter {
             };
             let x = rect.0 + (left + right) / 2.0 - width / 2.0;
             let shape = Shape::rect((x, rect.1 + a.y, width, a.height.max(b.height)));
+            // A rule wider than its gap paints past the box.
+            self.row_reach(super::bbox(ts, shape.rect));
             self.backend.fill(&shape, color, ts);
         }
     }
