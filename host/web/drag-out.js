@@ -6,7 +6,7 @@
 // receiver reads the URL. A node that carries nothing begins no drag. The JS target loads it from
 // `drag.js`; the wasm target's glue loads it when a node first turns draggable.
 
-import { DRAG_FIELDS, downForDrag, observeDragInput, pressedAt } from './drag-input.js';
+import { DRAG_FIELDS, downForDrag, elementOf, observeDragInput, pressedAt } from './drag-input.js';
 
 /** Whether `el` is a drag's source by its own `draggable`, HTML's enumerated attribute, read in any case. Firefox ignores
  * it on an SVG element and begins the drag of the draggable node around it; Chromium and WebKit begin the drag at the
@@ -201,12 +201,15 @@ export function listen(root = globalThis.document, owns = () => true, { signal, 
     if (data) given.set(event, { node, data });
   }, { capture: true, signal });
   // Given again where the event reaches the document, over what a listener at the node wrote: the drag carries the
-  // data the node declared as it began, while the node is still in the page and the app's.
+  // data the node declared as it began. A listener that took the node or the browser's source out of the page, or
+  // the node from the app, meanwhile cancels the drag, which already holds the node's data.
   root.addEventListener('dragstart', (event) => {
     if (event.isTrusted === false) return;
     const payload = given.get(event);
     given.delete(event);
-    if (payload?.node.isConnected && owns(payload.node)) give(event, payload.node, payload.data);
+    if (!payload) return;
+    if (payload.node.isConnected && elementOf(event.target)?.isConnected && owns(payload.node)) give(event, payload.node, payload.data);
+    else event.preventDefault();
   }, { signal });
 }
 

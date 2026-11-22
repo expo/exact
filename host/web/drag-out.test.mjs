@@ -56,6 +56,9 @@ class El {
   removeAttribute(name) { delete this.attrs[name]; }
   get parentElement() { return this.parent; }
   getBoundingClientRect() { return { left: 10, top: 20 }; }
+  addEventListener(type, fn) { (this.listeners ??= []).push([type, fn]); }
+  removeEventListener(type, fn) { this.listeners = (this.listeners ?? []).filter(([t, f]) => t !== type || f !== fn); }
+  fire(type, event) { event.type ??= type; for (const [t, fn] of [...(this.listeners ?? [])]) if (t === type) fn(event); }
   contains(other) { for (let at = other; at; at = at.parentElement) if (at === this) return true; return false; }
   matches(selector) {
     const a = this.attrs;
@@ -320,6 +323,42 @@ test('a primary down in a field turns the drag of every node the app made dragga
   expect(draggable()).toEqual([null, 'false', 'true', 'true']);
   controller.abort();
   expect(draggable()).toEqual([null, 'true', 'true', 'true']);
+});
+
+// A held press keeps its field's card off until it ends, and only its own end ends it: a window blur ends every one, a
+// mouse's ends at a chord's last `pointerup` whichever button it names, and another input's drag ends none.
+test('a held press ends at a blur and at a chord\'s last pointerup, and not at another input\'s drag', () => {
+  const root = page(), card = declared('div'), field = new El('input', {}, card), other = new El('div');
+  listenOn(root);
+  const elsewhere = () => root.fire('pointerdown', { isPrimary: true, pointerType: 'touch', target: other });
+  root.fire('pointerdown', { isPrimary: true, pointerType: 'pen', target: field });
+  root.defaultView.fire('blur', {});
+  elsewhere();
+  expect(card.getAttribute('draggable')).toBe('true');
+  root.fire('pointerdown', { isPrimary: true, pointerType: 'mouse', button: 0, pointerId: 1, target: field });
+  root.fire('mousedown', { button: 2, target: field });
+  root.fire('mouseup', { button: 0, target: field });
+  root.fire('pointerup', { isPrimary: true, pointerType: 'mouse', button: 2, buttons: 0, pointerId: 1, target: field });
+  elsewhere();
+  expect(card.getAttribute('draggable')).toBe('true');
+  root.fire('pointerdown', { isPrimary: true, pointerType: 'pen', target: field });
+  root.fire('dragstart', dragstart(other), true);
+  root.fire('dragend', { target: other }, true);
+  elsewhere();
+  expect(card.getAttribute('draggable')).toBe('false');
+});
+
+// WebKit can send `dragend` only to a source a script removed during the drag.
+test('a dragend only the drag\'s detached source hears ends the press it began from', () => {
+  const root = page(), card = declared('div'), field = new El('div', { contenteditable: 'true' }, card);
+  const theirs = new El('img', { draggable: 'true' }, field), other = new El('div');
+  listenOn(root);
+  root.fire('pointerdown', { isPrimary: true, pointerType: 'mouse', button: 0, pointerId: 1, target: theirs, clientX: 50, clientY: 70 });
+  root.fire('dragstart', dragstart(theirs), true);
+  theirs.isConnected = false;
+  theirs.fire('dragend', {});
+  root.fire('pointerdown', { isPrimary: true, pointerType: 'touch', target: other });
+  expect(card.getAttribute('draggable')).toBe('true');
 });
 
 test('a node the app makes draggable around the last primary down\'s field is off until the next primary down', () => {
@@ -781,16 +820,21 @@ test('a detached card cancels its own drag and its plain image’s, leaving nati
   }
 });
 
-test('a source detached between capture and bubble does not restore its data', () => {
+// The drag already holds the card's data from capture, so a source a listener took out of the page cancels it: the
+// card itself, or a native image in it, which held the card's place on the drag's path.
+test('a source detached between capture and bubble cancels the drag', () => {
   const root = page(), card = declared('div', { 'data-datatransfertext': 'card' });
+  const image = new El('img', {}, card);
   listenOn(root);
-  const drag = dragstart(card);
-  root.fire('dragstart', drag, true);
-  expect(drag.dataTransfer.data.get('text/plain')).toBe('card');
-  drag.dataTransfer.setData('text/plain', 'theirs');
-  card.isConnected = false;
-  root.fire('dragstart', drag, false);
-  expect(drag.dataTransfer.data.get('text/plain')).toBe('theirs');
+  for (const [source, removed] of [[card, card], [image, image]]) {
+    source.isConnected = card.isConnected = true;
+    const drag = dragstart(source);
+    root.fire('dragstart', drag, true);
+    expect(drag.dataTransfer.data.get('text/plain')).toBe('card');
+    removed.isConnected = false;
+    root.fire('dragstart', drag, false);
+    expect(drag.defaultPrevented).toBe(true);
+  }
 });
 
 test('a synthetic dragstart inside a trusted dragstart leaves its restoration pending', () => {

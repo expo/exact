@@ -10,10 +10,14 @@ export const elementOf = (target) => target?.nodeType === 1 ? target : target?.p
 /** What `down` went down on, when `event` is at its point and `target`, where the browser began the drag, holds it. */
 export const pressedAt = (down, event, target) => atPoint(down, event) && target.contains(down.target) ? down.target : null;
 
-/** The most recent press still held where a drag at `target` began, falling back to the last primary down. */
+/** The most recent press still held where a drag at `target` began. */
+const heldAt = (input, event, target = elementOf(event.target)) =>
+  target && [...input.held.values()].findLast((press) => pressedAt(press, event, target));
+
+/** The press a drag at `target` began from: the most recent one still held there, falling back to the last primary
+ * down. */
 export function downForDrag(input, event, target = elementOf(event.target)) {
-  const held = target && [...input.held.values()].findLast((press) => pressedAt(press, event, target));
-  return held || input.last;
+  return heldAt(input, event, target) || input.last;
 }
 
 /** How long after a pen's or a finger's down or release its compatibility mouse event may come; a tap's come together
@@ -79,7 +83,9 @@ export function observeDragInput(root, signal, input = { held: new Map() }, chan
     if (press.field && press.field !== input.field) changed(input);
   };
   const up = (event) => {
-    if (event.isTrusted === false || event.isPrimary === false || (event.button > 0 && event.type !== 'pointercancel')) return;
+    // A chord's last `pointerup` names whichever button was released last, and ends the press with no button left down.
+    const last = event.type === 'pointercancel' || (event.type === 'pointerup' && event.buttons === 0);
+    if (event.isTrusted === false || event.isPrimary === false || (event.button > 0 && !last)) return;
     if (event.type === 'mouseup') {
       const press = compatFor(event, elementOf(event.target));
       if (press) compat.delete(press);
@@ -101,23 +107,37 @@ export function observeDragInput(root, signal, input = { held: new Map() }, chan
   const capture = { capture: true, signal };
   for (const type of ['pointerdown', 'mousedown']) root.addEventListener(type, down, capture);
   for (const type of ['pointerup', 'pointercancel', 'mouseup']) root.addEventListener(type, up, capture);
-  // Releasing the primary button while another is held sends a move (Pointer Events 3 §4.1.1.1).
+  // Releasing the primary button while another is held sends a move (Pointer Events 3, "Chorded button interactions").
   // The page can miss a mouse release outside the window. The last down's field still keeps its protection.
   root.addEventListener('pointermove', (event) => {
     if (event.isTrusted !== false && event.pointerType === 'mouse' && (event.buttons & 1) === 0) end(held.get('mouse'));
   }, capture);
+  // A window that loses focus may miss a held press's release, so it ends them all; the last down's field keeps its
+  // protection. A script's `blur` is no release.
   root.defaultView?.addEventListener('blur', (event) => {
-    if (event.isTrusted !== false) end(held.get('mouse'));
+    if (event.isTrusted !== false) for (const press of [...held.values()]) end(press);
   }, { signal });
-  // A later listener can cancel dragstart. A drag that begins sends pointercancel (HTML §6.11.5).
+  // A drag's end ends only a press held where it began, and that press's pending compatibility events. Its start
+  // leaves them: a later listener can cancel `dragstart`, and a drag that begins sends the pointer `pointercancel`
+  // (Pointer Events 3, "Suppressing a pointer event stream"). WebKit can send `dragend` only to a source removed during
+  // the drag, so the source hears it too.
+  let leaveSource = null;
+  const dragEnded = (press) => {
+    compat.delete(press);
+    end(press);
+    leaveSource?.();
+    leaveSource = null;
+  };
   root.addEventListener('dragstart', (event) => {
     if (event.isTrusted === false) return;
-    input.dragPress = downForDrag(input, event);
+    leaveSource?.();
+    const press = input.dragPress = heldAt(input, event) || null, source = event.target;
+    const onEnd = (ended) => ended.isTrusted !== false && dragEnded(press);
+    source.addEventListener('dragend', onEnd);
+    leaveSource = () => source.removeEventListener('dragend', onEnd);
   }, capture);
   root.addEventListener('dragend', (event) => {
-    if (event.isTrusted === false) return;
-    compat.delete(input.dragPress);
-    end(input.dragPress);
+    if (event.isTrusted !== false) dragEnded(input.dragPress);
   }, capture);
   return input;
 }
