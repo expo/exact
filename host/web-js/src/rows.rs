@@ -487,10 +487,10 @@ impl Em<'_> {
                 }
                 w
             }
-            StyleId::Transition if press || shift => one(
-                "transition",
-                Some(style::composed_transition_map(press, shift)),
-            ),
+            StyleId::Transition => {
+                let entries = self.uses.constant("$transitionEntries", style::transition_entries);
+                one("transition", Some(self.uses.share('m', style::transition_map(&entries, press, shift))))
+            }
             StyleId::LayoutTransition => {
                 let parser = crate::paint::Parser::Transition.emit(plan, &mut self.uses);
                 let (say, view) = (self.uses.rt("say"), self.uses.rt("viewId"));
@@ -1181,9 +1181,10 @@ mod tests {
         exact_kernel::style::link_all();
         // LLP 1081 D5, as `style`'s map, then `scale` moved to the press's
         // `--exact-scale`.
+        let map = crate::style::transition_map(&crate::style::transition_entries(), true, false);
         assert_eq!(
             crate::style::tests::run(
-                &crate::style::composed_transition_map(true, false),
+                &map,
                 &[
                     "-exact-tint-color 1s",
                     "tint-color 1s, opacity 1s",
@@ -1202,10 +1203,7 @@ mod tests {
                 "none"
             ])
         );
-        crate::style::tests::assert_spring_transitions(
-            &crate::style::composed_transition_map(true, false),
-            true,
-        );
+        crate::style::tests::assert_spring_transitions(&map, true);
     }
 
     use crate::style::{

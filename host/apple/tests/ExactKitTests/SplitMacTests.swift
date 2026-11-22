@@ -850,7 +850,7 @@ final class SplitMacTests: XCTestCase {
         XCTAssertNil(title.enclosingScrollView)
         let shown = session.presenter.selection.shownParagraphs
         XCTAssertTrue(shown.contains { $0 === title })
-        XCTAssertTrue(TextViewportIndex(shown).candidates().contains { $0 === title })
+        XCTAssertTrue(TextViewportIndex(shown).candidates().contains { $0.node === title })
         XCTAssertEqual(shown.count, Set(shown.map(ObjectIdentifier.init)).count, "each paragraph once")
     }
 
