@@ -465,9 +465,22 @@ snapshot. The backend’s clock stays its own.
    the platform's bordered one; a document's own text (a note's title and body, as Notes
    draws them) says `border="none"`, and a chat's composer is `chat-thread`'s.
 2. **A `header` holds a heading (`h1 "Title"`), one text after it (the subtitle) and
-   buttons** (or a search field, a `tablist`); anything else isn't in the iOS bar. A
-   control fixed under the bar goes with an inline title (`h2`); one that may scroll
-   away, in the list's first section.
+   buttons** (or a search field, a `tablist`). On iOS that is a closed set: a button or
+   link of one symbol, one text or both (its children writing only their size; `color`
+   goes on the button), a one-part badge, and a readout (`role="status"`) of words,
+   symbols, dots and one spinner, drawn as written with no glass. Anything else (a
+   spinner or a picture alone, a second text, a switch, a button with a dot beside its
+   label) fails the build of an app that ships iOS (`lower-header-item`, naming the
+   repair): put it below the `header`, or say `navigationBar="none"` and draw the header
+   yourself. Inside a box around the heading, only the title shows. Android's top app
+   bar and tvOS's bar leave out a readout, Android the subtitle, the avatar and the tap
+   on the title too, and the Mac draws the header in the page for a readout holding a
+   spinner; `header-item-left-out` names each, but the title's own parts, for the
+   targets you ship. A readout's automatic size is at most a third of the bar's width
+   and 44 points high, a trailing or bottom margin is not kept, and it takes the page's
+   type and colour (write the `font-size` and `color` you want). Desktop Linux and the
+   web draw the header as written. A control fixed under the bar goes with an inline
+   title (`h2`); one that may scroll away, in the list's first section.
 3. **`width="100%"` with padding overflows**, as in CSS: drop the width; a `flex=1` field
    takes `min-width=0`.
 

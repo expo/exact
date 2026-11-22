@@ -172,7 +172,7 @@ export function warningLines(dir, host, warnings) {
 /** A compiler warning that is information, not a problem: `forma-unreachable` names a control whose host draws the
  *  platform's own look, which the author should know of and cannot change (LLP 1121 D9, amended 2026-10-30). A drive
  *  and verify say it but do not count it. contract's `warning_rank::information` is the same test. */
-export const information = (w) => / warning \[(forma-unreachable|style-undrawn)\] /.test(w);
+export const information = (w) => / warning \[(forma-unreachable|style-undrawn|header-item-left-out)\] /.test(w);
 
 /** The colours that stay one in dark mode (`lower-colour-one-scheme`), past one, as one line: their closing line with
  *  the first three sites' `file:line`, theme tokens included, at the first's place (LLP 1168.000 D7.2: a chat app said

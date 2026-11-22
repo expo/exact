@@ -233,39 +233,33 @@ final class AgentBarPointerIOSTests: XCTestCase {
         try assertVisibleSegmentPoint(session, "filter-done")
     }
 
-    func testABarReadoutBubblesPointersWithoutPressing() throws {
+    /// LLP 1141.004 D3: a hosted item is the element's own view in the bar, so
+    /// the agent's tap lands on it where the bar shows it, its pointer events
+    /// bubble to its logical ancestors, and nothing presses it.
+    func testAHostedItemBubblesPointersWithoutPressing() throws {
         let session = try fixture(), p = session.presenter, agent = Agent(session: session)
         p.press(try node(session, "open-plain").id)
         until { (p.navigationHost.primaryNavigation?.topViewController as? RouteController)?.node.props["testId"] == "route-plain" && !p.navigationHost.inTransition }
         try node(session, "navigation").handlers.formUnion(["pointerdown", "pointerup"])
         let readout = try node(session, "readout-plain")
         let route = try XCTUnwrap(p.navigationHost.primaryNavigation?.topViewController as? RouteController)
+        let item = try XCTUnwrap(route.navigationItem.rightBarButtonItems?.first { ($0.customView as? HostedItemView)?.node === readout }, "the readout is a hosted item")
         var events: [String] = [], presses: [UInt32] = []
         p.onPointer = { _, kind, sample in
             events.append(kind == .down ? "down" : "up")
-            guard let visible = route.readouts[readout.id]?.customView else { return XCTFail("the readout has a native view") }
-            let expected = p.client(visible.convert(CGPoint(x: visible.bounds.midX, y: visible.bounds.midY), to: nil))
+            let expected = p.client(readout.convert(CGPoint(x: readout.bounds.midX, y: readout.bounds.midY), to: nil))
             XCTAssertEqual(sample.clientX, Double(expected.x), accuracy: 0.5)
             XCTAssertEqual(sample.clientY, Double(expected.y), accuracy: 0.5)
         }
         p.onPress = { presses.append($0) }
-        for testId in ["readout-plain", "readout-text"] {
-            events = []
-            let readout = try node(session, testId)
-            let reply = agent.tap(["id": Int(readout.id)])
-            XCTAssertNil(reply["error"], "\(reply)")
-            XCTAssertEqual(reply["native"] as? String, "bar-readout")
-            XCTAssertEqual(events, ["down", "up"], testId)
-            XCTAssertTrue(presses.isEmpty, "a readout has no press action")
-        }
-        var checked = false
-        let refused = p.navigationHost.activateChrome(readout, before: { _ in checked = true; return false })
-        XCTAssertTrue(checked)
-        XCTAssertNotNil(refused?["error"], "a refused pointer delivery is not acknowledged as a tap")
-        // A readout the bar does not show has no place for a pointer
-        let item = try XCTUnwrap(route.readouts[readout.id])
+        events = []
+        let reply = agent.tap(["id": Int(readout.id)])
+        XCTAssertNil(reply["error"], "\(reply)")
+        XCTAssertEqual(events, ["down", "up"])
+        XCTAssertTrue(presses.isEmpty, "a readout has no press action")
+        // A hosted item the bar does not show has no place for a pointer
         item.isHidden = true
-        until { item.customView?.window == nil }
+        until { readout.window == nil }
         events = []
         XCTAssertNotNil(agent.tap(["id": Int(readout.id)])["error"], "the bar shows no view for the readout")
         XCTAssertEqual(events, [])

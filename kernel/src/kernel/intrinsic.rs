@@ -235,10 +235,11 @@ impl Kernel {
 
     /// Whether the next layout would size a symbol first (`measure_symbols`
     /// with `laid_out_only`): a new measurer or traits, or one owed outside
-    /// a box covered whole.
+    /// a box a host replaced.
     pub(crate) fn symbols_pending(&self) -> bool {
         Some(self.measurer.measure_revision()) != self.symbol_revision
-            || (self.arena.symbols_owed.iter()).any(|slot| !covered_whole(&self.arena, slot))
+            || (self.arena.symbols_owed.iter())
+                .any(|slot| !super::block::replaced_over(&self.arena, slot))
     }
 
     /// Measure the symbols owed a measurement. A template uses its viewBox at
@@ -269,7 +270,7 @@ impl Kernel {
         }
         let owed: Vec<u32> = self.arena.symbols_owed.iter().collect();
         for slot in owed {
-            if laid_out_only && covered_whole(&self.arena, slot) {
+            if laid_out_only && super::block::replaced_over(&self.arena, slot) {
                 continue;
             }
             self.arena.symbols_owed.remove(slot);
@@ -308,12 +309,6 @@ impl Kernel {
             self.inline_image_resized(slot);
         }
     }
-}
-
-/// Whether `slot` or a box above it is covered whole, so not laid out.
-fn covered_whole(arena: &NodeArena, slot: u32) -> bool {
-    std::iter::successors(Some(slot), |&s| arena.parent(s))
-        .any(|s| arena.cover(s) == Some(super::HostCover::Whole))
 }
 
 /// A projected tablist's or radio group's box. A native tab bar fills the

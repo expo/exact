@@ -415,8 +415,8 @@ platform's text prompt (UIAlertController, NSAlert); a header button whose
 face says more than a symbol or a title (a status dot, an authored font) is
 drawn as written in its bar item; swipe actions whose controls all say
 `appearance="none"` keep their paint. Take: none offered; waived by that
-instruction. Still out: an arbitrary subtree as a bar item, a prompt with
-several fields.
+instruction. Still out: an arbitrary subtree as a bar item (expanded for iOS
+below, 2026-11-21), a prompt with several fields.
 **Expanded (James, 2026-10-17: "Exact should allow the developer to
 configure this on platforms that support it"):** a sheet route's
 `navigationInitialDetent` names the `navigationDetent` word it opens at
@@ -430,6 +430,20 @@ shows as UIKit's centred `.formSheet`; a host whose sheets have one size
 ignores it. T3 Code's Add environment sheet (#216) is the consumer, and Nathan
 Schroeder implements it. Take: none offered; waived by Charlie. Still out:
 D7's `automatic` and `fitted`, which stay in stage 6.
+**Expanded (James, 2026-11-21: "We ideally can support any view and any role
+each host platform supports to be uncompromising in UX and aligned with the
+host platforms"), then narrowed (James, 2026-11-22: "on iOS we need to have
+more constraints ideally statically checkable and then allow more flexible UI
+on other platforms"):** on iOS a header readout (`role="status"`) of words,
+symbols, dots and a spinner is a bar item holding the element's own views,
+drawn as written and live (LLP 1141.004); the bar holds a closed set, and in
+an app that ships iOS the compiler refuses any other element in a header that
+is the bar (`lower-header-item`). The readout's redrawn face (`ReadoutView`,
+`ChipFace`) goes. Lexy's "Updating" spinner in its bar is the consumer. Take:
+none offered; waived by James, whom Charlie gave the call (James, 2026-11-21:
+"Charlie has given us permission to make decisions"). Still out: a readout as
+an item on the Mac, Android and tvOS; a header per platform in an app that
+ships iOS; the heading's own box drawn as written.
 **Expanded (Charlie, 2026-10-03: "A native grouped-list role mapped to
 UICollectionView list layout"):** `list appearance="auto"` is a grouped list
 (LLP 1084): sections with a header and footer, rows read by shape, UIKit's

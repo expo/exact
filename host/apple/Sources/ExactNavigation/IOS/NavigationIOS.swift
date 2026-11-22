@@ -144,6 +144,11 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     var besideInsets = UIEdgeInsets.zero
     /// The nodes nested beside the tab panels that paint over the container (LLP 1083.000 D4).
     lazy var siblings = PanelSiblings(navigation: self)
+    #if os(iOS)
+    /// The bars' hosted items (LLP 1141.004 D3).
+    lazy var barHosted = BarHosted(navigation: self)
+    lazy var liftedNodes: any LiftedNodes = LiftedPair(siblings, barHosted)
+    #endif
     weak var besideOwner: UIViewController?
     /// A context menu's commit pushes without the stack's animation: UIKit
     /// animates it (`.pop`, LLP 1021 §5.1). The selected route's key tells
@@ -689,6 +694,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// A route's controller leaves for good: its header paints again and the
     /// route hatch hears `routeEnded` (LLP 1075.003 §3.2).
     private func end(_ c: RouteController) {
+        #if os(iOS)
+        barHosted.show([], in: c)
+        #endif
         if let header = c.lifted { header.isHidden = false; c.lifted = nil }
         c.scoped?.isHidden = false
         c.scoped = nil

@@ -909,6 +909,7 @@ extension NavigationHost {
         presenter.modalHost.inheritFromAncestors()
         followAuthoredTablist()
         #if os(iOS)
+        barHosted.refreshOverflow()
         // A batch that projects nothing (a scroller's rows, a pane given back) can change the accessory's authored
         // ancestors or free a named element another host held, and no picture drawn for a batch outlives it: while
         // an accessory is claimed or named, unless the covers already owe a pass, one runs once the batch ends

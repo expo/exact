@@ -72,6 +72,7 @@ package final class Presenter {
     /// made modal, which a cleared prop drops from the index (`syncModal`).
     var announcedModal: (id: UInt32, incarnation: UInt64)?
     static var postScreenChanged: (Any?) -> Void = { UIAccessibility.post(notification: .screenChanged, argument: $0) }
+    static var postAnnouncement: (NSAttributedString) -> Void = { UIAccessibility.post(notification: .announcement, argument: $0) }
     let modalViews = NSHashTable<NodeView>.weakObjects()
     weak package var session: ExactSession?
     /// The document: the roots live here, content-sized like a page.

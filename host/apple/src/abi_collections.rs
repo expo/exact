@@ -138,6 +138,7 @@ impl<D: DataSource> Bridge<D> {
                         covers.push((view, Some(exact_kernel::HostCover::Edges(edges))));
                     }
                     2 => covers.push((view, Some(exact_kernel::HostCover::Whole))),
+                    26 => covers.push((view, Some(exact_kernel::HostCover::Bar))),
                     12 => covers.push((
                         view,
                         Some(exact_kernel::HostCover::Gutter([edge(12), edge(16)])),

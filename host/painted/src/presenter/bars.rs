@@ -264,6 +264,24 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
+    /// The nearest node at or above a bar item's node that hears `press`, as
+    /// `handler_target` finds it in the page. The bar shows the node, so the
+    /// page's hit regions and the header the bar lifts out do not decide.
+    fn bar_listener(&self, id: ViewId) -> Option<ViewId> {
+        let kernel = self.host.kernel();
+        let mut at = Some(id);
+        while let Some(n) = at {
+            if kernel.node(n)?.props.bool(PropId::Disabled) == Some(true) {
+                return None;
+            }
+            if (self.host.runner().handlers_of(n)).contains(&EventKind::Press) {
+                return Some(n);
+            }
+            at = self.display.parent(kernel, n);
+        }
+        None
+    }
+
     /// A header's button as the top bar shows it.
     fn bar_button(&self, id: ViewId, dark: bool) -> Option<Button> {
         let kernel = self.host.kernel();
@@ -279,7 +297,8 @@ impl<D: DataSource> Presenter<D> {
             title: row.title,
             direction: row.direction,
             symbol: row.symbol,
-            enabled: row.enabled,
+            // An inert button is no enabled item, as an inert tab is none.
+            enabled: row.enabled && !self.host.authored_visibility(id).1,
             destructive: row.destructive,
             tint,
         })
@@ -629,7 +648,23 @@ impl<D: DataSource> Presenter<D> {
             What::Up => {
                 self.system_back(now_ms);
             }
-            What::Item(node) => self.activate(node, now_ms),
+            What::Item(node) => {
+                // A link follows its `href` after its press, and at once where
+                // nothing hears the press, as a tap on it in the page does
+                // (LLP 1038 §7, LLP 1141.004 D1); an inert one follows nothing.
+                let kernel = self.host.kernel();
+                let href = (kernel.node(node))
+                    .and_then(|n| n.props.link().map(str::to_owned))
+                    .filter(|_| !self.host.authored_visibility(node).1);
+                match (href, self.bar_listener(node)) {
+                    (Some(href), None) => self.follow(node, &href, now_ms),
+                    (Some(href), Some(target)) => {
+                        self.press_then_follow(target, now_ms, true);
+                        self.follow(node, &href, now_ms);
+                    }
+                    (None, _) => self.activate(node, now_ms),
+                }
+            }
             What::Tab(node) => {
                 // Read before the tab's press, scrolled after it. The scroll
                 // gives way to a `scrollIntoView` the press asked for in the

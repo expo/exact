@@ -22,9 +22,6 @@ struct HeaderShape: Equatable {
         /// badge: a shape holding a text or a symbol), when the button has
         /// one: the item's image, in the box's own colours and corners.
         let badge: BadgeFace?
-        /// A face that says more than a title or symbol (a dot beside its
-        /// label, a font of the author's), drawn as painted (`ChipFace`).
-        let chip: ChipFace?
         /// Whether the button opens a menu-shaped popover or a confirmation
         /// (`MenuHost.pullsDown`): the item's menu, its rows read when it
         /// opens, as LLP 1021 D3's pull-down. Any other popover opens as
@@ -43,7 +40,8 @@ struct HeaderShape: Equatable {
         /// (`sharesBackground`). A bar item has no clear variant.
         let ownGlass: Bool
         /// The colour the author gave the item's face, light and dark: a
-        /// symbol's tint, else a `color` written on the button itself. Nil
+        /// symbol's tint, else a `color` written on its title's text, else
+        /// one written on the button itself. Nil
         /// (UIKit's tint, the platform default) for a colour the button
         /// only inherits or the compiler implied.
         let tint: [[Double]]?
@@ -56,18 +54,10 @@ struct HeaderShape: Equatable {
         let font: UIFont?
         let active: NativeButtonState
         let activeTitleColor: BatchValue?
-        var supportsActiveColor: Bool { symbol == nil && badge == nil && chip == nil && readout == nil }
-        /// A readout's face (`role="status"`, LLP 1075.003 §9.15): an item
-        /// no one presses, whose custom view shows the face as written and
-        /// follows it in place (BarReadoutIOS.swift).
-        let readout: ChipFace?
-        /// The padding around a readout's face inside the glass: each side
-        /// as its author wrote it, else UIKit's (`titleInset` beside words).
-        let readoutPadding: UIEdgeInsets
-        /// How far a `UIBarButtonItem(title:)`'s label sits inside its item
-        /// on each side, which UIKit does not publish: 12 pt on iOS 26 and 27
-        /// (measured), so its glass is 16 pt wider than the words each side.
-        static let titleInset: CGFloat = 12
+        var supportsActiveColor: Bool { symbol == nil && badge == nil && !hosted }
+        /// A readout (LLP 1141.004 D1): an item nothing presses, whose
+        /// custom view holds the element's own views (BarHostedIOS.swift).
+        let hosted: Bool
         /// The font UIKit draws a plain bar item's title in, which it does
         /// not publish: the system font at 17 pt, medium in the 26 design and
         /// bold under Bold Text (both measured on iOS 27,
@@ -78,10 +68,10 @@ struct HeaderShape: Equatable {
             if #available(iOS 26.0, *), LinkedDesign.liquidGlass { return .systemFont(ofSize: 17, weight: bold ? .bold : .medium) }
             return .systemFont(ofSize: 17, weight: bold ? .semibold : .regular)
         }
-        init(_ button: NodeView, readout isReadout: Bool = false) {
+        init(_ button: NodeView, hosted: Bool = false) {
             var symbol: String?, text = "", ink: (NodeView, String)?
             func walk(_ node: NodeView) {
-                for case let child as NodeView in node.container.subviews {
+                for child in Self.shown(node) {
                     if child.kind == "image", let name = child.faceSymbol {
                         if symbol == nil { symbol = name; ink = (child, "text_color") }
                     } else if child.isParagraph, text.isEmpty { text = child.accessibleText; ink = ink ?? (child, "text_color") }
@@ -96,36 +86,28 @@ struct HeaderShape: Equatable {
             } else {
                 walk(button)
             }
-            var parent = button.superview
+            // Up the authored tree: a hosted element the bar lifted keeps its group.
             var grouped: UInt32?
-            while let view = parent {
-                if let node = view as? NodeView {
+            if let presenter = button.presenter {
+                for case let node as NodeView in presenter.logicalAncestry(of: button).dropFirst() {
                     if node.props["semanticTag"] == "header" { break }
                     if node.props["accessibilityRole"] == "group" { grouped = node.id; break }
                 }
-                parent = view.superview
             }
             toolbarGroup = grouped
             id = button.id
             testId = button.props["testId"]
-            readout = isReadout ? ChipFace(button, readout: true) : nil
-            // A side left unsaid is UIKit's. A bare custom view hugs its
-            // capsule, whose round ends then cut into its words, so a face
-            // with words takes the inset a title item's label has.
-            let words = readout?.parts.contains { if case .text = $0 { true } else { false } } == true
-            let pad = { (side: String, platform: CGFloat) in button.wrote("padding_\(side)") ? button.number("padding_\(side)") : platform }
-            let beside: CGFloat = words ? Self.titleInset : 0
-            readoutPadding = isReadout ? UIEdgeInsets(top: pad("top", 0), left: pad("left", beside), bottom: pad("bottom", 0), right: pad("right", beside)) : .zero
-            badge = button.isNativeButton || isReadout ? nil : BadgeFace(button)
-            chip = badge == nil && !isReadout ? ChipFace(button) : nil
+            self.hosted = hosted
+            badge = button.isNativeButton || hosted ? nil : BadgeFace(button)
             let invocation = button.presenter?.invocation(of: button)
             menu = invocation.map { $0.opensPopover && button.presenter?.menus.pullsDown($0.target) == true } == true
             menuTitle = menu ? invocation?.target.props["accessibilityLabel"] ?? "" : ""
             menuOrder = menu ? button.props["menuOrder"] ?? "" : ""
             self.symbol = symbol
             title = text
-            label = button.props["accessibilityLabel"] ?? face?.label ?? (isReadout ? Self.shownWords(button) : nil)
-            disabled = button.disabled
+            label = hosted ? nil : button.props["accessibilityLabel"] ?? face?.label
+            // An inert button is no enabled item, as in the page.
+            disabled = button.disabled || button.inert
             accessibilityDisabled = button.ariaUnavailable
             prominent = ["filled", "bordered-prominent", "prominent-glass", "prominent-clear-glass"].contains(face?.style ?? "")
             // A badge (an avatar) on a button that asks for glass sits in its own capsule, as a glass button does.
@@ -140,40 +122,38 @@ struct HeaderShape: Equatable {
                 ? ButtonConfigurationIOS.font(Self.titleFont(bold: button.traitCollection.legibilityWeight == .bold), rows: rows) : nil
             #endif
             // The platform's tint unless the author said otherwise (LLP
-            // 1115.000 D2): a `color` written on the symbol, else a `color`
-            // written on the button, a platform colour as much as a literal.
+            // 1115.000 D2): a `color` written on the symbol, else on the title's
+            // text, else on the button, a platform colour as much as a literal.
             // One the button only inherits, or a sheet wrote, is unsaid.
             // Read from the node it is written on, the tint in it as a value (`carriedTint`)
             active = NativeButtonState(button)
             let ownsTitle = face.map { NativeButtonState.colorOwnership($0.rows).title } ?? (ink?.0.wrote("text_color") == true)
-            activeTitleColor = symbol == nil && badge == nil && chip == nil && !isReadout && !ownsTitle
+            activeTitleColor = symbol == nil && badge == nil && !hosted && !ownsTitle
                 && active.style.keys.allSatisfy { $0 == "press_color" } ? active.style["press_color"] : nil
-            let source = ink.flatMap { $0.0.kind == "image" && $0.0.ownColor("text_color") != nil ? $0.0 : nil } ?? (button.ownColor("text_color") != nil ? button : nil)
+            let source = ink.flatMap { $0.0.ownColor("text_color") != nil ? $0.0 : nil } ?? (button.ownColor("text_color") != nil ? button : nil)
             followsTint = source?.style["text_color"]?.tintAlpha == 1
-            if !followsTint, let source, let light = source.carriedChannels("text_color", dark: false), let dark = source.carriedChannels("text_color", dark: true) {
+            if followsTint {
+                tint = nil
+            } else if let source, let light = source.carriedChannels("text_color", dark: false), let dark = source.carriedChannels("text_color", dark: true) {
                 tint = [light, dark]
             } else {
                 tint = nil
             }
         }
-        /// What a readout says with no `aria-label`: its words that show,
-        /// none `display: none` or `aria-hidden` (the bar's own hiding of the
-        /// header is `isHidden`, not this).
-        static func shownWords(_ node: NodeView) -> String {
-            guard node.style["display"]?.string != "none", node.props["accessibilityElementsHidden"] != "true" else { return "" }
-            if node.isParagraph { return node.accessibleText }
-            return node.container.subviews.compactMap { ($0 as? NodeView).map(shownWords) }.filter { !$0.isEmpty }.joined(separator: " ")
+        /// `node`'s children that show (none `display: none`).
+        static func shown(_ node: NodeView) -> [NodeView] {
+            NodeView.committed(node.container.subviews).filter { $0.style["display"]?.string != "none" }
         }
-        /// Everything a bar item is made from. A readout's face is not: its
-        /// view follows it in place (`showReadouts`).
+        /// Everything a bar item is made from. A hosted element is not: its
+        /// views follow it in place (`BarHosted.show`).
         var source: String {
-            if readout != nil { return "readout:\(toolbarGroup.map(String.init) ?? ""):\(id):\(testId ?? "")" }
+            if hosted { return "hosted:\(toolbarGroup.map(String.init) ?? ""):\(id):\(testId ?? "")" }
             return "\(face):\(disabled):\(accessibilityDisabled)"
         }
         /// `source` but for whether the item is enabled.
         var face: String {
-            if readout != nil { return source }
-            return "\(toolbarGroup.map(String.init) ?? ""):\(id):\(title):\(symbol ?? ""):\(label ?? ""):\(prominent):\(ownGlass):\(badge?.source ?? ""):\(chip?.source ?? ""):\(menu):\(menuTitle):\(menuOrder):\(tint ?? []):\(followsTint):\(font.map { "\($0.fontName) \($0.pointSize) \(TextEngine.controlWeight($0))" } ?? ""):\(testId ?? ""):\(activeSignature)"
+            if hosted { return source }
+            return "\(toolbarGroup.map(String.init) ?? ""):\(id):\(title):\(symbol ?? ""):\(label ?? ""):\(prominent):\(ownGlass):\(badge?.source ?? ""):\(menu):\(menuTitle):\(menuOrder):\(tint ?? []):\(followsTint):\(font.map { "\($0.fontName) \($0.pointSize) \(TextEngine.controlWeight($0))" } ?? ""):\(testId ?? ""):\(activeSignature)"
         }
         private var activeSignature: String {
             let values = active.style.mapValues(\.any)
@@ -200,6 +180,9 @@ struct HeaderShape: Equatable {
     /// tablist when it has tabs for the segmented title, and what the title
     /// shows of the heading's group.
     let placed: [NodeView]
+    /// The readouts the bar shows in views of their own (LLP 1141.004 D1),
+    /// lifted out of the header rather than hidden with it.
+    let hosted: [NodeView]
     /// Explicit opt-outs stay in the authored header with their descendants.
     let authored: [NodeView]
     let authoredBack: Bool
@@ -212,20 +195,23 @@ struct HeaderShape: Equatable {
         guard let rule = HeaderRule(route: route, back: back, backIsPlatforms: backIsUIKits, projected: projected) else { return nil }
         // Every role the header rule assigns can remain authored. In
         // particular the title's tap target is not one of its bar items.
-        // A readout hidden as authored, itself or by a box around it in the
-        // header, shows nothing (the bar's own hiding is `isHidden`, not this).
-        let readouts = rule.readouts.filter { readout in
-            var at: UIView? = readout
-            while let view = at, view !== rule.header {
-                if (view as? NodeView)?.style["display"]?.string == "none" { return false }
-                at = view.superview
+        let roles = rule.items + rule.hosted + [rule.heading, rule.tap, rule.search, rule.segments].compactMap { $0 }
+        let keeps = { (node: NodeView) in node.wrote("appearance") && node.style["appearance"]?.string == "none" }
+        // Any other element its author keeps (a text, a box) stays in the page
+        // too, and is not the title's: the outermost such in the header,
+        // outside the bar's own parts (a tab that keeps its look is still
+        // the tablist's).
+        let parts = rule.items + rule.hosted + [rule.heading, rule.search, rule.segments].compactMap { $0 }
+        func kept(in node: NodeView) -> [NodeView] {
+            NodeView.committed(node.container.subviews).flatMap { child -> [NodeView] in
+                if parts.contains(where: { $0 === child }) { return [] }
+                return keeps(child) ? [child] : kept(in: child)
             }
-            return true
         }
-        let roles = rule.items + readouts + [rule.heading, rule.tap, rule.search, rule.segments].compactMap { $0 }
-        let authored = projected ? roles.filter { $0.wrote("appearance") && $0.style["appearance"]?.string == "none" } : []
+        let authored = projected ? roles.filter(keeps) + kept(in: rule.header).filter { node in !roles.contains { $0 === node } } : []
         self.authored = authored
-        let projects = { (node: NodeView) in !authored.contains { node === $0 || node.isDescendant(of: $0) } }
+        // In the authored tree: an element the bar lifted is still inside what keeps it.
+        let projects = { (node: NodeView) in !authored.contains { Self.inside(node, $0) } }
         authoredBack = back != nil && roles.contains { $0.props["id"] == back && !projects($0) }
         let heading = rule.heading.flatMap { projects($0) ? $0 : nil }, titleProjects = heading != nil
         self.heading = heading
@@ -238,35 +224,42 @@ struct HeaderShape: Equatable {
         let text = heading?.accessibleText ?? ""
         title = text.unicodeScalars.allSatisfy(\.properties.isWhitespace) ? "" : text
         level = titleProjects ? rule.level : 0
-        let item = { (node: NodeView) -> Item? in
-            guard rule.readouts.contains(where: { $0 === node }) else { return Item(node) }
-            guard readouts.contains(where: { $0 === node }) else { return nil }
-            let item = Item(node, readout: true)
-            return item.readout == nil ? nil : item
-        }
-        let before = rule.leading.filter(projects).compactMap(item), after = rule.trailing.filter(projects).compactMap(item)
-        // A readout is apart from the title when it has a face to show: one
-        // hidden, or with nothing to draw, is the page's, as the web has it.
-        let drawn = (before + after).filter { $0.readout != nil }.map(\.id)
-        let faced = readouts.filter { drawn.contains($0.id) }
+        // The title decides first, with the buttons, readouts, search field
+        // and tablist apart from it. What the author keeps in the page is not
+        // the title's to read either.
+        let readouts = rule.readouts.filter(projects)
+        let apart = rule.items + rule.readouts + [rule.search, rule.segments].compactMap { $0 } + authored
+        let group = heading.flatMap { HeaderTitle(header: rule.header, heading: $0, tap: tap, apart: apart, kept: authored) }
         #if os(tvOS)
-        // tvOS's bar has no item that focus passes by undimmed: no readout.
-        leading = before.filter { $0.readout == nil }
-        trailing = after.filter { $0.readout == nil }
-        let shownReadouts: [NodeView] = []
+        // tvOS's bar has no item that focus passes by undimmed: none hosted.
+        let hosted: [NodeView] = []
         #else
-        (leading, trailing) = (before, after)
-        let shownReadouts = faced
+        // The readouts are the bar's hosted items (D1); every button is
+        // UIKit's own item, drawn from its symbol and words.
+        let hosted = readouts
         #endif
+        self.hosted = hosted
+        let item = { (node: NodeView) -> Item? in
+            if hosted.contains(where: { $0 === node }) { return Item(node, hosted: true) }
+            return rule.hosted.contains(where: { $0 === node }) ? nil : Item(node)
+        }
+        leading = rule.leading.filter(projects).compactMap(item)
+        trailing = rule.trailing.filter(projects).compactMap(item)
         self.search = search
         self.segments = segments
-        let group = heading.flatMap { HeaderTitle(header: rule.header, heading: $0, tap: tap, apart: rule.items + faced + [rule.search, rule.segments].compactMap { $0 }) }
         self.group = group
         let tablist = segments.flatMap { HeaderShape.titleTabs($0).isEmpty ? nil : $0 }
         // The title's pressable wrapper goes with the title it holds, unless
         // it holds an opted-out node, which stays where it is.
-        let wrapper = titleProjects ? tap.flatMap { tap in authored.contains { $0.isDescendant(of: tap) } ? nil : tap } : nil
-        placed = ([rule.heading].compactMap { $0 } + rule.items + shownReadouts + [search, tablist, wrapper].compactMap { $0 } + (HeaderShape.presented(group, segments: segments)?.placed ?? [])).filter(projects)
+        let wrapper = titleProjects ? tap.flatMap { tap in authored.contains { Self.inside($0, tap) } ? nil : tap } : nil
+        placed = ([rule.heading].compactMap { $0 } + rule.items.filter { item in !hosted.contains { $0 === item } } + [search, tablist, wrapper].compactMap { $0 }
+                  + (HeaderShape.presented(group, segments: segments)?.placed ?? [])).filter(projects)
+    }
+
+    /// Whether `node` is `box` or inside it in the authored tree, where an
+    /// element the bar lifted is still in its parent (LLP 1141.004 D3).
+    static func inside(_ node: NodeView, _ box: NodeView) -> Bool {
+        node.presenter?.logicalAncestry(of: node).contains { $0 === box } ?? node.isDescendant(of: box)
     }
 
     /// The tabs of a header's tablist the segmented title shows (§9.8).
@@ -277,7 +270,7 @@ struct HeaderShape: Equatable {
     }
 
     static func == (a: HeaderShape, b: HeaderShape) -> Bool {
-        a.header === b.header && a.authoredBack == b.authoredBack && a.title == b.title && a.level == b.level && a.leading == b.leading && a.trailing == b.trailing && a.search === b.search && a.segments === b.segments && a.group == b.group && a.authored.map(\.id) == b.authored.map(\.id)
+        a.header === b.header && a.authoredBack == b.authoredBack && a.title == b.title && a.level == b.level && a.leading == b.leading && a.trailing == b.trailing && a.search === b.search && a.segments === b.segments && a.group == b.group && a.authored.map(\.id) == b.authored.map(\.id) && a.hosted.map(\.id) == b.hosted.map(\.id)
     }
 }
 

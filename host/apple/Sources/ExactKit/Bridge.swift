@@ -150,7 +150,8 @@ extension Runtime {
     }
     /// What native containers cover of boxes (LLP 1075.003 §3.5), under one
     /// layout: `edges` add to a box's padding; `whole` lays it out as
-    /// `display: none`; nil clears.
+    /// `display: none`, and `bar` too but for the blocks given inside it;
+    /// nil clears.
     package func covers(_ covers: [(UInt32, HostCover?)]) -> Batch {
         return on(layout: true) {
             var bytes = Data(capacity: covers.count * 24)
@@ -159,6 +160,7 @@ extension Runtime {
                 case .none: (0, [0, 0, 0, 0])
                 case .edges(let e)?: (1, [e.top, e.right, e.bottom, e.left])
                 case .whole?: (2, [0, 0, 0, 0])
+                case .bar?: (26, [0, 0, 0, 0])
                 case .inset(let top, let bottom)?: (3, [top, 0, bottom, 0])
                 case .gutter(let right, let bottom)?: (12, [0, right, bottom, 0])
                 case .rowSpacing(let top, let bottom)?: (25, [top, 0, bottom, 0])

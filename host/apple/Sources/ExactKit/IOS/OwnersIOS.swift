@@ -98,7 +98,8 @@ extension Presenter {
         var at: UIView? = start, crossed = false
         while let cur = at, cur !== target {
             let up = listenerParent(of: cur)
-            // A node lifted over the tab container stays inside its parent's box on the page
+            // Panel siblings stay within their parent's box. Bar items and the
+            // tab accessory are held apart from it.
             crossed = crossed || (up !== cur.superview && (up !== navigation.lifted?.parent(of: cur) || navigation.lifted?.heldApart(cur) == true))
             at = up
         }
@@ -345,6 +346,7 @@ package final class OwnerBlocks {
               session.state != .destroyed, !session.fillInFlight else { return Data() }
         var now: [UInt32: (block: HostBlock, placement: BlockPlacement?)] = [:]
         for pane in presenter.navigation.paneBlocks { now[pane.id] = (pane.block, pane.placement) }
+        for (id, block) in presenter.navigation.barItemBlocks { now[id] = (block, nil) }
         for (id, block) in presenter.dialogs.containingBlocks { now[id] = (block, nil) }
         for (route, view, block, shown, presented) in routes {
             let id = route.node.id

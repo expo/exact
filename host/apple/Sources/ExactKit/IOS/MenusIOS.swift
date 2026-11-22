@@ -487,11 +487,11 @@ package final class MenuHost {
     func eligible(_ node: NodeView, contextMenu: Bool = false, inertBoundary: UIView? = nil, inBar: Bool = false) -> Bool {
         guard live(node), !(contextMenu ? node.formDisabled : node.disabled), presenter?.navigation.isInactiveRoute(containing: node) == false else { return false }
         var ancestor: UIView? = node
-        var checksInert = true
+        var checksInert = true, inBar = inBar
         while let view = ancestor {
-            // A modal dialog escapes inertness above itself. Its issued command
-            // also survives the invoker subsequently becoming inert.
+            // A modal dialog escapes inertness above itself. Its issued command also survives the invoker subsequently becoming inert.
             if view === inertBoundary { checksInert = false }
+            if presenter?.navigation.lifted?.parent(of: view) != nil { inBar = true } // lifted into a bar's item, shown there (LLP 1141.004 D3)
             if let n = view as? NodeView, (contextMenu ? n.formDisabled : n.disabled) || (checksInert && n.props["inert"] == "true") { return false }
             let projectedSection = contextMenu && (view as? NodeView).map { presenter?.groupedLists?.hidSection($0) == true } == true
             if view.isHidden, !projectedSection, !(inBar && presenter?.navigation.hiddenForBar(view) == true), !groupedProjectionShows(node, behind: view) {

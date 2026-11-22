@@ -403,6 +403,11 @@ final class BarPress: NSObject {
                 return
             }
         }
+        // A link with no press of its own follows its `href`, as a tap does.
+        if node.defaultLink != nil {
+            if !node.disabled, !node.inert { host.presenter.press(id) }
+            return
+        }
         _ = host.presenter.hatchAct(id, 0)
     }
 }
@@ -479,18 +484,10 @@ extension NavigationHost {
             guard let nav = c.navigationController, nav.topViewController === c, barShows(nav) else { return false }
             return c.viewIfLoaded?.window != nil
         }
-        // A readout the bar shows (§9.15) is tapped as a person taps it:
-        // nothing happens. Its header may be lifted whole or only in part.
-        if let readout = shown.lazy.compactMap({ c in c.readouts.first { id, _ in
-            id == node.id || self.presenter.views[id].map { node.isDescendant(of: $0) } == true }?.value }).first {
-            let point = readout.customView.map { $0.convert(CGPoint(x: $0.bounds.midX, y: $0.bounds.midY), to: nil) }
-            guard before(point) else { return ["error": "bar readout #\(id) is unavailable"] }
-            return ["tapped": id, "delivery": "host-activation", "native": "bar-readout"]
-        }
         guard shown.contains(where: { c in
             c.barPresses.contains { $0.id == node.id } || c.lifted.map { node === $0 || node.isDescendant(of: $0) } == true
         }) else { return nil }
-        guard !node.disabled, before(nil), !node.disabled, !node.inert, presenter.views[node.id] === node else { return ["error": "bar item #\(id) is unavailable"] }
+        guard !node.disabled, !node.inert, before(nil), !node.disabled, !node.inert, presenter.views[node.id] === node else { return ["error": "bar item #\(id) is unavailable"] }
         // An item whose button only opens a menu is UIKit's pull-down, which
         // no public API opens: under the agent's painted popovers it opens
         // painted (`agentOpen(barItem:)`); under UIKit's menus a real touch opens it.
@@ -508,9 +505,10 @@ extension NavigationHost {
             case nil: return ["error": "unsupported: bar item #\(id) opens its menu as UIKit's pull-down from the bar, which only a real touch opens: under --touch platform `tap` opens it and `tap <row>` picks a row (LLP 1021 D4)"]
             }
         }
-        // A button with no press of its own that shows a dialog modally: its command, as `BarPress` runs it.
+        // A button with no press of its own that shows a dialog modally, or
+        // a link that follows its `href`: as `BarPress` runs it.
         let showsModal = presenter.invocation(of: node)?.action == .showModal
-        guard node.handlers.contains("press") || showsModal, !node.disabled else { return ["error": "bar item #\(id) is disabled or presses nothing"] }
+        guard node.handlers.contains("press") || showsModal || node.defaultLink != nil, !node.disabled, !node.inert else { return ["error": "bar item #\(id) is disabled, inert or presses nothing"] }
         presenter.press(node.id)
         return ["tapped": id, "pressed": id, "delivery": "host-activation", "native": "bar-button-item"]
     }
@@ -678,7 +676,9 @@ extension NavigationHost {
             scope(c, shape: shows ? shape : nil)
             #endif
             collapse(c, shape: shape, shows: shows, scroller: scroller)
-            showReadouts(shows ? shape : nil, in: c)
+            #if os(iOS)
+            barHosted.show(shows ? shape?.hosted.map(\.id) ?? [] : [], in: c)
+            #endif
             reachBottom(c, presented: presented)
             c.paintBackdrop()
             searchField(shows ? shape?.search : nil, in: c, covered: index < routes.count - 1)
@@ -777,8 +777,8 @@ extension NavigationHost {
     private func coverLifted(_ routes: [RouteController]) {
         var lifted = false
         for c in routes {
-            for node in (c.lifted.map({ [$0] }) ?? c.barNodes) + [c.scoped].compactMap({ $0 }) where covers[node.id] != .whole {
-                covers[node.id] = .whole
+            for node in (c.lifted.map({ [$0] }) ?? c.barNodes) + [c.scoped].compactMap({ $0 }) where covers[node.id] != Self.cover(of: node, in: c) {
+                covers[node.id] = Self.cover(of: node, in: c)
                 lifted = true
             }
         }
@@ -788,6 +788,12 @@ extension NavigationHost {
         if presenter.applying { liftReport = coversReported }
         presenter.afterBatch { [weak self] in self?.deliverCovers() }
     }
+
+    /// What the bar's projection covers `node` with: a header or a node the
+    /// bar replaces lays out only the blocks of the hosted items inside it
+    /// (LLP 1141.004 D2: a readout in a glyph line the title takes, under a
+    /// partial lift); the search scope's filter, whole.
+    static func cover(of node: NodeView, in c: RouteController) -> HostCover { node === c.scoped ? .whole : .bar }
 
     /// Write the defaults an authored header gives a navigation item, and
     /// lift the header out of the route's layout while the bar shows it. A
@@ -1156,7 +1162,7 @@ extension NavigationHost {
         return appearance
     }()
 
-    /// A drawn bar item (`ChipFace`, `BadgeFace`) is an image for one
+    /// A drawn bar item (`BadgeFace`) is an image for one
     /// appearance: a new colour scheme or contrast projects each live
     /// stack's bars again, and only an item whose face changed is drawn
     /// again. The change is heard in the Exact view's own trait change,
@@ -1314,8 +1320,8 @@ extension NavigationHost {
     /// Each of `shape`'s items enabled as it says, on the item made for it; false when one has none.
     private func enable(_ shape: HeaderShape, in c: RouteController) -> Bool {
         let items = shape.leading + shape.trailing
-        guard items.allSatisfy({ $0.readout != nil || c.barItemsMade[$0.id] != nil }) else { return false }
-        for i in items where i.readout == nil {
+        guard items.allSatisfy({ $0.hosted || c.barItemsMade[$0.id] != nil }) else { return false }
+        for i in items where !i.hosted {
             guard let item = c.barItemsMade[i.id]?.bar else { continue }
             item.isEnabled = !i.disabled
             if i.disabled || i.accessibilityDisabled { item.accessibilityTraits.insert(.notEnabled) }
@@ -1335,27 +1341,25 @@ extension NavigationHost {
     }
 
     private func barItemMade(_ i: HeaderShape.Item, _ c: RouteController) -> UIBarButtonItem {
+        // A hosted item draws its element as written, its `:active` look too.
+        #if os(iOS)
+        if i.hosted { c.barItemsMade[i.id] = nil; return barHosted.item(i, in: c) }
+        #endif
         presenter.views[i.id]?.rejectNativeActiveProperties(on: "UIBarButtonItem", supporting: i.supportsActiveColor ? ["press_color"] : [])
-        if i.readout != nil { c.barItemsMade[i.id] = nil; return readoutItem(i, c) }
         // A menu reads its rows through the button's view: a new view, a new menu.
-        // Before iOS 26 a chip's picture follows the bar's tint, which the item
-        // does not hold; from iOS 26 it is drawn in the label colour.
         let button = i.menu ? presenter.views[i.id] : nil
-        var tinted = i.chip != nil
-        if #available(iOS 26.0, tvOS 26.0, *) { tinted = false }
-        if let made = c.barItemsMade[i.id], made.item == i, !tinted, button?.incarnation == made.menuFrom {
+        if let made = c.barItemsMade[i.id], made.item == i, button?.incarnation == made.menuFrom {
             c.barPresses.append(made.press)
             return made.bar
         }
         let dimmed = c.navigationController?.navigationBar.tintAdjustmentMode == .dimmed
-        let image = i.badge?.image(dimmed: dimmed) ?? i.chip?.image(tint: presenter.views[i.id]?.carriedTint ?? presenter.viewport.tintColor,
-            dimmed: dimmed) ?? i.symbol.flatMap { FaceSymbol.image($0, points: FaceSymbol.barItemPoints) }
+        let image = i.badge?.image(dimmed: dimmed) ?? i.symbol.flatMap { FaceSymbol.image($0, points: FaceSymbol.barItemPoints) }
         // The same control as last time, still a menu or not and still a
         // picture or words: its item is kept and changed, as a hand-built
         // bar's is, so the glass animates what changed (a heart filling).
         if let made = c.barItemsMade[i.id], made.item.menu == i.menu, (made.bar.image != nil) == (image != nil) {
             c.barPresses.append(made.press)
-            if let image, tinted || made.item.chip != i.chip || made.item.symbol != i.symbol || made.item.badge != i.badge {
+            if let image, made.item.symbol != i.symbol || made.item.badge != i.badge {
                 if #available(iOS 17.0, tvOS 17.0, *), image.isSymbolImage {
                     made.bar.setSymbolImage(image, contentTransition: .replace)
                 } else { made.bar.image = image }
@@ -1398,7 +1402,7 @@ extension NavigationHost {
         else { item.accessibilityTraits.remove(.notEnabled) }
         // The authored `color` of a plain item's face; a prominent item's
         // tint is its fill, which `color` is not.
-        let plain = !i.prominent && i.badge == nil && i.chip == nil
+        let plain = !i.prominent && i.badge == nil
         item.tintColor = !plain ? nil : i.followsTint ? presenter.views[i.id]?.ownAccent ?? SystemColor.tint(1) : i.tint.map { tint in UIColor { TextEngine.color(tint[$0.userInterfaceStyle == .dark ? 1 : 0]) } }
         // UIKit's font where none is written, also once a kept item's author removes theirs.
         let font = image == nil ? i.font : nil

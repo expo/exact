@@ -17,7 +17,8 @@ import UIKit
 
 /// A route's header as the shared rule reads it: its heading and level (none
 /// for a header of buttons alone, whose bar has no title), its
-/// items before and after the heading (buttons and readouts, `role="status"`),
+/// items before and after the heading (buttons and readouts, LLP 1141.004
+/// D1),
 /// its buttons with the stack's Back control, its search field, its tablist
 /// and the pressable around the heading. Each platform's bar is made from it.
 package struct HeaderRule {
@@ -26,9 +27,12 @@ package struct HeaderRule {
     package let leading: [NodeView], trailing: [NodeView], items: [NodeView]
     package let search: NodeView?, segments: NodeView?, tap: NodeView?
 
-    /// The readouts among the leading and trailing items: nothing presses
-    /// them (LLP 1075.003 §9.15).
-    package var readouts: [NodeView] { (leading + trailing).filter { node in !items.contains { $0 === node } } }
+    /// The hosted elements among the leading and trailing items, which
+    /// nothing presses as a whole and the bar shows as written: the readouts
+    /// (LLP 1141.004 D1).
+    package var hosted: [NodeView] { (leading + trailing).filter { node in !items.contains { $0 === node } } }
+    /// The readouts among them (`role="status"`, LLP 1075.003 §9.15).
+    package var readouts: [NodeView] { hosted.filter { $0.props["accessibilityRole"] == "status" } }
 
     /// The nodes handed to the shared rule, in all: what a projection walks,
     /// which the tests pin (a feed's rows are never among them).
@@ -50,12 +54,18 @@ package struct HeaderRule {
         if node.isHeading { facts |= 1 | UInt32(node.headingLevel ?? 0) << 16 }
         if node.kind == "input", node.props["type"] == "search" { facts |= 2 }
         if node.props["accessibilityRole"] == "tablist" { facts |= 4 }
+        // An `href` or `role="link"` (`fact::LINK`): a link the bar's item follows.
+        if node.props["href"] != nil || node.props["accessibilityRole"] == "link" { facts |= 1 << 14 }
+        // An `href` that is not empty (`fact::HREF`): what the item follows.
+        if node.props["href"]?.isEmpty == false { facts |= 1 << 20 }
         if node.props["accessibilityRole"] == "status" { facts |= 1024 }
         if node.props["popover"] != nil || node.props["semanticTag"] == "dialog" { facts |= 2048 }
         if node.handlers.contains("press") { facts |= 8 }
         // A disabled button, native or bare: a dimmed bar item, pressed or not, never the title's tap.
         let button = node.kind == "button" || (node.kind == "control" && node.props["type"] == "button")
         if button && node.props["accessibilityRole"] == "button" && node.disabled { facts |= 4096 }
+        // A button, pressed or not, which is never hosted (`fact::BUTTON`).
+        if button { facts |= 1 << 19 }
         // A button that opens what it names, a popover or a modal dialog (`fact::OPENS`).
         if node.presenter?.invocation(of: node)?.opens == true { facts |= 16 }
         if back != nil, node.props["id"] == back { facts |= 32 }
@@ -84,7 +94,7 @@ package struct HeaderRule {
         // a node, its facts and the count of its children.
         var nodes: [NodeView] = [route], words: [UInt32] = [route.props["navigationBar"] == "none" ? 256 : 0, 1]
         func add(_ node: NodeView) {
-            let children = node.childNodes
+            let children = node.authoredChildNodes
             nodes.append(node)
             Self.walked += 1
             words.append(Self.facts(node, back: back))
@@ -112,6 +122,16 @@ package struct HeaderRule {
 }
 
 extension NodeView {
+    /// The children a reader of the header finds: `childNodes`, with a child
+    /// the navigation lifted out of this node (a bar's hosted item, LLP
+    /// 1141.004 D3) at its place among them.
+    package var authoredChildNodes: [NodeView] {
+        #if os(iOS) || os(tvOS)
+        if let ids = presenter?.navigation.lifted?.recordedIDs(of: self) { return NodeView.committed(ids.compactMap { presenter?.views[$0] }) }
+        #endif
+        return childNodes
+    }
+
     /// The platform's title font `base` with the typography the author
     /// wrote on this heading in its place: `font-family`, `font-weight`,
     /// `font-style` and, where `sized`, `font-size` (LLP 1115 §2, "what the

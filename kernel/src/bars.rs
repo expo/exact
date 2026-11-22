@@ -8,21 +8,29 @@
 //! **A header-shaped route** (LLP 1035.001 D9) is one whose first child is a
 //! `header` holding exactly one heading. The heading is the bar's title, at
 //! its level; the header's buttons are the bar's items, those before the
-//! heading leading and those after it trailing, and so is a readout (an
-//! element whose role is `status`, which nothing presses: a "● Clock" the
-//! bar shows as written, LLP 1075.003 §9.15); its `input type="search"`
+//! heading leading and those after it trailing; its `input type="search"`
 //! is the bar's search field and its `tablist` the title's segments. A
 //! pressable around the heading is the title itself, tapped. The stack's
 //! Back control is the platform's own Back where the platform has one for
 //! that route, and an item like the others where it has not.
 //!
+//! **A readout** (an element whose role is `status`, a "● Clock", LLP
+//! 1075.003 §9.15) is an item too, placed as a button is, which nothing
+//! presses as a whole and which a host shows as written, in views of its
+//! own (LLP 1141.004 D1). What a box around the heading holds besides the
+//! bar's parts is the title's (iOS's subtitle and avatar). Any other
+//! element is no item: the compiler refuses one in the header of an app
+//! that ships iOS, and one it cannot see stays out of the bar. A host that
+//! shows only buttons leaves the readouts out.
+//!
 //! **A header with no heading** is the bar too, with no title, when the bar
 //! places everything it shows: buttons, readouts, a search field, a
 //! tablist, and plain boxes around them or empty between them (issue #364).
-//! A text, an image or anything else in it is the page's, so such a header
-//! stays as written rather than lose it. With no heading to stand between
-//! them, its items trail, as SwiftUI's `ToolbarItemPlacement.automatic`
-//! places an action in a bar, except the stack's Back control, which leads.
+//! Any other element keeps such a header in the page as written rather
+//! than give its place to a bar with no title. With no heading to
+//! stand between them, its items trail, as SwiftUI's
+//! `ToolbarItemPlacement.automatic` places an action in a bar, except the
+//! stack's Back control, which leads.
 //!
 //! **Two trees.** The rule is written once, over [`Tree`]: a node's facts
 //! ([`fact`]) and its children. A host that reads the kernel's tree calls
@@ -97,8 +105,8 @@ pub mod fact {
     /// header that says so keeps its authored bar. Only a written one: a
     /// row the compiler implied is no opt-out.
     pub const AUTHORED: u32 = 1 << 9;
-    /// Its role is `status`: a readout the bar shows as an item that is
-    /// not pressed (LLP 1075.003 §9.15).
+    /// Its role is `status`: a readout, one hosted item whatever it holds
+    /// (LLP 1075.003 §9.15, LLP 1141.004 D1).
     pub const STATUS: u32 = 1 << 10;
     /// A `popover` or a `dialog`: the top layer's when open, as on the web,
     /// so neither it nor what it holds is the bar's (a menu written in the
@@ -108,6 +116,15 @@ pub mod fact {
     /// dimmed, whether or not anything would press it (a "● Clock" written
     /// as one); never the title's tap.
     pub const DISABLED: u32 = 1 << 12;
+    /// A button, native or bare, pressed or not: an item when it presses,
+    /// opens, has an `href` to follow or is disabled, and otherwise none,
+    /// never hosted (LLP 1141.004 D1), so a button whose press comes and
+    /// goes is an item or nothing.
+    pub const BUTTON: u32 = 1 << 19;
+    /// An `href` that is not empty (`PropList::link`): a link a tap follows.
+    /// `role="link"` alone, or an `href` cleared to nothing, follows nothing
+    /// (LLP 1115 §3).
+    pub const HREF: u32 = 1 << 20;
     /// A site's `nav`, including one inside a menu.
     pub const NAV: u32 = 1 << 13;
     /// An `href` or `role="link"`.
@@ -146,6 +163,7 @@ pub mod fact {
                 props.str(PropId::Href).is_some() || role == Some("link"),
                 LINK,
             ),
+            (props.link().is_some(), HREF),
             (
                 props.str(PropId::Popover).is_some()
                     || props.str(PropId::SemanticTag) == Some("dialog"),
@@ -170,6 +188,12 @@ pub mod fact {
                     && role == Some("button")
                     && props.bool(PropId::Disabled) == Some(true),
                 DISABLED,
+            ),
+            (
+                node.node_type == NodeType::Pressable
+                    || (node.node_type == NodeType::Control
+                        && props.str(PropId::Type) == Some("button")),
+                BUTTON,
             ),
         ]
         .into_iter()
@@ -217,14 +241,14 @@ pub struct HeaderShape<N> {
     /// The heading's level: 1 is the screen's own title (UIKit's large
     /// title), any other an inline one; 0 with no heading.
     pub level: u32,
-    /// The items before the heading, in order: its buttons and readouts
-    /// (`role="status"`).
+    /// The items before the heading, in order: its buttons and its
+    /// readouts (`role="status"`).
     pub leading: Vec<N>,
     /// The items after it, in order.
     pub trailing: Vec<N>,
     /// Every button of the header, the stack's Back control among them
     /// (which is in neither list where the platform's own Back stands for
-    /// it). A readout is not one: nothing presses it.
+    /// it). A readout is not one: nothing presses it as a whole.
     pub items: Vec<N>,
     /// Its `input type="search"`, the first.
     pub search: Option<N>,
@@ -276,21 +300,49 @@ impl Bar {
 /// that is `display: none`, which the web does not show.
 const UNSHOWN: u32 = fact::LAYER | fact::HIDDEN;
 
-/// Whether any node under `node` is a heading, leaving out what `walk`
-/// leaves out: a button wrapping a popover's heading is an item, not the
-/// title's tap.
-fn holds_heading<T: Tree>(tree: &T, node: T::Node) -> bool {
+/// Whether any node under `node` has one of `facts`, leaving out what
+/// `walk` leaves out: a button wrapping a popover's heading is an item, not
+/// the title's tap.
+fn holds<T: Tree>(tree: &T, node: T::Node, facts: u32) -> bool {
     tree.children(node).into_iter().any(|child| {
-        let facts = tree.facts(child);
-        facts & UNSHOWN == 0 && (facts & fact::HEADING != 0 || holds_heading(tree, child))
+        let own = tree.facts(child);
+        own & UNSHOWN == 0 && (own & facts != 0 || holds(tree, child, facts))
     })
 }
 
+fn holds_heading<T: Tree>(tree: &T, node: T::Node) -> bool {
+    holds(tree, node, fact::HEADING)
+}
+
+/// A box that shows nothing but boxes like it (a spacer, a box of spacers): no
+/// item. A host that draws a childless box as a layer, with no node of its
+/// own, reads the same.
+fn empty<T: Tree>(tree: &T, node: T::Node, facts: u32) -> bool {
+    facts & fact::BOX != 0
+        && tree.children(node).into_iter().all(|c| {
+            let facts = tree.facts(c);
+            facts & UNSHOWN != 0 || empty(tree, c, facts)
+        })
+}
+
+/// What the bar decides itself, so that a node holding one is walked: the
+/// heading, a search field, a tablist, a button (pressed or not, so a box
+/// around one is walked for it) and a readout.
+const PARTS: u32 = fact::HEADING
+    | fact::SEARCH
+    | fact::TABLIST
+    | fact::PRESS
+    | fact::OPENS
+    | fact::DISABLED
+    | fact::BUTTON
+    | fact::STATUS;
+
 struct Walk<N> {
     headings: Vec<N>,
-    /// A shown node the bar has no place for, outside its items: a text, an
-    /// image, a control. With a heading it is hidden with the header; with
-    /// none, the header is not the bar.
+    /// A shown node no button, readout, search field or tablist stands for:
+    /// an element the bar has no object for, a second search field or
+    /// tablist, a button that presses nothing. With no heading, the header
+    /// is not the bar.
     unplaced: bool,
     leading: Vec<N>,
     trailing: Vec<N>,
@@ -309,7 +361,9 @@ impl<N: Copy + PartialEq> Walk<N> {
         }
     }
 
-    fn walk<T: Tree<Node = N>>(&mut self, tree: &T, node: N, back_is_platforms: bool) {
+    /// `title`: `node` holds the heading, so what it holds besides the bar's
+    /// parts is the title's (iOS's subtitle and avatar).
+    fn walk<T: Tree<Node = N>>(&mut self, tree: &T, node: N, back_is_platforms: bool, title: bool) {
         for child in tree.children(node) {
             let facts = tree.facts(child);
             if facts & UNSHOWN != 0 {
@@ -328,13 +382,15 @@ impl<N: Copy + PartialEq> Walk<N> {
                 self.unplaced |= self.segments.is_some();
                 self.segments.get_or_insert(child);
             } else if facts & (fact::PRESS | fact::OPENS) != 0
+                // A link with nothing pressing it follows its `href` (LLP 1141.004 D1).
+                || (facts & fact::HREF != 0 && facts & fact::BUTTON != 0 && !holds_heading(tree, child))
                 // A disabled button around the heading is walked for it, as a box is.
                 || (facts & fact::DISABLED != 0 && !holds_heading(tree, child))
             {
                 // A pressable heading's group is the title, tapped.
                 if self.tap.is_none() && facts & fact::PRESS != 0 && holds_heading(tree, child) {
                     self.tap = Some(child);
-                    self.walk(tree, child, back_is_platforms);
+                    self.walk(tree, child, back_is_platforms, true);
                     continue;
                 }
                 self.items.push(child);
@@ -343,12 +399,18 @@ impl<N: Copy + PartialEq> Walk<N> {
                 }
                 self.place(child);
             } else if facts & fact::STATUS != 0 && !holds_heading(tree, child) {
-                // A readout: an item, placed as a button is, that nothing
-                // presses. What it holds is its face.
+                // A readout: an item, placed as a button is, whatever it holds.
                 self.place(child);
+            } else if holds(tree, child, PARTS) {
+                self.unplaced |= facts & fact::BOX == 0;
+                let title = title || holds_heading(tree, child);
+                self.walk(tree, child, back_is_platforms, title);
+            } else if !title && facts & fact::BUTTON == 0 && !empty(tree, child, facts) {
+                // An element the bar has no object for (a spinner, a
+                // picture, a second text) is no item: out of the bar.
+                self.unplaced = true;
             } else {
                 self.unplaced |= facts & fact::BOX == 0;
-                self.walk(tree, child, back_is_platforms);
             }
         }
     }
@@ -378,9 +440,9 @@ pub fn header_shape<T: Tree>(
         segments: None,
         tap: None,
     };
-    walk.walk(tree, header, back_is_platforms);
+    walk.walk(tree, header, back_is_platforms, false);
     let (heading, level) = match walk.headings[..] {
-        [heading] => match tree.facts(heading) >> fact::LEVEL {
+        [heading] => match (tree.facts(heading) >> fact::LEVEL) & 0b111 {
             level @ 1..=6 => (Some(heading), level),
             _ => (Some(heading), 2),
         },

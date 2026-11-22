@@ -62,7 +62,8 @@ pub(crate) fn displayed(kernel: &Kernel, open: &Scrolled, id: ViewId) -> bool {
         let Some(node) = kernel.node(id) else {
             return false;
         };
-        let whole = arena.slot_of(id).and_then(|slot| arena.cover(slot)) == Some(HostCover::Whole);
+        let whole =
+            (arena.slot_of(id).and_then(|slot| arena.cover(slot))).is_some_and(HostCover::replaces);
         let boxed = node.props.str(PropId::Popover).is_some()
             || node.props.str(PropId::SemanticTag) == Some("dialog");
         let closed = boxed && !arena.key_of(id).is_some_and(|key| open.is_open(key));

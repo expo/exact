@@ -234,19 +234,22 @@ final class NativeButtonsIOSTests: XCTestCase {
     /// A native button in what a native bar stands for (an adopted tablist)
     /// has no UIButton while the host hides that box, and has one again as
     /// soon as the box shows, though the bar's cover is still `whole`: the
-    /// cover leaves only when the navigation next reports covers.
+    /// cover leaves only when the navigation next reports covers. A lifted
+    /// header's cover, `bar` (LLP 1141.004 D2), hides its buttons the same way.
     func testAButtonUnderABarsCoverHasAControlWhileItsBoxShows() throws {
-        let p = presenter(box(1) + native(2) + [["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]]],
-                          faces: [2: face("Second")])
-        XCTAssertNotNil(p.controls.controls[2])
-        let list = try XCTUnwrap(p.views[1])
-        p.navigationHost.covers[1] = .whole
-        list.isHidden = true
-        p.controls.sync()
-        XCTAssertNil(p.controls.controls[2], "the bar's item stands for it")
-        list.isHidden = false
-        p.controls.syncShown()
-        XCTAssertNotNil(try button(p, 2), "shown again, it is UIKit's button before the cover leaves")
+        for cover in [HostCover.whole, .bar] {
+            let p = presenter(box(1) + native(2) + [["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]]],
+                              faces: [2: face("Second")])
+            XCTAssertNotNil(p.controls.controls[2])
+            let list = try XCTUnwrap(p.views[1])
+            p.navigationHost.covers[1] = cover
+            list.isHidden = true
+            p.controls.sync()
+            XCTAssertNil(p.controls.controls[2], "the bar's item stands for it: \(cover)")
+            list.isHidden = false
+            p.controls.syncShown()
+            XCTAssertNotNil(try button(p, 2), "shown again, it is UIKit's button before the cover leaves: \(cover)")
+        }
     }
 
     func testAncestorARIAUnavailabilityReachesButtonAndRefreshes() throws {

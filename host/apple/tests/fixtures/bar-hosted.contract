@@ -1,0 +1,49 @@
+// A header's items in the iOS bar's closed set (LLP 1141.004 D1,
+// BarHostedIOSTests): a readout before the heading, link items, which follow
+// their `href`, and a readout of a spinner and its words, each readout hosted,
+// its entry in UIKit's overflow menu its name, in a header that hears `press`;
+// on History, a native button whose `color` is its item's tint, and a filled
+// button of one text, UIKit's own item.
+routes nav
+  home "/"
+    history "/history"
+      about "/history/about"
+
+component BarHosted
+  state retried = 0
+  state noted = 0
+  state headerPresses = 0
+  action follow(url: string)
+    nav = go(nav, url)
+  action retry
+    retried = retried + 1
+  action note
+    noted = noted + 1
+  action pressHeader
+    headerPresses = headerPresses + 1
+  view
+    main navigationKey=`${top(nav).id}` navigate=follow width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}` position="absolute" inset=0
+          header display="flex" align-items="center" press=pressHeader
+            if e.name == "home"
+              row role="status" testId="sync-status"
+                text (retried == 0 ? "Ready" : "Retrying") font-size=13 testId="sync-text"
+            text (e.name == "home" ? "Inbox" : e.name == "history" ? "History" : "About") role="heading" aria-level=2 flex=1
+            if e.name == "home"
+              link href="/history" aria-label="History" testId="history-link"
+                image "symbol:history" width=20 height=20
+              row role="status" aria-label="Syncing" gap=6 align-items="center" testId="syncing"
+                progress
+                text "Syncing" font-size=13
+            if e.name == "history"
+              link href="/history/about" aria-label="About" testId="about-link"
+                image "symbol:info" width=20 height=20
+              button buttonStyle="glass" press=note color="-exact-system-red" testId="stop"
+                text "Stop"
+              button press=note background-color="-exact-fill" testId="note-button"
+                text "Note"
+          text `${noted}` testId="noted"
+          text `${headerPresses}` testId="header-presses"
+          button press=retry testId="retry"
+            text "Retry"

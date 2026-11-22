@@ -209,7 +209,7 @@ extension NavigationHost {
         var extras: [ObjectIdentifier: (UIScrollView, top: CGFloat, bottom: CGFloat)] = [:]
         for c in controllers.values where presenter.views[c.node.id] === c.node {
             // A lifted header takes no room, on a stack yet or not (`coverLifted`).
-            for node in (c.lifted.map({ [$0] }) ?? c.barNodes) + [c.scoped].compactMap({ $0 }) { wanted[node.id] = .whole }
+            for node in (c.lifted.map({ [$0] }) ?? c.barNodes) + [c.scoped].compactMap({ $0 }) { wanted[node.id] = NavigationHost.cover(of: node, in: c) }
             // Include the departing route until UIKit finishes its transition
             let nav = c.navigationController
             let stacked = c.stack?.stackRoutes.contains(c) == true || nav?.transitionCoordinator?.viewController(forKey: .from) === c
@@ -300,7 +300,7 @@ extension NavigationHost {
             // starts under it (`collapse`), so no `.inset` is reported there.
             var insetNodes = [c.collapseScroll, c.edgeScroll].compactMap { $0 }
             for peer in topPeers + bottomPeers where !insetNodes.contains(where: { $0 === peer }) { insetNodes.append(peer) }
-            for node in insetNodes where wanted[node.id] != .whole && node.scrollView != nil && !(node === c.collapseScroll && RouteGeometry.insetsNoTop(c.node)) {
+            for node in insetNodes where wanted[node.id] != .whole && wanted[node.id] != .bar && node.scrollView != nil && !(node === c.collapseScroll && RouteGeometry.insetsNoTop(c.node)) {
                 if settled, let safe = node.scrollView?.safeAreaInsets {
                     // The bottom edge's scroller takes the route's bottom
                     // clearance, which the route then pads nothing of

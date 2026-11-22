@@ -2996,7 +2996,7 @@
           "file": "$APP/app.contract",
           "id": "lower-header-unplaced",
           "line": 13,
-          "message": "this text, before the heading, in this route's `header` is not shown on iOS: the navigation bar there takes one heading as its title (with the symbol images beside it in its own row), the first text after it as the subtitle, one `input type=\"search\"`, one `role=\"tablist\"`, the buttons that press or are disabled and the readouts (`role=\"status\"`), and hides the rest of the header. Move it below the `header`, into the route's content (the scroller's first row), make it a button that presses, or, if it is a status that nothing presses (a \"\u25cf Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold (a chat's avatar beside the name), say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")",
+          "message": "this text, before the heading, in this route's `header` is not shown on iOS: the navigation bar there shows each element outside the box around the heading as an item, drawn as written, but of that box only the title (the heading, the symbol images beside it in its own row, the text after it, an avatar before it); it has one place for a search field and one for a tablist, and a button that presses nothing is no item. Move it out of the heading's box, so it is an item of its own, or below the `header`, into the route's content; make it a button that presses, or, if it is a status that nothing presses (a \"\u25cf Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold, say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")",
           "related": [],
           "severity": "warning"
         },
@@ -3006,7 +3006,7 @@
           "file": "$APP/app.contract",
           "id": "lower-header-unplaced",
           "line": 16,
-          "message": "this text, after the subtitle, in this route's `header` is not shown on iOS: the navigation bar there takes one heading as its title (with the symbol images beside it in its own row), the first text after it as the subtitle, one `input type=\"search\"`, one `role=\"tablist\"`, the buttons that press or are disabled and the readouts (`role=\"status\"`), and hides the rest of the header. Move it below the `header`, into the route's content (the scroller's first row), make it a button that presses, or, if it is a status that nothing presses (a \"\u25cf Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold (a chat's avatar beside the name), say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")",
+          "message": "this text, after the subtitle, in this route's `header` is not shown on iOS: the navigation bar there shows each element outside the box around the heading as an item, drawn as written, but of that box only the title (the heading, the symbol images beside it in its own row, the text after it, an avatar before it); it has one place for a search field and one for a tablist, and a button that presses nothing is no item. Move it out of the heading's box, so it is an item of its own, or below the `header`, into the route's content; make it a button that presses, or, if it is a status that nothing presses (a \"\u25cf Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold, say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")",
           "related": [],
           "severity": "warning"
         },
@@ -3016,7 +3016,7 @@
           "file": "$APP/app.contract",
           "id": "lower-header-unplaced",
           "line": 18,
-          "message": "a second `input type=\"search\"` in this route's `header` is not shown on iOS: the navigation bar there takes one heading as its title (with the symbol images beside it in its own row), the first text after it as the subtitle, one `input type=\"search\"`, one `role=\"tablist\"`, the buttons that press or are disabled and the readouts (`role=\"status\"`), and hides the rest of the header. Move it below the `header`, into the route's content (the scroller's first row), make it a button that presses, or, if it is a status that nothing presses (a \"\u25cf Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold (a chat's avatar beside the name), say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")",
+          "message": "a second `input type=\"search\"` in this route's `header` is not shown on iOS: the navigation bar there shows each element outside the box around the heading as an item, drawn as written, but of that box only the title (the heading, the symbol images beside it in its own row, the text after it, an avatar before it); it has one place for a search field and one for a tablist, and a button that presses nothing is no item. Move it out of the heading's box, so it is an item of its own, or below the `header`, into the route's content; make it a button that presses, or, if it is a status that nothing presses (a \"\u25cf Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold, say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")",
           "related": [],
           "severity": "warning"
         },
@@ -3026,7 +3026,7 @@
           "file": "$APP/app.contract",
           "id": "lower-header-unplaced",
           "line": 19,
-          "message": "a `button` that presses nothing in this route's `header` is not shown on iOS: the navigation bar there takes one heading as its title (with the symbol images beside it in its own row), the first text after it as the subtitle, one `input type=\"search\"`, one `role=\"tablist\"`, the buttons that press or are disabled and the readouts (`role=\"status\"`), and hides the rest of the header. Move it below the `header`, into the route's content (the scroller's first row), make it a button that presses, or, if it is a status that nothing presses (a \"\u25cf Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold (a chat's avatar beside the name), say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")",
+          "message": "a `button` that presses nothing in this route's `header` is not shown on iOS: the navigation bar there shows each element outside the box around the heading as an item, drawn as written, but of that box only the title (the heading, the symbol images beside it in its own row, the text after it, an avatar before it); it has one place for a search field and one for a tablist, and a button that presses nothing is no item. Move it out of the heading's box, so it is an item of its own, or below the `header`, into the route's content; make it a button that presses, or, if it is a status that nothing presses (a \"\u25cf Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold, say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")",
           "related": [],
           "severity": "warning"
         }
@@ -3056,7 +3056,7 @@
           "file": "$APP/app.contract",
           "id": "lower-header-unplaced",
           "line": 13,
-          "message": "this text, before the heading, in this route's `header` is not shown on iOS: the navigation bar there takes one heading as its title (with the symbol images beside it in its own row), the first text after it as the subtitle, one `input type=\"search\"`, one `role=\"tablist\"`, the buttons that press or are disabled and the readouts (`role=\"status\"`), and hides the rest of the header. Move it below the `header`, into the route's content (the scroller's first row), make it a button that presses, or, if it is a status that nothing presses (a \"\u25cf Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold (a chat's avatar beside the name), say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")",
+          "message": "this text, before the heading, in this route's `header` is not shown on iOS: the navigation bar there shows each element outside the box around the heading as an item, drawn as written, but of that box only the title (the heading, the symbol images beside it in its own row, the text after it, an avatar before it); it has one place for a search field and one for a tablist, and a button that presses nothing is no item. Move it out of the heading's box, so it is an item of its own, or below the `header`, into the route's content; make it a button that presses, or, if it is a status that nothing presses (a \"\u25cf Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold, say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")",
           "related": [],
           "severity": "warning"
         },
@@ -3066,7 +3066,7 @@
           "file": "$APP/app.contract",
           "id": "lower-header-unplaced",
           "line": 16,
-          "message": "this text, after the subtitle, in this route's `header` is not shown on iOS: the navigation bar there takes one heading as its title (with the symbol images beside it in its own row), the first text after it as the subtitle, one `input type=\"search\"`, one `role=\"tablist\"`, the buttons that press or are disabled and the readouts (`role=\"status\"`), and hides the rest of the header. Move it below the `header`, into the route's content (the scroller's first row), make it a button that presses, or, if it is a status that nothing presses (a \"\u25cf Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold (a chat's avatar beside the name), say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")",
+          "message": "this text, after the subtitle, in this route's `header` is not shown on iOS: the navigation bar there shows each element outside the box around the heading as an item, drawn as written, but of that box only the title (the heading, the symbol images beside it in its own row, the text after it, an avatar before it); it has one place for a search field and one for a tablist, and a button that presses nothing is no item. Move it out of the heading's box, so it is an item of its own, or below the `header`, into the route's content; make it a button that presses, or, if it is a status that nothing presses (a \"\u25cf Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold, say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")",
           "related": [],
           "severity": "warning"
         },
@@ -3076,7 +3076,7 @@
           "file": "$APP/app.contract",
           "id": "lower-header-unplaced",
           "line": 18,
-          "message": "a second `input type=\"search\"` in this route's `header` is not shown on iOS: the navigation bar there takes one heading as its title (with the symbol images beside it in its own row), the first text after it as the subtitle, one `input type=\"search\"`, one `role=\"tablist\"`, the buttons that press or are disabled and the readouts (`role=\"status\"`), and hides the rest of the header. Move it below the `header`, into the route's content (the scroller's first row), make it a button that presses, or, if it is a status that nothing presses (a \"\u25cf Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold (a chat's avatar beside the name), say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")",
+          "message": "a second `input type=\"search\"` in this route's `header` is not shown on iOS: the navigation bar there shows each element outside the box around the heading as an item, drawn as written, but of that box only the title (the heading, the symbol images beside it in its own row, the text after it, an avatar before it); it has one place for a search field and one for a tablist, and a button that presses nothing is no item. Move it out of the heading's box, so it is an item of its own, or below the `header`, into the route's content; make it a button that presses, or, if it is a status that nothing presses (a \"\u25cf Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold, say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")",
           "related": [],
           "severity": "warning"
         },
@@ -3086,7 +3086,7 @@
           "file": "$APP/app.contract",
           "id": "lower-header-unplaced",
           "line": 19,
-          "message": "a `button` that presses nothing in this route's `header` is not shown on iOS: the navigation bar there takes one heading as its title (with the symbol images beside it in its own row), the first text after it as the subtitle, one `input type=\"search\"`, one `role=\"tablist\"`, the buttons that press or are disabled and the readouts (`role=\"status\"`), and hides the rest of the header. Move it below the `header`, into the route's content (the scroller's first row), make it a button that presses, or, if it is a status that nothing presses (a \"\u25cf Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold (a chat's avatar beside the name), say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")",
+          "message": "a `button` that presses nothing in this route's `header` is not shown on iOS: the navigation bar there shows each element outside the box around the heading as an item, drawn as written, but of that box only the title (the heading, the symbol images beside it in its own row, the text after it, an avatar before it); it has one place for a search field and one for a tablist, and a button that presses nothing is no item. Move it out of the heading's box, so it is an item of its own, or below the `header`, into the route's content; make it a button that presses, or, if it is a status that nothing presses (a \"\u25cf Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold, say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")",
           "related": [],
           "severity": "warning"
         }
@@ -3109,16 +3109,6 @@
           "message": "symbol `clock` is not a role; did you mean `symbol:lock`? `contract vocab symbol` lists the roles; or name any SF Symbol as `symbol:sf/<name>` (`symbol:sf/clock`), drawn on Apple and blank elsewhere, so a tab or button that must show everywhere takes a role or an icon token (`icons` in app.forma)",
           "related": [],
           "severity": "error"
-        },
-        {
-          "col": 11,
-          "end_col": 17,
-          "file": "$APP/app.contract",
-          "id": "lower-header-unplaced",
-          "line": 18,
-          "message": "this box in this route's `header` is not shown on iOS: the navigation bar there takes one heading as its title (with the symbol images beside it in its own row), the first text after it as the subtitle, one `input type=\"search\"`, one `role=\"tablist\"`, the buttons that press or are disabled and the readouts (`role=\"status\"`), and hides the rest of the header. Move it below the `header`, into the route's content (the scroller's first row), make it a button that presses, or, if it is a status that nothing presses (a \"\u25cf Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold (a chat's avatar beside the name), say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")",
-          "related": [],
-          "severity": "warning"
         },
         {
           "col": 18,
@@ -3159,16 +3149,6 @@
           "message": "symbol `clock` is not a role; did you mean `symbol:lock`? `contract vocab symbol` lists the roles; or name any SF Symbol as `symbol:sf/<name>` (`symbol:sf/clock`), drawn on Apple and blank elsewhere, so a tab or button that must show everywhere takes a role or an icon token (`icons` in app.forma)",
           "related": [],
           "severity": "error"
-        },
-        {
-          "col": 11,
-          "end_col": 17,
-          "file": "$APP/app.contract",
-          "id": "lower-header-unplaced",
-          "line": 18,
-          "message": "this box in this route's `header` is not shown on iOS: the navigation bar there takes one heading as its title (with the symbol images beside it in its own row), the first text after it as the subtitle, one `input type=\"search\"`, one `role=\"tablist\"`, the buttons that press or are disabled and the readouts (`role=\"status\"`), and hides the rest of the header. Move it below the `header`, into the route's content (the scroller's first row), make it a button that presses, or, if it is a status that nothing presses (a \"\u25cf Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold (a chat's avatar beside the name), say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")",
-          "related": [],
-          "severity": "warning"
         },
         {
           "col": 18,
@@ -4497,26 +4477,6 @@
       "status": 0,
       "diagnostics": [
         {
-          "col": 9,
-          "end_col": 13,
-          "file": "$APP/screen.contract",
-          "id": "lower-header-unplaced",
-          "line": 7,
-          "message": "this text, after the subtitle, in this route's `header` is not shown on iOS: the navigation bar there takes one heading as its title (with the symbol images beside it in its own row), the first text after it as the subtitle, one `input type=\"search\"`, one `role=\"tablist\"`, the buttons that press or are disabled and the readouts (`role=\"status\"`), and hides the rest of the header. Move it below the `header`, into the route's content (the scroller's first row), make it a button that presses, or, if it is a status that nothing presses (a \"\u25cf Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold (a chat's avatar beside the name), say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")",
-          "related": [],
-          "severity": "warning"
-        },
-        {
-          "col": 9,
-          "end_col": 13,
-          "file": "$APP/screen.contract",
-          "id": "lower-header-unplaced",
-          "line": 7,
-          "message": "this text, after the subtitle, in this route's `header` is not shown on iOS: the navigation bar there takes one heading as its title (with the symbol images beside it in its own row), the first text after it as the subtitle, one `input type=\"search\"`, one `role=\"tablist\"`, the buttons that press or are disabled and the readouts (`role=\"status\"`), and hides the rest of the header. Move it below the `header`, into the route's content (the scroller's first row), make it a button that presses, or, if it is a status that nothing presses (a \"\u25cf Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold (a chat's avatar beside the name), say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")",
-          "related": [],
-          "severity": "warning"
-        },
-        {
           "col": 7,
           "end_col": 11,
           "file": "$APP/screen.contract",
@@ -4556,26 +4516,6 @@
           "message": "`column` has no attribute `definitelyUnknown`",
           "related": [],
           "severity": "error"
-        },
-        {
-          "col": 9,
-          "end_col": 13,
-          "file": "$APP/screen.contract",
-          "id": "lower-header-unplaced",
-          "line": 7,
-          "message": "this text, after the subtitle, in this route's `header` is not shown on iOS: the navigation bar there takes one heading as its title (with the symbol images beside it in its own row), the first text after it as the subtitle, one `input type=\"search\"`, one `role=\"tablist\"`, the buttons that press or are disabled and the readouts (`role=\"status\"`), and hides the rest of the header. Move it below the `header`, into the route's content (the scroller's first row), make it a button that presses, or, if it is a status that nothing presses (a \"\u25cf Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold (a chat's avatar beside the name), say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")",
-          "related": [],
-          "severity": "warning"
-        },
-        {
-          "col": 9,
-          "end_col": 13,
-          "file": "$APP/screen.contract",
-          "id": "lower-header-unplaced",
-          "line": 7,
-          "message": "this text, after the subtitle, in this route's `header` is not shown on iOS: the navigation bar there takes one heading as its title (with the symbol images beside it in its own row), the first text after it as the subtitle, one `input type=\"search\"`, one `role=\"tablist\"`, the buttons that press or are disabled and the readouts (`role=\"status\"`), and hides the rest of the header. Move it below the `header`, into the route's content (the scroller's first row), make it a button that presses, or, if it is a status that nothing presses (a \"\u25cf Live\" beside the title), give it `role=\"status\"`; or, for a header the bar cannot hold (a chat's avatar beside the name), say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md; docs/contract-for-agents.md, \"Tabs and stacks\")",
-          "related": [],
-          "severity": "warning"
         },
         {
           "col": 7,
