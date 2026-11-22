@@ -201,6 +201,10 @@ final class NodeExtras {
     /// While a pull-down's menu has this invoker (`MenuButton`), its fill is
     /// painted here, which UIKit's stand-in draws, instead of on its layer.
     var lentFill: CAShapeLayer?
+    /// The box's extension (`setExtension`, LLP 1123 D13), while its picture is mirrored past its border box.
+    var boxExtension: BoxExtension?
+    /// The extension's outsets as last asked (`setExtension`), which it keeps while the box does not allow it.
+    var extensionAsked = UIEdgeInsets.zero
     /// `glassGroup`'s view and a grouped glass's slot (`GlassGroup.swift`).
     var glassGroupView: GlassGroupView?
     var glassSlot: GlassSlot?
@@ -529,6 +533,8 @@ extension NodeView {
     package var pageBand: UIEdgeInsets { extras?.pageBand ?? .zero }
     /// Its reach (`NodeExtras.reach`), zero until activation applies the kernel's.
     package var reach: UIEdgeInsets { extras?.reach ?? .zero }
+    /// Its extension (`setExtension`), nil while its picture is not mirrored.
+    package var boxExtension: BoxExtension? { extras?.boxExtension }
     /// Whether the kernel has given its reach (`NodeExtras.reachGiven`).
     package var reachGiven: Bool { extras?.reachGiven ?? false }
     /// How far its scroll view lies past its box on each edge: its page band's top and bottom, or

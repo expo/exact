@@ -203,7 +203,7 @@ extension NodeView {
         let limit = style["dynamic_range_limit"]?.string
         #if os(iOS) || os(tvOS)
         let own: CALayer? = layer
-        let fills: [CALayer?] = [boxBorder, boxFill, boxGradient]
+        let fills: [CALayer?] = [boxBorder, boxFill, boxGradient, boxExtension?.picture?.layer, (boxExtension?.view as? ExtensionStrip)?.strip]
         let ink = textRasterLayer
         #else
         let own = layer

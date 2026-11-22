@@ -677,7 +677,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         }
         let after = Set(region.map { ids[($0 + 1)...] } ?? [])
         guard let next = mount.subviews.first(where: { ($0 as? NodeView).map { after.contains($0.id) } == true }) else {
-            let placed = mount.subviews.last === owner || (mount.subviews.last === siblings.layer && mount.subviews.dropLast().last === owner)
+            // Among what the mount holds, its extension view left out (`heldSubviews`)
+            let held = mount.heldSubviews
+            let placed = held.last === owner || (held.last === siblings.layer && held.dropLast().last === owner)
             if !placed {
                 mount.bringSubviewToFront(owner)
                 PaintOrder.changed(mount)

@@ -115,6 +115,15 @@ final class ContextMenuIOSTests: XCTestCase {
         try XCTUnwrap(ground(["background_color": [0, 122, 255, 255]])).getRed(&red, green: &green, blue: nil, alpha: nil)
         XCTAssertEqual(red, 0, accuracy: 0.01, "a filled bubble's ground is its fill, not UIKit's white")
         XCTAssertEqual(green, 122.0 / 255, accuracy: 0.01)
+        // Extended (LLP 1123 D13), the bubble's fill is its extension picture's, and the ground still
+        if #available(iOS 26, *) {
+            peek.setExtension(UIEdgeInsets(top: 10, left: 0, bottom: 0, right: 0))
+            defer { peek.setExtension(.zero) }
+            var extendedGreen: CGFloat = 0
+            try XCTUnwrap(ground(["background_color": [0, 122, 255, 255]])).getRed(nil, green: &extendedGreen, blue: nil, alpha: nil)
+            XCTAssertNotNil(peek.boxExtension, "the bubble extends")
+            XCTAssertEqual(extendedGreen, 122.0 / 255, accuracy: 0.01, "an extended bubble's ground is its fill too")
+        }
         XCTAssertEqual(try ground(["background_color": [0, 122, 255, 255], "background_clip": "text"]), unfilled,
                        "a fill clipped to the text is drawn in the copy: UIKit's own ground")
     }

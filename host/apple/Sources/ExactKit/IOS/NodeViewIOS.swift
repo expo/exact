@@ -360,7 +360,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     /// field does by itself): the web's rule that only a focusable element
     /// hears these. Keys come from a hardware keyboard (`pressesBegan`).
     /// UIKit's focus search finds what UIKit can focus (`FocusSearch`).
-    package override func didAddSubview(_ subview: UIView) { super.didAddSubview(subview); FocusSearch.joined(subview) }
+    package override func didAddSubview(_ subview: UIView) { super.didAddSubview(subview); if subview !== extras?.boxExtension?.view { keepExtensionLast(); FocusSearch.joined(subview) } }
     /// A hidden element is not exposed. Children stay in the tree: this is
     /// not `accessibilityElementsHidden`, which would hide them too.
     package override var isAccessibilityElement: Bool {
@@ -838,7 +838,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     /// this view's own coordinates — UIKit's convention, not AppKit's.)
     package override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         // A true leaf cannot hit beyond its bounds; flat children can overflow.
-        if !bounds.contains(point), subviews.isEmpty,
+        if !bounds.contains(point), heldSubviews.isEmpty,
            presenter?.flats.holdsLeaves(id) != true, layoutHits == nil, !hitBounds.contains(point) { return nil }
         // UIKit's conversion already carries a box in space through its
         // plane (LLP 1077 D8); a hidden back face is the host's to refuse.
@@ -1187,11 +1187,14 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         if f.set(style["filter"]) {
             boxFilter = f
             presenter?.boxFilters?.add(self) { [weak self] in self?.renderFilter(fresh: $0) }
+            // Before the picture is drawn, which paints them as it draws them: no extension shows beneath a filter (LLP 1123 D13)
+            Self.extensionsUnder(self)
             redrawFilter()
         } else if let f = boxFilter {
             f.remove()
             boxFilter = nil
             presenter?.boxFilters?.remove(self)
+            Self.extensionsUnder(self)
             applyBoxMask()
             presenter?.afterBatch { [weak self] in self?.filterPublished() }
         }
@@ -1225,6 +1228,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         if Self.containerMoves == 0 { pressEpoch &+= 1; cancelPressContact(reparenting: true); presenter?.unshown(self) } // a new parent: shown elsewhere
         super.didMoveToSuperview()
         Self.textRasterAncestryChanged(self)
+        Self.extensionsUnder(self)
         ScrollMembership.epoch &+= 1
         overflowClipGeometryChanged()
         Self.textGeometry &+= 1

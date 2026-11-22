@@ -17,6 +17,13 @@ extension CanvasView {
     }
 }
 
+#if os(macOS)
+extension NSView {
+    /// Its subviews: the Mac adds no extension view to a box, as iOS does (LLP 1123 D13, `heldSubviews` on iOS).
+    package var heldSubviews: [NSView] { subviews }
+}
+#endif
+
 extension NodeView {
     #if os(iOS) || os(tvOS)
     static let canvasOverlays = NSHashTable<PlainView>.weakObjects()

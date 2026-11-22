@@ -233,7 +233,7 @@ final class HatchRegions {
         while let (view, depth) = stack.popLast(), walked < 2000 {
             walked += 1
             for recognizer in view.gestureRecognizers ?? [] { out.insert(ObjectIdentifier(recognizer)) }
-            if depth < 8 { for sub in view.subviews where !(sub is NodeView) { stack.append((sub, depth + 1)) } }
+            if depth < 8 { for sub in view.heldSubviews where !(sub is NodeView) { stack.append((sub, depth + 1)) } }
         }
         return out
     }
@@ -255,7 +255,7 @@ final class HatchRegions {
                 let name = String(describing: type(of: recognizer))
                 if reported.insert("\(scope)\n\(name)").inserted { presenter?.session?.log("hatch \(scope) added a \(name) it did not declare") }
             }
-            if depth < 8 { for sub in view.subviews where !(sub is NodeView) { stack.append((sub, depth + 1)) } }
+            if depth < 8 { for sub in view.heldSubviews where !(sub is NodeView) { stack.append((sub, depth + 1)) } }
         }
     }
 }

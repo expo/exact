@@ -258,6 +258,8 @@ extension Presenter {
             if sub === o.specs?.rasterView { return ("text", id) }
             if sub === o.materialView || sub === o.glassSlot || sub === o.glassGroupView || sub === o.vibrancyView { return ("material", id) }
             if sub === o.clipBox { return ("clip", id) }
+            // A box's extension (LLP 1123 D13), whose own subviews are UIKit's
+            if sub === o.boxExtension?.view { return ("extension", id) }
             if sub === o.metal || sub === o.overlay { return ("canvas", id) }
             if sub === o.field || sub === o.textArea { return ("editor", id) }
             if sub === o.scroll { return ("scroll", id) }
@@ -400,7 +402,8 @@ extension Presenter {
         var stack: [(UIView, NodeView?)] = roots.reversed().map { ($0.0, nil) }
         walk: while let (v, owner) = stack.popLast() {
             let judged = inspectionJudges(v, owner: owner)
-            for sub in v.subviews.reversed() {
+            // A box's extension holds UIKit's own views, which the check does not judge (LLP 1123 D13)
+            for sub in v.heldSubviews.reversed() {
                 report.views += 1
                 if report.views > AgreementReport.walkCap { report.incomplete("walk-cap"); break walk }
                 if judged { report.judged += 1 } else {

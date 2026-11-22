@@ -316,6 +316,17 @@ final class DragOutIOSTests: XCTestCase {
         XCTAssertEqual(preview.parameters.backgroundColor, .clear, "no fill of its own")
         view.layer.backgroundColor = UIColor.systemTeal.cgColor
         XCTAssertEqual(DragSources.preview(of: view)?.parameters.backgroundColor?.cgColor, UIColor.systemTeal.cgColor, "on its own fill, as the menu's preview")
+        // Extended (LLP 1123 D13), the box's fill is its extension picture's, and the lift's ground still
+        if #available(iOS 26, *) {
+            p.apply(wireBatch([["op": "style", "id": 10, "style": ["background_color": [255, 0, 0, 255]]]]))
+            view.layer.displayIfNeeded()
+            view.setExtension(UIEdgeInsets(top: 10, left: 0, bottom: 0, right: 0))
+            XCTAssertNotNil(view.boxExtension)
+            XCTAssertNil(view.layer.backgroundColor, "the picture holds the fill")
+            XCTAssertEqual(DragSources.preview(of: view)?.parameters.backgroundColor?.cgColor.components?.prefix(3).map { ($0 * 255).rounded() }, [255, 0, 0],
+                           "on the extended box's fill")
+            view.setExtension(.zero)
+        }
         view.isHidden = true
         XCTAssertNil(DragSources.preview(of: view), "a hidden node lifts nothing")
     }

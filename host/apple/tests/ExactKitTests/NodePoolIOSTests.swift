@@ -132,6 +132,19 @@ final class NodePoolIOSTests: XCTestCase {
         XCTAssertEqual(p.pool.count, 0)
     }
 
+    /// A row whose box extends (LLP 1123 D13) is parked like any other, and its views come back with no extension.
+    func testAnExtendedRowIsParkedAndComesBackWithNoExtension() throws {
+        let p = fixture()
+        let row = try XCTUnwrap(p.views[10])
+        row.setExtension(UIEdgeInsets(top: 10, left: 0, bottom: 0, right: 0))
+        let e = try XCTUnwrap(row.boxExtension)
+        p.apply(wireBatch([collections([(20, 20)])] + destroy([10, 11, 12]) + rowOps(20, y: 44, label: "Save 20")
+            + [["op": "children", "id": 1, "ids": [20]]]))
+        XCTAssertTrue(p.views[20] === row, "the same view")
+        XCTAssertNil(row.boxExtension)
+        XCTAssertNil(e.view.superview)
+    }
+
     func testClipboardHandlersAreCountedAcrossPoolingWithTheSameHandlers() throws {
         let p = fixture(), row = try XCTUnwrap(p.views[10])
         let actions = [#selector(NodeView.copy(_:)), #selector(NodeView.cut(_:)), #selector(NodeView.paste(_:))]

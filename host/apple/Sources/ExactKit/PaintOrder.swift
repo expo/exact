@@ -250,7 +250,15 @@ extension PaintView {
         #if os(macOS)
         if on { wantsLayer = true }
         #endif
-        let plane: Int64? = on ? (aboveAuthored ? Int64.max : 1) : nil
+        setPaintPlane(on ? (aboveAuthored ? Int64.max : 1) : nil)
+    }
+
+    /// A native view under every authored sibling, those with a negative
+    /// `z-index` included, as a box's extension lies under its children
+    /// (LLP 1123 D13).
+    package func setPaintBehind() { setPaintPlane(Int64.min) }
+
+    private func setPaintPlane(_ plane: Int64?) {
         objc_setAssociatedObject(self, &paintForegroundKey, plane, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         // A view leaving the plane leaves the ranking too: back to the origin.
         if plane == nil, !(self is NodeView) { setPaintPosition(0) }

@@ -911,6 +911,8 @@ package final class Presenter {
             }
         }
         svg?.seek(clock: session?.clock); boxAnimations.seek(clock: session?.clock)
+        // A clock's move can put on or take off a background colour's animation, which the colour strip cannot follow (LLP 1123 D13)
+        if !NodeView.extensionMirrors { NodeView.extensionsLookAgain() }
         let outermost = !applying
         #if os(iOS)
         if outermost { carryFocus(batch) }
@@ -1050,6 +1052,7 @@ package final class Presenter {
             case .animations:
                 if flats.isFlat(id) { flats.promote(id) }
                 boxAnimations.animations(id, op.payload, layer: views[id]?.layer, clock: session?.clock)
+                views[id]?.applyExtension() // looks at an extension again, which a background colour's animation holds off before iOS 26 (LLP 1123 D13)
             case .command:
                 let name = op.payload["name"] as? String ?? ""
                 if name == "preventDefault" { defaultPrevented = true; break }
