@@ -313,11 +313,6 @@ fn a_row_includes_a_removed_branches_paint_bounds() {
     );
 }
 
-/// A row a commit bound to another item (LLP 1078) is a new row to the
-/// backend: not the row it was, whose recording is the other item's (a
-/// reader told otherwise draws that in its place until the new one is
-/// made), and the old recording is freed. A row that only changed is still
-/// the row it was.
 /// A reader made again holds none of the last one's rows (LLP 1115.001
 /// D15.1): the backend that records for it is told every row as a new one,
 /// and of none to free, though nothing in the app changed.

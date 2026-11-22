@@ -500,7 +500,8 @@ impl Painter {
         // The host keeps an unbound control's state and a choice its bound
         // value has not taken, and changes them without a commit.
         let scene = walk.scene;
-        if self.rows.controls != *scene.controls || self.rows.chosen != *scene.chosen {
+        let keeps = self.backend.rows() || self.backend.geometry_rows();
+        if keeps && (self.rows.controls != *scene.controls || self.rows.chosen != *scene.chosen) {
             let mut dirty = Dirty::default();
             let ids = changed(&self.rows.controls, scene.controls)
                 .chain(changed(&self.rows.chosen, scene.chosen));

@@ -387,7 +387,10 @@ fn a_stroked_line_draws_the_same_whatever_whole_pixels_move_it() {
         Some(p.frame().data().to_vec())
     };
     for ink in [false, true] {
-        let (Some(below), Some(above)) = (frame(ink, 0.), frame(ink, 30.)) else {
+        let Some(below) = frame(ink, 0.) else {
+            return;
+        };
+        let Some(above) = frame(ink, 30.) else {
             return;
         };
         assert!(below == above, "ink {ink}");
@@ -440,35 +443,44 @@ fn a_choice_no_value_takes_is_drawn_and_answered_from_its_row_again() {
           option "Wider choice" value="b"
         box width=100 height=400 flex-shrink=0
 "#;
-    let width = |geometry: bool, fresh: bool| {
+    // Each choice's width as `field_texts` answers it at once, then
+    // choosing the bound value again, which drops the choice.
+    let widths = |geometry: bool, fresh: bool| {
         let (mut p, heard) = kept(source);
-        let (port, pick) = (view_id(&p, "port"), view_id(&p, "pick"));
+        let pick = view_id(&p, "pick");
         p.frame();
-        p.commit_control_value(pick, "b", &[exact_plan::EventKind::Change])
-            .unwrap();
-        if fresh {
-            p.brush.forget_rows();
-        }
         heard.borrow_mut().geometry_without_drawing = geometry;
-        p.scroll_to(port, (0., 1.));
-        if !geometry {
-            p.frame();
-        }
-        p.field_texts(pick)
-            .and_then(|t| t.value)
-            .expect("the value")
-            .rect
-            .2
+        ["b", "a"].map(|choice| {
+            p.commit_control_value(pick, choice, &[exact_plan::EventKind::Change])
+                .unwrap();
+            if fresh {
+                p.brush.forget_rows();
+                p.repaint();
+            }
+            if !geometry {
+                p.frame();
+            }
+            p.field_texts(pick)
+                .and_then(|t| t.value)
+                .expect("the value")
+                .rect
+                .2
+        })
     };
     for geometry in [true, false] {
         assert_eq!(
-            width(geometry, false),
-            width(geometry, true),
+            widths(geometry, false),
+            widths(geometry, true),
             "geometry {geometry}"
         );
     }
 }
 
+/// A row a commit bound to another item (LLP 1078) is a new row to the
+/// backend: not the row it was, whose recording is the other item's (a
+/// reader told otherwise draws that in its place until the new one is
+/// made), and the old recording is freed. A row that only changed is still
+/// the row it was.
 #[test]
 fn a_renewed_row_is_not_the_row_it_was() {
     renewed_row(false);
