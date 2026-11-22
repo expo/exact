@@ -1,7 +1,7 @@
 {
   "name": "exact-contract",
   "displayName": "Exact Contract",
-  "description": "Syntax highlighting for Exact Contract files, a problem matcher for the Contract compiler's diagnostics, `.contract` registered with TypeScript 7 for the content mapper, and formatting by the Contract compiler.",
+  "description": "Syntax highlighting and snippets for Exact Contract and Forma files, a problem matcher for the Contract compiler's diagnostics, `.contract` registered with TypeScript 7 for the content mapper, and formatting by the Contract compiler.",
   "version": "0.5.0",
   "private": true,
   "publisher": "exact",
@@ -13,7 +13,8 @@
     "onLanguage:exact-contract"
   ],
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Snippets"
   ],
   "contributes": {
     "languages": [
@@ -27,6 +28,17 @@
           ".contract"
         ],
         "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "exact-forma",
+        "aliases": [
+          "Exact Forma",
+          "Forma"
+        ],
+        "extensions": [
+          ".forma"
+        ],
+        "configuration": "./forma-language-configuration.json"
       }
     ],
     "grammars": [
@@ -34,6 +46,17 @@
         "language": "exact-contract",
         "scopeName": "source.exact-contract",
         "path": "./syntaxes/exact-contract.tmLanguage.json"
+      },
+      {
+        "language": "exact-forma",
+        "scopeName": "source.exact-forma",
+        "path": "./syntaxes/exact-forma.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "exact-contract",
+        "path": "./snippets/exact-contract.code-snippets"
       }
     ],
     "configuration": {
@@ -73,6 +96,8 @@
     "README.md",
     "extension.js",
     "language-configuration.json",
-    "syntaxes/*.json"
+    "forma-language-configuration.json",
+    "syntaxes/*.json",
+    "snippets/*.code-snippets"
   ]
 }
