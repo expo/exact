@@ -1458,7 +1458,7 @@ sits on that list carries the trade it would take.
   input-assistant handling). Worth finding out how, if a form ever needs it gone
   (LLP 1008 §9).
 - **Linux host** (LLP 1015 §7): evdev has carried no real event yet; `canvas`; libinput and
-  xkbcommon (acceleration, touchpad gestures, hotplug, non-US keymaps); Wayland/X11
+  xkbcommon (acceleration, touchpad gestures, hotplug, non-US keymaps); X11
   windows; selection, IME, a caret blink; `text_decoration`, `font_family`, RTL;
   shadows, gradients, grid; JPEG, image URLs; accessibility; a font cache; text pixel
   fixtures against Chrome (the Linux tests pin a font, `host/painted/tests/pinned/`; Chrome draws the system's).

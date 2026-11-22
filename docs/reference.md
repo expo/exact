@@ -147,6 +147,13 @@ chat demo, with model conversations through a local OpenRouter service. It belon
 to the root workspace and does not use Snapback. Run `bun apps/messages/service.ts`
 and `bun host/web/dev.mjs --app messages --port 8767`.
 
+### Linux Wayland windows
+
+From a Wayland session, run the binary printed by `bun exact.mjs linux` to open a
+window. The compositor owns the display and sends the window its input.
+`EXACT_SIZE` supplies the initial logical window size. Setting `EXACT_DRM` or
+requesting VNC selects the DRM/KMS console path. Agent runs are headless.
+
 ### Linux KMS rotation and VNC
 
 On Linux KMS, `EXACT_ROTATE=0|90|180|270` turns the completed image clockwise.
