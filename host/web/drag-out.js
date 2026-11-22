@@ -85,7 +85,6 @@ function decide(event, owns, down) {
   let node = at;
   while (node && !(off.has(node) && declared(node)) && !explicit(node)) node = node.parentElement;
   if (!node || !declared(node) || !owns(node)) return;
-  if (!node.isConnected) return CANCEL;
   const keeper = at.closest(down?.mouse !== false ? KEEPS_A_MOUSE : DRAG_FIELDS);
   if (keeper && keeper !== node && node.contains(keeper)) {
     // A picture in a keeper drags no more than one in any press does (LLP 1115.000 D4.14).
@@ -95,7 +94,7 @@ function decide(event, owns, down) {
   // there; anything else, a link's, is its own.
   const link = target.closest('a[href]');
   if (target !== node && node.contains(target) && (target.localName !== 'img' || (link !== node && node.contains(link)))) return;
-  return node;
+  return node.isConnected ? node : CANCEL;
 }
 
 /** A drag that begins nothing. */

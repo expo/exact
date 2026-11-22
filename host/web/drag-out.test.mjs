@@ -219,21 +219,21 @@ function eventTarget() {
   };
 }
 
-const page = () => Object.assign(eventTarget(), { baseURI: BASE, defaultView: eventTarget() });
+const page = () => Object.assign(eventTarget(), { nodeType: 9, parentElement: null, baseURI: BASE, defaultView: eventTarget() });
 
 const cleanups = [];
 afterEach(() => {
   for (const cleanup of cleanups.splice(0)) cleanup();
 });
 
-function listenOn(root) {
+function listenOn(root, input) {
   const controller = new AbortController();
   cleanups.push(() => {
     controller.abort();
     expect(root.heard).toEqual([]);
     expect(root.defaultView.heard).toEqual([]);
   });
-  listen(root, undefined, { signal: controller.signal });
+  listen(root, undefined, { signal: controller.signal, input });
 }
 
 test('a primary down in a field turns the drag of every node the app made draggable around it off until the next one', () => {
@@ -556,19 +556,75 @@ test('a pen compatibility mouseup at its release point leaves a standalone mouse
   expect(card.getAttribute('draggable')).toBe('true');
 });
 
-test.each(['pointercancel', 'dragstart'])('a pen’s %s lets a standalone mouseup at the same point end its press', (type) => {
+test('a mouseup over a held pen ends the standalone mouse press', () => {
+  const root = page(), card = declared('div'), field = new El('input', {}, card);
+  const pen = { target: new El('div'), clientX: 5, clientY: 5 };
+  listenOn(root);
+  root.fire('mousedown', { target: field, clientX: 50, clientY: 70, timeStamp: 10 });
+  root.fire('pointerdown', { ...pen, pointerType: 'pen', timeStamp: 20 });
+  root.fire('mousedown', { ...pen, timeStamp: 21 });
+  expect(card.attrs.draggable).toBe('false');
+  root.fire('mouseup', { ...pen, timeStamp: 30 });
+  expect(card.attrs.draggable).toBe('true');
+});
+
+test('a targetless mouseup at another point ends the standalone mouse press after a pen release', () => {
+  const root = page(), card = declared('div'), field = new El('input', {}, card);
+  const pen = { target: new El('div'), clientX: 5, clientY: 5 };
+  listenOn(root);
+  root.fire('mousedown', { target: field, clientX: 50, clientY: 70, timeStamp: 10 });
+  root.fire('pointerdown', { ...pen, pointerType: 'pen', timeStamp: 20 });
+  root.fire('mousedown', { ...pen, timeStamp: 21 });
+  root.fire('pointerup', { target: root, pointerType: 'pen', clientX: 15, clientY: 15, timeStamp: 30 });
+  expect(card.attrs.draggable).toBe('false');
+  root.fire('mouseup', { target: root, clientX: 50, clientY: 70, timeStamp: 40 });
+  expect(card.attrs.draggable).toBe('true');
+});
+
+test('a cancelled dragstart keeps the pen’s mouseup paired and pointerup clears the drag press', () => {
+  const root = page(), input = { held: new Map() }, card = declared('div'), empty = declared('div');
+  const mouse = { target: new El('input', {}, card), clientX: 5, clientY: 5 };
+  const pen = { target: empty, clientX: 50, clientY: 70 };
+  listenOn(root, input);
+  root.fire('mousedown', { ...mouse, timeStamp: 10 });
+  root.fire('pointerdown', { ...pen, pointerType: 'pen', timeStamp: 20 });
+  root.fire('mousedown', { ...pen, timeStamp: 21 });
+  const drag = dragstart(empty);
+  root.fire('dragstart', drag);
+  expect(drag.defaultPrevented).toBe(true);
+  expect(input.dragPress?.target).toBe(empty);
+  root.fire('pointerup', { ...pen, pointerType: 'pen', timeStamp: 30 });
+  expect(input.dragPress).toBeNull();
+  root.fire('mouseup', { ...pen, timeStamp: 31 });
+  expect(card.attrs.draggable).toBe('false');
+  root.fire('mouseup', { ...mouse, timeStamp: 40 });
+  expect(card.attrs.draggable).toBe('true');
+});
+
+test.each(['pointercancel', 'dragend'])('a pen’s %s discards its pending compatibility mousedown', (type) => {
   const root = page(), card = declared('div'), field = new El('input', {}, card);
   listenOn(root);
   const point = { target: field, clientX: 50, clientY: 70 };
-  root.fire('mousedown', { ...point });
   root.fire('pointerdown', { ...point, pointerType: 'pen' });
+  if (type === 'dragend') root.fire('dragstart', dragstart(field));
+  root.fire(type, { ...point, pointerType: 'pen' });
   root.fire('mousedown', { ...point });
-  if (type === 'dragstart') root.fire(type, dragstart(field));
-  else root.fire(type, { ...point, pointerType: 'pen' });
-  root.fire('mouseup', { ...point });
-  if (type === 'dragstart') root.fire('dragend', { target: field });
   root.fire('pointerdown', { target: card, pointerType: 'touch' });
-  expect(card.getAttribute('draggable')).toBe('true');
+  expect(card.attrs.draggable).toBe('false');
+});
+
+test('a touch’s delayed mouse events stay paired after a second primary touch goes down', () => {
+  const root = page(), input = { held: new Map() }, firstCard = declared('div'), secondCard = declared('div');
+  const first = { target: new El('input', {}, firstCard), clientX: 5, clientY: 5 };
+  const second = { target: new El('input', {}, secondCard), clientX: 50, clientY: 70 };
+  listenOn(root, input);
+  root.fire('pointerdown', { ...first, pointerType: 'touch', isPrimary: true, pointerId: 1, timeStamp: 10 });
+  root.fire('pointerup', { ...first, pointerType: 'touch', isPrimary: true, pointerId: 1, timeStamp: 20 });
+  root.fire('pointerdown', { ...second, pointerType: 'touch', isPrimary: true, pointerId: 2, timeStamp: 30 });
+  root.fire('mousedown', { ...first, timeStamp: 40 });
+  expect(input.held.has('mouse')).toBe(false);
+  root.fire('mouseup', { ...first, timeStamp: 41 });
+  expect([firstCard.attrs.draggable, secondCard.attrs.draggable]).toEqual(['true', 'false']);
 });
 
 test.each(['expired', 'prevented'])('a compatibility down that is %s cannot swallow a standalone mousedown', (reason) => {
@@ -590,7 +646,7 @@ test.each(['blur', 'pointermove'])('a missed release ends at %s and the last fie
   const root = page(), card = declared('div'), field = new El('input', {}, card);
   listenOn(root);
   root.fire('pointerdown', { target: field, pointerType: 'mouse' });
-  if (type === 'blur') root.defaultView.fire('blur', {});
+  if (type === 'blur') root.defaultView.fire('blur', { isTrusted: true });
   else {
     root.fire('pointermove', { target: card, pointerType: 'mouse', buttons: 0, isTrusted: false });
     root.fire('pointermove', { target: card, pointerType: 'pen', buttons: 0, isTrusted: true });
@@ -603,6 +659,32 @@ test.each(['blur', 'pointermove'])('a missed release ends at %s and the last fie
   expect(card.getAttribute('draggable')).toBe('false');
   root.fire('pointerdown', { target: card, pointerType: 'touch' });
   expect(card.getAttribute('draggable')).toBe('true');
+});
+
+test('a synthetic blur leaves the mouse held in a field', () => {
+  const root = page(), card = declared('div'), field = new El('input', {}, card);
+  listenOn(root);
+  root.fire('pointerdown', { target: field, pointerType: 'mouse' });
+  root.defaultView.fire('blur', { isTrusted: false });
+  root.fire('pointerdown', { target: new El('div'), pointerType: 'pen' });
+  expect(card.attrs.draggable).toBe('false');
+  root.fire('pointerup', { target: field, pointerType: 'mouse' });
+  expect(card.attrs.draggable).toBe('true');
+});
+
+test('releasing the left mouse button while the right stays down frees the field’s card for the next press', () => {
+  const root = page(), input = { held: new Map() }, card = declared('div'), field = new El('input', {}, card);
+  const mouse = { target: field, pointerType: 'mouse', isTrusted: true };
+  listenOn(root, input);
+  root.fire('pointerdown', { ...mouse, button: 0, buttons: 1 });
+  root.fire('mousedown', { ...mouse, button: 0, buttons: 1 });
+  root.fire('pointermove', { ...mouse, button: 2, buttons: 3 });
+  root.fire('mousedown', { ...mouse, button: 2, buttons: 3 });
+  expect(input.held.has('mouse')).toBe(true);
+  root.fire('pointermove', { ...mouse, button: 0, buttons: 2 });
+  root.fire('mouseup', { ...mouse, button: 0, buttons: 2 });
+  root.fire('pointerdown', { target: new El('div'), pointerType: 'pen' });
+  expect(card.attrs.draggable).toBe('true');
 });
 
 test.each(['pen', 'touch'])('dragend releases the %s that began the drag and keeps the held mouse', (pointerType) => {
@@ -686,15 +768,16 @@ test('a pen down still pairs with its mousedown when the target changes at that 
   expect(drag.dataTransfer.data.get('text/plain')).toBe('card');
 });
 
-test('a detached card and its image cannot start a drag', () => {
+test('a detached card cancels its own drag and its plain image’s, leaving native link and field drags alone', () => {
   const root = page(), card = declared('div', { 'data-datatransfertext': 'card' });
   const image = new El('img', {}, card), theirs = new El('img');
+  const link = new El('a', { href: '/elsewhere' }, card), field = new El('input', {}, card);
   listenOn(root);
-  for (const target of [card, image, theirs]) {
+  for (const [target, cancelled] of [[card, true], [image, true], [link, false], [field, false], [theirs, false]]) {
     target.isConnected = false;
     const drag = dragstart(target);
     root.fire('dragstart', drag, true);
-    expect([drag.defaultPrevented, keys(drag)]).toEqual([target !== theirs, []]);
+    expect([drag.defaultPrevented, keys(drag)]).toEqual([cancelled, []]);
   }
 });
 
