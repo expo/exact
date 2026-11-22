@@ -40,7 +40,7 @@
           }
         },
         {
-          "match": "^(axes|dials|theme|icons|exports|pairs|roles|motion)\\s*(?://.*)?$",
+          "match": "^(axes|dials|theme|icons|exports)\\s*(?://.*)?$",
           "captures": {
             "1": { "name": "keyword.declaration.exact-forma" }
           }

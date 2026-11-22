@@ -8,7 +8,6 @@
   for `.contract` and `.forma` filetypes, comment strings, and 2-space indentation.
 - **Helix**: merge [helix/languages.toml](helix/languages.toml) into
   `~/.config/helix/languages.toml`.
-- **Zed**: see [zed/languages/exact-contract/config.toml](zed/languages/exact-contract/config.toml).
 - **Sublime Text / Shiki / Bat / GitHub Linguist**: reuse
   [vscode/syntaxes/exact-contract.tmLanguage.json](vscode/syntaxes/exact-contract.tmLanguage.json)
   and [vscode/syntaxes/exact-forma.tmLanguage.json](vscode/syntaxes/exact-forma.tmLanguage.json)

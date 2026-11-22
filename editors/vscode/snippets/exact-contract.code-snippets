@@ -56,8 +56,7 @@
   "Resource": {
     "prefix": "resource",
     "body": [
-      "resource ${1:items} = ${2:loadItems}() as shape ${3:Item}[]",
-      "  else empty()$0"
+      "resource ${1:items} = ${2:loadItems}() as shape ${3:Item}[] else empty()$0"
     ],
     "description": "Declare an async data resource"
   },
@@ -121,7 +120,7 @@
     "prefix": "test",
     "body": [
       "test \"${1:name}\"",
-      "  expect text \"${0:Hello}\""
+      "  expect text \"${2:testId}\" == \"${0:Hello}\""
     ],
     "description": "Authored Contract end-to-end test"
   }
