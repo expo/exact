@@ -10,6 +10,14 @@ import ExactKit
 
 #if os(iOS)
 private final class SelectButtonIOS: UIButton {
+    /// The node the select is the control of.
+    weak var owner: NodeView?
+    /// The drag of a draggable node around it, which a rested finger on a
+    /// select lifts (LLP 1094.000 D8, D9)
+    override var accessibilityDragSourceDescriptors: [UIAccessibilityLocationDescriptor]? {
+        get { super.accessibilityDragSourceDescriptors ?? owner?.presenter?.dragOut?.descriptors(of: self, isElement: true) }
+        set { super.accessibilityDragSourceDescriptors = newValue }
+    }
     /// Where the surface draws it, inside a placed canvas child (PlacedAccessibilityIOS.swift).
     override var accessibilityFrame: CGRect {
         get { placedAccessibilityFrame ?? super.accessibilityFrame }
@@ -96,6 +104,9 @@ extension ControlHost {
         if let picker = control as? UIDatePicker { configureDate(picker, owner); return }
         #endif
         guard let button = control as? UIButton else { return }
+        #if os(iOS)
+        (button as? SelectButtonIOS)?.owner = owner
+        #endif
         assign(button, \.tintColor, accent)
         #if os(iOS)
         if let select = button as? SelectButtonIOS {

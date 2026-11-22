@@ -398,6 +398,11 @@ fn open_pinned(roots: &[PathBuf; 3]) -> Result<AppDirectories, String> {
 /// [`SHARE_COPY_MAX`] bytes is copied; `to` must not exist. An error for
 /// anything else. `request` is `{"op":"shareFile","path":…,"to":…}`;
 /// `roots` the asking session's app's, `None` where it has no storage.
+///
+/// `{"op":"shareOpen","path":…}` opens the file as the copy would and
+/// answers `{"fd":…}`, a descriptor the caller then owns: a drag opens a file
+/// when a destination asks for it and copies from the descriptor off the
+/// main thread (LLP 1094.000 D3), so it has no size bound.
 pub fn share_copy(request: &str, grants: &str, roots: Option<&[PathBuf; 3]>) -> String {
     let field = |k| exact_runner::json::field_str(request, k).unwrap_or_default();
     let (path, to) = (field("path"), field("to"));
@@ -408,18 +413,34 @@ pub fn share_copy(request: &str, grants: &str, roots: Option<&[PathBuf; 3]>) -> 
             .get(r)
             .cloned()
     });
-    let copied = match pinned {
-        Some(Ok(directories)) => copy_confined(
-            &directories,
-            &path,
-            std::path::Path::new(&to),
-            grants,
-            SHARE_COPY_MAX,
-        ),
-        Some(Err(e)) => Err(format!("the app's files would not open: {e}")),
-        None => Err("this host has no app files".into()),
+    let directories = match pinned {
+        Some(Ok(directories)) => directories,
+        Some(Err(e)) => {
+            return exact_runner::json::error(&format!(
+                "{path}: the app's files would not open: {e}"
+            ))
+        }
+        None => return exact_runner::json::error(&format!("{path}: this host has no app files")),
     };
-    match copied {
+    if field("op") == "shareOpen" {
+        return match open_confined(&directories, &path, grants) {
+            #[cfg(unix)]
+            Ok(file) => format!("{{\"fd\":{}}}", std::os::fd::IntoRawFd::into_raw_fd(file)),
+            // A descriptor is Unix's: on Windows this crate is compiled, never run
+            #[cfg(not(unix))]
+            Ok(_) => exact_runner::json::error(&format!(
+                "{path}: only a Unix host hands a drag a file descriptor"
+            )),
+            Err(e) => exact_runner::json::error(&format!("{path}: {e}")),
+        };
+    }
+    match copy_confined(
+        &directories,
+        &path,
+        std::path::Path::new(&to),
+        grants,
+        SHARE_COPY_MAX,
+    ) {
         Ok(()) => {
             let mut s = String::from("{\"file\":");
             exact_runner::json::quote(&to, &mut s);
@@ -430,6 +451,20 @@ pub fn share_copy(request: &str, grants: &str, roots: Option<&[PathBuf; 3]>) -> 
     }
 }
 
+/// The app file `path`, opened under `grants` relative to the pinned roots'
+/// handles without following a symbolic link at any component.
+fn open_confined(
+    directories: &AppDirectories,
+    path: &str,
+    grants: &str,
+) -> Result<std::fs::File, String> {
+    let grants = ibex2::grant::GrantSet::parse(&exact_runner::io_grants(grants))
+        .map_err(|e| format!("the app's grants did not parse: {e}"))?;
+    directories
+        .open_file(&grants, path)
+        .map_err(|e| e.to_string())
+}
+
 fn copy_confined(
     directories: &AppDirectories,
     path: &str,
@@ -438,11 +473,7 @@ fn copy_confined(
     max: u64,
 ) -> Result<(), String> {
     use std::io::Read;
-    let grants = ibex2::grant::GrantSet::parse(&exact_runner::io_grants(grants))
-        .map_err(|e| format!("the app's grants did not parse: {e}"))?;
-    let from = directories
-        .open_file(&grants, path)
-        .map_err(|e| e.to_string())?;
+    let from = open_confined(directories, path, grants)?;
     let too_large = || format!("larger than the {} MB a share copies", max >> 20);
     if from.metadata().map_err(|e| e.to_string())?.len() > max {
         return Err(too_large());
@@ -667,6 +698,71 @@ mod tests {
         assert!(share_copy(&ask(&a.join("d")), GRANTS, None).contains("no app files"));
         let _ = std::fs::remove_dir_all(&a);
         let _ = std::fs::remove_dir_all(&b);
+    }
+
+    /// A drag's open answers a descriptor the caller owns, of the file the
+    /// pinned roots hold, under the grants, through no link; whatever is
+    /// refused answers an error and no descriptor. A file over the copy's
+    /// bound opens: the drag reads it off the main thread.
+    #[cfg(unix)]
+    #[test]
+    fn a_drag_opens_a_granted_file_through_its_own_pinned_roots() {
+        use std::io::Read;
+        use std::os::fd::FromRawFd;
+        let (base, roots) = tree("open");
+        pin(&roots);
+        let open = |path: &str| {
+            share_copy(
+                &format!(r#"{{"op":"shareOpen","path":"{path}"}}"#),
+                GRANTS,
+                Some(&roots),
+            )
+        };
+        let read = |reply: &str| {
+            let fd = exact_runner::json::field_num(reply, "fd").map(|n| n as i32);
+            let fd = fd.unwrap_or_else(|| panic!("no descriptor: {reply}"));
+            let mut text = String::new();
+            // SAFETY: the reply's descriptor is newly opened and this test's alone.
+            #[allow(unsafe_code)]
+            let file = unsafe { std::fs::File::from_raw_fd(fd) };
+            { file }.read_to_string(&mut text).unwrap();
+            text
+        };
+        // The data root swapped for a link after pinning: the pinned tree's file.
+        std::fs::rename(&roots[0], base.join("moved")).unwrap();
+        symlink(base.join("outside"), &roots[0]).unwrap();
+        assert_eq!(read(&open("app:/data/backups/notes.json")), "{}");
+        std::fs::write(
+            base.join("moved/big"),
+            vec![b'7'; (SHARE_COPY_MAX + 1) as usize],
+        )
+        .unwrap();
+        assert_eq!(
+            read(&open("app:/data/big")).len() as u64,
+            SHARE_COPY_MAX + 1
+        );
+        symlink(base.join("outside/secret"), base.join("moved/backups/leaf")).unwrap();
+        std::fs::write(base.join("cache/x"), b"x").unwrap();
+        for refused in [
+            "app:/data/backups/leaf",
+            "app:/data/backups",
+            "app:/cache/x",
+            "app:/data/missing",
+        ] {
+            let reply = open(refused);
+            assert!(
+                reply.contains("\"error\"") && !reply.contains("\"fd\""),
+                "{refused}: {reply}"
+            );
+        }
+        let unpinned = [base.join("x"), base.join("y"), base.join("z")];
+        assert!(share_copy(
+            r#"{"op":"shareOpen","path":"app:/data/backups/notes.json"}"#,
+            GRANTS,
+            Some(&unpinned)
+        )
+        .contains("no app files"));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// A file larger than the bound is refused by name and nothing is left.

@@ -624,6 +624,13 @@ private final class ReaderAtomAccessibility: UIAccessibilityElement, InspectionO
         guard let owner, !owner.disabled, !owner.inert, owner.handlers.contains("atompress") else { return false }
         return owner.pressReaderAtom(atom.url)
     }
+    #if os(iOS)
+    /// A draggable node's drag around the reader (LLP 1094.000 D9)
+    override var accessibilityDragSourceDescriptors: [UIAccessibilityLocationDescriptor]? {
+        get { owner.flatMap { $0.presenter?.dragOut?.descriptors(of: $0, isElement: false) } }
+        set { }
+    }
+    #endif
 }
 #endif
 
