@@ -1181,11 +1181,8 @@ fn fractional_row_scroll_matches_a_fresh_walk_with_clips_and_hinted_text() {
     assert_eq!(p.brush.retained_row_id(row), Some(clipped_id));
     p.scroll_to(port, (0., 0.75)).unwrap();
     let revealed = p.frame();
-    assert_ne!(
-        p.brush.retained_row_id(row),
-        Some(clipped_id),
-        "recorded again"
-    );
+    let revealed_id = p.brush.retained_row_id(row).expect("revealed row recorded");
+    assert_ne!(revealed_id, clipped_id, "recorded again");
     p.brush.forget_rows();
     p.repaint();
     let before = p.frame();

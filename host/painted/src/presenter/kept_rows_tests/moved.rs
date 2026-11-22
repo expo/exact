@@ -421,3 +421,47 @@ fn a_row_is_walked_again_when_an_env_value_it_reads_changes() {
     };
     assert_eq!(hits(false), hits(true));
 }
+
+#[test]
+fn a_choice_no_value_takes_is_drawn_and_answered_from_its_row_again() {
+    if !crate::presenter::control::material_tests::material_process() {
+        return;
+    }
+    // Nothing binds the choice: the select keeps it itself.
+    let source = r#"component App
+  view
+    scroll testId="port" width=200 height=100
+      column
+        select value="a" testId="pick"
+          option "A" value="a"
+          option "Wider choice" value="b"
+        box width=100 height=400 flex-shrink=0
+"#;
+    let width = |geometry: bool, fresh: bool| {
+        let (mut p, heard) = kept(source);
+        let (port, pick) = (view_id(&p, "port"), view_id(&p, "pick"));
+        p.frame();
+        p.commit_control_value(pick, "b", &[exact_plan::EventKind::Change])
+            .unwrap();
+        if fresh {
+            p.brush.forget_rows();
+        }
+        heard.borrow_mut().geometry_without_drawing = geometry;
+        p.scroll_to(port, (0., 1.));
+        if !geometry {
+            p.frame();
+        }
+        p.field_texts(pick)
+            .and_then(|t| t.value)
+            .expect("the value")
+            .rect
+            .2
+    };
+    for geometry in [true, false] {
+        assert_eq!(
+            width(geometry, false),
+            width(geometry, true),
+            "geometry {geometry}"
+        );
+    }
+}

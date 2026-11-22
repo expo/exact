@@ -215,6 +215,10 @@ pub(super) struct Rows {
     sections: Option<(u64, Rc<IdSet<ViewId>>)>,
     /// The environment the kept rows resolved `env()` against.
     env: Option<exact_kernel::Env>,
+    /// The controls' own states and choices the kept rows drew
+    /// ([`Scene::controls`], [`Scene::chosen`]).
+    controls: std::collections::BTreeMap<ViewId, bool>,
+    chosen: std::collections::BTreeMap<ViewId, (String, String)>,
     active: bool,
     recording: Option<Capture>,
     freed: Vec<u32>,
@@ -254,6 +258,20 @@ impl Rows {
         let row = self.kept.get(&key)?;
         row.order.filter(|_| !row.stale)
     }
+}
+
+/// The ids whose entry differs between `a` and `b`.
+fn changed<'a, V: PartialEq>(
+    a: &'a std::collections::BTreeMap<ViewId, V>,
+    b: &'a std::collections::BTreeMap<ViewId, V>,
+) -> impl Iterator<Item = ViewId> + 'a {
+    let gone = a.keys().filter(|id| !b.contains_key(id));
+    gone.chain(
+        b.iter()
+            .filter(|(id, v)| a.get(id) != Some(v))
+            .map(|(id, _)| id),
+    )
+    .copied()
 }
 
 /// Room around a row's boxes for what paints outside them (shadows).
@@ -472,6 +490,20 @@ impl Painter {
             }
             self.invalidate_rows(walk.scene.kernel, dirty);
             self.rows.focus = focus;
+        }
+        // The host keeps an unbound control's state and a choice its bound
+        // value has not taken, and changes them without a commit.
+        let scene = walk.scene;
+        if self.rows.controls != *scene.controls || self.rows.chosen != *scene.chosen {
+            let mut dirty = Dirty::default();
+            let ids = changed(&self.rows.controls, scene.controls)
+                .chain(changed(&self.rows.chosen, scene.chosen));
+            for node in ids.filter_map(|id| scene.kernel.node(id)) {
+                dirty.node(node.key);
+            }
+            self.invalidate_rows(scene.kernel, dirty);
+            self.rows.controls.clone_from(scene.controls);
+            self.rows.chosen.clone_from(scene.chosen);
         }
         let off = *self
             .rows

@@ -262,8 +262,8 @@ pub(super) fn slots(catalog: &mut Catalog, lines: &Lines) -> Vec<u32> {
 }
 
 /// A glyph's raster key and whole-pixel origin at `scale`, the pen at
-/// `offset` (device pixels): x in quarter-pixel phases, y truncated to the
-/// pixel row, as cosmic-text's `LayoutGlyph::physical` placed them.
+/// `offset` (device pixels): x in quarter-pixel phases, y rounded down to
+/// its pixel row, so a whole-pixel move moves every glyph alike.
 pub(super) fn physical(
     g: &LayoutGlyph,
     slot: u32,

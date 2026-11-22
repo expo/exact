@@ -33,8 +33,8 @@ impl Band {
         if delta.0.fract() != 0.0 || delta.1.fract() != 0.0 {
             return false;
         }
-        // Even a whole-pixel move can change coverage: y truncates toward
-        // zero, and f32 addition can round across a glyph's phase boundary.
+        // Even a whole-pixel move can change coverage: f32 addition can
+        // round across a glyph's phase boundary.
         paragraph
             .layout_runs()
             .zip(paragraph.baselines())
