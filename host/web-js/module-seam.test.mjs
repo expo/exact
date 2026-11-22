@@ -213,6 +213,34 @@ test.each([false, true])('implementation names keep their defaults and refuse of
   } finally { await browser?.close(); server.stop(true); }
 });
 
+test('a package without a web implementation honors source defaults and explicit refusals', async () => {
+  const server = moduleServer(), browser = await suiteBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    const result = await page.evaluate(async () => {
+      const { clock } = await import('/host/web-js/rt.js');
+      const { modules } = await import('/host/web-js/modules.js');
+      modules({
+        status: ['device.status', false, { default: { available: true, count: 0 }, targets: { web: { available: false } } }, { available: 'b', count: 'n' }],
+        optional: ['device.optional', false, { default: null }, ['?', 's']],
+        missing: ['device.missing', false, {}, ['?', 's']],
+        refused: ['device.refused', false, { default: 'present', unsupported: ['web'] }, 's'],
+      }, { device: async () => ({ implementation: null }) });
+      const read = source => exact.extensions.call({ extension: 'device', source, args: {} });
+      const answers = [];
+      for (const agent of [false, true]) {
+        clock.agent = agent;
+        answers.push(await Promise.all(['status', 'optional', 'missing', 'refused'].map(read)));
+      }
+      return answers;
+    });
+    const refused = { error: 'NotSupportedError' };
+    const expected = [{ available: false, count: 0 }, null, refused, refused];
+    expect(result).toEqual([expected, expected]);
+  } finally { await browser.close(); server.stop(true); }
+});
+
 test.each([false, true])('an implementation receives another package fixture only under the agent (agent: %p)', async agent => {
   const server = moduleServer(), browser = await suiteBrowser(), page = await browser.newPage();
   try {
