@@ -154,6 +154,19 @@ struct Heard {
     whole_sections: bool,
 }
 
+/// An Ink device, or none on a machine without one, which fails under
+/// `EXACT_REQUIRED=1`.
+fn ink() -> Option<crate::ink::Ink> {
+    match crate::ink::Ink::new() {
+        Ok(ink) => Some(ink),
+        Err(e) => {
+            assert_ne!(std::env::var("EXACT_REQUIRED").as_deref(), Ok("1"), "{e}");
+            eprintln!("no Ink device: {e}");
+            None
+        }
+    }
+}
+
 /// Keeps rows and draws nothing.
 struct Keeps {
     heard: Rc<RefCell<Heard>>,
@@ -606,7 +619,10 @@ fn a_lowered_sticky_section_paints_its_body_inside_the_layer() {
     assert!(error.is_none(), "{error:?}");
     p.host_mut().lowering = true;
     p.host_mut().engine.set_lowered_properties(&LOWERED);
-    p.reader_replaced(Box::new(crate::ink::Ink::new().expect("an Ink device")));
+    let Some(ink) = ink() else {
+        return;
+    };
+    p.reader_replaced(Box::new(ink));
     p.frame();
     let section = p.host.kernel().find_by_test_id("section")[0];
     let fade = p.host.kernel().find_by_test_id("fade")[0];
@@ -664,6 +680,40 @@ fn a_rotated_sticky_section_does_not_open_nested_row_groups() {
     let heard = heard.borrow();
     assert_eq!(heard.max_group_depth, 1);
     assert_eq!(heard.group_depth, 0);
+}
+
+#[test]
+fn a_column_that_clips_by_hiding_is_one_row() {
+    // `hidden` makes a scroll container, which its sticky child sticks to.
+    let plan = crate::test_plan(
+        r#"component App
+  view
+    scroll width=200 height=100
+      column
+        box width=200 height=5
+        column overflow="hidden"
+          box width=200 height=10 position="sticky" top=0
+          box width=200 height=10
+          box width=200 height=10
+"#,
+    );
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &plan,
+        (),
+        (200., 120.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let heard = Rc::new(RefCell::new(Heard::default()));
+    p.reader_replaced(Box::new(Keeps {
+        heard: heard.clone(),
+        row: 0,
+    }));
+    p.frame();
+    assert_eq!(heard.borrow().begun.len(), 2, "the box and the column");
 }
 
 #[test]
@@ -825,7 +875,10 @@ fn sticky_sections_draw_shadows_reaching_into_the_port_from_below() {
             .find(|(_, pixel)| (pixel.red(), pixel.green(), pixel.blue()) == (255, 0, 0))
             .expect("the shadow casts into the scroll port");
 
-        p.reader_replaced(Box::new(crate::ink::Ink::new().expect("an Ink device")));
+        let Some(ink) = ink() else {
+            return;
+        };
+        p.reader_replaced(Box::new(ink));
         assert_eq!(p.frame().pixels()[at], expected, "{row}");
     }
 }
@@ -865,7 +918,10 @@ fn overflowing_lines_still_draw_when_their_sticky_section_row_is_offscreen() {
         expected.iter().any(|red| *red),
         "the ungrouped text is in view"
     );
-    p.reader_replaced(Box::new(crate::ink::Ink::new().expect("an Ink device")));
+    let Some(ink) = ink() else {
+        return;
+    };
+    p.reader_replaced(Box::new(ink));
     assert!(
         p.frame()
             .pixels()

@@ -3,8 +3,12 @@
 use super::*;
 
 /// Ink, keeping rows, draws red where the CPU painter does in the frame
-/// after `drive`, at 200 by 120 points; Ink's red pixels, row by row.
-fn ink_draws_the_red_the_cpu_draws(source: &str, drive: impl Fn(&mut Presenter<()>)) -> Vec<bool> {
+/// after `drive`, at 200 by 120 points; Ink's red pixels, row by row, or
+/// none without an Ink device.
+fn ink_draws_the_red_the_cpu_draws(
+    source: &str,
+    drive: impl Fn(&mut Presenter<()>),
+) -> Option<Vec<bool>> {
     let boot = || {
         let (p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(source),
@@ -29,7 +33,7 @@ fn ink_draws_the_red_the_cpu_draws(source: &str, drive: impl Fn(&mut Presenter<(
         "the CPU draws red in the port"
     );
     let mut ink = boot();
-    ink.reader_replaced(Box::new(crate::ink::Ink::new().expect("an Ink device")));
+    ink.reader_replaced(Box::new(super::ink()?));
     drive(&mut ink);
     let drawn: Vec<_> = ink.frame().pixels().iter().map(red).collect();
     assert!(
@@ -39,7 +43,7 @@ fn ink_draws_the_red_the_cpu_draws(source: &str, drive: impl Fn(&mut Presenter<(
             .any(|(drawn, expected)| *drawn && expected),
         "Ink draws it"
     );
-    drawn
+    Some(drawn)
 }
 
 fn scroll(p: &mut Presenter<()>, y: f32) {
@@ -154,21 +158,23 @@ fn a_pinned_and_a_pushed_off_heading_draw_over_their_section() {
 "#;
     // Pinned, the heading covers y = 17; pushed off by 205, it ends at 15.
     for (at, covers) in [(80., true), (205., false)] {
-        let red = ink_draws_the_red_the_cpu_draws(source, |p| {
+        let Some(red) = ink_draws_the_red_the_cpu_draws(source, |p| {
             p.frame();
             scroll(p, at);
-        });
+        }) else {
+            return;
+        };
         assert_eq!(red[17 * 200 + 100], covers, "scrolled {at}");
     }
 }
 
 #[test]
 fn an_outgoing_number_aligned_away_from_its_start_still_draws() {
-    // One commit narrows the box and shortens the number: the old digits
-    // roll out at the old right edge, past the new number's width.
+    // One commit narrows the box and changes the digit: the old one rolls
+    // out at the old right edge, past the new number's width.
     ink_draws_the_red_the_cpu_draws(
         r#"component App
-  state n = 123
+  state n = 7
   task bump mount
     after(1000, step)
   action step
@@ -177,14 +183,15 @@ fn an_outgoing_number_aligned_away_from_its_start_still_draws() {
     scroll width=200 height=100
       column
         box width=200 height=10 flex-shrink=0
-        text `${n}` width=(n > 100 ? 400 : 30) margin-left=-250 text-align="right" font-size=24 color="red" flex-shrink=0 -exact-content-transition="numeric"
+        text `${n}` width=(n > 5 ? 400 : 30) margin-left=-250 text-align="right" font-size=24 color="red" flex-shrink=0 -exact-content-transition="numeric"
         box width=200 height=300 flex-shrink=0
 "#,
         |p| {
             p.frame();
             p.clock(1000.);
             p.frame();
-            p.clock(1050.);
+            // The old digit fades out within 50 ms.
+            p.clock(1016.);
         },
     );
 }
@@ -218,6 +225,41 @@ fn an_outside_list_marker_still_draws_when_its_row_is_offscreen() {
         box width=200 height=10 flex-shrink=0
         ol width=100 margin-left=260 padding-left=0 flex-shrink=0 font-size=80 color="red"
           li "One"
+"#,
+        |p| {
+            p.frame();
+        },
+    );
+}
+
+#[test]
+fn a_column_of_text_past_its_box_still_draws_when_its_row_is_offscreen() {
+    // Two columns hold two lines; the other four overflow to the right.
+    ink_draws_the_red_the_cpu_draws(
+        r#"component App
+  view
+    scroll width=200 height=100
+      column
+        box width=200 height=10 flex-shrink=0
+        text "one\ntwo\nthree\nfour\nfive\nsix" white-space="pre" width=100 height=20 margin-left=-200 column-count=2 column-gap=20 column-fill="auto" color="red" flex-shrink=0
+"#,
+        |p| {
+            p.frame();
+        },
+    );
+}
+
+#[test]
+fn an_indented_list_marker_still_draws_when_its_row_is_offscreen() {
+    // The indent draws the number 100 points before where it would be.
+    ink_draws_the_red_the_cpu_draws(
+        r#"component App
+  view
+    scroll width=200 height=120
+      column
+        box width=200 height=10 flex-shrink=0
+        ol width=100 margin-left=260 padding-left=0 flex-shrink=0 font-size=80 text-indent=-100 color="red"
+          li ""
 "#,
         |p| {
             p.frame();

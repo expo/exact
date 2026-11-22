@@ -355,10 +355,15 @@ impl Painter {
                 return;
             }
             let cell = &cells[i];
-            // The outermost cells reach past the paragraph, for overhang.
-            let left = if i == 0 { -reach.0 } else { cell.x };
+            // The outermost cells reach past the paragraph, and past where
+            // alignment puts their glyphs, for overhang.
+            let left = if i == 0 {
+                (-reach.0).min(cell.x - size * 2.0)
+            } else {
+                cell.x
+            };
             let right = if i + 1 == cells.len() {
-                reach.1
+                reach.1.max(cell.x + cell.w + size * 2.0)
             } else {
                 cell.x + cell.w
             };
