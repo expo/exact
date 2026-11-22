@@ -165,7 +165,7 @@ required tool, device or simulator is unavailable, report that target as unteste
 |Android|`bun exact.mjs verify android`|Start `bun exact.mjs web`, then run `bun exact.mjs android --run --url http://127.0.0.1:8765/` in another terminal.|
 |Windows|`bun exact.mjs verify windows`|`bun exact.mjs windows --run`|
 |macOS|`bun exact.mjs test macos`, then `bun exact.mjs agent macos --chrome platform "clock data" "screenshot .exact/mac.png window"` (`check` is the web's and iOS's)|`bun exact.mjs mac --run`|
-|Linux|`bun exact.mjs linux`, then `bun exact.mjs test linux`|The Linux host is headless; inspect it with `bun exact.mjs agent linux tree` after building.|
+|Linux|`bun exact.mjs linux`, then `bun exact.mjs test linux`|For a full-screen app, run the binary the build prints from a Linux virtual console with access to the display (DRM/KMS). For a headless screenshot, run `bun exact.mjs agent linux "screenshot .exact/linux.png"`. [Wayland desktop windows](https://github.com/expo/exact/issues/1289) are an open feature request.|
 
 For Android live iteration, use the port the web loop prints. Saving a Contract
 or `app.ts` edit updates the running app without rebuilding the APK.

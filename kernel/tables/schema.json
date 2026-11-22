@@ -2561,7 +2561,7 @@
       "default": "none"
     },
     "SafeAreaExtend": {
-      "_comment": "@ref LLP 1123 D13: `-exact-safe-area-extend`, the keywords of the safe_area_extend row, not a wire enum. none is 0; each other value is one bit in this order (top bit 0, end bit 5, manual bit 6).",
+      "_comment": "@ref LLP 1123 D13: `-exact-safe-area-extend`, the keywords of the safe_area_extend row, not a wire enum. none is 0; each other value is one bit in this order (top bit 0, end bit 5).",
       "values": [
         "none",
         "top",
@@ -2569,8 +2569,7 @@
         "bottom",
         "left",
         "start",
-        "end",
-        "manual"
+        "end"
       ],
       "default": "none"
     },
@@ -5808,7 +5807,7 @@
       "keywords": "SafeAreaExtend",
       "rare": true,
       "default": 0,
-      "_comment": "@ref LLP 1123 D13: `-exact-safe-area-extend: none | <edges> [manual]`: the box's rendered content is mirrored into the band on those edges, with `UIBackgroundExtensionView` (iOS 26) or `NSBackgroundExtensionView` (macOS 26); `start` and `end` resolve against the box's `direction`. `manual` puts the extension's content view at the box's final frame instead of letting the extension view place it. Where no extension view exists, the band shows the box's background colour. `none`, the initial value, extends nothing. Not inherited."
+      "_comment": "@ref LLP 1123 D13: `-exact-safe-area-extend: none | <edges>`: the box's picture, what it paints inside its border box below its children, is mirrored past its border box on those edges with `UIBackgroundExtensionView` (iOS 26) or `NSBackgroundExtensionView` (macOS 26), placed by hand at the border box; `start` and `end` resolve against the box's `direction`. Where no extension view exists, only the background colour extends. `none`, the initial value, extends nothing. Not inherited."
     },
     {
       "bit": 297,
@@ -5818,7 +5817,7 @@
       "refusesPercent": true,
       "admitsAuto": true,
       "default": "auto",
-      "_comment": "@ref LLP 1123 D13: `-exact-safe-area-extend-bounds: [<length> | auto]{1,4}`, one row per edge: how far the extension's container reaches beyond the box on an edge it extends on. `auto`, the initial value, reaches from the box's edge to the allocation's edge where the box touches the band, and is 0 where it does not. A negative length is refused, and a calculation below 0 counts as 0. It does nothing on an edge the box does not extend on. Not inherited."
+      "_comment": "@ref LLP 1123 D13: `-exact-safe-area-extend-bounds: [<length> | auto]{1,4}`, one row per edge: how far the extension reaches past the box's border box on an edge it extends on. `auto`, the initial value, is the distance reach would have on that edge were the box to reach it, and 0 where it does not touch or while the band is unavailable (`Kernel::extension`). A negative length is refused, and a calculation below 0 counts as 0. It does nothing on an edge the box does not extend on. Not inherited."
     },
     {
       "bit": 298,

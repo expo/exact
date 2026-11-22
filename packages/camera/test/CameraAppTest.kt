@@ -50,6 +50,15 @@ class CameraAppTest {
             @JvmStatic @Implementation fun __staticInitializer__() {}
             @JvmStatic @Implementation fun underAgent(name: String) = agent
             @JvmStatic @Implementation fun appFile(path: String): String = File(root, path.removePrefix("app:/")).path
+            @JvmStatic @Implementation fun openApp(path: String): ParcelFileDescriptor? =
+                File(appFile(path)).takeIf(Files::regular)?.let { ParcelFileDescriptor.open(it, ParcelFileDescriptor.MODE_READ_ONLY) }
+            /** What happens on the camera worker as its file is published. */
+            var publishing: () -> Unit = {}
+            @JvmStatic @Implementation fun publishApp(path: String, source: String): Boolean {
+                publishing()
+                val to = File(appFile(path)).apply { parentFile!!.mkdirs() }
+                return File(source).renameTo(to)
+            }
         }
     }
 
@@ -64,10 +73,12 @@ class CameraAppTest {
         companion object {
             var type: String? = "video/mp4"
             lateinit var file: File
+            /** What happens on the camera worker as it opens the video. */
+            var opening: () -> Unit = {}
         }
         override fun onCreate() = true
         override fun getType(uri: Uri) = type
-        override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+        override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).also { opening() }
         override fun query(uri: Uri, p: Array<out String>?, s: String?, a: Array<out String>?, o: String?): Cursor? = null
         override fun insert(uri: Uri, values: ContentValues?): Uri? = null
         override fun delete(uri: Uri, s: String?, a: Array<out String>?) = 0
@@ -78,9 +89,12 @@ class CameraAppTest {
     private lateinit var activity: Activity
     private lateinit var provider: Files
     private val answers = ArrayList<JSONObject>()
+    /** The looper each answer came on: the main thread's, as the runner's replies must. */
+    private val answeredOn = ArrayList<Looper?>()
 
     @Before fun show() {
         Host.agent = false
+        Host.publishing = {}
         Host.root = File(application.cacheDir, "app").apply { mkdirs() }
         provider = Robolectric.setupContentProvider(Files::class.java, "${application.packageName}.exact.files")
         shown(Activity::class.java)
@@ -101,7 +115,7 @@ class CameraAppTest {
 
     private fun take(args: JSONObject = JSONObject(), tap: String? = null, send: String = "takePhotoWithCameraApp", request: Int? = null) =
         CameraModule(ExtensionContext(application, "camera").also { it.request = request }).let { module ->
-            module.later(send, args, tap?.let { JSONObject().put("tap", it) }) { answers += it }
+            module.later(send, args, tap?.let { JSONObject().put("tap", it) }) { answers += it; answeredOn += Looper.myLooper() }
             module
         }
 
@@ -118,9 +132,9 @@ class CameraAppTest {
         return answers.single()
     }
 
-    /** The staged video's facts as the platform's retriever would read them. */
-    private fun facts(width: Int, height: Int, rotation: Int, ms: Long) {
-        val staged = File(application.cacheDir, "exact.camera-app/video.mp4").path
+    /** The video staged at [out], as kept in its private copy, with its facts as the platform's retriever would read them. */
+    private fun facts(out: Uri, width: Int, height: Int, rotation: Int, ms: Long) {
+        val staged = staged(out).let { File(it.parentFile, "kept-${it.name}") }.path
         ShadowMediaMetadataRetriever.addMetadata(staged, MediaMetadataRetriever.METADATA_KEY_MIMETYPE, "video/mp4")
         ShadowMediaMetadataRetriever.addMetadata(staged, MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH, "$width")
         ShadowMediaMetadataRetriever.addMetadata(staged, MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT, "$height")
@@ -134,6 +148,12 @@ class CameraAppTest {
     /** The camera app's write: through the provider, as another app opens an `EXTRA_OUTPUT` URI. */
     private fun write(uri: Uri, bytes: ByteArray) =
         provider.openFile(uri, "w").use { pfd -> FileOutputStream(pfd.fileDescriptor).use { it.write(bytes) } }
+
+    /** Where the reader keeps the file the camera app writes through [out]. */
+    private fun staged(out: Uri) = File(Files.captures(application), out.pathSegments.drop(1).joinToString("/"))
+
+    /** Whether any capture's file is still staged. */
+    private fun staging() = Files.captures(application).listFiles().orEmpty().isNotEmpty()
 
     private fun started(): Pair<Intent, Int> {
         val made = shadowOf(activity).nextStartedActivityForResult ?: error("no activity started")
@@ -155,10 +175,11 @@ class CameraAppTest {
         assertTrue(intent.flags and Intent.FLAG_GRANT_WRITE_URI_PERMISSION != 0)
         val out = output(intent)
         assertEquals("content", out.scheme)
-        assertFalse("staged outside the app's directories", out.path!!.startsWith(Host.root.canonicalPath))
+        assertFalse("staged outside the app's directories", staged(out).canonicalPath.startsWith(Host.root.canonicalPath + File.separator))
+        assertTrue(staged(out).isFile)
 
         // Another of the app's files stays read-only, the destination among them.
-        val other = Files.uri(application, visitor)!!
+        val other = Files.uri(application, "app:/data/visitor.jpg")!!
         assertThrows(SecurityException::class.java) { provider.openFile(other, "w") }
         val photo = jpeg(40, 30)
         write(out, photo)
@@ -185,7 +206,8 @@ class CameraAppTest {
         Extensions.activityResult(code, Activity.RESULT_CANCELED, null)
         assertEquals("AbortError", answers.single().getString("error"))
         assertEquals("kept", visitor.readText())
-        assertFalse(File(out.path!!).exists())
+        assertFalse(staged(out).exists())
+        assertFalse(staging())
     }
 
     /** A video: the camera app's video intent with the call's limits as its extras, and no permission asked, the
@@ -205,8 +227,10 @@ class CameraAppTest {
         assertEquals(50_000_000L, intent.getLongExtra(MediaStore.EXTRA_SIZE_LIMIT, -1))
         assertEquals(0, intent.getIntExtra("android.intent.extras.CAMERA_FACING", -1))
         val bytes = ByteArray(4096) { it.toByte() }
-        provider.openFile(output(intent), "rw").use { pfd -> FileOutputStream(pfd.fileDescriptor).use { it.write(bytes) } }
-        facts(1920, 1080, 90, 31_500)
+        // The camera app keeps its descriptor past its answer: what it writes then reaches no kept file.
+        val held = provider.openFile(output(intent), "rw")
+        FileOutputStream(held.fileDescriptor).write(bytes)
+        facts(output(intent), 1920, 1080, 90, 31_500)
         assertEquals("the last clip", clip.readText())
 
         Extensions.activityResult(code, Activity.RESULT_OK, null)
@@ -217,6 +241,8 @@ class CameraAppTest {
         assertEquals(31.5, answer.getDouble("duration"), 0.0)
         assertEquals(1080, answer.getInt("width"))
         assertEquals(1920, answer.getInt("height"))
+        assertArrayEquals(bytes, clip.readBytes())
+        held.use { FileOutputStream(it.fileDescriptor).write(ByteArray(8) { 9 }) }
         assertArrayEquals(bytes, clip.readBytes())
     }
 
@@ -247,13 +273,22 @@ class CameraAppTest {
         assertEquals("kept", kept.readText())
 
         answers.clear()
-        val secret = File(Host.root, "data/secret.mp4").apply { parentFile!!.mkdirs(); writeText("the app's own") }
+        File(Host.root, "data/secret.mp4").apply { parentFile!!.mkdirs(); writeText("the app's own") }
         record()
         code = started().second
-        Extensions.activityResult(code, Activity.RESULT_OK, Intent().setData(Files.uri(application, secret)))
+        Extensions.activityResult(code, Activity.RESULT_OK, Intent().setData(Files.uri(application, "app:/data/secret.mp4")))
         assertEquals("UnknownError", settled().getString("error"))
         assertEquals("kept", kept.readText())
-        assertFalse(File(application.cacheDir, "exact.camera-app/video.mp4").exists())
+
+        // Nor under another user's form of the same authority.
+        answers.clear()
+        record()
+        code = started().second
+        val mine = Files.uri(application, "app:/data/secret.mp4")!!
+        Extensions.activityResult(code, Activity.RESULT_OK, Intent().setData(mine.buildUpon().encodedAuthority("10@${mine.authority}").build()))
+        assertEquals("UnknownError", settled().getString("error"))
+        assertEquals("kept", kept.readText())
+        assertFalse(staging())
     }
 
     /** A call let go while the camera app is up (LLP 1133.008.000 D7): what the person keeps there is not written, the
@@ -268,10 +303,68 @@ class CameraAppTest {
         Extensions.activityResult(code, Activity.RESULT_OK, null)
         assertEquals("AbortError", settled().getString("error"))
         assertEquals("kept", clip.readText())
-        assertFalse(File(application.cacheDir, "exact.camera-app/video.mp4").exists())
+        assertFalse(staging())
         answers.clear()
         module.later("takePhotoWithCameraApp", JSONObject(), null) { answers += it }
         assertEquals(MediaStore.ACTION_IMAGE_CAPTURE, started().first.action)
+    }
+
+    /** Holds the camera worker at a checkpoint ([Host.publishing], [Gallery.opening]) while the test, on the main thread
+     * as the app's `cancel` runs, lets the call go; then lets the worker on and waits for it to finish. */
+    private class Checkpoint {
+        val reached = java.util.concurrent.CountDownLatch(1)
+        val resume = java.util.concurrent.CountDownLatch(1)
+        val hold: () -> Unit = { reached.countDown(); resume.await(10, java.util.concurrent.TimeUnit.SECONDS) }
+        fun letGo(module: CameraModule) {
+            assertTrue("the worker reached its checkpoint", reached.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            assertSame(Looper.getMainLooper(), Looper.myLooper())
+            module.cancel(7)
+        }
+        fun release() {
+            resume.countDown()
+            Thread.getAllStackTraces().keys.filter { it.name == "exact-camera-app" }.forEach { it.join(10_000) }
+        }
+    }
+
+    /** A let-go is too late once the worker began publishing the file: the commit point, after which the call answers
+     * with what it kept, as one let go after the answer does. */
+    @Test fun aLetGoOnceThePublishBeganKeepsTheFile() {
+        val clip = File(Host.root, "tmp/camera/1.mp4").apply { parentFile!!.mkdirs(); writeText("kept") }
+        val module = record(request = 7)
+        val (intent, code) = started()
+        val bytes = ByteArray(10) { 7 }
+        provider.openFile(output(intent), "rw").use { pfd -> FileOutputStream(pfd.fileDescriptor).use { it.write(bytes) } }
+        val checkpoint = Checkpoint().also { Host.publishing = it.hold }
+        Extensions.activityResult(code, Activity.RESULT_OK, null)
+        checkpoint.letGo(module)
+        assertTrue("no answer while publication runs", answers.isEmpty())
+        checkpoint.release()
+        assertEquals("app:/tmp/camera/1.mp4", settled().getString("path"))
+        assertArrayEquals(bytes, clip.readBytes())
+        assertEquals(listOf(Looper.getMainLooper()), answeredOn)
+    }
+
+    /** A let-go while the worker copies the camera app's own video, before publication, is answered at once on the main
+     * thread, and keeps nothing: once the worker is done, no capture is left. */
+    @Test fun aLetGoBeforeThePublishKeepsNothing() {
+        Robolectric.setupContentProvider(Gallery::class.java, "test.camera.media")
+        Gallery.type = "video/mp4"
+        Gallery.file = File(application.filesDir, "gallery.mp4").apply { writeBytes(ByteArray(1000) { 3 }) }
+        val clip = File(Host.root, "tmp/camera/1.mp4").apply { parentFile!!.mkdirs(); writeText("kept") }
+        val module = record(request = 7)
+        val (_, code) = started()
+        val checkpoint = Checkpoint().also { Gallery.opening = it.hold }
+        try {
+            Extensions.activityResult(code, Activity.RESULT_OK, Intent().setData(Uri.parse("content://test.camera.media/video/7")))
+            checkpoint.letGo(module)
+            assertEquals("answered at once, while the worker waits", "AbortError", answers.single().getString("error"))
+            checkpoint.release()
+            shadowOf(Looper.getMainLooper()).idle()
+        } finally { Gallery.opening = {} }
+        assertEquals(1, answers.size)
+        assertEquals(listOf(Looper.getMainLooper()), answeredOn)
+        assertEquals("kept", clip.readText())
+        assertFalse(staging())
     }
 
     /** One camera app at a time, a photo's or a video's. */

@@ -96,16 +96,18 @@ fn each_reset_point_is_its_own_evaluation() {
     assert_eq!(owned.matches("let $s=0").count(), 2, "{owned}");
 }
 
-/// An action knows its string parameters' names, and whether it takes the
-/// row first, so an argument past MAX_STRING is refused naming it.
+/// The string budget names authored arguments, skipping the row and captured props.
 #[test]
 fn act_names_its_string_parameters() {
-    let (_, js) = js("component App\n  state t = \"\"\n  action put(v: string, n: number)\n    t = v\n  resource ids = ids() as shape string[]\n  view\n    column\n      button press=put(\"a\", 1) testId=\"go\"\n        text \"go\"\n      for i in ids key=i\n        Row()\ncomponent Row\n  state got = \"\"\n  action take(w: string)\n    got = w\n  view\n    input value=got input=take testId=\"in\"\n");
+    let (_, js) = js("component App\n  state t = \"\"\n  action put(v: string, n: number)\n    t = v\n  resource ids = ids() as shape string[]\n  view\n    column\n      button press=put(\"a\", 1) testId=\"go\"\n        text \"go\"\n      for i in ids key=i\n        Row(label=i)\ncomponent Row\n  props\n    label: string\n  state got = \"\"\n  action take(w: string)\n    if label != \"\"\n      got = w\n  view\n    input value=got input=take testId=\"in\"\n");
     assert!(
         decl(&js, "a_0").ends_with(",[\"s\",\"n\"],0,[\"v\",0]);"),
         "{js}"
     );
-    assert!(decl(&js, "a_1").ends_with(",[\"s\"],1,[\"w\"]);"), "{js}");
+    assert!(
+        decl(&js, "a_1").ends_with(",[\"s\",\"s\"],1,[0,\"w\"]);"),
+        "{js}"
+    );
     assert!(
         js.contains("sig(\"\",\"s\",\"t\")"),
         "a string slot is named: {js}"

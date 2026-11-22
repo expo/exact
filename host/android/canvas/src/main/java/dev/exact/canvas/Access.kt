@@ -133,6 +133,11 @@ internal class Access(private val host: View) {
     /** The node that holds accessibility focus, and the one a finger explores. */
     private var focused = NONE
     private var hovered = NONE
+    /** The node whose service's drag began on this view ([drag]), until the view no longer offers its Cancel: it says
+     * what Android says of the drag ([heard]). */
+    private var dragging = NONE
+    /** Whether [dragging] offers the view's Cancel: not once a finger went down in the window ([touched]). */
+    private var cancellable = false
     private var pane = 0
     /** The reader's text fields, where this view's nodes may be one ([Root]). */
     var fields: Fields? = null
@@ -270,7 +275,9 @@ internal class Access(private val host: View) {
                 AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS -> unfocus(id)
                 AccessibilityNodeInfo.ACTION_CLICK -> n.has(CLICK) && Exact.accessAct(id, PRESS, 0f)
                 AccessibilityNodeInfo.ACTION_LONG_CLICK -> n.has(LONG_CLICK) && Exact.accessAct(id, HOLD, 0f)
-                android.R.id.accessibilityActionDragStart -> drags(n) && Exact.accessAct(id, DRAG_START, 0f)
+                // While the window has yet to hear a drag's end, no drag begins ([Root.dragging]): refused here, not later.
+                android.R.id.accessibilityActionDragStart -> drags(n) && (host as? Root)?.dragging != true && Exact.accessAct(id, DRAG_START, 0f)
+                android.R.id.accessibilityActionDragCancel -> id == dragging && cancellable && cancel(id)
                 AccessibilityNodeInfo.ACTION_EXPAND -> n.has(EXPANDABLE) && !n.has(EXPANDED) && n.has(CLICK) && Exact.accessAct(id, PRESS, 0f)
                 AccessibilityNodeInfo.ACTION_COLLAPSE -> n.has(EXPANDED) && n.has(CLICK) && Exact.accessAct(id, PRESS, 0f)
                 AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, android.R.id.accessibilityActionScrollDown, android.R.id.accessibilityActionScrollRight ->
@@ -391,7 +398,10 @@ internal class Access(private val host: View) {
         // What a double tap does. A tab that is selected takes none, as Material's does not.
         if (n.has(CLICK) && !(n.role == TAB && n.has(SELECTED))) { info.isClickable = true; info.addAction(AccessibilityAction.ACTION_CLICK) }
         if (n.has(LONG_CLICK)) { info.isLongClickable = true; info.addAction(AccessibilityAction.ACTION_LONG_CLICK) }
+        // Start stays: Android refuses a second drag while one is under way, and a Cancel that no longer reaches a drag
+        // leaves a way to begin one. The drag's Cancel stays on the node that asked, whatever the node carries now.
         if (drags(n)) info.addAction(AccessibilityAction.ACTION_DRAG_START)
+        if (n.id == dragging && cancellable && cancels()) info.addAction(AccessibilityAction.ACTION_DRAG_CANCEL)
         if (n.has(EXPANDABLE) && n.has(CLICK)) info.addAction(if (n.has(EXPANDED)) AccessibilityAction.ACTION_COLLAPSE else AccessibilityAction.ACTION_EXPAND)
         // A range steps forward and back, as a SeekBar does; only a native one is set to a value (a drawn one steps by its author's keys).
         if (n.role == SCROLLER || n.role == LIST_BOX || n.has(RANGE)) {
@@ -563,18 +573,88 @@ internal class Access(private val host: View) {
         return find(top)
     }
 
-    private fun changed(id: Int, types: Int) = send(id, AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) { it.contentChangeTypes = types }
+    private fun changed(id: Int, types: Int): Boolean = send(id, AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) { it.contentChangeTypes = types }
+
+    /**
+     * A service's drag of the node standing for exact2's node [view], begun on this tree's own view: Android then
+     * offers Cancel on that view and handles it, says from it that the drag started and, where nothing took the drop,
+     * that it was cancelled, and lets the view's mark go at the drag's end (`View.startDragAndDrop`,
+     * `ViewRootImpl.handleDragEvent`). The node offers the view's Cancel beside its Start while the view has it,
+     * and says what the view would ([heard]). Whether the drag began.
+     */
+    fun drag(view: Int, clip: android.content.ClipData, flags: Int): Boolean {
+        // A service that went before the request came begins nothing: with no service on, Android would drag the
+        // window's last touch.
+        if (!manager.isEnabled) return false
+        val n = nodes.values.firstOrNull { it.view == view && drags(it) && real(it) == null } ?: return false
+        if (!host.startDragAndDrop(clip, DragOut.blank, null, flags)) return false
+        dragging = n.id
+        cancellable = true
+        changed(n.id, AccessibilityEvent.CONTENT_CHANGE_TYPE_UNDEFINED)
+        return true
+    }
+
+    /**
+     * An event this tree's view sends of itself ([Root], [Pane]). While a service's drag begun here ([drag]) lasts, the
+     * drag's start and cancel Android says from the view are said by the node that asked instead, the one a service is
+     * on, where it was sent; the event goes on with whatever else it says. Once the view no longer offers Cancel, the
+     * drag is over and the node offers its Start again. Whether nothing of the event is left to send.
+     */
+    fun heard(e: AccessibilityEvent): Boolean {
+        val id = dragging
+        if (id == NONE || e.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) return false
+        val drag = AccessibilityEvent.CONTENT_CHANGE_TYPE_DRAG_STARTED or AccessibilityEvent.CONTENT_CHANGE_TYPE_DRAG_CANCELLED
+        val said = e.contentChangeTypes and drag
+        // Said by the node only while the provider shows it: a native view standing at it now says its own.
+        val shown = nodes[id]?.let { real(it) == null } == true
+        val moved = said != 0 && shown && changed(id, said)
+        if (!cancels()) {
+            dragging = NONE
+            changed(id, AccessibilityEvent.CONTENT_CHANGE_TYPE_UNDEFINED)
+        }
+        if (!moved) return false
+        e.contentChangeTypes = e.contentChangeTypes and drag.inv()
+        return e.contentChangeTypes == 0
+    }
+
+    /** A finger went down in the window, where a hosted view may then begin a drag of its own that shares the
+     * window's hold once this tree's service drag is over: the node's Cancel goes now, and the drag goes on. */
+    fun touched() {
+        if (dragging == NONE || !cancellable) return
+        cancellable = false
+        changed(dragging, AccessibilityEvent.CONTENT_CHANGE_TYPE_UNDEFINED)
+    }
+
+    /**
+     * The view's Cancel, taken from node [id]. Where it reaches no drag, the node's Cancel goes: the window may have
+     * heard another drag's end after this drag began, which takes the window's hold on it and leaves the view's mark
+     * (`ViewRootImpl.handleDragEvent` clears the mark of the view it heard begin first).
+     */
+    private fun cancel(id: Int): Boolean {
+        if (host.performAccessibilityAction(android.R.id.accessibilityActionDragCancel, null)) return true
+        cancellable = false
+        changed(id, AccessibilityEvent.CONTENT_CHANGE_TYPE_UNDEFINED)
+        return false
+    }
+
+    /** Whether this tree's view offers Cancel: Android's own mark that a service's drag begun on it is under way, read
+     * from the view's node as a service reads it. */
+    private fun cancels(): Boolean {
+        val info = if (Build.VERSION.SDK_INT >= 30) AccessibilityNodeInfo(host) else Legacy.node(host)
+        host.onInitializeAccessibilityNodeInfo(info)
+        return info.actionList.any { it.id == android.R.id.accessibilityActionDragCancel }
+    }
 
     /** Whether a service may drag [n]: it drags, on API 32 and later, where Android has the drag's actions. */
     private fun drags(n: Node) = n.has(DRAG) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S_V2
 
-    /** An event from node [id], or from the view itself. */
-    private fun send(id: Int, type: Int, fill: ((AccessibilityEvent) -> Unit)? = null) {
-        if (!manager.isEnabled) return
-        val parent = host.parent ?: return
+    /** An event from node [id], or from the view itself: whether its window took it. */
+    private fun send(id: Int, type: Int, fill: ((AccessibilityEvent) -> Unit)? = null): Boolean {
+        if (!manager.isEnabled) return false
+        val parent = host.parent ?: return false
         val e = if (Build.VERSION.SDK_INT >= 30) AccessibilityEvent(type) else Legacy.event(type)
         if (id == HOST) host.onInitializeAccessibilityEvent(e) else {
-            val n = nodes[id] ?: return
+            val n = nodes[id] ?: return false
             e.setSource(host, id)
             e.packageName = host.context.packageName
             e.className = kind(n)
@@ -585,7 +665,7 @@ internal class Access(private val host: View) {
         fill?.invoke(e)
         if (log && type != AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED && type != AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED)
             say("event ${AccessibilityEvent.eventTypeToString(type)}${if (e.contentChangeTypes != 0) " change ${e.contentChangeTypes}" else ""} from ${if (id == HOST) "the view" else named(id)}")
-        parent.requestSendAccessibilityEvent(host, e)
+        return parent.requestSendAccessibilityEvent(host, e)
     }
 
     companion object {
@@ -716,6 +796,28 @@ internal class Root(context: Context) : FrameLayout(context) {
     init { clipChildren = false }
 
     override fun getAccessibilityNodeProvider(): AccessibilityNodeProvider? = if (accessible) access.provider else null
+
+    override fun sendAccessibilityEventUnchecked(event: AccessibilityEvent) {
+        if (!access.heard(event)) super.sendAccessibilityEventUnchecked(event)
+    }
+
+    /**
+     * Whether the window has heard a drag start and not yet its end. Android tells a view of a drag's end only where
+     * the view took its start, which this does with `onDragEvent`, so it is offered to services as no drop target
+     * (`View.canAcceptAccessibilityDrop` asks for a listener), and it takes no drop. Exact begins no drag while this
+     * holds ([DragOut.start], [Requests]): the window keeps one drag's hold, and an earlier drag's end handled after a
+     * later drag began would take the later one's (`ViewRootImpl.handleDragEvent`).
+     */
+    var dragging = false
+        private set
+
+    override fun onDragEvent(event: android.view.DragEvent): Boolean {
+        when (event.action) {
+            android.view.DragEvent.ACTION_DRAG_STARTED -> { dragging = true; return true }
+            android.view.DragEvent.ACTION_DRAG_ENDED -> dragging = false
+        }
+        return false
+    }
 
     override fun dispatchHoverEvent(event: MotionEvent): Boolean = (accessible && access.hover(event)) || super.dispatchHoverEvent(event)
 }

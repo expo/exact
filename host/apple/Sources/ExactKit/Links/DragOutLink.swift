@@ -38,6 +38,44 @@ package protocol DragOutSources: AnyObject {
     func parked(_ view: NodeView)
     /// A parked `view` leaves the pool for good.
     func dropped(_ view: NodeView)
+    /// The drags an assistive technology offers on an element (D9): `view`
+    /// itself when `isElement`, else the view that holds an element UIKit
+    /// makes no view for (a paragraph's words, a link, a reader's atom). Nil
+    /// where UIKit's own offer the same.
+    func descriptors(of view: UIView, isElement: Bool) -> [UIAccessibilityLocationDescriptor]?
+}
+
+extension NodeView {
+    /// Whether a touch `hitTest` brings to this paragraph goes to the
+    /// selection surface its selectable container's paragraphs share
+    /// (`hitTest`'s `.touches` branch), whose selection then has the contact.
+    package var touchSelectsText: Bool { isParagraph && presenter?.textSelection.routesToSurface(self) == true }
+}
+
+/// UIKit offers an element only the drag interactions on it or in its
+/// subtree (Document: `UIAccessibility.h:445-450`), and a node's is on the
+/// node's view: an element inside the node, its text or a button in it, asks
+/// the node's sources (D9).
+extension NodeView {
+    package override var accessibilityDragSourceDescriptors: [UIAccessibilityLocationDescriptor]? {
+        get { super.accessibilityDragSourceDescriptors ?? presenter?.dragOut?.descriptors(of: self, isElement: true) }
+        set { super.accessibilityDragSourceDescriptors = newValue }
+    }
+}
+
+extension NativeButtonIOS {
+    package override var accessibilityDragSourceDescriptors: [UIAccessibilityLocationDescriptor]? {
+        get { super.accessibilityDragSourceDescriptors ?? owner?.presenter?.dragOut?.descriptors(of: self, isElement: true) }
+        set { super.accessibilityDragSourceDescriptors = newValue }
+    }
+}
+
+/// The button laid over a custom invoker is the element VoiceOver visits there.
+extension InvokerButton {
+    override var accessibilityDragSourceDescriptors: [UIAccessibilityLocationDescriptor]? {
+        get { super.accessibilityDragSourceDescriptors ?? invoker?.presenter?.dragOut?.descriptors(of: self, isElement: true) }
+        set { super.accessibilityDragSourceDescriptors = newValue }
+    }
 }
 #endif
 

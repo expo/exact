@@ -186,7 +186,7 @@ pub(super) fn passes(arena: &NodeArena, s: u32, space: &Space, depth: f32) -> bo
     let ignores = || ignore::edges(arena, s, SafeAreaIgnore::Keyboard)[2];
     match arena.observations.keyboards.policy {
         Some(KeyboardPolicy::ResizesContent) => {
-            let tolerance = arena.observations.tolerance();
+            let tolerance = super::area::tolerance(arena);
             ignores() && space.edges(arena, s)[2] <= depth + tolerance
         }
         Some(KeyboardPolicy::ResizesVisual) => ignores() || !scroll_axes(arena, s).1,

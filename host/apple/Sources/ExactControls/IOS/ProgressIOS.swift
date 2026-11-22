@@ -31,7 +31,8 @@ extension ControlHost {
         }
         for owner in owners {
             let spinner = spinners[owner.id] ?? {
-                let made = UIActivityIndicatorView(style: .medium)
+                let made = SpinnerIOS(style: .medium)
+                made.owner = owner
                 // Stopped, it still shows its frame: the agent's still one.
                 made.hidesWhenStopped = false
                 made.isUserInteractionEnabled = false
@@ -100,7 +101,8 @@ extension ControlHost {
         for owner in owners {
             let fresh = bars[owner.id] == nil
             let bar = bars[owner.id] ?? {
-                let made = UIProgressView(progressViewStyle: .default)
+                let made = ProgressBarIOS(progressViewStyle: .default)
+                made.owner = owner
                 made.isUserInteractionEnabled = false
                 bars[owner.id] = made
                 return made
@@ -145,5 +147,27 @@ extension ControlHost {
         return ["view": "UIActivityIndicatorView", "style": s.style == .large ? "large" : "medium", "animating": s.isAnimating,
                 "size": [InspectionValue.r2(s.bounds.width), InspectionValue.r2(s.bounds.height)]]
     }
+}
+/// UIKit's progress bar, which VoiceOver reads as an element of its own:
+/// given the drag of a draggable node around it when asked (LLP 1094.000 D9).
+final class ProgressBarIOS: UIProgressView {
+    weak var owner: NodeView?
+    #if os(iOS)
+    override var accessibilityDragSourceDescriptors: [UIAccessibilityLocationDescriptor]? {
+        get { super.accessibilityDragSourceDescriptors ?? owner?.presenter?.dragOut?.descriptors(of: self, isElement: true) }
+        set { super.accessibilityDragSourceDescriptors = newValue }
+    }
+    #endif
+}
+
+/// UIKit's activity indicator, given that drag as the bar is.
+final class SpinnerIOS: UIActivityIndicatorView {
+    weak var owner: NodeView?
+    #if os(iOS)
+    override var accessibilityDragSourceDescriptors: [UIAccessibilityLocationDescriptor]? {
+        get { super.accessibilityDragSourceDescriptors ?? owner?.presenter?.dragOut?.descriptors(of: self, isElement: true) }
+        set { super.accessibilityDragSourceDescriptors = newValue }
+    }
+    #endif
 }
 #endif

@@ -5,12 +5,14 @@
 //! container and keyboard terms the scroller observes, the container's being `reserved` where
 //! Exact reserves and elsewhere the scroller's native band where the band reaches it, and writes
 //! it less the platform's adjustment, at least 0 where it observes the container region, Exact
-//! reserves nothing and the band reaches it (D14).
+//! reserves nothing and the band reaches it (D14). And a box's extension (D13): how far its
+//! picture is mirrored past its border box, `auto` going as far as reach would.
 use super::area::{self, Space};
 use super::block::reservation;
 use super::{block, ignore, keyboard};
 use crate::arena::NodeArena;
-use crate::generated::{SafeAreaEdges, SafeAreaIgnore, SafeAreaReach};
+use crate::generated::{SafeAreaEdges, SafeAreaExtend, SafeAreaIgnore, SafeAreaReach};
+use crate::style::Dimension;
 use crate::{Kernel, NodeKey, Overflow, StyleId};
 
 /// A scroller's terms, each top right bottom left, in points in its layout's space: its owner's,
@@ -63,6 +65,50 @@ impl Kernel {
         let space = area::band_at(self, slot);
         space.placed().then(|| terms(arena, slot, &space))
     }
+
+    /// How far the box `key`'s picture is mirrored past its laid-out border box on each edge, top
+    /// right bottom left (D13's extension), in points in its layout's space. On an edge it extends
+    /// on, `auto` is the distance reach would have there were the box to reach that edge, whatever
+    /// its `-exact-safe-area-reach`, and 0 while the band is unavailable; a length is taken as
+    /// given and a calculation below 0 counts as 0. 0 on an edge it does not extend on. `None` when
+    /// it extends on no edge or is not live or not laid out.
+    pub fn extension(&self, key: NodeKey) -> Option<[f32; 4]> {
+        let arena = &self.arena;
+        let slot = arena.resolve(key)?;
+        let named = extended(arena, slot);
+        if !named.contains(&true) {
+            return None;
+        }
+        self.laid_out_frame(key)?;
+        let space = area::band_at(self, slot);
+        let auto = match space.band.filter(|_| space.placed()) {
+            Some(band) => reach_on(
+                arena,
+                slot,
+                &space,
+                &sides(arena, slot, &space, band).0,
+                named,
+            ),
+            None => [0.0; 4],
+        };
+        let style = arena.style(slot);
+        let env = super::owner::env_for(arena, slot, style);
+        let rare = &style.rare;
+        let bounds = [
+            &rare.safe_area_extend_bounds_top,
+            &rare.safe_area_extend_bounds_right,
+            &rare.safe_area_extend_bounds_bottom,
+            &rare.safe_area_extend_bounds_left,
+        ];
+        // A bound that resolves to `auto`, through a fallback too, is `auto`
+        Some(std::array::from_fn(|e| {
+            match (named[e], bounds[e].resolve(&env)) {
+                (false, _) => 0.0,
+                (true, Dimension::Auto) => auto[e],
+                (true, d) => d.at_basis(&env, 0.0).max(0.0),
+            }
+        }))
+    }
 }
 
 fn terms(arena: &NodeArena, slot: u32, space: &Space) -> ScrollTerms {
@@ -77,34 +123,12 @@ fn terms(arena: &NodeArena, slot: u32, space: &Space) -> ScrollTerms {
         };
     };
     let band_reaches = area::open_edges(arena, slot, space, band);
-    let (mut sides, mut reserving) = area::area_reserving(arena, slot, space, band);
-    // Take what its host clears as the area of an owner's root that reserves, as a controller's
-    // view lies under its own additional insets
-    if space.owner == Some(slot) {
-        let clear = block::clearance(arena, slot);
-        if let Some(r) = reservation::reserved(arena, slot) {
-            for e in (0..4).filter(|&e| r.added[e] != 0.0 || r.padding[e] != 0.0) {
-                (sides[e], reserving[e], container[e]) = ([0.0, clear[e]], true, true);
-            }
-        }
+    let (sides, reserving, roots) = sides(arena, slot, space, band);
+    for e in (0..4).filter(|&e| roots[e]) {
+        container[e] = true;
     }
-    let (edges, tolerance) = (space.edges(arena, slot), arena.observations.tolerance());
-    let named = reached(arena, slot);
-    let touches: [bool; 4] =
-        std::array::from_fn(|e| named[e] && edges[e] <= sides[e][1] + tolerance);
-    // Walk the ancestors only where an edge would reach past the scroller
-    let stops = match (0..4).any(|e| touches[e] && edges[e] > sides[e][0]) {
-        true => stops(arena, slot, space),
-        false => [0.0; 4],
-    };
-    // Stop reach at the keyboard's top under `resizes-content`, where the content root ends
-    let cover = space
-        .owner
-        .map_or([0.0; 4], |owner| keyboard::cover(arena, owner));
-    let reach: [f32; 4] = std::array::from_fn(|e| match touches[e] {
-        true => (edges[e] - sides[e][0].max(cover[e]).max(stops[e])).max(0.0),
-        false => 0.0,
-    });
+    let reach = reach_on(arena, slot, space, &sides, reached(arena, slot));
+    let edges = space.edges(arena, slot);
     let reserved = std::array::from_fn(|e| {
         reserving[e].then(|| (sides[e][1] - (edges[e] - reach[e])).max(0.0))
     });
@@ -116,6 +140,76 @@ fn terms(arena: &NodeArena, slot: u32, space: &Space) -> ScrollTerms {
         band_reaches,
         container,
     }
+}
+
+/// The area that reaches `slot` on each edge, its outer and inner sides from the space's edges,
+/// and whether Exact reserves there; for an owner's root that scrolls and reserves, what its host
+/// clears, as a controller's view lies under its own additional insets, the third value naming
+/// those edges. A root that does not scroll lies clear of its own reservations.
+fn sides(
+    arena: &NodeArena,
+    slot: u32,
+    space: &Space,
+    band: [f32; 4],
+) -> ([[f32; 2]; 4], [bool; 4], [bool; 4]) {
+    let (mut sides, mut reserving) = area::area_reserving(arena, slot, space, band);
+    let mut roots = [false; 4];
+    if space.owner == Some(slot) && area::scroll_view(arena, slot) {
+        let clear = block::clearance(arena, slot);
+        if let Some(r) = reservation::reserved(arena, slot) {
+            for e in (0..4).filter(|&e| r.added[e] != 0.0 || r.padding[e] != 0.0) {
+                (sides[e], reserving[e], roots[e]) = ([0.0, clear[e]], true, true);
+            }
+        }
+    }
+    (sides, reserving, roots)
+}
+
+/// How far `slot` reaches past its border box on each edge `named` names (D13): to the outer side
+/// of the area that reaches it, `sides`, where that area has depth and its border edge meets or
+/// lies inside it within half a device pixel, no further than the ancestors' stops and, under
+/// `resizes-content`, the keyboard's top, where the content root ends; 0 elsewhere.
+fn reach_on(
+    arena: &NodeArena,
+    slot: u32,
+    space: &Space,
+    sides: &[[f32; 2]; 4],
+    named: [bool; 4],
+) -> [f32; 4] {
+    let tolerance = area::tolerance(arena);
+    let edges = space.edges(arena, slot);
+    let touches: [bool; 4] = std::array::from_fn(|e| {
+        named[e] && sides[e][1] > sides[e][0] && edges[e] <= sides[e][1] + tolerance
+    });
+    // Walk the ancestors only where an edge would reach past the box
+    let stops = match (0..4).any(|e| touches[e] && edges[e] > sides[e][0]) {
+        true => stops(arena, slot, space),
+        false => [0.0; 4],
+    };
+    let cover = space
+        .owner
+        .map_or([0.0; 4], |owner| keyboard::cover(arena, owner));
+    std::array::from_fn(|e| match touches[e] {
+        true => (edges[e] - sides[e][0].max(cover[e]).max(stops[e])).max(0.0),
+        false => 0.0,
+    })
+}
+
+/// The edges `slot`'s `-exact-safe-area-extend` extends on, top right bottom left, `start` and
+/// `end` resolved against its `direction` (D13).
+fn extended(arena: &NodeArena, slot: u32) -> [bool; 4] {
+    let bits = arena.style(slot).rare.safe_area_extend;
+    let has = |v: SafeAreaExtend| bits & v.keyword_bits() != 0;
+    let (right, left) = match super::owner::rtl(arena, slot) {
+        false => (SafeAreaExtend::End, SafeAreaExtend::Start),
+        true => (SafeAreaExtend::Start, SafeAreaExtend::End),
+    };
+    [
+        has(SafeAreaExtend::Top),
+        has(SafeAreaExtend::Right) || has(right),
+        has(SafeAreaExtend::Bottom),
+        has(SafeAreaExtend::Left) || has(left),
+    ]
 }
 
 /// The edges `slot`'s `-exact-safe-area-reach` reaches on, top right bottom left: every edge
