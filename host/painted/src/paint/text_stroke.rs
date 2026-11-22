@@ -38,6 +38,7 @@ impl Painter {
             ((paragraph.width * scale + (device.0 - x)).ceil() + 2.0 * reach) / scale,
             ((paragraph.height * scale + (device.1 - y)).ceil() + 2.0 * reach) / scale,
         );
+        self.row_reach(super::bbox(ts, rect));
         if let Some(band) = paragraph
             .strokes
             .borrow_mut()
