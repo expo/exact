@@ -220,17 +220,16 @@ fn labels_are_only_built_on_the_trap_path() {
 
 #[test]
 fn at_read_rows_share_the_readers_list_and_call_budgets() {
-    let mut plan = contract::compile("component App\n  state xs = [1, 2]\n  derive picked = xs.map(x => x + 1)\n  view\n    text `${picked.length}`\n").unwrap();
-    plan.derives[0].unsettled = true;
+    let mut plan = contract::compile(
+        "component App\n  state xs = [1, 2]\n  state ys = [3, 4]\n  derive picked = xs.map(x => x + 1)\n  derive other = ys.map(x => x + 2)\n  view\n    column\n      text `${picked.length}`\n      text `${picked.length}/${other.length}`\n",
+    ).unwrap();
+    for row in &mut plan.derives {
+        row.unsettled = true;
+    }
     let js = crate::emit::emit(&plan, false, false).unwrap().js;
-    assert!(
-        js.contains("const d_0=($budget={s:0,n:0,d:0},$pc)=>"),
-        "{js}"
-    );
-    assert!(js.contains("++$budget.s>65536"), "{js}");
+    assert!(js.contains("const d_0=$atRead("), "{js}");
+    assert_eq!(js.matches("++$budget.s>65536").count(), 1, "{js}");
     assert!(js.contains("d_0(undefined,"), "{js}");
-    assert!(!js.contains("const d_0=memo"), "{js}");
-    assert!(js.contains("finally{$budget.d--}"), "{js}");
     assert!(!js.contains("const d_0=memo"), "{js}");
 }
 

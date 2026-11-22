@@ -89,8 +89,24 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (c: RouteController, _: UITraitCollection) in c.reopenTitle() }
         #endif
     }
+    /// Whether UIKit is making it appear as the destination of its stack's pop: from `viewIsAppearing` until
+    /// `viewDidAppear`, or `viewDidDisappear` where the pop is cancelled. Its side insets are published afresh meanwhile, in the transition too: it left in whatever pose it was
+    /// last sampled in, and UIKit can give it the new one later in the transition, after `viewIsAppearing` (LLP 1123,
+    /// "When the host publishes it")
+    var appearing = false
+    /// Whether it is the destination of a pop of its stack now running: the transition goes to it, or to the controller
+    /// that holds it in the stack, which was in the stack already (not moving to it), from one that has left the stack.
+    /// A push, a replacement of the stack's top, a tab More pushes, and a sheet's route presented with its stack are not.
+    private var isPopDestination: Bool {
+        guard let nav = navigationController, let coordinator = nav.transitionCoordinator,
+              let from = coordinator.viewController(forKey: .from), let to = coordinator.viewController(forKey: .to) else { return false }
+        var held: UIViewController = self
+        while let parent = held.parent, parent !== nav { held = parent }
+        return to === held && !held.isMovingToParent && !nav.viewControllers.contains(from)
+    }
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        appearing = false
         #if os(iOS)
         if navigationItem.largeTitleDisplayMode == .always { reopenTitle() }
         #endif
@@ -121,6 +137,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         host?.followSelection(showing: self)
         // UIKit sized its block (LLP 1123 D2); a deferred boot already published from its holder.
         host?.presenter.owners.publish()
+        appearing = isPopDestination
         // Run the edge passes that an app's selection owes it, whatever is under way, before the transition's first frame;
         // the covers follow below
         host?.runOwedScrollEdges(of: self)
@@ -352,6 +369,8 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     var exitPart: RoutePart?
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
+        // A transition that made it appear was cancelled
+        appearing = false
         retiringRoot?.removeFromSuperview()
         retiringRoot = nil
     }

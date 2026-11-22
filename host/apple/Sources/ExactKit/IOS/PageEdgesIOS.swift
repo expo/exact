@@ -257,7 +257,7 @@ extension NodeView {
         // Offsets a layout in flight saved to restore are native: they move with the inset.
         let moved = own.top - oldOwn.top
         if var saved = beforeLayoutScroll { saved.offset.y -= moved; saved.topInset += moved; beforeLayoutScroll = saved }
-        if var followed = followedScroll { followed.top -= moved; followedScroll = followed }
+        if var followed = followedScroll { followed.top -= moved; followed.port += moved; followedScroll = followed }
         if let mark { presenter?.collections.portMoved(id, since: mark) }
     }
 }
