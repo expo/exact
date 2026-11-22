@@ -702,21 +702,32 @@ final class NativeListNavigationIOSTests: XCTestCase {
         XCTAssertEqual(collection.contentOffset.y, -collection.adjustedContentInset.top, accuracy: 0.5)
     }
 
-    func testChangingANativeTitleToInlineKeepsTheVisibleNativeReader() throws {
+    /// A large title turned inline in a batch shortens the bar over a fixed collection: the native row keeps its place in
+    /// the port, as UIKit's own grouped collection keeps it (LLP 1123 D14, "Inset adoption"), so CSS `scrollTop` changes
+    /// only by the row's own shift in content, and the row moves up in the window with the bar's edge.
+    func testChangingANativeTitleToInlineKeepsTheNativeReadersPlaceInThePort() throws {
         let (session, _, route, node) = try nativeList(initialTop: 20)
         let p = session.presenter
         let collection = try XCTUnwrap(node.scrollView)
         let header = try XCTUnwrap(route.lifted)
         let heading = try XCTUnwrap(p.views.values.first { $0.props["accessibilityHeadingLevel"] != nil && $0.isDescendant(of: header) })
         let row = try XCTUnwrap(p.views[node.id + 10])
-        let before = try XCTUnwrap(p.groupedLists?.projectedRect(for: row, in: collection)).minY - collection.contentOffset.y
-        XCTAssertEqual(collection.contentOffset.y + node.scrollTopInset(collection), 20, accuracy: 0.5)
+        let content = { try XCTUnwrap(p.groupedLists?.projectedRect(for: row, in: collection)).minY }
+        let inPort = { try content() - collection.contentOffset.y - node.scrollPortInsets(collection).top }
+        let frame = { collection.superview?.convert(collection.frame, to: nil) }
+        let frameBefore = frame()
+        let (rowBefore, placeBefore, port) = (try content(), try inPort(), node.scrollPortInsets(collection).top)
+        let top = collection.contentOffset.y + node.scrollTopInset(collection)
+        XCTAssertEqual(top, 20, accuracy: 0.5)
         p.apply(wireBatch([["op": "props", "id": heading.id, "set": ["accessibilityHeadingLevel": "2"]]]))
         spin(0.1)
         XCTAssertTrue(node.scrollView === collection)
         XCTAssertEqual(route.navigationItem.largeTitleDisplayMode, .never)
-        let after = try XCTUnwrap(p.groupedLists?.projectedRect(for: row, in: collection)).minY - collection.contentOffset.y
-        XCTAssertEqual(after, before, accuracy: 0.5, "changing the title preserves the same native row at the same window position")
+        XCTAssertNotEqual(node.scrollPortInsets(collection).top, port, accuracy: 0.5, "the bar's inset changed")
+        XCTAssertEqual(frame(), frameBefore, "the collection stays where it was")
+        XCTAssertEqual(try inPort(), placeBefore, accuracy: 0.5, "the row keeps its place in the port")
+        let shift = try content() - rowBefore
+        XCTAssertEqual(collection.contentOffset.y + node.scrollTopInset(collection), top + shift, accuracy: 0.5, "scrollTop moves by the row's shift alone")
         let observation = Agent(session: session).layout([:])
         let measured = (observation["nodes"] as? [[String: Any]])?.first { ($0["id"] as? Int) == Int(node.id) }
         XCTAssertEqual(measured?["sy"] as? Double ?? -1, Double(collection.contentOffset.y + node.scrollTopInset(collection)), accuracy: 0.5, "the new layout basis is reported as the current logical offset")

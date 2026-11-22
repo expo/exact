@@ -57,13 +57,13 @@ final class PixelGridIOSTests: XCTestCase {
             p.listHost.correct(1, top: 10000, extent: 1000)
             XCTAssertEqual(scroll.contentOffset.y, 900, accuracy: 1e-6, "fractional range ends snap inward")
             scroll.contentInset.bottom = scale == 2 ? 0.4 : 0.6
-            node.followedScroll = (top: 900, end: true, start: false)
+            node.followedScroll = (top: 900, end: true, start: false, port: node.scrollPortInsets(scroll).top)
             node.restoreScrollPosition()
             let bound = (900 + scroll.contentInset.bottom) * scale
             XCTAssertEqual(scroll.contentOffset.y, bound.rounded(.down) / scale, accuracy: 1e-6, "followed fractional end")
             scroll.contentInset.bottom = 0
             scroll.contentOffset.y = 100
-            node.followedScroll = (top: 100.4, end: false, start: false)
+            node.followedScroll = (top: 100.4, end: false, start: false, port: node.scrollPortInsets(scroll).top)
             node.restoreScrollPosition()
             XCTAssertEqual(scroll.contentOffset.y, PixelGrid.round(100.4, scale: scale), accuracy: 1e-6)
             let format = UIGraphicsImageRendererFormat(); format.scale = scale; format.opaque = false; format.preferredRange = .standard

@@ -153,6 +153,43 @@ final class LocalInsetsIOSTests: XCTestCase {
         XCTAssertEqual(reported[3], max(0, safe.left - max(0, box.minX)), accuracy: 0.5, "left")
     }
 
+    /// A route coming back in a pop reads the sides it returns to while the pop runs, as UIKit gives them to it, not the
+    /// ones it left with, and keeps its top and bottom, which the bars' transition moves, until the pop ends.
+    func testARouteComingBackInAPopReadsItsNewSidesDuringThePop() throws {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "the bars and the safe area are a scene window's")
+        }
+        let (session, _) = try fixture(scene)
+        let navigation = session.presenter.navigationHost
+        until("the route shows") { self.node(session, "more") != nil && self.node(session, "left-probe") != nil }
+        let route = try XCTUnwrap(node(session, "route")), probe = try XCTUnwrap(node(session, "left-probe"))
+        let c = try XCTUnwrap(navigation.controllers[route.id]), nav = try XCTUnwrap(c.navigationController)
+        until("the first route's insets are reported") { navigation.localInsets.wanted[route.id] != nil }
+        let before = try XCTUnwrap(navigation.localInsets.wanted[route.id]), width = probe.bounds.width
+        _ = Agent(session: session).tap(["id": Int(try XCTUnwrap(node(session, "more")).id)])
+        until("the pushed route lands, the first out of the window") {
+            nav.viewControllers.count == 2 && nav.transitionCoordinator == nil && c.viewIfLoaded?.window == nil
+        }
+        // The pose changes while the first route is away: a side inset it has not seen
+        let host = try XCTUnwrap(window?.rootViewController)
+        host.additionalSafeAreaInsets.left += 20
+        window?.layoutIfNeeded()
+        XCTAssertEqual(navigation.localInsets.wanted[route.id], before, "away, it keeps what it had")
+        nav.popViewController(animated: true)
+        var during: (width: CGFloat, top: CGFloat?)?, timeline: [String] = []
+        until("the pop lands") {
+            let moving = nav.transitionCoordinator != nil, shown = c.viewIfLoaded?.window != nil
+            timeline.append("moving \(moving) shown \(shown) left \(c.surface.safeAreaInsets.left) probe \(probe.bounds.width)")
+            if moving, shown, during == nil, abs(probe.bounds.width - width) > 0.5 {
+                during = (probe.bounds.width, navigation.localInsets.wanted[route.id]?[0])
+            }
+            return !moving && nav.viewControllers.count == 1 && timeline.count > 2
+        }
+        let read = try XCTUnwrap(during, "the content read no new side before the pop landed: \(timeline.suffix(8).joined(separator: " | "))")
+        XCTAssertEqual(read.width, width + 20, accuracy: 0.5, "the content reads the left side it returns to while the pop runs")
+        XCTAssertEqual(read.top ?? -1, before[0], accuracy: 0.5, "its top holds until the pop ends")
+    }
+
     func testAScrollerAtTheTopOptsOutAndItsFirstBoxReachesUnderTheBar() throws {
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
             throw missing("scene", "the bars and the safe area are a scene window's")

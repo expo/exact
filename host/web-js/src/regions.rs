@@ -51,7 +51,10 @@ impl Em<'_> {
             .enumerate()
             .filter(|(_, row)| row.unsettled && row.owner.map(|a| a.0) == owner)
             .collect();
-        if owner.is_some() && !rows.is_empty() {
+        if rows.is_empty() {
+            return Ok(String::new());
+        }
+        if owner.is_some() {
             let depth = scope.frames.len();
             let names = std::rc::Rc::make_mut(&mut scope.local_derives);
             for (ordinal, &(i, _)) in rows.iter().enumerate() {
@@ -63,11 +66,15 @@ impl Em<'_> {
                 names.insert(i, (name, self.mount_templates.depth + 1));
             }
         }
+        let mut inner = scope.clone();
+        inner.unsettled = true;
+        inner.evaluation = None;
+        inner.capture = !self.site_attrs && !self.dev_reload;
+        let mut templates =
+            super::templates::Templates::computations(self.mount_templates.depth + 1, "$budget");
+        let read = self.uses.budget("$atRead");
         let mut out = String::new();
         for (i, row) in rows {
-            let mut inner = scope.clone();
-            inner.unsettled = true;
-            inner.evaluation = None;
             let f = code::function(
                 self.plan,
                 self.plan.code(row.body),
@@ -75,15 +82,24 @@ impl Em<'_> {
                 0,
                 &mut self.uses,
             )?;
-            let enter = self.uses.budget("$enter");
             let name = scope
                 .local_derives
                 .get(&i)
                 .map(|(name, _)| name.clone())
                 .unwrap_or_else(|| format!("d_{i}"));
-            write!(out, "const {name}=($budget={{s:0,n:0,d:0}},$pc)=>{{{enter}($budget,$pc);try{{return ({f})($budget)}}finally{{$budget.d--}}}};").unwrap();
+            let getter = if inner.capture {
+                // Resolve captures when the value is read. Its resource or another
+                // getter may be declared after this one in the same scope.
+                let body = f.strip_prefix("($budget)=>").expect("at-read function");
+                let expr = templates.expression(body.into());
+                format!("$budget=>{expr}")
+            } else {
+                f
+            };
+            write!(out, "const {name}={read}({getter});").unwrap();
         }
-        Ok(out)
+        let (declarations, getters) = templates.render(out, scope.capture, "$read");
+        Ok(declarations + &getters)
     }
 
     pub(super) fn region(&mut self, r: u32, parent: &str, scope: &Scope) -> Result<(), String> {

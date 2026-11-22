@@ -499,31 +499,35 @@ extension NavigationHost {
         return (max(0, safe.left - minX), max(0, safe.right - (container.bounds.maxX - maxX)))
     }
 
-    /// @ref LLP 1123 D9 — each route's own safe area, which its content reads
-    /// as `var(--exact-safe-area-inset-*)`: its controller's view's, the bars,
-    /// the status bar and the home indicator in it, on the sides only as far
-    /// as the route's box reaches them, as its covers are. A route out of a
-    /// window keeps the last it had, UIKit's zero there being no measurement,
-    /// and so does one while its stack's transition runs, as its cover does;
-    /// one that has none yet takes what it has from its first frame, its sides
-    /// from where a sheet being presented lands (`landingSides`). And the
-    /// session root's while the containers take the whole view, where `env()`
-    /// is 0 but the screen's insets are not. Whether any changed.
+    /// @ref LLP 1123 D9 — each route's own safe area, which its content reads as
+    /// `var(--exact-safe-area-inset-*)`: its controller's view's, the bars, the
+    /// status bar and the home indicator in it, on the sides only as far as the
+    /// route's box reaches them, as its covers are. A route out of a window keeps
+    /// the last it had, UIKit's zero there being no measurement, and so does one
+    /// while its stack's transition runs, as its cover does, but for its sides
+    /// while it appears (`RouteController.appearing`), since UIKit can give a route
+    /// coming back in a pop its new sides during the transition, after
+    /// `viewIsAppearing`. One that has none yet takes what it has, and an appearing
+    /// one its sides, from where a sheet being presented lands (`landingSides`).
+    /// And the session root's while the containers take the whole view, where
+    /// `env()` is 0 but the screen's insets are not. Whether any changed.
     func reportLocalInsets() -> Bool {
         var wanted: [UInt32?: [CGFloat]] = [:]
         for c in controllers.values where presenter.views[c.node.id] === c.node {
-            let last = localInsets.wanted[c.node.id]
+            let last = localInsets.wanted[c.node.id], moving = c.navigationController?.transitionCoordinator != nil
             let view = c.surface
-            guard view.window != nil, c.node.window != nil,
-                  last == nil || c.navigationController?.transitionCoordinator == nil else {
+            guard view.window != nil, c.node.window != nil, last == nil || !moving || c.appearing else {
                 wanted[c.node.id] = last
                 continue
             }
             let box = c.node.convert(c.node.bounds, to: view)
             let safe = view.safeAreaInsets
             var sides = (left: max(0, safe.left - max(0, box.minX)), right: max(0, safe.right - max(0, view.bounds.maxX - box.maxX)))
-            if last == nil, let landing = Self.landingSides(c) { sides = landing }
-            wanted[c.node.id] = [safe.top, sides.right, safe.bottom, sides.left]
+            if last == nil || c.appearing, let landing = Self.landingSides(c) { sides = landing }
+            // An appearing route takes its sides afresh while the transition runs and keeps its top and bottom, which the
+            // bars' own transition moves, until it ends
+            if let last, moving { wanted[c.node.id] = [last[0], sides.right, last[2], sides.left] }
+            else { wanted[c.node.id] = [safe.top, sides.right, safe.bottom, sides.left] }
         }
         if wantsWholeView, let view = presenter.session?.view, view.window != nil {
             let safe = view.safeAreaInsets

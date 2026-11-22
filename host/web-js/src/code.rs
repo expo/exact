@@ -573,7 +573,7 @@ impl Translator<'_> {
                 }
                 Opcode::LoadDerive => {
                     let pc = if self.plan.unsettled_body(x.args[0] as u32).is_some() {
-                        self.uses.budget("$enter");
+                        self.uses.budget("$atRead");
                         Some(x.pc.to_string())
                     } else {
                         None
