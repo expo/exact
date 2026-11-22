@@ -294,3 +294,36 @@ fn a_number_its_indent_moves_before_its_start_still_rolls() {
         },
     );
 }
+
+#[test]
+fn a_column_of_text_its_box_clips_adds_no_reach() {
+    // One line a column: the other five columns are past the box's right,
+    // where `overflow-x` clips them.
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &crate::test_plan(
+            r#"component App
+  view
+    scroll width=200 height=100
+      column
+        text "one\ntwo\nthree\nfour\nfive\nsix" white-space="pre" width=100 height=20 column-count=2 column-gap=20 column-fill="auto" overflow-x="clip" flex-shrink=0
+"#,
+        ),
+        (),
+        (200., 120.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let heard = Rc::new(RefCell::new(Heard::default()));
+    p.reader_replaced(Box::new(Keeps {
+        heard: heard.clone(),
+        row: 0,
+    }));
+    p.frame();
+    let bounds = heard.borrow().bounds.clone();
+    assert_eq!(bounds.len(), 1);
+    // The column's box and margin; the clipped columns would reach past 300.
+    assert!(bounds[0].0 + bounds[0].2 <= 200. + 48., "{bounds:?}");
+}
