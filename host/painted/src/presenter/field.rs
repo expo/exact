@@ -328,7 +328,7 @@ impl<D: DataSource> Presenter<D> {
         let value = self.field_text_ref(id);
         match self.fields.get(&id) {
             Some(mark) if mark.value == value => (mark.selection, mark.upstream),
-            _ => (FieldSelection::at_end(value), false),
+            _ => (FieldSelection::at_end(&value), false),
         }
     }
 
@@ -751,7 +751,7 @@ impl<D: DataSource> Presenter<D> {
             };
             let next = String::from_utf16_lossy(&[&value[..start], &units, &value[end..]].concat());
             let next = if textarea {
-                next.replace("\r\n", "\n").replace('\r', "\n")
+                exact_kernel::control::textarea_value(&next).into_owned()
             } else {
                 next.replace(['\r', '\n'], "")
             };

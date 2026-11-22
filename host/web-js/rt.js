@@ -980,7 +980,8 @@ export const Store = {
 export const Inspections = DEVELOPMENT_STORE
   ? resourceInspection(true, () => clock.now)
   : { track() {}, begin() {}, placeholder() {}, stoodIn() {}, take() {}, fail() {} };
-// Requests in flight, for the agent's `clock settle`.
+// Each new request can interrupt an agent clock jump so its reply lands before the next timer.
+// A queued style refresh runs at the browser's microtask checkpoint without interrupting the jump.
 export const inflight = { n: 0 };
 // A development build's only: the dev page's hold asks for it so, as a bundled page serves no rt.js; not on `exact`,
 // which says the runtime is up.

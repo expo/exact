@@ -102,8 +102,9 @@ impl PaintedField {
             return field.paragraph.textarea_scroll_max(&field.value, content);
         }
         let value = previous
-            .map(|field| field.value.as_str())
-            .unwrap_or_else(|| node.props.str(PropId::Value).unwrap_or(""));
+            .map(|field| Cow::Borrowed(field.value.as_str()))
+            .unwrap_or_else(|| exact_kernel::control::bound_field_value(node.props));
+        let value = value.as_ref();
         let shown = if value.is_empty() {
             node.props.str(PropId::Placeholder).unwrap_or("")
         } else {
@@ -478,7 +479,9 @@ impl Painter {
             .as_ref()
             .map(|c| c.value.as_str())
             .or_else(|| control::choice(node, walk.scene.chosen.get(&node.id)))
-            .unwrap_or_else(|| node.props.str(PropId::Value).unwrap_or(""));
+            .map(Cow::Borrowed)
+            .unwrap_or_else(|| exact_kernel::control::bound_field_value(node.props));
+        let value = value.as_ref();
         // Material's field floats its placeholder as its label (`material.rs`).
         let labelled = native
             && !look::neutral()

@@ -1268,20 +1268,6 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         }
     }
 
-    func evaluate(token: UInt32, script: String) {
-        guard pdf == nil else { return sendReply(token: token, kind: 2, text: "a PDF frame has no document to script") }
-        if direct {
-            guard !serving else { sendReply(token: token, kind: 2, text: "guest frame is not ready"); return }
-            webView.evaluateJavaScript(script, in: nil, in: world) { [weak self] result in self?.evaluated(token: token, result) }
-            return
-        }
-        guard let guestFrame else {
-            sendReply(token: token, kind: 2, text: "guest frame is not ready")
-            return
-        }
-        webView.evaluateJavaScript(script, in: guestFrame, in: world) { [weak self] result in self?.evaluated(token: token, result) }
-    }
-
     func evaluated(token: UInt32, _ result: Result<Any, Error>) {
         switch result {
         case .success(let value):
@@ -1387,8 +1373,11 @@ public func exactWebSnapshot(_ handle: UnsafeMutableRawPointer?, _ token: UInt32
 
 @_cdecl("exact_web_agent_eval")
 public func exactWebAgentEval(_ handle: UnsafeMutableRawPointer?, _ token: UInt32, _ bytes: UnsafePointer<UInt8>?, _ length: UInt32) {
-    let script = String(decoding: UnsafeBufferPointer(start: bytes, count: Int(length)), as: UTF8.self)
-    arm(handle)?.evaluate(token: token, script: script)
+    guard let arm = arm(handle), let bytes else { return }
+    guard let request = try? JSONDecoder().decode(GuestEvaluation.self, from: Data(bytes: bytes, count: Int(length))) else {
+        return arm.sendReply(token: token, kind: 2, text: "invalid guest evaluation")
+    }
+    arm.evaluate(token: token, request: request)
 }
 
 @_cdecl("exact_web_destroy")

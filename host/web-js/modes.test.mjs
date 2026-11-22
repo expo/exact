@@ -6,7 +6,7 @@ import { createDocument } from './dom.js';
 
 // rt.js's pieces modes.js reads; the runtime itself needs a browser's.
 const After = [], journal = [];
-mock.module('./rt.js', () => ({ After, PropHooks: {}, inflight: { n: 0 }, say: line => journal.push(line) }));
+mock.module('./rt.js', () => ({ After, PropHooks: {}, say: line => journal.push(line) }));
 
 test('a boundary takes its tuple and the inherited token text, in document order', async () => {
   const document = createDocument();
@@ -250,7 +250,7 @@ test('a release copy of modes.js has no live entry point', async () => {
   const dir = mkdtempSync(join((await import('node:os')).tmpdir(), 'exact-modes-release-'));
   let modes;
   try {
-    writeFileSync(join(dir, 'rt.js'), 'export const After = [], PropHooks = {}, inflight = { n: 0 }, say = () => {};\n');
+    writeFileSync(join(dir, 'rt.js'), 'export const After = [], PropHooks = {}, say = () => {};\n');
     writeFileSync(join(dir, 'modes.js'), release);
     const document = createDocument();
     Object.assign(globalThis, { document, __exactRender: true, exact: {} });

@@ -770,7 +770,7 @@ final class WebViews: WebHosting {
         wait.done = true
     }
 
-    private func request(_ entry: WebEntry, script: String? = nil) -> Result<Data, WebRequestError> {
+    private func request(_ entry: WebEntry, script: String? = nil, viewPoint: [Double]? = nil) -> Result<Data, WebRequestError> {
         guard let module, let handle = entry.handle else { return .failure(WebRequestError(message: failure ?? "web arm unavailable")) }
         let token = nextToken
         nextToken &+= 1
@@ -778,7 +778,12 @@ final class WebViews: WebHosting {
         waits[token] = wait
         entry.asked = false
         if let script {
-            let data = Data(script.utf8)
+            var operation: [String: Any] = ["script": script]
+            if let viewPoint { operation["viewPoint"] = viewPoint }
+            guard let data = try? JSONSerialization.data(withJSONObject: operation) else {
+                waits.removeValue(forKey: token)
+                return .failure(WebRequestError(message: "invalid guest input"))
+            }
             data.withUnsafeBytes { bytes in
                 module.evaluate(handle, token, bytes.bindMemory(to: UInt8.self).baseAddress, UInt32(data.count))
             }
@@ -833,12 +838,32 @@ final class WebViews: WebHosting {
 
     func tap(_ owner: NodeView, request values: [String: Any], at: [Double]) -> [String: Any] {
         guard let entry = entries[owner.id] else { return ["error": "iframe \(owner.id) is unavailable"] }
-        let script = GuestInput.tap(selector: values["selector"] as? String, x: values["x"] as? Double, y: values["y"] as? Double)
-        switch guestResponse(request(entry, script: script), operation: "tap") {
+        var viewPoint: [Double]?
+        if let local = values["at"] as? [Double], values["selector"] == nil, values["x"] == nil, values["y"] == nil {
+            guard local.count == 2, local.allSatisfy(\.isFinite), let view = entry.platformView else {
+                return ["error": "guest tap needs a point and a mounted frame"]
+            }
+            let p = view.convert(CGPoint(x: local[0], y: local[1]), from: owner)
+            let bounds = view.bounds
+            #if os(macOS)
+            let y = view.isFlipped ? p.y - bounds.minY : bounds.maxY - p.y
+            #else
+            let y = p.y - bounds.minY
+            #endif
+            let x = p.x - bounds.minX
+            guard x >= 0, y >= 0, x < bounds.width, y < bounds.height else {
+                return ["error": "guest tap point is outside the frame's viewport"]
+            }
+            viewPoint = [Double(x), Double(y)]
+        }
+        let script = viewPoint == nil
+            ? GuestInput.tap(selector: values["selector"] as? String, x: values["x"] as? Double, y: values["y"] as? Double)
+            : GuestInput.tapAtViewPoint
+        switch guestResponse(request(entry, script: script, viewPoint: viewPoint), operation: "tap") {
         case .failure(let error):
             return ["error": error.message]
         case .success(let object):
-            var result: [String: Any] = ["tapped": Int(owner.id), "guest": true, "at": at]
+            var result: [String: Any] = ["tapped": Int(owner.id), "guest": true, "at": at, "delivery": "synthetic", "inputPath": "dispatchEvent"]
             // The click opened a dialog, held as this ticket.
             if object["held"] as? Bool == true, let ticket = held.filter({ $0.value.view == owner.id }).keys.max() { result["held"] = Int(ticket) }
             return result

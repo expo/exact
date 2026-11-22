@@ -977,6 +977,26 @@ impl Kernel {
     }
 }
 
+/// A textarea's API value has one LF for each CRLF or lone CR in its raw
+/// value. Selection, editing and layout use those same characters.
+pub fn textarea_value(value: &str) -> std::borrow::Cow<'_, str> {
+    if value.contains('\r') {
+        value.replace("\r\n", "\n").replace('\r', "\n").into()
+    } else {
+        value.into()
+    }
+}
+
+/// The displayed value of a text field whose binding supplies its text.
+pub fn bound_field_value(props: &PropList) -> std::borrow::Cow<'_, str> {
+    let value = props.str(PropId::Value).unwrap_or("");
+    if props.str(PropId::SemanticTag) == Some("textarea") {
+        textarea_value(value)
+    } else {
+        value.into()
+    }
+}
+
 /// HTML's maxlength applies to text field types and textarea, not number or controls.
 pub fn text_maxlength(props: &crate::PropList) -> Option<usize> {
     if props.str(PropId::SemanticTag) != Some("textarea")

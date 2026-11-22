@@ -1347,18 +1347,18 @@ extension Agent {
 }
 
 open class ExactAgentWindow: NSWindow {
-    private static weak var pointerWindow: NSWindow?
+    private(set) static var pointerEvent: NSEvent?
 
     /// An inactive process cannot make its window key. AppKit checks the target
     /// window's key state when a native table receives a primary button event.
-    fileprivate static func sendPointerEvent(_ event: NSEvent) {
-        let previous = pointerWindow
-        pointerWindow = NSApp.isActive ? nil : event.window
-        defer { pointerWindow = previous }
+    static func sendPointerEvent(_ event: NSEvent) {
+        let previous = pointerEvent
+        pointerEvent = event
+        defer { pointerEvent = previous }
         NSApp.sendEvent(event)
     }
 
-    public override var isKeyWindow: Bool { self === Self.pointerWindow || super.isKeyWindow }
+    public override var isKeyWindow: Bool { (!NSApp.isActive && self === Self.pointerEvent?.window) || super.isKeyWindow }
 
     /// WebKit reads this public AppKit property when deciding whether to run a
     /// page's frames and timers. At the driver's reserved level, a covered window

@@ -11,7 +11,7 @@
 // theirs, resolved in its own modes, while one holds. It runs after each
 // commit, a pin's change and `setMode`. Like the runner's, the window's modes
 // do not persist (§9 Q5).
-import { After, PropHooks, inflight, say } from "./rt.js";
+import { After, PropHooks, say } from "./rt.js";
 
 // The rows by bit (`modes.rs` `CHANNELS`).
 const CH = ["color", "caret-color", "fill", "stroke", "accent-color", "text-shadow", "-webkit-text-stroke-color"];
@@ -186,8 +186,8 @@ function accent(b, v) {
 // (`After`), as it is built.
 function schedule() {
   if (Pending || rendering()) return;
-  Pending = true; inflight.n++;
-  queueMicrotask(() => { try { apply(); } finally { inflight.n--; } });
+  Pending = true;
+  queueMicrotask(apply);
 }
 
 /** A bound inherited colour row (`S`, `Sm` or `Sr` as `s`): its value as

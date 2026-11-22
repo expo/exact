@@ -280,7 +280,7 @@ final class NativeButtonMac: NSButton {
     /// presses Delete. The agent's window is never key, so its every click
     /// counts here as at a node (`NodeView.everyClickCounts`): without it a
     /// destructive button took no click from the driver at all.
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { NodeView.everyClickCounts || super.acceptsFirstMouse(for: event) }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { NodeView.countsFirstMouse(event) || super.acceptsFirstMouse(for: event) }
     // `pointerdown`/`pointerup` (LLP 1005 §Events): AppKit's tracking loop
     // takes the button's mouse events, so the node hears them here. The up
     // goes before the action the loop sends, DOM's order.

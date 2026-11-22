@@ -26,12 +26,12 @@ let Pending = false;
 function schedule() {
   if (typeof window === "undefined" || globalThis.__exactRender) return refresh();
   if (Pending) return;
-  Pending = true; inflight.n++;
+  Pending = true;
   // After runs before navigation projection and queued root-font commands.
   // A microtask reads their final styles without waiting on a visible frame.
   queueMicrotask(() => {
     Pending = false;
-    try { refresh(); } finally { inflight.n--; }
+    refresh();
   });
 }
 // A role, or an icon token (LLP 1121 D10): by name, by `sf/<name>`, or the build's own form,

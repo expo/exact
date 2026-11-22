@@ -935,18 +935,17 @@ impl<D: DataSource> Presenter<D> {
     /// What a field shows and commits: its typed text while its bound
     /// value is the one it had then (`keep_typed`), else that value.
     pub(crate) fn field_text(&self, id: ViewId) -> String {
-        self.field_text_ref(id).to_owned()
+        self.field_text_ref(id).into_owned()
     }
 
-    pub(super) fn field_text_ref(&self, id: ViewId) -> &str {
-        if let Some(value) = self.ime_value(id) {
-            return value;
-        }
+    pub(super) fn field_text_ref(&self, id: ViewId) -> std::borrow::Cow<'_, str> {
         let Some(node) = self.host.kernel().node(id) else {
-            return "";
+            return "".into();
         };
-        crate::paint::control::choice(&node, self.chosen.get(&id))
-            .unwrap_or_else(|| node.props.str(PropId::Value).unwrap_or(""))
+        self.ime_value(id)
+            .or_else(|| crate::paint::control::choice(&node, self.chosen.get(&id)))
+            .map(std::borrow::Cow::Borrowed)
+            .unwrap_or_else(|| exact_kernel::control::bound_field_value(node.props))
     }
 
     /// After an edit's dispatch: a field whose `value` the edit's action did

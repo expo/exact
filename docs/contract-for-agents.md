@@ -6414,6 +6414,8 @@ During a reorder `state.reorder` reads `{ item, from, to, before, phase,
 ending }`; a grouped grip also takes `type <grip> key Space` and the arrows. `clock +N` moves the virtual clock without
 waiting for a store's or the network's reply on real time (unless a timer fires
 first); its reply says what is still in flight (`inflight`, on every host), and `clock settle` lands it.
+On the web JS target, a single jump can deliver several timer-driven DOM edits together
+to a `MutationObserver`. To observe an intermediate value, advance to that time in a separate clock step.
 A request the server holds, marked `exactHeld: true` (a long poll, LLP 1016.000 D9), is the exception: no
 clock waits on it, neither a jump nor `clock settle` nor `clock data`, and each of their replies names it
 (`held`, `heldTargets`; `state.pending` marks it `held: true`). Its answer must be safe to supersede.
