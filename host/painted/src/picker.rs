@@ -351,6 +351,62 @@ pub fn open(path: &str) -> Option<std::fs::File> {
     open_from(path, roots)
 }
 
+/// [`open`] once the reader's boot has made the app's directories known
+/// ([`know_roots`], [`set_roots`]), and `None` before: in a process Android
+/// started for the app's content provider alone, an `app:/` path names
+/// nothing (`Files.openFile` on Android).
+pub fn open_known(path: &str) -> Option<std::fs::File> {
+    let roots = ROOTS.lock().unwrap_or_else(|e| e.into_inner()).clone()?;
+    open_from(path, || roots)
+}
+
+/// The host's regular file `source`, outside the app's directories, renamed
+/// to the `app:/` path `path` with its missing directories made, as a
+/// background transfer places a response (ibex2's
+/// `AppDirectories::publish_file`): every directory below the root is
+/// reached through no symbolic link, and a link found at `path` is
+/// refused, never written through. The camera app's photo is kept this way on Android.
+/// Whether `source` is now the file at `path`; it must be on the same file
+/// system.
+#[cfg(unix)]
+pub fn publish(path: &str, source: &std::path::Path) -> bool {
+    let roots = ROOTS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    roots.is_some_and(|roots| publish_from(path, source, roots))
+}
+
+#[cfg(unix)]
+pub(crate) fn publish_from(path: &str, source: &std::path::Path, roots: [PathBuf; 3]) -> bool {
+    use ibex2::stdlib::fs::{self, FsOp};
+    use std::os::unix::fs::MetadataExt;
+    static WRITE: std::sync::LazyLock<ibex2::grant::GrantSet> = std::sync::LazyLock::new(|| {
+        ibex2::grant::GrantSet::parse("fs.write app:/data\nfs.write app:/cache\nfs.write app:/tmp")
+            .expect("the app roots' write grants parse")
+    });
+    let (Some((index, _)), Some((parent, _))) = (parse(path), path.rsplit_once('/')) else {
+        return false;
+    };
+    // Published is the staged file itself at `path`, whatever the rename's
+    // own answer: it renames before syncing the directories, and it takes a
+    // file already at `path` with no source for its own earlier rename.
+    let staged = match std::fs::symlink_metadata(source) {
+        Ok(meta) if meta.is_file() => (meta.dev(), meta.ino()),
+        _ => return false,
+    };
+    // The destination's root stands for all three, as `open_from` takes it,
+    // and is the host's to make: another may not exist yet.
+    let root = roots[index].clone();
+    if std::fs::create_dir_all(&root).is_ok() {
+        if let Ok(directories) = ibex2::stdlib::app_fs::AppDirectories::new(&root, &root, &root) {
+            if fs::run(&WRITE, Some(&directories), FsOp::Mkdir, parent, None, None).is_ok() {
+                let _ = directories.publish_file(&WRITE, path, source);
+            }
+        }
+    }
+    open_from(path, || roots)
+        .and_then(|file| file.metadata().ok())
+        .is_some_and(|meta| (meta.dev(), meta.ino()) == staged)
+}
+
 /// The place of the file [`open`] finds, for a reader that needs a path (a
 /// player's animation): `None` where `open` refuses.
 pub fn file(path: &str) -> Option<PathBuf> {
@@ -879,6 +935,61 @@ mod tests {
         );
         assert_eq!(place("app:/data/photos/a.png/x"), None, "below a file");
         assert_eq!(place("app:/data/../private/new.png"), None);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The camera app's photo kept at an `app:/` path: its directories and
+    /// its root made, and a link at the path or on the way refused, so
+    /// nothing is written where a link points.
+    #[cfg(unix)]
+    #[test]
+    fn a_published_file_goes_through_no_link() {
+        let base =
+            std::env::temp_dir().join(format!("exact-painted-publish-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let roots = [
+            base.join("data"),
+            base.join("cache"),
+            base.join("temporary"),
+        ];
+        let private = base.join("private");
+        std::fs::create_dir_all(&private).unwrap();
+        std::fs::write(private.join("kept.db"), "kept").unwrap();
+        let staged = |name: &str| {
+            let file = base.join(name);
+            std::fs::write(&file, name).unwrap();
+            file
+        };
+        let publish =
+            |path: &str, source: &std::path::Path| publish_from(path, source, roots.clone());
+
+        assert!(publish("app:/data/camera/day/1.jpg", &staged("one")));
+        assert_eq!(
+            std::fs::read_to_string(roots[0].join("camera/day/1.jpg")).unwrap(),
+            "one"
+        );
+        assert!(
+            publish("app:/tmp/camera/2.jpg", &staged("two")),
+            "a root not made yet"
+        );
+        assert_eq!(
+            std::fs::read_to_string(roots[2].join("camera/2.jpg")).unwrap(),
+            "two"
+        );
+        std::os::unix::fs::symlink(private.join("kept.db"), roots[0].join("shot.jpg")).unwrap();
+        assert!(!publish("app:/data/shot.jpg", &staged("link")));
+        assert!(roots[0].join("shot.jpg").is_symlink());
+        std::os::unix::fs::symlink(&private, roots[0].join("photos")).unwrap();
+        assert!(!publish("app:/data/photos/kept.db", &staged("three")));
+        assert!(!publish("app:/data/../private/kept.db", &staged("four")));
+        assert!(
+            !publish("app:/data/camera/day/1.jpg", &base.join("gone")),
+            "no staged file, whatever is at the path"
+        );
+        assert_eq!(
+            std::fs::read_to_string(private.join("kept.db")).unwrap(),
+            "kept"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 

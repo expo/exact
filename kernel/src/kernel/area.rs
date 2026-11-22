@@ -51,7 +51,7 @@ pub(super) fn area_reserving(
         .then(|| arena.parent(slot))
         .flatten();
     // What each box reserves this round, which `check_reservations` resolved
-    let (observations, tolerance) = (&arena.observations, arena.observations.tolerance());
+    let (observations, tolerance) = (&arena.observations, tolerance(arena));
     let mut via = slot;
     while let Some(s) = above {
         let r =
@@ -277,8 +277,14 @@ pub(super) fn passed(arena: &NodeArena, slot: u32, space: &Space, band: [f32; 4]
         return [false; 4];
     }
     let (sides, edges) = (area(arena, slot, space, band), space.edges(arena, slot));
-    let tolerance = arena.observations.tolerance();
+    let tolerance = tolerance(arena);
     std::array::from_fn(|e| ignored[e] && edges[e] <= sides[e][1] + tolerance)
+}
+
+/// D9's tolerance: half a device pixel at the display scale, within which an edge meets the area,
+/// whether or not an observation solve has run (the solve settles readers within the same).
+pub(crate) fn tolerance(arena: &NodeArena) -> f32 {
+    0.5 / arena.display_scale.unwrap_or(1.0)
 }
 
 /// Whether the host presents `slot` as a scroll view: an axis whose

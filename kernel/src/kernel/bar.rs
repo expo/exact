@@ -244,7 +244,7 @@ impl super::Kernel {
         let parents = parents(arena);
         let (held, tolerance) = (
             &arena.observations.bars.observed,
-            arena.observations.tolerance(),
+            super::area::tolerance(arena),
         );
         let hidden = |p: u32| arena.flags(p).has(crate::id::NodeFlags::HIDDEN);
         let branches =

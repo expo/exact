@@ -1,5 +1,5 @@
 //! Action registrations share compiled bodies and argument checks across component uses.
-use super::{code, templates::Templates, type_code, type_code_numeric, Em, Scope};
+use super::{code, templates::Templates, type_code_numeric, Em, Scope};
 use std::fmt::Write as _;
 
 impl Em<'_> {
@@ -29,31 +29,25 @@ impl Em<'_> {
                 self.row_actions.insert(i);
                 f = f.replacen('(', "($r,", 1).replace("($r,)", "($r)");
             }
-            // The parameters' types: an argument outside its type is refused,
-            // as the runner refuses it (ArgumentType), before the body runs. A
-            // hidden parameter (`@capture:…`, a child's captured prop) is the
-            // compiler's argument: its numbers need not be finite.
-            let types: Vec<String> = r
+            // Reading a captured prop through an action has the same limits as
+            // reading it in place. Only authored arguments have a string budget
+            // and require finite numbers (LLP 1090 D6).
+            let (types, names): (Vec<_>, Vec<_>) = r
                 .params
                 .iter()
                 .map(|p| {
                     let param = plan.param(p);
-                    let code =
-                        type_code_numeric(plan, param.ty, plan.str(param.name).starts_with('@'));
-                    scope.operand(serde_json::to_string(&code).unwrap())
+                    let name = plan.str(param.name);
+                    let hidden = name.starts_with('@');
+                    let code = type_code_numeric(plan, param.ty, hidden);
+                    let label = if !hidden && code == "s" {
+                        scope.operand(serde_json::to_string(name).unwrap())
+                    } else {
+                        "0".into()
+                    };
+                    (scope.operand(serde_json::to_string(&code).unwrap()), label)
                 })
-                .collect();
-            // A string parameter's name, which an argument past MAX_STRING
-            // names (the runner's StringTooLong, LLP 1090 D6).
-            let names: Vec<String> =
-                r.params
-                    .iter()
-                    .map(|p| match type_code(plan, plan.param(p).ty).as_str() {
-                        "s" => scope
-                            .operand(serde_json::to_string(plan.str(plan.param(p).name)).unwrap()),
-                        _ => "0".into(),
-                    })
-                    .collect();
+                .unzip();
             let act = self.uses.rt("act");
             let expr = if types.is_empty() {
                 format!("{act}({f})")

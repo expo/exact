@@ -785,7 +785,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
 
     /// The direct child of a canvas this node is under, when that child is
     /// placed by the surface: the node whose `placement` maps this subtree.
-    var placedAncestor: NodeView? {
+    package var placedAncestor: NodeView? {
         guard Self.placedViews.count > 0 else { return nil }
         var v: UIView? = self
         while let n = v {

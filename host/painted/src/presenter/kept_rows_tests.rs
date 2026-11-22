@@ -701,7 +701,7 @@ fn a_list_with_a_sticky_item_is_one_row() {
 #[test]
 fn a_pressed_split_section_records_its_body_rows_again() {
     // A split section, and a section a scroller wraps as its only child,
-    // whose `hidden` clip does not let it split.
+    // whose `hidden` clip, on both axes or on y, does not let it split.
     for (source, recorded) in [
         (
             r#"component App
@@ -732,6 +732,22 @@ fn a_pressed_split_section_records_its_body_rows_again() {
   view
     scroll width=200 height=100
       column testId="section" press=go color="red" overflow="hidden"
+        :active
+          color = "blue"
+        text "Heading" position="sticky" top=0 width=200 height=20
+        text "First" width=200 height=30
+        text "Second" width=200 height=30
+"#,
+            2,
+        ),
+        (
+            r#"component App
+  state presses = 0
+  action go
+    presses = presses + 1
+  view
+    scroll width=200 height=100
+      column testId="section" press=go color="red" overflow-y="hidden"
         :active
           color = "blue"
         text "Heading" position="sticky" top=0 width=200 height=20

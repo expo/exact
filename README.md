@@ -42,7 +42,7 @@ Everything in Exact is built around three priorities:
 | **Web** | Works | Browser DOM (~20 KB runtime, zero layout engine shipped) |
 | **iOS** | Works (Simulator & device) | UIKit views, native controls, and system bars |
 | **macOS** | Works | AppKit views and native controls (no SwiftUI) |
-| **Linux** | Works | Exact's GPU/CPU painter on DRM/KMS consoles or headless |
+| **Linux** | Works on a DRM/KMS console or headless | Exact's GPU/CPU painter draws directly to the display or an offscreen buffer. [Wayland desktop windows](https://github.com/expo/exact/issues/1289) are an open feature request. |
 | **Android** | [Works](#android) (Material 3 polish in progress) | Hardware-accelerated Android Canvas (`RenderNode`) with Material 3 styling, native `EditText`, dialogs, and Compose date pickers |
 | **Windows** | [Early](#early-windows) | DirectX 11 (`ink`) or CPU painter (neutral look + Fluent symbols) with native file dialogs, IME, and UI Automation |
 

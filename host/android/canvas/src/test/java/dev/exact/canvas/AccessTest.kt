@@ -151,6 +151,102 @@ class AccessTest {
         assertEquals(listOf<Pair<Int, Int>>(), Acts.asked)
     }
 
+    /**
+     * A service's drag begins on the tree's own view (LLP 1094.000 D9), where Android keeps its mark: the node that
+     * asked offers Cancel beside its Start while the view does, its Cancel is the view's, and it says the drag's start
+     * and cancel that Android says from the view. Once the drag ends its Cancel goes; a drop that something took says
+     * no cancel, and a Cancel that reaches no drag goes when taken. Android's own `View` and `ViewRootImpl` begin the drag and handle its events, which the test
+     * sends as the window manager would, over Robolectric's window session.
+     */
+    @Test @Config(sdk = [33], shadows = [Acts::class]) fun aServicesDragIsCancelledFromTheNodeThatAskedForIt() {
+        val activity = org.robolectric.Robolectric.buildActivity(android.app.Activity::class.java).setup().get()
+        val manager = activity.getSystemService(android.view.accessibility.AccessibilityManager::class.java)
+        org.robolectric.Shadows.shadowOf(manager).setEnabled(true)
+        val root = Root(activity).also { activity.setContentView(it); it.accessible = true }
+        root.access.told(Access.Told(statement(listOf(Said(1, 0, Access.GROUP, "Ochre dunes", flags = Access.DRAG), Said(2, 0, Access.GROUP, "Kelp", flags = Access.DRAG)))))
+        val start = android.R.id.accessibilityActionDragStart
+        val cancel = android.R.id.accessibilityActionDragCancel
+        val actions = { id: Int -> root.access.provider.createAccessibilityNodeInfo(id)!!.actionList.map { it.id } }
+        val clip = android.content.ClipData.newPlainText("", "Ochre dunes")
+        val sent = { org.robolectric.Shadows.shadowOf(manager).sentAccessibilityEvents.filter { it.eventType == android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED } }
+        val said = { change: Int -> sent().filter { it.contentChangeTypes and change != 0 }.map { it.text.joinToString() } }
+        fun send(action: Int, result: Boolean = false, queued: Boolean = false) {
+            val window = activity.window.decorView.javaClass.getMethod("getViewRootImpl").invoke(activity.window.decorView)
+            window.javaClass.getMethod("dispatchDragEvent", android.view.DragEvent::class.java).invoke(window,
+                org.robolectric.shadows.DragEventBuilder.newBuilder().setAction(action).setResult(result).setClipDescription(clip.description.takeIf { action == android.view.DragEvent.ACTION_DRAG_STARTED }).build())
+            if (!queued) org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        }
+
+        org.robolectric.Shadows.shadowOf(manager).setEnabled(false)
+        assertFalse("no service, no drag", root.access.drag(1, clip, DragOut.flags(true, 33)))
+        org.robolectric.Shadows.shadowOf(manager).setEnabled(true)
+        assertTrue(root.access.drag(1, clip, DragOut.flags(true, 33)))
+        assertSame(clip, org.robolectric.shadows.ShadowWindowManagerGlobal.getLastDragClipData())
+        assertFalse("the window has heard no start yet", root.dragging)
+        assertTrue(cancel in actions(1) && start in actions(1))
+        assertTrue(start in actions(2) && cancel !in actions(2))
+        assertTrue("Android's own Cancel on the view", cancel in actions(android.view.accessibility.AccessibilityNodeProvider.HOST_VIEW_ID))
+        send(android.view.DragEvent.ACTION_DRAG_STARTED)
+        assertTrue("the window heard the start, and waits for the end", root.dragging)
+        assertEquals(listOf("Ochre dunes"), said(android.view.accessibility.AccessibilityEvent.CONTENT_CHANGE_TYPE_DRAG_STARTED))
+        // The node keeps the drag's Cancel when it no longer drags.
+        val dunes = { flags: Int -> root.access.told(Access.Told(statement(listOf(Said(1, 0, Access.GROUP, "Ochre dunes", flags = flags), Said(2, 0, Access.GROUP, "Kelp", flags = Access.DRAG))))) }
+        dunes(0)
+        assertTrue(cancel in actions(1))
+        dunes(Access.DRAG)
+        assertFalse(root.access.provider.performAction(2, cancel, null))
+        assertTrue("the view's Cancel took it", root.access.provider.performAction(1, cancel, null))
+        send(android.view.DragEvent.ACTION_DRAG_ENDED)
+        assertEquals(listOf("Ochre dunes"), said(android.view.accessibility.AccessibilityEvent.CONTENT_CHANGE_TYPE_DRAG_CANCELLED))
+        assertTrue(start in actions(1) && cancel !in actions(1))
+        assertFalse(cancel in actions(android.view.accessibility.AccessibilityNodeProvider.HOST_VIEW_ID))
+        assertFalse("the window heard the end", root.dragging)
+        assertNull("the root took no drop and offers none", root.createAccessibilityNodeInfo().actionList.firstOrNull { it.id == android.R.id.accessibilityActionDragDrop })
+
+        assertTrue(root.access.drag(2, clip, DragOut.flags(true, 33)))
+        send(android.view.DragEvent.ACTION_DRAG_STARTED)
+        send(android.view.DragEvent.ACTION_DRAG_ENDED, result = true)
+        assertEquals(listOf("Ochre dunes"), said(android.view.accessibility.AccessibilityEvent.CONTENT_CHANGE_TYPE_DRAG_CANCELLED))
+        assertTrue(start in actions(2) && cancel !in actions(2))
+        assertFalse("no node that drags stands for exact2's node 3", root.access.drag(3, clip, DragOut.flags(true, 33)))
+
+        // While the window has heard a drag start and not its end, a Start is refused before exact2 is asked.
+        Acts.asked.clear()
+        send(android.view.DragEvent.ACTION_DRAG_STARTED)
+        assertFalse(root.access.provider.performAction(1, start, null))
+        assertEquals(listOf<Pair<Int, Int>>(), Acts.asked)
+        send(android.view.DragEvent.ACTION_DRAG_ENDED, result = true)
+
+        // A known limit: a drag whose start and end both wait in the window's queue is one the root has not heard of,
+        // so a service's drag begins, and that end, handled after, takes the new drag's hold and the view's mark, and
+        // the node says the new drag was cancelled.
+        send(android.view.DragEvent.ACTION_DRAG_STARTED, queued = true)
+        send(android.view.DragEvent.ACTION_DRAG_ENDED, queued = true)
+        assertTrue(root.access.drag(1, clip, DragOut.flags(true, 33)))
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertFalse(cancel in actions(android.view.accessibility.AccessibilityNodeProvider.HOST_VIEW_ID))
+        assertTrue(cancel !in actions(1) && start in actions(1))
+        assertEquals(listOf("Ochre dunes", "Ochre dunes"), said(android.view.accessibility.AccessibilityEvent.CONTENT_CHANGE_TYPE_DRAG_CANCELLED))
+
+        // A finger down in the window takes the node's Cancel: a hosted view's drag it begins may share the hold.
+        assertTrue(root.access.drag(2, clip, DragOut.flags(true, 33)))
+        assertTrue(cancel in actions(2))
+        root.access.touched()
+        assertTrue(cancel !in actions(2) && start in actions(2))
+        send(android.view.DragEvent.ACTION_DRAG_STARTED)
+        send(android.view.DragEvent.ACTION_DRAG_ENDED)
+        assertEquals("the node still says what became of its drag", listOf("Ochre dunes", "Ochre dunes", "Kelp"), said(android.view.accessibility.AccessibilityEvent.CONTENT_CHANGE_TYPE_DRAG_CANCELLED))
+
+        // Another drag's end, heard after this one began, takes the window's hold on it and leaves the view's mark: the
+        // node's Cancel reaches nothing, and goes when taken.
+        assertTrue(root.access.drag(1, clip, DragOut.flags(true, 33)))
+        val attach = android.view.View::class.java.getDeclaredField("mAttachInfo").apply { isAccessible = true }.get(root)
+        attach.javaClass.getDeclaredField("mDragToken").apply { isAccessible = true }.set(attach, null)
+        assertTrue(cancel in actions(1))
+        assertFalse(root.access.provider.performAction(1, cancel, null))
+        assertTrue(cancel !in actions(1) && start in actions(1))
+    }
+
     /** exact2's side of an act: each node and act asked, all taken. */
     @Implements(Native::class, isInAndroidSdk = false)
     class Acts {

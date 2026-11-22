@@ -3,6 +3,7 @@ import UIKit
 import XCTest
 @testable import ExactKit
 @testable import ExactControls
+@testable import ExactDragOut
 @testable import ExactSurfaces
 
 /// Whether the fake surface places its first child, moved right by `controlsShift`.
@@ -71,6 +72,54 @@ final class CanvasPlacedControlsIOSTests: XCTestCase {
         let cls = try XCTUnwrap(NSClassFromString("UIAccessibilityElementTraversalOptions") as? NSObject.Type)
         let options = cls.perform(NSSelectorFromString("defaultVoiceOverOptions"))?.takeUnretainedValue()
         return try XCTUnwrap(window.perform(NSSelectorFromString("_accessibilityLeafDescendantsWithOptions:"), with: options)?.takeUnretainedValue() as? [NSObject])
+    }
+
+    /// A draggable card inside a child the surface places offers its drag
+    /// where it is drawn, not where it is laid out (LLP 1094.000 D9), on its
+    /// text and on the card itself, whose own UIKit would offer where it is
+    /// laid out: at the card's activation point, which follows the placement,
+    /// where the lift begins. So does the placed child when it drags itself.
+    func testAPlacedCardsDragIsWhereItIsDrawn() throws {
+        if ExactEnv.agentPaints { throw XCTSkip("none while the agent paints (LLP 1094.000 D4)") }
+        let d = try deck("canvas-placed-drag")
+        defer { d.session.destroy() }
+        let p = d.session.presenter
+        _ = node(101, p, CGRect(x: 0, y: 0, width: 150, height: 150), in: d.overlay)
+        p.apply(wireBatch([
+            ["op": "create", "id": 30, "kind": "view", "props": ["draggable": "true", "dataTransferText": "Mount Fuji"]],
+            ["op": "create", "id": 31, "kind": "text", "props": ["text": "Fuji"]],
+            ["op": "children", "id": 30, "ids": [31]], ["op": "children", "id": 101, "ids": [30]],
+            ["op": "frame", "id": 30, "x": 10, "y": 10, "w": 120, "h": 80],
+            ["op": "frame", "id": 31, "x": 8, "y": 8, "w": 80, "h": 20],
+        ]))
+        placesFirst = true
+        d.frame()
+        let card = try XCTUnwrap(p.views[30]), text = try XCTUnwrap(p.views[31])
+        let middle = CGPoint(x: card.bounds.midX, y: card.bounds.midY)
+        let drawn = card.drawnPoint(middle, in: d.window), laid = card.convert(middle, to: d.window)
+        XCTAssertEqual(drawn.x - laid.x, CGFloat(controlsShift), accuracy: 0.5, "the surface moved it")
+        let sources = try XCTUnwrap(p.dragOut as? DragSources)
+        let lift = { (node: NodeView, at: CGPoint) throws -> [UIDragItem] in
+            let interaction = try XCTUnwrap(node.interactions.compactMap { $0 as? UIDragInteraction }.first)
+            return sources.dragInteraction(interaction, itemsForBeginning: PointDragSession(at: at, in: d.window))
+        }
+        for element in [text, card] {
+            let drag = try XCTUnwrap(element.accessibilityDragSourceDescriptors?.first)
+            XCTAssertTrue(drag.view === card)
+            let lands = card.convert(drag.point, to: d.window)
+            XCTAssertEqual(lands.x, drawn.x, accuracy: 0.5, "\(element.id)")
+            XCTAssertEqual(lands.y, drawn.y, accuracy: 0.5, "\(element.id)")
+            XCTAssertEqual(try lift(card, lands).count, 1, "the card lifts at \(element.id)'s point")
+        }
+        // The placed child itself dragging, which UIKit too would offer where it is laid out
+        p.apply(wireBatch([["op": "props", "id": 30, "set": ["draggable": "false"]], ["op": "props", "id": 101, "set": ["draggable": "true", "dataTransferText": "Deck"]]]))
+        let placed = try XCTUnwrap(p.views[101])
+        let own = try XCTUnwrap(placed.accessibilityDragSourceDescriptors?.first)
+        XCTAssertTrue(own.view === placed)
+        let ownLands = placed.convert(own.point, to: d.window), ownDrawn = placed.drawnPoint(CGPoint(x: placed.bounds.midX, y: placed.bounds.midY), in: d.window)
+        XCTAssertEqual(ownLands.x, ownDrawn.x, accuracy: 0.5)
+        XCTAssertEqual(ownLands.y, ownDrawn.y, accuracy: 0.5)
+        XCTAssertEqual(try lift(placed, ownLands).count, 1, "the placed child lifts at its point")
     }
 
     func testPlacedSegmentsKeepTheirAuthoredTabsInAccessibilityReads() throws {

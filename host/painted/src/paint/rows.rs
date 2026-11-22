@@ -282,13 +282,12 @@ const MARGIN: f32 = 48.0;
 const MAX_TRANSLATION: f32 = 4096.0;
 
 /// Whether `node` may hold rows split under a sticky child, a section's
-/// or a scroller's only child's (`wraps_rows`), where a change to it
-/// reaches them. Looser than [`can_split`]: it only marks more rows.
+/// or a scroller's only child's (`wraps_rows`, whatever its overflow),
+/// where a change to it reaches them. Looser than [`can_split`]: it only
+/// marks more rows.
 fn holds_split_rows(node: &NodeRef<'_>) -> bool {
     node.node_type == NodeType::View
         && node.style.flex_direction == exact_kernel::FlexDirection::Column
-        && !scrolls(effective_overflow(node).0)
-        && !scrolls(effective_overflow(node).1)
         && node
             .child_nodes()
             .any(|child| child.layout_position() == exact_kernel::PositionType::Sticky)
@@ -312,8 +311,9 @@ fn can_split(node: &NodeRef<'_>) -> bool {
         && node.child_nodes().len() >= 3
 }
 
-/// The parents of every sticky node: the only columns [`can_split`] can
-/// take, found without reading each column's children on every paint.
+/// The parents of every sticky node: the only columns asked of
+/// [`can_split`], found without reading each column's children on every
+/// paint.
 fn sticky_parents(kernel: &exact_kernel::Kernel) -> IdSet<ViewId> {
     kernel
         .sticky_nodes()

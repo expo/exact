@@ -630,23 +630,27 @@ fn safe_area_reach(text: &str, span: Span) -> Result<[String; 2], LowerError> {
     }
 }
 
-/// `-exact-safe-area-extend: none | <edges> [manual]` (LLP 1123 D13): the
-/// edges, each once, then `manual` if wanted; `manual` needs an edge.
+/// `-exact-safe-area-extend: none | <edges>` (LLP 1123 D13): the edges, each
+/// once. The host places the extension by hand at the box, so no placement
+/// word is taken.
 fn safe_area_extend(text: &str, span: Span) -> Result<String, LowerError> {
     if text.trim() == "unset" {
         return Ok("unset".into());
     }
     let words: Vec<&str> = text.split_ascii_whitespace().collect();
-    let edges = match words.split_last() {
-        Some((&"manual", edges)) => edges,
-        _ => words.as_slice(),
-    };
-    if words == ["none"] || edge_set(edges) {
+    if words == ["none"] || edge_set(&words) {
         return Ok(words.join(" "));
+    }
+    if words.contains(&"manual") {
+        return err(
+            "lower-attr-value",
+            "`-exact-safe-area-extend` takes no `manual`: the host always places the extension at the box's final frame (LLP 1123 D13). Name the edges alone: e.g. `top bottom`",
+            span,
+        );
     }
     err(
         "lower-attr-value",
-        "`-exact-safe-area-extend` is `none`, or the edges it extends on, each once, then `manual` if wanted: e.g. `bottom` or `top bottom manual`",
+        "`-exact-safe-area-extend` is `none`, or the edges it extends on, each once: e.g. `bottom` or `top bottom`",
         span,
     )
 }

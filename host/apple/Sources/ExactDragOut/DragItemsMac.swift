@@ -3,7 +3,7 @@
 // drag begins. Each file is a promise (`NSFilePromiseProvider`), written
 // where a destination asks; the first also offers `url` and then `text`. With
 // no file one pasteboard item carries them. Each item's image is the node as
-// drawn.
+// drawn when AppKit asks for it.
 #if os(macOS)
 import AppKit
 import ExactCore
@@ -11,14 +11,17 @@ import ExactKit
 import UniformTypeIdentifiers
 
 enum DragItemsMac {
-    static func items(of node: NodeView, in session: ExactSession?) -> [NSDraggingItem] {
+    /// Each `app:/` file is opened when a destination asks, through `open`.
+    static func items(of node: NodeView, in session: ExactSession?, open: @escaping DragFiles.Opener = DragFiles.open) -> [NSDraggingItem] {
         let files = (node.props["dataTransferFiles"] ?? "").split(separator: "\n").map(String.init)
         let url = node.props["dataTransferUrl"].flatMap { $0.isEmpty ? nil : $0 }
         let text = node.props["dataTransferText"].flatMap { $0.isEmpty ? nil : $0 }
+        let journal = DragFiles.Journal(session: session)
         var writers: [NSPasteboardWriting] = files.enumerated().map { index, entry in
             let name = (entry as NSString).lastPathComponent
             let type = UTType(filenameExtension: (name as NSString).pathExtension) ?? .data
-            let writer = PromiseWriter(entry: entry, name: name, resolver: session?.app.resolver, session: session)
+            let writer = PromiseWriter(entry: entry, name: name, resolver: session?.app.resolver, journal: journal)
+            writer.open = open
             let promise = Promise(fileType: type.identifier, delegate: writer)
             // The provider's delegate is weak: its `userInfo` holds the writer
             // as long as AppKit holds the provider.
@@ -32,10 +35,18 @@ enum DragItemsMac {
             if let text { item.setString(text, forType: .string) }
             writers = [item]
         }
-        let image = picture(of: node)
         return writers.map { writer in
             let item = NSDraggingItem(pasteboardWriter: writer)
-            item.setDraggingFrame(node.bounds, contents: image)
+            item.draggingFrame = node.bounds
+            // Draw each item's image only when AppKit asks for it, which its header
+            // promises only "if necessary": making the items draws nothing
+            item.imageComponentsProvider = { [weak node] in
+                guard let node, let image = picture(of: node) else { return [] }
+                let component = NSDraggingImageComponent(key: .icon)
+                component.contents = image
+                component.frame = NSRect(origin: .zero, size: node.bounds.size)
+                return [component]
+            }
             return item
         }
     }
@@ -68,37 +79,47 @@ enum DragItemsMac {
         }
     }
 
-    /// Writes one promised file where a destination asks, from the resolver
-    /// found when the drag began (a delivered update's removes its files when
-    /// released) or through `share`'s confined copy, on the main queue, the
-    /// provider's default.
+    /// Writes one promised file where a destination asks (`DragFiles.place`),
+    /// on the drags' copy queue (`DragFiles.copies`) rather than the main
+    /// queue, the provider's default, since a file has no size bound: a
+    /// shipped one from the resolver found when the drag began (a delivered
+    /// update's removes its files when released), an `app:/` one opened when
+    /// the destination asks for it (`open`).
     final class PromiseWriter: NSObject, NSFilePromiseProviderDelegate {
         let entry: String, name: String
         let resolver: AssetResolver?
-        weak var session: ExactSession?
+        let journal: DragFiles.Journal
+        var open: DragFiles.Opener = DragFiles.open
 
-        init(entry: String, name: String, resolver: AssetResolver?, session: ExactSession?) {
-            self.entry = entry; self.name = name; self.resolver = resolver; self.session = session
+        init(entry: String, name: String, resolver: AssetResolver?, journal: DragFiles.Journal) {
+            self.entry = entry; self.name = name; self.resolver = resolver; self.journal = journal
         }
 
         func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider, fileNameForType fileType: String) -> String { name }
 
+        func operationQueue(for filePromiseProvider: NSFilePromiseProvider) -> OperationQueue { DragFiles.copies }
+
         func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider, writePromiseTo url: URL, completionHandler: @escaping (Error?) -> Void) {
             do {
-                if entry.hasPrefix("app:/") {
-                    guard let session else { throw CocoaError(.fileReadUnknown) }
-                    try DragFiles.copy(entry, to: url, session)
-                } else {
-                    guard let file = DragFiles.shipped(entry, in: resolver) else { throw CocoaError(.fileReadNoSuchFile) }
-                    try FileManager.default.copyItem(at: file, to: url)
-                    // A delivered update's file is read-only; the person's copy is not.
-                    try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
-                }
+                try write(to: url)
                 completionHandler(nil)
             } catch {
-                let reason = (error as? CocoaError)?.code == .fileReadNoSuchFile ? "the app does not ship it" : error.localizedDescription
-                completionHandler(DragFiles.failed(entry, reason, session))
+                completionHandler(journal.failed(entry, error.localizedDescription))
             }
+        }
+
+        /// The file at `url`, its source descriptor closed before this returns.
+        private func write(to url: URL) throws {
+            let fd: Int32
+            if entry.hasPrefix("app:/") {
+                fd = try open(entry, journal).get()
+            } else {
+                guard let file = DragFiles.shipped(entry, in: resolver) else { throw DragFiles.failure("the app does not ship it") }
+                fd = Darwin.open(file.path, O_RDONLY | O_CLOEXEC)
+                guard fd >= 0 else { throw DragFiles.posix() }
+            }
+            defer { Darwin.close(fd) }
+            try DragFiles.place(fd, at: url)
         }
     }
 }

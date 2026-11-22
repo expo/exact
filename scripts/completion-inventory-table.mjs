@@ -388,7 +388,8 @@ export const classifications = [
       "Java_dev_exact_canvas_Native_hintSession Java_dev_exact_canvas_Native_inputHint Java_dev_exact_canvas_Native_nextDue Java_dev_exact_canvas_Native_scrollers " +
       "Java_dev_exact_canvas_Native_surface Java_dev_exact_canvas_Native_forma Java_dev_exact_canvas_Native_under"],
     ["painted:host/painted/src/canvas/jni_extensions.rs",
-      "Java_dev_exact_canvas_Native_appFile Java_dev_exact_canvas_Native_appRoot Java_dev_exact_canvas_Native_hidden Java_dev_exact_canvas_Native_now " +
+      "Java_dev_exact_canvas_Native_appDescriptor Java_dev_exact_canvas_Native_appFile Java_dev_exact_canvas_Native_appRoot Java_dev_exact_canvas_Native_hidden " +
+      "Java_dev_exact_canvas_Native_now Java_dev_exact_canvas_Native_publishApp " +
       "Java_dev_exact_canvas_Native_scratchStorage Java_dev_exact_canvas_Native_sensorInput Java_dev_exact_canvas_Native_surfaceHas " +
       "Java_dev_exact_canvas_Native_underAgent"],
     ["painted:host/painted/src/canvas/jni_frames.rs", "Java_dev_exact_canvas_Native_frameRates Java_dev_exact_canvas_Native_frameWindow"],
@@ -1046,7 +1047,7 @@ export const classifications = [
   ]),
   group("picker results", ["one-shot"], "current picker/share request and its app file roots", "UI-owned",
     "host/painted/src/picker.rs configures app file roots and copies/selects paths for the current picker/share. Persistent copies are separate from the UI continuation receiving them.", [
-    ["painted:host/painted/src/picker.rs", "agent cold_share copy_in dimensions file know_roots open place resolve roots scripted set_roots xdg_base"],
+    ["painted:host/painted/src/picker.rs", "agent cold_share copy_in dimensions file know_roots open open_known place publish resolve roots scripted set_roots xdg_base"],
   ]),
   group("presence storage", ["durable operation"], "app-scoped secret vault/backend and secret generation", "durable",
     "host/painted/src/presence_secrets.rs backend/on_keystore select the app vault; system_support.rs SecretSession seeds and remembers secret records. Stored secret state is separate from a session-owned presence check.", [

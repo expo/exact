@@ -234,7 +234,7 @@ class ExtensionContext internal constructor(val application: Context, private va
 
     /** A content URI for the file an admitted `app:/` path names, which an intent may carry with a read grant
      * (`FLAG_GRANT_READ_URI_PERMISSION`), or null when it names none ([Files], LLP 1133.024 D22 item 2). */
-    fun contentUri(path: String): android.net.Uri? = fileToRead(path)?.let { Files.uri(application, it) }
+    fun contentUri(path: String): android.net.Uri? = Files.uri(application, path)
 
     /** Whether the activity is resumed. */
     val resumed: Boolean get() = Extensions.resumedNow
