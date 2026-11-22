@@ -253,7 +253,7 @@ impl Labels {
 /// Which of a field's [`FieldTexts`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Part {
-    /// A button's title.
+    /// A field's label, or a button's title.
     Label,
     Value,
 }
@@ -382,7 +382,7 @@ impl super::Painter {
             None => resting_label(dark),
         };
         let painted = FieldText::painted(&paragraph, (ox, oy), ts);
-        self.labels.walking.entry(node.id).or_default().label = Some(painted);
+        self.row_field_text(node.id, Part::Label, painted);
         self.backend.push_clip(
             &Shape::rect((x + inset(), y, (w - 2.0 * inset()).max(0.0), h)),
             ts,

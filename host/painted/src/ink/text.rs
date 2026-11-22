@@ -34,7 +34,9 @@ impl Ink {
             for (id, x, y) in run.glyphs {
                 self.observe_glyph(x, y, transform);
                 let (x, phase) = subpixel(x);
-                let y = y.trunc() as i32;
+                // Down, as for a negative position too: a whole-pixel move of
+                // a kept row then moves each glyph by the same pixels.
+                let y = y.floor() as i32;
                 let Some(glyph) = self.glyphs.get(
                     &mut self.device,
                     &font,

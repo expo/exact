@@ -307,6 +307,12 @@ fn a_row_includes_a_removed_branches_paint_bounds() {
 /// the row it was.
 #[test]
 fn a_renewed_row_is_not_the_row_it_was() {
+    renewed_row(false);
+    // A geometry walk on a backend that keeps sections whole frees nothing.
+    renewed_row(true);
+}
+
+fn renewed_row(whole_sections: bool) {
     let cells: String = (0..6)
         .map(|i| format!("        box height=50 width=200 testId=\"c{i}\"\n"))
         .collect();
@@ -324,7 +330,10 @@ fn a_renewed_row_is_not_the_row_it_was() {
     )
     .unwrap();
     assert!(error.is_none(), "{error:?}");
-    let heard = Rc::new(RefCell::new(Heard::default()));
+    let heard = Rc::new(RefCell::new(Heard {
+        whole_sections,
+        ..Heard::default()
+    }));
     p.brush.replace_backend(Box::new(Keeps {
         heard: heard.clone(),
         row: 0,
@@ -1127,9 +1136,8 @@ fn fractional_row_scroll_matches_a_fresh_walk_with_clips_and_hinted_text() {
         assert!(kept.data() == fresh.data(), "scroll {offset}");
     }
 
-    // Ink truncates negative glyph positions toward zero. An integer
-    // translation across zero can put the saved glyph one pixel too low.
-    // The jump is within the long-scroll guard's `MAX_TRANSLATION`.
+    // A row kept while clipped after a fractional move records its glyphs
+    // again when it shows. The jump is within `MAX_TRANSLATION`.
     p.brush.forget_rows();
     p.scroll_to(port, (0., 200.75)).unwrap();
     p.frame();
@@ -1145,6 +1153,22 @@ fn fractional_row_scroll_matches_a_fresh_walk_with_clips_and_hinted_text() {
     assert!(
         revealed.data() == before.data(),
         "reveal at the original phase"
+    );
+
+    // Recorded again above the port, inside the row's margin, at another
+    // phase, then moved back by whole pixels: its glyphs' negative device
+    // rows must move by the same pixels.
+    p.scroll_to(port, (0., 0.5)).unwrap();
+    p.frame();
+    p.scroll_to(port, (0., 80.75)).unwrap();
+    p.frame();
+    p.scroll_to(port, (0., 0.75)).unwrap();
+    let moved = p.frame();
+    p.brush.forget_rows();
+    p.repaint();
+    assert!(
+        moved.data() == p.frame().data(),
+        "moved back by whole pixels"
     );
 
     p.scroll_to(port, (0., 119.5)).unwrap();

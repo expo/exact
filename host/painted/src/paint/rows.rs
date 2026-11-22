@@ -92,8 +92,8 @@ struct Row {
     boxes: Vec<PaintedBox>,
     text: Vec<(NodeKey, Rc<Paragraph>)>,
     inline: Vec<(ViewId, Rc<inline_frame::PaintedInline>)>,
-    /// Where its buttons' titles and fields' values were painted, for an
-    /// inspector.
+    /// Where its fields' labels and values and its buttons' titles were
+    /// painted, for an inspector.
     field_texts: Vec<(ViewId, material::Part, material::FieldText)>,
     images: Vec<(ViewId, Option<std::sync::Weak<Bitmap>>)>,
     /// Where each picture kept apart from the row is drawn.
@@ -105,8 +105,8 @@ struct Row {
     scrolls: Vec<(ViewId, (f32, f32))>,
     /// A fresh geometry walk can translate these hits without consulting descendants.
     can_translate_hits: bool,
-    /// Where its hit slop takes hits, relative to its origin.
-    hit_reach: Option<Rect4>,
+    /// Whether a box in it may have hit slop.
+    may_have_hit_slop: bool,
     /// Kept through a clipped fractional move. Re-record its glyphs before drawing.
     paint_stale: bool,
     unsupported: bool,
@@ -127,21 +127,36 @@ impl Row {
         (x + origin.0, y + origin.1, w, h)
     }
 
-    /// Whether a walk that paints nothing may move this row's hits to
-    /// `origin`; `shown`: where hits can land, the viewport within the row's
-    /// clip.
-    fn can_translate_geometry_to(&self, origin: (f32, f32), shown: Rect4) -> bool {
+    /// Whether a replay may move this row's hits to `origin`; `shown`: where
+    /// hits can land, the viewport within the row's clip.
+    fn can_translate_geometry_to(
+        &self,
+        kernel: &exact_kernel::Kernel,
+        origin: (f32, f32),
+        shown: Rect4,
+    ) -> bool {
         let (dx, dy) = (origin.0 - self.origin.0, origin.1 - self.origin.1);
         if dx.abs() <= MAX_TRANSLATION && dy.abs() <= MAX_TRANSLATION {
             return true;
         }
         // Further, a hit can round onto the old box's exclusive edge: walk a
-        // row that can take hits at its new position, its drawing's or its
-        // hit slop's.
+        // row that can take hits at its new position, by its drawing or by
+        // its hit slop, read now because `env()` changes it without a commit.
+        let (x, y, w, h) = self.bounds;
+        let drawn = (x + self.origin.0, y + self.origin.1, w, h);
         let (x, y, w, h) = self
-            .hit_reach
-            .map_or(self.bounds, |r| union(Some(self.bounds), r));
-        let at = (x + origin.0, y + origin.1, w, h);
+            .boxes
+            .iter()
+            .filter(|_| self.may_have_hit_slop)
+            .filter_map(|b| super::fragments::slop_bounds(kernel, b))
+            .fold(drawn, |u, r| union(Some(u), r));
+        // Recorded far from the viewport, each edge rounded by up to an
+        // `f32` step there: allow two.
+        let far = [x, y, x + w, y + h]
+            .into_iter()
+            .fold(0f32, |m, v| m.max(v.abs()));
+        let pad = 2. * f32::EPSILON * far;
+        let at = (x + dx - pad, y + dy - pad, w + 2. * pad, h + 2. * pad);
         let (_, _, w, h) = intersect(at, shown);
         w <= 0. || h <= 0.
     }
@@ -480,7 +495,9 @@ impl Painter {
 
     /// At a walk's end: free what no longer draws.
     pub(super) fn rows_end(&mut self) {
-        if self.backend.geometry_rows() {
+        // A geometry walk's stand-in backend keeps no rows: what is owed to be
+        // freed waits for the backend that recorded it.
+        if !self.backend.rows() {
             return;
         }
         if self.rows.active {
@@ -790,8 +807,9 @@ impl Painter {
         }
     }
 
-    /// Publish where a button's title or a field's value was painted, and
-    /// keep it with the recording row so a replay publishes it moved.
+    /// Publish where a field's label or value or a button's title was
+    /// painted, and keep it with the recording row so a replay publishes it
+    /// moved.
     pub(super) fn row_field_text(
         &mut self,
         id: ViewId,
@@ -910,11 +928,9 @@ impl Painter {
         let frame = self.rows.frame;
         let port = (0., 0., self.viewport.0, self.viewport.1);
         let shown = clip_rect.map_or(port, |c| intersect(c, port));
-        let kept = self
-            .rows
-            .kept
-            .get(&node.key)
-            .filter(|row| !split_sections || row.can_translate_geometry_to(origin, shown));
+        let kept = self.rows.kept.get(&node.key).filter(|row| {
+            !split_sections || row.can_translate_geometry_to(walk.scene.kernel, origin, shown)
+        });
         let suspect = self.rows.suspect.contains(&node.key);
         let can_draw = !geometry
             && kept
@@ -1145,18 +1161,6 @@ impl Painter {
             return;
         }
         let (x0, y0) = (node.frame.x, node.frame.y);
-        let hit_reach = capture
-            .may_have_hit_slop
-            .then(|| {
-                boxes
-                    .iter()
-                    .filter_map(|b| super::fragments::slop_bounds(walk.scene.kernel, b))
-                    .fold(None, |u, r| Some(union(u, r)))
-            })
-            .flatten()
-            // A point more each way: recorded far from the viewport, its edges
-            // round by half an `f32` step, under a point below 2^24.
-            .map(|(x, y, w, h)| (x - origin.0 - 1., y - origin.1 - 1., w + 2., h + 2.));
         self.rows.kept.insert(
             node.key,
             Row {
@@ -1166,7 +1170,7 @@ impl Painter {
                 scale,
                 size: (node.frame.width, node.frame.height),
                 can_translate_hits: boxes.iter().all(|b| b.hit.is_none()),
-                hit_reach,
+                may_have_hit_slop: capture.may_have_hit_slop,
                 paint_stale: false,
                 boxes,
                 text: capture.text,
