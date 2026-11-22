@@ -111,15 +111,15 @@ export async function open({
   // default the smoke depends on. Replies say `mode: "platform"`.
   if (!['agent', 'platform'].includes(timing)) throw new Error(`timing: agent or platform, not ${timing}`);
   if (timing === 'platform') env = { ...(env ?? {}), EXACT_AGENT_TIMING: 'platform' };
-  // `touch: 'platform'` (LLP 1080.000, opt-in): a plain `tap` on an iOS simulator is a real touch from the XCTest
+  // `touch: 'platform'` (LLP 1080.000, opt-in): a plain `tap` on iOS is a real touch from the XCTest
   // runner, `delivery: platform`.
   // `touch: 'drag'`: only `tap … drag` is (§11), every other input as under `agent` — what an authored test's drag
   // takes (chat2 diary).
   if (
     !['agent', 'drag', 'platform'].includes(touch) ||
-    (touch !== 'agent' && (device || !['ios', 'host-ios'].includes(host)))
+    (touch !== 'agent' && !['ios', 'host-ios'].includes(host))
   )
-    throw new Error(`touch: ${touch} is an iOS simulator's (LLP 1080.000), not ${device ? 'a phone' : host}'s`);
+    throw new Error(`touch: ${touch} requires iOS (LLP 1080.000), got ${host}`);
   // UIKit's menus, which a real touch opens (D7)
   if (touch === 'platform') env = { ...(env ?? {}), EXACT_AGENT_PRESENTATION: 'native' };
   // `chrome: 'platform'` (opt-in; splitter rough 4, 11): UIKit's navigation bar and tab bar show as a person sees them,
@@ -183,7 +183,7 @@ export async function open({
     } else env = { ...(env ?? {}), EXACT_LAUNCH_URL: url };
   }
   const carrier = device
-    ? await openDevice({ host: 'ios', plan, world, size, env, app, device, phone: pick, onProcess })
+    ? await openDevice({ host: 'ios', plan, world, size, env, app, device, phone: pick, touch, onProcess })
     : // `documents` are the Mac's command line, a terminal's route in (LLP
       // 1033 D3); each window's session then routes by its label (LLP 1069.010).
       host === 'macos' || host === 'mac'

@@ -1443,7 +1443,6 @@ fn moving_exclusions_publish_owned_fragments_and_keep_original_run_metadata() {
     );
     assert!(snapshot
         .paragraph
-        .layout_runs()
-        .flat_map(|r| r.glyphs)
-        .any(|g| g.run() == 1));
+        .glyphs_with_runs()
+        .any(|(_, _, run)| run == 1));
 }

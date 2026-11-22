@@ -472,7 +472,7 @@ include!(concat!(env!("OUT_DIR"), "/packages.rs"));
 include!(concat!(env!("OUT_DIR"), "/hatches.rs"));
 fn main() {
     let composed = exact_painted::Composed { hatches: exact_hatches(), packages: exact_packages() };
-    std::process::exit(exact_windows::run_composed::<AppData>(${JSON.stringify(title)}, window(), PLAN, COMPAT, composed));
+    std::process::exit(exact_windows::run_baked::<AppData, ADMIT_AGENT>(${JSON.stringify(title)}, window(), PLAN, COMPAT, composed));
 }
 `,
   };
@@ -777,6 +777,21 @@ export const unregisteredSurfaces = (manifest, platform) =>
 /** `gpuModules` with package declarations read now, not when `app` was resolved: a long-lived process (a dev loop)
  * otherwise acts on the declarations it started with. */
 export const currentGpuModules = (app, platform = null) => gpuModules(packageGpuManifest({ gpu: app.manifest.gpu }, app.dir), platform);
+/** The stock web bake reads the Contract directly. An authored build script must run through Cargo. */
+export function authoredWebBake(dir) {
+  const script = resolve(dir, 'build.rs');
+  return existsSync(script) && !/^\s*fn main\(\)\s*\{\s*exact_js_bake::build\w*\(/m.test(readFileSync(script, 'utf8'));
+}
+
+export const webRendererHost = (dir, binary) => ['linux', 'web'].find(host => existsSync(resolve(dir, host, 'src/bin', binary + '.rs')));
+
+/** Whether a normal web build compiles anything belonging to the app as well as the SDK tools. */
+export function webCompilesRust(app) {
+  return !!(app.manifest.game || rustDataOf(app.manifest) || app.manifest.rust?.module?.package ||
+    existsSync(resolve(app.dir, 'gpu/Cargo.toml')) || currentGpuModules(app, 'web').length ||
+    authoredWebBake(resolve(app.dir, 'web')) || webRendererHost(app.dir, app.name + '-render'));
+}
+
 /** Where `ensurePackageGpu` generates a package module's workspace. */
 export const packageGpuDir = (app, module) => resolve(app.dir, '.exact/package-gpu', module.name);
 
@@ -864,7 +879,7 @@ export function packageGpuLock(sdk, own, attempt = 'merged', pins = {}) {
     const identities = new Set(ownBlocks.map(lockBlockId));
     return lock([...ownBlocks, ...added.filter(b => !identities.has(lockBlockId(b)))]);
   }
-  return lockSeed(lock(s.blocks.filter((_, i) => sdkGpu.has(i) || pinned.includes(i))), lock(keep),
+  return mergeLockBlocks(lock(s.blocks.filter((_, i) => sdkGpu.has(i) || pinned.includes(i))), keep,
     attempt === 'merged' ? new Set(pinned.map(i => lockSeriesSource(s.blocks[i]))) : null);
 }
 
@@ -1113,10 +1128,10 @@ const lockSeriesSource = block => `${seriesId(block)} ${/^source = "([^"#]*)/m.e
 const lockBlockId = block => `${/^name = "([^"]+)"/m.exec(block)[1]} ${/^version = "([^"]+)"/m.exec(block)[1]} ${/^source = "([^"]*)"/m.exec(block)?.[1] ?? ''}`;
 
 /** Merge by compatible series and source, preserving exact pins; null keeps every SDK choice. */
-function lockSeed(sdk, own, pinned) {
+export function mergeLockBlocks(sdk, incoming, pinned = new Set()) {
   const held = new Map(lockBlocks(sdk).map(block => [lockSeriesSource(block), block]));
   const version = block => /^version = "([^"]+)"/m.exec(block)[1];
-  for (const block of lockBlocks(own)) {
+  for (const block of incoming) {
     const id = lockSeriesSource(block), previous = held.get(id);
     if (!previous || pinned && !pinned.has(id) && Bun.semver.order(version(block), version(previous)) > 0
       && gpuVersionMatches(version(block), version(previous))) held.set(id, block);

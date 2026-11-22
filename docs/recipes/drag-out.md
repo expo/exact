@@ -3,9 +3,9 @@
 A node a person will lift and drop into another app (Messages, Notes, Photos,
 Files, the other pane of a split screen) says so with HTML's `draggable`
 attribute and declares what the drag carries (LLP 1094.000). A press held on
-the node lifts it on iOS and a mouse drags it on the Mac, where the drop gets
-the file itself; on the web the browser drags it, with the file's URL.
-Android's lift is still to come. `tree` and `expect drag` work on every host.
+the node lifts it on iOS and Android, and a mouse drags it on the Mac; the
+drop gets the file itself. On the web the browser drags it, with the file's
+URL. `tree` and `expect drag` work on every host.
 
 ```contract
 fn thumb(l: Landmark): string = `assets/apple/${l.id}-thumb.jpg`
@@ -20,7 +20,8 @@ link href=path("landmark", l.id) press=open(path("landmark", l.id)) aria-label=l
   list (`list appearance="auto"`).
 - **`dataTransfer=DataTransfer(text=, url=, files=[…])`** is what the drag
   carries; give at least one. `text` is offered as `text/plain`, `url` as
-  `text/uri-list`, and each file as itself, its type from its extension:
+  `text/uri-list` (Android: `text/plain`), and each file as itself, its
+  type from its extension:
   - `url` is an absolute `http:` or `https:` URL, never an app path, which
     another app cannot open;
   - a file the app ships is written as an `image` names one,

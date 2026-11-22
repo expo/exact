@@ -5,6 +5,16 @@ import { parseSync } from 'rolldown/utils';
 import { rolldown } from 'rolldown';
 import { runInNewContext } from 'node:vm';
 import { configure, dataBundle, staticFacts } from '../src/typescript.mjs';
+import { sourceTurnBudgets } from '../src/__exact_facts.mjs';
+
+test('a source budget is a finite duration for a source owned by TypeScript', () => {
+  const names = new Set(['low', 'high']);
+  const read = code => sourceTurnBudgets(code, parseSync, {}, names);
+  expect(read('const first = {low: 100}; export const turnBudgets = {...first, high: 1000} as const;')).toEqual({low: 100, high: 1000});
+  for (const value of ['99', '1001', 'NaN', 'Infinity', '"400"', 'null'])
+    expect(() => read(`export const turnBudgets = {low: ${value}};`)).toThrow(/turnBudgets/);
+  expect(() => read('export const turnBudgets = {other: 400};')).toThrow('unknown TypeScript source other');
+});
 
 function fixture(files, manifest = {}) {
   const root = resolve(import.meta.dir, '../../../target');
@@ -21,9 +31,9 @@ function fixture(files, manifest = {}) {
   return { stage, put, close: () => rmSync(stage, { recursive: true, force: true }) };
 }
 
-test('grants fold imported literal arrays and spreads without running their module', async () => {
+for (const [specifier, read] of [['{ SECRET_GRANTS }', 'SECRET_GRANTS'], ['* as session', 'session.SECRET_GRANTS']]) test(`grants fold imported literal arrays and spreads without running their module: ${read}`, async () => {
   const f = fixture({
-    'app.ts': "import { SECRET_GRANTS } from './src/session';\nexport const grants = ['net.fetch https://api.example.com', ...SECRET_GRANTS].join('\\n');\n",
+    'app.ts': `import ${specifier} from './src/session';\nexport const grants = ['net.fetch https://api.example.com', ...${read}].join('\\n');\n`,
     'src/session.ts': "throw new Error('the static reader must not run this');\nexport const SECRET_GRANTS = ['secret.keep session.refresh', 'secret.keep session.device'];\n",
   });
   try {
@@ -32,6 +42,32 @@ test('grants fold imported literal arrays and spreads without running their modu
       'net.fetch https://api.example.com\nsecret.keep session.refresh\nsecret.keep session.device');
   } finally { f.close(); }
 });
+
+// Only `ns.NAME` of a namespace import reads an export. A computed key is refused, since the launch-setting walk does
+// not read every key this reader does, and so is a member of a named import, whose export's name may be the empty one.
+for (const [specifier, read] of [['* as session', "session['SECRET_GRANTS']"], ['* as session', 'session[`SECRET_GRANTS`]'], ['{ "" as session }', 'session.SECRET_GRANTS']]) {
+  test(`grants refuse ${read} of import ${specifier}`, async () => {
+    const f = fixture({
+      'app.ts': `import ${specifier} from './src/session';\nexport const grants = ['net.fetch https://api.example.com', ...${read}].join('\\n');\n`,
+      'src/session.ts': "export const SECRET_GRANTS = ['secret.keep session.refresh'];\nconst other = { SECRET_GRANTS: ['secret.keep other'] };\nexport { other as \"\" };\n",
+    });
+    try { await expect(configure(f.stage, false, parseSync)).rejects.toThrow('grants cannot read a computed value or array element'); }
+    finally { f.close(); }
+  });
+}
+
+// A destructured export is the module's own export of its names, so an `export *` beside it does not supply them.
+for (const [specifier, read] of [['{ LINE }', 'LINE'], ['* as strings', 'strings.LINE']]) {
+  test(`grants refuse a destructured export and do not take a star export's in its place: ${read}`, async () => {
+    const f = fixture({
+      'app.ts': `import ${specifier} from './strings';\nexport const grants = ${read};\n`,
+      'strings.ts': "export const { LINE, inner: [OTHER = 'x', ...REST] } = { LINE: 'secret.keep explicit', inner: [] };\nexport * from './fallback';\n",
+      'fallback.ts': "export const LINE = 'secret.keep fallback';\n",
+    });
+    try { await expect(configure(f.stage, false, parseSync)).rejects.toThrow('grants require a top-level const; LINE is not one'); }
+    finally { f.close(); }
+  });
+}
 
 const constants = {
   'strings.ts': "export const PREFIX = 'secret.keep ';\nexport const NAME = 'session.refresh';\nexport const LINE = PREFIX + NAME;\nexport const LINES = [LINE, `secret.keep session.device`];\n",

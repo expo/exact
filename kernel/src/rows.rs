@@ -75,7 +75,8 @@ pub(crate) fn prop_changed(
             return true;
         }
         PropId::SemanticTag
-            if crate::style::table::styled(arena, slot)
+            if crate::style::table::Part::of(arena, slot).is_some()
+                || crate::style::prose::styled(arena, slot)
                 || layout.tree_ref().is_some_and(|t| t.in_table(slot)) =>
         {
             if let Some(node) = arena.taffy(slot) {

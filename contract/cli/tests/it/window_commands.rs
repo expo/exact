@@ -1,6 +1,7 @@
 //! The commands an app gives its own window. LLP 1069.010: a quit the app
 //! holds leaves full screen and fades its window first. LLP 1133.025 D4: a
-//! utility that keeps running puts its window away.
+//! utility that keeps running puts its window away. `startViewTransition`
+//! cross-fades the whole window into the action's commit.
 
 use exact_kernel::Kernel;
 use exact_plan::Value;
@@ -77,4 +78,26 @@ fn a_utility_hides_its_window_and_shows_it_again() {
         format!("{error:?}").contains("type-hide-window"),
         "{error:?}"
     );
+}
+
+/// `startViewTransition()` reaches the host with the commit it fades into;
+/// any argument is refused, as the web's takes no duration (LLP 1013.003 D2).
+#[test]
+fn a_switch_cross_fades_the_window_into_its_commit() {
+    let src = "component App\n  state game = \"a\"\n  action pick(g: string)\n    startViewTransition()\n    game = g\n  view\n    button press=pick(\"b\")\n      text game\n";
+    let mut r = boot(src);
+    r.act("pick", vec![Value::from("b")]).unwrap();
+    let commands = r.take_commands();
+    let named: Vec<(&str, &[Value])> = commands
+        .iter()
+        .map(|c| (c.name.as_str(), &c.args[..]))
+        .collect();
+    assert_eq!(named, [("startViewTransition", &[][..])]);
+    for bad in ["startViewTransition(0.3)", "startViewTransition(\"slow\")"] {
+        let error = contract::compile(&src.replace("startViewTransition()", bad)).unwrap_err();
+        assert!(
+            format!("{error:?}").contains("type-view-transition"),
+            "{bad}: {error:?}"
+        );
+    }
 }

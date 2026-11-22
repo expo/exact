@@ -846,14 +846,9 @@ impl<D: DataSource> Runner<D> {
         if exact_plan::runner_owned_source(self.plan.str(self.resource_row(i).source)) {
             return Err(refusal);
         }
-        let crate::failure::Failure {
-            code,
-            message,
-            reason,
-        } = crate::failure::Failure::of(&refusal);
         Err(RunnerError::Data {
             resource: self.plan.str(self.resource_row(i).name).to_string(),
-            error: DataError::Failed(code, message, reason),
+            error: crate::failure::Failure::of(&refusal).into(),
         })
     }
 

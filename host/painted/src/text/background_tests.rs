@@ -333,7 +333,7 @@ fn flowed_background_generated_hyphen_has_source_owner() {
     assert_eq!(corners(&pieces[1]), RIGHT);
     let line = p.layout_runs().next().unwrap();
     let hyphen = line.glyphs.last().unwrap();
-    assert_eq!(hyphen.run(), 1);
+    assert_eq!(hyphen.run(line.run_base), 1);
     assert!((pieces[0].rect.0 + pieces[0].rect.2 - hyphen.x - hyphen.w).abs() < 0.01);
 }
 
@@ -449,7 +449,7 @@ fn flowed_background_spaces_and_later_hard_lines_keep_run_ownership() {
         for g in line.glyphs {
             assert!(!line.text[g.range()].is_empty());
             assert_eq!(
-                g.run(),
+                g.run(line.run_base),
                 ends.partition_point(|end| *end <= g.start as usize)
             );
         }
@@ -726,21 +726,25 @@ fn a_wrapped_boxs_fragments_hold_its_glyphs_in_a_right_to_left_paragraph() {
         let lines: Vec<_> = p.layout_runs().collect();
         let first = lines
             .iter()
-            .position(|l| l.glyphs.iter().any(|g| g.run() == 1));
+            .position(|l| l.glyphs.iter().any(|g| g.run(l.run_base) == 1));
         let last = lines
             .iter()
-            .rposition(|l| l.glyphs.iter().any(|g| g.run() == 1));
+            .rposition(|l| l.glyphs.iter().any(|g| g.run(l.run_base) == 1));
         let (first, last) = (first.unwrap(), last.unwrap());
         assert!(last > first, "{texts:?} wraps");
         for (i, line) in lines
             .iter()
             .enumerate()
-            .filter(|(_, l)| l.glyphs.iter().any(|g| g.run() == 1))
+            .filter(|(_, l)| l.glyphs.iter().any(|g| g.run(l.run_base) == 1))
         {
             let ink: Vec<_> = line
                 .glyphs
                 .iter()
-                .filter(|g| g.run() == 1 && g.w > 0.0 && !line.text[g.range()].trim().is_empty())
+                .filter(|g| {
+                    g.run(line.run_base) == 1
+                        && g.w > 0.0
+                        && !line.text[g.range()].trim().is_empty()
+                })
                 .collect();
             let lo = ink.iter().map(|g| g.x).fold(f32::INFINITY, f32::min);
             let hi = ink

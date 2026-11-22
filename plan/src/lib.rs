@@ -71,6 +71,13 @@ pub mod generated {
 }
 
 pub use generated::*;
+
+impl SlotsRow {
+    /// Whether a host restores this slot at boot.
+    pub fn is_persisted(&self) -> bool {
+        self.persist != PersistScope::None
+    }
+}
 pub use shared::{HeapStr, InlineStr, Items, Str};
 pub use value::Value;
 
@@ -512,7 +519,7 @@ impl Plan {
                     field: "late",
                 });
             }
-            if slot.persist
+            if slot.is_persisted()
                 && (slot.owner.is_some()
                     || slot.late
                     || self.locale == here

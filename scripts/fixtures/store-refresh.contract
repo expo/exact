@@ -3,7 +3,7 @@ component StoreRefresh
   state favourite = false persist
   state marker = false persist
   state delay = 10000 persist
-  state local = 0
+  state local = 0 persist window
   task short when delay == 10000
     after(10000, timeout)
   task long when delay == 20000

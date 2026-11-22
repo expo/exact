@@ -218,11 +218,9 @@ impl Parser {
             }
             children = self.block_rest(|p| p.node())?;
         }
-        // LLP 1017.001's primary button argument is its visible text
-        // child, not a prop on the pressable itself. Keeping it as a
-        // real text node gives every host the same visible and
-        // accessible subtree.
-        if word == "button" && positional.len() == 1 {
+        // A label on a container is its first text child on every host
+        // (LLP 1017.001 for buttons).
+        if matches!(word.as_str(), "button" | "blockquote" | "li") && positional.len() == 1 {
             if self.view_depth >= 256 {
                 return self.err("syntax-view-depth", "views nest more than 256 sites deep");
             }

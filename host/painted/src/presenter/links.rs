@@ -87,14 +87,17 @@ impl<D: DataSource> Presenter<D> {
                 .enumerate()
                 .filter(|(i, _)| lines.contains(i))
                 .map(|(_, line)| line)
-                .flat_map(|(line, baseline)| line.glyphs.iter().map(move |g| (g, *baseline)))
-                .find(|(g, baseline)| {
+                .flat_map(|(line, baseline)| {
+                    line.glyphs
+                        .iter()
+                        .map(move |g| (g, *baseline, line.run_base))
+                })
+                .find(|(g, baseline, _)| {
                     (g.x..g.x + g.w).contains(&px)
                         && (baseline - g.font_size * 1.05..baseline + g.font_size * 0.35)
                             .contains(&py)
-                })?
-                .0
-                .run(),
+                })
+                .map(|(g, _, base)| g.run(base))?,
         )
     }
 
@@ -317,7 +320,7 @@ component App
         let g = line
             .glyphs
             .iter()
-            .find(|g| paragraph.runs()[g.run()].href == href)
+            .find(|g| paragraph.runs()[g.run(line.run_base)].href == href)
             .unwrap();
         (
             rect.0 + content.0 + g.x + g.w / 2.0,

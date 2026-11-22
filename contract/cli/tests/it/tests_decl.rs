@@ -1,7 +1,7 @@
 //! LLP 1017 P7: `test` blocks parse to the agent's steps and print as JSON
 //! the driver reads (`scripts/agent.mjs --test`).
 
-use contract_syntax::{Expr, StateComparison, StateOperand, Step, TapForm};
+use contract_syntax::{Expr, StateOperand, Step, TapForm};
 
 #[test]
 fn a_test_answers_a_pending_presence_prompt() {
@@ -25,30 +25,7 @@ fn a_test_answers_a_pending_presence_prompt() {
     }
 }
 
-#[test]
-fn authored_http_responses_are_launch_facts_and_steps() {
-    let tests = contract::tests(
-        r#"answer fetch "https://api.example.com/" with 200 {"text":"Stubbed greeting"}
-test "inherited"
-  expect text "greeting" == "Stubbed greeting"
-test "overridden"
-  fail fetch "https://api.example.com/"
-  clock data
-  answer fetch "https://api.example.com/" with 503 "unavailable"
-  reload
-"#,
-    )
-    .unwrap();
-    let json: serde_json::Value = serde_json::from_str(&contract::tests_json(&tests)).unwrap();
-    assert_eq!(json[0]["steps"][0]["op"], "answer-fetch");
-    assert_eq!(json[0]["steps"][0]["response"]["status"], 200);
-    assert_eq!(json[1]["steps"][0]["op"], "fail-fetch");
-    assert_eq!(json[1]["steps"][2]["op"], "answer-fetch");
-    assert!(contract::tests(
-        "answer fetch \"x\" with 200\nfail fetch \"x\"\ntest \"t\"\n  clock data\n"
-    )
-    .is_err());
-}
+mod fetch;
 
 #[test]
 fn a_test_block_parses_to_the_eight_operations_and_expects() {
@@ -1424,11 +1401,8 @@ fn state_relations_accept_inequality_and_paths() {
 
 #[test]
 fn state_relations_check_both_path_types_before_running() {
-    let dir = crate::scratch::Scratch::new(
-        std::env::current_dir()
-            .unwrap()
-            .join(format!("target/state-types-{}", std::process::id())),
-    );
+    let path = format!("target/state-types-{}", std::process::id());
+    let dir = crate::scratch::Scratch::new(std::path::absolute(path).unwrap());
     let app = dir.join("app.contract");
     std::fs::write(
         &app,
@@ -1450,6 +1424,10 @@ component App
 "#,
     )
     .unwrap();
+    let check = |line: &str| {
+        let source = format!("test \"relation\"\n  expect state {line}\n");
+        contract::resolve_test_states_path(&app, &mut contract::tests(&source).unwrap())
+    };
     for line in [
         "n == state doubled",
         "n != state rows.0.id",
@@ -1463,8 +1441,7 @@ component App
         "saved.id == state n",
         "n == state other.id",
     ] {
-        let tests = contract::tests(&format!("test \"valid\"\n  expect state {line}\n")).unwrap();
-        contract::check_test_states_path(&app, &tests).unwrap();
+        check(line).unwrap();
     }
     for (line, left, right) in [
         ("n == state word", "number", "string"),
@@ -1475,9 +1452,7 @@ component App
         ("n in state n", "number", "number"),
         ("saved == state wordResult", "option<Row>", "option<string>"),
     ] {
-        let source = format!("test \"invalid\"\n  expect state {line}\n");
-        let tests = contract::tests(&source).unwrap();
-        let errors = contract::check_test_states_path(&app, &tests).unwrap_err();
+        let errors = check(line).unwrap_err();
         assert_eq!(errors[0].id, "type-test-state");
         assert_eq!(errors[0].span.line, 2);
         for ty in [left, right] {

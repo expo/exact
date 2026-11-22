@@ -240,7 +240,7 @@ impl Lowerer<'_> {
         self.check_svg(tag, parent_tag, expanded, scope)?;
         shorthands::check_text_box(tag, parent_tag, expanded)?;
         // @ref LLP 1011.002 D3 — the one box `vertical-align` moves.
-        let inline_image = tag == "image" && matches!(parent_tag, Some("text"));
+        let inline_image = tag == "image" && matches!(parent_tag, Some("text" | "p"));
         if inline_image {
             // Its box takes lengths alone, not the sizes it would resolve
             // against a containing block (LLP 1011.002 §"Not built").
@@ -281,7 +281,7 @@ impl Lowerer<'_> {
         }
         // @ref LLP 1034 §8 — an inline run paints in its paragraph's
         // scheme: no host gives a run an appearance of its own.
-        if matches!(tag.as_str(), "text" | "time") && matches!(parent_tag, Some("text" | "time")) {
+        if crate::prose::phrasing(tag) && parent_tag.is_some_and(crate::prose::text_container) {
             if let Some(a) = expanded.iter().find(|a| a.name == "color-scheme") {
                 return Err(LowerError {
                             id: "lower-attr-tag",
@@ -316,6 +316,7 @@ impl Lowerer<'_> {
         let authored_children = children;
         let children: &[Node] = face.as_deref().unwrap_or(authored_children.as_slice());
         controls::check_nesting(tag, parent_tag, *span)?;
+        crate::prose::check(tag, parent_tag, *span)?;
         crate::tables::check(tag, parent_tag, self.in_dl_group, expanded, children, *span)?;
         controls::check_progress(tag, expanded, children)?;
         crate::live_time::check(tag, expanded, *span)?;
@@ -953,15 +954,15 @@ impl Lowerer<'_> {
             fn run(c: &Node, images: bool) -> bool {
                 match c {
                     Node::Element { tag, .. } => {
-                        matches!(tag.as_str(), "text" | "time") || images && tag == "image"
+                        crate::prose::phrasing(tag) || images && tag == "image"
                     }
                     Node::Use { .. } | Node::Children { .. } => false,
                     region => region.children().all(|c| run(c, images)),
                 }
             }
             // A `text` that holds runs, not a string or a `time` value.
-            let paragraph = !matches!(parent_tag, Some("text" | "time"))
-                && tag == "text"
+            let paragraph = !parent_tag.is_some_and(crate::prose::text_container)
+                && matches!(tag.as_str(), "text" | "p")
                 && positional.is_empty()
                 && !expanded.iter().any(|a| a.name == "text");
             // Columns lay a paragraph's lines out apart, which an image's

@@ -310,5 +310,67 @@ final class HDRVideoIOSTests: XCTestCase {
             }
         }
     }
+
+    /// Diary acd9fff0: `aria-label` and `aria-labelledby` on `<video>` and `<audio>`
+    /// reach VoiceOver without overwriting audio's Play button label.
+    func testVideoAndAudioForwardAuthoredAriaLabelToVoiceOver() throws {
+        let p = Presenter()
+        let frame = CGRect(x: 0, y: 0, width: 360, height: 320)
+        let window = hostedWindowScene().map { UIWindow(windowScene: $0) } ?? UIWindow(frame: frame)
+        window.frame = frame
+        let controller = UIViewController()
+        window.rootViewController = controller
+        p.viewport.frame = window.bounds
+        controller.view.addSubview(p.viewport)
+        window.makeKeyAndVisible()
+        defer { p.reset(); window.isHidden = true }
+        let clip = fixtures.appendingPathComponent("pq.mov").absoluteString
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "video", "props": [
+                "semanticTag": "audio", "src": clip, "controls": "true", "muted": "true",
+                "accessibilityLabel": "Voice memo"]],
+            ["op": "create", "id": 3, "kind": "video", "props": [
+                "src": clip, "controls": "false", "muted": "true", "paused": "true", "playsinline": "true",
+                "accessibilityLabel": "Background loop"]],
+            ["op": "create", "id": 4, "kind": "video", "props": [
+                "src": clip, "controls": "true", "muted": "true", "paused": "true", "playsinline": "true",
+                "accessibilityLabelledBy": "cap"]],
+            ["op": "create", "id": 5, "kind": "text", "props": ["id": "cap", "text": "Intro clip"]],
+            ["op": "children", "id": 1, "ids": [2, 3, 4, 5]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 360.0, "h": 320.0],
+            ["op": "frame", "id": 2, "x": 0.0, "y": 0.0, "w": 300.0, "h": 54.0],
+            ["op": "frame", "id": 3, "x": 0.0, "y": 60.0, "w": 180.0, "h": 100.0],
+            ["op": "frame", "id": 4, "x": 0.0, "y": 170.0, "w": 180.0, "h": 100.0],
+            ["op": "frame", "id": 5, "x": 0.0, "y": 280.0, "w": 180.0, "h": 30.0],
+        ]))
+        p.syncAccessibility()
+        window.layoutIfNeeded()
+        func descendants(_ view: UIView) -> [UIView] { view.subviews.flatMap { [$0] + descendants($0) } }
+
+        let audioOwner = try XCTUnwrap(p.views[2])
+        let audioContainer = try XCTUnwrap(audioOwner.subviews.first)
+        let playButton = try XCTUnwrap(descendants(audioOwner).compactMap { $0 as? UIButton }.first)
+        XCTAssertEqual(audioContainer.accessibilityContainerType, .semanticGroup)
+        XCTAssertEqual(audioContainer.accessibilityLabel, "Voice memo")
+        XCTAssertEqual(playButton.accessibilityLabel, "Play", "audio Play button keeps its own label")
+
+        let inlineOwner = try XCTUnwrap(p.views[3])
+        let inlineLayerView = try XCTUnwrap(descendants(inlineOwner).first { $0.layer is AVPlayerLayer })
+        XCTAssertTrue(inlineLayerView.isAccessibilityElement)
+        XCTAssertEqual(inlineLayerView.accessibilityLabel, "Background loop")
+        p.apply(wireBatch([["op": "props", "id": 3, "clear": ["accessibilityLabel"]]]))
+        XCTAssertFalse(inlineLayerView.isAccessibilityElement)
+        XCTAssertNil(inlineLayerView.accessibilityLabel)
+
+        let controlsOwner = try XCTUnwrap(p.views[4])
+        let controlsContainer = try XCTUnwrap(controlsOwner.subviews.first)
+        XCTAssertEqual(controlsContainer.accessibilityContainerType, .semanticGroup)
+        XCTAssertEqual(controlsContainer.accessibilityLabel, "Intro clip")
+        p.apply(wireBatch([["op": "props", "id": 5, "set": ["text": "Chapter two"]]]))
+        p.syncAccessibility()
+        XCTAssertEqual(controlsContainer.accessibilityLabel, "Chapter two")
+    }
 }
 #endif

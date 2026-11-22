@@ -57,6 +57,23 @@ final class StoreRefreshTests: XCTestCase {
     }
     #endif
 
+    func testRestoredWindowBootsWithItsOwnStateAndPublishesSubsequentChanges() throws {
+        let plan = try fixturePlan("STORE_REFRESH")
+        let first = ExactApp.shared.makeSession(label: "restored-window")
+        let second = ExactApp.shared.makeSession(label: "fresh-window")
+        defer { first.destroy(); second.destroy() }
+        first.restoreWindowState(["local": "17", "favourite": "true", "retired": "42"])
+        let size = CGSize(width: 300, height: 400)
+        XCTAssertNil(first.boot(plan: plan, size: size).error)
+        XCTAssertNil(second.boot(plan: plan, size: size).error)
+        XCTAssertEqual(first.windowState, ["local": "17"])
+        XCTAssertEqual(second.windowState, ["local": "0"])
+        let increment = try XCTUnwrap(first.presenter.views.values.first { $0.props["testId"] == "local" })
+        first.apply(first.runtime.press(increment.id, now: 0))
+        XCTAssertEqual(first.windowState, ["local": "18"])
+        XCTAssertEqual(second.windowState, ["local": "0"])
+    }
+
     func testABurstOfStoreWritesReloadsTheWidgetsOnceItIsQuiet() {
         let refresh = SharedStoreRefresh()
         refresh.quiet = 0.2

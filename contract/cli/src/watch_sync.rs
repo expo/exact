@@ -24,7 +24,11 @@ pub fn identity(sync: &WatchSync, phone: Option<&Plan>) -> Result<serde_json::Va
     let mut types = serde_json::Map::new();
     for name in &sync.state {
         let slot = phone
-            .and_then(|p| p.slots.iter().find(|s| s.persist && p.str(s.name) == name))
+            .and_then(|p| {
+                p.slots
+                    .iter()
+                    .find(|s| s.persist == exact_plan::PersistScope::App && p.str(s.name) == name)
+            })
             .ok_or_else(|| format!("watch.sync.state `{name}` must be a root persist state"))?;
         types.insert(name.clone(), shape(phone.unwrap(), slot.ty).into());
     }
@@ -42,7 +46,7 @@ pub fn plans(sync: &WatchSync, phone: &Plan, watch: &Plan) -> Result<(), String>
         let find = |p: &Plan| {
             p.slots
                 .iter()
-                .position(|s| s.persist && p.str(s.name) == name)
+                .position(|s| s.persist == exact_plan::PersistScope::App && p.str(s.name) == name)
         };
         let (Some(p), Some(w)) = (find(phone), find(watch)) else {
             return Err(format!(

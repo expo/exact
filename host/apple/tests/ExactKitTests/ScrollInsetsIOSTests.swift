@@ -54,6 +54,18 @@ final class ScrollInsetsIOSTests: XCTestCase {
         // Each edge is its own, the sides included
         let sides = ScrollInsetsIOS.insets(terms: .init(), rows: rows, band: [62, 21, 34, 44], platform: never)
         XCTAssertEqual(sides.content, UIEdgeInsets(top: 62, left: 44, bottom: 34, right: 21))
+        // A native list's layout clears what it consumes: an 84-point side band it consumes whole is none of the
+        // writer's, 20 reserved past it is, UIKit's adjustment over the consumed depth is cancelled, and the indicator,
+        // which the layout does not move, still takes the whole occupied depth
+        let side: [CGFloat] = [0, 84, 0, 0], consumed: [CGFloat] = [0, 84, 0, 0]
+        XCTAssertEqual(ScrollInsetsIOS.insets(terms: .init(), rows: rows, band: side, platform: never, consumed: consumed).content.right, 0)
+        let reserved = ScrollInsetsIOS.Terms(reserved: [nil, 104, nil, nil])
+        XCTAssertEqual(ScrollInsetsIOS.insets(terms: reserved, rows: rows, band: side, platform: never, consumed: consumed).content.right, 20)
+        let adjusted = ScrollInsetsIOS.insets(terms: .init(), rows: rows, band: side, platform: side, consumed: consumed)
+        XCTAssertEqual([adjusted.content.right, adjusted.verticalIndicator.right], [-84, 84])
+        // On an edge whose region it ignores, the consumed depth is none of the writer's either way
+        let ignored = ScrollInsetsIOS.Terms(container: [true, false, true, true])
+        XCTAssertEqual(ScrollInsetsIOS.insets(terms: ignored, rows: rows, band: side, platform: never, consumed: consumed).content.right, 0)
     }
 
     func testTheIndicatorsTakeTheOccupiedDepthUnlessTheirAdjustmentIsNone() {
@@ -261,6 +273,27 @@ final class ScrollInsetsIOSTests: XCTestCase {
         let above = UIScrollView(frame: CGRect(x: 0, y: -20, width: owner.bounds.width, height: 300))
         owner.addSubview(above)
         XCTAssertEqual(ScrollInsetsIOS.band(of: above, in: owner)[0], band.top)
+    }
+
+    func testAnOutsetScrollViewsSideBandIsReadFromItsOwnersSafeArea() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "the band is a scene window's safe area") }
+        // A box between the side bands' inner sides holding a scroll view outset over the window's
+        // width, on a device with a side band: UIKit gives it none of the band past its box there
+        // either, and the writer reads the overlap from the owner's view
+        let (_, owner) = try scrollView(in: scene)
+        let band = owner.safeAreaInsets
+        try XCTSkipIf(band.left + band.right < 1, "no side band on this device")
+        let box = UIView(frame: CGRect(x: band.left, y: 0, width: owner.bounds.width - band.left - band.right, height: owner.bounds.height))
+        owner.addSubview(box)
+        let scroll = UIScrollView(frame: CGRect(x: -band.left, y: 0, width: owner.bounds.width, height: owner.bounds.height))
+        scroll.contentSize = CGSize(width: owner.bounds.width, height: 5000)
+        box.addSubview(scroll)
+        owner.layoutIfNeeded()
+        XCTAssertEqual([scroll.safeAreaInsets.left, scroll.safeAreaInsets.right], [0, 0], "UIKit's")
+        let read = ScrollInsetsIOS.band(of: scroll, in: owner)
+        XCTAssertEqual([read[3], read[1]], [band.left, band.right])
+        ScrollInsetsIOS.write(scroll, in: owner, terms: .init(), rows: .init())
+        XCTAssertEqual([scroll.adjustedContentInset.left, scroll.adjustedContentInset.right], [band.left, band.right])
     }
 
     func testAScrollerInAnotherTakesNoneOfTheBandThatOneTook() throws {

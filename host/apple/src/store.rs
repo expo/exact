@@ -410,7 +410,8 @@ pub fn endowed<const PRESENCE: bool>(grants: &str, app_id: &str, fresh: bool) ->
     };
     let (mut snapshot, unread_kept) = match bindings.as_ref().filter(|_| fresh) {
         Some(b) => {
-            let read = snapshot_parts(&b.secrets, &b.kv, &prefs, Vec::new());
+            let mut read = snapshot_parts(&b.secrets, &b.kv, &prefs, Vec::new());
+            crate::picker::seed_first_window(app_id, &mut read.values);
             (read.values, read.omitted)
         }
         None => Default::default(),

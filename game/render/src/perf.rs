@@ -57,9 +57,11 @@ impl Stamp {
 }
 #[cfg(target_arch = "wasm32")]
 fn performance_now() -> f64 {
+    use web_sys::js_sys::{global, Reflect};
+    use web_sys::wasm_bindgen::{JsCast, JsValue};
     thread_local! {
-        static PERFORMANCE: web_sys::Performance = web_sys::window()
-            .and_then(|w| w.performance()).expect("WorldSurface requires window.performance");
+        static PERFORMANCE: web_sys::Performance = Reflect::get(&global(), &JsValue::from_str("performance"))
+            .and_then(JsCast::dyn_into).expect("game rendering requires globalThis.performance");
     }
     PERFORMANCE.with(web_sys::Performance::now)
 }

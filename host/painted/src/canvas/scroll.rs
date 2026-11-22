@@ -17,6 +17,51 @@ use crate::presenter::PAGE;
 #[cfg(target_os = "android")]
 use exact_runner::DataSource;
 
+/// Scroll deferral state shared by the Android canvas loop's `frame`,
+/// `requests`, `refine`, and input handlers: `scrolled` stays true until
+/// `refine` runs or non-scroll input ends the scroll, while `scroll_turn` is
+/// true only for the scroll step's own frame and requests turn so later turns
+/// still pump and tell the shell (including `Request::Back`).
+#[cfg(any(target_os = "android", test))]
+#[derive(Default)]
+pub(super) struct ScrollHold {
+    scrolled: bool,
+    scroll_turn: bool,
+}
+
+#[cfg(any(target_os = "android", test))]
+impl ScrollHold {
+    pub(super) fn note_scroll(&mut self, prefetching: bool) {
+        self.scrolled = prefetching;
+        self.scroll_turn = prefetching;
+    }
+    pub(super) fn end(&mut self) {
+        self.scrolled = false;
+        self.scroll_turn = false;
+    }
+    pub(super) fn touch(&mut self, action: i32) {
+        self.scroll_turn = false;
+        if action != 2 {
+            self.scrolled = false;
+        }
+    }
+    pub(super) fn poll(&mut self) {
+        self.scroll_turn = false;
+    }
+    pub(super) fn holding_collections(&self) -> bool {
+        self.scrolled
+    }
+    pub(super) fn quick(&self) -> bool {
+        self.scroll_turn
+    }
+    pub(super) fn take_request_skip(&mut self) -> bool {
+        std::mem::take(&mut self.scroll_turn)
+    }
+    pub(super) fn owed(&self) -> bool {
+        self.scrolled
+    }
+}
+
 #[cfg(target_os = "android")]
 impl<D: DataSource + Default> CanvasHost<D> {
     /// What is under a point of the view (pixels), for the reader to decide
@@ -72,7 +117,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
         let Some((_, down)) = went else {
             return;
         };
-        self.scrolled = self.prefetching;
+        self.scroll_hold.note_scroll(self.prefetching);
         self.scrolled_at = at;
         if down != 0.0 && id != PAGE {
             if self.feed != Some(id) {
@@ -239,5 +284,44 @@ mod tests {
         }
         assert_ne!(before["session"], after["session"]);
         assert_eq!(token(next), after["session"].as_u64().unwrap());
+    }
+
+    /// Diary 1ef6ac05: a plain `<scroll>` scroll must not leave `tell_shell()`
+    /// suppressed on subsequent turns when `refine` did not immediately run.
+    #[test]
+    fn scroll_hold_skips_only_the_scroll_turn_and_clears_on_input_or_refine() {
+        let mut hold = super::ScrollHold::default();
+        assert!(!hold.quick() && !hold.owed() && !hold.take_request_skip());
+        // Before `refine` has ever run (`prefetching == false`), scrolling defers nothing.
+        hold.note_scroll(false);
+        assert!(!hold.quick() && !hold.owed() && !hold.take_request_skip());
+        // After a plain `<scroll>` step once prefetching is active:
+        hold.note_scroll(true);
+        assert!(hold.quick() && hold.holding_collections() && hold.owed());
+        // The scroll step's own requests() skips tell_shell() once, then releases scroll_turn.
+        assert!(hold.take_request_skip());
+        assert!(
+            !hold.quick(),
+            "the following frame is no longer a quick scroll frame"
+        );
+        assert!(
+            !hold.take_request_skip(),
+            "the following requests() tells the shell"
+        );
+        assert!(hold.owed(), "refine() is still owed to settle the scroll");
+        // Non-move touch (down/up/cancel) clears both flags; MOVE keeps collection deferral.
+        hold.note_scroll(true);
+        hold.touch(2);
+        assert!(!hold.quick() && hold.holding_collections());
+        hold.touch(0);
+        assert!(!hold.quick() && !hold.holding_collections() && !hold.owed());
+        // Non-scroll input (`back`, `key`, `bar`, `refine`) clears both flags.
+        hold.note_scroll(true);
+        hold.end();
+        assert!(!hold.quick() && !hold.holding_collections() && !hold.owed());
+        // `poll` ends the scroll turn without clearing pending collection deferral.
+        hold.note_scroll(true);
+        hold.poll();
+        assert!(!hold.quick() && !hold.take_request_skip() && hold.owed());
     }
 }

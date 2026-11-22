@@ -504,7 +504,7 @@ export async function driveServer(dir, storage, say = (line) => console.error(li
     if (await answering(server.url)) {
       if (server.fixture && !ownsServer(dir, server)) {
         await stop();
-        throw new Error(`agent: ${server.url} answers, but its fixture does not belong to ${realpathSync(dir)}; use --backend http://127.0.0.1:<free-port> or PORT=<free-port> for this checkout`);
+        throw new Error(`agent: ${server.url} answers, but its fixture does not belong to ${realpathSync(dir)}; stop it to let agent start its own, or use --backend http://127.0.0.1:<free-port> or PORT=<free-port> for this checkout`);
       }
       const records = files('server').filter(([, pid]) => alive(pid)).map(([file]) => { try { return JSON.parse(readIn(lease, file)); } catch { return null; } }).filter((r) => r?.origin === server.url);
       const other = db && records.map((r) => r.db).find((was) => was && was !== db);

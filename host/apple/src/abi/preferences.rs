@@ -201,11 +201,44 @@ impl<D: DataSource> Bridge<D> {
         }
     }
 
+    pub(super) fn seed_window_state(&self, snapshot: &mut Vec<(String, Vec<u8>)>) {
+        match &self.host {
+            Some(host) => snapshot.extend(host.runner().window_state().into_iter().map(
+                |(name, text)| {
+                    (
+                        format!("{}{name}", exact_runner::Store::WINDOW_STATE),
+                        text.as_bytes().to_vec(),
+                    )
+                },
+            )),
+            None => snapshot.extend_from_slice(&self.restore_window),
+        }
+    }
+
     /// The window the session runs in, for every boot from here: its name,
     /// which the page's `name` reads, and whether the router launches
     /// rooted at the launch location (LLP 1030.004 D2).
-    pub fn set_launch_window(&mut self, len: usize, rooted: bool) {
-        let name = String::from_utf8_lossy(&self.input[..len.min(self.input.len())]).into_owned();
+    pub fn set_launch_window(&mut self, name: usize, rooted: bool, archive: usize) {
+        let Some(bytes) = self.input.get(..name.saturating_add(archive)) else {
+            return;
+        };
+        let (name, state) = bytes.split_at(name);
+        if !state.is_empty() && self.host.is_none() {
+            let values =
+                serde_json::from_slice::<std::collections::BTreeMap<String, String>>(state);
+            self.restore_window = values
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|(_, value)| value.len() <= exact_runner::runner::persist::PERSIST_LIMIT)
+                .map(|(key, value)| {
+                    (
+                        format!("{}{key}", exact_runner::Store::WINDOW_STATE),
+                        value.into_bytes(),
+                    )
+                })
+                .collect();
+        }
+        let name = String::from_utf8_lossy(name).into_owned();
         self.launch_facts.window_name = Some(name);
         self.launch_facts.rooted = rooted;
     }

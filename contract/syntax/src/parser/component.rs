@@ -298,11 +298,8 @@ impl Parser {
                 self.type_annotation(w, &name, if none { "as none" } else { "as" })?;
                 let persist = self.persist_word(w, &name)?;
                 self.newline()?;
-                if let Some(span) = persist {
-                    c.persist.push(Persist {
-                        name: name.clone(),
-                        span,
-                    });
+                if let Some(persist) = persist {
+                    c.persist.push(persist);
                 }
                 let expr = match declared {
                     Some(ty) => Expr::Typed(Box::new(expr), ty, t.span),

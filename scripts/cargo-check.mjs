@@ -3,8 +3,8 @@ import { spawn, spawnSync } from '../host/apple/toolchain.mjs';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { OFFLINE_MISSING, withHostDeployment } from './filesystem.mjs';
-import { throwContractErrors } from './contract-diagnosis.mjs';
-import { delimiter, dirname, relative, resolve, sep } from 'node:path';
+import { BUILD_SCRIPT_FAILED_LINE, buildScriptFailed, throwContractErrors } from './contract-diagnosis.mjs';
+import { basename, delimiter, dirname, isAbsolute, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
@@ -159,11 +159,21 @@ async function streamCargo(args) {
     process.on(signal, handler); return [signal, handler];
   });
   const filter = cargoDiagnosticFilter(text => process.stderr.write(text));
+  // Whether a build script failed, which the caller cannot read from the stderr this streams (contract-diagnosis.mjs),
+  // read from whole lines however the stream splits them
+  let partial = '', failed = false;
   try {
     child.stderr.setEncoding('utf8');
-    for await (const text of child.stderr) filter.write(text);
+    for await (const text of child.stderr) {
+      filter.write(text);
+      const lines = (partial + text).split('\n');
+      partial = lines.pop();
+      failed ||= lines.some(buildScriptFailed);
+    }
     filter.end();
+    failed ||= buildScriptFailed(partial);
     const { code, signal } = await ended;
+    if (failed && (signal || code !== 0)) process.stdout.write(`${BUILD_SCRIPT_FAILED_LINE}\n`);
     for (const [signal, handler] of handlers) process.off(signal, handler);
     if (signal) process.kill(process.pid, signal); else process.exitCode = code;
   } finally { for (const [signal, handler] of handlers) process.off(signal, handler); }
@@ -270,6 +280,38 @@ export function appCrates(dir) {
       const joins = Object.keys(MEMBER_OF).find(kind => declared === MEMBER_OF[kind]) ?? null;
       return { dir: crate, manifest: resolve(crate, 'Cargo.toml'), name: pkg?.name ?? null, joins };
     });
+}
+/** The directory of the package `name` that the app's host crates at `dir` build with, linked by path, which may be
+ * another app's, as Unsaid links Hello's data crate (LLP 1153.003 D2), or null when none does: through a normal or
+ * build dependency of that name or one renamed to it, given its own `path` or inheriting one from the crate's
+ * workspace, found as Cargo finds it and read without a build's lock check; a test's dev-dependency is not what a
+ * host builds. Two host crates linking different directories under that name are refused. */
+export function linkedCrate(dir, name) {
+  const found = new Set();
+  for (const crate of appCrates(dir).filter(crate => HOST_CRATES.includes(basename(crate.dir)))) {
+    const manifest = readToml(crate.manifest) ?? {};
+    const tables = [manifest, ...Object.values(manifest.target ?? {})]
+      .flatMap(table => [table.dependencies, table['build-dependencies']]);
+    let workspace;
+    for (const [key, dep] of tables.flatMap(table => Object.entries(table ?? {}))) {
+      if (dep?.workspace === true) workspace ??= cargoWorkspace(crate.dir, manifest);
+      const from = dep?.workspace === true ? workspace?.dependencies[key] : dep, base = dep?.workspace === true ? workspace?.root : crate.dir;
+      if ((from?.package ?? key) === name && typeof from?.path === 'string') found.add(resolve(base, from.path));
+    }
+  }
+  if (found.size > 1) throw new Error(`${dir}: its host crates link ${name} from ${[...found].join(' and ')}; link one directory`);
+  return found.size ? [...found][0] : null;
+}
+
+/** The workspace of the crate at `crate` (its parsed `manifest`), `{ root, dependencies }`, as Cargo finds it: the
+ * one `package.workspace` names, else the nearest directory with a `[workspace]`, the crate's own first; or null. */
+function cargoWorkspace(crate, manifest) {
+  const named = typeof manifest.package?.workspace === 'string' ? resolve(crate, manifest.package.workspace) : null;
+  for (let at = named ?? crate; ; at = dirname(at)) {
+    const workspace = readToml(resolve(at, 'Cargo.toml'))?.workspace;
+    if (workspace) return { root: at, dependencies: workspace.dependencies ?? {} };
+    if (named || dirname(at) === at) return null;
+  }
 }
 /** The refusal of a crate beside app.json that joins neither generated workspace, with the line to add. */
 export const notAMember = (crate) => `${crate.manifest}: a crate beside app.json joins the app's generated workspace. Add, under [package], workspace = "${MEMBER_OF.host}" (a GPU crate: workspace = "${MEMBER_OF.gpu}"). An app that writes its own host crates writes their workspace too, a Cargo.toml beside app.json (docs/reference.md, "An authored workspace").`;
@@ -395,6 +437,30 @@ export function cargoBuildEnv(cwd, env) {
     }
   }
   return result;
+}
+
+/** `path` made absolute as written, a `..` kept: a relative one joins the working directory, a Windows drive's own
+ * for `D:staging`, and a root (a drive, a UNC share) stays whole. */
+export function writtenPath(path) {
+  if (isAbsolute(path)) return path;
+  const { root } = parse(path);
+  return resolve(root || '.') + sep + path.slice(root.length);
+}
+
+/** `path` as the system reaches it, or null when a part of it cannot be read. Windows collapses a `..` before it
+ * opens a path, as `path.resolve` does; POSIX follows each link before a later `..`, which `path.resolve`, and Bun's
+ * `realpathSync.native`, collapse first, so there a path with `..` is followed part by part, split at `/` alone. Bun
+ * 1.4.2's `realpathSync` cannot read a POSIX name that holds a backslash, which the system and Node read, so such a
+ * path gives null here and its root is remapped only as written. */
+export function physicalPath(path) {
+  const written = writtenPath(path), { root } = parse(written);
+  const parts = written.slice(root.length).split(/\/+/).filter(part => part && part !== '.');
+  try {
+    if (process.platform === 'win32' || !parts.includes('..')) return realpathSync.native(resolve(written));
+    let at = realpathSync.native(root);
+    for (const part of parts) at = part === '..' ? dirname(at) : realpathSync.native(resolve(at, part));
+    return at;
+  } catch { return null; }
 }
 
 /** The `--config` that gives `target` the rustflags `flags` beside those its Cargo configuration gives it. A TOML array

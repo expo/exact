@@ -46,10 +46,10 @@ impl Output for Headless {
     fn fd(&self) -> i32 {
         self.close.as_raw_fd()
     }
-    fn submit(&mut self, frame: SubmittedFrame) -> Result<Option<SubmittedFrame>, String> {
-        Ok(Some(frame))
+    fn submit(&mut self, frame: PanelFrame) -> Result<Completion, String> {
+        Ok(Completion::Shown(frame))
     }
-    fn ready(&mut self) -> Result<Option<SubmittedFrame>, String> {
+    fn ready(&mut self) -> Result<Completion, String> {
         Err("headless display closed".into())
     }
 }

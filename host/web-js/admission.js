@@ -1,6 +1,6 @@
 import { rt } from './rt-link.js';
 import { admitsNetwork, admitsSecret, coversPath, createGrantSet, grantError, grantWords, hasGrant, rawGrantText, scopedGrantSet, unionGrantSets } from '../web/grant-admission.js';
-import { answeredFetch, countFault, faultMessage, matchFault } from '../web/faults.js';
+import { answeredFetch, countFault, delayFixture, faultMessage, matchFault } from '../web/faults.js';
 import { redirectFor, reachRefusal, UNATTRIBUTED } from '../web/address-space.js';
 export { socketProtocols, admitsNetwork, admitsSecret, coversPath, createGrantSet, grantError, grantWords, hasGrant, rawGrantText, trimGrant, sameGrantDeclaration, scopedGrantSet, unionGrantSets } from '../web/grant-admission.js';
 
@@ -83,7 +83,7 @@ export const signalDeadline = { arm: null };
 // `origin`: who asked it (LLP 1133.036 D6); a tool's, a wake's or the device's reach to a less public space is checked.
 // `decided`: `fetchOf` has already armed the signal's deadline before the file work, or found the request has none
 // (ts-fetch.js), so it is not weighed again.
-export async function fetchWith(set, input, init = {}, expires = null, redirect = redirectOf(input, init), read = within, origin = 'app', decided = false, forced) {
+export async function fetchWith(set, input, init = {}, expires = null, redirect = redirectOf(input, init), read = within, origin = 'app', decided = false, forced, wait) {
   let value, asset, deadline, signal, own, armed;
   init ??= {};
   deadline = deadlineOf(init);
@@ -99,14 +99,21 @@ export async function fetchWith(set, input, init = {}, expires = null, redirect 
   if (invalid) throw new FetchError('Refused', invalid);
   if (!asset && !admitsNetwork(set, value, 'fetch')) throw new FetchError('Refused', refusal('net.fetch'));
   // @ref LLP 1103 D1, D2 — a driver fault: the refused connection's failure, never sent.
-  const fixture = !asset && matchFault(value, true);
+  const suppliedMethod = init.method;
+  const method = suppliedMethod === undefined ? input?.method ?? 'GET' : String(suppliedMethod);
+  const fixture = !asset && matchFault(value, true, /^(get|post|put|head|delete|options)$/i.test(method) ? method.toUpperCase() : method);
+  const delay = fixture?.response?.afterMs ?? 0;
+  const timeout = delay && deadline && deadline.ms <= delay ? deadline.ms : 0;
+  const due = delay && (rt.clock?.now ?? 0) + (timeout || delay);
+  if (delay) { deadline = until = null; }
   if (fixture && !fixture.response) { countFault(value, fixture); throw new FetchError('Network', faultMessage(value)); }
   if (fixture && init.exactBodyTo !== undefined) throw new FetchError('Refused', 'answer fetch does not support exactBodyTo');
   const unreached = asset ? null : reachRefusal(value, origin);
   if (unreached) throw new FetchError('Refused', `NotAllowedError: ${unreached}`);
   redirect = redirectFor(origin, redirect);
   try {
-    const rest = ownWithout(init, ['exactBodyTo', 'exactTimeout', 'exactIndependentHttp', 'exactPreload', 'exactPrefetch', 'redirect', 'signal']);
+    const rest = ownWithout(init, ['method', 'exactBodyTo', 'exactTimeout', 'exactIndependentHttp', 'exactPreload', 'exactPrefetch', 'redirect', 'signal']);
+    if (suppliedMethod !== undefined) rest.method = method;
     // A forced ask reloads unless the request stores nothing; Fetch allows only-if-cached same-origin (LLP 1162 D4).
     const cache = init.cache ?? input?.cache, sent = forced && cache !== 'no-store' ? 'reload' : cache;
     const mode = init.mode ?? (sent === 'only-if-cached' && 'same-origin');
@@ -160,7 +167,14 @@ export async function fetchWith(set, input, init = {}, expires = null, redirect 
     if (fixture) {
       if (until && performance.now() >= until.at) throw new FetchError('Timeout', `the request timed out after ${until.ms} ms`);
       if (own?.aborted) throw own.reason;
+      if (delay && globalThis.__exactRender) {
+        throw Object.assign(new Error('delayed HTTP fixture'), { renderDeferred: true, unavailable: "the test clock" });
+      }
       countFault(value, fixture);
+      if (delay) {
+        await delayFixture(rt, wait, due, own);
+        if (timeout) throw new FetchError('Timeout', `the request timed out after ${timeout} ms`);
+      }
     }
     if (deadline) deadline.signal.removeEventListener('abort', relay);
     return response;
@@ -186,7 +200,7 @@ export function fetchHostAsset(input, init = {}) {
 
 export function createRequestExecutor(appId, sourceSet, readBody = response => response.arrayBuffer()) {
   let storage = null;
-  return async (req, signal, controller) => {
+  return async (req, signal, controller, call) => {
     const admitted = scopedGrantSet(sourceSet, req.scope);
     const why = grantError(admitted);
     if (why) return { failed: 2, message: why };
@@ -212,7 +226,7 @@ export function createRequestExecutor(appId, sourceSet, readBody = response => r
       // It goes out as the asking commit's origin (LLP 1133.036 D6): one it does not carry is not taken for the app's.
       const init = { method: req.method, headers: req.headers, cache: req.forced && req.cache !== 'no-store' ? 'reload' : req.cache, mode: req.mode, body: ['GET', 'HEAD'].includes(req.method) ? undefined : req.raw,
         signal, ...(req.maxResponseBytes != null ? { exactIndependentHttp: { maxResponseBytes: req.maxResponseBytes } } : {}) };
-      const response = await fetchWith(admitted, req.url, init, null, redirectOf(req.url, init), within, req.origin ?? UNATTRIBUTED);
+      const response = await fetchWith(admitted, req.url, init, null, redirectOf(req.url, init), within, req.origin ?? UNATTRIBUTED, false, undefined, { call, kind: req.held ? 'held' : undefined });
       return { status: response.status, headers: [...response.headers], body: new Uint8Array(await readBody(response, req.maxResponseBytes)) };
     } catch (error) {
       if (globalThis.__exactRender && error?.renderDeferred) return { refused: error.message };

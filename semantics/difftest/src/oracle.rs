@@ -117,7 +117,7 @@ impl Oracle {
     /// its type, or one of another (LLP 1116 D5).
     pub fn with_store(mut self) -> Self {
         let mut stored = Vec::new();
-        for row in self.plan.slots.iter().filter(|s| s.persist) {
+        for row in self.plan.slots.iter().filter(|s| s.is_persisted()) {
             let name = self.plan.str(row.name).to_string();
             let mut rng = Rng::new(hash(self.seed, &format!("stored {name}")));
             let v = match rng.below(3) {
@@ -139,10 +139,18 @@ impl Oracle {
             .map(|(name, _, v)| {
                 let mut text = String::new();
                 exact_runner::runner::persist::encode(v, &mut text);
-                (
-                    format!("{}{name}", exact_runner::Store::STATE),
-                    text.into_bytes(),
-                )
+                let row = self
+                    .plan
+                    .slots
+                    .iter()
+                    .find(|row| self.plan.str(row.name) == name)
+                    .expect("persisted slot");
+                let prefix = if row.persist == exact_plan::PersistScope::Window {
+                    exact_runner::Store::WINDOW_STATE
+                } else {
+                    exact_runner::Store::STATE
+                };
+                (format!("{prefix}{name}"), text.into_bytes())
             })
             .collect()
     }

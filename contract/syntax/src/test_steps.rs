@@ -199,6 +199,8 @@ pub enum Step {
     AnswerFetch {
         /// What a matching fetch's URL starts with.
         prefix: String,
+        /// An explicit HTTP method restricts the fixture to that method.
+        method: Option<String>,
         /// Response status, headers and text body, encoded as JSON.
         response: String,
         /// Where.
@@ -257,10 +259,21 @@ pub enum Step {
         /// Where.
         span: Span,
     },
+    /// A local OIDC fixture session in the test's initial store.
+    SignedIn {
+        /// The provider's secret.keep name.
+        key: String,
+        /// The fixture account as JSON.
+        account: String,
+        /// Where.
+        span: Span,
+    },
     /// A persisted state in the test's initial store (LLP 1116 D5).
     Stored {
         /// The state name, including names used by earlier builds.
         name: String,
+        /// The app declares this state with `persist window`.
+        window: bool,
         /// The value as JSON text.
         value: String,
         /// Where.

@@ -583,6 +583,55 @@ fn native_intersect_mount_and_scroll_without_a_scroll_handler() {
 }
 
 #[test]
+fn a_resize_handler_can_remove_the_next_observer_without_losing_its_siblings_resize() {
+    let mut p = boot(
+        r#"component App
+  state requested = false
+  state narrow = false
+  state mounted = true
+  state childCalls = 0
+  state siblingWidth = 0
+  action request
+    requested = true
+  task resizeLater when requested
+    after(1, shrink)
+  action shrink
+    narrow = true
+  action parentResized(width: number, height: number)
+    if narrow
+      mounted = false
+  action childResized(width: number, height: number)
+    childCalls = childCalls + 1
+  action siblingResized(width: number, height: number)
+    siblingWidth = width
+  view
+    column
+      button "Shrink" press=request testId="shrink"
+      column width=(narrow ? 180 : 300) height=100 resize=parentResized
+        if mounted
+          box width="100%" height=20 resize=childResized
+        box width="100%" height=20 resize=siblingResized
+"#,
+    );
+    assert_eq!(
+        p.host.runner().slot("siblingWidth"),
+        Some(&Value::Number(300.0))
+    );
+    p.tap(id(&p, "shrink")).unwrap();
+    let (_, error) = p.clock(p.host.now() + 20.0);
+    assert_eq!(error, None);
+    assert_eq!(p.host.runner().slot("mounted"), Some(&Value::Bool(false)));
+    assert_eq!(
+        p.host.runner().slot("childCalls"),
+        Some(&Value::Number(1.0))
+    );
+    assert_eq!(
+        p.host.runner().slot("siblingWidth"),
+        Some(&Value::Number(180.0))
+    );
+}
+
+#[test]
 fn native_intersect_samples_after_resize_handlers() {
     let p = boot(
         r#"component App

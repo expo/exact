@@ -62,6 +62,8 @@ pub const STYLE_NAMES: &[(&str, &str, AttrTarget)] = &[
     ("cy", "css SVG 2", AttrTarget::Styles(&[StyleId::Cy])),
     ("r", "css SVG 2", AttrTarget::Styles(&[StyleId::R])),
     // style rows, by their CSS property names
+    ("list-style-type", "css CSS Lists 3", AttrTarget::Styles(&[StyleId::ListStyleType])),
+    ("list-style", "css CSS Lists 3", AttrTarget::Styles(&[StyleId::ListStyleType])),
     ("white-space", "css CSS Text 3", AttrTarget::Styles(&[StyleId::WhiteSpace])),
     ("text-wrap-style", "css CSS Text 4", AttrTarget::Styles(&[StyleId::TextWrapStyle])),
     ("text-wrap", "css CSS Text 4", AttrTarget::Styles(&[StyleId::TextWrapStyle])),

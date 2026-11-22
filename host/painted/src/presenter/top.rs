@@ -214,6 +214,9 @@ pub(super) struct State {
     /// How many long presses a node has taken ([`Presenter::long_press`]):
     /// a reader that compares it across a contact knows whether its own was.
     long_presses: u32,
+    /// The node whose drag the held finger lifts when it moves on past the
+    /// slop after its long press opened a menu, and where it was held.
+    pub(super) lift: Option<(ViewId, f32, f32)>,
     /// The status item's menu that is open or opening (`top/status.rs`).
     status: Option<status::Menu>,
     /// Its Exit was chosen, and the host has not yet taken it.

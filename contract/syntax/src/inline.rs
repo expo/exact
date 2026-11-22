@@ -205,6 +205,17 @@ pub struct Instance {
     pub span: crate::Span,
 }
 
+impl Expanded {
+    /// Each runner action name and the instance that declared it, including the root.
+    pub fn component_actions(&self) -> impl Iterator<Item = (&Instance, &str)> {
+        self.root
+            .actions
+            .iter()
+            .zip(&self.action_instances)
+            .map(|(action, &instance)| (&self.instances[instance as usize], action.name.as_str()))
+    }
+}
+
 /// Expand the file's root: inline every use and lift every child's own
 /// declarations into it, every action call expanded (LLP 1089).
 pub fn expand(file: &File) -> Result<Expanded, SyntaxError> {

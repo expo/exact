@@ -660,7 +660,7 @@ export async function request(op, { grantSet, loadPageNative, moduleLoader, loca
     const early = !asset && moduleLoader?.claim?.(url, init);
     // @ref LLP 1103 D1, D2 — a driver fault is a refused connection, never sent; a GET
     // `fetchEarly` already sent (before the fault was armed) is not one it decides.
-    const fixture = !early && !asset && !op.stream && matchFault(url, true);
+    const fixture = !early && !asset && !op.stream && matchFault(url, true, method);
     if (fixture && !fixture.response) { countFault(url, fixture); return failed(1, faultMessage(url)); }
     if (!early && expired()) return failed(10, `the request timed out after ${op.timeoutMs} ms`);
     if (fixture && target) return failed(2, 'answer fetch does not support exactBodyTo');
@@ -695,6 +695,7 @@ export async function request(op, { grantSet, loadPageNative, moduleLoader, loca
       if (expired()) return failed(10, `the request timed out after ${op.timeoutMs} ms`);
       if (signal.aborted) return failed(4, 'request aborted');
       countFault(url, fixture);
+      if (fixture.response.afterMs) result.afterMs = fixture.response.afterMs;
     }
     return result;
   } catch (error) {

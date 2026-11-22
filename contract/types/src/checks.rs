@@ -812,6 +812,14 @@ pub(super) fn check_command(
             span,
         );
     }
+    // @ref LLP 1013.003 D2 — no argument, as the web's takes no duration.
+    if name == "startViewTransition" && !args.is_empty() {
+        return err(
+            "type-view-transition",
+            "`startViewTransition()` takes no arguments: the action's commit cross-fades the whole window over 0.25 s, as the web's `document.startViewTransition()` with the root's default animation",
+            span,
+        );
+    }
     if name == "close" && args.len() > 1 {
         return err(
             "type-close",

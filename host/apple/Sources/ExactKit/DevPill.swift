@@ -26,7 +26,7 @@ extension Presenter {
     /// Show `text` in the pill, or take the pill away (nil). Kept on the app
     /// (`ExactApp.devStatusText`), so a window that opens or a view that
     /// moves meanwhile shows it too (`ExactView`'s window callbacks).
-    func showDevStatus(_ text: String?) {
+    func showDevStatus(_ text: String?, expanded: Bool = false) {
         guard !ExactEnv.agentMode, !ExactEnv.releaseBuild, let text, let window = viewport.window else {
             devPill?.removeFromSuperview()
             devPill = nil
@@ -41,7 +41,9 @@ extension Presenter {
         pill.backgroundColor = NSColor.black.withAlphaComponent(0.72)
         pill.wantsLayer = true
         pill.layer?.cornerRadius = 6
-        pill.lineBreakMode = .byTruncatingTail
+        pill.lineBreakMode = expanded ? .byWordWrapping : .byTruncatingTail
+        pill.maximumNumberOfLines = expanded ? 0 : 1
+        pill.preferredMaxLayoutWidth = expanded ? max(40, (window.contentView?.bounds.width ?? 64) - 40) : 0
         pill.setAccessibilityElement(false)
         guard let host = window.contentView else { return }
         // One pill a window: a second session in it (a split's pane) shows none.
@@ -60,7 +62,7 @@ extension Presenter {
         pill.backgroundColor = UIColor.black.withAlphaComponent(0.72)
         pill.layer.cornerRadius = 8
         pill.clipsToBounds = true
-        pill.numberOfLines = 2
+        pill.numberOfLines = expanded ? 0 : 2
         pill.isAccessibilityElement = false
         pill.isUserInteractionEnabled = false
         if pill.superview !== window { window.addSubview(pill) }
@@ -86,6 +88,14 @@ extension DevLoopStatus {
     }
 }
 
+extension ExactSession {
+    func showBudgetWarning(_ warning: String?) {
+        guard !ExactEnv.releaseBuild, budgetWarning != warning else { return }
+        budgetWarning = warning
+        app.refreshDevPills()
+    }
+}
+
 extension ExactApp {
     /// The dev loop's status the windows show, or nil (one app, one status).
     nonisolated(unsafe) static var devStatusText: String?
@@ -108,6 +118,8 @@ extension ExactApp {
     func refreshDevPills() {
         let live = sessions.filter { $0.state != .destroyed }
         for session in live where session.presenter.viewport.window == nil { session.presenter.showDevStatus(nil) }
-        for session in live { session.presenter.showDevStatus(Self.devStatusText) }
+        for session in live {
+            session.presenter.showDevStatus(Self.devStatusText ?? session.budgetWarning, expanded: Self.devStatusText == nil)
+        }
     }
 }

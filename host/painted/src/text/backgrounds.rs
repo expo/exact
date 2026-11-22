@@ -257,13 +257,16 @@ impl Paragraph {
                 let local = g.range();
                 if local.is_empty() {
                     // An ellipsis carries its run's backgrounds, but no endpoint.
-                    if let Some(background) = backgrounds.get(g.run()).and_then(Option::as_ref) {
+                    if let Some(background) = backgrounds
+                        .get(g.run(line.run_base))
+                        .and_then(Option::as_ref)
+                    {
                         if g.w > 0.0 {
                             for (depth, layer) in background.layers().enumerate() {
                                 spans.push(Span {
                                     lo: g.x,
                                     hi: g.x + g.w,
-                                    run: g.run(),
+                                    run: g.run(line.run_base),
                                     layer,
                                     depth,
                                 });

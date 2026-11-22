@@ -656,6 +656,9 @@ test('the web build refuses undrawn surfaces and routes primary and declared GPU
     expect(r.status, r.stderr).toBe(0);
     expect(readFileSync(resolve(dir, 'dist/.gen/app.js'), 'utf8')).toMatch(/gs\(e\d+,"spark"/);
     expect(readFileSync(resolve(dir, 'dist/.gen/main.js'), 'utf8')).toContain('gpuModules: {"world":["spark"]}');
+    const shipped = readdirSync(resolve(dir, 'dist'));
+    expect(shipped).toContain('gpu-glue.js');
+    expect(shipped.filter(name => name.startsWith('gpu-jobs'))).toEqual([]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

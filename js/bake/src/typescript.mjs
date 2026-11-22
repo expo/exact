@@ -20,7 +20,7 @@ export { launchModule, launchSource };
 // And the check of what package code may use (resident.rs `PORTABLE`).
 import { compilerOptions, builtin, nodeNote, bare, lineColumn, packageRefusals, propertyName, walkRuntime, moduleSpecifiers } from './__exact_portable.mjs';
 
-import { freezeGrants, grantsInitializer, recordedConstants, staticFacts } from './__exact_facts.mjs';
+import { freezeGrants, grantsInitializer, moduleMetadata, nativeModuleEntry, recordedConstants, staticFacts } from './__exact_facts.mjs';
 export { moduleBinding, compilerOptions, nodeNote, staticFacts };
 
 function httpOrigin(value, label) {
@@ -1001,6 +1001,7 @@ export async function configure(stage, incremental=false, parse, web=false, buil
     if(before!==after) writeFileSync(declaration,after);
   }
   writeFileSync(resolve(stage,'__exact_inputs.json'), '{}');
+  let inspectMetadata;
   const modulePath=resolve(stage,'app.ts');
   if (existsSync(modulePath)) {
     const original=resolve(stage,'__exact_backend_source.json');
@@ -1036,6 +1037,7 @@ export async function configure(stage, incremental=false, parse, web=false, buil
       throw Object.assign(new Error(`${selection.source}: ${error.message.replace(/^EXACT_BACKEND_ORIGIN: /,'')}`),{code:'backend-selection'});
     }
     checkPreloadBackend(app,settings.record,literalBackendOrigin(settings.code,parse),selection);
+    inspectMetadata=moduleMetadata(injected,parse,{load,source:authored},resolve(stage,'app.contract.d.ts'));
     const facts=staticFacts(injected,parse,{load,locations:true,source:authored});
     const declaration=grantsDeclaration(parse('app.ts',injected).program.body);
     const launched=Object.keys(settings.record).filter(name=>settings.record[name].launch);
@@ -1063,6 +1065,7 @@ export async function configure(stage, incremental=false, parse, web=false, buil
     if (parse) staticFacts(after,parse);
   }
   stagePackages(stage,parse);
+  return inspectMetadata;
 }
 
 // A native module's names in data code (LLP 1133.002 D13): an `import … from
@@ -1378,29 +1381,19 @@ export async function valueExports(stage, libraries, inspect) {
       checkFiles(stage, libraries, await program.getSourceFileNames());
       const file = await program.getSourceFile(module);
       const type = await checker.getTypeAtLocation(file);
-      if (inspect) return await inspect(checker, type, checking);
+      if (inspect) return await inspect(checker, type, checking, program);
       return (await checker.getPropertiesOfType(type)).map(symbol => symbol.name);
     } finally { await snapshot.dispose(); }
   } finally { await api.close(); }
 }
 
 /** Select the native canvas seam before checking or bundling, so CommonJS namespaces cannot retain an unused recorder. */
-export async function prepareCanvas(stage, libraries) {
+export async function prepareNativeEntry(stage, libraries, inspectMetadata) {
   const path = resolve(stage, '__exact_entry.ts'), before = readFileSync(path, 'utf8');
   const marker = '// __exact_canvas_entry\n';
   if (!before.includes(marker)) return;
-  const exported = await valueExports(stage, libraries);
-  const draws = exported.includes('draw');
-  if (draws !== exported.includes('surfaces'))
-    throw new Error('app.ts exports `draw` and `surfaces` together, or neither (LLP 1056 D1)');
-  const entry = draws ? `import { canvasSeam } from './__exact_canvas.js';
-export const abi = 2;
-export const surfacesJson = JSON.stringify(app.surfaces);
-const seam = canvasSeam(app.draw);
-export const drawCanvas = (request: string, host?: unknown): string => seam.draw(JSON.parse(request), host);
-export const retireCanvases = (retired: string): void => seam.retire(JSON.parse(retired));
-` : 'export const abi = 1;\n';
-  writeFileSync(path, before.replace(marker, entry));
+  const metadata = await valueExports(stage, libraries, inspectMetadata);
+  writeFileSync(path, before.replace(marker, nativeModuleEntry(metadata)));
 }
 
 function checkFiles(stage, libraries, files) {

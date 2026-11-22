@@ -155,6 +155,10 @@ named here pass.
     glyphs and source ranges in `long_clusters_keep_their_fallback_face_glyphs_and_byte_ranges`
     (expo/exact#1150).
 
+21. **Font fallback for combining marks.** When a pair has no canonical composition,
+    the face must cover the original characters. An empty composed form counted as
+    full coverage and made fallback stop at a face missing both glyphs (expo/exact#1203).
+
 `Cargo.toml` also carries the empty `[workspace]` boundary described below;
 retain it when updating. All remaining archive files are byte-for-byte upstream.
 The upstream test suite (not in the archive) passed with patches 1–4 applied; with 4–7, five tests

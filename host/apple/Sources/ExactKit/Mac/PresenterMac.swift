@@ -122,6 +122,7 @@ package final class Presenter {
     package lazy var blocks = BlockHost(self)
     /// Lists whose rows a table holds (LLP 1115.002 D5, stage 3a).
     package lazy var tables = TableHost(self)
+    lazy var dataTables = DataTableHost(self)
     package lazy var alerts = AlertHost(self)
     lazy package var navigation: any NavigationHosting = NavigationLink.make?(self) ?? NoNavigation(self)
     package lazy var inputGates = InputGates(self)
@@ -672,6 +673,7 @@ package final class Presenter {
         reorders.mouse.cancel()
         reorders.abandon()
         collections.reset()
+        dataTables.reset()
         tables.reset()
         leaves?.reset()
         autofocusProcessed.removeAll()
@@ -881,7 +883,7 @@ package final class Presenter {
     package func press(_ id: UInt32, fromNativeMenu: Bool = false, held: String = "", bubbled: Bool = false, outsideModal: Bool = false, click: NSEvent? = nil) {
         pressHeld = held; defer { pressHeld = "" } // `outsideModal`: an app-wide menu item's (ShortcutsMac `enabled`)
         guard let node = textHost(id), !(bubbled || outsideModal ? node.authoredInert : node.inert), !node.disabled,
-              fromNativeMenu || (segments.shown(node) ?? sidebar.shows(node) ?? !node.isHiddenOrHasHiddenAncestor) || toolbar.contains(node) else { return }
+              fromNativeMenu || (segments.shown(node) ?? sidebar.shows(node) ?? dataTables.shows(node) ?? !node.isHiddenOrHasHiddenAncestor) || toolbar.contains(node) else { return }
         commitPendingEdit() // the press no longer ends a field's editing (FocusMac.swift)
         guard views[node.id] === node else { return }
         // A route this press brings is the row's detail (SplitMac.swift).
@@ -1145,7 +1147,6 @@ package final class Presenter {
         }
         // No view changed: no pass over the views. A correction may have scrolled a context preview's source.
         if Self.onlySnapshots(batch) { tables.sync(batch); positionContexts(); return }
-        if !batch.ops.isEmpty { textViewportIndex = nil }
         var reparented = Set<UInt32>()
         let structureChanged = batch.ops.contains { [.children, .roots, .destroy, .create, .renew, .style].contains($0.op) }
         if structureChanged { selection.structureChanged() }
@@ -1270,11 +1271,19 @@ package final class Presenter {
         NodeView.inkPlaced(reparented.compactMap { views[$0] })
         if !flightHost.isEmpty { flightHost.batchApplied() }
         tables.sync(batch)
+        dataTables.sync(batch)
         // A prepared subtree's gates were read where it stands (`prepareAccessibility`).
         navigation.sync(batch, reparented: stage.map { reparented.subtracting($0.tops.keys) } ?? reparented)
         sidebar.sync(batch)
         if !pendingTips.isEmpty { settleTips() }
-        if !keepFit || !viewport.hasCurrentDocumentFit { fitDocument() }
+        if !keepFit || !viewport.hasCurrentDocumentFit {
+            if !batch.ops.isEmpty || batch.rootTabs != nil || batch.routeInspectors != nil || batch.controls || batch.layoutProvisional || stage != nil {
+                textViewportIndex = nil
+            }
+            fitDocument()
+        } else if batch.ops.contains(where: { $0.property != "opacity" && selection.mayMoveParagraph($0.id) }) {
+            textViewportIndex = nil
+        }
         // The page's canvas colour is the first root's background — what
         // shows beyond a document shorter than the viewport, as a browser
         // paints the root element's background over the whole canvas.
@@ -1340,8 +1349,9 @@ package final class Presenter {
     }
 
     /// A node's view, as its `create` op makes it; `register` puts it in the table.
-    func newView(_ op: BatchOp) -> NodeView {
+    func newView(_ op: BatchOp, stage: NodeView.Stage = .committed) -> NodeView {
         let v = NodeView(id: op.id, kind: op.kind, presenter: self)
+        v.stage = stage
         v.handlers = op.handlers
         v.applyStyle(v.presented(op.style))
         v.applyProps(set: op.props, clear: [])
@@ -1364,7 +1374,8 @@ package final class Presenter {
         dialogs.children(container, want)
         menus.children(container, want)
         tables.children(id, want)
-        let mounted = want.filter { !dialogs.owns($0) && !menus.owns($0) && !blocks.owns($0) && !tables.owns($0, in: id) && !flightHost.isFlying($0) }
+        dataTables.children(id, want)
+        let mounted = want.filter { !dialogs.owns($0) && !menus.owns($0) && !blocks.owns($0) && !tables.owns($0, in: id) && ($0.superview as? DataTableCell)?.home !== parent && !flightHost.isFlying($0) }
         placeChildren(want, mounted: mounted, in: container, reparented: &reparented, leaving: leaving)
     }
 

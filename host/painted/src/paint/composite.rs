@@ -164,6 +164,7 @@ mod tests {
             inner,
             crate::canvas2d::CanvasPaint {
                 pixels: Arc::new(green),
+                update: None,
             },
         );
         let scene = Scene {

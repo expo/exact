@@ -62,6 +62,13 @@ here pass.
    that axis undeclared. Static faces and installed variable fonts retain
    their behavior.
    Tests: `host/painted/src/text/variable_face_tests.rs`.
+6. **A scan says whether it read every path.** `scan_paths` and
+   `Collection::load_fonts_from_paths` return whether every directory within
+   their depth limit was listed and every file opened and mapped; 0.11.1
+   skipped what it could not read without saying so. The host's font cache
+   keys a directory by each file's path, length and modification time,
+   which a failed open leaves as they were, so it caches no directory that a
+   scan could not read whole. Tests: `host/painted/src/text/font_cache.rs`.
 
 `Cargo.toml` also carries the empty `[workspace]` boundary described below;
 retain it when updating. All remaining archive files are byte-for-byte upstream.

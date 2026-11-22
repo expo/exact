@@ -5,7 +5,7 @@
 // `https:`. A prop left with nothing is removed. As the runner journals a refusal when a binding writes a new value,
 // the page journals one when the value changes. `install` takes the runtime's hooks and journal, as follow.js
 // does, so the rules load without a page. The drag itself is the browser's, its data `drag-out.js`'s.
-import { listen } from '../web/drag-out.js';
+import { listen, writeDraggable } from '../web/drag-out.js';
 
 const FILES = 'data-datatransferfiles', URL_PROP = 'data-datatransferurl';
 
@@ -53,5 +53,7 @@ export function install({ PropHooks, say, document = globalThis.document }) {
   });
   hook(FILES, admit);
   hook(URL_PROP, admitUrl);
-  if (document) listen(document);
+  // The listener holds a node's drag off while a field in it keeps a contact, so it writes `draggable` (drag-out.js).
+  PropHooks.draggable = (e, v) => (writeDraggable(e, v), true);
+  if (document) listen(document, (e) => e.$exactTree === true);
 }

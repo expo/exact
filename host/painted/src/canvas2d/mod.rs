@@ -1,8 +1,7 @@
 //! Canvas 2D on Linux (LLP 1056 D7): the recorded lists replayed into a
 //! tiny-skia pixmap, the canvas's kept bitmap, under both painters. The
 //! painters composite each canvas's latest snapshot in its content box; the
-//! GPU painter uploads it as an image, keyed by the snapshot's identity, so a
-//! new revision is a new upload and a retained region holds the old one.
+//! GPU painter updates changed pixels when it still has the previous revision.
 //!
 //! The list's geometry is resolved (`exact_canvas::list`): paths arrive in
 //! canvas coordinates, so a fill or clip draws them under the base scale; a
@@ -13,6 +12,7 @@
 //! (`text.rs`).
 
 pub(crate) mod capture;
+mod damage;
 mod draw;
 mod prefix;
 pub(crate) mod text;
@@ -30,11 +30,14 @@ use tiny_skia::{
     Stroke, StrokeDash, Transform,
 };
 
+pub use damage::CanvasUpdate;
+
 /// One canvas's snapshot for the painters.
 #[derive(Clone)]
 pub(crate) struct CanvasPaint {
-    /// The bitmap as last replayed; a new `Arc` per revision.
+    /// Pixels as last replayed.
     pub pixels: Arc<Pixmap>,
+    pub update: Option<CanvasUpdate>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -149,6 +152,7 @@ pub(crate) struct Replayer {
     /// Shared with the painters' snapshot until the next list draws into it,
     /// which copies it only while a painter still holds the last one.
     pixmap: Arc<Pixmap>,
+    update: CanvasUpdate,
     /// True when every pixel in `pixmap` is transparent zero.
     cleared: bool,
     base: Transform,
@@ -225,6 +229,7 @@ impl Replayer {
     fn new(w: u32, h: u32, scale: f64, lifetime: u64, generation: u32) -> Option<Replayer> {
         Some(Replayer {
             pixmap: Arc::new(Pixmap::new(w, h)?),
+            update: CanvasUpdate::after(0),
             cleared: true,
             base: Transform::from_scale(scale as f32, scale as f32),
             scale: scale as f32,
@@ -247,6 +252,7 @@ impl Replayer {
         if self.cleared {
             return;
         }
+        self.damage_all();
         if let Some(pm) = Arc::get_mut(&mut self.pixmap) {
             pm.data_mut().fill(0);
         } else if let Some(pm) = Pixmap::new(self.pixmap.width(), self.pixmap.height()) {
@@ -283,6 +289,7 @@ impl Replayer {
             self.clear_all();
             return true;
         }
+        self.damage_edges(x0, y0, x1, y1);
         let stride = pw as usize * 4;
         let data = Arc::make_mut(&mut self.pixmap).data_mut();
         for row in y0..y1 {
@@ -323,6 +330,7 @@ impl Replayer {
         if x0 >= x1 || y0 >= y1 {
             return true;
         }
+        self.damage_edges(x0, y0, x1, y1);
         if full {
             if px.alpha() == 0 {
                 self.clear_all();
@@ -617,6 +625,7 @@ impl Replayer {
                             ..Default::default()
                         };
                         let ts = self.device();
+                        self.damage_path(p.bounds().transform(ts));
                         Arc::make_mut(&mut self.pixmap).fill_path(
                             &p,
                             &paint,
@@ -657,6 +666,7 @@ impl Replayer {
     /// Apply all lists of one draw, using prefix checkpointing when a
     /// single-list full redraw repeats an unchanged prefix of paint ops.
     fn apply_draw(&mut self, lists: &[Vec<u8>], env: &Env<'_>) -> Result<(), String> {
+        self.update = CanvasUpdate::after(self.update.revision);
         if lists.len() != 1
             || self.state.clip.is_some()
             || !self.stack.is_empty()
@@ -707,7 +717,7 @@ impl Replayer {
             });
             if reusable {
                 let mut cp = self.checkpoint.take().unwrap();
-                self.pixmap = cp.pixmap.clone();
+                self.restore_tail(&cp);
                 self.state = cp.state.clone();
                 self.stack = cp.stack.clone();
                 self.path = cp.path.clone();
@@ -746,20 +756,42 @@ impl Replayer {
                     text_ptr,
                     images,
                     pixmap: self.pixmap.clone(),
+                    tail: None,
                     state: self.state.clone(),
                     stack: self.stack.clone(),
                     path: self.path.clone(),
                     cleared: self.cleared,
                 });
             }
+            let prefix_damage = self.update.area.take();
             for r in &recs[plan.checkpoint_recs..] {
                 self.apply_record(r, env);
             }
+            self.checkpoint.as_mut().unwrap().tail = self.update.area;
+            self.include_damage(prefix_damage);
         }
         self.last_draw = Some(prefix::LastDraw {
             bytes: bytes.to_vec(),
         });
         Ok(())
+    }
+}
+
+/// A layout dimension arrives in points rounded to f32. Recover an integer
+/// device edge when converting it back to points gives exactly that input.
+/// Limit the extra snap to less than half an 8-bit coverage step, so a large
+/// transform cannot turn a visibly fractional edge into a whole pixel.
+fn device_edge(point: f64, scale: f32, offset: f32) -> f64 {
+    let (scale, offset) = (f64::from(scale), f64::from(offset));
+    let edge = point * scale + offset;
+    let pixel = edge.round();
+    let error = (edge - pixel).abs();
+    if error <= 1e-4
+        || (error < 0.5 / 255. && point == f64::from(((pixel - offset) / scale) as f32))
+    {
+        pixel
+    } else {
+        edge
     }
 }
 
@@ -778,27 +810,15 @@ pub(super) fn whole_pixel_rect(
     if ts.kx.abs() > 1e-6 || ts.ky.abs() > 1e-6 || ts.sx == 0.0 || ts.sy == 0.0 {
         return None;
     }
-    let x0f = x * f64::from(ts.sx) + f64::from(ts.tx);
-    let x1f = (x + w) * f64::from(ts.sx) + f64::from(ts.tx);
-    let y0f = y * f64::from(ts.sy) + f64::from(ts.ty);
-    let y1f = (y + h) * f64::from(ts.sy) + f64::from(ts.ty);
-    let (l, r) = (x0f.min(x1f), x0f.max(x1f));
-    let (t, b) = (y0f.min(y1f), y0f.max(y1f));
-    let (pwf, phf) = (f64::from(pw), f64::from(ph));
-    let whole_or_outside =
-        |v: f64, limit: f64| v <= 0.0 || v >= limit || (v - v.round()).abs() <= 1e-4;
-    if !whole_or_outside(l, pwf)
-        || !whole_or_outside(r, pwf)
-        || !whole_or_outside(t, phf)
-        || !whole_or_outside(b, phf)
-    {
-        return None;
-    }
-    let x0 = l.round().clamp(0.0, pwf) as usize;
-    let x1 = r.round().clamp(0.0, pwf) as usize;
-    let y0 = t.round().clamp(0.0, phf) as usize;
-    let y1 = b.round().clamp(0.0, phf) as usize;
-    Some((x0, y0, x1, y1))
+    let clip = |point, scale, offset, limit: u32| {
+        let edge = device_edge(point, scale, offset).clamp(0., f64::from(limit));
+        (edge.fract() == 0.).then_some(edge as usize)
+    };
+    let x0 = clip(x, ts.sx, ts.tx, pw)?;
+    let x1 = clip(x + w, ts.sx, ts.tx, pw)?;
+    let y0 = clip(y, ts.sy, ts.ty, ph)?;
+    let y1 = clip(y + h, ts.sy, ts.ty, ph)?;
+    Some((x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)))
 }
 
 pub(super) fn is_full_clear_rect(
@@ -905,6 +925,7 @@ impl Canvases {
                     view,
                     CanvasPaint {
                         pixels: r.pixmap.clone(),
+                        update: Some(r.update),
                     },
                 );
             }

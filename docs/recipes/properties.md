@@ -29,11 +29,11 @@ after "done" "done writes nothing and focuses the button"
 never refuses "reset"
 ```
 
-Choose the blocks your app means. Names read root states or derives; no fields,
-indices or expressions. A derive may read only state, pure functions and,
-in `always`, resources; the rest is refused with the dependency chain. `stays true` means that a true value cannot become false at the next observed
-step. `after` checks an eligible commit and its landed continuations; extra commits
-can make a line counted only. The [grammar](../contract-grammar.md#authored-tests)
+Read root states or derives by name. Use `Component.action` for a child action.
+Derives may read state, pure functions and, in `always`, resources. A refusal
+shows the dependency chain. Once true, `stays true` must hold at each observed
+step. `after` checks an eligible commit and its landed continuations. Extra
+commits can make a line counted only. The [grammar](../contract-grammar.md#authored-tests)
 defines each form.
 
 Run `bun exact.mjs contract verify app.contract`. It delivers test prefixes, explores

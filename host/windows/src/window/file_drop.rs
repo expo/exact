@@ -401,13 +401,8 @@ pub(super) mod tests {
             assert!(doc.starts_with("doc:/") && doc.ends_with(name), "{doc}");
         }
         p.reader_access(1., true);
-        let id = p
-            .access_told()
-            .iter()
-            .find(|n| n.view == editor)
-            .unwrap()
-            .id;
-        assert_eq!(p.access_text(id).as_deref(), Some("Original text"));
+        let source = p.access_told().iter().find(|n| n.view == editor).unwrap();
+        assert_eq!(p.access_editor(source).unwrap().0, "Original text");
         Ok(())
     }
 }

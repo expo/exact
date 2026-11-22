@@ -92,7 +92,7 @@ test('a link pop is journaled when the URL serializer leaves the link\'s `|` une
 
 test('a wasm batch held for presence retains its link after click dispatch ends', async () => {
   const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
-  const commit = glueDeclarations(hostFixtureFile(new URL('../glue.js', import.meta.url), 'utf8'), ['heldLinks', 'applyBatch']);
+  const commit = glueDeclarations(hostFixtureFile(new URL('../glue.js', import.meta.url), 'utf8'), ['heldLinks', 'heldOutputs', 'applyBatch']);
   try {
     await page.goto(server.url.href);
     await page.evaluate(async commit => {

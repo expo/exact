@@ -212,6 +212,8 @@ package final class ControlHost: NSObject {
             if !(control is NativeButtonIOS) {
                 assign(control, \.isEnabled, !owner.disabled)
                 assign(control, \.accessibilityLabel, owner.controlLabel)
+                // An authored label replaces UIKit's title on a pop-up button, so expose the chosen option as its value.
+                if owner.props["type"] == "select" { assign(control, \.accessibilityValue, selectValue(for: owner)) }
                 assign(control, \.accessibilityIdentifier, owner.props["testId"])
             }
             // A native button's box is its frame (below): its natural size is
@@ -284,6 +286,16 @@ package final class ControlHost: NSObject {
             measured = []
             if !latest.isEmpty { presenter.onIntrinsic?(latest.map { ($0.key, $0.value) }) }
         }
+    }
+
+    /// The chosen option's label when an authored `aria-label`/`aria-labelledby`
+    /// replaces the pop-up button's spoken title; nil otherwise so VoiceOver does
+    /// not read the choice twice.
+    func selectValue(for owner: NodeView) -> String? {
+        guard owner.controlLabel != nil, let menu = menus[owner.id] else { return nil }
+        let chosen = picked[owner.id].flatMap { value in menu.options.firstIndex { $0.value == value } } ?? menu.chosen
+        guard let chosen, menu.options.indices.contains(chosen) else { return nil }
+        return menu.options[chosen].label
     }
 
     /// Whether a batch left `owner`'s control as it was: neither the owner

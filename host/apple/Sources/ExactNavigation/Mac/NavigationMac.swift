@@ -51,6 +51,7 @@ final class NavigationHost {
     private(set) lazy var split = SplitHost(presenter)
     /// @ref LLP 1013.001 — a route's own entrance and exit (RouteTransitionMac.swift).
     private(set) lazy var transitions = RouteTransitions(presenter: presenter)
+    var crossFading = false
     /// The modal route the root shows painted in the window, on its ground.
     var paintedModal: NodeView? {
         guard let selection, selection.at > 0, selection.stack.indices.contains(selection.at), let route = presenter.views[selection.stack[selection.at]],

@@ -355,6 +355,26 @@ registration behind. Metadata revision 17. Upstreamable.
 `cargo test --manifest-path vendor/wgpu-hal/Cargo.toml --lib shared_registration`
 runs on any host.
 
+## 18. Find the Vulkan display by its DRM connector
+
+On a Raspberry Pi 4, V3D renders and vc4 owns the display connector.
+`src/vulkan/drm.rs` asks each Vulkan physical device for the display on that
+connector. A driver can recognize it even when its advertised DRM node has a
+different device number. Display acquisition, mode lookup and surface creation
+return errors to the caller. After a successful acquisition, the surface keeps
+the DRM descriptor open and releases the display when surface creation fails or
+the surface is dropped. [Vulkan DRM display queries](https://docs.vulkan.org/refpages/latest/refpages/source/vkGetDrmDisplayEXT.html)
+and [display acquisition](https://docs.vulkan.org/refpages/latest/refpages/source/vkAcquireDrmDisplayEXT.html).
+
+## 19. Identify a queued Vulkan presentation on Linux
+
+A caller that enabled the Vulkan `presentId` feature can label the next
+presentation on its swapchain. The native queue passes that ID to Vulkan once.
+This lets a DRM carrier wait for the corresponding page flip, including when
+the app goes idle after presenting a single frame. Surface creation keeps the
+selected plane’s stack position and checks that it supports opaque output.
+[Vulkan presentation IDs](https://docs.vulkan.org/refpages/latest/refpages/source/VkPresentIdKHR.html).
+
 ## Updating
 
 Take the new archive whole, reapply the marked places (`git diff` against the

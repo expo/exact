@@ -202,6 +202,10 @@ pub struct PropertyDecl {
     pub name: String,
     /// Predicates in source order.
     pub lines: Vec<PropertyLine>,
+    /// For `after` and `never refuses`, the expanded root's names of the
+    /// action named: the name as written, until the app resolves a child's
+    /// `Component.action` to the action of each of its instances.
+    pub actions: Vec<String>,
 }
 /// The observations a property quantifies over.
 #[derive(Debug, Clone, PartialEq)]
@@ -515,13 +519,20 @@ impl Component {
 pub struct Persist {
     /// The state's name.
     pub name: String,
+    /// Whether this value belongs to one window.
+    pub window: bool,
     /// Where `persist` is written.
     pub span: Span,
 }
 impl Component {
+    /// The state's storage declaration, when it has one.
+    pub fn persistence(&self, name: &str) -> Option<&Persist> {
+        self.persist.iter().find(|p| p.name == name)
+    }
+
     /// Whether the state `name` says `persist`.
     pub fn persists(&self, name: &str) -> bool {
-        self.persist.iter().any(|p| p.name == name)
+        self.persistence(name).is_some()
     }
 }
 /// `name = expr`.

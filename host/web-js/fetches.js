@@ -93,7 +93,7 @@ async function answer(name, [method, url, origin, params, headers, body, documen
   }
   const target = expand(url, e => { const t = arg(e); return t == null ? null : encode(t); });
   if (globalThis.__exactRender && !globalThis.__exactProduction) (call.urls ??= new Set()).add(target);
-  const response = await fetchWith(own, target, init, null, undefined, undefined, asker, false, forced);
+  const response = await fetchWith(own, target, init, null, undefined, undefined, asker, false, forced, { call, kind: 'plain' });
   if (response.status < 200 || response.status > 299) throw new Error(`${name}: HTTP ${response.status} from ${origin}`);
   let reply;
   try { reply = JSON.parse(await response.text()); }

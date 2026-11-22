@@ -207,6 +207,20 @@ final class ReachIOSTests: XCTestCase {
         XCTAssertEqual(node.reach, .zero)
     }
 
+    func testUIKitGivesAReachedScrollersScrollViewItsReachedFrameAndTheNodeItsBox() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "reach and the band are a scene window's") }
+        guard Presenter.axRuntimeLoaded else { throw missing("accessibility", "UIKit answers accessibility frames only with its runtime loaded") }
+        // A reached scroller's native frame is its scroll view's, which UIKit reports by default, and the node, which is no
+        // element, keeps its laid-out box, as `layout` does (D13)
+        let (node, scroll, _) = try scroller(in: scene, at: .middle)
+        let screen = { (v: UIView) in UIAccessibility.convertToScreenCoordinates(v.bounds, in: v) }
+        node.setReach(UIEdgeInsets(top: 0, left: 30, bottom: 0, right: 20))
+        XCTAssertEqual(scroll.frame.width, node.bounds.width + 50)
+        XCTAssertEqual(scroll.accessibilityFrame, screen(scroll), "the scroll view, its reached frame")
+        XCTAssertEqual(node.accessibilityFrame, screen(node), "the node, its box")
+        XCTAssertFalse(node.isAccessibilityElement)
+    }
+
     private func isScroll(_ hit: UIView?, _ scroll: UIScrollView) -> Bool {
         hit.map { $0 === scroll || $0.isDescendant(of: scroll) } ?? false
     }

@@ -86,7 +86,8 @@ pub(crate) const RUST_ABI: u32 = exact_logic_abi::ABI;
 /// 15: `exactIdleTimeout` on an event stream or a byte stream (LLP 1016.000
 /// D11), which a prelude of 9 to 14 refuses, failing the stream. A bundle
 /// names the option alike on a socket, so every use needs 15.
-pub(crate) const TYPESCRIPT_RUNTIME: u32 = 15;
+/// 16: per-source turn budgets. Older native hosts give every source 100 ms.
+pub(crate) const TYPESCRIPT_RUNTIME: u32 = 16;
 
 /// What each runtime past the first added that a bundle names to use (see
 /// [`TYPESCRIPT_RUNTIME`]): a `fetch` option an older prelude would ignore,
@@ -97,7 +98,8 @@ pub(crate) const TYPESCRIPT_RUNTIME: u32 = 15;
 /// `Response` now needs 8, as do constructors whose readable side can become
 /// a request body. `structuredClone` names none of them. 10 is read from the
 /// grants, not the bundle.
-const RUNTIME_OPTIONS: [(u32, &str); 28] = [
+const RUNTIME_OPTIONS: [(u32, &str); 29] = [
+    (16, "turnBudgetsJson"),
     (15, "exactIdleTimeout"),
     (14, "__exact_launch_settings"),
     (13, "exactPrefetch"),
@@ -213,6 +215,11 @@ pub struct Compat {
 }
 
 impl Compat {
+    /// Whether this binary admits the development driver, including when its store level is zero.
+    pub fn admits_agent(&self) -> bool {
+        self.embedded["trust"] == "development"
+    }
+
     /// `{"id":…,"inputs":{…},"delivery":{"activate":…,"channel":…,"origin":…}}`,
     /// canonical (sorted keys within each value), the id first, one line plus
     /// a newline. The runner reads `id`, `store.L`, and `executors` from this

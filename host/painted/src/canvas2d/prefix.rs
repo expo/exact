@@ -29,6 +29,8 @@ pub(super) struct Checkpoint {
     /// records a missing handle so a later load invalidates the checkpoint.
     pub images: Vec<(String, usize)>,
     pub pixmap: Arc<Pixmap>,
+    /// Pixels painted after this checkpoint in the previous draw.
+    pub tail: Option<tiny_skia::IntRect>,
     pub state: State,
     pub stack: Vec<State>,
     pub path: PathBuilder,

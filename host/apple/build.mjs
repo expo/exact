@@ -330,7 +330,7 @@ export { appClip };
  * is the application-identifier. A simulator's is `SIMULATORX.<id>`, with the bare id it had before kept as a
  * second Keychain group so items stored then still read and update in place (D3, measured).
  * `allows`: the signing profile's entitlements; `profile`: that profile. */
-export const entitlements = (app, team = null, debuggable = true, reach = null, { simulator = false, prefix = team, allows = [], profile = null, distributed = false } = {}) => {
+export const entitlements = (app, team = null, debuggable = true, reach = null, { simulator = false, prefix = team, allows = [], profile = null, distributed = false, inboxGroup = null } = {}) => {
   const prefixed = `${SIMULATOR_PREFIX}.${app.id}`;
   const dict = {
     'application-identifier': team ? `${prefix}.${app.id}` : simulator ? prefixed : app.id,
@@ -351,7 +351,8 @@ export const entitlements = (app, team = null, debuggable = true, reach = null, 
     // (`widgetAppId`) signs none. The value is the grant's too (`entitlementValue`), so one app with both has one.
     if (grantEntitlements(app, ['aps-environment']).length && activityEntries(app).some(entry => entry.push === true)) dict['aps-environment'] = entitlementValue('aps-environment', debuggable);
   }
-  if (app.manifest.share_target && simulator && !app.widgetTV && !app.widgetHost && !app.clipParent) dict['com.apple.security.application-groups'] ??= [widgetGroup(app)]; // the share inbox (LLP 1133.024 D4)
+  const inbox = inboxGroup ?? (app.manifest.share_target && !app.widgetAppId && !app.widgetTV && !app.widgetHost && !app.clipParent ? widgetGroup(app) : null);
+  if (inbox) dict['com.apple.security.application-groups'] = [inbox];
   // @ref LLP 1038 D8 — `handle_links`' derived applinks, then the raw list; tvOS signs no link claim.
   const domains = claimedDomains(app).filter((d) => !app.widgetTV || !d.startsWith('applinks:'));
   // @ref LLP 1069.006 D2 — a claimed https auth callback needs `webcredentials:` (the bake's derivation from the `auth.callback` grants, LLP 1069.008).
@@ -649,11 +650,12 @@ async function main(args, lockHeld = false) {
     ph = ipa ? null : phone(args.includes('--phone') ? args[args.indexOf('--phone') + 1] : undefined, { tv });
     // Refuse missing widget groups or browser approval before building; final signing checks again.
     const required = [...browserEntitlements({ ...app, widgetTV: tv }, distribution), ...memoryEntitlements({ ...app, widgetTV: tv })];
-    const pair = widgets ? entryProfiles({ app, udid: ph?.udid, phoneName: ph?.name, required }) : null;
+    const pair = widgets || (!tv && app.manifest.share_target) ? entryProfiles({ app, udid: ph?.udid, phoneName: ph?.name, required }) : null;
     prof = pair?.app ?? profile(ph?.udid, app.id, required, { phoneName: ph?.name });
-    return identity(prof.team, { profiles: [prof, pair?.extension, ...(!tv && packaged.has('watch') ? watchProfiles({ app, udid: ph?.udid, like: prof }) : [])].filter(Boolean) });
+    return identity(prof.team, { profiles: [prof, pair?.extension, pair?.share, ...(!tv && packaged.has('watch') ? watchProfiles({ app, udid: ph?.udid, like: prof }) : [])].filter(Boolean) });
   })() : ios ? '-' : appstore ? (args.includes('--ad-hoc') ? '-' : process.env.EXACT_APPSTORE_ID ?? null) : (distribution ? process.env.EXACT_DEVELOPER_ID ?? null : macIdentity());
   if (!ios && sha1 === '-') widgets = false;
+  if (!ios && !appleEmbedOnly(args)) macSigning(app, null, { current: sha1, release: process.env.EXACT_UPDATE_TRUST === 'production' || distribution, distribution, store: appstore ? 'appstore' : null, preflight: true, log: () => {} });
   let macWidgets = null;
   const dylib = `lib${gpuCrate.replace(/-/g, '_')}.dylib`;
   // One load name lets the Swift presenter serve every app.

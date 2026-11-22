@@ -102,6 +102,10 @@ static SEGMENTED: std::sync::LazyLock<StyleProps> = std::sync::LazyLock::new(|| 
     style
 });
 
+fn inherited_structural_rows() -> StyleMask {
+    StyleMask::of(StyleId::TextColor).union(StyleMask::of(StyleId::TextAlign))
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DefaultContext {
     pub alert: u8,
@@ -332,10 +336,21 @@ impl NodeArena {
     }
 
     pub(crate) fn style_starts(&self, slot: u32) -> impl Iterator<Item = &StyleProps> {
+        self.style_starts_for(slot, [true; 3])
+    }
+
+    fn style_starts_for(
+        &self,
+        slot: u32,
+        [structural, shorthand, control]: [bool; 3],
+    ) -> impl Iterator<Item = &StyleProps> {
         // A style the author names beats a control's own type.
-        self.structural_starts(slot)
-            .chain(self.text_style_start(slot))
-            .chain(self.control_text_start(slot))
+        structural
+            .then(|| self.structural_starts(slot))
+            .into_iter()
+            .flatten()
+            .chain(shorthand.then(|| self.text_style_start(slot)).flatten())
+            .chain(control.then(|| self.control_text_start(slot)).flatten())
     }
 
     /// Effective own rows never alter stored ownership. Inherited text is
@@ -408,19 +423,41 @@ impl NodeArena {
     /// The style that supplies row `id` of [`NodeArena::computed_style`]:
     /// one row read without copying a whole style.
     pub fn computed_source(&self, slot: u32, id: StyleId) -> &StyleProps {
+        let original = &self.styles[slot as usize];
+        if original.mask.has(id) {
+            return original;
+        }
+        // Only inherited rows walk ancestors. Use row IDs to skip providers
+        // without building their styles or consulting the session's theme.
+        let inherited = id.inherited();
+        let starts = if inherited {
+            static STARTS: std::sync::LazyLock<[StyleMask; 3]> = std::sync::LazyLock::new(|| {
+                [
+                    inherited_structural_rows(),
+                    super::text_style::start_rows(),
+                    super::control_text::start_rows(),
+                ]
+            });
+            STARTS.map(|mask| mask.has(id))
+        } else {
+            [true; 3]
+        };
+        let check_starts = starts != [false; 3];
         let mut cur = Some(slot);
         while let Some(s) = cur {
             let own = &self.styles[s as usize];
             if own.mask.has(id) {
                 return own;
             }
-            if let Some(start) = self
-                .style_starts(s)
-                .find(|start| start.mask.has(id) && !own.written.has(id))
-            {
-                return start;
+            if check_starts && !own.written.has(id) {
+                let start = self
+                    .style_starts_for(s, starts)
+                    .find(|start| start.mask.has(id));
+                if let Some(start) = start {
+                    return start;
+                }
             }
-            if !id.inherited() {
+            if !inherited {
                 return own;
             }
             cur = self.parents[s as usize];
@@ -471,6 +508,9 @@ impl NodeArena {
             crate::text::TextStyle::from_rows(&self.styles[slot as usize], |rows, take| {
                 self.copy_inherited(slot, rows, take)
             });
+        if self.strong_text(slot) {
+            style.font_weight = crate::text::css_bolder(style.font_weight);
+        }
         self.embolden(slot, &mut style);
         style
     }
@@ -545,5 +585,23 @@ impl NodeArena {
         if !found.is_empty() {
             copy(&self.document_style, found);
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn structural_mask_matches_every_inherited_default() {
+        let built = HEADER
+            .mask
+            .union(TAB_BAR.mask)
+            .union(SEGMENTED.mask)
+            .union(NodeArena::alert_rows());
+        assert_eq!(
+            inherited_structural_rows(),
+            built.intersect(StyleMask::INHERITED)
+        );
     }
 }

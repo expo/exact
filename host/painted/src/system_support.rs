@@ -42,7 +42,7 @@ pub(crate) fn store_read(app_id: &str, carried: bool) -> (Vec<(String, Vec<u8>)>
         return Default::default();
     };
     let kv = ibex2::kv::FileStore::new(root.join("kv"));
-    let mut out = Vec::new();
+    let mut out = exact_data::storage::take_window_seed(&root);
     if let Ok(Some(secret_root)) = crate::picker::secret_root(app_id) {
         let secrets = secret_backend(&secret_root);
         #[cfg(target_os = "android")]

@@ -1953,7 +1953,7 @@
       "id": 294,
       "name": "accessibilitySort",
       "kind": "str",
-      "_comment": "ARIA `aria-sort` on a `columnheader` or `rowheader`: `ascending`, `descending`, `none` or `other`, the order its table's rows are sorted by that column (WAI-ARIA 1.2 §6.7). The DOM attribute on the web; AppKit and UIKit have no such property on a view, so the Apple hosts expose none."
+      "_comment": "ARIA `aria-sort` on a `columnheader` or `rowheader`: `ascending`, `descending`, `none` or `other`, the order its table's rows are sorted by that column (WAI-ARIA 1.2 §6.7). The web sets the DOM attribute. AppKit exposes the header’s sort direction through AXSortDirection (Core-AAM)."
     },
     {
       "id": 295,
@@ -2482,6 +2482,10 @@
         "pre"
       ],
       "default": "normal"
+    },
+    "ListMarkerType": {
+      "values": ["none", "disc", "circle", "square", "decimal"],
+      "default": "disc"
     },
     "TextWrapStyle": {
       "_comment": "@ref LLP 1001 §6: CSS text-wrap-style, auto or balance; balance is bounded to six lines by the native breakers.",
@@ -5836,6 +5840,13 @@
       "refusesPercent": true,
       "admitsAuto": true,
       "default": "auto"
+    },
+    {
+      "bit": 301,
+      "field": "list_style_type",
+      "codec": "enum:ListMarkerType",
+      "inherited": true,
+      "_comment": "CSS Lists 3 §3.4. Supplies the marker for an HTML list item."
     }
   ],
   "_transitions": "The `transition` row is CSS `transition` (LLP 1002): count u8 (≤8), then per declaration property u8 (0 all, then 1 + `Property`: 1 translate, 2 scale, 3 rotate, 4 opacity, 5 height, 6 stroke-dashoffset, 7 r, 8 color, 9 background-color, 10 fill, 11 stroke, 12 cx, 13 cy, 14 x, 15 y, 16 rx, 17 ry, 18 border-top-color, 19 border-right-color, 20 border-bottom-color, 21 border-left-color, 22 -exact-tint-color, 23 box-shadow — LLP 1062; 24, box-shadow's colour alone, is refused; 25 font-weight, 26 font-stretch, 27 font-variation-settings — LLP 1019 §13 D10; 28 is CSS's `border-color` shorthand; 29 is a path's `d`, LLP 1055.000 D15; 30 is `filter`, LLP 1003.002), duration f32 s, delay f32 s, easing u8 (0 linear, 1 ease, 2 ease-in, 3 ease-out, 4 ease-in-out, 5 cubic-bezier + 4×f32, 6 steps + u16 count + u8 position, 7 spring + f32 stiffness/damping/mass, 8 linear() + u8 count + count×(f32 input, f32 output)). Its Rust type lives in exact-motion; the kernel owns the bytes.",
@@ -6090,6 +6101,10 @@
           "items": {
             "member": "collections",
             "codec": "collectionSnapshots"
+          },
+          "tables": {
+            "member": "sectionTables",
+            "codec": "sectionTables"
           }
         }
       },
@@ -6326,6 +6341,10 @@
           "member": "landing",
           "codec": "bool"
         },
+        "windowState": {
+          "member": "windowState",
+          "codec": "modes"
+        },
         "stored": {
           "member": "stored",
           "codec": "bool"
@@ -6373,6 +6392,10 @@
         "rootTabs": {
           "member": "rootTabs",
           "codec": "rootTabs"
+        },
+        "budgetWarning": {
+          "member": "budgetWarning",
+          "codec": "optionalString"
         },
         "alerts": {
           "member": "alerts",

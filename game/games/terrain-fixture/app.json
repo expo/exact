@@ -3,7 +3,8 @@
     "render": {
       "crate": "terrain-fixture-render",
       "hooks": "Passes",
-      "shaders": "shaders::SHADERS"
+      "shaders": "shaders::SHADERS",
+      "workers": true
     }
   },
   "gpu": {

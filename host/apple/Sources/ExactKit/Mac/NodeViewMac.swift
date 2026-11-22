@@ -54,8 +54,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     var paintLifted = false
     /// The opacity written while a reveal holds the box off screen (`holdOffstage`).
     var offstageAlpha: CGFloat?
-    /// In a subtree a staged batch prepares or has taken down: outside the committed tree (`StagingMac.swift`).
-    var held = false
+    var stage = Stage.committed
     var paintGhost = false
     var paintGhosts = 0
     weak var paintParent: PaintView?
@@ -74,6 +73,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     var contextClicked = false
     var cachedTextSpec: Spec? { didSet { cachedTextHeadroom = nil } }
     var cachedTextHeadroom: Float?
+    var proseMarker: CATextLayer?
     var textLayoutValid = false
     /// The node whose `accent-color` this view last read as its tint, nil for the system's (NodeColorMac.swift).
     var tintSource: ObjectIdentifier?
@@ -378,14 +378,8 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     package override func resetCursorRects() {
         super.resetCursorRects()
         guard !held else { return }
-        if let cursor = CSSCursor.value(style["cursor"]?.string ?? "auto") { addCursorRect(bounds, cursor: cursor); return }
-        // `cursor: auto` over a link is AppKit's pointing hand, as
-        // `NSTextView` shows over its links (LLP 1115 §3): a `link` node, and
-        // each `href` run of a paragraph.
-        if props["accessibilityRole"] == "link" || !(props["href"] ?? "").isEmpty {
-            addCursorRect(bounds, cursor: .pointingHand)
-            return
-        }
+        if let cursor = boxCursor { addCursorRect(bounds, cursor: cursor); return }
+        // An inline link has a pointing hand over its own fragments (LLP 1115 §3).
         for run in inlineText where run.isLink && !run.hidden {
             for rect in inlineRects(run) { addCursorRect(rect, cursor: .pointingHand) }
         }
@@ -415,6 +409,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// range is a leaf.
     package override func accessibilityChildren() -> [Any]? {
         if props["accessibilityElementsHidden"] == "true" || accessibilityHiddenWritten || held { return [] }
+        if semanticTag == "table", let native = presenter?.dataTables.native(self) { return childNodes.filter { $0.semanticTag == "caption" } + [native as NSView] }
         if actsAsButton { return withAtoms(controlAccessibilityChildren()) }
         return props["accessibilityRole"] == "img" || rangeRole != nil ? nil : withAtoms(textAccessibilityChildren() ?? inDrawnOrder(exposed(super.accessibilityChildren())))
     }
@@ -453,7 +448,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// `aria-hidden` takes the node and its subtree off the tree, as the
     /// web's does (onboarding F16: a checkbox's visible label stayed exposed).
     package override func isAccessibilityElement() -> Bool {
-        accessibilityExposed && props["accessibilityElementsHidden"] != "true" && !held && super.isAccessibilityElement()
+        accessibilityExposed && props["accessibilityElementsHidden"] != "true" && !held && (semanticTag != "table" || presenter?.dataTables.native(self) == nil) && super.isAccessibilityElement()
     }
     /// Where an image source resolves, as a page resolves `src`: an `http(s)`
     /// URL as is; a relative path under the asset root (`EXACT_ASSETS`, else
@@ -758,6 +753,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// (children the surface left in place) is tested in AppKit's order
     /// without them, and then the canvas itself is the hit.
     package override func hitTest(_ point: NSPoint) -> NSView? {
+        if isProjectedSectionWrapper { return nil }
         // A plain leaf or clipped box cannot hit beyond its frame. Visible
         // overflow and transformed or placed children still need the full walk.
         if overlay == nil, !frame.contains(point), (clipsToBounds || subviews.isEmpty),
@@ -1014,6 +1010,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         for k in clear { next.removeValue(forKey: k) }
         for (k, v) in set { next[k] = v }
         props = next
+        if set["listMarker"] != nil || clear.contains("listMarker") { layoutProseMarker() }
         if set["groupedSeparator"] != nil || clear.contains("groupedSeparator") { applyGroupedSeparator() }
         if set["symbolEffectValue"] != nil || set["symbolColorWritten"] != nil || clear.contains("symbolColorWritten")
             || set["symbolFillRule"] != nil || clear.contains("symbolFillRule") { updateSymbol() }

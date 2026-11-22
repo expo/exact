@@ -13,7 +13,12 @@ impl<D: DataSource> Host<D> {
         for line in self.kept_failures() {
             self.store_failure(line);
         }
-        let writes = self.runner.take_store_writes();
+        let mut writes = self.runner.take_store_writes();
+        writes.retain(|write| {
+            let window = write.name.starts_with(exact_runner::Store::WINDOW_STATE);
+            self.window_state_changed |= window;
+            !window
+        });
         if self.secrets.is_none() {
             if changed {
                 self.stored = true;

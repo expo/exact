@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { plistFile } from './assets.mjs';
 import { EXTENSION_KINDS, extensionKinds, packageShareExtension, withoutExtensions } from './extensions.mjs';
-import { hasEntries, platformWidgetEntries, activityEntries } from './widgets.mjs';
+import { entryProfiles, hasEntries, platformWidgetEntries, activityEntries } from './widgets.mjs';
 
 test('--extensions keeps every kind by default, none, or a named list; refuses an unknown kind', () => {
   expect([...extensionKinds([])]).toEqual(EXTENSION_KINDS);
@@ -17,7 +17,7 @@ test('--extensions keeps every kind by default, none, or a named list; refuses a
 });
 
 test('a left-out kind drops its manifest entries, so nothing gated on them builds', () => {
-  const manifest = { widgets: [{ kind: 'next', families: ['systemSmall'] }], live_activities: [{ kind: 'trip' }], name: 'x' };
+  const manifest = { widgets: [{ kind: 'next', families: ['systemSmall'] }], live_activities: [{ kind: 'trip' }], share_target: { action: '/receive' }, name: 'x' };
   const app = kinds => ({ manifest: withoutExtensions(manifest, new Set(kinds)) });
   expect(hasEntries(app(EXTENSION_KINDS))).toBe(true);
   expect(hasEntries(app([]))).toBe(false);
@@ -25,8 +25,36 @@ test('a left-out kind drops its manifest entries, so nothing gated on them build
   expect(activityEntries(app(['activities'])).length).toBe(1);
   expect(hasEntries(app(['activities']))).toBe(true); // the extension, with activities alone
   expect(activityEntries(app(['widgets'])).length).toBe(0);
+  expect(app(['share']).manifest.share_target).toEqual(manifest.share_target);
+  expect(app(['widgets']).manifest.share_target).toBeUndefined();
   expect(app([]).manifest.name).toBe('x');
   expect(manifest.widgets.length).toBe(1); // the app's own manifest is not changed
+});
+
+test('the share inbox requires an App Group profile for each bundle and one certificate that signs them all', () => {
+  const id = 'com.example.league', group = `group.${id}`;
+  const app = { id, manifest: { share_target: { action: '/receive' } } };
+  const profile = (suffix, certificates, extra = {}) => ({
+    appId: `TEAM.${id}${suffix}`, name: `League${suffix}`, prefix: 'TEAM', team: 'TEAM', method: 'development',
+    expires: new Date('2099-01-01'), dev: true, devices: ['PHONE'], groups: [group], keychain: [], certificates, ...extra,
+  });
+  const choose = (installed, options = {}) => entryProfiles({ app, udid: 'PHONE', named: null, team: null, installed, ...options });
+  const parent = profile('', ['A', 'B']), share = profile('.share', ['B']);
+  expect(choose([parent, share])).toEqual({ app: parent, share });
+  expect(() => choose([parent])).toThrow(`${id}.share`);
+  expect(() => choose([parent, { ...share, groups: [] }])).toThrow(`none grants the App Group ${group}`);
+  expect(() => choose([parent, { ...share, devices: ['OTHER'] }])).toThrow('does not include this phone');
+  expect(() => choose([parent, { ...share, certificates: ['C'] }])).toThrow('common signing certificate');
+  const otherTeam = { ...parent, team: 'OTHER', expires: new Date('2099-02-01') };
+  expect(choose([otherTeam, parent, share]).app).toBe(parent);
+
+  const widgets = { ...app, manifest: { ...app.manifest, live_activities: [{ kind: 'score' }] } };
+  const keychain = [`TEAM.${id}`], owner = { ...parent, keychain };
+  const widgetA = profile('.widgets', ['A'], { keychain }), widgetB = profile('.widgets', ['B'], { keychain });
+  expect(() => choose([owner, widgetA, share], { app: widgets })).toThrow('common signing certificate');
+  expect(choose([owner, widgetA, widgetB, share], { app: widgets })).toEqual({ app: owner, extension: widgetB, share });
+  const store = p => ({ ...p, devices: [], dev: false, method: 'appstore' });
+  expect(choose([store(share)], { udid: null, named: store(parent) }).share).toEqual(store(share));
 });
 
 // LLP 1133.024 D4, D6 (amended 2026-11-15): an extension compiles one presentation, so an app that declares none

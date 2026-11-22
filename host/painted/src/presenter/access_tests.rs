@@ -322,7 +322,17 @@ fn told(words: &[i32]) -> Told {
             role: w[3],
             flags: w[4],
             rect: [w[5] as f32, w[6] as f32, w[7] as f32, w[8] as f32],
-            range: [float(at + 9), float(at + 10), float(at + 11)],
+            range: match (w[3], w[4] & flag::SIDEWAYS != 0) {
+                (role::SCROLLER | role::LIST_BOX, true) => NodeRange::Scroll {
+                    offset: (float(at + 9), 0.),
+                    max: (float(at + 10), 0.),
+                },
+                (role::SCROLLER | role::LIST_BOX, false) => NodeRange::Scroll {
+                    offset: (0., float(at + 9)),
+                    max: (0., float(at + 10)),
+                },
+                _ => [float(at + 9), float(at + 10), float(at + 11)].into(),
+            },
             set: (w[12], w[13]),
             grid: [w[14], w[15], w[16], w[17]],
             name,
@@ -438,7 +448,7 @@ fn shelfs_library_is_read_bar_then_page_then_navigation_bar() {
         .find(|n| n.parent == row.id)
         .expect("its meter");
     assert_eq!(
-        (meter.role, meter.range),
+        (meter.role, meter.reader_range()),
         (role::PROGRESS, [0.0, 100.0, 44.0])
     );
     assert_library_clipping(&mut p, &nodes);
@@ -506,7 +516,7 @@ fn a_control_is_its_kind_with_its_state_and_what_is_hidden_is_no_node() {
         ],
         "the words under `aria-hidden` are no node"
     );
-    assert_eq!(named(&nodes, "Volume").range, [0.0, 100.0, 40.0]);
+    assert_eq!(named(&nodes, "Volume").reader_range(), [0.0, 100.0, 40.0]);
     // A shell that hosts fields has its own view there: the node says only
     // where it stands and what its author named it.
     let _hosting = hosting();
@@ -699,7 +709,7 @@ fn a_nodes_identity_outlives_a_commit_a_scroll_and_a_row_that_returns() {
     let moved = read(&mut p);
     let higher = named(&moved, "Row 3");
     assert_eq!((higher.id, higher.rect[1]), (row.id, row.rect[1] - 80.0));
-    assert_eq!(moved[1].range, [80.0, 12600.0, 0.0]);
+    assert_eq!(moved[1].reader_range(), [80.0, 12600.0, 0.0]);
     assert_eq!(moved[1].flags, flag::FORWARD | flag::BACKWARD);
     // Far away: the row is gone, and no row there is taken for one that
     // was here.
@@ -922,6 +932,52 @@ fn a_scroll_and_a_new_screen_are_said_as_what_they_are() {
 }
 
 #[test]
+fn accessibility_scrolls_both_axes_and_the_app_receives_the_position() {
+    let mut p = boot(
+        r#"
+component Host
+  state x = 0
+  state y = 0
+  action moved(dx: number, dy: number)
+    x = round(dx)
+    y = round(dy)
+  view
+    column
+      text `Offset ${x}, ${y}`
+      view aria-label="Notes" width=120 height=100 overflow="scroll" scroll=moved
+        view width=320 height=500
+"#,
+        (460., 560.),
+        0,
+    );
+    p.reader_access(1., true);
+    let pane = named(p.access_told(), "Notes");
+    let id = pane.id;
+    assert_eq!(
+        pane.range,
+        NodeRange::Scroll {
+            offset: (0., 0.),
+            max: (200., 400.)
+        }
+    );
+    assert!(p.access_scroll_to(id, (100., 200.)));
+    settle(&mut p);
+    let moved = statement(&mut p);
+    assert!(moved
+        .nodes
+        .iter()
+        .any(|node| node.name == "Offset 100, 200"));
+    assert_eq!(
+        named(p.access_told(), "Notes").range,
+        NodeRange::Scroll {
+            offset: (100., 200.),
+            max: (200., 400.)
+        }
+    );
+    assert!(!p.access_scroll_to(id, (f32::NAN, 0.)));
+}
+
+#[test]
 fn an_action_is_the_presenters_own_press_scroll_and_step() {
     let mut p = boot(CONTROLS, (320., 600.), 0);
     let nodes = statement(&mut p).nodes;
@@ -936,13 +992,16 @@ fn an_action_is_the_presenters_own_press_scroll_and_step() {
     // A range steps by its step, and is set to a value.
     assert!(p.access_act(of("Volume"), act::FORWARD, 0.0, 0.0));
     settle(&mut p);
-    assert_eq!(named(&statement(&mut p).nodes, "Volume").range[2], 50.0);
+    assert_eq!(
+        named(&statement(&mut p).nodes, "Volume").reader_range()[2],
+        50.0
+    );
     assert!(p.access_act(of("Volume"), act::BACKWARD, 0.0, 0.0));
     assert!(p.access_act(of("Volume"), act::SET, 100.0, 0.0));
     settle(&mut p);
     let full = statement(&mut p);
     let volume = named(&full.nodes, "Volume");
-    assert_eq!(volume.range[2], 100.0);
+    assert_eq!(volume.reader_range()[2], 100.0);
     assert_eq!(
         volume.flags,
         flag::RANGE | flag::SETTABLE | flag::BACKWARD,

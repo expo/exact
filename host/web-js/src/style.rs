@@ -1053,6 +1053,9 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
         | StyleId::ScrollEdgeEffect
         | StyleId::HoverEffect
         | StyleId::SmartInvert => vec![],
+        // @ref LLP 1123 §"What it replaces" — main's route clearance opt-out, not CSS, as
+        // css.rs has it: the web host executes no route clearance for it to turn off.
+        StyleId::SafeArea => vec![],
         // @ref LLP 1123 D4, D8, D11 to D14 — not CSS, and not written yet, as on the web
         // host: a page's ignored regions, insets, margins, reach and scroll insets
         // wait for the web's owners (D17).

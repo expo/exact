@@ -1,0 +1,18 @@
+component App
+  state extra = false
+  action toggle
+    extra = not extra
+  view
+    column width=200 height=360 color="#a00000" background-color="#ffffff"
+      ol testId="ordered"
+        if extra
+          li "Added"
+        li "No marker" testId="bare" list-style-type="none"
+        li "No box" testId="removed" display="none"
+        li "Retained" testId="retained"
+      ul direction="rtl"
+        li "Right" testId="right"
+        li
+          ul
+            li "Nested" testId="nested"
+      button "Change" testId="change" press=toggle

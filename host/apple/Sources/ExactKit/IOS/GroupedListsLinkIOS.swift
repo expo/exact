@@ -25,6 +25,8 @@ package protocol GroupedLists: AnyObject {
     func cellFrame(of view: NodeView, at place: GridPlace) -> CGRect?
     /// After a batch; `changed` is the touched views and their ancestors.
     func sync(changed: Set<UInt32>?)
+    /// The list `id`'s owner changed its frame outside a batch (`setReach`): the list's geometry follows.
+    func geometryChanged(_ id: UInt32)
     /// Whether some list holds a custom row's views in its cells.
     var carriesRows: Bool { get }
     func reset()

@@ -857,10 +857,10 @@ uint32_t exact_set_launch_time(ExactRuntime rt, double epoch_at_zero, double utc
  * seed, then optionally NUL formatLocale), for the next boot or candidate; the running runner is not told.
  * Returns zero when accepted, otherwise an error batch length; keeps the last valid fact. */
 uint32_t exact_set_launch_place(ExactRuntime rt, size_t len);
-/* LLP 1030.004 D2: the window's name (UTF-8 in exact_in), which the page's
- * `name` reads, and whether its router launches rooted (`rooted` nonzero),
- * for every boot from here. Not a batch. */
-uint32_t exact_set_launch_window(ExactRuntime rt, size_t len, uint32_t rooted);
+/* Window name (UTF-8) and rooted launch (LLP 1030.004 D2). An optional JSON object
+ * of window state follows the name for a restoration before boot. No archive leaves
+ * any previously supplied state in place. */
+uint32_t exact_set_launch_window(ExactRuntime rt, size_t name, uint32_t rooted, size_t archive);
 /* The platform's layout direction for every boot from here, where it governs
  * a direction the author left unsaid (AppKit's process direction): 0 left to
  * right, 1 right to left, anything else the strings table's. Not a batch. */
@@ -1062,12 +1062,14 @@ uint32_t exact_intrinsics(ExactRuntime rt, size_t len);
  * (LLP 1127 D8): float 1 beside it, live (the split's list column beside
  * its detail), 2 under a pane over it, not live (the detail under the list
  * that overlays it, the columns under a sheet), 0 in its stack; then three
- * unused. */
+ * unused. Kind 24 gives a column header its track width in the first float.
+ * NaN restores automatic sizing. */
 uint32_t exact_host_covers(ExactRuntime rt, size_t len);
 /* What a block's root would measure in another block (a popover's
  * position-area option, LLP 1021 D2): each axis a length and a policy as
  * exact_host_covers' kind 4 takes them (0 size, 1 maximum, 2 fit, 3 a
- * position-area's region). The used width and height, the border box's
+ * position-area's region, 4 a pane's border box, 5 the axis a container
+ * sizes to the content). The used width and height, the border box's
  * width and height, then the margins (top, right, bottom, left) as the layout
  * resolved them, eight LE floats in the output buffer, and 32; 0 when refused.
  * The tactic uses kind 4's side permutation.

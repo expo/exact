@@ -106,6 +106,8 @@ export const exitFullscreen = say => () => { if (document.fullscreenElement) doc
 export const setWindowOpacity = say => () => say("setWindowOpacity refused: a page cannot change its window's opacity");
 // A page cannot put its window away and keep running (LLP 1133.025 D4).
 export const hideWindow = say => () => say("hideWindow refused: a page cannot hide its window");
+// The commit that names it already ran its tree update inside the browser's view transition (rt.js, shared.js).
+export const startViewTransition = () => () => {};
 // A page cannot set the browser's zoom, which is the person's (LLP 1021 §5.3.1).
 export const setPageZoom = say => () => say("setPageZoom refused: the browser's zoom is the person's; a page cannot set it");
 // A recording of frames is the Apple hosts'; the browser's performance panel records the page.

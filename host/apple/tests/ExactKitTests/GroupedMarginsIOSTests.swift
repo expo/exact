@@ -174,6 +174,14 @@ final class GroupedMarginsIOSTests: XCTestCase {
         guard narrow.margin != wide.margin else {
             throw XCTSkip("UIKit's list margin is \(narrow.margin) at both widths on this device (the iPhone Duo's), so a report sampled when it was owed would pass too")
         }
+        // The kernel's side reach of 30, given between batches, widens the collection, and UIKit gives its cells the
+        // wider list's margin: the margin told changes to the one that shows once the list has laid out by it
+        list.owner.setReach(UIEdgeInsets(top: 0, left: 30, bottom: 0, right: 0))
+        settle()
+        let reached = try starts()
+        XCTAssertNotEqual(reached.margin, narrow.margin, "UIKit's margin at the reached width")
+        XCTAssertEqual(host.told[list.owner.id]?[2], reached.margin)
+        XCTAssertEqual(reached.row, reached.margin, accuracy: 0.5, "the custom row follows it")
         XCTAssertEqual(narrow.margin, 16, "UIKit's cell margin at an iPhone's width")
     }
 }

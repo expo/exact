@@ -129,7 +129,7 @@ fn a_fresh_drive_empties_its_tree_before_the_boot_reads_and_never_after() {
             .env("EXACT_AGENT", "1")
             .env("EXACT_AGENT_STORAGE", "fresh")
             .env("EXACT_AGENT_STORAGE_FRESH", "1")
-            .env("EXACT_AGENT_STORED", r#"[["runText","\"2:15\""]]"#)
+            .env("EXACT_AGENT_STORED", r##"[["runText","\"2:15\""],["#window.draft","\"mine\""]]"##)
             .env_remove("EXACT_STORE")
             .output()
             .unwrap();
@@ -151,12 +151,18 @@ fn a_fresh_drive_empties_its_tree_before_the_boot_reads_and_never_after() {
     std::fs::write(root.join("secrets").join("fresh.best"), "stale").unwrap();
     std::fs::create_dir_all(root.join("data")).unwrap();
     std::fs::write(root.join("data").join("left.txt"), "stale").unwrap();
-    let (bindings, unbound) = endow_bound(grants, app, true);
-    assert!(unbound.is_none(), "{unbound:?}");
+    let first = crate::store::endowed::<false>(grants, app, true);
+    assert!(first.unbound.is_none(), "{:?}", first.unbound);
+    let window = ("exact.state.#window.draft".into(), br#""mine""#.to_vec());
+    assert!(first.snapshot.contains(&window));
+    assert!(!crate::store::endowed::<false>(grants, app, true)
+        .snapshot
+        .contains(&window));
+    let bindings = first.bindings;
     assert_eq!(
         snapshot_of(bindings.as_ref()),
         vec![("exact.state.runText".into(), br#""2:15""#.to_vec())],
-        "only the test's stored setting survives the fresh launch"
+        "only the shared setting belongs in the preference store"
     );
     assert!(
         !root.join("data").join("left.txt").exists(),

@@ -68,6 +68,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// from the bar's own top left. What it pressed commits, and the page
     /// paints with it.
     pub fn bar(&mut self, which: i32, what: i32, x: f32, y: f32) {
+        self.end_scroll();
         let now = self.now();
         let (x, y) = (x / self.scale, y / self.scale);
         self.p.bar_event(which, what, x, y, now);
@@ -79,6 +80,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// system dismissed it (8); the reader could not make it (9); a key
     /// (16 and up).
     pub fn surface(&mut self, serial: u32, what: i32, x: f32, y: f32) {
+        self.end_scroll();
         let now = self.now();
         let (x, y) = (x / self.scale, y / self.scale);
         self.p.surface_event(serial, what, x, y, now);

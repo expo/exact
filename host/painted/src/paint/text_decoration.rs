@@ -216,12 +216,13 @@ impl Painter {
             }
         }
         let mut lines = Vec::new();
-        for (glyph, baseline, paint) in paragraph.paint_glyphs(palette) {
-            let Some(declarations) = &flags[glyph.run()] else {
+        for (glyph, baseline, run) in paragraph.glyphs_with_runs() {
+            let paint = palette[run];
+            let Some(declarations) = &flags[run] else {
                 continue;
             };
             // A Markdown piece's own: a followed link, `~~strike~~`.
-            let mark = paragraph.runs().get(glyph.run()).map_or(0, |r| r.mark);
+            let mark = paragraph.runs().get(run).map_or(0, |r| r.mark);
             let marked_line = match (mark & UNDERLINE != 0, mark & STRIKE != 0) {
                 (true, true) => TextDecorationLine::UnderlineLineThrough,
                 (true, false) => TextDecorationLine::Underline,
@@ -241,10 +242,10 @@ impl Painter {
                                     .node(paint.source)
                                     .and_then(|node| self.text_shadow(&node, paint.color))
                             },
-                            |shadows| shadows[glyph.run()],
+                            |shadows| shadows[run],
                         ),
                     },
-                    spans[glyph.run()],
+                    spans[run],
                 )
             });
             let thickness = (glyph.font_size / 16.0).max(1.0);
@@ -260,7 +261,7 @@ impl Painter {
                     TextDecorationLine::Underline | TextDecorationLine::UnderlineLineThrough
                 ) {
                     lines.push(Decoration {
-                        run: glyph.run(),
+                        run,
                         first_run,
                         last_run,
                         line: TextDecorationLine::Underline,
@@ -275,7 +276,7 @@ impl Painter {
                     TextDecorationLine::LineThrough | TextDecorationLine::UnderlineLineThrough
                 ) {
                     lines.push(Decoration {
-                        run: glyph.run(),
+                        run,
                         first_run,
                         last_run,
                         line: TextDecorationLine::LineThrough,

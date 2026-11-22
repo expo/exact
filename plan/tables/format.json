@@ -166,8 +166,8 @@
         },
         {
           "name": "persist",
-          "codec": "bool",
-          "_comment": "@ref LLP 1116 D5 (`state ... persist`): a root slot the host keeps across launches. Boot takes the store's value under `exact.state.<name>` where it decodes to the slot's type (else the initializer's value stands, and the mismatch is journaled); after every commit that stands the store holds the slot's value. Only a root slot (no owner, not late) of a number, string or bool, or an option or list of those."
+          "codec": "enum:PersistScope",
+          "_comment": "The scope that keeps this root slot. App settings are shared by the app's windows. Window state belongs to the window that restores it. Both restore before the first commit and use the type and size limits of LLP 1116 D5."
         }
       ]
     },
@@ -1179,6 +1179,7 @@
   ],
   "_enums": "Wire ordinal is the 0-based index. An unknown ordinal is a typed decode rejection.",
   "enums": {
+    "PersistScope": ["none", "app", "window"],
     "SurfaceArgsMode": ["named", "positional"],
     "MutationMode": ["newest", "queue", "parallel"],
     "TypeKind": [

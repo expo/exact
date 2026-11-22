@@ -1,0 +1,82 @@
+// ViewTransitionIOSTests and ViewTransitionMacTests: `startViewTransition()`
+// from the page, with a push or a pop; from a sheet whose commit closes it
+// or keeps it; from the upper of two sheets, closing one or both; and from a
+// dialog its commit closes with `close(id)`.
+routes nav
+  home "/"
+    settings "/settings"
+      about "/settings/about"
+    item "/item"
+
+keyframes enter
+  from opacity=0
+
+keyframes leave
+  to opacity=0
+
+component App
+  state game = "a"
+  action follow(url: string)
+    nav = go(nav, url)
+  action pick(g: string)
+    startViewTransition()
+    game = g
+  action pickAndClose(g: string)
+    startViewTransition()
+    game = g
+    nav = back(nav)
+  action pickAndGo(g: string, url: string)
+    startViewTransition()
+    game = g
+    nav = go(nav, url)
+  action pickAndPush(g: string)
+    startViewTransition()
+    game = g
+    nav = go(nav, "/item")
+  action openNote
+    showModal("note")
+  action pickAndCloseNote(g: string)
+    startViewTransition()
+    game = g
+    close("note")
+  view
+    main navigationKey=`${top(nav).id}` navigate=follow width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        if e.name == "home"
+          column navigationKey=`${e.id}` position="absolute" inset=0 padding=16
+            text game testId="game"
+            button press=pick("b") testId="pick"
+              text "Pick"
+            button press=pickAndPush("f") testId="pick-and-push"
+              text "Pick and push"
+            link href="/settings" testId="open"
+              text "Settings"
+            button press=openNote testId="open-note"
+              text "Note"
+            dialog id="note" width=300 height=200
+              button press=pickAndCloseNote("e") testId="pick-and-close-note"
+                text "Pick and close"
+        if e.name == "settings"
+          column navigationKey=`${e.id}` navigationPresentation="modal" navigationDetent="large" position="absolute" inset=0 padding=16
+            text game testId="game-in-sheet"
+            button press=pickAndClose("c") testId="pick-and-close"
+              text "Pick and close"
+            button press=pick("d") testId="pick-and-stay"
+              text "Pick and stay"
+            link href="/settings/about" testId="open-about"
+              text "About"
+        if e.name == "about"
+          column navigationKey=`${e.id}` navigationPresentation="modal" navigationDetent="medium" position="absolute" inset=0 padding=16
+            button press=pickAndClose("g") testId="pick-and-close-about"
+              text "Pick and close"
+            button press=pickAndGo("i", "/") testId="pick-and-home"
+              text "Pick and close both"
+        if e.name == "item"
+          column navigationKey=`${e.id}` position="absolute" inset=0 padding=16 background-color="white" testId="item"
+            ::view-transition-new
+              animation="enter 2s linear both"
+            ::view-transition-old
+              animation="leave 2s linear both"
+            text game
+            button press=pickAndClose("h") testId="pick-and-pop"
+              text "Pick and pop"

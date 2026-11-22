@@ -164,6 +164,82 @@ impl Drop for Memory {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    #[test]
+    fn mouse_selection_copies_both_drag_directions_into_a_windows_textarea() {
+        use exact_painted::{presenter::PainterChoice, Presenter};
+        let plan = contract::compile(
+            r#"component App
+  view
+    column width=240
+      text "First" testId="first" user-select="text" width=200 height=32
+      text "Second" testId="second" user-select="text" width=200 height=32
+      textarea testId="editor" width=200 height=64
+"#,
+        )
+        .unwrap()
+        .encode();
+        let (mut p, warning) = Presenter::boot_with(
+            &plan,
+            (),
+            (240., 180.),
+            1.,
+            Default::default(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(warning.is_none(), "{warning:?}");
+        p.set_clipboard(Box::new(Memory));
+        let [first, second, editor] = ["first", "second", "editor"].map(|name| {
+            let k = p.host().kernel();
+            k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id
+        });
+        let point = |p: &mut Presenter<()>, id, start: bool| {
+            let (x, y, w, h) = p.boxes().iter().find(|b| b.id == id).unwrap().rect;
+            (x + if start { 1. } else { w - 1. }, y + h / 2.)
+        };
+        let start = point(&mut p, first, true);
+        let end = point(&mut p, second, false);
+        let chord = |p: &mut Presenter<()>, code, key| {
+            for (code, key, down) in [
+                ("ControlLeft", "Control", true),
+                (code, key, true),
+                (code, key, false),
+                ("ControlLeft", "Control", false),
+            ] {
+                crate::keyboard::press(p, (code, key), None, down, false);
+            }
+        };
+        for (from, to, time) in [(start, end, 1.), (end, start, 4.)] {
+            write(
+                Item {
+                    text: Some("unchanged".into()),
+                    image: None,
+                },
+                true,
+            )
+            .unwrap();
+            p.pointer_down_with_clicks(from.0, from.1, time, 1).unwrap();
+            p.pointer_move(to.0, to.1, time + 1.).unwrap();
+            p.pointer_up(to.0, to.1, time + 2.).unwrap();
+            chord(&mut p, "KeyC", "c");
+            assert_eq!(
+                PRIVATE.with(|v| v.borrow().text.clone()).as_deref(),
+                Some("First\nSecond")
+            );
+            p.tap(editor).unwrap();
+            chord(&mut p, "KeyA", "a");
+            chord(&mut p, "KeyV", "v");
+            let field = p
+                .access_tree()
+                .0
+                .into_iter()
+                .find(|v| v.view == editor)
+                .unwrap();
+            assert_eq!(field.value, "First\nSecond");
+        }
+    }
+
     /// The edit menu offers Paste from the board Ctrl+V pastes from: the
     /// memory board under the agent, whatever the Windows clipboard holds.
     #[test]

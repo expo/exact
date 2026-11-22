@@ -106,7 +106,7 @@ function harness(classify=()=>({bundle:true}), runtime=4, {appBake, bake, graphT
 }
 
 test.each([
-  ['the default selection', ['widgets', 'activities', 'intents', 'alarms', 'notifications', 'watch']],
+  ['the default selection', ['widgets', 'activities', 'intents', 'alarms', 'notifications', 'watch', 'share']],
   ['--extensions none', []],
 ])('an unchanged Apple cohort keeps %s current', async (_, appleExtensions) => {
   const { root, app, binaryInputChanges } = harness();

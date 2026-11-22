@@ -64,17 +64,60 @@ impl Keyboard {
 /// Points per wheel notch — the browser's tick.
 pub const LINE: f32 = 40.0;
 
-/// An absolute device's (min, max) per axis, x then y.
-type Ranges = [(i32, i32); 2];
-
 /// How an absolute device's ABS_X and ABS_Y move the pointer.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Absolute {
     /// To the same fraction of the screen: a touch screen, a drawing
     /// tablet, a KVM's mouse.
-    Screen(Ranges),
+    Screen(Screen),
     /// By the finger's travel: a touchpad.
     Pad(Glide),
+}
+
+/// evdev omits unchanged axes, even when a finger lands after a mouse click.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Screen {
+    at: [i32; 2],
+    ranges: [(i32, i32); 2],
+}
+
+impl Screen {
+    fn position(&self) -> InputEvent {
+        let fraction = |axis: usize| {
+            let (min, max) = self.ranges[axis];
+            let span = (i64::from(max) - i64::from(min)).max(1) as f32;
+            ((i64::from(self.at[axis]) - i64::from(min)) as f32 / span).clamp(0., 1.)
+        };
+        InputEvent::Absolute(Some(fraction(0)), Some(fraction(1)))
+    }
+
+    // BTN_TOUCH can precede the axes it belongs to. Publish one position at
+    // the first pointer event once SYN_REPORT closes the packet.
+    fn observe(
+        &mut self,
+        event: &EventSummary,
+        before: &mut Option<usize>,
+        out: &mut Vec<InputEvent>,
+    ) {
+        use AbsoluteAxisCode as Abs;
+        match event {
+            EventSummary::AbsoluteAxis(_, Abs::ABS_X | Abs::ABS_MT_POSITION_X, v) => {
+                self.at[0] = *v
+            }
+            EventSummary::AbsoluteAxis(_, Abs::ABS_Y | Abs::ABS_MT_POSITION_Y, v) => {
+                self.at[1] = *v
+            }
+            EventSummary::Key(_, KeyCode::BTN_TOUCH | KeyCode(0x110..=0x116), _) => {}
+            EventSummary::Synchronization(_, SynchronizationCode::SYN_REPORT, _) => {
+                if let Some(i) = before.take() {
+                    out.insert(i, self.position());
+                }
+                return;
+            }
+            _ => return,
+        }
+        before.get_or_insert(out.len());
+    }
 }
 
 /// Device pixels a touchpad finger's millimetre of travel moves the
@@ -224,7 +267,10 @@ impl Input {
                             [x, y].map(|a| (a.value, (a.minimum, a.maximum), a.resolution)),
                         ))
                     } else {
-                        Absolute::Screen([(x.minimum, x.maximum), (y.minimum, y.maximum)])
+                        Absolute::Screen(Screen {
+                            at: [x.value, y.value],
+                            ranges: [(x.minimum, x.maximum), (y.minimum, y.maximum)],
+                        })
                     }
                 });
             let keyboard = has(KeyCode::KEY_A) || has(KeyCode::BTN_LEFT);
@@ -348,132 +394,117 @@ impl Input {
                     continue;
                 }
             };
-            let mut pointer = PointerReport::default();
-            let fraction = |range: (i32, i32), v: i32| {
-                let span = (range.1 - range.0).max(1) as f32;
-                ((v - range.0) as f32 / span).clamp(0.0, 1.0)
-            };
-            for e in events {
-                let summary = e.destructure();
-                if !matches!(
-                    summary,
-                    EventSummary::RelativeAxis(
-                        _,
-                        RelativeAxisCode::REL_X | RelativeAxisCode::REL_Y,
-                        _
-                    ) | EventSummary::AbsoluteAxis(
-                        _,
-                        AbsoluteAxisCode::ABS_X
-                            | AbsoluteAxisCode::ABS_Y
-                            | AbsoluteAxisCode::ABS_MT_POSITION_X
-                            | AbsoluteAxisCode::ABS_MT_POSITION_Y,
-                        _
-                    )
-                ) {
-                    pointer.flush(&mut out);
-                }
-                let (screen, glide) = match absolute {
-                    Some(Absolute::Screen(r)) => (Some(*r), None),
-                    Some(Absolute::Pad(glide)) => (None, Some(glide)),
-                    None => (None, None),
-                };
-                match (summary, glide) {
-                    (EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_X, v), Some(g)) => {
-                        pointer.relative.0 += g.axis(0, v);
-                    }
-                    (EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_Y, v), Some(g)) => {
-                        pointer.relative.1 += g.axis(1, v);
-                    }
-                    // A touch on the pad is not a press: its click is BTN_LEFT.
-                    (EventSummary::Key(_, KeyCode::BTN_TOUCH, value), Some(g)) => {
-                        g.touch(value != 0);
-                    }
-                    (
-                        EventSummary::Key(
-                            _,
-                            KeyCode::BTN_TOOL_FINGER
-                            | KeyCode::BTN_TOOL_DOUBLETAP
-                            | KeyCode::BTN_TOOL_TRIPLETAP
-                            | KeyCode::BTN_TOOL_QUADTAP
-                            | KeyCode::BTN_TOOL_QUINTTAP,
-                            _,
-                        ),
-                        Some(g),
-                    ) => g.restart(),
-                    (
-                        EventSummary::Synchronization(_, SynchronizationCode::SYN_REPORT, _),
-                        Some(g),
-                    ) => {
-                        g.report();
-                    }
-                    (EventSummary::AbsoluteAxis(..), Some(_)) => {}
-                    (
-                        EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_X, v)
-                        | EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_MT_POSITION_X, v),
-                        _,
-                    ) => {
-                        if let Some(r) = screen {
-                            pointer.absolute.0 = Some(fraction(r[0], v));
-                        }
-                    }
-                    (
-                        EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_Y, v)
-                        | EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_MT_POSITION_Y, v),
-                        _,
-                    ) => {
-                        if let Some(r) = screen {
-                            pointer.absolute.1 = Some(fraction(r[1], v));
-                        }
-                    }
-                    (EventSummary::RelativeAxis(_, RelativeAxisCode::REL_X, v), _) => {
-                        pointer.relative.0 += v as f32;
-                    }
-                    (EventSummary::RelativeAxis(_, RelativeAxisCode::REL_Y, v), _) => {
-                        pointer.relative.1 += v as f32;
-                    }
-                    (EventSummary::RelativeAxis(_, code, v), _) => {
-                        if let Some(event) = wheels.event(code, v) {
-                            out.push(event);
-                        }
-                    }
-                    (EventSummary::Key(_, code, value), _) => {
-                        let code = code.0;
-                        let down = value != 0;
-                        match code {
-                            0x110 if down => out.push(InputEvent::MouseDown(e.timestamp())),
-                            0x14a if down => out.push(InputEvent::TouchDown),
-                            0x110 | 0x14a => out.push(InputEvent::ButtonUp),
-                            // BTN_RIGHT, BTN_MIDDLE.
-                            0x111 => out.push(InputEvent::Aux(2, down)),
-                            0x112 => out.push(InputEvent::Aux(4, down)),
-                            // BTN_SIDE and BTN_EXTRA, a mouse's back and
-                            // forward (thumb) buttons, and BTN_BACK and
-                            // BTN_FORWARD, as some mice report them.
-                            0x113 | 0x116 => out.push(InputEvent::Aux(8, down)),
-                            0x114 | 0x115 => out.push(InputEvent::Aux(16, down)),
-                            _ => {
-                                if let Some(event) = self.keyboard.event(code, value, None) {
-                                    out.push(event);
-                                }
-                            }
-                        }
-                    }
-                    (EventSummary::Synchronization(_, SynchronizationCode::SYN_DROPPED, _), g) => {
-                        if let Some(g) = g {
-                            g.restart();
-                        }
-                        out.push(InputEvent::Cancel)
-                    }
-                    _ => {}
-                }
-            }
-            pointer.flush(&mut out);
+            read_events(events, absolute, &wheels, &mut self.keyboard, &mut out);
         }
         for index in gone.into_iter().rev() {
             self.devices.remove(index);
         }
         out
     }
+}
+
+fn read_events(
+    events: impl Iterator<Item = evdev::InputEvent>,
+    absolute: &mut Option<Absolute>,
+    wheels: &Wheels,
+    keyboard: &mut Keyboard,
+    out: &mut Vec<InputEvent>,
+) {
+    let mut pointer = PointerReport::default();
+    let mut position_before = None;
+    for e in events {
+        let summary = e.destructure();
+        if !matches!(
+            summary,
+            EventSummary::RelativeAxis(_, RelativeAxisCode::REL_X | RelativeAxisCode::REL_Y, _)
+                | EventSummary::AbsoluteAxis(
+                    _,
+                    AbsoluteAxisCode::ABS_X
+                        | AbsoluteAxisCode::ABS_Y
+                        | AbsoluteAxisCode::ABS_MT_POSITION_X
+                        | AbsoluteAxisCode::ABS_MT_POSITION_Y,
+                    _
+                )
+        ) {
+            pointer.flush(out);
+        }
+        let glide = match absolute {
+            Some(Absolute::Screen(screen)) => {
+                screen.observe(&summary, &mut position_before, out);
+                None
+            }
+            Some(Absolute::Pad(glide)) => Some(glide),
+            None => None,
+        };
+        match (summary, glide) {
+            (EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_X, v), Some(g)) => {
+                pointer.relative.0 += g.axis(0, v);
+            }
+            (EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_Y, v), Some(g)) => {
+                pointer.relative.1 += g.axis(1, v);
+            }
+            // A touch on the pad is not a press: its click is BTN_LEFT.
+            (EventSummary::Key(_, KeyCode::BTN_TOUCH, value), Some(g)) => {
+                g.touch(value != 0);
+            }
+            (
+                EventSummary::Key(
+                    _,
+                    KeyCode::BTN_TOOL_FINGER
+                    | KeyCode::BTN_TOOL_DOUBLETAP
+                    | KeyCode::BTN_TOOL_TRIPLETAP
+                    | KeyCode::BTN_TOOL_QUADTAP
+                    | KeyCode::BTN_TOOL_QUINTTAP,
+                    _,
+                ),
+                Some(g),
+            ) => g.restart(),
+            (EventSummary::Synchronization(_, SynchronizationCode::SYN_REPORT, _), Some(g)) => {
+                g.report();
+            }
+            (EventSummary::RelativeAxis(_, RelativeAxisCode::REL_X, v), _) => {
+                pointer.relative.0 += v as f32;
+            }
+            (EventSummary::RelativeAxis(_, RelativeAxisCode::REL_Y, v), _) => {
+                pointer.relative.1 += v as f32;
+            }
+            (EventSummary::RelativeAxis(_, code, v), _) => {
+                if let Some(event) = wheels.event(code, v) {
+                    out.push(event);
+                }
+            }
+            (EventSummary::Key(_, code, value), _) => {
+                let code = code.0;
+                let down = value != 0;
+                match code {
+                    0x110 if down => out.push(InputEvent::MouseDown(e.timestamp())),
+                    0x14a if down => out.push(InputEvent::TouchDown),
+                    0x110 | 0x14a => out.push(InputEvent::ButtonUp),
+                    // BTN_RIGHT, BTN_MIDDLE.
+                    0x111 => out.push(InputEvent::Aux(2, down)),
+                    0x112 => out.push(InputEvent::Aux(4, down)),
+                    // BTN_SIDE and BTN_EXTRA, a mouse's back and
+                    // forward (thumb) buttons, and BTN_BACK and
+                    // BTN_FORWARD, as some mice report them.
+                    0x113 | 0x116 => out.push(InputEvent::Aux(8, down)),
+                    0x114 | 0x115 => out.push(InputEvent::Aux(16, down)),
+                    _ => {
+                        if let Some(event) = keyboard.event(code, value, None) {
+                            out.push(event);
+                        }
+                    }
+                }
+            }
+            (EventSummary::Synchronization(_, SynchronizationCode::SYN_DROPPED, _), g) => {
+                if let Some(g) = g {
+                    g.restart();
+                }
+                out.push(InputEvent::Cancel)
+            }
+            _ => {}
+        }
+    }
+    pointer.flush(out);
 }
 
 fn nonblocking(d: &Device) {
@@ -493,17 +524,12 @@ fn nonblocking(d: &Device) {
 #[derive(Default)]
 struct PointerReport {
     relative: (f32, f32),
-    absolute: (Option<f32>, Option<f32>),
 }
 impl PointerReport {
     fn flush(&mut self, out: &mut Vec<InputEvent>) {
         let (dx, dy) = std::mem::take(&mut self.relative);
         if dx != 0. || dy != 0. {
             out.push(InputEvent::Motion(dx, dy));
-        }
-        let (x, y) = std::mem::take(&mut self.absolute);
-        if x.is_some() || y.is_some() {
-            out.push(InputEvent::Absolute(x, y));
         }
     }
 }
@@ -851,6 +877,80 @@ mod tests {
 mod pointer_tests {
     use super::*;
 
+    #[test]
+    fn tapping_after_a_mouse_click_uses_the_touchscreens_own_position() {
+        use evdev::{AbsoluteAxisEvent, KeyEvent, RelativeAxisEvent, SynchronizationEvent};
+        let report = SynchronizationEvent::new(SynchronizationCode::SYN_REPORT, 0).into();
+        let touch = |v| KeyEvent::new(KeyCode::BTN_TOUCH, v).into();
+        let x = |v| AbsoluteAxisEvent::new(AbsoluteAxisCode::ABS_X, v).into();
+        let y = |v| AbsoluteAxisEvent::new(AbsoluteAxisCode::ABS_Y, v).into();
+        let mut screen = Some(Absolute::Screen(Screen {
+            at: [10, 80],
+            ranges: [(0, 100), (0, 200)],
+        }));
+        let mut keyboard = Keyboard::default();
+        let mut read = |device: &mut Option<Absolute>, events: &[evdev::InputEvent]| {
+            let mut out = Vec::new();
+            read_events(
+                events.iter().copied(),
+                device,
+                &Wheels::new(None),
+                &mut keyboard,
+                &mut out,
+            );
+            out
+        };
+        let at = |x, y| InputEvent::Absolute(Some(x), Some(y));
+        assert_eq!(
+            read(&mut screen, &[touch(1), report, touch(0), report]),
+            [
+                at(0.1, 0.4),
+                InputEvent::TouchDown,
+                at(0.1, 0.4),
+                InputEvent::ButtonUp
+            ]
+        );
+        assert_eq!(
+            read(
+                &mut screen,
+                &[touch(1), x(25), y(100), report, touch(0), report]
+            ),
+            [
+                at(0.25, 0.5),
+                InputEvent::TouchDown,
+                at(0.25, 0.5),
+                InputEvent::ButtonUp
+            ],
+        );
+        let click: evdev::InputEvent = KeyEvent::new(KeyCode::BTN_LEFT, 1).into();
+        assert_eq!(
+            read(
+                &mut None,
+                &[
+                    RelativeAxisEvent::new(RelativeAxisCode::REL_X, 60).into(),
+                    click,
+                    report,
+                    KeyEvent::new(KeyCode::BTN_LEFT, 0).into(),
+                    report,
+                ]
+            ),
+            [
+                InputEvent::Motion(60., 0.),
+                InputEvent::MouseDown(click.timestamp()),
+                InputEvent::ButtonUp
+            ],
+        );
+        assert!(read(&mut screen, &[report]).is_empty());
+        assert_eq!(
+            read(&mut screen, &[touch(1), report]),
+            [at(0.25, 0.5), InputEvent::TouchDown]
+        );
+        assert_eq!(
+            read(&mut screen, &[touch(0), y(150), report]),
+            [at(0.25, 0.75), InputEvent::ButtonUp]
+        );
+    }
+
     /// A finger on a touchpad moves the pointer by its travel; landing,
     /// another finger joining and lifting move nothing.
     #[test]
@@ -886,8 +986,7 @@ mod pointer_tests {
         report.relative.0 += 10.;
         report.relative.1 += 30.;
         report.flush(&mut out);
-        report.absolute.0 = Some(0.2);
-        report.absolute.1 = Some(0.3);
+        report.relative.1 += 12.;
         report.flush(&mut out);
         out.push(InputEvent::ButtonUp);
         report.flush(&mut out);
@@ -896,7 +995,7 @@ mod pointer_tests {
             vec![
                 InputEvent::MouseDown(std::time::UNIX_EPOCH),
                 InputEvent::Motion(10., 30.),
-                InputEvent::Absolute(Some(0.2), Some(0.3)),
+                InputEvent::Motion(0., 12.),
                 InputEvent::ButtonUp
             ]
         );

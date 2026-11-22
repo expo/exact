@@ -203,3 +203,44 @@ fn the_held_op_answers_held_requests_and_their_replies_cheaply() {
     assert!(crate::agent::handle(&r, r#"{"op":"held"}"#)
         .starts_with("{\"held\":[],\"heldReplies\":{\"changes\":1},"));
 }
+
+#[test]
+fn a_delayed_http_fixture_keeps_its_original_reply_until_the_test_clock_is_due() {
+    let mut r = boot();
+    let (first, _) = one_request(&mut r);
+    r.fulfill(first, reply("first")).unwrap();
+    r.act("wave", vec![Value::Number(2.)]).unwrap();
+    let (ticket, _) = one_request(&mut r);
+    r.delay_fetch_fixture(ticket, 0., 200, None);
+    assert!(r.has_pending(), "the executor still has to read the body");
+    assert!(r.fulfill(ticket, reply("old")).unwrap().is_none());
+    assert!(!r.has_pending());
+    assert_eq!(r.data_timer_waits(), [("changes".into(), ticket, 200.)]);
+    r.advance(199.).unwrap();
+    assert_eq!(r.resource("changes"), Some(&Value::Number(5.)));
+    r.advance(200.).unwrap();
+    assert_eq!(r.resource("changes"), Some(&Value::Number(3.)));
+    assert!(!r.holds(ticket));
+    assert!(r.data_timer_waits().is_empty());
+}
+
+#[test]
+fn a_delayed_http_fixture_honours_an_earlier_timeout_and_drops_a_superseded_reply() {
+    let mut r = boot();
+    let (first, _) = one_request(&mut r);
+    r.delay_fetch_fixture(first, 0., 200, Some(30));
+    r.fulfill(first, reply("late")).unwrap();
+    r.advance(29.).unwrap();
+    assert!(r.holds(first));
+    r.advance(30.).unwrap();
+    assert_eq!(r.resource("changes"), Some(&Value::Number(-2.)));
+    r.act("wave", vec![Value::Number(2.)]).unwrap();
+    let (second, _) = one_request(&mut r);
+    r.delay_fetch_fixture(second, 30., 100, None);
+    r.fulfill(second, reply("forgotten")).unwrap();
+    r.act("wave", vec![Value::Number(0.)]).unwrap();
+    r.take_requests();
+    assert!(r.data_timer_waits().is_empty());
+    r.advance(130.).unwrap();
+    assert_eq!(r.resource("changes"), Some(&Value::Number(-1.)));
+}

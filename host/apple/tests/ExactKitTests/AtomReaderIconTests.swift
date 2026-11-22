@@ -912,4 +912,72 @@ final class AtomReaderIconTests: XCTestCase {
     }
     #endif
 
+    /// Diary 6f1189e6: read-only `markup="markdown"` paragraphs with inline
+    /// `atoms` expose each atom as its own link/button accessible element so
+    /// VoiceOver can navigate and activate it independently of surrounding prose.
+    func testReaderAtomsExposeIndividualAccessibleElementsAndActivate() throws {
+        let atomKinds = #"[{"name":"badge","link":"badge:","role":"link","iconSize":"12px","gap":"3px"},{"name":"act","link":"act:","role":"button"}]"#
+        let faces = String(data: try JSONSerialization.data(withJSONObject: [
+            ["source": "[Ab](badge:done)", "label": "Ab", "icon": "symbol:sf/circle.fill",
+             "ariaLabel": "Completed books", "title": "See completed"],
+            ["source": "[Run](act:go)", "label": "Run now"],
+        ]), encoding: .utf8)!
+        session.presenter.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "text", "handlers": ["atompress"],
+             "props": ["text": "Before [Ab](badge:done) mid [Run](act:go) after",
+                       "markup": "markdown", "atoms": atomKinds, "atomFaces": faces, "testId": "rich"],
+             "style": ["font_size": 16, "text_color": [0, 0, 0, 255]]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 400.0, "h": 60.0],
+        ]))
+        let node = try XCTUnwrap(session.presenter.views[1])
+        #if os(iOS)
+        let frame = CGRect(x: 0, y: 0, width: 400, height: 100)
+        let window = hostedWindowScene().map { UIWindow(windowScene: $0) } ?? UIWindow(frame: frame)
+        window.frame = frame
+        session.presenter.viewport.frame = window.bounds
+        window.addSubview(session.presenter.viewport)
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        window.layoutIfNeeded()
+        XCTAssertFalse(node.isAccessibilityElement, "paragraph with reader atoms exposes its atoms as children")
+        let els = try XCTUnwrap(node.accessibilityElements as? [UIAccessibilityElement])
+        XCTAssertEqual(els.count, 3, "paragraph plus two atoms")
+        XCTAssertTrue(els[0].accessibilityTraits.contains(.staticText))
+        XCTAssertEqual(els[1].accessibilityLabel, "Completed books")
+        XCTAssertEqual(els[1].accessibilityHint, "See completed")
+        XCTAssertTrue(els[1].accessibilityTraits.contains(.link))
+        XCTAssertFalse(els[1].accessibilityFrame.isEmpty)
+        XCTAssertTrue(els[1].accessibilityActivate())
+        XCTAssertEqual(els[2].accessibilityLabel, "Run now")
+        XCTAssertTrue(els[2].accessibilityTraits.contains(.button))
+        XCTAssertFalse(els[2].accessibilityFrame.isEmpty)
+        let ax = session.presenter.axElements(roots: [session.presenter.viewport])
+        let items = ax["elements"] as? [[String: Any]] ?? []
+        let link = try XCTUnwrap(items.first { $0["role"] as? String == "link" && $0["name"] as? String == "Completed books" })
+        XCTAssertEqual(link["id"] as? UInt32, 1)
+        XCTAssertEqual(link["via"] as? String, "owner")
+        #else
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 400, height: 100), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = session.presenter.viewport
+        defer { window.close() }
+        let els = try XCTUnwrap(node.accessibilityChildren() as? [NSAccessibilityElement])
+        XCTAssertEqual(els.count, 2)
+        XCTAssertEqual(els[0].accessibilityRole(), .link)
+        XCTAssertEqual(els[0].accessibilityLabel(), "Completed books")
+        XCTAssertEqual(els[0].accessibilityHelp(), "See completed")
+        XCTAssertFalse(els[0].accessibilityFrame().isEmpty)
+        XCTAssertEqual(els[1].accessibilityRole(), .button)
+        XCTAssertEqual(els[1].accessibilityLabel(), "Run now")
+        let updatedFaces = String(data: try JSONSerialization.data(withJSONObject: [
+            ["source": "[Ab](badge:done)", "label": "Ab", "ariaLabel": "Archived books"],
+            ["source": "[Run](act:go)", "label": "Run now"],
+        ]), encoding: .utf8)!
+        session.presenter.apply(wireBatch([["op": "props", "id": 1, "set": ["atomFaces": updatedFaces]]]))
+        let refreshed = try XCTUnwrap(node.accessibilityChildren() as? [NSAccessibilityElement])
+        XCTAssertEqual(refreshed.first?.accessibilityLabel(), "Archived books")
+        #endif
+    }
+
 }

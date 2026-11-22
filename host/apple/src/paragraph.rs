@@ -538,7 +538,17 @@ impl<D: DataSource> Host<D> {
             return;
         }
         // An `svg`'s and a `g`'s children are its scene's (LLP 1055 D4).
-        let node_type = self.runner.kernel().node(id).expect("live").node_type;
+        let node = self.runner.kernel().node(id).expect("live");
+        match node.props.str(PropId::SemanticTag) {
+            Some("ul" | "ol") => {
+                self.changed_prose_lists.insert(id);
+            }
+            Some("li") => {
+                self.changed_prose_lists.extend(node.parent);
+            }
+            _ => {}
+        }
+        let node_type = node.node_type;
         if node_type == NodeType::Svg || node_type.is_svg_element() {
             self.svg.element(self.runner.kernel(), id);
             return;

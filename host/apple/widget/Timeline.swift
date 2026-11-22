@@ -36,7 +36,8 @@ private func snapshotFamily(_ family: WidgetFamily) -> SnapshotEnvironment.Famil
     case .systemSmall: .systemSmall
     case .systemMedium: .systemMedium
     case .systemLarge: .systemLarge
-    case .systemExtraLarge, .systemExtraLargePortrait: .systemExtraLarge
+    case .systemExtraLarge: .systemExtraLarge
+    case .systemExtraLargePortrait: .systemExtraLargePortrait
     #endif
     #if os(watchOS)
     case .accessoryCorner: .accessoryCorner

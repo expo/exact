@@ -525,15 +525,22 @@ impl<D: DataSource> Runner<D> {
         // A mutation's console lines, including a refusal, reach the agent's
         // logs whether the answer comes now or the send waited its turn.
         self.take_data_logs();
-        if let Err(DataError::Failed(code, why, reason)) = &answer {
+        if let Err(error @ (DataError::Failed(..) | DataError::Overrun(_))) = &answer {
+            let failure = crate::failure::Failure::from_data(error);
+            let name = name(&self.plan);
+            let overrun = failure.is_overrun();
+            let line = if overrun {
+                format!(
+                    "mutation {name} failed: {}; it is not retried",
+                    failure.message
+                )
+            } else {
+                super::lines::send_failed_now(&name, &failure.message)
+            };
             if self.conclude_send(target) {
-                self.failed_mut[m] = Some(crate::failure::Failure {
-                    code: *code,
-                    message: why.clone(),
-                    reason: reason.clone(),
-                });
+                self.failed_mut[m] = Some(failure);
             }
-            self.alert(super::lines::send_failed_now(&name(&self.plan), why));
+            self.source_alert(line, overrun);
             self.end_write(target, write);
             return Ok(Asked::Failed);
         }

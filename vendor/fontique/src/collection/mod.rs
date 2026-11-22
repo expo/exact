@@ -98,10 +98,15 @@ impl Collection {
         }
     }
 
-    /// Loads all fonts contained within the specified directory(s)
+    /// Loads all fonts contained within the specified directory(s).
+    /// Returns whether every path within 16 directory levels was read: each
+    /// directory listed, and each file opened and mapped.
     #[cfg(feature = "std")]
-    pub fn load_fonts_from_paths(&mut self, paths: impl IntoIterator<Item = impl AsRef<Path>>) {
-        self.inner.load_fonts_from_paths(paths);
+    pub fn load_fonts_from_paths(
+        &mut self,
+        paths: impl IntoIterator<Item = impl AsRef<Path>>,
+    ) -> bool {
+        self.inner.load_fonts_from_paths(paths)
     }
 
     /// Returns an iterator over all available family names in the collection.
@@ -509,18 +514,21 @@ impl Inner {
         self.data.fallbacks.append(key, families)
     }
 
-    /// Loads all fonts that exist in the specified directory(s)
+    /// Loads all fonts that exist in the specified directory(s).
+    /// Returns whether every path within 16 directory levels was read: each
+    /// directory listed, and each file opened and mapped.
     #[cfg(feature = "std")]
-    pub fn load_fonts_from_paths(&mut self, paths: impl IntoIterator<Item = impl AsRef<Path>>) {
-        #[cfg(feature = "std")]
+    pub fn load_fonts_from_paths(
+        &mut self,
+        paths: impl IntoIterator<Item = impl AsRef<Path>>,
+    ) -> bool {
         if let Some(shared) = &self.shared {
-            shared.data.lock().unwrap().load_fonts_from_paths(paths);
+            let complete = shared.data.lock().unwrap().load_fonts_from_paths(paths);
             shared.bump_version();
+            complete
         } else {
-            self.data.load_fonts_from_paths(paths);
+            self.data.load_fonts_from_paths(paths)
         }
-        #[cfg(not(feature = "std"))]
-        self.data.register_fonts(paths)
     }
 
     /// Registers faces described ahead of time
@@ -723,7 +731,7 @@ struct CommonData {
 
 impl CommonData {
     #[cfg(feature = "std")]
-    fn load_fonts_from_paths(&mut self, paths: impl IntoIterator<Item = impl AsRef<Path>>) {
+    fn load_fonts_from_paths(&mut self, paths: impl IntoIterator<Item = impl AsRef<Path>>) -> bool {
         let mut scratch_family_name = String::default();
         // 0.11.1 shared one `families` map across
         // every scanned face, and register_font_impl merges the whole map into
@@ -750,7 +758,7 @@ impl CommonData {
                 &mut scratch_family_name,
                 &mut families,
             );
-        });
+        })
     }
 
     fn register_fonts(

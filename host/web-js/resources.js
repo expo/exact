@@ -41,7 +41,7 @@ import {
   Origin,
   Invocation,
 } from './rt.js';
-import { checkpoint, READER, keptAnswer } from './mount.js';
+import { booting, checkpoint, READER, keptAnswer } from './mount.js';
 /** Resource instances, including list members; list aggregates have no entry. */
 export const Resources = [];
 /** A source change during an ordinary request waits for its reply. Several changes
@@ -257,10 +257,18 @@ export function res(
     r.value = v;
     Inspections.placeholder(r);
   };
-  // `id`: the call arguments, `with` aside (`current`, LLP 1161.001); `asleep`: a closed `when`, the value kept and no
-  // answer, a request let go but an upload's (LLP 1161.002 D2)
+  // `id`: the call arguments, `with` aside (`current`, LLP 1161.001); `asleep`: a closed `when`, the value kept (but a
+  // build-time one never shown, D4) and no answer, a request let go but an upload's (LLP 1161.002 D2)
   const id = a => a?.slice(0, Math.max(0, a.length - r.context)),
     asleep = () => {
+      // Idle at its first settlement, it adopts nothing compiled and shows its placeholder (LLP 1161.002 D4); a page's
+      // answer stays (§7). A build-time answer is `stale` from the first settlement that finds the gate open, so one
+      // that is not has never shown. `passed` keeps it for a wake that adopts it (`adopt`).
+      if (r.stand === 'build' && !r.stale) {
+        r.passed = [r.value, r.settled];
+        r.value = r.settled = undefined;
+        r.stand = null;
+      }
       r.asleep = r.slept = true;
       r.forced = r.rev = r.reconciling = false;
       if (!r.ticket?.upload) release();
@@ -272,6 +280,13 @@ export function res(
       hold();
       return r.value;
     };
+  // A wake shows the build-time answer the closed gate passed over, where the runner adopts a compiled value
+  const adopt = () => {
+    [r.value, r.settled] = r.passed;
+    r.stand = 'build';
+    r.placeholder = false;
+    Inspections.stoodIn(r);
+  };
   // `origin`: when it was asked (overlay.js)
   const take = (v, a, origin, generation, call) => {
     if (type && !conforms(v, type, [0], r.checked))
@@ -293,6 +308,7 @@ export function res(
     if (globalThis.__exactRender) r.renderCall = call;
     r.stand = null;
     r.stale = false;
+    r.passed = undefined;
     Inspections.take(r, generation);
   };
   const land = t =>
@@ -404,19 +420,26 @@ export function res(
         }
         // an upload answers as it ended, or goes on
         if (mk) return data.uploads.answer(r, mk, a, { take, fails, release });
+        // an instance has a `path` (each.js `own`)
         const baked = r.baked,
-          was = r.stale;
+          was = r.stale,
+          root = r.path === undefined;
         r.baked = false;
         if (baked) r.stale = true;
         // the first frame's build-time answer, said once when it starts to stand in for an answer (the runner's
         // `journal_build_time`)
+        let quiet = false;
         const stands = () => {
-          if (!was && r.stale && r.stand === 'build') say(`${name} shows its build-time answer until its source answers`);
+          if (!was && !quiet && r.stale && r.stand === 'build') say(`${name} shows its build-time answer until its source answers`);
         };
         if (!forced && !rev) {
           // Reuse follows the request in flight; the displayed value may answer older arguments (LLP 1016 D5).
           // `equal`: `-0` is `0`, NaN asks again; a bake is asked once anyway (LLP 1048.003 D6).
-          if (!r.ticket && r.settled !== undefined && equal(a, r.settled) && !baked) return r.value;
+          if (!r.ticket && r.settled !== undefined && equal(a, r.settled) && !baked) {
+            // before its source is ready, a root resource's arguments are its build-time answer's again
+            if (root && r.stand === 'build') flag(pend, false);
+            return r.value;
+          }
           if (r.ticket && equal(a, r.ticket.args)) return r.value;
         }
         let ans;
@@ -519,12 +542,18 @@ export function res(
         // Not ready (Rust loads after first paint): the bake's answer stands, not pending, asked at `ready` as at
         // data_ready (review B3); another compiled value stands, stale, forced then (LLP 1027 D4). That ask's refusal
         // fails it, not the commit; a commit refused otherwise is followed by one failing it.
-        const shown = baked && eq(a, r.settled);
-        r.launch = !forced && waited !== false;
-        if (!shown) {
-          hold();
-          flag(pend, true);
+        // While the source is not ready the runner adopts a compiled value in any settlement, but for an instance
+        // after the boot. So a wake shows the build-time answer a closed gate passed over: in the boot, with the
+        // journal's line, which the runner says of its boot alone, and after it for a root resource only, which is
+        // pending only at other arguments however often it is asked before its source is ready.
+        if (r.passed && r.stand === null && (root || booting())) {
+          adopt();
+          quiet = !booting();
         }
+        const shown = (baked || (root && r.stand === 'build')) && eq(a, r.settled);
+        r.launch = !forced && waited !== false;
+        if (!shown) hold();
+        flag(pend, !shown);
         // a build-time answer stands in for any arguments until the source answers, as the runner's `stale`
         if (r.stand === 'build') r.stale = true;
         stands();
@@ -543,7 +572,8 @@ export function res(
         }
         return r.value;
       })(),
-      r.settled ?? r.asked,
+      // idle before any answer, it has read no arguments: none, as the runner's placeholder state
+      r.settled ?? r.asked ?? [],
       r.origin,
     );
     flag(

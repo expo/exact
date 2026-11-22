@@ -146,6 +146,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
     pub fn owed(&self) -> bool {
         (self.moved > 0 && self.moves < 1000)
             || self.waiting
+            || self.scroll_hold.owed()
             || (self.led && self.now() - self.scrolled_at >= STEP_MS)
     }
 
@@ -246,7 +247,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
     }
 
     fn refine_inner(&mut self) -> bool {
-        self.scrolled = false;
+        self.scroll_hold.end();
         self.prefetching = true;
         self.sync_moved_pictures();
         // How soon what this pass mounts past the view can scroll in: it

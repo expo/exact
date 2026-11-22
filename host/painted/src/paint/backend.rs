@@ -19,6 +19,12 @@ pub enum FrameTarget {
     Pixels,
     /// Present to the window, or return pixels for its carrier to present.
     Window,
+    /// Keep the finished Ink texture for the Linux display, with pixels if a reader needs them.
+    #[cfg(target_os = "linux")]
+    Scanout {
+        /// Also return panel-oriented pixels for a mirror of this picture.
+        readback: bool,
+    },
     /// Refresh painted geometry without changing the visible window image.
     Geometry,
 }
@@ -277,6 +283,17 @@ pub trait Backend {
     fn surface_image(&mut self, pixels: Arc<Pixmap>, dst: Rect4);
     /// Composite a 2D canvas's bitmap into `dst`, clipped (LLP 1056 D7).
     fn canvas(&mut self, pixels: &Arc<Pixmap>, dst: Rect4, clips: &[Shape], ts: Transform);
+    /// Composite a canvas snapshot whose changed backing pixels are known.
+    fn canvas_frame(
+        &mut self,
+        pixels: &Arc<Pixmap>,
+        _update: Option<CanvasUpdate>,
+        dst: Rect4,
+        clips: &[Shape],
+        ts: Transform,
+    ) {
+        self.canvas(pixels, dst, clips, ts);
+    }
     /// Split an untransformed full-window canvas from the UI, if supported.
     /// A refusal leaves the painter unchanged.
     fn split_window_canvas(&mut self, _dst: Rect4, _clips: &[Shape], _ts: Transform) -> bool {
@@ -361,6 +378,15 @@ pub trait Backend {
     /// Rotate a retained GPU target before readback, when this backend supports it.
     /// Other backends return pixels for the output's GPU blit.
     fn finish_rotated(&mut self, _rotation: exact_ink::Rotation) -> Option<Result<Pixmap, String>> {
+        None
+    }
+    /// Finish in panel orientation on the GPU. A VNC mirror reads the same image.
+    #[cfg(target_os = "linux")]
+    fn finish_scanout(
+        &mut self,
+        _rotation: exact_ink::Rotation,
+        _readback: bool,
+    ) -> Option<Result<(wgpu::TextureView, Option<Pixmap>), String>> {
         None
     }
     /// Complete a paint for its consumer. `Pixels` requires an image; `Window`

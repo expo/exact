@@ -59,6 +59,11 @@ impl<D: DataSource> Host<D> {
             });
         }
         match exact_runner::json::field_str(request, "op").as_deref() {
+            Some("saveWindow") => exact_data::storage::save_test_window(
+                &self.runner,
+                crate::picker::agent_secret_root(self.runner.data_ref().app_id()),
+                request,
+            ),
             Some("node") => self.node_reply(request),
             Some("state") => self.state_reply(request),
             _ => exact_runner::agent::handle(&self.runner, request),

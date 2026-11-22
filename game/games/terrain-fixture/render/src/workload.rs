@@ -800,10 +800,10 @@ impl<T: Default> Workload<T> {
         &self,
         settings: WorkloadSettings,
         tick: u64,
-        drew: bool,
-        uploads: u64,
+        frame: exact_game_render::FrameWork,
         timestamp_queries: bool,
         buffers: super::BufferStats,
+        opaque: super::OpaqueStats,
     ) -> String {
         let mut report = String::new();
         let crossing_interval = settings
@@ -813,6 +813,8 @@ impl<T: Default> Workload<T> {
         let thermal = self
             .thermal
             .map_or_else(|| "null".into(), |state| format!("\"{state}\""));
+        let drew = frame.draws > 0;
+        let uploads = frame.upload_bytes;
         write!(report, "{{\"tick\":{tick},\"pending\":{},\"completed\":{},\"kept\":{},\"drew\":{drew},\"lightCells\":{},\"uploadBytes\":{uploads},\"discarded\":{{\"stale\":{},\"stagedLeft\":{},\"queuedLeft\":{}}},\"gpuBufferBytes\":{},\"peakGpuBufferBytes\":{},\"cpuBytes\":{},\"peakCpuBytes\":{},\"crossingIntervalMs\":{crossing_interval},\"timestampQueries\":{timestamp_queries},\"thermalState\":{thermal},\"thermalChanges\":{}",
             self.pending(settings), self.completed, self.kept, settings.light, self.discarded.stale,
             self.discarded.staged_left, self.discarded.queued_left, self.gpu.current, self.gpu.peak,
@@ -821,6 +823,12 @@ impl<T: Default> Workload<T> {
             report,
             ",\"sectionBuffers\":{{\"created\":{},\"reused\":{},\"destroyed\":{},\"bytesWritten\":{}}}",
             buffers.created, buffers.reused, buffers.destroyed, buffers.bytes_written
+        )
+        .unwrap();
+        write!(
+            report,
+            ",\"binds\":{},\"bindsTotal\":{},\"arenas\":{},\"arenaFreeBytes\":{}",
+            opaque.binds, opaque.total_binds, opaque.arenas, opaque.arena_free_bytes
         )
         .unwrap();
         self.refills.write(&mut report);

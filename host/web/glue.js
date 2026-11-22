@@ -621,7 +621,7 @@ export function surfaceGranted(op) {
   const need = `surface.${op.mode === "capture" ? "read" : "write"} ${op.name}`;
   return scoped?.entries.some(([, source]) => source === need) ?? false;
 }
-function fulfill(requestIncarnation, ticket, kind, status, headersText, body, elapsedMs) {
+function fulfill(requestIncarnation, ticket, kind, status, headersText, body, elapsedMs, askedAt = 0, afterMs = 0, timeoutMs = 0) {
   // Boot reuses ticket IDs; an old incarnation's completion must not land.
   if (!host.wasm || requestIncarnation !== host.incarnation) {
     return;
@@ -635,7 +635,7 @@ function fulfill(requestIncarnation, ticket, kind, status, headersText, body, el
   const mem = new Uint8Array(host.memory.buffer, ptr, h.length + body.length);
   mem.set(h);
   mem.set(body, h.length);
-  send(host.wasm.exact_fulfill(ticket, kind, status, h.length, body.length, now()));
+  send(host.wasm.exact_fulfill(ticket, kind, status, h.length, body.length, now(), askedAt, afterMs, timeoutMs));
 }
 export function safelyFulfill(...args) {
   try {

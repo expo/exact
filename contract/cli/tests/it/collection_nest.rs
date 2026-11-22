@@ -170,6 +170,53 @@ fn an_inner_list_lives_with_its_row_and_names_its_parent() {
 }
 
 #[test]
+fn a_replacement_finds_the_horizontal_list_inside_the_restored_outer_row() {
+    let mut old = boot(STRIP, 100);
+    feed_at(&mut old, 10_013.0);
+    let strip = view(&old, "strip-50").unwrap();
+    report(
+        &mut old,
+        strip,
+        1234.0,
+        400.0,
+        100.0,
+        CollectionFill::default(),
+        None,
+    );
+    let changed = feed(STRIP)
+        .replace(
+            "for p in posts ",
+            "for p in posts.filter(x => x.id % 2 == 0) ",
+        )
+        .replace(
+            "for t in p.cards ",
+            "for t in p.cards.filter(n => n % 2 == 1) ",
+        );
+    let new = Runner::boot_carrying(
+        contract::compile(&changed).unwrap(),
+        Data { posts: 100 },
+        Kernel::with_monospace(),
+        &old.carry(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let offset = |id| {
+        snapshot(&new, view(&new, id).unwrap())
+            .unwrap()
+            .correction
+            .map(|c| c.offset)
+    };
+    assert_eq!(offset("feed"), Some(5013.0));
+    assert_eq!(offset("strip-50"), Some(634.0));
+    assert!(view(&new, "card-50-13").is_some());
+    assert!(
+        view(&new, "card-52-1").is_some(),
+        "the neighboring strip is still at its start"
+    );
+}
+
+#[test]
 fn an_inner_list_keeps_its_position_by_default_as_a_key_and_an_offset() {
     let mut r = boot(STRIP, 100);
     feed_at(&mut r, 0.0);

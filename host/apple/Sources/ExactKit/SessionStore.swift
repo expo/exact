@@ -106,12 +106,22 @@ extension ExactSession {
     /// in all; and they hear the topics its SQLite and file writes announced
     /// (LLP 1030.004 D2).
     func relayStore(_ batch: Batch) {
+        if let archive = batch.windowState, archive != windowState {
+            windowState = archive
+            windowStateDidChange?()
+        }
         guard batch.stored || !batch.announced.isEmpty else { return }
         if batch.stored { app.replicateStore?() }
         for peer in app.sessions where peer !== self && peer.booted && peer.state != .destroyed {
             if batch.stored { peer.refreshSharedStore { _ in } }
             for topic in batch.announced { peer.runtime.peerChanged(topic) }
         }
+    }
+
+    /// Seed this window before its first frame when the platform restores it.
+    public func restoreWindowState(_ archive: [String: String]) {
+        guard !booted, state != .destroyed else { return }
+        runtime.restoreWindowState(archive)
     }
 
     func retryStoreActivation(attempts: Int = 3) {

@@ -101,7 +101,7 @@ const PROPS = [['aria-live', 'accessibilityLive'], ['role', 'accessibilityRole']
   ['navigationPresentation', 'navigationPresentation'], ['type', 'type'], ['popover', 'popover'],
   ['popovertarget', 'popovertarget'], ['popovertargetaction', 'popovertargetaction'], ['commandfor', 'commandfor'], ['command', 'command'],
 ];
-const SEMANTIC_TAGS = /^(main|header|footer|section|article|aside|nav|dialog|table|caption|thead|tbody|tfoot|tr|th|td|dl|dt|dd)$/;
+const SEMANTIC_TAGS = /^(main|header|footer|section|article|aside|nav|dialog|table|caption|thead|tbody|tfoot|tr|th|td|dl|dt|dd|p|blockquote|ul|ol|li|strong|em)$/;
 const TYPES = { TEMPLATE: 'Head', BUTTON: 'Pressable', INPUT: 'TextInput', TEXTAREA: 'TextInput', VIDEO: 'Video', AUDIO: 'Video', IMG: 'Image', IFRAME: 'WebView', A: 'Pressable' };
 /** The view an operation names: its id, else the first node with that testId on an active screen, a covered
  * screen's or an unselected tab's copy only when no active one carries it, as the runner's `target`. */

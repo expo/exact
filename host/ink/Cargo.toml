@@ -22,6 +22,10 @@ objc2-metal = { version = "0.3.2", default-features = false, features = [
     "MTLResource", "MTLSampler", "MTLTexture", "MTLTypes", "MTLVertexDescriptor",
 ] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+ash = { version = "0.38", default-features = false }
+wgpu = { version = "30", default-features = false, features = ["drm"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 raw-window-handle = "0.6"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSAppearance", "NSResponder", "NSView", "NSColor", "objc2-core-foundation", "objc2-core-graphics", "NSWindow", "NSApplication", "NSEvent", "objc2-quartz-core"] }

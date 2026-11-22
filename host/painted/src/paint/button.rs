@@ -1017,8 +1017,12 @@ impl Painter {
                 label
             }
         };
-        // Material's press (D9), in the content's colour; a segment draws its own.
+        // Material's press (D9), and a key's focus as the state layer, in the
+        // content's colour; a segment draws its own.
         if material_segment.is_none() && !disabled {
+            if focused && look::material() && !control::ringless(node) {
+                self.focus_layer(&shape, ink, ts);
+            }
             self.ripple(node, &shape, ink, ts);
         }
         let layout = face_layout(
@@ -1250,7 +1254,7 @@ impl Painter {
         if face_clip.is_some() {
             self.backend.pop_clip();
         }
-        if focused && !disabled && !super::control::ringless(node) {
+        if focused && !disabled && !look::material() && !super::control::ringless(node) {
             self.field_ring(&shape, accent, ts);
         }
         shape

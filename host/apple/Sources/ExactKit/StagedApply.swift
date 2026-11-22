@@ -103,6 +103,13 @@ final class StagePlan {
     /// The style it gives each live node: a style op carries a node's whole
     /// style, a sampled paint value with the rest.
     let styles: [UInt32: NodeStyle]
+    #if os(macOS)
+    /// The views share this flag so they join the committed tree together.
+    /// It can outlive the plan without retaining its views or operations.
+    final class Publication { var committed = false }
+    let publication = Publication()
+    var tips: [NodeView] = [], cursorRects: [NodeView] = []
+    #endif
     var frames: StageFrames?
     var preparedAll: Bool { cursor == batch.ops.count && attachments.isEmpty && accessibilityCursor == madeOrder.count }
 
@@ -291,72 +298,6 @@ final class StageFrames: NSObject {
     #if !canImport(UIKit)
     @objc private func tick(_ link: CADisplayLink) { session?.stepStage() }
     #endif
-}
-
-/// Views a reveal took out, removed a few each turn, innermost first so
-/// that each removal is one view's.
-final class Teardown {
-    private var pending: [NodeView?] = []
-    private var next = 0
-    private var tops = Set<ObjectIdentifier>()
-    /// Released boxes whose caches go as each is removed.
-    private var forgetting: [ObjectIdentifier: NodeView] = [:]
-    private var scheduled = false
-    private static let turnSeconds = 0.0015
-
-    func add(_ top: NodeView, destroying: Set<UInt32>) {
-        // A control owns its native subviews. A surviving Exact child may move elsewhere at the reveal.
-        func walk(_ node: NodeView) {
-            for child in node.structuralChildren where destroying.contains(child.id) { walk(child) }
-            pending.append(node)
-        }
-        walk(top)
-        tops.insert(ObjectIdentifier(top))
-        schedule()
-    }
-
-    /// Takes every waiting view down now: the presenter's tree is being replaced.
-    func finish() {
-        for case let view? in pending[next...] { view.removeFromSuperview() }
-        for node in forgetting.values { node.forget() }
-        pending = []; next = 0; tops = []; forgetting = [:]
-    }
-
-    func forgetAsRemoved(_ node: NodeView) {
-        forgetting[ObjectIdentifier(node)] = node
-        schedule()
-    }
-
-    /// Whether `view` is a top that waits here to be removed.
-    func holds(_ view: PlatformView) -> Bool { !tops.isEmpty && tops.contains(ObjectIdentifier(view)) }
-
-    private func schedule() {
-        guard !scheduled, next < pending.count || !forgetting.isEmpty else { return }
-        scheduled = true
-        DispatchQueue.main.async { [weak self] in self?.step() }
-    }
-
-    private func step() {
-        scheduled = false
-        let deadline = CACurrentMediaTime() + Self.turnSeconds
-        while next < pending.count, CACurrentMediaTime() < deadline {
-            // Released as it goes: freeing them all at once costs AppKit a frame too.
-            if let view = pending[next] {
-                forgetting.removeValue(forKey: ObjectIdentifier(view))?.forget()
-                view.removeFromSuperview()
-                tops.remove(ObjectIdentifier(view))
-            }
-            pending[next] = nil
-            next += 1
-        }
-        if next == pending.count {
-            pending = []; next = 0
-            // A box whose top was removed at once rather than here.
-            for node in forgetting.values { node.forget() }
-            forgetting = [:]
-        }
-        schedule()
-    }
 }
 
 extension ExactSession {

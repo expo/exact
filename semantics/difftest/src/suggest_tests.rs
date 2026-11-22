@@ -10,6 +10,50 @@ fn root() -> PathBuf {
 }
 
 #[test]
+fn a_suggested_child_frame_includes_writes_from_unobserved_instances() {
+    let file = root().join("semantics/corpus/properties/child-actions.contract");
+    let source = std::fs::read_to_string(&file).unwrap();
+    let plan = contract::compile_path(&file).unwrap();
+    let mut suggestions = Suggestions::new(&plan, &file).unwrap();
+    let test = contract::tests("test \"visit only the first counter\"\n  tap \"a\"\n  tap \"a\"\n")
+        .unwrap()
+        .remove(0);
+    let script = script::test_case("counters", &source, Some(&file), &test, Some(&plan)).unwrap();
+    let (lines, _) = observe::run(
+        plan.clone(),
+        Oracle::for_case(&plan, &script.case),
+        &script.case.events,
+    );
+    suggestions.observe(&lines);
+    let (blocks, _) = suggestions.blocks(&[], &file).unwrap();
+    let frames: Vec<_> = blocks
+        .iter()
+        .filter(|s| s.starts_with("after \""))
+        .collect();
+    assert_eq!(frames.len(), 1, "{frames:?}");
+    assert!(
+        frames[0].starts_with("after \"Counter.bump\""),
+        "{frames:?}"
+    );
+    assert!(
+        frames[0].contains("only writes extra last taps"),
+        "{frames:?}"
+    );
+
+    let authored = contract::properties(
+        &std::fs::read_to_string(file.with_extension("test.contract")).unwrap(),
+    )
+    .unwrap();
+    let (remaining, _) = suggestions.blocks(&authored, &file).unwrap();
+    assert!(
+        !remaining
+            .iter()
+            .any(|s| s.starts_with("after \"Counter.bump\"")),
+        "{remaining:?}"
+    );
+}
+
+#[test]
 fn unreached_corpus_writes_filter_or_widen_observed_candidates() {
     for (fixture, false_line, replacement) in [
         ("frame", "only writes n", Some("only writes hidden n")),
@@ -23,7 +67,7 @@ fn unreached_corpus_writes_filter_or_widen_observed_candidates() {
         ));
         let source = std::fs::read_to_string(&file).unwrap();
         let plan = contract::compile_path(&file).unwrap();
-        let mut suggestions = Suggestions::new(&plan, &file);
+        let mut suggestions = Suggestions::new(&plan, &file).unwrap();
         for t in contract::tests(&source).unwrap() {
             let s = script::test_case(
                 &file.display().to_string(),
@@ -147,7 +191,7 @@ fn the_eighteen_kept_blocks_survive_without_existing_property_suppression() {
                     }
                     let source = std::fs::read_to_string(&file).unwrap();
                     let plan = contract::compile_path(&file).unwrap();
-                    let mut suggestions = Suggestions::new(&plan, &file);
+                    let mut suggestions = Suggestions::new(&plan, &file).unwrap();
                     let mut scripted = Vec::new();
                     let mut authored = Vec::new();
                     let mut test_files: Vec<_> = std::fs::read_dir(file.parent().unwrap())

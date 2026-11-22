@@ -168,7 +168,7 @@ fn state(r: &mut Runner<Oracle>, plan: &Plan, out: &mut Vec<String>) {
         }
     }
     // What the store keeps for each persisted state (LLP 1116 D5).
-    for row in plan.slots.iter().filter(|s| s.persist) {
+    for row in plan.slots.iter().filter(|s| s.is_persisted()) {
         let name = plan.str(row.name);
         let kept = r.persisted(name).map_or("-".to_string(), |v| value(&v));
         out.push(format!("store {name} {kept}"));

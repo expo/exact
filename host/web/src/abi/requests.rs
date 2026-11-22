@@ -30,6 +30,7 @@ impl<D: DataSource> Bridge<D> {
         hlen: usize,
         blen: usize,
         now_ms: f64,
+        fixture: (f64, u32, u32),
     ) -> u32 {
         let n = self.input.len();
         let hlen = hlen.min(n);
@@ -37,7 +38,18 @@ impl<D: DataSource> Bridge<D> {
         let headers = String::from_utf8_lossy(&self.input[..hlen]).into_owned();
         let body = self.input[hlen..hlen + blen].to_vec();
         let out = match self.host.as_mut() {
-            Some(h) => h.fulfill_at(ticket as u64, kind, status, &headers, body, now_ms),
+            Some(h) => {
+                let (asked_at, delay, timeout) = fixture;
+                if delay > 0 {
+                    h.runner_mut().delay_fetch_fixture(
+                        ticket as u64,
+                        asked_at,
+                        delay,
+                        (timeout > 0).then_some(timeout),
+                    );
+                }
+                h.fulfill_at(ticket as u64, kind, status, &headers, body, now_ms)
+            }
             None => "{\"ops\":[],\"timers\":false,\"error\":\"not booted\"}".to_string(),
         };
         self.emit(out)

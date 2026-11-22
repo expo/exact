@@ -1126,9 +1126,10 @@ impl<D: DataSource> Runner<D> {
         audio.transport_stood(&mut runner);
         let mut ids = std::mem::take(&mut runner.ids);
         ids.tabs.carried = carried.map(|c| c.panels.clone()).unwrap_or_default();
-        runner.prepare_view_ids(&mut ids, carried)?;
+        let lists = runner.prepare_view_ids(&mut ids, carried)?;
         let (tree, ops, surfaces, notes, shown) = {
             let mut u = runner.instance_update(&mut ids);
+            u.list_seeds = Some(&lists);
             u.discard = runner.kernel.is_detached();
             let tree = Tree::create(&mut u)?;
             (tree, u.ops, u.surfaces, u.notes, u.shown)

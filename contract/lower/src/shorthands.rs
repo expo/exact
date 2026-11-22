@@ -820,7 +820,7 @@ pub(crate) fn portable_literal(value: &Expr, name: &str) -> Result<(), LowerErro
 /// `text-box` shorthand) is a `text`'s, and its edge, inherited, may sit
 /// anywhere.
 pub(crate) fn text_box_trim_refusal(name: &str, tag: &str, module: bool) -> Option<String> {
-    (matches!(name, "text-box-trim" | "text-box") && tag != "text" && !module).then(|| {
+    (matches!(name, "text-box-trim" | "text-box") && !crate::prose::text_container(tag) && !module).then(|| {
         format!("`{name}` trims a `text`, not `{tag}`; write it on the `text` inside (`text-box-edge` may stay here: it is inherited)")
     })
 }
@@ -877,10 +877,10 @@ pub(crate) fn check_text_box(
             _ => {}
         }
     }
-    let Some(trim) = trim.filter(|_| tag == "text") else {
+    let Some(trim) = trim.filter(|_| crate::prose::text_container(tag)) else {
         return Ok(());
     };
-    if parent_tag == Some("text") {
+    if parent_tag.is_some_and(crate::prose::text_container) {
         return err(
             "lower-attr-tag",
             format!("`{}` on an inline `text` run: Exact trims a paragraph, not a run's own box; set it on the paragraph", trim.name),

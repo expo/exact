@@ -571,6 +571,13 @@ pub const DEVICES: &[Device] = &[
         tvos: false,
         ..ROW
     },
+    Device {
+        name: "system-audio-recording",
+        sandbox: Some(sandbox::NONE),
+        macos: &["NSAudioCaptureUsageDescription"],
+        tvos: false,
+        ..ROW
+    },
     // App Attest and Play Integrity (LLP 1133.028 D6): nothing is shown or
     // asked. The entitlement's value, `development` or `production`, is the
     // build's to choose (`host/apple/build.mjs`); a Mac takes it only with a
@@ -1247,6 +1254,17 @@ mod tests {
         assert_eq!(all[0].device.macos, ["NSScreenCaptureUsageDescription"]);
         assert!(all[0].device.web.is_none() && all[0].device.ios.is_empty());
         assert!(device_grants("device.screen-recording").is_err());
+    }
+
+    #[test]
+    fn system_audio_recording_is_a_mac_line_with_a_purpose() {
+        assert!(device_grants("device.system-audio-recording").is_err());
+        let all = device_grants("device.system-audio-recording purpose.tap").unwrap();
+        let row = all[0].device;
+        assert_eq!(row.macos, ["NSAudioCaptureUsageDescription"]);
+        assert!(row.ios.is_empty() && row.android.is_empty() && !row.tvos);
+        assert!(row.web.is_none() && row.hardened.is_none());
+        assert_eq!(sandbox::device(row), sandbox::NONE);
     }
 
     #[test]

@@ -120,7 +120,7 @@ pub(crate) fn evaluate(properties: &[PropertyDecl], observation: &[String]) -> R
         if p.kind == K::NeverRefuses {
             for (si, step) in steps.iter().enumerate() {
                 for (kind, name, outcome) in &step.ran {
-                    if *name != p.name {
+                    if !p.actions.iter().any(|a| a == name) {
                         continue;
                     }
                     report.counts[pi][0].checked += 1;
@@ -147,17 +147,15 @@ pub(crate) fn evaluate(properties: &[PropertyDecl], observation: &[String]) -> R
             let previous = si.checked_sub(1).map(|k| &steps[k]);
             let (old, current, commands, eligible, at) = match &p.kind {
                 K::Always => (previous, step, vec![step], step.config, si),
-                K::After(action) => {
+                K::After(_) => {
+                    let named = |a: &str| p.actions.iter().any(|x| x == a);
                     if !step.input()
-                        || !step
-                            .ran
-                            .iter()
-                            .any(|(k, a, _)| *k == "handler" && *a == action)
+                        || !step.ran.iter().any(|(k, a, _)| *k == "handler" && named(a))
                     {
                         continue;
                     }
                     let land = steps.get(si + 1).filter(|s| s.label == "land");
-                    let eligible = step.ran.as_slice() == [("handler", action.as_str(), "ok")]
+                    let eligible = matches!(step.ran.as_slice(), [("handler", a, "ok")] if named(a))
                         && !step.omitted
                         && step.config
                         && previous.is_some_and(|s| s.config)
@@ -558,5 +556,65 @@ mod tests {
             &pair(before, before, "slot queued none\nslot rec {false,[]}")
         )
         .passed());
+    }
+
+    const TWO_COUNTERS: &str = include_str!("../../corpus/properties/child-actions.contract");
+    const COUNTER_TEST: &str = include_str!("../../corpus/properties/child-actions.test.contract");
+
+    /// Resolve `tests` against [`TWO_COUNTERS`] as `contract verify` does.
+    fn resolved(tests: &str) -> Result<Vec<contract_syntax::PropertyDecl>, Vec<String>> {
+        let file = contract_syntax::parse(TWO_COUNTERS).unwrap();
+        let expanded = contract_syntax::expand(&file).unwrap();
+        let mut properties = contract::properties(tests).unwrap();
+        contract::check_properties(&file, &expanded, &mut properties)
+            .map(|()| properties)
+            .map_err(|es| es.iter().map(|e| e.to_string()).collect())
+    }
+
+    #[test]
+    fn a_childs_action_is_named_by_its_component_in_every_instance() {
+        let properties = resolved(COUNTER_TEST).unwrap();
+        let test = contract::tests(COUNTER_TEST).unwrap().remove(0);
+        let s = crate::script::test_case("counters", TWO_COUNTERS, None, &test, None).unwrap();
+        let plan = crate::compile(&s.case).unwrap();
+        let oracle = crate::oracle::Oracle::for_case(&plan, &s.case);
+        let (lines, _) = crate::observe::run(plan, oracle, &s.case.events);
+        let r = evaluate(&properties, &lines);
+        assert!(r.passed(), "{:?}", r.failures);
+        assert_eq!(
+            r.counts[0].iter().map(|c| c.checked).collect::<Vec<_>>(),
+            [2, 2]
+        );
+        assert_eq!(r.counts[1][0].checked, 2);
+
+        let false_on_second =
+            resolved("after \"Counter.bump\" \"extra stays off\"\n  expect state extra == false\n")
+                .unwrap();
+        let report = evaluate(&false_on_second, &lines);
+        assert_eq!(report.counts[0][0].checked, 2);
+        assert_eq!(report.counts[0][0].false_, 1);
+    }
+
+    #[test]
+    fn an_action_no_component_declares_is_refused_by_name() {
+        for (written, refusal) in [
+            (
+                "Counter.press",
+                "`Counter` has no action `press`. Available actions are bump",
+            ),
+            ("Missing.bump", "the app uses no component `Missing`"),
+            ("bump", "name the child action `bump` as `Counter.bump`"),
+        ] {
+            let errors =
+                resolved(&format!("after \"{written}\" \"p\"\n  writes none\n")).unwrap_err();
+            assert!(
+                errors.iter().any(|e| e.contains(refusal)),
+                "{written}: {errors:?}"
+            );
+        }
+        let root = resolved("after \"App.count\" \"p\"\n  writes none\n\nnever refuses \"count\"\n\nnever refuses \"nothing\"\n").unwrap();
+        assert_eq!(root[0].actions, ["count"]);
+        assert_eq!(root[1].actions, ["count"]);
+        assert_eq!(root[2].actions, ["nothing"]);
     }
 }

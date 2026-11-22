@@ -882,8 +882,18 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   // A reload waits while text composes, a pointer is down or a drag is under way, then takes the newest build
   // (`replacementBoundary`).
   // A gallery page's (dev-gallery.mjs): its own stream, design and checkpoint routes, `page: 'gallery'`, no `navigate`.
-  const client = (n, revision, { base = '/__dev', stream = '/__dev/page', page = null } = {}) => `<script>(()=>{const fetch=globalThis.fetch.bind(globalThis),seq=${n},logicRevision=${JSON.stringify(revision)},es=new EventSource('${stream}');let o,reloading=false,latest;const boundary=globalThis.__exactDevReplacement=(${replacementBoundary.toString()})(${engagement.toString()});Promise.resolve().then(()=>ready()).then(()=>globalThis.exact.replacementBoundary=boundary);
-const show=t=>{if(!t){o?.remove();o=null;return}o??=document.body.appendChild(Object.assign(document.createElement('pre'),{style:'position:fixed;left:0;right:0;bottom:0;margin:0;padding:12px;background:#300;color:#fdd;font:12px/1.4 ui-monospace,monospace;white-space:pre-wrap;z-index:2147483647',onclick:()=>show()}));o.textContent=t+'\\n(click to dismiss)'};
+  const client = (n, revision, { base = '/__dev', stream = '/__dev/page', page = null } = {}) => `<script>(()=>{const fetch=globalThis.fetch.bind(globalThis),seq=${n},logicRevision=${JSON.stringify(revision)},es=new EventSource('${stream}');let reloading=false,latest;const boundary=globalThis.__exactDevReplacement=(${replacementBoundary.toString()})(${engagement.toString()});Promise.resolve().then(()=>ready()).then(()=>Object.assign(globalThis.exact,{replacementBoundary:boundary,devError:show}));
+let overlay;
+const errors=new Map(),show=(message,source='app')=>{
+  if(message)errors.set(source,message);else if(!errors.delete(source))return;
+  if(!errors.size){overlay?.remove();overlay=null;return}
+  if(!overlay){
+    overlay=document.body.appendChild(document.createElement('pre'));
+    overlay.style='position:fixed;left:0;right:0;bottom:0;margin:0;padding:12px;background:#300;color:#fdd;font:12px/1.4 ui-monospace,monospace;white-space:pre-wrap;z-index:2147483647';
+    overlay.onclick=()=>{errors.clear();overlay.remove();overlay=null};
+  }
+  overlay.textContent=[...errors.values()].join('\\n\\n')+'\\n(click to dismiss)';
+};
 const encode=v=>typeof v==='number'&&(!Number.isFinite(v)||Object.is(v,-0))?{$exactNumber:Object.is(v,-0)?'-0':String(v)}:Array.isArray(v)?v.map(encode):v;
 const capture=logic=>{const x=globalThis.exact;return{generation:x.clock.generation,epoch:x.clock.epoch,time:x.clock.now,slots:[...x.state[0],...[...(globalThis.__exactDevPanels?.live??[])].filter(s=>!s.n.gone)].map(s=>[s.n.devName,s.n.devType,encode(s())]).concat(globalThis.__exactDevPanels?.left()??[]),answers:logic?[]:x.resources.filter(r=>!r.owned&&!r.failed&&!r.ticket&&!r.waiting&&!r.ov&&r.settled!==undefined).map(r=>[r.name,r.source,encode(r.settled),encode(r.value),r.devType,!!r.store]),carryAnswers:!logic,modes:ch.before?.mode??x.modes?.read()??null,...globalThis.__exactDevRecords()}};
 const restored=document.querySelector('script[type="application/vnd.exact.dev-checkpoint"]'),q=new URLSearchParams(location.search),devKeys=new Set(${JSON.stringify(agentParameters)}),admission=['','1'].includes(q.get('agent'))?[...q].filter(([k])=>devKeys.has(k)):null;

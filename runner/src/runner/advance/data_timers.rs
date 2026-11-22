@@ -54,6 +54,7 @@ impl<D: DataSource> Runner<D> {
         &mut self,
         requests: Vec<RequestOut>,
     ) -> Vec<RequestOut> {
+        self.prune_fixture_replies();
         let now = self.now_ms;
         let mut out = Vec::with_capacity(requests.len());
         for r in requests {
@@ -109,7 +110,10 @@ impl<D: DataSource> Runner<D> {
         let wakes = (data.wakes.iter())
             .filter(|(t, _, _)| *t == ticket)
             .map(|(_, _, at)| *at);
-        held.chain(wakes).find(|at| *at > now)
+        held.chain(wakes)
+            .chain(self.fixture_due(Some(ticket)))
+            .filter(|at| *at > now)
+            .reduce(f64::min)
     }
 
     /// When the earliest answer's timer the runner waits for is due, of
@@ -126,7 +130,10 @@ impl<D: DataSource> Runner<D> {
         let races = (data.races.iter())
             .filter(|(ticket, _)| self.racing(*ticket))
             .map(|(_, at)| *at);
-        held.chain(wakes).chain(races).reduce(f64::min)
+        held.chain(wakes)
+            .chain(races)
+            .chain(self.fixture_due(None))
+            .reduce(f64::min)
     }
 
     /// Whether a timer's continuation an advance released is still out:

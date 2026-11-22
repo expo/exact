@@ -173,6 +173,7 @@ extension ExactSession {
     // Input without a touch hit test still installs ownership before its runner call.
     package func applyInput(_ input: @autoclosure () -> Batch, at id: UInt32? = nil) {
         guard admits(id) else { return }
+        showBudgetWarning(nil)
         #if os(iOS)
         presenter.navigation.finishBootOwner()
         #endif

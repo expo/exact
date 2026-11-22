@@ -860,7 +860,7 @@ test('a native verb names its platform, and the generated workspace follows app.
     assert.deepEqual(namePlatform(dir, 'windows'), ['host.windows', 'deploy.store.windows']);
     assert.deepEqual([manifest().host.windows.painter, manifest().host.windows.window.width, manifest().deploy.store.windows], [undefined, 1024, '0']);
     const windows = ensureShells(dir).workspace;
-    assert.match(readFileSync(resolve(windows, 'windows/src/main.rs'), 'utf8'), /exact_windows::run_composed::<AppData>\("Field Log", window\(\), PLAN, COMPAT, composed\)/);
+    assert.match(readFileSync(resolve(windows, 'windows/src/main.rs'), 'utf8'), /exact_windows::run_baked::<AppData, ADMIT_AGENT>\("Field Log", window\(\), PLAN, COMPAT, composed\)/);
     assert.match(createApp(dir, { update: true, without: 'windows' }), /without windows \(removed host\.windows, deploy\.store\.windows\)/);
     assert.deepEqual(shellCrates(manifest()), ['web', 'apple', 'linux', 'android']);
     readManifest(dir, 'field-log');

@@ -59,6 +59,15 @@ unsafe impl GlobalAlloc for Observed {
     }
 }
 
+pub(crate) fn measure_allocations<T>(f: impl FnOnce() -> T) -> (T, usize, usize) {
+    LIVE.with(|n| n.set(0));
+    PEAK.with(|n| n.set(0));
+    TRACK.with(|t| t.set(true));
+    let result = f();
+    TRACK.with(|t| t.set(false));
+    (result, PEAK.with(Cell::get), LIVE.with(Cell::get))
+}
+
 #[test]
 fn measured_decoder_capacity_stays_under_reserved_peak_for_tall_wide_and_adam7_pngs() {
     use super::{
@@ -72,26 +81,12 @@ fn measured_decoder_capacity_stays_under_reserved_peak_for_tall_wide_and_adam7_p
         ("tall", png(1, 8192), (1, 100)),
         ("adam7", adam7(19, 11), (7, 5)),
     ] {
-        LIVE.with(|n| n.set(0));
-        PEAK.with(|n| n.set(0));
-        TRACK.with(|t| t.set(true));
-        let header = inspect(&mut Cursor::new(&bytes), bytes.len() as u64).unwrap();
-        TRACK.with(|t| t.set(false));
-        assert_eq!(
-            PEAK.with(Cell::get),
-            0,
-            "metadata inspection allocates nothing"
-        );
+        let (header, peak, _) =
+            measure_allocations(|| inspect(&mut Cursor::new(&bytes), bytes.len() as u64).unwrap());
+        assert_eq!(peak, 0, "metadata inspection allocates nothing");
         let plan = DecodePlan::new(header, target).unwrap();
-        LIVE.with(|n| n.set(0));
-        PEAK.with(|n| n.set(0));
-        TRACK.with(|t| t.set(true));
-        let result = decode_rows(Cursor::new(&bytes), &plan, || false);
-        let succeeded = result.is_ok();
-        drop(result);
-        TRACK.with(|t| t.set(false));
-        let peak = PEAK.with(Cell::get);
-        let remaining = LIVE.with(Cell::get);
+        let (succeeded, peak, remaining) =
+            measure_allocations(|| decode_rows(Cursor::new(&bytes), &plan, || false).is_ok());
         eprintln!(
             "{name}: measured capacity peak={peak}; reserved={}; remaining={remaining}",
             plan.peak_bytes()

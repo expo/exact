@@ -2,6 +2,7 @@ import { host, loadAfterPaint, localAssetURL, agentMode, now, collections, follo
 import { send, applyBatch } from "./commit.js";
 import { navigation, launchLocation, launchVisits, reportTime, reportPlace, preferences, updateCode, foldBits, appRootFontSize, releaseAssets, afterPaint, grantOrigins, modalLayers, inertAncestor, editMenu } from "../navigation.js";
 import { setInputReady } from "./input.js";
+import { WINDOW_STATE } from "../navigation/store.js";
 import { startClock } from "./flow.js";
 import { forgetList } from "./views.js";
 import { engagement } from "../engagement.js";
@@ -10,6 +11,20 @@ import { engagement } from "../engagement.js";
 // calls: the clock ends, a later call throws `ModuleStopped` without entering
 // the module and is not reported, and the page says so once.
 class ModuleStopped extends Error {}
+// A split core imports, for each stage function its table can reach, a placeholder from `placeholder.<stage>`
+// (`wasm-split`, LLP 1047.000 §9), which the stage, when it loads, writes its function over. One called before then
+// throws, leaving the module mid-call as a trap does.
+class StageNotLoaded extends Error {}
+function withPlaceholders(imports) {
+  const stage = (name) => new Proxy({}, {
+    get: (_, slot) => () => {
+      throw new StageNotLoaded(`app.wasm called the ${name} stage (placeholder ${String(slot)}) before the stage loaded`);
+    }
+  });
+  return new Proxy(imports, {
+    get: (given, name) => given[name] ?? (typeof name === "string" && name.startsWith("placeholder.") ? stage(name.slice("placeholder.".length)) : undefined)
+  });
+}
 function guardedExports(exports) {
   const guarded = {};
   for (const [name, value] of Object.entries(exports)) {
@@ -20,7 +35,7 @@ function guardedExports(exports) {
       try {
         return value(...args);
       } catch (error) {
-        if (error instanceof WebAssembly.RuntimeError) {
+        if (error instanceof WebAssembly.RuntimeError || error instanceof StageNotLoaded) {
           stopModule(error);
         }
         throw error;
@@ -39,7 +54,10 @@ function stopModule(error) {
   host.textflow?.dispose();
   host.textflow = null;
   root.dataset.error = String(error);
-  console.error("exact: app.wasm trapped, and the page no longer calls it:", error);
+  const unloaded = error instanceof StageNotLoaded
+    ? "; every call into a stage goes through its gate, which loads the stage first (glue.js `ask`, LLP 1047.000 §9): the stack names the caller that did not, and a development build, which is whole, shows the page without the split"
+    : "";
+  console.error(`exact: app.wasm trapped, and the page no longer calls it${unloaded}:`, error);
   globalThis.exact.onTrap?.(error);
 }
 addEventListener("error", (e) => e.error instanceof ModuleStopped && e.preventDefault());
@@ -569,7 +587,7 @@ export async function main() {
   let compiled;
   for (;;) {
     try {
-      ({instance, module: compiled} = await WebAssembly.instantiateStreaming(response, imports));
+      ({instance, module: compiled} = await WebAssembly.instantiateStreaming(response, withPlaceholders(imports)));
       break;
     } catch (e) {
       if (!aborted(e)) {
@@ -601,19 +619,27 @@ export async function main() {
   // Every data executor activates after the baked first pixel.
   // Restore granted secrets and persisted states before the baked frame (LLP 1018 D6, LLP 1116 D5).
   if (agentKeepsStore) {
-    if (agentMode) globalThis.__exactSeedStored?.("exact.state.");
+    if (agentMode) globalThis.__exactSeedStored?.("exact.state.", "exact.secret.");
     const kept = [];
     try {
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
-        if (key?.startsWith("exact.secret.")) {
+        if (key?.startsWith("exact.secret.") && !key.slice("exact.secret.".length).startsWith(WINDOW_STATE)) {
           kept.push(key.slice("exact.secret.".length), localStorage.getItem(key) ?? "");
-        } else if (key?.startsWith("exact.state.")) {
+        } else if (key?.startsWith("exact.state.") && !key.startsWith(WINDOW_STATE)) {
           kept.push(key, localStorage.getItem(key) ?? "");
         }
       }
     } catch (e) {
       console.warn("exact: store", String(e));
+    }
+    try {
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i);
+        if (key?.startsWith(WINDOW_STATE)) kept.push(key, sessionStorage.getItem(key) ?? "");
+      }
+    } catch (e) {
+      console.warn("exact: window state", String(e));
     }
     if (kept.length) {
       host.wasm.exact_store(writeIn(kept.join("\0")));

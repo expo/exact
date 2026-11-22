@@ -92,9 +92,15 @@ extension NodeView {
     /// waits for it.
     func authorOwnsScroll(_ sv: UIScrollView) -> Bool {
         guard let presenter else { return authoredScrollAnimating }
-        return authoredScrollAnimating || presenter.elementScrolls.revealing(sv) != nil
-            || presenter.collections.drivesOffset(id) || presenter.collections.startOwed.contains(id)
-            || presenter.collections.snapshot(id)?.underWay == true
+        return authoredScrollAnimating || presenter.elementScrolls.revealing(sv) != nil || listOwnsScroll
+    }
+
+    /// The part of the app's scroll UIKit does not run: a list's `scrollIntoView` under way, or its smooth correction
+    /// running or about to start. A reveal and a smooth `scrollTop` write are UIKit's animations, which a scroll view
+    /// reports itself where it reports them (`isScrollAnimating`), and their records can outlive them.
+    var listOwnsScroll: Bool {
+        guard let collections = presenter?.collections else { return false }
+        return collections.drivesOffset(id) || collections.startOwed.contains(id) || collections.snapshot(id)?.underWay == true
     }
 
     /// The scroll is over: its last `scroll` first, then `scrollend`, once.

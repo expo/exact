@@ -358,6 +358,61 @@ final class FaceSymbolIOSTests: XCTestCase {
         XCTAssertGreaterThan(large.size.width, small.size.width, "font-size changes natural geometry even in a fixed box")
     }
 
+    /// A symbol laid out again in the same box leaves its image view's geometry as it was (`symbolGeometryChanges`).
+    @MainActor func testLayingOutASymbolAgainLeavesItsViewsGeometry() throws {
+        let p = Presenter()
+        defer { p.reset() }
+        let w = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        p.viewport.frame = w.bounds
+        w.addSubview(p.viewport); w.makeKeyAndVisible()
+        window = w
+        let symbol: [String: Any] = ["imageSource": "symbol:sf/textformat", "symbolName": "textformat"]
+        let path: [String: Any] = ["imageSource": "symbol:icon||0 0 24 24|M2 2 L22 2 L22 22 L2 22 Z|icons/x.svg", "symbolName": "",
+                                   "symbolPath": "M 2 2 L 22 2 L 22 22 L 2 22 Z", "symbolViewBox": "0 0 24 24"]
+        // Placements that differ from the box: a symbol and a path contained in a wide box, and a symbol at its own
+        // size (`none`)
+        let cases: [(id: Int, props: [String: Any], fit: String)] = [(1, symbol, "contain"), (2, symbol, "none"), (3, path, "contain")]
+        func frame(_ id: Int, width: Double, height: Double) -> [String: Any] {
+            ["op": "frame", "id": id, "x": 10.0, "y": Double(id) * 50, "w": width, "h": height]
+        }
+        var ops: [[String: Any]] = []
+        for item in cases {
+            ops += [["op": "create", "id": item.id, "kind": "image", "props": item.props, "handlers": [],
+                     "style": ["font_size": 17, "text_color": [0, 0, 0, 255], "object_fit": item.fit]], frame(item.id, width: 72, height: 32)]
+        }
+        p.apply(wireBatch(ops + [["op": "roots", "ids": cases.map(\.id)]]))
+        w.layoutIfNeeded()
+        for item in cases {
+            let context = "symbol \(item.id), fit \(item.fit)"
+            let node = try XCTUnwrap(p.views[UInt32(item.id)]), leaf = try XCTUnwrap(node.symbolView, context)
+            // Drawn, placed inside its box and centred there
+            func assertPlaced(_ step: String) {
+                let box = node.contentBox()
+                XCTAssertNotNil(leaf.image, "\(context), \(step)")
+                XCTAssertFalse(leaf.frame.isEmpty, "\(context), \(step): the glyph is placed")
+                XCTAssertNotEqual(leaf.frame, box, "\(context), \(step): placed inside its box")
+                XCTAssertEqual(leaf.frame.midX, box.midX, accuracy: 0.001, "\(context), \(step): centred in its box")
+                XCTAssertEqual(leaf.frame.midY, box.midY, accuracy: 0.001, "\(context), \(step)")
+            }
+            assertPlaced("laid out")
+            let resized = symbolGeometryChanges(of: leaf) {
+                p.apply(wireBatch([frame(item.id, width: 80, height: 36)]))
+                node.layoutIfNeeded()
+            }
+            assertPlaced("in a new box")
+            XCTAssertTrue(resized.contains { $0.hasPrefix("position") }, "\(context): a new box moves the view: \(resized)")
+            if item.fit == "contain" {
+                XCTAssertTrue(resized.contains { $0.hasPrefix("bounds") }, "\(context): a taller box resizes a contained glyph: \(resized)")
+            }
+            let moves = symbolGeometryChanges(of: leaf) {
+                node.setNeedsLayout()
+                node.layoutIfNeeded()
+            }
+            assertPlaced("laid out again")
+            XCTAssertEqual(moves, [], "\(context): laid out again in the same box, the view stays where it is")
+        }
+    }
+
     /// LLP 1069.011.001 D14: a native button uses its symbol's font configuration.
     @MainActor func testANativeButtonsFrameDoesNotSizeItsGlyph() throws {
         guard let scene else { throw missing("scene", "symbol sizing needs a window's pixels") }
@@ -639,5 +694,20 @@ final class FaceSymbolGroupedTests: GroupedListFixture {
         XCTAssertGreaterThan(after, before + 10, "grown with the text")
         XCTAssertEqual(after, GroupedCell.pathPoints(reply.traitCollection).rounded(.up))
     }
+}
+
+/// The changes to `view`'s layer bounds and position while `change` runs. UIKit sets a symbol's image view's contents
+/// again for each change to its geometry, so a layout that leaves a symbol's box as it was must leave these alone.
+func symbolGeometryChanges(of view: UIView, during change: () -> Void) -> [String] {
+    let changes = NSMutableArray()
+    let watches = [view.layer.observe(\.bounds, options: [.old, .new]) { _, seen in
+                       if seen.oldValue != seen.newValue { changes.add("bounds \(String(describing: seen.newValue))") }
+                   },
+                   view.layer.observe(\.position, options: [.old, .new]) { _, seen in
+                       if seen.oldValue != seen.newValue { changes.add("position \(String(describing: seen.newValue))") }
+                   }]
+    change()
+    watches.forEach { $0.invalidate() }
+    return changes.compactMap { $0 as? String }
 }
 #endif

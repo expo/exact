@@ -126,7 +126,9 @@ impl FlowSource {
             .collect();
         let mut clusters: Vec<Cluster> = Vec::new();
         let (baseline, height) = source.flow_box(
-            plain.layout_runs().flat_map(|r| r.glyphs),
+            plain
+                .layout_runs()
+                .flat_map(|r| r.glyphs.iter().map(move |g| (g, g.run(r.run_base)))),
             &plain.layouts().faces,
         );
         for run in plain.layout_runs() {
@@ -136,6 +138,7 @@ impl FlowSource {
             // multi-glyph clusters.
             glyphs.sort_by_key(|g| g.start);
             for mut glyph in glyphs {
+                glyph.metadata += run.run_base;
                 let range = start + glyph.start as usize..start + glyph.end as usize;
                 glyph.start = range.start as u32;
                 glyph.end = range.end as u32;
@@ -503,7 +506,7 @@ impl ShapedSource {
                     let run = visible
                         .last()
                         .and_then(|c| c.glyphs.first())
-                        .map_or(0, |g| g.run());
+                        .map_or(0, |g| g.run(0));
                     let ink = &data.ellipses[run];
                     let advance: f32 = ink.iter().map(|g| g.w).sum();
                     if total + advance <= available || visible.is_empty() {
@@ -614,6 +617,7 @@ impl ShapedSource {
             let end = layouts.glyphs.len() as u32;
             layouts.lines.push(LayoutLine {
                 hard: line as u32,
+                run_base: 0,
                 glyphs: (first, end),
                 w: f.width,
                 max_ascent: data.baseline,

@@ -46,6 +46,8 @@
 //! itself: its node here says only where it stands in the order and what
 //! its author named it.
 mod menu;
+mod scroll;
+pub use scroll::NodeRange;
 mod surface;
 mod walk;
 
@@ -170,6 +172,8 @@ pub mod flag {
     pub const SETTABLE: i32 = 1 << 14;
     /// The dialog makes the rest of the page inert.
     pub const MODAL: i32 = 1 << 15;
+    /// A held press lifts a drag out of the app (LLP 1094.000 D9).
+    pub const DRAG: i32 = 1 << 16;
 }
 
 /// What changed of a node since the last statement.
@@ -198,6 +202,8 @@ pub mod act {
     pub const BACKWARD: i32 = 4;
     /// Set a range to the value given.
     pub const SET: i32 = 5;
+    /// Start its drag out of the app.
+    pub const DRAG: i32 = 6;
 }
 
 /// The Up arrow, an alert's headline and its supporting text stand for no
@@ -229,9 +235,8 @@ pub struct Node {
     /// Where it shows, in points: in the window for the page and the bars,
     /// in its own window for a surface of the top layer.
     pub rect: [f32; 4],
-    /// A range's least, greatest and present value; for a scroller, where
-    /// it is along its axis and how far it goes.
-    pub range: [f32; 3],
+    /// The control's value range or the container's scroll offsets.
+    pub range: NodeRange,
     /// Its place among its kind, from 1, and how many they are (a tab, a
     /// list's row); for a `tablist`, 0 and how many tabs. 0 and 0: none.
     pub set: (i32, i32),
@@ -604,7 +609,7 @@ impl<D: DataSource> Presenter<D> {
         node: &NodeRef<'_>,
         role: i32,
         mut flags: i32,
-        range: [f32; 3],
+        range: impl Into<NodeRange>,
         words: impl FnOnce() -> Option<(String, String)>,
     ) -> Option<i32> {
         let kernel = self.host.kernel();
@@ -629,8 +634,11 @@ impl<D: DataSource> Presenter<D> {
             Some(hash) => rowed(hash),
             None => (node.id & 0x3fff_ffff) as i32,
         });
+        if Self::drags(node) && self.lifts() {
+            flags |= flag::DRAG;
+        }
         if node.props.bool(PropId::Disabled) == Some(true) {
-            flags = (flags | flag::DISABLED) & !(flag::CLICK | flag::LONG_CLICK);
+            flags = (flags | flag::DISABLED) & !(flag::CLICK | flag::LONG_CLICK | flag::DRAG);
         } else if scope.disabled {
             flags |= flag::DISABLED;
         }
@@ -642,7 +650,7 @@ impl<D: DataSource> Presenter<D> {
             role,
             flags,
             rect: [shows.0 + b.origin.0, shows.1 + b.origin.1, shows.2, shows.3],
-            range,
+            range: range.into(),
             set: std::mem::take(&mut b.item),
             grid: [0; 4],
             name,
@@ -742,30 +750,19 @@ impl<D: DataSource> Presenter<D> {
         if let Some(expanded) = node.props.bool(PropId::AccessibilityExpanded) {
             flags |= flag::EXPANDABLE | if expanded { flag::EXPANDED } else { 0 };
         }
-        let menu = node.props.str(PropId::ContextPopover);
-        if menu.is_some_and(|name| !name.is_empty())
-            || (self.host.runner().handlers_of(node.id)).contains(&EventKind::Contextmenu)
-        {
-            flags |= flag::LONG_CLICK;
-        }
-        (role, flags)
+        (role, flags | self.access_menu_flag(node))
     }
 
-    /// A scroller's flags and where it is along the axis it scrolls on.
-    fn access_scroll(s: &Scroller) -> (i32, [f32; 3]) {
-        let sideways = s.axes.0 && !s.axes.1;
-        let (at, max) = match sideways {
-            true => (s.offset.0, s.max.0),
-            false => (s.offset.1, s.max.1),
-        };
-        let mut flags = if sideways { flag::SIDEWAYS } else { 0 };
-        if at < max - 0.5 {
-            flags |= flag::FORWARD;
+    /// [`flag::LONG_CLICK`] for a node a held press opens a menu on.
+    pub(super) fn access_menu_flag(&self, node: &NodeRef<'_>) -> i32 {
+        let menu = node.props.str(PropId::ContextPopover);
+        let opens = menu.is_some_and(|name| !name.is_empty())
+            || (self.host.runner().handlers_of(node.id)).contains(&EventKind::Contextmenu);
+        if opens {
+            flag::LONG_CLICK
+        } else {
+            0
         }
-        if at > 0.5 {
-            flags |= flag::BACKWARD;
-        }
-        (flags, [at, max, 0.0])
     }
 
     /// A node a bar stands for, at `rect` in the bar at `frame`.
@@ -1140,10 +1137,12 @@ impl<D: DataSource> Presenter<D> {
                 stated.push(node.id);
             }
             if what & change::SCROLLED != 0 {
-                let by = node.range[0] - was.range[0];
-                let sideways = node.flags & flag::SIDEWAYS != 0;
-                let entry = changed.entry(node.id).or_insert((0, 0.0, 0.0));
-                (entry.1, entry.2) = if sideways { (by, 0.0) } else { (0.0, by) };
+                if let (NodeRange::Scroll { offset, .. }, NodeRange::Scroll { offset: old, .. }) =
+                    (node.range, was.range)
+                {
+                    let entry = changed.entry(node.id).or_insert((0, 0.0, 0.0));
+                    (entry.1, entry.2) = (offset.0 - old.0, offset.1 - old.1);
+                }
             }
             if was.rect != node.rect {
                 // Moved or sized: the node above shows its children anew.
@@ -1275,7 +1274,7 @@ impl<D: DataSource> Presenter<D> {
                 node.flags,
             ]);
             out.extend(node.rect.map(px));
-            out.extend(node.range.map(|v| v.to_bits() as i32));
+            out.extend(node.reader_range().map(|v| v.to_bits() as i32));
             out.extend([node.set.0, node.set.1]);
             out.extend(node.grid);
             for text in [&node.name, &node.value, &node.hint] {
@@ -1335,8 +1334,14 @@ impl<D: DataSource> Presenter<D> {
                 let Some(painted) = self.box_of(node.view) else {
                     return false;
                 };
+                // The element's own menu: a service's long click lifts no drag, which is its own action.
                 let (x, y) = painted.center();
-                self.long_press(x, y, now_ms)
+                let menu = self.context_menu_at(x, y);
+                self.top.lift = None;
+                self.open_context_menu(menu, x, y, now_ms)
+            }
+            (act::DRAG, _) if node.flags & flag::DRAG != 0 && live(self) => {
+                self.access_drag(node.view, now_ms)
             }
             (act::FORWARD | act::BACKWARD, role::SCROLLER) => {
                 if self

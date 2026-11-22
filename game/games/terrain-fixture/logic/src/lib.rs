@@ -2,7 +2,7 @@ use exact_game::*;
 
 mod options;
 pub use options::{
-    camera_chunk, edit, edit_count, Blend, Budget, Inflight, Motion, Options, Window,
+    camera_chunk, edit, edit_count, Blend, Budget, Draw, Inflight, Motion, Options, Window,
     WorkloadSettings,
 };
 
@@ -66,8 +66,12 @@ impl Game for TerrainFixture {
         Ok(())
     }
 
-    fn quality(_: &Options) -> Quality {
-        Quality::High
+    fn quality(args: &Options) -> Quality {
+        args.quality()
+    }
+
+    fn max_fps(_: &World, args: &Options) -> u32 {
+        args.max_fps()
     }
 
     fn samples(_: &Options) -> SceneSamples {

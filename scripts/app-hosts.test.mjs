@@ -478,14 +478,14 @@ test.skipIf(process.platform === 'win32')('TypeScript Android builds require a t
     writeFileSync(resolve(bin, 'x86_64-linux-android29-clang'), '');
     for (const [abis, bundle] of [['x86_64', '/intel-bundle'], ['x86_64'], ['arm64-v8a,x86_64']]) {
       const r = spawnSync(process.execPath, [resolve(import.meta.dir, 'agent-android.mjs'), 'build', 'shelf', '--apk', '--abis', abis], {
-        encoding: 'utf8', env: { ...process.env, PATH: `${dir}/bin:${process.env.PATH}`, JAVA_HOME: dir, ANDROID_NDK_HOME: dir,
+        encoding: 'utf8', env: { ...process.env, PATH: `${dir}/bin:${process.env.PATH}`, JAVA_HOME: dir, ANDROID_NDK_HOME: dir, CARGO_HOME: resolve(dir, 'cargo'),
           HERMES_LEAN_SYS_DIR_aarch64_linux_android: '/arm-bundle', HERMES_LEAN_SYS_DIR_x86_64_linux_android: bundle },
       });
       expect(r.status).toBe(1);
       if (bundle) expect(r.stderr).toContain('x86_64 bake reached');
       else {
         expect(r.stderr).toContain("shelf's TypeScript needs the x86_64-linux-android Hermes bundle:");
-        expect(r.stderr).toContain('HERMES_LEAN_SYS_DIR_x86_64_linux_android');
+        expect(r.stderr).toContain('hermes-lean-sys-installer/Cargo.toml -- --target x86_64-linux-android');
         expect(r.stderr).not.toContain('x86_64 bake reached');
         expect(r.stderr).not.toContain('at hermesBundle');
       }

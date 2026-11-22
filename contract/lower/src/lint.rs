@@ -870,13 +870,6 @@ pub(crate) fn css_hint(name: &str) -> Option<String> {
              `border-bottom` on each cell draws a rule between rows"
                 .into(),
         ),
-        // No `::marker` (CSS Lists 3 §3): every list is `list-style: none`, which is taken
-        // (`tags::attr_valued`); any other value is not.
-        _ if name.starts_with("list-style") => Some(
-            "; a list here draws no marker, as `list-style=\"none\"` has it; a bullet is a \
-             `text \"•\"` before the item's text in a row"
-                .into(),
-        ),
         _ => None,
     }
 }

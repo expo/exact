@@ -31,6 +31,7 @@ pub(crate) struct PaintedField {
     pub(crate) value: String,
     spec: Spec,
     content: Rect4,
+    text_clip: Rect4,
     multiline: bool,
     masked: bool,
     origin: (f32, f32),
@@ -39,6 +40,30 @@ pub(crate) struct PaintedField {
     pub(crate) scroll_max: (f32, f32),
     pub(super) transform: Transform,
     decorations: Option<Rc<FieldDecorations>>,
+}
+
+/// The kernel measures an editable value with its whitespace preserved.
+fn field_style(node: &NodeRef<'_>) -> StyleProps {
+    let mut style = node.computed_style(StyleMask::INHERITED);
+    if !style.white_space.model().preserves() {
+        style.white_space = exact_kernel::WhiteSpace::PreWrap;
+    }
+    style
+}
+
+fn field_decorations(
+    node: &NodeRef<'_>,
+    value: &str,
+    previous: Option<&Rc<FieldDecorations>>,
+) -> Option<Rc<FieldDecorations>> {
+    if value.is_empty() || node.props.str(PropId::SemanticTag) != Some("textarea") {
+        return None;
+    }
+    FieldDecorations::cached(
+        node.props.get(PropId::Decorations)?,
+        node.props.get(PropId::DecorationStyles)?,
+        previous,
+    )
 }
 
 impl PaintedField {
@@ -61,6 +86,7 @@ impl PaintedField {
         let content = Self::editor_size(kernel, node);
         let stamp = node.paragraph_stamp();
         let prior = previous.map(|field| field.paragraph.as_ref());
+        let prior_decorations = previous.and_then(|field| field.decorations.as_ref());
         let previous = previous.filter(|f| {
             f.stamp
                 .as_ref()
@@ -78,10 +104,6 @@ impl PaintedField {
         let value = previous
             .map(|field| field.value.as_str())
             .unwrap_or_else(|| node.props.str(PropId::Value).unwrap_or(""));
-        let mut computed = node.computed_style(StyleMask::INHERITED);
-        if !computed.white_space.model().preserves() {
-            computed.white_space = exact_kernel::WhiteSpace::PreWrap;
-        }
         let shown = if value.is_empty() {
             node.props.str(PropId::Placeholder).unwrap_or("")
         } else {
@@ -91,7 +113,11 @@ impl PaintedField {
         let spec = match previous {
             Some(field) => &field.spec,
             None => {
-                spec = text_spec(&computed, shown);
+                let base = text_spec(&field_style(node), shown);
+                spec = match field_decorations(node, value, prior_decorations) {
+                    Some(decorations) => decorations.project(base, shown).spec,
+                    None => base,
+                };
                 &spec
             }
         };
@@ -114,6 +140,7 @@ impl PaintedField {
         value: &str,
         spec: Spec,
         content: Rect4,
+        text_clip: Rect4,
         multiline: bool,
         masked: bool,
         transform: Transform,
@@ -209,6 +236,7 @@ impl PaintedField {
             value: value.to_owned(),
             spec,
             content,
+            text_clip,
             multiline,
             masked,
             origin,
@@ -242,6 +270,7 @@ impl PaintedField {
             value,
             spec,
             self.content,
+            self.text_clip,
             self.multiline,
             self.masked,
             self.transform,
@@ -277,30 +306,49 @@ impl PaintedField {
         (self.origin.0 + translation.0, self.origin.1 + translation.1)
     }
 
-    pub(crate) fn reveal_cursor(&self, cursor: Cursor) -> (f32, f32) {
-        let caret = self.geometry.caret(cursor);
-        let origin = self.text_origin(self.scroll);
-        let x = origin.0 - self.content.0 + caret.0;
-        let x = self.scroll.0
-            + if self.scrolls_from_right() {
-                self.content.2 - x - caret.2
-            } else {
-                x
-            };
-        let y = origin.1 + self.scroll.1 - self.content.1 + caret.1;
-        let reveal = |at: f32, size: f32, offset: f32, port: f32, max: f32| {
-            let next = if at < offset {
-                at
-            } else if at + size > offset + port {
-                at + size - port
-            } else {
-                offset
-            };
-            next.clamp(0., max)
-        };
+    pub(crate) fn text_placement(&self) -> (Transform, Rect4) {
+        let (x, y) = self.text_origin(self.scroll);
         (
-            reveal(x, caret.2, self.scroll.0, self.content.2, self.scroll_max.0),
-            reveal(y, caret.3, self.scroll.1, self.content.3, self.scroll_max.1),
+            self.transform.pre_translate(x, y),
+            (
+                self.text_clip.0 - x,
+                self.text_clip.1 - y,
+                self.text_clip.2,
+                self.text_clip.3,
+            ),
+        )
+    }
+
+    pub(crate) fn aligned_line_y(&self, offset: u32, top: bool) -> f32 {
+        let (_, y, _, height) = self.geometry.caret(Cursor {
+            offset,
+            upstream: false,
+        });
+        let y = self.origin.1 - self.content.1 + y;
+        (if top { y } else { y + height - self.content.3 }).clamp(0., self.scroll_max.1)
+    }
+
+    pub(crate) fn reveal_cursor(&self, cursor: Cursor) -> (f32, f32) {
+        let (x, y, width, height) = self.place(self.geometry.caret(cursor));
+        let (cx, cy, cw, ch) = self.content;
+        let (vx, vy, vw, vh) = self.text_clip;
+        // A textarea draws into its padding. Scroll a clipped caret back into
+        // the content box, leaving each axis alone while its caret is visible.
+        let delta = |start, end, visible_start, visible_end, content_start, content_end| {
+            if start < visible_start {
+                start - content_start
+            } else if end > visible_end {
+                end - content_end
+            } else {
+                0.
+            }
+        };
+        let dx = delta(x, x + width, vx, vx + vw, cx, cx + cw);
+        let dy = delta(y, y + height, vy, vy + vh, cy, cy + ch);
+        let dx = if self.scrolls_from_right() { -dx } else { dx };
+        (
+            (self.scroll.0 + dx).clamp(0., self.scroll_max.0),
+            (self.scroll.1 + dy).clamp(0., self.scroll_max.1),
         )
     }
 
@@ -328,7 +376,7 @@ impl PaintedField {
     }
 
     pub(crate) fn caret_frame(&self, cursor: Cursor) -> Rect4 {
-        let caret = super::intersect(self.place(self.geometry.caret(cursor)), self.content);
+        let caret = super::intersect(self.place(self.geometry.caret(cursor)), self.text_clip);
         super::bbox(self.transform, caret)
     }
 
@@ -414,8 +462,11 @@ impl Painter {
         let disabled = node.props.bool(PropId::Disabled) == Some(true);
         let focused = walk.scene.focus == Some(node.id);
         let field_shape = native.then(|| self.text_field_chrome(node, surface, focused, ts));
-        // Material's field shows its focus by its indicator, not a ring.
-        let ringed = focused && !control::ringless(node) && (!native || look::neutral());
+        // Material's field shows its focus by its indicator, not a ring, and
+        // an `appearance: none` one by its caret alone, as Compose's
+        // `BasicTextField`, however the focus came.
+        let ringed =
+            focused && !self.unringed(node) && !look::material() && (!native || look::neutral());
         let content = if let Some(c) = node.field_content_rect() {
             (rect.0 + c.x, rect.1 + c.y, c.width, c.height)
         } else {
@@ -460,24 +511,12 @@ impl Painter {
         } else {
             value
         };
-        let mut computed = node.computed_style(StyleMask::INHERITED);
-        // A field's value is never collapsed, as the kernel measures it.
-        if !computed.white_space.model().preserves() {
-            computed.white_space = exact_kernel::WhiteSpace::PreWrap;
-        }
+        let computed = field_style(node);
         let spec = text_spec(&computed, shown);
         let multiline = node.props.str(PropId::SemanticTag) == Some("textarea");
-        let decorations = (!placeholder && multiline)
-            .then(|| {
-                FieldDecorations::cached(
-                    node.props.get(PropId::Decorations)?,
-                    node.props.get(PropId::DecorationStyles)?,
-                    self.field_text
-                        .get(&node.id)
-                        .and_then(|field| field.decorations.as_ref()),
-                )
-            })
-            .flatten();
+        let previous = self.field_text.get(&node.id).map(Rc::as_ref);
+        let decorations =
+            field_decorations(node, value, previous.and_then(|f| f.decorations.as_ref()));
         let (spec, inks, backgrounds, shadows) = match &decorations {
             Some(decorations) => {
                 let projected = decorations.project(spec, shown);
@@ -494,10 +533,7 @@ impl Painter {
             (node.id, 0),
             &spec,
             multiline.then_some(content.2),
-            self.field_text
-                .get(&node.id)
-                .filter(|_| multiline)
-                .map(|f| f.paragraph.as_ref()),
+            previous.filter(|_| multiline).map(|f| f.paragraph.as_ref()),
         );
         walk.text.insert(node.key, paragraph.clone());
         let mut oy = content.1
@@ -566,23 +602,25 @@ impl Painter {
             ),
             None => Cow::Borrowed(std::slice::from_ref(&base)),
         };
+        let padding = inset_sides(outer, computed.border_widths());
+        let text_clip = if multiline { padding.rect } else { content };
         let mut field = PaintedField::new(
             paragraph.clone(),
             value,
             spec,
             content,
+            text_clip,
             multiline,
             node.props.str(PropId::Type) == Some("password"),
             ts,
             decorations,
-            self.field_text.get(&node.id).map(Rc::as_ref),
+            previous,
         );
         field.stamp = node.paragraph_stamp();
         field.set_scroll(walk.scene.scroll.get(&node.id).copied().unwrap_or_default());
         let translation = field.scroll_translation(field.scroll);
         ox += translation.0;
         oy += translation.1;
-        let padding = inset_sides(outer, computed.border_widths());
         self.backend.push_clip(&padding, ts);
         let selection = walk.scene.selection.filter(|_| focused);
 
@@ -685,7 +723,6 @@ impl Painter {
             let painted = material::FieldText::painted(&paragraph, (ox, oy), ts);
             self.labels.value(node.id, painted);
         }
-        let text_clip = if multiline { padding.rect } else { content };
         if let Some(shadows) = shadows {
             let ink = self.capture_field_ink(
                 walk.scene.kernel,

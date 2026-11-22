@@ -15,6 +15,66 @@
 use super::*;
 use crate::instance::{Activation, Claim, Handed, Instance};
 
+/// DWM composes a cloaked window without putting it on the desktop. Winit's
+/// visible flag stays clear until the frame is ready because setting it can
+/// activate the window and take keyboard input away from the current app.
+pub(super) struct PendingShow {
+    window: Rc<Window>,
+    hwnd: windows_sys::Win32::Foundation::HWND,
+}
+
+impl PendingShow {
+    #[allow(unsafe_code)]
+    fn begin(window: &Rc<Window>) -> Option<Self> {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNOACTIVATE};
+        let RawWindowHandle::Win32(handle) = window.window_handle().ok()?.as_raw() else {
+            return None;
+        };
+        let pending = Self {
+            window: window.clone(),
+            hwnd: handle.hwnd.get() as _,
+        };
+        pending.cloak(true).ok()?;
+        unsafe { ShowWindow(pending.hwnd, SW_SHOWNOACTIVATE) };
+        Some(pending)
+    }
+
+    #[allow(unsafe_code)]
+    fn cloak(&self, enabled: bool) -> Result<(), String> {
+        use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
+        let value = i32::from(enabled);
+        let hr = unsafe {
+            DwmSetWindowAttribute(
+                self.hwnd,
+                DWMWA_CLOAK as u32,
+                (&value as *const i32).cast(),
+                size_of_val(&value) as u32,
+            )
+        };
+        if hr < 0 {
+            return Err(format!("DWM could not change the window's cloak ({hr:#x})"));
+        }
+        Ok(())
+    }
+
+    pub(super) fn reveal(self) -> Result<(), String> {
+        self.cloak(false)?;
+        self.window.set_visible(true);
+        self.window.focus_window();
+        Ok(())
+    }
+
+    #[allow(unsafe_code)]
+    fn cancel(self) {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+        // Winit still considers the window hidden, so undo the native show first.
+        unsafe { ShowWindow(self.hwnd, SW_HIDE) };
+        if let Err(error) = self.cloak(false) {
+            eprintln!("exact-windows: {error}");
+        }
+    }
+}
+
 /// This launch's claim to be the app's one instance (D6), or the exit code
 /// it ends with: 0 once the running instance has its arguments, 1 when that
 /// instance did not answer. A measured run (`frame_limit`, the readiness
@@ -139,6 +199,9 @@ impl<D: DataSource + Default + 'static> App<D> {
         let Some(window) = &self.window else {
             return;
         };
+        if let Some(pending) = self.pending_show.take() {
+            pending.cancel();
+        }
         window.set_visible(false);
         self.hidden = true;
         self.caret.clear();
@@ -164,8 +227,14 @@ impl<D: DataSource + Default + 'static> App<D> {
             return;
         };
         if self.hidden {
+            if let Some(p) = &mut self.presenter {
+                p.prepare_window_show();
+            }
             self.hidden = false;
-            window.set_visible(true);
+            self.pending_show = PendingShow::begin(&window);
+            if self.pending_show.is_none() {
+                window.set_visible(true);
+            }
             // A page put away comes back (`pageshow` with `persisted`); a
             // hidden launch's window shows for the first time, no restore.
             self.tell_page(|page| {
@@ -177,6 +246,10 @@ impl<D: DataSource + Default + 'static> App<D> {
             if let Some(p) = &mut self.presenter {
                 p.repaint();
             }
+        }
+        if self.pending_show.is_some() {
+            window.request_redraw();
+            return;
         }
         if window.is_minimized() == Some(true) {
             window.set_minimized(false);

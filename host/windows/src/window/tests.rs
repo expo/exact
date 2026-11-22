@@ -201,6 +201,7 @@ fn direct_window_blinks_without_a_softbuffer_surface() {
         closing: false,
         keep_running: false,
         hidden: false,
+        pending_show: None,
         instance: None,
         cold_documents: Vec::new(),
         tray: None,
@@ -225,6 +226,7 @@ fn direct_window_blinks_without_a_softbuffer_surface() {
 fn hiding_a_resident_window_releases_its_painter_and_preserves_its_canvas_and_editor() {
     use exact_painted::presenter::PainterChoice;
     use exact_runner::{exact_canvas, DataError, Value};
+    use winit::platform::pump_events::EventLoopExtPumpEvents;
 
     #[derive(Default)]
     struct Picture;
@@ -254,21 +256,10 @@ fn hiding_a_resident_window_releases_its_painter_and_preserves_its_canvas_and_ed
     }
 
     let size = [240u32, 120u32];
-    let events = EventLoop::<crate::accessibility::Event>::with_user_event()
+    let mut events = EventLoop::<crate::accessibility::Event>::with_user_event()
         .with_any_thread(true)
         .build()
         .unwrap();
-    let window = Rc::new(
-        events
-            .create_window(
-                Window::default_attributes()
-                    .with_title("Resident canvas test")
-                    .with_no_redirection_bitmap(true)
-                    .with_inner_size(winit::dpi::PhysicalSize::new(size[0], size[1])),
-            )
-            .unwrap(),
-    );
-    let owned = exact_ink::device::d3d11::Window::from_owner(window.clone()).unwrap();
     let plan = contract::compile(
         r#"component App
   view
@@ -279,55 +270,120 @@ fn hiding_a_resident_window_releases_its_painter_and_preserves_its_canvas_and_ed
     )
     .unwrap()
     .encode();
-    let (mut p, warning) = Presenter::boot_with(
-        &plan,
-        Picture,
-        (size[0] as f32, size[1] as f32),
-        1.,
-        Default::default(),
-        PainterChoice::Ink,
-    )
-    .unwrap();
-    assert!(warning.is_none(), "{warning:?}");
-    assert!(p.attach_painter_window(owned.clone(), size).unwrap());
-    let k = p.host().kernel();
-    let field = k.node_by_key(k.find_by_test_id("field")[0]).unwrap().id;
-    p.type_text(field, "resident").unwrap();
-    p.reader_access(1., true);
-    let editor_id = p.access_told().iter().find(|n| n.view == field).unwrap().id;
-    let selection = exact_runner::FieldSelection {
-        start: 1,
-        end: 4,
-        direction: exact_runner::SelectionDirection::Backward,
-    };
-    assert!(p.access_select(editor_id, selection, 0.));
-    let mut app = test_app(events.create_proxy(), &plan, p);
-    app.window = Some(window);
-    app.keep_running = true;
-    let verify = |p: &mut Presenter<Picture>| {
-        let editor = p
-            .access_tree()
-            .0
-            .into_iter()
-            .find(|n| n.view == field)
-            .unwrap();
-        assert_eq!(editor.value, "resident");
-        assert_eq!(p.access_selection(editor_id), Some(selection));
-        let pixels = p.frame();
-        let offset = ((size[1] - 8) * size[0] + size[0] - 8) as usize * 4;
-        assert_eq!(&pixels.data()[offset..offset + 4], &[24, 48, 96, 255]);
-    };
-    let p = app.presenter.as_mut().unwrap();
-    present(p, &owned);
-    verify(p);
-    for _ in 0..2 {
-        app.hide_by_app();
-        assert_eq!(app.presenter.as_ref().unwrap().painter.name, "cpu");
-        app.bring_forward();
+    for (painter, name) in [(PainterChoice::Ink, "ink"), (PainterChoice::Cpu, "cpu")] {
+        let direct = painter == PainterChoice::Ink;
+        let window = Rc::new(
+            events
+                .create_window(
+                    Window::default_attributes()
+                        .with_title("Resident canvas test")
+                        .with_no_redirection_bitmap(direct)
+                        .with_inner_size(winit::dpi::PhysicalSize::new(size[0], size[1])),
+                )
+                .unwrap(),
+        );
+        let owned = exact_ink::device::d3d11::Window::from_owner(window.clone()).unwrap();
+        let (mut p, warning) = Presenter::boot_with(
+            &plan,
+            Picture,
+            (size[0] as f32, size[1] as f32),
+            1.,
+            Default::default(),
+            painter,
+        )
+        .unwrap();
+        assert!(warning.is_none(), "{warning:?}");
+        assert_eq!(
+            p.attach_painter_window(owned.clone(), size).unwrap(),
+            direct
+        );
+        let k = p.host().kernel();
+        let field = k.node_by_key(k.find_by_test_id("field")[0]).unwrap().id;
+        p.type_text(field, "resident").unwrap();
+        p.reader_access(1., true);
+        let editor_id = p.access_told().iter().find(|n| n.view == field).unwrap().id;
+        let selection = exact_runner::FieldSelection {
+            start: 1,
+            end: 4,
+            direction: exact_runner::SelectionDirection::Backward,
+        };
+        assert!(p.access_select(editor_id, selection, 0.));
+        let mut app = test_app(events.create_proxy(), &plan, p);
+        app.window = Some(window);
+        app.keep_running = true;
+        app.direct = direct;
+        app.config.compat = serde_json::json!({"painter": name}).to_string();
+        let verify = |p: &mut Presenter<Picture>| {
+            let editor = p
+                .access_tree()
+                .0
+                .into_iter()
+                .find(|n| n.view == field)
+                .unwrap();
+            assert_eq!(editor.value, "resident");
+            assert_eq!(p.access_selection(editor_id), Some(selection));
+            let pixels = p.frame();
+            let offset = ((size[1] - 8) * size[0] + size[0] - 8) as usize * 4;
+            assert_eq!(&pixels.data()[offset..offset + 4], &[24, 48, 96, 255]);
+        };
         let p = app.presenter.as_mut().unwrap();
-        present(p, &owned);
-        assert_eq!(p.painter.name, "ink");
+        if direct {
+            present(p, &owned);
+        }
         verify(p);
+        let hwnd = owned.hwnd() as _;
+        #[allow(unsafe_code)]
+        let cloaked = || {
+            use windows_sys::Win32::Graphics::Dwm::{
+                DwmGetWindowAttribute, DWMWA_CLOAKED, DWM_CLOAKED_APP,
+            };
+            let mut flags = 0u32;
+            let hr = unsafe {
+                DwmGetWindowAttribute(
+                    hwnd,
+                    DWMWA_CLOAKED as u32,
+                    (&mut flags as *mut u32).cast(),
+                    size_of_val(&flags) as u32,
+                )
+            };
+            assert!(hr >= 0, "{hr:#x}");
+            flags & DWM_CLOAKED_APP != 0
+        };
+        for cancel_first in [true, false] {
+            app.hide_by_app();
+            assert_eq!(app.presenter.as_ref().unwrap().painter.name, "cpu");
+            app.bring_forward();
+            app.bring_forward();
+            assert!(cloaked());
+            #[allow(unsafe_code)]
+            let foreground =
+                unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow() };
+            assert_ne!(foreground, hwnd);
+            if cancel_first {
+                app.hide_by_app();
+                assert!(!cloaked());
+                assert_eq!(app.window.as_ref().unwrap().is_visible(), Some(false));
+                app.bring_forward();
+                assert!(cloaked());
+            }
+            let previous = app.frames;
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while app.frames == previous {
+                events.pump_app_events(
+                    Some(deadline.saturating_duration_since(Instant::now())),
+                    &mut app,
+                );
+                assert!(
+                    !app.failed && Instant::now() < deadline,
+                    "first window frame missing"
+                );
+            }
+            assert!(!cloaked());
+            assert_eq!(app.window.as_ref().unwrap().is_visible(), Some(true));
+            let p = app.presenter.as_mut().unwrap();
+            assert_eq!(p.painter.name, name);
+            verify(p);
+        }
     }
 }
 
@@ -468,6 +524,7 @@ fn test_app<D: DataSource>(
         closing: false,
         keep_running: false,
         hidden: false,
+        pending_show: None,
         instance: None,
         cold_documents: Vec::new(),
         tray: None,

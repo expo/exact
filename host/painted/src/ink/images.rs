@@ -6,6 +6,8 @@ use std::collections::HashMap;
 pub(super) struct Images {
     bitmaps: HashMap<(usize, [u32; 2]), (Arc<Bitmap>, TextureId)>,
     pixmaps: HashMap<usize, Uploaded>,
+    /// A recorded revision keeps its texture without holding the CPU pixels.
+    frames: HashMap<(u64, bool), TextureId>,
     /// Textures whose pixmap no one holds any more, kept for one frame to
     /// take a new pixmap of the same size in place: a canvas redrawn at an
     /// unchanged size keeps its one texture instead of making another.
@@ -30,6 +32,7 @@ impl Images {
     pub fn pin(&mut self, texture: TextureId) {
         if self.bitmaps.values().any(|(_, t)| *t == texture)
             || self.pixmaps.values().any(|u| u.texture == texture)
+            || self.frames.values().any(|&t| t == texture)
         {
             *self.pins.entry(texture).or_default() += 1;
         }
@@ -81,6 +84,12 @@ impl Images {
     }
 
     pub(super) fn end(&mut self, device: &mut impl Device) -> Result<()> {
+        for (_, texture) in self
+            .frames
+            .extract_if(|_, t| !self.used.contains(t) && !self.pins.contains_key(t))
+        {
+            device.retire_texture(texture)?;
+        }
         for (_, (_, texture)) in self
             .bitmaps
             .extract_if(|_, (_, t)| !self.used.contains(t) && !self.pins.contains_key(t))
@@ -130,6 +139,41 @@ impl Images {
         };
         self.used.insert(texture);
         self.bitmaps.insert(key, (image.clone(), texture));
+        Ok(texture)
+    }
+
+    pub fn canvas(
+        &mut self,
+        device: &mut impl Device,
+        image: &Pixmap,
+        update: CanvasUpdate,
+        mipmapped: bool,
+    ) -> Result<TextureId> {
+        let key = (update.revision, mipmapped);
+        if let Some(&texture) = self.frames.get(&key) {
+            self.used.insert(texture);
+            return Ok(texture);
+        }
+        let previous = (update.previous, mipmapped);
+        // A retained row or an earlier draw in this frame still needs its own pixels.
+        let reuse = self
+            .frames
+            .get(&previous)
+            .is_some_and(|t| !self.used.contains(t) && !self.pins.contains_key(t));
+        let texture = if reuse {
+            let texture = self.frames.remove(&previous).unwrap();
+            if let Some(area) = update.area {
+                if let Err(error) = fill_area(device, texture, image, area, mipmapped) {
+                    device.retire_texture(texture)?;
+                    return Err(error);
+                }
+            }
+            texture
+        } else {
+            upload(device, image.as_ref(), mipmapped)?
+        };
+        self.frames.insert(key, texture);
+        self.used.insert(texture);
         Ok(texture)
     }
 
@@ -184,6 +228,34 @@ fn upload(
     })?;
     fill(device, texture, pixels, mipmapped)?;
     Ok(texture)
+}
+
+fn fill_area(
+    device: &mut impl Device,
+    texture: TextureId,
+    image: &Pixmap,
+    area: tiny_skia::IntRect,
+    mipmapped: bool,
+) -> Result<()> {
+    let width = image.width();
+    let packed;
+    let bytes = if area.width() == width {
+        let stride = width as usize * 4;
+        &image.data()[area.top() as usize * stride..area.bottom() as usize * stride]
+    } else {
+        packed = image.clone_rect(area).expect("damage is inside the canvas");
+        packed.data()
+    };
+    device.upload_texture(
+        texture,
+        [area.left() as u32, area.top() as u32],
+        [area.width(), area.height()],
+        bytes,
+    )?;
+    if mipmapped {
+        device.generate_mips(texture)?;
+    }
+    Ok(())
 }
 
 fn fill(

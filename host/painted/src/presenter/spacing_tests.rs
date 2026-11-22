@@ -143,3 +143,32 @@ fn an_hr_is_one_device_pixel_of_the_scale_this_host_draws_at() {
     assert_eq!(pixel(&mut p, 30, 60), RED);
     assert_eq!(pixel(&mut p, 30, 61), WHITE);
 }
+
+#[test]
+fn prose_list_markers_paint_in_the_gutter_and_renumber_retained_items() {
+    let mut p = boot(
+        include_str!("../../../../scripts/fixtures/prose-list.contract"),
+        1.,
+    );
+    let gutter = |p: &mut Presenter<()>, test_id: &str, rtl: bool| {
+        let (x, y, w, h) = rect(p, test_id);
+        let start = if rtl { (x + w) as u32 } else { x as u32 - 32 };
+        let frame = p.frame();
+        (0..h as u32)
+            .flat_map(|dy| (0..32).map(move |dx| (start + dx, y as u32 + dy)))
+            .map(|(x, y)| frame.pixel(x, y).unwrap().green() < 200)
+            .collect::<Vec<_>>()
+    };
+    let two = gutter(&mut p, "retained", false);
+    assert!(two.contains(&true));
+    assert!(!gutter(&mut p, "bare", false).contains(&true));
+    assert!(gutter(&mut p, "right", true).contains(&true));
+    let k = p.host().kernel();
+    let change = k.node_by_key(k.find_by_test_id("change")[0]).unwrap().id;
+    p.tap(change).unwrap();
+    let three = gutter(&mut p, "retained", false);
+    assert!(three.contains(&true));
+    assert_ne!(three, two);
+    p.tap(change).unwrap();
+    assert_eq!(gutter(&mut p, "retained", false), two);
+}

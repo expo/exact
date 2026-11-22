@@ -188,7 +188,7 @@ fn work(
                 });
             }
             match rendered {
-                Ok(()) => crate::android::trace(c"exact present", || frame.present()),
+                Ok(()) => crate::android::trace(c"exact present", || queue.present(frame)),
                 Err(e) => eprintln!("exact: vello render: {e}"),
             }
         }
@@ -244,6 +244,7 @@ impl Presenting {
             format,
             width: width.max(1),
             height: height.max(1),
+            color_space: wgpu::SurfaceColorSpace::Auto,
             present_mode: wgpu::PresentMode::Fifo,
             desired_maximum_frame_latency: 2,
             alpha_mode,
@@ -359,7 +360,7 @@ impl Gpu {
             .expect("blit path")
             .copy(&device, &mut encoder, &view, &swap_view);
         queue.submit([encoder.finish()]);
-        frame.present();
+        queue.present(frame);
         Ok(())
     }
 }

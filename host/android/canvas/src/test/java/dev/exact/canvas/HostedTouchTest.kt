@@ -791,6 +791,60 @@ class HostedTouchTest {
         }
     }
 
+    /** A long press exact2 takes on the page (its menu's, or a drag's that lifts as the finger moves on, LLP 1094.000
+     * D7) keeps the rest of the contact from the scroller under it: the move along its axis reaches exact2 and nothing
+     * scrolls. One exact2 does not take leaves the move to the scroller. */
+    @Test fun aLongPressExactTakesKeepsTheRestOfTheContactFromAScroller() {
+        for (takes in listOf(false, true)) {
+            val f = Fixture(scroller = true)
+            f.controller.setup()
+            f.activity.setContentView(f.parent)
+            f.parent.layout(0, 0, 600, 800)
+            Engine.takesLongPress = takes
+            Engine.reply[Engine.reply.lastIndex] = 7
+            val down = android.os.SystemClock.uptimeMillis()
+            f.touch(0, x = 250f, y = 300f, time = down)
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(
+                java.time.Duration.ofMillis(android.view.ViewConfiguration.getLongPressTimeout().toLong() + 1))
+            assertTrue(Engine.touches.contains(4))
+            for ((y, at) in listOf(250f to 600L, 200f to 620L, 150f to 640L)) f.touch(2, x = 250f, y = y, time = down + at)
+            f.touch(1, x = 250f, y = 150f, time = down + 660)
+            assertEquals("taken: $takes", takes, Engine.scrolls.isEmpty())
+            if (takes) assertTrue(Engine.touches.containsAll(listOf(2, 1)))
+            f.controller.pause().stop().destroy()
+        }
+    }
+
+    /** The moves that come while the reader waits for exact2's answer to the long press it forwarded wait with it, so
+     * the scroller cannot claim one before the answer says exact2 took the press. */
+    @Test fun theMovesBeforeTheLongPresssAnswerWaitForIt() {
+        val f = Fixture(scroller = true)
+        f.controller.setup()
+        f.activity.setContentView(f.parent)
+        f.parent.layout(0, 0, 600, 800)
+        Engine.takesLongPress = true
+        Engine.reply[Engine.reply.lastIndex] = 7
+        val down = android.os.SystemClock.uptimeMillis()
+        f.touch(0, x = 250f, y = 300f, time = down)
+        lateinit var deferAfterAction: () -> Unit
+        deferAfterAction = {
+            if (Engine.touches.contains(4)) Engine.deferReplies = true
+            else Engine.beforeReply = deferAfterAction
+        }
+        Engine.beforeReply = deferAfterAction
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(
+            java.time.Duration.ofMillis(android.view.ViewConfiguration.getLongPressTimeout().toLong() + 1))
+        assertEquals(1, Engine.replies.size)
+        for ((y, at) in listOf(250f to 600L, 200f to 620L, 150f to 640L)) f.touch(2, x = 250f, y = y, time = down + at)
+        assertTrue("no move before the answer", Engine.scrolls.isEmpty() && !Engine.touches.contains(2))
+        Engine.deferReplies = false
+        f.answer()
+        f.touch(1, x = 250f, y = 150f, time = down + 660)
+        assertTrue(Engine.scrolls.isEmpty())
+        assertTrue(Engine.touches.containsAll(listOf(2, 1)))
+        f.controller.pause().stop().destroy()
+    }
+
     @Test fun anExactContextMenuLeavesAnOngoingRefreshVisible() {
         val f = Fixture(scroller = true)
         f.controller.setup()

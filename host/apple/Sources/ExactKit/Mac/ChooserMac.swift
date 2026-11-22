@@ -180,6 +180,21 @@ extension MenuHost {
     /// D5), else its `img` — a provider's own icon — once that has loaded.
     /// The menu reads what the hidden row already holds; opening it never
     /// fetches, and an image still loading is no image until the next open.
+    enum MenuImageKey: Equatable {
+        case none
+        case symbol(String)
+        case viewImage(ObjectIdentifier?)
+        case raster(ObjectIdentifier)
+    }
+    /// Identity of what `image(of:)` draws, so callers that run every batch
+    /// can skip allocating a fresh `NSImage` and redrawing unchanged items.
+    func imageKey(of row: NodeView) -> MenuImageKey {
+        guard row.isButton else { return .none }
+        if let symbol = row.face?.symbol { return .symbol(symbol) }
+        guard !row.isNativeButton, let img = Self.firstImage(in: row) else { return .none }
+        if img.imageSource?.hasPrefix("symbol:") == true { return .viewImage(img.image.map(ObjectIdentifier.init)) }
+        return img.raster.map { .raster(ObjectIdentifier($0.image.image)) } ?? .none
+    }
     func image(of row: NodeView) -> NSImage? {
         guard row.isButton else { return nil }
         if let symbol = row.face?.symbol { return FaceSymbol.image(symbol) }

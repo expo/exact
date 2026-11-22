@@ -1,6 +1,7 @@
 //! An editable width shares longer hard lines and packs short ones together. The
 //! paragraph's visual lines keep global ranges; a painter reads one slice.
 use super::{LayoutGlyph, LayoutLine, Lines};
+use crate::text::shaping::HardLine;
 use std::collections::HashSet;
 use std::mem::{size_of, take};
 use std::ops::{Deref, DerefMut};
@@ -204,7 +205,7 @@ impl FieldLines {
         out: &mut Lines,
         old: &Lines,
         from: usize,
-        to: usize,
+        (to, hard): (usize, &HardLine),
         cursor: &mut usize,
         faces: &mut Vec<Option<u16>>,
     ) {
@@ -229,6 +230,7 @@ impl FieldLines {
             let (a, b) = line.glyphs;
             out.lines.push(LayoutLine {
                 hard: to as u32,
+                run_base: hard.run_base,
                 glyphs: (self.len as u32 + (a - start), self.len as u32 + (b - start)),
                 ..*line
             });

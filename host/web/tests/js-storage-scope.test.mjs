@@ -18,6 +18,8 @@ import { fileURLToPath } from 'node:url';
 const webJs = fileURLToPath(new URL('../../web-js/', import.meta.url)), web = fileURLToPath(new URL('../', import.meta.url));
 const REAL = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js', 'shape.js', 'persist.js'];
 const root = mkdtempSync(resolve(tmpdir(), 'exact-js-storage-'));
+mkdirSync(resolve(root, 'web'));
+writeFileSync(resolve(root, 'web/faults.js'), readFileSync(resolve(web, 'faults.js')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 /** The runtime as a build lays it out for the app at `appDir`, or as written (a release) when it is null. */
 function runtime(name, appDir) {
@@ -79,6 +81,30 @@ test('persisted state and the durable store are the app\'s own on a shared origi
   // A release's keys are the runner's: "exact.state.<name>".
   kept.set('exact.state.goal', '1500');
   expect(release.persist.stored('goal', 2000, 'n')).toBe(1500);
+});
+
+test("a window restores its own slot even when shared storage holds a value of the same name", async () => {
+  const at = runtime("window", one);
+  const rt = await import(resolve(at, "rt.js")), persist = await import(resolve(at, "persist.js"));
+  const prefix = rt.Kept("state"), values = new Map();
+  const original = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage");
+  Object.defineProperty(globalThis, "sessionStorage", { configurable: true, value: {
+    getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value)
+  } });
+  try {
+    kept.set(prefix + "thread", '"shared"');
+    expect(persist.stored("thread", "", "s", true)).toBe("");
+    persist.keep({ n: { v: "one" } }, "thread", "s", true);
+    for (const flush of rt.After) flush();
+    expect(persist.stored("thread", "", "s", true)).toBe("one");
+    expect(kept.get(prefix + "thread")).toBe('"shared"');
+    expect(kept.has(prefix + "#window.thread")).toBe(false);
+    values.clear();
+    expect(persist.stored("thread", "", "s", true)).toBe("");
+  } finally {
+    if (original) Object.defineProperty(globalThis, "sessionStorage", original);
+    else delete globalThis.sessionStorage;
+  }
 });
 
 // A write that failed after reading the value it replaces retries under the secret's lease

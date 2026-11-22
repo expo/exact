@@ -453,9 +453,11 @@ impl NodeArena {
             &MESSAGE_BOX,
             &MESSAGE_TEXT,
             &ACTIONS,
+            &ACTIONS_FIRST,
             &DIALOG,
             &POPOVER,
             &RAISED,
+            &MAC_MENU,
         ]
         .into_iter()
         .fold(StyleMask::EMPTY, |mask, s| mask.union(s.mask))

@@ -1250,8 +1250,8 @@ macro_rules! host {
         /// `hlen` bytes of `name: value` header lines then `blen` bytes of
         /// body (or the message). Returns the batch's length.
         #[no_mangle]
-        pub extern "C" fn exact_fulfill(ticket: f64, kind: u32, status: u32, hlen: u32, blen: u32, now_ms: f64) -> u32 {
-            EXACT_BRIDGE.with(|b| b.borrow_mut().fulfill(ticket, kind, status, hlen as usize, blen as usize, now_ms))
+        pub extern "C" fn exact_fulfill(ticket: f64, kind: u32, status: u32, hlen: u32, blen: u32, now_ms: f64, asked_at: f64, after_ms: u32, timeout_ms: u32) -> u32 {
+            EXACT_BRIDGE.with(|b| b.borrow_mut().fulfill(ticket, kind, status, hlen as usize, blen as usize, now_ms, (asked_at, after_ms, timeout_ms)))
         }
 
         /// Whether the runner still holds request `ticket`: the page asks

@@ -54,6 +54,7 @@ impl<D: DataSource> Host<D> {
 
     pub(super) fn quiet_collection_key(&self) -> Option<[u64; 8]> {
         if self.stored
+            || self.window_state_changed
             || !self.preload_content.is_empty()
             || !self.engine.quiescent()
             || self.engine.spatial()
@@ -83,6 +84,7 @@ impl<D: DataSource> Host<D> {
             documents(self);
         }
         let (mut batch, error) = self.resize_rounds(batch, error);
+        self.emit_prose_markers(&mut batch);
         self.route_overflow.settled =
             error.is_none() && !batch.layout_provisional && !self.layout_owed;
         if let Some(canvas) = self.turn.canvas {
@@ -146,7 +148,9 @@ impl<D: DataSource> Host<D> {
             depth = shallowest + 1;
             let mut receipts = Vec::new();
             for (view, rect, _) in due {
-                self.runner.resize_delivered(view, rect);
+                if !self.runner.resize_delivered(view, rect) {
+                    continue;
+                }
                 match self.runner.dispatch(view, Event::Resize(rect)) {
                     Ok(receipt) => receipts.push(Timed {
                         at_ms: self.now_ms,

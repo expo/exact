@@ -501,3 +501,13 @@ test('an App Clip signs on-demand install, and its app names it where the profil
   }
   expect(entitlements(clip, 'TEAM', false, null, { prefix: 'PREFIX' })).toMatch(/<key>com.apple.developer.on-demand-install-capable<\/key>\s*<true\/>/);
 });
+
+test('macSigning preflight catches missing or ambiguous signing before a bake exists (LLP 1156.007)', () => {
+  const plain = { id: 'com.example.notes', manifest: { host: {} } };
+  const twoTeams = () => [{ sha1: 'A'.repeat(40), team: 'TEAM1' }, { sha1: 'B'.repeat(40), team: 'TEAM2' }];
+  expect(() => macSigning(plain, null, { preflight: true, identities: twoTeams, find: none, log: () => {} }))
+    .toThrow(/Apple Development identities span several teams/);
+  expect(() => macSigning(plain, null, { preflight: true, release: true, distribution: true, store: 'appstore', current: 'A'.repeat(40), teamOf: () => 'TEAM1', find: none, log: () => {} }))
+    .toThrow(/^appstore-needs-profile:/);
+  expect(macSigning(plain, null, { preflight: true, current: '-', identities: twoTeams, find: none, log: () => {} }).sha1).toBe('-');
+});

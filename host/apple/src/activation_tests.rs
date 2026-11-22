@@ -233,6 +233,54 @@ fn only_a_module_on_the_runners_thread_is_evaluated_from_the_draw() {
 }
 
 #[test]
+fn window_restore_publishes_its_values_without_writing_shared_preferences() {
+    use crate::store::{KeptStore, Platform};
+    let plan = contract::compile(
+        r#"
+component App
+  state thread = "" persist window
+  action choose
+    thread = "second"
+  view
+    text thread
+"#,
+    )
+    .unwrap()
+    .encode();
+    crate::store::PLATFORM
+        .with(|p| *p.borrow_mut() = Some(Arc::new(ibex2::secrets::MemoryStore::new())));
+    let bindings = crate::store::endow("").unwrap();
+    crate::store::PLATFORM.with(|p| *p.borrow_mut() = None);
+    let platform = Platform::of(&bindings);
+    let key = format!("{}thread", exact_runner::Store::WINDOW_STATE);
+    let (mut host, first) = Host::boot_stored(
+        &plan,
+        (),
+        Box::new(MonospaceMeasurer::default()),
+        300.,
+        200.,
+        None,
+        vec![(key.clone(), br#""first""#.to_vec())],
+        Some(platform.clone()),
+    )
+    .unwrap();
+    let batch: serde_json::Value = serde_json::from_str(&first).unwrap();
+    assert_eq!(batch["windowState"]["thread"], r#""first""#);
+    assert_eq!(host.runner.slot("thread"), Some(&Value::str("first")));
+
+    let receipt = host.runner.act("choose", vec![]).unwrap();
+    let batch: serde_json::Value =
+        serde_json::from_str(&host.commit(&[Timed { at_ms: 0., receipt }], None)).unwrap();
+    assert_eq!(batch["windowState"]["thread"], r#""second""#);
+    assert!(batch.get("stored").is_none());
+    assert!(platform
+        .snapshot(Vec::new())
+        .values
+        .iter()
+        .all(|(name, _)| name != &key));
+}
+
+#[test]
 fn peer_store_refresh_reasks_readers_and_restores_persisted_slots_in_every_session() {
     use crate::store::{KeptStore, Platform};
     use exact_runner::StoreWrite;

@@ -74,6 +74,9 @@ pub fn bake<D: DataSource>(
     constructor: &str,
     replace: impl FnOnce(&Entry) -> Option<String>,
 ) {
+    if platform == "windows" {
+        crate::link_windows_resources();
+    }
     let platform = if platform == "apple" {
         if matches!(
             env::var("CARGO_CFG_TARGET_OS").as_deref(),
@@ -254,7 +257,8 @@ include!(concat!(env!("OUT_DIR"), "/hatches.rs"));"#
             "fn main() {{ std::process::exit(exact_linux::run_composed::<AppData>(PLAN, COMPAT, {composed})); }}"
         ),
         "windows" => format!(
-            "fn main() {{ std::process::exit(exact_windows::run_composed::<AppData>({:?}, {}, PLAN, COMPAT, {composed})); }}",
+            "fn main() {{ std::process::exit(exact_windows::run_baked::<AppData, {}>({:?}, {}, PLAN, COMPAT, {composed})); }}",
+            compat.admits_agent(),
             manifest.name,
             manifest.windows_window().unwrap_or_else(|e| panic!("app.json: {e}"))
         ),

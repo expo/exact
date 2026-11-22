@@ -110,8 +110,7 @@ pub struct LayoutGlyph {
     pub font_size: f32,
     /// In its face.
     pub glyph_id: u32,
-    /// The canonical run index ([`super::Spec`]'s runs), kept across font
-    /// fallback and wrapping.
+    /// The glyph's run relative to the hard line's first run.
     pub metadata: u32,
     /// Its face, an index into [`Lines::faces`].
     pub face: u16,
@@ -121,8 +120,8 @@ pub struct LayoutGlyph {
 
 impl LayoutGlyph {
     /// The canonical run index.
-    pub fn run(&self) -> usize {
-        self.metadata as usize
+    pub fn run(&self, run_base: u32) -> usize {
+        (run_base + self.metadata) as usize
     }
     /// The cluster's byte range in [`super::LayoutRun::text`].
     pub fn range(&self) -> std::ops::Range<usize> {
@@ -167,6 +166,8 @@ impl Face {
 /// One visual line.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct LayoutLine {
+    /// The canonical run of a glyph whose brush is zero.
+    pub run_base: u32,
     /// The hard line (text between line feeds) it belongs to.
     pub hard: u32,
     /// Its glyphs, a range of [`Lines::glyphs`], in visual order.

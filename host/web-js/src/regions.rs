@@ -436,8 +436,13 @@ pub(super) fn root_slot(
     // A persisted slot starts from the store's value where it fits, and is
     // kept after each commit (LLP 1116 D5, persist.js).
     let quoted = serde_json::to_string(plan.str(r.name)).unwrap();
-    let init = if r.persist {
-        format!("$stored({quoted},{init},{})", type_json(plan, r.ty))
+    let scope = if r.persist == exact_plan::PersistScope::Window {
+        ",true"
+    } else {
+        ""
+    };
+    let init = if r.is_persisted() {
+        format!("$stored({quoted},{init},{}{scope})", type_json(plan, r.ty))
     } else {
         init
     };
@@ -452,8 +457,12 @@ pub(super) fn root_slot(
         let name = string_name(plan, r, top);
         let _ = write!(body, "const s_{i}={make}({init},{ty}{name});");
     }
-    if r.persist {
-        let _ = write!(body, "$keep(s_{i},{quoted},{});", type_json(plan, r.ty));
+    if r.is_persisted() {
+        let _ = write!(
+            body,
+            "$keep(s_{i},{quoted},{}{scope});",
+            type_json(plan, r.ty)
+        );
     }
     Ok(())
 }

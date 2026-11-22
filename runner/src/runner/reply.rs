@@ -53,6 +53,10 @@ impl<D: DataSource> Runner<D> {
         outcome: Outcome,
         timing: Option<crate::CompletionTiming>,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
+        let (outcome, timing) = match self.park_fixture_reply(ticket, outcome, timing) {
+            Some(reply) => reply,
+            None => return Ok(None),
+        };
         let binding = self.request_completion(ticket);
         let completion = match &binding {
             Some(binding) => binding.completion(outcome, timing),

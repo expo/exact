@@ -166,6 +166,8 @@ impl<D: DataSource> Bridge<D> {
             Some(io) => (io.endow)(data.grants(), data.app_id(), true),
             None => crate::store::Endowed::none(),
         };
+        let mut snapshot = snapshot;
+        self.seed_window_state(&mut snapshot);
         let fonts = self.fonts;
         let fonts_ctx = self.fonts_ctx;
         let control_text = self.control_text;
@@ -237,6 +239,7 @@ impl<D: DataSource> Bridge<D> {
                 self.presenter_hooks(&mut host, &hooks);
                 self.wake = hooks.wake.map(|w| (w, hooks.wake_ctx));
                 self.executor = executor;
+                self.restore_window.clear();
                 let batch = Host::ending(self.host.replace(host), batch);
                 self.launch_layout.insets = None;
                 self.parked.clear();

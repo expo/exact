@@ -1275,7 +1275,12 @@ fn faults<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
             Ok(v) => v,
             Err(e) => return error(&e.to_string()),
         };
-        if let Err(e) = table.answer(&prefix, &value["faults"]["response"]) {
+        let method = match value["faults"].get("method") {
+            Some(serde_json::Value::String(s)) => Some(s.as_str()),
+            Some(_) => return error("answer fetch needs a method name"),
+            None => None,
+        };
+        if let Err(e) = table.answer_method(&prefix, method, &value["faults"]["response"]) {
             return error(&e);
         }
     } else if let Some(prefix) = field_str(request, "fail") {

@@ -7,12 +7,12 @@ const errors = new Map();
 // Whether a drive opened this page: `agent` alone or `agent=1`, as every web reader of the parameter asks
 const driven = () => ['', '1'].includes(new URL(globalThis.performance?.getEntriesByType?.('navigation')[0]?.name ?? location.href).searchParams.get('agent'));
 function show(message, source = "app") {
-  if (message) errors.set(source, message); else errors.delete(source);
+  if (message) errors.set(source, message); else if (!errors.delete(source)) return;
   const text = [...errors.values()].join("\n\n");
   if (!text) { overlay?.remove(); overlay = null; return; }
   overlay ??= document.body.appendChild(Object.assign(document.createElement("pre"), { style: "position:fixed;left:0;right:0;bottom:0;margin:0;padding:12px;background:#300;color:#fdd;font:12px/1.4 ui-monospace,monospace;white-space:pre-wrap;z-index:2147483647" }));
   overlay.textContent = text + "\n(click to dismiss)";
-  overlay.onclick = () => { errors.clear(); show(null); };
+  overlay.onclick = () => { errors.clear(); overlay.remove(); overlay = null; };
 }
 
 // SHA-256 also works on trusted-LAN HTTP pages where SubtleCrypto is absent.

@@ -7,6 +7,61 @@ use exact_runner::{
 };
 use serde_json::Value as Json;
 
+#[test]
+fn source_turn_budgets_survive_baking_and_bytecode_activation() {
+    if !exact_js::ENGINE_LINKED {
+        return;
+    }
+    let f = Fixture::new();
+    f.write("app.contract", "component App\n  resource a = signOrder() as shape string\n  resource b = fetchLabel() as shape string\n  view\n    text a + b\n");
+    let source = "import type { Answer } from './app.contract.d.ts';\nexport const grants = '';\nexport const answer: Answer = name => name;\n";
+    let mut producer = Producer::new(Tools::default()).unwrap();
+    f.write(
+        "policy.ts",
+        "export const turnBudgets = { signOrder: 400 } as const;\n",
+    );
+    f.write(
+        "app.ts",
+        &format!("{source}export {{turnBudgets}} from './policy';\n"),
+    );
+    for baked in [f.bake(), producer.bake(&f.0, None).unwrap()] {
+        let receipt: Json = serde_json::from_str(&baked.receipt).unwrap();
+        assert_eq!(
+            receipt["turnBudgets"],
+            serde_json::json!({"signOrder": 400.0})
+        );
+        assert_eq!(receipt["typescriptRuntime"], 16);
+        let plan = exact_plan::Plan::decode(&baked.plan).unwrap();
+        let mut module =
+            Module::loaded(baked.bytecode, receipt["appId"].as_str().unwrap(), "").unwrap();
+        module.bind(&plan);
+        module.set_turn_step(std::time::Duration::from_millis(150));
+        assert_eq!(
+            module.query("signOrder", &[]).unwrap(),
+            Value::str("signOrder")
+        );
+        assert!(
+            matches!(module.query("fetchLabel", &[]), Err(exact_runner::DataError::Overrun(why)) if why.contains("100 ms"))
+        );
+        module.set_turn_step(std::time::Duration::from_millis(401));
+        assert!(
+            matches!(module.query("signOrder", &[]), Err(exact_runner::DataError::Overrun(why)) if why.contains("400 ms"))
+        );
+    }
+    f.write(
+        "policy.ts",
+        "export const turnBudgets = { missing: 400 };\n",
+    );
+    let error = producer
+        .bake(&f.0, None)
+        .err()
+        .expect("unknown source refused");
+    assert!(
+        error.contains("unknown TypeScript source missing"),
+        "{error}"
+    );
+}
+
 fn model_fixture() -> Fixture {
     let f = Fixture::new();
     let package =

@@ -106,8 +106,7 @@ final class DevPillTests: XCTestCase {
     private var session: ExactSession?
     override func tearDown() { session?.destroy(); session = nil; window?.isHidden = true; window = nil; super.tearDown() }
 
-    func testThePillSaysTheLoopsStatusAndGoesWhenThePlanComes() throws {
-        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { throw missing("scene", "the pill is in a scene's window") }
+    private func makeWindow(_ scene: UIWindowScene) -> (ExactSession, UIWindow) {
         let session = ExactApp.shared.makeSession(label: "dev-pill")
         self.session = session
         let window = UIWindow(windowScene: scene), host = UIViewController()
@@ -118,6 +117,12 @@ final class DevPillTests: XCTestCase {
         let view = ExactView(session: session)
         host.view.addSubview(view)
         view.frame = host.view.bounds
+        return (session, window)
+    }
+
+    func testThePillSaysTheLoopsStatusAndGoesWhenThePlanComes() throws {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { throw missing("scene", "the pill is in a scene's window") }
+        let (session, window) = makeWindow(scene)
         session.presenter.showDevStatus("Dev loop: building the module producer…")
         let pill = session.presenter.devPill as? UILabel
         if ExactEnv.agentMode { XCTAssertNil(pill, "never under the agent"); return }
@@ -129,4 +134,36 @@ final class DevPillTests: XCTestCase {
         XCTAssertNil(pill?.superview, "gone when the plan comes")
     }
     #endif
+
+    func testOverrunStaysInItsWindowUntilTheNextInput() throws {
+        if ExactEnv.agentMode || ExactEnv.releaseBuild { throw XCTSkip("development window required") }
+        #if os(macOS)
+        let f = try SheetFixture()
+        fixture = f
+        f.window.orderFrontRegardless()
+        f.settle()
+        let session = f.session
+        let said = { (session.presenter.devPill as? NSTextField)?.stringValue }
+        #else
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { throw missing("scene", "the pill is in a scene's window") }
+        let (session, _) = makeWindow(scene)
+        let said = { (session.presenter.devPill as? UILabel)?.text?.trimmingCharacters(in: .whitespaces) }
+        #endif
+        let warning = "mutation order failed: signOrder took 150 ms of CPU time over its 100 ms turn budget"
+        let data = try JSONSerialization.data(withJSONObject: ["ops": [], "budgetWarning": warning] as [String: Any])
+        session.apply(Batch.decode(data))
+        XCTAssertEqual(said(), warning)
+        #if os(macOS)
+        XCTAssertEqual((session.presenter.devPill as? NSTextField)?.maximumNumberOfLines, 0)
+        #else
+        XCTAssertEqual((session.presenter.devPill as? UILabel)?.numberOfLines, 0)
+        #endif
+        defer { ExactApp.shared.showDevStatus(nil) }
+        ExactApp.shared.showDevStatus(.stale)
+        XCTAssertEqual(said(), "Rebuild this app: its native code changed")
+        ExactApp.shared.showDevStatus(nil)
+        XCTAssertEqual(said(), warning)
+        session.applyInput(wireBatch([]))
+        XCTAssertNil(session.presenter.devPill)
+    }
 }

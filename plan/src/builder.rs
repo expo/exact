@@ -482,7 +482,7 @@ impl PlanBuilder {
             init,
             owner: None,
             late: false,
-            persist: false,
+            persist: PersistScope::None,
         });
         SlotsId(self.plan.slots.len() as u32 - 1)
     }
@@ -1168,8 +1168,8 @@ impl PlanBuilder {
         self.plan.slots[id.0 as usize].late = true;
     }
 
-    /// Mark a root slot persisted (LLP 1116 D5), or not.
-    pub fn set_slot_persist(&mut self, id: SlotsId, persist: bool) {
+    /// Choose where a root slot is kept across reloads.
+    pub fn set_slot_persist(&mut self, id: SlotsId, persist: PersistScope) {
         self.plan.slots[id.0 as usize].persist = persist;
     }
 

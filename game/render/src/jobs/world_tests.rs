@@ -6,7 +6,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
 #[derive(Args, Default)]
-struct Options {
+pub(super) struct Options {
     value: u32,
     #[live]
     paused: bool,
@@ -14,7 +14,7 @@ struct Options {
     boosted: bool,
 }
 
-struct TestGame;
+pub(super) struct TestGame;
 impl Game for TestGame {
     const ID: &'static str = "render-jobs-test";
     type Args = Options;
@@ -256,7 +256,7 @@ impl<const HOLD: bool> Hooks for JobHooks<HOLD> {
     }
 }
 
-fn triangle(gpu: &HookGpu<'_>, view: &FrameView<'_>) -> wgpu::RenderPipeline {
+pub(super) fn triangle(gpu: &HookGpu<'_>, view: &FrameView<'_>) -> wgpu::RenderPipeline {
     let module = gpu
         .device
         .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -326,7 +326,7 @@ fn canvas(value: u32, paused: bool, seekable: bool) -> Canvas {
     canvas
 }
 
-fn draw(gpu: &Gpu, canvas: &mut dyn Surface, now_ms: f64, seekable: bool) -> Vec<u8> {
+pub(super) fn draw(gpu: &Gpu, canvas: &mut dyn Surface, now_ms: f64, seekable: bool) -> Vec<u8> {
     draw_frame(gpu, canvas, now_ms, seekable).0
 }
 

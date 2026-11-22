@@ -12,8 +12,8 @@
  *   bun scripts/evidence.mjs [--app <name>] [--since <rev>] [--draft]
  *   bun scripts/evidence.mjs note <host> "<what was seen>" [--app <name>] [--device "<model, OS>"]
  */
-import { createHash } from 'node:crypto';
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, utimesSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { pendingBuildInputs, platformCrateKind, resolveApp, webDist as defaultWebDist } from './app.mjs';
 import { nativeBuild, receiptPath } from './agent-build.mjs';
@@ -27,7 +27,8 @@ const git = (args, cwd = ROOT) => {
   if (run.exitCode !== 0) throw new Error(`git ${args.join(' ')}: ${run.stderr.toString()}`);
   return run.stdout.toString();
 };
-const digest = (path) => createHash('sha256').update(readFileSync(path)).digest('hex').slice(0, 16);
+const receiptId = bytes => createHash('sha256').update(bytes).digest('hex').slice(0, 16);
+const digest = path => receiptId(readFileSync(path));
 const runsOf = (app) => resolve(app.dir, '.exact', 'runs.jsonl');
 
 /** The record of the build a run on `host` uses: its path, or null where builds are not identified. */
@@ -38,19 +39,31 @@ function buildRecord(app, host, { webDist, device } = {}) {
   return null;
 }
 
+/** The digest, contents and freshness timestamp come from the same open receipt, even if a new build replaces it. */
+function retainReceipt(app, host, record) {
+  const fd = openSync(record, 'r');
+  try {
+    const bytes = readFileSync(fd), build = receiptId(bytes), info = fstatSync(fd);
+    const dir = resolve(app.dir, '.exact', 'receipts', build);
+    const receipt = resolve(dir, host === 'web' ? '.exact-build.json' : 'receipt.json');
+    mkdirSync(dir, { recursive: true });
+    const temporary = resolve(dir, randomUUID());
+    try {
+      writeFileSync(temporary, bytes, { mode: 0o600, flag: 'wx' });
+      utimesSync(temporary, info.atime, info.mtime);
+      renameSync(temporary, receipt);
+    } finally { rmSync(temporary, { force: true }); }
+    return { build, receipt };
+  } finally { closeSync(fd); }
+}
+
 /** Append one run to the app's record. Never throws: a run's result does not depend on its record. */
 export function recordRun(appName, { host, what, result, timing = 'agent', touch, device, sim, target, webDist, kind = 'run' }) {
   try {
     const app = resolveApp(appName), record = buildRecord(app, host, { webDist, device: device || !!target });
-    let receipt;
-    if (record) {
-      receipt = resolve(app.target, host === 'web' ? 'web-receipts' : 'native-receipts', digest(record), host === 'web' ? '.exact-build.json' : 'receipt.json');
-      mkdirSync(dirname(receipt), { recursive: true });
-      copyFileSync(record, receipt);
-      const info = statSync(record); utimesSync(receipt, info.atime, info.mtime);
-    }
+    const retained = record ? retainReceipt(app, host, record) : { build: null };
     const line = { at: new Date().toISOString(), kind, host, target: target ?? (device ? 'device' : host === 'ios' ? sim ?? process.env.EXACT_SIM ?? 'simulator' : host === 'web' ? process.env.EXACT_WEB_BROWSER ?? 'chrome' : host),
-      timing, ...(touch && touch !== 'agent' ? { touch } : {}), what, result, commit: git(['rev-parse', '--short=10', 'HEAD']).trim(), build: record ? digest(record) : null, ...(receipt ? { receipt } : {}) };
+      timing, ...(touch && touch !== 'agent' ? { touch } : {}), what, result, commit: git(['rev-parse', '--short=10', 'HEAD']).trim(), ...retained };
     mkdirSync(resolve(app.dir, '.exact'), { recursive: true });
     appendFileSync(runsOf(app), JSON.stringify(line) + '\n');
   } catch { /* the record is advice */ }

@@ -129,6 +129,32 @@ fn width_and_intrinsic_queries_reuse_actual_shape_calls() {
 }
 
 #[test]
+fn repeated_field_lines_share_shapes_and_keep_their_own_offsets() {
+    let mut engine = crate::text::fixtures::engine();
+    let text = "alpha\r\nbravo\nalpha\nbravo\nalpha\n";
+    let style = exact_kernel::StyleProps::default().with_rows(|rows| {
+        rows.white_space = exact_kernel::WhiteSpace::Pre;
+        rows.text_indent = 8.;
+    });
+    let mut spec = crate::paint::text_spec(&style, text);
+    let mut bold = spec.runs[0].clone();
+    bold.text = "alpha\nalpha".into();
+    bold.weight = 700;
+    spec.runs.push(bold);
+    let calls = shaping::shape_line_calls();
+    let paragraph = engine.edited_field(&spec, Some(120.), None);
+    let lines = &paragraph.source.data.lines;
+    assert_eq!(shaping::shape_line_calls() - calls, 4);
+    assert_eq!(
+        lines.iter().map(|l| l.start).collect::<Vec<_>>(),
+        [0, 7, 13, 19, 25, 31, 37]
+    );
+    let same = |a: usize, b: usize| Arc::ptr_eq(&lines[a].shape, &lines[b].shape);
+    assert!(same(1, 3) && same(2, 4) && same(5, 6));
+    assert!(!same(0, 2) && !same(2, 5));
+}
+
+#[test]
 fn retiring_catalog_outlives_engine_and_supplies_cpu_and_gpu_fonts() {
     let mut engine = crate::text::fixtures::engine();
     let a = engine.paragraph(&spec(), Some(200.));

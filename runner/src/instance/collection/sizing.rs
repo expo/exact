@@ -311,6 +311,7 @@ impl Collection {
             children: Vec::new(),
             revision: 0,
             data_generation: 0,
+            section_rows: RefCell::default(),
             next_epoch: 0,
             zero_heights: Default::default(),
             geometry: None,

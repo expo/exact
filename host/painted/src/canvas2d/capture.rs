@@ -2,8 +2,7 @@
 //! expo/exact#188 and #504; `exact_runner::canvas_capture`). The bitmap is
 //! the replayer's own pixmap, every list applied (the painters share it, and
 //! a list drawn while one holds it draws into a copy), so an accumulating
-//! drawing, its images and its text are what the capture holds. tiny-skia's encoder writes a PNG straight-alpha RGBA8,
-//! which a PNG without a colour chunk is read as sRGB. A JPEG is the bitmap
+//! drawing, its images and its text are what the capture holds. PNG stores straight-alpha sRGB pixels. A JPEG is the bitmap
 //! over opaque black, as `toBlob` writes one: by WIC on Windows
 //! ([JPEG encoder options](https://learn.microsoft.com/windows/win32/wic/jpeg-format-overview)),
 //! by `Bitmap.compress` on Android, which also writes WebP, and elsewhere
@@ -48,7 +47,7 @@ pub(crate) fn encode(
     {
         if let Some(codec) = exact_data::image::platform::installed().filter(|c| c.encodes(named)) {
             let source = if jpeg { opaque(pixmap) } else { pixmap.clone() };
-            let png = source.encode_png().map_err(|e| e.to_string())?;
+            let png = canvas_png(&source).map_err(|e| e.to_string())?;
             let failed = |(code, detail): (String, String)| format!("{code}: {detail}");
             let decoded = codec
                 .decode(&png, true, exact_runner::canvas_capture::MAX_PIXELS)
@@ -67,10 +66,34 @@ pub(crate) fn encode(
         }
         return jpeg_bytes(&opaque(pixmap), encoding.lossy_quality()).map(|b| (b, "image/jpeg"));
     }
-    pixmap
-        .encode_png()
+    canvas_png(pixmap)
         .map(|b| (b, "image/png"))
         .map_err(|e| e.to_string())
+}
+
+fn canvas_png(pixels: &tiny_skia::Pixmap) -> Result<Vec<u8>, png::EncodingError> {
+    let straight;
+    let rgba = if pixels.pixels().iter().all(|p| p.is_opaque()) {
+        pixels.data()
+    } else {
+        straight = pixels.clone().take_demultiplied();
+        &straight
+    };
+    png(pixels.width(), pixels.height(), rgba)
+}
+
+/// The PNG representation of a captured canvas or display. Rows are straight-alpha sRGB.
+pub(crate) fn png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, png::EncodingError> {
+    let mut out = Vec::new();
+    let mut encoder = png::Encoder::new(&mut out, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_compression(png::Compression::Fast);
+    encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+    let mut writer = encoder.write_header()?;
+    writer.write_image_data(rgba)?;
+    writer.finish()?;
+    Ok(out)
 }
 
 /// `pixmap` over opaque black: its premultiplied colour with full alpha.

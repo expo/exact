@@ -317,7 +317,7 @@ pub(super) fn tree(
     if families.iter().any(|f| {
         !matches!(
             f.as_str(),
-            "systemMedium" | "systemLarge" | "systemExtraLarge"
+            "systemMedium" | "systemLarge" | "systemExtraLarge" | "systemExtraLargePortrait"
         )
     }) && links(nodes) > 1
     {

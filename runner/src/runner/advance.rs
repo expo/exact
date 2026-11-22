@@ -6,6 +6,7 @@
 use super::*;
 
 mod data_timers;
+mod fixture_replies;
 mod inputs;
 
 /// A timer or collection-feedback commit and the runner clock it happened at.
@@ -68,6 +69,7 @@ pub(super) struct Clock {
     arrived: bool,
     /// Answers waiting on their own timers (`data_timers.rs`)
     data: data_timers::DataTimers,
+    fixtures: Vec<fixture_replies::Delayed>,
     /// Inputs waiting on the work due by their arrival (`inputs.rs`)
     held: std::collections::VecDeque<inputs::Held>,
 }
@@ -909,9 +911,18 @@ impl<D: DataSource> Runner<D> {
             if let Some(at) =
                 data_at.filter(|at| before_wake(*at) && due.is_none_or(|(_, timer)| *at < timer))
             {
-                // No commit: the host settles the continuation it hands out.
                 self.now_ms = if live { self.now_ms.max(at) } else { at };
-                if self.release_data_timers(at) && until_request {
+                let ticket = self.next_ticket;
+                if let Err(error) = self.release_fixture_replies(at, &mut receipts) {
+                    return Advanced {
+                        receipts,
+                        now_ms: self.now_ms,
+                        error: Some(error),
+                        stopped_on_request: false,
+                        needs_apply: false,
+                    };
+                }
+                if (self.release_data_timers(at) || self.next_ticket != ticket) && until_request {
                     landed = self.now_ms;
                     stopped_on_request = true;
                     break;

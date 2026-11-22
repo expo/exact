@@ -74,6 +74,7 @@ struct WidgetVariant: Hashable, Identifiable {
         case "systemMedium": return CGSize(width: 338, height: 158)
         case "systemLarge": return CGSize(width: 338, height: 354)
         case "systemExtraLarge": return CGSize(width: 720, height: 354)
+        case "systemExtraLargePortrait": return CGSize(width: 354, height: 720)
         case "accessoryCircular", "accessoryCorner": return CGSize(width: 58, height: 58)
         case "accessoryInline": return CGSize(width: 225, height: 26)
         default: return CGSize(width: 160, height: 72)

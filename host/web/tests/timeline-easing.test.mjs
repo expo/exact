@@ -25,7 +25,7 @@ const compiler = resolve(process.env.CARGO_TARGET_DIR ?? resolve(ROOT, 'target')
 const WEB = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const WEB_JS = resolve(WEB, '../web-js');
 const GLUE = readFileSync(resolve(WEB, 'glue.js'), 'utf8');
-const commitSource = glueDeclarations(GLUE, ['apply', 'heldLinks', 'applyBatch', 'holdWake', 'holdOrientation']);
+const commitSource = glueDeclarations(GLUE, ['apply', 'heldLinks', 'heldOutputs', 'applyBatch', 'holdWake', 'holdOrientation']);
 // The wasm host's real operation switch and commit tail, with the unrelated
 // host pieces inert. Keeping both functions in this one closure matters:
 // the `timelines` operation sets the flag that the commit tail consumes.
@@ -408,7 +408,8 @@ check('in Chrome, followers match timeline progress and stop when a consumer res
     if (target === 'js') {
       const instantiate = WebAssembly.instantiate;
       const memory = new WebAssembly.Memory({initial:1});
-      WebAssembly.instantiate = async () => ({instance:{exports:{memory,m_in:()=>0,m_out:()=>0,m_lower:()=>0}}});
+      // The motion module's exports the engine calls here, starting a page's springs at its ready time among them
+      WebAssembly.instantiate = async () => ({instance:{exports:{memory,m_in:()=>0,m_out:()=>0,m_lower:()=>0,m_start_on_frame:()=>{},m_presentable:()=>{}}}});
       globalThis.__files = () => new ArrayBuffer(0);
       globalThis.exact ??= {}; globalThis.exact.After ??= {};
       try {

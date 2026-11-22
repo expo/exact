@@ -226,7 +226,7 @@ fn an_upload_let_go_after_progress_turns_or_during_reply_turns_is_interrupted() 
             turns(&mut r, 1);
         }
         r.act("go", vec![Value::Number(2.0)]).unwrap();
-        assert!(matches!(mark(&r, 1.0), UploadEnd::Failed(f) if f.reason == "interrupted"));
+        assert!(matches!(mark(&r, 1.0), UploadEnd::Failed(f) if f.reason() == "interrupted"));
         r.take_requests();
         r.act("go", vec![Value::Number(1.0)]).unwrap();
         assert!(r.take_requests().is_empty());

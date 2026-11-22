@@ -48,8 +48,9 @@ and [hosting below a path](recipes/website-hosting.md) such as `/app/`.
 
 Keep scratch files in `.exact/` and helper scripts in `tools/`: neither makes the build stale.
 
-On a new machine, `bun <exact2>/scripts/exact.mjs setup --platform web` installs the
-web prerequisites. See [web CI preparation](reference.md#web-ci-preparation) for a Linux test runner.
+From the site directory, `bun <exact2>/scripts/exact.mjs setup --platform web` installs the
+web prerequisites. A Contract and TypeScript site can use matching prebuilt tools on a machine without Rust.
+Add `--check` to see which tools are already installed. See [web CI preparation](reference.md#web-ci-preparation) for a Linux test runner.
 
 ## The language
 

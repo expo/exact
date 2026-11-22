@@ -381,7 +381,7 @@ pub fn tag_of<'a>(node: &NodeFacts<'a>, in_button: bool) -> &'a str {
     }
     match element(node) {
         "div" | "main" | "header" | "nav" | "section" | "footer" | "article" | "aside" | "hr"
-        | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
+        | "p" | "blockquote" | "ul" | "ol" | "li" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
             if in_button =>
         {
             "span"

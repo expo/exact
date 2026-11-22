@@ -19,7 +19,7 @@ import os
 @available(iOS 17.0, macOS 14.0, watchOS 10.0, visionOS 26.0, *)
 public struct SnapshotEnvironment {
     public enum Family: String, Sendable {
-        case systemSmall, systemMedium, systemLarge, systemExtraLarge
+        case systemSmall, systemMedium, systemLarge, systemExtraLarge, systemExtraLargePortrait
         case accessoryRectangular, accessoryCircular, accessoryInline, accessoryCorner
         /// A Live Activity's placement (LLP 1126.001 WP10), named by `placement`.
         case liveActivity
@@ -64,7 +64,7 @@ public struct SnapshotEnvironment {
     /// Home Screen families, the Lock Screen and the expanded Island.
     package var takesLinks: Bool {
         switch family {
-        case .systemMedium, .systemLarge, .systemExtraLarge: return true
+        case .systemMedium, .systemLarge, .systemExtraLarge, .systemExtraLargePortrait: return true
         case .liveActivity: return placement?.takesLinks ?? false
         default: return false
         }

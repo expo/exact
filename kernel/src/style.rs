@@ -40,7 +40,7 @@ mod intern;
 pub mod safe_area_properties;
 pub use calc::Comparison;
 use handles::calc_handle;
-pub(crate) use handles::{calc_handle_in, resolve_calc, tree_handle, LayoutEnv};
+pub(crate) use handles::{calc_handle_in, calc_has_percent, resolve_calc, tree_handle, LayoutEnv};
 pub mod env;
 pub mod targets;
 pub use env::link as link_segments;
@@ -59,6 +59,7 @@ mod color_parse;
 mod features;
 pub mod metrics;
 pub mod profiled;
+pub(crate) mod prose;
 pub mod relative;
 pub mod roles;
 pub mod scale;
@@ -1411,9 +1412,6 @@ pub fn taffy_style(arena: &NodeArena, slot: u32) -> taffy::style::Style {
         // the columns, once they are cut (`fragment::cut`).
         s.align_content = None;
     }
-    // A root with `width: auto` fills what it is offered, as a `<div>` fills
-    // the body: CSS's block rule, which Taffy does not apply to a root.
-    // Height stays auto — as tall as its content, the page a viewport scrolls.
     // A replaced element keeps its natural ratio under `aspect-ratio: auto`
     // (with or without a fallback ratio, or a degenerate one): CSS sizes an
     // `<img>` with one dimension given from the other by that ratio. Only a
@@ -1449,6 +1447,7 @@ pub fn taffy_style(arena: &NodeArena, slot: u32) -> taffy::style::Style {
     }
     crate::grouped::apply_card_margins(arena, slot, &mut s);
     // After the mirror: a table's sides are what they cancel, physically.
+    prose::apply(arena, slot, &mut s);
     table::apply(arena, slot, &mut s);
     // After the mirror and a table's padding: a reservation is physical
     let reserved = crate::kernel::block::reservation::lay_out(arena, slot, &style, &env, &mut s);

@@ -49,6 +49,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
         // next frame is a paint.
         self.painted = None;
         self.moved = 0;
+        self.end_scroll();
         self.quiet = None;
         self.paint_by = None;
         self.travel = crate::travel::Travel::default();

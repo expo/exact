@@ -2,6 +2,28 @@
 use super::*;
 
 impl Mirror {
+    pub(super) fn derived_prop(
+        &mut self,
+        id: ViewId,
+        key: &'static str,
+        value: Option<String>,
+        batch: &mut Batch,
+    ) {
+        if self.props.get(key) == value.as_ref() {
+            return;
+        }
+        match value {
+            Some(value) => {
+                batch.props(id, &[(key, value.clone())], &[]);
+                self.props.insert(key, value);
+            }
+            None => {
+                batch.props(id, &[], &[key]);
+                self.props.remove(key);
+            }
+        }
+    }
+
     pub(super) fn update_props(
         &mut self,
         id: ViewId,

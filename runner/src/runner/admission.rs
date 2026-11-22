@@ -353,6 +353,7 @@ impl<D: DataSource> Runner<D> {
         // Why, on the line the test runner quotes for a mutation (which has
         // no `state.failed`): sb4 farm wave 6, E3.
         let reason = why.message.clone();
+        let overrun = why.is_overrun();
         let mut again = Vec::new();
         let next = match target {
             Target::Resource(i) => {
@@ -385,9 +386,15 @@ impl<D: DataSource> Runner<D> {
                 "it is not retried"
             }
         };
-        let what =
-            format!("request {ticket} ({name}) failed and is no longer pending: {next}: {reason}");
-        self.alert(what.clone());
+        let request = match (overrun, target.mutation()) {
+            (true, Some(_)) => format!("mutation {name}"),
+            (true, None) => format!("resource {name}"),
+            _ => format!("request {ticket} ({name})"),
+        };
+        self.source_alert(
+            format!("{request} failed and is no longer pending: {next}: {reason}"),
+            overrun,
+        );
         if ask_again {
             self.log(super::lines::asked_again(ticket, &name));
         }

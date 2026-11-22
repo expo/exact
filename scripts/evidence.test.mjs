@@ -21,14 +21,15 @@ const appAt = (path) => {
   }
 };
 
-test('web evidence keeps its receipt after temporary publications are removed', () => {
+test('web evidence stays current after its entire build directory is removed', () => {
   mkdirSync(resolve(ROOT, 'target'), { recursive: true });
   const dir = mkdtempSync(resolve(ROOT, 'target/evidence-web-'));
-  const previous = process.env.EXACT_APP_DIR, distBefore = process.env.EXACT_WEB_DIST;
+  const previous = process.env.EXACT_APP_DIR, distBefore = process.env.EXACT_WEB_DIST, targetBefore = process.env.CARGO_TARGET_DIR;
   try {
     writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'evidence-web', app: { id: 'com.exact.evidence-web', name: 'Evidence Web' } }));
     const source = resolve(dir, 'app.contract');
     writeFileSync(source, 'component App\n  text "hello"\n');
+    process.env.CARGO_TARGET_DIR = resolve(dir, 'target');
     const app = resolveApp(dir), build = privateWebBuild(app, 'test');
     process.env.EXACT_WEB_DIST = build.dist;
     mkdirSync(build.dist, { recursive: true });
@@ -36,6 +37,7 @@ test('web evidence keeps its receipt after temporary publications are removed', 
     recordRun(dir, { host: 'web', what: 'test', result: 'passed' });
     build.close();
     expect(existsSync(build.dist)).toBe(false);
+    rmSync(resolve(dir, 'target'), { recursive: true, force: true });
     const recorded = runs(app);
     expect(recorded).toHaveLength(1);
     expect(existsSync(recorded[0].receipt)).toBe(true);
@@ -45,6 +47,7 @@ test('web evidence keeps its receipt after temporary publications are removed', 
   } finally {
     if (previous === undefined) delete process.env.EXACT_APP_DIR; else process.env.EXACT_APP_DIR = previous;
     if (distBefore === undefined) delete process.env.EXACT_WEB_DIST; else process.env.EXACT_WEB_DIST = distBefore;
+    if (targetBefore === undefined) delete process.env.CARGO_TARGET_DIR; else process.env.CARGO_TARGET_DIR = targetBefore;
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -299,7 +302,7 @@ test('changed paths preserve unstaged edits, filenames and both sides of a renam
 });
 
 
-test.each(['macos', 'ios'])('%s evidence survives private product and bake cleanup', host => {
+test.each(['macos', 'ios'])('%s evidence stays current after its entire build directory is removed', host => {
   mkdirSync(resolve(ROOT, 'target'), { recursive: true });
   const dir = mkdtempSync(resolve(ROOT, 'target/evidence-native-'));
   const previous = { ...process.env };
@@ -308,6 +311,7 @@ test.each(['macos', 'ios'])('%s evidence survives private product and bake clean
     writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'evidence-native', app: { id: 'com.exact.evidence-native', name: 'Evidence Native' } }));
     const source = resolve(dir, 'app.contract'), data = resolve(dir, 'logic.rs');
     writeFileSync(source, 'component App\n  text "hello"\n'); writeFileSync(data, 'logic');
+    process.env.CARGO_TARGET_DIR = resolve(dir, 'target');
     const app = resolveApp(dir); build = privateNativeBuild(app, 'test');
     Object.assign(process.env, build.env);
     const paths = appleArtifacts(app, { destination: host === 'ios' ? 'ios-simulator' : 'macos' });
@@ -322,6 +326,7 @@ test.each(['macos', 'ios'])('%s evidence survives private product and bake clean
     recordRun(dir, { host, what: 'test', result: 'passed' });
     build.close();
     expect(existsSync(receipt)).toBe(false);
+    rmSync(resolve(dir, 'target'), { recursive: true, force: true });
     const recorded = runs(app);
     expect(recorded).toHaveLength(1);
     expect(standing(app, recorded)[0].standing).toBe('current');

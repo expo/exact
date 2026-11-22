@@ -47,9 +47,9 @@ import { nativeSource, prepareRustBundle } from './rust.mjs';
 import { bakeOutside, buildAndroidBake, compiledBakeDir, linkable, linkedInputs, recordRustBake } from './linked-plan.mjs';
 import { filesystem, installedModules, OFFLINE_MISSING, removePrivateTree, withHostDeployment } from './filesystem.mjs';
 import { installedFileDependencies } from './file-dependencies.mjs';
-import { startSweep } from './sweep.mjs';
+import { holdAppOutput, startSweep } from './sweep.mjs';
 import { WEB_TOOLCHAIN, WEB_STD, WEB_SIZE, WEB_RUSTFLAGS, webToolchainEnv, cargoEnvironment,
-  appCrates, authoredWorkspace, buildCommand, cargoOnPath, claimTargetCrates,
+  appCrates, authoredWorkspace, buildCommand, cargoOnPath, claimTargetCrates, physicalPath, writtenPath,
   wholeProgram, declaredWorkspace, knownWorkspace, refuseLoose, rememberWorkspace, shellsDir, targetRustflags } from './cargo-check.mjs';
 export { WEB_TOOLCHAIN, WEB_STD, WEB_SIZE, webToolchainEnv, cargoEnvironment, cargoOnPath, wholeProgram } from './cargo-check.mjs';
 import { appCrateName, gpuModules, packageGpuInputs, packageGpuManifest, gpuView, joinMetadata, joinsGpu, settleShells } from './app-shells.mjs';
@@ -250,7 +250,9 @@ export function rustRemapFlags(app, toolchain = null, env = process.env) {
   const { commit, sysroot } = rustcFacts.get(key);
   const pairs = [[resolve(env.CARGO_HOME ?? resolve(homedir(), '.cargo')), 'cargo']];
   if (sysroot && commit) pairs.push([resolve(sysroot, 'lib/rustlib/src/rust'), `/rustc/${commit}`]);
-  if (env.EXACT_SOURCE_ROOT) pairs.push([resolve(env.EXACT_SOURCE_ROOT), 'source']);
+  // The source root by the physical path Cargo names its sources by (/var is /private/var), and as written, `..` and
+  // all, last, so rustc's last matching prefix is the written spelling where both match one path
+  if (env.EXACT_SOURCE_ROOT) for (const root of new Set([physicalPath(env.EXACT_SOURCE_ROOT), writtenPath(env.EXACT_SOURCE_ROOT)].filter(Boolean))) pairs.push([root, 'source']);
   pairs.push([ROOT, '']);
   if (app && resolve(app.workspace) !== ROOT) pairs.push([resolve(app.workspace), '']);
   if (app) pairs.push([resolve(app.target), 'target']);
@@ -401,7 +403,7 @@ export function platformCrateKind(dir, kind) {
 
 /** The app `nameOrCrate` selects (`caltrain`, `caltrain-web`, …; or `EXACT_APP_DIR`): its directory, Cargo workspace,
  * target directory, crate identity (`appCrateName`), and manifest. */
-export function resolveApp(nameOrCrate) {
+export function resolveApp(nameOrCrate, { useOutput = true } = {}) {
   const path = nameOrCrate && /[\\/]|^\.\.?$/.test(String(nameOrCrate)) ? resolve(String(nameOrCrate)) : null;
   const outside = path ?? (process.env.EXACT_APP_DIR ? resolve(process.env.EXACT_APP_DIR) : null);
   if (path) nameOrCrate = undefined;
@@ -415,8 +417,10 @@ export function resolveApp(nameOrCrate) {
   dir = realpathSync(dir);
   // The bake runs this checkout's TypeScript compiler and bundler (partial
   // fixture copies carry no package.json, as PINNED_BUN says).
-  if (PINNED_BUN) installedModules();
-  installedFileDependencies(dir); // every package reader reads node_modules, where a `file:` package is as of the last install
+  if (useOutput) {
+    if (PINNED_BUN) installedModules();
+    installedFileDependencies(dir); // builds read a file: package as of its last install
+  }
   // Materialize defaults before Cargo inspects workspace members on a clean checkout.
   const manifest = claimVariant(dir, () => readManifest(dir, name));
   if (manifest.game === undefined) name = appCrateName(dir, name);
@@ -456,6 +460,14 @@ export function resolveApp(nameOrCrate) {
   const generated = workspace === shellsDir(dir), own = manifest.game || generated ? dir : workspace;
   const target = process.env.CARGO_TARGET_DIR ? resolve(process.env.CARGO_TARGET_DIR) : resolve(own, 'target');
   assertOwnTarget(target, own);
+  let outputUsed = false;
+  const output = () => {
+    if (useOutput && !outputUsed) {
+      holdAppOutput(target);
+      outputUsed = true;
+    }
+    return target;
+  };
   // What a build asks for before it runs Cargo in the workspace, once: a generated workspace written current with the
   // manifest (LLP 1153 D1.3) and its copied lock resolved (the first build fetches what the cache lacks), or an
   // authored workspace's lock checked. Every build helper reads `workspace`, so every build passes here; a web
@@ -464,13 +476,14 @@ export function resolveApp(nameOrCrate) {
   let rusted = false, gpuWorkspace = generated ? null : workspace;
   const rust = () => {
     if (rusted) return workspace;
+    output();
     rusted = true;
     // A deploy builds its capture of the app where the app builds (scripts/deploy.mjs `materializeSnapshot`).
     if (process.env.CARGO_TARGET_DIR && own !== ROOT && !process.env.EXACT_DEPLOY_CAPSULE) claimTargetCrates(target, name, dir);
     if (generated) gpuWorkspace = settleShells(dir, manifest, name); else checkLock?.();
     return workspace;
   };
-  startSweep(target);
+  if (useOutput) startSweep(target);
   let packages;
   const prepare = (refresh = false, options) => {
     if (manifest.game && (refresh || !packages)) {
@@ -492,7 +505,7 @@ export function resolveApp(nameOrCrate) {
     return packages.find(pkg => pkg.name === crate(kind));
   };
   return {
-    name, dir, target, crate, generated, rust, outside: !!outside,
+    name, dir, get target() { return output(); }, crate, generated, rust, outside: !!outside,
     selector,
     get workspace() { return rust(); },
     get gpuWorkspace() { rust(); return gpuWorkspace; },
@@ -1121,7 +1134,7 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
     const entries=platform==='ios'&&(app.manifest.widgets?.length||app.manifest.live_activities?.length); if(entries)add(resolve(packageRoot,'widget'),true); if(entries||env.EXACT_WIDGET_GALLERY==='1')add(resolve(packageRoot,'Sources/ExactSnapshot'),true);
   }
   if(platform==='web') {
-    for(const path of [...Object.values(webHostFiles('base','rust','gpu',...(gpuModules(app.manifest,'web').length?['gpuModules']:[]))).filter(path => !path.startsWith('target/web-host/')),...hostModuleSources(ROOT),'host/web-js/glue.mjs','host/web-js/agent-gate.mjs','scripts/app.mjs','scripts/rust.mjs',...SHELL_SOURCES,'host/web/build.mjs','package.json','bun.lock']) add(resolve(ROOT,path));
+    for(const path of [...Object.values(webHostFiles('base','rust','gpu',...(gpuModules(app.manifest,'web').length?['gpuModules']:[]),...(app.manifest.game?.render?.workers===true?['gpuJobs']:[]))).filter(path => !path.startsWith('target/web-host/')),...hostModuleSources(ROOT),'host/web-js/glue.mjs','host/web-js/agent-gate.mjs','scripts/app.mjs','scripts/rust.mjs',...SHELL_SOURCES,'host/web/build.mjs','package.json','bun.lock']) add(resolve(ROOT,path));
     if (existsSync(resolve(app.dir, 'app.ts'))) {
       // The TS producer is a build dependency, outside the runtime Cargo graph.
       // Its canonical API declaration still determines the accepted app module.

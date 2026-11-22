@@ -22,8 +22,8 @@ final class StatusItemHost: NSObject {
     private struct Weak { weak var host: StatusItemHost? }
     /// The placed items, by the button's id.
     private(set) var items: [UInt32: NSStatusItem] = [:]
-    /// The image each item was given from: a sync runs after every batch.
-    private var images: [UInt32: NSImage?] = [:]
+    /// The image source each item was drawn from: `sync()` runs after every batch.
+    private var images: [UInt32: MenuHost.MenuImageKey] = [:]
     private var saidUnplaced = false
     /// The session has ended: the next oldest places its own.
     private(set) var ended = false
@@ -112,10 +112,10 @@ final class StatusItemHost: NSObject {
         guard let button = item.button else { return }
         button.tag = Int(node.id)
         let label = presenter.menus.title(of: node)
-        let image = presenter.menus.image(of: node)
-        if images[node.id] != .some(image) {
-            images[node.id] = .some(image)
-            let template = image?.copy() as? NSImage
+        let imageKey = presenter.menus.imageKey(of: node)
+        if images[node.id] != imageKey {
+            images[node.id] = imageKey
+            let template = presenter.menus.image(of: node)?.copy() as? NSImage
             // The menu bar tints a template image (D7, Apple's HIG).
             template?.isTemplate = true
             if let template, template.size.height > 18 {
@@ -123,15 +123,18 @@ final class StatusItemHost: NSObject {
             }
             button.image = template
         }
-        button.title = button.image == nil ? label : ""
-        button.toolTip = label
-        button.setAccessibilityLabel(label)
-        button.appearsDisabled = node.disabled
+        // Guard AppKit writes: redundant assignments trigger NSStatusItem
+        // replicant redraws on every batch (LLP 1156.007 §5.1).
+        let title = button.image == nil ? label : ""
+        if button.title != title { button.title = title }
+        if button.toolTip != label { button.toolTip = label }
+        if button.accessibilityLabel() != label { button.setAccessibilityLabel(label) }
+        if button.appearsDisabled != node.disabled { button.appearsDisabled = node.disabled }
         // A menu AppKit opens on the click, filled from the rows then; a
         // disabled item has neither menu nor press.
         if !node.disabled, presenter.menus.toolbarPopover(of: node) != nil {
             if (item.menu as? InvokerMenu)?.source !== node { item.menu = presenter.menus.toolbarMenu(for: node) }
-        } else {
+        } else if item.menu != nil {
             item.menu = nil
         }
         if item.menu != nil, let pop = presenter.menus.toolbarPopover(of: node) { presenter.menus.rejectActiveMenuProperties(in: pop) }

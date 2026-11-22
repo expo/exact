@@ -1441,7 +1441,7 @@ function sourcesOf(dist, id) {
 /** A development page's trace (LLP 1079 D5): ⌥⇧T posts its journal, frames and
  * `perf`; this adds what only the server knows — the build's identity, as
  * stress-metrics.mjs writes it, the plan's digest and its source map — and
- * writes it under the app's target/traces/ for `agent.mjs trace <file>`. */
+ * writes it under the app's .exact/traces/ for `agent.mjs trace <file>`. */
 export async function saveTrace(req, res, { app, dist, root }) {
   const reply = (status, body) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
   try {
@@ -1456,8 +1456,9 @@ export async function saveTrace(req, res, { app, dist, root }) {
     trace.plan = trace.perf?.plan ?? plan;
     if (trace.perf && !trace.perf.plan) trace.perf.plan = plan;
     if (trace.plan === plan && existsSync(mapFile)) trace.map = JSON.parse(readFileSync(mapFile, 'utf8'));
-    mkdirSync(resolve(app.target, 'traces'), { recursive: true });
-    const path = resolve(app.target, 'traces', `trace-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+    const dir = resolve(app.dir, '.exact', 'traces');
+    mkdirSync(dir, { recursive: true });
+    const path = resolve(dir, `trace-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
     writeFileSync(path, JSON.stringify(trace));
     console.log(`trace: ${path}`);
     reply(200, { path });

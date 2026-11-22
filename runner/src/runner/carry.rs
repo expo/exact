@@ -14,6 +14,8 @@ pub struct Carried {
     pub last_view_id: exact_kernel::ViewId,
     /// Views the candidate can keep at matching source places (LLP 1029.000.002 D3).
     pub views: crate::instance::RetainedViews,
+    /// Reading positions of virtualized lists, by their authored place.
+    pub lists: crate::instance::RetainedLists,
     /// The last published kernel epoch.
     pub epoch: u64,
     /// A fresh reboot keeps the sequence but initializes state and reads the host store anew.
@@ -160,6 +162,11 @@ impl<D: super::DataSource> super::Runner<D> {
                 .as_ref()
                 .map(|tree| tree.retainable_views(&self.plan, &self.kernel, &self.ids))
                 .unwrap_or_default(),
+            lists: self
+                .tree
+                .as_ref()
+                .map(|tree| tree.carried_lists(&self.plan, &self.kernel))
+                .unwrap_or_default(),
             picked_count: self.picked_count,
             router: self.carry_router(),
             data_revision: self.data.revision().map(str::to_owned),
@@ -300,8 +307,8 @@ impl<D: super::DataSource> Runner<D> {
         let mut found = None;
         self.tree
             .as_ref()?
-            .visit_places(&self.plan, &self.kernel, |id, path| {
-                if id == view {
+            .visit_places(&self.plan, &self.kernel, |node, path, _| {
+                if node.view == view {
                     found = Some(path.to_vec());
                 }
             });

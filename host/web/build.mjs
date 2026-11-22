@@ -36,19 +36,19 @@ import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { sourceProvenance, writeInstallPages } from '../../scripts/install-page.mjs';
 import { sealEnvelope } from '../../scripts/deploy-signing.mjs';
-import { compilerWarnings, oneScheme, webInputDigests } from '../../scripts/agent-launch.mjs';
+import { compilerWarnings, oneScheme, webInputDigests, webInputPresent } from '../../scripts/agent-launch.mjs';
 import { webBuildFailure } from '../../scripts/app-cli.mjs';
 import { builtSettings } from '../../js/bake/src/__exact_env.mjs';
-import { packageGpuDir, packageGpuInputs, packageGpuManifest, rustDataOf } from '../../scripts/app-shells.mjs';
+import { authoredWebBake, webRendererHost, packageGpuDir, packageGpuInputs, packageGpuManifest, rustDataOf } from '../../scripts/app-shells.mjs';
 import { authClientMetadata, checkModuleRoster, gpuModules, markWorlds, rustPolicy, webGpuArtifacts, webHostFiles, worldSurfaces } from '../../scripts/app.mjs';
 import { webAudioSession, webCspFile, webHead } from '../../scripts/web-head.mjs';
 import { buildRust, rustFiles, rustCards, rustPackage } from '../../scripts/rust.mjs';
 import { webAppManifest, webDist, copyShaders, bakeOutput, bakeWatchEnv, buildBake, contractLast, readBake, verifyBakeFiles, developmentBuildEnv, resolveApp, webToolchainEnv } from '../../scripts/app.mjs';
 import { buildEditor, buildFlow, compilerSet } from '../web-js/module.mjs';
-import { RustMissing, WEB_CRATES, rustMissing, setMetadata } from '../../scripts/tools.mjs';
+import { RustMissing, WEB_CRATES, fromSets, rustMissing, setMetadata } from '../../scripts/tools.mjs';
 import { closeFilesystemReader, offlineMiss } from '../../scripts/filesystem.mjs';
 import { guardFlags, reportBuilt } from '../../scripts/help.mjs';
-import { BINARYEN_DOWNLOAD, optimizeWasm, splitStages, unsplitReason } from './stages.mjs';
+import { BINARYEN_DOWNLOAD, optimizeWasm, splitStages, stripWasm, Unsplittable, unsplitReason } from './stages.mjs';
 import { interfaceStyle, launchBackground, schemeHead, withInterfaceStyle, withLook } from './look.mjs';
 import { webIconLinks, webThemeColors } from '../../scripts/app-icons.mjs';
 import { appManifestDigest, appSources, buildFileCards, copyStaticTreeIfPresent, listAssets, hostingNotes, planRouteTable, publicFileCards, replaceBuild, webEnvelope, moduleCards, MODULE_FILES } from './serve.mjs';
@@ -101,17 +101,18 @@ export function webSourceRoots(app, js, render = 'rust') {
     for (const name of ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', '.cargo/config']) files.add(resolve(metadata.workspace_root, name));
     workspaces.push({ metadata, packages: local, rootNames: new Set(names) });
   };
-  // The compiler and the leaves from a tool set: its record of Cargo's answer, and Cargo is not asked (LLP 1174 D5).
-  const set = js ? compilerSet() : null, recorded = set && setMetadata(set);
-  // Without Rust only a set answers what Cargo would: said as that, not as `cargo metadata` failing (LLP 1174 D5).
-  if (js && !set && rustMissing()) throw new RustMissing('exact-web-js');
+  // A machine without Rust also needs the set's Cargo metadata when a local compiler takes precedence (LLP 1174 D5).
+  const missing = js && rustMissing();
+  let set;
+  if (js) set = missing ? fromSets('exact-web-js')?.set : compilerSet();
+  const recorded = setMetadata(set);
+  if (missing && !recorded) throw new RustMissing('exact-web-js', process.env, set && 'the matching web compiler has no Cargo metadata for this checkout');
   closure(recorded ?? webMetadata(SDK_ROOT), WEB_CRATES);
-  const names = [], build = resolve(app.dir, 'web/build.rs');
+  const names = [];
   const data = rustDataOf(app.manifest);
   if (data) names.push(data.krate);
-  const authored = existsSync(build) && !/^\s*fn main\(\)\s*\{\s*exact_js_bake::build\w*\(/m.test(readFileSync(build, 'utf8'));
   if (app.crate) {
-    if (!js || authored) names.push(app.crate('web'));
+    if (!js || authoredWebBake(resolve(app.dir, 'web'))) names.push(app.crate('web'));
     if (app.manifest.rust?.module?.package) names.push(app.manifest.rust.module.package);
     const gpu = [...(app.manifest.game || existsSync(resolve(app.dir, 'gpu/Cargo.toml')) ? [app.crate('gpu')] : []), ...gpuModules(app.manifest, 'web').filter(m => !m.package).map(({ name }) => app.crate(`gpu-${name}`))];
     // Discovery reads the workspace the last build generated and never writes one: a dev loop's parent asks after
@@ -132,7 +133,7 @@ export function webSourceRoots(app, js, render = 'rust') {
     const own = gpu.length && app.gpuWorkspace && app.gpuWorkspace !== app.workspace ? app.gpuWorkspace : null;
     if (own) closure(webMetadata(own), gpu); else names.push(...gpu);
     const renderBin = app.name ? `${app.name}-render` : `${app.crate('web').replace(/-web$/, '')}-render`;
-    const at = (!js || render === 'rust') && ['linux', 'web'].find(dir => existsSync(resolve(app.dir, dir, 'src/bin', `${renderBin}.rs`)));
+    const at = (!js || render === 'rust') && webRendererHost(app.dir, renderBin);
     if (at) names.push(app.crate(at));
   }
   const renderBin = app.crate ? (app.name ? `${app.name}-render` : `${app.crate('web').replace(/-web$/, '')}-render`) : null;
@@ -247,7 +248,11 @@ function completeWebInputs(app, js, render, inputRoots, inputs, inputsAt, settin
   const next = webSourceRoots(app, js, render);
   inputRoots.splice(0, inputRoots.length, ...next);
   const current = webInputDigests(app, js, next, settings.sourceInputs);
-  for (const path of Object.keys(inputs)) if (!Object.hasOwn(current,path)) delete inputs[path];
+  // An input the build no longer reads is dropped; one removed while it built, or no longer a file it reads, keeps what
+  // was read at the start, so a check sees the removal (a generated asset recorded absent stays absent).
+  for (const path of Object.keys(inputs)) if (!Object.hasOwn(current, path)) {
+    if (path.startsWith('import.meta.env.') || webInputPresent(app, path)) delete inputs[path];
+  }
   for (const [name,value] of Object.entries(settings.env ?? {})) current[`import.meta.env.${name}`] = JSON.stringify(value);
   for (const [path, value] of Object.entries(current)) {
     if (Object.hasOwn(inputs, path) && !path.startsWith('import.meta.env.')) continue;
@@ -359,7 +364,7 @@ if (target !== '--wasm' && !game && !bakeOnly) {
   process.stdout.write(said(js.stdout));
   // The compiler's warnings, as `contract build` says them, its file from here: the count names them (LLP 1116.004 D7).
   const compiler = compilerWarnings(js.stderr);
-  if (js.status === 0) {
+  if (js.status === 0 && !js.error) {
     if (inputs) completeWebInputs(app, true, render[1] ?? 'rust', inputRoots, inputs, inputsAt, builtSettings(stage));
     // What the JS target warned of, in its own words: the count it prints names nothing (workout F3, kanban F30).
     // The bundler's notes on the generated glue are not the app's to act on. The types app.ts imports, when
@@ -398,7 +403,10 @@ if (target !== '--wasm' && !game && !bakeOnly) {
   }
   // Its warnings as a success says them: the colours in one line unless a drive reads each (`EXACT_WARNINGS_WHOLE`).
   const failure = webBuildFailure(js.stderr);
-  console.error(`${(process.env.EXACT_WARNINGS_WHOLE ? failure : oneScheme(failure)).join('\n')}\n${app.name}: the web build (the JS target) failed; the wasm target is internal (--wasm)`);
+  for (const line of process.env.EXACT_WARNINGS_WHOLE ? failure : oneScheme(failure)) console.error(line);
+  if (js.error) console.error(js.error.message);
+  const exit = js.signal ? `signal ${js.signal}` : js.status != null ? `exit ${js.status}` : 'no exit status';
+  console.error(`${app.name}: the web build (the JS target) failed (${exit}); the wasm target is internal (--wasm)`);
   process.exit(1);
 }
 const crate = app.crate('web');
@@ -485,11 +493,20 @@ if (opt.error?.code === 'ENOENT') { copyFileSync(built, out); optNote = `wasm-op
 else if (opt.status !== 0) process.exit(opt.status ?? 1);
 else if (unsplit) optNote = `wasm-opt -Oz${opt.cached ? ' (cached)' : ''}; unsplit: ${unsplit}`;
 else {
-  const split = splitStages(named);
-  writeFileSync(out, split.core);
-  for (const [path, bytes] of split.files) { mkdirSync(resolve(stage, path, '..'), { recursive: true }); writeFileSync(resolve(stage, path), bytes); }
+  let split;
+  try { split = splitStages(named); }
+  catch (e) {
+    // A module the planner cannot show safe to split ships whole.
+    if (!(e instanceof Unsplittable)) throw e;
+    stripWasm(named, out);
+    optNote = `wasm-opt -Oz${opt.cached ? ' (cached)' : ''}; unsplit: ${e.message}`;
+  }
+  if (split) {
+    writeFileSync(out, split.core);
+    for (const [path, bytes] of split.files) { mkdirSync(resolve(stage, path, '..'), { recursive: true }); writeFileSync(resolve(stage, path), bytes); }
+    optNote = `wasm-opt -Oz${opt.cached ? ' (cached)' : ''}; the core, with stages: ${split.report.join('; ')}`;
+  }
   rmSync(named);
-  optNote = `wasm-opt -Oz${opt.cached ? ' (cached)' : ''}; the core, with stages: ${split.report.join('; ')}`;
 }
 }
 
@@ -547,7 +564,10 @@ if (bakeOnly) planBytes = readFileSync(resolve(buildEnv.EXACT_BAKE_OUTPUT, 'web-
 else {
 wasm = readFileSync(out);
 const unbooted = () => { throw new Error('app logic ran while extracting baked bytes'); };
-const { instance } = await WebAssembly.instantiate(wasm, { exact_grants: grantOrigins(() => instance.exports.memory), exact_js: { call: unbooted }, exact_rust: { load: unbooted, call: unbooted, read: unbooted, drop: unbooted }, exact_data: { random: unbooted, agent_seed: unbooted }, exact_clock: { now: unbooted }, exact_geometry: { scroll_metrics: unbooted, range: unbooted, read: unbooted, point: unbooted, points: unbooted, shown: unbooted } });
+// A split core's stage placeholders (stages.mjs) are imports too, from a `placeholder.<stage>` namespace each.
+const compiled = new WebAssembly.Module(wasm);
+const placeholders = Object.fromEntries(WebAssembly.Module.imports(compiled).filter(({ module }) => module.startsWith('placeholder.')).map(({ module }) => [module, new Proxy({}, { get: () => unbooted })]));
+const instance = await WebAssembly.instantiate(compiled, { ...placeholders, exact_grants: grantOrigins(() => instance.exports.memory), exact_js: { call: unbooted }, exact_rust: { load: unbooted, call: unbooted, read: unbooted, drop: unbooted }, exact_data: { random: unbooted, agent_seed: unbooted }, exact_clock: { now: unbooted }, exact_geometry: { scroll_metrics: unbooted, range: unbooted, read: unbooted, point: unbooted, points: unbooted, shown: unbooted } });
 exports = instance.exports;
 if (typeof exports.exact_plan !== 'function' || typeof exports.exact_out !== 'function' || !(exports.memory instanceof WebAssembly.Memory)) {
   throw new Error('the web wasm does not export exact_plan, exact_out, and memory');
@@ -702,9 +722,7 @@ if (!bakeOnly) {
 // robots.txt, and the shell itself as shell.html — what a client route is
 // served, and what the render server composes documents over.
 const renderBin = crate.replace(/-web$/, '-render');
-const renderAt = [['linux', app.crate('linux')], ['web', crate]]
-  .find(([dir]) => existsSync(resolve(app.dir, dir, 'src/bin', `${renderBin}.rs`)));
-const renderCrate = renderAt?.[1];
+const renderAt = webRendererHost(app.dir, renderBin);
 // Pay for what you use: an app that renders nothing at build builds and runs
 // no render entry (the wasm says which locations it renders, from its plan).
 // `--bake` has no wasm to ask: the entry, where there is one, renders what the plan declares.
@@ -713,6 +731,7 @@ const buildLocations = bakeOnly ? (renderAt ? ['the plan\'s'] : []) : locationsL
 if (buildLocations.error) throw new Error(`the plan's render=build routes: ${buildLocations.error}`);
 let documentNote = buildLocations.length ? `${buildLocations.length} declared, but no ${renderBin} entry in ${app.crate('linux')} or ${crate}` : 'none declared';
 if (buildLocations.length && renderAt) {
+  const renderCrate = renderAt === 'web' ? crate : app.crate('linux');
   // A build-time tool, never shipped: it renders the plan it is handed, so
   // its own Linux bake takes development trust (a production bake would
   // demand a publisher receipt for an updater nothing publishes).
@@ -770,6 +789,10 @@ let gpuNote = gpu.note;
 if (gpu.built) {
   copyHostFiles('gpu');
   if (gpuModules(app.manifest, 'web').length) copyHostFiles('gpuModules');
+  if (app.manifest.game?.render?.workers === true) {
+    copyHostFiles('gpuJobs');
+    gpuNote += `, ${Object.keys(webHostFiles('gpuJobs')).join(', ')}`;
+  }
   gpuNote += ', on demand';
   // A game's world surfaces, by name, as its GPU build declared them (`.shells/surfaces.json`): a browser without
   // WebGPU shows the refusal page over these and no other canvas (gpu-refusal.js, LLP 1139.003 D1).

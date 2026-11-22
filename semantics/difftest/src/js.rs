@@ -220,8 +220,14 @@ fn prepare(case: &Case, dir: &Path, index: usize) -> Result<Ready, JsVerdict> {
     let persisted: Vec<String> = plan
         .slots
         .iter()
-        .filter(|s| s.persist)
-        .map(|s| string(plan.str(s.name)))
+        .filter(|s| s.is_persisted())
+        .map(|s| {
+            format!(
+                "[{},{}]",
+                string(plan.str(s.name)),
+                s.persist == exact_plan::PersistScope::Window
+            )
+        })
         .collect();
     let launch_answers: Vec<_> = case.answers.iter().map(|(name, _)| name.as_str()).collect();
     let changes = case.events.iter().filter_map(|e| match e {

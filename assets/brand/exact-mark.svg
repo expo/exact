@@ -1,14 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 161.803 100" role="img" aria-labelledby="title description">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 246" role="img" aria-labelledby="title description">
   <title id="title">Exact mark</title>
-  <desc id="description">A golden rectangle partitioned into a square and a reciprocal golden rectangle.</desc>
+  <desc id="description">A rectangle split into a large panel on the left and a column on the right that is divided again into smaller panels.</desc>
   <g
     fill="none"
     stroke="#737373"
-    stroke-width="7"
-    stroke-linecap="round"
-    stroke-linejoin="round"
+    stroke-width="16"
+    stroke-linecap="square"
+    stroke-linejoin="miter"
   >
-    <rect x="3.5" y="3.5" width="154.803" height="93" rx="8" />
-    <path d="M100 4v92" />
+    <rect x="8" y="8" width="404" height="230" />
+    <path d="M256.5 8V238M256.5 97.5H412M319.5 8V97.5M256.5 58.5H319.5M295.5 58.5V97.5" />
   </g>
 </svg>

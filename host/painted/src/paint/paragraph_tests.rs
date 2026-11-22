@@ -304,14 +304,14 @@ fn styled_paragraph_metrics_and_cpu_gpu_glyph_batches_agree() {
         assert_eq!(paragraph.height, node.frame.height);
         for palette in [&light, &dark] {
             let cpu: Vec<_> = paragraph
-                .paint_glyphs(palette)
-                .map(|(g, baseline, ink)| {
+                .glyphs_with_runs()
+                .map(|(g, baseline, run)| {
                     (
                         g.glyph_id,
                         g.x,
                         baseline + g.y,
-                        g.run(),
-                        ink,
+                        run,
+                        palette[run],
                         paragraph.lines().faces[g.face as usize].skew,
                     )
                 })

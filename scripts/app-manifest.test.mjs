@@ -708,6 +708,14 @@ test('watchFamilies admits only the four accessory families', async () => {
     for (const family of ['systemSmall','systemMedium','systemLarge','systemExtraLarge']) {
       write([family]); assert.throws(() => readManifest(dir,'watch'), /watchFamilies/);
     }
+    // iOS 27 portrait extra-large is admitted in families, guarded in Swift source, and omitted on watchOS (LLP 1156.007 §5.1).
+    const { platformWidgetEntries, widgetBundleSource } = await import('../host/apple/widgets.mjs');
+    writeFileSync(resolve(dir,'app.json'), JSON.stringify({name:'XL', app:{id:'com.exact.xl', name:'XL'}, widgets:[{kind:'board',families:['systemExtraLarge','systemExtraLargePortrait'],component:'Card',props:'Props',refresh:'refresh',preview:{}}]}));
+    const xl = { id: 'com.exact.xl', manifest: readManifest(dir, 'xl') };
+    assert.deepEqual(platformWidgetEntries(xl, 'ios').map(e => e.families), [['systemExtraLarge', 'systemExtraLargePortrait']]);
+    assert.deepEqual(platformWidgetEntries(xl, 'macos').map(e => e.families), [['systemExtraLarge', 'systemExtraLargePortrait']]);
+    assert.deepEqual(platformWidgetEntries(xl, 'watchos'), []);
+    assert.match(widgetBundleSource(platformWidgetEntries(xl, 'ios'), { platform: 'ios' }), /if #available\(iOS 27\.0, macOS 27\.0, \*\) \{ families\.append\(\.systemExtraLargePortrait\) \}/);
   } finally { rmSync(dir,{recursive:true,force:true}); }
 });
 

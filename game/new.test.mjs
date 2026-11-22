@@ -979,7 +979,21 @@ test('SDK graph drift is repaired by the async lock refresh before locked consum
   const root = mkdtempSync(resolve(tmpdir(), 'sdk-drift-')), sdk = resolve(root, 'sdk'), dep = resolve(root, 'dep');
   mkdirSync(resolve(sdk, 'app'), {recursive:true}); mkdirSync(dep);
   const manifest = (version, name = 'sdk-drift-dependency') => `[package]\nname = "${name}"\nversion = "${version}"\nedition = "2021"\n[lib]\npath = "lib.rs"\n`;
+  const home = resolve(root, 'cargo-home'), vendor = resolve(root, 'registry');
+  const env = {...process.env, CARGO_HOME:home, CARGO_NET_OFFLINE:'true'};
+  const publish = (name, version, dependencies = '') => {
+    const dir = resolve(vendor, name + '-' + version);
+    const toml = manifest(version, name) + '[dependencies]\n' + dependencies;
+    mkdirSync(dir, {recursive:true});
+    writeFileSync(resolve(dir, 'lib.rs'), '');
+    writeFileSync(resolve(dir, 'Cargo.toml'), toml);
+    writeFileSync(resolve(dir, '.cargo-checksum.json'), JSON.stringify({files:{}, package:createHash('sha256').update(toml).digest('hex')}));
+  };
   try {
+    mkdirSync(home);
+    writeFileSync(resolve(home, 'config.toml'), `[source.crates-io]\nreplace-with = "fixture"\n[source.fixture]\ndirectory = ${JSON.stringify(vendor)}\n`);
+    publish('shared', '0.12.5');
+    publish('serde_json', '1.0.0', 'shared = "0.12"\n');
     for (const [path, name] of [['logic', 'exact-logic'], ['vendor/ibex/crates/ibex2-sqlite', 'ibex2-sqlite']]) {
       const dir = resolve(root, path);
       mkdirSync(dir, {recursive:true});
@@ -988,11 +1002,26 @@ test('SDK graph drift is repaired by the async lock refresh before locked consum
     }
     writeFileSync(resolve(dep, 'lib.rs'), ''); writeFileSync(resolve(dep, 'Cargo.toml'), manifest('0.1.0'));
     writeFileSync(resolve(sdk, 'Cargo.toml'), `[workspace]\nresolver = "2"\n[workspace.package]\nedition = "2021"\n[workspace.dependencies]\nsdk-drift-dependency = { path = "../dep" }\n`);
-    sdkLock(sdk, {update:true}); sdkLock(sdk);
-    writeFileSync(resolve(dep, 'Cargo.toml'), manifest('0.2.0'));
-    assert.throws(() => sdkLock(sdk), /stale for the SDK/);
-    sdkLock(sdk, {update:true}); sdkLock(sdk);
-    assert.match(readFileSync(resolve(sdk, 'app/shells.lock'), 'utf8'), /name = "sdk-drift-dependency"\nversion = "0.2.0"/);
+    const lock = resolve(sdk, 'app/shells.lock');
+    sdkLock(sdk, {update:true, env});
+    sdkLock(sdk, {env});
+    const before = readFileSync(lock, 'utf8');
+    assert.match(before, /name = "shared"\nversion = "0.12.5"/);
+
+    publish('shared', '0.12.7');
+    publish('new-reader', '1.0.0', 'shared = "0.12.7"\n');
+    writeFileSync(resolve(dep, 'Cargo.toml'), manifest('0.2.0') + '[dependencies]\nnew-reader = "1"\n');
+    // The checkout already resolved the new reader. The game SDK still holds the earlier patch.
+    rmSync(lock);
+    sdkLock(sdk, {update:true, env});
+    renameSync(lock, resolve(root, 'Cargo.lock'));
+    writeFileSync(lock, before);
+    assert.throws(() => sdkLock(sdk, {env}), /stale for the SDK/);
+    sdkLock(sdk, {update:true, env});
+    sdkLock(sdk, {env});
+    const updated = readFileSync(lock, 'utf8');
+    assert.match(updated, /name = "sdk-drift-dependency"\nversion = "0.2.0"/);
+    assert.match(updated, /name = "shared"\nversion = "0.12.7"/);
     const {checks} = await import('../scripts/async.mjs');
     const steps = checks('head', 'base', {lane:[],glue:[]});
     assert.ok(steps.findIndex(s => s[0] === 'game-lock') < steps.findIndex(s => s[0] === 'game'));

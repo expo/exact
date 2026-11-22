@@ -91,9 +91,6 @@ impl Source {
         palette: &[RunPaint],
         inline: impl Iterator<Item = ViewId>,
     ) -> Option<Self> {
-        if cfg!(windows) && !cfg!(test) {
-            return None;
-        }
         let admits =
             |n: &NodeRef<'_>| matches!(n.style.user_select, UserSelect::Text | UserSelect::All);
         let above =

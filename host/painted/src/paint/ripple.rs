@@ -339,27 +339,51 @@ impl Ripples {
 impl Painter {
     /// A pressable box under the Material look that is no control (a list's
     /// row, a card, a link): the hover's state layer over its `outer`
-    /// shape, unless it has a `:hover` of its own, and its ripple, in its
-    /// own `color`.
-    pub(super) fn pressable(&mut self, node: &NodeRef<'_>, outer: &Shape, ts: Transform) {
+    /// shape, unless it has a `:hover` of its own, a key's focus's, and its
+    /// ripple, in its own `color`.
+    pub(super) fn pressable(
+        &mut self,
+        node: &NodeRef<'_>,
+        outer: &Shape,
+        focused: bool,
+        ts: Transform,
+    ) {
         let (hovered, pressed) = (
             self.feedback.0 == Some(node.id),
             self.ripples.on(node).is_some() || self.held_press == Some(node.id),
         );
-        if !(hovered || pressed)
+        let focused = focused
+            && self.focus_presses
+            && !self.unringed(node)
+            && node.props.bool(exact_kernel::PropId::Disabled) != Some(true)
+            // Its player marks the focus on its controller's own button.
+            && self.media.focused != Some(node.key);
+        if !(hovered || pressed || focused)
             || !super::look::material()
             || matches!(node.node_type, NodeType::Control | NodeType::TextInput)
         {
             return;
         }
         let ink = super::rgba(node.text_color().resolve(self.dark));
-        // An authored `:hover` replaces the platform's (LLP 1121 D8).
+        // An authored `:hover` replaces the platform's (LLP 1121 D8); Compose
+        // shows one state layer, a focus's over a hover's.
         let own_hover = || (node.looks().iter()).any(|(s, _)| *s == exact_kernel::LOOK_HOVER);
-        if hovered && !own_hover() {
+        if hovered && !focused && !own_hover() {
             let hover = super::material::hover_opacity();
             self.backend.fill(outer, super::look::fade(ink, hover), ts);
         }
+        if focused {
+            self.focus_layer(outer, ink, ts);
+        }
         self.ripple(node, outer, ink, ts);
+    }
+
+    /// A key's focus under the Material look: the state layer over `shape`
+    /// in `ink`, at the pressed state's opacity, as Compose's ripple shows
+    /// it (`RippleDefaults`' `focusedAlpha`).
+    pub(super) fn focus_layer(&mut self, shape: &Shape, ink: [u8; 4], ts: Transform) {
+        let layer = super::look::fade(ink, super::material::pressed_opacity());
+        self.backend.fill(shape, layer, ts);
     }
 
     /// A checkbox's or a radio's press under the Material look: from the
@@ -367,11 +391,13 @@ impl Painter {
     /// (`CheckboxTokens`, `RadioButtonTokens.StateLayerSize`), as Compose's
     /// unbounded ripple there starts, `primary` while it is on and
     /// `onSurface` while off. `held`: a contact's toggle not yet committed.
+    /// A key's focus (`focused`) is the state layer on that circle.
     pub(super) fn mark_ripple(
         &mut self,
         node: &NodeRef<'_>,
         content: Rect4,
         held: Option<bool>,
+        focused: bool,
         ts: Transform,
     ) {
         let switch = node.props.str(exact_kernel::PropId::AccessibilityRole) == Some("switch");
@@ -389,6 +415,9 @@ impl Painter {
         let (cx, cy) = (x + w / 2.0, y + h / 2.0);
         let r = MARK_LAYER / 2.0;
         let circle = Shape::new((cx - r, cy - r, 2.0 * r, 2.0 * r), [r; 4]);
+        if focused && !self.unringed(node) {
+            self.focus_layer(&circle, ink, ts);
+        }
         self.ripple_in(node, &circle, ink, ts, true);
     }
 
