@@ -752,8 +752,11 @@ fn a_list_with_a_sticky_item_is_one_row() {
 
 #[test]
 fn a_pressed_split_section_records_its_body_rows_again() {
-    let plan = crate::test_plan(
-        r#"component App
+    // A split section, and a section a scroller wraps as its only child,
+    // whose `hidden` clip does not let it split.
+    for (source, recorded) in [
+        (
+            r#"component App
   state presses = 0
   action go
     presses = presses + 1
@@ -771,31 +774,51 @@ fn a_pressed_split_section_records_its_body_rows_again() {
             text "Third" width=200 height=30
             text "Fourth" width=200 height=30
 "#,
-    );
-    let (mut p, error) = Presenter::boot_with_fixture_fonts(
-        &plan,
-        (),
-        (200., 120.),
-        1.,
-        PathBuf::new(),
-        PainterChoice::Cpu,
-    )
-    .unwrap();
-    assert!(error.is_none(), "{error:?}");
-    let heard = Rc::new(RefCell::new(Heard::default()));
-    p.reader_replaced(Box::new(Keeps {
-        heard: heard.clone(),
-        row: 0,
-    }));
-    p.frame();
-    let section = p.host.kernel().find_by_test_id("section")[0];
-    let section = p.host.kernel().node_by_key(section).unwrap().id;
-    let (x, y, _, _) = p.rect_of(section).unwrap();
-    let before = heard.borrow().begun.len();
-    assert!(p.pointer_down(x + 10., y + 30., 0.).unwrap());
-    // The body text takes the section's `:active` color: First, and Third
-    // and Fourth in the section split within it.
-    assert_eq!(heard.borrow().begun.len() - before, 3);
+            3,
+        ),
+        (
+            r#"component App
+  state presses = 0
+  action go
+    presses = presses + 1
+  view
+    scroll width=200 height=100
+      column testId="section" press=go color="red" overflow="hidden"
+        :active
+          color = "blue"
+        text "Heading" position="sticky" top=0 width=200 height=20
+        text "First" width=200 height=30
+        text "Second" width=200 height=30
+"#,
+            2,
+        ),
+    ] {
+        let plan = crate::test_plan(source);
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
+            &plan,
+            (),
+            (200., 120.),
+            1.,
+            PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        let heard = Rc::new(RefCell::new(Heard::default()));
+        p.reader_replaced(Box::new(Keeps {
+            heard: heard.clone(),
+            row: 0,
+        }));
+        p.frame();
+        let section = p.host.kernel().find_by_test_id("section")[0];
+        let section = p.host.kernel().node_by_key(section).unwrap().id;
+        let (x, y, _, _) = p.rect_of(section).unwrap();
+        let before = heard.borrow().begun.len();
+        assert!(p.pointer_down(x + 10., y + 30., 0.).unwrap());
+        // The body text takes the section's `:active` color: First, and Third
+        // and Fourth in the section split within it; First and Second.
+        assert_eq!(heard.borrow().begun.len() - before, recorded, "{source}");
+    }
 }
 
 #[test]
