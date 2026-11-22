@@ -393,7 +393,7 @@ public final class ExactView: NSView {
                     if self.session.presenter.pressEditorFirst(event) { return nil }
                     return event
                 }
-                if event.type == .keyDown { self.session.presenter.flushKeyViewLoop() }
+                self.session.presenter.prepareKeyViewLoop(for: event, in: event.window)
                 let focused = self.ownsShortcutFocus(in: event.window)
                 let code=KeyCodes.mac[Int(event.keyCode)] ?? "Unidentified"
                 if focused, event.modifierFlags.intersection([.command,.control]).isEmpty,

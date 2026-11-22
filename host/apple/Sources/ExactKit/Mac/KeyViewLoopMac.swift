@@ -54,10 +54,23 @@ extension Presenter {
         return v.textArea ?? v.field ?? v.nativeValueControl ?? v
     }
 
+    /// Plain text insertion doesn't read the key-view loop. If AppKit
+    /// interprets a text key as a command, the editor prepares it there.
+    func prepareKeyViewLoop(for event: NSEvent, in window: NSWindow?) {
+        guard event.type == .keyDown else { return }
+        let editor = window?.firstResponder as? NSTextView
+        let owner = (editor as? TextArea)?.owner ?? (editor as? FieldEditor)?.owner
+        if owner?.presenter === self, editor?.hasMarkedText() == false,
+           event.modifierFlags.isDisjoint(with: [.command, .control, .option, .shift, .function]),
+           let characters = event.characters, !characters.isEmpty,
+           characters.unicodeScalars.allSatisfy({ $0.properties.generalCategory != .control && $0.properties.generalCategory != .privateUse }) {
+            return
+        }
+        flushKeyViewLoop()
+    }
+
     /// Rebuild the key-view loop if a batch left it stale, or the Keyboard
-    /// Navigation setting changed since it was built: called for each key
-    /// event before AppKit reads `nextKeyView` (the view's monitor, and the
-    /// agent's `type`, which sends to the window directly).
+    /// Navigation setting changed since it was built.
     func flushKeyViewLoop() {
         guard keyViewLoopStale || keyViewLoopMode != KeyboardNavigation.on else { return }
         keyViewLoopStale = false

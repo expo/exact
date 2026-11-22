@@ -1088,7 +1088,7 @@ extension Agent {
             }
             // This driver sends directly to NSWindow, bypassing NSApplication's
             // local monitor. Use the same session command router first.
-            presenter.flushKeyViewLoop()
+            if phase != "up" { presenter.prepareKeyViewLoop(for: down, in: win) }
             // The monitor's route (`Presenter.routeKey`): shortcuts, the focus's
             // `key` handlers (a prevented key goes no further), then the menus'
             // and dialogs' defaults.

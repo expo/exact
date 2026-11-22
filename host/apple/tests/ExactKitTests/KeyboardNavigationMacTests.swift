@@ -79,6 +79,47 @@ final class KeyboardNavigationMacTests: XCTestCase {
         if !p.routeKey(event, focused: true, in: window) { window.sendEvent(event) }
     }
 
+    func testTypingLeavesTheLoopForTheNextFocusCommand() throws {
+        keyboardNavigation(false)
+        for kind in ["textarea", "input"] {
+            window?.close()
+            let p = page(row(2, kind, ["id": "editor", "value": ""])
+                + row(3, "input", ["value": ""])
+                + row(4, "input", ["value": ""])
+                + [["op": "children", "id": 1, "ids": [2, 3, 4]]])
+            let source = p.keyView(of: try XCTUnwrap(p.views[2]))
+            let first = try XCTUnwrap(p.views[3]?.field)
+            let second = try XCTUnwrap(p.views[4]?.field)
+            p.focusElement(["editor"])
+            let editor = try XCTUnwrap(window.firstResponder as? NSTextView)
+            if kind == "input" { XCTAssertTrue(editor is FieldEditor) }
+            else { XCTAssertTrue(editor === source && editor is TextArea) }
+            XCTAssertTrue(source.nextKeyView === first, kind)
+
+            p.apply(wireBatch([["op": "props", "id": 3, "set": ["tabIndex": "1"]]]))
+            let letter = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                characters: "a", charactersIgnoringModifiers: "a", isARepeat: false, keyCode: 0))
+            p.prepareKeyViewLoop(for: letter, in: window)
+            if !p.routeKey(letter, focused: true, in: window) { editor.keyDown(with: letter) }
+            XCTAssertEqual(editor.string, "a", kind)
+            XCTAssertTrue(window.firstResponder === editor, kind)
+            XCTAssertTrue(source.nextKeyView === first, "typing didn't need the new focus order in a \(kind)")
+
+            // A binding can deliver a command without a Tab key event.
+            editor.doCommand(by: #selector(NSResponder.insertTab(_:)))
+            XCTAssertNotNil(second.currentEditor(), "Tab follows the new order in a \(kind)")
+            XCTAssertTrue(window.firstResponder === second.currentEditor(), kind)
+
+            if let area = editor as? TextArea {
+                p.focusElement(["editor"])
+                p.apply(wireBatch([["op": "props", "id": 4, "set": ["tabIndex": "1"]]]))
+                area.insertBacktab(nil)
+                XCTAssertNotNil(second.currentEditor(), "Shift-Tab wraps to the last field in the latest order")
+            }
+        }
+    }
+
     /// A date, a time and a `select` (X52, #280, #327): with Keyboard
     /// Navigation on, Tab stops at each, in order, as at every control (LLP
     /// 1115.000 D7.2). Off, the date and the time are still stops, as an
