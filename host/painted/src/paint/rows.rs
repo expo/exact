@@ -281,19 +281,25 @@ const MARGIN: f32 = 48.0;
 /// a point.
 const MAX_TRANSLATION: f32 = 4096.0;
 
-/// Whether `node` is a column with a sticky heading, whose children a backend
-/// that splits sections keeps as rows ([`Backend::independent_section_rows`]).
-/// A list is kept whole: an item's number counts its siblings.
-fn row_section(node: &NodeRef<'_>) -> bool {
-    can_split(node)
+/// Whether `node` may hold rows split under a sticky child, a section's
+/// or a scroller's only child's (`wraps_rows`), where a change to it
+/// reaches them. Looser than [`can_split`]: it only marks more rows.
+fn holds_split_rows(node: &NodeRef<'_>) -> bool {
+    node.node_type == NodeType::View
+        && node.style.flex_direction == exact_kernel::FlexDirection::Column
+        && !scrolls(effective_overflow(node).0)
+        && !scrolls(effective_overflow(node).1)
         && node
             .child_nodes()
             .any(|child| child.layout_position() == exact_kernel::PositionType::Sticky)
 }
 
-/// [`row_section`] but for its sticky child. Not a scroll container, which
-/// `hidden` makes too: a sticky child would stick to it, not to the
-/// scroller.
+/// Whether `node` is a column whose children a backend that splits
+/// sections keeps as rows under its sticky child
+/// ([`Backend::independent_section_rows`]), which the caller knows it has. A
+/// list is kept whole: an item's number counts its siblings. A scroll
+/// container, which `hidden` makes too, is kept whole: a sticky child
+/// sticks to it, not to the scroller.
 fn can_split(node: &NodeRef<'_>) -> bool {
     let unscrolled = |o| matches!(o, Overflow::Visible | Overflow::Clip);
     let (x, y) = effective_overflow(node);
@@ -306,7 +312,7 @@ fn can_split(node: &NodeRef<'_>) -> bool {
         && node.child_nodes().len() >= 3
 }
 
-/// The parents of every sticky node: the only columns [`row_section`] can
+/// The parents of every sticky node: the only columns [`can_split`] can
 /// take, found without reading each column's children on every paint.
 fn sticky_parents(kernel: &exact_kernel::Kernel) -> IdSet<ViewId> {
     kernel
@@ -419,8 +425,9 @@ impl Painter {
         for key in dirty.hard {
             if let Some(row) = row_of(&self.rows, key) {
                 self.rows.kept.get_mut(&row).expect("found").stale = true;
-            } else if let Some(section) =
-                kernel.node_by_key(key).filter(|n| split && row_section(n))
+            } else if let Some(section) = kernel
+                .node_by_key(key)
+                .filter(|n| split && holds_split_rows(n))
             {
                 // A split section is in none of its rows, though they paint
                 // what they take from it, such as a pressed or moving color;
@@ -430,7 +437,7 @@ impl Painter {
                     for child in section.child_nodes() {
                         if let Some(row) = self.rows.kept.get_mut(&child.key) {
                             row.stale = true;
-                        } else if row_section(&child) {
+                        } else if holds_split_rows(&child) {
                             open.push(child);
                         }
                     }

@@ -190,7 +190,8 @@ fn an_outgoing_number_aligned_away_from_its_start_still_draws() {
             p.frame();
             p.clock(1000.);
             p.frame();
-            // The old digit fades out within 50 ms.
+            // At 16 ms the old digit is still opaque enough to read as red;
+            // by 50 ms it has faded to two thirds.
             p.clock(1016.);
         },
     );
@@ -263,6 +264,33 @@ fn an_indented_list_marker_still_draws_when_its_row_is_offscreen() {
 "#,
         |p| {
             p.frame();
+        },
+    );
+}
+
+#[test]
+fn a_number_its_indent_moves_before_its_start_still_rolls() {
+    // The indent puts the digit 100 points before the paragraph's start,
+    // past the overhang the first cell was clipped to.
+    ink_draws_the_red_the_cpu_draws(
+        r#"component App
+  state n = 7
+  task bump mount
+    after(1000, step)
+  action step
+    n = 4
+  view
+    scroll width=200 height=100
+      column
+        box width=200 height=10 flex-shrink=0
+        text `${n}` width=30 margin-left=120 text-indent=-100 font-size=24 color="red" flex-shrink=0 -exact-content-transition="numeric"
+        box width=200 height=300 flex-shrink=0
+"#,
+        |p| {
+            p.frame();
+            p.clock(1000.);
+            p.frame();
+            p.clock(1016.);
         },
     );
 }
