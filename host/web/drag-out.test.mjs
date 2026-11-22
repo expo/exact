@@ -203,10 +203,10 @@ test('an image the browser begins the drag at is the node\'s, but for one in a l
   expect([touched.defaultPrevented, keys(touched)]).toEqual([false, []]);
 });
 
-/** A document double that keeps the listeners `listen` adds, by type and phase. */
-function page() {
+/** An event target double that keeps the listeners `listen` adds, by type and phase. */
+function eventTarget() {
   const heard = [];
-  return { heard, baseURI: BASE,
+  return { heard,
     addEventListener(type, fn, options) {
       const entry = [type, fn, !!options?.capture, options?.signal];
       heard.push(entry);
@@ -219,6 +219,8 @@ function page() {
   };
 }
 
+const page = () => Object.assign(eventTarget(), { baseURI: BASE, defaultView: eventTarget() });
+
 const cleanups = [];
 afterEach(() => {
   for (const cleanup of cleanups.splice(0)) cleanup();
@@ -229,6 +231,7 @@ function listenOn(root) {
   cleanups.push(() => {
     controller.abort();
     expect(root.heard).toEqual([]);
+    expect(root.defaultView.heard).toEqual([]);
   });
   listen(root, undefined, { signal: controller.signal });
 }
@@ -242,7 +245,10 @@ test('a primary down in a field turns the drag of every node the app made dragga
   cleanups.push(() => controller.abort());
   expect(root.heard.map(([type, , capture, signal]) => [type, capture, signal === controller.signal]))
     .toEqual([['pointerdown', true, true], ['mousedown', true, true], ['pointerup', true, true], ['pointercancel', true, true],
-      ['mouseup', true, true], ['dragstart', true, true], ['dragend', true, true], ['dragstart', true, true], ['dragstart', false, true]]);
+      ['mouseup', true, true], ['pointermove', true, true], ['dragstart', true, true], ['dragend', true, true],
+      ['dragstart', true, true], ['dragstart', false, true]]);
+  expect(root.defaultView.heard.map(([type, , capture, signal]) => [type, capture, signal === controller.signal]))
+    .toEqual([['blur', false, true]]);
   const draggable = () => [outer, card, foreign, unowned].map((el) => el.getAttribute('draggable'));
   root.fire('pointerdown', { isPrimary: true, pointerType: 'mouse', target: field });
   root.fire('pointerdown', { isPrimary: true, pointerType: 'mouse', target: range });
@@ -266,6 +272,7 @@ test('a primary down in a field turns the drag of every node the app made dragga
   root.fire('mousedown', { isTrusted: false, target: other });
   expect(draggable()).toEqual(['false', 'false', 'true', 'true']);
   // A mouse's `mousedown`, which WebKit sends for a press after a drag without a `pointerdown`, counts.
+  root.fire('pointerup', { pointerType: 'mouse', target: field });
   root.fire('mousedown', { target: other });
   expect(draggable()).toEqual([null, 'true', 'true', 'true']);
   // A second field down turns off again a node another script wrote `TRUE` on meanwhile.
@@ -355,7 +362,7 @@ test('a field\'s down keeps a held node the source, so an image in its field dra
   expect(nested.defaultPrevented).toBe(true);
 });
 
-test('a press\'s own `mousedown` keeps its pointer, one alone counts, and another script\'s `false` is the app\'s to undo', () => {
+test('a press\'s own `mousedown` keeps its pointer, and another script\'s `false` is the app\'s to undo', () => {
   const root = page(), card = declared('div', { 'data-datatransfertext': 'card' }), press = new El('button', {}, card);
   const field = new El('input', {}, card), other = new El('div');
   listenOn(root);
@@ -372,24 +379,6 @@ test('a press\'s own `mousedown` keeps its pointer, one alone counts, and anothe
   expect(card.getAttribute('draggable')).toBe('FALSE');
   root.fire('pointerdown', { isPrimary: true, pointerType: 'mouse', target: other });
   expect(card.getAttribute('draggable')).toBe('true');
-  // A `mousedown` alone at the last press's target and point, as WebKit sends after a drag, counts: the field turns
-  // off a node the app made draggable since that press.
-  const late = new El('div'), inside = new El('input', {}, late);
-  writeDraggable(late, 'false');
-  root.fire('pointerdown', { isPrimary: true, pointerType: 'mouse', target: inside, clientX: 5, clientY: 5 });
-  root.fire('mousedown', { target: inside, clientX: 5, clientY: 5 });
-  writeDraggable(late, 'true');
-  root.fire('mousedown', { target: inside, clientX: 5, clientY: 5 });
-  expect(late.getAttribute('draggable')).toBe('false');
-  // A press whose own `mousedown` another listener kept from the document ends its pairing at its drag.
-  const later = new El('div'), within = new El('input', {}, later);
-  writeDraggable(later, 'false');
-  root.fire('pointerdown', { isPrimary: true, pointerType: 'mouse', target: within, clientX: 9, clientY: 9 });
-  // Heard in capture, before any listener can stop the drag's event
-  for (const [type, fn, capture] of root.heard) if (type === 'dragstart' && capture) fn(dragstart(within));
-  writeDraggable(later, 'true');
-  root.fire('mousedown', { target: within, clientX: 9, clientY: 9 });
-  expect(later.getAttribute('draggable')).toBe('false');
 });
 
 
@@ -494,6 +483,151 @@ test('a held mouse keeps its moved press after a touch tap, and release lets a p
   expect(pen.dataTransfer.data.get('text/plain')).toBe('card');
 });
 
+test('a held pen drags from a button after the mouse clicks elsewhere', () => {
+  const root = page(), card = declared('div', { 'data-datatransfertext': 'card' }), button = new El('button', {}, card);
+  listenOn(root);
+  const mouse = { pointerType: 'mouse', target: new El('div'), clientX: 5, clientY: 5 };
+  root.fire('pointerdown', { pointerType: 'pen', target: button, clientX: 50, clientY: 70 });
+  root.fire('pointerdown', { ...mouse });
+  root.fire('pointerup', { ...mouse });
+  const drag = dragstart(card, button);
+  root.fire('dragstart', drag);
+  expect(drag.dataTransfer.data.get('text/plain')).toBe('card');
+});
+
+test('a released touch at the same point cannot take the drag from a held mouse', () => {
+  const root = page(), card = declared('div', { 'data-datatransfertext': 'card' }), button = new El('button', {}, card);
+  listenOn(root);
+  const point = { target: button, clientX: 50, clientY: 70 };
+  root.fire('pointerdown', { ...point, pointerType: 'mouse' });
+  root.fire('pointerdown', { ...point, pointerType: 'touch' });
+  root.fire('pointerup', { ...point, pointerType: 'touch' });
+  const drag = dragstart(card, card);
+  root.fire('dragstart', drag);
+  expect(drag.defaultPrevented).toBe(true);
+});
+
+test('the newest held press at the drag point wins when the last down was elsewhere', () => {
+  const root = page(), input = observeDragInput(root), card = new El('div'), button = new El('button', {}, card);
+  const point = { clientX: 50, clientY: 70 };
+  root.fire('pointerdown', { ...point, target: card, pointerType: 'mouse' });
+  root.fire('pointerdown', { ...point, target: button, pointerType: 'pen' });
+  root.fire('pointerdown', { target: new El('div'), pointerType: 'touch', clientX: 5, clientY: 5 });
+  expect(downForDrag(input, { ...point, target: card }).target).toBe(button);
+});
+
+test.each(['pen', 'touch'])('compatibility events from a %s that went down first leave a held mouse alone', (pointerType) => {
+  const root = page(), card = declared('div'), field = new El('input', {}, card);
+  listenOn(root);
+  const other = { target: new El('div'), clientX: 5, clientY: 5 };
+  const mouse = { target: field, pointerType: 'mouse', pointerId: 1, clientX: 50, clientY: 70 };
+  root.fire('pointerdown', { ...other, pointerType });
+  if (pointerType === 'pen') root.fire('mousedown', { ...other });
+  root.fire('pointerdown', { ...mouse });
+  root.fire('mousedown', { ...mouse });
+  // A delayed touch down comes after its pointerup. A pen can release at a different point from its down.
+  const release = pointerType === 'pen' ? { target: new El('div'), clientX: 15, clientY: 15 } : other;
+  root.fire('pointerup', { ...release, pointerType });
+  if (pointerType === 'touch') root.fire('mousedown', { ...other });
+  root.fire('mouseup', { ...release });
+  root.fire('pointerdown', { ...other, pointerType });
+  expect(card.getAttribute('draggable')).toBe('false');
+  root.fire('mouseup', { ...mouse });
+  root.fire('pointerup', { ...mouse, pointerId: 2 });
+  expect(card.getAttribute('draggable')).toBe('false');
+  root.fire('pointerup', { ...mouse });
+  expect(card.getAttribute('draggable')).toBe('true');
+});
+
+test('a pen compatibility mouseup at its release point leaves a standalone mouse held', () => {
+  const root = page(), card = declared('div'), field = new El('input', {}, card);
+  listenOn(root);
+  const pen = { target: new El('div'), pointerType: 'pen', clientX: 5, clientY: 5 };
+  const mouse = { target: field, clientX: 50, clientY: 70 };
+  root.fire('pointerdown', { ...pen });
+  root.fire('mousedown', { ...pen });
+  root.fire('mousedown', { ...mouse });
+  const release = { ...pen, target: new El('div'), clientX: 15, clientY: 15 };
+  root.fire('pointerup', { ...release });
+  root.fire('mouseup', { ...release });
+  root.fire('pointerdown', { ...pen, pointerType: 'touch' });
+  expect(card.getAttribute('draggable')).toBe('false');
+  root.fire('mouseup', { ...mouse });
+  expect(card.getAttribute('draggable')).toBe('true');
+});
+
+test.each(['pointercancel', 'dragstart'])('a pen’s %s lets a standalone mouseup at the same point end its press', (type) => {
+  const root = page(), card = declared('div'), field = new El('input', {}, card);
+  listenOn(root);
+  const point = { target: field, clientX: 50, clientY: 70 };
+  root.fire('mousedown', { ...point });
+  root.fire('pointerdown', { ...point, pointerType: 'pen' });
+  root.fire('mousedown', { ...point });
+  if (type === 'dragstart') root.fire(type, dragstart(field));
+  else root.fire(type, { ...point, pointerType: 'pen' });
+  root.fire('mouseup', { ...point });
+  if (type === 'dragstart') root.fire('dragend', { target: field });
+  root.fire('pointerdown', { target: card, pointerType: 'touch' });
+  expect(card.getAttribute('draggable')).toBe('true');
+});
+
+test.each(['expired', 'prevented'])('a compatibility down that is %s cannot swallow a standalone mousedown', (reason) => {
+  const root = page(), card = declared('div'), field = new El('input', {}, card);
+  listenOn(root);
+  const point = { target: field, clientX: 50, clientY: 70 };
+  const touch = { ...point, pointerType: 'touch', timeStamp: 10, defaultPrevented: false };
+  root.fire('pointerdown', touch);
+  touch.defaultPrevented = reason === 'prevented';
+  root.fire('pointerup', { ...touch, timeStamp: 20 });
+  root.fire('mousedown', { ...point, timeStamp: reason === 'expired' ? 600 : 30 });
+  root.fire('pointerdown', { target: card, pointerType: 'pen' });
+  expect(card.getAttribute('draggable')).toBe('false');
+  root.fire('mouseup', { ...point });
+  expect(card.getAttribute('draggable')).toBe('true');
+});
+
+test.each(['blur', 'pointermove'])('a missed release ends at %s and the last field stays protected until a new down', (type) => {
+  const root = page(), card = declared('div'), field = new El('input', {}, card);
+  listenOn(root);
+  root.fire('pointerdown', { target: field, pointerType: 'mouse' });
+  if (type === 'blur') root.defaultView.fire('blur', {});
+  else {
+    root.fire('pointermove', { target: card, pointerType: 'mouse', buttons: 0, isTrusted: false });
+    root.fire('pointermove', { target: card, pointerType: 'pen', buttons: 0, isTrusted: true });
+    root.fire('pointermove', { target: card, pointerType: 'mouse', buttons: 1, isTrusted: true });
+    root.fire('pointerdown', { target: card, pointerType: 'pen' });
+    expect(card.getAttribute('draggable')).toBe('false');
+    root.fire('pointerdown', { target: field, pointerType: 'mouse' });
+    root.fire('pointermove', { target: card, pointerType: 'mouse', buttons: 0, isTrusted: true });
+  }
+  expect(card.getAttribute('draggable')).toBe('false');
+  root.fire('pointerdown', { target: card, pointerType: 'touch' });
+  expect(card.getAttribute('draggable')).toBe('true');
+});
+
+test.each(['pen', 'touch'])('dragend releases the %s that began the drag and keeps the held mouse', (pointerType) => {
+  const root = page(), card = declared('div'), other = declared('div');
+  const field = new El('input', {}, card), mouseField = new El('input', {}, other);
+  listenOn(root);
+  root.fire('pointerdown', { target: field, pointerType, clientX: 50, clientY: 70 });
+  root.fire('dragstart', dragstart(field));
+  root.fire('pointerdown', { target: mouseField, pointerType: 'mouse' });
+  root.fire('dragend', { target: field });
+  expect(card.getAttribute('draggable')).toBe('true');
+  root.fire('pointerdown', { target: other, pointerType });
+  expect(other.getAttribute('draggable')).toBe('false');
+  root.fire('pointerup', { target: mouseField, pointerType: 'mouse' });
+  // If pointerup already ended the dragging press, dragend leaves a newer press of that type held.
+  const press = { target: field, pointerType, clientX: 50, clientY: 70 };
+  root.fire('pointerdown', { ...press });
+  root.fire('dragstart', dragstart(field));
+  root.fire('pointerup', { ...press });
+  root.fire('pointerdown', { ...press, target: mouseField });
+  root.fire('dragend', { target: field });
+  root.fire('pointerdown', { target: other, pointerType: 'mouse' });
+  expect([card.getAttribute('draggable'), other.getAttribute('draggable')]).toEqual(['true', 'false']);
+});
+
 test.each(['pointerup', 'mouseup', 'dragend'])('%s forgets the mouse down target and point', (end) => {
   const root = page(), card = declared('div', { 'data-datatransfertext': 'card' });
   const link = new El('a', { href: '/x' }, card);
@@ -552,13 +686,16 @@ test('a pen down still pairs with its mousedown when the target changes at that 
   expect(drag.dataTransfer.data.get('text/plain')).toBe('card');
 });
 
-test('a drag from a detached card supplies no data in capture', () => {
+test('a detached card and its image cannot start a drag', () => {
   const root = page(), card = declared('div', { 'data-datatransfertext': 'card' });
+  const image = new El('img', {}, card), theirs = new El('img');
   listenOn(root);
-  const drag = dragstart(card);
-  card.isConnected = false;
-  root.fire('dragstart', drag, true);
-  expect(keys(drag)).toEqual([]);
+  for (const target of [card, image, theirs]) {
+    target.isConnected = false;
+    const drag = dragstart(target);
+    root.fire('dragstart', drag, true);
+    expect([drag.defaultPrevented, keys(drag)]).toEqual([target !== theirs, []]);
+  }
 });
 
 test('a source detached between capture and bubble does not restore its data', () => {

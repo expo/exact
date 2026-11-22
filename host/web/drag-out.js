@@ -69,21 +69,23 @@ export function start(event, base = globalThis.document?.baseURI, owns = () => t
  * nearest draggable around that element is one the app made (`exactDraggable`) and `owns`. Another script's draggable
  * keeps its own drag, and so do a selection, a link inside the node and what keeps the contact (rule 3): a field, and
  * for a mouse's down a press, between the element and the node keeps the node's drag from starting, and leaves the
- * keeper's own drag (a link's, a field's text) to the browser. A node that carries nothing begins no drag. */
+ * keeper's own drag (a link's, a field's text) to the browser. A detached source or a node that carries nothing
+ * begins no drag. */
 function decide(event, owns, down) {
   // A script's `dragstart` is no drag, and a selection's begins at its text, not an element (Firefox). A shadow root's
   // content is its host's, as the document sees it.
   const target = event.isTrusted !== false && event.target?.nodeType === 1 ? event.target : null;
   // Another script's draggable the browser began the drag at is its own, whatever is inside it, an SVG element too where
   // the engine honors its mark.
-  if (!target?.isConnected || (target.matches('[draggable="true" i]') && !declared(target))) return;
+  if (!target || (target.matches('[draggable="true" i]') && !declared(target))) return;
   // The down's target outlasts a pressed look that moves it from under the point.
   const point = pressedAt(down, event, target) ?? target.ownerDocument.elementFromPoint?.(event.clientX, event.clientY);
   const at = point && target.contains(point) ? point : target;
   // The nearest draggable, or a node the app has draggable that a field's down turned off, whose field keeps the drag
   let node = at;
   while (node && !(off.has(node) && declared(node)) && !explicit(node)) node = node.parentElement;
-  if (!node?.isConnected || !declared(node) || !owns(node)) return;
+  if (!node || !declared(node) || !owns(node)) return;
+  if (!node.isConnected) return CANCEL;
   const keeper = at.closest(down?.mouse !== false ? KEEPS_A_MOUSE : DRAG_FIELDS);
   if (keeper && keeper !== node && node.contains(keeper)) {
     // A picture in a keeper drags no more than one in any press does (LLP 1115.000 D4.14).

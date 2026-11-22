@@ -36,7 +36,7 @@ export function admitUrl(url, refuse) {
   return '';
 }
 
-export function install({ PropHooks, say, document = globalThis.document }) {
+export function install({ PropHooks, say, document = globalThis.document, signal }) {
   const last = new WeakMap();
   const hook = (name, rule) => (PropHooks[name] = (e, v) => {
     const seen = last.get(e) ?? last.set(e, {}).get(e);
@@ -53,5 +53,5 @@ export function install({ PropHooks, say, document = globalThis.document }) {
   if (!document) return;
   // The listener keeps the app's `draggable` on the node, which a field's contact turns off for a time (drag-out.js).
   PropHooks.draggable = (e, v) => (writeDraggable(e, v), true);
-  listen(document, (e) => e.$exactTree === true);
+  listen(document, (e) => e.$exactTree === true, { signal });
 }

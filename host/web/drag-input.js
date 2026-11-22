@@ -10,71 +10,105 @@ export const elementOf = (target) => target?.nodeType === 1 ? target : target?.p
 /** What `down` went down on, when `event` is at its point and `target`, where the browser began the drag, holds it. */
 export const pressedAt = (down, event, target) => atPoint(down, event) && target.contains(down.target) ? down.target : null;
 
-/** The down a drag at `target` began from: the last primary down, or a mouse's still held where the drag began, though
- * another input's primary down came since. */
+/** The most recent press still held where a drag at `target` began, falling back to the last primary down. */
 export function downForDrag(input, event, target = elementOf(event.target)) {
-  const { last } = input, mouse = input.held.get('mouse');
-  if (target && !pressedAt(last, event, target) && pressedAt(mouse, event, target)) return mouse;
-  return last;
+  const held = target && [...input.held.values()].findLast((press) => pressedAt(press, event, target));
+  return held || input.last;
 }
 
+/** How long after a pen's or a finger's down or release its compatibility mouse event may come; a tap's come together
+ * after it lifts, a long press's after its release. */
+const COMPAT_MS = 500;
+const matchesMouseEvent = (point, event, target) => point && (point.target === target || atPoint(point, event));
+
 /** Follows the primary presses in `root` until `signal` aborts, into `input`: each pointer type's held press
- * ({ target, x, y, mouse, field }), the last primary down, and the field it went down in. `changed` hears each down and
+ * ({ type, down, target, x, y, mouse, field }), the last primary down, the field it went down in, and the press a drag
+ * began from, which its `dragend` ends. `changed` hears each down and
  * each release of a field no longer the last down's. The wasm wait hands its `input` to the listener when it loads. */
 export function observeDragInput(root, signal, input = { held: new Map() }, changed = () => {}) {
-  const { held } = input;
+  const { held } = input, compat = input.compat ??= new Map();
+  // A pen's or a finger's compatibility `mousedown` and `mouseup` are its own, matched by target or point, and never
+  // a mouse's press or release (Pointer Events 3 §11). A down whose default was prevented sends neither.
+  const compatFor = (event, target) => [...compat.values()].findLast((press) =>
+    press.sawMouseDown === (event.type === 'mouseup') && !press.down.defaultPrevented
+    && !(event.timeStamp - (press.release?.timeStamp ?? press.down.timeStamp) > COMPAT_MS)
+    && (matchesMouseEvent(press, event, target) || matchesMouseEvent(press.release, event, target)));
+  const forgetCompat = (press) => {
+    if (press && compat.get(press.type) === press) compat.delete(press.type);
+  };
   const down = (event) => {
     if (event.isTrusted === false || event.isPrimary === false || event.button > 0) return;
     const target = elementOf(event.target);
     if (!target) return;
     // A `mousedown` alone is a press too: WebKit sends a press after a drag no `pointerdown` (Measured under Playwright).
     if (event.type === 'mousedown') {
-      // A press's compatibility `mousedown` after its own `pointerdown` adds nothing, or a pen's or a finger's would read
-      // as a mouse's; a tap sends it after the pointer has lifted.
-      const { paired } = input;
-      input.paired = null;
-      const own = paired && (paired.target === target || atPoint(paired, event));
-      input.compatUp = own && !paired.mouse;
-      if (own) return;
+      const mouse = held.get('mouse');
+      if (mouse?.down.type === 'pointerdown' && !mouse.sawMouseDown && !mouse.down.defaultPrevented
+          && matchesMouseEvent(mouse, event, target)) {
+        mouse.sawMouseDown = true;
+        return;
+      }
+      const press = compatFor(event, target);
+      if (press) press.sawMouseDown = true;
+      if (press || mouse) return;
     }
-    const type = event.pointerType || 'mouse';
-    const press = { target, x: event.clientX, y: event.clientY, mouse: type === 'mouse', field: target.closest(DRAG_FIELDS) };
-    if (event.type === 'pointerdown') input.paired = press;
+    const type = event.type === 'mousedown' ? 'mouse' : event.pointerType || 'mouse';
+    const press = { type, down: event, target, x: event.clientX, y: event.clientY, mouse: type === 'mouse',
+      field: target.closest(DRAG_FIELDS), sawMouseDown: event.type === 'mousedown' };
+    if (!press.mouse) {
+      compat.delete(type);
+      compat.set(type, press);
+    }
+    // Keep the most recent down last, including when a new press replaces the same pointer type.
+    held.delete(type);
     held.set(type, press);
     input.last = press;
     input.field = press.field;
     changed(input);
   };
-  const end = (type) => {
-    const press = held.get(type);
-    if (!held.delete(type)) return;
+  const end = (press) => {
+    if (!press || held.get(press.type) !== press) return;
+    held.delete(press.type);
     if (press.mouse && input.last === press) input.last = null;
-    if (input.dragMouse === press) input.dragMouse = null;
     if (press.field && press.field !== input.field) changed(input);
   };
   const up = (event) => {
     if (event.isTrusted === false || event.isPrimary === false || (event.button > 0 && event.type !== 'pointercancel')) return;
-    const type = event.pointerType || 'mouse';
-    if (event.type === 'mouseup' && input.compatUp) {
-      input.compatUp = false;
+    if (event.type === 'mouseup') {
+      const press = compatFor(event, elementOf(event.target));
+      if (press) forgetCompat(press);
+      else {
+        const mouse = held.get('mouse');
+        if (mouse?.down.type === 'mousedown') end(mouse);
+      }
       return;
     }
-    if (input.paired === held.get(type) && (type === 'mouse' || event.type === 'pointercancel')) input.paired = null;
-    end(type);
+    const type = event.pointerType || 'mouse';
+    const press = held.get(type);
+    if (press?.down.type !== 'pointerdown' || press.down.pointerId !== event.pointerId) return;
+    if (event.type === 'pointercancel') forgetCompat(press);
+    else if (compat.get(type) === press) {
+      press.release = { target: elementOf(event.target), x: event.clientX, y: event.clientY, timeStamp: event.timeStamp };
+    }
+    end(press);
   };
   const capture = { capture: true, signal };
   for (const type of ['pointerdown', 'mousedown']) root.addEventListener(type, down, capture);
   for (const type of ['pointerup', 'pointercancel', 'mouseup']) root.addEventListener(type, up, capture);
+  // A mouse released outside the window can miss its up. The last down's field still keeps its protection.
+  root.addEventListener('pointermove', (event) => {
+    if (event.isTrusted !== false && event.pointerType === 'mouse' && event.buttons === 0) end(held.get('mouse'));
+  }, capture);
+  root.defaultView?.addEventListener('blur', () => end(held.get('mouse')), { signal });
   root.addEventListener('dragstart', (event) => {
     if (event.isTrusted === false) return;
-    input.paired = null;
-    const mouse = held.get('mouse');
-    input.dragMouse = mouse && downForDrag(input, event) === mouse ? mouse : null;
+    input.dragPress = downForDrag(input, event);
+    forgetCompat(input.dragPress);
   }, capture);
   root.addEventListener('dragend', (event) => {
     if (event.isTrusted === false) return;
-    if (input.dragMouse === held.get('mouse')) end('mouse');
-    input.dragMouse = null;
+    end(input.dragPress);
+    input.dragPress = null;
   }, capture);
   return input;
 }

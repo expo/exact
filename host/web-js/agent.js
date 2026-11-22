@@ -154,8 +154,7 @@ export function install(exact) {
     // are the host's presentation of a modal route, not props (input-glue.js marks them; LLP 1115.000 D4.5).
     const sheet = el.hasAttribute('data-exact-dialog');
     for (const [attr, prop, num] of PROPS) if (el.hasAttribute(attr) && !(hostRole && attr === 'role')) props[prop] = num ? Number(el.getAttribute(attr)) : el.getAttribute(attr);
-    const draggable = el.exactDraggable === undefined ? el.getAttribute('draggable') : el.exactDraggable;
-    if (draggable != null) props.draggable = draggable;
+    if (el.exactDraggable != null) props.draggable = el.exactDraggable;
     // The intent `tree --ax` reads (LLP 1080.002 D7), as the runner names it.
     if (el.hasAttribute('inert')) props.inert = true;
     // A disabled control, as the runner's tree gives its `disabled` prop (LLP 1116.010 D3: `expect disabled`, and a press refused the same on every host).

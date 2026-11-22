@@ -333,8 +333,9 @@ export function syncMarkup(el) {
 // in it, or at an element around it where the down's point is in it, as a link's around its image pressed on the image,
 // is cancelled, a field's drag of text too, so no drag begins without the node's data. Another script's draggable keeps
 // its own drag. The presses followed from the glue's load are the listener's once it listens, so a field held then
-// keeps its node off. A load that fails, or a listener that fails as it starts, is logged and tried again, from a URL
-// of its own since a browser may keep a module's failure, on one timer while a live node waits.
+// keeps its node off. A load that fails, or a listener that fails as it starts, is logged and tried again on one timer
+// while a live node waits. Each retry uses a fresh URL for the entire module, including its bundled input helper,
+// since the browser keeps failures by URL.
 const liveView = (el) => views.get(Number(el.dataset?.view)) === el && !retiredViews.has(el);
 const dragOutWait = new AbortController();
 const waitingInput = typeof document === "object" ? observeDragInput(document, dragOutWait.signal) : undefined;
