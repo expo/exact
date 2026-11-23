@@ -91,7 +91,10 @@ pub struct Under {
 pub(super) struct Reader {
     tracked: BTreeMap<ViewId, (u32, (f32, f32))>,
     /// The last statement [`Presenter::reader_scrollers`] returned.
+    #[cfg(any(target_os = "android", test))]
     last: Vec<i32>,
+    #[cfg(any(target_os = "android", test))]
+    last_scale: f32,
 }
 
 impl Reader {
@@ -628,16 +631,16 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// What the reader is told after a frame of the scrollers it knows, when
-    /// that is not what it was last told (`None`): nine words a scroller:
-    /// id, flags (as [`Presenter::reader_under`]'s, for any drag), revision,
-    /// then as float bits where it is (x, y), the offset its rows were last
-    /// painted at (x, y; `drawn` names them for a scroller that has rows)
-    /// and its farthest offset (x, y), in the reader's pixels. A scroller the
+    /// that is not what it was last told (`None`): eleven words a scroller.
+    /// Id, flags, revision, then pairs of float bits: current logical offset
+    /// in points, recorded offset in pixels, logical maximum in points, and
+    /// painted endpoint in pixels. A scroller the
     /// reader knew that is not in a statement is gone (its node went, or a
     /// driver took it over): the reader forgets it.
-    pub fn reader_scrollers(
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn reader_scrollers(
         &mut self,
-        drawn: &[(ViewId, (f32, f32))],
+        drawn: &[crate::paint::grid::RecordedScroll],
         scale: f32,
     ) -> Option<Vec<i32>> {
         if self.reader.tracked.is_empty() {
@@ -646,24 +649,37 @@ impl<D: DataSource> Presenter<D> {
         }
         let limits = self.collection_scroll_limits();
         let ids: Vec<ViewId> = self.reader.tracked.keys().copied().collect();
-        let mut out = Vec::with_capacity(ids.len() * 9);
+        let mut out = Vec::with_capacity(ids.len() * 11);
         for id in ids {
             let Some(mut s) = self.scroller(id, &limits) else {
                 self.reader.tracked.remove(&id);
                 continue;
             };
             let rev = self.reader_revision(&s);
-            let painted = drawn.iter().find(|g| g.0 == id).map(|g| g.1);
+            let painted = drawn.iter().find(|g| g.id == id);
             s.node = painted.is_some();
-            let at = painted.unwrap_or(s.offset);
+            let (at, end) = painted.map_or(
+                ((s.offset.0 * scale, s.offset.1 * scale), (0., 0.)),
+                |group| {
+                    (
+                        (group.at.0 as f32, group.at.1 as f32),
+                        (group.grid.end.0 as f32, group.grid.end.1 as f32),
+                    )
+                },
+            );
             out.extend([id as i32, self.reader_flags(&s), rev as i32]);
-            let px = [s.offset.0, s.offset.1, at.0, at.1, s.max.0, s.max.1];
-            out.extend(px.iter().map(|v| bits(v * scale)));
+            out.extend(
+                [
+                    s.offset.0, s.offset.1, at.0, at.1, s.max.0, s.max.1, end.0, end.1,
+                ]
+                .map(bits),
+            );
         }
-        if out == self.reader.last {
+        if out == self.reader.last && scale == self.reader.last_scale {
             return None;
         }
         self.reader.last.clone_from(&out);
+        self.reader.last_scale = scale;
         Some(out)
     }
 

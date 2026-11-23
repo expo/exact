@@ -355,6 +355,7 @@ impl Painter {
                 let mut child_walk = Walk {
                     scene: walk.scene,
                     scrollbar_cover: walk.scrollbar_cover,
+                    scroll_grids: walk.scroll_grids.clone(),
                     hit_space: None,
                     boxes: Vec::new(),
                     text: BTreeMap::new(),
@@ -420,6 +421,7 @@ impl Painter {
         let mut child_walk = Walk {
             scene: walk.scene,
             scrollbar_cover: walk.scrollbar_cover,
+            scroll_grids: walk.scroll_grids.clone(),
             hit_space: None,
             boxes: Vec::new(),
             text: BTreeMap::new(),
@@ -575,6 +577,7 @@ pub(super) fn sticky(
     id: ViewId,
     offset: PaintOffset,
     grid: Option<f32>,
+    scroll_grids: &[(ViewId, Option<grid::ScrollGrid>)],
 ) -> PaintOffset {
     let kernel = scene.kernel;
     let Some(node) = kernel
@@ -583,7 +586,8 @@ pub(super) fn sticky(
     else {
         return offset;
     };
-    let (dx, dy) = sticky_displacement(scene, &node, grid);
+    let scroll_grid = sticky_owner_grid(scene, &node, scroll_grids).flatten();
+    let (dx, dy) = sticky_displacement(scene, &node, grid, scroll_grid);
     (offset.0 - dx, offset.1 - dy)
 }
 
@@ -591,6 +595,7 @@ pub(super) fn sticky_displacement(
     scene: &Scene<'_>,
     node: &NodeRef<'_>,
     grid: Option<f32>,
+    scroll_grid: Option<grid::ScrollGrid>,
 ) -> PaintOffset {
     let kernel = scene.kernel;
     let Some((c, scroller)) = kernel
@@ -599,10 +604,10 @@ pub(super) fn sticky_displacement(
     else {
         return (0., 0.);
     };
-    let scroll = sticky_scroll(scene, &scroller);
-    let snap_box = grid.is_some() && !grid::leaves_grid(node, &(scene.presented)(node.id));
-    let (dx, dy) = grid::sticky_shift(c, &scroller, scroll, grid, snap_box);
-    match grid.filter(|_| snap_box) {
+    let scroll = sticky_scroll(scene, &scroller, scroll_grid);
+    let grid = grid.filter(|_| !grid::leaves_grid(node, &(scene.presented)(node.id)));
+    let (dx, dy) = grid::sticky_shift(c, &scroller, scroll, grid);
+    match grid {
         Some(s) => (
             grid::device_pixel(dx, s) / f64::from(s),
             grid::device_pixel(dy, s) / f64::from(s),
@@ -611,8 +616,33 @@ pub(super) fn sticky_displacement(
     }
 }
 
-pub(super) fn sticky_scroll(scene: &Scene<'_>, scroller: &NodeRef<'_>) -> (f32, f32) {
-    if effective_overflow(scroller) != (Overflow::Visible, Overflow::Visible) {
+pub(super) fn sticky_owner_grid(
+    scene: &Scene<'_>,
+    node: &NodeRef<'_>,
+    scroll_grids: &[(ViewId, Option<grid::ScrollGrid>)],
+) -> Option<Option<grid::ScrollGrid>> {
+    let scroller = scene
+        .kernel
+        .node(scene.kernel.sticky_constraint(node.key)?.scroller)?;
+    let id = if effective_overflow(&scroller) == (Overflow::Visible, Overflow::Visible)
+        && scroller.parent.is_none()
+    {
+        crate::presenter::PAGE
+    } else {
+        scroller.id
+    };
+    scroll_grids
+        .iter()
+        .rfind(|(owner, _)| *owner == id)
+        .map(|(_, grid)| *grid)
+}
+
+pub(super) fn sticky_scroll(
+    scene: &Scene<'_>,
+    scroller: &NodeRef<'_>,
+    grid: Option<grid::ScrollGrid>,
+) -> (f32, f32) {
+    let scroll = if effective_overflow(scroller) != (Overflow::Visible, Overflow::Visible) {
         scene
             .scroll
             .get(&scroller.id)
@@ -622,5 +652,9 @@ pub(super) fn sticky_scroll(scene: &Scene<'_>, scroller: &NodeRef<'_>) -> (f32, 
         scene.page
     } else {
         (0.0, 0.0)
-    }
+    };
+    grid.map_or(scroll, |g| {
+        let (x, y) = g.points(scroll);
+        (x as f32, y as f32)
+    })
 }

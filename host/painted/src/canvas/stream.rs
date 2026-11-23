@@ -524,7 +524,7 @@ mod tests {
             let inner = Transform::from_translate(16., 118.);
             let shape = Shape::new((0., 0., 379., 70.), [16.; 4]);
             r.push_clip(&Shape::rect((0., 0., 379., 120.)), outer);
-            r.group_begin(7, (0., 0.));
+            r.group_begin(7, (0., 0.), None);
             let start = r.ops.len();
             r.fill(&shape, [42, 42, 42, 255], outer);
             assert_eq!(

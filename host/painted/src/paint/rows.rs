@@ -83,6 +83,7 @@ struct RowFrame {
 struct RowSticky {
     node: NodeKey,
     grid: Option<f32>,
+    scroll_grid: Option<grid::ScrollGrid>,
     shift: PaintOffset,
 }
 
@@ -611,7 +612,11 @@ impl Painter {
             return;
         }
         let scroll = walk.scene.scroll.get(&id).copied().unwrap_or((0.0, 0.0));
-        self.backend.group_begin(id, scroll);
+        self.backend.group_begin(
+            id,
+            scroll,
+            walk.scroll_grids.last().and_then(|(_, grid)| *grid),
+        );
         self.rows
             .groups
             .push((id, walk.boxes.len(), walk.boxes.len()));
@@ -760,8 +765,8 @@ impl Painter {
     }
 
     /// Note a node walked while a row records.
-    pub(super) fn row_node(&mut self, scene: &Scene<'_>, node: &NodeRef<'_>, shown: &Presented) {
-        let grid = self.grid();
+    pub(super) fn row_node(&mut self, walk: &Walk<'_, '_>, node: &NodeRef<'_>, shown: &Presented) {
+        let (scene, grid) = (walk.scene, self.grid());
         if let Some(c) = &mut self.rows.recording {
             c.frames.push(RowFrame {
                 node: node.key,
@@ -773,10 +778,13 @@ impl Painter {
             if node.layout_position() == exact_kernel::PositionType::Sticky {
                 c.refused |= c.split_sections;
                 if self.pixel_grid {
+                    let scroll_grid =
+                        space::sticky_owner_grid(scene, node, &walk.scroll_grids).flatten();
                     c.sticky.push(RowSticky {
                         node: node.key,
                         grid,
-                        shift: space::sticky_displacement(scene, node, grid),
+                        scroll_grid,
+                        shift: space::sticky_displacement(scene, node, grid, scroll_grid),
                     });
                 }
             }
@@ -987,7 +995,10 @@ impl Painter {
                 .all(|(id, at)| walk.scene.scroll.get(id).copied().unwrap_or((0.0, 0.0)) == *at)
             && row.sticky.iter().all(|s| {
                 walk.scene.kernel.node_by_key(s.node).is_some_and(|node| {
-                    space::sticky_displacement(walk.scene, &node, s.grid) == s.shift
+                    let scroll_grid =
+                        space::sticky_owner_grid(walk.scene, &node, &walk.scroll_grids)
+                            .unwrap_or(s.scroll_grid);
+                    space::sticky_displacement(walk.scene, &node, s.grid, scroll_grid) == s.shift
                 })
             })
             && (!pictures
@@ -1238,7 +1249,13 @@ impl Painter {
             })
             .fold(None, |u, r| Some(union(u, r)))
             .unwrap_or((content.0, content.1, 0.0, 0.0));
-        let placed = sticky(walk.scene, id, offset, self.grid());
+        let placed = sticky(
+            walk.scene,
+            id,
+            offset,
+            self.grid().filter(|_| !grid::changes_axes(ts)),
+            &walk.scroll_grids,
+        );
         let p = (walk.scene.presented)(id);
         let rect = self.node_rect(&node, placed, &p);
         let space =

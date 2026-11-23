@@ -126,7 +126,7 @@ impl Painter {
             let offset = if painter.flatten == Some(id) {
                 offset
             } else {
-                sticky(walk.scene, id, offset, painter.grid())
+                sticky(walk.scene, id, offset, painter.grid(), &walk.scroll_grids)
             };
             painter.record_sticky(walk, id, ts, |painter, walk| {
                 painter.node_at_inner(walk, id, ts, offset, clip);

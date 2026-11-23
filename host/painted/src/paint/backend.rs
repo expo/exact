@@ -170,8 +170,8 @@ pub trait Backend {
     /// A new frame of this size in points at this scale, cleared to the
     /// page's colour ([`Backend::page`]; white until one is told).
     fn begin(&mut self, width: f32, height: f32, scale: f32);
-    /// The raster backing's size in device pixels after `begin`.
-    fn raster_extent(&self) -> Option<(u32, u32)> {
+    /// The raster backing's origin and size in device pixels after `begin`.
+    fn raster_extent(&self) -> Option<crate::placement::RasterExtent> {
         None
     }
     /// Release idle renderer storage, keeping the visible frame unless hidden.
@@ -478,7 +478,13 @@ pub trait Backend {
     fn row_free(&mut self, _id: u32) {}
     /// The rows of scroller `id`, painted at its `scroll` offset, follow
     /// until [`Backend::group_end`].
-    fn group_begin(&mut self, _id: ViewId, _scroll: (f32, f32)) {}
+    fn group_begin(
+        &mut self,
+        _id: ViewId,
+        _scroll: (f32, f32),
+        _grid: Option<super::grid::ScrollGrid>,
+    ) {
+    }
     /// The scroller's rows end.
     fn group_end(&mut self) {}
     /// Image node `id`'s picture (or none, not yet decoded) is drawn until

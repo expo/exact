@@ -23,7 +23,7 @@ class ScrollingTest {
         val scrollers = Scrolling::class.java.getDeclaredField("scrollers").apply { isAccessible = true }
         val indicate = Scrolling::class.java.getDeclaredMethod("indicate", Scrolling.Scroller::class.java).apply { isAccessible = true }
         fun scroller() = (scrollers.get(scrolling) as Map<*, *>)[1] as Scrolling.Scroller
-        fun told(flags: Int) = scrolling.told(intArrayOf(1, flags, 0, 0, 0, 0, 0, 500f.toBits(), 500f.toBits()))
+        fun told(flags: Int) = scrolling.told(intArrayOf(1, flags, 0, 0, 0, 0, 0, 500f.toBits(), 500f.toBits(), 0, 0))
         fun down() {
             val e = MotionEvent.obtain(0, 0, MotionEvent.ACTION_DOWN, 100f, 100f, 0)
             scrolling.touch(e); e.recycle()
@@ -196,7 +196,7 @@ class ScrollingTest {
         val r = ListRelease(mandatory = true)
         assertTrue(r.snap(8000f))
         // The app scrolls the list (a new revision): the settle ends, and the late answer moves nothing.
-        r.f.scrolling.told(intArrayOf(1, 1, 1, 0, 0, 0, 0, 100000f.toBits(), 500f.toBits()))
+        r.f.scrolling.told(intArrayOf(1, 1, 1, 0, 0, 0, 0, 100000f.toBits(), 500f.toBits(), 0, 0))
         assertEquals(0, r.mode)
         r.answer(r.asked!!.first)
         assertEquals("idle", 0, r.mode)

@@ -234,10 +234,10 @@ impl<D: DataSource + Default> CanvasHost<D> {
                 let moved: std::collections::BTreeMap<ViewId, (f32, f32)> = painted
                     .groups
                     .iter()
-                    .map(|(id, at)| {
-                        let to = now.get(id).copied().unwrap_or((0.0, 0.0));
-                        let (dx, dy) = crate::paint::grid::pixel_delta(*at, to, self.scale);
-                        (*id, (dx / self.scale, dy / self.scale))
+                    .map(|group| {
+                        let to = now.get(&group.id).copied().unwrap_or_default();
+                        let (dx, dy) = group.shift(to);
+                        (group.id, (dx / self.scale, dy / self.scale))
                     })
                     .collect();
                 if let Some(e) = self.p.sync_images_moved(&moved) {

@@ -57,22 +57,83 @@ fn on_pixels(frame: Frame, scale: f32) -> Frame {
 /// Quantize to 1/64 of a device pixel before rounding half up. This keeps
 /// float noise close to a half pixel from choosing a different edge.
 pub(crate) fn device_pixel(v: f32, scale: f32) -> f64 {
-    round_device_pixel(f64::from(v) * f64::from(scale))
+    round_device_pixel(f64::from(v * scale))
 }
 
 fn round_device_pixel(pixels: f64) -> f64 {
     ((pixels * 64.0).round() / 64.0 + 0.5).floor()
 }
 
-// Match the precision of the fractional device offsets sent to the reader.
-fn scroll_pixel(v: f32, scale: f32) -> f64 {
-    round_device_pixel(f64::from(v * scale))
+/// Drawn scroll offsets for one port. Gesture travel stays in layout points.
+#[derive(Clone, Copy)]
+pub struct ScrollGrid {
+    pub(crate) scale: f32,
+    pub(crate) max: (f32, f32),
+    pub(crate) end: (f64, f64),
+}
+
+impl ScrollGrid {
+    pub(super) fn new(frame: Frame, max: (f32, f32), scale: f32) -> Self {
+        let trailing = |start: f32, size: f32, port: f64, max: f32| {
+            (device_pixel(start + (size + max), scale) - port).max(0.)
+        };
+        let [x, y, w, h] = pixel_box(frame, scale);
+        Self {
+            scale,
+            max,
+            end: (
+                trailing(frame.x, frame.width, x + w, max.0),
+                trailing(frame.y, frame.height, y + h, max.1),
+            ),
+        }
+    }
+
+    pub(crate) fn pixels(self, offset: (f32, f32)) -> (f64, f64) {
+        let axis = |at, max, end| {
+            if max > 0. && at >= max {
+                end
+            } else {
+                device_pixel(at, self.scale)
+            }
+        };
+        (
+            axis(offset.0, self.max.0, self.end.0),
+            axis(offset.1, self.max.1, self.end.1),
+        )
+    }
+
+    pub(super) fn points(self, offset: (f32, f32)) -> PaintOffset {
+        let (x, y) = self.pixels(offset);
+        (x / f64::from(self.scale), y / f64::from(self.scale))
+    }
+}
+
+pub(super) fn page_scroll_grid(scale: Option<f32>) -> Vec<(ViewId, Option<ScrollGrid>)> {
+    scale
+        .into_iter()
+        .map(|s| {
+            (
+                crate::presenter::PAGE,
+                Some(ScrollGrid::new(Frame::default(), (0., 0.), s)),
+            )
+        })
+        .collect()
 }
 
 #[cfg(any(target_os = "android", test))]
-pub(crate) fn pixel_delta(from: (f32, f32), to: (f32, f32), scale: f32) -> (f32, f32) {
-    let axis = |from, to| (scroll_pixel(from, scale) - scroll_pixel(to, scale)) as f32;
-    (axis(from.0, to.0), axis(from.1, to.1))
+#[derive(Clone, Copy)]
+pub(crate) struct RecordedScroll {
+    pub(crate) id: ViewId,
+    pub(crate) grid: ScrollGrid,
+    pub(crate) at: (f64, f64),
+}
+
+#[cfg(any(target_os = "android", test))]
+impl RecordedScroll {
+    pub(crate) fn shift(self, offset: (f32, f32)) -> (f32, f32) {
+        let to = self.grid.pixels(offset);
+        ((self.at.0 - to.0) as f32, (self.at.1 - to.1) as f32)
+    }
 }
 
 /// `c`, a sticky box's constraint in the space of its scroller at `origin`,
@@ -121,28 +182,30 @@ fn sticky_on_pixels(mut c: StickyConstraint, origin: Frame, scale: f32) -> Stick
 }
 
 /// How far a sticky box moves from where layout put it, in `scroller`
-/// scrolled to `scroll`. With a grid, use the drawn scroll offset and snap
-/// the constraint too when the sticky box is drawn on the grid.
+/// scrolled to its drawn offset. Snap the constraint when the sticky box is
+/// drawn on the grid.
 pub(super) fn sticky_shift(
     c: StickyConstraint,
     scroller: &NodeRef<'_>,
     scroll: (f32, f32),
     grid: Option<f32>,
-    snap_box: bool,
 ) -> (f32, f32) {
-    let Some(s) = grid else {
-        return c.offset(scroll);
+    grid.map_or(c, |s| sticky_on_pixels(c, scroller.frame, s))
+        .offset(scroll)
+}
+
+pub(super) fn rect_on_grid(frame: Frame, offset: PaintOffset, grid: Option<f32>) -> Rect4 {
+    let Some(scale) = grid else {
+        return paint_rect(frame, offset);
     };
-    let scroll = (
-        scroll_pixel(scroll.0, s) as f32 / s,
-        scroll_pixel(scroll.1, s) as f32 / s,
-    );
-    let constraint = if snap_box {
-        sticky_on_pixels(c, scroller.frame, s)
-    } else {
-        c
-    };
-    constraint.offset(scroll)
+    let k = f64::from(scale);
+    let [x, y, w, h] = pixel_box(frame, scale);
+    (
+        ((x - offset.0 * k) / k) as f32,
+        ((y - offset.1 * k) / k) as f32,
+        (w / k) as f32,
+        (h / k) as f32,
+    )
 }
 
 impl BoxPaint {
@@ -165,6 +228,10 @@ impl Painter {
         result
     }
 
+    pub(crate) fn uses_pixel_grid(&self) -> bool {
+        self.pixel_grid
+    }
+
     /// The display's scale, when this painter draws on its pixels.
     pub(super) fn grid(&self) -> Option<f32> {
         (self.pixel_grid && !self.grid_suspended).then_some(self.scale)
@@ -180,17 +247,7 @@ impl Painter {
     }
 
     pub(super) fn drawn_rect(&self, node: &NodeRef<'_>, offset: PaintOffset) -> Rect4 {
-        let Some(scale) = self.grid() else {
-            return paint_rect(node.frame, offset);
-        };
-        let k = f64::from(scale);
-        let [x, y, w, h] = pixel_box(node.frame, scale);
-        (
-            ((x - offset.0 * k) / k) as f32,
-            ((y - offset.1 * k) / k) as f32,
-            (w / k) as f32,
-            (h / k) as f32,
-        )
+        rect_on_grid(node.frame, offset, self.grid())
     }
 
     pub(super) fn node_rect(
@@ -208,7 +265,7 @@ impl Painter {
 
     pub(super) fn pixel_phase(&self, frame: Frame) -> Option<(f64, f64)> {
         let scale = self.grid()?;
-        let phase = |v| f64::from(v) * f64::from(scale) - device_pixel(v, scale);
+        let phase = |v: f32| f64::from(v * scale) - device_pixel(v, scale);
         Some((phase(frame.x), phase(frame.y)))
     }
 
@@ -226,8 +283,8 @@ impl Painter {
     pub(super) fn drawn_scroll(&self, (x, y): (f32, f32)) -> PaintOffset {
         match self.grid() {
             Some(s) => (
-                scroll_pixel(x, s) / f64::from(s),
-                scroll_pixel(y, s) / f64::from(s),
+                device_pixel(x, s) / f64::from(s),
+                device_pixel(y, s) / f64::from(s),
             ),
             None => (f64::from(x), f64::from(y)),
         }

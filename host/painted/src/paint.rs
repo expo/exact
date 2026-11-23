@@ -489,6 +489,7 @@ struct Walk<'a, 'b> {
     scene: &'b Scene<'a>,
     /// Offscreen boxes can cover the frame's scrollbars too.
     scrollbar_cover: bool,
+    scroll_grids: Vec<(ViewId, Option<grid::ScrollGrid>)>,
     hit_space: Option<(Transform, Option<Rect4>)>,
     boxes: Vec<PaintedBox>,
     text: BTreeMap<exact_kernel::NodeKey, Rc<Paragraph>>,
@@ -818,6 +819,7 @@ impl Painter {
         let mut walk = Walk {
             scene,
             scrollbar_cover: self.scrollbars.enabled,
+            scroll_grids: grid::page_scroll_grid(self.grid()),
             hit_space: None,
             boxes: Vec::with_capacity(self.boxes_hint),
             text: BTreeMap::new(),
@@ -943,7 +945,7 @@ impl Painter {
         // The roles drawn in the accent read the nearest authored accent color.
         let _accent = accent_scope(&node);
         let p = (walk.scene.presented)(id);
-        self.row_node(walk.scene, &node, &p);
+        self.row_node(walk, &node, &p);
         // @ref LLP 1077 D8 — turned or moved in space: painted apart, warped.
         if self.spatial(walk, &node, &p, ts, offset, clip_rect) {
             self.row_refuse();
@@ -1314,8 +1316,10 @@ impl Painter {
         let scrolls = !matches!(ox, Overflow::Visible | Overflow::Clip)
             || !matches!(oy, Overflow::Visible | Overflow::Clip);
         let child_offset = if scrolls {
+            let grid = self.scroll_grid(walk.scene.kernel, node, self.grid());
+            walk.scroll_grids.push((node.id, grid));
             let scroll = walk.scene.scroll.get(&node.id).copied().unwrap_or_default();
-            let (sx, sy) = self.child_scroll_offset(node, scroll);
+            let (sx, sy) = self.child_scroll_offset(scroll, grid);
             (offset.0 + sx, offset.1 + sy)
         } else {
             offset
@@ -1325,6 +1329,9 @@ impl Painter {
         }
         let child_start = walk.boxes.len();
         self.children(walk, node, ts, child_offset, child_rect);
+        if scrolls {
+            walk.scroll_grids.pop();
+        }
         if let Some(clip) = &clip {
             let hit_ts = walk.hit_space.map_or(ts, |(ts, _)| ts);
             shape::overflow_hits(&mut walk.boxes[child_start..], clip, ts, hit_ts);

@@ -154,22 +154,28 @@ pub(super) struct Sticky {
     recorded: (f32, f32),
     /// The display's scale, where it is drawn on its pixels (`grid.rs`).
     grid: Option<f32>,
-    snap_box: bool,
+    scroll_grid: Option<super::grid::ScrollGrid>,
 }
 
 impl Sticky {
-    pub(super) fn capture(scene: &Scene<'_>, id: ViewId, grid: Option<f32>) -> Option<Self> {
+    pub(super) fn capture(
+        walk: &super::Walk<'_, '_>,
+        id: ViewId,
+        grid: Option<f32>,
+    ) -> Option<Self> {
+        let scene = walk.scene;
         let node = scene.kernel.node(id)?;
         let constraint = scene.kernel.sticky_constraint(node.key)?;
         let scroller = scene.kernel.node(constraint.scroller)?;
-        let scroll = space::sticky_scroll(scene, &scroller);
-        let snap_box = grid.is_some() && !super::grid::leaves_grid(&node, &(scene.presented)(id));
+        let scroll_grid = space::sticky_owner_grid(scene, &node, &walk.scroll_grids).flatten();
+        let scroll = space::sticky_scroll(scene, &scroller, scroll_grid);
+        let grid = grid.filter(|_| !super::grid::leaves_grid(&node, &(scene.presented)(id)));
         Some(Self {
             constraint,
             scroller: scroller.key,
-            recorded: super::grid::sticky_shift(constraint, &scroller, scroll, grid, snap_box),
+            recorded: super::grid::sticky_shift(constraint, &scroller, scroll, grid),
             grid,
-            snap_box,
+            scroll_grid,
         })
     }
 
@@ -177,13 +183,12 @@ impl Sticky {
         scene
             .and_then(|scene| {
                 let scroller = scene.kernel.node_by_key(self.scroller)?;
-                let scroll = space::sticky_scroll(scene, &scroller);
+                let scroll = space::sticky_scroll(scene, &scroller, self.scroll_grid);
                 Some(super::grid::sticky_shift(
                     self.constraint,
                     &scroller,
                     scroll,
                     self.grid,
-                    self.snap_box,
                 ))
             })
             .unwrap_or(self.recorded)

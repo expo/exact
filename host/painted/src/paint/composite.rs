@@ -68,6 +68,7 @@ impl Painter {
         let mut apart = Walk {
             scene: walk.scene,
             scrollbar_cover: walk.scrollbar_cover,
+            scroll_grids: walk.scroll_grids.clone(),
             hit_space: None,
             boxes: Vec::new(),
             text: BTreeMap::new(),

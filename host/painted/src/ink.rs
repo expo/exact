@@ -961,7 +961,12 @@ impl Backend for Ink {
     fn can_keep_clipped_row(&self, id: u32, bounds: Rect4) -> bool {
         self.keeps_row_outside_clip(id, bounds)
     }
-    fn group_begin(&mut self, _id: u32, scroll: (f32, f32)) {
+    fn group_begin(
+        &mut self,
+        _id: u32,
+        scroll: (f32, f32),
+        _: Option<crate::paint::grid::ScrollGrid>,
+    ) {
         if exact_ink::counters::enabled() {
             self.rows.scrolls.push(scroll);
         }

@@ -702,7 +702,7 @@ macro_rules! canvas_jni {
 
             $crate::canvas_jni_scroll!();
 
-            /// What the reader is told of the scrollers it knows, nine
+            /// What the reader is told of the scrollers it knows, eleven
             /// words each (`Presenter::reader_scrollers`), when that is not
             /// what this last returned (else null).
             #[no_mangle]

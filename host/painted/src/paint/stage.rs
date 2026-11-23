@@ -394,7 +394,7 @@ impl Painter {
         else {
             return false;
         };
-        let (x, y, ..) = self.drawn_rect(&node, offset);
+        let (x, y, ..) = self.stage_rect(walk, &node, ts, offset);
         let at = ts.pre_translate(x, y);
         recorder.nest(kept.tape.clone(), at);
         true
@@ -423,10 +423,10 @@ impl Painter {
             return;
         };
         let cross = self.stage.crossing[cross].clone();
-        let placed = sticky(walk.scene, id, offset, self.grid());
-        let (x, y, w, h) = self.without_grid(grid::changes_axes(cross.pose(ts)), |painter| {
-            painter.drawn_rect(&node, placed)
-        });
+        let posed = cross.pose(ts);
+        let grid = self.grid().filter(|_| !grid::changes_axes(posed));
+        let placed = sticky(walk.scene, id, offset, grid, &walk.scroll_grids);
+        let (x, y, w, h) = self.stage_rect(walk, &node, posed, placed);
         let at = (x, y);
         let size = (w, h);
         let hit_space = walk.hit_space;
@@ -598,12 +598,17 @@ impl Painter {
             };
             let mut space = affine(ts);
             let mut offset = offset;
+            let mut grid = self.grid().filter(|_| !grid::changes_axes(ts));
+            let mut scroll_grids = walk.scroll_grids.clone();
             for &id in path[..=at].iter().rev() {
                 let node = kernel.node(id)?;
+                let p = (walk.scene.presented)(id);
                 if id != root.id {
-                    offset = sticky(walk.scene, id, offset, self.grid());
-                    let rect = self.drawn_rect(&node, offset);
-                    let p = (walk.scene.presented)(id);
+                    offset = sticky(walk.scene, id, offset, grid, &scroll_grids);
+                }
+                grid = grid.filter(|_| !grid::leaves_grid(&node, &p));
+                if id != root.id {
+                    let rect = grid::rect_on_grid(node.frame, offset, grid);
                     space = space::mul3(
                         &space,
                         &space::mapping_at(
@@ -620,13 +625,15 @@ impl Painter {
                     || !matches!(oy, Overflow::Visible | Overflow::Clip)
                 {
                     let d = walk.scene.scroll.get(&id).copied().unwrap_or_default();
-                    let d = self.child_scroll_offset(&node, d);
+                    let scroll_grid = self.scroll_grid(kernel, &node, grid);
+                    let d = self.child_scroll_offset(d, scroll_grid);
+                    scroll_grids.push((id, scroll_grid));
                     offset = (offset.0 + d.0, offset.1 + d.1);
                 }
                 let zoom = self.zoom_children(kernel, &node, Transform::identity(), offset);
                 space = space::mul3(&space, &affine(zoom));
             }
-            let (x, y, ..) = self.drawn_rect(&kernel.node(parent)?, offset);
+            let (x, y, ..) = grid::rect_on_grid(kernel.node(parent)?.frame, offset, grid);
             let space = space::mul3(&space, &affine(Transform::from_translate(x, y)));
             let origin = space::mul3(&space, &affine(replay.at));
             let cross = &self.stage.crossing[replay.cross];
@@ -752,12 +759,27 @@ impl Painter {
         }
     }
 
+    fn stage_rect(
+        &self,
+        walk: &Walk<'_, '_>,
+        node: &NodeRef<'_>,
+        ts: Transform,
+        offset: PaintOffset,
+    ) -> Rect4 {
+        let grid = self.grid().filter(|_| {
+            !grid::changes_axes(ts) && !grid::leaves_grid(node, &(walk.scene.presented)(node.id))
+        });
+        grid::rect_on_grid(node.frame, offset, grid)
+    }
+
     /// A live route at the origin of `ts`, and its drawing kept.
     fn stage_route(&mut self, walk: &mut Walk<'_, '_>, id: ViewId, ts: Transform, tape: bool) {
         let Some(node) = walk.scene.kernel.node(id) else {
             return;
         };
-        self.without_grid(grid::changes_axes(ts), |painter| {
+        let suspend =
+            grid::changes_axes(ts) || grid::leaves_grid(&node, &(walk.scene.presented)(id));
+        self.without_grid(suspend, |painter| {
             let at = painter.drawn_offset((node.frame.x, node.frame.y));
             painter.node_at(walk, id, ts, at, None);
             if tape {
@@ -836,7 +858,7 @@ impl Painter {
             .recording
             .as_ref()
             .filter(|_| self.backend.name() == "tape")
-            .and_then(|_| tape::Sticky::capture(walk.scene, id, self.grid()));
+            .and_then(|_| tape::Sticky::capture(walk, id, self.grid()));
         let Some((sticky, inverse)) = sticky.zip(ts.invert()) else {
             draw(self, walk);
             return;
@@ -877,7 +899,7 @@ impl Painter {
             return;
         };
         let key = node.key;
-        let (x, y, w, h) = self.drawn_rect(&node, offset);
+        let (x, y, w, h) = self.stage_rect(walk, &node, ts, offset);
         let size = (w, h);
         let local = ts.pre_translate(x, y);
         let placement = self.kept.to_page.pre_concat(local);
@@ -1086,6 +1108,40 @@ mod tests {
             let frame = painter.paint(&scene, (200., 100.)).unwrap();
             assert_eq!(frame.boxes.iter().find(|b| b.id == id).unwrap().rect.0, 0.);
             assert_eq!(painter.kept.routes[&key].placement.tx, 0.);
+        });
+    }
+
+    #[test]
+    fn a_route_with_its_own_scale_uses_layout_geometry_on_the_stage() {
+        let source = ROUTE.replace(
+            "padding-left=4 padding-top=4",
+            "padding-left=4.2 padding-top=4.2",
+        );
+        with_route(&source, |painter, scene, id, key| {
+            let presented = |node| Presented {
+                scale: if node == id { 1.5 } else { 1. },
+                ..Presented::IDENTITY
+            };
+            let scene = Scene {
+                presented: &presented,
+                ..scene
+            };
+            painter.stage = Stage {
+                skip: vec![id],
+                sheets: vec![Item::Route {
+                    id,
+                    ts: Transform::identity(),
+                    tape: true,
+                }],
+                ..Stage::default()
+            };
+            let frame = painter.paint(&scene, (200., 100.)).unwrap();
+            let route = frame.boxes.iter().find(|b| b.id == id).unwrap();
+            let laid = scene.kernel.node(id).unwrap().frame;
+            assert_eq!(route.affine.unwrap().1, (0., 0., laid.width, laid.height));
+            let kept = &painter.kept.routes[&key];
+            assert_eq!(kept.placement, Transform::identity());
+            assert_eq!(kept.size, (laid.width, laid.height));
         });
     }
 

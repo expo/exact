@@ -3,10 +3,10 @@
 use super::*;
 
 impl Painter {
-    pub(super) fn warp_extent(&self) -> (u32, u32) {
+    pub(super) fn warp_extent(&self) -> crate::placement::RasterExtent {
         self.backend.raster_extent().unwrap_or_else(|| {
             let pixels = |points: f32| (points * self.scale).round() as u32;
-            (pixels(self.viewport.0), pixels(self.viewport.1))
+            ((0., 0.), (pixels(self.viewport.0), pixels(self.viewport.1)))
         })
     }
 
@@ -54,6 +54,7 @@ impl Painter {
         let mut child_walk = Walk {
             scene: walk.scene,
             scrollbar_cover: walk.scrollbar_cover,
+            scroll_grids: walk.scroll_grids.clone(),
             hit_space: None,
             boxes: Vec::new(),
             text: BTreeMap::new(),
@@ -117,20 +118,12 @@ mod tests {
     use super::*;
     use crate::presenter::{PainterChoice, Presenter};
 
-    #[test]
-    fn placed_child_paints_the_last_column_of_a_software_backing() {
+    fn paint_placed(source: &str, viewport: (f32, f32), scale: f32, at: f32) -> Arc<Pixmap> {
         let (p, error) = Presenter::boot_with(
-            &crate::test_plan(
-                r#"component App
-  view
-    box width=4.7 height=4 overflow="hidden" translate="0px 0px 1px"
-      canvas width=4.7 height=4 testId="canvas"
-        box width=0.4 height=2 background-color="red" testId="ink"
-"#,
-            ),
+            &crate::test_plan(source),
             (),
-            (20., 20.),
-            2.75,
+            viewport,
+            scale,
             std::path::PathBuf::new(),
             PainterChoice::Cpu,
         )
@@ -145,13 +138,13 @@ mod tests {
         };
         let mut painter = Painter::new(
             p.text().clone(),
-            2.75,
+            scale,
             Box::new(crate::raster::Raster::new()),
         );
         painter.placements.insert(
             id("ink"),
             crate::placement::Placement::Visible {
-                h: [1., 0., 4.4, 0., 1., 0., 0., 0., 1.],
+                h: [1., 0., at, 0., 1., 0., 0., 0., 1.],
                 depth: 0.,
                 opacity: 1.,
                 clip_depth: [[0., 0., 1.]; 2],
@@ -176,12 +169,49 @@ mod tests {
             chosen: &BTreeMap::new(),
             menu: None,
         };
-        let frame = painter.paint(&scene, (20., 20.)).unwrap();
-        let pixels = frame.pixmap;
+        painter.paint(&scene, viewport).unwrap().pixmap
+    }
+
+    #[test]
+    fn placed_child_paints_the_last_column_of_a_software_backing() {
+        let pixels = paint_placed(
+            r#"component App
+  view
+    box width=4.7 height=4 overflow="hidden" translate="0px 0px 1px"
+      canvas width=4.7 height=4 testId="canvas"
+        box width=0.4 height=2 background-color="red" testId="ink"
+"#,
+            (20., 20.),
+            2.75,
+            4.4,
+        );
         assert!(pixels.pixel(12, 2).unwrap().green() < 255);
         for x in (0..12).chain(13..pixels.width()) {
             assert_eq!(pixels.pixel(x, 2).unwrap().green(), 255, "column {x}");
         }
+    }
+
+    #[test]
+    fn an_offset_filter_backing_keeps_projected_and_placed_children() {
+        let pixels = paint_placed(
+            r#"component App
+  view
+    box width=50 height=50 margin-left=100 margin-top=100 filter="brightness(1)"
+      box width=20 height=20 translate="0px 0px 1px" background-color="red"
+      canvas width=50 height=20 testId="canvas"
+        box width=10 height=10 background-color="blue" testId="ink"
+"#,
+            (180., 180.),
+            1.,
+            25.,
+        );
+        let projected = pixels.pixel(105, 105).unwrap();
+        let placed = pixels.pixel(130, 125).unwrap();
+        assert_eq!(
+            [projected.red(), projected.green(), projected.blue()],
+            [255, 0, 0]
+        );
+        assert_eq!([placed.red(), placed.green(), placed.blue()], [0, 0, 255]);
     }
 
     #[test]

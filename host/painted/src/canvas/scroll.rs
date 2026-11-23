@@ -24,13 +24,12 @@ use std::collections::BTreeMap;
 pub(super) fn shift_groups(
     before: &BTreeMap<u32, (f32, f32)>,
     now: &BTreeMap<u32, (f32, f32)>,
-    groups: &[(u32, (f32, f32))],
-    scale: f32,
+    groups: &[crate::paint::grid::RecordedScroll],
 ) -> Option<Vec<u32>> {
     let others = |offsets: &BTreeMap<u32, (f32, f32)>| {
         offsets
             .iter()
-            .filter(|(id, _)| !groups.iter().any(|(g, _)| g == *id))
+            .filter(|(id, _)| !groups.iter().any(|g| g.id == **id))
             .map(|(id, o)| (*id, o.0.to_bits(), o.1.to_bits()))
             .collect::<Vec<_>>()
     };
@@ -38,10 +37,10 @@ pub(super) fn shift_groups(
         return None;
     }
     let mut ops = vec![super::SHIFT, groups.len() as u32];
-    for (id, at) in groups {
-        let to = now.get(id).copied().unwrap_or_default();
-        let shift = crate::paint::grid::pixel_delta(*at, to, scale);
-        ops.extend([*id, shift.0.to_bits(), shift.1.to_bits()]);
+    for group in groups {
+        let to = now.get(&group.id).copied().unwrap_or_default();
+        let shift = group.shift(to);
+        ops.extend([group.id, shift.0.to_bits(), shift.1.to_bits()]);
     }
     Some(ops)
 }
@@ -391,13 +390,77 @@ mod tests {
         p.reader_sample_at(port, (0., target - start), rev, 1.)
             .unwrap();
         let words = p.reader_scrollers(&groups, scale).unwrap();
-        assert_eq!(f32::from_bits(words[4] as u32), 20.4921875);
-        assert_eq!(f32::from_bits(words[6] as u32), start * scale);
+        assert_eq!(f32::from_bits(words[4] as u32), target);
+        assert_eq!(f32::from_bits(words[6] as u32), 20.);
         let now = super::BTreeMap::from([(port, p.scroll_of(port))]);
-        let shift = super::shift_groups(&before, &now, &groups, scale).unwrap();
+        let shift = super::shift_groups(&before, &now, &groups).unwrap();
         assert_eq!(shift, [SHIFT, 1, port, 0, (-1_f32).to_bits()]);
         p.frame();
         assert_eq!(row_top() - top, -1.);
+    }
+
+    #[test]
+    fn equal_layout_edge_and_scroll_offset_cancel() {
+        let mut p = boot_at(
+            r#"component App
+  view
+    scroll width=200 height=100 scrollTop=7.4517045
+      box height=7.4517045
+      box width=200 height=150 background-color="red" testId="row"
+"#,
+            2.75,
+        );
+        assert_eq!(p.rect_of(id(&p, "row")).unwrap().1, 0.);
+    }
+
+    #[test]
+    fn sticky_under_a_projected_wrapper_uses_the_ports_drawn_scroll() {
+        let mut p = boot_at(
+            r#"component App
+  view
+    scroll width=200 height=100 scrollTop=0.75
+      box width=200 height=200 translate="0px 0px 1px"
+        box width=200 height=20 position="sticky" top=0 background-color="red" testId="heading"
+"#,
+            1.,
+        );
+        assert_eq!(p.rect_of(id(&p, "heading")).unwrap().1, 0.);
+    }
+
+    #[test]
+    fn the_logical_end_aligns_the_last_row_with_the_ports_drawn_edge() {
+        use super::super::{GROUPS, SHIFT};
+
+        let mut p = boot_at(
+            r#"component App
+  view
+    scroll width=100 height=100.25 testId="port"
+      box width=100 height=199.5
+      box width=100 height=1 background-color="red" testId="last"
+"#,
+            1.,
+        );
+        let port = id(&p, "port");
+        let last = id(&p, "last");
+        let under = p.reader_under(10., 10., 1.);
+        assert_eq!(under[3], port as i32);
+        let groups = GROUPS.with(|g| g.borrow().clone());
+        let before = super::BTreeMap::from([(port, p.scroll_of(port))]);
+        assert_eq!(p.scroll_to(port, (0., 999.)), Some((0., 100.25)));
+
+        let now = super::BTreeMap::from([(port, p.scroll_of(port))]);
+        let shift = super::shift_groups(&before, &now, &groups).unwrap();
+        assert_eq!(shift, [SHIFT, 1, port, 0, (-101_f32).to_bits()]);
+        let words = p.reader_scrollers(&groups, 1.).unwrap();
+        assert_eq!(f32::from_bits(words[8] as u32), 100.25);
+        assert_eq!(f32::from_bits(words[10] as u32), 101.);
+
+        p.frame();
+        assert_eq!(p.rect_of(last).unwrap().1, 99.);
+        assert_eq!(p.hit(10., 99.5), Some(last));
+        let groups = GROUPS.with(|g| g.borrow().clone());
+        let words = p.reader_scrollers(&groups, 1.).unwrap();
+        assert_eq!(f32::from_bits(words[6] as u32), 101.);
     }
 
     #[test]
@@ -507,7 +570,7 @@ mod tests {
         p.scroll_to(port, (0., 20. / 2.625)).unwrap();
         let now = std::collections::BTreeMap::from([(port, p.scroll_of(port))]);
         assert!(
-            super::shift_groups(&before, &now, &groups, 2.625).is_none(),
+            super::shift_groups(&before, &now, &groups).is_none(),
             "a move-only frame would move the sticky box"
         );
         assert_eq!(

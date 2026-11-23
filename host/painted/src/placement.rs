@@ -2,6 +2,9 @@
 use crate::paint::Rect4;
 use tiny_skia::{Pixmap, Transform};
 
+/// Origin and integer size of the destination backing, in device pixels.
+pub(crate) type RasterExtent = ((f32, f32), (u32, u32));
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Placement {
     Hidden,
@@ -64,7 +67,7 @@ pub(crate) fn warp(
     scale: f32,
     pixels: (u32, u32),
 ) -> Option<(Pixmap, Rect4)> {
-    warp_clipped(source, h, [[0., 0., 1.]; 2], scale, pixels)
+    warp_clipped(source, h, [[0., 0., 1.]; 2], scale, ((0., 0.), pixels))
 }
 pub(crate) fn accepts(planes: &[[f32; 3]; 2], x: f32, y: f32) -> bool {
     planes.iter().all(|p| p[0] * x + p[1] * y + p[2] >= 0.)
@@ -112,9 +115,9 @@ pub(crate) fn warp_clipped(
     h: [f32; 9],
     planes: [[f32; 3]; 2],
     scale: f32,
-    pixels: (u32, u32),
+    extent: RasterExtent,
 ) -> Option<(Pixmap, Rect4)> {
-    warp_with(source, h, planes, scale, pixels, false)
+    warp_with(source, h, planes, scale, extent, false)
 }
 
 /// [`warp_clipped`] with soft edges: past the picture is transparent, so a
@@ -125,9 +128,9 @@ pub(crate) fn warp_soft(
     h: [f32; 9],
     planes: [[f32; 3]; 2],
     scale: f32,
-    pixels: (u32, u32),
+    extent: RasterExtent,
 ) -> Option<(Pixmap, Rect4)> {
-    warp_with(source, h, planes, scale, pixels, true)
+    warp_with(source, h, planes, scale, extent, true)
 }
 
 fn warp_with(
@@ -135,7 +138,7 @@ fn warp_with(
     h: [f32; 9],
     planes: [[f32; 3]; 2],
     scale: f32,
-    pixels: (u32, u32),
+    extent: RasterExtent,
     soft: bool,
 ) -> Option<(Pixmap, Rect4)> {
     let inv = inverse(h)?;
@@ -152,10 +155,11 @@ fn warp_with(
     if ![b.0, b.1, b.2, b.3].iter().all(|n| n.is_finite()) {
         return None;
     }
-    let x0 = (b.0 * scale).floor().max(0.);
-    let y0 = (b.1 * scale).floor().max(0.);
-    let x1 = ((b.0 + b.2) * scale).ceil().min(pixels.0 as f32);
-    let y1 = ((b.1 + b.3) * scale).ceil().min(pixels.1 as f32);
+    let ((ox, oy), (width, height)) = extent;
+    let x0 = (b.0 * scale).floor().max(ox);
+    let y0 = (b.1 * scale).floor().max(oy);
+    let x1 = ((b.0 + b.2) * scale).ceil().min(ox + width as f32);
+    let y1 = ((b.1 + b.3) * scale).ceil().min(oy + height as f32);
     if x1 <= x0 || y1 <= y0 {
         return None;
     }
@@ -262,7 +266,7 @@ mod tests {
         src.fill(tiny_skia::Color::WHITE);
         let h = [1., 0., 0., 0., 1., 0., 0., 0., 1.];
         let clip = [[1., 0., -50.], [0., 0., 1.]];
-        let (out, rect) = warp_clipped(&src, h, clip, 1., (100, 50)).unwrap();
+        let (out, rect) = warp_clipped(&src, h, clip, 1., ((0., 0.), (100, 50))).unwrap();
         assert_eq!(rect, (50., 0., 50., 50.));
         assert!(out.data().as_chunks::<4>().0.iter().all(|p| *p == [255; 4]));
         assert_eq!(
@@ -273,8 +277,14 @@ mod tests {
         assert!(accepts(&clip, 51., 25.));
         // An eye crossing is bounded by near before projecting, never by the invalid full quad.
         let h = [1., 0., 0., 0., 1., 0., 0.02, 0., -0.5];
-        let (out, rect) =
-            warp_clipped(&src, h, [[1., 0., -30.], [0., 0., 1.]], 1., (400, 400)).unwrap();
+        let (out, rect) = warp_clipped(
+            &src,
+            h,
+            [[1., 0., -30.], [0., 0., 1.]],
+            1.,
+            ((0., 0.), (400, 400)),
+        )
+        .unwrap();
         assert!(out.data().as_chunks::<4>().0.iter().any(|p| p[3] != 0));
         assert!(rect.0.is_finite() && rect.2 > 0.);
     }
