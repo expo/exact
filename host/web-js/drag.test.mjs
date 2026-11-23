@@ -132,8 +132,8 @@ test('the JS agent reports only the app’s draggable declaration after a field 
   const views = new Map([[1, card], [2, field], [3, foreign]]);
   const exact = { views, viewId: (node) => [...views].find(([, el]) => el === node)[0], After: [], clock: { now: 0 } };
   const ctx = vm.createContext({ document, setFaultLog() {}, viewChildren, routeFlags: () => () => 0,
-    unopened: () => false, HTMLIFrameElement: class {}, animationClock: () => ({ register() {}, seek() {} }), pieces() {} });
-  vm.runInContext(declarations('./agent.js', ['PROPS', 'SEMANTIC_TAGS', 'TYPES', 'targetOf', 'install']), ctx);
+    unopened: () => false, HTMLIFrameElement: class {}, animationClock: () => ({ register() {}, seek() {} }), pieces() {}, watchGlides() {} });
+  vm.runInContext(declarations('./agent.js', ['PROPS', 'SEMANTIC_TAGS', 'TYPES', 'gate', 'targetOf', 'install']), ctx);
   ctx.install(exact);
   for (const type of ['pointerdown', 'pointerup']) fire(type, field, { pointerType: 'mouse' });
   expect(card.getAttribute('draggable')).toBe('false');
