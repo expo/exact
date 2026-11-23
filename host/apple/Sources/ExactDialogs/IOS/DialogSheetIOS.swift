@@ -67,9 +67,9 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
             let inset = scroller.adjustedContentInset
             return max(0, scroller.bounds.height - inset.top - inset.bottom)
         }
-        if let maximumDetentHeight { return maximumDetentHeight }
+        if let maximumDetentHeight { return max(0, maximumDetentHeight - barHeight) }
         #endif
-        return presentationController?.containerView?.safeAreaLayoutGuide.layoutFrame.height
+        return presentation?.containerView?.safeAreaLayoutGuide.layoutFrame.height
     }
     #if os(iOS)
     /// What the dialog's authored ancestors listen for: the sheet is out of
@@ -91,24 +91,48 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
         #if os(tvOS)
         // tvOS has no sheets; every modal covers the screen.
         modalPresentationStyle = .overFullScreen
-        #else
-        modalPresentationStyle = .pageSheet
-        sheetPresentationController?.detents = [fittedDetent()]
         #endif
     }
+    /// The presentation UIKit runs for this controller, and its sheet: its
+    /// navigation controller's where it is in one (`sheet(barred:)`).
+    private var presentation: UIPresentationController? { (navigationController ?? self).presentationController }
     #if os(iOS)
-    /// UIKit adds the bottom safe area to a custom detent's height.
+    private var presentedSheet: UISheetPresentationController? { (navigationController ?? self).sheetPresentationController }
+    /// What UIKit presents as the sheet, made ready: this controller, or,
+    /// for a dialog whose header is the sheet's bar, a navigation controller
+    /// holding it, as a hand-built form sheet is (LLP 1141.004 D6,
+    /// DialogBarIOS.swift).
+    func sheet(barred: Bool) -> UIViewController {
+        let presented: UIViewController = barred ? UINavigationController(rootViewController: self) : self
+        presented.modalPresentationStyle = .pageSheet
+        presented.sheetPresentationController?.detents = [fittedDetent()]
+        if let nav = presented as? UINavigationController {
+            nav.navigationBar.prefersLargeTitles = true
+            nav.view.tintColor = view.tintColor
+            setContentScrollView(scroller)
+        }
+        return presented
+    }
+    /// The height of the bar above the dialog, while it shows.
+    var barHeight: CGFloat {
+        guard let nav = navigationController, !nav.isNavigationBarHidden else { return 0 }
+        return nav.navigationBar.frame.height
+    }
+    private var fittedBar: CGFloat = 0
+    /// UIKit adds the bottom safe area to a custom detent's height; the bar
+    /// is the sheet's, above the dialog.
     private func fittedDetent() -> UISheetPresentationController.Detent {
         .custom(identifier: .init("exact.dialog")) { [weak self] context in
             guard let self else { return context.maximumDetentValue }
             maximumDetentHeight = context.maximumDetentValue
+            fittedBar = barHeight
             let height = box.height
-            return height > 0 ? min(height.rounded(.up), context.maximumDetentValue) : context.maximumDetentValue
+            return height > 0 ? min((height + fittedBar).rounded(.up), context.maximumDetentValue) : context.maximumDetentValue
         }
     }
 
     fileprivate func updateSheet(for dialog: NodeView) {
-        guard !topLayer, let sheet = sheetPresentationController else { return }
+        guard !topLayer, let sheet = presentedSheet else { return }
         let value = dialog.props["navigationDetent"].flatMap { $0.split(separator: " ").isEmpty ? nil : $0 }
         let nextGrabber = dialog.props["navigationGrabber"]
         let initial = dialog.props["navigationInitialDetent"] ?? ""
@@ -122,7 +146,7 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
         let configure = {
             if newHeights {
                 if value != nil {
-                    SheetDetents.select(on: sheet, node: dialog, owner: "dialog \"\(dialog.props["id"] ?? "")\"")
+                    SheetDetents.select(on: sheet, node: dialog, owner: "dialog \"\(dialog.props["id"] ?? "")\"") { [weak self] in self?.barHeight ?? 0 }
                 } else {
                     if !initial.isEmpty, initial != "fit-content" {
                         dialog.presenter?.session?.log("navigationInitialDetent \"\(initial)\" on dialog \"\(dialog.props["id"] ?? "")\" names no height of its content-fitted sheet")
@@ -204,6 +228,10 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
     }
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        #if os(iOS)
+        // The bar came, went or changed height: a fitted sheet holds it above the dialog.
+        if authoredDetents == nil, barHeight != fittedBar, let sheet = presentedSheet { sheet.invalidateDetents() }
+        #endif
         place()
         host?.containingBlockChanged()
         host?.geometryChanged()
@@ -231,7 +259,7 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
             return
         }
         #if !os(tvOS)
-        let sheet = sheetPresentationController
+        let sheet = presentedSheet
         let undimmed = authored == nil ? nil : sheet?.detents.last?.identifier
         if let sheet, sheet.largestUndimmedDetentIdentifier != undimmed {
             if viewIfLoaded?.window != nil, !ExactEnv.agentFreezes { sheet.animateChanges { sheet.largestUndimmedDetentIdentifier = undimmed } }
@@ -241,7 +269,7 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
         // An undimmed sheet lets touches and VoiceOver reach the page beneath.
         // The dialog is modal: the backdrop takes the touches, and the
         // container hides the page from VoiceOver as the dimming did.
-        presentationController?.containerView?.accessibilityViewIsModal = authored != nil
+        presentation?.containerView?.accessibilityViewIsModal = authored != nil
         #endif
     }
     /// The dim fades in with the presentation: a sheet's in UIKit's
@@ -251,7 +279,7 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
         super.viewWillAppear(animated)
         paintBackdrop()
         if !topLayer {
-            guard let container = presentationController?.containerView, backdrop.superview !== container else { return }
+            guard let container = presentation?.containerView, backdrop.superview !== container else { return }
             backdrop.frame = container.bounds
             backdrop.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             container.insertSubview(backdrop, at: 0)
@@ -280,7 +308,7 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
     /// else over `backdropFade`, and at once under the agent's clock.
     func fadeBackdrop(to alpha: CGFloat) {
         if ExactEnv.agentFreezes { backdrop.alpha = alpha; return }
-        if let coordinator = transitionCoordinator, coordinator.isAnimated {
+        if let coordinator = (navigationController ?? self).transitionCoordinator, coordinator.isAnimated {
             coordinator.animate(alongsideTransition: { [backdrop] _ in backdrop.alpha = alpha })
         } else {
             UIView.animate(withDuration: Self.backdropFade, delay: 0, options: .beginFromCurrentState) { [backdrop] in backdrop.alpha = alpha }
@@ -289,7 +317,7 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         host?.appeared(self)
-        guard backdropTap == nil, let container = presentationController?.containerView else { return }
+        guard backdropTap == nil, let container = presentation?.containerView else { return }
         host?.observePopovers(in: container)
         let tap = UITapGestureRecognizer(target: self, action: #selector(tappedBackdrop))
         tap.delegate = self
@@ -310,7 +338,7 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
             if let view = touch.view, view === dialog || view.isDescendant(of: dialog) { return false }
             return !dialog.bounds.contains(touch.location(in: dialog))
         }
-        guard let container = presentationController?.containerView, let presented = presentationController?.presentedView,
+        guard let container = presentation?.containerView, let presented = presentation?.presentedView,
               host?.closesOnBackdrop(self) == true else { return false }
         return !presented.convert(presented.bounds, to: container).contains(touch.location(in: container))
     }
@@ -344,7 +372,7 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
         place()
         guard resized, !topLayer else { return }
         #if !os(tvOS)
-        if authoredDetents == nil, let sheet = sheetPresentationController {
+        if authoredDetents == nil, let sheet = presentedSheet {
             if viewIfLoaded?.window != nil, !ExactEnv.agentFreezes { sheet.animateChanges { sheet.invalidateDetents() } }
             else { sheet.invalidateDetents() }
         }
@@ -420,6 +448,8 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate, Di
         weak var previous: UIView?
         weak var focused: NodeView?
         let controller: DialogSheetController
+        /// What UIKit presents: a sheet's navigation controller, else the controller.
+        var presented: UIViewController
         /// What the sheet is over (the page, or the sheet beneath), hidden
         /// from assistive technology while this one shows, and how it stood.
         weak var under: UIView?
@@ -437,6 +467,7 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate, Di
         var afterPresenting: (() -> Void)?
         package init(_ dialog: NodeView, source: NodeView?, previous: UIView?, controller: DialogSheetController) {
             self.dialog = dialog; self.source = source; self.previous = previous; self.controller = controller
+            presented = controller
             incarnation = dialog.incarnation
             parent = dialog.superview
             index = parent?.subviews.firstIndex(of: dialog) ?? 0
@@ -501,22 +532,25 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate, Di
         for entry in entries { presenter?.stickies.scrolled(entry.dialog.id) }
     }
     var inTransition: Bool {
-        !resuming.isEmpty || entries.contains { $0.closing || $0.controller.isBeingPresented || $0.controller.isBeingDismissed }
+        !resuming.isEmpty || entries.contains { $0.closing || $0.presented.isBeingPresented || $0.presented.isBeingDismissed }
     }
     var observation: [String: Any]? {
         guard let entry = entries.last else { return nil }
-        let moving = entry.closing || entry.controller.isBeingPresented || entry.controller.isBeingDismissed
+        let moving = entry.closing || entry.presented.isBeingPresented || entry.presented.isBeingDismissed
         return ["kind": "dialog", "dialog": Int(entry.dialog.id), "source": entry.source.map { Int($0.id) as Any } ?? NSNull(),
                 "closedby": entry.dialog.props["closedby"] ?? "closerequest", "presentation": entry.controller.topLayer ? "top-layer" : "sheet",
                 "phase": moving ? "transition" : "open"]
     }
     /// LLP 1080.001 D3: the views this host adds.
-    func inspectionOwns(_ view: UIView) -> Bool { entries.contains { $0.controller.viewIfLoaded === view || $0.controller.scroller === view } }
+    func inspectionOwns(_ view: UIView) -> Bool {
+        entries.contains { $0.presented.viewIfLoaded === view || $0.controller.viewIfLoaded === view || $0.controller.scroller === view }
+    }
     /// The sheets' own views, oldest first: roots of the session's
     /// accessibility tree beside its view (`tree --ax`).
     func surfaces(includingRetiring: Bool) -> [SessionSurface] {
         entries.compactMap { entry in
-            guard includingRetiring || !entry.closing, let view = entry.controller.viewIfLoaded else { return nil }
+            // A sheet's navigation controller's view holds its bar too.
+            guard includingRetiring || !entry.closing, let view = entry.presented.viewIfLoaded else { return nil }
             return SessionSurface(view: view, label: "dialog #\(entry.dialog.id)\(entry.closing ? " (retiring)" : "")",
                                   kind: .dialog, owned: [entry.controller.scroller])
         }
@@ -527,7 +561,7 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate, Di
         guard let presenter else { return [] }
         return entries.compactMap { entry -> TopLayerBox? in
             let controller = entry.controller
-            guard !entry.closing, !controller.isBeingDismissed,
+            guard !entry.closing, !entry.presented.isBeingDismissed,
                   let view = controller.viewIfLoaded, view.window != nil else { return nil }
             let scroller = controller.scroller
             let clip = NativeGeometry.bounds(of: scroller, in: presenter.viewport)
@@ -535,7 +569,7 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate, Di
             let block = entry.usedBlock.map { CGRect(origin: CGPoint(x: -entry.frame.minX, y: -entry.frame.minY), size: $0) }
             let backdrop = controller.topLayer
                 ? NativeGeometry.hitRegion(of: view, in: presenter.viewport).map { (bounds: $0, excluding: nil as CGRect?) }
-                : controller.presentationController.flatMap { NativeGeometry.sheetBackdrop(of: $0, in: presenter.viewport) }
+                : entry.presented.presentationController.flatMap { NativeGeometry.sheetBackdrop(of: $0, in: presenter.viewport) }
             return TopLayerBox(view: entry.dialog,
                                frame: (entry.dialog.id, entry.dialog.topLayerFrame(in: presenter.viewport, containingBlock: block), presenter.viewportPoints(clip)),
                                modal: controller,
@@ -585,6 +619,9 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate, Di
         if old == nil { previous?.resignFirstResponder() }
         controller.loadViewIfNeeded()
         #if os(iOS)
+        if !controller.topLayer { entry.presented = controller.sheet(barred: presenter.navigation.wantsDialogBar(dialog)) }
+        // VoiceOver stays in the sheet, its bar included.
+        if entry.presented !== controller { dialog.accessibilityViewIsModal = false; entry.presented.view.accessibilityViewIsModal = true }
         controller.updateSheet(for: dialog)
         controller.relay = MountRelay(presenter, mount: controller.view)
         #endif
@@ -592,9 +629,13 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate, Di
         controller.paintBackdrop()
         dialog.isHidden = false
         controller.isModalInPresentation = refuses(dialog)
+        entry.presented.isModalInPresentation = refuses(dialog)
+        #if os(iOS)
+        projectBar(entry)
+        #endif
         controller.fit(dialog.bounds.size)
-        controller.presentationController?.delegate = self
-        owner.present(controller, animated: !ExactEnv.agentFreezes && !controller.topLayer) { [weak self, entry] in
+        entry.presented.presentationController?.delegate = self
+        owner.present(entry.presented, animated: !ExactEnv.agentFreezes && !controller.topLayer) { [weak self, entry] in
             if let leave = entry.afterPresenting {
                 entry.afterPresenting = nil
                 // Let UIKit finish unwinding the presentation before dismissing.
@@ -641,7 +682,7 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate, Di
         if entry.dialog.pressContact?.responderContact?.routesBubbledPress == true { entry.dialog.cancelPressContact() }
         // A finger is taking it down already: UIKit's delegate ends it, and
         // should the finger let it back up, this closes it then.
-        if entry.controller.isBeingDismissed, let coordinator = entry.controller.transitionCoordinator, coordinator.isInteractive {
+        if entry.presented.isBeingDismissed, let coordinator = entry.presented.transitionCoordinator, coordinator.isInteractive {
             coordinator.notifyWhenInteractionChanges { [weak self] context in
                 if context.isCancelled { DispatchQueue.main.async { self?.dismiss(entry, animated: animated, cancelled: cancelled) } }
             }
@@ -650,12 +691,12 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate, Di
         entry.closing = true
         // Sheets over this one leave with it, as UIKit dismisses a stack.
         for above in entries where above !== entry && !above.closing
-            && sequence(first: above.controller.presentingViewController, next: { $0?.presentingViewController }).contains(where: { $0 === entry.controller }) {
+            && sequence(first: above.presented.presentingViewController, next: { $0?.presentingViewController }).contains(where: { $0 === entry.presented }) {
             above.closing = true
             ended(above, cancelled: false)
         }
         entry.dialog.endEditing(true)
-        let controller = entry.controller
+        let controller = entry.presented
         let owner = controller.presentingViewController
         // UIKit drops a dismissal asked for while it presents: that one waits.
         func leave(_ work: @escaping () -> Void) { if controller.isBeingPresented { entry.afterPresenting = work } else { work() } }
@@ -679,11 +720,14 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate, Di
         let cancelled = cancelled || entry.cancelled
         defer {
             DispatchQueue.main.async { [weak self] in
-                guard entry.controller.presentingViewController == nil else { return }
+                guard entry.presented.presentingViewController == nil else { return }
                 self?.presenter?.menus.resumeAfterRouteDismissal()
             }
         }
         let dialog = entry.dialog
+        #if os(iOS)
+        presenter?.navigation.endDialogBar(dialog)
+        #endif
         if dialog.pressContact?.responderContact?.routesBubbledPress == true { dialog.cancelPressContact() }
         dialog.accessibilityViewIsModal = false
         entry.under?.accessibilityElementsHidden = entry.underHidden
@@ -743,7 +787,7 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate, Di
 
     // UIKit's own dismissal: the swipe down, and whatever else it gives a sheet.
     func presentationControllerShouldDismiss(_ presentationController: UIPresentationController) -> Bool {
-        guard let entry = entries.first(where: { $0.controller === presentationController.presentedViewController }) else { return true }
+        guard let entry = entries.first(where: { $0.presented === presentationController.presentedViewController }) else { return true }
         return !entry.closing && !refuses(entry.dialog)
     }
     /// Its popovers leave its container while that is still in the window:
@@ -774,11 +818,11 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate, Di
         }
     }
     func presentationControllerDidAttemptToDismiss(_ presentationController: UIPresentationController) {
-        guard let entry = entries.first(where: { $0.controller === presentationController.presentedViewController }) else { return }
+        guard let entry = entries.first(where: { $0.presented === presentationController.presentedViewController }) else { return }
         presenter?.session?.log("dialog \(entry.dialog.props["id"] ?? "?"): dismissal refused, closedby is none")
     }
     func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
-        guard let entry = entries.first(where: { $0.controller === presentationController.presentedViewController }),
+        guard let entry = entries.first(where: { $0.presented === presentationController.presentedViewController }),
               !entry.closing || entry.retiring else { return }
         resuming.removeAll { $0 === entry }
         entry.cancelled = true
@@ -791,7 +835,7 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate, Di
     func retire(over controller: UIViewController, removing route: NodeView) -> () -> Void {
         resuming = resuming.filter { presenter?.authored($0.dialog, inside: route) != true }
         let affected = entries.filter {
-            ViewPresentation.isPresented($0.controller, above: controller)
+            ViewPresentation.isPresented($0.presented, above: controller)
         }
         for entry in affected where !entry.closing {
             if presenter?.authored(entry.dialog, inside: route) == false {
@@ -815,7 +859,7 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate, Di
     /// One at a time: UIKit must finish presenting a sheet before it can present another.
     func resumeAfterRouteDismissal() -> Bool {
         guard let presenter, !presenter.modals.inTransition, !presenter.navigation.inTransition,
-              !entries.contains(where: { $0.closing || $0.controller.isBeingPresented || $0.controller.isBeingDismissed }) else { return false }
+              !entries.contains(where: { $0.closing || $0.presented.isBeingPresented || $0.presented.isBeingDismissed }) else { return false }
         while let entry = resuming.first {
             let dialog = entry.dialog
             guard live(dialog), dialog.incarnation == entry.incarnation, entry.parent?.window != nil, dialog.props["semanticTag"] == "dialog",
@@ -854,8 +898,10 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate, Di
                 dismiss(entry, animated: false, cancelled: false)
             } else {
                 assign(entry.controller, \.isModalInPresentation, refuses(dialog))
+                assign(entry.presented, \.isModalInPresentation, refuses(dialog))
                 #if os(iOS)
                 entry.controller.updateSheet(for: dialog)
+                projectBar(entry)
                 #endif
                 entry.controller.paintBackdrop()
                 // Its children's frames came after its own: the overflow the sheet scrolls.
@@ -867,6 +913,18 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate, Di
             entry.dialog.removeFromSuperview()
         }
     }
+    #if os(iOS)
+    /// The sheet's navigation bar shows the dialog's header where the
+    /// shared rule makes a bar of it (DialogBarIOS.swift); a bar that comes
+    /// or goes moves the dialog's block and the sheet's height.
+    private func projectBar(_ entry: Entry) {
+        guard let presenter, let nav = entry.controller.navigationController else { return }
+        let hidden = nav.isNavigationBarHidden
+        _ = presenter.navigation.projectDialogBar(entry.dialog, on: entry.controller)
+        if nav.isNavigationBarHidden != hidden { entry.controller.view.setNeedsLayout() }
+    }
+    #endif
+
     /// The runner maps a block's viewport rectangle through its used size,
     /// which can exceed the authored dialog's border box.
     func applied(_ op: BatchOp) {

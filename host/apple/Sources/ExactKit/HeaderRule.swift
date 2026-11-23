@@ -66,8 +66,8 @@ package struct HeaderRule {
         if button && node.props["accessibilityRole"] == "button" && node.disabled { facts |= 4096 }
         // A button, pressed or not, which is never hosted (`fact::BUTTON`).
         if button { facts |= 1 << 19 }
-        // A button that opens what it names, a popover or a modal dialog (`fact::OPENS`).
-        if node.presenter?.invocation(of: node)?.opens == true { facts |= 16 }
+        // A button that opens a popover or a dialog, or closes a dialog (`fact::COMMANDS`).
+        if let invocation = node.presenter?.invocation(of: node), invocation.opens || invocation.action == .close { facts |= 16 }
         if back != nil, node.props["id"] == back { facts |= 32 }
         if node.props["semanticTag"] == "header" { facts |= 64 }
         // A plain box, which shows nothing of its own (`fact::BOX`).
