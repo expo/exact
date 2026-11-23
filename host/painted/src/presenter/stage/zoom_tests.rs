@@ -96,9 +96,10 @@ fn a_source_route_grows_from_the_first_card_and_returns_from_its_kept_drawing() 
             leaving.scale > start.scale && leaving.scale < 1.0,
             "{leaving:?}"
         );
-        assert!(leaving.opacity > 0.99);
+        // Past 0.6 of its eased progress the source fades in over the route.
+        assert!(leaving.opacity < 0.5, "{leaving:?}");
         after(&mut p, 130.0);
-        assert!(poses(&p).0.opacity < 0.5);
+        assert_eq!(poses(&p).0.opacity, 0.0);
         after(&mut p, 45.0);
         assert!(!p.stage_moving());
         assert!(!p.brush.kept(detail));
@@ -177,6 +178,11 @@ fn a_zoom_pop_starts_at_the_predictive_back_pose() {
         assert!(p.back_progress(1, 0.6, 0, now));
         after(&mut p, 0.0);
         let preview = poses(&p).0;
+        // The preview runs the container's return, as Compose seeks it.
+        assert!(
+            preview.scale < 0.5 && preview.height.is_some(),
+            "{preview:?}"
+        );
         back(&mut p);
         after(&mut p, 0.0);
         let leaving = poses(&p).0;
@@ -625,4 +631,32 @@ fn route_flights_run_on_the_containers_clock() {
             assert!(off.abs() < 0.01, "{t}: {off}");
         }
     }
+}
+
+#[test]
+fn a_container_draws_its_source_under_it_in_and_over_it_back_masked_to_its_height() {
+    let mut p = phone_source(ZOOM);
+    let card = rect(&mut p, "card");
+    let key = p.host.kernel().node(id(&p, "card")).unwrap().key;
+    let lift = |p: &mut Presenter<()>| p.stage_paint().crossing.iter().find_map(|c| c.lift);
+    tap(&mut p, "card");
+    after(&mut p, 0.0);
+    assert_eq!(lift(&mut p), Some((key, 412. / card.2, false)));
+    after(&mut p, 400.0);
+    back(&mut p);
+    after(&mut p, 0.0);
+    assert_eq!(lift(&mut p), Some((key, 412. / card.2, true)));
+    let shift = p.stage.shift.as_ref().unwrap().progress;
+    let mut now = shift.start;
+    while shift.at(now) < 0.9 {
+        now += 1.0;
+    }
+    // By 0.9 the route, fitted to the container's width, is masked to the
+    // card's proportions.
+    let leaving = p.shift_poses(now, None).0;
+    assert!(
+        near(leaving.height.unwrap(), card.3 * 412. / card.2),
+        "{leaving:?}"
+    );
+    assert!(leaving.scale > card.2 / 412. + 0.01);
 }

@@ -75,6 +75,10 @@ pub(crate) struct Cross {
     /// Its top bar's picture and place in the page, drawn over it. A
     /// page-space motion leaves it in place.
     pub(crate) bar: Option<(Rc<Tape>, Transform)>,
+    /// A container's source, drawn in it at its top, fitted to its width by
+    /// this scale; under the node, or over it (a return) with the opacity
+    /// the node would have had (Material's container transform).
+    pub(crate) lift: Option<(NodeKey, f32, bool)>,
 }
 
 impl Cross {
@@ -125,6 +129,8 @@ pub(crate) struct Stage {
     live: Vec<(ViewId, usize)>,
     /// The removed ones, where their kept drawings go.
     replays: Vec<Replay>,
+    /// A container's source as the walk recorded it, in its border box.
+    lifted: Option<Rc<Tape>>,
     /// The top bars' transforms as drawn this frame.
     #[cfg(test)]
     pub(crate) bars: Vec<Transform>,
@@ -458,15 +464,31 @@ impl Painter {
         self.row_refuse();
         self.damage.unsupported = true;
         let fades = cross.opacity < 1.0;
-        if fades {
-            self.backend.push_opacity(cross.opacity.clamp(0.0, 1.0));
-        }
         let posed = cross.pose(origin);
         let rounded = cross.radius > 0.0 || cross.height.is_some();
         if rounded {
             let height = cross.height.unwrap_or(size.1);
             let shape = Shape::new((0.0, 0.0, size.0, height), [cross.radius; 4]);
             self.backend.push_clip(&shape, posed);
+        }
+        // Material fades the destination in over what it leaves: the route
+        // over its source on the way in, the source over the route back.
+        let source = (cross.lift.zip(self.stage.lifted.clone()))
+            .map(|((_, fit, over), tape)| (tape, posed.pre_scale(fit, fit), over));
+        let over = source.as_ref().is_some_and(|s| s.2);
+        let replay = |painter: &mut Self, (tape, ts, _): &(Rc<Tape>, Transform, bool)| {
+            tape.replay(
+                painter.backend.as_mut(),
+                &mut painter.text.borrow_mut(),
+                *ts,
+            );
+        };
+        if let Some(source) = source.as_ref().filter(|_| !over) {
+            replay(self, source);
+        }
+        let fades = fades && !over;
+        if fades {
+            self.backend.push_opacity(cross.opacity.clamp(0.0, 1.0));
         }
         draw(self, posed);
         if let Some((tape, bar)) = &cross.bar {
@@ -475,12 +497,36 @@ impl Painter {
             self.stage.bars.push(ts);
             tape.replay(self.backend.as_mut(), &mut self.text.borrow_mut(), ts);
         }
-        if rounded {
-            self.backend.pop_clip();
-        }
         if fades {
             self.backend.pop_opacity();
         }
+        if let Some(source) = source.as_ref().filter(|_| over) {
+            self.backend
+                .push_opacity((1.0 - cross.opacity).clamp(0.0, 1.0));
+            replay(self, source);
+            self.backend.pop_opacity();
+        }
+        if rounded {
+            self.backend.pop_clip();
+        }
+    }
+
+    /// Record `id` instead of drawing it where it is when a crossing's
+    /// container draws it, in its border box's space.
+    pub(super) fn lift(&mut self, walk: &mut Walk<'_, '_>, id: ViewId, offset: (f32, f32)) -> bool {
+        let Some(node) = walk.scene.kernel.node(id) else {
+            return false;
+        };
+        let lifts = (self.stage.crossing.iter()).any(|c| c.lift.is_some_and(|l| l.0 == node.key));
+        if !lifts || self.kept.recording.is_some() {
+            return false;
+        }
+        self.row_refuse();
+        let rect = paint_rect(node.frame, sticky(walk.scene, id, offset));
+        let ts = Transform::from_translate(-rect.0, -rect.1);
+        let source = self.record_layer(|painter| painter.node_content(walk, id, ts, offset, None));
+        self.stage.lifted = Some(Rc::new(source));
+        true
     }
 
     /// Where among `children`, in paint order, of `parent` (none: the

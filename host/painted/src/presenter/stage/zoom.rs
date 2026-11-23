@@ -10,7 +10,13 @@ use crate::paint::{FrameTarget, PaintedBox, Painter, Scene};
 // lib/java/com/google/android/material/motion/res/values/tokens.xml.
 const ENTER: f64 = 400.0;
 const RETURN: f64 = 350.0;
-const FADE: f32 = 0.3;
+// Its default thresholds (DEFAULT_ENTER_THRESHOLDS, DEFAULT_RETURN_THRESHOLDS),
+// on the eased progress: the route fades in over its source, and on return
+// the source fades in over the route; the height mask reaches the source's
+// by 0.9 on return.
+const ENTER_FADE: f32 = 0.25;
+const RETURN_FADE: (f32, f32) = (0.6, 0.9);
+const RETURN_MASK: f32 = 0.9;
 
 /// The route and its source identity, retained until the route is popped.
 pub(super) struct Source {
@@ -20,10 +26,12 @@ pub(super) struct Source {
     pub(super) bounds: Rect4,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub(super) struct Container {
     source: Rect4,
     pub(super) route: Rect4,
+    /// The source, which the container draws in itself, fitted to its width.
+    pub(super) node: Option<NodeKey>,
 }
 
 pub(super) fn progress(forward: bool, now: f64) -> Glide {
@@ -86,7 +94,12 @@ pub(super) fn emphasized(t: f32) -> f32 {
 }
 
 impl Container {
-    pub(super) fn pose(self, forward: bool, t: f32, linear: f32, from: Option<Pose>) -> Pose {
+    /// The source's scale in the container: the route's width over its own.
+    pub(super) fn fit(self) -> f32 {
+        self.route.2 / self.source.2
+    }
+
+    pub(super) fn pose(self, forward: bool, t: f32, from: Option<Pose>) -> Pose {
         let (x, y, w, h) = self.route;
         let (sx, sy, sw, sh) = self.source;
         let small = Pose {
@@ -113,20 +126,25 @@ impl Container {
         };
         let lerp = |a: f32, b: f32| a + (b - a) * t;
         let scale = lerp(a.scale, b.scale);
-        let height = lerp(
-            a.height.unwrap_or(h) * a.scale,
-            b.height.unwrap_or(h) * b.scale,
-        );
+        // Both fitted to the container's width, the taller is masked to the
+        // shorter's height (FitModeEvaluators.WIDTH).
+        let mask = if forward {
+            t
+        } else {
+            (t / RETURN_MASK).min(1.0)
+        };
+        let (ha, hb) = (a.height.unwrap_or(h), b.height.unwrap_or(h));
         Pose {
             dx: lerp(a.dx, b.dx),
             dy: lerp(a.dy, b.dy),
             scale,
             radius: lerp(a.radius * a.scale, b.radius * b.scale) / scale,
-            height: Some(height / scale),
+            height: Some(ha + (hb - ha) * mask),
             opacity: if forward {
-                (linear / FADE).clamp(0., 1.)
+                (t / ENTER_FADE).clamp(0., 1.)
             } else {
-                ((1.0 - linear) / FADE).clamp(0., 1.)
+                let fade = (t - RETURN_FADE.0) / (RETURN_FADE.1 - RETURN_FADE.0);
+                (1.0 - fade).clamp(0., 1.).min(full.opacity)
             },
             ..Pose::REST
         }
@@ -175,30 +193,47 @@ impl<D: DataSource> Presenter<D> {
             container = Some(Container {
                 source: shown,
                 route: bounds,
+                node,
             });
         } else if popped && sheet_of(kinds, top).is_none() {
-            if let Some(link) = self
-                .stage
-                .zooms
-                .iter()
-                .find(|z| Some(&z.route) == before.last())
-            {
-                let source = self.source_node(stack[top], &link.name);
-                if let Some(source) = source.filter(|id| {
-                    self.host
-                        .kernel()
-                        .node(*id)
-                        .is_some_and(|n| Some(n.key) == link.node)
-                }) {
-                    let boxes = self.return_boxes(stack[top]);
-                    container = self.source_rect(&boxes, source).map(|shown| Container {
-                        source: shown,
-                        route: link.bounds,
-                    });
-                }
-            }
+            container = self.return_container(*before.last()?, stack[top]);
         }
         container
+    }
+
+    /// The container `route`'s pop returns into on `beneath`, the route it
+    /// reveals: its source there, where it is still the one it came from
+    /// and still shows.
+    pub(super) fn return_container(&self, route: NodeKey, beneath: ViewId) -> Option<Container> {
+        let link = self.stage.zooms.iter().find(|z| z.route == route)?;
+        let source = self.source_node(beneath, &link.name).filter(|id| {
+            self.host
+                .kernel()
+                .node(*id)
+                .is_some_and(|n| Some(n.key) == link.node)
+        })?;
+        let boxes = self.return_boxes(beneath);
+        self.source_rect(&boxes, source).map(|shown| Container {
+            source: shown,
+            route: link.bounds,
+            node: link.node,
+        })
+    }
+
+    /// The source a container draws in itself while `route` is its route,
+    /// the scale that fits it to the route's width, and whether it returns.
+    pub(super) fn container_lift(&self, route: NodeKey) -> Option<(NodeKey, f32, bool)> {
+        let (key, container, back) = match &self.stage.shift {
+            Some(s) => match s.forward {
+                true => (s.incoming, s.container?, false),
+                false => (s.outgoing, s.container?, true),
+            },
+            None => {
+                let p = self.stage.preview.as_ref()?;
+                (p.pair()?.0, p.container?, true)
+            }
+        };
+        (key == route).then_some((container.node?, container.fit(), back))
     }
 
     /// Keep each binding current while its route is in any tab's stack.

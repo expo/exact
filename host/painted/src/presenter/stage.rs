@@ -1016,10 +1016,16 @@ impl<D: DataSource> Presenter<D> {
             let (out_pose, in_pose) = self.shift_poses(now, None);
             let forward = page_shift.is_some_and(|s| s.forward);
             // A crossing kept the leaving route's bar; under a preview the
-            // bar is still the leaving route's, and the one beneath has none.
+            // bar is still the leaving route's, and the one beneath shows the
+            // bar it kept only where the leaving route has none.
             let (out_bar, in_bar) = match page_shift {
                 Some(s) => (s.bar.clone(), bar_top.clone()),
-                None => (bar_top.clone(), None),
+                None => (
+                    bar_top.clone(),
+                    (self.stage.bar.clone())
+                        .filter(|(route, ..)| *route == incoming)
+                        .map(|(_, tape, frame)| (tape, frame)),
+                ),
             };
             let order = match forward {
                 true => [(outgoing, out_pose, out_bar), (incoming, in_pose, in_bar)],
@@ -1067,6 +1073,7 @@ impl<D: DataSource> Presenter<D> {
     ) {
         let kernel = self.host.kernel();
         let live = kernel.node_by_key(key);
+        let lift = self.container_lift(key);
         let Some(at) = place else {
             let through = self.stage.shift.as_ref().filter(|s| s.through);
             let key = match &live {
@@ -1090,6 +1097,7 @@ impl<D: DataSource> Presenter<D> {
                 radius: pose.radius,
                 height: pose.height,
                 bar: bar.map(|(tape, frame)| (tape, self.window_to_page(frame))),
+                lift,
             });
             return;
         };
@@ -1295,7 +1303,7 @@ impl<D: DataSource> Presenter<D> {
                 shift.progress.linear(now),
             );
             if let Some(container) = shift.container {
-                let pose = container.pose(shift.forward, t, linear, shift.from);
+                let pose = container.pose(shift.forward, t, shift.from);
                 return match shift.forward {
                     true => (Pose::REST, pose),
                     false => (pose, Pose::REST),

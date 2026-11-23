@@ -22,7 +22,8 @@
 //! returns to drawn beneath. A cancel puts it back; the commit is Back
 //! itself, whose pop starts from where the preview left the route. Nothing
 //! commits before the gesture does. A route whose exit is declared, pushed
-//! or full screen, previews that exit instead (`authored.rs`).
+//! or full screen, previews that exit instead (`authored.rs`); one zoomed
+//! from a source runs its container's return (`zoom.rs`).
 use super::*;
 
 /// A slop of Android's (`ViewConfiguration`'s touch slop, 8 dp).
@@ -88,6 +89,9 @@ pub(in crate::presenter) struct Preview {
     edge: i32,
     /// Going back to rest, once cancelled.
     release: Option<Glide>,
+    /// The container a zoomed route returns into: the preview runs its
+    /// return, as Compose seeks a shared transition.
+    pub(super) container: Option<zoom::Container>,
 }
 
 impl Preview {
@@ -160,6 +164,9 @@ impl Preview {
     }
 
     fn pose_at(&self, p: f32, width: f32, height: f32) -> Pose {
+        if let Some(container) = self.container {
+            return container.pose(false, zoom::emphasized(p), None);
+        }
         let way = if self.edge == 1 { -1.0 } else { 1.0 };
         Pose {
             dx: way * p * (width / 20.0 - 8.0).max(0.0),
@@ -599,11 +606,21 @@ impl<D: DataSource> Presenter<D> {
         match phase {
             0 => {
                 let target = self.preview_target().filter(|_| self.back_previewable());
+                let container = match target {
+                    Some(Target::Page {
+                        outgoing,
+                        incoming,
+                        sheet: None,
+                    }) => (self.host.kernel().node_by_key(incoming))
+                        .and_then(|n| self.return_container(outgoing, n.id)),
+                    _ => None,
+                };
                 self.stage.preview = target.map(|target| Preview {
                     target,
                     progress,
                     edge,
                     release: None,
+                    container,
                 });
             }
             1 => {
@@ -637,6 +654,10 @@ impl<D: DataSource> Presenter<D> {
         match seeks {
             Some((outgoing, _)) if self.stage.pops.1 == Some(outgoing) => {
                 let pairs = self.stage.pops.2.clone();
+                let progress = match self.stage.preview.and_then(|p| p.container) {
+                    Some(_) => zoom::emphasized(progress),
+                    None => progress,
+                };
                 self.host.seek_flights(&pairs, progress);
             }
             _ => self.host.release_flights(&bounds_spring(), false),

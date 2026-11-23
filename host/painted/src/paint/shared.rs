@@ -136,6 +136,9 @@ impl Painter {
         offset: (f32, f32),
         clip: Option<Rect4>,
     ) {
+        if self.lift(walk, id, offset) {
+            return;
+        }
         let named = self.backend.name() == "canvas"
             && self.shared.epoch.is_some()
             && walk.dialog.is_none()

@@ -184,9 +184,14 @@ impl<D: DataSource> Presenter<D> {
         self.brush.numerals.still = self.host.runner().viewport().preferences.reduced_motion;
         // A geometry paint records no layer, and leaves a played ripple played.
         self.brush.ripples.reader = self.host.lowering && target != FrameTarget::Geometry;
-        self.brush.rows_dirty(self.host.kernel(), dirty);
         self.sync_stage();
         let stage = self.stage_paint();
+        // A container's source is drawn in the container: its row records
+        // again without it.
+        for cross in stage.crossing.iter().filter_map(|c| c.lift) {
+            dirty.node(cross.0);
+        }
+        self.brush.rows_dirty(self.host.kernel(), dirty);
         self.brush.set_stage(self.host.kernel(), stage);
         self.unpose_flights();
         let shows = self.stage_shows();

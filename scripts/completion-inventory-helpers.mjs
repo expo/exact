@@ -211,7 +211,7 @@ export function helperClassifications(group) {
     ["painted:host/painted/src/presenter/arrive.rs", "Presenter::focus_landed"],
     ["painted:host/painted/src/presenter/reveal.rs", "Presenter::reveal_flights"],
     ["painted:host/painted/src/presenter/stage/authored.rs", "Presenter::entrance Presenter::hold_arriving Presenter::top_of"],
-    ["painted:host/painted/src/presenter/stage/zoom.rs", "Presenter::navigation_container Presenter::source_node Presenter::source_rect Presenter::sync_sources"],
+    ["painted:host/painted/src/presenter/stage/zoom.rs", "Presenter::navigation_container Presenter::return_container Presenter::source_node Presenter::source_rect Presenter::sync_sources"],
   ]),
   group("module announcements", ["subscription"], "bound module, app topic and its current readers", "UI-owned",
     "Store::announce_topic records changed app topics; exact_peer_changed delivers them to another session. Canvas extension activation checks the current plan's declared action before raising its event.", [
