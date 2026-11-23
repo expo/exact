@@ -6,6 +6,7 @@ import { dirname, join, normalize, relative, resolve } from 'node:path';
 import { agentRows, sections, tabs, type NavPage } from '../constants/navigation.ts';
 import { redirects } from '../constants/redirects.ts';
 import { site } from '../constants/site.ts';
+import { promptOf } from './prompts.ts';
 
 const SITE = resolve(import.meta.dir, '..');
 const DOCS = resolve(SITE, '..');
@@ -98,17 +99,6 @@ const docsUrlOf = new Map(sections.flatMap(s => s.pages).map(p => [GITHUB_DOCS +
 
 const PROMPTS = join(SITE, 'prompts');
 const folderPrompted: string[] = [];
-function promptOf(source: string): string {
-  let file = join(PROMPTS, source);
-  if (!existsSync(file)) {
-    const folder = dirname(source);
-    if (folder === '.') return '';
-    file = join(PROMPTS, `${folder}.md`);
-    if (!existsSync(file)) return '';
-    folderPrompted.push(source);
-  }
-  return `${readFileSync(file, 'utf8').trim().replaceAll('{{SOURCE}}', () => source)}\n\n`;
-}
 
 function read(nav: NavPage): Doc {
   const text = readFileSync(join(DOCS, nav.source), 'utf8')
@@ -117,7 +107,9 @@ function read(nav: NavPage): Doc {
   const tokens = marked.lexer(text, { gfm: true });
   let afterIntro = tokens[0]?.type === 'heading' && tokens[0].depth === 1 ? 1 : 0;
   while (tokens[afterIntro]?.type === 'space' || tokens[afterIntro]?.type === 'paragraph') afterIntro++;
-  tokens.splice(afterIntro, 0, ...marked.lexer(promptOf(nav.source), { gfm: true }));
+  const prompt = promptOf(PROMPTS, nav.source);
+  if (prompt.fromFolder) folderPrompted.push(nav.source);
+  tokens.splice(afterIntro, 0, ...marked.lexer(prompt.text, { gfm: true }));
   const slug = slugger();
   const anchors = new Map<string, string>();
   const intro: Token[] = [];

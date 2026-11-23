@@ -1,9 +1,11 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { marked } from 'marked';
 import pages from '../content/pages.json';
+import { promptOf } from '../tools/prompts.ts';
 
 // Pages' own rules meet the tree tools/pages.ts makes here: `wrangler pages dev` serves dist.pages as Cloudflare
 // does, with its _redirects, _headers, _routes.json and _worker.js.
@@ -64,12 +66,35 @@ test('Recipes lists every Markdown recipe in name order', () => {
 });
 
 test('every recipe has a Markdown prompt that names its source', async () => {
+  const problems: string[] = [];
   for (const page of pages.filter(page => page.section === 'Recipes')) {
     const source = `docs${page.path}.md`;
     const markdown = await Bun.file(resolve(site, 'dist.pages', `${page.path.slice(1)}.md`)).text();
     const prompt = marked.lexer(markdown).find(token => token.type === 'code' && token.lang?.split(/\s+/, 1)[0] === 'prompt');
-    expect(prompt?.text, source).toContain(source);
-    expect(prompt?.raw, source).not.toMatch(/\{\{[^{}]*\}\}/);
+    if (!prompt?.text.includes(source)) problems.push(`${source} has no prompt naming its source`);
+    if (prompt && /\{\{[^{}]*\}\}/.test(prompt.raw)) problems.push(`${source} has an unresolved prompt placeholder`);
+  }
+  expect(problems).toEqual([]);
+});
+
+test('a recipe uses its own prompt or expands both source references in the folder prompt', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-recipe-prompts-'));
+  try {
+    mkdirSync(join(dir, 'recipes'));
+    const own = 'recipes/own.md';
+    const inherited = 'recipes/new-$&.md';
+    const dedicated = '```prompt Dedicated\nRead docs/recipes/own.md.\n```';
+    writeFileSync(join(dir, own), dedicated);
+    writeFileSync(join(dir, 'recipes.md'), '```prompt Folder\nRead https://github.com/expo/exact/blob/main/docs/{{SOURCE}} or docs/{{SOURCE}}.\n```');
+    writeFileSync(join(dir, '..md'), 'A top-level document has no folder prompt.');
+
+    expect([promptOf(dir, own), promptOf(dir, inherited), promptOf(dir, 'guide.md')]).toEqual([
+      { text: `${dedicated}\n\n`, fromFolder: false },
+      { text: '```prompt Folder\nRead https://github.com/expo/exact/blob/main/docs/recipes/new-$&.md or docs/recipes/new-$&.md.\n```\n\n', fromFolder: true },
+      { text: '', fromFolder: false },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
