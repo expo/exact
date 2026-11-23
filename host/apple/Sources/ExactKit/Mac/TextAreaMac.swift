@@ -702,6 +702,14 @@ final class Field: NSTextField {
 final class FieldEditor: NSTextView {
     override func mouseDown(with event: NSEvent) { pressingField(owner, event, self) { super.mouseDown(with: event) } }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { NodeView.countsFirstMouse(event) || super.acceptsFirstMouse(for: event) }
+    override func insertTab(_ sender: Any?) {
+        owner?.presenter?.flushKeyViewLoop()
+        super.insertTab(sender)
+    }
+    override func insertBacktab(_ sender: Any?) {
+        owner?.presenter?.flushKeyViewLoop()
+        super.insertBacktab(sender)
+    }
     override func doCommand(by selector: Selector) {
         owner?.presenter?.flushKeyViewLoop()
         let types = ["deleteBackward:": "deleteContentBackward", "deleteForward:": "deleteContentForward", "deleteWordBackward:": "deleteWordBackward", "deleteWordForward:": "deleteWordForward", "deleteToBeginningOfLine:": "deleteSoftLineBackward", "deleteToEndOfLine:": "deleteSoftLineForward", "deleteToBeginningOfParagraph:": "deleteHardLineBackward", "deleteToEndOfParagraph:": "deleteHardLineForward"]
