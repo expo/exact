@@ -2,12 +2,14 @@ import { site } from '../constants/site.ts';
 
 // The Pages worker (dist.pages/_worker.js, which tools/pages.ts bundles from this file). It gives a request the
 // answer `bun exact.mjs serve` gives it: a page's Markdown where the request prefers text/markdown, and 404.md
-// for a path nothing answers. _routes.json keeps the site's other files away from it.
+// for a path nothing answers. It also gives the Markdown to an agent that fetches one page for a person in a
+// chat and asks for HTML, as docs.expo.dev's worker does. _routes.json keeps the site's other files away from it.
 
 export type Env = { ASSETS: { fetch(request: Request): Promise<Response> } };
 
 const HOST = site.origin && new URL(site.origin).host;
 const MARKDOWN = 'text/markdown; charset=utf-8';
+const AI_USER_AGENTS = /\b(?:ChatGPT-User|Claude-User|Perplexity-User)\b/i;
 
 // The rule of scripts/origin.mjs's prefersMarkdown, which imports what a worker cannot load: text/markdown at a
 // quality above zero and no lower than that of the most specific range matching text/html (RFC 9110 §12.5.1).
@@ -45,15 +47,15 @@ async function answer(request: Request, env: Env, url: URL): Promise<Response> {
   if (/\.[^/]+$/.test(url.pathname)) return env.ASSETS.fetch(request);
 
   const vary = { Vary: 'Accept' };
-  if (prefersMarkdown(request.headers.get('Accept') ?? '')) {
+  const asked = prefersMarkdown(request.headers.get('Accept') ?? '');
+  const offered = !asked && AI_USER_AGENTS.test(request.headers.get('User-Agent') ?? '');
+  if (asked || offered) {
     const markdown = await asset(`${url.pathname.replace(/\/+$/, '') || '/index'}.md`);
     // 304 answers a conditional request for the Markdown.
-    if (markdown.ok || markdown.status === 304) return withHeaders(markdown, markdown.status, vary);
-    const page = await env.ASSETS.fetch(request);
-    return page.status === 404 ? missing(vary) : withHeaders(page, page.status, vary);
+    if (markdown.ok || markdown.status === 304) return withHeaders(markdown, markdown.status, offered ? { Vary: 'Accept, User-Agent' } : vary);
   }
   const page = await env.ASSETS.fetch(request);
-  return withHeaders(page, page.status, vary);
+  return asked && page.status === 404 ? missing(vary) : withHeaders(page, page.status, vary);
 }
 
 export default {

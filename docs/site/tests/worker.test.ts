@@ -41,6 +41,18 @@ test('a request that prefers text/markdown gets the page as Markdown, and any ot
   expect(await get('/app.plan', asksMarkdown)).toMatchObject({ status: 200, vary: null, body: 'plan' });
 });
 
+test('an agent that fetches a page for a person in a chat gets its Markdown without asking', async () => {
+  const asksHtml = { Accept: 'text/html' };
+  for (const agent of ['Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; ChatGPT-User/1.0; +https://openai.com/bot', 'Claude-User/1.0', 'Perplexity-User/1.0']) {
+    expect(await get('/start', { ...asksHtml, 'User-Agent': agent })).toMatchObject({ status: 200, type: MARKDOWN['Content-Type'], vary: 'Accept, User-Agent', body: '# Start' });
+  }
+  const fetcher = { ...asksHtml, 'User-Agent': 'Claude-User/1.0' };
+  expect(await get('/start', { ...fetcher, ...asksMarkdown })).toMatchObject({ vary: 'Accept', body: '# Start' });
+  expect(await get('/.exact/install/', fetcher)).toMatchObject({ status: 200, vary: 'Accept', body: 'install page' });
+  expect(await get('/nope', fetcher)).toMatchObject({ status: 404, type: HTML['Content-Type'], body: 'not found page' });
+  expect(await get('/start', { ...asksHtml, 'User-Agent': 'ClaudeBot/1.0' })).toMatchObject({ type: HTML['Content-Type'], vary: 'Accept', body: 'start page' });
+});
+
 test('a path nothing answers gets 404.md where Markdown was asked for', async () => {
   const missing = { status: 404, type: MARKDOWN['Content-Type'], body: '# Page not found' };
   expect(await get('/nope', asksMarkdown)).toMatchObject({ ...missing, vary: 'Accept' });
