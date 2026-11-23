@@ -2522,7 +2522,7 @@ says `cancelled: true`, and the journal that the caller left.
   once the page has loaded. A declared `activate` is kept.
 - `document.modelContext` exists only in a secure context: on `https`, on
   `localhost` and on `127.0.0.1`, not on a LAN address over `http`
-  (Chrome 156 with `--enable-features=WebMCPTesting`: none at
+  (Chrome 157 with `--enable-features=WebMCP`: none at
   `http://10.0.0.4:<port>`). To try a LAN host, serve it over HTTPS or
   start Chrome with `--unsafely-treat-insecure-origin-as-secure=<origin>`.
 
