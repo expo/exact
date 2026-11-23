@@ -1,0 +1,14 @@
+```prompt Keep a draft when a save is refused
+Make a form in the Exact app in this folder clear its fields and close only after its write succeeds, and keep the draft and show the reason when the write is refused. Use https://github.com/expo/exact/blob/main/docs/recipes/after-a-write.md as the source for each step. The Exact checkout has the same page at docs/recipes/after-a-write.md.
+
+1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
+2. If I did not say which form, list each `mutation` in app.contract with the fields it clears or the form it closes, and ask me which one before you write code.
+3. In app.ts, make the write's source return a reply with `ok` and `error`: `ok: true` when it saves, and `ok: false` with a reason a person can read when it refuses.
+4. In app.contract, declare the write as a `mutation` with the reply's shape that `refreshes` its resource `then` runs an action. In that action, clear the draft only when the reply has `ok: true`. Do not clear the draft in the action that sends. A request failure runs no `then`.
+5. Send only while the draft is not empty and the mutation is not `pending`, and disable the button on the same condition. Under the field, show nothing while `pending`, a message that says to try again while `failed`, and the reply's `error` otherwise.
+6. If the `then` action closes a form, check the route first, as docs/recipes/navigation-stack.md shows. If the write needs a date or a random number, send `time.epochAtZero + performanceNow()` or `time.seed` from `exactTime()` with it: app.ts has no clock or randomness.
+7. Add a test in app.test.contract like the recipe's: an accepted write empties the draft, a refused write keeps its text and shows the reason, and the next accepted write removes the reason. Put `clock data` after each tap. The test's clock stands still until `clock +N`: step it between writes that are dated, or they tie.
+8. Follow the platform checks in docs/start-here.md (`bun exact.mjs docs platform checks`) for the targets in the app's AGENTS.md and app.json until they pass. Read the reports, including counted findings; a zero exit code alone does not mean clean. Fix the app, not the test. If a finding stays after three rounds of fixes, or the app had it before you changed anything, record it (step 9) and report it; do not keep trying.
+9. When a doc was wrong or missing, or a step needed a workaround, read `bun exact.mjs feedback status`. Under `never`, keep no note. Otherwise record it: `bun exact.mjs feedback note "<what happened>"`, which goes to Expo only as that status says. Do not change the policy; tell me how many notes you kept.
+10. Tell me which form changed, what it shows for a refusal and for a failed request, what the tests and checks reported, and the launch command for each target platform.
+```
