@@ -339,12 +339,11 @@ package final class MenuHost {
         #else
         let custom = false
         #endif
-        // A bar item's `command="show-modal"` (`BarPress`): the page hides
-        // its button while the bar shows it, and what it opens presents with
-        // no invoker, as a pull-down's confirmation does. A bar item that
-        // opens a popover is its pull-down (`pullDown`), never this.
-        let barModal = !eligible(source) && eligible(source, inBar: true)
-            && presenter?.invocation(of: source)?.action == .showModal
+        // A bar item's `command="show-modal"` (`BarPress`): the page hides its button while the bar shows it, and
+        // what it opens presents with no invoker, as a pull-down's confirmation does; its `command="close"` (a
+        // dialog's Cancel in its sheet's bar) closes. One that opens a popover is its pull-down (`pullDown`).
+        let inBarOnly = !eligible(source) && eligible(source, inBar: true), barAction = presenter?.invocation(of: source)?.action
+        let barModal = inBarOnly && barAction == .showModal, barClose = inBarOnly && barAction == .close
         // A bar item's popover that was no menu when its item was made (a
         // pull-down item opens its own): with a press of its own, after it,
         // whatever the press made it; without one the bar opens it (`openFromBar`).
@@ -353,7 +352,7 @@ package final class MenuHost {
             _ = openFromBar(source)
             return
         }
-        guard custom || source.isNativeButton || barModal || closesPresentedContent(source), barModal || eligible(source),
+        guard custom || source.isNativeButton || barModal || closesPresentedContent(source), barModal || barClose || eligible(source),
               let invocation = presenter?.invocation(of: source), let name = invocation.target.props["id"] else { return }
         let pop = invocation.target, action = invocation.action
         if source === presentationOwner, action == .show || action == .showModal || action == .toggle && !isOpen(pop) { return }

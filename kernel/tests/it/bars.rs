@@ -587,10 +587,11 @@ fn a_heading_with_an_href_keeps_its_level() {
 
 /// Whether a header button with no `press` is an item is whether what it
 /// invokes, as HTML resolves it (`exact_kernel::Invocation`), opens what it
-/// names: a popover, or a dialog shown modally (#387: an alert's button that
-/// says `commandfor` alone was left out of the iOS bar).
+/// names, a popover or a dialog shown modally, or closes a dialog (#387: an
+/// alert's button that says `commandfor` alone was left out of the iOS bar;
+/// #1316: a dialog's Cancel is `command="close"` alone).
 #[test]
-fn a_header_button_is_an_item_when_its_invocation_opens_what_it_names() {
+fn a_header_button_is_an_item_when_its_invocation_acts_on_what_it_names() {
     let cases: &[(Props, bool, &str)] = &[
         (
             &[
@@ -633,8 +634,8 @@ fn a_header_button_is_an_item_when_its_invocation_opens_what_it_names() {
         ),
         (
             &[(PropId::Commandfor, "clear"), (PropId::Command, "close")],
-            false,
-            "a command that only closes the dialog",
+            true,
+            "a command that closes the dialog: a dialog's Cancel",
         ),
         (
             &[
@@ -1270,4 +1271,37 @@ fn a_linked_panel_inside_the_tablist_belongs_to_the_root() {
     assert_eq!(tabs.tablist, 2);
     assert_eq!(tabs.tabs, [3]);
     assert_eq!(tabs.panels, [4]);
+}
+
+/// #1316's form: a `dialog` whose first child is a `header` of a closing
+/// button, a heading and a pressed button. The rule reads the dialog as it
+/// reads a route: the heading is the title, the Cancel that only closes the
+/// dialog leads, the action trails.
+#[test]
+fn a_dialogs_header_is_read_as_a_routes() {
+    const DIALOG: Props = &[(PropId::Id, "invite"), (PropId::SemanticTag, "dialog")];
+    const CANCEL: Props = &[(PropId::Commandfor, "invite"), (PropId::Command, "close")];
+    let kernel = kernel(view(
+        1,
+        vec![Node(
+            10,
+            NodeType::View,
+            DIALOG,
+            vec![
+                Node(
+                    11,
+                    NodeType::View,
+                    HEADER,
+                    vec![button(20, CANCEL), text(12, HEADING), button(41, &[])],
+                ),
+                view(30, vec![]),
+            ],
+        )],
+    ));
+    let shape = kernel.header_shape(10, None, false, &pressed).unwrap();
+    assert_eq!(shape.heading, Some(12));
+    assert_eq!(shape.level, 2);
+    assert_eq!(shape.leading, vec![20]);
+    assert_eq!(shape.trailing, vec![41]);
+    assert_eq!(shape.items, vec![20, 41]);
 }

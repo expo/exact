@@ -28,7 +28,7 @@ impl<S: Source> exact_kernel::bars::Tree for BarTree<'_, S> {
             .get(&id)
             .is_some_and(|kinds| kinds.contains(&EventKind::Press));
         // A button that shows or toggles a popover, or shows a dialog
-        // modally: `Invocation::opens` restated over the source's names,
+        // modally or closes one (`fact::COMMANDS`): `Invocation` restated over the source's names,
         // since `Invocation::of` resolves a name through a kernel and a
         // render's tree (`DocTree`) has none.
         let named = |prop| {
@@ -49,7 +49,7 @@ impl<S: Source> exact_kernel::bars::Tree for BarTree<'_, S> {
                     (commanded.props.get(PropId::Popover).is_some()
                         && is(PropId::Command, &["show-popover", "toggle-popover"]))
                         || (commanded.props.str(PropId::SemanticTag) == Some("dialog")
-                            && is(PropId::Command, &["show-modal"]))
+                            && is(PropId::Command, &["show-modal", "close"]))
                 }
                 None => {
                     named(PropId::Popovertarget)
