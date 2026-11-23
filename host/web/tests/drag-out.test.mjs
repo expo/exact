@@ -284,16 +284,23 @@ need('chromium', chromium().unavailable).each([
 });
 
 need('chromium', chromium().unavailable).each([
-  ['only its image moves into a frame', false, false],
-  ['the entire card with a slotted image moves into a frame', true, false],
-  ['only its image moves into a frame while the wasm listener loads', false, true],
-])('chromium: capture cancels a card’s drag after %s', async (_, moveCard, waiting) => {
+  ['only its image moves into a frame', { move: 'image' }],
+  ['the entire card with a slotted image moves into a frame', { move: 'card' }],
+  ['only its image moves into a frame while the wasm listener loads', { move: 'image', waiting: true }],
+  ['the entire card with a slotted image moves into a frame’s shadow root', { move: 'card', to: 'shadow' }],
+  ['the entire card with a slotted image moves into a frame’s shadow root while the wasm listener loads',
+    { move: 'card', to: 'shadow', waiting: true }],
+  ['only its image moves to the same document’s body while the wasm listener loads', { move: 'image', to: 'body', waiting: true }],
+  ['a script-owned wrapper moves into a frame’s shadow root', { move: 'wrapper', to: 'shadow' }],
+  ['a script-owned wrapper moves into a frame’s shadow root while the wasm listener loads',
+    { move: 'wrapper', to: 'shadow', waiting: true }],
+])('chromium: capture checks the image drag owner after %s', async (_, { move, to, waiting }) => {
   const browser = await suiteBrowser('chromium');
   try {
     const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
     await page.goto(`http://127.0.0.1:${server.port}/${waiting ? '?waiting' : ''}`);
     await page.waitForFunction('window.ready');
-    const draggable = await page.evaluate(async ({ moveCard, waiting }) => {
+    const draggable = await page.evaluate(async ({ move, to, waiting }) => {
       const card = document.getElementById('card2'), image = document.getElementById('picture');
       card.replaceChildren(image);
       if (waiting) {
@@ -301,27 +308,47 @@ need('chromium', chromium().unavailable).each([
         waitForDrag(card);
       }
       let wrapper = null;
-      if (moveCard) {
+      if (move !== 'image') {
         wrapper = document.createElement('div');
         wrapper.draggable = true;
-        wrapper.append(document.createElement('slot'));
-        card.attachShadow({ mode: 'open' }).append(wrapper);
+        if (move === 'card') {
+          wrapper.append(document.createElement('slot'));
+          card.attachShadow({ mode: 'open' }).append(wrapper);
+        } else {
+          wrapper.append(image);
+          card.append(wrapper);
+        }
       }
-      const frame = document.createElement('iframe');
-      frame.hidden = true;
-      document.body.append(frame);
-      window.addEventListener('dragstart', () => frame.contentDocument.body.append(moveCard ? card : image), { capture: true, once: true });
+      let destination = document.body;
+      if (to !== 'body') {
+        const frame = document.createElement('iframe');
+        frame.hidden = true;
+        document.body.append(frame);
+        destination = frame.contentDocument.body;
+        if (to === 'shadow') destination = destination.attachShadow({ mode: 'open' });
+      }
+      const moved = { card, image, wrapper }[move];
+      window.addEventListener('dragstart', () => destination.append(moved), { capture: true, once: true });
       image.addEventListener('dragstart', (event) => {
-        window.imageDrag = [event.target === image, !wrapper || event.composedPath().includes(wrapper),
-          image.ownerDocument === frame.contentDocument, card.ownerDocument === document,
-          event.defaultPrevented, event.dataTransfer.getData('text/plain')];
+        window.imageDrag = {
+          imageTarget: event.target === image,
+          wrapperOnPath: !wrapper || event.composedPath().includes(wrapper),
+          moved: moved.parentNode === destination,
+          connected: image.isConnected,
+          cardInDocument: card.ownerDocument === document,
+          cancelled: event.defaultPrevented,
+          text: event.dataTransfer.getData('text/plain'),
+        };
         event.stopPropagation();
       });
       return card.draggable;
-    }, { moveCard, waiting });
+    }, { move, to, waiting });
     expect(draggable).toBe(!waiting);
     await drag(page, '#picture', [0, 20]);
-    expect(await page.evaluate(() => window.imageDrag)).toEqual([true, true, true, !moveCard, true, '']);
+    expect(await page.evaluate(() => window.imageDrag)).toEqual({
+      imageTarget: true, wrapperOnPath: true, moved: true, connected: true,
+      cardInDocument: move !== 'card', cancelled: move !== 'wrapper', text: '',
+    });
   } finally {
     await browser.close();
   }

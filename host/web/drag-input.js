@@ -12,12 +12,19 @@ export function lightDomDragPath(event) {
   const path = event.composedPath?.() ?? [];
   const start = path.indexOf(event.target);
   if (start < 0) return [];
-  const getRootNode = globalThis.Node?.prototype.getRootNode;
-  return path.slice(start).filter((el) => {
-    if (el.nodeType !== 1) return false;
-    const root = (getRootNode ?? el.getRootNode).call(el);
-    return root.nodeType !== 11 || !root.host;
-  });
+  const elements = [];
+  const isSlot = (el) => el.localName === 'slot' && el.namespaceURI === 'http://www.w3.org/1999/xhtml';
+  for (const node of path.slice(start)) {
+    if (node.nodeType === 1) elements.push(node);
+    else if (node.nodeType === 11 && node.host) {
+      // Past the retargeted event target, a shadow boundary closes a detour through an assigned slot.
+      // A slot can also wrap that slot as fallback content, so prefer the entry reached by a jump.
+      const entry = elements.findLastIndex((el, i) => isSlot(el) && elements[i - 1]?.parentNode !== el);
+      const slot = entry < 0 ? elements.findLastIndex(isSlot) : entry;
+      if (slot >= 0) elements.length = slot;
+    }
+  }
+  return elements;
 }
 /** What `down` went down on, when `event` is at its point and `target`, where the browser began the drag, holds it. */
 export const pressedAt = (down, event, target) => atPoint(down, event) && target.contains(down.target) ? down.target : null;

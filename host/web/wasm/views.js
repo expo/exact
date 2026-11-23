@@ -397,7 +397,7 @@ function waitingDrag(event) {
   if (event.isTrusted === false) return;
   const target = event.target;
   if (target.matches?.('[draggable="true" i]') && !waitingView(target)) return;
-  if (target.localName === "img" && (!target.isConnected || target.ownerDocument !== document)) {
+  if (target.localName === "img") {
     const path = lightDomDragPath(event);
     if (path.length) {
       if (waits(path)) event.preventDefault();
