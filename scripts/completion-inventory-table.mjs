@@ -182,7 +182,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/unload.rs", "Presenter::before_unload"],
     ["painted:host/painted/src/presenter/wheel.rs", "Presenter::wheel_at"],
     ["painted:host/painted/src/surface_controls.rs",
-      "Presenter::blur Presenter::dispatch_press Presenter::focusable Presenter::forget_pads Presenter::handler_target Presenter::hardware_key " +
+      "Presenter::blur Presenter::dispatch_press Presenter::focusable Presenter::forget_pads Presenter::handler_target Presenter::hardware_key Presenter::in_hidden_mover Presenter::listener_parent " +
       "Presenter::hardware_key_typing Presenter::hardware_pad Presenter::has_gamepad_input Presenter::mouse_press_target Presenter::press_at Presenter::press_target"],
     ["painted:host/painted/src/surfaces.rs", "Surfaces::sync"],
     ["painted:host/painted/src/transform_binding.rs", "Host::dispatch_transform_held"],
