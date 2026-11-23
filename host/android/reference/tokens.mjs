@@ -118,11 +118,21 @@ function check({ files, objects }) {
   const { rows } = JSON.parse(readFileSync(join(here, 'rows.json'), 'utf8'));
   const defaultsFile = join(build, 'oracle/defaults.json');
   const defaults = existsSync(defaultsFile) ? JSON.parse(readFileSync(defaultsFile, 'utf8')) : null;
+  const palette = readFileSync(join(root, 'host/painted/src/presenter/palette.rs'), 'utf8');
   let ok = true;
   for (const name of Object.keys(material)) if (!rows[name]) { console.log(`  ${name}: no source in rows.json`); ok = false; }
   for (const [name, src] of Object.entries(rows)) {
     const want = material[name];
     let got, from;
+    if (src.token && typeof want === 'string') {
+      // A colour: the role the schema names must be the scheme colour the token names (palette.rs's table).
+      const role = palette.match(new RegExp(`\\("${want}", (\\w+), 100\\)`))?.[1];
+      const ref = resolveToken(objects, src.token).ref;
+      const same = ref === `ColorSchemeKeyTokens.${role}`;
+      ok &&= same;
+      console.log(`  ${same ? 'ok' : 'DIFFERS'} ${name}: schema ${want} (${role ?? 'no Material role'}), source ${ref}   ${src.token}`);
+      continue;
+    }
     if (src.token) {
       const v = resolveToken(objects, src.token);
       got = src.corner ? v.corners?.[['topStart', 'topEnd', 'bottomEnd', 'bottomStart'].indexOf(src.corner)] : v.dp ?? v.number;
@@ -155,7 +165,7 @@ function check({ files, objects }) {
  * constants (`TopAppBarTitleInset = 16.dp - TopAppBarHorizontalPadding`).
  */
 function constant(text, name, depth = 0) {
-  const m = text.match(new RegExp(`^(?:internal |private )?(?:const )?val ${name}\\s*(?::\\s*\\w+\\s*)?=\\s*(.+?)\\s*$`, 'm'));
+  const m = text.match(new RegExp(`^(?:@\\w+ )?(?:internal |private )?(?:const )?val ${name}\\s*(?::\\s*\\w+\\s*)?=\\s*(.+?)\\s*$`, 'm'));
   return m && depth <= 8 ? evaluate(text, m[1], depth) : undefined;
 }
 
