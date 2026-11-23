@@ -82,14 +82,15 @@ component App
           text "A"
         button press=pick("b") role="tab" aria-controls="panel-b" aria-selected=(nav.tab == "b")
           text "B"
-      Unsent(replace=replace)
+      if !replacing
+        Unsent(replace=replace)
       text (replacing ? "attempted" : "committed")
 component Unsent
   props
     replace: action
-  mutation saved as shape number
+  mutation firstSaved as shape number
   action save
-    send saved = held()
+    send firstSaved = held()
     replace()
   view
     button press=save testId="first-send"
@@ -209,6 +210,14 @@ fn ownership(r: &Runner<Data>) -> Ownership {
 #[test]
 fn every_reconcile_refusal_restores_ownership() {
     let plan = contract::compile(SOURCE).unwrap();
+    let first_send_owner = plan
+        .mutations
+        .iter()
+        .find(|m| crate::agent::declared_name(plan.str(m.name)) == "firstSaved")
+        .unwrap()
+        .owner
+        .expect("first-send mutation has an owner");
+    let first_send_region = plan.arm(first_send_owner).region.0;
     for refusal in [
         "key",
         "key-trap",
@@ -271,7 +280,20 @@ fn every_reconcile_refusal_restores_ownership() {
             let panels = r.unopened_tabs().to_vec();
             let result = match entry {
                 "replace" => r.act("replace", vec![]),
-                "first-send" => press(&mut r, "first-send"),
+                "first-send" => {
+                    let kernel = r.kernel();
+                    let button = kernel.find_first_by_test_id("first-send").unwrap();
+                    let view = kernel.node_by_key(button).unwrap().id;
+                    let (_, frames) = r.find(view).unwrap();
+                    let storage = Frame::row_of(&frames, first_send_region).unwrap();
+                    assert!(storage.borrow().sends.is_empty());
+                    let result = r.dispatch(view, crate::Event::Press);
+                    assert!(
+                        storage.borrow().sends.is_empty(),
+                        "{refusal}: {entry}: instance sends"
+                    );
+                    result
+                }
                 "tab" => r.build_tabs(&panels),
                 _ => r.build_every_tab(),
             };
@@ -295,6 +317,48 @@ fn every_reconcile_refusal_restores_ownership() {
             );
         }
     }
+}
+
+#[test]
+fn a_sleeping_owned_resource_records_arguments_without_resettling() {
+    let plan = contract::compile(
+        r#"component App
+  state show = true
+  state number = 1
+  view
+    column
+      if show
+        Sleeping(number=number)
+component Sleeping
+  props
+    number: number
+  resource answer = mirror(number) when false as shape number
+  view
+    text `${answer}`
+"#,
+    )
+    .unwrap();
+    let number = plan
+        .slots
+        .iter()
+        .position(|slot| plan.str(slot.name) == "number")
+        .unwrap();
+    let mut r = Runner::boot(
+        plan,
+        Data::default(),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let owners = r.tree.as_ref().unwrap().owners();
+    let row = owners[0].storage.borrow().requests[0].row.unwrap();
+    assert!(r.resources[row].state.as_ref().unwrap().asleep);
+    assert_eq!(r.owned_row(row).unwrap().want.args, [Value::Number(1.)]);
+
+    r.slots[number] = Value::Number(2.);
+    assert!(!r.reconcile_owned(&owners).unwrap());
+    assert_eq!(r.owned_row(row).unwrap().want.args, [Value::Number(2.)]);
 }
 
 #[test]

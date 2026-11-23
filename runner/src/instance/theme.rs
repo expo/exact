@@ -210,8 +210,12 @@ impl ThemeIndex {
 
     /// Forget the views `live` says are gone.
     pub(super) fn retain(&mut self, live: &impl Fn(ViewId) -> bool) {
-        Rc::make_mut(&mut self.rows).retain(|(view, _), _| live(*view));
-        Rc::make_mut(&mut self.looks).retain(|view, _| live(*view));
+        if Rc::strong_count(&self.rows) == 1 || self.rows.keys().any(|(view, _)| !live(*view)) {
+            Rc::make_mut(&mut self.rows).retain(|(view, _), _| live(*view));
+        }
+        if Rc::strong_count(&self.looks) == 1 || self.looks.keys().any(|view| !live(*view)) {
+            Rc::make_mut(&mut self.looks).retain(|view, _| live(*view));
+        }
         self.faces.retain(|view, _| live(*view));
         self.decorations.retain(|view, _| live(*view));
     }
@@ -239,6 +243,50 @@ impl ThemeIndex {
     /// Whether no row reads a token.
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::instance::looks::Looks;
+
+    #[test]
+    fn retain_keeps_unchanged_theme_maps_shared() {
+        let mut theme = ThemeIndex::default();
+        theme.put(
+            1,
+            ThemedRow {
+                style: StyleId::TextColor,
+                text: Value::str("var(--ink)"),
+                tuple: 0,
+                written: true,
+                implied: false,
+                tokens: 1,
+            },
+        );
+        theme.set_look(
+            2,
+            Looks {
+                tuple: 0,
+                tokens: 1,
+                states: vec![],
+            },
+        );
+        let checkpoint = theme.clone();
+
+        theme.retain(&|_| true);
+        assert!(Rc::ptr_eq(&theme.rows, &checkpoint.rows), "themed rows");
+        assert!(Rc::ptr_eq(&theme.looks, &checkpoint.looks), "themed looks");
+
+        theme.retain(&|view| view != 1);
+        assert!(theme.row(1, StyleId::TextColor).is_none());
+        assert!(checkpoint.row(1, StyleId::TextColor).is_some());
+        assert!(Rc::ptr_eq(&theme.looks, &checkpoint.looks));
+
+        theme.retain(&|view| view != 2);
+        assert!(theme.look(2).is_none());
+        assert!(checkpoint.look(2).is_some());
     }
 }
 
