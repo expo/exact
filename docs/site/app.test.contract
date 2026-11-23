@@ -99,6 +99,8 @@ test "the page header has Edit page, and Copy link copies the page's address"
   expect tree has "edit-page"
   tap "copy-link"
   expect text "copy-link" == "Copied"
+  clock +2000
+  expect text "copy-link" == "Copy link"
 
 test "the Actions menu copies the Markdown and opens the page in each AI app"
   size 1440x900
@@ -230,6 +232,8 @@ test "Start here's prompt copies, and shows its text on request"
   expect tree has "agent-prompt-text"
   tap "agent-prompt-copy"
   expect text "agent-prompt-copy" == "Copied"
+  clock +2000
+  expect text "agent-prompt-copy" == "Copy prompt"
 
 test "Search opens from the sidebar and hints until two letters"
   size 1440x900
