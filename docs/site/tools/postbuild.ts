@@ -149,11 +149,6 @@ writeFileSync(
   ].join('\n'),
 );
 
-writeFileSync(
-  join(DIST, 'llms.txt'),
-  `# ${site.name}\n\n> ${site.description}\n\n[sitemap.md](${ORIGIN}/sitemap.md) lists the same pages with each one's type, last change and prerequisites.\n\n## Pages\n\n${pages.map(p => `- [${p.title}](${ORIGIN}${p.path === '/' ? '/index' : p.path}.md): ${p.description}`).join('\n')}\n`
-);
-
 const TYPES: Record<string, string> = { Home: 'Overview', 'Get started': 'Tutorial', Learn: 'Guide', Recipes: 'How-to', Reference: 'Reference', 'For AI agents': 'Reference' };
 const mdUrl = (p: Page) => `${ORIGIN}${p.path === '/' ? '/index' : p.path}.md`;
 const parentOf = (p: Page) => pages.filter(q => q.path !== '/' && p.path.startsWith(`${q.path}/`)).sort((a, b) => b.path.length - a.path.length)[0];
@@ -167,15 +162,17 @@ function prerequisites(p: Page): string {
   return `[${start.title}](${mdUrl(start)})`;
 }
 const depth = (p: Page): number => (parentOf(p) ? depth(parentOf(p)) + 1 : 0);
-const sitemapSections = [...new Set(pages.map(p => p.section))].map(section => [
-  `## ${section}`,
-  '',
-  ...pages.filter(p => p.section === section).map(p =>
-    `${'    '.repeat(depth(p))}- [${p.title}](${mdUrl(p)}) | Type: ${TYPES[section] ?? 'Reference'} | Lastmod: ${p.updated || 'unknown'} | Summary: ${p.description} | Prerequisites: ${prerequisites(p)}`),
-].join('\n'));
+const bySection = (fields: (p: Page) => string) =>
+  [...new Set(pages.map(p => p.section))]
+    .map(section => [`## ${section}`, '', ...pages.filter(p => p.section === section).map(p => `${'    '.repeat(depth(p))}- [${p.title}](${mdUrl(p)})${fields(p)}`)].join('\n'))
+    .join('\n\n');
+writeFileSync(
+  join(DIST, 'llms.txt'),
+  `# ${site.name}\n\n> ${site.description}\n\n[sitemap.md](${ORIGIN}/sitemap.md) lists the same pages with each one's type, last change and prerequisites.\n\n${bySection(p => `: ${p.description}`)}\n`
+);
 writeFileSync(
   join(DIST, 'sitemap.md'),
-  `# ${site.name} sitemap\n\nA page index for agents: each page's Markdown URL, its type, the date it last changed, a summary, and what to read before it. [llms.txt](${ORIGIN}/llms.txt) lists the same pages without the extra fields.\n\n${sitemapSections.join('\n\n')}\n`
+  `# ${site.name} sitemap\n\nA page index for agents: each page's Markdown URL, its type, the date it last changed, a summary, and what to read before it. [llms.txt](${ORIGIN}/llms.txt) lists the same pages without the extra fields.\n\n${bySection(p => ` | Type: ${TYPES[p.section] ?? 'Reference'} | Lastmod: ${p.updated || 'unknown'} | Summary: ${p.description} | Prerequisites: ${prerequisites(p)}`)}\n`
 );
 
 writeFileSync(
