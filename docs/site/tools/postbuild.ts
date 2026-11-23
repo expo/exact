@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { sections } from '../constants/navigation.ts';
-import { redirects } from '../constants/redirects.ts';
+import { nonPageRules, redirects } from '../constants/redirects.ts';
 import { site } from '../constants/site.ts';
 
 const SITE = resolve(import.meta.dir, '..');
@@ -37,6 +37,8 @@ const rules = [
   ...Object.entries(redirects).flatMap(([from, to]) => [`${from} ${to} 301`, `${withSlash(from)} ${to} 301`]),
   '# A page reached with a trailing slash goes to its path: the router matches no route that ends in "/".',
   ...pages.filter(p => p.path !== '/').map(p => `${withSlash(p.path)} ${p.path} 301`),
+  '# The paths that are not pages.',
+  ...nonPageRules.map(({ from, to, status }) => `${from} ${to} ${status}`),
 ];
 writeFileSync(join(DIST, '_redirects'), `${rules.join('\n')}\n`);
 
@@ -202,5 +204,5 @@ if (ORIGIN) {
   );
 }
 
-console.log(`${DIST}: head (favicon, stored choices, Markdown link, JSON-LD${ORIGIN ? ', canonical' : ''}) on ${prepainted} pages, _redirects (${rules.length - 2} rules), _headers, ${pages.length} .md pages and 404.md, ${Object.keys(redirects).length} moved-page fallbacks, robots.txt, llms.txt, sitemap.md${ORIGIN ? ', sitemap.xml' : ''}`);
+console.log(`${DIST}: head (favicon, stored choices, Markdown link, JSON-LD${ORIGIN ? ', canonical' : ''}) on ${prepainted} pages, _redirects (${rules.filter(rule => !rule.startsWith('#')).length} rules), _headers, ${pages.length} .md pages and 404.md, ${Object.keys(redirects).length} moved-page fallbacks, robots.txt, llms.txt, sitemap.md${ORIGIN ? ', sitemap.xml' : ''}`);
 if (!ORIGIN) console.log('  no origin: set it in constants/site.ts (or SITE_ORIGIN) for sitemap.xml, canonical links and JSON-LD URLs');

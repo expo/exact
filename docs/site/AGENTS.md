@@ -50,6 +50,13 @@ Pages' 100 rules, and the worker. The worker (`worker/index.ts`) answers a reque
 `text/markdown` as `bun start` does, and marks every host but the site's origin `noindex`. `bun
 run test:worker` tests the worker, and `bun run test:pages` the tree under `wrangler pages dev`.
 
+`constants/redirects.ts` holds the redirects. A moved page goes in `redirects`. A redirect or a
+rewrite for any other path goes in `nonPageRules`, as the fields of a rule in [Pages'
+syntax](https://developers.cloudflare.com/pages/configuration/redirects/): status 200 makes a
+rewrite, and `from` can have a splat. The build writes both lists to `dist/_redirects`. Pages
+applies those rules. `bun start` does not: it answers a moved page's old path with a fallback
+page, and the path of any other rule with a 404.
+
 ## Search
 
 The search dialog (Cmd+K) asks the Algolia app and index in `constants/search.ts` with its

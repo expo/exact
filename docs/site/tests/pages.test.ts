@@ -48,6 +48,11 @@ test('a page answers at its path, and every other spelling of it redirects there
   expect(await get('/nope')).toEqual({ status: 404, type: 'text/html', location: null });
 });
 
+test('a path that is not a page redirects by its rule in constants/redirects.ts', async () => {
+  expect(await get('/llms-full.txt')).toMatchObject({ status: 301, location: '/llms.txt' });
+  expect(await get('/llms.txt')).toEqual({ status: 200, type: 'text/plain', location: null });
+});
+
 test('Markdown, the worker and the files it does not see', async () => {
   const response = await fetch(`${origin}/start`, { headers: { Accept: 'text/markdown' } });
   // The build writes sitemap.xml only with an origin, and names it only then.

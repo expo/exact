@@ -199,5 +199,5 @@ export async function attachWire(socket, { nonce, session, onWaiting, handshakeM
     if (answered !== mine) { fail(`the app answered request ${answered} where ${mine} was asked`); throw failure; }
     return reply;
   }));
-  return { attached: first, ask, close: () => { socket.end(); }, get failure() { return failure; } };
+  return { attached: first, ask, close: () => { socket.end(); }, abandon: (why) => fail(why), get failure() { return failure; } };
 }
