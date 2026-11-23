@@ -10,9 +10,10 @@
 // Cargo can hold separate locks for target and build directories. Rename under both
 // locks, fingerprints first. Take rustc's session locks before moving its caches.
 // Delete after releasing the locks.
-import { constants, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { constants, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statfsSync, statSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { takeLock } from '../host/web/build-lock.mjs';
+import { platform } from 'node:os';
 import { basename, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
@@ -41,6 +42,7 @@ export function startSweep(target, now = Date.now()) {
   if (existsSync(ledger) && now - JSON.parse(readFileSync(ledger, 'utf8')).at < EVERY) return;
   const err = openSync(log, 'a');
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url), resolve(target)], { cwd: import.meta.dirname, detached: true, stdio: ['ignore', 'ignore', err] });
+  child.on('error', () => {});
   child.unref();
   closeSync(err);
   return child;
@@ -86,6 +88,13 @@ function assertAccessTimes(target, resetAccess) {
 const profiles = target => [target, ...readdirSync(target, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => resolve(target, e.name))]
   .flatMap(dir => readdirSync(dir, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => resolve(dir, e.name)))
   .filter(dir => existsSync(resolve(dir, '.fingerprint')));
+
+function cargoUsesProfileLocks(dir) {
+  if (platform() !== 'linux') return true;
+  // Cargo skips locking on filesystems with NFS_SUPER_MAGIC.
+  try { return statfsSync(dir).type !== 0x6969; }
+  catch { return false; }
+}
 
 const isDirectory = path => lstatSync(path, { throwIfNoEntry: false })?.isDirectory();
 
@@ -192,20 +201,26 @@ function sweepIncremental(incrementalDir, now, move, lock, { prefix, oldCaches, 
     const key = prefix + entry.name, recorded = oldCaches[key];
     if (recorded !== undefined) caches[key] = recorded;
     const lockFiles = new Set();
-    const children = readdirSync(cache, { withFileTypes: true }).map(c => {
+    const listed = readdirSync(cache, { withFileTypes: true });
+    const children = listed.map(c => {
       const path = resolve(cache, c.name);
       const [, prefix, timestamp, state] = (c.isDirectory() ? SESSION.exec(c.name) : null) ?? [];
       const lockName = prefix ? `${prefix}.lock` : !c.isDirectory() && SESSION_LOCK.test(c.name) ? c.name : null;
       if (lockName && c.isFile()) lockFiles.add(lockName);
       return { path, timestamp, state, lockName, mtime: lstatSync(path).mtimeMs };
     });
+    const moveCache = () => {
+      const names = new Set(listed.map(c => c.name));
+      // A standalone rustc can start a session while the listed locks are held.
+      if (readdirSync(cache).some(name => !names.has(name))) return;
+      move(cache);
+      delete caches[key];
+      removed++;
+    };
     const activity = children.reduce((latest, c) => Math.max(latest, c.mtime), recorded ?? (children.length ? -Infinity : stat.mtimeMs));
     if (now - activity > KEEP) {
       const locks = new Set(children.map(c => c.lockName).filter(Boolean));
-      if (withSessionLocks(cache, locks, lock, () => move(cache))) {
-        delete caches[key];
-        removed++;
-      }
+      withSessionLocks(cache, locks, lock, moveCache);
       continue;
     }
     // rustc encodes the timestamp as ten base-36 digits, so string order is chronological.
@@ -230,14 +245,11 @@ function sweepIncremental(incrementalDir, now, move, lock, { prefix, oldCaches, 
       for (const child of group) if (!child.timestamp) move(child.path);
     };
     if (children.length && !hasSurvivors) {
-      const moved = withSessionLocks(cache, discard.keys(), lock, () => {
+      withSessionLocks(cache, discard.keys(), lock, () => {
         for (const group of discard.values()) moveGroup(group);
-        move(cache);
+        removed += children.length;
+        moveCache();
       });
-      if (moved) {
-        delete caches[key];
-        removed += children.length + 1;
-      }
     } else {
       for (const [name, group] of discard) {
         if (withSessionLocks(cache, [name], lock, () => {
@@ -277,10 +289,12 @@ export async function sweep(target, now = Date.now()) {
     for (const dir of profiles(target)) {
       const at = relative(target, dir), prefix = `${at}#`, locks = [];
       try {
-        for (const name of ['.cargo-lock', '.cargo-build-lock']) {
-          const fd = lock(resolve(dir, name));
-          if (fd === null) break;
-          locks.push(fd);
+        if (cargoUsesProfileLocks(dir)) {
+          for (const name of ['.cargo-lock', '.cargo-build-lock']) {
+            const fd = lock(resolve(dir, name));
+            if (fd === null) break;
+            locks.push(fd);
+          }
         }
         if (locks.length < 2) {
           for (const [key, t] of Object.entries(oldUnits)) if (key.startsWith(prefix)) units[key] = t;

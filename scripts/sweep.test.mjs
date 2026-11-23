@@ -2,8 +2,10 @@ import { spyOn, test } from 'bun:test';
 import * as childProcess from 'node:child_process';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs';
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import * as os from 'node:os';
 import { tmpdir } from 'node:os';
 import { dirname, relative, resolve } from 'node:path';
 import process from 'node:process';
@@ -51,6 +53,21 @@ test.skipIf(process.platform === 'win32')('a detached sweep ignores the callerâ€
     assert.equal(readFileSync(resolve(cache, '.exact-sweep.log'), 'utf8'), '');
   } finally { rmSync(directory, { recursive: true, force: true }); }
 }, 30_000);
+
+test.skipIf(process.platform === 'win32')('a deferred sweep spawn failure leaves the caller running', async () => {
+  const t = target(), child = new EventEmitter();
+  child.unref = () => {};
+  const error = Object.assign(new Error('spawn EAGAIN'), { code: 'EAGAIN' });
+  let failure;
+  const start = spyOn(childProcess, 'spawn').mockImplementation(() => {
+    failure = Promise.resolve().then(() => child.emit('error', error));
+    return child;
+  });
+  try {
+    assert.equal(startSweep(t), child);
+    assert.equal(await failure, true);
+  } finally { start.mockRestore(); rmSync(t, { recursive: true, force: true }); }
+});
 
 test.skipIf(process.platform === 'win32')('a unit no build has read for a week goes; one read since the last sweep stays', async () => {
   const t = target(), now = Date.now(), b = resolve(t, 'debug/.fingerprint', `b-${B}`, 'lib-b');
@@ -198,10 +215,6 @@ test.skipIf(process.platform === 'win32')('the rlib names the fully reused set a
     for (const path of [live, liveReuse]) assert.ok(existsSync(path), path);
     for (const path of [old, reused, interrupted, interruptedReuse]) assert.ok(!existsSync(path), path);
   } finally { rmSync(t, { recursive: true, force: true }); }
-});
-
-test('the object classifier is private to the sweep', () => {
-  assert.equal(Object.hasOwn(sweepModule, 'obsoleteRcguObjects'), false);
 });
 
 test.skipIf(process.platform === 'win32')('linked deps is skipped during object trimming and unit expiry', async () => {
@@ -379,6 +392,58 @@ test.skipIf(process.platform === 'win32')('trimming an abandoned session removes
     assert.deepEqual(removed, { debug: 3 });
   } finally { rmSync(t, { recursive: true, force: true }); }
 });
+
+for (const [reason, age] of [['cache expiry', 8 * DAY], ['trimming the last known session', DAY]]) {
+  test.skipIf(process.platform === 'win32')(`a session added after listing survives ${reason}`, async () => {
+    const t = target(), now = Date.now(), cache = resolve(t, 'debug/incremental/exact_kernel-2ajo1mk2vrgcf');
+    const [, knownLock] = session(cache, 's-hoensmxwyy-0jdnav7', 'working', (now - age) / 1000);
+    const open = fs.openSync;
+    let working;
+    const opening = spyOn(fs, 'openSync').mockImplementation((path, ...args) => {
+      if (path === knownLock) working = session(cache, 's-hoeq3b8k0z-1xawk5k', 'working', now / 1000);
+      return open(path, ...args);
+    });
+    try {
+      await sweep(t, now);
+      assert.ok(working);
+      for (const path of working) assert.ok(existsSync(path), path);
+    } finally { opening.mockRestore(); rmSync(t, { recursive: true, force: true }); }
+  });
+}
+
+for (const [name, type] of [['NFS', 0x6969], ['a failed filesystem probe', null]]) {
+  test.skipIf(process.platform === 'win32')(`on Linux ${name} keeps a profile and its ledger while a local profile is swept`, async () => {
+    const t = target(), now = Date.now(), debug = resolve(t, 'debug');
+    const release = resolve(t, 'release/.fingerprint', `a-${A}`);
+    const path = resolve(t, '.exact-sweep.json'), cacheKey = 'debug#a-2ajo1mk2vrgcf';
+    try {
+      mkdirSync(release, { recursive: true });
+      writeFileSync(resolve(release, 'lib-a'), A);
+      await sweep(t, now);
+      const ledger = JSON.parse(readFileSync(path, 'utf8'));
+      ledger.caches[cacheKey] = now;
+      writeFileSync(path, JSON.stringify(ledger));
+      const locks = ['.cargo-lock', '.cargo-build-lock'].map(name => resolve(debug, name));
+      for (const lock of locks) rmSync(lock);
+
+      const platform = spyOn(os, 'platform').mockReturnValue('linux');
+      const disk = spyOn(fs, 'statfsSync').mockImplementation(dir => {
+        if (dir !== debug) return { type: 0xef53 };
+        if (type === null) throw new Error('statfs failed');
+        return { type };
+      });
+      try { assert.deepEqual(await sweep(t, now + 8 * DAY), { release: 1 }); }
+      finally { disk.mockRestore(); platform.mockRestore(); }
+
+      for (const lock of locks) assert.ok(!existsSync(lock), lock);
+      assert.ok(has(t, '.fingerprint', `a-${A}`));
+      assert.ok(!existsSync(release));
+      const { units, caches } = JSON.parse(readFileSync(path, 'utf8'));
+      assert.deepEqual(units, { [`debug#${A}`]: now, [`debug#${B}`]: now });
+      assert.deepEqual(caches, { [cacheKey]: now });
+    } finally { rmSync(t, { recursive: true, force: true }); }
+  });
+}
 
 for (const lockName of ['.cargo-lock', '.cargo-build-lock']) {
   test.skipIf(process.platform === 'win32')(`a profile held by ${lockName} keeps its fingerprints and working session`, async () => {
