@@ -6,12 +6,15 @@ use FixtureActivity, FixtureState from "./activities.contract"
 // bundle; its two entries exercise `push` and `frequent`, each drawing one
 // line in every placement (WP8's eight). On Android the departure is an
 // ongoing notification by its row's `android` mapping, and the alert, which
-// has none, is refused (LLP 1126 D13). Its two controls (app.json) are a
-// tool control whose tool starts a departure, which iOS runs in the app as a
-// Live Activity intent, and a URL control that opens the app at its root
-// (LLP 1126.004).
+// has none, is refused (LLP 1126 D13). Its three controls (app.json, LLP
+// 1126.004) are a tool control whose tool starts a departure, which iOS runs
+// in the app as a Live Activity intent; a URL control that opens the second
+// route, so a press shows which route it opened; and a plain tool control that
+// counts presses, which only a qualification build offers (§6d): the count on
+// screen says whether its intent ran in the app.
 routes nav
   home "/"
+  detail "/detail"
 
 shape ActivityHandle
   id: string
@@ -37,7 +40,11 @@ component ActivityFixture
   state count = 0
   derive live = activities.activities.filter(a => a.activityState == "active" or a.activityState == "stale")
   derive firstId = match first(live) { case some(a) => a.id, case none => "" }
+  state presses = 0
   tool startDeparture writes "Start a departure." = startDeparture
+  tool tally writes "Count a press." = tally
+  action tally
+    presses = presses + 1
   action follow(url: string)
     nav = go(nav, url)
   action startDeparture
@@ -62,6 +69,7 @@ component ActivityFixture
   view
     main navigationKey=`${current.id}` navigate=follow
       text "Activity fixture"
+      text `Route ${current.name} · ${presses} ${presses == 1 ? "press" : "presses"}` testId="route" font-variant-numeric="tabular-nums"
       if activities.linked
         button press=startDeparture testId="start-departure"
           text "Start departure"
