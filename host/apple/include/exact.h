@@ -652,6 +652,7 @@ uint32_t exact_share_land(ExactRuntime rt);
  * 46 = focusin, 47 = focusout (#283): UTF-8 `<target byte length>:<target id>`
  *      then `0` (no relatedTarget) or `1<related id>`;
  * 64 = host look states (UTF-8 bits: 1 hover, 2 focus-visible); presentation only.
+ * 65 = AppKit text input, the same edit as 54 with its receipt tracked.
  * any other kind is refused with an error batch.
  * Format lists are space-separated command tokens. Link keeps the remaining bytes.
  * A change's text, key's name, or guest message is the payload in the input
@@ -822,6 +823,7 @@ uint32_t exact_row_reuse(ExactRuntime rt, uint32_t on);
 uint32_t exact_flat_nodes(ExactRuntime rt, uint32_t on);
 /* Deliver only this timer instance. A cancelled generation cannot fire a replacement. */
 uint32_t exact_fire_native_timer(ExactRuntime rt, uint32_t index, uint64_t generation, double now_ms);
+/* Mode 4 drains work preceding a held AppKit field edit or its immediate continuations. */
 uint32_t exact_advance(ExactRuntime rt, double now_ms, uint32_t mode);
 /* @ref LLP 1073 D5: a presented display frame — timers due by now_ms, then
  * every frame task once at it. The batch says "frames" while one wants it. */

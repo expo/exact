@@ -948,6 +948,8 @@ impl<D: DataSource> Bridge<D> {
     /// bytes, UTF-8).
     /// Event kinds and payloads are declared in `include/exact.h`.
     pub fn dispatch(&mut self, view: u32, kind: u32, len: usize, now_ms: f64) -> u32 {
+        let native_text = kind == 65;
+        let kind = if native_text { 54 } else { kind };
         let payload =
             String::from_utf8_lossy(&self.input[..len.min(self.input.len())]).into_owned();
         if kind == 64 {
@@ -1051,6 +1053,7 @@ impl<D: DataSource> Bridge<D> {
             _ => return self.refuse(&format!("unknown event kind {kind}")),
         };
         let out = match self.host.as_mut() {
+            Some(h) if native_text => h.dispatch_native_text(view, event, now_ms),
             Some(h) => h.dispatch_at(view, event, now_ms),
             None => not_booted(),
         };
@@ -1182,18 +1185,6 @@ impl<D: DataSource> Bridge<D> {
             .host
             .as_mut()
             .map_or_else(not_booted, |h| h.hold_end(token, end, now_ms));
-        self.emit(out)
-    }
-
-    /// Move the clock: `mode` 0 fires every timer due (the wall clock), 1
-    /// stops after a timer that sends (the agent's jump), 2 lands only the
-    /// `then`s already armed, the clock unmoved (an agent's input's end).
-    pub fn advance(&mut self, now_ms: f64, mode: u32) -> u32 {
-        let out = self.host.as_mut().map_or_else(not_booted, |h| match mode {
-            2 | 3 => h.land_then(mode == 3),
-            1 => h.advance_until_request(now_ms),
-            _ => h.advance(now_ms),
-        });
         self.emit(out)
     }
 
@@ -1447,6 +1438,7 @@ pub type Cell<D> = RefCell<Bridge<D>>;
 mod answers;
 mod boot;
 mod canvas_performance;
+mod events;
 use boot::PreparedHost;
 pub(crate) use boot::TreeBase;
 mod colors;

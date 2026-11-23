@@ -4,6 +4,7 @@
 import UIKit
 #else
 import AppKit
+import ExactCore
 #endif
 
 extension ExactSession {
@@ -37,6 +38,11 @@ extension ExactSession {
         // Queued behind a slice, the driver may have taken the clock since
         whenIdle { [weak self] in
             guard let self, state != .destroyed, clock == nil, !ExactEnv.agentFreezes else { return }
+            #if os(macOS)
+            // Landing the text batch re-arms the clock. A clock wake is
+            // not a new native input and need not wait for this one.
+            guard !nativeTextThenWaiting else { return }
+            #endif
             timerAdmissions.check()
             followOffset()
             // Posted, not waited for; one in flight re-arms the clock as it lands.
@@ -61,8 +67,22 @@ extension ExactSession {
     /// for a `then`, a queue's `next` or an answer that is the earliest work
     /// due; what is due after it is posted.
     func advanceIfDue() {
+        #if os(macOS)
+        defer { deliverAfterNativeText() }
+        #endif
         guard !advancingDue, !applying, !landing, !waits(.advance), !holdingReports, state != .destroyed, clock == nil, !ExactEnv.agentFreezes,
-              !frames.tasks, !ownerInFlight, let due = timerDue, due <= now() else { return }
+              !ownerInFlight else { return }
+        #if os(macOS)
+        guard !nativeText.settling else { return }
+        if nativeText.owed {
+            advanceNativeText()
+            if !nativeText.posted, nativeText.owed, !nativeText.stalled {
+                DispatchQueue.main.async { [weak self] in self?.advanceIfDue() }
+            }
+            return
+        }
+        #endif
+        guard !frames.tasks, let due = timerDue, due <= now() else { return }
         advancingDue = true
         defer { advancingDue = false }
         followOffset()
@@ -78,7 +98,8 @@ extension ExactSession {
             if let edit = presenter.fieldSelections.input(id), let selection = presenter.fieldSelections.reported(id, value) {
                 #if os(macOS)
                 if edit.ordinaryTyping {
-                    (presenter.views[id]?.textArea as? TextArea)?.ordinaryInputSelection = (value, selection)
+                    applyNativeTextInput(id, value, selection, edit)
+                    return
                 }
                 #endif
                 applyInput(runtime.fieldEvent(id, 54, edit.payload(value, selection), now: now()))

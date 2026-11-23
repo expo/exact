@@ -110,6 +110,16 @@ extension Presenter {
                            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
     }
 
+    func admitsNativeMouseDown(at point: NSPoint, in window: NSWindow) -> Bool {
+        guard let session, session.nativeTextThenWaiting else { return true }
+        let target = Self.node(at: point, in: window)
+        if window === viewport.window, target?.presenter !== self {
+            let background = hit(point, in: window)
+            guard target == nil, background === viewport || background === session.view else { return true }
+        }
+        return session.settleNativeText() && hosts(window) && Self.node(at: point, in: window) === target
+    }
+
     private func hit(_ point: NSPoint, in window: NSWindow) -> NSView? {
         guard let content = window.contentView else { return nil }
         return content.hitTest(content.superview?.convert(point, from: nil) ?? point)

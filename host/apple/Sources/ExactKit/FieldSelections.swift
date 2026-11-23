@@ -426,6 +426,12 @@ package final class FieldSelections {
                     return
                 }
             }
+            if let session = presenter.session, session.nativeTextThenWaiting {
+                session.nativeText.after.append { [weak self, weak node] in
+                    self?.deliverSelection(id, identity: identity, node: node)
+                }
+                return
+            }
             #endif
             deliverSelection(id, identity: identity, node: node)
         }

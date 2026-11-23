@@ -87,6 +87,10 @@ impl<D: DataSource> Host<D> {
         batch.facts = self.facts_moved();
         batch.landing = self.runner.data_timer_landing();
         batch.stored = std::mem::take(&mut self.stored);
+        batch.native_text_pending = self.native_text_pending();
+        if !batch.native_text_pending {
+            self.native_text_receipt = None;
+        }
         if std::mem::take(&mut self.window_state_changed) {
             batch.window_state =
                 Some(serde_json::to_string(&self.runner.window_state()).expect("string map"));
@@ -122,6 +126,7 @@ impl<D: DataSource> Host<D> {
     pub(crate) fn refused(&self, error: Option<String>) -> String {
         let mut batch = Batch::new();
         self.state_onto(&mut batch);
+        batch.native_text_pending = self.native_text_pending();
         let (timers, motion) = (
             self.route_overflow_due(self.runner.timer_due_ms()),
             self.motion_onto(&mut batch),

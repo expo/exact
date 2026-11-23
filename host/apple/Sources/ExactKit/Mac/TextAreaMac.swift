@@ -28,6 +28,16 @@ package final class TextArea: NSTextView {
     var changingText = false
     var nativeTextInput: Bool { owner?.props["nativeTextInput"] == "true" }
 
+    @discardableResult
+    private func finishNativeInput() -> Bool {
+        guard let owner, let presenter = owner.presenter, let session = presenter.session,
+              session.nativeTextThenWaiting else { return true }
+        if owner.writingValue || markup?.applying == true || session.insideApply { return true }
+        let focused = window?.firstResponder === self
+        return session.settleNativeText() && presenter.views[owner.id] === owner
+            && (!focused || window?.firstResponder === self)
+    }
+
     func ordinaryInsertionKey(_ event: NSEvent, presenter: Presenter) -> Bool {
         guard nativeTextInput, event.type == .keyDown, let owner, owner.presenter === presenter,
               !owner.disabled, !owner.inert, window?.firstResponder === self,
@@ -38,7 +48,13 @@ package final class TextArea: NSTextView {
     }
 
     package override func keyDown(with event: NSEvent) {
+        guard finishNativeInput() else { return }
         interpretKey(event) { super.keyDown(with: event) }
+    }
+
+    package override func insertText(_ string: Any, replacementRange: NSRange) {
+        guard finishNativeInput() else { return }
+        super.insertText(string, replacementRange: replacementRange)
     }
 
     func interpretKey(_ event: NSEvent, _ interpret: () -> Void) {
@@ -187,6 +203,7 @@ package final class TextArea: NSTextView {
     }
 
     package override func doCommand(by selector: Selector) {
+        guard finishNativeInput() else { return }
         if ordinaryInsertion != nil, deliverCommandKey() { return }
         owner?.presenter?.flushKeyViewLoop()
         let types = ["deleteBackward:": "deleteContentBackward", "deleteForward:": "deleteContentForward", "deleteWordBackward:": "deleteWordBackward", "deleteWordForward:": "deleteWordForward", "deleteToBeginningOfLine:": "deleteSoftLineBackward", "deleteToEndOfLine:": "deleteSoftLineForward", "deleteToBeginningOfParagraph:": "deleteHardLineBackward", "deleteToEndOfParagraph:": "deleteHardLineForward"]
@@ -211,6 +228,8 @@ package final class TextArea: NSTextView {
         if let fields = owner?.presenter?.fieldSelections { fields.quietly(place) } else { place() }
     }
     package override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
+        if let owner, owner.presenter?.session?.nativeText.stalled == true,
+           !owner.writingValue, markup?.applying != true { return false }
         let ordinary = ordinaryInsertion != nil && replacementString == ordinaryInsertion?.text && affectedCharRange == selectedRange() && !hasMarkedText() && !markingText
         if ordinaryInsertion != nil, !ordinary, deliverCommandKey() { return false }
         // Asked before `super`, which registers the native edit's undo: the
@@ -251,6 +270,7 @@ package final class TextArea: NSTextView {
     /// AppKit posts no change while text is marked: the owner hears each one
     /// here, and a commit's steps as one (`settlingComposition`).
     package override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        guard finishNativeInput() else { return }
         if ordinaryInsertion != nil, deliverCommandKey() { return }
         // A composition that starts over a selection holding a hidden link
         // destination first deletes what the selection shows, as the editor
@@ -284,10 +304,12 @@ package final class TextArea: NSTextView {
     /// web's textarea does; an app that wants a tab or an indent prevents
     /// the `key` and calls `setRangeText` (LLP 1045 D6).
     package override func insertTab(_ sender: Any?) {
+        guard finishNativeInput() else { return }
         owner?.presenter?.flushKeyViewLoop()
         window?.selectNextKeyView(self)
     }
     package override func insertBacktab(_ sender: Any?) {
+        guard finishNativeInput() else { return }
         owner?.presenter?.flushKeyViewLoop()
         window?.selectPreviousKeyView(self)
     }
@@ -295,6 +317,7 @@ package final class TextArea: NSTextView {
     /// Return: the app's `beforeinput` first, then the Markdown editor's
     /// list continuation, else a line break (LLP 1045 D6).
     package override func insertNewline(_ sender: Any?) {
+        guard finishNativeInput() else { return }
         guard markup != nil, !hasMarkedText(), let owner else { super.insertNewline(sender); return }
         let line = { if !owner.formatMarkup("newline") { super.insertNewline(sender) } }
         if let fields = owner.presenter?.fieldSelections { fields.nativeEdit(owner, replacement: "\n", marked: false, line) } else { line() }
@@ -302,6 +325,7 @@ package final class TextArea: NSTextView {
 
     package override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard window?.firstResponder === self else { return super.performKeyEquivalent(with: event) }
+        if !finishNativeInput() { return true }
         // An embedded/agent window need not own NSApp.keyWindow, so the
         // menu's responder lookup may miss its editor. Route the ordinary
         // undo chord straight to this text view's native manager.
@@ -329,12 +353,14 @@ package final class TextArea: NSTextView {
     // NSTextView does not implement these responder actions. The Edit menu's
     // nil target must reach this editor's history, rather than NSWindow's.
     @objc package func undo(_ sender: Any?) {
+        guard finishNativeInput() else { return }
         if isEditable, !hasMarkedText(), undoManager?.canUndo == true {
             if let fields = owner?.presenter?.fieldSelections { fields.history(owner, redo: false) { undoManager?.undo() } }
             else { undoManager?.undo() }
         }
     }
     @objc package func redo(_ sender: Any?) {
+        guard finishNativeInput() else { return }
         if isEditable, !hasMarkedText(), undoManager?.canRedo == true {
             if let fields = owner?.presenter?.fieldSelections { fields.history(owner, redo: true) { undoManager?.redo() } }
             else { undoManager?.redo() }
@@ -348,6 +374,7 @@ package final class TextArea: NSTextView {
     }
 
     @objc package func copyPlainText(_ sender: Any?) {
+        guard finishNativeInput() else { return }
         guard markup != nil, selectedRange().length > 0,
               let plain = MarkdownLink.installed?.plain(string, range: selectedRange(), atoms: owner?.props["atoms"] ?? "", faces: owner?.props["atomFaces"] ?? "", spoken: false) else { return }
         NSPasteboard.general.clearContents()
@@ -355,6 +382,7 @@ package final class TextArea: NSTextView {
     }
     // DOM's clipboard events, before the editor's own (#125, Clipboard.swift).
     package override func copy(_ sender: Any?) {
+        guard finishNativeInput() else { return }
         NodeView.fieldEdit(owner, #selector(NodeView.copy(_:))) {
             guard let markup, let storage = textStorage else { super.copy(sender); return }
             let selection = markup.copyRange(selectedRange(), in: storage)
@@ -365,12 +393,15 @@ package final class TextArea: NSTextView {
     }
 
     package override func cut(_ sender: Any?) {
+        guard finishNativeInput() else { return }
         NodeView.fieldEdit(owner, #selector(NodeView.cut(_:))) { super.cut(sender) }
     }
     package override func paste(_ sender: Any?) {
+        guard finishNativeInput() else { return }
         NodeView.fieldPaste(owner, self) { super.paste(sender) }
     }
     package override func pasteAsPlainText(_ sender: Any?) {
+        guard finishNativeInput() else { return }
         NodeView.fieldPaste(owner, self) { super.pasteAsPlainText(sender) }
     }
 

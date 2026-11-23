@@ -232,9 +232,14 @@ extension Presenter {
     /// that is its own first responder — which a prevented key never
     /// reaches. True when taken. `focused`: the window's focus is in this
     /// session (the shortcuts and handlers are its).
-    func routeKey(_ event: NSEvent, focused: Bool, in window: NSWindow? = nil) -> Bool {
-        // Before the shortcuts and a composition: a key on a held node lets its hold go (HeldState.swift).
-        if event.type == .keyDown || event.type == .flagsChanged && KeyCodes.pressed(event) { heldKey(at: keyTarget((window ?? event.window)?.firstResponder)) }
+    func routeKey(_ event: NSEvent, focused: Bool, in window: NSWindow? = nil,
+                  nativeTextSettled: Bool = false) -> Bool {
+        let down = event.type == .keyDown || event.type == .flagsChanged && KeyCodes.pressed(event)
+        if down, focused, !nativeTextSettled, !settleNativeKeyDown(in: window ?? event.window) { return true }
+        if down {
+            // Before the shortcuts and a composition: a key on a held node lets its hold go (HeldState.swift).
+            heldKey(at: keyTarget((window ?? event.window)?.firstResponder))
+        }
         if focused {
             keyboardUsed(event, in: window)
             // A keyup's handlers (#140); AppKit gets the event either way.
@@ -251,6 +256,17 @@ extension Presenter {
         }
         return menus.key(event) || dialogs.key(event) || tabFromStart(event, focused: focused, in: window)
     }
+    func settleNativeKeyDown(in window: NSWindow?) -> Bool {
+        let responder = window?.firstResponder
+        let editor = responder as? TextArea
+        let beforeEdit = editor?.nativeTextInput == true && editor?.owner?.presenter === self
+        guard session?.settleNativeText(drainEarlierWork: beforeEdit) != false else { return false }
+        // A continuation may move focus within this session; route the key
+        // there. If it moves to another session, consume this event.
+        guard responder !== window?.firstResponder else { return true }
+        return session?.view?.ownsShortcutFocus(in: window) ?? (keyTarget(window?.firstResponder)?.presenter === self)
+    }
+
     /// A keydown at the window's first responder, before AppKit delivers
     /// it: true when a handler prevented its default, and the caller drops
     /// the event. An input method's composition keeps its keys, but for a
@@ -275,10 +291,22 @@ extension Presenter {
     /// (`passesComposition`).
     func keyUp(_ event: NSEvent, in window: NSWindow? = nil) {
         guard event.type == .keyUp || event.type == .flagsChanged && KeyCodes.released(event) else { return }
-        let responder = (window ?? event.window)?.firstResponder
+        let source = window ?? event.window
+        if let session, session.nativeTextThenWaiting {
+            guard !session.nativeText.stalled else { return }
+            let epoch = session.viewsEpoch
+            session.nativeText.after.append { [weak self, weak source, weak session] in
+                guard let self, let source, let session, session.viewsEpoch == epoch, session.state != .destroyed,
+                      session.view?.ownsShortcutFocus(in: source) ?? (keyTarget(source.firstResponder)?.presenter === self) else { return }
+                self.keyUp(event, in: source)
+            }
+            return
+        }
+        let responder = source?.firstResponder
         if !passesComposition(event, at: responder) { return }
-        _ = keyEvent("keyup", at: keyPath(responder, in: window ?? event.window), KeyPress(KeyCodes.held(event.modifierFlags) + NodeView.keyName(event),
-                     code: KeyCodes.code(event), up: true, composing: composes(event, at: responder)), inline: (responder as? InlineKeyView)?.id)
+        _ = keyEvent("keyup", at: keyPath(responder, in: source), KeyPress(KeyCodes.held(event.modifierFlags) + NodeView.keyName(event),
+                     code: KeyCodes.code(event), up: true, composing: composes(event, at: responder)),
+                     inline: (responder as? InlineKeyView)?.id)
     }
     /// A key's `isComposing`: a modifier's own press or release while an
     /// input method composes text at `responder`, as Chrome reports one

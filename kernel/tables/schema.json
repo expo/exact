@@ -6358,6 +6358,10 @@
           "member": "landing",
           "codec": "bool"
         },
+        "nativeTextPending": {
+          "member": "nativeTextPending",
+          "codec": "bool"
+        },
         "windowState": {
           "member": "windowState",
           "codec": "modes"

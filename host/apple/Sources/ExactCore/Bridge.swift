@@ -27,6 +27,7 @@ public struct Batch {
     public var held = false
     /// @ref LLP 1043.000 §3 D8 — absolute runner deadline, absent without timers.
     public var timerDueMs: Double? = nil
+    package var nativeTextPending: Bool?
     /// A data module's timer continuation an advance released is still out: the agent's jump waits for it.
     public var landing = false
     /// A store write this batch's commits made has landed: the app's other sessions refresh (LLP 1030.004 D2).
@@ -359,6 +360,7 @@ package final class Runtime {
         let bytes = UnsafeBufferPointer(start: exact_out(rt), count: Int(len))
         var batch = hooks.decodeBatch(bytes, profileResolver)
         batch.sequence = sequence.next()
+        if !batch.busy && !batch.held { batch.nativeTextPending = batch.nativeTextPending ?? false }
         #if DEBUG
         // What was decoded, before `prepare` adds the owner's values.
         observeBatch?(Data(bytes), batch)
@@ -914,9 +916,19 @@ package final class Runtime {
     }
     package func advance(now: Double, untilRequest: Bool = false) -> Batch { on { read(exact_advance(rt, now, untilRequest ? 1 : 0)).made(by: .advance) } }
     /// The `then`s an agent's input settled, the clock unmoved (LLP 1012 §2).
-    package func landThen() -> Batch { on { read(exact_advance(rt, 0, 2)).made(by: .advance) } }
+    package func landThen(nativeText: Bool = false) -> Batch {
+        on(caller: "landThen()") { read(exact_advance(rt, 0, nativeText ? 4 : 2)).made(by: .advance) }
+    }
     /// Those `then`s only when one is the earliest work due (LLP 1072.000 §4 B).
     package func landThenFirst() -> Batch { on { read(exact_advance(rt, 0, 3)).made(by: .advance) } }
+    #if os(macOS)
+    package func advanceNativeTextAsync(done: @escaping (RuntimeCompletion) -> Void) {
+        post(caller: "landThenFirst()", done: done) { [self] _ in
+            installTopLayer([], modal: nil, backdrop: nil)
+            return read(exact_advance(rt, 0, 4)).made(by: .advance)
+        }
+    }
+    #endif
     /// A timer advance on the owner, not waited for (LLP 1072.000): what is
     /// due by `now`, or with `frame` that display frame's (`frame(now:wall:)`).
     package func advanceAsync(now: Double, frame: Double? = nil, admitted: Bool = false, capture: UInt64 = 0, measureFrame: Bool = false, done: @escaping (RuntimeCompletion) -> Void) {

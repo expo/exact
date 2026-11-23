@@ -79,6 +79,8 @@ pub struct Batch {
     pub landing: bool,
     /// A shared write landed. Other sessions refresh (LLP 1030.004 D2).
     pub stored: bool,
+    /// An AppKit field edit or its immediate work still needs to run.
+    pub native_text_pending: bool,
     /// The window's restorable slots as JSON, at boot and whenever they change.
     pub window_state: Option<String>,
     /// Topics this batch's durable writes announced to other sessions (LLP 1030.004 D2).
@@ -446,6 +448,7 @@ impl Batch {
             && !self.layout_provisional
             && !self.facts
             && self.window_state.is_none()
+            && !self.native_text_pending
             && !self.stored
             && self.wakelock.is_none()
             && self.orientationlock.is_none()
@@ -1178,6 +1181,7 @@ impl Batch {
             ("facts", self.facts),
             ("landing", self.landing),
             ("stored", self.stored),
+            ("nativeTextPending", self.native_text_pending),
         ] {
             if present {
                 let _ = write!(s, r#","{key}":true"#);

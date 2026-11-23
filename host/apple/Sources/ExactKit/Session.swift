@@ -477,6 +477,9 @@ public final class ExactSession {
     /// A slice's batch is applying, ahead of the work that waited for it
     var fillLanding = false
     private(set) var viewsEpoch = 0
+    #if os(macOS)
+    var nativeText = NativeTextContinuation()
+    #endif
     /// Native work that still prevents this session from settling
     var hostOutstanding: [String] {
         var out: [String] = []
@@ -699,6 +702,9 @@ public final class ExactSession {
         let completion = next.completion
         let began = CACurrentMediaTime()
         var submitted = 0.0
+        #if os(macOS)
+        if case .advance = next.kind { nativeTextAdvancePublished(completion) }
+        #endif
         switch next.kind {
         case .fill: fillInFlight = false; fillLanding = true
         case .tick: tickInFlight = false

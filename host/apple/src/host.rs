@@ -50,6 +50,8 @@ pub use content_region_host::LinkedRegions;
 mod control_text_tests;
 #[path = "covers.rs"]
 mod covers;
+#[path = "events.rs"]
+mod events;
 #[path = "first_frame.rs"]
 mod first_frame;
 #[cfg(test)]
@@ -327,6 +329,7 @@ pub struct Host<D: DataSource> {
     pending_store_writes: Vec<exact_runner::StoreWrite>,
     /// A store write landed since the last batch was written (`Batch::stored`).
     stored: bool,
+    native_text_receipt: Option<events::NativeTextReceipt>,
     window_state_changed: bool,
     pending_store_stamps: std::collections::BTreeMap<String, exact_data::secrets::Stamp>,
     /// What the disk held for each owed name when its write first failed.
@@ -742,6 +745,7 @@ impl<D: DataSource> Host<D> {
             secrets,
             pending_store_writes: Vec::new(),
             stored: false,
+            native_text_receipt: None,
             window_state_changed,
             pending_store_stamps: Default::default(),
             pending_store_bases: Default::default(),

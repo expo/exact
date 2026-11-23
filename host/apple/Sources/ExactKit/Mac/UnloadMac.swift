@@ -15,6 +15,7 @@ extension ExactSession {
     /// has nothing to keep.
     public func beforeUnload() -> Bool {
         guard state != .destroyed, booted else { return true }
+        guard settleNativeText(drainEarlierWork: stage != nil) else { return false }
         let listeners = presenter.views.values.filter { $0.handlers.contains("beforeunload") }.map(\.id).sorted()
         var prevented = false
         for id in listeners where presenter.views[id] != nil {

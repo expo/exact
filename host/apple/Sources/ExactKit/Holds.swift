@@ -19,6 +19,9 @@ public extension ExactSession {
     /// Whether the app must finish work an answer started, asked of the
     /// runner now: what a quit waits for.
     var mustFinish: Bool {
+        #if os(macOS)
+        guard settleNativeText(retry: false) else { return true }
+        #endif
         guard let data = runtime.ask(exact_must_finish, "").data(using: .utf8),
               let reply = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
         return reply["mustFinish"] as? Bool == true

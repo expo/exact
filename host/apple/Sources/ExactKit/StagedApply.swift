@@ -548,6 +548,12 @@ extension ExactSession {
         frames.tasks = newest.frames
         updateTimerState(newest)
         timerDue = newest.timerDueMs; timerLanding = newest.landing
+        #if os(macOS)
+        if let owed = newest.nativeTextPending {
+            if !owed && (nativeText.owed || newest.replacesTree) { nativeText.stalled = false }
+            nativeText.owed = owed
+        }
+        #endif
         scheduleClock(due: newest.timerDueMs)
         guard shown else { return }
         canvasOwed = newest.canvasOwed

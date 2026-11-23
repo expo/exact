@@ -216,6 +216,7 @@ public final class ExactView: NSView {
     }
 
     public override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if ownsShortcutFocus(), !session.presenter.settleNativeKeyDown(in: event.window ?? window) { return true }
         if session.presenter.menus.key(event) || session.presenter.dialogs.key(event) { return true }
         if ownsShortcutFocus(), session.presenter.shortcuts.perform(event) { return true }
         return super.performKeyEquivalent(with: event)
@@ -362,12 +363,18 @@ public final class ExactView: NSView {
                    let source = self.session.presenter.pointerSource, source.window == nil {
                     source.pointerReleased(event)
                 }
-                guard self.session.presenter.hosts(event.window) else { return event }
+                guard let eventWindow = event.window, self.session.presenter.hosts(eventWindow) else { return event }
+                if [.leftMouseDown, .rightMouseDown].contains(event.type),
+                   !self.session.presenter.admitsNativeMouseDown(at: event.locationInWindow, in: eventWindow) { return nil }
+                if (event.type == .keyDown || event.type == .flagsChanged && KeyCodes.pressed(event)),
+                   self.ownsShortcutFocus(in: event.window),
+                   !self.session.presenter.settleNativeKeyDown(in: event.window) { return nil }
                 // The reader's press in a list, before any handler here can make a request in answer.
                 self.session.presenter.collections.heard(event)
                 // A window may hold several sessions: the one under the pointer steps its history.
                 if event.type == .otherMouseUp, event.window === self.window,
-                   self.bounds.contains(self.convert(event.locationInWindow, from: nil)) { self.session.presenter.historyButton(event) }
+                   self.bounds.contains(self.convert(event.locationInWindow, from: nil)),
+                   self.session.presenter.admitsNativeMouseDown(at: event.locationInWindow, in: eventWindow) { self.session.presenter.historyButton(event) }
                 // A modifier pressed is a keydown on the web (`"Shift"`), and
                 // released a keyup (#140); to AppKit a flags change, which
                 // goes on to it either way.
@@ -401,7 +408,7 @@ public final class ExactView: NSView {
                    self.session.canvases.pressedControlKey(code,down:event.type == .keyDown,timestamp:event.timestamp) {return nil}
                 // Shortcuts, then the `key` handlers (before a field editor can
                 // take the key), then the menus' and dialogs' defaults.
-                guard !presenter.routeKey(event, focused: focused) else { return nil }
+                guard !presenter.routeKey(event, focused: focused, nativeTextSettled: true) else { return nil }
                 if let deferredEditor, event.window?.firstResponder !== deferredEditor { presenter.flushKeyViewLoop() }
                 return presenter.dialogs.appKitEvent(event)
             }

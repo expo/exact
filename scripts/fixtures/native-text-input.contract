@@ -1,7 +1,71 @@
 component Test
+  state recorded = ""
+  state settled = ""
+  state unloadSaw = ""
+  state selection = ""
   state keys = ""
   state checkedInput = ""
   state before = ""
+  state moveOnType = false
+  state armed = false
+  state earlierFired = false
+  state removed = false
+  state first = ""
+  state second = ""
+  state earlier = ""
+  state future = ""
+  state submitted = ""
+  state loop = false
+  action enableLoop
+    loop = true
+  action typeAsync(value: string)
+    recorded = value
+  task firstChange when recorded != "" key=recorded
+    change(writeFirst)
+  task secondChange when recorded != "" key=recorded
+    change(writeSecond)
+  task futureChange when recorded != "" key=recorded
+    after(20, writeFuture)
+  action writeFirst
+    first = recorded
+  action writeSecond
+    second = recorded
+  action writeFuture
+    future = recorded
+  task accept when recorded != "" key=recorded
+    change(acceptText)
+  action acceptText
+    settled = recorded
+    if moveOnType
+      focus("checked")
+  action nativeSelection(e: InputEvent)
+    selection = `${e.selectionStart}:${e.selectionEnd}`
+  action redirect
+    moveOnType = true
+  action keep
+    unloadSaw = settled
+    if settled != ""
+      preventDefault()
+  action arm
+    armed = true
+  task earlierTimer when armed
+    after(1, fireEarlier)
+  action fireEarlier
+    earlierFired = true
+  task earlierChange when earlierFired key="earlier"
+    change(writeEarlier)
+  action writeEarlier
+    earlier = "earlier"
+  action open
+    showPopover("editor-popover")
+  action submit(k: string)
+    if k == "Enter"
+      submitted = settled
+      if loop
+        focus("checked")
+      preventDefault()
+  action remove
+    removed = true
   action capture(k: string)
     keys = keys + "capture " + k + ";"
     if k == "x"
@@ -19,9 +83,102 @@ component Test
   action keyRelease(k: string)
     keys = keys + "up " + k + ";"
   view
-    column
-      textarea -exact-native-text-input=true testId="checked" width="15rem" height=50 value=checkedInput input=checked keycapture=capture key=key keyup=keyRelease beforeinput=beforeEdit
+    column beforeunload=keep
+      if not removed
+        textarea -exact-native-text-input=true testId="async" width="15rem" height=50 value=recorded input=typeAsync selectionchange=nativeSelection key=submit
+      textarea -exact-native-text-input=true id="checked" testId="checked" width="15rem" height=50 value=checkedInput input=checked keycapture=capture key=key keyup=keyRelease beforeinput=beforeEdit
       textarea -exact-native-text-input=true testId="binding" width="15rem" height=50 value=checkedInput input=checked key=key keyup=keyRelease beforeinput=beforeEdit
       textarea testId="plain" width="15rem" height=50 keycapture=capture key=key beforeinput=beforeEdit
+      input testId="next" width="15rem"
+      list testId="table-keys" key=key width="9rem" height=55
+        row press=enableLoop
+          text "One"
+      button testId="redirect" press=redirect
+        text "Move focus"
+      button testId="arm" press=arm
+        text "Arm earlier change"
+      button testId="remove" press=remove
+        text "Remove editor"
+      button testId="default-popover" popovertarget="editor-popover"
+        text "Open popover"
+      button testId="open" press=open
+        text "Open editor"
+      button testId="loop" press=enableLoop
+        text "Start work"
+      if loop
+        PendingGroup(token=recorded)
+        PendingGroup(token=recorded)
+        PendingGroup(token=recorded)
+        PendingGroup(token=recorded)
+        MouseTarget(token=recorded)
+      column id="editor-popover" popover="manual"
+        textarea -exact-native-text-input=true testId="popover-editor" value=recorded input=typeAsync key=submit width="12rem" height=50
+      text recorded testId="recorded"
+      text settled testId="settled"
+      text unloadSaw testId="unload-saw"
+      text selection testId="selection"
       text keys testId="keys"
       text before testId="before"
+      text first testId="first"
+      text second testId="second"
+      text earlier testId="earlier"
+      text future testId="future"
+      text submitted testId="submitted"
+
+component PendingChange
+  props
+    token: string
+  state heard = false
+  task accept when token != "" key=token
+    change(write)
+  action write
+    heard = true
+  view
+    if heard
+      text "Done"
+
+component PendingGroup
+  props
+    token: string
+  view
+    column
+      PendingSteps(token=token)
+      PendingSteps(token=token)
+      PendingSteps(token=token)
+      PendingSteps(token=token)
+      PendingSteps(token=token)
+      PendingSteps(token=token)
+
+component PendingSteps
+  props
+    token: string
+  view
+    column
+      PendingChange(token=token)
+      PendingChange(token=token)
+      PendingChange(token=token)
+      PendingChange(token=token)
+      PendingChange(token=token)
+      PendingChange(token=token)
+
+
+component MouseTarget
+  props
+    token: string
+  state replaced = false
+  state clicked = ""
+  task changeTarget when token != "" key=token
+    change(replace)
+  action replace
+    replaced = true
+  action send
+    clicked = token
+  view
+    column position="absolute" top=20 left=260
+      if replaced
+        button width="6rem" height=40 testId="new-send" press=send
+          text "Send"
+      else
+        button width="6rem" height=40 testId="old-send" press=send
+          text "Send"
+      text clicked testId="clicked"

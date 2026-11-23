@@ -359,6 +359,15 @@ impl<D: DataSource> Runner<D> {
         self.advance_within(self.now_ms, false, false)
     }
 
+    /// Whether the current turn has immediate work from an input or answer.
+    pub fn immediate_work_due(&self) -> bool {
+        !self.poisoned
+            && (self.then_due.iter().any(|&at| at <= self.now_ms)
+                || self.due_next(self.now_ms).is_some()
+                || self.audio_due()[2] <= self.now_ms
+                || (!self.invocation_stops_timers() && self.change_due_by(self.now_ms)))
+    }
+
     /// [`Runner::land_then`] when the earliest work due is an answer's
     /// `then`, a queue's `next`, a change action or a transport or MIDI answer; otherwise
     /// nothing, so no timer due before it is overtaken. A host that runs

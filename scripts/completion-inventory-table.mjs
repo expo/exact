@@ -779,7 +779,7 @@ export const classifications = [
     ["painted:host/painted/src/surfaces/window.rs", "Presenter::window_frame"],
     ["runner:runner/src/runner/advance.rs",
       "Runner::advance Runner::advance_timed Runner::advance_until_request Runner::complete_frame_tasks Runner::frame Runner::frame_tasks " +
-      "Runner::frame_tasks_with_limit#next_ms:1 Runner::host_forward_at Runner::land_then Runner::land_then_first Runner::present_frames Runner::set_live_clock"],
+      "Runner::frame_tasks_with_limit#next_ms:1 Runner::host_forward_at Runner::immediate_work_due Runner::land_then Runner::land_then_first Runner::present_frames Runner::set_live_clock"],
     ["runner:runner/src/runner/advance/fixture_replies.rs", "Runner::delay_fetch_fixture"],
     ["runner:runner/src/runner/advance/data_timers.rs", "Runner::data_timer_due_ms Runner::data_timer_landing Runner::data_timer_waits Runner::timer_first#next_ticket:1"],
     ["runner:runner/src/runner/dated.rs", "Runner::resources_reading_clock"],
