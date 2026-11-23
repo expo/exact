@@ -62,7 +62,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
         });
         self.force |= action != 2;
         if action != 2 && self.painted_once {
-            self.p.slice_collections(Some(0), 0.0);
+            self.p.slice_collections(self.feed, Some(0), 0.0);
             self.responding = true;
             self.lead = false;
             self.travel.stopped();

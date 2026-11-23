@@ -701,7 +701,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
         // A moved paint is owed a paint once scrolling pauses: each step pushes this back.
         if (Native.owed() && (due < 0 || due > 16)) due = 16.0
         handler.removeCallbacks(timer)
-        if (due >= 0) handler.postDelayed(timer, due.toLong().coerceAtLeast(0))
+        if (due >= 0) handler.postDelayed(timer, kotlin.math.ceil(due).toLong())
     }
 }
 
