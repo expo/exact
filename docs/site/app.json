@@ -62,7 +62,7 @@
         "title": "Open an Exact docs page",
         "doors": ["web"],
         "parameters": {
-          "path": { "title": "Path", "description": "A path that starts with \"/\", such as /recipes/website. It can end with a fragment, such as /recipes/website#a-deep-link." }
+          "path": { "title": "Path", "description": "A path that starts with \"/\", such as /recipes/website, or a URL of these docs. It can end with a fragment. Empty for the current page." }
         }
       }
     }

@@ -56,9 +56,9 @@ Each page offers six tools to an agent that controls the browser, through [WebMC
 | `get_page_info` | `path` | The page's `path`, `title`, `description`, `modificationDate` and `headings` as JSON |
 | `get_site_overview` | None | The content of `/llms.txt` |
 | `list_sections` | `area`, `section` | The sidebar's areas with the names of their sections, or the pages of one area or section, as JSON |
-| `navigate_page` | `path` | Opens the page in the tab |
+| `navigate_page` | `path` | Opens the page in the tab. Available while the search dialog is closed. |
 
-Every input is required, and an empty string stands for one left out: an empty `path` is the current page, an empty `section` is the whole page or every section of the area, and an empty `area` lists the areas. A `path` starts with `/`, as in `/recipes/money`. The tools that read a page also take a URL of these docs, as `llms.txt` writes them.
+Every input is required. An empty `path` means the current page, an empty `section` means the whole page or every section of the area, and an empty `area` lists the areas. Pass a `path` starting with `/`, as in `/recipes/money`, or a URL of these docs, as `llms.txt` writes them. `navigate_page` preserves the URL fragment.
 
 A call answers with an object. When `outcome` is `ok`, `value` holds the result as a string. For input the tool cannot answer, such as a path with no page, `outcome` is `failed` and `value` says why. Only `navigate_page` changes what the tab shows.
 

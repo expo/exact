@@ -2,7 +2,7 @@
 // tools/gen.ts turns ../*.md into content/<route>.ts and content/nav.ts from constants/navigation.ts;
 // app.ts imports one page's module per route, so a reader downloads only the page it reads.
 // Each route waits for the reader before its runtime loads.
-use Page, Nav, Moved, Markdown, Address, Viewport, ToolAnswer, SearchHit, SearchPart, Hit, Key from "./components/shapes.contract"
+use Page, Nav, Moved, Markdown, Address, Viewport, ToolAnswer, ToolDestination, SearchHit, SearchPart, Hit, Key from "./components/shapes.contract"
 use Sidebar, Tabs from "./components/sidebar.contract"
 use Article from "./components/article.contract"
 
@@ -232,6 +232,8 @@ component App
   resource moved = resolveMoved(top(nav).name == "notfound" ? top(nav).url : "") as shape Moved else empty()
   mutation markdown as shape Markdown then copyFetched
   mutation address as shape Address then copyAddress
+  mutation toolDestination as shape ToolDestination then openToolPage
+  state searchOpen = false
   state query = ""
   state term = ""
   state chosen = 0
@@ -256,7 +258,7 @@ component App
   state askedPath = ""
   state askedText = ""
   state askedCount = 0
-  state missed = false
+  state navigationError = ""
   resource answered = answerTool(askedTool, askedPath, askedText, askedCount) as shape ToolAnswer else empty()
   tool search_docs reads "Searches the Exact docs and returns the matching sections as JSON, each with a title and a path. Pass a path to get_page_markdown to read a result." = toolSearch
     returns answered.text
@@ -273,14 +275,16 @@ component App
   tool list_sections reads "With an empty area, returns each area of the sidebar with the names of its sections as JSON. With an area, returns the pages of that area, or of one of its sections, each with a title and a path." = toolSections
     returns answered.text
     fails when answered.failed
-  tool navigate_page writes additive closed "Opens a page of the Exact docs in this tab." = toolNavigate
-    returns missed ? "No page is at that path. search_docs and list_sections return the paths of the pages." : `Opened ${top(nav).url}.`
-    fails when missed
+  tool navigate_page writes closed "Opens a page of the Exact docs in this tab." = toolNavigate
+    returns navigationError != "" ? navigationError : failed(page) ? `The page at ${top(nav).url} did not load.` : `Opened ${top(nav).url}.`
+    fails when navigationError != "" or failed(page)
+    available when not searchOpen
   action askTool(tool: string, path: string, text: string, count: number)
     askedTool = tool
     askedPath = path
     askedText = text
     askedCount = count
+    refresh answered
   action toolSearch(query: string, limit: number)
     askTool("search_docs", "", query, limit)
   action toolMarkdown(path: string, section: string)
@@ -292,10 +296,19 @@ component App
   action toolSections(area: string, section: string)
     askTool("list_sections", area, section, 0)
   action toolNavigate(path: string)
-    let miss = top(go(nav, path)).name == "notfound"
-    missed = miss
-    if not miss
-      openPage(path)
+    let current = top(nav)
+    let hash = fragment(current)
+    let location = path == "" ? current.url + (hash == "" ? "" : `#${hash}`) : path
+    send toolDestination = resolveToolPage(location)
+  action openToolPage
+    match toolDestination
+      case some(target)
+        let error = searchOpen ? "Close the search dialog before opening a page." : target.error
+        navigationError = error
+        if error == ""
+          openPage(target.url)
+      case none
+        navigationError = "The destination could not be resolved."
   action follow(url: string)
     close("search")
     openPage(url)
@@ -376,8 +389,11 @@ component App
   action toggleNav(route: string)
     navToggled = navToggled.includes(route) ? navToggled.filter(x => x != route) : navToggled.concat([route])
   action openSearch
+    searchOpen = true
     showModal("search")
     focus("search-input")
+  action searchClosed
+    searchOpen = false
   action ask(v: string)
     query = v
     chosen = 0
@@ -467,7 +483,7 @@ component App
           row padding-top=10 border-bottom="0.5px solid var(--color-border-default)"
             Tabs(nav=site, tab=tab, prefix="menu-")
           Sidebar(nav=site, current=top(nav).name, tab=tab, toggled=navToggled, toggle=toggleNav, prefix="menu-")
-      dialog id="search" closedby="any" aria-label="Search the docs" padding=0 margin=0 left="50%" transform="translate(-50%, -50%)"
+      dialog id="search" close=searchClosed closedby="any" aria-label="Search the docs" padding=0 margin=0 left="50%" transform="translate(-50%, -50%)"
         top="calc(45vh + clamp(0px, (789px - 100vw) * 1000, 5vh))" height="calc(75vh + clamp(0px, (789px - 100vw) * 1000, 21vh))" width="calc(max(40vw, 680px) + clamp(0px, (789px - 100vw) * 1000, max(0px, 96vw - max(40vw, 680px))) - clamp(0px, (789px - 100vw) * 1000, max(0px, max(40vw, 680px) - 96vw)))" max-width="none" max-height="none" overflow="hidden"
         border="1px solid var(--color-border-default)" border-radius=40 background-color="var(--color-background-default)" color="var(--color-text-default)" font-family="var(--font-sans)"
         column height="100%"

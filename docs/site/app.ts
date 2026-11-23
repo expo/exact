@@ -3,6 +3,7 @@ import { pages } from './content/index.ts';
 import nav from './content/nav.ts';
 import moved from './content/redirects.ts';
 import { search } from './constants/search.ts';
+import { proseLines } from './markdown-fences.ts';
 
 export const appId = 'dev.exact.docs';
 const SEARCH_HOST = 'https://SNB9MIQMWS-dsn.algolia.net';
@@ -139,7 +140,7 @@ function pageAt(given: string) {
   const path = moved.redirects[clean] ?? (clean === '/index' ? '/' : clean);
   const page = moved.pages.find(page => page.path === path);
   if (!page) throw new Error(`No page is at ${clean}. search_docs and list_sections return the paths of the pages.`);
-  return page;
+  return { ...page, location: `${path}${url.search}${url.hash}` };
 }
 
 const markdownAt = (route: string) => textAt(`/assets/markdown/${route}.md`);
@@ -147,12 +148,10 @@ const markdownAt = (route: string) => textAt(`/assets/markdown/${route}.md`);
 function outline(markdown: string) {
   const lines = markdown.split('\n');
   const headings: { level: number; text: string; line: number }[] = [];
-  let fenced = false;
-  lines.forEach((line, index) => {
-    if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
-    const heading = fenced ? null : /^(#{1,6})\s+(.+?)\s*#*$/.exec(line);
-    if (heading) headings.push({ level: heading[1].length, text: heading[2], line: index });
-  });
+  for (const line of proseLines(lines).indices) {
+    const heading = /^ {0,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*\r?$/.exec(lines[line]);
+    if (heading) headings.push({ level: heading[1].length, text: heading[2], line });
+  }
   return { lines, headings };
 }
 
@@ -232,6 +231,13 @@ const sources: Sources = {
   },
   loadNav: async (): Promise<Result<'loadNav'>> => nav,
   resolveMoved: async ([url]): Promise<Result<'resolveMoved'>> => resolve(url),
+  resolveToolPage: async ([given]): Promise<Result<'resolveToolPage'>> => {
+    try {
+      return { url: pageAt(given).location, error: '' };
+    } catch (error) {
+      return { url: '', error: error instanceof Error ? error.message : String(error) };
+    }
+  },
   searchDocs: async ([query]): Promise<Result<'searchDocs'>> => {
     if (query.trim().length < 2) return [];
     const hits = await searchHits({ query, hitsPerPage: 20, attributesToSnippet: ['content:24'], highlightPreTag: MARK_START, highlightPostTag: MARK_END });

@@ -232,31 +232,40 @@ test('Open in AI uses the public page or its repository source', () => withPage(
   expect(prompt).not.toContain('docs.exact.example');
 }));
 
-test('a page offers its tools to a browser\'s agent, and each tool answers a call', () => withPage({}, async page => {
+async function visitWithTools(page, path = '/start') {
   await page.addInitScript(() => {
     window.offered = [];
     Object.defineProperty(Document.prototype, 'modelContext', {
       configurable: true,
-      value: { registerTool: tool => { window.offered.push(tool); return Promise.resolve(); } },
+      value: { registerTool: (tool, { signal }) => {
+        window.offered.push(tool);
+        signal.addEventListener('abort', () => { window.offered = window.offered.filter(other => other !== tool); });
+        return Promise.resolve();
+      } },
     });
   });
-  const hit = { objectID: '1', url: 'https://exact.expo.dev/recipes/website#a-deep-link', hierarchy: { lvl0: 'Recipes', lvl1: 'Recipe: a website', lvl2: 'A deep link' } };
-  await page.route('https://*.algolia.net/**', route => route.fulfill({
-    json: { hits: [hit] },
-    headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' },
-  }));
-  await visit(page, '/start');
+  await visit(page, path);
   await page.waitForFunction(() => window.offered.length === 6);
+  return (name, input) => page.evaluate(([name, input]) => window.offered.find(tool => tool.name === name).execute(input), [name, input]);
+}
+
+const searchHit = { objectID: '1', url: 'https://exact.expo.dev/recipes/website#a-deep-link', hierarchy: { lvl0: 'Recipes', lvl1: 'Recipe: a website', lvl2: 'A deep link' } };
+const searchHeaders = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' };
+const searchAnswer = JSON.stringify([{ title: 'Recipes > Recipe: a website > A deep link', path: '/recipes/website#a-deep-link' }]);
+
+test('a page offers its tools to a browser\'s agent, and each tool answers a call', () => withPage({}, async page => {
+  await page.route('https://*.algolia.net/**', route => route.fulfill({ json: { hits: [searchHit] }, headers: searchHeaders }));
+  const call = await visitWithTools(page);
   expect(await page.evaluate(() => window.offered.map(tool => [tool.name, tool.annotations.readOnlyHint]))).toEqual([
     ['search_docs', true], ['get_page_markdown', true], ['get_page_info', true], ['get_site_overview', true], ['list_sections', true], ['navigate_page', false]]);
-  const call = (name, input) => page.evaluate(([name, input]) => window.offered.find(tool => tool.name === name).execute(input), [name, input]);
 
   expect(await call('search_docs', { query: 'deep link', limit: 3 })).toMatchObject({
-    outcome: 'ok', value: JSON.stringify([{ title: 'Recipes > Recipe: a website > A deep link', path: '/recipes/website#a-deep-link' }]) });
+    outcome: 'ok', value: searchAnswer });
   expect((await call('get_page_markdown', { path: '', section: '' })).value).toStartWith('# Start here: building an app with Exact');
-  expect((await call('get_page_markdown', { path: `${origin}/recipes/website.md`, section: 'a deep link' })).value).toStartWith('# Recipe: a website\n## A deep link');
+  expect((await call('get_page_markdown', { path: `${site.origin || origin}/recipes/website.md`, section: 'a deep link' })).value).toStartWith('# Recipe: a website\n## A deep link');
   expect(JSON.parse((await call('get_page_info', { path: '/recipes/website/' })).value)).toMatchObject({
-    path: '/recipes/website', title: 'Recipe: a website', headings: expect.arrayContaining([{ level: 2, text: 'A deep link' }]) });
+    path: '/recipes/website', title: 'Recipe: a website', modificationDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+    headings: expect.arrayContaining([{ level: 2, text: 'A deep link' }]) });
   expect((await call('get_site_overview', {})).value).toBe(readFileSync(resolve(dist, 'llms.txt'), 'utf8'));
   expect(JSON.parse((await call('list_sections', { area: '', section: '' })).value).map(area => area.area)).toEqual(['home', 'learn', 'reference']);
   expect(JSON.parse((await call('list_sections', { area: 'home', section: 'Get started' })).value)[0]).toEqual({
@@ -267,6 +276,103 @@ test('a page offers its tools to a browser\'s agent, and each tool answers a cal
   await page.getByTestId('h-a-deep-link').waitFor();
   expect(await call('navigate_page', { path: '/no-such-page' })).toMatchObject({ outcome: 'failed' });
   expect(new URL(page.url()).pathname).toBe('/recipes/website');
+}));
+
+test('a WebMCP search retries the same request after a transient failure', () => withPage({}, async page => {
+  const requests = [];
+  await page.route('https://*.algolia.net/**', route => {
+    requests.push(route.request().postDataJSON());
+    return route.fulfill({
+      status: requests.length === 1 ? 503 : 200,
+      json: { hits: [searchHit] },
+      headers: searchHeaders,
+    });
+  });
+  const call = await visitWithTools(page);
+  const input = { query: ' deep link ', limit: 3 };
+  expect(await call('search_docs', input)).toMatchObject({ outcome: 'failed', value: 'Search answered 503.' });
+  expect(await call('search_docs', input)).toMatchObject({ outcome: 'ok', value: searchAnswer });
+  expect(requests).toEqual(Array(2).fill({ query: 'deep link', hitsPerPage: 3 }));
+}));
+
+test('WebMCP search and section tools explain invalid inputs', () => withPage({}, async page => {
+  const call = await visitWithTools(page);
+  expect(await call('search_docs', { query: ' ', limit: 3 })).toMatchObject({ outcome: 'failed', value: 'query must not be empty.' });
+  expect(await call('search_docs', { query: 'tabs', limit: 21 })).toMatchObject({ outcome: 'failed', value: 'limit must be a whole number from 1 to 20.' });
+  expect(await call('list_sections', { area: 'unknown', section: '' })).toMatchObject({ outcome: 'failed', value: expect.stringContaining('No area is "unknown".') });
+  expect(await call('list_sections', { area: 'home', section: 'unknown' })).toMatchObject({ outcome: 'failed', value: expect.stringContaining('No section of home is "unknown".') });
+}));
+
+test('WebMCP reads headings after an inline code span that starts with three backticks', () => withPage({}, async page => {
+  const call = await visitWithTools(page);
+  const path = '/reference/developer/generate-typescript-data-source-types';
+  const info = await call('get_page_info', { path });
+  const section = await call('get_page_markdown', { path, section: 'Notifications' });
+  expect(JSON.parse(info.value).headings).toContainEqual({ level: 3, text: 'Notifications' });
+  expect(section).toMatchObject({ outcome: 'ok', value: expect.stringContaining('\n### Notifications\n') });
+}));
+
+test('WebMCP headings respect fence markers, lengths and indentation', () => withPage({}, async page => {
+  await page.route('**/assets/markdown/recipeWebsite.md', route => route.fulfill({ body: [
+    '# Recipe', '   ````ts', '## Inside', '```', '## After a short marker',
+    '~~~~', '## After a different marker', '```` trailing text', '## After trailing text',
+    '  `````', '   ## C#', '## Closing hashes ###',
+  ].join('\n') }));
+  const call = await visitWithTools(page);
+  const result = await call('get_page_info', { path: '/recipes/website' });
+  expect(JSON.parse(result.value).headings).toEqual([
+    { level: 1, text: 'Recipe' }, { level: 2, text: 'C#' }, { level: 2, text: 'Closing hashes' },
+  ]);
+}));
+
+test('WebMCP navigation is a consequential write', () => withPage({}, async page => {
+  await visitWithTools(page);
+  expect(await page.evaluate(() => window.offered.find(tool => tool.name === 'navigate_page').annotations)).toMatchObject({
+    readOnlyHint: false, consequentialHint: true,
+  });
+}));
+
+test('WebMCP navigation resolves paths against the published pages', () => withPage({}, async page => {
+  const call = await visitWithTools(page);
+  const inputs = ['/recipes/website/#a-deep-link', '', '/start-here', '/_components', '#a-deep-link', `${site.origin || origin}/recipes/website.md#a-deep-link`];
+  const results = [];
+  for (const path of inputs) {
+    const { outcome, value } = await call('navigate_page', { path });
+    results.push({ path, outcome, value, location: page.url().slice(origin.length) });
+  }
+  expect(results).toEqual([
+    { path: inputs[0], outcome: 'ok', value: 'Opened /recipes/website.', location: '/recipes/website#a-deep-link' },
+    { path: inputs[1], outcome: 'ok', value: 'Opened /recipes/website.', location: '/recipes/website#a-deep-link' },
+    { path: inputs[2], outcome: 'ok', value: 'Opened /start.', location: '/start' },
+    { path: inputs[3], outcome: 'failed', value: expect.stringContaining('No page is at /_components.'), location: '/start' },
+    { path: inputs[4], outcome: 'failed', value: expect.stringContaining('path must start with'), location: '/start' },
+    { path: inputs[5], outcome: 'ok', value: 'Opened /recipes/website.', location: '/recipes/website#a-deep-link' },
+  ]);
+  await headingInView(page);
+}));
+
+test('WebMCP navigation reports a page module that fails to download', () => withPage({}, async page => {
+  await page.route(/\/recipeWebsite-[\w-]+\.js$/, route => route.abort('internetdisconnected'));
+  const call = await visitWithTools(page);
+  const result = await call('navigate_page', { path: '/recipes/website' });
+  await page.getByTestId('load-failed').waitFor();
+  expect(result).toMatchObject({ outcome: 'failed', value: 'The page at /recipes/website did not load.' });
+}));
+
+test('WebMCP navigation is unavailable while the search dialog is modal', () => withPage({}, async page => {
+  const call = await visitWithTools(page);
+  const navigate = await page.evaluateHandle(() => window.offered.find(tool => tool.name === 'navigate_page').execute);
+  await page.keyboard.press('ControlOrMeta+k');
+  await page.getByTestId('search-input').waitFor({ state: 'visible' });
+  const result = await navigate.evaluate(execute => execute({ path: '/recipes/website' }));
+  expect(result).toMatchObject({ outcome: 'refused', reason: 'unavailable' });
+  expect(await page.evaluate(() => window.offered.some(tool => tool.name === 'navigate_page'))).toBe(false);
+  expect(new URL(page.url()).pathname).toBe('/start');
+
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => window.offered.some(tool => tool.name === 'navigate_page'));
+  expect(await call('navigate_page', { path: '/recipes/website' })).toMatchObject({ outcome: 'ok' });
+  await page.getByTestId('h-a-deep-link').waitFor();
 }));
 
 for (const mode of ['default', '--loopback', '--lan']) {
