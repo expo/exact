@@ -1,11 +1,12 @@
-// `--attach` (LLP 1012.000): finding the running app's marker, the attached wire, and what the driver refuses before
-// it looks for an app. The app's side is driven on a Mac (the RFC's piece 2 proof); these need no app.
+// `--attach` (LLP 1012.000): finding the running app's marker, on the Mac and in the iOS simulator, the attached wire,
+// and what the driver refuses before it looks for an app. The app's side is driven on a Mac and a simulator (the
+// RFC's piece 2 and 3 proofs); these need no app.
 import { test, expect } from 'bun:test';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { attachTarget } from './agent-inspect.mjs';
+import { attachTarget, attachTargetIOS, openAttached } from './agent-attach.mjs';
 import { attachWire } from './agent-wire.mjs';
 import { main } from './agent.mjs';
 
@@ -151,10 +152,79 @@ test('--attach refuses what only a launch takes, and a host with no attach, befo
   await expect(main(['macos', '--attach', '--live', 'tree'], fail)).rejects.toThrow('--live is for a launch');
   await expect(main(['macos', '--attach', '--headless', 'tree'], fail)).rejects.toThrow('--headless is for a launch');
   await expect(main(['macos', '--attach', '--call', 'x {}', 'tree'], fail)).rejects.toThrow('--notification, --wake, --call and --login is for a launch');
-  await expect(main(['android', '--attach', 'tree'], fail)).rejects.toThrow('--attach: unsupported on android');
-  await expect(main(['ios', '--attach', 'tree'], fail)).rejects.toThrow('the iOS simulator is not built yet');
+  for (const host of ['android', 'windows', 'linux', 'web']) await expect(main([host, '--attach', 'tree'], fail)).rejects.toThrow(`--attach: unsupported on ${host}: attach on ${host} is not built yet`);
+  await expect(main(['tvos', '--attach', 'tree'], fail)).rejects.toThrow('--attach: unsupported on tvos: an Apple TV build carries no attach');
+  await expect(main(['watchos', '--attach', 'tree'], fail)).rejects.toThrow('a watch app carries no attach');
+  await expect(main(['host-ios', '--attach', 'tree'], fail)).rejects.toThrow('the embedding fixture carries no attach');
+  for (const device of [['--device'], ['--device', '--phone', 'X']]) await expect(main(['ios', '--attach', ...device, 'tree'], fail)).rejects.toThrow('--attach: unsupported on a physical iPhone');
+  await expect(main(['macos', '--attach', '--sim', 'X', 'tree'], fail)).rejects.toThrow('--sim is for a launch');
   await expect(main(['trace', '--attach'], fail)).rejects.toThrow('--attach drives a running app');
   expect(opened).toEqual([]);
   await expect(main(['macos', '--app', 'caltrain', '--attach', '41', '--session', 'b', 'tree'], fail)).rejects.toThrow('opened');
-  expect(opened).toEqual([{ host: 'macos', app: 'caltrain', session: 'b', attach: 41 }]);
+  await expect(main(['ios', '--app', 'caltrain', '--attach', '--sim', 'X', 'tree'], fail)).rejects.toThrow('opened');
+  expect(opened).toEqual([{ host: 'macos', app: 'caltrain', session: 'b', attach: 41 }, { host: 'ios', app: 'caltrain', session: undefined, attach: true }]);
+});
+
+/** A simulator `udid`'s app container holding markers, and the private socket directory, as `simctl` and `ps` answer. */
+const UDID = '11111111-2222-3333-4444-555555555555', OTHER = '66666666-7777-8888-9999-000000000000';
+function simulatorMachine({ processes = {}, plists = {}, installed = true } = {}) {
+  const m = machine({ processes, plists });
+  mkdirSync(join(m.dir, 'tmp'));
+  const run = (cmd, args) => {
+    if (cmd === 'xcrun') return installed ? { status: 0, stdout: `${m.dir}\n` } : { status: 2, stdout: '', stderr: 'No such file' };
+    return m.run(cmd, args);
+  };
+  const marker = (pid, fields = {}) => {
+    const socket = join(m.sockets, String(pid));
+    writeFileSync(join(m.dir, 'tmp', `exact-attach-${pid}.json`), JSON.stringify({ v: 1, pid, started, bundle: 'com.example.notes', executable: appExe(UDID), socket, nonce: 'n', ...fields }), { mode: 0o600 });
+    return socket;
+  };
+  return { ...m, run, marker };
+}
+const appDir = (udid) => `/Users/me/Library/Developer/CoreSimulator/Devices/${udid}/data/Containers/Bundle/Application/ABCDEFAB-CDEF-ABCD-EFAB-CDEFABCDEFAB/Notes.app`;
+const appExe = (udid) => `${appDir(udid)}/Notes`;
+const simPlists = (purpose = 'local-development') => Object.fromEntries([UDID, OTHER].map((u) => [`${appDir(u)}/Info.plist`, { CFBundleIdentifier: 'com.example.notes', ExactBuildPurpose: purpose }]));
+const iphone = (state = 'Booted', runtime = 'com.apple.CoreSimulator.SimRuntime.iOS-26-5') => () => ({ udid: UDID, name: 'iPhone 17', state, runtime });
+const findIOS = (m, opts = {}) => attachTargetIOS({ id: 'com.example.notes', name: 'Notes', app: 'notes', run: m.run, choose: iphone(), ...opts });
+
+test('attach finds the simulator app\'s marker in its container on the selected device', async () => {
+  const m = simulatorMachine({ processes: { 61: { exe: appExe(UDID), start: START } }, plists: simPlists() });
+  const server = createServer();
+  try {
+    const socket = m.marker(61);
+    await new Promise((r) => server.listen(socket, r));
+    chmodSync(socket, 0o600);
+    expect(findIOS(m)).toMatchObject({ pid: 61, socket, device: { udid: UDID } });
+    // The same marker naming an executable on another device is not this device's app.
+    m.marker(61, { executable: appExe(OTHER) });
+    expect(() => findIOS(m)).toThrow('Notes pid 61 in simulator iPhone 17');
+  } finally { server.close(); m.done(); }
+});
+
+test('attach in the simulator refuses another device, an Apple TV, a simulator not running and a build without attach', () => {
+  const elsewhere = simulatorMachine({ processes: { 62: { exe: appExe(OTHER), start: START } }, plists: simPlists() });
+  try { expect(() => findIOS(elsewhere)).toThrow(`attach: Notes is not running in the selected simulator iPhone 17 (${UDID}); it runs in ${OTHER}: name that one with --sim <udid>`); }
+  finally { elsewhere.done(); }
+  const m = simulatorMachine({ processes: { 63: { exe: appExe(UDID), start: START } }, plists: simPlists() });
+  try {
+    expect(() => findIOS(m)).toThrow('Notes pid 63 in simulator iPhone 17 (11111111-2222-3333-4444-555555555555) has not turned Agent Attach on: open its developer menu (four fingers, or ⌘D) and choose Enable Agent Attach');
+    expect(() => findIOS(m, { choose: iphone('Shutdown') })).toThrow('is not running: build and open it there');
+    expect(() => findIOS(m, { choose: iphone('Booted', 'com.apple.CoreSimulator.SimRuntime.tvOS-26-5') })).toThrow('--attach: unsupported on tvOS (simulator iPhone 17): an Apple TV build carries no attach');
+  } finally { m.done(); }
+  const release = simulatorMachine({ processes: { 64: { exe: appExe(UDID), start: START } }, plists: simPlists(null) });
+  try { expect(() => findIOS(release)).toThrow('Notes pid 64 in simulator iPhone 17 (11111111-2222-3333-4444-555555555555) is a unstamped build, which carries no agent attach'); }
+  finally { release.done(); }
+  const missing = simulatorMachine({ installed: false });
+  try { expect(() => findIOS(missing)).toThrow('Notes (com.example.notes) is not installed in simulator iPhone 17'); }
+  finally { missing.done(); }
+});
+
+test('the attached carrier refuses a physical device before it looks for an app', async () => {
+  const looked = [];
+  const find = (o) => { looked.push(o); throw new Error('looked'); };
+  await expect(openAttached({ host: 'ios', app: 'caltrain', device: true, find })).rejects.toThrow('--attach: unsupported on a physical iPhone');
+  expect(looked).toEqual([]);
+  // A simulator's lookup is given the app's directory, whose remembered simulator a drive also chooses.
+  await expect(openAttached({ host: 'ios', app: 'caltrain', find })).rejects.toThrow('looked');
+  expect(looked[0]).toMatchObject({ id: 'com.exact.caltrain', app: 'caltrain', dir: expect.stringMatching(/apps\/caltrain$/) });
 });
