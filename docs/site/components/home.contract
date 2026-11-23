@@ -1,5 +1,5 @@
 use Page, Nav, NavItem, Hit from "./shapes.contract"
-use CopyButton, Terminal from "./code.contract"
+use CopyButton, Frame, Bar, Label, Body from "./code.contract"
 
 style SectionTitle
   font-size="var(--text-xl)" font-weight=600 letter-spacing="-0.25px" color="var(--color-text-default)"
@@ -41,8 +41,34 @@ component AgentRow
           text detail font-size="var(--text-sm)" color="var(--color-text-secondary)"
         image "symbol:back" aria-hidden=true font-size="var(--text-sm)" color="var(--color-icon-tertiary)" transform="rotate(180deg)"
 
-// Nico's Home frame, for Exact: a hero, the one prompt an agent needs, the first commands, and a card for
-// each sidebar section that opens its first page. The commands are pages/home.md's; the cards are
+style Prompt
+  font-family="var(--font-mono)" font-size="var(--text-sm)" line-height=1.7 white-space="pre-wrap" color="var(--color-text-default)"
+
+component Setup
+  props
+    id: string
+    prompt: string
+    copiedId: string
+    copyBlock: action
+  state shown = false
+  action toggle
+    shown = not shown
+  view
+    column align-items="center" testId="setup"
+      column class=Frame align-self="stretch"
+        row class=Bar
+          text "Agent prompt" class=Label
+          CopyButton(id=id, source=prompt, copiedId=copiedId, copyBlock=copyBlock)
+        view class=Body padding-bottom=28
+          if shown
+            text prompt class=Prompt testId="setup-prompt-full"
+          else
+            text (prompt.split("\n").slice(0, 4).join("\n")) class=Prompt mask-image="linear-gradient(to bottom, black 55%, transparent)" testId="setup-prompt"
+      button press=toggle appearance="none" aria-expanded=shown position="relative" display="flex" align-items="center" height=32 margin-top=-16 padding="0 12px" border="1px solid var(--color-border-secondary)" border-radius="var(--radius-full)" background-color="var(--color-background-default)" testId="setup-more"
+        text (shown ? "Show less" : "Show more") font-size="var(--text-sm)" font-weight=500 color="var(--color-text-default)"
+
+// Nico's Home frame, for Exact: a hero, the one prompt an agent needs, the setup prompt, and a card for
+// each sidebar section that opens its first page. The setup prompt is pages/home.md's; the cards are
 // constants/navigation.ts's, as are the agent rows, which open sections of pages/agents.md.
 component Home
   props
@@ -69,10 +95,10 @@ component Home
       column margin-top=56
         h2 class=SectionTitle
           text "Set up Exact"
-        text "Install the toolchain once, then make an app and start its dev loop." margin-top=6 font-size="var(--text-sm)" color="var(--color-text-secondary)"
-        for b in page.blocks.filter(x => x.kind == "terminal") key=b.id
+        text "Give this prompt to your coding agent. It installs the toolchain, makes an app and starts its dev loop." margin-top=6 font-size="var(--text-sm)" color="var(--color-text-secondary)"
+        for b in page.blocks.filter(x => x.lang == "prompt") key=b.id
           view margin-top=16
-            Terminal(id=b.id, title=b.title, source=b.text, lines=b.lines, copiedId=copiedId, copyBlock=copyBlock)
+            Setup(id=b.id, prompt=b.text, copiedId=copiedId, copyBlock=copyBlock)
       column margin-top=48
         h2 class=SectionTitle
           text "Explore the docs"
