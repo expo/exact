@@ -79,6 +79,18 @@ for (const p of pages) {
   if (!ORIGIN && canonical) fail(p.path, 'a canonical link without an origin');
 }
 
+const DESCRIPTION_MIN = 40;
+const WRITE_ONE = 'write one in constants/navigation.ts';
+const pathsByDescription = new Map<string, string[]>();
+for (const p of pages) pathsByDescription.set(p.description, [...(pathsByDescription.get(p.description) ?? []), p.path]);
+for (const [description, paths] of pathsByDescription) if (paths.length > 1) fail(paths.join(', '), `${paths.length} pages share the description ${JSON.stringify(description)}; ${WRITE_ONE} for each`);
+for (const p of pages) {
+  if (p.description.length < DESCRIPTION_MIN) fail(p.path, `description ${JSON.stringify(p.description)} is under ${DESCRIPTION_MIN} characters; ${WRITE_ONE}`);
+  if (p.description.endsWith(':')) fail(p.path, `description ${JSON.stringify(p.description)} ends with a colon; ${WRITE_ONE}`);
+}
+const cutDescriptions = pages.filter(p => p.description.endsWith('…')).map(p => p.path);
+if (cutDescriptions.length) console.warn(`seo-check: ${cutDescriptions.length} descriptions are cut short; ${WRITE_ONE} for each\n${cutDescriptions.map(p => `  ${p}`).join('\n')}`);
+
 for (const file of [...ICONS, SHARE_IMAGE, '/favicon.ico']) if (!existsSync(join(DIST, file))) fail(file, 'missing');
 
 const robots = existsSync(join(DIST, 'robots.txt')) ? readFileSync(join(DIST, 'robots.txt'), 'utf8') : '';
@@ -104,4 +116,4 @@ if (problems.length) {
   console.error(`seo-check: ${problems.length} problems\n${problems.map(p => `  ${p}`).join('\n')}`);
   process.exit(1);
 }
-console.log(`seo-check: ${pages.length} pages' JSON-LD, favicons, share image${ORIGIN ? ', canonical links, robots.txt and sitemap.xml' : ' and robots.txt'} are valid${ORIGIN ? '' : ' (no origin yet: URLs, canonical links and sitemap.xml not checked)'}`);
+console.log(`seo-check: ${pages.length} pages' descriptions, JSON-LD, favicons, share image${ORIGIN ? ', canonical links, robots.txt and sitemap.xml' : ' and robots.txt'} are valid${ORIGIN ? '' : ' (no origin yet: URLs, canonical links and sitemap.xml not checked)'}`);

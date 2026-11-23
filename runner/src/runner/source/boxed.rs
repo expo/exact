@@ -276,4 +276,7 @@ impl<T: DataSource + ?Sized> DataSourceWrapper for Box<T> {
     fn canvases_retired(&mut self, retired: &[(u64, u32)]) {
         (**self).canvases_retired(retired)
     }
+    fn queued_send_replacer(&mut self, source: Option<&str>) -> Option<crate::QueuedSendReplacer> {
+        (**self).queued_send_replacer(source)
+    }
 }

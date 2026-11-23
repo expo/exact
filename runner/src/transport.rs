@@ -596,6 +596,9 @@ pub struct Transport {
     owner: Option<usize>,
     /// The last sequence that played, for the agent.
     last: Option<usize>,
+    /// How many times a sequence has started or restarted: the runner reads
+    /// the cause of the commit that moved it (LLP 1133.023 D7a).
+    pub(crate) starts: u64,
     raw: Vec<Value>,
     play: Option<Play>,
     segments: VecDeque<Segment>,
@@ -650,6 +653,7 @@ impl Transport {
             gates: vec![(false, None); plan.sequences.len()],
             owner: None,
             last: None,
+            starts: 0,
             raw: Vec::new(),
             play: None,
             segments: VecDeque::new(),
@@ -842,6 +846,7 @@ impl Transport {
             }
         };
         self.owner = Some(i);
+        self.starts += 1;
         self.raw = args;
         (self.issued_to, self.skip, self.unsent_told) = (t, 0, false);
         if !play.clock.is_empty() {

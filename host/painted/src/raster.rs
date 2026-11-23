@@ -379,6 +379,10 @@ impl Backend for Raster {
         self.frame_storage = Some(pixels);
     }
 
+    fn raster_extent(&self) -> Option<crate::placement::RasterExtent> {
+        Some((self.origin, (self.width, self.height)))
+    }
+
     fn begin_damage(
         &mut self,
         width: f32,

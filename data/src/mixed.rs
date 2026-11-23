@@ -569,6 +569,18 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
 }
 
 impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, R> {
+    fn queued_send_replacer(
+        &mut self,
+        source: Option<&str>,
+    ) -> Option<exact_runner::QueuedSendReplacer> {
+        let name = source?;
+        if self.owner(name).ok()? {
+            self.rust.queued_send_replacer(source)
+        } else {
+            self.javascript.queued_send_replacer(source)
+        }
+    }
+
     fn prepare_snapshot(
         &mut self,
         module: Option<exact_runner::SnapshotModule<'_>>,

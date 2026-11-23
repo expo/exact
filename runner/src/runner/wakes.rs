@@ -51,7 +51,7 @@
 //!   op), which then lets the platform suspend the app; when the platform's
 //!   time runs out first the host expires it ([`Runner::expire_action`]).
 
-use super::provenance::CallOrigin;
+use super::provenance::{CallOrigin, Cause};
 use super::{CommitReceipt, DataSource, Runner, RunnerError};
 use crate::request::{FailureKind, Outcome, Reply};
 use serde_json::{json, Value as Json};
@@ -541,7 +541,8 @@ impl<D: DataSource> Runner<D> {
         let name = self.plan.str(action.name).to_owned();
         let (event_name, tag) = self.invocation_words(i);
         self.log(format!("{word} {event_name} {tag}: heard by {name}"));
-        let result = self.as_invocation(origin, id, |r| r.run_action(event.action, args, &[]));
+        let cause = Cause::of(origin, id, false);
+        let result = self.as_cause(cause, |r| r.run_action(event.action, args, &[]));
         match result {
             Ok(receipt) => Ok(Some(receipt)),
             Err(e) => {
@@ -585,6 +586,15 @@ impl<D: DataSource> Runner<D> {
         (wake.invocations.iter())
             .find(|i| i.state == State::Running)
             .map(|i| i.id)
+    }
+
+    /// Whether invocation `id` is the current wake's running invocation, a
+    /// wake's event or a background action: its grants hold only while it
+    /// is (LLP 1133.023 D7a).
+    /// An expired wake's is not, from its deadline on.
+    pub(in crate::runner) fn wake_invocation_live(&self, id: u64) -> bool {
+        let before = |at: f64| self.now_ms < at;
+        self.running_wake() == Some(id) && self.wake_deadline().is_some_and(before)
     }
 
     /// Whether a wake runs.
@@ -720,7 +730,12 @@ impl<D: DataSource> Runner<D> {
         self.abort_held_of(id, "the wake expired");
         self.drop_invocation_thens(id);
         if self.drop_queued_of(id) {
-            let result = self.as_invocation(CallOrigin::Wake, id, |r| {
+            let origin = self
+                .wakes
+                .current
+                .as_ref()
+                .map_or(CallOrigin::Wake, |w| w.origin);
+            let result = self.as_cause(Cause::of(origin, id, false), |r| {
                 r.commit_again(Vec::new(), "an expired wake's queued sends")
             });
             match result {

@@ -1,8 +1,8 @@
-// `--attach` (LLP 1012.000): the driver joins the development app a person already has open, a Mac app or an app in
-// the iOS simulator, and reads the window they allow over the app's own socket. It builds, installs and launches
-// nothing, and holds no clock.
+// `--attach` (LLP 1012.000): the driver joins the development app a person already has open, a Mac app, an app in
+// the iOS simulator or a tab of a web dev loop, and reads the window or tab they allow, over the app's own socket or
+// the loop's attach channel. It builds, installs and launches nothing, and holds no clock.
 import { spawnSync } from 'node:child_process';
-import { lstatSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { basename, dirname, resolve } from 'node:path';
 import { chooseSimulator } from '../host/apple/devices.mjs';
@@ -11,15 +11,15 @@ import { resolveApp } from './app.mjs';
 import { attachWire } from './agent-wire.mjs';
 
 /** Why `--attach` refuses a host or a target before any platform tool runs (LLP 1012.000 D2), or null where it
- *  attaches: a development macOS app, or an app in the iOS simulator. */
+ *  attaches: a development macOS app, an app in the iOS simulator, or a tab of a web dev loop. */
 export function attachUnsupported(host, { device = false } = {}) {
   const why = device || host === 'phone' ? 'a physical iPhone keeps its app’s socket on the phone, out of this Mac’s reach, and a device build carries no attach'
     : host === 'tvos' ? 'an Apple TV build carries no attach'
     : host === 'watchos' ? 'a watch app carries no attach'
     : host === 'host-ios' || host === 'host' ? 'the embedding fixture carries no attach'
-    : ['ios', 'macos', 'mac'].includes(host) ? null
+    : ['ios', 'macos', 'mac', 'web'].includes(host) ? null
     : `attach on ${host} is not built yet`;
-  return why && `--attach: unsupported on ${device ? 'a physical iPhone' : host}: ${why}. An agent attaches to a development macOS app or an app in the iOS simulator (LLP 1012.000 D2)`;
+  return why && `--attach: unsupported on ${device ? 'a physical iPhone' : host}: ${why}. An agent attaches to a development macOS app, an app in the iOS simulator or a tab of a web dev loop (LLP 1012.000 D2)`;
 }
 
 const ps = (run, p, field) => run('ps', ['-o', `${field}=`, '-p', String(p)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }).stdout?.trim() ?? ''; // `lstart` in English, which Date.parse reads
@@ -132,9 +132,10 @@ const GRANTED = new Set(['tap', 'type', 'call', 'called']);
 /** The attached carrier (LLP 1012.000 D1): the development app a person has open, a Mac app or one in the iOS
  * simulator, read over its own socket once the person allows it in the app. It reads; it launches nothing and holds
  * no clock. */
-export async function openAttached({ host, app, pid = null, session, device = false, find = host === 'ios' ? attachTargetIOS : attachTarget, dial = connect, say = (line) => console.error(line), grantMs = 60000 }) {
+export async function openAttached({ host, app, pid = null, session, device = false, find = host === 'ios' ? attachTargetIOS : attachTarget, dial = connect, say = (line) => console.error(line), grantMs = 60000, pairing }) {
   const refused = attachUnsupported(host, { device });
   if (refused) throw new Error(refused);
+  if (host === 'web') return openAttachedTab({ app, pid, session, dial, say, pairing });
   const a = resolveApp(app), name = a.manifest?.name ?? a.name;
   const m = find({ id: a.id, name, app: basename(a.dir), appDir: a.dir, pid });
   const where = m.device ? ` in simulator ${m.device.name}` : '';
@@ -265,5 +266,96 @@ export function attachedInput({ host, ask, abandon, touches }) {
       if (r.error) throw new Error(`type: the touch runner: ${r.error}; part of the text may have been typed`);
       return { typed: tapped.tapped, delivery: 'platform', at: 'caret', note: 'in the simulator the text is typed where the tap left the caret; it does not replace the field\'s text' };
     }),
+  };
+}
+
+/** The web dev loop running `appDir`'s JS target, as its claim records it (host/web/dev-startup.mjs `claimDevLoop`):
+ *  `{pid, port}`, its process alive and its URL this machine's loopback; else why there is none. */
+export function devLoopOf(appDir, name) {
+  const record = resolve(appDir, '.exact/web-js-loop.json');
+  const start = `start it (\`bun exact.mjs web\` in the app, or \`bun host/web/dev.mjs --app ${name}\` in exact2), open it in your browser and press ⌥⇧A in the tab`;
+  // This user's own file, not a link: it names a URL, which others may read.
+  let mine = false;
+  try { const st = lstatSync(record); mine = st.isFile() && st.uid === process.getuid(); } catch { /* none */ }
+  if (!mine) {
+    if (existsSync(resolve(appDir, '.exact/web-wasm-loop.json'))) throw new Error(`attach: ${name}'s web dev loop runs the wasm target (a game, or --wasm), which carries no attach; a JS-target loop does`);
+    throw new Error(`attach: no web dev loop of ${name} runs on this machine: ${start}`);
+  }
+  let loop;
+  try { loop = JSON.parse(readFileSync(record, 'utf8')); } catch { throw new Error(`attach: ${record} is unreadable: ${start}`); }
+  const port = /^http:\/\/127\.0\.0\.1:(\d{1,5})$/.exec(String(loop.url))?.[1];
+  let alive = Number.isInteger(loop.pid) && loop.pid > 0;
+  try { if (alive) process.kill(loop.pid, 0); } catch { alive = false; }
+  if (!alive || !port) throw new Error(`attach: ${name}'s web dev loop ${!alive ? `(pid ${loop.pid}) is not running` : loop.url ? `is at ${loop.url}, not this machine's loopback` : 'is still starting'}: ${start}`);
+  return { pid: loop.pid, port: Number(port) };
+}
+
+/** The pairing code the tab shows, from stdin: asked for on a terminal, else its first line. Never stored. */
+export async function readPairing(stdin = process.stdin, say = (line) => console.error(line)) {
+  if (stdin.isTTY) say('attach: type the pairing code the tab shows (⌥⇧A in the tab shows one), then Return:');
+  let text = '';
+  for await (const chunk of stdin) { text += chunk; if (text.includes('\n') || text.length > 256) break; }
+  if (!stdin.isTTY) stdin.destroy?.();
+  const code = text.split('\n')[0].trim();
+  if (!code) throw new Error('attach: no pairing code on stdin: press ⌥⇧A in the tab, then give the code it shows (`echo <code> | bun exact.mjs agent web --attach …`)');
+  return code;
+}
+
+/** The loop's attach channel: an HTTP upgrade to `exact-attach` on loopback, the socket once it switched, within
+ *  `ms`. */
+export function attachChannel(port, dial = connect, ms = 10000) {
+  return new Promise((resolveChannel, rejectChannel) => {
+    const socket = dial({ host: '127.0.0.1', port });
+    const timer = setTimeout(() => { socket.destroy(); rejectChannel(new Error(`attach: the dev loop on port ${port} did not answer the attach channel within ${ms / 1000} s`)); }, ms);
+    const ok = (v) => { clearTimeout(timer); resolveChannel(v); }, fail = (e) => { clearTimeout(timer); rejectChannel(e); };
+    let head = Buffer.alloc(0);
+    const onData = (d) => {
+      head = Buffer.concat([head, d]);
+      const end = head.indexOf('\r\n\r\n');
+      if (end < 0) { if (head.length > 65536) { socket.destroy(); fail(new Error('attach: the dev loop sent no answer to the upgrade')); } return; }
+      socket.off('data', onData); socket.off('error', onError); socket.off('end', onEnd);
+      const lines = head.subarray(0, end).toString('latin1');
+      const status = /^HTTP\/1\.1 (\d{3})/.exec(lines)?.[1];
+      if (status !== '101' || !/\r\nupgrade: *exact-attach\r?$/im.test(lines)) {
+        const body = head.subarray(end + 4).toString('utf8').trim();
+        socket.destroy();
+        return fail(new Error(body.startsWith('attach:') ? body : `attach: the dev loop on port ${port} answered ${status ?? 'no HTTP'} to the attach channel: is it this checkout's JS-target loop?`));
+      }
+      if (head.length > end + 4) socket.unshift(head.subarray(end + 4));
+      ok(socket);
+    };
+    const onError = (e) => fail(new Error(`attach: cannot reach the dev loop on 127.0.0.1:${port}: ${e.message}`));
+    const onEnd = () => fail(new Error(`attach: the dev loop on port ${port} closed the attach channel`));
+    socket.on('data', onData); socket.on('error', onError); socket.on('end', onEnd);
+    socket.write(`GET /__dev/attach HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: Upgrade\r\nUpgrade: exact-attach\r\n\r\n`);
+  });
+}
+
+/** An attached web tab (LLP 1012.000 D2): the tab of `app`'s dev loop whose pairing code the person gave, read once
+ *  they allow it in the tab. It reads; a tab takes no picture of itself and no input an agent could make is a
+ *  person's, so both are refused. */
+export async function openAttachedTab({ app, pid, session, dial = connect, say = (line) => console.error(line), pairing }) {
+  if (pid != null) throw new Error('--attach <pid>: a web tab is chosen by the pairing code it shows, not a PID');
+  if (session) throw new Error('--session: an attached tab has one session; its pairing code chooses the tab');
+  const a = resolveApp(app), name = a.manifest?.name ?? a.name;
+  const loop = devLoopOf(a.dir, basename(a.dir));
+  const code = pairing ?? await readPairing(undefined, say);
+  const socket = await attachChannel(loop.port, dial);
+  const wire = await attachWire(socket, { pairing: code, closed: 'the dev loop closed the attach connection (Detach in the tab, the tab reloaded, navigated or closed, or the loop stopped)',
+    onWaiting: () => say(`attach: waiting for Allow in the ${name} tab`) });
+  const { attached } = wire, build = attached.build ?? {};
+  say(`attach: reading the ${name} tab “${attached.window ?? ''}” at ${attached.location ?? '?'} (dev loop pid ${loop.pid}); exact2 ${build.commit ? `${build.commit.slice(0, 9)}${build.dirty ? ' (dirty)' : ''}` : 'at an unknown commit'}; on its wall clock`);
+  const refuse = (op, why) => Promise.reject(Object.assign(new Error(`${op}: unsupported: ${why}`), { reply: { refused: 'unsupported' } }));
+  const untrusted = 'a browser tab takes no input an agent makes as a person\'s, so an attached tab is read, not driven';
+  return {
+    host: 'web', attached, hostLines: [], plan: false, sessions: null, state: null,
+    ask: (req) => (req?.op === 'clock' ? Promise.reject(new Error('clock: live-clock: an attached tab keeps its own wall clock'))
+      : WITHHELD.has(req?.op) || GRANTED.has(req?.op) ? refuse(req.op, untrusted)
+      : wire.ask(req)),
+    input: { tap: () => refuse('tap', untrusted), type: () => refuse('type', untrusted) },
+    screenshot: () => refuse('screenshot', 'a browser tab cannot take its own picture; that needs a connection the browser authorizes for that tab'),
+    close: async () => { wire.close(); },
+    abandon: (why) => wire.abandon(why),
+    get failure() { return wire.failure; },
   };
 }

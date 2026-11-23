@@ -172,7 +172,7 @@ export async function fetchWith(set, input, init = {}, expires = null, redirect 
       }
       countFault(value, fixture);
       if (delay) {
-        await delayFixture(rt, wait, due, own);
+        await delayFixture({ clock: rt.clock, drive: rt.drive }, wait, due, own);
         if (timeout) throw new FetchError('Timeout', `the request timed out after ${timeout} ms`);
       }
     }

@@ -1,0 +1,14 @@
+```prompt Add motion to my app
+Add motion to the Exact app in this folder: rows that enter and leave, a section that expands, and a still screen for a person who asks for reduced motion. Use https://github.com/expo/exact/blob/main/docs/recipes/motion.md as the source for each step. The Exact checkout has the same page at docs/recipes/motion.md.
+
+1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
+2. If I did not say what moves (rows that enter and leave, a section that expands, a route change, a zoom from a row), propose it from the app and ask me before you write code.
+3. In app.contract, write each `keyframes` block with literal values. A row enters with `animation`; a delay for each index staggers the rows. A row leaves with `-exact-exit-animation`: give the exit an end, and give the rows `-exact-layout-transition`, so the siblings move. A row that leaves is out of layout and inert at once.
+4. Keep a section that expands mounted: `height` of `"auto"` or `"0px"`, `overflow="hidden"`, `inert` while it is closed, and `-exact-layout-transition`. An `if` row appears at full size.
+5. Animate only what the recipe lists under Animates; a native `button` animates only opacity and transforms. `-exact-spring(stiffness, damping, mass)` is a `transition` timing with no duration: never write it in `animation`. For a route change, use `::view-transition-new` and `::view-transition-old`; modal sheets, and routes with a literal nonempty `navigationSource`, reject them. For a zoom, `navigationSource=` names the `id` of a visible source.
+6. Read `exactViewport()` as a resource with `prefersReducedMotion`. While it is true, write `"none"` for each `animation`, `transition`, `-exact-layout-transition` and `-exact-exit-animation`.
+7. Add a test in app.test.contract that says `prefer prefers-reduced-motion reduce`, removes a row and expects it missing. In each test, use `clock settle` after motion: never wait in real time.
+8. Follow the platform checks in docs/start-here.md (`bun exact.mjs docs platform checks`) for the targets in the app's AGENTS.md and app.json until they pass. Read the reports, including counted findings; a zero exit code alone does not mean clean. Fix the app, not the test. To see motion play, film it: `bun exact.mjs agent web "<op>" "screenshot .exact/m.png over 600 every 50"`. If a finding stays after three rounds of fixes, or the app had it before you changed anything, record it (step 9) and report it; do not keep trying.
+9. When a doc was wrong or missing, or a step needed a workaround, read `bun exact.mjs feedback status`. Under `never`, keep no note. Otherwise record it: `bun exact.mjs feedback note "<what happened>"`, which goes to Expo only as that status says. Do not change the policy; tell me how many notes you kept.
+10. Tell me what moves and what reduced motion changes, what the tests and checks reported, and the launch command for each target platform.
+```

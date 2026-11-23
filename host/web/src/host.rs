@@ -278,6 +278,9 @@ pub struct Host<D: DataSource> {
     canvas2d: canvas2d::Watch,
     /// Which views the page makes `relative` (LLP 1001 §1).
     layers: layers::Layers,
+    /// Each `portal` mover away from its declaration or hidden, and the
+    /// parent the page was last told shows it (`None`: hidden).
+    movers: std::collections::BTreeMap<ViewId, Option<ViewId>>,
 }
 
 impl<D: DataSource> Host<D> {
@@ -339,14 +342,16 @@ impl<D: DataSource> Host<D> {
             keyframes: Default::default(),
             canvas2d: Default::default(),
             layers: Default::default(),
+            movers: Default::default(),
         };
         // LLP 1057.001.000 §5: the JS target zooms; this host does not.
         if exact_runner::uses::zooms(host.runner.plan()) {
             host.runner.log("this host has no zoomable scroller: each draws at zoom 1, reports 1 and drops a `scrollZoom` write (LLP 1057.001.000 §5)");
         }
-        // Everything live is new to the page.
-        let roots = host.runner.roots();
-        let mut stack: Vec<ViewId> = roots.iter().rev().copied().collect();
+        // Everything live is new to the page, a hidden `portal` mover's
+        // subtree included: live, unattached, shown later (LLP 1013.002 D5).
+        let tops = (host.runner.roots().into_iter()).chain(host.runner.hidden_movers());
+        let mut stack: Vec<ViewId> = tops.rev().collect();
         let mut order = Vec::new();
         while let Some(id) = stack.pop() {
             order.push(id);
@@ -367,6 +372,7 @@ impl<D: DataSource> Host<D> {
         for id in &order {
             host.emit_children(*id, &mut batch);
         }
+        host.emit_hold(&mut batch);
         host.springs.adopt(host.runner.kernel(), &order);
         // A boot's consumers are sought as a commit's are (LLP 1057.003 D4).
         if host.runner.kernel().has_timelines() {
@@ -830,6 +836,9 @@ impl<D: DataSource> Host<D> {
     }
 
     fn emit_receipts(&mut self, receipts: &[Timed], batch: &mut Batch) {
+        if !receipts.is_empty() {
+            self.emit_hold(batch);
+        }
         // Paint isolation in the final tree, before creates and updates.
         let changed: Vec<ViewId> = (receipts.iter())
             .flat_map(|t| t.receipt.created.iter().chain(&t.receipt.touched))
@@ -1336,6 +1345,31 @@ impl<D: DataSource> Host<D> {
 }
 
 impl<D: DataSource> Host<D> {
+    /// @ref LLP 1013.002 D6 — each `portal` mover whose shown parent changed
+    /// waits in the page's connected holder before this batch's destroys and
+    /// child lists can disconnect it, and the list that shows it takes it from
+    /// there; one shown nowhere stays. Its element, media and state go on.
+    fn emit_hold(&mut self, batch: &mut Batch) {
+        let kernel = self.runner.kernel();
+        let parent = |m: ViewId| kernel.node(m).and_then(|n| n.parent);
+        let now = (self.runner.declared_parents().into_iter())
+            .map(|(m, _)| (m, parent(m)))
+            .collect();
+        let told = std::mem::replace(&mut self.movers, now);
+        // A mover that came home is in `told` alone.
+        let home = (told.keys())
+            .filter(|m| !self.movers.contains_key(m) && kernel.node(**m).is_some())
+            .map(|&m| (m, parent(m)));
+        let moved: Vec<(ViewId, Option<ViewId>)> = (self.movers.iter())
+            .map(|(&m, &at)| (m, at))
+            .chain(home)
+            .filter(|(m, at)| told.get(m) != Some(at))
+            .collect();
+        if !moved.is_empty() {
+            batch.hold(&moved);
+        }
+    }
+
     /// The roots the page holds: every root but a head.
     fn page_roots(&self) -> Vec<ViewId> {
         let mut roots = self.runner.roots();

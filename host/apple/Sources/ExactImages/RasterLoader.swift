@@ -254,6 +254,7 @@ final class RasterLoader: ImageLoader {
         backend.release(interest.source.id)
     }
     func invalidate(_ source: String) { backend.invalidate(source) }
+    var hasRefusedPictures: Bool { !refusedPictures.isEmpty }
     /// Each refused package picture whose admission now passes loads. Main
     /// thread, after a commit applied.
     func readmitPictures() {

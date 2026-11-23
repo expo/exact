@@ -32,6 +32,7 @@ class ZoomTouchTest {
         val touches = ArrayList<Int>()
         /** How far the reader moved each scroller, by id, along each axis. */
         val moved = HashMap<Int, FloatArray>()
+        val waits = ArrayList<Long>()
         val answers = ArrayDeque<(IntArray) -> Unit>()
         @Implementation fun __constructor__(hwbuf: Boolean, fast: Boolean, priority: Int, intent: (String) -> String?) {}
         @Implementation fun under(x: Float, y: Float, done: (IntArray) -> Unit) { answers.addLast(done) }
@@ -42,7 +43,7 @@ class ZoomTouchTest {
             val m = moved.getOrPut(id) { FloatArray(2) }
             m[0] += dx; m[1] += dy
         }
-        @Implementation fun answer(waitMs: Long, f: () -> Unit) = false
+        @Implementation fun answer(waitMs: Long, f: () -> Unit): Boolean { waits.add(waitMs); return false }
         @Implementation fun call(f: () -> Unit) = f()
         @Implementation fun input() {}
         @Implementation fun held(on: Boolean) {}
@@ -159,11 +160,15 @@ class ZoomTouchTest {
         assertTrue("dragging down zooms in", Host.factors.fold(1f) { a, f -> a * f } > 1f)
     }
 
+    @Config(shadows = [ScrollTouchTest.Placement::class])
     @Test fun aDragOfAZoomedScrollerPansItAlongBothAxes() {
         val zoomed = scroller(1, Scrolling.ZOOM_FLAG, 500f)
         touch(MotionEvent.ACTION_DOWN, 200f to 400f)
         answer(reply(zoomed))
+        ScrollTouchTest.Placement.calls = 0
         for (k in 1..5) touch(MotionEvent.ACTION_MOVE, 200f - 12f * k to 400f - 8f * k, step = 100)
+        assertTrue("the pan waits for the ungrouped content's paint", thread.waits.isNotEmpty())
+        assertEquals("the pan leaves placement to the paint", 0, ScrollTouchTest.Placement.calls)
         touch(MotionEvent.ACTION_UP, 140f to 360f, step = 100)
         val m = thread.moved[1]!!
         assertTrue("x ${m[0]}", m[0] > 0f)

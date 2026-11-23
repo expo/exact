@@ -364,9 +364,39 @@ extension ExactSession {
 
     /// Every batch the session applies comes here (`order`).
     package func apply(_ batch: Batch) { order(PendingBatch(batch: batch)) }
+    #if os(macOS)
+    func applyAppKitEvent(_ batch: Batch) { order(PendingBatch(batch: batch, presentation: .appKitEvent)) }
+    #endif
     /// `apply` for a batch that may change nothing (`applyUnlessEmptyNow`).
     func applyUnlessEmpty(_ batch: Batch, scrolled: Bool = false, resized: Bool = false) {
-        order(PendingBatch(batch: batch, unlessEmpty: true, scrolled: scrolled, resized: resized))
+        order(PendingBatch(batch: batch, presentation: .unlessEmpty, scrolled: scrolled, resized: resized))
+    }
+
+    func presentation(for batch: Batch, published: Published) -> PendingBatch.Presentation? {
+        if batch.unchanged {
+            // Match the original intake. An admission wait alone did not force a pass.
+            let scheduled = frames.motion || frames.spatial || frames.presentOnly || canvasOwed
+                || frames.canvas2d || frames.tasks || timerDue != nil || taskTimers.hasReady
+            return scheduled ? .full : nil
+        }
+        if case .advance = published { return .unlessEmpty }
+        #if os(macOS)
+        if !hasEarlierBatch(than: batch.sequence), batch.hasStoreEffects || batch.layoutProvisional || batch.replacesTree {
+            if case .reply = published { return .appKitEvent }
+            return .full
+        }
+        #endif
+        return changesNothing(batch) && clockUnchanged(batch) ? nil : .full
+    }
+
+    func hasEarlierBatch(than sequence: UInt64) -> Bool {
+        stage != nil || pending.contains { $0.batch.sequence < sequence }
+    }
+
+    func canSkipAppKitPresentation(_ batch: Batch) -> Bool {
+        !hasEarlierBatch(than: batch.sequence)
+            && clock == nil && !ExactEnv.agentFreezes && clockUnchanged(batch)
+            && !batch.layoutProvisional && !batch.replacesTree && rasters?.hasRefusedPictures != true
     }
 
     /// Batches apply in the order the runtime made them (`Batch.sequence`,
@@ -385,7 +415,11 @@ extension ExactSession {
         takeEventResults(&entry.batch)
         if entry.batch.sequence == 0 { entry.batch.sequence = runtime.sequence.next() }
         let made = entry.batch.sequence
-        if !landing, !insideApply, published.earliest.map({ $0 > made }) ?? true {
+        let publicationsClear = published.earliest.map { $0 > made } ?? true
+        if entry.presentation == .appKitEvent, !publicationsClear || hasEarlierBatch(than: made) {
+            entry.presentation = .full
+        }
+        if !landing, !insideApply, publicationsClear {
             let mine = footprint(entry.batch)
             if passes(entry.batch), pending.allSatisfy({ $0.batch.sequence > made || $0.footprint.admits(mine) }) { supersede(mine, before: made); return land(entry) }
         }
@@ -482,7 +516,8 @@ extension ExactSession {
             entry.batch = plan.withheld(entry.batch) { [unowned self] in presenter.views[$0]?.style }
         }
         inCoversChain(entry.cause) {
-            if entry.unlessEmpty { applyUnlessEmptyNow(entry.batch, scrolled: entry.scrolled, resized: entry.resized, beside: stage) } else { applyNow(entry.batch, beside: stage) }
+            if entry.presentation == .full { applyNow(entry.batch, beside: stage) }
+            else { applyUnlessEmptyNow(entry.batch, presentation: entry.presentation, scrolled: entry.scrolled, resized: entry.resized, beside: stage) }
             entry.landed?()
         }
     }
@@ -577,8 +612,10 @@ extension ExactSession {
 /// caller does once it has applied (a publication's landing) or if it is
 /// dropped (a reset's).
 struct PendingBatch {
+    enum Presentation { case full, unlessEmpty, appKitEvent }
     var batch: Batch
-    var unlessEmpty = false, scrolled = false, resized = false
+    var presentation: Presentation = .full
+    var scrolled = false, resized = false
     /// A frame's tick or a timer's advance, as the bridge read it: no path to `order` can leave it off.
     var clock: Batch.ClockWork? { batch.clockWork }
     var landed: (() -> Void)? = nil

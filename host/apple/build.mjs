@@ -64,7 +64,7 @@ import { appleBuildRefusal, guardFlags, reportBuilt } from '../../scripts/help.m
 import { appleImplementations } from '../../js/bake/src/typescript.mjs';
 import { loadedDylibs, rebuildArgs } from './link.mjs';
 export { rebuildArgs };
-import { composedModule, moduleSeam, moduleLibraryLinkArgs, packageCompiler, rosterProbe, rosterProbeMain } from './compose.mjs';
+import { appleConfig, composedModule, moduleSeam, moduleLibraryLinkArgs, packageCompiler, rosterProbe, rosterProbeMain } from './compose.mjs';
 import { associatedDomains, clipEntitlements, entitlementValue, grantEntitlements, grantEntitlementValues, macSigning, merchantEntitlement, signInEntitlement, signsGrant } from './presence.mjs';
 import { writeDataKeys } from './data-keys.mjs';
 import { alternativeNames, backgroundKeys, firstFrameKeys, declaredOrigin, interfaceStyle, layoutDirection, localNetworking, memoryEntitlements, modulePlist, nfcKeys, startLocation, storeKeys, transportSecurity, updateActivation, withPackageKeys } from './plist.mjs';
@@ -1104,9 +1104,9 @@ async function main(args, lockHeld = false) {
   // @ref LLP 1075.003 Q2 — the app's `data-*` words as typed keys, written
   // from app.json `data` beside the glue (built, never committed).
   const dataKeys = resolve(linkRoot, `ExactDataKeys-${app.id}.swift`);
-  // @ref LLP 1133.001 D4, D5 — the modules' Swift implementations the app names, each package compiled as a Swift
-  // module of its own and loaded by an adapter at first use (LLP 1067.000.001).
-  const packages = appleImplementations(app.dir, tv ? 'tvos' : ios ? 'ios' : 'macos', buildReceipt.graph.extensions), composing = modules.apple.length > 0 || packages.length > 0;
+  // @ref LLP 1133.001 D4, D5 — the modules' Swift implementations the app names, each package a Swift module of its
+  // own loaded by an adapter at first use (LLP 1067.000.001), and their configuration, refused before one compiles.
+  const packages = appleImplementations(app.dir, tv ? 'tvos' : ios ? 'ios' : 'macos', buildReceipt.graph.extensions), composing = modules.apple.length > 0 || packages.length > 0, configured = appleConfig(app, tv ? 'tvos' : ios ? 'ios' : 'macos', buildReceipt.graph.extensions, production || distribution);
   // A package that asks for AlarmKit's countdown compiles the host's metadata type into its own module, on iOS
   // only, as the extension compiles it (LLP 1133.030 D8 item 1).
   for (const p of packages) if (p.activity === 'alarmkit' && ios && !tv) p.sources = [...p.sources, resolve(root, 'host/apple/widget/AlarmAttributes.swift')];
@@ -1123,7 +1123,7 @@ async function main(args, lockHeld = false) {
     writeFileSync(copy, `#sourceLocation(file: ${JSON.stringify(realpathSync(f))}, line: 1)\n${readFileSync(f, 'utf8')}`);
     return copy;
   })), packageSources = packages.length ? [seam, ...packageCopies.flat()] : [];
-  if (composing) writeFileSync(composed, composedModule(packages, modules.apple.length > 0));
+  if (composing) writeFileSync(composed, composedModule(packages, modules.apple.length > 0, configured));
   if (composing) writeDataKeys(app, dataKeys, ios ? 'ios' : 'macos');
   // @ref LLP 1121 D12 — the token names `contract forma gen swift` writes from the design (never committed).
   if (composing) (await import('../../scripts/forma-names.mjs')).writeFormaNames(app, 'swift'); const formaNames = resolve(app.dir, '.exact/forma/forma.swift');

@@ -254,10 +254,8 @@ impl Host {
     #[cfg(target_os = "macos")]
     fn call(&mut self, body: &Json) -> mpsc::Receiver<Outcome> {
         let (tx, rx) = mpsc::channel();
-        match self
-            .r
-            .native_work(&Request::native(body.to_string().into_bytes()))
-        {
+        let request = Request::native(body.to_string().into_bytes());
+        match self.r.as_person(|r| r.native_work(&request)) {
             Dispatch::Run(Work::Now(work)) => tx.send(work()).unwrap(),
             Dispatch::Run(Work::Later(work)) => work(Reply::new(move |o| tx.send(o).unwrap())),
             _ => panic!("a module call is work"),

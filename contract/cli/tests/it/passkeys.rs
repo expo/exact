@@ -212,7 +212,8 @@ impl Host {
 /// ticket's answer sends it.
 fn call(r: &mut Runner<Source>, body: &Json) -> mpsc::Receiver<Outcome> {
     let (tx, rx) = mpsc::channel();
-    match r.native_work(&Request::native(body.to_string().into_bytes())) {
+    let request = Request::native(body.to_string().into_bytes());
+    match r.as_person(|r| r.native_work(&request)) {
         Dispatch::Run(Work::Now(work)) => tx.send(work()).unwrap(),
         Dispatch::Run(Work::Later(work)) => work(Reply::new(move |o| tx.send(o).unwrap())),
         _ => panic!("a module call is work"),

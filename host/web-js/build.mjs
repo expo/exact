@@ -1,5 +1,6 @@
 import { grantWords, trimGrant, knownFolderPath } from '../web/grant-admission.js';
-import { asyncContext, bundleOptions, developmentLocalNetwork, lowered, packageConfig, webImplementations } from '../../js/bake/src/typescript.mjs';
+import { asyncContext, bundleOptions, developmentLocalNetwork, lowered, webImplementations } from '../../js/bake/src/typescript.mjs';
+import { packageConfig } from '../../js/bake/src/package-config.mjs';
 import { buildPageFiles, renderEntryPages, writeCrawlerFiles } from '../web/crawl.mjs';
 import { bakeWatchEnv, hatchWords, injectedProfiles, moduleDirectory, readManifest, resolveApp, webAppManifest, webToolchainEnv } from '../../scripts/app.mjs';
 import { authoredWebBake, webRendererHost, rustDataOf } from '../../scripts/app-shells.mjs';
@@ -384,9 +385,10 @@ const time = Object.hasOwn(sources, 'exactTime');
 const moduleFlag = existsSync(resolve(gen, 'modules.flag')) ? JSON.parse(readFileSync(resolve(gen, 'modules.flag'), 'utf8')) : { extensions: {}, sources: [] };
 if (Object.keys(moduleFlag.extensions).length) {
   const bound = webImplementations(appDir, moduleFlag.extensions);
-  // `app.json`'s package configuration (LLP 1133.021 §9 item 7): refused here when a required key is absent.
+  // `app.json`'s package configuration (LLP 1133.021 §9 item 7), refused here as package-config.mjs says; a production
+  // build is a release.
   let configs;
-  try { configs = packageConfig(appDir, 'web', { extensions: moduleFlag.extensions }); } catch (e) { console.error(`${app}: ${e.message}`); process.exit(1); }
+  try { configs = packageConfig(appDir, 'web', { extensions: moduleFlag.extensions, release: production, warn: (m) => console.warn(`${app}: ${m}`) }); } catch (e) { console.error(`${app}: ${e.message}`); process.exit(1); }
   for (const extension of Object.keys(moduleFlag.extensions)) {
     const at = bound.get(extension);
     // `roster`: the views it serves (views.js), where it exports one.
@@ -673,9 +675,10 @@ writeFileSync(resolve(gen, 'main.js'), [
   ...(launchWeb.length ? ["  marks.mounted();"] : []),
   ...(devReload ? ["  finishDev();"] : []),
   `  globalThis.exact = Object.assign(globalThis.exact ?? {}, { ready: true, journal, clock, views: Views, viewId, After${production ? '' : ', advance, commit, data, state, inflight, heldAsks, heldReplies, resources: Resources, mutations: Mutations, writes: writeRecords'} });`,
-  // A development page counts its work and samples its frames (LLP 1079); the agent adapter, only when the agent drives it.
+  // A development page counts its work and samples its frames (LLP 1079); the agent adapter, only when the agent drives it,
+  // else its passive reads, which the dev loop's attach bridge loads once a person allows an agent (LLP 1012.000 D2).
   // The served plan's digest, which a development page's `perf` names (LLP 1079 D2).
-  ...(production ? [] : [`  globalThis.exact.plan = ${JSON.stringify(createHash('sha256').update(readFileSync(opt('--plan') ? resolve(opt('--plan')) : resolve(gen, 'app.plan'))).digest('hex'))};`, "  globalThis.exact.goTo = goTo;", "  develop(globalThis.exact).catch(console.error);", "  if (clock.agent) globalThis.exact.ready = import('./agent.js').then(m => m.install(globalThis.exact));"]),
+  ...(production ? [] : [`  globalThis.exact.plan = ${JSON.stringify(createHash('sha256').update(readFileSync(opt('--plan') ? resolve(opt('--plan')) : resolve(gen, 'app.plan'))).digest('hex'))};`, "  globalThis.exact.goTo = goTo;", "  develop(globalThis.exact).catch(console.error);", "  if (clock.agent) globalThis.exact.ready = import('./agent.js').then(m => m.install(globalThis.exact));", "  else globalThis.exact.attachReads = () => import('./agent.js').then(m => m.install(globalThis.exact, { passive: true }));"]),
   "  booted?.();",
   "};",
   // The declared fonts are the stylesheet's `font-display: optional` faces (src/faces.rs): a face first needed while it
@@ -694,10 +697,11 @@ writeFileSync(resolve(gen, 'main.js'), [
   // animation.
   ...(production ? [] : ["if (fonts) clock.agent = agentMode();"]),
   // A rendered page's sheet holds only what its document can match (LLP 1048.007 D4): the plan's sheet (style.css,
-  // below) comes first, then the page's goes, before the first render (one that fails to load leaves the page's, and
-  // the render goes on).
+  // below) replaces it before the first render, and a failed load leaves it. One task swaps them, so Chrome never
+  // draws fallback text for optional faces both declare. High priority keeps the nonmatching sheet from loading
+  // last; setting the loaded sheet's media list, not the link's, keeps WebKit from fetching a no-store sheet again.
   "const page = typeof document === 'object' && document.querySelector('style[data-exact-page]');",
-  "const sheet = page && new Promise(r => { const l = Object.assign(document.createElement('link'), { rel: 'stylesheet', href: './__EXACT_SHEET__' }); l.onload = () => { page.remove(); r(); }; l.onerror = r; page.before(l); });",
+  "const sheet = page && new Promise(r => { const l = Object.assign(document.createElement('link'), { rel: 'stylesheet', media: 'not all', fetchPriority: 'high', href: './__EXACT_SHEET__' }); l.onload = () => { l.sheet.media.mediaText = 'all'; page.remove(); r(); }; l.onerror = r; page.before(l); });",
   // A waiting page's answers past 1 KB are named, not held (LLP 1048.007 D10): the capture script fetched them as it
   // imported this; the first render waits for them. Ones no longer kept are none: an empty checkpoint at the page's
   // own location, since a page made per request is served where it was made.

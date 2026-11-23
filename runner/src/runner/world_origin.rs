@@ -23,6 +23,7 @@ pub(super) fn unmark(text: &str) -> Option<(CallOrigin, &str)> {
     let origin = match word {
         "tool" => CallOrigin::Tool,
         "wake" => CallOrigin::Wake,
+        "action" => CallOrigin::Action,
         _ => CallOrigin::Device,
     };
     Some((origin, text))

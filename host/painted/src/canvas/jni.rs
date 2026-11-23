@@ -660,22 +660,6 @@ macro_rules! canvas_jni {
                 with(|h| h.module_event(id as u32, key, session as u64, &kind, payload));
             }
 
-            #[no_mangle]
-            pub unsafe extern "system" fn Java_dev_exact_canvas_Native_frameLoaded(
-                _env: *mut JNIEnv,
-                _class: jclass,
-                id: jint,
-                slot: jint,
-                generation: jint,
-                session: jlong,
-            ) {
-                let key = $crate::canvas::ModuleKey {
-                    index: slot as u32,
-                    generation: generation as u32,
-                };
-                with(|h| h.frame_loaded(id as u32, key, session as u64));
-            }
-
             /// A media element's event, or (an empty `event`) its state (LLP 1042.001 D7).
             #[no_mangle]
             #[allow(clippy::too_many_arguments)]
@@ -702,9 +686,8 @@ macro_rules! canvas_jni {
 
             $crate::canvas_jni_scroll!();
 
-            /// What the reader is told of the scrollers it knows, nine
-            /// words each (`Presenter::reader_scrollers`), when that is not
-            /// what this last returned (else null).
+            /// The producer's scale and its scroller statement
+            /// (`CanvasHost::scrollers`), or null when unchanged.
             #[no_mangle]
             pub unsafe extern "system" fn Java_dev_exact_canvas_Native_scrollers(
                 env: *mut JNIEnv,

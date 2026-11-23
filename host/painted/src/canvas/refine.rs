@@ -236,7 +236,8 @@ impl<D: DataSource + Default> CanvasHost<D> {
                     .iter()
                     .map(|(id, at)| {
                         let to = now.get(id).copied().unwrap_or((0.0, 0.0));
-                        (*id, (at.0 - to.0, at.1 - to.1))
+                        let (dx, dy) = crate::paint::grid::pixel_delta(*at, to, self.scale);
+                        (*id, (dx / self.scale, dy / self.scale))
                     })
                     .collect();
                 if let Some(e) = self.p.sync_images_moved(&moved) {

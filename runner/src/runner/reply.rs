@@ -179,12 +179,11 @@ impl<D: DataSource> Runner<D> {
         let target = p.target;
         // An answer lands as a commit of its request's origin (LLP 1133.002
         // D12), with every cause the request has (LLP 1133.035 D16 item 6).
-        let (origin, id) = (self.ticket_origin(ticket), self.ticket_id(ticket));
-        let causes = self.ticket_causes(ticket);
-        let result = self.as_invocation_caused(origin, id, causes, |r| r.fulfill_inner(p, outcome));
+        let cause = self.ticket_cause(ticket);
+        let result = self.as_cause(cause, |r| r.fulfill_inner(p, outcome));
         self.conclude(checkpoint, &result, was_poisoned);
         // Its `then` is armed under the same origin, invocation and causes.
-        self.as_invocation_caused(origin, id, causes, |r| r.arm_then(result.is_ok()));
+        self.as_cause(cause, |r| r.arm_then(result.is_ok()));
         self.arm_next(result.is_ok());
         self.log_outcome(&what, &result, was_poisoned);
         if let (Some(handles), Err(_)) = (handles, &result) {
@@ -251,9 +250,8 @@ impl<D: DataSource> Runner<D> {
         // D12), with every cause its request has (LLP 1133.035 D16 item 6),
         // as a one-shot's reply does: a stream a tool asked answers as the
         // tool's, frame after frame.
-        let (origin, id) = (self.ticket_origin(ticket), self.ticket_id(ticket));
-        let causes = self.ticket_causes(ticket);
-        let result = self.as_invocation_caused(origin, id, causes, |r| r.fulfill_inner(p, outcome));
+        let cause = self.ticket_cause(ticket);
+        let result = self.as_cause(cause, |r| r.fulfill_inner(p, outcome));
         // What the mapper staged answering this frame (LLP 1016.000 D7):
         // addressed for the commit, or left staged by a frame that failed.
         // The commit's answers may have sent too (its amendment of
@@ -263,7 +261,7 @@ impl<D: DataSource> Runner<D> {
         let replied = left || self.sockets[before..].iter().any(mapper);
         self.conclude(checkpoint, &result, was_poisoned);
         crate::stream_timing::committed(result.is_ok());
-        self.as_invocation_caused(origin, id, causes, |r| r.arm_then(result.is_ok()));
+        self.as_cause(cause, |r| r.arm_then(result.is_ok()));
         self.arm_next(result.is_ok());
         self.log_outcome(&what, &result, was_poisoned);
         // Or by one whose answer reopened the stream, which sends none.
@@ -531,7 +529,7 @@ impl<D: DataSource> Runner<D> {
                     self.failed_mut[m] = None;
                     self.land_send(m, slot, Value::some(value));
                 }
-                self.landed.push(m);
+                self.landed.push((m, self.cause()));
                 // The reply landed: what the mutation changed is asked again
                 // in this commit (LLP 1054.000.000 D1); its write shows until
                 // that answer lands.

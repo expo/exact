@@ -56,12 +56,12 @@ final class PortalMoveTests: XCTestCase {
     private func boot(_ p: Presenter) {
         p.apply(wireBatch([
             ["op": "create", "id": 1, "kind": "view"],
-            ["op": "create", "id": 2, "kind": "view", "handlers": ["focusin", "dblclick", "pointerdown"]],
+            ["op": "create", "id": 2, "kind": "view", "handlers": ["focusin", "dblclick", "pointerdown", "press"]],
             ["op": "create", "id": 3, "kind": "view"],
             ["op": "create", "id": 4, "kind": "view", "props": ["declaredParent": "7"]],
             ["op": "create", "id": 5, "kind": "video", "props": ["muted": "true", "playsinline": "true"]],
             ["op": "create", "id": 6, "kind": "button", "props": ["accessibilityLabel": "Count"]],
-            ["op": "create", "id": 7, "kind": "view", "handlers": ["focusin", "pointerdown"]],
+            ["op": "create", "id": 7, "kind": "view", "handlers": ["focusin", "pointerdown", "press"]],
             ["op": "children", "id": 1, "ids": [2, 3, 7]],
             ["op": "children", "id": 4, "ids": [5, 6]],
             ["op": "roots", "ids": [1]],
@@ -125,6 +125,7 @@ final class PortalMoveTests: XCTestCase {
         p.onFocusEvent = { at, kind, _, _ in heard.append("\(at):\(kind)") }
         p.focus(6)
         XCTAssertEqual(heard, ["7:focusin"], "focusin reaches the declaration parent, not the card")
+        XCTAssertTrue(p.buttonPressListener(above: button) === p.views[7], "a click above the button runs the declaration's press")
         #if os(macOS)
         XCTAssertTrue(button.pointerdownHeard, "the declaration parent's pointerdown hears a press")
         XCTAssertNil(button.dblclickListener, "the card's dblclick does not")

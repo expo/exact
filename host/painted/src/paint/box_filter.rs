@@ -25,7 +25,7 @@ impl Painter {
         node: &NodeRef<'_>,
         rect: Rect4,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip_rect: Option<Rect4>,
     ) {
         // A running transition's list over the row (LLP 1003.002 D8).
@@ -204,13 +204,11 @@ pub(super) struct Filter {
 }
 
 impl Filter {
-    pub(super) fn region(&self, drawing: &tape::Tape, scene: &Scene<'_>, scale: f32) -> Rect4 {
-        let bounds = drawing
-            .bounds(scene, scale, Transform::identity())
-            .map(|r| {
-                let (x, y, w, h) = self.chain.region;
-                (r.0 + x, r.1 + y, r.2 + w, r.3 + h)
-            });
+    pub(super) fn region(&self, drawing: &tape::Tape, live: tape::Live<'_, '_>) -> Rect4 {
+        let bounds = drawing.bounds(live, Transform::identity()).map(|r| {
+            let (x, y, w, h) = self.chain.region;
+            (r.0 + x, r.1 + y, r.2 + w, r.3 + h)
+        });
         bounds.map_or(self.region, |r| rows::union(Some(self.region), r))
     }
 
@@ -227,7 +225,7 @@ impl Filter {
         raster.begin(viewport.0, viewport.1, scale);
         drawing.replay_live(&mut raster, text, ts, live);
         if let Ok(source) = raster.finish() {
-            let region = live.map_or(self.region, |l| self.region(drawing, l.scene, scale));
+            let region = live.map_or(self.region, |l| self.region(drawing, l));
             filtered(backend, source, self.chain.clone(), region, ts, scale);
         }
     }

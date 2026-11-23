@@ -12,6 +12,7 @@
 //!   person's origin; an event a package emits runs with the device's, so a
 //!   request it leads to while `prompt` fails, reason `person-required`.
 
+use super::super::provenance::Cause;
 use super::super::{CommitReceipt, DataSource, Runner, RunnerError};
 use super::{CallOrigin, Json, ModulesRow};
 use std::collections::VecDeque;
@@ -144,7 +145,8 @@ impl<D: DataSource> Runner<D> {
             if raised.origin == CallOrigin::App {
                 self.note_activation();
             }
-            let result = self.as_origin(raised.origin, |r| r.run_action(row.action, args, &[]));
+            let cause = Cause::of(raised.origin, 0, false);
+            let result = self.as_cause(cause, |r| r.run_action(row.action, args, &[]));
             match result {
                 Ok(receipt) => receipts.push(receipt),
                 Err(e) => return (receipts, Some(e)),

@@ -179,7 +179,7 @@ struct KeptRoute {
     /// Its border box's size.
     size: (f32, f32),
     /// The page offset when recorded, for a replay among the roots.
-    page: (f32, f32),
+    page: PaintOffset,
     /// Its place in paint order and each ancestor's, from the route up.
     path: Vec<Step>,
     /// The split view's pane it was drawn in.
@@ -303,7 +303,7 @@ impl Painter {
         let kept = self.kept.routes.get(&branch.key)?;
         let space = match alive {
             Some(at) => path[at].space?,
-            None => Transform::from_translate(-kept.page.0, -kept.page.1),
+            None => Transform::from_translate(-kept.page.0 as f32, -kept.page.1 as f32),
         };
         let inverse = space.invert()?;
         Some(Replay {
@@ -344,7 +344,7 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip: Option<Rect4>,
         pane: Option<Pane>,
     ) {
@@ -379,7 +379,7 @@ impl Painter {
         walk: &Walk<'_, '_>,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
     ) -> bool {
         // A filter may have replaced the recorder with a raster. Its
         // descendants must draw into that raster, inside the filter.
@@ -394,7 +394,8 @@ impl Painter {
         else {
             return false;
         };
-        let at = ts.pre_translate(node.frame.x - offset.0, node.frame.y - offset.1);
+        let (x, y, ..) = self.stage_rect(walk, &node, ts, offset);
+        let at = ts.pre_translate(x, y);
         recorder.nest(kept.tape.clone(), at);
         true
     }
@@ -415,16 +416,19 @@ impl Painter {
         cross: usize,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip: Option<Rect4>,
     ) {
         let Some(node) = walk.scene.kernel.node(id) else {
             return;
         };
         let cross = self.stage.crossing[cross].clone();
-        let placed = sticky(walk.scene, id, offset);
-        let at = (node.frame.x - placed.0, node.frame.y - placed.1);
-        let size = (node.frame.width, node.frame.height);
+        let posed = cross.pose(ts);
+        let grid = self.grid().filter(|_| !grid::changes_axes(posed));
+        let placed = sticky(walk.scene, id, offset, grid, &walk.scroll_grids);
+        let (x, y, w, h) = self.stage_rect(walk, &node, posed, placed);
+        let at = (x, y);
+        let size = (w, h);
         let hit_space = walk.hit_space;
         self.cross_layer(
             &cross,
@@ -521,7 +525,7 @@ impl Painter {
     /// under the parent's current child space.
     pub(super) fn replay_kept(
         &mut self,
-        scene: &Scene<'_>,
+        walk: &Walk<'_, '_>,
         kept: &[(usize, usize)],
         at: usize,
         space: Transform,
@@ -554,7 +558,8 @@ impl Painter {
                     &mut painter.text.borrow_mut(),
                     posed,
                     Some(tape::Live {
-                        scene,
+                        scene: walk.scene,
+                        scroll_grids: &walk.scroll_grids,
                         viewport: painter.viewport,
                         scale: painter.scale,
                     }),
@@ -574,7 +579,7 @@ impl Painter {
         walk: &Walk<'_, '_>,
         root: &NodeRef<'_>,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
     ) -> Option<Rect4> {
         if self.kept.recording.is_some() || self.stage.replays.is_empty() {
             return None;
@@ -594,12 +599,17 @@ impl Painter {
             };
             let mut space = affine(ts);
             let mut offset = offset;
+            let mut grid = self.grid().filter(|_| !grid::changes_axes(ts));
+            let mut scroll_grids = walk.scroll_grids.clone();
             for &id in path[..=at].iter().rev() {
                 let node = kernel.node(id)?;
+                let p = (walk.scene.presented)(id);
                 if id != root.id {
-                    offset = sticky(walk.scene, id, offset);
-                    let rect = paint_rect(node.frame, offset);
-                    let p = (walk.scene.presented)(id);
+                    offset = sticky(walk.scene, id, offset, grid, &scroll_grids);
+                }
+                grid = grid.filter(|_| !grid::leaves_grid(&node, &p));
+                if id != root.id {
+                    let rect = grid::rect_on_grid(node.frame, offset, grid);
                     space = space::mul3(
                         &space,
                         &space::mapping_at(
@@ -616,19 +626,15 @@ impl Painter {
                     || !matches!(oy, Overflow::Visible | Overflow::Clip)
                 {
                     let d = walk.scene.scroll.get(&id).copied().unwrap_or_default();
+                    let d = grid::scroll_offset(d, grid);
+                    scroll_grids.push((id, grid));
                     offset = (offset.0 + d.0, offset.1 + d.1);
                 }
                 let zoom = self.zoom_children(kernel, &node, Transform::identity(), offset);
                 space = space::mul3(&space, &affine(zoom));
             }
-            let node = kernel.node(parent)?;
-            let space = space::mul3(
-                &space,
-                &affine(Transform::from_translate(
-                    node.frame.x - offset.0,
-                    node.frame.y - offset.1,
-                )),
-            );
+            let (x, y, ..) = grid::rect_on_grid(kernel.node(parent)?.frame, offset, grid);
+            let space = space::mul3(&space, &affine(Transform::from_translate(x, y)));
             let origin = space::mul3(&space, &affine(replay.at));
             let cross = &self.stage.crossing[replay.cross];
             let motion = affine(cross.motion);
@@ -638,7 +644,13 @@ impl Painter {
             };
             let posed = space::mul3(&unplace, &posed);
             let kept = self.kept.routes.get(&replay.key)?;
-            let mut bounds = kept.tape.bounds_in(walk.scene, self.scale, posed);
+            let live = tape::Live {
+                scene: walk.scene,
+                scroll_grids: &scroll_grids,
+                viewport: self.viewport,
+                scale: self.scale,
+            };
+            let mut bounds = kept.tape.bounds_in(live, posed);
             if let Some(pane) = replay.pane {
                 let matrix = space::mul3(&unplace, &space::mul3(&space, &affine(pane.ts)));
                 if let Some(clip) = space::mapped_bounds(&matrix, pane.rect) {
@@ -655,7 +667,7 @@ impl Painter {
                     }
                     _ => space::mul3(&unplace, &affine(*at)),
                 };
-                if let Some(b) = bar.bounds_in(walk.scene, self.scale, matrix) {
+                if let Some(b) = bar.bounds_in(live, matrix) {
                     bounds = Some(rows::union(bounds, b));
                 }
             }
@@ -725,6 +737,7 @@ impl Painter {
                             *ts,
                             Some(tape::Live {
                                 scene: walk.scene,
+                                scroll_grids: &walk.scroll_grids,
                                 viewport: self.viewport,
                                 scale: self.scale,
                             }),
@@ -736,6 +749,7 @@ impl Painter {
                 }
                 Item::Hit(id, rect) => walk.boxes.push(PaintedBox {
                     baseline: None,
+                    text_origin: None,
                     rounded_border: None,
                     shape_clips: Vec::new(),
                     id: *id,
@@ -752,16 +766,33 @@ impl Painter {
         }
     }
 
+    fn stage_rect(
+        &self,
+        walk: &Walk<'_, '_>,
+        node: &NodeRef<'_>,
+        ts: Transform,
+        offset: PaintOffset,
+    ) -> Rect4 {
+        let grid = self.grid().filter(|_| {
+            !grid::changes_axes(ts) && !grid::leaves_grid(node, &(walk.scene.presented)(node.id))
+        });
+        grid::rect_on_grid(node.frame, offset, grid)
+    }
+
     /// A live route at the origin of `ts`, and its drawing kept.
     fn stage_route(&mut self, walk: &mut Walk<'_, '_>, id: ViewId, ts: Transform, tape: bool) {
         let Some(node) = walk.scene.kernel.node(id) else {
             return;
         };
-        let at = (node.frame.x, node.frame.y);
-        self.node_at(walk, id, ts, at, None);
-        if tape {
-            self.keep_route(walk, id, ts, at, None);
-        }
+        let suspend =
+            grid::changes_axes(ts) || grid::leaves_grid(&node, &(walk.scene.presented)(id));
+        self.without_grid(suspend, |painter| {
+            let at = painter.drawn_offset((node.frame.x, node.frame.y));
+            painter.node_at(walk, id, ts, at, None);
+            if tape {
+                painter.keep_route(walk, id, ts, at, None);
+            }
+        });
     }
 
     /// Whether `id` stands on a sheet's ground, with no background unless
@@ -777,7 +808,7 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         refer: bool,
     ) -> Tape {
         let recorder = Recorder::portable(&*self.backend);
@@ -834,7 +865,7 @@ impl Painter {
             .recording
             .as_ref()
             .filter(|_| self.backend.name() == "tape")
-            .and_then(|_| tape::Sticky::capture(walk.scene, id));
+            .and_then(|_| tape::Sticky::capture(walk, id, self.grid()));
         let Some((sticky, inverse)) = sticky.zip(ts.invert()) else {
             draw(self, walk);
             return;
@@ -868,15 +899,16 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         pane: Option<Pane>,
     ) {
         let Some(node) = walk.scene.kernel.node(id) else {
             return;
         };
-        let (key, at) = (node.key, (node.frame.x, node.frame.y));
-        let size = (node.frame.width, node.frame.height);
-        let local = ts.pre_translate(at.0 - offset.0, at.1 - offset.1);
+        let key = node.key;
+        let (x, y, w, h) = self.stage_rect(walk, &node, ts, offset);
+        let size = (w, h);
+        let local = ts.pre_translate(x, y);
         let placement = self.kept.to_page.pre_concat(local);
         let Some(unplace) = local.invert() else {
             self.kept.routes.remove(&key);
@@ -897,7 +929,7 @@ impl Painter {
                 tape: Rc::new(normalized.tape()),
                 placement,
                 size,
-                page: walk.scene.page,
+                page: self.drawn_scroll(walk.scene.page),
                 path,
                 pane: pane.map(|pane| Pane {
                     ts: self.kept.to_page.pre_concat(pane.ts),
@@ -989,4 +1021,172 @@ pub(crate) fn destination_path(kernel: &Kernel, route: ViewId, shared: &[NodeKey
 /// A picture of the presenter's own, recorded once and drawn by the stage.
 pub(crate) fn picture(paint: impl FnOnce(&mut dyn Backend)) -> Rc<Tape> {
     Rc::new(record(paint))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::presenter::{PainterChoice, Presenter};
+
+    fn with_route(source: &str, run: impl FnOnce(&mut Painter, Scene<'_>, ViewId, NodeKey)) {
+        let (p, error) = Presenter::boot_with_fixture_fonts(
+            &crate::test_plan(source),
+            (),
+            (200., 100.),
+            2.625,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert_eq!(error, None);
+        let kernel = p.host().kernel();
+        let key = kernel.find_by_test_id("route")[0];
+        let id = kernel.node_by_key(key).unwrap().id;
+        let scene = Scene {
+            kernel,
+            roots: &kernel.roots(),
+            hidden: &|_| false,
+            presented: &|_| Presented::IDENTITY,
+            paths: &|_| None,
+            filters: &|_| None,
+            scroll: &BTreeMap::new(),
+            page: (0., 0.),
+            images: &BTreeMap::new(),
+            focus: None,
+            selection: None,
+            caret_upstream: false,
+            pointer: None,
+            controls: &BTreeMap::new(),
+            chosen: &BTreeMap::new(),
+            menu: None,
+        };
+        let mut painter = Painter::new(
+            p.text().clone(),
+            2.625,
+            Box::new(crate::canvas::Recorder::new()),
+        );
+        run(&mut painter, scene, id, key);
+    }
+
+    const ROUTE: &str = r#"component App
+  view
+    column padding-left=4 padding-top=4
+      box width=100.37 height=20.37 background-color="red" testId="route"
+"#;
+
+    #[test]
+    fn a_scaled_crossing_uses_one_layout_box_for_its_pose_and_clip() {
+        with_route(ROUTE, |painter, scene, id, key| {
+            painter.stage = Stage {
+                live: vec![(id, 0)],
+                crossing: vec![Cross {
+                    key,
+                    motion: Transform::from_scale(0.5, 0.5),
+                    page: false,
+                    opacity: 0.5,
+                    radius: 1.,
+                    height: None,
+                    bar: None,
+                }],
+                ..Stage::default()
+            };
+            painter.replace_backend(Box::new(crate::raster::Raster::new()));
+            let reference = painter.paint(&scene, (200., 100.)).unwrap();
+            painter.pixel_grid = true;
+            let frame = painter.paint(&scene, (200., 100.)).unwrap();
+            let route = frame.boxes.iter().find(|b| b.id == id).unwrap();
+            assert_eq!((route.rect.0, route.rect.1), (4., 4.));
+            assert!(frame.pixmap.data() == reference.pixmap.data());
+        });
+    }
+
+    #[test]
+    fn a_scaled_stage_route_starts_at_the_stages_origin() {
+        with_route(ROUTE, |painter, scene, id, key| {
+            painter.stage = Stage {
+                skip: vec![id],
+                sheets: vec![Item::Route {
+                    id,
+                    ts: Transform::from_scale(0.5, 0.5),
+                    tape: true,
+                }],
+                ..Stage::default()
+            };
+            let frame = painter.paint(&scene, (200., 100.)).unwrap();
+            assert_eq!(frame.boxes.iter().find(|b| b.id == id).unwrap().rect.0, 0.);
+            assert_eq!(painter.kept.routes[&key].placement.tx, 0.);
+        });
+    }
+
+    #[test]
+    fn a_route_with_its_own_scale_uses_layout_geometry_on_the_stage() {
+        let source = ROUTE.replace(
+            "padding-left=4 padding-top=4",
+            "padding-left=4.2 padding-top=4.2",
+        );
+        with_route(&source, |painter, scene, id, key| {
+            let presented = |node| Presented {
+                scale: if node == id { 1.5 } else { 1. },
+                ..Presented::IDENTITY
+            };
+            let scene = Scene {
+                presented: &presented,
+                ..scene
+            };
+            painter.stage = Stage {
+                skip: vec![id],
+                sheets: vec![Item::Route {
+                    id,
+                    ts: Transform::identity(),
+                    tape: true,
+                }],
+                ..Stage::default()
+            };
+            let frame = painter.paint(&scene, (200., 100.)).unwrap();
+            let route = frame.boxes.iter().find(|b| b.id == id).unwrap();
+            let laid = scene.kernel.node(id).unwrap().frame;
+            assert_eq!(route.affine.unwrap().1, (0., 0., laid.width, laid.height));
+            let kept = &painter.kept.routes[&key];
+            assert_eq!(kept.placement, Transform::identity());
+            assert_eq!(kept.size, (laid.width, laid.height));
+        });
+    }
+
+    #[test]
+    fn a_kept_route_subtracts_its_origin_before_converting_to_points() {
+        let source = r#"component App
+  view
+    column
+      box height=65544.76
+      box width=100.37 height=20.37 background-color="red" testId="route"
+"#;
+        with_route(source, |painter, mut scene, id, key| {
+            scene.page = (0., 65543.24);
+            painter.stage.tape = vec![id];
+            let frame = painter.paint(&scene, (200., 100.)).unwrap();
+            let route = frame.boxes.iter().find(|b| b.id == id).unwrap();
+            assert_eq!(route.rect.1 * 2.625, 4.);
+            assert_eq!(painter.kept.routes[&key].placement.ty, route.rect.1);
+        });
+    }
+
+    #[test]
+    fn a_scaled_ghost_is_drawn_at_its_layout_placement() {
+        with_route(ROUTE, |painter, scene, _, key| {
+            painter.replace_backend(Box::new(crate::raster::Raster::new()));
+            painter.lift.ghost = Some(super::super::lift::Ghost {
+                wrapper: key,
+                at: (40., 40.),
+                scale: 1.03,
+                opacity: 1.,
+                shadow: 0.,
+            });
+            let reference = painter.paint(&scene, (200., 100.)).unwrap().pixmap;
+            painter.pixel_grid = true;
+            let actual = painter.paint(&scene, (200., 100.)).unwrap().pixmap;
+            let stride = actual.width() as usize * 4;
+            let rows = 100 * stride..170 * stride;
+            assert!(actual.data()[rows.clone()] == reference.data()[rows]);
+        });
+    }
 }

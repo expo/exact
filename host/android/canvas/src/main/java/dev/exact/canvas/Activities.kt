@@ -32,6 +32,12 @@ import kotlin.math.roundToInt
  * extras; its state, which may hold fields the mapping does not show, is kept in the app's private preferences, since
  * a notification listener reads every extra.
  *
+ * Each activity is an app group of its own, keyed by its id, with a summary, so the system does not bundle several
+ * activities into one notification whose collapsed rows drop their progress and time: AOSP bundles an app's
+ * notifications outside an app group once two are shown, and from Android 16 a group without its summary as well.
+ * AOSP's shade shows a group of one child as that child and dismisses the summary with a dismissed child; a Live
+ * Update may be a group child, though never a summary (LLP 1126 D13).
+ *
  * `notify` and `cancel` reach the shade a few main-thread turns later. A send is answered once the shade shows what it
  * did, and until then the send's own post is the activity's, so a send that follows at once neither misses a start
  * nor revives an end.
@@ -40,6 +46,8 @@ object Activities {
     private const val TAG = "ExactActivities"
     /** Every activity's notification id; its tag tells them apart. */
     private const val ID = 0x61637476
+    /** Every activity's group summary's id, tagged as its activity is. */
+    private const val SUMMARY = ID + 1
     private const val KIND = "dev.exact.activity.kind"
     private const val ENDED = "dev.exact.activity.ended"
     private const val STALE = "dev.exact.activity.stale"
@@ -67,7 +75,7 @@ object Activities {
 
     class Row(val kind: String, val channel: String, val title: String, val text: String?, val progress: String?, val chip: String?, val time: String?)
 
-    private var rows: Map<String, Row>? = null
+    internal var rows: Map<String, Row>? = null
 
     private fun rows(context: Context): Map<String, Row> = rows ?: run {
         val id = context.resources.getIdentifier("exact_activities", "raw", context.packageName)
@@ -124,7 +132,7 @@ object Activities {
         if (shown || own?.extras == null) reply.put("status", 200).put("body", JSONObject().put("id", id))
         else {
             if (posted == null) {
-                manager(context).cancel(id, ID)
+                cancel(context, id)
                 forget(context, id)
             }
             reply.put("status", 400).put("error", "Android did not show activity $id's notification")
@@ -152,6 +160,12 @@ object Activities {
 
     private fun active(context: Context, id: String) = manager(context).activeNotifications.firstOrNull { it.id == ID && it.tag == id }
 
+    /** The summary first: Android cancels a summary's children with it, so the shade never shows it alone. */
+    private fun cancel(context: Context, id: String) = manager(context).run {
+        cancel(id, SUMMARY)
+        cancel(id, ID)
+    }
+
     private fun start(context: Context, kind: String, state: JSONObject): String {
         val row = rows(context)[kind] ?: throw Refused("activity $kind has no android mapping in app.json's live_activities")
         check(row, state)
@@ -161,7 +175,7 @@ object Activities {
         if (manager.getNotificationChannel(row.channel)?.importance == NotificationManager.IMPORTANCE_NONE) throw Refused("the person turned off channel ${row.channel} in Settings")
         val id = UUID.randomUUID().toString()
         val now = System.currentTimeMillis()
-        post(context, row, id, now, now, state, alert = null, ended = null, stale = null)
+        post(context, row, id, now, now, state, alert = null, ended = null, stale = null, first = true)
         return id
     }
 
@@ -169,7 +183,7 @@ object Activities {
         val (row, extras) = existing(context, id)
         check(row, state)
         if (extras.getLong(ENDED, 0) != 0L) throw Refused("activity $id has ended")
-        post(context, row, id, System.currentTimeMillis(), extras.getLong(STARTED), state, alert = alert, ended = null, stale = stale)
+        post(context, row, id, System.currentTimeMillis(), extras.getLong(STARTED), state, alert = alert, ended = null, stale = stale, first = false)
         return id
     }
 
@@ -183,10 +197,10 @@ object Activities {
             policy is Number -> policy.toLong()
             else -> throw Refused("dismissal policy is immediate, default, or Unix milliseconds")
         }
-        if (until > now) post(context, row, id, now, extras.getLong(STARTED), state, alert = null, ended = until, stale = null)
+        if (until > now) post(context, row, id, now, extras.getLong(STARTED), state, alert = null, ended = until, stale = null, first = false)
         else {
             pending[id] = Pending(System.nanoTime(), null)
-            manager(context).cancel(id, ID)
+            cancel(context, id)
             forget(context, id)
         }
         return id
@@ -217,15 +231,11 @@ object Activities {
     /**
      * Post [id]'s notification at [now]: ongoing and asking for promotion while it is live, an ordinary one that times
      * out once it has [ended]. Its first post alerts as its channel does, and an update only with an [alert], as
-     * ActivityKit's.
+     * ActivityKit's. Its group's [summary] follows its [first] post and precedes its end.
      */
-    private fun post(context: Context, row: Row, id: String, now: Long, started: Long, state: JSONObject, alert: String?, ended: Long?, stale: Long?) {
+    private fun post(context: Context, row: Row, id: String, now: Long, started: Long, state: JSONObject, alert: String?, ended: Long?, stale: Long?, first: Boolean) {
         val text = { field: String? -> field?.let { state.optNullable(it) as? String } }
         val number = { field: String? -> field?.let { state.optNullable(it) as? Number }?.toDouble()?.takeIf { it.isFinite() } }
-        val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
-        val tap = launch?.let { PendingIntent.getActivity(context, 0, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT) }
-        val icon = context.resources.getIdentifier("exact_notification", "drawable", context.packageName).takeIf { it != 0 }
-            ?: context.applicationInfo.icon
         val mark = System.nanoTime()
         val extras = Bundle().apply {
             putString(KIND, row.kind)
@@ -238,11 +248,12 @@ object Activities {
             if (ended == null) putBoolean(Notification.EXTRA_REQUEST_PROMOTED_ONGOING, true)
         }
         val builder = Notification.Builder(context, row.channel)
-            .setSmallIcon(icon)
+            .setSmallIcon(icon(context))
             .setContentTitle(text(row.title))
-            .setContentIntent(tap)
+            .setContentIntent(tap(context))
             .setOngoing(ended == null)
             .setOnlyAlertOnce(alert == null)
+            .setGroup(id)
             .addExtras(extras)
         val body = text(row.text)
         val progress = number(row.progress)
@@ -264,7 +275,38 @@ object Activities {
         if (Build.VERSION.SDK_INT >= 36 && ended == null) text(row.chip)?.let { builder.setShortCriticalText(it) }
         states(context).edit().putString(id, state.toString()).apply()
         pending[id] = Pending(mark, extras)
+        if (ended != null) summary(context, row.channel, id, text(row.title), ended, now)
         manager(context).notify(id, ID, builder.build())
+        if (first) summary(context, row.channel, id, text(row.title), null, now)
+    }
+
+    private fun tap(context: Context) = context.packageManager.getLaunchIntentForPackage(context.packageName)
+        ?.let { PendingIntent.getActivity(context, 0, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT) }
+
+    private fun icon(context: Context) = context.resources.getIdentifier("exact_notification", "drawable", context.packageName)
+        .takeIf { it != 0 } ?: context.applicationInfo.icon
+
+    /**
+     * Post [id]'s group summary: ongoing while the activity is live, and once it has [ended] timing out no later than
+     * the activity, since Android cancels a summary's children with it. An update leaves it, since Android sheds an
+     * app's updates beyond five a second. It is the group's, not the send's: a refusal of it leaves the activity to
+     * the system's bundle, and the send stands.
+     */
+    private fun summary(context: Context, channel: String, id: String, title: CharSequence?, ended: Long?, now: Long) {
+        val summary = Notification.Builder(context, channel)
+            .setSmallIcon(icon(context))
+            .setContentTitle(title)
+            .setContentIntent(tap(context))
+            .setGroup(id)
+            .setGroupSummary(true)
+            .setGroupAlertBehavior(Notification.GROUP_ALERT_CHILDREN)
+            .setOngoing(ended == null)
+        if (ended != null) summary.setTimeoutAfter(ended - now)
+        try {
+            manager(context).notify(id, SUMMARY, summary.build())
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "activity $id's group summary: $e")
+        }
     }
 
     /** List what the shade shows, by [Exact.activities], and wait for the next deadline: an activity reads `promoted`
@@ -274,7 +316,8 @@ object Activities {
         val states = states(context)
         val list = JSONArray()
         var next = Long.MAX_VALUE
-        val shown = manager(context).activeNotifications.filter { it.id == ID && it.tag != null }
+        val active = manager(context).activeNotifications
+        val shown = active.filter { it.id == ID && it.tag != null }
         shown.sortedBy { it.notification.extras.getLong(STARTED) }.forEach { posted ->
             val extras = posted.notification.extras
             val kind = extras.getString(KIND) ?: return@forEach
@@ -287,12 +330,18 @@ object Activities {
                 else -> "active"
             }
             val promoted = Build.VERSION.SDK_INT >= 36 && posted.notification.flags and Notification.FLAG_PROMOTED_ONGOING != 0
+            // An end's summary update the system shed, which a completed progress is not, would outlive the activity.
+            val head = active.firstOrNull { it.id == SUMMARY && it.tag == posted.tag }?.notification
+            if (ended > now && head != null && head.flags and Notification.FLAG_ONGOING_EVENT != 0)
+                summary(context, posted.notification.channelId, posted.tag, extras.getCharSequence(Notification.EXTRA_TITLE), ended, now)
             list.put(JSONObject().put("id", posted.tag).put("kind", kind).put("state", states.getString(posted.tag, null) ?: "null")
                 .put("activityState", state).put("token", JSONObject.NULL).put("promoted", promoted))
         }
-        // The state of an activity the shade no longer shows, nor a send of this process is about to.
+        // The state and summary of an activity the shade no longer shows, nor a send of this process is about to.
         val kept = shown.mapTo(HashSet()) { it.tag } + pending.keys
         states.all.keys.filter { it !in kept }.takeIf { it.isNotEmpty() }?.let { gone -> states.edit().apply { gone.forEach { remove(it) } }.apply() }
+        active.filter { it.id == SUMMARY && it.tag != null && it.notification.group == it.tag && it.tag !in kept }
+            .forEach { manager(context).cancel(it.tag, SUMMARY) }
         main.removeCallbacks(deadline)
         if (next != Long.MAX_VALUE) main.postDelayed(deadline, next - now + 1)
         Exact.activities(JSONObject().put("activities", list).put("frequentPushesEnabled", false).toString())

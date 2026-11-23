@@ -404,6 +404,27 @@ impl Batch {
         self.ops.push(s);
     }
 
+    /// `{"op":"hold","movers":[[id,parent],…]}` — `portal` movers to keep in
+    /// the page's holder until a list shows them; `null` for one hidden.
+    pub fn hold(&mut self, movers: &[(u32, Option<u32>)]) {
+        let mut s = String::from("{\"op\":\"hold\",\"movers\":[");
+        for (i, (id, parent)) in movers.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            s.push('[');
+            id.push_to(&mut s);
+            s.push(',');
+            match parent {
+                Some(parent) => parent.push_to(&mut s),
+                None => s.push_str("null"),
+            }
+            s.push(']');
+        }
+        s.push_str("]}");
+        self.ops.push(s);
+    }
+
     /// `{"op":"animate","id":…,"property":…,"delay":ms,"duration":ms,"values":[…]}`
     /// — a spring's frames, evenly spaced; `translate` values are `[x,y]`
     /// pairs, `[x,y,px,py]` with percentages of the box (chess diary #4),
