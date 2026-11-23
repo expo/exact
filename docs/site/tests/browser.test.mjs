@@ -1,12 +1,14 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { resolve } from 'node:path';
 import { networkInterfaces } from 'node:os';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { serveBuildTree } from '../../../host/web/serve.mjs';
 import { site } from '../constants/site.ts';
+import { markdownHeadings } from '../tools/markdown-headings.ts';
 
 const dist = resolve(import.meta.dir, '../dist');
 let browser, server, origin;
@@ -329,14 +331,21 @@ test('WebMCP page info uses metadata and headings from one build', () => withPag
   });
 }));
 
-test('WebMCP section reads end at the next heading in the same Markdown snapshot', () => withPage({}, async page => {
-  await page.route('**/assets/markdown/recipeWebsite.md', route => route.fulfill({ body: '# A newer recipe\n\n## A setting\n\nNew text.\n' }));
+test('WebMCP rereads section offsets when a deployment replaces the Markdown', () => withPage({}, async page => {
+  const body = '# A newer recipe\n\nAn introduction in the new build.\n\n## A setting\n\nNew text.\n\n## A deep link\n\nA separate section.\n';
+  const digest = createHash('sha256').update(body).digest('hex');
+  let metadataReads = 0;
+  await page.route('**/assets/markdown/tools/recipeWebsite.json', route => {
+    if (++metadataReads === 1) return route.continue();
+    return route.fulfill({ json: { digest, headings: markdownHeadings(body) } });
+  });
+  await page.route('**/assets/markdown/tools/recipeWebsite-*.md', route => route.fulfill({ status: 404 }));
+  await page.route('**/assets/markdown/recipeWebsite.md', route => route.fulfill({ body }));
   const call = await visitWithTools(page);
-  const result = await call('get_page_markdown', { path: '/recipes/website', section: 'A setting' });
-  expect(result.outcome).toBe('ok');
-  expect(result.value).toStartWith('# Recipe: a website\n## A setting\n');
-  expect(result.value).toContain('API_BASE_URL');
-  expect(result.value).not.toContain('## A deep link');
+  expect(await call('get_page_markdown', { path: '/recipes/website', section: 'A setting' })).toMatchObject({
+    outcome: 'ok', value: '# A newer recipe\n## A setting\n\nNew text.',
+  });
+  expect(metadataReads).toBe(2);
 }));
 
 test('WebMCP navigation is a consequential write', () => withPage({}, async page => {
@@ -363,6 +372,33 @@ test('WebMCP navigation resolves paths against the published pages', () => withP
     { path: inputs[5], outcome: 'ok', value: 'Opened /recipes/website.', location: '/recipes/website#a-deep-link' },
   ]);
   await headingInView(page);
+}));
+
+test('WebMCP accepts uppercase URL schemes on the docs origin', () => withPage({}, async page => {
+  const call = await visitWithTools(page);
+  const path = `${site.origin || origin}/start`.replace(/^https?:/, scheme => scheme.toUpperCase());
+  expect(await call('get_page_info', { path })).toMatchObject({ outcome: 'ok' });
+  expect(await call('get_page_markdown', { path, section: '' })).toMatchObject({ outcome: 'ok' });
+  expect(await call('navigate_page', { path })).toMatchObject({ outcome: 'ok' });
+  expect(await call('navigate_page', { path: 'HTTPS://example.invalid/start' })).toMatchObject({
+    outcome: 'failed', value: expect.stringContaining('path must start with'),
+  });
+}));
+
+test('WebMCP same-visit navigation keeps the helpful vote and active heading', () => withPage({}, async page => {
+  const call = await visitWithTools(page, '/recipes/website');
+  await page.getByTestId('helpful-yes').click();
+  const active = page.getByTestId('toc-active');
+  const heading = await active.getAttribute('href');
+  expect(await call('navigate_page', { path: '' })).toMatchObject({ outcome: 'ok', value: 'Opened /recipes/website.' });
+  expect(await page.evaluate(() => ({
+    vote: document.querySelector('[data-testid="helpful-thanks"]')?.textContent,
+    heading: document.querySelector('[data-testid="toc-active"]')?.getAttribute('href'),
+  }))).toEqual({ vote: 'Thanks for the feedback.', heading });
+
+  expect(await call('navigate_page', { path: '/recipes/website#a-deep-link' })).toMatchObject({ outcome: 'ok' });
+  await headingInView(page);
+  expect(await page.getByTestId('helpful-thanks').textContent()).toBe('Thanks for the feedback.');
 }));
 
 const websiteChunk = /\/recipeWebsite-[\w-]+\.js$/;

@@ -318,13 +318,14 @@ component App
     openPage(url)
   action openPage(url: string)
     menu = false
-    copied = false
-    linked = false
-    copiedId = ""
-    voted = ""
-    visible = []
-    active = ""
     let next = go(nav, url)
+    if top(next).id != top(nav).id
+      copied = false
+      linked = false
+      copiedId = ""
+      voted = ""
+      visible = []
+      active = ""
     nav = next
     // sidebar scrolling must not cancel the router's pending fragment scroll.
     if fragment(top(next)) == "" and inSidebar(site, top(next).name)

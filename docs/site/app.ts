@@ -126,15 +126,15 @@ const searchHits = async (body: Record<string, unknown>) => {
   return ((await response.json()) as { hits: DocSearchHit[] }).hits;
 };
 
-async function textAt(url: string) {
-  const response = await fetch(url);
+async function textAt(url: string, cache?: RequestCache) {
+  const response = await fetch(url, { cache });
   if (!response.ok) throw new Error(`${url} answered ${response.status}.`);
   return await response.text();
 }
 
 function pageAt(given: string) {
   const here = new URL(import.meta.url);
-  const url = (given.startsWith('/') || /^https?:\/\//.test(given)) && URL.canParse(given, here) ? new URL(given, here) : null;
+  const url = (given.startsWith('/') || /^https?:\/\//i.test(given)) && URL.canParse(given, here) ? new URL(given, here) : null;
   if (!url || ![here.origin, moved.origin].includes(url.origin)) throw new Error('path must start with "/", or be a URL of these docs.');
   const clean = cleaned(url.pathname);
   const path = moved.redirects[clean] ?? (clean === '/index' ? '/' : clean);
@@ -143,8 +143,7 @@ function pageAt(given: string) {
   return { ...page, location: `${path}${url.search}${url.hash}` };
 }
 
-const markdownAt = (route: string) => textAt(`/assets/markdown/${route}.md`);
-const toolMarkdown = '/assets/markdown/tools';
+const markdownAt = (route: string, cache?: RequestCache) => textAt(`/assets/markdown/${route}.md`, cache);
 
 type PageInfo = {
   path: string;
@@ -152,11 +151,11 @@ type PageInfo = {
   description: string;
   modificationDate: string;
   headings: ReturnType<typeof markdownHeadings>;
-  markdownFile: string;
+  digest: string;
 };
 
-async function pageInfoAt(route: string): Promise<PageInfo> {
-  return JSON.parse(await textAt(`${toolMarkdown}/${route}.json`)) as PageInfo;
+async function pageInfoAt(route: string, cache?: RequestCache): Promise<PageInfo> {
+  return JSON.parse(await textAt(`/assets/markdown/tools/${route}.json`, cache)) as PageInfo;
 }
 
 const plain = (heading: string) => heading.replaceAll('`', '').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -207,9 +206,14 @@ const tools: Record<string, (path: string, text: string, count: number) => Promi
   get_page_markdown: async (given, section) => {
     const { path, route } = pageAt(given);
     if (!section) return markdownAt(route);
-    const { headings, markdownFile } = await pageInfoAt(route);
-    const markdown = await textAt(`${toolMarkdown}/${markdownFile}`);
-    return sectionsOf(markdown, headings, section, path);
+    for (const cache of ['default', 'reload'] as const) {
+      const { headings, digest } = await pageInfoAt(route, cache);
+      const markdown = await markdownAt(route, cache);
+      const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(markdown));
+      const hex = Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
+      if (hex === digest) return sectionsOf(markdown, headings, section, path);
+    }
+    throw new Error(`The Markdown for ${path} changed while it was being read. Try again.`);
   },
   get_page_info: async given => {
     const { route } = pageAt(given);

@@ -8,7 +8,7 @@ import { agentRows, sections, tabs, type NavPage } from '../constants/navigation
 import { redirects } from '../constants/redirects.ts';
 import { site } from '../constants/site.ts';
 import { decode, descriptionOf, plain, sectionDescriptionProblems } from './descriptions.ts';
-import { markdownHeadings } from './markdown-headings.ts';
+import { markdownHeadings, pageMarkdown } from './markdown-headings.ts';
 import { promptOf } from './prompts.ts';
 
 const SITE = resolve(import.meta.dir, '..');
@@ -377,15 +377,12 @@ function markdownHref(href: string, from: string, image: boolean): string {
   const [path, anchor] = at.split('#');
   return `${ORIGIN}${path === '/' ? '/index' : path}.md${anchor ? `#${anchor}` : ''}`;
 }
-function markdownOf(tokens: Token[], from: string): string {
-  return tokens.map(t => {
-    if (t.type === 'code') return t.raw;
-    const spans: string[] = [];
-    return t.raw
-      .replace(/(`+)[\s\S]*?\1/g, span => `\u0000${spans.push(span) - 1}\u0000`)
-      .replace(/(!?)\[([^\[\]]*)\]\(([^)\s]+)((?:\s+"[^"]*")?)\)/g, (_, bang: string, text: string, href: string, title: string) => `${bang}[${text}](${markdownHref(href, from, bang === '!')}${title})`)
-      .replace(/\u0000(\d+)\u0000/g, (_, i: string) => spans[Number(i)]);
-  }).join('').trim();
+function rewriteMarkdown(raw: string, from: string): string {
+  const spans: string[] = [];
+  return raw
+    .replace(/(`+)[\s\S]*?\1/g, span => `\u0000${spans.push(span) - 1}\u0000`)
+    .replace(/(!?)\[([^\[\]]*)\]\(([^)\s]+)((?:\s+"[^"]*")?)\)/g, (_, bang: string, text: string, href: string, title: string) => `${bang}[${text}](${markdownHref(href, from, bang === '!')}${title})`)
+    .replace(/\u0000(\d+)\u0000/g, (_, i: string) => spans[Number(i)]);
 }
 
 mkdirSync(OUT, { recursive: true });
@@ -446,18 +443,15 @@ pages.forEach(page => {
   const { blocks, toc } = render(page);
   const markdownPath = page.path === '/' ? '/index.md' : `${page.path}.md`;
   const markdownUrl = ORIGIN ? ORIGIN + markdownPath : GITHUB_DOCS + page.source;
-  const split = page.tocDepth === 3;
-  const markdown = markdownOf(split ? page.tokens.slice(1) : page.tokens, page.source);
-  const body = `${split ? `# ${page.title}\n\n` : ''}${markdown}\n${page.route === 'home' ? homeMarkdown() : ''}`;
+  const markdown = pageMarkdown(page.tokens, raw => rewriteMarkdown(raw, page.source), page.tocDepth === 3 ? page.title : undefined);
+  const body = `${markdown}\n${page.route === 'home' ? homeMarkdown() : ''}`;
   writeFileSync(join(MARKDOWN, `${page.route}.md`), body);
   if (!page.hidden) {
     const { route, path, title, description } = page;
     // The digest ties the section offsets to this Markdown across deployments.
-    const digest = createHash('sha256').update(body).digest('hex').slice(0, 16);
-    const markdownFile = `${route}-${digest}.md`;
-    const info = { path, title, description, modificationDate: isoDateOf(page.source), headings: markdownHeadings(body), markdownFile };
+    const digest = createHash('sha256').update(body).digest('hex');
+    const info = { path, title, description, modificationDate: isoDateOf(page.source), headings: markdownHeadings(body), digest };
     writeFileSync(join(TOOL_MARKDOWN, `${route}.json`), JSON.stringify(info));
-    writeFileSync(join(TOOL_MARKDOWN, markdownFile), body);
   }
   const data = {
     slug: page.route,

@@ -1,4 +1,10 @@
-import { marked } from 'marked';
+import { marked, type Token } from 'marked';
+
+export function pageMarkdown(tokens: Token[], rewrite: (raw: string) => string, sectionTitle?: string) {
+  const content = sectionTitle === undefined ? tokens : tokens.slice(1);
+  const body = content.map(token => token.type === 'code' ? token.raw : rewrite(token.raw)).join('');
+  return sectionTitle === undefined ? body.trim() : `# ${sectionTitle}\n\n${body.replace(/^(?:[ \t]*\n)+/, '').trimEnd()}`;
+}
 
 export function markdownHeadings(markdown: string) {
   let offset = 0;
