@@ -15,7 +15,7 @@ fn delivery(platform: &str) {
             output_rotation: Default::default(),
             #[cfg(target_os = "macos")]
             painted_boot: None,
-            start_executor: exact_painted::executor::Executor::start,
+            services: Default::default(),
             content_region: None,
             launch,
             plan: plan.clone().into(),
