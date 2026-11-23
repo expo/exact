@@ -58,6 +58,15 @@ rewrite, and `from` can have a splat. The build writes both lists to `dist/_redi
 applies those rules. `bun start` does not: it answers a moved page's old path with a fallback
 page, and the path of any other rule with a 404.
 
+## Prompts
+
+A page shows the prompt in `prompts/<its source>`, after its introduction: `prompts/recipes/tabs.md`
+is the prompt on `docs/recipes/tabs.md`'s page. A recipe with no file of its own shows
+`prompts/recipes.md`, with `{{SOURCE}}` replaced by the recipe's path, and `bun run build` names
+each recipe that does. To give a new recipe its own prompt, add `prompts/recipes/<name>.md` in the
+form of the others: the task, the questions only the person can answer, the recipe's steps, a
+test, the platform checks, the feedback step and what to report.
+
 ## Search
 
 The search dialog (Cmd+K) asks the Algolia app and index in `constants/search.ts` with its

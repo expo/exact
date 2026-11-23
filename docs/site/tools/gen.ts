@@ -97,7 +97,12 @@ const GITHUB_DOCS = 'https://github.com/expo/exact/blob/main/docs/';
 const docsUrlOf = new Map(sections.flatMap(s => s.pages).map(p => [GITHUB_DOCS + p.source, ORIGIN ? `${ORIGIN}${p.path === '/' ? '/index' : p.path}.md` : GITHUB_DOCS + p.source]));
 
 const PROMPTS = join(SITE, 'prompts');
-const promptOf = (source: string) => existsSync(join(PROMPTS, source)) ? `${readFileSync(join(PROMPTS, source), 'utf8').trim()}\n\n` : '';
+const ownPrompt = (source: string) => join(PROMPTS, source);
+const folderPrompt = (source: string) => join(PROMPTS, `${dirname(source)}.md`);
+function promptOf(source: string): string {
+  const file = [ownPrompt(source), folderPrompt(source)].find(existsSync);
+  return file ? `${readFileSync(file, 'utf8').trim().replaceAll('{{SOURCE}}', source)}\n\n` : '';
+}
 
 function read(nav: NavPage): Doc {
   const text = readFileSync(join(DOCS, nav.source), 'utf8')
@@ -517,4 +522,6 @@ writeFileSync(APP, `${app.slice(0, begin + ROUTES_BEGIN.length)}\n${routes}\n${a
 const broken = links.filter(l => !l.ok);
 for (const l of broken) console.error(`broken link: ${l.from} -> ${l.to}`);
 console.log(`${pages.length} pages from ${docs.length} docs at Exact ${SHA.slice(0, 10)}, ${links.length} internal links, ${broken.length} broken`);
+const folderPrompted = docs.map(d => d.nav.source).filter(s => !existsSync(ownPrompt(s)) && existsSync(folderPrompt(s)));
+if (folderPrompted.length) console.log(`no prompt of its own, so its folder's is shown: ${folderPrompted.join(', ')}`);
 if (broken.length || badRedirects.length) process.exit(1);
