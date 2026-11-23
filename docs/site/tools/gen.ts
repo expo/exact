@@ -36,7 +36,7 @@ type Link = { title: string; href: string };
 type TocItem = { id: string; title: string; href: string };
 
 type Section = { title: string; anchor: string; tokens: Token[] };
-type Doc = { nav: NavPage; title: string; intro: Token[]; sections: Section[]; anchors: Map<string, string> };
+type Doc = { nav: NavPage; title: string; description: string; intro: Token[]; sections: Section[]; anchors: Map<string, string> };
 type SitePage = { route: string; path: string; title: string; description: string; source: string; tokens: Token[]; tocDepth: number; skipHeading: string; hidden: boolean; landing: boolean };
 
 const THEMES = { light: 'github-light', dark: 'github-dark' } as const;
@@ -124,7 +124,7 @@ function read(nav: NavPage): Doc {
     }
     (parts.at(-1)?.tokens ?? intro).push(t);
   }
-  return { nav, title, intro, sections: parts.filter(s => !SKIPPED_SECTIONS.has(s.anchor)), anchors };
+  return { nav, title, description: nav.description ?? lead(intro, title), intro, sections: parts.filter(s => !SKIPPED_SECTIONS.has(s.anchor)), anchors };
 }
 
 const docs = sections.flatMap(s => s.pages).map(read);
@@ -349,7 +349,7 @@ function lead(tokens: Token[], fallback: string): string {
 }
 
 const pages: SitePage[] = docs.flatMap(doc => {
-  const base: SitePage = { route: doc.nav.route, path: doc.nav.path, title: doc.title, description: doc.nav.description, source: doc.nav.source, tokens: doc.intro, tocDepth: 2, skipHeading: '', hidden: !!doc.nav.hidden, landing: !!doc.nav.landing };
+  const base: SitePage = { route: doc.nav.route, path: doc.nav.path, title: doc.title, description: doc.description, source: doc.nav.source, tokens: doc.intro, tocDepth: 2, skipHeading: '', hidden: !!doc.nav.hidden, landing: !!doc.nav.landing };
   if (!doc.nav.split) return [{ ...base, tokens: [...doc.intro, ...doc.sections.flatMap(s => s.tokens)] }];
   return [
     base,
@@ -357,7 +357,7 @@ const pages: SitePage[] = docs.flatMap(doc => {
       route: routeName(`${doc.nav.path}/${s.anchor}`),
       path: `${doc.nav.path}/${s.anchor}`,
       title: s.title,
-      description: lead(s.tokens, doc.nav.description),
+      description: lead(s.tokens, doc.description),
       source: doc.nav.source,
       tokens: s.tokens,
       tocDepth: 3,
