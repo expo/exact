@@ -4,6 +4,7 @@ import { test, expect } from 'bun:test';
 import { chordKeys } from './agent-playwright.mjs';
 import { KEY_REPEAT, validateKey, typeFor, cdpKey, withHeldModifiers, browserKey, nativeKey, typeArguments, typeCommand, tapWords, tapArguments, pointerGap, intoArguments, MalformedOperation, clockSlices, padOp, postCommand, postInto, resizeArguments } from './agent-keys.mjs';
 import { open } from './agent.mjs';
+import { helpText } from './help.mjs';
 import { launchFacts } from './agent-launch.mjs';
 
 test('a hover wheel accepts its point and modifiers; a plain hover refuses them', () => {
@@ -22,6 +23,33 @@ test('tap midi is a MIDI input\'s message, its bytes two hex digits each; a test
   expect(tapWords(['midi', '"clk"', 'fa'])).toEqual([null, { midi: { input: 'clk', data: [0xfa] } }]);
   expect(() => tapWords(['midi', 'clk', 'clock', '0', '100'])).toThrow('a tempo above 0');
   expect(clockSlices({ bpm: 125, ms: 110 })).toEqual([{ to: 50, ticks: [20, 40] }, { to: 100, ticks: [60, 80, 100] }, { to: 110, ticks: [] }]);
+});
+
+test('a press point before drag is refused with the drag from a point and the held contact\'s phases (#1332)', () => {
+  expect(() => tapWords(['stage', 'at', '50', '400', 'drag', '300', '0'])).toThrow('`tap stage drag 300 0 from 50 400`');
+  expect(() => tapWords(['stage', 'down', 'at', '55', '430', 'drag', '300', '0'])).toThrow('`tap stage down at 55 430`, then `tap hold <ms>`, `tap move [by] <x> <y> [over <ms>]`, `tap up`');
+  expect(() => tapWords(['stage', 'down', 'drag'])).toThrow('`tap stage drag <dx> <dy> from <x> <y>`');
+  expect(() => tapWords(['stage', 'at', '5', '6', 'drag', '7', '8', 'hold', '500', 'during', "'screenshot", "mid.png'"])).toThrow("`tap stage drag 7 8 from 5 6 hold 500 during 'screenshot mid.png'`");
+  expect(() => tapWords(['stage', 'down', 'at', '5', '6', 'modifiers', 'Shift', 'drag', '7', '8'])).toThrow('`tap stage drag 7 8 from 5 6 modifiers Shift`; a held contact is `tap stage down at 5 6 modifiers Shift`');
+  expect(() => tapWords(['Sky off', 'at', '5', '6', 'drag', '7', '8'])).toThrow('`tap "Sky off" drag 7 8 from 5 6`');
+  expect(() => tapWords(['drag', 'at', '5', '6', 'drag', '7', '8'])).toThrow('`tap drag drag 7 8 from 5 6`');
+  expect(() => tapWords(['at', 'down', 'at', '5', '6', 'drag', '7', '8'])).toThrow('`tap at down at 5 6`');
+  expect(() => tapWords(['stage', 'down', 'drag', '7', '8', 'from', '5', '6'])).toThrow('`tap stage drag 7 8 from 5 6`; a held contact is `tap stage down at 5 6`');
+  expect(() => tapWords(['stage', 'at', '5', '6', 'drag', '7', '8', 'hold', '500', 'during', "'state", 'list', 'from', "2'"])).toThrow("`tap stage drag 7 8 from 5 6 hold 500 during 'state list from 2'`");
+  expect(() => tapWords(['stage', 'at', '5', '6', 'drag', 'to', '"Sky', 'off"'])).toThrow('`tap stage drag to "Sky off" from 5 6`');
+  expect(() => tapWords(['', 'at', '5', '6', 'drag', '7', '8'])).toThrow('`tap "" drag 7 8 from 5 6`');
+  expect(() => tapWords(['stage', 'down', 'drag', 'to', 'row', 'during', '"state"', 'from', '5', '6'])).toThrow('`tap stage drag to row during "state" from 5 6`; a held contact is `tap stage down at 5 6`');
+  expect(() => tapWords(['stage', 'at', '5', '6', 'drag', 'to', 'from'])).toThrow('`tap stage drag to from from 5 6`');
+  expect(() => tapWords(['stage', 'at', '5', '6', 'drag', '7'])).toThrow('`tap stage drag 7 <dy> from 5 6`');
+  // Escaped quotes stay inside their quoted word, as parseDrag reads them.
+  expect(() => tapWords(['stage', 'at', '5', '6', 'drag', '7', '8', 'hold', '500', 'during', '"state', '\\"items\\"', 'from', '2"'])).toThrow('`tap stage drag 7 8 from 5 6 hold 500 during "state \\"items\\" from 2"`');
+  expect(() => tapWords(['stage', 'at', '5', '6', 'drag', 'to', '"say', '\\"', 'hello"', 'over', '300'])).toThrow('`tap stage drag to "say \\" hello" from 5 6 over 300`');
+  expect(() => tapWords(['stage', 'at', '5', '6', 'modifiers', 'Shift', 'drag', 'to', 'row', 'modifiers'])).toThrow('`tap stage drag to row from 5 6 modifiers Shift`');
+  expect(() => tapWords(['stage', 'at', '5', '6', 'drag', 'to'])).toThrow('`tap stage drag to <target> from 5 6`');
+  expect(tapWords(['stage', 'at', '50', '400'])).toEqual(['stage', { at: [50, 400] }]);
+  expect(tapWords(['stage', 'down', 'at', '55', '430'])).toEqual(['stage', { down: true, at: [55, 430] }]);
+  expect(tapWords(['move', '220', '430', 'over', '200'], true)).toEqual([null, { phase: 'move', x: 220, y: 430, ms: 200 }]);
+  expect(helpText('agent', { all: true })).toContain('"tap <t> down [at <x> <y>]" "tap hold <ms>" "tap move [by] <x> <y> [over <ms>]" "tap up"');
 });
 
 test('a pad on a world canvas: tap stick and type key Gamepad… reach the world as its pad 0, held across requests (LLP 1127.003 D3)', async () => {
