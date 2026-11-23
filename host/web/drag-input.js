@@ -34,14 +34,17 @@ export function observeDragInput(root, signal, input = { held: new Map() }, chan
   const { held } = input, compat = input.compat ??= new Set();
   // A pen's or a finger's compatibility mouse events name no pointer, so pairing them with a press is a heuristic: by
   // point, or else by target, the earliest pending press first. A pair the browser delays or suppresses, or that
-  // another script stops before the document, can shift the pairing of those after it. A finger's `mousedown` and every
-  // `mouseup` follow the press's release. Preventing `pointerdown` suppresses both mouse events (Pointer Events 3 §11).
+  // another script stops before the document, can shift the pairing of those after it. A finger's `mousedown` can
+  // come before release (Pointer Events 3 §11.3). An unreleased finger is a fallback so a pen gets its own pair.
+  // A compatibility `mouseup` follows release. Preventing `pointerdown` suppresses both mouse events (§11).
   const compatFor = (event, target) => {
     const up = event.type === 'mouseup';
-    const pending = [...compat].filter((press) => press.sawMouseDown === up && (press.release || (!up && press.type !== 'touch'))
+    const pending = [...compat].filter((press) => press.sawMouseDown === up && (!up || press.release)
       && !press.down.defaultPrevented && !expired(press, event.timeStamp));
-    return pending.find((press) => atPoint(press, event) || atPoint(press.release, event))
-      ?? pending.find((press) => target != null && (press.target === target || press.release?.target === target));
+    const match = (candidates) => candidates.find((press) => atPoint(press, event) || atPoint(press.release, event))
+      ?? candidates.find((press) => target != null && (press.target === target || press.release?.target === target));
+    const heldTouch = (press) => press.type === 'touch' && !press.release;
+    return match(pending.filter((press) => !heldTouch(press))) ?? match(pending.filter(heldTouch));
   };
   const down = (event) => {
     if (event.isTrusted === false) return;
@@ -132,24 +135,27 @@ export function observeDragInput(root, signal, input = { held: new Map() }, chan
   // A drag's end ends only the press held where it began, which its release may already have ended, and drops that
   // press's pending compatibility events. Its start leaves them: a later listener can cancel `dragstart`, and a drag
   // that begins sends the pointer `pointercancel` (Pointer Events 3, "Suppressing a pointer event stream"). WebKit can
-  // send `dragend` only to a source removed during the drag, so each observer of `input` also listens at the source
-  // while the drag is on, one given `input` mid-drag too, as the listener is at the wasm wait's handoff.
+  // send `dragend` only to a source removed during the drag. Keep its capture listener in registration order across
+  // the wasm handoff, and let the newest live observer finish the drag.
   const hearSource = (drag) => {
     if (signal?.aborted) return;
-    const onEnd = (event) => event.isTrusted !== false && dragEnded(drag);
-    // Capture runs before a page's bubble listener even when the handoff registers ours later. The listener goes
-    // with the drag or with this observer, whichever ends first.
+    if (!drag.observers.size) {
+      const onEnd = (event) => {
+        if (event.isTrusted !== false) [...drag.observers.values()].at(-1)?.(drag);
+      };
+      drag.source.addEventListener('dragend', onEnd, true);
+      drag.forgetSource = () => drag.source.removeEventListener('dragend', onEnd, true);
+    }
     const forget = () => {
-      drag.source.removeEventListener('dragend', onEnd, true);
       signal?.removeEventListener('abort', forget);
-      drag.leave.delete(forget);
+      drag.observers.delete(forget);
+      if (!drag.observers.size) drag.forgetSource();
     };
-    drag.source.addEventListener('dragend', onEnd, true);
+    drag.observers.set(forget, dragEnded);
     signal?.addEventListener('abort', forget);
-    drag.leave.add(forget);
   };
   const leave = (drag) => {
-    for (const forget of [...drag.leave]) forget();
+    for (const forget of drag.observers.keys()) forget();
     if (input.drag === drag) input.drag = null;
   };
   const dragEnded = (drag) => {
@@ -170,7 +176,7 @@ export function observeDragInput(root, signal, input = { held: new Map() }, chan
     // The browser's source, inside an open shadow root too, where the event's target is its host: WebKit sends a
     // removed source alone its `dragend`.
     const source = event.composedPath?.()[0] ?? event.target;
-    const drag = input.drag = { press, start: event, source, leave: new Set() };
+    const drag = input.drag = { press, start: event, source, observers: new Map() };
     hearSource(drag);
     // A cancelled start begins no drag, so its source goes once the event's dispatch is over. The flag is read when this
     // zero-delay timer runs, so a script that calls `preventDefault` after dispatch, on a timer that runs earlier, makes

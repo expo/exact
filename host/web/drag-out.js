@@ -78,22 +78,37 @@ function decide(event, owns, down, inPage) {
   // Another script's draggable the browser began the drag at is its own, whatever is inside it, an SVG element too where
   // the engine honors its mark.
   if (!target || (target.matches('[draggable="true" i]') && !declared(target))) return;
+  const draggable = (el) => (off.has(el) && declared(el)) || explicit(el);
+  const image = target.localName === 'img', keepers = down?.mouse !== false ? KEEPS_A_MOUSE : DRAG_FIELDS;
+  // An earlier capture listener can move the image alone. Its dispatch path still names the card it came from.
+  if (image && inPage && !inPage(target)) {
+    const path = event.composedPath?.();
+    const start = path?.indexOf(target) ?? -1;
+    if (start >= 0) {
+      const ancestors = path.slice(start).filter((el) => el.nodeType === 1);
+      const node = ancestors.find(draggable);
+      if (!node || !declared(node) || !owns(node)) return;
+      const inside = ancestors.slice(0, ancestors.indexOf(node));
+      if (inside.some((el) => el.matches(keepers))) return CANCEL;
+      return inside.some((el) => el.matches('a[href]')) ? undefined : CANCEL;
+    }
+  }
   // The down's target outlasts a pressed look that moves it from under the point.
   const point = pressedAt(down, event, target) ?? target.ownerDocument.elementFromPoint?.(event.clientX, event.clientY);
   const at = point && target.contains(point) ? point : target;
   // The nearest draggable, or a node the app has draggable that a field's down turned off, whose field keeps the drag
   let node = at;
-  while (node && !(off.has(node) && declared(node)) && !explicit(node)) node = node.parentElement;
+  while (node && !draggable(node)) node = node.parentElement;
   if (!node || !declared(node) || !owns(node)) return;
-  const keeper = at.closest(down?.mouse !== false ? KEEPS_A_MOUSE : DRAG_FIELDS);
+  const keeper = at.closest(keepers);
   if (keeper && keeper !== node && node.contains(keeper)) {
     // A picture in a keeper drags no more than one in any press does (LLP 1115.000 D4.14).
-    return !keeper.contains(target) || target.localName === 'img' ? CANCEL : undefined;
+    return !keeper.contains(target) || image ? CANCEL : undefined;
   }
   // The browser began the drag at an element inside the node: an image is the node's drag, but for one in a link
   // there; anything else, a link's, is its own.
   const link = target.closest('a[href]');
-  if (target !== node && node.contains(target) && (target.localName !== 'img' || (link !== node && node.contains(link)))) return;
+  if (target !== node && node.contains(target) && (!image || (link !== node && node.contains(link)))) return;
   const inDocument = inPage ? inPage(node) && inPage(event.composedPath?.()[0] ?? target) : node.isConnected;
   return inDocument ? node : CANCEL;
 }

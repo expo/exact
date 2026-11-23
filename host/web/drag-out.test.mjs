@@ -397,17 +397,16 @@ test('a drag begun during the wasm wait ends at its detached source\'s dragend a
     seen.push(card.getAttribute('draggable'));
     event.stopImmediatePropagation();
   };
-  theirs.addEventListener('dragend', pageEnd);
+  theirs.addEventListener('dragend', pageEnd, { capture: true });
   listenOn(root, input);
   wait.abort();
   expect(card.getAttribute('draggable')).toBe('false');
   theirs.isConnected = false;
   theirs.fire('dragend', {});
-  expect([seen, card.getAttribute('draggable'), theirs.listeners]).toEqual([['true'], 'true', [['dragend', pageEnd, false]]]);
+  expect([seen, card.getAttribute('draggable'), theirs.listeners]).toEqual([['true'], 'true', [['dragend', pageEnd, true]]]);
 });
 
-// A listener that fails after it starts goes, and so does its listener at the drag's source; the one that starts next
-// hears the drag's end.
+// A failed handoff leaves the source listener registered for the wait and the next handoff.
 test('a drag begun during the wasm wait keeps only the live listener at its source through a failed start', () => {
   const root = page(), input = { held: new Map() }, wait = new AbortController(), failed = new AbortController();
   const card = declared('div'), field = new El('div', { contenteditable: 'true' }, card);
@@ -416,11 +415,13 @@ test('a drag begun during the wasm wait keeps only the live listener at its sour
   root.fire('pointerdown', { isPrimary: true, pointerType: 'pen', pointerId: 2, target: theirs, clientX: 50, clientY: 70 });
   root.fire('pointerdown', { isPrimary: true, pointerType: 'mouse', pointerId: 1, target: other });
   root.fire('dragstart', dragstart(theirs), true);
+  const sourceEnd = theirs.listeners[0];
   listen(root, undefined, { signal: failed.signal, input });
+  expect(theirs.listeners).toEqual([sourceEnd]);
   failed.abort();
   listenOn(root, input);
   wait.abort();
-  expect([theirs.listeners.length, input.drag.leave.size]).toEqual([1, 1]);
+  expect(theirs.listeners).toEqual([sourceEnd]);
   theirs.isConnected = false;
   theirs.fire('dragend', {});
   expect([card.getAttribute('draggable'), theirs.listeners]).toEqual(['true', []]);
@@ -691,6 +692,19 @@ test('a held finger leaves the pen’s compatibility mouse events to the pen', (
   expect(card.attrs.draggable).toBe('true');
 });
 
+test.each([['before', false], ['after', true]])('a touch’s compatibility mousedown %s pointerup keeps its drag from a button', (_, released) => {
+  const root = page(), card = declared('div', { 'data-datatransfertext': 'card' });
+  const point = { target: new El('button', {}, card), clientX: 50, clientY: 70 };
+  const touch = { ...point, pointerType: 'touch', pointerId: 1 };
+  listenOn(root);
+  root.fire('pointerdown', { ...touch, timeStamp: 10 });
+  if (released) root.fire('pointerup', { ...touch, timeStamp: 20 });
+  root.fire('mousedown', { ...point, timeStamp: 30 });
+  const drag = dragstart(card, point.target);
+  root.fire('dragstart', drag);
+  expect([drag.defaultPrevented, drag.dataTransfer.data.get('text/plain')]).toEqual([false, 'card']);
+});
+
 test('a pen releases after blur and an unrelated down without ending a standalone mouse press', () => {
   const root = page(), card = declared('div'), field = new El('input', {}, card);
   const mouse = { target: field, clientX: 50, clientY: 70 };
@@ -858,8 +872,7 @@ test.each([1, 2])('a touch’s delayed mouse events stay paired after a second p
   expect([firstCard.attrs.draggable, secondCard.attrs.draggable]).toEqual(['true', 'false']);
 });
 
-// A finger's compatibility events come after its release, in the order of the presses, so a tap's pair with it while
-// a second touch on the same element is held, at another point or at the same one.
+// A tap's delayed compatibility events pair with it while a second touch on the same element is held.
 test.each([['another point', 15], ['the same point', 5]])('a tap’s late compatibility events pass a second touch held at %s', (_, x) => {
   const root = page(), card = declared('div'), field = new El('input', {}, card);
   const tap = { target: new El('button'), pointerType: 'touch', clientX: 5, clientY: 5 };
