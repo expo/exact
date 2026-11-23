@@ -58,7 +58,7 @@ component Setup
           CopyButton(source=prompt)
         view class=Body padding-bottom=28
           if shown
-            text prompt class=Prompt testId="setup-prompt"
+            text prompt class=Prompt testId="setup-prompt-full"
           else
             text (prompt.split("\n").slice(0, 4).join("\n")) class=Prompt mask-image="linear-gradient(to bottom, black 55%, transparent)" testId="setup-prompt"
       button press=toggle appearance="none" aria-expanded=shown position="relative" display="flex" align-items="center" height=32 margin-top=-16 padding="0 12px" border="1px solid var(--color-border-secondary)" border-radius="var(--radius-full)" background-color="var(--color-background-default)" testId="setup-more"
