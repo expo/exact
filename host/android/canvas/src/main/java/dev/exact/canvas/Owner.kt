@@ -87,8 +87,11 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     private val thread = HandlerThread("exact", priority).apply { start() }
     private val handler = Handler(thread.looper)
     private val main = Handler(Looper.getMainLooper())
-    /** Boot completion and the reader's first chrome pass a traversal barrier so they can take effect before drawing. */
     private val mainNow = Handler.createAsync(Looper.getMainLooper())
+    // The main thread chooses the boot path before attaching the reader.
+    private var firstBoot = true
+    private var readerRunning = true
+    @Volatile private var coldChrome = false
     /** Every paint in order (each may define and free pictures and rows); moves are coalesced by the reader. */
     val queue = ConcurrentLinkedQueue<Pub>()
     private val notifying = AtomicBoolean(false)
@@ -106,7 +109,6 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     private val readerScrolling get() = timerReports.scrolling
     private val readerSampling get() = timerReports.sampling
     private var idlePosted = false
-    private var firstChrome = false
 
     private fun postMain(work: () -> Unit) = postMain(main, work)
     private fun postMain(to: Handler, work: () -> Unit) {
@@ -237,9 +239,14 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
      * made again in this process (LLP 1115.001 D15.1) calls this for its own view: [Native.start] then adopts the host
      * that runs on this thread, which paints everything again for the new reader, and starts no second one.
      * [started] runs on this thread once the host has booted, before its first turn and before its data module can
-     * activate ([active]). */
+     * activate ([active]). Returns whether the new reader should hold its first draw. */
     fun boot(width: Int, height: Int, scale: Float, dir: String, store: String, live: Boolean, started: () -> Unit = {},
-             done: (Boolean) -> Unit) {
+             done: (Boolean) -> Unit): Boolean {
+        val cold = firstBoot && readerRunning
+        firstBoot = false
+        // Only a cold foreground launch saves a frame by passing a traversal barrier. On adoption, chrome,
+        // paint notifications and platform requests must stay in queue order with completion.
+        coldChrome = cold
         handler.post {
             android.os.Trace.beginSection("exact boot")
             try { Native.hardwarePictures(hwbuf) } catch (e: UnsatisfiedLinkError) { }
@@ -247,7 +254,6 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
             android.os.Trace.endSection()
             if (ok) {
                 booted = true
-                firstChrome = true
                 started()
                 // What was published or scrolled for the reader before this one is not this one's.
                 queue.clear(); made.clear(); seq = 0
@@ -262,10 +268,14 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
                 }
                 wakes?.sync()
                 produce()
-            }
-            postMain(mainNow) { done(ok) }
+            } else coldChrome = false
+            postMain(if (cold) mainNow else main) { done(ok) }
         }
+        return cold
     }
+
+    /** The cold reader drew, even if it received no chrome, or left without drawing. */
+    fun endColdDraw() { coldChrome = false }
 
     /** Whether a [boot] has given this thread a host. */
     @Volatile var booted = false
@@ -333,6 +343,8 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
 
     /** The activity stopped ([on] false) or started again. */
     fun running(on: Boolean) {
+        readerRunning = on
+        if (!on) endColdDraw()
         handler.post {
             if (on == running) return@post
             running = on
@@ -582,11 +594,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
             Native.timerObservation(readerScrolling, readerSampling, true, false)
             if (!notifying.getAndSet(true)) postMain { notifying.set(false); published() }
         }
-        Native.chrome()?.let { c ->
-            // Later chrome must reach the reader in order with its paint notification.
-            postMain(if (firstChrome) mainNow else main) { chrome(c) }
-            firstChrome = false
-        }
+        Native.chrome()?.let { c -> postMain(if (coldChrome) mainNow else main) { chrome(c) } }
         requests()
         schedule()
     }

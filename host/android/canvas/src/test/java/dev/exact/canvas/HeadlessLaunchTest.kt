@@ -9,6 +9,8 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.HandlerThread
 import android.os.Looper
+import android.view.View
+import android.widget.FrameLayout
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -29,6 +31,7 @@ import org.robolectric.annotation.Implements
 import org.robolectric.shadows.ShadowChoreographer
 import org.robolectric.util.ReflectionHelpers
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -56,6 +59,15 @@ class HeadlessLaunchTest {
             var bootResult = true
             var bootEntered: CountDownLatch? = null
             var releaseBoot: CountDownLatch? = null
+            var paint: ByteBuffer? = null
+            var chrome: IntArray? = null
+
+            fun rectangle(color: Int): ByteBuffer {
+                val words = intArrayOf(2, color, 8f.toBits(), 8f.toBits(), 16f.toBits(), 8f.toBits()) + IntArray(8)
+                return ByteBuffer.allocate(words.size * 4).order(ByteOrder.LITTLE_ENDIAN)
+                    .apply { asIntBuffer().put(words) }
+            }
+
             @JvmStatic @Implementation fun __staticInitializer__() {}
             @JvmStatic @Implementation fun start(width: Int, height: Int, scale: Float, dir: String, store: String, live: Boolean): Boolean {
                 told += "start"
@@ -77,7 +89,18 @@ class HeadlessLaunchTest {
             @JvmStatic @Implementation fun launchShare(request: String) { told += "launchShare $request" }
             @JvmStatic @Implementation fun open(href: String) { told += "open $href" }
             @JvmStatic @Implementation fun share(request: String) { told += "share $request" }
-            @JvmStatic @Implementation fun frame(vsync: Boolean): ByteBuffer? { told += "frame"; return null }
+            @JvmStatic @Implementation fun window(width: Int, height: Int, scale: Float, insets: IntArray) {
+                if (insets[0] == 16) {
+                    paint = rectangle(Color.BLUE)
+                    chrome = intArrayOf(0, 16, width, height - 16, Color.TRANSPARENT, 0)
+                }
+            }
+            @JvmStatic @Implementation fun frame(vsync: Boolean): ByteBuffer? {
+                told += "frame"
+                return paint.also { paint = null }
+            }
+            @JvmStatic @Implementation fun pendingPictures() = IntArray(0)
+            @JvmStatic @Implementation fun chrome(): IntArray? = chrome.also { chrome = null }
             @JvmStatic @Implementation fun drew(): Boolean { turns += "drew"; return false }
             @JvmStatic @Implementation fun dataActive(unshown: Boolean): Int { turns += "dataActive $unshown"; return 1 }
             @JvmStatic @Implementation fun fds() = IntArray(0)
@@ -109,6 +132,7 @@ class HeadlessLaunchTest {
     @Before fun setup() {
         Host.told.clear(); Host.turns.clear(); Host.environment.clear(); Environment.values.clear()
         Host.pageHidden = false; Host.bootResult = true; Host.bootEntered = null; Host.releaseBoot = null
+        Host.paint = null; Host.chrome = null
         Exact.owner = null; Exact.reader = null; Exact.live = false; Exact.unshown = false
         ReflectionHelpers.setStaticField(Exact::class.java, "pageHidden", null)
     }
@@ -172,16 +196,64 @@ class HeadlessLaunchTest {
         assertFalse(owner.ask { Host.pageHidden })
     }
 
+    @Test fun aColdCompletionStillBelongsToItsReaderAfterRestart() {
+        val controller = start(Intent(Intent.ACTION_MAIN))
+        val owner = checkNotNull(Exact.owner)
+        fun reader() = ReflectionHelpers.getField<ExactView>(controller.get(), "view")
+        fun started(view: ExactView) = ReflectionHelpers.getField<Boolean>(view, "started")
+        val cold = reader()
+        assertTrue(cold.booting)
+        withMainSyncBarrier {
+            controller.pause().stop().restart().resume()
+            val resumed = reader()
+            assertTrue(cold !== resumed)
+            assertFalse("restart does not hold drawing", resumed.booting)
+            owner.ask { }
+            main.idle()
+            assertTrue("the asynchronous completion reaches the cold reader", started(cold))
+            assertFalse("the restarted reader waits for its own completion", started(resumed))
+        }
+        assertTrue(started(reader()))
+    }
+
+    @Test fun chromeAfterTheFirstDrawStaysInOrderEvenWhenBootSentNone() {
+        val controller = start(Intent(Intent.ACTION_MAIN).putExtra("warm", "0"))
+        settle()
+        val view = ReflectionHelpers.getField<ExactView>(controller.get(), "view")
+        val bitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+        try {
+            view.layout(0, 0, 64, 64)
+            view.draw(Canvas(bitmap))
+            main.idle()
+            assertTrue("the reader drew", "drew" in Host.turns)
+            val owner = checkNotNull(Exact.owner)
+            withMainSyncBarrier {
+                owner.sync { Host.chrome = intArrayOf(0, 4, 64, 60, Color.TRANSPARENT, 0) }
+                main.idle()
+                assertEquals("later chrome waits for the traversal", 0,
+                    (view.layoutParams as FrameLayout.LayoutParams).topMargin)
+            }
+            assertEquals(4, (view.layoutParams as FrameLayout.LayoutParams).topMargin)
+        } finally {
+            Exact.owner?.ask { Host.chrome = null }
+            bitmap.recycle()
+        }
+    }
+
     @Test fun theWindowWaitsForASuccessfulBoot() = drawsAfterBoot(ok = true)
+
+    @Test fun aBootInsetCorrectionIsAppliedOnTheFirstDraw() = drawsAfterBoot(ok = true, insetCorrection = true)
 
     @Test fun theWindowDrawsAfterAFailedBoot() = drawsAfterBoot(ok = false)
 
-    private fun drawsAfterBoot(ok: Boolean) {
+    private fun drawsAfterBoot(ok: Boolean, insetCorrection: Boolean = false) {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
         Host.bootEntered = entered
         Host.releaseBoot = release
         Host.bootResult = ok
+        if (ok) Host.paint = Host.rectangle(Color.RED)
+        if (insetCorrection) Host.chrome = intArrayOf(0, 0, 64, 64, Color.TRANSPARENT, 0)
         val controller = Robolectric.buildActivity(Activity::class.java).setup()
         val bitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
         val wasPaused = ShadowChoreographer.isPaused()
@@ -190,27 +262,41 @@ class HeadlessLaunchTest {
             val activity = controller.get()
             activity.intent.putExtra("warm", "0")
             val owner = Owner(false, false, 0) { "0" }.also { Exact.owner = it }
-            val view = ExactView(activity, false) {}.apply { booting = true; this.owner = owner }
-            owner.boot(64, 64, 1f, "", "", false, done = view::ownerStarted)
+            val view = ExactView(activity, false) {}.apply { this.owner = owner }
+            view.booting = owner.boot(64, 64, 1f, "", "", false, done = view::ownerStarted)
             assertTrue("native startup entered", entered.await(5, TimeUnit.SECONDS))
-            activity.setContentView(view)
-            assertTrue(view.isAttachedToWindow)
-            view.layout(0, 0, 64, 64)
-            view.setBackgroundColor(Color.RED)
-            fun traverse() {
-                if (!view.viewTreeObserver.dispatchOnPreDraw()) view.draw(Canvas(bitmap))
+            val root = FrameLayout(activity)
+            root.addView(view, FrameLayout.LayoutParams(64, 64))
+            owner.chrome = { c ->
+                view.layoutParams = FrameLayout.LayoutParams(c[2], c[3]).apply { topMargin = c[1] }
             }
-            traverse()
-            assertEquals("the window must not draw while the owner boots", Color.TRANSPARENT, bitmap.getPixel(32, 32))
+            activity.setContentView(root)
+            assertTrue(view.isAttachedToWindow)
+            fun traverse(): Boolean {
+                val size = View.MeasureSpec.makeMeasureSpec(64, View.MeasureSpec.EXACTLY)
+                root.measure(size, size)
+                root.layout(0, 0, 64, 64)
+                if (root.viewTreeObserver.dispatchOnPreDraw()) return false
+                view.draw(Canvas(bitmap))
+                return true
+            }
+            assertFalse("the window waits for the owner", traverse())
 
-            release.countDown()
-            settle()
-            traverse()
-            main.idle()
-            assertEquals("the window draws once boot completes", Color.RED, bitmap.getPixel(32, 32))
+            withMainSyncBarrier {
+                if (insetCorrection) owner.window(64, 64, 1f, IntArray(16).apply { this[0] = 16 })
+                release.countDown()
+                owner.ask { }
+                main.idle()
+                assertTrue("boot completion lets the window draw through the barrier", traverse())
+                assertEquals("the first frame uses the current page margin", if (insetCorrection) 16 else 0, view.top)
+                val color = if (insetCorrection) Color.BLUE else if (ok) Color.RED else Color.TRANSPARENT
+                assertEquals("the first frame replays the owner's paint", color, bitmap.getPixel(12, 12))
+                assertEquals(Color.TRANSPARENT, bitmap.getPixel(12, 20))
+            }
             assertEquals("the host draws content only after a successful boot", ok, "drew" in Host.turns)
         } finally {
             release.countDown()
+            Exact.owner?.ask { Host.paint = null; Host.chrome = null }
             controller.pause().stop().destroy()
             ShadowChoreographer.setPaused(wasPaused)
             bitmap.recycle()

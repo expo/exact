@@ -141,7 +141,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private var taken = false
     /** The last take was a move: no new drawing, only the groups' translations. */
     private var moved = false
-    /** exact2 is booting on a thread of its own ([Native.startAsync] or [Owner.boot]); false: it boots here. */
+    /** An ownerless async boot ([Native.startAsync]), or a cold owner boot that holds the first draw. */
     var booting = false
     // The first app frame dismisses the starting window even if the reader has nothing to draw yet.
     private val bootDraw = ViewTreeObserver.OnPreDrawListener { !booting || owner == null }
@@ -429,7 +429,12 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         // Asynchronous: a traversal this frame schedules (rows made on the worker draw at the next) holds posted
         // messages behind its barrier, and the mark then waited for that frame, which waits for this one's on
         // RenderThread (30-45 ms, the first with text): 82 ms where the same launch otherwise marked 47.
-        if (first) { first = false; android.os.Handler.createAsync(android.os.Looper.getMainLooper()).post(onFirst); if (warm) postDelayed({ warmer.prepare() }, 300) }
+        if (first) {
+            first = false
+            owner?.endColdDraw()
+            android.os.Handler.createAsync(android.os.Looper.getMainLooper()).post(onFirst)
+            if (warm) postDelayed({ warmer.prepare() }, 300)
+        }
         if (blessing) { blessing = false; android.os.Handler.createAsync(android.os.Looper.getMainLooper()).post(bless) }
         if (!owned) schedule()
     }
@@ -494,6 +499,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         presents.attach()
     }
     internal fun stopMainWakes() {
+        owner?.endColdDraw()
         removeCallbacks(timer)
         wakes?.close()
         wakes = null
