@@ -1,6 +1,7 @@
 //! LLP 1103: a driver fault fails a fetch by its URL's prefix, where a host
 //! would hand the request to its transport, as a refused connection does.
 
+use crate::source::{boxed, Source};
 use exact_kernel::Kernel;
 use exact_runner::failure::FailureCode;
 use exact_runner::{
@@ -43,7 +44,7 @@ const APP: &str = "shape Line\n  text: string\ncomponent App\n  resource a = rec
 fn an_http_fixture_runs_the_source_parser_and_survives_replacement() {
     let mut r = Runner::boot(
         contract::compile(APP).unwrap(),
-        Recipes,
+        boxed(Recipes),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -76,7 +77,7 @@ fn an_http_fixture_runs_the_source_parser_and_survives_replacement() {
     let carried = r.carry();
     let next = Runner::boot_carrying(
         contract::compile(APP).unwrap(),
-        Recipes,
+        boxed(Recipes),
         Kernel::with_monospace(),
         &carried,
         Default::default(),
@@ -98,7 +99,7 @@ fn an_http_fixture_runs_the_source_parser_and_survives_replacement() {
     assert!(r.fault_dispatch(&out).is_none());
 }
 
-fn text(r: &Runner<Recipes>, id: &str) -> String {
+fn text(r: &Runner<Source>, id: &str) -> String {
     let key = r.kernel().find_by_test_id(id)[0];
     let node = r.kernel().node_by_key(key).unwrap();
     node.props
@@ -109,7 +110,7 @@ fn text(r: &Runner<Recipes>, id: &str) -> String {
 
 /// Every request out, as a host runs it: a fault's work, else a 200 whose
 /// body is the URL.
-fn run(r: &mut Runner<Recipes>) {
+fn run(r: &mut Runner<Source>) {
     for out in r.take_requests() {
         let outcome = match r.fault_dispatch(&out) {
             Some(Dispatch::Run(Work::Now(work))) => work(),
@@ -128,7 +129,7 @@ fn run(r: &mut Runner<Recipes>) {
 fn a_fault_fails_the_fetches_its_prefix_matches_as_a_network_failure() {
     let mut r = Runner::boot(
         contract::compile(APP).unwrap(),
-        Recipes,
+        boxed(Recipes),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -181,7 +182,7 @@ fn a_stream_is_not_matched() {
     request.stream = true;
     let r = Runner::boot(
         contract::compile(APP).unwrap(),
-        Recipes,
+        boxed(Recipes),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -224,7 +225,7 @@ fn a_replacement_runner_carries_the_table_as_it_is() {
     let boot = || {
         Runner::boot(
             contract::compile(APP).unwrap(),
-            Recipes,
+            boxed(Recipes),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -239,7 +240,7 @@ fn a_replacement_runner_carries_the_table_as_it_is() {
     let carried = r.carry();
     let mut next = Runner::boot_carrying(
         contract::compile(APP).unwrap(),
-        Recipes,
+        boxed(Recipes),
         Kernel::with_monospace(),
         &carried,
         Default::default(),
@@ -289,7 +290,7 @@ fn state_says_why_a_resource_failed_until_it_answers() {
     // App farm round 1: a shape refusal was only in the journal.
     let mut r = Runner::boot(
         contract::compile(APP).unwrap(),
-        Wide,
+        boxed(Wide),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -366,13 +367,13 @@ fn failure_names_each_class_and_says_why() {
     // (empty unless it named one: the author's ruling of 2026-10-12).
     let mut r = Runner::boot(
         contract::compile(WHY).unwrap(),
-        Through,
+        boxed(Through),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let text = |r: &Runner<Through>, id: &str| {
+    let text = |r: &Runner<Source>, id: &str| {
         let key = r.kernel().find_by_test_id(id)[0];
         let node = r.kernel().node_by_key(key).unwrap();
         node.props

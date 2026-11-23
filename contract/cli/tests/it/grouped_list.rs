@@ -3,6 +3,7 @@
 //! kernel reads its sections and rows as a native list draws them. Bare row
 //! fixtures exercise LLP 1104's default in the grouped-list context.
 
+use crate::source::{boxed, Source};
 use exact_kernel::{
     Accessory, Color, ColorValue, GroupedRow, Kernel, Offer, PropId, StyleMask, TextFont, TextLook,
 };
@@ -28,19 +29,19 @@ fn app(body: &str) -> String {
     )
 }
 
-fn boot(body: &str) -> Runner<NoData> {
+fn boot(body: &str) -> Runner<Source> {
     boot_source(&app(body))
 }
 
-pub(super) fn boot_source(source: &str) -> Runner<NoData> {
+pub(super) fn boot_source(source: &str) -> Runner<Source> {
     let plan = contract::bake(
         contract::compile(source).unwrap_or_else(|e| panic!("{e}")),
-        NoData,
+        boxed(NoData),
     )
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -53,14 +54,14 @@ pub(super) fn boot_source(source: &str) -> Runner<NoData> {
     r
 }
 
-pub(super) fn id(r: &Runner<NoData>, test_id: &str) -> u32 {
+pub(super) fn id(r: &Runner<Source>, test_id: &str) -> u32 {
     let k = r.kernel();
     k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap().id
 }
 
 /// Where a box's content starts: its frame's x and its resolved left
 /// padding (a grouped row spans its card, its inset inside it).
-fn content_x(r: &Runner<NoData>, test_id: &str) -> f32 {
+fn content_x(r: &Runner<Source>, test_id: &str) -> f32 {
     let k = r.kernel();
     let node = k.node(id(r, test_id)).unwrap();
     node.frame.x + k.resolved_padding(node.key).unwrap().0
@@ -190,7 +191,7 @@ fn a_radio_is_its_rows_accessory() {
     button press=go testId="dark"
       text "Dark""#,
     );
-    let rows = |r: &Runner<NoData>| {
+    let rows = |r: &Runner<Source>| {
         let list = r.kernel().grouped_list(id(r, "list")).unwrap();
         list.sections[0].rows.clone()
     };
@@ -296,10 +297,10 @@ fn a_grouped_list_holds_sections_and_a_section_its_texts_at_its_ends() {
 fn a_class_replaces_the_sheet_as_an_attribute_does() {
     let src = app("list appearance=\"auto\" testId=\"list\" flex=1\n  section\n    button press=go class=Tall testId=\"tall\"\n      text \"Tall\"");
     let src = format!("style Tall\n  min-height=80\n{src}");
-    let plan = contract::bake(contract::compile(&src).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(&src).unwrap(), boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -322,7 +323,7 @@ fn a_class_replaces_the_sheet_as_an_attribute_does() {
 #[test]
 fn a_symbol_under_a_condition_moves_the_text_with_it() {
     let mut r = boot("list appearance=\"auto\" testId=\"list\" flex=1\n  section\n    button press=go testId=\"row\"\n      if dark\n        image \"symbol:person\"\n      text \"Profile\" testId=\"title\"");
-    let x = |r: &Runner<NoData>| r.kernel().node(id(r, "title")).unwrap().frame.x;
+    let x = |r: &Runner<Source>| r.kernel().node(id(r, "title")).unwrap().frame.x;
     assert_eq!(x(&r), 32.0, "no symbol: 16 into the group");
     let row = id(&r, "row");
     r.dispatch(row, exact_runner::Event::Press).unwrap();
@@ -390,7 +391,7 @@ fn a_conditional_text_and_an_authors_column_are_styled_as_the_kernel_reads_them(
 #[test]
 fn a_text_after_a_condition_is_styled_by_the_condition() {
     let mut r = boot("list appearance=\"auto\" testId=\"list\" flex=1\n  section\n    button press=go testId=\"row\"\n      if dark\n        text \"New\"\n      text \"Notifications\" testId=\"title\"");
-    let grow = |r: &Runner<NoData>| r.kernel().node(id(r, "title")).unwrap().style.flex_grow;
+    let grow = |r: &Runner<Source>| r.kernel().node(id(r, "title")).unwrap().style.flex_grow;
     assert_eq!(grow(&r), 1.0, "the title while `dark` is false");
     let row = id(&r, "row");
     r.dispatch(row, exact_runner::Event::Press).unwrap();
@@ -451,7 +452,7 @@ fn round_three_shapes() {
     // A conditional first subtitle line, a text field beside a column,
     // and a hidden leading symbol.
     let mut r = boot("list appearance=\"auto\" testId=\"list\" flex=1\n  section\n    button press=go testId=\"row\"\n      column\n        if dark\n          text \"New\"\n        text \"Notifications\" testId=\"second\"\n    row testId=\"field\"\n      column testId=\"cols\"\n        text \"A\"\n        text \"B\"\n      input type=\"text\" value=\"x\"\n    button press=go testId=\"plain\"\n      image \"symbol:person\" display=\"none\"\n      text \"Title\"");
-    let size = |r: &Runner<NoData>| r.kernel().node(id(r, "second")).unwrap().frame.height;
+    let size = |r: &Runner<Source>| r.kernel().node(id(r, "second")).unwrap().frame.height;
     let title = size(&r);
     assert!(
         r.kernel().node(id(&r, "cols")).unwrap().frame.height < 50.0,
@@ -749,7 +750,7 @@ fn a_hidden_text_in_a_subtitle_column_and_a_hidden_first_line() {
         r.kernel().node(id(&r, "stack")).unwrap().frame.height > 60.0,
         "two shown lines: the subtitle cell's padding"
     );
-    let size = |r: &Runner<NoData>| r.kernel().node(id(r, "lock")).unwrap().frame.height;
+    let size = |r: &Runner<Source>| r.kernel().node(id(r, "lock")).unwrap().frame.height;
     let alone = size(&r);
     let row = id(&r, "row");
     r.dispatch(row, exact_runner::Event::Press).unwrap();
@@ -1265,7 +1266,7 @@ fn a_disabled_row_is_the_tertiary_labels_grey() {
         "where no host has the platform's red, the one the sheet drew before"
     );
     let mut r = boot("list appearance=\"auto\" testId=\"list\" flex=1\n  section\n    button press=go destructive=true disabled=true testId=\"off\"\n      text \"Delete\"\n    button press=go destructive=true disabled=dark testId=\"bound\"\n      text \"Delete\"\n    button press=go disabled=on testId=\"plain\"\n      text \"Open\"");
-    let colour = |r: &Runner<NoData>, t: &str| r.kernel().node(id(r, t)).unwrap().style.text_color;
+    let colour = |r: &Runner<Source>, t: &str| r.kernel().node(id(r, t)).unwrap().style.text_color;
     assert_eq!(colour(&r, "off"), grey);
     assert_eq!(
         colour(&r, "bound"),

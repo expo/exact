@@ -2,24 +2,15 @@
 //! applied where the kernel produces runs, so what is measured is what a
 //! host paints.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Color, ColorValue, Kernel, Offer, StyleProps, Vec2};
-use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Event, Runner};
+use exact_runner::{Event, Runner};
 
-#[derive(Default)]
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-
-fn boot(src: &str) -> Runner<NoData> {
-    let plan = contract::bake(contract::compile(src).unwrap(), NoData).unwrap();
+fn boot(src: &str) -> Runner<Source> {
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -27,7 +18,7 @@ fn boot(src: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn id(r: &Runner<NoData>, test_id: &str) -> u32 {
+fn id(r: &Runner<Source>, test_id: &str) -> u32 {
     let k = r.kernel();
     k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap().id
 }
@@ -63,7 +54,7 @@ fn box_shadow_sets_its_row_from_a_literal_a_style_a_choice_and_a_template() {
         "      button class=(pressed ? Flat : Raised) press=press testId=\"chosen\"\n        text \"x\"\n",
         "      view box-shadow=`0 ${lift}px 6px light-dark(#000000, #ffffff)` testId=\"template\"\n",
     ));
-    let style = |r: &Runner<NoData>, t: &str| r.kernel().node(id(r, t)).unwrap().style.clone();
+    let style = |r: &Runner<Source>, t: &str| r.kernel().node(id(r, t)).unwrap().style.clone();
     let v = |x, y| Vec2 { x, y };
     assert_eq!(
         shadow(&style(&r, "literal")),

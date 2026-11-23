@@ -4,15 +4,9 @@
 //! that paints the popover to draw the platform's surface under it. A menu is
 //! marked as any popover is, for a host that paints its rows (expo/exact#551).
 
+use crate::source::{boxed, NoData};
 use exact_kernel::{Kernel, PropId};
-use exact_runner::{DataError, DataSource, Runner, Value};
-
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::Runner;
 
 const APP: &str = r##"style Card
   border-width=1
@@ -73,12 +67,12 @@ component App
 fn a_popover_whose_author_wrote_no_surface_is_marked_for_the_platforms() {
     let plan = contract::bake(
         contract::compile(APP).unwrap_or_else(|e| panic!("{e}")),
-        NoData,
+        boxed(NoData),
     )
     .unwrap();
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -151,12 +145,12 @@ component App
         );
         let plan = contract::bake(
             contract::compile(&source).unwrap_or_else(|e| panic!("{surface}: {e}")),
-            NoData,
+            boxed(NoData),
         )
         .unwrap();
         let mut r = Runner::boot(
             plan,
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",

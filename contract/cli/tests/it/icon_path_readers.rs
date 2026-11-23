@@ -122,7 +122,7 @@ const LINES: &[(&str, &str, &str)] = &[
     ("host/web-js/dom.js", "set cssText(t) { this.map.clear(); for (const d of t.split(';')) { const i = d.indexOf(':'); if (i > 0) this.map.set(d.slice(0, i).trim(), d.slice(i + 1).trim()); } }", "the DOM shim's style declarations"),
     (
         "host/web/navigation/routes.js",
-        r#"].join("|"))"#,
+        r#"].join("|"))].join("/");"#,
         "the sidebar's placement key, its styles joined",
     ),
 ];
@@ -481,7 +481,7 @@ fn the_scan_catches_each_bypass() {
         .is_empty());
     let (found, seen) = readers(
         "host/web/navigation/routes.js",
-        "// data-symbol\n  ].join(\"|\"))\n",
+        "// data-symbol\n  ].join(\"|\"))].join(\"/\");\n",
     );
     assert!(found.is_empty(), "{found:?}");
     assert_eq!(seen, vec![4]);

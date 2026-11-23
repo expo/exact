@@ -1,15 +1,16 @@
 //! A release plan keeps the source boundaries needed to identify its live
 //! views across edits (LLP 1029.000.002 D1).
+use crate::source::{boxed, Source};
 use exact_kernel::Kernel;
 use exact_plan::Plan;
 use exact_runner::{agent, Runner};
 use serde_json::{json, Value};
 
-fn boot(source: &str) -> Runner<()> {
+fn boot(source: &str) -> Runner<Source> {
     let bytes = contract::compile(source).unwrap().encode();
     Runner::boot(
         Plan::decode(&bytes).unwrap(),
-        (),
+        boxed(()),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -17,7 +18,7 @@ fn boot(source: &str) -> Runner<()> {
     .unwrap()
 }
 
-fn places(runner: &Runner<()>, target: &str) -> Vec<Value> {
+fn places(runner: &Runner<Source>, target: &str) -> Vec<Value> {
     let kernel = runner.kernel();
     kernel
         .find_by_test_id(target)
@@ -158,7 +159,7 @@ fn a_new_view_cannot_receive_an_id_retired_in_an_earlier_generation() {
         text "Retired" testId="retired"
 "#,
     );
-    let id = |r: &Runner<()>, name: &str| {
+    let id = |r: &Runner<Source>, name: &str| {
         r.kernel()
             .node_by_key(r.kernel().find_by_test_id(name)[0])
             .unwrap()
@@ -175,7 +176,7 @@ fn a_new_view_cannot_receive_an_id_retired_in_an_earlier_generation() {
         exhausted.last_view_id = u32::MAX;
         assert!(Runner::boot_carrying(
             plan.clone(),
-            (),
+            boxed(()),
             Kernel::with_monospace(),
             &exhausted,
             Default::default(),
@@ -184,7 +185,7 @@ fn a_new_view_cannot_receive_an_id_retired_in_an_earlier_generation() {
         .is_err());
         let new = Runner::boot_carrying(
             plan.clone(),
-            (),
+            boxed(()),
             Kernel::with_monospace(),
             &carry,
             Default::default(),
@@ -210,7 +211,7 @@ fn a_replacement_keeps_a_compatible_view_and_requires_its_parent_to_match() {
       text "Before" testId="label"
 "#;
     let old = boot(source);
-    let id = |app: &Runner<()>, name| {
+    let id = |app: &Runner<Source>, name| {
         let kernel = app.kernel();
         kernel
             .node_by_key(kernel.find_by_test_id(name)[0])
@@ -222,7 +223,7 @@ fn a_replacement_keeps_a_compatible_view_and_requires_its_parent_to_match() {
         let plan = contract::compile(source).unwrap();
         Runner::boot_carrying(
             plan,
-            (),
+            boxed(()),
             Kernel::with_monospace(),
             &carry,
             Default::default(),
@@ -266,14 +267,14 @@ fn reload_moves_keyed_row_views_with_their_data() {
     let plan = contract::compile(&source.replace(r#"["a","b","a"]"#, r#"["a","a","b"]"#)).unwrap();
     let after = Runner::boot_carrying(
         plan,
-        (),
+        boxed(()),
         Kernel::with_monospace(),
         &before.carry(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let children = |app: &Runner<()>| app.kernel().node(app.roots()[0]).unwrap().children();
+    let children = |app: &Runner<Source>| app.kernel().node(app.roots()[0]).unwrap().children();
     let rows = children(&before);
     assert_eq!(rows.len(), 3);
     assert_eq!(children(&after), [rows[0], rows[2], rows[1]]);
@@ -301,7 +302,7 @@ component Other
         let plan = contract::compile(&inserted.replace("key=row", &format!("key={key}"))).unwrap();
         let candidate = Runner::boot_carrying(
             plan,
-            (),
+            boxed(()),
             Kernel::with_monospace(),
             &carry,
             Default::default(),

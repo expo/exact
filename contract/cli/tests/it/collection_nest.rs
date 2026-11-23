@@ -2,6 +2,7 @@
 //! lives and dies with the row (N1), keeps its position across the row's
 //! retirement by default (Q1), pins its outer row (N5), and builds only what
 //! it owes while the outer list moves (F2).
+use crate::source::{boxed, Source};
 use exact_kernel::Kernel;
 use exact_plan::Value;
 use exact_runner::{
@@ -64,28 +65,28 @@ impl DataSource for Data {
         })
     }
 }
-fn boot(inner: &str, posts: usize) -> Runner<Data> {
+fn boot(inner: &str, posts: usize) -> Runner<Source> {
     let plan = contract::compile(&feed(inner)).unwrap();
     Runner::boot(
         plan,
-        Data { posts },
+        boxed(Data { posts }),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap()
 }
-fn view(r: &Runner<Data>, test_id: &str) -> Option<u32> {
+fn view(r: &Runner<Source>, test_id: &str) -> Option<u32> {
     let k = r.kernel();
     Some(k.node_by_key(*k.find_by_test_id(test_id).first()?)?.id)
 }
-fn snapshot(r: &Runner<Data>, list: u32) -> Option<CollectionSnapshot> {
+fn snapshot(r: &Runner<Source>, list: u32) -> Option<CollectionSnapshot> {
     r.collections().into_iter().find(|c| c.view == list)
 }
 /// A report for `list` at `offset`, measuring every mounted row at `size`,
 /// with a port of `port` on its main axis.
 fn report(
-    r: &mut Runner<Data>,
+    r: &mut Runner<Source>,
     list: u32,
     offset: f64,
     port: f64,
@@ -120,7 +121,7 @@ fn report(
     )
     .unwrap();
 }
-fn feed_at(r: &mut Runner<Data>, offset: f64) {
+fn feed_at(r: &mut Runner<Source>, offset: f64) {
     let feed = view(r, "feed").unwrap();
     report(
         r,
@@ -194,7 +195,7 @@ fn a_replacement_finds_the_horizontal_list_inside_the_restored_outer_row() {
         );
     let new = Runner::boot_carrying(
         contract::compile(&changed).unwrap(),
-        Data { posts: 100 },
+        boxed(Data { posts: 100 }),
         Kernel::with_monospace(),
         &old.carry(),
         Default::default(),

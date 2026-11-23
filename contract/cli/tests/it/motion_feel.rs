@@ -2,6 +2,7 @@
 //! and transparency preferences are `exactViewport()` fields, re-answered in
 //! one commit, so an app collapses its own motion.
 
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, StyleId};
 use exact_plan::Value;
 use exact_runner::{DataError, DataSource, Preferences, Runner};
@@ -14,11 +15,11 @@ impl DataSource for NoData {
     }
 }
 
-fn boot(src: &str) -> Runner<NoData> {
-    let plan = contract::bake(contract::compile(src).unwrap(), NoData).unwrap();
+fn boot(src: &str) -> Runner<Source> {
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -26,12 +27,12 @@ fn boot(src: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn style<'a>(r: &'a Runner<NoData>, test_id: &str) -> &'a exact_kernel::StyleProps {
+fn style<'a>(r: &'a Runner<Source>, test_id: &str) -> &'a exact_kernel::StyleProps {
     let k = r.kernel();
     k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap().style
 }
 
-fn feel() -> Runner<NoData> {
+fn feel() -> Runner<Source> {
     boot(include_str!("../../../corpus/motion-feel.contract"))
 }
 
@@ -65,7 +66,7 @@ fn a_press_scale_from_an_expression_follows_its_state() {
 #[test]
 fn reduced_motion_is_read_by_the_app_and_reanswered_in_one_commit() {
     let mut r = feel();
-    let still = |r: &Runner<NoData>| style(r, "root").animation.0.is_empty();
+    let still = |r: &Runner<Source>| style(r, "root").animation.0.is_empty();
     assert!(!still(&r), "no preference: the entry rises");
     assert!(style(&r, "record").mask.has(StyleId::Transition));
     let receipt = r
@@ -103,14 +104,14 @@ fn reduced_motion_is_read_by_the_app_and_reanswered_in_one_commit() {
 #[test]
 fn a_preference_is_a_bool_and_the_boot_fact_is_the_first_answer() {
     let src = "shape M\n  prefersReducedMotion: bool\ncomponent A\n  resource m = exactViewport() as shape M\n  view\n    text (m.prefersReducedMotion ? \"still\" : \"moving\") testId=\"t\"\n";
-    let plan = contract::bake(contract::compile(src).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(NoData)).unwrap();
     let mut viewport = exact_runner::Viewport::sized(390.0, 844.0);
     viewport.preferences = Preferences::from_bits(1);
-    let r = Runner::boot(plan, NoData, Kernel::with_monospace(), viewport, "/").unwrap();
+    let r = Runner::boot(plan, boxed(NoData), Kernel::with_monospace(), viewport, "/").unwrap();
     let state: serde_json::Value = serde_json::from_str(&exact_runner::agent::state(&r)).unwrap();
     assert_eq!(state["resources"]["m"]["prefersReducedMotion"], true);
     let wrong = "shape M\n  prefersReducedMotion: number\ncomponent A\n  resource m = exactViewport() as shape M\n  view\n    text `${m.prefersReducedMotion}`\n";
-    assert!(contract::bake(contract::compile(wrong).unwrap(), NoData).is_err());
+    assert!(contract::bake(contract::compile(wrong).unwrap(), boxed(NoData)).is_err());
 }
 
 /// LLP 1061 D6: `transform-origin` in CSS's grammar, from a literal or an
@@ -127,7 +128,7 @@ fn transform_origin_is_css_from_a_literal_or_an_expression() {
         "      view scale=0.9 transform-origin=\"25%\" testId=\"b\"\n",
         "      button press=drop transform-origin=(low ? \"0 100%\" : \"right 4px\") testId=\"c\"\n        text \"c\"\n",
     ));
-    let origin = |r: &Runner<NoData>, id: &str| style(r, id).transform_origin.clone();
+    let origin = |r: &Runner<Source>, id: &str| style(r, id).transform_origin.clone();
     assert_eq!(origin(&r, "root"), TransformOrigin::default());
     assert!(!style(&r, "root").mask.has(StyleId::TransformOrigin));
     assert_eq!(

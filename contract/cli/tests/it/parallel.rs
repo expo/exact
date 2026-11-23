@@ -2,6 +2,7 @@
 //! is made, each its own request in flight; replies land in any order, and
 //! the slot and the failure follow the latest send that has concluded.
 
+use crate::source::{boxed, Read, Source};
 use exact_kernel::{Kernel, PropId};
 use exact_runner::{
     failure::FailureCode, Answer, DataError, DataSource, FailureKind, Outcome, Overlaid, Request,
@@ -136,11 +137,11 @@ impl DataSource for Names {
     }
 }
 
-fn boot_with(src: &str) -> Runner<Names> {
-    let baked = contract::bake(contract::compile(src).unwrap(), Names::default()).unwrap();
+fn boot_with(src: &str) -> Runner<Source> {
+    let baked = contract::bake(contract::compile(src).unwrap(), boxed(Names::default())).unwrap();
     let mut r = Runner::boot(
         baked,
-        Names::default(),
+        boxed(Names::default()),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -153,26 +154,26 @@ fn boot_with(src: &str) -> Runner<Names> {
     r
 }
 
-fn boot() -> Runner<Names> {
+fn boot() -> Runner<Source> {
     boot_with(APP)
 }
 
 /// The tickets handed out since the last take, by target name.
-fn sent(r: &mut Runner<Names>, name: &str) -> Vec<u64> {
+fn sent(r: &mut Runner<Source>, name: &str) -> Vec<u64> {
     (r.take_requests().into_iter())
         .filter(|q| q.target == name)
         .map(|q| q.ticket)
         .collect()
 }
 
-fn derive(r: &Runner<Names>, name: &str) -> String {
+fn derive(r: &Runner<Source>, name: &str) -> String {
     r.derive(name)
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string()
 }
 
-fn busy(r: &Runner<Names>) -> bool {
+fn busy(r: &Runner<Source>) -> bool {
     let k = r.kernel();
     let key = k.find_by_test_id("busy")[0];
     k.node_by_key(key).unwrap().props.str(PropId::Text) == Some("busy")
@@ -220,13 +221,13 @@ fn a_reply_landing_after_a_later_one_leaves_the_slot() {
     r.fulfill(a, ok()).unwrap();
     assert_eq!(derive(&r, "last"), "b");
     assert!(!busy(&r));
-    assert_eq!(r.data().server, ["b", "a"]);
+    assert_eq!(r.source::<Names>().server, ["b", "a"]);
 }
 
 #[test]
 fn an_earlier_failure_while_the_later_is_out_shows_until_the_later_lands() {
     let mut r = boot();
-    r.data().decline.push("a".into());
+    r.source::<Names>().decline.push("a".into());
     r.act("rename", vec![Value::str("a")]).unwrap();
     r.act("rename", vec![Value::str("b")]).unwrap();
     let [a, b] = sent(&mut r, "renamed")[..] else {
@@ -245,7 +246,7 @@ fn an_earlier_failure_while_the_later_is_out_shows_until_the_later_lands() {
 #[test]
 fn an_earlier_failure_after_the_later_landed_leaves_the_later() {
     let mut r = boot();
-    r.data().decline.push("a".into());
+    r.source::<Names>().decline.push("a".into());
     r.act("rename", vec![Value::str("a")]).unwrap();
     r.act("rename", vec![Value::str("b")]).unwrap();
     let [a, b] = sent(&mut r, "renamed")[..] else {
@@ -265,7 +266,7 @@ fn an_earlier_failure_after_the_later_landed_leaves_the_later() {
 #[test]
 fn a_later_failure_stands_through_an_earlier_success() {
     let mut r = boot();
-    r.data().decline.push("b".into());
+    r.source::<Names>().decline.push("b".into());
     r.act("rename", vec![Value::str("a")]).unwrap();
     r.act("rename", vec![Value::str("b")]).unwrap();
     let [a, b] = sent(&mut r, "renamed")[..] else {
@@ -288,7 +289,7 @@ fn a_later_failure_stands_through_an_earlier_success() {
 #[test]
 fn an_assignment_forgets_no_request_and_a_reply_lands_after_it() {
     let mut r = boot();
-    r.data().decline.push("a".into());
+    r.source::<Names>().decline.push("a".into());
     r.act("rename", vec![Value::str("a")]).unwrap();
     let [a] = sent(&mut r, "renamed")[..] else {
         panic!()
@@ -320,7 +321,7 @@ fn one_action_may_send_twice_with_equal_arguments_and_both_land() {
     r.fulfill(tickets[1], ok()).unwrap();
     assert!(r.holds(tickets[0]));
     r.fulfill(tickets[0], ok()).unwrap();
-    assert_eq!(r.data().server, ["a", "a"]);
+    assert_eq!(r.source::<Names>().server, ["a", "a"]);
     assert!(!busy(&r));
 }
 
@@ -370,7 +371,7 @@ fn each_write_shows_on_its_own_and_the_overlay_sees_landed_writes_in_landing_ord
         "every write shows from its send"
     );
     assert_eq!(
-        r.data().overlays.last().unwrap(),
+        r.source::<Names>().overlays.last().unwrap(),
         &[
             ("a".into(), false),
             ("b".into(), false),
@@ -382,7 +383,7 @@ fn each_write_shows_on_its_own_and_the_overlay_sees_landed_writes_in_landing_ord
     r.fulfill(b, ok()).unwrap();
     r.fulfill(a, ok()).unwrap();
     assert_eq!(
-        r.data().overlays.last().unwrap(),
+        r.source::<Names>().overlays.last().unwrap(),
         &[("b".into(), true), ("a".into(), true), ("c".into(), false)]
     );
     assert_eq!(r.writes().len(), 3, "landed writes show until answered");
@@ -391,7 +392,7 @@ fn each_write_shows_on_its_own_and_the_overlay_sees_landed_writes_in_landing_ord
 #[test]
 fn a_declined_write_stops_showing_alone() {
     let mut r = boot();
-    r.data().decline.push("a".into());
+    r.source::<Names>().decline.push("a".into());
     r.act("rename", vec![Value::str("a")]).unwrap();
     r.act("rename", vec![Value::str("b")]).unwrap();
     let [a, b] = sent(&mut r, "renamed")[..] else {
@@ -453,11 +454,11 @@ impl DataSource for Quick {
 }
 
 /// A runner over [`KEPT`] whose data source is still loading.
-fn loading() -> Runner<Quick> {
+fn loading() -> Runner<Source> {
     let plan = contract::compile(KEPT).unwrap();
     Runner::boot(
         plan,
-        Quick(false),
+        boxed(Quick(false)),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -485,7 +486,7 @@ fn a_kept_send_answering_after_a_later_one_landed_leaves_the_slot() {
     });
     r.fulfill(b.ticket, reply).unwrap();
     assert_eq!(r.derive("last"), Some(&Value::str("b")));
-    r.data().0 = true;
+    r.source::<Quick>().0 = true;
     r.data_ready().unwrap();
     assert_eq!(
         r.derive("last"),
@@ -501,7 +502,7 @@ fn a_later_kept_success_clears_an_earlier_kept_failure() {
     let mut r = loading();
     r.act("near", vec![Value::str("fail")]).unwrap();
     r.act("near", vec![Value::str("ok")]).unwrap();
-    r.data().0 = true;
+    r.source::<Quick>().0 = true;
     r.data_ready().unwrap();
     assert_eq!(r.derive("last"), Some(&Value::str("ok")));
     assert_eq!(r.derive("why"), Some(&Value::str("-")));

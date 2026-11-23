@@ -5,30 +5,22 @@
 //! the bake refusing a field the runner cannot fill.
 
 use crate::scratch::Scratch;
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, PropId};
 use exact_runner::{agent, DataError, DataSource, Delivery, Runner, Value};
 use std::path::Path;
-
-/// A data source with nothing in it: `exactDelivery` never reaches here.
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _args: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.to_string()))
-    }
-}
 
 fn corpus() -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../corpus/delivery.contract");
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
-fn boot(src: &str) -> Runner<NoData> {
+fn boot(src: &str) -> Runner<Source> {
     let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e}"));
-    let baked = contract::bake(plan, NoData).unwrap_or_else(|e| panic!("{e}"));
+    let baked = contract::bake(plan, boxed(NoData)).unwrap_or_else(|e| panic!("{e}"));
     Runner::boot(
         baked,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -36,7 +28,7 @@ fn boot(src: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn text_of(r: &Runner<NoData>, test_id: &str) -> Option<String> {
+fn text_of(r: &Runner<Source>, test_id: &str) -> Option<String> {
     let k = r.kernel();
     let key = k.find_by_test_id(test_id).into_iter().next()?;
     k.node_by_key(key)?
@@ -47,7 +39,7 @@ fn text_of(r: &Runner<NoData>, test_id: &str) -> Option<String> {
 
 /// Read the top-level delivery mirror independently of sibling diagnostics
 /// and the fixture's resource, which is also called `delivery`.
-fn mirror(r: &Runner<NoData>) -> serde_json::Value {
+fn mirror(r: &Runner<Source>) -> serde_json::Value {
     let state: serde_json::Value = serde_json::from_str(&agent::state(r)).unwrap();
     state
         .get("delivery")
@@ -192,7 +184,7 @@ fn the_two_commands_reach_the_host_by_name() {
 fn a_field_the_runner_cannot_fill_is_refused_at_bake_by_name() {
     let src = corpus().replace("  stream: string\n", "  stream: string\n  foo: string\n");
     let plan = contract::compile(&src).unwrap();
-    let error = contract::bake(plan, NoData).unwrap_err();
+    let error = contract::bake(plan, boxed(NoData)).unwrap_err();
     let message = error.to_string();
     assert!(
         message.starts_with("[bake-delivery-field]")
@@ -213,7 +205,7 @@ fn manifest_identity_survives_an_unnamed_data_standin_and_conflicts_fail() {
     let path = directory.join("app.contract");
     std::fs::write(&path, corpus()).unwrap();
     let compiled = contract::compile_path(&path).unwrap();
-    let baked = contract::bake(compiled.clone(), NoData).unwrap();
+    let baked = contract::bake(compiled.clone(), boxed(NoData)).unwrap();
     assert_eq!(baked.app_id, "com.exact.standin");
     assert_eq!(
         exact_plan::Plan::decode(&baked.encode()).unwrap().app_id,
@@ -228,7 +220,7 @@ fn manifest_identity_survives_an_unnamed_data_standin_and_conflicts_fail() {
             Err(DataError::UnknownSource(source.into()))
         }
     }
-    assert!(contract::bake(compiled, Conflict).is_err());
+    assert!(contract::bake(compiled, boxed(Conflict)).is_err());
     std::fs::create_dir_all(directory.join(".shells")).unwrap();
     std::fs::rename(
         directory.join("app.json"),
@@ -237,7 +229,7 @@ fn manifest_identity_survives_an_unnamed_data_standin_and_conflicts_fail() {
     .unwrap();
     let generated = contract::compile_path(&path).unwrap();
     assert_eq!(
-        contract::bake(generated, NoData).unwrap().app_id,
+        contract::bake(generated, boxed(NoData)).unwrap().app_id,
         "com.exact.standin"
     );
     std::fs::remove_dir_all(directory).unwrap();

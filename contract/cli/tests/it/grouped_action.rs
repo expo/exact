@@ -5,25 +5,19 @@
 //! it (theme2 16:37, stage 13 C). A row that says whether it is selected
 //! is a choice, never one.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Accessory, ColorValue, GroupedRow, Kernel, Offer};
-use exact_runner::{DataError, DataSource, Runner, Value};
+use exact_runner::Runner;
 
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-
-fn boot(source: &str) -> Runner<NoData> {
+fn boot(source: &str) -> Runner<Source> {
     let plan = contract::bake(
         contract::compile(source).unwrap_or_else(|e| panic!("{e}")),
-        NoData,
+        boxed(NoData),
     )
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -33,20 +27,20 @@ fn boot(source: &str) -> Runner<NoData> {
     r
 }
 
-fn layout(r: &mut Runner<NoData>) {
+fn layout(r: &mut Runner<Source>) {
     let k = r.kernel_mut();
     let root = k.node_by_key(k.find_by_test_id("root")[0]).unwrap().id;
     k.compute_layout(root, Offer::definite(402.0, 874.0))
         .unwrap();
 }
 
-fn id(r: &Runner<NoData>, test_id: &str) -> u32 {
+fn id(r: &Runner<Source>, test_id: &str) -> u32 {
     let k = r.kernel();
     k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap().id
 }
 
 /// The kernel's model of the row `test_id` names.
-fn row(r: &Runner<NoData>, test_id: &str) -> GroupedRow {
+fn row(r: &Runner<Source>, test_id: &str) -> GroupedRow {
     let view = id(r, test_id);
     let list = r.kernel().grouped_list(id(r, "list")).unwrap();
     list.sections[0]
@@ -57,7 +51,7 @@ fn row(r: &Runner<NoData>, test_id: &str) -> GroupedRow {
         .clone()
 }
 
-fn colour(r: &Runner<NoData>, test_id: &str) -> ColorValue {
+fn colour(r: &Runner<Source>, test_id: &str) -> ColorValue {
     r.kernel().node(id(r, test_id)).unwrap().text_color()
 }
 
@@ -259,7 +253,7 @@ fn a_row_that_says_it_is_selected_is_a_choice_not_an_action() {
 #[test]
 fn a_leading_symbols_slot_and_the_title_after_it_follow_the_text_size() {
     let mut r = boot(SYMBOLS);
-    let place = |r: &Runner<NoData>, t: &str| {
+    let place = |r: &Runner<Source>, t: &str| {
         let k = r.kernel();
         let (f, row) = (
             k.node(id(r, t)).unwrap().frame,
@@ -267,7 +261,7 @@ fn a_leading_symbols_slot_and_the_title_after_it_follow_the_text_size() {
         );
         ((f.x - row.x) * 100.0).round() / 100.0
     };
-    let width = |r: &Runner<NoData>| {
+    let width = |r: &Runner<Source>| {
         (r.kernel().node(id(r, "written-icon")).unwrap().frame.width * 100.0).round() / 100.0
     };
     for (body, title, symbol) in [

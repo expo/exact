@@ -2,18 +2,12 @@
 //! the platform's insets as its padding, and the separator under it is
 //! decoration the kernel places (`Kernel::grouped_separator`).
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, Offer};
-use exact_runner::{DataError, DataSource, Runner, Value};
-
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::Runner;
 
 /// `body` under a 402 × 874 column.
-fn boot(body: &str) -> Runner<NoData> {
+fn boot(body: &str) -> Runner<Source> {
     let body = body
         .lines()
         .map(|l| format!("      {l}\n"))
@@ -22,12 +16,12 @@ fn boot(body: &str) -> Runner<NoData> {
         format!("style Native\n  appearance=\"auto\"\ncomponent App\n  action go\n  view\n    column testId=\"root\" width=402 height=874\n{body}");
     let plan = contract::bake(
         contract::compile(&source).unwrap_or_else(|e| panic!("{e}")),
-        NoData,
+        boxed(NoData),
     )
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -40,7 +34,7 @@ fn boot(body: &str) -> Runner<NoData> {
     r
 }
 
-fn id(r: &Runner<NoData>, test_id: &str) -> u32 {
+fn id(r: &Runner<Source>, test_id: &str) -> u32 {
     let k = r.kernel();
     k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap().id
 }

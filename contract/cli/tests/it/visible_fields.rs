@@ -1,16 +1,10 @@
 //! LLP 1104 r8 D1/D2: fields default native; authored backgrounds, borders
 //! and corners devolve them once, while explicit `auto` refuses those rows.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Appearance, Kernel, NodeType, PropId, StyleId};
 use exact_plan::{BindingKind, Plan};
-use exact_runner::{DataError, DataSource, Event, Runner, Value};
-
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::{Event, Runner};
 
 fn app(styles: &str, body: &str) -> String {
     let body = body
@@ -24,10 +18,10 @@ fn compile(styles: &str, body: &str) -> Plan {
     contract::compile(&app(styles, body)).unwrap_or_else(|e| panic!("{body}: {e}"))
 }
 
-fn boot(styles: &str, body: &str) -> Runner<NoData> {
+fn boot(styles: &str, body: &str) -> Runner<Source> {
     Runner::boot(
         compile(styles, body),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -35,7 +29,7 @@ fn boot(styles: &str, body: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn id(r: &Runner<NoData>, test_id: &str) -> u32 {
+fn id(r: &Runner<Source>, test_id: &str) -> u32 {
     let k = r.kernel();
     k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap().id
 }
@@ -349,7 +343,7 @@ fn non_native_fields_keep_authored_appearance_only_when_it_is_always_none() {
         );
         let mut r = Runner::boot(
             Plan::decode(&plan.encode()).unwrap(),
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -445,7 +439,7 @@ fn outline_none_takes_any_elements_ring_off() {
         "style Quiet\n  outline=\"none\"\n",
         "input outline=\"none\" testId=\"input\"\ntextarea outline-style=\"none\" appearance=\"none\" testId=\"textarea\"\ntextarea markup=\"markdown\" outline=\"none\" testId=\"markdown\"\ninput class=Quiet background-color=\"red\" testId=\"class\"\ninput outline=(on ? \"none\" : none) testId=\"arm\"\ninput testId=\"plain\"\nbutton press=flip outline=\"none\" testId=\"button\"\n  text \"Go\"\nbutton \"Native\" appearance=\"auto\" press=flip outline=\"none\" testId=\"native\"\ninput type=\"checkbox\" outline=\"none\" testId=\"checkbox\"\nlink href=\"/a\" outline=\"none\" testId=\"link\"\n  text \"A\"\ncolumn tabindex=0 class=Quiet testId=\"box\"\nbutton press=flip testId=\"flip\"\n  text \"Flip\"",
     );
-    let has = |r: &Runner<NoData>, name: &str| {
+    let has = |r: &Runner<Source>, name: &str| {
         let node = r.kernel().node(id(r, name)).unwrap();
         node.style.mask.has(StyleId::OutlineStyle)
     };
@@ -524,7 +518,7 @@ fn a_placeholder_part_colours_a_text_field_and_nothing_else() {
         "style Themed\n  padding=4\n  ::placeholder\n    color=\"#6b7280\"\n",
         "input placeholder=\"Search\" class=Themed testId=\"class\"\ninput placeholder=\"Name\" class=Themed testId=\"own\"\n  ::placeholder\n    color=\"red\"\ntextarea placeholder=\"Notes\" testId=\"arm\"\n  ::placeholder\n    color=(on ? \"#00800080\" : none)\ninput placeholder=\"Plain\" testId=\"plain\"\nbutton press=flip testId=\"flip\"\n  text \"Flip\"",
     );
-    let colour = |r: &Runner<NoData>, name: &str| {
+    let colour = |r: &Runner<Source>, name: &str| {
         let node = r.kernel().node(id(r, name)).unwrap();
         assert!(
             !node.style.mask.has(StyleId::TextColor),
@@ -634,7 +628,7 @@ fn a_backdrop_part_colours_beneath_a_dialog_and_nothing_else() {
         "style Dim\n  ::backdrop\n    background-color=\"#00000080\"\n",
         "dialog id=\"a\" class=Dim testId=\"class\"\n  text \"A\"\ndialog id=\"b\" class=Dim testId=\"own\"\n  ::backdrop\n    background-color=\"transparent\"\n  text \"B\"\ndialog id=\"c\" testId=\"arm\"\n  ::backdrop\n    background-color=(on ? \"#ff000040\" : none)\n  text \"C\"\ndialog id=\"d\" testId=\"plain\"\n  text \"D\"\nbutton press=flip testId=\"flip\"\n  text \"Flip\"",
     );
-    let colour = |r: &Runner<NoData>, name: &str| {
+    let colour = |r: &Runner<Source>, name: &str| {
         let node = r.kernel().node(id(r, name)).unwrap();
         assert!(
             !node.style.mask.has(StyleId::BackgroundColor),

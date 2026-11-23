@@ -5,6 +5,7 @@
 //! every session reads; the person's choices on a delivered entry; pause
 //! and resume in place; and the declared checks every route holds a call to.
 
+use crate::source::{boxed, Source};
 use exact_runner::{agent, CallOrigin, Runner, Value};
 use serde_json::{json, Value as Json};
 use std::path::{Path, PathBuf};
@@ -65,10 +66,10 @@ impl exact_runner::DataSource for Granted {
     }
 }
 
-fn boot(plan: exact_plan::Plan, target: &str) -> Runner<Granted> {
+fn boot(plan: exact_plan::Plan, target: &str) -> Runner<Source> {
     let mut r = Runner::boot(
         plan,
-        Granted,
+        boxed(Granted),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -78,24 +79,24 @@ fn boot(plan: exact_plan::Plan, target: &str) -> Runner<Granted> {
     r
 }
 
-fn logs(r: &Runner<Granted>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     agent::handle(r, r#"{"op":"logs"}"#)
 }
 
-fn state(r: &Runner<Granted>) -> Json {
+fn state(r: &Runner<Source>) -> Json {
     serde_json::from_str(&agent::handle(r, r#"{"op":"state"}"#)).unwrap()
 }
 
-fn chimes(r: &Runner<Granted>) -> Json {
+fn chimes(r: &Runner<Source>) -> Json {
     state(r)["chimes"].clone()
 }
 
 /// A resource's value, or a mutation's.
-fn slot(r: &Runner<Granted>, name: &str) -> String {
+fn slot(r: &Runner<Source>, name: &str) -> String {
     format!("{:?}", r.resource(name).or_else(|| r.slot(name)))
 }
 
-fn tap(r: &mut Runner<Granted>, ticket: u64, choice: Option<&str>) -> String {
+fn tap(r: &mut Runner<Source>, ticket: u64, choice: Option<&str>) -> String {
     let choice = choice
         .map(|c| format!(r#","choice":"{c}""#))
         .unwrap_or_default();
@@ -104,7 +105,7 @@ fn tap(r: &mut Runner<Granted>, ticket: u64, choice: Option<&str>) -> String {
         .0
 }
 
-fn prefer(r: &mut Runner<Granted>, name: &str, state: &str) {
+fn prefer(r: &mut Runner<Source>, name: &str, state: &str) {
     let request = json!({ "op": "prefer", "permission": { name: state } }).to_string();
     let (_, reply) = r.extension_agent(&request).expect("a prefer");
     reply.unwrap_or_else(|e| panic!("{e}"));
@@ -117,7 +118,7 @@ thread_local! {
 
 /// The host's part: held module work run, released work run when its
 /// ticket is answered, readers asked again.
-fn pump(r: &mut Runner<Granted>) {
+fn pump(r: &mut Runner<Source>) {
     for _ in 0..8 {
         let outs = r.take_requests();
         let released = r.release_work();
@@ -139,14 +140,14 @@ fn pump(r: &mut Runner<Granted>) {
     }
 }
 
-fn run(r: &mut Runner<Granted>, ticket: u64, dispatch: exact_runner::Dispatch) {
+fn run(r: &mut Runner<Source>, ticket: u64, dispatch: exact_runner::Dispatch) {
     if let exact_runner::Dispatch::Run(exact_runner::Work::Now(work)) = dispatch {
         r.fulfill(ticket, work()).unwrap();
     }
 }
 
 /// The permission tickets held now, oldest first, by what each asks.
-fn tickets(r: &Runner<Granted>) -> Vec<(u64, String)> {
+fn tickets(r: &Runner<Source>) -> Vec<(u64, String)> {
     (r.device_holds().iter())
         .filter(|h| h.capability == "permission")
         .map(|h| {

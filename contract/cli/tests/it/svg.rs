@@ -2,26 +2,17 @@
 //! and props on the kernel, the keyframes resolved onto the `animation` row,
 //! the longhands composed, and every refusal by its id.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, NodeType, PropId, StyleId};
 use exact_motion::{Direction, Easing, FillMode, Property};
-use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Runner};
+use exact_runner::Runner;
 
-#[derive(Default)]
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-
-fn boot(src: &str) -> Runner<NoData> {
+fn boot(src: &str) -> Runner<Source> {
     let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e}"));
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -915,7 +906,7 @@ component App
           view testId="foreign" transform="scale(0.8)"
 "#,
     );
-    let rows = |r: &Runner<NoData>, id: &str| {
+    let rows = |r: &Runner<Source>, id: &str| {
         let k = r.kernel();
         let s = &k.node_by_key(k.find_by_test_id(id)[0]).unwrap().style;
         (
@@ -1313,7 +1304,7 @@ component App
         text "HTML text"
 "#,
     );
-    let matrix = |r: &Runner<NoData>, id: &str| {
+    let matrix = |r: &Runner<Source>, id: &str| {
         let k = r.kernel();
         k.node_by_key(k.find_by_test_id(id)[0])
             .unwrap()

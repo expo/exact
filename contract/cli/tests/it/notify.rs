@@ -5,6 +5,7 @@
 //! permission ticket; without the `device.notifications` grant a post is
 //! refused before any module sees it.
 
+use crate::source::{boxed, Source};
 use exact_runner::{agent, Runner, Value};
 use std::path::PathBuf;
 
@@ -90,12 +91,12 @@ impl exact_runner::DataSource for Grants {
 
 const GRANTED: &str = "device.notifications purpose.notifications\n";
 
-fn boot(grants: &'static str) -> (App, Runner<Grants>) {
+fn boot(grants: &'static str) -> (App, Runner<Source>) {
     let app = App::new("runner");
     let plan = app.compile(APP).unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Grants(grants),
+        boxed(Grants(grants)),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -110,15 +111,15 @@ fn boot(grants: &'static str) -> (App, Runner<Grants>) {
     (app, r)
 }
 
-fn state(r: &Runner<Grants>) -> serde_json::Value {
+fn state(r: &Runner<Source>) -> serde_json::Value {
     serde_json::from_str(&agent::handle(r, r#"{"op":"state"}"#)).unwrap()
 }
 
-fn logs(r: &Runner<Grants>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     agent::handle(r, r#"{"op":"logs"}"#)
 }
 
-fn tap(r: &mut Runner<Grants>, ticket: u64, choice: Option<&str>) -> String {
+fn tap(r: &mut Runner<Source>, ticket: u64, choice: Option<&str>) -> String {
     let choice = choice
         .map(|c| format!(r#","choice":"{c}""#))
         .unwrap_or_default();
@@ -127,7 +128,7 @@ fn tap(r: &mut Runner<Grants>, ticket: u64, choice: Option<&str>) -> String {
         .0
 }
 
-fn permission(r: &Runner<Grants>) -> u64 {
+fn permission(r: &Runner<Source>) -> u64 {
     (r.device_holds().iter())
         .find(|h| h.capability == "permission")
         .unwrap_or_else(|| panic!("no permission ticket: {}", logs(r)))
@@ -348,7 +349,7 @@ fn a_package_only_data_code_imports_is_in_the_plan() {
     assert_eq!(extensions(&compile()), ["notifications"]);
     let mut r = Runner::boot(
         compile(),
-        Grants(GRANTED),
+        boxed(Grants(GRANTED)),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",

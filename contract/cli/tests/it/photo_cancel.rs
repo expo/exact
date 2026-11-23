@@ -4,6 +4,7 @@
 //! `@exact/media-capture` and `@exact/camera` are played by the native slot
 //! under the agent; `takePhoto` answers only when the test says.
 
+use crate::source::{boxed, Source};
 use exact_runner::{Dispatch, Outcome, Reply, Response, Runner, Work};
 use serde_json::{json, Value as Json};
 use std::path::Path;
@@ -49,18 +50,18 @@ fn reply(reply: Reply, answer: Json) {
 }
 
 /// Photo Editor over the native slot; each `takePhoto` is held in `Held`.
-fn boot() -> (Runner<Granted>, Calls, Held) {
+fn boot() -> (Runner<Source>, Calls, Held) {
     boot_holding(&["takePhoto"])
 }
 
 /// Photo Editor over the native slot; each send named in `holds` is held in
 /// `Held`, every other answered at once.
-fn boot_holding(holds: &'static [&'static str]) -> (Runner<Granted>, Calls, Held) {
+fn boot_holding(holds: &'static [&'static str]) -> (Runner<Source>, Calls, Held) {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/photo-editor/app.contract");
     let (plan, _) = contract::compile_path_all(&path, false).unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Granted,
+        boxed(Granted),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -96,7 +97,7 @@ fn boot_holding(holds: &'static [&'static str]) -> (Runner<Granted>, Calls, Held
 
 /// The host's part: each request run and each outcome fulfilled, until
 /// nothing is left to do; one not answered yet stays pending.
-fn pump(r: &mut Runner<Granted>, waiting: &mut Waiting) {
+fn pump(r: &mut Runner<Source>, waiting: &mut Waiting) {
     for _ in 0..16 {
         let ran = !r.advance(0.0).unwrap().is_empty();
         let outs = r.take_requests();
@@ -130,7 +131,7 @@ fn pump(r: &mut Runner<Granted>, waiting: &mut Waiting) {
     }
 }
 
-fn top(r: &Runner<Granted>) -> String {
+fn top(r: &Runner<Source>) -> String {
     let tree = exact_runner::agent::handle(r, r#"{"op":"tree"}"#);
     ["print", "camera"]
         .into_iter()
@@ -139,7 +140,7 @@ fn top(r: &Runner<Granted>) -> String {
         .to_owned()
 }
 
-fn why(r: &Runner<Granted>, calls: &Calls) -> String {
+fn why(r: &Runner<Source>, calls: &Calls) -> String {
     let slots: Vec<_> = ["shot", "photo", "track", "nav"]
         .iter()
         .map(|n| format!("{n}={:?}", r.slot(n)))
@@ -276,7 +277,7 @@ fn facing_follows_the_flip_the_track_took() {
     pump(&mut r, &mut w);
     r.act("takePicture", Vec::new()).unwrap();
     pump(&mut r, &mut w);
-    let facing = |r: &Runner<Granted>| r.slot("facing").cloned();
+    let facing = |r: &Runner<Source>| r.slot("facing").cloned();
     let environment = Some(exact_runner::Value::str("environment"));
     r.act("flip", Vec::new()).unwrap();
     pump(&mut r, &mut w);

@@ -1,5 +1,6 @@
 //! The sheet handle is an authored IDREF and a typed two-number release.
 
+use crate::source::boxed;
 use exact_kernel::{Kernel, PropId};
 use exact_plan::{EventKind, Plan, Value};
 use exact_runner::{agent, DataError, DataSource, Runner};
@@ -25,11 +26,11 @@ fn height_binding_compiles_bakes_roundtrips_and_exports_the_handler() {
         "\"sheet\"",
     ))
     .unwrap();
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     let plan = Plan::decode(&plan.encode()).unwrap();
     let runner = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

@@ -2,6 +2,7 @@
 //! reaches the receipt of the commit that removes its node; `-exact-layout-transition`
 //! reaches its row.
 
+use crate::source::boxed;
 use exact_kernel::{Kernel, StyleId};
 use exact_motion::{Property, TimingFunction, Value};
 use exact_plan::{Plan, Value as PlanValue};
@@ -21,7 +22,7 @@ fn a_removed_row_leaves_with_its_exit_and_its_sibling_declares_a_layout_transiti
     let plan = contract::compile(&std::fs::read_to_string(path).unwrap()).unwrap();
     let mut r = Runner::boot(
         Plan::decode(&plan.encode()).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
