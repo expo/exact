@@ -1068,8 +1068,9 @@ export const classifications = [
     ["runner:runner/src/frame_health/history.rs", "History::push#retained:1"],
     ["runner:runner/src/instance.rs",
       "Ids::evaluated#evaluated:1 Ids::evaluated#unchanged:1 Ids::retain#forgotten:1 NodeInst::create#created:1 NodeInst::create#nodes_visited:1 " +
-      "NodeInst::emit_bindings#bindings_evaluated:1 NodeInst::emit_bindings#bindings_evaluated:2 NodeInst::update#nodes_visited:1 update_all#regions_skipped:1 " +
+      "NodeInst::emit_bindings#bindings_evaluated:1 NodeInst::emit_bindings#bindings_evaluated:2 NodeInst::update#nodes_visited:1 " +
       "update_row#rows_reused:1 update_row#rows_scanned:1"],
+    ["runner:runner/src/instance/children.rs", "needs_update#regions_skipped:1"],
     ["runner:runner/src/instance/collection/index.rs", "SumTree::fill#zeros:1"],
     ["runner:runner/src/instance/collection/into_view.rs", "Collection::settle_target#reports:1"],
     ["runner:runner/src/instance/collection/mod.rs", "Collection::build_row#row_constructed:1 Collection::feedback#size:1 Collection::realize_window_with_row#rows_reused:1 Collection::update_data#regions_skipped:1"],

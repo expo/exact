@@ -291,3 +291,94 @@ fn every_reconcile_refusal_restores_ownership() {
         }
     }
 }
+
+#[test]
+fn a_refused_render_preserves_a_pinned_row_in_a_nested_collection() {
+    let plan = contract::compile(
+        r#"component App
+  state count = 0
+  action change(nextCount: number)
+    count = nextCount
+  view
+    column
+      list testId="outer" virtualized=true estimated-item-height=120 height=120
+        for groupKey in ["a"] key=groupKey
+          column height=120
+            list testId="inner" virtualized=true estimated-item-height=20 height=100
+              for item in range(count == 0 ? 80 : 81) key=item
+                row testId=`item-${item}` height=20
+                  text groupKey
+      if count != 0
+        Candidate(count=count)
+component Candidate
+  props
+    count: number
+  state ticks = 0
+  task tick when true key=(1 / (count - 1))
+    every(10, bump)
+  action bump
+    ticks = ticks + 1
+  view
+    text `${ticks}`
+"#,
+    )
+    .unwrap();
+    let mut r = Runner::boot(
+        plan,
+        Data::default(),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    assert!(r.transactional_render());
+    let view = |r: &Runner<Data>, name| {
+        let kernel = r.kernel();
+        kernel
+            .node_by_key(kernel.find_by_test_id(name)[0])
+            .unwrap()
+            .id
+    };
+    let report = |r: &mut Runner<Data>, list, offset, port, interaction_view| {
+        let previous = r.collection(list).unwrap();
+        r.collection_feedback(crate::CollectionFeedback {
+            view: list,
+            revision: previous.revision,
+            scroll_sequence: previous.scroll_sequence + 1,
+            offset,
+            port_main: port,
+            port_cross: 320.,
+            cross: 320.,
+            padding: [0.; 2],
+            measurements: Vec::new(),
+            focus_view: None,
+            interaction_view,
+        })
+        .unwrap();
+    };
+
+    let outer = view(&r, "outer");
+    report(&mut r, outer, 0., 120., None);
+    let inner = view(&r, "inner");
+    report(&mut r, inner, 0., 100., None);
+    let pinned = view(&r, "item-0");
+    report(&mut r, inner, 600., 100., Some(pinned));
+    let before = r.collection(inner).unwrap();
+    assert_eq!(before.count, 80);
+    assert!(before.rows.iter().any(|row| row.root == pinned));
+    assert!(before.rows.iter().any(|row| row.index > 20));
+
+    assert!(r.act("change", vec![Value::Number(1.)]).is_err());
+    assert!(!r.is_poisoned());
+    assert_eq!(r.collection(inner).as_ref(), Some(&before));
+    assert_eq!(view(&r, "item-0"), pinned);
+
+    r.act("change", vec![Value::Number(2.)]).unwrap();
+    assert_eq!(view(&r, "inner"), inner);
+    let after = r.collection(inner).unwrap();
+    assert_eq!(after.count, 81);
+    assert!(after.revision > before.revision);
+    assert_eq!(view(&r, "item-0"), pinned);
+    report(&mut r, inner, 640., 100., None);
+    assert!(r.kernel().node(pinned).is_none());
+}
