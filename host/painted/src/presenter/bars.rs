@@ -277,7 +277,7 @@ impl<D: DataSource> Presenter<D> {
             if (self.host.runner().handlers_of(n)).contains(&EventKind::Press) {
                 return Some(n);
             }
-            at = self.display.parent(kernel, n);
+            at = self.listener_parent(kernel, n);
         }
         None
     }
