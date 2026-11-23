@@ -990,9 +990,14 @@ fn mac_draws(readout: Visit<'_>) -> bool {
 /// `HeaderMac.showable` accepts a badge, a painted face or a toolbar item
 /// of text and at most one image.
 fn mac_button(button: Visit<'_>) -> bool {
+    // `HeaderMac`'s `textOnly` reads the node kind, and every prose tag
+    // that holds text lowers to a text node.
     fn text_only(node: Visit<'_>) -> bool {
         matches!(part(node), Part::Doubt)
-            || matches!(node.element(), Some(("text", _, _))) && node.children().all(text_only)
+            || node
+                .element()
+                .is_some_and(|(tag, _, _)| crate::prose::text_container(tag))
+                && node.children().all(text_only)
     }
 
     let mut images = 0;

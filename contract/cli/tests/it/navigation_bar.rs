@@ -615,6 +615,27 @@ fn the_mac_warns_when_a_header_button_has_no_toolbar_face() {
 }
 
 #[test]
+fn the_mac_accepts_a_header_button_labelled_with_prose() {
+    for (name, label) in [
+        (
+            "strong-run",
+            "              text\n                strong \"Save\"\n",
+        ),
+        ("strong", "              strong \"Save\"\n"),
+        ("p", "              p\n                strong \"Save\"\n"),
+    ] {
+        let header = format!(
+            "            text \"Car\" role=\"heading\"\n            button press=go\n{label}"
+        );
+        let (errors, warnings) = compile_header(name, "\"macos\": {}", &header);
+        assert!(
+            errors.is_empty() && warnings.is_empty(),
+            "{name}: {errors:?} {warnings:?}"
+        );
+    }
+}
+
+#[test]
 fn the_mac_accepts_classed_badges_and_sized_dots() {
     let mac = "\"macos\": {}";
     let refusals: Vec<_> = [
