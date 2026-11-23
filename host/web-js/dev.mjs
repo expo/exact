@@ -33,8 +33,8 @@ import { pluginOnLoopback } from '../../scripts/forma-remote.mjs';
 import { openRemoteCanvas } from '../../scripts/forma-canvas.mjs';
 import { mapCard, pullMap } from '../../scripts/forma-inspect.mjs';
 import { serveCommands, serveReport, streamFrame } from '../../scripts/forma-builds.mjs';
-import { EXE, depInfoOf, fresh, freshCompiler, webCompiler } from './module.mjs';
-import { RustMissing, fromSets, launch, rustMissing, toolEnv } from '../../scripts/tools.mjs';
+import { EXE, depInfoOf, fresh, freshCompiler, webCompiler, webCompilerFrom } from './module.mjs';
+import { RustMissing, launch, rustMissing, toolEnv } from '../../scripts/tools.mjs';
 import { hostModuleSources } from './glue.mjs';
 import { engagement } from '../web/engagement.js';
 import { schemeHead } from '../web/look.mjs';
@@ -245,13 +245,22 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   // a value-only edit's and a scrub's. Optimised (host-dev), built as the
   // loop starts and again after any edit that is not a design's, so it is
   // the compiler the builds use; until it is, the debug compiler answers.
-  // Where this build is not fresh, a tool set's compiler is the reader
-  // (`set`), and nothing is built (LLP 1174 D5).
+  // A verified tool set can supply the reader while the optimized build is
+  // stale (LLP 1174 D5).
   const ownTool = resolve(process.env.CARGO_TARGET_DIR ? resolve(process.env.CARGO_TARGET_DIR) : resolve(root, 'target'), `host-dev/exact-web-js${EXE}`);
-  const tool = { path: ownTool, set: false, ready: false, built: null, child: null, reading: null, cleaner: null };
-  // Whether the reader is still what its sources make: its own build by its dep-info, or the set it was taken from.
-  const toolCurrent = () => (tool.set ? fromSets('exact-web-js')?.path === tool.path : fresh(tool.path, depInfoOf(tool.path)));
-  const patcher = { child: null, built: null, asks: new Map(), n: 0 };
+  const tool = { path: ownTool, ready: false, built: null, child: null, reading: null, cleaner: null };
+  const readerCompiler = () => webCompilerFrom(process.env, { rehash: true });
+  let checkedUntil = 0, current = false;
+  const toolCurrent = () => {
+    if (tool.path === ownTool) return fresh(ownTool, depInfoOf(ownTool));
+    // A scrub can ask on every frame.
+    if (performance.now() >= checkedUntil) {
+      current = readerCompiler()?.path === tool.path;
+      checkedUntil = performance.now() + 1000;
+    }
+    return current;
+  };
+  const patcher = { child: null, path: null, identity: null, asks: null, n: 0 };
   const toolExits = new Set(), inspections = new Set();
   const stopGroup = child => {
     const exit = stopBuildTree(child);
@@ -408,16 +417,19 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
     tool.ready = false;
     const waited = tool.child || tool.cleaner;
     stopGroup(tool.child);
-    if (!fresh(ownTool, depInfoOf(ownTool))) {
-      const set = fromSets('exact-web-js');
-      if (set || rustMissing()) {
-        Object.assign(tool, { path: set?.path ?? ownTool, set: !!set, ready: !!set, built: null, child: null });
-        console.log(set ? 'design reader ready (a tool set\'s)' : `the design reader did not build (design edits take the full build):\n${new RustMissing('exact-web-js').message}`);
+    const missing = rustMissing(), ownFresh = fresh(ownTool, depInfoOf(ownTool));
+    if (missing || !ownFresh) {
+      const selected = readerCompiler();
+      if (selected?.set?.manifest.verifiedBuild === true || missing) {
+        Object.assign(tool, { path: selected?.path ?? ownTool, ready: !!selected || ownFresh, built: null, child: null });
+        current = tool.ready;
+        checkedUntil = performance.now() + 1000;
+        console.log(tool.ready ? `design reader ready${selected?.set ? " (a tool set's)" : ''}` : `the design reader did not build (design edits take the full build):\n${new RustMissing('exact-web-js').message}`);
         if (waited) resumeAfterReader();
         return;
       }
     }
-    Object.assign(tool, { path: ownTool, set: false });
+    tool.path = ownTool;
     const started = new Date();
     const child = tool.child = spawn('cargo', ['build', '-q', '--profile', 'host-dev', '-p', 'exact-web-js'], { cwd: root, stdio: ['ignore', 'ignore', 'pipe'], detached: true });
     let err = '';
@@ -468,6 +480,42 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   // (`propose`'s class, stage 10 A1), which may not start a build.
   const toolReady = () => tool.ready && toolCurrent();
   buildTool();
+  const runReader = async (args, { text, readOnly = false } = {}) => {
+    const inspect = text === undefined;
+    const read = () => new Promise((done, failed) => {
+      if (stopping) return done({ error: 'the dev loop is stopping' });
+      let compiler;
+      try {
+        if (readOnly && !toolReady()) return done({ error: 'the design reader is not built' });
+        compiler = readOnly || toolFresh() ? launch(tool.path) : webCompiler({ rehash: true });
+      } catch (error) { return done({ error: error.message }); }
+      // The Cargo fallback can start compilers of its own.
+      const child = spawn(compiler.cmd, [...compiler.pre, ...args], { cwd: root, env: compiler.env,
+        stdio: inspect ? ['ignore', 'ignore', 'pipe'] : ['pipe', 'pipe', 'pipe'], detached: true });
+      if (inspect) inspections.add(child);
+      else tool.reading = child;
+      const untrack = () => {
+        if (inspect) inspections.delete(child);
+        else if (tool.reading === child) tool.reading = null;
+      };
+      let out = '', err = '';
+      child.once('error', error => { untrack(); failed(error); });
+      child.once('close', code => {
+        untrack();
+        if (inspect && child.pid) compiler.done();
+        done({ code, out, err });
+      });
+      child.stdout?.on('data', d => { out += d; });
+      child.stderr?.on('data', d => { err += d; });
+      child.stdin?.on('error', () => {});
+      child.stdin?.end(text);
+    });
+    try { return await read(); } catch {
+      // A selected set can be evicted before the next freshness check.
+      checkedUntil = 0;
+      try { return await read(); } catch (error) { return { error: error.message }; }
+    }
+  };
   // The page's inspect table (LLP 1122 T2b, inspect.rs), made for dist's
   // plan when the page first asks (seconds for a large app, so no build
   // makes it), kept by the plan's digest, the 4 last; it names that plan,
@@ -476,49 +524,31 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   const inspectTable = (digest, plan = resolve(dist, 'app.plan')) => {
     if (stopping) return Promise.resolve(null);
     if (!tables.has(digest)) {
-      tables.set(digest, new Promise((done) => {
-        // (this loop's own: another loop on one target/ may make the same plan's table, and removes its own)
-        const out = resolve(app.target, `inspect-${digest}-${process.pid}.json`);
-        let compiler;
-        try { compiler = toolFresh() ? launch(tool.path) : webCompiler(); } catch (error) { tables.delete(digest); console.log(`inspect table: ${error.message}`); return done(null); }
-        const child = spawn(compiler.cmd, [...compiler.pre, 'inspect-table', plan, out], { cwd: root, env: compiler.env, stdio: ['ignore', 'ignore', 'pipe'], detached: true });
-        inspections.add(child);
-        child.once('close', () => inspections.delete(child));
-        let err = '';
-        child.stderr.on('data', (d) => { err += d; });
-        child.on('exit', (code) => {
-          compiler.done();
-          let bytes = null;
-          try { bytes = code === 0 ? readFileSync(out) : null; if (bytes && JSON.parse(bytes).plan !== digest) bytes = null; } catch { bytes = null; }
-          rmSync(out, { force: true });
-          if (!bytes) { tables.delete(digest); if (err.trim()) console.log(`inspect table: ${err.trim().split('\n').slice(-3).join('\n')}`); }
-          done(bytes);
-        });
-      }));
+      // Another loop on this target can make a table for the same plan.
+      const out = resolve(app.target, `inspect-${digest}-${process.pid}.json`);
+      const pending = runReader(['inspect-table', plan, out]).then(({ code, err, error }) => {
+        let bytes = null;
+        try { bytes = code === 0 ? readFileSync(out) : null; if (bytes && JSON.parse(bytes).plan !== digest) bytes = null; } catch { bytes = null; }
+        rmSync(out, { force: true });
+        if (!bytes) {
+          if (tables.get(digest) === pending) tables.delete(digest);
+          const message = error ?? err.trim().split('\n').slice(-3).join('\n');
+          if (message) console.log(`inspect table: ${message}`);
+        }
+        return bytes;
+      });
+      tables.set(digest, pending);
       for (const old of [...tables.keys()].slice(0, Math.max(0, tables.size - 4))) tables.delete(old);
     }
     return tables.get(digest);
   };
   // `readOnly` (what a request below write scope reaches): the built reader
   // only, as it is, never a build or the `cargo run` fallback.
-  const designOf = (text, { readOnly = false } = {}) => new Promise((done) => {
-    if (readOnly && !toolReady()) return done({ error: 'the design reader is not built' });
-    let compiler;
-    try { compiler = readOnly || toolFresh() ? launch(tool.path) : webCompiler(); } catch (error) { return done({ error: error.message }); }
-    // A group: the debug fallback is a `cargo run`, stopped with its compilers.
-    const child = tool.reading = spawn(compiler.cmd, [...compiler.pre, 'design', resolve(app.dir, 'app.contract'), '-'], { cwd: root, env: compiler.env, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
-    child.on('error', (e) => done({ error: e.message }));
-    child.stdin.on('error', () => {});
-    child.stdin.end(text);
-    let out = '', err = '';
-    child.stdout.on('data', (d) => { out += d; });
-    child.stderr.on('data', (d) => { err += d; });
-    // `close`: its output read whole.
-    child.on('close', (code) => {
-      if (tool.reading === child) tool.reading = null;
-      try { done(code === 0 ? JSON.parse(out) : { error: err.trim().split('\n').slice(-6).join('\n') || `the compiler exited ${code}` }); } catch (e) { done({ error: e.message }); }
-    });
-  });
+  const designOf = async (text, { readOnly = false } = {}) => {
+    const { code, out, err, error } = await runReader(['design', resolve(app.dir, 'app.contract'), '-'], { text, readOnly });
+    if (error) return { error };
+    try { return code === 0 ? JSON.parse(out) : { error: err.trim().split('\n').slice(-6).join('\n') || `the compiler exited ${code}` }; } catch (e) { return { error: e.message }; }
+  };
   // The design's shape and the plan's structure (a profile colour's value
   // is in it) as a kept build requires, and each token's accent.
   // A token the page writes inline (`inline`: no property sets it in place,
@@ -658,7 +688,8 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
     // Only the binary this loop's own build left (another loop on this
     // target/ may have linked one since, not yet dated to its start).
     if (tool.ready && tool.built !== null && freshCompiler(tool.path)) copyCompiler(tool.path, copy, tool.built);
-    const compiler = freshCompiler(copy) ? copy : null;
+    const explicit = process.env.EXACT_WEB_COMPILER;
+    const compiler = explicit && freshCompiler(explicit) ? explicit : freshCompiler(copy) ? copy : null;
     // Anything else may move the compiler: the design tool is built again.
     if (!designOnly) buildTool();
     // What a full build reads from disk is what changed since it began.
@@ -973,23 +1004,30 @@ for(;;){
   const patcherAsk = (request) => new Promise((done) => {
     if (stopping) return done({ fallback: true });
     if (!toolFresh()) return done({ fallback: true });
-    if (!patcher.child || patcher.built !== tool.built) {
+    const executable = statSync(tool.path, { throwIfNoEntry: false });
+    if (!executable) return done({ fallback: true });
+    const identity = `${executable.dev}:${executable.ino}:${executable.mtimeMs}:${executable.size}`;
+    if (!patcher.child || patcher.path !== tool.path || patcher.identity !== identity) {
       stopGroup(patcher.child);
       const child = patcher.child = spawn(tool.path, ['design-serve', resolve(app.dir, 'app.contract')], { cwd: root, env: toolEnv(), stdio: ['pipe', 'pipe', 'ignore'], detached: true });
-      patcher.built = tool.built;
+      patcher.path = tool.path;
+      patcher.identity = identity;
+      const asks = patcher.asks = new Map();
       let buffered = '';
       child.stdin.on('error', () => {});
       child.stdout.on('data', (d) => {
         buffered += d;
         const lines = buffered.split('\n');
         buffered = lines.pop();
-        for (const line of lines) { try { const r = JSON.parse(line); patcher.asks.get(r.id)?.(r); patcher.asks.delete(r.id); } catch { /* not a reply */ } }
+        for (const line of lines) { try { const r = JSON.parse(line); asks.get(r.id)?.(r); asks.delete(r.id); } catch { /* not a reply */ } }
       });
-      child.on('exit', () => {
+      const end = () => {
         if (patcher.child === child) patcher.child = null;
-        for (const answer of patcher.asks.values()) answer({ fallback: true });
-        patcher.asks.clear();
-      });
+        for (const answer of asks.values()) answer({ fallback: true });
+        asks.clear();
+      };
+      child.once('exit', end);
+      child.once('error', end);
     }
     const id = ++patcher.n;
     patcher.asks.set(id, done);

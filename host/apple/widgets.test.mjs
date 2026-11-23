@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { moduleTripleFor } from './build.mjs';
+import { assertAppleIdentity, moduleTripleFor } from './build.mjs';
 
 test('apps of one scratch share the widget core: another archive relinks it, leaves its modules, and each copy names its app', async () => {
   if (process.platform !== 'darwin') return;
@@ -29,7 +29,9 @@ test('apps of one scratch share the widget core: another archive relinks it, lea
     const module = resolve(base, 'ExactCore.xcframework/ios-arm64-simulator/ExactCore.framework/Modules/ExactCore.swiftmodule/arm64-apple-ios-simulator.swiftmodule');
     let first;
     for (const [id, value] of [['com.exact.first', 1], ['com.exact.second', 2]]) {
-      writeFileSync(source, `int exact_value(void) { return ${value}; }`);
+      const compatibilityId = String(value).repeat(32);
+      const identity = JSON.stringify({ id: compatibilityId, inputs: { app: id } });
+      writeFileSync(source, `int exact_value(void) { return ${value}; } const char *exact_identity(void) { return ${JSON.stringify(identity)}; }`);
       writeFileSync(resolve(dir, 'libfixture.a'), `archive ${value}`);
       const app = { id, manifest: {} };
       sharedWidgetCore({ app, prepared, libDir: dir, crate: 'fixture', env: process.env, runApple });
@@ -38,9 +40,17 @@ test('apps of one scratch share the widget core: another archive relinks it, lea
       assert.deepEqual({ ino, mtimeMs }, first, 'an unchanged module is not rewritten');
       const slice = resolve(base, 'ExactCore.xcframework/ios-arm64-simulator/ExactCore.framework/ExactCore');
       assert.deepEqual(readFileSync(slice), readFileSync(resolve(prepared.framework, 'ExactCore')), 'the slice links this archive');
-      const copy = placeCoreFramework(prepared.framework, resolve(dir, `${id}/ExactCore.framework`), app);
+      const bundle = resolve(dir, `${id}.app`), frameworks = resolve(bundle, 'Frameworks');
+      const copy = placeCoreFramework(prepared.framework, resolve(frameworks, 'ExactCore.framework'), app);
       const info = JSON.parse(run('plutil', ['-convert', 'json', '-o', '-', resolve(copy, 'Info.plist')]).stdout);
       assert.equal(info.CFBundleIdentifier, `${id}.runtime`);
+      const executable = resolve(bundle, 'Fixture (Preview)'), consumer = resolve(dir, 'app.c');
+      writeFileSync(consumer, 'extern int exact_value(void); int main(void) { return exact_value(); }');
+      run('xcrun', ['--sdk', 'iphonesimulator', 'clang', '-target', triple, consumer, '-F', frameworks, '-framework', 'ExactCore', '-o', executable]);
+      assert.equal(assertAppleIdentity(app, executable, compatibilityId, resolve(copy, 'ExactCore')), id);
+      assert.equal(assertAppleIdentity(app, executable, compatibilityId), id);
+      assert.throws(() => assertAppleIdentity({ ...app, id: 'com.exact.wrong' }, executable), /embedded app identity/);
+      assert.throws(() => assertAppleIdentity(app, executable, '0'.repeat(32)), /embedded app identity/);
     }
     assert.notEqual(JSON.parse(run('plutil', ['-convert', 'json', '-o', '-', resolve(prepared.framework, 'Info.plist')]).stdout).CFBundleIdentifier, 'com.exact.second.runtime', 'the shared framework names no app');
   } finally { rmSync(dir, { recursive: true, force: true }); }

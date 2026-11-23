@@ -19,7 +19,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHash, createPrivateKey, createPublicKey, sign, verify } from 'node:crypto';
 import { parseArgs } from 'node:util';
-import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, chmodSync, constants, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -42,6 +42,11 @@ export const launch = (cmd, pre = [], done = () => {}, env = process.env) => ({ 
 
 /** The packages whose source roots the web build's receipt holds (host/web/build.mjs `webSourceRoots`). */
 export const WEB_CRATES = ['exact-web-js', 'exact-web', 'exact-js-bake', 'exact-markdown-editor', 'exact-web-js-motion', 'exact-textflow'];
+const WORKSPACE_INPUTS = ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', '.cargo/config'];
+const NATIVE_RECIPE = ['rust-toolchain.toml', '.cargo/config.toml'];
+const HELPER_RECIPE = ['scripts/filesystem.mjs', 'scripts/rustc/exact-rustc'];
+const CROSS_RECIPE = ['scripts/tools.mjs', 'scripts/rustc/exact-linux-cc'];
+const LEAF_RECIPE = ['host/web-js/module.mjs', 'scripts/cargo-check.mjs', '.cargo/config.toml'];
 
 const TRIPLES = { 'darwin-arm64': 'aarch64-apple-darwin', 'darwin-x64': 'x86_64-apple-darwin', 'linux-x64': 'x86_64-unknown-linux-gnu', 'linux-arm64': 'aarch64-unknown-linux-gnu', 'win32-x64': 'x86_64-pc-windows-msvc', 'win32-arm64': 'aarch64-pc-windows-msvc' };
 /** This machine's target triple, as Rust names it, without asking rustc. */
@@ -89,35 +94,41 @@ function differs(product, root = ROOT) {
 
 /** What a checkout saw of a matched product's inputs; while it is unchanged the product is not hashed again (D3). */
 const glance = (entry, product) => sha(JSON.stringify([entry, product.inputs.map(([file]) => seen(resolve(ROOT, file))), seen(resolve(ROOT, 'Cargo.lock')), seen(resolve(ROOT, 'Cargo.toml'))]));
-const stampOf = (name) => resolve(ROOT, 'target/tools', `${name}.json`);
+const stampOf = (name, env) => resolve(ROOT, env.CARGO_TARGET_DIR || 'target', 'tools', `${name}.json`);
 
-function productFile(set, product) {
-  const path = resolve(set.dir, product.file);
-  return statSync(path, { throwIfNoEntry: false })?.isFile() ? path : null;
+function productFile(set, name, product) {
+  try {
+    const path = resolve(set.dir, product.file);
+    if (!statSync(path).isFile()) return null;
+    if (process.platform !== 'win32' && EXECUTABLES.includes(name)) accessSync(path, constants.X_OK);
+    return path;
+  } catch { return null; }
 }
 
 /**
  * Product `name` from the newest set in this machine's cache that `source` made (`built` here by `keep`, or
  * `fetched`) and whose inputs are this checkout's bytes: `{ path, set, product }`, or null.
  */
-export function fromSet(name, source, env = process.env) {
-  try {
-    const last = JSON.parse(readFileSync(stampOf(name), 'utf8'));
+export function fromSet(name, source, env = process.env, { requireVerifiedBuild = false, rehash = false } = {}) {
+  const stamp = stampOf(name, env);
+  if (!requireVerifiedBuild && !rehash) try {
+    const last = JSON.parse(readFileSync(stamp, 'utf8'));
     const set = { dir: last.entry, manifest: JSON.parse(readFileSync(resolve(last.entry, 'manifest.json'), 'utf8')) };
     const product = set.manifest.products[name];
     if (within(cacheDir(env), set.dir) && set.manifest.source === source && glance(last.entry, product) === last.glance) {
-      const path = productFile(set, product);
+      const path = productFile(set, name, product);
       if (path) return { path, set, product };
     }
   } catch {}
   for (const set of sets(env)) {
     const product = set.manifest.products?.[name];
     if (set.manifest.source !== source || !product) continue;
-    const path = productFile(set, product);
+    if (requireVerifiedBuild && set.manifest.verifiedBuild !== true) continue;
+    const path = productFile(set, name, product);
     if (!path || differs(product)) continue;
     try {
-      mkdirSync(dirname(stampOf(name)), { recursive: true });
-      writeFileSync(stampOf(name), JSON.stringify({ entry: set.dir, glance: glance(set.dir, product) }));
+      mkdirSync(dirname(stamp), { recursive: true });
+      writeFileSync(stamp, JSON.stringify({ entry: set.dir, glance: glance(set.dir, product) }));
     } catch {}
     return { path, set, product };
   }
@@ -131,9 +142,9 @@ const fetchMisses = new Map();
 const lookupKey = (env, name) => JSON.stringify([cacheDir(env), env.EXACT_TOOLS_ORIGIN || TOOLS_ORIGIN, name]);
 
 /** A fetched product from the cache or the tools origin, when this machine accepts one. */
-export function fetchedTool(name, env = process.env, download = true) {
+export function fetchedTool(name, env = process.env, download = true, { rehash = false } = {}) {
   if (!fetchedAllowed(env)) return null;
-  const cached = fromSet(name, 'fetched', env);
+  const cached = fromSet(name, 'fetched', env, { rehash });
   if (cached || !download) return cached;
   const origin = env.EXACT_TOOLS_ORIGIN || TOOLS_ORIGIN;
   if (!origin) return null;
@@ -151,8 +162,7 @@ export function fetchedTool(name, env = process.env, download = true) {
   return null;
 }
 
-/** The set D5's order takes product `name` from, after this checkout's own fresh build: one built here, else (where a
- * kept product does not answer first) a fetched one where that is allowed. */
+/** Product `name` from a set built here, then from a fetched set where one may run (LLP 1174 D5). */
 export const fromSets = (name, env = process.env, download = true) => fromSet(name, 'built', env) ?? fetchedTool(name, env, download);
 
 /** Thrown where product `name` would need Cargo and Rust is missing: says why no set matched, the newest set's commit
@@ -165,7 +175,7 @@ export class RustMissing extends Error {
     if (reason) why = reason;
     else if (newest) {
       const product = newest.manifest.products[name], built = short(newest.manifest.commit);
-      const path = productFile(newest, product), at = path && differs(product);
+      const path = productFile(newest, name, product), at = path && differs(product);
       if (!path) why = `the tool set built at ${built} is missing ${product.file}`;
       else why = at ? `${at} differs from the newest tool set's, built at ${built}` : `the tool set built at ${built} that matches was fetched, and EXACT_TOOLS_ORIGIN=none runs none`;
       // Its commit to check out, when that moves nothing of the author's and is not where the checkout is.
@@ -186,10 +196,24 @@ export class RustMissing extends Error {
   }
 }
 
+/** The compiler and its set, if any (LLP 1174 D5). A set built here takes precedence over a fresh debug build when
+ * it passed the build's committed-sources check and its inputs still match by content. Callers that need unwinding or supply dev
+ * build flags take a fresh debug build first.
+ * A kept product comes next where the caller has one, then a fetched set where one may run. */
+export function compilerFrom(name, debug, env = process.env, { preferDebug = false, kept, rehash = false } = {}) {
+  const local = freshCompiler(debug) ? { path: debug, set: null } : null;
+  if (local && (preferDebug || env.RUSTFLAGS !== undefined || env.CARGO_ENCODED_RUSTFLAGS !== undefined ||
+    Object.keys(env).some(key => key.startsWith('CARGO_PROFILE_DEV_') && env[key] !== undefined))) return local;
+  const built = fromSet(name, 'built', env, { requireVerifiedBuild: !!local, rehash });
+  if (built || local) return built ?? local;
+  const path = kept?.();
+  return path ? { path, set: null } : fetchedTool(name, env, true, { rehash });
+}
+
 const CONTRACT = resolve(ROOT, 'target/debug', `contract${EXE}`);
-/** The Contract compiler built already, to `launch`: this checkout's fresh debug build or a matching tool set's. */
-export function builtContract(env = process.env) {
-  const path = freshCompiler(CONTRACT) ? CONTRACT : fromSets('contract', env)?.path;
+/** The Contract compiler built already, to `launch`, from where `compilerFrom` takes it. */
+export function builtContract(env = process.env, { preferDebug = false, debug = CONTRACT } = {}) {
+  const path = compilerFrom('contract', debug, env, { preferDebug })?.path;
   return path ? launch(path, [], undefined, env) : null;
 }
 
@@ -220,37 +244,43 @@ export function sweepCompilerTarget({ pin, env }) {
 
 /** Select a fresh Contract compiler, building with the pinned Cargo when needed (D5).
  * A Rust-less machine receives the diagnostic in the form requested by the caller. */
-export function contractTool({ env = process.env, json = false, file = '' } = {}) {
-  const built = builtContract(env);
+export function contractTool({ env = process.env, json = false, file = '', preferDebug = false, debug = CONTRACT } = {}) {
+  const built = builtContract(env, { preferDebug, debug });
   if (built) return built;
   if (rustMissing(env)) { new RustMissing('contract', env).say(json, file); return null; }
-  if (!existsSync(CONTRACT)) console.error('exact contract: building the Contract compiler once (about a minute on a cold checkout; `exact new` starts it in the background)…');
+  if (!existsSync(debug)) console.error('exact contract: building the Contract compiler once (about a minute on a cold checkout; `exact new` starts it in the background)…');
   // Built before and stale, as after a pull: Cargo runs quietly, so say why the wait (LLP 1156.006.000 D11).
   else console.error('exact contract: rebuilding the Contract compiler, since its sources changed (about a minute)…');
   return compilerCargo('run', env);
 }
 
-/** Cargo's metadata as `webSourceRoots` reads it, for `WEB_CRATES`' closure: its local packages with their targets,
- * and every reachable package's dependencies. Paths are relative to the checkout, so another checkout reads it as its
- * own (`setMetadata`). */
-function recordMetadata() {
-  const result = spawnSync('cargo', ['metadata', '--locked', '--offline', '--format-version', '1'], { cwd: ROOT, env: cargoEnvironment(), encoding: 'utf8', maxBuffer: 128 << 20 });
+/** Cargo's metadata for `webSourceRoots` and the tool set's input directories. The recorded paths are relative to
+ * the checkout so another checkout can read them as its own (`setMetadata`). */
+function recordMetadata(root, env) {
+  if (rustMissing(env)) throw new Error(`tools keep builds the set, with Rust: install it with rustup (https://rustup.rs) and the pinned toolchain ${pin()}`);
+  const result = spawnSync('cargo', ['metadata', '--locked', '--format-version', '1'], { cwd: root, env: cargoEnvironment(env), encoding: 'utf8', maxBuffer: 128 << 20 });
   if (result.status !== 0) throw new Error(`cargo metadata: ${result.stderr}${offlineMiss(result.stderr)}`);
   const metadata = JSON.parse(result.stdout), packages = new Map(metadata.packages.map(pkg => [pkg.id, pkg]));
-  const nodes = new Map(metadata.resolve.nodes.map(node => [node.id, node])), seenIds = new Set();
-  const pending = WEB_CRATES.map(name => metadata.packages.find(pkg => pkg.name === name).id);
-  while (pending.length) {
-    const id = pending.pop(); if (seenIds.has(id)) continue; seenIds.add(id);
-    for (const dep of nodes.get(id)?.deps ?? []) if (dep.dep_kinds.some(kind => kind.kind !== 'dev')) pending.push(dep.pkg);
-  }
-  const ids = [...seenIds].sort(), local = ids.map(id => packages.get(id)).filter(pkg => !pkg.source);
+  const nodes = new Map(metadata.resolve.nodes.map(node => [node.id, node]));
+  const reachable = names => {
+    const seenIds = new Set(), pending = names.map(name => metadata.packages.find(pkg => pkg.name === name).id);
+    while (pending.length) {
+      const id = pending.pop(); if (seenIds.has(id)) continue; seenIds.add(id);
+      for (const dep of nodes.get(id)?.deps ?? []) if (dep.dep_kinds.some(kind => kind.kind !== 'dev')) pending.push(dep.pkg);
+    }
+    return [...seenIds].sort();
+  };
+  const local = ids => ids.map(id => packages.get(id)).filter(pkg => !pkg.source && within(root, pkg.manifest_path));
+  const ids = reachable(WEB_CRATES);
   const record = {
     packages: ids.map(id => { const { name, source, manifest_path, targets } = packages.get(id); return source ? { id, name, source } : { id, name, source: null, manifest_path, targets: targets.map(({ name, kind, src_path }) => ({ name, kind, src_path })) }; }),
     resolve: { nodes: ids.map(id => ({ id, deps: (nodes.get(id)?.deps ?? []).map(({ pkg, dep_kinds }) => ({ pkg, dep_kinds: dep_kinds.map(({ kind }) => ({ kind })) })) })) },
   };
-  const text = JSON.stringify(record).replaceAll(JSON.stringify(ROOT).slice(1, -1), '<root>');
-  const files = ['Cargo.toml', 'Cargo.lock', ...local.map(pkg => relative(ROOT, pkg.manifest_path))];
-  return { record: JSON.parse(text), inputs: files.map(file => [file, digest(resolve(ROOT, file))]) };
+  const text = JSON.stringify(record).replaceAll(JSON.stringify(root).slice(1, -1), '<root>');
+  const inputs = ['Cargo.toml', 'Cargo.lock', ...local(ids).map(pkg => relative(root, pkg.manifest_path))];
+  const dirs = local(reachable([...EXECUTABLES, ...WEB_CRATES, 'exact-web-capabilities']))
+    .map(pkg => relative(root, dirname(pkg.manifest_path)) || '.');
+  return { metadata: { record: JSON.parse(text), inputs }, dirs };
 }
 
 /** The Cargo metadata the set the web compiler is taken from recorded for `WEB_CRATES` (null when its inputs differ
@@ -311,19 +341,16 @@ const buildsToolSet = triple => triple === hostTriple() || (hostTriple() === 'aa
 
 /** Build all seven products for one machine. The Mac producer also builds the Linux
  * executables with Zig. The four wasm modules are identical for both machines. */
-async function keep(triple = hostTriple()) {
-  if (rustMissing()) throw new Error(`tools keep builds the set, with Rust: install it with rustup (https://rustup.rs) and the pinned toolchain ${pin()}`);
+async function buildProducts(triple) {
   const host = /^host: (.+)$/m.exec(spawnSync('rustc', ['-vV'], { cwd: ROOT, encoding: 'utf8' }).stdout ?? '')?.[1];
   if (host !== hostTriple()) throw new Error(`rustc builds for ${host}, and this machine's tool sets are ${hostTriple()}'s`);
   const cross = triple !== host;
   if (!buildsToolSet(triple)) throw new Error(`cannot build a ${triple} tool set on ${host}`);
-  const commit = spawnSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
   const target = process.env.CARGO_TARGET_DIR ? resolve(process.env.CARGO_TARGET_DIR) : resolve(ROOT, 'target');
   const env = cargoEnvironment();
   delete env.RUSTUP_TOOLCHAIN;
-  const recipe = ['rust-toolchain.toml', '.cargo/config.toml'];
+  const recipe = cross ? [...NATIVE_RECIPE, ...CROSS_RECIPE] : NATIVE_RECIPE;
   if (cross) {
-    recipe.push('scripts/tools.mjs', 'scripts/rustc/exact-linux-cc');
     env.PATH = [resolve(ROOT, 'scripts/rustc'), env.PATH].join(':');
     env.CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER = 'exact-linux-cc';
     env.CRATE_CC_NO_DEFAULTS = '1';
@@ -331,53 +358,97 @@ async function keep(triple = hostTriple()) {
     env.CXX_x86_64_unknown_linux_gnu = 'exact-linux-cc -x c++';
   }
   const products = {}, files = new Map();
-  for (const crate of ['contract', 'exact-web-js', 'exact-filesystem']) {
+  for (const crate of EXECUTABLES) {
     const nativeHelper = !cross && crate === 'exact-filesystem';
     const profile = nativeHelper ? 'dev' : 'host-dev';
     console.log(`tools: building ${crate} (${triple}, ${profile})`);
-    let directory, file, buildDirs, inputs = recipe;
+    let file, depInfo, buildDirs, inputs = recipe;
     if (nativeHelper) {
       const helper = builtFilesystemHelper();
-      directory = resolve(helper.directory, 'debug');
+      const directory = resolve(helper.directory, 'debug');
       file = helper.path;
       // A reused capture must still match the build whose dep-info we read.
       const binary = resolve(directory, crate + EXE);
       if (!existsSync(binary) || sha(readFileSync(binary)) !== sha(readFileSync(file))) throw new Error(`${binary} is not the helper ${file}, so its dep-info cannot name that helper's inputs`);
+      depInfo = depInfoOf(binary);
       buildDirs = [resolve(directory, 'build')];
-      inputs = [...recipe, 'scripts/filesystem.mjs', 'scripts/rustc/exact-rustc'];
+      inputs = [...recipe, ...HELPER_RECIPE];
     } else {
-      const args = [cross ? 'rustc' : 'build', '--locked', '-q', '--profile', profile, '-p', crate, '--bin', crate];
-      if (cross) args.push('--target', triple, '--', '-C', 'strip=symbols');
-      const built = spawnSync('cargo', args, { cwd: ROOT, env, stdio: 'inherit' });
-      if (built.status !== 0) throw new Error(`${crate} did not build for ${triple}`);
-      directory = resolve(target, cross ? triple : '', profile);
-      file = resolve(directory, crate + EXE);
+      const args = [cross ? 'rustc' : 'build', '--locked', '-q', '--profile', profile, '-p', crate, '--bin', crate, '--message-format=json-render-diagnostics', '--target', triple];
+      if (cross) args.push('--', '-C', 'strip=symbols');
+      const built = spawnSync('cargo', args, { cwd: ROOT, env, encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'inherit'] });
+      if (built.status !== 0) throw new Error(`${crate} did not build for ${triple}`, { cause: built.error });
+      const artifact = built.stdout.split('\n').filter(Boolean).map(line => JSON.parse(line))
+        .find(message => message.reason === 'compiler-artifact' && message.target.name === crate && message.target.kind.includes('bin'));
+      file = artifact?.executable ?? artifact?.filenames.find(name => basename(name) === crate + EXE);
+      if (!file) throw new Error(`Cargo did not report the ${crate} executable for ${triple}`);
+      const directory = dirname(file);
+      depInfo = depInfoOf(file);
       buildDirs = [resolve(directory, 'build')];
-      if (cross) buildDirs.push(resolve(target, profile, 'build'));
+      if (directory !== resolve(target, profile)) buildDirs.push(resolve(target, profile, 'build'));
     }
     files.set(crate, file);
     products[crate] = { file: crate, crate, profile, toolchain: pin(),
-      inputs: inputsOf({ depInfo: resolve(directory, crate + '.d'), buildDirs, skip: [target], recipe: inputs }) };
+      inputs: inputsOf({ depInfo, buildDirs, skip: [target], recipe: inputs }) };
   }
   const { leafRecipes } = await import('../host/web-js/module.mjs');
   for (const leaf of await leafRecipes()) {
     files.set(leaf.name, leaf.wasm);
     products[leaf.name] = { file: leaf.name, crate: leaf.crate, profile: leaf.profile, toolchain: leaf.toolchain, flags: leaf.flags, wasmOpt: leaf.wasmOpt,
-      inputs: inputsOf({ depInfo: leaf.depInfo, buildDirs: leaf.buildDirs, skip: [target], recipe: ['host/web-js/module.mjs', 'scripts/cargo-check.mjs', '.cargo/config.toml'] }) };
+      inputs: inputsOf({ depInfo: leaf.depInfo, buildDirs: leaf.buildDirs, skip: [target], recipe: LEAF_RECIPE }) };
   }
-  // Only committed sources: a set serves every checkout with these bytes, so it is never an edit in progress.
-  const all = [...new Set(Object.values(products).flatMap(product => product.inputs))];
-  const dirty = spawnSync('git', ['-C', ROOT, 'status', '--porcelain', '--', ...all], { encoding: 'utf8' }).stdout.trim();
-  if (dirty) throw new Error(`tools keep keeps committed sources only, and these inputs are not:\n${dirty}`);
+  return { products, files };
+}
+
+function committedInputs(root, inputs) {
+  const dirty = gitAt(root, 'status', '--porcelain', '--untracked-files=normal', '--', ...new Set(inputs));
+  if (dirty) throw new Error(`tools keep keeps committed sources only:\n${dirty}`);
+}
+
+function dirtyPaths(root) {
+  const entries = gitAt(root, 'status', '--porcelain', '--untracked-files=normal', '-z').split('\0');
+  const paths = [];
+  for (let i = 0; entries[i]; i++) {
+    const entry = entries[i];
+    paths.push(entry.slice(3));
+    if (/[RC]/.test(entry.slice(0, 2))) paths.push(entries[++i]);
+  }
+  return paths;
+}
+
+export async function keep(triple = hostTriple(), { root = ROOT, env = process.env, build = buildProducts, readMetadata = recordMetadata } = {}) {
+  // Any case: Windows reads environment names without it, so Cargo takes `RustFlags` as `RUSTFLAGS`.
+  const override = Object.keys(env).find(name => /^(RUSTFLAGS|CARGO_(ENCODED_RUSTFLAGS|BUILD_RUSTFLAGS|TARGET_.+_RUSTFLAGS|PROFILE_.*|BUILD_DEP_INFO_BASEDIR))$/i.test(name));
+  if (override) throw new Error(`tools keep refuses while ${override} is set`);
+  const commit = gitAt(root, 'rev-parse', 'HEAD');
+  const initiallyDirty = dirtyPaths(root);
+  const { metadata, dirs } = readMetadata(root, env);
+  const recipe = triple === hostTriple() ? HELPER_RECIPE : CROSS_RECIPE;
+  committedInputs(root, [...WORKSPACE_INPUTS, ...recipe, ...LEAF_RECIPE, ...dirs]);
+  const { products, files } = await build(triple);
+  const inputs = [...new Set([...Object.values(products).flatMap(product => product.inputs), ...metadata.inputs])];
+  const workspace = sha(JSON.stringify(workspaceManifest(root)));
   for (const product of Object.values(products)) {
-    product.inputs = product.inputs.map(file => [file, digest(resolve(ROOT, file))]);
-    product.closure = lockClosure(ROOT, product.crate);
-    product.workspace = sha(JSON.stringify(workspaceManifest(ROOT)));
+    product.closure = lockClosure(root, product.crate);
+    product.workspace = workspace;
     product.target = triple;
   }
-  const manifest = { version: 1, triple, commit, source: 'built', built: Date.now(), products, metadata: recordMetadata() };
+  const hashes = new Map(inputs.map(file => [file, digest(resolve(root, file))]));
+  const hashed = files => files.map(file => [file, hashes.get(file)]);
+  for (const product of Object.values(products)) product.inputs = hashed(product.inputs);
+  metadata.inputs = hashed(metadata.inputs);
+  committedInputs(root, [...WORKSPACE_INPUTS, ...inputs]);
+  // After the status: a commit made before it leaves the status clean, so only HEAD shows it.
+  if (gitAt(root, 'rev-parse', 'HEAD') !== commit) throw new Error('HEAD changed while building the tool set. No set was kept.');
+  const inputPaths = inputs.map(file => resolve(root, file));
+  const dirty = initiallyDirty.find(file => {
+    const path = resolve(root, file);
+    return inputPaths.some(input => within(path, input) || within(input, path));
+  });
+  if (dirty) throw new Error(`tools keep keeps committed sources only: ${dirty} was dirty before the build`);
+  const manifest = { version: 1, triple, commit, source: 'built', verifiedBuild: true, built: Date.now(), products, metadata };
   const id = sha(JSON.stringify(Object.entries(products).map(([name, product]) => [name, product.inputs, product.closure, product.workspace]))).slice(0, 24);
-  const dir = cacheDir(process.env, triple), entry = resolve(dir, id), making = `${entry}.${process.pid}`;
+  const dir = cacheDir(env, triple), entry = resolve(dir, id), making = `${entry}.${process.pid}`;
   rmSync(making, { recursive: true, force: true });
   mkdirSync(making, { recursive: true });
   for (const [name, file] of files) {
@@ -386,7 +457,7 @@ async function keep(triple = hostTriple()) {
     // The executables are kept stripped; the profile is not, so its builds stay incremental.
     if (!name.endsWith('.wasm')) {
       chmodSync(kept, 0o755);
-      if (!cross && spawnSync('strip', [kept]).status !== 0) console.warn(`tools: ${name} kept unstripped (strip failed)`);
+      if (triple === hostTriple() && spawnSync('strip', [kept]).status !== 0) console.warn(`tools: ${name} kept unstripped (strip failed)`);
     }
     const bytes = readFileSync(kept);
     products[name].sha256 = sha(bytes);
@@ -396,7 +467,7 @@ async function keep(triple = hostTriple()) {
   rmSync(entry, { recursive: true, force: true });
   renameSync(making, entry);
   // The newest four sets of this triple: a set is about 100 MB.
-  for (const { dir: old } of sets(process.env, triple).slice(4)) rmSync(old, { recursive: true, force: true });
+  for (const { dir: old } of sets(env, triple).slice(4)) rmSync(old, { recursive: true, force: true });
   console.log(`tools: kept the set for ${short(commit)} in ${entry.replace(homedir(), '~')}`);
   for (const [name, product] of Object.entries(products)) console.log(`  ${name}: ${(product.size / 1e6).toFixed(1)} MB, ${product.inputs.length} inputs`);
   return { dir: entry, manifest };
@@ -644,7 +715,7 @@ async function recordCommit(origin, stream, base, commit, id, newer) {
 function gitAt(tree, ...args) {
   const r = spawnSync('git', ['-C', tree, ...args], { encoding: 'utf8', maxBuffer: 32 << 20 });
   if (r.status !== 0) throw new Error(`git ${args[0]}: ${r.error?.message ?? r.stderr.trim()}`);
-  return r.stdout.trim();
+  return args.includes('-z') ? r.stdout : r.stdout.trim();
 }
 
 function cleanRevision(tree) {

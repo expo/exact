@@ -46,7 +46,10 @@ style Prompt
 
 component Setup
   props
+    id: string
     prompt: string
+    copiedId: string
+    copyBlock: action
   state shown = false
   action toggle
     shown = not shown
@@ -55,7 +58,7 @@ component Setup
       column class=Frame align-self="stretch"
         row class=Bar
           text "Agent prompt" class=Label
-          CopyButton(source=prompt)
+          CopyButton(id=id, source=prompt, copiedId=copiedId, copyBlock=copyBlock)
         view class=Body padding-bottom=28
           if shown
             text prompt class=Prompt testId="setup-prompt"
@@ -71,6 +74,8 @@ component Home
   props
     page: Page
     nav: Nav
+    copiedId: string
+    copyBlock: action
   view
     column testId="home-page"
       column align-items="center" text-align="center" padding="clamp(16px, 6vw, 56px) 0 8px"
@@ -86,14 +91,14 @@ component Home
             Avatar(icon="symbol:icon.cursor", fill="light-dark(#000000, #000000)", ink="light-dark(#FFFFFF, #FFFFFF)", first=false)
           text "Teach your agent how to use Exact:" font-family="var(--font-mono)" font-size="var(--text-xs)" color="var(--color-text-secondary)"
           text nav.startLabel font-family="var(--font-mono)" font-size="var(--text-xs)" color="var(--color-text-default)" white-space="nowrap"
-          CopyButton(source=nav.startPrompt)
+          CopyButton(id="start-prompt", source=nav.startPrompt, copiedId=copiedId, copyBlock=copyBlock)
       column margin-top=56
         h2 class=SectionTitle
           text "Set up Exact"
         text "Give this prompt to your coding agent. It installs the toolchain, makes an app and starts its dev loop." margin-top=6 font-size="var(--text-sm)" color="var(--color-text-secondary)"
         for b in page.blocks.filter(x => x.lang == "prompt") key=b.id
           view margin-top=16
-            Setup(prompt=b.text)
+            Setup(id=b.id, prompt=b.text, copiedId=copiedId, copyBlock=copyBlock)
       column margin-top=48
         h2 class=SectionTitle
           text "Explore the docs"

@@ -24,39 +24,44 @@ component Lines
 
 component CopyButton
   props
+    id: string
     source: string
-  state copied = false
-  action copy
-    copyText(source)
-    copied = true
+    copiedId: string
+    copyBlock: action
   view
-    button press=copy appearance="none" aria-label=(copied ? "Copied" : "Copy") title=(copied ? "Copied" : "Copy") padding=6 border-radius="var(--radius-lg)" testId="copy"
-      image (copied ? "symbol:checkmark" : "symbol:copy") aria-hidden=true font-size="var(--text-sm)" color="var(--color-icon-default)"
+    button press=copyBlock(id, source) appearance="none" aria-label=(copiedId == id ? "Copied" : "Copy") title=(copiedId == id ? "Copied" : "Copy") padding=6 border-radius="var(--radius-lg)" testId="copy"
+      image (copiedId == id ? "symbol:checkmark" : "symbol:copy") aria-hidden=true font-size="var(--text-sm)" color="var(--color-icon-default)"
 
 component CodeBlock
   props
+    id: string
     lang: string
     title: string
     source: string
     lines: Line[]
+    copiedId: string
+    copyBlock: action
   view
     column class=Frame
       row class=Bar
         text (title != "" ? title : lang == "" ? "text" : lang) class=Label testId="code-title"
-        CopyButton(source=source)
+        CopyButton(id=id, source=source, copiedId=copiedId, copyBlock=copyBlock)
       view class=Body
         Lines(lines=lines)
 
 component Terminal
   props
+    id: string
     title: string
     source: string
     lines: Line[]
+    copiedId: string
+    copyBlock: action
   view
     column class=Frame testId="terminal"
       row class=Bar
         text (title != "" ? title : "Terminal") class=Label
-        CopyButton(source=source)
+        CopyButton(id=id, source=source, copiedId=copiedId, copyBlock=copyBlock)
       view class=Body
         Lines(lines=lines)
 
@@ -64,13 +69,12 @@ component Terminal
 // and the text itself behind Show prompt. Neutral colours: the card is the page's subtle background.
 component AgentPrompt
   props
+    id: string
     title: string
     source: string
-  state copied = false
+    copiedId: string
+    copyBlock: action
   state shown = false
-  action copy
-    copyText(source)
-    copied = true
   action toggle
     shown = not shown
   view
@@ -82,9 +86,9 @@ component AgentPrompt
           column gap=2 min-width=0
             text title font-size="var(--text-base)" font-weight=600 color="var(--color-text-default)"
             text "Paste this into Claude, Cursor, Codex, or another agent." font-size="var(--text-sm)" color="var(--color-text-secondary)"
-        button press=copy appearance="none" display="flex" align-items="center" gap=6 padding="6px 12px" border="1px solid var(--color-border-secondary)" border-radius="var(--radius-lg)" background-color="var(--color-background-default)" testId="agent-prompt-copy"
-          image (copied ? "symbol:checkmark" : "symbol:copy") aria-hidden=true font-size="var(--text-sm)" color="var(--color-icon-default)"
-          text (copied ? "Copied" : "Copy prompt") font-size="var(--text-sm)" font-weight=500 color="var(--color-text-default)"
+        button press=copyBlock(id, source) appearance="none" display="flex" align-items="center" gap=6 padding="6px 12px" border="1px solid var(--color-border-secondary)" border-radius="var(--radius-lg)" background-color="var(--color-background-default)" testId="agent-prompt-copy"
+          image (copiedId == id ? "symbol:checkmark" : "symbol:copy") aria-hidden=true font-size="var(--text-sm)" color="var(--color-icon-default)"
+          text (copiedId == id ? "Copied" : "Copy prompt") font-size="var(--text-sm)" font-weight=500 color="var(--color-text-default)"
       button press=toggle appearance="none" display="flex" align-items="center" gap=6 align-self="flex-start" aria-expanded=shown padding="4px 8px" margin="-4px -8px" border-radius="var(--radius-lg)" testId="agent-prompt-toggle"
         image "symbol:back" aria-hidden=true font-size="var(--text-xs)" color="var(--color-icon-tertiary)" transition="rotate 200ms ease" rotate=(shown ? "90deg" : "270deg")
         text (shown ? "Hide prompt" : "Show prompt") font-size="var(--text-sm)" color="var(--color-text-secondary)"
