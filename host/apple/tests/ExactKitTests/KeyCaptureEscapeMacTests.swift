@@ -120,6 +120,44 @@ final class KeyCaptureEscapeMacTests: XCTestCase {
         XCTAssertEqual(editor.string, "az")
     }
 
+    func testAnEmptyTextInputStillRunsBeforeTheNextEdit() throws {
+        for field in ["input", "textarea"] {
+            let f = try SheetFixture(page: """
+            component PostEdit
+              state body = ""
+              state previous = ""
+              action before(e: InputEvent)
+                if e.data == some("x") and previous == "a"
+                  preventDefault()
+              action edited(value: string)
+                previous = value
+                if value == "ac"
+                  body = "ABC"
+                  setSelectionRange("editor", 1, 2)
+                else if value == "AbC"
+                  setSelectionRange("editor", 0, 2)
+              view
+                \(field) id="editor" testId="editor" value=body input=edited beforeinput=before
+            """)
+            defer { f.close() }
+            let node = try f.node("editor")
+            let responder = try XCTUnwrap((node.textArea as NSResponder?) ?? node.field)
+            XCTAssertTrue(f.window.makeFirstResponder(responder))
+            let editor = try XCTUnwrap(node.textArea ?? node.field?.currentEditor() as? NSTextView)
+            editor.insertText("a", replacementRange: editor.selectedRange())
+            XCTAssertEqual(editor.string, "a")
+            editor.insertText("x", replacementRange: editor.selectedRange())
+            XCTAssertEqual(editor.string, "a", "beforeinput sees the preceding input's state")
+            editor.insertText("c", replacementRange: editor.selectedRange())
+            XCTAssertEqual(editor.string, "ABC")
+            XCTAssertEqual(editor.selectedRange(), NSRange(location: 1, length: 1))
+            editor.insertText("b", replacementRange: editor.selectedRange())
+            XCTAssertEqual(editor.string, "AbC")
+            XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: 2))
+            XCTAssertTrue(f.window.firstResponder === editor)
+        }
+    }
+
     /// A batch that changes the placeholder of a focused, empty field: AppKit
     /// restarts the field editor's editing to show it (with text in the
     /// field it does not), and the field keeps the focus and its caret, with

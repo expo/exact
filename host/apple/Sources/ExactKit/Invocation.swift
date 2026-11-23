@@ -174,11 +174,22 @@ extension ExactSession {
             #endif
             apply(batch)
         } }
+        presenter.onInput = { [unowned self] id, value in admit(id) {
+            if let edit = presenter.fieldSelections.input(id), let selection = presenter.fieldSelections.reported(id, value) {
+                #if os(macOS)
+                let unlessEmpty = clock == nil && !ExactEnv.agentFreezes && stage == nil
+                    && !edit.isComposing && presenter.views[id]?.fieldComposing == false
+                #else
+                let unlessEmpty = false
+                #endif
+                applyInput(runtime.fieldEvent(id, 54, edit.payload(value, selection), now: now()), unlessEmpty: unlessEmpty)
+            } else { applyInput(runtime.input(id, value, selection: presenter.fieldSelections.reported(id, value), now: now())) }
+        } }
         presenter.fieldSelections.onBeforeInput = { [unowned self] id, value, selection, edit in
-            applyInput(runtime.fieldEvent(id, 53, edit.payload(value, selection), now: now()), at: id, beforeDefault: true)
+            applyInput(runtime.fieldEvent(id, 53, edit.payload(value, selection), now: now()), at: id, unlessEmpty: true)
         }
         presenter.onKey = { [unowned self] id, press in
-            applyInput(runtime.key(id, press.payload, up: press.up, capture: press.capture, now: now()), at: id, beforeDefault: !press.up)
+            applyInput(runtime.key(id, press.payload, up: press.up, capture: press.capture, now: now()), at: id, unlessEmpty: !press.up)
         }
     }
 
@@ -191,8 +202,10 @@ extension ExactSession {
     /// can cause as well as a person: focus, a selection, a scroll, a
     /// dialog's close and a popover's `toggle`. Beside a staged batch the
     /// input on `id` is admitted as `admit` says (LLP 1072 T13).
+    /// A text event can skip presentation when AppKit already reflects the edit
+    /// and the app produced no view changes or commands.
     // Input without a touch hit test still installs ownership before its runner call.
-    package func applyInput(_ input: @autoclosure () -> Batch, at id: UInt32? = nil, beforeDefault: Bool = false) {
+    package func applyInput(_ input: @autoclosure () -> Batch, at id: UInt32? = nil, unlessEmpty: Bool = false) {
         guard admits(id) else { return }
         showBudgetWarning(nil)
         #if os(iOS)
@@ -202,7 +215,7 @@ extension ExactSession {
         var batch = input()
         batch.input = CACurrentMediaTime()
         #if os(macOS)
-        if beforeDefault, !batch.layoutProvisional, !batch.replacesTree { return applyUnlessEmpty(batch) }
+        if unlessEmpty, !batch.layoutProvisional, !batch.replacesTree { return applyUnlessEmpty(batch) }
         #endif
         apply(batch)
     }
