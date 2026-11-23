@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -85,14 +85,26 @@ test('a recipe uses its own prompt or expands both source references in the fold
     const inherited = 'recipes/new-$&.md';
     const dedicated = '```prompt Dedicated\nRead docs/recipes/own.md.\n```';
     writeFileSync(join(dir, own), dedicated);
-    writeFileSync(join(dir, 'recipes.md'), '```prompt Folder\nRead https://github.com/expo/exact/blob/main/docs/{{SOURCE}} or docs/{{SOURCE}}.\n```');
+    copyFileSync(join(site, 'prompts', 'recipes.md'), join(dir, 'recipes.md'));
     writeFileSync(join(dir, '..md'), 'A top-level document has no folder prompt.');
 
-    expect([promptOf(dir, own), promptOf(dir, inherited), promptOf(dir, 'guide.md')]).toEqual([
-      { text: `${dedicated}\n\n`, fromFolder: false },
-      { text: '```prompt Folder\nRead https://github.com/expo/exact/blob/main/docs/recipes/new-$&.md or docs/recipes/new-$&.md.\n```\n\n', fromFolder: true },
-      { text: '', fromFolder: false },
-    ]);
+    const fallback = promptOf(dir, inherited);
+    const prompt = marked.lexer(fallback.text).find(token => token.type === 'code' && token.lang?.split(/\s+/, 1)[0] === 'prompt');
+    expect({
+      dedicated: promptOf(dir, own),
+      fromFolder: fallback.fromFolder,
+      remoteSource: prompt?.text.includes(`https://github.com/expo/exact/blob/main/docs/${inherited}`),
+      checkoutSource: prompt?.text.includes(` docs/${inherited}`),
+      placeholders: prompt?.text.match(/\{\{[^{}]*\}\}/g) ?? [],
+      topLevel: promptOf(dir, 'guide.md'),
+    }).toEqual({
+      dedicated: { text: `${dedicated}\n\n`, fromFolder: false },
+      fromFolder: true,
+      remoteSource: true,
+      checkoutSource: true,
+      placeholders: [],
+      topLevel: { text: '', fromFolder: false },
+    });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
