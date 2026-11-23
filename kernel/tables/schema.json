@@ -9302,7 +9302,7 @@
     ["textarea", "FieldText", "exact", "exact", "exact", "exact", "exact", "none: the terminal draws no colour", "exact"],
     ["textarea", "placeholder", "exact", "exact", "exact", "exact", "exact", "none: the terminal draws no colour", "exact"]
   ],
-  "_textStyles": "@ref LLP 1115 D3: the platform's text styles, written `-exact-<name>` (or the WebKit alias) as a `font-size` and lowered from a heading's level. Each row: the name, WebKit's `-apple-system-*` alias or empty, UIFont's and NSFont's TextStyle, its weight in each column of the metric table (web, iOS, the Mac, neutral: the Mac's `headline` is bold, its `caption2` medium), the size at each body size in `textStyleBodies` (the root font size the host sets), and its leading in each column, a line height over the size, or null for `normal`, the face's own (LLP 1115.000 D12.2, measured with NSFont.preferredFont on macOS and UIFont.preferredFont on an iOS 27 simulator, where every style's line height is the face's natural one). The ramp is Apple's: 13 is the Mac's (NSFont.preferredFont, macOS 11), 14 to 53 iOS Dynamic Type's categories xSmall to AX5 (17 is Large, the default; the web's 16 reads Small's row). A root between two bodies interpolates; outside, the nearest row scales.",
+  "_textStyles": "@ref LLP 1115 D3: the platform's text styles, written `-exact-<name>` (or the WebKit alias) as a `font-size` and lowered from a heading's level. Each row: the name, WebKit's `-apple-system-*` alias or empty, UIFont's and NSFont's TextStyle, its weight in each column of the metric table (web, iOS, the Mac, neutral: the Mac's `headline` is bold, its `caption2` medium), the size at each body size in `textStyleBodies` (the root font size the host sets), and its leading in each column, a line height over the size, or null for `normal`, the face's own (LLP 1115.000 D12.2, measured with NSFont.preferredFont on macOS and UIFont.preferredFont on an iOS 27 simulator, where every style's line height is the face's natural one). The ramp is Apple's: 13 is the Mac's (NSFont.preferredFont, macOS 11), 14 to 53 iOS Dynamic Type's categories xSmall to AX5 (17 is Large, the default; the web's 16 reads Small's row). A root between two bodies interpolates; outside, the nearest row scales. Last, Android's Material look's (LLP 1115.001 D4's table): its `TypeScaleTokens` key in Compose Material 3 at the pinned version, its size and line height in sp and its weight, which `host/android/reference/tokens.mjs` checks against that source; the size scales with the root over 16, the font scale the host reports, and the leading is the line height over the size. Material's tracking is not drawn.",
   "textStyleBodies": [
     13,
     14,
@@ -9350,6 +9350,12 @@
         null,
         1.2308,
         null
+      ],
+      [
+        "DisplaySmall",
+        36,
+        44,
+        400
       ]
     ],
     [
@@ -9383,6 +9389,12 @@
         null,
         1.1818,
         null
+      ],
+      [
+        "HeadlineMedium",
+        28,
+        36,
+        400
       ]
     ],
     [
@@ -9416,6 +9428,12 @@
         null,
         1.2941,
         null
+      ],
+      [
+        "HeadlineSmall",
+        24,
+        32,
+        400
       ]
     ],
     [
@@ -9449,6 +9467,12 @@
         null,
         1.3333,
         null
+      ],
+      [
+        "TitleLarge",
+        22,
+        28,
+        400
       ]
     ],
     [
@@ -9482,6 +9506,12 @@
         null,
         1.2308,
         null
+      ],
+      [
+        "TitleMedium",
+        16,
+        24,
+        500
       ]
     ],
     [
@@ -9515,6 +9545,12 @@
         null,
         1.2308,
         null
+      ],
+      [
+        "BodyLarge",
+        16,
+        24,
+        400
       ]
     ],
     [
@@ -9548,6 +9584,12 @@
         null,
         1.25,
         null
+      ],
+      [
+        "BodyLarge",
+        16,
+        24,
+        400
       ]
     ],
     [
@@ -9581,6 +9623,12 @@
         null,
         1.2727,
         null
+      ],
+      [
+        "BodyMedium",
+        14,
+        20,
+        400
       ]
     ],
     [
@@ -9614,6 +9662,12 @@
         null,
         1.3,
         null
+      ],
+      [
+        "BodySmall",
+        12,
+        16,
+        400
       ]
     ],
     [
@@ -9647,6 +9701,12 @@
         null,
         1.3,
         null
+      ],
+      [
+        "LabelMedium",
+        12,
+        16,
+        500
       ]
     ],
     [
@@ -9680,6 +9740,12 @@
         null,
         1.3,
         null
+      ],
+      [
+        "LabelSmall",
+        11,
+        16,
+        500
       ]
     ]
   ]

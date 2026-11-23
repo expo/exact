@@ -146,6 +146,17 @@ function check({ files, objects }) {
     ok &&= same;
     console.log(`  ${same ? 'ok' : 'DIFFERS'} ${name}: schema ${want}, source ${got ?? 'not found'}   ${from}`);
   }
+  // A text style's Material cell names its `TypeScaleTokens` key: its size, line height and weight there.
+  const weights = { Normal: 400, Medium: 500, Bold: 700 };
+  for (const [name, , , , , , , [key, size, line, weight]] of schema.textStyles) {
+    const sp = (part) => resolveToken(objects, `TypeScaleTokens.${key}${part}`).sp;
+    const named = resolveToken(objects, `TypeScaleTokens.${key}Weight`).expr?.match(/(?:FontWeight\.|Weight)(Normal|Medium|Bold)\b/)?.[1];
+    for (const [part, want, got] of [['Size', size, sp('Size')], ['LineHeight', line, sp('LineHeight')], ['Weight', weight, weights[named]]]) {
+      const same = got === want;
+      ok &&= same;
+      console.log(`  ${same ? 'ok' : 'DIFFERS'} ${name} ${part}: schema ${want}, source ${got ?? 'not found'}   TypeScaleTokens.${key}${part}`);
+    }
+  }
   console.log(ok ? `every Material row is Compose Material 3 ${pinned}'s` : `rows differ from Compose Material 3 ${pinned}`);
   return ok;
 }
