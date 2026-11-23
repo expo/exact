@@ -50,6 +50,17 @@ test('a path nothing answers gets 404.md where Markdown was asked for', async ()
   expect(await get('/nope', { ...asksMarkdown, 'If-None-Match': '"current"' })).toMatchObject(missing);
 });
 
+test('a path nothing answers gets a JSON 404 where JSON was asked for', async () => {
+  const response = await worker.fetch(new Request('https://docs.example.com/nope', { headers: { Accept: 'application/json' } }), env);
+  expect([response.status, response.headers.get('Content-Type'), response.headers.get('Vary')]).toEqual([404, 'application/json; charset=utf-8', 'Accept']);
+  expect(await response.json()).toMatchObject({ error: { status: 404, code: 'not_found' }, links: { index: 'https://docs.example.com/llms.txt', sitemap: 'https://docs.example.com/sitemap.md', home: 'https://docs.example.com/' } });
+  const html = { status: 404, type: HTML['Content-Type'], body: 'not found page' };
+  expect(await get('/nope', { Accept: 'text/html, application/json;q=0.9' })).toMatchObject(html);
+  expect(await get('/nope', { Accept: '*/*' })).toMatchObject(html);
+  expect(await get('/nope', { Accept: 'application/json, text/markdown' })).toMatchObject({ status: 404, type: MARKDOWN['Content-Type'], body: '# Page not found' });
+  expect(await get('/start', { Accept: 'application/json' })).toMatchObject({ status: 200, type: HTML['Content-Type'], body: 'start page' });
+});
+
 test('a request that is not a GET or a HEAD is not negotiated', async () => {
   const response = await worker.fetch(new Request('https://docs.example.com/start', { method: 'POST', body: 'text', headers: asksMarkdown }), env);
   expect([response.status, response.headers.get('Vary'), await response.text()]).toEqual([200, null, 'start page']);
