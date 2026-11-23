@@ -1,5 +1,6 @@
 //! LLP 1070.000: `scrollIntoView` brings a virtualized list's row into view
 //! by key, aligned as the web aligns it, corrected until it lands.
+use crate::source::{boxed, Source};
 use exact_kernel::Kernel;
 use exact_plan::Value;
 use exact_runner::{
@@ -97,7 +98,7 @@ fn an_elements_scroll_into_view_is_the_hosts() {
 "#;
     let mut r = Runner::boot(
         contract::compile(source).unwrap(),
-        Data,
+        boxed(Data),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -133,10 +134,10 @@ impl DataSource for Data {
         ))
     }
 }
-fn boot() -> Runner<Data> {
+fn boot() -> Runner<Source> {
     Runner::boot(
         contract::compile(APP).unwrap(),
-        Data,
+        boxed(Data),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -145,7 +146,7 @@ fn boot() -> Runner<Data> {
 }
 /// A report of the feed at `offset` (a 600 px port), its rows at their real
 /// size, with `fill`.
-fn feed_report(r: &mut Runner<Data>, offset: f64, fill: exact_runner::CollectionFill) {
+fn feed_report(r: &mut Runner<Source>, offset: f64, fill: exact_runner::CollectionFill) {
     let c = list(r, false).unwrap();
     report(
         r,
@@ -166,7 +167,7 @@ fn fling(velocity: f64) -> exact_runner::CollectionFill {
         ..Default::default()
     }
 }
-fn list(r: &Runner<Data>, horizontal: bool) -> Option<CollectionSnapshot> {
+fn list(r: &Runner<Source>, horizontal: bool) -> Option<CollectionSnapshot> {
     r.collections().into_iter().find(|c| {
         (c.axis == exact_runner::ListAxis::Horizontal) == horizontal
             && (horizontal || c.parent.is_none())
@@ -176,7 +177,7 @@ fn list(r: &Runner<Data>, horizontal: bool) -> Option<CollectionSnapshot> {
 /// mounted row at its real size (feed rows 40, or 160 with a strip; cards
 /// 60), until the list asks for nothing more. The offset it ends at.
 fn host(
-    r: &mut Runner<Data>,
+    r: &mut Runner<Source>,
     view: u32,
     offset: f64,
     port: f64,
@@ -186,7 +187,7 @@ fn host(
 }
 /// `host`, laying out `padding` before the rows and after them.
 fn host_padded(
-    r: &mut Runner<Data>,
+    r: &mut Runner<Source>,
     view: u32,
     mut offset: f64,
     port: f64,
@@ -229,7 +230,7 @@ fn host_padded(
 /// its real `size`.
 #[allow(clippy::too_many_arguments)]
 fn report(
-    r: &mut Runner<Data>,
+    r: &mut Runner<Source>,
     c: &CollectionSnapshot,
     sequence: u64,
     offset: f64,
@@ -271,7 +272,7 @@ fn feed_size(i: usize) -> f64 {
         40.0
     }
 }
-fn state(r: &Runner<Data>) -> String {
+fn state(r: &Runner<Source>) -> String {
     exact_runner::agent::state(r)
 }
 
@@ -320,7 +321,7 @@ fn a_row_aligns_clear_of_what_the_platform_covers() {
     let (port, bands) = (600.0, [100.0, 80.0]);
     host_padded(&mut r, feed, -100.0, port, bands, feed_size);
     assert!(r.set_list_covered(feed, bands));
-    let landed = |r: &mut Runner<Data>, n: usize| {
+    let landed = |r: &mut Runner<Source>, n: usize| {
         let offset = host_padded(r, feed, -100.0, port, bands, feed_size);
         let row = list(r, false)
             .unwrap()
@@ -379,7 +380,7 @@ fn refused_keys_are_preserved_in_state_json() {
 "#;
     let mut r = Runner::boot(
         contract::compile(source).unwrap(),
-        Data,
+        boxed(Data),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -503,7 +504,7 @@ fn a_card_whose_feed_is_scrolling_waits_with_it_and_lands_with_its_row() {
     let feed = list(&r, false).unwrap().view;
     host(&mut r, feed, 0.0, 600.0, feed_size);
     let fling = fling(3000.0);
-    let fling_to = |r: &mut Runner<Data>, offset: f64| {
+    let fling_to = |r: &mut Runner<Source>, offset: f64| {
         let c = list(r, false).unwrap();
         report(
             r,
@@ -623,7 +624,7 @@ fn a_card_whose_row_already_shows_begins_at_once_and_the_feed_stays() {
     let fling = fling(3000.0);
     // Row 20 starts at 1040 (rows 0 and 10 are 160 tall, the rest 40)
     let mut sequence = list(&r, false).unwrap().scroll_sequence;
-    let mut fling_at = |r: &mut exact_runner::Runner<Data>, offset: f64| {
+    let mut fling_at = |r: &mut exact_runner::Runner<Source>, offset: f64| {
         let c = list(r, false).unwrap();
         sequence += 1;
         report(r, &c, sequence, offset, 600.0, [0.0; 2], &feed_size, fling);
@@ -704,7 +705,7 @@ fn a_card_refused_while_its_feed_opens_at_its_end_leaves_it_opening() {
                 "list id=\"feed\" scroll-start=\"end\" ",
             ))
             .unwrap(),
-            Data,
+            boxed(Data),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -787,7 +788,7 @@ fn a_refused_inner_part_reads_the_same_at_rest_and_during_the_readers_scroll() {
             scrolling: true,
             ..Default::default()
         };
-        let scroll = |r: &mut Runner<Data>| {
+        let scroll = |r: &mut Runner<Source>| {
             let c = list(r, false).unwrap();
             report(
                 r,
@@ -854,7 +855,7 @@ component App
         let source = source.replace("key=p.id", &format!("key={key}"));
         let mut r = Runner::boot(
             contract::compile(&source).unwrap(),
-            Data,
+            boxed(Data),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -910,7 +911,7 @@ shape Post
 "#;
     let mut r = Runner::boot(
         contract::compile(source).unwrap(),
-        Data,
+        boxed(Data),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -918,7 +919,7 @@ shape Post
     .unwrap();
     let feed = list(&r, false).unwrap().view;
     host(&mut r, feed, 1804.0, 600.0, |_| 100.25);
-    let heard = |r: &mut Runner<Data>, top: &str| {
+    let heard = |r: &mut Runner<Source>, top: &str| {
         let payload = format!("0,{top},400,100300,400,600");
         r.dispatch(feed, exact_runner::Event::scroll_payload(&payload).unwrap())
             .unwrap();
@@ -970,7 +971,7 @@ shape Post
 "#;
     let mut r = Runner::boot(
         contract::compile(source).unwrap(),
-        Data,
+        boxed(Data),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -991,6 +992,7 @@ shape Post
 }
 
 mod sibling_inner {
+    use crate::source::boxed;
     use exact_kernel::{Kernel, PropId};
     use exact_plan::Value;
     use exact_runner::instance::collection::{Align, IntoView};
@@ -1015,8 +1017,14 @@ mod sibling_inner {
     fn nested_seek_selects_the_outer_list_holding_the_requested_id() {
         let plan = contract::compile(SOURCE).expect("valid app");
         let plan = exact_plan::Plan::decode(&plan.encode()).unwrap();
-        let mut r =
-            Runner::boot(plan, (), Kernel::with_monospace(), Default::default(), "/").unwrap();
+        let mut r = Runner::boot(
+            plan,
+            boxed(()),
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
         let before = r.collections();
         r.scroll_into_view(IntoView {
             list: "inner-b".into(),

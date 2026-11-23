@@ -3,31 +3,24 @@
 //! top layer, its clip, what it inherits for hit testing, and the modal
 //! boundary a presentation draws for structural reads.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, Offer};
-use exact_runner::{DataError, DataSource, Runner, Value};
+use exact_runner::{Runner, Value};
 
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-
-fn num(r: &Runner<NoData>, name: &str) -> f64 {
+fn num(r: &Runner<Source>, name: &str) -> f64 {
     r.slot(name).and_then(Value::as_number).unwrap()
 }
 
 /// The view the first node with `id` is.
-fn view(r: &Runner<NoData>, id: &str) -> exact_kernel::ViewId {
+fn view(r: &Runner<Source>, id: &str) -> exact_kernel::ViewId {
     let key = r.kernel().find_by_id(id)[0];
     r.kernel().arena().local_id(key.index)
 }
 
-fn boot(plan: exact_plan::Plan) -> Runner<NoData> {
+fn boot(plan: exact_plan::Plan) -> Runner<Source> {
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -36,7 +29,7 @@ fn boot(plan: exact_plan::Plan) -> Runner<NoData> {
 }
 
 /// Gives `view`'s root a block that is the size on both axes.
-fn block(r: &mut Runner<NoData>, view: exact_kernel::ViewId, width: f32, height: f32) {
+fn block(r: &mut Runner<Source>, view: exact_kernel::ViewId, width: f32, height: f32) {
     let is = exact_kernel::BlockAxis::Is;
     r.kernel_mut()
         .set_host_block(
@@ -50,7 +43,7 @@ fn block(r: &mut Runner<NoData>, view: exact_kernel::ViewId, width: f32, height:
         .unwrap();
 }
 
-fn lay_out(r: &mut Runner<NoData>) {
+fn lay_out(r: &mut Runner<Source>) {
     let root = r.kernel().roots()[0];
     r.kernel_mut()
         .compute_layout(root, Offer::definite(400.0, 800.0))
@@ -302,7 +295,7 @@ fn a_block_held_beside_its_parent_is_read_where_its_holder_shows_it() {
     let route = view(&r, "route");
     block(&mut r, route, 300.0, 500.0);
     lay_out(&mut r);
-    let read = |r: &mut Runner<NoData>| {
+    let read = |r: &mut Runner<Source>| {
         r.act("read", vec![]).unwrap();
         let text = |name: &str| r.slot(name).and_then(Value::as_str).map(str::to_owned);
         let rect = ["x", "y", "width", "height"].map(|name| num(r, name));
@@ -481,7 +474,7 @@ fn a_block_clips_what_is_reached_in_it() {
     block(&mut r, route, 200.0, 500.0);
     lay_out(&mut r);
     let hit =
-        |r: &Runner<NoData>, name: &str| r.slot(name).and_then(Value::as_str).map(str::to_owned);
+        |r: &Runner<Source>, name: &str| r.slot(name).and_then(Value::as_str).map(str::to_owned);
     // A sheet 200 points wide at x 100: the route's 400 points overflow it
     r.top_layer_frames(&[(route, [100.0, 0.0, 200.0, 500.0], None)], None);
     r.act("read", vec![]).unwrap();
@@ -540,7 +533,7 @@ fn an_inert_ancestor_keeps_a_lifted_block_from_being_reached() {
     let route = view(&r, "route");
     block(&mut r, route, 200.0, 500.0);
     lay_out(&mut r);
-    let hit = |r: &Runner<NoData>| r.slot("hit").and_then(Value::as_str).map(str::to_owned);
+    let hit = |r: &Runner<Source>| r.slot("hit").and_then(Value::as_str).map(str::to_owned);
     r.top_layer_frames(&[(route, [100.0, 0.0, 200.0, 500.0], None)], None);
     r.act("read", vec![]).unwrap();
     assert_eq!(

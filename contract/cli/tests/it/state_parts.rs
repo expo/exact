@@ -3,24 +3,16 @@
 //! hover and focus targets are literals. List rows admit active parts.
 
 use crate::scratch::Scratch;
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Color, ColorValue, Kernel, RowValue, StyleId};
-use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Runner};
+use exact_runner::Runner;
 
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-
-fn booted(src: &str) -> Runner<NoData> {
+fn booted(src: &str) -> Runner<Source> {
     let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e:?}"));
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -35,7 +27,7 @@ fn refused(src: &str) -> String {
         .unwrap_or_else(|| "compiled".into())
 }
 
-fn colour(r: &Runner<NoData>, id: &str, style: StyleId) -> String {
+fn colour(r: &Runner<Source>, id: &str, style: StyleId) -> String {
     let key = r.kernel().find_by_test_id(id)[0];
     match r.kernel().node_by_key(key).unwrap().computed(style) {
         RowValue::ColorValue(ColorValue::Fixed(c)) => hex(c),
@@ -47,7 +39,7 @@ fn hex(c: Color) -> String {
     format!("#{:06x}", c.0 >> 8)
 }
 
-fn press(r: &mut Runner<NoData>, id: &str) {
+fn press(r: &mut Runner<Source>, id: &str) {
     let view = {
         let k = r.kernel();
         k.node_by_key(k.find_by_test_id(id)[0]).unwrap().id
@@ -595,10 +587,10 @@ fn a_param_read_only_by_a_state_part_is_reached() {
         "the :active row, the press's background"
     );
     // The :disabled row folded over the param: 0.4 once disabled.
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -688,7 +680,7 @@ fn active_targets_follow_regular_commits_and_clear() {
       text "Paint"
 "##,
     );
-    let style = |r: &Runner<NoData>| {
+    let style = |r: &Runner<Source>| {
         let k = r.kernel();
         let s = k.node_by_key(k.find_by_test_id("paint")[0]).unwrap().style;
         (
@@ -764,7 +756,7 @@ fn active_targets_can_belong_to_list_rows() {
           text row
 "##,
     );
-    let fills = |r: &Runner<NoData>| {
+    let fills = |r: &Runner<Source>| {
         let k = r.kernel();
         k.find_by_test_id("paint")
             .into_iter()

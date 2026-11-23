@@ -3,22 +3,16 @@
 //! dataset, not module props; a word a host writes, or one HTML does not
 //! spell, is refused; and a word `app.json` does not declare fails the bake.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, NodeType, PropId};
-use exact_runner::{DataError, DataSource, Event, Runner, Value};
+use exact_runner::{Event, Runner};
 use std::path::PathBuf;
 
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-
-fn boot(src: &str) -> Runner<NoData> {
+fn boot(src: &str) -> Runner<Source> {
     let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e}"));
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -26,7 +20,7 @@ fn boot(src: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn dataset(r: &Runner<NoData>, test_id: &str) -> Option<String> {
+fn dataset(r: &Runner<Source>, test_id: &str) -> Option<String> {
     let key = r.kernel().find_by_test_id(test_id)[0];
     let node = r.kernel().node_by_key(key).unwrap();
     node.props.str(PropId::Dataset).map(str::to_owned)

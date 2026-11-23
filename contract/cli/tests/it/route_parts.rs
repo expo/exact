@@ -6,16 +6,9 @@
 //! platform's transition). The shorthand alone, literal arms, an animation
 //! that ends and keyframes that move a picture; nowhere but on a route.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, StyleId};
-use exact_runner::{DataError, DataSource, Event, Runner, Value};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::{Event, Runner};
 
 const KEYFRAMES: &str = "keyframes fade-in
   from opacity=0
@@ -51,11 +44,11 @@ fn screen(styles: &str, route: &str) -> String {
         .replace("ROUTE", route)
 }
 
-fn boot(source: &str) -> Runner<NoData> {
+fn boot(source: &str) -> Runner<Source> {
     let plan = contract::compile(source).unwrap_or_else(|e| panic!("{e}"));
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -67,7 +60,7 @@ fn boot(source: &str) -> Runner<NoData> {
 /// its animations (`none` for none) and the keyframes each carries.
 type Part = Option<(String, Vec<usize>)>;
 
-fn parts(r: &Runner<NoData>) -> (Part, Part) {
+fn parts(r: &Runner<Source>) -> (Part, Part) {
     let key = r.kernel().find_by_test_id("route")[0];
     let style = &r.kernel().node_by_key(key).unwrap().style;
     let part = |row, list: &exact_motion::Animations| {

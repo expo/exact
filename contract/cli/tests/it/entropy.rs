@@ -3,6 +3,7 @@
 //! empty-store answer is compiled as the fresh install's placeholder — so
 //! no random value is shared by every install, and the device asks it.
 
+use crate::source::{boxed, Read, Source};
 use exact_kernel::Kernel;
 use exact_runner::{Answer, DataError, DataSource, Runner, Store, Value};
 
@@ -61,7 +62,7 @@ impl DataSource for Device {
 
 #[test]
 fn bake_compiles_no_value_that_drew_randomness() {
-    let plan = contract::bake(contract::compile(SRC).unwrap(), Device::default()).unwrap();
+    let plan = contract::bake(contract::compile(SRC).unwrap(), boxed(Device::default())).unwrap();
     let row = |name: &str| {
         plan.resources
             .iter()
@@ -79,7 +80,7 @@ fn bake_compiles_no_value_that_drew_randomness() {
     // The device answers it, with its own draw.
     let runner = Runner::boot(
         plan,
-        Device { draws: 41 },
+        boxed(Device { draws: 41 }),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -166,13 +167,13 @@ impl DataSource for Writer {
 }
 
 /// Each source's asks, in `WRITES`' order.
-fn asks(r: &mut Runner<Writer>) -> [u32; 5] {
+fn asks(r: &mut Runner<Source>) -> [u32; 5] {
     ["token", "session", "both", "connect", "watch"]
-        .map(|s| r.data().asks.get(s).copied().unwrap_or(0))
+        .map(|s| r.source::<Writer>().asks.get(s).copied().unwrap_or(0))
 }
 
 /// After `signIn` keeps a secret: who was asked again.
-fn sign_in(r: &mut Runner<Writer>) -> [u32; 5] {
+fn sign_in(r: &mut Runner<Source>) -> [u32; 5] {
     let before = asks(r);
     r.act("signIn", vec![]).unwrap();
     let after = asks(r);
@@ -187,10 +188,11 @@ fn sign_in(r: &mut Runner<Writer>) -> [u32; 5] {
 /// arguments, as `session` answers the same.
 #[test]
 fn a_store_write_asks_again_what_read_the_store_not_what_only_drew() {
-    let plan = contract::bake(contract::compile(WRITES).unwrap(), Writer::default()).unwrap();
+    let plan =
+        contract::bake(contract::compile(WRITES).unwrap(), boxed(Writer::default())).unwrap();
     let mut r = Runner::boot(
         plan,
-        Writer::default(),
+        boxed(Writer::default()),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -206,10 +208,11 @@ fn a_store_write_asks_again_what_read_the_store_not_what_only_drew() {
 /// The same after a reload: what each reader's last ask read is carried.
 #[test]
 fn a_reload_carries_which_readers_only_drew() {
-    let plan = contract::bake(contract::compile(WRITES).unwrap(), Writer::default()).unwrap();
+    let plan =
+        contract::bake(contract::compile(WRITES).unwrap(), boxed(Writer::default())).unwrap();
     let r = Runner::boot(
         plan.clone(),
-        Writer::default(),
+        boxed(Writer::default()),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -217,7 +220,7 @@ fn a_reload_carries_which_readers_only_drew() {
     .unwrap();
     let mut reloaded = Runner::boot_carrying(
         plan,
-        Writer::default(),
+        boxed(Writer::default()),
         Kernel::with_monospace(),
         &r.carry(),
         Default::default(),
@@ -257,18 +260,18 @@ component App
 /// a derive.
 #[test]
 fn a_store_write_asks_no_dependent_whose_arguments_stay() {
-    let plan = contract::bake(contract::compile(LATER).unwrap(), Writer::default()).unwrap();
+    let plan = contract::bake(contract::compile(LATER).unwrap(), boxed(Writer::default())).unwrap();
     let mut r = Runner::boot(
         plan,
-        Writer::default(),
+        boxed(Writer::default()),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
     // `follow` takes `id` directly, `trail` through a derive.
-    let asks = |r: &mut Runner<Writer>| {
-        ["maybe", "follow", "trail"].map(|s| r.data().asks.get(s).copied().unwrap_or(0))
+    let asks = |r: &mut Runner<Source>| {
+        ["maybe", "follow", "trail"].map(|s| r.source::<Writer>().asks.get(s).copied().unwrap_or(0))
     };
     let before = asks(&mut r);
     r.act("signIn", vec![]).unwrap();
@@ -328,7 +331,7 @@ fn a_refused_reply_that_only_drew_is_asked_again_by_no_store_write() {
 ";
     let mut r = Runner::boot(
         contract::compile(src).unwrap(),
-        Drawn::default(),
+        boxed(Drawn::default()),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -343,5 +346,5 @@ fn a_refused_reply_that_only_drew_is_asked_again_by_no_store_write() {
     r.fulfill(ticket, reply).unwrap();
     r.store_changed(vec![("session".into(), b"ada".to_vec())])
         .unwrap();
-    assert_eq!(r.data().asks, 1);
+    assert_eq!(r.source::<Drawn>().asks, 1);
 }

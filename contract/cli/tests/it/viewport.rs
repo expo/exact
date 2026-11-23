@@ -1,4 +1,5 @@
 //! @ref LLP 1039 §5 — bake, first frame, resize, carry and invalid facts.
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, PropId};
 use exact_runner::{agent, DataError, DataSource, Runner, RunnerError, Value, Viewport};
 
@@ -11,8 +12,8 @@ fn window_toolbar_intention_survives_compile_bake_and_boot() {
     )
     .unwrap();
     let runner = Runner::boot(
-        contract::bake(plan, NoData).unwrap(),
-        NoData,
+        contract::bake(plan, boxed(NoData)).unwrap(),
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -35,14 +36,14 @@ impl DataSource for NoData {
 fn plan() -> exact_plan::Plan {
     contract::bake(
         contract::compile(include_str!("../../../corpus/viewport.contract")).unwrap(),
-        NoData,
+        boxed(NoData),
     )
     .unwrap()
 }
-fn present(r: &Runner<NoData>, id: &str) -> bool {
+fn present(r: &Runner<Source>, id: &str) -> bool {
     !r.kernel().find_by_test_id(id).is_empty()
 }
-fn state(r: &Runner<NoData>) -> serde_json::Value {
+fn state(r: &Runner<Source>) -> serde_json::Value {
     serde_json::from_str(&agent::state(r)).unwrap()
 }
 
@@ -60,7 +61,7 @@ fn baked_phone_first_wide_batch_then_one_narrow_commit() {
         .contains("exactViewport"));
     let mut r = Runner::boot(
         baked,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Viewport::sized(1280.0, 900.0),
         "/",
@@ -93,7 +94,7 @@ fn baked_phone_first_wide_batch_then_one_narrow_commit() {
     let carried = r.carry();
     let r = Runner::boot_carrying(
         plan(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         &carried,
         Viewport::sized(1280.0, 900.0),
@@ -107,7 +108,7 @@ fn baked_phone_first_wide_batch_then_one_narrow_commit() {
 fn invalid_sizes_refuse_without_poisoning_and_unread_sizes_do_not_commit() {
     let mut r = Runner::boot(
         plan(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -132,7 +133,7 @@ fn invalid_sizes_refuse_without_poisoning_and_unread_sizes_do_not_commit() {
     let plan = contract::compile("component A\n  view\n    text \"empty\"\n").unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -146,7 +147,7 @@ fn invalid_sizes_refuse_without_poisoning_and_unread_sizes_do_not_commit() {
 fn fields_and_arguments_refuse_at_the_fact_boundary() {
     for source in ["shape V\n  width: string\ncomponent A\n  resource viewport = exactViewport() as shape V\n  view\n    text viewport.width\n", "shape V\n  width: number\ncomponent A\n  resource viewport = exactViewport(1) as shape V\n  view\n    text `${viewport.width}`\n"] {
         let p = contract::compile(source).unwrap();
-        assert!(contract::bake(p,NoData).is_err());
+        assert!(contract::bake(p,boxed(NoData)).is_err());
     }
 }
 
@@ -162,10 +163,10 @@ component App
       text `${a.width}` testId="width-a"
       text `${b.width}` testId="width-b"
 "#;
-    let plan = contract::bake(contract::compile(src).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -196,16 +197,16 @@ component App
       if two
         text "two panes" testId="panes"
 "#;
-    let plan = contract::bake(contract::compile(src).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let text = |r: &Runner<NoData>, id: &str| {
+    let text = |r: &Runner<Source>, id: &str| {
         let key = r.kernel().find_by_test_id(id)[0];
         r.kernel()
             .node_by_key(key)
@@ -247,7 +248,7 @@ component App
         "shape F\n  devicePosture: number\ncomponent A\n  resource m = exactViewport() as shape F\n  view\n    text `${m.devicePosture}`\n",
         "shape F\n  hingeAngle: number\ncomponent A\n  resource m = exactViewport() as shape F\n  view\n    text `${m.hingeAngle}`\n",
     ] {
-        assert!(contract::bake(contract::compile(wrong).unwrap(), NoData).is_err(), "{wrong}");
+        assert!(contract::bake(contract::compile(wrong).unwrap(), boxed(NoData)).is_err(), "{wrong}");
     }
 }
 
@@ -255,10 +256,10 @@ component App
 fn display_ratio_is_optional_host_data_and_updates_without_display_lengths() {
     let plan = contract::bake(contract::compile(
         "shape Viewport\n  devicePixelRatio: option<number>\ncomponent App\n  resource viewport = exactViewport() as shape Viewport\n  view\n    text \"Display\"\n",
-    ).unwrap(), NoData).unwrap();
+    ).unwrap(), boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan.clone(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Viewport::default(),
         "/",
@@ -284,7 +285,7 @@ fn display_ratio_is_optional_host_data_and_updates_without_display_lengths() {
     let carried = r.carry();
     let fresh = Runner::boot_carrying(
         plan.clone(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         &carried,
         Viewport::default(),
@@ -297,7 +298,7 @@ fn display_ratio_is_optional_host_data_and_updates_without_display_lengths() {
     );
     let mut kernel = Kernel::with_monospace();
     kernel.set_display_scale(1.0).unwrap();
-    let primed = Runner::boot(plan, NoData, kernel, Viewport::default(), "/").unwrap();
+    let primed = Runner::boot(plan, boxed(NoData), kernel, Viewport::default(), "/").unwrap();
     assert_eq!(
         primed.resource("viewport"),
         Some(&Value::record(vec![Value::some(Value::Number(1.0))]))
@@ -326,12 +327,12 @@ component App
 "#,
         )
         .unwrap(),
-        NoData,
+        boxed(NoData),
     )
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Viewport::sized(900., 600.),
         "/",
@@ -404,7 +405,7 @@ component App
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Viewport::default(),
         "/",
@@ -439,7 +440,7 @@ component App
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Viewport::default(),
         "/",

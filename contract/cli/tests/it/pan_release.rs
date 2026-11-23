@@ -1,5 +1,6 @@
 //! @ref LLP 1057 §10.6 phase 2 — `panrelease` completes `pan` with its
 //! release velocity: two numbers appended, pan's units per second.
+use crate::source::{boxed, Source};
 use exact_plan::{EventKind, Value};
 use exact_runner::{DataError, DataSource, Event, Runner};
 struct Empty;
@@ -24,11 +25,11 @@ const APP: &str = r#"component App
     box testId="card" pan=move panrelease=release(2) translate=`${x}px 0px`
 "#;
 
-fn boot() -> (Runner<Empty>, exact_kernel::ViewId) {
+fn boot() -> (Runner<Source>, exact_kernel::ViewId) {
     let plan = contract::compile(APP).unwrap();
     let runner = Runner::boot(
         plan,
-        Empty,
+        boxed(Empty),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",

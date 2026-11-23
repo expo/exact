@@ -1,25 +1,17 @@
 //! LLP 1125 D11: `wakelock` lowers to a prop on any element, a literal other
 //! than its two words is refused naming both, and a bound one follows state.
 
+use crate::source::{boxed, NoData};
 use exact_kernel::{Kernel, PropId};
-use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Runner};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::Runner;
 
 #[test]
 fn it_lowers_on_any_element() {
     let src = "component App\n  state on = true\n  view\n    column testId=\"box\" wakelock=\"screen\"\n      text \"a\" testId=\"text\" wakelock=(on ? \"screen\" : \"none\")\n      image \"symbol:star\" testId=\"image\" wakelock=\"none\"\n";
-    let plan = contract::bake(contract::compile(src).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(NoData)).unwrap();
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

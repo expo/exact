@@ -2,7 +2,8 @@
 //! `fastSeek(id, seconds)` reaches the host every time it runs, even to the
 //! same time twice (the bound `currentTime` seeks only on a changed value),
 //! and `load(id)` loads the source again.
-use exact_runner::{DataError, DataSource, Runner, Value};
+use crate::source::{boxed, NoData};
+use exact_runner::{Runner, Value};
 
 const APP: &str = r#"component App
   state hush = true
@@ -19,18 +20,11 @@ const APP: &str = r#"component App
       audio "https://example.com/episode.mp3" id="player" paused=hush
 "#;
 
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.to_string()))
-    }
-}
-
 #[test]
 fn every_seek_and_load_is_its_own_command() {
     let mut r = Runner::boot(
         contract::compile(APP).unwrap(),
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",

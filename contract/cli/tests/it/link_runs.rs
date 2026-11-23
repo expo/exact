@@ -5,22 +5,15 @@
 //! row or a column, or has a `role`, is the author's row or button and keeps
 //! inheriting, as the bare node it is.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::style::roles::role;
 use exact_kernel::{Color, ColorValue, Kernel, StyleId, StyleMask};
-use exact_runner::{DataError, DataSource, Event, Runner, Value};
+use exact_runner::{Event, Runner};
 
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-
-fn boot(plan: exact_plan::Plan) -> Runner<NoData> {
+fn boot(plan: exact_plan::Plan) -> Runner<Source> {
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -28,12 +21,12 @@ fn boot(plan: exact_plan::Plan) -> Runner<NoData> {
     .unwrap()
 }
 
-fn node<'a>(r: &'a Runner<NoData>, id: &str) -> exact_kernel::NodeRef<'a> {
+fn node<'a>(r: &'a Runner<Source>, id: &str) -> exact_kernel::NodeRef<'a> {
     let key = r.kernel().find_by_test_id(id)[0];
     r.kernel().node_by_key(key).unwrap()
 }
 
-fn color(r: &Runner<NoData>, id: &str) -> ColorValue {
+fn color(r: &Runner<Source>, id: &str) -> ColorValue {
     node(r, id)
         .computed_style(StyleMask::of(StyleId::TextColor))
         .text_color
@@ -140,7 +133,7 @@ fn an_href_that_turns_out_empty_is_not_a_link() {
     let link = ColorValue::Role(role("LinkText").unwrap());
     let page = ColorValue::Fixed(Color::rgba(0x33, 0x66, 0x99, 255));
     let red = ColorValue::Fixed(Color::rgba(255, 0, 0, 255));
-    let target = |r: &Runner<NoData>, id: &str| node(r, id).props.link().map(str::to_owned);
+    let target = |r: &Runner<Source>, id: &str| node(r, id).props.link().map(str::to_owned);
     // Empty: the paragraph's colour, and no target for a host to read.
     for id in ["run", "none", "block", "words", "blank"] {
         assert_eq!(color(&r, id), page, "{id} is not a link");

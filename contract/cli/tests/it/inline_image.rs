@@ -1,17 +1,10 @@
 //! LLP 1011.002: `contract/corpus/inline-image.contract`, an image in a
 //! paragraph's text, lowered to an `Image` child of its `Text` and placed in
 //! the line by the reference measurer.
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, VerticalAlign, INLINE_BOX_TEXT};
-use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Runner};
+use exact_runner::Runner;
 use std::path::Path;
-
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
 
 fn corpus(name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -23,10 +16,10 @@ fn corpus(name: &str) -> String {
 #[test]
 fn an_image_in_a_paragraph_is_a_run_between_its_words() {
     let plan = contract::compile(&corpus("inline-image.contract")).unwrap();
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -152,14 +145,14 @@ fn a_match_among_a_paragraphs_runs_is_read_as_an_if() {
     for source in [by_if, by_match] {
         let plan = contract::compile(&source).unwrap_or_else(|e| panic!("{e}\n{source}"));
         let mut r = Runner::boot(
-            contract::bake(plan, NoData).unwrap(),
-            NoData,
+            contract::bake(plan, boxed(NoData)).unwrap(),
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
         )
         .unwrap();
-        let runs = |r: &Runner<NoData>| -> Vec<String> {
+        let runs = |r: &Runner<Source>| -> Vec<String> {
             let k = r.kernel();
             let greeting = k.node_by_key(k.find_by_test_id("greeting")[0]).unwrap();
             greeting

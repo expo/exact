@@ -2,6 +2,7 @@
 //! takes no space, whose fields the innermost active head sets field by field;
 //! `scroll document` (D4).
 
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, NodeType, Offer, PropId};
 use exact_plan::{ActivatePolicy, RenderPolicy};
 use exact_runner::{agent, DataError, DataSource, Head, Runner, Value};
@@ -28,14 +29,14 @@ impl DataSource for Posts {
     }
 }
 
-fn boot(launch: &str) -> Runner<Posts> {
+fn boot(launch: &str) -> Runner<Source> {
     let src = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../corpus/document.contract"),
     )
     .unwrap();
     Runner::boot(
         contract::compile(&src).unwrap(),
-        Posts,
+        boxed(Posts),
         Kernel::with_monospace(),
         Default::default(),
         launch,
@@ -86,7 +87,7 @@ fn the_innermost_active_head_wins_field_by_field() {
     .unwrap();
     let failed = Runner::boot(
         failed,
-        Posts,
+        boxed(Posts),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -100,7 +101,7 @@ fn the_innermost_active_head_wins_field_by_field() {
         let plan = contract::compile(src).unwrap();
         Runner::boot(
             plan,
-            Posts,
+            boxed(Posts),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -123,7 +124,7 @@ fn the_innermost_active_head_wins_field_by_field() {
     let tip = contract::compile("component A\n  view\n    column\n      button title=\"Zoom In\" testId=\"z\" width=20 height=20\n").unwrap();
     let r = Runner::boot(
         tip,
-        Posts,
+        boxed(Posts),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -179,7 +180,7 @@ fn heads_take_no_space_and_the_agent_reports_the_active_one() {
 fn a_page_with_no_head_has_none() {
     let r = Runner::boot(
         contract::compile("component A\n  view\n    text \"a\"\n").unwrap(),
-        Posts,
+        boxed(Posts),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -433,7 +434,7 @@ fn scroll_document_binds_an_expression_too() {
     let marked = |src: &str| {
         let r = Runner::boot(
             contract::compile(src).unwrap(),
-            Posts,
+            boxed(Posts),
             Kernel::with_monospace(),
             Default::default(),
             "/",

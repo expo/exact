@@ -5,6 +5,7 @@
 //! outside the roster, another target and a tool are refused with the
 //! runner's names.
 
+use crate::source::{boxed, NoData, Source};
 use exact_runner::{CallOrigin, Dispatch, Reply, Runner, Work};
 use serde_json::{json, Value as Json};
 #[cfg(unix)]
@@ -50,28 +51,17 @@ impl Drop for App {
     }
 }
 
-struct NoData;
-impl exact_runner::DataSource for NoData {
-    fn query(
-        &mut self,
-        source: &str,
-        _: &[exact_runner::Value],
-    ) -> Result<exact_runner::Value, exact_runner::DataError> {
-        Err(exact_runner::DataError::UnknownSource(source.into()))
-    }
-}
-
-fn boot(name: &str, target: &str) -> (App, Runner<NoData>) {
+fn boot(name: &str, target: &str) -> (App, Runner<Source>) {
     boot_app(name, target, APP)
 }
 
-fn boot_app(name: &str, target: &str, source: &str) -> (App, Runner<NoData>) {
+fn boot_app(name: &str, target: &str, source: &str) -> (App, Runner<Source>) {
     let app = App::new(name, source);
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -89,7 +79,7 @@ thread_local! {
 
 /// The host's turn: requests dispatched, released answers fulfilled, and
 /// what they announced applied, until nothing moves.
-fn settle(r: &mut Runner<NoData>) {
+fn settle(r: &mut Runner<Source>) {
     for _ in 0..8 {
         let outs = r.take_requests();
         let released = r.release_work();
@@ -113,7 +103,7 @@ fn settle(r: &mut Runner<NoData>) {
     }
 }
 
-fn run(r: &mut Runner<NoData>, ticket: u64, dispatch: Dispatch) {
+fn run(r: &mut Runner<Source>, ticket: u64, dispatch: Dispatch) {
     let outcome = match dispatch {
         Dispatch::Run(Work::Now(work)) => work(),
         Dispatch::Run(Work::Later(work)) => {
@@ -126,7 +116,7 @@ fn run(r: &mut Runner<NoData>, ticket: u64, dispatch: Dispatch) {
     let _ = r.fulfill(ticket, outcome);
 }
 
-fn pick(r: &mut Runner<NoData>, icon: Option<&str>) {
+fn pick(r: &mut Runner<Source>, icon: Option<&str>) {
     match icon {
         Some(icon) => r.act("pick", vec![icon.into()]),
         None => r.act("primary", vec![]),
@@ -135,22 +125,22 @@ fn pick(r: &mut Runner<NoData>, icon: Option<&str>) {
     settle(r);
 }
 
-fn logs(r: &Runner<NoData>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     exact_runner::agent::handle(r, r#"{"op":"logs"}"#)
 }
 
-fn prefer_icons(r: &mut Runner<NoData>, icons: Json) {
+fn prefer_icons(r: &mut Runner<Source>, icons: Json) {
     let line = json!({ "op": "prefer", "extension": { "app-icon.icons": icons } }).to_string();
     r.extension_agent(&line).unwrap().1.unwrap();
     settle(r);
 }
 
 /// The resource's value as `{available, icon, icons}`, from its debug form.
-fn shown(r: &Runner<NoData>) -> String {
+fn shown(r: &Runner<Source>) -> String {
     format!("{:?}", r.resource("shown"))
 }
 
-fn tap(r: &mut Runner<NoData>, choice: &str) {
+fn tap(r: &mut Runner<Source>, choice: &str) {
     let holds = r.device_holds();
     assert_eq!(holds.len(), 1, "{}", logs(r));
     assert_eq!(holds[0].capability, "app-icon");

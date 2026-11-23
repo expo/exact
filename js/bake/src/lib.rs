@@ -106,11 +106,6 @@ struct Composer<'a> {
     compose: Box<dyn Fn(Module) -> Box<dyn DataSource> + 'a>,
 }
 
-/// A composed source, as `contract::bake` takes it.
-struct Composed(Box<dyn DataSource>);
-
-mod composed;
-
 fn mixed_grants<'a>(
     javascript: &serde_json::Value,
     rust: Option<&'a dyn DataSource>,
@@ -1252,8 +1247,8 @@ fn bake_in(
         (Some(composer), _) => contract::snapshot::bake_app_with_warnings(
             &entries,
             plan,
-            Composed((composer.compose)(module)),
-            Composed((composer.compose)(refresh_module)),
+            (composer.compose)(module),
+            (composer.compose)(refresh_module),
         ),
         (None, Some(seed)) => {
             // A data source owns what it reads: the bake's two share one seed.

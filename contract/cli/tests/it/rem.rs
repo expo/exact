@@ -1,5 +1,6 @@
 //! @ref LLP 1069.000 D3 — `rem` and `em` from a Contract source to the
 //! kernel, and the root font size a host sets through the runner.
+use crate::source::{boxed, Source};
 use exact_kernel::{Dimension, Kernel, RowValue, StyleId};
 use exact_runner::{DataError, DataSource, Runner, RunnerError, Value};
 
@@ -13,12 +14,12 @@ impl DataSource for NoData {
 
 const SOURCE: &str = "component App\n  view\n    column testId=\"box\" padding-top=\"1rem\" font-size=\"0.875rem\"\n      text \"Offline\" testId=\"label\" letter-spacing=\"0.1em\" margin-top=\"8px\"\n";
 
-fn node<'a>(r: &'a Runner<NoData>, id: &str) -> exact_kernel::NodeRef<'a> {
+fn node<'a>(r: &'a Runner<Source>, id: &str) -> exact_kernel::NodeRef<'a> {
     let key = r.kernel().find_by_test_id(id)[0];
     r.kernel().node_by_key(key).unwrap()
 }
 
-fn font(r: &Runner<NoData>, id: &str) -> f64 {
+fn font(r: &Runner<Source>, id: &str) -> f64 {
     match node(r, id).computed(StyleId::FontSize) {
         RowValue::Number(n) => n,
         other => panic!("{other:?}"),
@@ -27,10 +28,10 @@ fn font(r: &Runner<NoData>, id: &str) -> f64 {
 
 #[test]
 fn a_root_font_size_rescales_rem_and_em_in_one_commit() {
-    let plan = contract::bake(contract::compile(SOURCE).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(SOURCE).unwrap(), boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -59,10 +60,10 @@ const APP: &str = "component App\n  action pick(v: number)\n    setRootFontSize(
 
 #[test]
 fn the_apps_root_font_size_lands_in_its_commit_over_the_hosts() {
-    let plan = contract::bake(contract::compile(APP).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(APP).unwrap(), boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -112,10 +113,10 @@ const SHARE: &str = "component App\n  action larger\n    setRootFontSize(\"125%\
 
 #[test]
 fn the_apps_percentage_follows_the_hosts_size() {
-    let plan = contract::bake(contract::compile(SHARE).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(SHARE).unwrap(), boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
