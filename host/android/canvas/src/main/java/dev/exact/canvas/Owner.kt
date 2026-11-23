@@ -832,6 +832,9 @@ internal object Exact {
     fun frameLoaded(id: Int, slot: Int, generation: Int, session: Long) =
         field { Native.frameLoaded(id, slot, generation, session) }
 
+    fun frameEvent(id: Int, slot: Int, generation: Int, session: Long, event: String, record: String) =
+        field { Native.frameEvent(id, slot, generation, session, event, record) }
+
     /** A media element's event (by HTML's name, [payload] its value) or, with no [event], its observed [state]
      * (LLP 1042.001 D7), checked against the allocation and session its painted element carries. */
     fun media(id: Int, slot: Int, generation: Int, session: Long, event: String, payload: String, state: String) =
