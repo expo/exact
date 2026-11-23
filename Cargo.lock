@@ -92,6 +92,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "activity-fixture-android"
+version = "0.1.0"
+dependencies = [
+ "activity-fixture-data",
+ "contract",
+ "exact-bake",
+ "exact-painted",
+]
+
+[[package]]
 name = "activity-fixture-apple"
 version = "0.1.0"
 dependencies = [
@@ -978,6 +988,7 @@ dependencies = [
  "exact-kernel",
  "exact-motion",
  "exact-plan",
+ "exact-route",
  "exact-runner",
  "exact-shader-uniforms",
  "libc",
@@ -2352,6 +2363,7 @@ dependencies = [
  "exact-runner",
  "exact-web",
  "exact-web-capabilities",
+ "libc",
  "serde_json",
 ]
 

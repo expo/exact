@@ -27,6 +27,41 @@ fn near(actual: [u8; 4], expected: [u8; 4], tolerance: u8) {
 }
 
 #[test]
+fn panel_copy_preserves_every_texel_at_all_four_rotations() {
+    use crate::Rotation::*;
+    let Some(mut ink) = open() else {
+        return;
+    };
+    let size = [3, 2];
+    let source = ink.create_texture(TextureDesc::rgba(3, 2)).unwrap();
+    let texel = |n: u8| [n * 31, n * 23, n * 13, n * 40];
+    let picture: Vec<_> = (1..=6).flat_map(texel).collect();
+    ink.upload_texture(source, [0, 0], size, &picture).unwrap();
+    let blit = panel_blit::Blit::new(&ink.device, ::wgpu::TextureFormat::Rgba8Unorm);
+    for (rotation, order) in [
+        (R0, [1, 2, 3, 4, 5, 6]),
+        (R90, [4, 1, 5, 2, 6, 3]),
+        (R180, [6, 5, 4, 3, 2, 1]),
+        (R270, [3, 6, 2, 5, 1, 4]),
+    ] {
+        let [w, h] = rotation.size(size);
+        let target = ink.create_target(w, h).unwrap();
+        let mut encoder = ink.device.create_command_encoder(&Default::default());
+        blit.copy(
+            &ink.device,
+            &mut encoder,
+            &ink.texture(source).unwrap().view,
+            &ink.texture(target).unwrap().view,
+            rotation,
+        );
+        ink.queue.submit([encoder.finish()]);
+        let expected: Vec<_> = order.into_iter().flat_map(texel).collect();
+        assert_eq!(ink.readback(target).unwrap(), expected, "{rotation:?}");
+        ink.retire_texture(target).unwrap();
+    }
+}
+
+#[test]
 fn rounded_rectangles_ring_and_gaussian_shadow_at_two_times_scale() {
     let Some(mut device) = open() else {
         return;

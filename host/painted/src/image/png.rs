@@ -236,10 +236,12 @@ pub(super) struct DecodePlan {
     pub crop: Crop,
 }
 impl DecodePlan {
-    /// Whether the platform's decoder decodes this (JPEG, GIF, WebP).
-    #[cfg(target_os = "android")]
-    pub(super) fn platform(&self) -> bool {
-        self.header.color == PLATFORM
+    pub(super) fn storage(&self) -> u32 {
+        #[cfg(target_os = "android")]
+        if self.header.color == PLATFORM && super::hardware::enabled() {
+            return exact_raster::variant::HARDWARE_SRGB8;
+        }
+        exact_raster::variant::SRGB8
     }
     pub fn new(header: Header, pixels: (u32, u32)) -> Result<Self, Refusal> {
         let natural = header.metadata.natural;
@@ -341,9 +343,6 @@ impl DecodePlan {
             (pixels, scratch)
         };
         let cost = DecodeCost::checked(u64::from(pixels.0) * 4, pixels.1, scratch, 0)?;
-        if cost.peak()? > SESSION_BYTES {
-            return Err(Refusal::TooLarge);
-        }
         Ok(Self {
             header,
             pixels: PixelSize {
@@ -370,9 +369,6 @@ impl DecodePlan {
             .and_then(|n| n.checked_add(1024 * 1024))
             .ok_or(Refusal::Overflow)?;
         let cost = DecodeCost::checked(u64::from(pixels.0) * 4, pixels.1, scratch, 0)?;
-        if cost.peak()? > SESSION_BYTES {
-            return Err(Refusal::TooLarge);
-        }
         Ok(Self {
             header,
             pixels: PixelSize {

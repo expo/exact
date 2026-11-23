@@ -111,13 +111,13 @@ pub(super) fn designs(
     bindable: bool,
 ) -> Result<Vec<contract_syntax::DesignSource>, CompileError> {
     // A vendored package's `package.json` is an input as a `use`d one's is.
-    let manifests = packages(sources).1;
+    let (packages, manifests) = packages(sources);
     for m in manifests {
         if !sources.consulted.contains(&m) {
             sources.consulted.push(m);
         }
     }
-    let read = read(sources, bindable)?;
+    let read = read_designs(packages, bindable, &mut sources.consulted)?;
     Ok(read
         .into_iter()
         .map(|(mut design, package)| {
@@ -142,8 +142,16 @@ pub(super) fn read(
     sources: &Sources,
     bindable: bool,
 ) -> Result<Vec<(contract_syntax::DesignSource, Package)>, CompileError> {
+    read_designs(packages(sources).0, bindable, &mut Vec::new())
+}
+
+fn read_designs(
+    packages: Vec<Package>,
+    bindable: bool,
+    consulted: &mut Vec<PathBuf>,
+) -> Result<Vec<(contract_syntax::DesignSource, Package)>, CompileError> {
     let mut found: Vec<(contract_syntax::DesignSource, Package)> = Vec::new();
-    for package in packages(sources).0 {
+    for package in packages {
         let json = std::fs::read_to_string(&package.manifest)
             .ok()
             .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
@@ -192,6 +200,7 @@ pub(super) fn read(
             ));
         }
         if !design.named && !path.is_file() {
+            consulted.push(path);
             continue;
         }
         let inside = path.starts_with(&package.root)

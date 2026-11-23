@@ -442,6 +442,20 @@
           "frequent": {
             "type": "boolean",
             "default": false
+          },
+          "android": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["title"],
+            "description": "Android's ongoing notification for this activity, which asks to be promoted to a Live Update. Each field but channel names a field of the state shape.",
+            "properties": {
+              "channel": { "type": "string", "minLength": 1, "default": "default", "description": "A channel host.android.notificationChannels declares, or \"default\"; not one of importance \"min\"." },
+              "title": { "type": "string", "minLength": 1, "description": "A string field: the notification's title." },
+              "text": { "type": "string", "minLength": 1, "description": "A string field: the notification's text." },
+              "progress": { "type": "string", "minLength": 1, "description": "A number field, 0 to 1: the progress bar." },
+              "chip": { "type": "string", "minLength": 1, "description": "A string field: the status-bar chip's text, whole under 7 characters." },
+              "when": { "type": "string", "minLength": 1, "description": "A number field of Unix milliseconds: counted down in the chip while ahead, up once past." }
+            }
           }
         }
       }
@@ -670,6 +684,103 @@
             }
           }
         }
+      }
+    },
+    "controls": {
+      "type": "array",
+      "description": "Buttons the system draws outside the app: in Control Center, on the Lock Screen and on the Action button (LLP 1126.004). Each names exactly one of `tool` and `url`: a press runs that declared tool or opens that location at the navigation root. Rows are compiled into the binary. A build names each control its host cannot offer, and why.",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "title",
+              "symbol",
+              "tool"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+                "description": "The control's stable identity, unique among the app's controls regardless of case. A person's placed control keeps it, so renaming it removes the placed one."
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])",
+                "description": "What the system labels the button with."
+              },
+              "symbol": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])",
+                "description": "An SF Symbol name for the button's glyph."
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])",
+                "description": "What the controls gallery says about it."
+              },
+              "tool": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])",
+                "description": "A tool line's name: a press calls it with no arguments, passing none for each optional parameter. It needs no `intents.tools` face, may not destroy, and may take no required parameter."
+              },
+              "authentication": {
+                "enum": [
+                  "required",
+                  "local",
+                  "always"
+                ],
+                "description": "Who may press a tool control on a locked device (LLP 1133.023 D10): `required` (the default) asks for the person, `local` for this device unlocked, `always` runs it locked."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "title",
+              "symbol",
+              "url"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+                "description": "The control's stable identity, unique among the app's controls regardless of case. A person's placed control keeps it, so renaming it removes the placed one."
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])",
+                "description": "What the system labels the button with."
+              },
+              "symbol": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])",
+                "description": "An SF Symbol name for the button's glyph."
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])",
+                "description": "What the controls gallery says about it."
+              },
+              "url": {
+                "type": "string",
+                "pattern": "^/(?!/)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])",
+                "description": "A location one of the navigation root's routes matches: a press opens the app there."
+              }
+            }
+          }
+        ]
       }
     },
     "intents": {

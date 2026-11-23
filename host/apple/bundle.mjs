@@ -23,6 +23,7 @@ import { embedWatch, watchProfiles, watchSyncKeys, watchSyncSelected } from './w
 import { fileURLToPath } from 'node:url';
 // The App Intents module the bundle places, built before the executable links it (LLP 1133.023 D8).
 export { buildIntents, shortcutKeys } from './intents.mjs';
+import { offeredControls } from './controls.mjs';
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 
 const run = (cmd, args, opts = {}) => {
@@ -329,7 +330,9 @@ export function assembleIOS({intents, shared, library, moduleLibraries = [], pac
     const id = kind === 'host' ? `${app.id}.host` : kind === 'clip' ? clip.id : app.id, executable = kind === 'host' ? 'ExactHostIOS' : kind === 'clip' ? clip.executable : paths.executable;
     const keptSymbols = ipa || kind !== 'host' ? symbols : resolve(binDir, `${executable}.dSYMs`);
     const signingProfile = appProfile ? (kind === 'app' ? appProfile : profiles[kind]()) : null;
-    const alarmProfile = signingProfile && !shared && alarm && !tv && kind === 'app' ? embeddedProfile(ph?.udid, widgetId(app), signingProfile) : null;
+    const controls = kind === 'app' && !tv ? offeredControls(bakedCompat, 'ios') : [];
+    // An extension without widgets or activities (an alarm's countdown, controls) takes the app's team's profile for its id.
+    const alarmProfile = signingProfile && !shared && (alarm || controls.length) && !tv && kind === 'app' ? embeddedProfile(ph?.udid, widgetId(app), signingProfile) : null;
     const signingIdentity = signingProfile ? identity(signingProfile.team, { profiles: [signingProfile, ...(kind === 'app' ? [provisioned?.extension, provisioned?.share, alarmProfile, ...companion] : [])].filter(Boolean) }) : sha1;
     const ent = resolve(binDir, kind === 'app' ? 'entitlements.plist' : `${kind}-entitlements.plist`);
     if (signingProfile) copyFileSync(signingProfile.path, resolve(assembled, 'embedded.mobileprovision'));
@@ -364,10 +367,12 @@ export function assembleIOS({intents, shared, library, moduleLibraries = [], pac
       }
     }
     if (shared && kind === 'app' && activityEntries(app).length) packageActivityArm({ app, bundle: assembled, shared, sdk, triple, device, runApple });
-    if (shared && kind === 'app') packageWidgets({ app, bundle: assembled, shared, directory: linkRoot, sdk, triple, device, alarm: tv ? null : alarm,
-      runApple, production: production || distribution, symbols: keptSymbols ?? linkRoot, profile: provisioned?.extension ?? null,
-      // The extension's identifier and shared Keychain group under its own profile's prefix (entryProfiles refused a pair whose prefixes differ).
-      entitlements: entitlements({ ...app, id: widgetId(app), widgetAppId: app.id }, signingProfile?.team, signingProfile?.dev ?? !unsigned, null, { simulator: !device, prefix: provisioned?.extension.prefix ?? signingProfile?.prefix }),
+    // Controls alone share the extension an alarm's countdown would have had to itself.
+    if ((shared || controls.length) && kind === 'app') packageWidgets({ app, bundle: assembled, shared, directory: linkRoot, sdk, triple, device, alarm: tv ? null : alarm, controls,
+      runApple, production: production || distribution, symbols: keptSymbols ?? linkRoot, profile: provisioned?.extension ?? alarmProfile,
+      // The extension's identifier and shared Keychain group under its own profile's prefix (entryProfiles refused a pair whose prefixes differ);
+      // an extension of controls alone shares neither.
+      entitlements: entitlements(shared ? { ...app, id: widgetId(app), widgetAppId: app.id } : { id: widgetId(app), manifest: {} }, signingProfile?.team, signingProfile?.dev ?? !unsigned, null, { simulator: !device, prefix: provisioned?.extension?.prefix ?? signingProfile?.prefix }),
       sign: (extension, ent) => run('codesign', ['--force', '--sign', signingIdentity, '--timestamp=none', ...(device ? ['--entitlements', ent] : []), extension], { stdio: 'ignore' }) });
     if (kind === 'app' && tv && app.manifest.share_target) console.log('Share extension: not built for tvOS, which has no share sheet (LLP 1133.024 D4).');
     if (kind === 'app' && !tv && app.manifest.share_target) {
@@ -379,7 +384,7 @@ export function assembleIOS({intents, shared, library, moduleLibraries = [], pac
         entitlements: entitlements(owner, share?.team, share?.dev ?? !unsigned, null, { simulator: !device, prefix: share?.prefix, inboxGroup: group }),
         sign: (extension, ent) => run('codesign', ['--force', '--sign', signingIdentity, '--timestamp=none', ...(device ? ['--entitlements', ent] : []), extension], { stdio: 'ignore' }) });
     }
-    if (!shared && alarm && !tv && kind === 'app') packageAlarmExtension({ app, bundle: assembled, directory: linkRoot, sdk, triple, device, runApple, alarm, production, symbols: keptSymbols ?? linkRoot,
+    if (!shared && !controls.length && alarm && !tv && kind === 'app') packageAlarmExtension({ app, bundle: assembled, directory: linkRoot, sdk, triple, device, runApple, alarm, production, symbols: keptSymbols ?? linkRoot,
       profile: alarmProfile,
       entitlements: entitlements({ ...app, id: widgetId(app), widgetAppId: app.id }, signingProfile?.team, signingProfile?.dev ?? !unsigned, null, { simulator: !device, prefix: signingProfile?.prefix }),
       sign: (extension, ent) => run('codesign', ['--force', '--sign', signingIdentity, '--timestamp=none', ...(device ? ['--entitlements', ent] : []), extension], { stdio: 'ignore' }) });

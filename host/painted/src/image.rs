@@ -40,6 +40,8 @@ pub(crate) use allocation_tests::measure_allocations;
 mod assets;
 #[path = "image/bitmap.rs"]
 mod bitmap;
+#[path = "image/canvas.rs"]
+mod canvas;
 #[cfg(test)]
 #[path = "image/control_tests.rs"]
 mod control_tests;
@@ -59,6 +61,10 @@ mod windows_bitmap;
 pub use package::Ask as PackageAsk;
 #[path = "image/png.rs"]
 mod png_decode;
+#[path = "image/published.rs"]
+mod published;
+pub use published::PublishedImage;
+pub(crate) use published::Publisher;
 #[path = "image/remote.rs"]
 mod remote;
 #[path = "image/svg.rs"]
@@ -77,7 +83,7 @@ mod hardware;
 pub use hardware::hardware_pictures;
 #[cfg(target_os = "android")]
 pub(crate) use jpeg_decode::platform_decoder;
-use workers::{Backend, Prepared, SourceOwner};
+use workers::{Backend, Prepared, SourceOwner, Want};
 
 struct View {
     key: ViewKey,
@@ -144,6 +150,14 @@ impl View {
             assignment: self.assignment,
             error,
         })
+    }
+}
+
+fn source_limit(source: &str) -> usize {
+    if source.starts_with("data:") {
+        exact_raster::MAX_DATA_URL_BYTES
+    } else {
+        4096
     }
 }
 
@@ -226,6 +240,10 @@ pub struct Images {
     assets: Arc<Assets>,
     backend: Arc<Backend>,
     generation: u64,
+    pub(crate) publisher: Arc<Publisher>,
+    canvas_generation: u64,
+    canvas_reads: BTreeMap<String, canvas::Read>,
+    pub(crate) canvas_answers: Vec<(String, Result<RasterLease, String>)>,
     views: BTreeMap<ViewId, View>,
     /// Shared immutable pictures. Removing a view never refunds another owner.
     pub bitmaps: BTreeMap<ViewId, Arc<Bitmap>>,
@@ -287,8 +305,13 @@ impl Images {
         Self::make(assets, Backend::local())
     }
     fn make(assets: Assets, backend: Arc<Backend>) -> Self {
+        let generation = backend.generation();
         Self {
-            generation: backend.generation(),
+            publisher: Publisher::new(&backend, generation),
+            generation,
+            canvas_generation: backend.generation(),
+            canvas_reads: Default::default(),
+            canvas_answers: Vec::new(),
             assets: Arc::new(assets),
             backend,
             views: BTreeMap::new(),
@@ -551,11 +574,7 @@ impl Images {
                 view.lease = None;
                 self.bitmaps.remove(id);
             }
-            let limit = if source.starts_with("data:") {
-                exact_raster::MAX_DATA_URL_BYTES
-            } else {
-                4096
-            };
+            let limit = source_limit(source);
             if source.len() > limit {
                 if let Some((request, _)) = view.request.take() {
                     self.backend.cancel(request);
@@ -688,6 +707,7 @@ impl Images {
     /// Consume bounded completions and retry metadata/decode admission once.
     pub fn poll(&mut self) -> Vec<Report> {
         self.backend.drain_wake();
+        self.start_canvas_reads();
         if let Some(text) = &self.painter {
             self.backend.finish_pictures(text);
         }
@@ -733,6 +753,45 @@ impl Images {
             if let Some(source) = view.source_id.as_ref().filter(|_| urgent) {
                 // (One already asked for, grown to fill it: its waiting download moves up.)
                 self.backend.promote(source);
+            }
+            // A capture's own pixels, still its file's, are taken as asked,
+            // before its header is read, unless much larger than the box
+            // (as a decode already shared is, `covering`).
+            let published = (view.visible && self.decode_enabled && view.request.is_none())
+                .then(|| self.backend.published(self.generation, &view.source))
+                .flatten()
+                .filter(|p| {
+                    let natural = p.key.pixels;
+                    let drawn = drawn_pixels(natural, view.desired, view.object_fit, scale);
+                    let area = u64::from(natural.width) * u64::from(natural.height);
+                    area as f64 <= f64::from(drawn.0 * drawn.1) * 2.5
+                });
+            if let Some(published) = published {
+                let demand = Demand {
+                    view: view.key,
+                    priority: Priority::Visible,
+                    ..published
+                };
+                if let Ok(request) = self.backend.session.request_cached(demand) {
+                    view.request = Some((request, published.key.pixels));
+                    view.requested_for = view.desired;
+                    view.requested_fit = view.object_fit;
+                    view.requested_rendering = view.rendering;
+                    view.requested_scale = scale;
+                    view.part = false;
+                    view.refusal = None;
+                    if let Some(lease) = self.backend.session.take_ready(request) {
+                        if let Some(bitmap) = lease.payload::<Arc<Bitmap>>() {
+                            self.bitmaps.insert(*id, bitmap.clone());
+                            let natural = bitmap.natural();
+                            reports.push((*id, Some((natural.0 as f32, natural.1 as f32))));
+                            view.lease = Some(lease);
+                            view.accepted = Some(request);
+                            view.displayed_source = view.source.clone();
+                            self.load_events.extend(view.settle(*id, None));
+                        }
+                    }
+                }
             }
             if view.source_id.is_none() {
                 match self
@@ -847,9 +906,8 @@ impl Images {
                         continue;
                     }
                     Some(RequestStatus::WaitingBudget) => {
-                        let stats = self.backend.session.stats();
                         admission_budget =
-                            SESSION_BYTES - stats.resident_bytes - stats.reserved_bytes;
+                            admission_budget.min(self.backend.session.available_bytes());
                         let smaller = plan_view(header, view, scale, admission_budget);
                         if smaller.as_ref().is_ok_and(|p| p.pixels != pixels) {
                             self.backend.cancel(request);
@@ -898,7 +956,7 @@ impl Images {
                         (self.backend.session).covering(
                             source,
                             self.generation,
-                            1,
+                            decode.storage(),
                             decode.pixels,
                             wanted * 5 / 2,
                         )
@@ -924,7 +982,7 @@ impl Images {
                         source,
                         generation: self.generation,
                         pixels: decode.pixels,
-                        variant: 1,
+                        variant: decode.storage(),
                         crop: decode.crop,
                     },
                     metadata: header.metadata,
@@ -934,7 +992,7 @@ impl Images {
                 if header.is_svg() {
                     self.backend.note_scale(source, decode.pixels, scale);
                 }
-                match self.backend.request(demand) {
+                match self.backend.request(demand, false) {
                     Ok(request) => {
                         #[cfg(target_os = "macos")]
                         exact_ink::device::apple::trace_mark(c"image request", || source as f64);
@@ -999,6 +1057,9 @@ impl Images {
     }
     /// Pending work, including capacity waits; this is not an animation request.
     pub fn pending(&self) -> bool {
+        if !self.canvas_reads.is_empty() {
+            return true;
+        }
         // A package's picture is answered through the host's turn, not the
         // workers: nothing here to wait on.
         self.views.values().any(|v| {
@@ -1111,6 +1172,45 @@ impl Images {
     pub(crate) fn finish_boot(&mut self) {
         self.boot_visible_only = false;
     }
+    /// A picture asked for and still loading, which a window being shown
+    /// waits for: a canvas's, or a visible image's that shows nothing of its
+    /// source yet. Not a picture out of view, nor one that failed.
+    pub(crate) fn awaited(&self) -> bool {
+        !self.canvas_reads.is_empty()
+            || self.views.values().any(|v| {
+                v.visible
+                    && !v.errored
+                    && !v.source.is_empty()
+                    && v.symbol_size.is_none()
+                    && v.displayed_source != v.source
+                    && !self.package.serves(&v.source)
+                    && !matches!(v.refusal, Some(Refusal::DecodeFailed))
+                    && !matches!(
+                        v.source_id
+                            .as_ref()
+                            .and_then(|s| self.backend.prepared(s.id)),
+                        Some(Prepared::Failed(_))
+                    )
+            })
+    }
+    /// Poll until `done` holds or `timeout` passes, waiting on the workers
+    /// between polls.
+    pub(crate) fn wait_until(
+        &mut self,
+        timeout: Duration,
+        mut done: impl FnMut(&Self) -> bool,
+    ) -> Vec<Report> {
+        let start = Instant::now();
+        let mut seen = self.revision();
+        let mut reports = self.poll();
+        while !done(self) && start.elapsed() < timeout {
+            let left = timeout.saturating_sub(start.elapsed());
+            self.pause_wait(seen, left.min(Duration::from_millis(20)));
+            seen = self.revision();
+            reports.extend(self.poll());
+        }
+        reports
+    }
     /// Wait for available work until the deadline, without spinning on capacity.
     pub fn wait(&mut self, timeout: Duration) -> Vec<Report> {
         let start = Instant::now();
@@ -1147,6 +1247,8 @@ impl Images {
     /// Retire this generation. Old worker/backing ownership remains charged.
     pub fn reset(&mut self) {
         self.backend.retire(self.generation);
+        self.canvas_reads.clear();
+        self.canvas_answers.clear();
         self.views.clear();
         self.package = std::mem::take(&mut self.package).reset();
         self.bitmaps.clear();
@@ -1154,6 +1256,7 @@ impl Images {
         self.loaded.clear();
         self.load_events.clear();
         self.generation = self.backend.generation();
+        self.publisher = Publisher::new(&self.backend, self.generation);
         self.settled = None;
     }
     #[cfg(unix)]
@@ -1229,7 +1332,16 @@ fn drawn_size(
     fit: exact_kernel::ObjectFit,
     scale: f32,
 ) -> (f32, f32) {
-    let natural = header.metadata.natural;
+    drawn_pixels(header.metadata.natural, desired, fit, scale)
+}
+
+/// The pixels a picture of `natural` size covers in a box of `desired`.
+fn drawn_pixels(
+    natural: PixelSize,
+    desired: (f32, f32),
+    fit: exact_kernel::ObjectFit,
+    scale: f32,
+) -> (f32, f32) {
     crate::paint::object_fit(
         (natural.width, natural.height),
         fit,

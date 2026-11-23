@@ -262,6 +262,11 @@ impl Startup {
         Ok((startup, selected))
     }
 
+    /// A device already open, with nothing left to prepare.
+    pub(crate) fn opened(force_warp: bool) -> Self {
+        Self::new(force_warp)
+    }
+
     fn new(force_warp: bool) -> Self {
         Self {
             attempts: None,

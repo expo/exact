@@ -14,11 +14,14 @@ use std::{collections::BTreeMap, sync::Arc};
     target_os = "macos",
     target_os = "ios",
     target_os = "tvos",
+    target_os = "android",
     windows,
     test
 ))]
 #[allow(unsafe_code)]
 mod native;
+#[cfg(target_os = "android")]
+pub use native::AndroidOutput;
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
 pub use native::AppleOutput;
 #[cfg(windows)]

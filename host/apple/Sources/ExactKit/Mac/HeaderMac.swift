@@ -137,8 +137,11 @@ struct WindowHeader {
             return nil
         }
         if let why = refusal(in: rule.header) { return .kept(why) }
+        // The toolbar's items are the buttons and the readouts (LLP 1141.004 D1); the subtitle is
+        // no item of its own.
+        let barred = { (node: NodeView) in shown(node) && (items.contains(ObjectIdentifier(node)) || rule.readouts.contains { $0 === node }) }
         var read = WindowHeader(route: route, header: rule.header, heading: rule.heading, title: rule.heading?.accessibleText ?? "",
-                                leading: rule.leading.filter(shown), trailing: rule.trailing.filter(shown), backs: backs)
+                                leading: rule.leading.filter(barred), trailing: rule.trailing.filter(barred), backs: backs)
         read.subtitle = subtitle
         if let list = rule.segments, shown(list), let tabs = titleTabs(of: list) { (read.segments, read.tabs) = (list, tabs) }
         if let input = rule.search, shown(input) { read.search = input }

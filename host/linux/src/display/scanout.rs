@@ -63,7 +63,7 @@ impl Direct {
     pub(super) fn submit(&mut self, frame: PanelFrame) -> Completion {
         let result = match frame.image() {
             PanelImage::Pixels(pixels) => self.output.present_pixels(pixels),
-            PanelImage::Ink { view, .. } => self.output.present(view),
+            PanelImage::Ink { view, rotation, .. } => self.output.present_rotated(view, *rotation),
         }
         .map_err(|e| e.to_string())
         .and_then(|queued| {

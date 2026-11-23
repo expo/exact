@@ -144,6 +144,11 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     var besideInsets = UIEdgeInsets.zero
     /// The nodes nested beside the tab panels that paint over the container (LLP 1083.000 D4).
     lazy var siblings = PanelSiblings(navigation: self)
+    #if os(iOS)
+    /// The bars' hosted items (LLP 1141.004 D3).
+    lazy var barHosted = BarHosted(navigation: self)
+    lazy var liftedNodes: any LiftedNodes = LiftedPair(siblings, barHosted)
+    #endif
     weak var besideOwner: UIViewController?
     /// A context menu's commit pushes without the stack's animation: UIKit
     /// animates it (`.pop`, LLP 1021 §5.1). The selected route's key tells
@@ -163,6 +168,10 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     var stacks: [ObjectIdentifier: NavigationStack] = [:]
     var stackCount = 0
     var covers: [UInt32: HostCover] = [:]
+    #if os(iOS)
+    /// The bars of the dialogs' sheets, by dialog (DialogBarIOS.swift).
+    var dialogBars: [UInt32: DialogBar] = [:]
+    #endif
     /// The covers the kernel was last told (`deliverCovers`), each route's local insets (LLP 1123 D9), and
     /// the clearance its scrollers' insets hold (D3, ClearanceIOS.swift).
     var delivered: [UInt32: HostCover] = [:], localInsets = LocalInsetsReport(), clearance: [ObjectIdentifier: ClearanceInset] = [:]
@@ -689,6 +698,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// A route's controller leaves for good: its header paints again and the
     /// route hatch hears `routeEnded` (LLP 1075.003 §3.2).
     private func end(_ c: RouteController) {
+        #if os(iOS)
+        barHosted.show([], in: c)
+        #endif
         if let header = c.lifted { header.isHidden = false; c.lifted = nil }
         c.scoped?.isHidden = false
         c.scoped = nil
@@ -1205,16 +1217,25 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         presenter.modalHost.reset()
         for nav in presentedNavigations { retireNavigation(nav, preserving: false) }
         for c in controllers.values { end(c) }
+        #if os(iOS)
+        barHosted.reset()
+        #endif
         retireTabs()
         #if os(iOS)
         tabAccessoryNoted = []
         #endif
         retireSplit()
         if let primaryNavigation { retireStack(primaryNavigation) }
-        if !covers.isEmpty || !delivered.isEmpty || !localInsets.wanted.isEmpty {
+        // An open dialog's header its sheet's bar stands for stays covered (DialogBarIOS.swift).
+        #if os(iOS)
+        let kept = dialogBarCovers
+        #else
+        let kept: [UInt32: HostCover] = [:]
+        #endif
+        if covers != kept || delivered != kept || !localInsets.wanted.isEmpty {
             // Clearing the covers or local insets changes them as a report does, and is answered as one
-            if !covers.isEmpty || !localInsets.wanted.isEmpty { countReport() }
-            covers = [:]; localInsets.wanted = [:]
+            if covers != kept || !localInsets.wanted.isEmpty { countReport() }
+            covers = kept; localInsets.wanted = [:]
             presenter.afterBatch { [weak self] in self?.deliverCovers() }
         }
         primaryNavigation?.willMove(toParent: nil)

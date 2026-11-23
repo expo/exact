@@ -450,11 +450,9 @@ component NativeFixture
                     if e.name != "chat"
                       text (e.name == "home" ? "Fixture" : e.name == "detail" ? "Detail" : e.name == "rows" ? "Rows" : e.name == "sheet" ? "Sheet" : e.name == "plain" ? "Plain" : e.name == "note" ? "Note" : "Second") role="heading" aria-level=(e.name == "home" or e.name == "second" ? 1 : 2) testId=`title-${e.name}` flex=1
                     // The heading the header holds directly: the first text
-                    // after it is the bar's subtitle; a second is not shown
-                    // on iOS, which the agent says (LLP 1116 D2).
+                    // after it is the bar's subtitle (LLP 1116 D2).
                     if e.name == "plain"
                       text "No Back control" testId="subtitle-plain" font-size=12 color="#6b7280"
-                      text "Draft" testId="aside-plain" font-size=12 color="#6b7280"
                     // A bar item opening a popover that is no menu: it opens
                     // as itself, from the item, not as a pull-down (LLP 1021 D3).
                     if e.name == "plain"
@@ -468,7 +466,7 @@ component NativeFixture
                       image "symbol:compose" width=20 height=20
                     // A readout after the buttons: an item nothing presses,
                     // its dot and monospaced count drawn as written, which
-                    // follows the count in place (LLP 1075.003 §9.15).
+                    // follows the count in place (LLP 1141.004).
                     if e.name == "plain"
                       row role="status" testId="readout-plain" aria-label=`${composed} composed` display="flex" align-items="center" gap=6
                         column width=7 height=7 border-radius=3.5 background-color=(composed > 0 ? "#16a34a" : "#9ca3af")

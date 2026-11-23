@@ -14,6 +14,7 @@ import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rm
 import { createServer, request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { galleryCache } from './dev-gallery.mjs';
 import { FRAME_ANCESTORS } from '../../scripts/forma-server.mjs';
 import { fileURLToPath } from 'node:url';
@@ -190,9 +191,10 @@ test("the gallery is told of a kept design only after the app's own publication:
 
 /** A stand-in root and target: a `contract` that writes the gallery's source (or waits, holding a child of its
  * own), and a builder that waits holding one; each records its pid and its child's. */
-function standIns(stall) {
-  const dir = mkdtempSync(join(tmpdir(), 'exact-gallery-life-'));
-  const pids = join(dir, 'pids');
+function standIns(stall, parent = tmpdir()) {
+  const dir = mkdtempSync(join(parent, 'exact-gallery-life-'));
+  const pids = join(dir, 'pids'), buildEnv = join(dir, 'build-env.json'), home = join(dir, 'home');
+  const env = { ...process.env, HOME: home, USERPROFILE: home, EXACT_TOOLS_ORIGIN: 'none', CARGO_TARGET_DIR: join(dir, 'target') };
   writeFileSync(pids, '');
   const hold = `sleep 30 & echo $! >> ${pids}; echo $$ >> ${pids};`;
   mkdirSync(join(dir, 'target/debug'), { recursive: true });
@@ -200,33 +202,52 @@ function standIns(stall) {
   writeFileSync(join(dir, 'target/debug/contract'), `#!/bin/sh\n${stall === 'generate' ? `${hold} sleep 30` : 'mkdir -p "$4"; echo "// Generated" > "$4/app.contract"; echo "{}" > "$4/app.json"; echo made'}\n`, { mode: 0o755 });
   writeFileSync(join(dir, 'target/debug/contract.d'), `${join(dir, 'target/debug/contract')}: ${join(dir, 'src.rs')}\n`);
   mkdirSync(join(dir, 'root/host/web-js'), { recursive: true });
-  writeFileSync(join(dir, 'root/host/web-js/build.mjs'), `const { spawn } = require('node:child_process'); const fs = require('node:fs'); const c = spawn('sleep', ['30']); fs.appendFileSync(${JSON.stringify(pids)}, c.pid + '\\n' + process.pid + '\\n'); setTimeout(() => {}, 30000);\n`);
+  writeFileSync(join(dir, 'root/host/web-js/build.mjs'), `
+    const { spawn } = require('node:child_process');
+    const fs = require('node:fs');
+    const { HOME, USERPROFILE, EXACT_TOOLS_ORIGIN } = process.env;
+    fs.writeFileSync(${JSON.stringify(buildEnv)}, JSON.stringify({ HOME, USERPROFILE, EXACT_TOOLS_ORIGIN }));
+    const c = spawn('sleep', ['30']);
+    fs.appendFileSync(${JSON.stringify(pids)}, c.pid + '\\n' + process.pid + '\\n');
+    setTimeout(() => {}, 30000);
+  `);
   mkdirSync(join(dir, 'app'), { recursive: true });
-  return { dir, pids: () => readFileSync(pids, 'utf8').split('\n').filter(Boolean).map(Number) };
+  return { dir, env, buildEnv, pids: () => readFileSync(pids, 'utf8').split('\n').filter(Boolean).map(Number) };
 }
 const fakeRes = () => { const handlers = {}; return { writeHead() {}, write() {}, end() {}, on: (e, f) => { handlers[e] = f; }, close: () => handlers.close?.() }; };
 const fakeReq = () => { const handlers = {}; return { method: 'GET', headers: {}, on: (e, f) => { handlers[e] = f; }, close: () => handlers.close?.() }; };
 
 test('every process the gallery starts, a child of its generator or its builder included, stops with it: at stop, at either stage, and when its last page has been gone a while', async () => {
   const { galleryLoop } = await import('./dev-gallery.mjs');
+  const parent = mkdtempSync(join(tmpdir(), 'exact-gallery-parent-'));
+  mkdirSync(join(parent, 'node_modules'));
   // ('build, res only': its page gone with only the response's close, as under Bun on a handed-off socket.)
-  for (const [stage, by] of [['generate', null], ['build', 'req'], ['build', 'res']]) {
-    const s = standIns(stage);
-    const loop = galleryLoop({ app: { dir: join(s.dir, 'app'), id: `life-${stage}` }, root: join(s.dir, 'root'), appDist: join(s.dir, 'dist'), env: { ...process.env, CARGO_TARGET_DIR: join(s.dir, 'target') }, client: () => '', log: () => {}, idleMs: 200 });
-    rmSync(loop.cache, { recursive: true, force: true });
-    const req = fakeReq(), res = fakeRes();
-    await loop.handle(req, res, new URL('http://x/__dev/gallery/stream'));
-    await until(() => s.pids().length >= 2, 30_000);
-    const started = s.pids();
-    expect(started.every(alive)).toBe(true);
-    if (stage === 'generate') await loop.stop();
-    // Its last page gone: after the quiet period, its processes stopped with it.
-    else { (by === 'req' ? req : res).close(); await until(() => !started.some(alive), 10_000); }
-    await until(() => !started.some(alive), 10_000);
-    expect(started.filter(alive)).toEqual([]);
-    rmSync(loop.cache, { recursive: true, force: true });
-    rmSync(s.dir, { recursive: true, force: true });
-  }
+  try {
+    for (const [stage, by] of [['generate', null], ['build', 'req'], ['build', 'res']]) {
+      const s = standIns(stage, parent);
+      const loop = galleryLoop({ app: { dir: join(s.dir, 'app'), id: `life-${stage}` }, root: join(s.dir, 'root'), appDist: join(s.dir, 'dist'), env: s.env, client: () => '', log: () => {}, idleMs: 200 });
+      const stale = join(loop.cache, 'previous-run');
+      mkdirSync(loop.cache, { recursive: true });
+      writeFileSync(stale, '');
+      rmSync(loop.cache, { recursive: true, force: true });
+      try {
+        const req = fakeReq(), res = fakeRes();
+        await loop.handle(req, res, new URL('http://x/__dev/gallery/stream'));
+        await until(() => s.pids().length >= 2, 30_000);
+        const started = s.pids();
+        expect(started.every(alive)).toBe(true);
+        if (stage === 'generate') await loop.stop();
+        else {
+          expect(JSON.parse(readFileSync(s.buildEnv, 'utf8'))).toEqual({ HOME: join(s.dir, 'home'), USERPROFILE: join(s.dir, 'home'), EXACT_TOOLS_ORIGIN: 'none' });
+          (by === 'req' ? req : res).close();
+        }
+        await until(() => !started.some(alive), 10_000);
+        expect(started.filter(alive)).toEqual([]);
+        expect(existsSync(stale)).toBe(false);
+      } finally { await loop.stop(); rmSync(loop.cache, { recursive: true, force: true }); rmSync(s.dir, { recursive: true, force: true }); }
+      expect(existsSync(loop.cache)).toBe(false);
+    }
+  } finally { rmSync(parent, { recursive: true, force: true }); }
 }, 120_000);
 
 test("an inspect table asked with no page of the gallery open is a process of the gallery's, stopped with it after the quiet period", async () => {
@@ -237,7 +258,7 @@ test("an inspect table asked with no page of the gallery open is a process of th
   writeFileSync(join(s.dir, 'table'), `#!/bin/sh\nsleep 30 & echo $! >> ${pids}; echo $$ >> ${pids}; sleep 30\n`, { mode: 0o755 });
   // (A quiet period longer than a loaded machine takes from the table writing its pids to the check that they run:
   // at 200 ms the gallery could already have stopped them, 1 run in 5 on main.)
-  const loop = galleryLoop({ app: { dir: join(s.dir, 'app'), id: 'life-table' }, root: join(s.dir, 'root'), appDist: join(s.dir, 'dist'), env: { ...process.env, CARGO_TARGET_DIR: join(s.dir, 'target') }, client: () => '', log: () => {}, idleMs: 3000, tableTool: () => ({ cmd: join(s.dir, 'table'), pre: [] }) });
+  const loop = galleryLoop({ app: { dir: join(s.dir, 'app'), id: 'life-table' }, root: join(s.dir, 'root'), appDist: join(s.dir, 'dist'), env: s.env, client: () => '', log: () => {}, idleMs: 3000, tableTool: () => ({ cmd: join(s.dir, 'table'), pre: [] }) });
   rmSync(loop.cache, { recursive: true, force: true });
   mkdirSync(join(loop.cache, 'dist'), { recursive: true });
   writeFileSync(join(loop.cache, 'dist', 'app.plan'), 'a plan');
@@ -249,3 +270,113 @@ test("an inspect table asked with no page of the gallery open is a process of th
   rmSync(loop.cache, { recursive: true, force: true });
   rmSync(s.dir, { recursive: true, force: true });
 }, 120_000);
+
+test('each frame URL reloads its own document and recovers from its own errors', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-frame-pages-'));
+  mkdirSync(join(dir, 'frames'));
+  writeFileSync(join(dir, 'app.json'), JSON.stringify({ name: 'Canvas', app: { name: 'Canvas', id: 'test.frame-pages' } }));
+  const samples = join(dir, 'node_modules/preview-data');
+  mkdirSync(samples, { recursive: true });
+  writeFileSync(join(samples, 'package.json'), JSON.stringify({ name: 'preview-data', version: '1.0.0', type: 'module', main: 'index.js', types: 'index.d.ts' }));
+  writeFileSync(join(samples, 'index.d.ts'), 'export const prefix: string;');
+  writeFileSync(join(samples, 'index.js'), 'export const prefix = "Sample ";');
+  const app = `routes nav
+  home "/"
+component App
+  view
+    Card(title="Full app")
+component Card
+  props
+    title: string
+  resource label = caption(title) as shape string
+  resource detail = detail() as shape string
+  state count = 0
+  action add
+    count = count + 1
+  view
+    column
+      text title
+      text label
+      text detail
+      button press=add
+        text count.toString()
+`;
+  const source = title => `use Card from "../app.contract"
+component Frame
+  view
+    Card(title=${JSON.stringify(title)})
+`;
+  const put = (name, content) => writeFileSync(join(dir, 'frames', name + '.contract'), content);
+  writeFileSync(join(dir, 'app.contract'), app);
+  writeFileSync(join(dir, 'app.ts'), `import type { Answer, Sources } from './app.contract.d.ts';
+export const grants = '';
+const sources: Sources = { caption: ([title]) => 'Live ' + title, detail: () => 'Live detail' };
+export const answer: Answer = (name, args, store, storage) => sources[name](args, store, storage);
+`);
+  put('card', source('Card A'));
+  put('other', source('Card B'));
+  let loop, browser;
+  try {
+    loop = await devLoop(dir);
+    browser = await suiteBrowser('chromium');
+    const context = await browser.newContext();
+    const [a, b, full] = await Promise.all([context.newPage(), context.newPage(), context.newPage()]);
+    const open = async (page, path, title) => {
+      await page.goto(loop.base + path);
+      await page.getByText(title, { exact: true }).waitFor({ timeout: 120_000 });
+    };
+    await Promise.all([open(a, '/__dev/frames/card/', 'Card A'), open(b, '/__dev/frames/other/', 'Card B'), open(full, '/', 'Full app')]);
+    const count = b.getByRole('button');
+    await count.click();
+    await b.getByRole('button', { name: '1' }).waitFor();
+    await b.evaluate(() => { window.frameDocument = 'kept'; });
+    await full.evaluate(() => { window.appDocument = 'kept'; });
+    put('card', source('Card A edited'));
+    await a.getByText('Card A edited', { exact: true }).waitFor({ timeout: 60_000 });
+    expect(await b.evaluate(() => window.frameDocument)).toBe('kept');
+    expect(await full.evaluate(() => window.appDocument)).toBe('kept');
+    expect(await count.textContent()).toBe('1');
+
+    const fixture = join(dir, 'frames/card.fixture.mts');
+    const sample = `import type { TypeScriptSources } from '../app.contract.d.ts';
+import { prefix } from 'preview-data';
+export default { caption: ([title]) => prefix + title } satisfies Partial<TypeScriptSources>;`;
+    const inputs = join(dir, '.exact/typescript-inputs.json');
+    const originalInputs = readFileSync(inputs, 'utf8');
+    writeFileSync(fixture, sample);
+    await a.getByText('Sample Card A edited', { exact: true }).waitFor({ timeout: 60_000 });
+    await a.getByText('Live detail', { exact: true }).waitFor();
+    expect(await b.getByText('Live Card B', { exact: true }).count()).toBe(1);
+    writeFileSync(join(samples, 'index.js'), 'export const prefix = "Edited ";');
+    await a.getByText('Edited Card A edited', { exact: true }).waitFor({ timeout: 60_000 });
+    writeFileSync(fixture, sample.replace('prefix + title', '42'));
+    const fixtureError = a.locator('pre').filter({ hasText: 'card.fixture.mts' });
+    await fixtureError.waitFor({ timeout: 60_000 });
+    expect(await fixtureError.textContent()).toContain('number');
+    expect(await b.evaluate(() => window.frameDocument)).toBe('kept');
+    expect(await full.evaluate(() => window.appDocument)).toBe('kept');
+    rmSync(fixture);
+    await a.getByText('Live Card A edited', { exact: true }).waitFor({ timeout: 60_000 });
+    expect(readFileSync(inputs, 'utf8')).toBe(originalInputs);
+
+    put('other', source('Card B').replace('"Card B"', 'unknownTitle'));
+    const error = b.locator('pre').filter({ hasText: 'unknownTitle' });
+    await error.waitFor({ timeout: 60_000 });
+    expect(await error.textContent()).toContain('other.contract:');
+    expect(await a.locator('pre').filter({ hasText: 'unknownTitle' }).count()).toBe(0);
+    put('other', source('Card B'));
+    await error.waitFor({ state: 'detached', timeout: 60_000 });
+    expect(await b.evaluate(() => window.frameDocument)).toBe('kept');
+    expect(await count.textContent()).toBe('1');
+
+    writeFileSync(join(dir, 'app.contract'), app.replace('      text title', '      text "Shared edit"\n      text title'));
+    await Promise.all([a, b, full].map(page => page.getByText('Shared edit', { exact: true }).waitFor({ timeout: 60_000 })));
+    expect((await fetch(loop.base + '/__dev/frames/absent/')).status).toBe(404);
+  } catch (error) {
+    throw new Error(`${error.message}\n${loop?.said() ?? ''}`, { cause: error });
+  } finally {
+    await browser?.close();
+    await loop?.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 300_000);

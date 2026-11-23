@@ -57,7 +57,7 @@ import { Resources, Mutations, lateReaders, lateIdle } from './resources.js';
 import { Views, viewId } from './tree.js';
 import { KeyEvent, Propagating } from './events.js';
 import { Pres, Present, Sh, Input, pressFeedback } from './pieces.js';
-import { Booting, start, finishTaskScopes } from './mount.js';
+import { Booting, start, finishTaskScopes, Portals } from './mount.js';
 export * from './clock.js';
 export * from './resources.js';
 export * from './tree.js';
@@ -681,6 +681,7 @@ export const Scrolls = new Map(),
 /** What a commit does once its tree is in place: authored scrolls, then the
  * loaded pieces' publications (also after a list's report, list.js). */
 export function settled(inCommit) {
+  Portals?.place();
   drain();
   markDocument();
   Paint?.flush();

@@ -486,8 +486,8 @@ fn module_moved_by(lines: &[String], at: usize) -> Option<(usize, String)> {
     None
 }
 
-/// The runner's observation split into steps: entry 0 is boot, entry `k`
-/// follows the `k`-th event.
+/// An observation split into steps: entry 0 is boot, and each event adds
+/// one, or two for an input whose arrival ran due work (`due`, then the input).
 fn chunks(lines: &[String]) -> Vec<&[String]> {
     let mut starts: Vec<usize> = lines
         .iter()
@@ -497,6 +497,62 @@ fn chunks(lines: &[String]) -> Vec<&[String]> {
         .collect();
     starts.push(lines.len());
     starts.windows(2).map(|w| &lines[w[0]..w[1]]).collect()
+}
+
+/// Whether a step is the work due at an input's arrival, printed before it.
+pub(crate) fn is_due(step: &[String]) -> bool {
+    step.first().is_some_and(|l| l == "== due")
+}
+
+/// The steps one per event: entry 0 is boot and entry `k` the `k`-th event's
+/// own step, leaving out the `due` step before an input.
+fn event_steps(lines: &[String]) -> Vec<&[String]> {
+    chunks(lines).into_iter().filter(|s| !is_due(s)).collect()
+}
+
+/// The event (counted from 1; 0 is boot) whose delivery printed step `step`:
+/// a `due` step is its input's.
+pub(crate) fn event_of(lines: &[String], step: usize) -> usize {
+    let steps = chunks(lines);
+    let own = steps
+        .iter()
+        .take(step + 1)
+        .skip(1)
+        .filter(|s| !is_due(s))
+        .count();
+    own + usize::from(steps.get(step).is_some_and(|s| is_due(s)))
+}
+
+/// The observation with each `due` step folded into its input's, as an
+/// evaluator without a commit trace prints it (the web JS target, the
+/// component semantics): its configuration and outcome are the input's, and
+/// the due work's commands come before the handlers' (after the states,
+/// where a step lists its commands). Commit lines are not carried.
+pub(crate) fn fold_due(lines: &[String]) -> Vec<String> {
+    let first = lines
+        .iter()
+        .position(|l| l.starts_with("== "))
+        .unwrap_or(lines.len());
+    let mut out = lines[..first].to_vec();
+    let mut commands = Vec::new();
+    for step in chunks(lines) {
+        if is_due(step) {
+            commands = step
+                .iter()
+                .filter(|l| l.starts_with("command "))
+                .cloned()
+                .collect();
+            continue;
+        }
+        let at = step
+            .iter()
+            .position(|l| l.starts_with("command ") || l.starts_with("view "))
+            .unwrap_or(step.len());
+        out.extend_from_slice(&step[..at]);
+        out.append(&mut commands);
+        out.extend_from_slice(&step[at..]);
+    }
+    out
 }
 
 /// Check a corpus case's `expect` lines against the runner's observation.
@@ -514,7 +570,7 @@ pub fn expectations_on(
     plan: &exact_plan::Plan,
     rust: &[String],
 ) -> Result<(), String> {
-    let steps = chunks(rust);
+    let steps = event_steps(rust);
     let mut k = 0;
     for item in &s.items {
         match item {

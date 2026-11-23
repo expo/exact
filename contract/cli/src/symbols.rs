@@ -376,7 +376,7 @@ fn symbols(
         matches.extend(elements::lookup(sources, filters.unwrap_or_default(), file));
     };
     let visit = filters.map(|_| &mut collect as sources::ViewVisitor<'_>);
-    let loaded = sources::load_partial_visiting_views(path, &src, &root, &mut refused, visit);
+    let loaded = sources::load_partial_with(path, &src, &root, &mut refused, visit, None);
     let (file, sources) = match loaded {
         Ok(loaded) => loaded,
         Err(all) => {

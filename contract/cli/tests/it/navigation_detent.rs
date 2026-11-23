@@ -108,10 +108,8 @@ fn sheet(route: &str, inner: &str) -> String {
     )
 }
 
-/// A sheet opens at the detent `navigationInitialDetent` names, one of the
-/// words of its route's `navigationDetent` (`large` when it says none); a
-/// literal naming another height is refused, a computed list is not
-/// checked, and off a route, where no host reads it, it is refused.
+/// An initial detent belongs to the sheet's list. With no list, a route
+/// opens large and a dialog fits its contents.
 #[test]
 fn the_initial_detent_is_one_of_the_sheets_heights() {
     let compile = |route: &str| contract::compile(&sheet(route, ""));
@@ -152,7 +150,18 @@ fn the_initial_detent_is_one_of_the_sheets_heights() {
             "{value:?}: {error}"
         );
     }
-    // Off a route: a box in one, and a keyed element no navigation root holds.
+    let dialog = |attrs| {
+        contract::compile(&format!(
+            "component App\n  view\n    dialog id=\"form\" {attrs}\n      text \"Form\"\n"
+        ))
+    };
+    dialog("navigationDetent=\"medium large\" navigationInitialDetent=\"large\"").unwrap();
+    dialog("navigationInitialDetent=\"fit-content\"").unwrap();
+    assert!(dialog("navigationInitialDetent=\"large\"")
+        .unwrap_err()
+        .to_string()
+        .contains("`fit-content` alone"));
+    // A box inside a route and a keyed element outside a navigation root.
     for src in [
         sheet("navigationDetent=\"medium large\"", "navigationInitialDetent=\"large\""),
         "component App\n  view\n    column\n      column navigationKey=\"sheet\" navigationPresentation=\"modal\" navigationDetent=\"medium large\" navigationInitialDetent=\"large\"\n        text \"Sheet\"\n".into(),

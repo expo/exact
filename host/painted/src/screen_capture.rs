@@ -1,7 +1,7 @@
 //! Still files and the agent's display cards (LLP 1178 D3, D6).
 //! The platform supplies pixels; publication and cancellation stay the same.
 
-use crate::package::{json, Context, Json, Package, Reply};
+use crate::package::{json, Context, Json, Package, PublishedImage, Reply};
 use exact_runner::canvas_capture::Encoding;
 use ibex2::grant::{Grant, GrantSet, PathPrefix};
 use ibex2::stdlib::{app_fs::AppDirectories, fs};
@@ -98,9 +98,17 @@ impl Captures {
         });
         let notifier = context.notifier();
         let job = Box::new(move || {
-            let result = write(&roots, &directory, displays, &encoding, &held, &|path| {
-                notifier.picture_changed(path)
-            });
+            let result = write(
+                &roots,
+                &directory,
+                displays,
+                &encoding,
+                &held,
+                &|path, image| match image {
+                    Some(image) => notifier.publish_image(path, image),
+                    None => notifier.picture_changed(path),
+                },
+            );
             match result {
                 Ok(answer) => reply.send(answer),
                 Err((code, why)) => reply.error(code, Some(&why)),
@@ -139,7 +147,7 @@ fn write(
     displays: Vec<Display>,
     encoding: &Encoding,
     held: &Mutex<bool>,
-    published: &dyn Fn(&str),
+    published: &dyn Fn(&str, Option<PublishedImage>),
 ) -> Result<Json, Failure> {
     if !*held.lock().unwrap() {
         return Err(("AbortError", "capture cancelled".into()));
@@ -200,9 +208,9 @@ fn write(
         return Err(("AbortError", "capture cancelled".into()));
     }
     let mut captures = Vec::with_capacity(staged.len());
-    for (file, answer) in staged {
+    for (file, answer, image) in staged {
         file.publish().map_err(file_error)?;
-        published(answer["path"].as_str().unwrap());
+        published(answer["path"].as_str().unwrap(), image);
         captures.push(answer);
     }
     Ok(json!({"captures": captures}))
@@ -214,7 +222,7 @@ fn encode_file(
     path: &str,
     display: Display,
     encoding: &Encoding,
-) -> Result<(ibex2::stdlib::app_fs::Staged, Json), Failure> {
+) -> Result<(ibex2::stdlib::app_fs::Staged, Json, Option<PublishedImage>), Failure> {
     let bytes = (display.read)()?;
     let size = tiny_skia::IntSize::from_wh(display.width, display.height)
         .ok_or_else(|| failed("empty display"))?;
@@ -227,7 +235,13 @@ fn encode_file(
         "path": path, "width": display.width, "height": display.height,
         "type": media_type, "screen": display.screen,
     });
-    Ok((file, answer))
+    // A JPEG decoder returns the lossy file's pixels.
+    let image = if media_type == "image/png" {
+        PublishedImage::new(&bytes, pixels)
+    } else {
+        None
+    };
+    Ok((file, answer, image))
 }
 
 fn encode(

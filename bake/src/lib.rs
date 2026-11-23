@@ -12,6 +12,7 @@ mod atom_faces;
 mod channels;
 pub mod colors;
 pub mod compat;
+mod controls;
 pub mod host;
 mod icon_rules;
 mod link;

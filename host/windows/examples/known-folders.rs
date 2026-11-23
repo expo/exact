@@ -1,6 +1,7 @@
 //! LLP 1173 D4 qualification: run on Windows with OneDrive Pictures and a
 //! UNC-redirected folder. Storage is exercised in temporary subdirectories.
-//! To exercise a dehydrated child, append `-- pictures OnlineOnly` with its name.
+//! To exercise a dehydrated child folder, append `-- pictures OnlineOnly` with its name.
+//! Each step prints its answer; the probe removes what it creates.
 #[cfg(windows)]
 fn main() -> std::io::Result<()> {
     probe::run()
@@ -23,7 +24,7 @@ mod probe {
         fs::OpenOptions,
         io,
         os::windows::{fs::OpenOptionsExt, io::AsRawHandle},
-        path::{Component, Path, Prefix},
+        path::{Component, Path, PathBuf, Prefix},
         sync::Arc,
     };
     use windows_sys::{
@@ -55,7 +56,7 @@ mod probe {
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "expected a folder role and a relative child path using /",
+                "expected a folder role and a relative child folder path using /",
             ));
         }
         // Windows can disguise cloud tags unless the querying thread asks for them.
@@ -132,32 +133,48 @@ mod probe {
             Err(error) => println!("attributes/tag: {error}"),
         }
         let leaf = format!(".exact-known-probe-{}-{token}", std::process::id());
-        let directory = folder.join(&leaf);
         let path = if relative.is_empty() {
             format!("{name}:/{leaf}")
         } else {
             format!("{name}:/{relative}/{leaf}")
         };
+        // Only what this run made is removed, on every path out.
+        let mut made = Cleanup(Vec::new());
         let grants = GrantSet::parse(&format!("fs.write {path}")).unwrap();
-        let created = if relative.is_empty() {
-            fs::run(&grants, None, FsOp::Mkdir, &path, None, None)
-                .map(|_| ())
-                .map_err(|error| error.to_string())
-        } else {
-            // Known-folder mkdir refuses existing components. Prepare a child's
-            // temporary natively; file writes still walk from the OS-selected root.
-            std::fs::create_dir(&directory).map_err(|error| error.to_string())
-        };
-        if let Err(error) = created {
-            println!("temporary subdirectory: {error}");
-            return;
+        let directory = folder.join(&leaf);
+        if relative.is_empty() {
+            let existed = directory.exists();
+            let answer = fs::run(&grants, None, FsOp::Mkdir, &path, None, None);
+            println!("mkdir: {answer:?}");
+            made.note(&directory, existed, answer.is_ok(), "mkdir");
+            let nested = format!("{name}:/{leaf}-nested/inner");
+            let nested_grants = GrantSet::parse(&format!("fs.write {nested}")).unwrap();
+            let outer = folder.join(format!("{leaf}-nested"));
+            let existed = outer.exists();
+            let answer = fs::run(&nested_grants, None, FsOp::Mkdir, &nested, None, None);
+            println!("mkdir of two new levels: {answer:?}");
+            made.note(&outer, existed, answer.is_ok(), "mkdir of two new levels");
+        }
+        if !directory.is_dir() {
+            // Known-folder mkdir refuses existing components, so a child's
+            // temporary directory (or one mkdir could not make) is made natively;
+            // the steps below still walk from the OS-selected root.
+            if let Err(error) = std::fs::create_dir(&directory) {
+                println!("native temporary subdirectory: {error}");
+                return;
+            }
+            made.0.push(directory);
         }
         println!(
             "mkdir collision (must be EEXIST): {:?}",
             fs::run(&grants, None, FsOp::Mkdir, &path, None, None)
         );
         for (label, op, target) in [
-            ("CREATE_NEW", FsOp::WriteFile, "created"),
+            (
+                "CREATE_NEW in the new directory",
+                FsOp::WriteFile,
+                "created",
+            ),
             (
                 "CREATE_NEW collision (must be EEXIST)",
                 FsOp::WriteFile,
@@ -180,6 +197,42 @@ mod probe {
             );
             println!("{label}: {answer:?}");
         }
-        println!("cleanup: {:?}", std::fs::remove_dir_all(directory));
+    }
+
+    /// Directories this run made, removed when the folder's steps end.
+    struct Cleanup(Vec<PathBuf>);
+    impl Cleanup {
+        /// Keep `path` if the step made it, or if its failure left it behind,
+        /// and say which; a path that existed before the step is never kept.
+        fn note(&mut self, path: &Path, existed: bool, succeeded: bool, step: &str) {
+            if existed {
+                println!("{step}: {} existed before the step", path.display());
+                return;
+            }
+            if succeeded {
+                self.0.push(path.to_owned());
+                return;
+            }
+            match path.try_exists() {
+                Ok(left) => {
+                    println!("{step} left its directory: {left}");
+                    if left {
+                        self.0.push(path.to_owned());
+                    }
+                }
+                Err(error) => println!("{step} left its directory: unknown ({error})"),
+            }
+        }
+    }
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            for directory in &self.0 {
+                println!(
+                    "cleanup {}: {:?}",
+                    directory.display(),
+                    std::fs::remove_dir_all(directory)
+                );
+            }
+        }
     }
 }

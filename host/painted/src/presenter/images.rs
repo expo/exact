@@ -13,6 +13,15 @@ static AT_MOUNT: std::sync::LazyLock<bool> =
     std::sync::LazyLock::new(|| std::env::var("EXACT_PICTURES_AT_MOUNT").is_ok_and(|v| v != "0"));
 
 impl<D: DataSource> Presenter<D> {
+    pub(crate) fn sync_canvases(&mut self, frame: bool) -> bool {
+        self.host.sync_canvases(
+            self.brush.scale as f64,
+            frame,
+            &self.assets,
+            &mut self.images,
+        )
+    }
+
     /// Restore the ordinary image policy after the painted carrier retires boot.
     #[cfg(target_os = "macos")]
     pub fn finish_boot_images(&mut self) {
@@ -43,7 +52,7 @@ impl<D: DataSource> Presenter<D> {
         if self.images.retry_due_in().is_some_and(|d| d.is_zero()) {
             self.dirty = true;
         }
-        self.apply_reports(reports)
+        self.apply_image_results(reports)
     }
 
     /// A source's first picture sends its `load`, and a failure for good its
@@ -100,11 +109,49 @@ impl<D: DataSource> Presenter<D> {
         self.images.retry_due_in().map(|d| d.as_secs_f64() * 1000.0)
     }
 
+    /// Before a window's first present after a show: draw its canvases, then
+    /// wait, at most `bound`, while a picture they or a visible image asked
+    /// for is loading (`Images::awaited`), so the window shows with its
+    /// pictures (LLP 1178 D3). A missing or failing file settles at once;
+    /// one still loading at the bound lands in a later frame.
+    pub fn settle_pictures(&mut self, bound: Duration) -> bool {
+        let start = std::time::Instant::now();
+        self.images.paint_with(self.brush.text.clone());
+        self.draw_and_capture_canvases(false);
+        let mut changed = false;
+        loop {
+            let left = bound.saturating_sub(start.elapsed());
+            let reports = self.images.wait_until(left, |images| !images.awaited());
+            changed |= self.apply_image_results(reports);
+            let awaited = self.host.runner().canvas_images_pending() || self.images.awaited();
+            if !awaited || start.elapsed() >= bound {
+                return changed;
+            }
+        }
+    }
+
     /// Wait for every load in flight (bounded).
     pub fn wait_images(&mut self, timeout: Duration) -> bool {
         self.images.paint_with(self.brush.text.clone());
-        let reports = self.images.wait(timeout);
-        self.apply_reports(reports)
+        self.draw_and_capture_canvases(false);
+        let start = std::time::Instant::now();
+        let mut changed = false;
+        loop {
+            let reports = self.images.wait(timeout.saturating_sub(start.elapsed()));
+            changed |= self.apply_image_results(reports);
+            if !self.host.runner().canvas_images_pending() || start.elapsed() >= timeout {
+                return changed;
+            }
+        }
+    }
+
+    fn apply_image_results(&mut self, reports: Vec<crate::image::Report>) -> bool {
+        let canvases = !self.images.canvas_answers.is_empty();
+        if canvases {
+            self.draw_and_capture_canvases(false);
+            self.image_paint_pending = true;
+        }
+        self.apply_reports(reports) || canvases
     }
 
     pub(super) fn apply_reports(&mut self, reports: Vec<crate::image::Report>) -> bool {

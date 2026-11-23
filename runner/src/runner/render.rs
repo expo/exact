@@ -32,7 +32,9 @@ impl<D: DataSource> Runner<D> {
                 self.fonts.borrow().clone(),
             )));
             update.list_seeds = Some(&lists);
-            let tree = Tree::create(&mut update)?;
+            let mut tree = Tree::create(&mut update)?;
+            // The candidates sit where the carried views were shown.
+            tree.place(&self.plan, &self.sites, &mut update.ops, &mut Vec::new());
             let mut kernel =
                 Kernel::on_demand(Box::new(exact_kernel::MonospaceMeasurer::default()));
             let _roles = self.bind_roles();

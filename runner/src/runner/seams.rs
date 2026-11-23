@@ -109,7 +109,7 @@ impl<D: DataSource> ModuleLinks<D> {
                 true => &NoModules,
                 false => self.modules,
             },
-            tools: match plan.tools.is_empty() {
+            tools: match plan.tools.is_empty() && plan.controls.is_empty() {
                 true => &NoTools,
                 false => self.tools,
             },
@@ -167,6 +167,32 @@ pub trait Tools<D: DataSource> {
     }
     /// `state.intents`.
     fn intents_state(&self, _: &Runner<D>) -> Option<Json> {
+        None
+    }
+    /// A person's press of control `kind`: [`Runner::press_control`].
+    fn press_control(
+        &self,
+        _: &mut Runner<D>,
+        kind: &str,
+        _: &str,
+        _: CallHow,
+    ) -> Result<u64, String> {
+        Err(format!("no control `{kind}`: this app declares none"))
+    }
+    /// Whether invocation `id` is a control's press that no longer runs
+    /// uncancelled within its bound.
+    fn press_revoked(&self, _: &Runner<D>, _: u64) -> bool {
+        false
+    }
+    /// Whether invocation `id` is a live press of a control the binary
+    /// offers as a recording.
+    fn press_records(&self, _: &Runner<D>, _: u64) -> bool {
+        false
+    }
+    /// The host's placement of each control: [`Runner::place_controls`].
+    fn place_controls(&self, _: &mut Runner<D>, _: Json) {}
+    /// `state.controls`.
+    fn controls_state(&self, _: &Runner<D>) -> Option<Json> {
         None
     }
 }
@@ -389,6 +415,9 @@ impl<D: DataSource> Runner<D> {
         if let Some(intents) = self.intents_state() {
             out.insert("intents".into(), intents);
         }
+        if let Some(controls) = self.links_tools().controls_state(self) {
+            out.insert("controls".into(), controls);
+        }
         out.into_iter().collect()
     }
 
@@ -448,6 +477,59 @@ impl<D: DataSource> Runner<D> {
 
     fn call_answer(&self, id: u64) -> Result<String, String> {
         self.links_tools().call_answer(self, id)
+    }
+
+    /// A person's press of the compiled control `kind`, which carries
+    /// `digest` (LLP 1126.004 D2): its tool is called with no arguments as
+    /// an invocation of origin `action`, polled and cancelled by id as a
+    /// tool call is. Only a native host's press entry calls this; the
+    /// agent's `call` and the tool doors enter as `tool` whatever door they
+    /// name. `Err` for a kind the plan has no tool control of.
+    pub fn press_control(&mut self, kind: &str, digest: &str, how: CallHow) -> Result<u64, String> {
+        let t = self.links_tools();
+        t.press_control(self, kind, digest, how)
+    }
+
+    /// What this host's build offers of each control, which `state.controls`
+    /// reports: each row's placement in `compat`, the binary's compat.json
+    /// (`inputs.controls`, which `bake/src/controls.rs` derives). A kind it
+    /// leaves out, and every control of a host that never calls this, is
+    /// `absent`.
+    pub fn place_controls(&mut self, compat: &str) {
+        let Ok(compat) = serde_json::from_str::<Json>(compat) else {
+            return;
+        };
+        let rows = compat["inputs"]["controls"]
+            .as_array()
+            .into_iter()
+            .flatten();
+        let placed: serde_json::Map<String, Json> = rows
+            .filter_map(|c| {
+                Some((
+                    c["control"]["kind"].as_str()?.to_owned(),
+                    c["placement"].clone(),
+                ))
+            })
+            .collect();
+        if !placed.is_empty() {
+            let t = self.links_tools();
+            t.place_controls(self, Json::Object(placed))
+        }
+    }
+
+    /// Whether invocation `id` is a control's press that no longer runs
+    /// uncancelled within its bound: its caller cancelled it, or it ended or
+    /// ran out of time. Its work keeps what it started and is admitted no
+    /// further name held to the person (LLP 1126.004 D2).
+    pub(in crate::runner) fn press_revoked(&self, id: u64) -> bool {
+        self.links_tools().press_revoked(self, id)
+    }
+
+    /// Whether invocation `id` is a press running uncancelled within its
+    /// bound, of a control whose placement offers it as a recording, which
+    /// only a qualification build's bake does (LLP 1126.004 §6d).
+    pub(in crate::runner) fn press_records(&self, id: u64) -> bool {
+        self.links_tools().press_records(self, id)
     }
 
     /// `state.intents`: each tool with its word, modifiers, availability

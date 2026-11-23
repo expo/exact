@@ -13,4 +13,9 @@ impl DataSource for ActivityFixture {
     fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
         Err(DataError::UnknownSource(source.into()))
     }
+
+    // Android shows the departure as a notification (LLP 1126 D13).
+    fn grants(&self) -> &str {
+        "device.notifications purpose.notifications"
+    }
 }

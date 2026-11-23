@@ -11,6 +11,8 @@ extension NavigationHost: NavigationHosting {
     func makeRouteChrome() -> (any SheetChrome)? { RouteChrome() }
     func adoptRouteSheet(_ entry: DialogHost.Entry, _ sheet: DialogSheet) { presenter.dialogs.adopt(entry, sheet) }
     func releaseRouteSheet(_ entry: DialogHost.Entry) { presenter.dialogs.release(entry) }
+    func dialogSheetHeader(_ dialog: NodeView) -> (any SheetHeading)? { SheetHeader.read(dialog: dialog) }
+    func syncDialogSheet(_ entry: DialogHost.Entry) { presenter.dialogs.project(entry, SheetHeader.read(dialog: entry.dialog)) }
     #if EXACT_AGENT
     var paintedModalObservation: [String: Any]? {
         paintedModal.map { ["route": Int($0.id), "presentation": "painted", "kept": keptSheets[$0.id] ?? NSNull()] }

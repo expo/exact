@@ -420,6 +420,13 @@ impl Backend for Ink {
         Ok(None)
     }
     #[cfg(windows)]
+    fn keep_hidden_device(&self) -> Option<exact_ink::device::d3d11::Hidden> {
+        match &self.device {
+            Selected::D3d11(device) if !self.device_lost => device.keep_hidden(),
+            _ => None,
+        }
+    }
+    #[cfg(windows)]
     fn attach_window(
         &mut self,
         window: exact_ink::device::d3d11::Window,

@@ -1,5 +1,5 @@
 //! The plan's tools (LLP 1111 D2) for calls.js, which runs a call of one as
-//! the runner's `calls.rs` does (LLP 1133.023 D7, §10).
+//! the runner's `calls.rs` does (LLP 1133.023 D7, §10), and its controls.
 
 use crate::emit::surface_type_json;
 use exact_plan::{DerivesId, Plan};
@@ -56,4 +56,27 @@ pub fn tools(plan: &Plan, body: &mut String) -> String {
         .collect();
     let _ = write!(body, "$tools({{{}}});", rows.join(","));
     "import{tools as $tools}from\"./calls.js\";".into()
+}
+
+/// The plan's controls (LLP 1126.004 D5) as `state.controls` lists them:
+/// the web offers none, so each is `absent`. Empty for a plan with none.
+pub fn controls(plan: &Plan, body: &mut String) {
+    if plan.controls.is_empty() {
+        return;
+    }
+    let rows: Vec<serde_json::Value> = (plan.controls.iter())
+        .map(|c| {
+            let mut row = serde_json::json!({ "kind": plan.str(c.kind), "digest": plan.str(c.digest), "placement": "absent" });
+            match c.tool {
+                Some(t) => row["tool"] = plan.str(plan.tools[t.0 as usize].name).into(),
+                None => row["url"] = plan.str(c.url).into(),
+            }
+            row
+        })
+        .collect();
+    let _ = write!(
+        body,
+        "(globalThis.exact??={{}}).controls={};",
+        serde_json::Value::from(rows)
+    );
 }

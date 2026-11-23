@@ -134,6 +134,9 @@ package enum PageFacts {
     nonisolated(unsafe) private static var showWatch: [ObjectIdentifier: NSKeyValueObservation] = [:]
     /// Orders `window` out for a close that keeps its page, and tells the
     /// page it can no longer be seen.
+    /// Whether `window` is put away by its close (`hideForClose`) and not shown since.
+    package static func hiddenForClose(_ window: NSWindow) -> Bool { closeHid.contains(window) }
+
     package static func hideForClose(_ window: NSWindow) {
         closeHid.add(window)
         window.orderOut(nil)

@@ -103,6 +103,88 @@ fn conditional_action_bindings_name_the_callers_file_and_binding() {
     }
 }
 
+fn assert_locations(entry: &std::path::Path, expected: &[(&str, (&str, u32, u32, u32))]) {
+    let errors = contract::compile_path_all(entry, false)
+        .err()
+        .expect("the fixture should report an error");
+    let mut found: Vec<_> = errors
+        .iter()
+        .map(|e| {
+            let file = e
+                .file
+                .as_deref()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap();
+            (
+                file,
+                (e.id.as_str(), e.span.line, e.span.col, e.span.end_col),
+            )
+        })
+        .collect();
+    found.sort();
+    assert_eq!(found, expected, "{}", entry.display());
+}
+
+#[test]
+fn a_forwarded_prop_names_its_supplier_and_keeps_the_consumers_own_error() {
+    let app = App::new("forwarded-name");
+    let root = app.write(
+        "app.contract",
+        "use Frame from \"./frame.contract\"\ncomponent App\n  view\n    Frame()\n",
+    );
+    app.write(
+        "forward.contract",
+        "use Inspector from \"./inspector.contract\"\ncomponent Forward\n  props\n    value: string\n  view\n    Inspector(title=value)\n",
+    );
+    app.write(
+        "inspector.contract",
+        "component Inspector\n  props\n    title: string\n  view\n    if title\n      text title\n",
+    );
+    for (state, caller) in [
+        (
+            "state label =",
+            Some(("syntax-expected-expression", 3, 16, 16)),
+        ),
+        ("state other = 1", Some(("type-unknown-name", 5, 19, 24))),
+        ("state label = \"ok\"", None),
+    ] {
+        app.write(
+            "frame.contract",
+            &format!("use Forward from \"./forward.contract\"\ncomponent Frame\n  {state}\n  view\n    Forward(value=label)\n"),
+        );
+        let mut expected: Vec<_> = caller
+            .into_iter()
+            .map(|at| ("frame.contract", at))
+            .collect();
+        expected.push(("inspector.contract", ("type-condition", 5, 8, 13)));
+        assert_locations(&root, &expected);
+    }
+}
+
+#[test]
+fn an_invalid_provider_reports_its_own_file_at_root_and_below_a_shell() {
+    let app = App::new("provided-name");
+    let shell = app.write(
+        "app.contract",
+        "use Frame from \"./frame.contract\"\ncomponent App\n  view\n    Frame()\n",
+    );
+    let frame = app.write("frame.contract", "use Inspector from \"./inspector.contract\"\ncomponent Frame\n  provide\n    accent = 1\n    title = missing\n  view\n    Inspector()\n");
+    app.write("inspector.contract", "component Inspector\n  inject\n    accent: string\n    title: string\n  view\n    if title\n      text title\n");
+    for entry in [&shell, &frame] {
+        assert_locations(
+            entry,
+            &[
+                ("frame.contract", ("type-provide", 4, 5, 11)),
+                ("frame.contract", ("type-unknown-name", 5, 13, 20)),
+                ("inspector.contract", ("type-condition", 6, 8, 13)),
+            ],
+        );
+    }
+}
+
 #[test]
 fn imported_type_analyze_and_lower_errors_keep_the_offending_token_range() {
     let app = App::new("passes");

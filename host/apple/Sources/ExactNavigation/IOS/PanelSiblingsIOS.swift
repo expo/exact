@@ -186,11 +186,11 @@ final class PanelSiblings: LiftedNodes {
     /// The parent a view in a stand is under in the authored tree.
     func parent(of view: UIView) -> NodeView? { (view.superview as? PanelSiblingsStand)?.parent ?? navigation.paneParent(of: view) }
 
-    func heldApart(_ view: UIView) -> Bool {
+    func pressBox(crossing view: UIView, from start: UIView) -> UIView? {
         #if os(iOS)
-        navigation.tabAccessoryParent(of: view) != nil
+        navigation.tabAccessoryParent(of: view) == nil ? nil : start
         #else
-        false
+        nil
         #endif
     }
 

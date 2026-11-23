@@ -123,6 +123,7 @@ internal class Requests(private val activity: ExactActivity) {
                     HATCH -> activity.hatches()?.told(words, body, i)
                     MODULE -> Extensions.call(id, string(words, body).first)
                     PRESENCE -> Presence.check(string(words, body).first)
+                    ACTIVITY -> Activities.request(string(words, body).first)
                     ORIENTATION -> orientation.told(words, body)
                     // The surface, then its message's JSON.
                     SURFACE_HAPTIC -> (haptics ?: SurfaceHaptics(activity, paused).also { haptics = it }).told(words[body], string(words, body + 1).first)
@@ -329,6 +330,7 @@ internal class Requests(private val activity: ExactActivity) {
                     AUTH_END -> Auth.end(words[body])
                     MODULE -> Extensions.call(id, string(words, body).first)
                     PRESENCE -> Presence.check(string(words, body).first)
+                    ACTIVITY -> Activities.request(string(words, body).first)
                 }
             }
         }
@@ -396,6 +398,7 @@ internal class Requests(private val activity: ExactActivity) {
         const val ASSETS = 20
         const val WINDOW_TITLE = 22
         const val DRAG = 23
+        const val ACTIVITY = 24
         /** How long after the activity is in front again a share sheet's choice is still waited for. */
         private const val DISMISSED_MS = 500L
     }

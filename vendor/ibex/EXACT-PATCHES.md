@@ -1116,17 +1116,22 @@ for retry. This avoids requiring another response-sized allocation at publicatio
 LLP 1173 D4's create-only namespaces use an OS-selected root, UNC included,
 and retain handles below it. Their walk refuses name-surrogate reparse tags
 and reopens admitted directories with normal reparse processing so cloud
-filters can recall placeholders. The reopened handle must identify the same
-object; tags are checked again before use. Every directory is reopened because
-Windows can hide cloud tags. The app and native drive walks keep refusing all
-reparse points. Leaf validation shares the native path rule. Exclusive
+filters can recall placeholders: an `NtCreateFile` with an empty name relative
+to the held handle, since `ReOpenFile` refuses directories. The reopened handle
+must identify the same object; tags are checked again before use. Every
+directory it opens is reopened because Windows can hide cloud tags; an entry it
+has just created with `FILE_CREATE` is not, having nothing to recall, unless it
+already carries a tag. Such an entry is held with `DELETE`, and removed if that
+check fails. The app and native drive walks keep refusing all reparse points. Leaf validation shares the native path rule. Exclusive
 creation uses `FILE_CREATE`; atomic publication uses the retained parent and
 `FileRenameInformation` with `ReplaceIfExists` false. Known-folder `mkdir`
 creates every component exclusively, with `FILE_CREATE` on Windows and
-`mkdirat` on Unix; app walks keep their open-or-create behavior. Replay on a refresh.
+`mkdirat` on Unix; app walks keep their open-or-create behavior. On Windows a
+failed `mkdir` removes the directories it created before the failing one,
+through their own handles, and names any it could not remove. Replay on a refresh.
 
 The portable tag and name tests run on macOS. Windows tests cover collisions,
-retained parents and agent roots. Native qualification remains pending:
+nested `mkdir`, retained parents and agent roots. Native qualification remains pending:
 `cargo run -p exact-windows --example known-folders` probes OneDrive and UNC
 redirection before a Windows app drive claims the cell. Append
 `-- pictures OnlineOnly` to exercise an existing dehydrated child directory.

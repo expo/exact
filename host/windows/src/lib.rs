@@ -41,7 +41,7 @@ mod orientation;
 mod pad_poll;
 #[cfg(windows)]
 mod pads;
-#[cfg(windows)]
+#[cfg_attr(not(windows), allow(dead_code))]
 mod placement;
 #[cfg(windows)]
 mod probe;
@@ -111,7 +111,9 @@ impl Default for Window {
 #[cfg(windows)]
 pub use windows;
 
-/// Run a Windows app with its display name, window, baked plan and product identity.
+/// Run a Windows app with its display name, window, baked plan and product identity,
+/// as a development build: it links the headless driver and every transport.
+/// A production shell calls [`run_baked`] with the constants its bake wrote.
 pub fn run<D: exact_runner::DataSource + Default + 'static>(
     name: &str,
     window: Window,
@@ -132,50 +134,18 @@ pub fn run_composed<D: exact_runner::DataSource + Default + 'static>(
     compat: &str,
     composed: exact_painted::Composed,
 ) -> i32 {
-    run_baked::<D, true>(name, window, plan, compat, composed)
-}
-
-/// Run the composed app. Development bakes link the headless driver and painter overrides.
-/// The receipt also has to admit development before the host accepts either.
-pub fn run_baked<D: exact_runner::DataSource + Default + 'static, const DEVELOPMENT: bool>(
-    name: &str,
-    window: Window,
-    plan: &[u8],
-    compat: &str,
-    composed: exact_painted::Composed,
-) -> i32 {
-    run_with_executor::<D, DEVELOPMENT>(name, window, plan, compat, composed, Executor::start)
+    run_baked::<D, true>(name, window, plan, compat, composed, Services::default())
 }
 
 pub use exact_painted::{app::Services, executor::Executor};
 
-/// Run a baked shell with the executor selected from its data grants.
-pub fn run_with_executor<
-    D: exact_runner::DataSource + Default + 'static,
-    const DEVELOPMENT: bool,
->(
-    name: &str,
-    window: Window,
-    plan: &[u8],
-    compat: &str,
-    composed: exact_painted::Composed,
-    start_executor: exact_painted::executor::Start,
-) -> i32 {
-    run_with_services::<D, DEVELOPMENT>(
-        name,
-        window,
-        plan,
-        compat,
-        composed,
-        Services::with_image_downloads(start_executor),
-    )
-}
-
-/// Run a shell with the services selected when its plan was baked.
-pub fn run_with_services<
-    D: exact_runner::DataSource + Default + 'static,
-    const DEVELOPMENT: bool,
->(
+/// Run a baked shell with the constants its build wrote
+/// (`exact_bake::Compat::windows_shell`): `DEVELOPMENT` is `ADMIT_AGENT`,
+/// which links the headless driver and painter overrides (the receipt must
+/// also admit development), and `services` is `SERVICES`, the data
+/// executor and image loader the bake selected. A production shell links
+/// only the transports those name.
+pub fn run_baked<D: exact_runner::DataSource + Default + 'static, const DEVELOPMENT: bool>(
     name: &str,
     window: Window,
     plan: &[u8],

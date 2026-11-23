@@ -35,7 +35,7 @@ const DRIVE = [
   ['--size <w>x<h>', 'viewport; Linux: unrotated panel; 90/270 swap layout'],
   ['--scale <n>', 'screenshots at n pixels per point (exact.mjs agent on ios, macos: 1; an iPhone\'s own: 3)'],
   ['--chrome platform|agent', 'UIKit\'s bars (exact.mjs on iOS); agent paints the header'],
-  ['--live · --timing platform · --bind <extension>', 'wall clock on macOS, iOS and Android reader · Apple native transitions · use a module implementation'],
+  ['--attach [pid] · --live · --timing platform · --bind <extension>', 'macOS and the iOS simulator: read the development app a person has open, after its Enable Agent Attach (Develop menu; iOS developer menu) and their Allow · wall clock on macOS, iOS and Android reader · Apple native transitions · use a module implementation'],
   ['--touch platform', 'iOS simulator or paired iPhone: send taps and drags through XCTest'],
   ['--epoch <ISO|ms|now> · --login [hidden]', 'the date at the clock\'s zero (default 2026-01-01) · a launch the login item made, hidden: with no window'],
   ['--locale <tag> · --format-locale <tag> · --time-zone <zone> · --seed <n>', 'default en-US, the locale (the Region\'s format, exactTime().formatLocale), UTC, 1'],
@@ -49,7 +49,7 @@ const DRIVE = [
   ['--family <name> · --mode fullColor|accented|vibrant · --scheme light|dark · --props <json> · --configuration <json> · --placement <name> · --state <json>', 'gallery: widget variant/props/configuration choices or activity placement/state; --size large|xxxl is widget text size'],
   ['--json', 'one compact JSON object per op reply, one per line (default: short text)'],
 ];
-const TEST_IGNORES = ['--live', '--bind <extension>', '--timing <v>', '--world <file>', '--open <file>', '--json', '--family <name>', '--mode <name>', '--scheme <name>', '--props <json>', '--configuration <json>', '--placement <name>', '--state <json>'];
+const TEST_IGNORES = ['--attach [pid]', '--live', '--bind <extension>', '--timing <v>', '--world <file>', '--open <file>', '--json', '--family <name>', '--mode <name>', '--scheme <name>', '--props <json>', '--configuration <json>', '--placement <name>', '--state <json>'];
 // The drive flags a first build reaches for; `--help all` shows the rest.
 const DRIVE_FIRST = ['--storage', '--size', '--chrome', '--epoch', '--sim', '--json'];
 const naming = (names, keep) => ([row]) => specs(row).some((spec) => names.includes(name(spec))) === keep;
@@ -198,7 +198,7 @@ Ports    --port <n> or EXACT_PORT chooses the page’s port; otherwise web: head
   check [dark|both]  what is wrong · screenshot <png> [over <ms> every <ms>] [window]  window: bars · --device captures display
   Android reader drives refuse film and play layers only under --live. Record a live or normal run with adb shell screenrecord.
   screenshot <png> compare <ref> · prefer <feature> <value> · fail|pass fetch <prefix>`,
-    bodyAll: `Unnamed, the host is one app.json ships, as test's. Builds if stale, launches, runs each quoted op and closes. A game's world: post [<surface>] <text> is a message its next tick reads (type <surface> message <text>). No --storage, no storage; --reset-storage empties a native store, --keep-storage keeps a web or compare's. A deep link is typed on the navigate= root: "type <root> euxy://p/1" (macOS, iOS: through protocol_handlers, no alert). Held contact: "tap <t> down" "screenshot <png>" "tap up". A drag takes [hold ms during "read"] [then dx dy …] in one iOS touch. Dragging into the keyboard needs --touch platform and the keyboard open. clock held [<target>…] [<n>s] waits for a held reply with the clock frozen, then runs clock data (default bound: 20 s). clock until state <path> == <JSON literal> within <ms> waits, the clock frozen, until state reads it (a stream's state after its first message); a miss names the last value. state media (Apple): each video's player (renderer, paused, currentTime, muted, volume); under the agent a video takes no audio session, and on iOS AVKit's own controls answer only --touch platform.
+    bodyAll: `Unnamed, the host is one app.json ships, as test's. Builds if stale, launches, runs each quoted op and closes. A game's world: post [<surface>] <text> is a message its next tick reads (type <surface> message <text>). No --storage, no storage; --reset-storage empties a native store, --keep-storage keeps a web or compare's. A deep link is typed on the navigate= root: "type <root> euxy://p/1" (macOS, iOS: through protocol_handlers, no alert). Held contact: "tap <t> down [at <x> <y>]" "tap hold <ms>" "tap move [by] <x> <y> [over <ms>]" "tap up"; a drag from a point is "tap <t> drag <dx> <dy> from <x> <y>". A drag takes [hold ms during "read"] [then dx dy …] in one iOS touch. Dragging into the keyboard needs --touch platform and the keyboard open. clock held [<target>…] [<n>s] waits for a held reply with the clock frozen, then runs clock data (default bound: 20 s). clock until state <path> == <JSON literal> within <ms> waits, the clock frozen, until state reads it (a stream's state after its first message); a miss names the last value. state media (Apple): each video's player (renderer, paused, currentTime, muted, volume); under the agent a video takes no audio session, and on iOS AVKit's own controls answer only --touch platform.
 Ports    web: --port/EXACT_PORT, else a named store’s port (20000-47999), else free. ${NATIVE_PORTS}`,
     example: 'bun exact.mjs agent web --storage s1 tree "tap add" "screenshot .exact/a.png"',
   },
@@ -260,7 +260,7 @@ Ports    none to choose: test's and agent's (headless Chrome over a pipe; a simu
       ['--archive <out.ipa>', 'with --device: an .ipa to distribute (EXACT_IDENTITY, EXACT_PROFILE), no phone; production trust, so with an update store EXACT_UPDATE_RECEIPT or EXACT_UPDATE_GENESIS=1'],
       ['--unsigned', 'with --device: ad-hoc signed .app, no phone, profile, identity or install; no --run; --archive writes an .ipa for re-signing'],
       ['--development', 'with --archive --unsigned: the development build --run installs, as an .ipa (development trust, host-dev; no update store receipt)'],
-      ['--extensions <kinds>', 'which app extensions to package: all (the default), none, or a list of widgets,activities,intents,alarms,notifications,watch,share; the bake still compiles every entry, and app code that reaches a missing one is refused, not crashed'],
+      ['--extensions <kinds>', 'which app extensions to package: all (the default), none, or a list of widgets,activities,controls,intents,alarms,notifications,watch,share (controls need intents); the bake still compiles every entry, and app code that reaches a missing one is refused, not crashed'],
       ['--tvos', 'an Apple TV simulator instead (with --device, an Apple TV)'],
       ['--url <url>', 'connect the client to that dev server (web\'s URL) for live reload'],
       OPTIMIZE,

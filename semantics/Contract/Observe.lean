@@ -339,6 +339,34 @@ def stepTrace (p : Program) (o : Oracle) (c : Config) : Event → (Config × Out
   | .clock ms => advanceTrace p o c (c.now + ms)
   | .other t e v => dispatchAtTrace p o c t e v
 
+/-- The target, event and payload an input dispatches, chosen as it arrives. -/
+def Event.dispatched (c : Config) : Event → Option (String × String × Option Value)
+  | .tap t => .some (t, "press", .none)
+  | .change t s => .some (t, typed c t, .some (.str s))
+  | .clock _ => .none
+  | .other t e v => .some (t, e, v)
+
+/-- The work due at an input's arrival, traced, when the input reaches a
+handler: `dispatchAt`'s advance, which the observation prints as its own
+`due` step when it ran anything (LLP 1151 D1). -/
+def arrival (p : Program) (o : Oracle) (c : Config) (ev : Event) :
+    Option ((Config × Outcome) × List Ran) := do
+  let (target, event, _) ← ev.dispatched c
+  let n ← findTestId target c.view
+  if (n.handlers.find? (·.1 == event)).isNone then .none
+  else .some (advanceTrace p o c c.now true)
+
+/-- The input after its due work: the handler at `c₁`, the configuration the
+due work left; the outcome is the handler's when it failed, else the due
+work's `o₁` (`dispatchAt`). `c` is the configuration the input arrived at. -/
+def afterArrival (p : Program) (o : Oracle) (c c₁ : Config) (o₁ : Outcome) (ev : Event) :
+    (Config × Outcome) × List Ran :=
+  match ev.dispatched c with
+  | .none => ((c₁, o₁), [])
+  | .some (target, event, payload) =>
+    let ((c₂, o₂), handler) := dispatchTrace p o c₁ target event payload
+    ((c₂, match o₂ with | .ok => o₁ | _ => o₂), handler)
+
 /-- The root-to-target path in the view that receives a keyboard event. -/
 private def keyPath (id : String) : List VNode → Option (List VNode)
   | [] => .none
@@ -365,17 +393,24 @@ private def keyPhase (p : Program) (o : Oracle) (c : Config) (out : Outcome)
       if (current.commands.drop before).any (·.1 == "stopPropagation") then break
   return ((current, status), ran)
 
-private def keyPress (p : Program) (o : Oracle) (c : Config) (target key : String) (downInfo upInfo : Value) :
-    (Config × Outcome) × List Ran := Id.run do
-  if (findTestId target c.view).isNone then
-    return ((c, .refused (.refused s!"no element `{target}`")), [])
-  let ((ready, due), timers) := advanceTrace p o c c.now true
+/-- A key's handlers at `ready`, the configuration the work due at its
+arrival left, starting from that work's outcome `due`. -/
+private def keyHandlers (p : Program) (o : Oracle) (ready : Config) (due : Outcome) (target key : String)
+    (downInfo upInfo : Value) : (Config × Outcome) × List Ran :=
   let path := (keyPath target ready.view).getD (ready.view.take 1)
   let down := path.map (·, "keycapture") ++ path.reverse.map (·, "key")
   let ((pressed, status), downs) := keyPhase p o ready due down [.str key, downInfo]
   let up := (keyPath target pressed.view).getD (pressed.view.take 1)
   let (result, ups) := keyPhase p o pressed status (up.reverse.map (·, "keyup")) [.str key, upInfo]
-  return (result, timers ++ downs ++ ups)
+  (result, downs ++ ups)
+
+private def keyPress (p : Program) (o : Oracle) (c : Config) (target key : String) (downInfo upInfo : Value) :
+    (Config × Outcome) × List Ran := Id.run do
+  if (findTestId target c.view).isNone then
+    return ((c, .refused (.refused s!"no element `{target}`")), [])
+  let ((ready, due), timers) := advanceTrace p o c c.now true
+  let (result, handlers) := keyHandlers p o ready due target key downInfo upInfo
+  return (result, timers ++ handlers)
 
 /-- Script delivery includes `land`; the event type used by the existing theorems stays unchanged. -/
 inductive ScriptEvent where
@@ -495,18 +530,41 @@ def runScript (p : Program) (o : Oracle) (events : List ScriptEvent) : List Stri
   let mut o := o
   for e in events do
     o := e.oracle p.resources o
-    let before := c.commands.length
-    let (label, result, twin, ran) := match e, e.event with
-      | .keyPress target key label down up, _ =>
+    let mut before := c.commands.length
+    -- The work due at an input's arrival, when it ran anything and did not
+    -- poison, is its own step before the input's (LLP 1151 D1); `ready` is
+    -- what it left.
+    let arrived : Option ((Config × Outcome) × List Ran) := match e, e.event with
+      | .keyPress target .., _ =>
+        if (findTestId target c.view).isNone then .none else .some (advanceTrace p o c c.now true)
+      | .tap _, .some ev | .change _ _, .some ev => arrival p o c ev
+      | _, _ => .none
+    let mut ready : Option (Config × Outcome) := .none
+    if let .some ((c₁, o₁), due) := arrived then
+      let result := advance p o c c.now true
+      -- Due work that poisons ends the step as the input's, below.
+      let poisoned := match result.2 with | .poisoned _ => true | _ => false
+      if !due.isEmpty && !poisoned then
+        acc := acc ++ checkedLines p "due" result (c₁, o₁) before due
+        ready := .some (c₁, o₁)
+        before := c₁.commands.length
+    let (label, result, twin, ran) := match e, e.event, ready with
+      | .keyPress target key label down up, _, .some (c₁, o₁) =>
+        let (result, ran) := keyHandlers p o c₁ o₁ target key down up
+        (label, result, result, ran)
+      | _, .some ev, .some (c₁, o₁) =>
+        let (twin, ran) := afterArrival p o c c₁ o₁ ev
+        (ev.label, step p o c ev, twin, ran)
+      | .keyPress target key label down up, _, _ =>
         let (result, ran) := keyPress p o c target key down up
         (label, result, result, ran)
-      | .answerSource source label _, _ =>
+      | .answerSource source label _, _, _ =>
         let (result, ran) := sourceChanged p o c source
         (label, result, result, ran)
-      | _, .some ev =>
+      | _, .some ev, _ =>
         let (twin, ran) := stepTrace p o c ev
         (ev.label, step p o c ev, twin, ran)
-      | _, .none =>
+      | _, .none, _ =>
         let (result, ran) := land p o c
         (e.label, result, result, ran)
     let (c', out) := result

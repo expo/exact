@@ -333,3 +333,34 @@ fn a_formatted_live_time_is_as_wide_without_its_fallback() {
         "the fallback is not laid out beside the formatted text"
     );
 }
+
+#[test]
+fn a_live_time_in_a_portal_keeps_ticking_after_its_destination_dies() {
+    // LLP 1013.002 D2: the destroy of the destination does not take the
+    // mover it shows, nor the clock inside it.
+    let source = r#"component App
+  state alive = true
+  action toggle
+    alive = not alive
+  view
+    column
+      if alive
+        box id="slot"
+      box portal="slot" testId="card"
+        time datetime=0 format="timer" testId="timer"
+"#;
+    let plan = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
+    let mut r = Runner::boot(
+        plan,
+        NoData,
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    assert_eq!(text(&r, "timer"), "00:00");
+    r.act("toggle", vec![]).unwrap();
+    r.act("toggle", vec![]).unwrap();
+    r.advance(61_000.).unwrap();
+    assert_eq!(text(&r, "timer"), "01:01");
+}

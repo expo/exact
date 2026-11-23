@@ -14,6 +14,8 @@ was shown, on either one's `-exact-layout-transition`.
 | Cards | Tap a card | A box with children grows into a detail: its surface flies, its children keep their places. |
 | Tasks | Tap a task | The task flies between the two lists. |
 | Zoom | Tap a photo | A fullscreen route zooms out of it on iOS 18 (UIKit's zoom, `navigationSource`). |
+| Player | Count, Open, Back, another tab, Remove/New | A playing video and a counter written once are shown in the card or the detail that expands from it (`portal`, LLP 1013.002): the same video plays on, the count stays, another tab hides it alive, and a new one starts at 0. |
+| Flight | Open, Back | The same, where the destination flies between the two routes and both routes cut. |
 
 ## Run it
 

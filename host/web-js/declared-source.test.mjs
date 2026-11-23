@@ -3,7 +3,7 @@
 // field, says a failure as a TypeScript `fetch` would, and posts a send's parameters as JSON. A release admits the
 // declaration's origin, though no module grants anything (build.mjs `admitsNothing`).
 import { test, expect } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { runTests } from '../../scripts/agent-test.mjs';
 import { webCompiler } from './module.mjs';
@@ -158,3 +158,117 @@ component App
     if (dir) rmSync(dir, { recursive: true, force: true });
   }
 }, 300_000);
+
+test('an alternate web entry checks its requests against the app’s TypeScript dispatcher', () => {
+  const root = resolve(import.meta.dir, '../..');
+  const dir = mkdtempSync(resolve(root, 'target/web-entry-sources-'));
+  const entry = resolve(dir, 'frame.contract');
+  const editor = resolve(dir, 'app.contract.d.ts');
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Frames', app: { name: 'Frames', id: 'test.frame-sources' } }));
+    writeFileSync(resolve(dir, 'app.contract'), 'component App\n  resource title = caption(1) as shape string\n  resource count = count() as shape number\n  view\n    text title\n');
+    writeFileSync(resolve(dir, 'app.ts'), "import type { Answer, Sources } from './app.contract.d.ts';\nexport const grants = '';\nconst sources: Sources = { caption: ([n]) => String(n), count: () => 2 };\nexport const answer: Answer = (name, args, store, storage) => sources[name](args, store, storage);\n");
+    const check = (ask, result) => {
+      writeFileSync(entry, `component Frame\n  resource title = ${ask} as shape ${result}\n  view\n    text "Frame"\n`);
+      return Bun.spawnSync([process.execPath, 'host/web-js/build.mjs', dir, '--contract', entry, '--out', resolve(dir, 'target/frame'), '--check'], {
+        cwd: root, env: { ...process.env, EXACT_WEB_TYPES: '' }, stdout: 'pipe', stderr: 'pipe',
+      });
+    };
+    writeFileSync(editor, 'stale editor declarations\n');
+    const passed = check('caption(7)', 'string');
+    expect(passed.exitCode, passed.stderr.toString()).toBe(0);
+    expect(readFileSync(editor, 'utf8')).toBe('stale editor declarations\n');
+    const declarations = readFileSync(resolve(dir, 'target/frame/.gen/app.contract.d.ts'), 'utf8');
+    expect(declarations).toContain('"count": { args: []');
+    expect(declarations).toContain('"caption": { args: [');
+    for (const [ask, result] of [['caption("seven")', 'string'], ['caption(7)', 'number'], ['missing()', 'string']]) {
+      const failed = check(ask, result);
+      expect(failed.exitCode, failed.stderr.toString()).toBe(1);
+      expect(failed.stderr.toString()).toContain('TS2322');
+      expect(readFileSync(editor, 'utf8')).toBe('stale editor declarations\n');
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 60_000);
+
+test('a frame renders components from its routed app root with the app’s data', () => {
+  const root = resolve(import.meta.dir, '../..');
+  const dir = mkdtempSync(resolve(root, 'target/web-frame-'));
+  const app = resolve(dir, 'app'), owner = resolve(app, 'app.contract');
+  const frame = resolve(app, 'frames/card.contract'), outside = resolve(dir, 'other.contract');
+  const out = resolve(dir, 'dist'), gen = resolve(out, '.gen');
+  try {
+    mkdirSync(resolve(app, 'frames'), { recursive: true });
+    mkdirSync(resolve(app, 'node_modules'));
+    writeFileSync(resolve(app, 'app.json'), JSON.stringify({ name: 'Canvas', app: { name: 'Canvas', id: 'test.canvas' } }));
+    writeFileSync(resolve(app, 'package.json'), '{"name":"canvas-app"}');
+    symlinkSync(app, resolve(app, 'node_modules/canvas-app'), 'junction');
+    writeFileSync(owner, `routes nav
+  home "/"
+component App
+  resource count = count() as shape number
+  view
+    Card(title="App")
+component Card
+  props
+    title: string
+  resource label = caption(title) as shape string
+  view
+    text label
+`);
+    writeFileSync(resolve(app, 'app.ts'), "import type { Sources, Answer } from './app.contract.d.ts';\nexport const grants = '';\nconst sources: Sources = { caption: ([title]) => 'Live ' + title, count: () => 2 };\nexport const answer: Answer = (name, args, store, storage) => sources[name](args, store, storage);\n");
+    writeFileSync(frame, 'use Card from "canvas-app/app.contract"\ncomponent App\n  view\n    Card(title="Frame")\n');
+    const check = (...args) => Bun.spawnSync([process.execPath, 'host/web-js/build.mjs', app, ...args, '--out', out, '--check'],
+      { cwd: root, stdout: 'pipe', stderr: 'pipe' });
+    const checkFrame = () => check('--frame', 'frames/card.contract', '--dev');
+    const built = checkFrame();
+    expect(built.exitCode, built.stderr.toString()).toBe(0);
+    const calls = readFileSync(resolve(gen, 'entry-answer.ts'), 'utf8');
+    expect(calls).toContain('"caption":');
+    expect(calls).not.toContain('"count":');
+    expect(readFileSync(resolve(gen, 'app.contract.d.ts'), 'utf8')).toContain('"count":');
+    const sources = JSON.parse(readFileSync(resolve(gen, 'dev-sources.json'))).sources;
+    expect(sources).toContain(owner);
+    expect(sources).toContain(frame);
+
+    // The frame may share a typed map with fixtures for sources used elsewhere in the app.
+    const fixture = resolve(app, 'frames/card.fixture.mts');
+    writeFileSync(fixture, `import type { TypeScriptSources } from '../app.contract.d.ts';
+const sample: Partial<TypeScriptSources> = { caption: ([title]) => title, count: () => 1 };
+export default sample;`);
+    const shared = checkFrame();
+    expect(shared.exitCode, shared.stderr.toString()).toBe(0);
+    // Even a fixture that omits its own type annotation is checked by the frame.
+    for (const object of ["{ caption: () => 10 }", "{ caption: ([n]: [number]) => String(n) }", "{ missing: () => 'bad' }"]) {
+      writeFileSync(fixture, `export default ${object};`);
+      const refused = checkFrame();
+      expect(refused.exitCode).toBe(1);
+      expect(refused.stderr.toString()).toMatch(/TS(2322|1360|2559)/);
+    }
+    writeFileSync(fixture, "import absent from 'missing-fixture-package'; export default absent;");
+    const release = check('--production');
+    expect(release.exitCode, release.stderr.toString()).toBe(0);
+    rmSync(fixture);
+    symlinkSync(owner, fixture, 'file');
+    const linked = checkFrame();
+    expect(linked.exitCode).toBe(1);
+    expect(linked.stderr.toString()).toContain('regular file inside the app');
+    rmSync(fixture);
+
+    const compiler = webCompiler();
+    const compile = (input, args) => Bun.spawnSync([compiler.cmd, ...compiler.pre, 'js', input, '-o', gen, ...args],
+      { cwd: root, env: compiler.env, stdout: 'pipe', stderr: 'pipe' });
+    writeFileSync(frame, 'use Card from "../app.contract"\ncomponent App\n  view\n    Card(title=badName)\n');
+    const broken = compile(owner, ['--frame', frame]);
+    expect(broken.exitCode).toBe(1);
+    expect(broken.stderr.toString()).toContain(frame + ':4:');
+    writeFileSync(outside, 'component Other\n  view\n    text "Outside"\n');
+    symlinkSync(outside, resolve(app, 'frames/link.contract'), 'file');
+    const escaped = compile(owner, ['--frame', resolve(app, 'frames/link.contract')]);
+    expect(escaped.exitCode).toBe(1);
+    expect(escaped.stderr.toString()).toContain('contract-frame-path');
+    writeFileSync(frame, 'use Card from "canvas-app/app.contract"\ncomponent Frame\n  view\n    Card(title="Frame")\n');
+    const standalone = compile(frame, []);
+    expect(standalone.exitCode).toBe(1);
+    expect(standalone.stderr.toString()).toContain('analyze-routes-not-root');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 60_000);

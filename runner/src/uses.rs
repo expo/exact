@@ -744,6 +744,12 @@ fn shows_media_picker(plan: &Plan) -> bool {
     })
 }
 
+/// Whether the plan says `portal` anywhere (LLP 1013.002): only then does
+/// placement run, on any host.
+pub fn portals(plan: &Plan) -> bool {
+    (plan.bindings.iter()).any(|b| b.kind == BindingKind::Prop && b.id == PropId::Portal as u16)
+}
+
 /// Whether node `node` is a zoomable scroller (LLP 1057.001.000 D1): either
 /// range row written, literal or bound. The web loads its zoom module, and the
 /// wasm host names its absence, only for a plan with one.

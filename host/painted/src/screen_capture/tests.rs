@@ -43,7 +43,7 @@ impl Files {
             displays,
             &Encoding::default(),
             held,
-            &|_| {},
+            &|_, _| {},
         )
     }
 }
@@ -107,7 +107,7 @@ fn still_files_have_sorted_physical_pixels_and_drawable_pngs() {
         two(),
         &Encoding::default(),
         &Mutex::new(true),
-        &|_| {},
+        &|_, _| {},
     )
     .unwrap();
     assert_eq!(
@@ -127,7 +127,7 @@ fn capture_directory_names_are_paths_not_grant_text() {
             two(),
             &Encoding::default(),
             &Mutex::new(true),
-            &|_| {},
+            &|_, _| {},
         )
         .unwrap();
         for index in 0..2 {
@@ -242,16 +242,27 @@ impl exact_runner::DataSource for StillCanvas {
             ("blank".into(), 0),
             ("pattern".into(), 0),
             ("saved".into(), 0),
+            ("selected".into(), 1),
         ]
     }
     fn draw_2d(
         &mut self,
         surface: &str,
-        _: &[exact_plan::Value],
+        args: &[exact_plan::Value],
         ctx: &exact_canvas::Context2d,
         _: &exact_canvas::Frame,
     ) -> Result<bool, exact_canvas::DrawError> {
         ctx.clear_rect(0., 0., 32., 32.);
+        if surface == "selected" {
+            if let Some(path) = args
+                .first()
+                .and_then(|v| v.as_str())
+                .filter(|p| !p.is_empty())
+            {
+                ctx.draw_image_with_image_handle(path, 0., 0.)?;
+            }
+            return Ok(false);
+        }
         if surface == "blank" {
             return Ok(false);
         }
@@ -306,19 +317,19 @@ fn a_replaced_still_refreshes_image_and_canvas_handles() {
     .unwrap();
     assert!(error.is_none(), "{error:?}");
     presenter.wait_images(std::time::Duration::from_secs(30));
-    presenter.host.sync_canvases(1., true, &presenter.assets);
+    presenter.sync_canvases(true);
     let pixels = |p: &Presenter<StillCanvas>| {
+        let bitmap = p.images().bitmaps.values().next().unwrap();
+        let handle = p.host().cached_canvas_image("freeze/screen-0.png").unwrap();
+        assert_eq!(
+            bitmap.pixels().data().as_ptr(),
+            handle.data().as_ptr(),
+            "both consumers share the decoded allocation"
+        );
+        let canvases = p.host().canvas_snapshots().borrow();
         (
-            p.images().bitmaps.values().next().unwrap().pixels().data()[..4].to_vec(),
-            p.host()
-                .canvas_snapshots()
-                .borrow()
-                .values()
-                .next()
-                .unwrap()
-                .pixels
-                .data()[..4]
-                .to_vec(),
+            bitmap.pixels().data()[..4].to_vec(),
+            canvases.values().next().unwrap().pixels.data()[..4].to_vec(),
         )
     };
     assert_eq!(
@@ -341,11 +352,31 @@ fn a_replaced_still_refreshes_image_and_canvas_handles() {
         .unwrap();
     presenter.run_commands(StillCanvas::default);
     presenter.wait_images(std::time::Duration::from_secs(30));
-    presenter.host.sync_canvases(1., true, &presenter.assets);
+    presenter.sync_canvases(true);
     assert_eq!(
         pixels(&presenter),
         (vec![192, 64, 128, 255], vec![192, 64, 128, 255])
     );
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        let encoding = Encoding::new("image/jpeg", Some(0.6));
+        let answer = write(
+            &files.roots(),
+            "app:/tmp/freeze",
+            displays(96),
+            &encoding,
+            &Mutex::new(true),
+            &|_, _| {},
+        )
+        .unwrap();
+        let path = files.local(&answer["captures"][0]);
+        std::fs::copy(path, files.roots()[2].join("freeze/screen-0.png")).unwrap();
+        presenter.picture_changed("freeze/screen-0.png", false);
+        presenter.wait_images(std::time::Duration::from_secs(30));
+        let (image, canvas) = pixels(&presenter);
+        assert_eq!(image, canvas);
+        assert!(image[0].abs_diff(96) < 5, "{image:?}");
+    }
 }
 
 #[test]
@@ -366,7 +397,8 @@ fn a_canvas_whose_still_was_missing_draws_it_once_captured() {
     .unwrap();
     assert!(error.is_none(), "{error:?}");
     let pixel = |p: &mut Presenter<StillCanvas>| {
-        p.host.sync_canvases(1., true, &p.assets);
+        p.sync_canvases(true);
+        p.wait_images(std::time::Duration::from_secs(30));
         let canvases = p.host().canvas_snapshots().borrow();
         canvases.values().next().unwrap().pixels.data()[..4].to_vec()
     };
@@ -409,7 +441,8 @@ fn a_still_reloads_only_for_mounted_canvases_and_a_remount_draws_it() {
         k.node_by_key(k.find_by_test_id(id)[0]).unwrap().id
     };
     let pixel = |p: &mut Presenter<StillCanvas>| {
-        p.host.sync_canvases(1., true, &p.assets);
+        p.sync_canvases(true);
+        p.wait_images(std::time::Duration::from_secs(30));
         let canvases = p.host().canvas_snapshots().borrow();
         canvases[&named(p, "still")].pixels.data()[..4].to_vec()
     };
@@ -491,7 +524,8 @@ fn a_retained_pattern_keeps_its_image_across_draws() {
         assert!(error.is_none(), "{error:?}");
         for frame in 0..4 {
             presenter.host.advance(16. * frame as f64);
-            presenter.host.sync_canvases(1., true, &presenter.assets);
+            presenter.sync_canvases(true);
+            presenter.wait_images(std::time::Duration::from_secs(30));
             let canvases = presenter.host().canvas_snapshots().borrow();
             let pixel = &canvases.values().next().unwrap().pixels.data()[..4];
             assert_eq!(pixel, [192, 64, 128, 255], "{surface}, frame {frame}");
@@ -508,4 +542,234 @@ impl Package for PictureNotice {
         self.0.notifier().picture_changed("freeze/screen-0.png");
         reply.send(Json::Null);
     }
+}
+
+/// Large enough that a 16-point thumbnail decodes a smaller picture.
+const STILL: u32 = 512;
+
+struct SyntheticScreen(Context, Captures);
+impl Package for SyntheticScreen {
+    fn new(context: Context) -> Self {
+        Self(context, Captures::default())
+    }
+    fn later(&mut self, _: &str, args: &Json, _: Option<&Json>, reply: Reply) {
+        // Every pixel differs from its neighbours, so a lossy or shifted
+        // round trip cannot match.
+        let pixels: Vec<u8> = (0..STILL * STILL)
+            .flat_map(|i| [i as u8, (i >> 4) as u8, (i * 7) as u8, 255])
+            .collect();
+        let display = Display {
+            screen: json!({"allocation": pixels.as_ptr() as usize}),
+            width: STILL,
+            height: STILL,
+            read: Box::new(move || Ok(pixels)),
+        };
+        self.1.start(&self.0, args, vec![display], reply);
+    }
+}
+
+#[test]
+fn image_and_canvas_share_the_capture_allocation_only_while_the_file_matches() {
+    use crate::presenter::{PainterChoice, Presenter};
+    let plan = crate::test_plan(
+        r#"component App
+  state path = ""
+  state late = false
+  action selectFile(value: string)
+    path = value
+  action showLate(value: string)
+    late = true
+  view
+    column
+      input testId="path" value=path input=selectFile width=96 height=20
+      input testId="late" input=showLate width=96 height=20
+      image path width=512 height=512
+      image path width=16 height=16
+      canvas surface=selected(path) width=32 height=32
+      if late
+        image path testId="later" width=512 height=512
+"#,
+    );
+    let directory = format!("app:/tmp/exact-publish-test-{}", std::process::id());
+    let roots = crate::picker::roots();
+    let _files = Files(roots[2].join(directory.strip_prefix("app:/tmp/").unwrap()));
+    let named = |p: &Presenter<StillCanvas>, id: &str| {
+        let k = p.host().kernel();
+        k.node_by_key(k.find_by_test_id(id)[0]).unwrap().id
+    };
+    // Both readers have their answer: pixels, or a failure.
+    let settle = |p: &mut Presenter<StillCanvas>, pictures: usize| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        p.wait_images(std::time::Duration::from_secs(30));
+        while (p.images().pending() || p.images().bitmaps.len() < pictures)
+            && std::time::Instant::now() < deadline
+        {
+            p.wait_images(std::time::Duration::from_millis(50));
+        }
+        assert!(!p.images().pending(), "the images settle");
+    };
+    for file in ["original", "replaced", "corrupted", "deleted"] {
+        let (mut p, error) = Presenter::boot_with(
+            &plan,
+            StillCanvas,
+            (600., 700.),
+            1.,
+            roots[2].clone(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.serve_packages(vec![crate::package::Entry::of::<SyntheticScreen>(
+            "screen-capture",
+        )]);
+        let handler = p.host().runner().native_slot().handler().unwrap();
+        let (sent, received) = std::sync::mpsc::channel();
+        handler(json!({"extension":"screen-capture", "send":"captureScreens", "args":{"directory":directory}}).to_string().into_bytes(),
+            exact_runner::Reply::new(move |outcome| sent.send(outcome).unwrap()));
+        p.run_commands(StillCanvas::default);
+        let exact_runner::Outcome::Response(response) = received
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap()
+        else {
+            panic!("no capture reply")
+        };
+        let answer: Json = serde_json::from_slice(&response.body).unwrap();
+        let still = &answer["captures"][0];
+        let path = still["path"].as_str().unwrap();
+        let original = still["screen"]["allocation"].as_u64().unwrap() as usize;
+        let disk = roots[2].join(path.strip_prefix("app:/tmp/").unwrap());
+        match file {
+            "replaced" => {
+                let replacement = [128, 64, 32, 255].repeat((STILL * STILL) as usize);
+                std::fs::write(
+                    &disk,
+                    crate::canvas2d::capture::png(STILL, STILL, &replacement).unwrap(),
+                )
+                .unwrap();
+            }
+            // The same length: its new modification time tells it apart.
+            "corrupted" => {
+                let mut bytes = std::fs::read(&disk).unwrap();
+                let data = bytes.windows(4).position(|w| w == b"IDAT").unwrap() + 64;
+                bytes[data] ^= 0xff;
+                std::fs::write(&disk, bytes).unwrap();
+            }
+            "deleted" => std::fs::remove_file(&disk).unwrap(),
+            _ => {}
+        }
+        p.run_commands(StillCanvas::default);
+        p.type_text(named(&p, "path"), path).unwrap();
+        let readable = matches!(file, "original" | "replaced");
+        settle(&mut p, if readable { 2 } else { 0 });
+        let cached = p.host().cached_canvas_image(path).cloned();
+        let bitmaps = &p.images().bitmaps;
+        if !readable {
+            assert!(
+                cached.is_none() && bitmaps.is_empty(),
+                "both readers see the file as it is"
+            );
+            continue;
+        }
+        let canvas = cached.unwrap();
+        let image = bitmaps.values().find(|b| b.width() == STILL).unwrap();
+        let small = bitmaps.values().find(|b| b.width() < STILL).unwrap();
+        assert_ne!(
+            small.pixels().data().as_ptr(),
+            image.pixels().data().as_ptr(),
+            "a thumbnail decodes its own pixels rather than pin the whole still"
+        );
+        let ptr = image.pixels().data().as_ptr() as usize;
+        assert_eq!(canvas.data().as_ptr() as usize, ptr);
+        if file == "replaced" {
+            assert_ne!(ptr, original);
+            assert_eq!(&canvas.data()[..4], [128, 64, 32, 255]);
+            continue;
+        }
+        assert_eq!(
+            ptr, original,
+            "the actual capture allocation reaches both readers"
+        );
+        let decoded = tiny_skia::Pixmap::load_png(&disk).unwrap();
+        assert_eq!(
+            canvas.data(),
+            decoded.data(),
+            "readers see what the file decodes to"
+        );
+        // A reader that comes after the file is gone does not get its pixels.
+        std::fs::remove_file(&disk).unwrap();
+        p.type_text(named(&p, "late"), "x").unwrap();
+        settle(&mut p, 0);
+        let later = named(&p, "later");
+        assert!(!p.images().bitmaps.contains_key(&later));
+    }
+}
+
+#[test]
+fn a_captures_pixels_reach_its_readers_in_the_turn_that_asks() {
+    use crate::presenter::{PainterChoice, Presenter};
+    let plan = crate::test_plan(
+        r#"component App
+  state path = ""
+  action selectFile(value: string)
+    path = value
+  view
+    column
+      input testId="path" value=path input=selectFile width=96 height=20
+      image path width=512 height=512
+      canvas surface=selected(path) width=32 height=32
+"#,
+    );
+    let directory = format!("app:/tmp/exact-asked-test-{}", std::process::id());
+    let roots = crate::picker::roots();
+    let _files = Files(roots[2].join(directory.strip_prefix("app:/tmp/").unwrap()));
+    let (mut p, error) = Presenter::boot_with(
+        &plan,
+        StillCanvas,
+        (600., 600.),
+        1.,
+        roots[2].clone(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.serve_packages(vec![crate::package::Entry::of::<SyntheticScreen>(
+        "screen-capture",
+    )]);
+    let handler = p.host().runner().native_slot().handler().unwrap();
+    let (sent, received) = std::sync::mpsc::channel();
+    handler(json!({"extension":"screen-capture", "send":"captureScreens", "args":{"directory":directory}}).to_string().into_bytes(),
+        exact_runner::Reply::new(move |outcome| sent.send(outcome).unwrap()));
+    p.run_commands(StillCanvas::default);
+    let exact_runner::Outcome::Response(response) = received
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap()
+    else {
+        panic!("no capture reply")
+    };
+    let answer: Json = serde_json::from_slice(&response.body).unwrap();
+    let path = answer["captures"][0]["path"].as_str().unwrap().to_owned();
+    let original = answer["captures"][0]["screen"]["allocation"]
+        .as_u64()
+        .unwrap() as usize;
+    p.run_commands(StillCanvas::default);
+    let kernel = p.host().kernel();
+    let field = kernel
+        .node_by_key(kernel.find_by_test_id("path")[0])
+        .unwrap()
+        .id;
+    p.type_text(field, &path).unwrap();
+    // No wait: nothing has read the file's header.
+    p.settle_pictures(std::time::Duration::ZERO);
+    let canvas = p
+        .host()
+        .cached_canvas_image(&path)
+        .expect("the canvas has the still");
+    assert_eq!(canvas.data().as_ptr() as usize, original);
+    let image = p
+        .images()
+        .bitmaps
+        .values()
+        .next()
+        .expect("the image has it");
+    assert_eq!(image.pixels().data().as_ptr() as usize, original);
 }

@@ -2,6 +2,13 @@ use super::{DataSource, Event, EventKind, Runner, ViewId};
 use exact_kernel::PropId;
 
 impl<D: DataSource> Runner<D> {
+    /// The next view on an event's path: a moved view's declaration parent
+    /// (LLP 1013.002 D1), else its kernel parent.
+    pub(super) fn event_parent(&self, view: ViewId) -> Option<ViewId> {
+        (self.tree.as_ref().and_then(|t| t.declared_parent(view)))
+            .or_else(|| self.kernel.node(view).and_then(|n| n.parent))
+    }
+
     pub(super) fn capture_blur_focus(&self, target: ViewId) -> super::super::FocusPath {
         let mut path = Vec::new();
         let mut at = Some(target);
@@ -9,7 +16,7 @@ impl<D: DataSource> Runner<D> {
             if let Some((node, frames)) = self.find(id) {
                 path.push((id, node, frames));
             }
-            at = self.kernel.node(id).and_then(|node| node.parent);
+            at = self.event_parent(id);
         }
         path
     }
@@ -95,7 +102,7 @@ impl<D: DataSource> Runner<D> {
                 };
                 path.push((id, event));
             }
-            at = kernel.node(id).and_then(|node| node.parent);
+            at = self.event_parent(id);
         }
         path
     }

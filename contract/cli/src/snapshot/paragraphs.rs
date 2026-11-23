@@ -3,7 +3,7 @@ use super::{refusal, CompileError};
 use contract_syntax::{Expr, File, Node};
 
 pub(super) fn check(file: &File, families: &[String]) -> Result<(), Vec<CompileError>> {
-    let (expanded, _) = contract_syntax::expand_checked(file, false);
+    let (expanded, _) = contract_syntax::expand_checked(file, false, &Default::default());
     let mut errors = Vec::new();
     super::values::tree(&expanded.root.view, file, families, &mut errors);
     // Expansion errors belong to the ordinary compiler. Its surviving tree

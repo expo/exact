@@ -12,6 +12,15 @@
 //! with a stable id — there is no fallback attribute, and an old spelling
 //! (`size`, `fontSize`, `radius`, `label`) is refused with the CSS name it
 //! became.
+pub(crate) mod portal;
+
+/// The refusals of attributes that name another element by its `id`, which
+/// read the whole expansion: the tab bar's accessory and a `portal`.
+pub(crate) fn id_refusals(checked: &contract_types::Checked<'_>) -> Vec<crate::LowerError> {
+    let mut out = crate::routes::tab_accessory::check(checked);
+    out.extend(portal::check(checked));
+    out
+}
 use exact_kernel::{NodeType, PropId, StyleId};
 use exact_plan::BindingsRow;
 /// What an attribute lowers to.
@@ -637,6 +646,8 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         // `none` for a full-bleed screen.
         "navigationBar" => AttrTarget::Prop(p("navigationBar")),
         "navigationSource" | "sharedElement" => AttrTarget::Prop(p(name)),
+        // @ref LLP 1013.002 D1 — where the element is shown, by a destination's `id`.
+        "portal" => AttrTarget::Prop(p("portal")),
         // @ref LLP 1075.003 §3.5 — the route's content scroll view, by HTML id.
         "navigationScroll" => AttrTarget::Prop(p("navigationScroll")),
         // @ref LLP 1075.003 §9.17 — the root tablist's tab bar accessory, by HTML id.

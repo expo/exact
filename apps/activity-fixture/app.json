@@ -16,7 +16,18 @@
       "state": "FixtureState",
       "push": true,
       "preview": {
-        "label": "Departs 9:05"
+        "label": "Departs 9:05",
+        "detail": null,
+        "short": null,
+        "at": null,
+        "done": null
+      },
+      "android": {
+        "title": "label",
+        "text": "detail",
+        "chip": "short",
+        "when": "at",
+        "progress": "done"
       }
     },
     {
@@ -25,8 +36,34 @@
       "state": "FixtureState",
       "frequent": true,
       "preview": {
-        "label": "Delay"
+        "label": "Delay",
+        "detail": null,
+        "short": null,
+        "at": null,
+        "done": null
       }
+    }
+  ],
+  "controls": [
+    {
+      "kind": "depart",
+      "title": "Start a departure",
+      "symbol": "tram.fill",
+      "tool": "startDeparture",
+      "authentication": "always"
+    },
+    {
+      "kind": "open",
+      "title": "Activity fixture details",
+      "symbol": "info.circle",
+      "url": "/detail"
+    },
+    {
+      "kind": "tally",
+      "title": "Count a press",
+      "symbol": "plus.circle",
+      "tool": "tally",
+      "authentication": "always"
     }
   ],
   "host": {
@@ -53,5 +90,11 @@
       "ios": "0"
     }
   },
-  "rust": { "data": { "crate": "activity-fixture-data", "type": "activity_fixture_data::ActivityFixture", "source": "activity_fixture_data::ActivityFixture" } }
+  "rust": {
+    "data": {
+      "crate": "activity-fixture-data",
+      "type": "activity_fixture_data::ActivityFixture",
+      "source": "activity_fixture_data::ActivityFixture"
+    }
+  }
 }

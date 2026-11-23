@@ -169,7 +169,9 @@ pub(crate) fn name_the_fix(n: &Node, mut e: LowerError) -> LowerError {
 }
 
 /// The props besides ARIA's that any leaf box takes, so a module's too.
-const BOX_PROPS: [&str; 6] = ["testId", "id", "role", "disabled", "inert", "tabindex"];
+const BOX_PROPS: [&str; 7] = [
+    "testId", "id", "role", "disabled", "inert", "tabindex", "portal",
+];
 
 /// The events a native view sends its box (`ExactNativeEvents`; the Apple
 /// host's `NativeViews.kinds`), the only handlers a module tag can fire.

@@ -76,7 +76,7 @@ impl Known {
     }
     fn enqueue(&self) {
         for demand in &self.demands {
-            self.backend.request(*demand).unwrap();
+            self.backend.request(*demand, false).unwrap();
         }
     }
 }

@@ -451,6 +451,7 @@ impl<D: DataSource> Presenter<D> {
         self.text = candidate_text.clone();
         self.brush.text = candidate_text;
         self.images.reset();
+        self.packages_publish_to_images();
         self.restore_focus(kept);
         let e = self.after_commit();
         Ok(e)

@@ -172,7 +172,7 @@ export function warningLines(dir, host, warnings) {
 /** A compiler warning that is information, not a problem: `forma-unreachable` names a control whose host draws the
  *  platform's own look, which the author should know of and cannot change (LLP 1121 D9, amended 2026-10-30). A drive
  *  and verify say it but do not count it. contract's `warning_rank::information` is the same test. */
-export const information = (w) => / warning \[(forma-unreachable|style-undrawn)\] /.test(w);
+export const information = (w) => / warning \[(forma-unreachable|style-undrawn|header-item-left-out)\] /.test(w);
 
 /** The colours that stay one in dark mode (`lower-colour-one-scheme`), past one, as one line: their closing line with
  *  the first three sites' `file:line`, theme tokens included, at the first's place (LLP 1168.000 D7.2: a chat app said
@@ -378,6 +378,9 @@ async function verbRun({ dir, name, game = false, exact2, args }, reply) {
     for (const line of feedback.nudge(dir, { verb, host, exit, ms: Date.now() - started, args: rest, interrupted })) console.error(line);
   } catch {}
   return exit; };
+  // `agent --attach` reads an app already running (LLP 1012.000 D1): the driver takes it as given, before anything here
+  // builds, prepares or adds a launch default.
+  if (verb === 'agent' && rest.includes('--attach')) return log(spawnSync(process.execPath, [resolve(exact2, verbs.agent[0]), ...verbs.agent.slice(1), ...rest], { stdio: 'inherit' }).status ?? 1);
   // A verb that builds the app bundles app.ts with rolldown from this checkout's node_modules (the web's build and
   // every native bake); without it Bun's auto-install spins silently instead of failing. A web drive of a site
   // already built (`--web-dist`, or a `--url` that is not a path: a path is the app's own, built first, as

@@ -186,7 +186,16 @@ impl Kernel {
                 tree.set_style(node, derive(s, taffy_style(&self.arena, s)));
             }
         }
-        let mut style = derive(slot, taffy_style(&self.arena, slot));
+        // The containing block sets the width at which content wraps. Its
+        // current height must not cap the trial, but the author's max-height can.
+        let intrinsic = block.map(|block| crate::HostBlock {
+            height: crate::BlockAxis::Is(block.height.length()),
+            ..block
+        });
+        let mut style = derive(
+            slot,
+            crate::style::style_in_block(&self.arena, slot, intrinsic),
+        );
         style.size.height = Dimension::auto();
         style.inset.top = LengthPercentageAuto::auto();
         style.inset.bottom = LengthPercentageAuto::auto();

@@ -1,9 +1,10 @@
 # Exact Contract for VS Code
 
-Syntax highlighting and editing defaults for the current `.contract` language,
-and `$exact-contract`, a problem matcher for the Contract compiler's
-diagnostics. Its only runtime code, `extension.js`, does three things, each only
-when a setting turns it on, and nothing without them. It has no dependencies.
+Syntax highlighting, snippets, and editing defaults for `.contract` and
+`.forma` files, and `$exact-contract`, a problem matcher for the Contract
+compiler's diagnostics. Its only runtime code, `extension.js`, does three
+things, each only when a setting turns it on, and nothing without them. It has
+no dependencies.
 
 - It registers `.contract` with the TypeScript 7 extension when that is
   installed and the workspace sets `js/ts.contentMappers.enabled`, so a

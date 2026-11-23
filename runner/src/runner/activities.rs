@@ -84,7 +84,7 @@ impl<D: DataSource> Runner<D> {
                 "exactActivities takes no arguments".into(),
             ));
         }
-        let value = decode(&self.plan, row.ty, &self.activities.snapshot).ok_or_else(|| DataError::BadArguments("exactActivities answers {linked: bool, activities: Activity[], frequentPushesEnabled: bool, pushToStartToken: option<string>, pushToStartActivities: PushStartActivity[]}; Activity has id, kind, state (JSON string), activityState, token (option<string>)".into()))?;
+        let value = decode(&self.plan, row.ty, &self.activities.snapshot).ok_or_else(|| DataError::BadArguments("exactActivities answers {linked: bool, activities: Activity[], frequentPushesEnabled: bool, pushToStartToken: option<string>, pushToStartActivities: PushStartActivity[]}; Activity has id, kind, state (JSON string), activityState, token (option<string>), promoted (bool)".into()))?;
         if self.activities.linked && !self.activities.started && !self.activities.loading {
             self.activities.demanded = true;
             self.activities.loading = true;
@@ -105,6 +105,12 @@ impl<D: DataSource> Runner<D> {
         }
         if snapshot.get("pushToStartActivities").is_none() {
             snapshot["pushToStartActivities"] = Json::Array(vec![]);
+        }
+        // Only Android's notifications are promoted (LLP 1126 D13).
+        for activity in snapshot["activities"].as_array_mut().into_iter().flatten() {
+            if activity.get("promoted").is_none() {
+                activity["promoted"] = Json::Bool(false);
+            }
         }
         let mut next = self.activities.clone();
         next.snapshot = snapshot;
@@ -280,6 +286,40 @@ component App
             assert_eq!(r.mutation_requests(), requests + 1);
             assert!(r.take_requests().is_empty());
         }
+    }
+    #[test]
+    fn promoted_is_androids_word_and_false_where_a_host_says_nothing() {
+        let source = SOURCE.replacen(
+            "  token: option<string>\nshape Activities",
+            "  token: option<string>\n  promoted: bool\nshape Activities",
+            1,
+        );
+        let mut r = Runner::boot(
+            contract::compile(&source).unwrap(),
+            NoData,
+            exact_kernel::Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        r.link_activities().unwrap();
+        let promoted = |r: &Runner<NoData>| {
+            let mut state = String::new();
+            crate::json::typed_json(
+                r.plan(),
+                r.plan().resources[0].ty,
+                r.resource("activities").unwrap(),
+                &mut state,
+            );
+            serde_json::from_str::<Json>(&state).unwrap()["activities"][0]["promoted"].clone()
+        };
+        // Apple's arm lists no `promoted`.
+        let apple = r#"{"activities":[{"id":"a","kind":"train","state":"{}","activityState":"active","token":null}],"frequentPushesEnabled":false}"#;
+        r.set_activities(apple).unwrap();
+        assert_eq!(promoted(&r), json!(false));
+        let android = r#"{"activities":[{"id":"a","kind":"train","state":"{}","activityState":"active","token":null,"promoted":true}],"frequentPushesEnabled":false}"#;
+        r.set_activities(android).unwrap();
+        assert_eq!(promoted(&r), json!(true));
     }
     #[test]
     fn typed_sends_land_ids_and_rotating_tokens_reanswer_the_source() {

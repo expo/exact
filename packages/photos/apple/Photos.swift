@@ -53,6 +53,7 @@ public final class PhotosModule: ExactPackage {
             switch name {
             case "photoLibraryStatus": return reply(photoKit.status())
             case "photoAssets": return photoKit.assets(args, origin: origin, reply: reply)
+            case "photoChanges": return photoKit.changes(args, origin: origin, reply: reply)
             case "copyPhotoAsset": return photoKit.copy(args, origin: origin, reply: reply)
             case "addToPhotoLibrary": return photoKit.add(args, origin: origin, reply: reply)
             case "managePhotoSelection": return photoKit.manage(origin: origin, reply: reply)
@@ -62,6 +63,7 @@ public final class PhotosModule: ExactPackage {
         switch name {
         case "photoLibraryStatus": reply(status())
         case "photoAssets": reply(assets(args))
+        case "photoChanges": reply(changes(args))
         case "copyPhotoAsset": copy(args, reply)
         case "addToPhotoLibrary": add(args, reply)
         case "managePhotoSelection":
@@ -88,23 +90,35 @@ public final class PhotosModule: ExactPackage {
         done()
     }
 
-    /// Under the agent: the access the runner's status gives and the
-    /// selection; a photo that left what the app may read is revoked.
+    /// Under the agent: the access the runner's status gives, the selection
+    /// and the fixtures deleted; a photo that left what the app may read is
+    /// revoked.
     public func preferred(_ values: [String: Any]) {
-        let before = library.visible
-        if let access = (values["photoLibraryStatus"] as? [String: Any])?["access"] as? String { library.access = access }
-        library.selection = (values["selection"] as? [String]) ?? AgentLibrary.defaultSelection
-        let after = library.visible
-        for id in before.subtracting(after).sorted() {
-            say("revoked photos:\(id)")
-            context.revokePicture("photos:\(id)")
+        guard context.agent else { return }
+        change { library in
+            if let access = (values["photoLibraryStatus"] as? [String: Any])?["access"] as? String { library.access = access }
+            library.selection = (values["selection"] as? [String]) ?? AgentLibrary.defaultSelection
+            library.deleted = Set((values["deleted"] as? [String]) ?? [])
         }
-        if before != after { context.changed("photos.photoAssets") }
     }
 
     public func permissions(_ states: [String: String]) {
         // Denied reading: nothing is readable, whatever the status said before.
-        if states["photos"] == "denied" { preferred(["photoLibraryStatus": ["access": "none"]]) }
+        if context.agent, states["photos"] == "denied" { change { $0.access = "none" } }
+    }
+
+    /// The agent's library changed by `edit`: a photo that left what the app
+    /// may read is revoked, and the readers of what moved are announced.
+    private func change(_ edit: (AgentLibrary) -> Void) {
+        let before = (library.visible, library.access, library.epoch, library.journal.count)
+        edit(library)
+        let after = library.visible
+        for id in before.0.subtracting(after).sorted() {
+            say("revoked photos:\(id)")
+            context.revokePicture("photos:\(id)")
+        }
+        if before.0 != after { context.changed("photos.photoAssets") }
+        if before != (after, library.access, library.epoch, library.journal.count) { context.changed("photos.photoChanges") }
     }
 
     public func image(_ source: String, width: Int, height: Int, fit: String, owned: Bool, reply: @escaping (CGImage?, String?) -> Void) {
@@ -131,14 +145,43 @@ public final class PhotosModule: ExactPackage {
         let limit = min(500, max(1, (args["limit"] as? NSNumber)?.intValue ?? 60))
         let after: PageCursor.Key?
         do { after = try PageCursor.key("agent", args["cursor"]) } catch { return PageCursor.refused }
-        let (page, more) = library.page(limit, after: after)
-        let assets = page.map { a -> [String: Any] in
-            ["id": a.id, "mediaType": "image", "width": a.width, "height": a.height, "creationDate": a.created,
-             "favorite": false, "picture": "photos:\(a.id)",
-             "apple": ["mediaSubtypes": [String](), "burstIdentifier": NSNull(), "hasAdjustments": false], "android": NSNull()]
-        }
+        let screenshots = (args["subtypes"] as? [String])?.contains("screenshot") == true
+        let (page, more) = library.page(limit, after: after, screenshots: screenshots)
         let cursor = more ? page.last.map { PageCursor.text("agent", .init(date: $0.created, id: $0.id)) } : nil
-        return ["assets": assets, "cursor": cursor ?? NSNull()]
+        return ["assets": page.map(Self.asset), "cursor": cursor ?? NSNull()]
+    }
+
+    private static func asset(_ a: AgentLibrary.Asset) -> [String: Any] {
+        ["id": a.id, "mediaType": "image", "width": a.width, "height": a.height, "creationDate": a.created,
+         "favorite": false, "picture": "photos:\(a.id)",
+         "apple": ["mediaSubtypes": a.screenshot ? ["photoScreenshot"] : [String](), "burstIdentifier": NSNull(), "hasAdjustments": false], "android": NSNull()]
+    }
+
+    /// The agent's journal from `since` (LLP 1133.019.000 D1, D5). A walk
+    /// fixes its end on its first page; each page after takes up after the
+    /// last photo the one before answered.
+    private func changes(_ args: [String: Any]) -> [String: Any] {
+        let count = library.journal.count
+        let here = ChangeToken(backend: "agent", access: library.access, subtypes: ChangeToken.subtypes(args), epoch: library.epoch, at: String(count))
+        let given: ChangeToken?
+        do { given = try ChangeToken.parse(args["since"], backend: "agent") } catch { return ChangeToken.refused }
+        guard let since = given else { return here.answer() }
+        // The agent answers no rescan-only token, and each of its tokens names its store and a position.
+        let fixed = since.end.map { Int($0) }
+        guard since.epoch != nil, let from = since.at.flatMap({ Int($0) }), from >= 0, fixed.map({ ($0 ?? -1) >= from }) ?? true else {
+            return ChangeToken.refused
+        }
+        guard here.sameView(since), since.epoch == library.epoch else { return here.answer(expired: true) }
+        // Positions in this store: a walk's end, else now.
+        let end = fixed.flatMap { $0 } ?? count
+        guard from <= end, end <= count, let page = library.changes(from: from, end: end, after: since.after, limit: ChangeToken.limit(args),
+                                                                    screenshots: here.subtypes.contains("screenshot")) else { return ChangeToken.refused }
+        var next = here
+        next.at = String(page.more ? from : end)
+        if page.more { (next.end, next.after) = (String(end), page.last) }
+        return next.answer(added: page.upserts.filter(\.inserted).map { Self.asset($0.asset) },
+                           updated: page.upserts.filter { !$0.inserted }.map { Self.asset($0.asset) },
+                           deleted: page.removed, more: page.more)
     }
 
     private func copy(_ args: [String: Any], _ reply: @escaping ([String: Any]) -> Void) {
@@ -164,6 +207,7 @@ public final class PhotosModule: ExactPackage {
               let asset = library.add(data, directory: directory, now: context.now()) else { return reply(["error": "DataError"]) }
         say("added \(asset.id) from \(path) sha256 \(AgentLibrary.sha256(data)) \(asset.width)x\(asset.height) \(asset.type)")
         context.changed("photos.photoAssets")
+        context.changed("photos.photoChanges")
         // The new photo's id where the app may read it (D6): not under add-only access.
         reply(["asset": library.visible.contains(asset.id) ? asset.id : NSNull()])
     }

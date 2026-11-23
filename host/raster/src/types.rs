@@ -57,11 +57,14 @@ pub mod variant {
     /// 8-bit in the picture's own space for a deep or HDR picture that did not
     /// fit the budget at full depth: the budget's last resort.
     pub const REDUCED8: u32 = 5;
+    /// 8-bit sRGB in a platform GPU buffer. A CPU canvas requests SRGB8
+    /// to keep its own directly readable pixels within the same budget.
+    pub const HARDWARE_SRGB8: u32 = 6;
 
     /// Bytes per pixel of a variant's output, or `None` for an unknown one.
     pub fn bytes_per_pixel(variant: u32) -> Option<u64> {
         match variant {
-            SRGB8 | OWN8 | REDUCED8 => Some(4),
+            SRGB8 | OWN8 | REDUCED8 | HARDWARE_SRGB8 => Some(4),
             DEEP | HDR => Some(8),
             _ => None,
         }

@@ -161,6 +161,7 @@ impl<D: DataSource> Runner<D> {
             prefix.append(&mut ops);
             ops = prefix;
         }
+        self.place_portals(&mut ops);
         let change = self.router_change()?;
         // Each phase is prepared as `apply` prepares a commit: its `time` and
         // `progress` nodes take their text and value in it, and the font rows
@@ -194,6 +195,7 @@ impl<D: DataSource> Runner<D> {
                     };
                     Ok(())
                 })?;
+                self.place_portals(&mut phase);
                 self.prepare_live_times(&mut phase);
                 axes = self.join_text_axes(axes, self.prepare_text_axes(&phase), &created);
                 created.extend(created_views(&phase));
@@ -216,6 +218,7 @@ impl<D: DataSource> Runner<D> {
             statuses.push(status);
         }
         let mut cleanup = self.reconcile_reorder()?;
+        self.place_portals(&mut cleanup);
         if !cleanup.is_empty() {
             self.prepare_live_times(&mut cleanup);
             axes = self.join_text_axes(axes, self.prepare_text_axes(&cleanup), &created);

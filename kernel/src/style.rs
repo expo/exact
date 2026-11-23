@@ -1342,20 +1342,21 @@ impl StyleProps {
     }
 }
 
-/// The engine style for a live slot, its `env()` lengths resolved against
-/// the arena's environment.
-pub fn taffy_style(arena: &NodeArena, slot: u32) -> taffy::style::Style {
+pub use engine::taffy_style;
+
+pub(crate) fn style_in_block(
+    arena: &NodeArena,
+    slot: u32,
+    block: Option<crate::HostBlock>,
+) -> taffy::style::Style {
     let lowering = handles::Lowering::new();
     let style = arena.effective_style(slot);
     let env = crate::kernel::owner::env_for(arena, slot, &style);
     let mut s = style.to_taffy(arena.node_type(slot), &env);
     arena.alert_layout(slot, &mut s);
     arena.bar_symbol_layout(slot, &mut s);
-    // HTML's button layout, which Exact's reset of a `<button>` keeps: its
-    // automatic inline size is shrink-to-fit, and a block button's content
-    // sits in an anonymous flow-root box centred safely in the block axis,
-    // whatever `align-content` says (Chrome 154; LLP 1001 §1). A flex or
-    // grid button lays out as any flex or grid container.
+    // HTML buttons shrink to fit. A block button safely centres its anonymous
+    // flow-root on the block axis regardless of align-content (LLP 1001 §1).
     if arena.is_button(slot) {
         s.item_is_table = true;
         if s.display == taffy::Display::Block {
@@ -1454,7 +1455,7 @@ pub fn taffy_style(arena: &NodeArena, slot: u32) -> taffy::style::Style {
     crate::kernel::bar::lay_out(arena, slot, reserved, &mut s);
     crate::kernel::ignore::lay_out(arena, slot, &mut s);
     // @ref LLP 1115.002 D8.2 — the containing block a host gave the subtree.
-    crate::kernel::apply_block(arena, slot, &mut s);
+    crate::kernel::apply_block(arena, slot, block, &mut s);
     // @ref LLP 1074 T1 — a root is the containing block of every absolutely
     // positioned box no positioned ancestor holds, on every host: a static
     // root is `relative` (its insets apply, as on the web's root element).

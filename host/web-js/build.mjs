@@ -38,7 +38,7 @@ import { namesStream } from './stream-names.mjs';
 import { bundleHostModule, localImports, stageHostGlue, writeFalse } from './glue.mjs';
 import { gateAgent } from './agent-gate.mjs';
 import { contentName, contentNames } from './content-names.mjs';
-import { buildEditor, buildFlow, buildMarkdown, buildModule, buildMotion, moduleSourceDirs, undeclaredRustData, fresh, leafTaken, moduleGrants, webCompiler, inspectHooked, withInspectHooks, withoutDev, withRuntimeStamp, sizeWarning, entrySizeReport } from './module.mjs';
+import { buildEditor, buildFlow, buildMarkdown, buildModule, buildMotion, moduleSourceDirs, undeclaredRustData, fresh, frameAnswer, frameFixture, frameURL, leafTaken, moduleGrants, webCompiler, inspectHooked, withInspectHooks, withoutDev, withRuntimeStamp, sizeWarning, entrySizeReport } from './module.mjs';
 import { appDigest, developmentStore } from '../../scripts/agent-launch.mjs';
 import { settingLines } from '../../js/bake/src/__exact_env.mjs';
 import { colorSchemeMeta, interfaceStyle, launchBackground, schemeHead, withInterfaceStyle, withLook } from '../web/look.mjs';
@@ -54,15 +54,16 @@ const given = args[0] && /[\\/]|^\.\.?$/.test(args[0]) ? resolve(args[0]) : null
 if (given) process.env.EXACT_APP_DIR = given;
 const app = given ? basename(given) : args[0];
 const opt = (name) => { const i = args.indexOf(name); return i < 0 ? null : args[i + 1]; };
-if (!app) { console.error('usage: bun host/web-js/build.mjs <app> [--plan <app.plan> | --contract <file>] [--out <dir>] [--inline] [--render rust|js|none] [--check]'); process.exit(2); }
+if (!app) { console.error('usage: bun host/web-js/build.mjs <app> [--plan <app.plan> | --contract <file> | --frame <file>] [--out <dir>] [--inline] [--render rust|js|none] [--check]'); process.exit(2); }
 // An app outside this repo is where `EXACT_APP_DIR` says (scripts/app.mjs).
 const appDir = process.env.EXACT_APP_DIR ? resolve(process.env.EXACT_APP_DIR) : resolve(root, 'apps', app);
 // Before anything reads a package: the dev loop runs this build directly, not through resolveApp (#115).
 try { installedFileDependencies(appDir); } catch (error) { console.error(`error: ${error.message}`); process.exit(1); }
 const manifest = readManifest(appDir, app);
-const siteBase = manifest.host?.web?.base ?? "/";
+const framePath = opt('--frame');
+const frame = framePath && !framePath.startsWith('--') && resolve(appDir, framePath);
+const siteBase = frame && args.includes('--serve-frame') ? frameURL(basename(frame, '.contract')) + '/' : manifest.host?.web?.base ?? "/";
 if (siteBase !== "/" && opt("--plan")) throw new Error("host.web.base: native update bakes require /; build the standalone JS site without --plan");
-const out = resolve(opt('--out') ?? `/tmp/exact-web-js-dist/${app}`);
 // Bun's runtime transpiler cache keys a module by its text and keeps the
 // imports this build's mount resolver gives it (below), so the same file at
 // another place (a second checkout, a moved mount) would resolve back into
@@ -83,6 +84,11 @@ if (process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH !== '0') {
 // With no bake (an app that names no native platform, LLP 1153 D3.6), it
 // builds the app's own Contract, links its web manifest, and has no envelope.
 const production = args.includes('--production');
+if (args.includes('--frame') && (!frame || production || opt('--plan') || opt('--contract') || opt('--data'))) {
+  console.error('--frame takes one app-owned Contract file for a development build'); process.exit(2);
+}
+const defaultOut = frame ? resolve('/tmp/exact-web-js-frames', createHash('sha256').update(frame).digest('hex')) : `/tmp/exact-web-js-dist/${app}`;
+const out = resolve(opt('--out') ?? defaultOut);
 const sizes = args.includes('--sizes');
 // `--dev` (host/web-js/dev.mjs): typed state checkpoint hooks that ordinary
 // and production builds neither emit nor link.
@@ -124,8 +130,10 @@ if (rust && (process.env.EXACT_RUST_PLACEMENT ?? manifest.rust?.platforms?.web?.
 // TypeScript module the rest (ts-data.js, rust-data.js). A synthetic plan
 // over another app's sources (`--data`) asks the Rust module only.
 const ts = existsSync(resolve(appDir, 'app.ts')) && !(rust && opt('--data'));
+const fixture = frameFixture(appDir, frame);
+if (fixture && !ts) { console.error(`error: ${fixture} supplies TypeScript answers and needs the app's app.ts`); process.exit(1); }
+const appTypes = ts && (frame || (opt('--contract') && !opt('--plan') && !opt('--data') && resolve(input) !== resolve(appDir, 'app.contract')));
 const mixed = rust && ts;
-const appTs = resolve(appDir, 'app.ts');
 // The manifest's `typescript.sources` mounts (js/bake/src/lib.rs `mounts`):
 // `./<name>/…` from the app's own modules resolves into that directory in
 // every load this build makes (the module read below, the server and page
@@ -241,7 +249,7 @@ try { compiler = webCompiler(); } catch (error) { rustMissing(error); }
 let planCosts = ''; // the compiler's line of plan code by component, for the size warning at the end
 function compilePlan(undrawn, source = input) {
   rmSync(resolve(gen, 'canvas2d.flag'), { force: true });
-  const cargo = spawnSync(compiler.cmd, [...compiler.pre, 'js', source, '-o', gen, '--app', appDir, ...(production ? [] : ['--sites']), ...(devReload ? ['--dev-reload'] : []), ...(sizes ? ['--sizes'] : [])], { cwd: root, stdio: checkOnly ? ['ignore', 'ignore', 'pipe'] : ['inherit', 'pipe', 'inherit'], encoding: 'utf8', maxBuffer: 64 << 20, env: { ...compiler.env, EXACT_JS_GPU_SURFACES: (gpuSurfaces ?? []).join(','), EXACT_JS_UNREGISTERED_SURFACES: undrawn.join(',') } });
+  const cargo = spawnSync(compiler.cmd, [...compiler.pre, 'js', source, '-o', gen, '--app', appDir, ...(frame && source === input ? ['--frame', frame] : []), ...(appTypes ? ['--app-types'] : []), ...(production ? [] : ['--sites']), ...(devReload ? ['--dev-reload'] : []), ...(sizes ? ['--sizes'] : [])], { cwd: root, stdio: checkOnly ? ['ignore', 'ignore', 'pipe'] : ['inherit', 'pipe', 'inherit'], encoding: 'utf8', maxBuffer: 64 << 20, env: { ...compiler.env, EXACT_JS_GPU_SURFACES: (gpuSurfaces ?? []).join(','), EXACT_JS_UNREGISTERED_SURFACES: undrawn.join(',') } });
   if (!checkOnly) { process.stdout.write(cargo.stdout ?? ''); planCosts = /^ *own plan code by component[^\n]*/m.exec(cargo.stdout ?? '')?.[0].trim() ?? planCosts; }
   if (cargo.status !== 0) { if (checkOnly) process.stderr.write(cargo.stderr ?? ''); process.exit(cargo.status ?? 1); }
   compiler.done();
@@ -259,7 +267,7 @@ if (!checkOnly || prerequisitesOnly) {
 }
 // The checked capture of app.ts and what it imports (typecheck, below): the
 // page and its server render bundle it, never the app's own directory.
-const tsStage = resolve(realpathSync(gen), 'typescript'), pageAppTs = resolve(tsStage, 'app.ts');
+const tsStage = resolve(realpathSync(gen), 'typescript'), pageAppTs = resolve(tsStage, fixture ? '__exact_frame.ts' : 'app.ts');
 // App generation may create files imported by app.ts. A mixed app's composer
 // also owns the Rust source roster, so take its declarations from that bake.
 // A generated workspace's web crate composes the two when app.json names rust.data (LLP 1153.003 D2).
@@ -314,7 +322,7 @@ if (ts) for (const line of settingLines(JSON.parse(readFileSync(resolve(tsStage,
 if (ts && unregistered.length && !captured.facts.exported.includes('draw')) {
   compilePlan(unregistered, opt('--plan') ?? resolve(gen, 'app.plan'));
 }
-const runtime = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'request-send.js', 'presence-bindings.js', 'rows.js', 'resource-inspection.js', 'rt-link.js', 'generation-reload.js', 'elements.js', 'editor.js', 'live-time.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'each.js', 'timer-waits.js', 'timer-observations.js', 'budget.js', 'shape.js', 'pointer.js', 'document.js', 'media.js', 'links.js', 'commands.js', 'focus.js', 'backdrop.js', 'persist.js', 'chosen.js', 'modes.js', 'follow.js', 'zoom.js', 'beat.js', 'regions.js', 'declarations.js', 'said.js', 'held.js', 'uploads.js', 'lower.js'];
+const runtime = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'request-send.js', 'presence-bindings.js', 'rows.js', 'resource-inspection.js', 'rt-link.js', 'generation-reload.js', 'elements.js', 'editor.js', 'live-time.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'each.js', 'timer-waits.js', 'timer-observations.js', 'budget.js', 'shape.js', 'pointer.js', 'document.js', 'media.js', 'links.js', 'commands.js', 'focus.js', 'backdrop.js', 'persist.js', 'chosen.js', 'modes.js', 'follow.js', 'zoom.js', 'portal.js', 'beat.js', 'regions.js', 'declarations.js', 'said.js', 'held.js', 'uploads.js', 'lower.js'];
 for (const f of runtime) cpSync(resolve(here, f === 'timer-observations.js' ? '../web/' + f : f), resolve(gen, f));
 if (siteBase !== '/') {
   // Specialize the URL boundaries only. Root builds keep the ordinary runtime's bytes.
@@ -406,12 +414,13 @@ const orientationlock = existsSync(resolve(gen, 'orientationlock.flag'));
 // A dialog, an alertdialog, a menu or a popover (prompt-glue.js, alert-message.js, menu-rows.js; LLP 1047.002 D1).
 const dialogs = existsSync(resolve(gen, 'dialogs.flag'));
 async function typecheck(checking) {
+  if (fixture && existsSync(resolve(appDir, '__exact_frame.ts'))) throw new Error('__exact_frame.ts is reserved for the preview frame');
   const { configure, check, capturedSources, staticFacts, valueExports, CODE_WARNINGS } = await import(resolve(root, 'js/bake/src/typescript.mjs'));
   const libraries = resolve(dirname(fileURLToPath(import.meta.resolve(`@typescript/typescript-${process.platform}-${process.arch}/package.json`))), 'lib');
   const declarations = readFileSync(resolve(gen, 'app.contract.d.ts'), 'utf8');
   // Checks keep declarations in their stage (LLP 1172.010 E11). An ordinary
-  // development build also refreshes the editor's copy, never captured.
-  if (checking && !production && process.env.EXACT_WEB_TYPES !== 'private') {
+  // development build of the app's own entry also refreshes the editor's copy. An alternate entry keeps its types in the stage.
+  if (checking && !production && !appTypes && process.env.EXACT_WEB_TYPES !== 'private') {
     const beside = resolve(appDir, 'app.contract.d.ts');
     const before = existsSync(beside) ? readFileSync(beside, 'utf8') : null;
     if (before !== declarations) {
@@ -427,10 +436,12 @@ async function typecheck(checking) {
   const output = realpathSync(out);
   const mounts = Object.entries(manifest.typescript?.sources ?? {}).map(([name, path]) => [name, mountDir(name, path)]);
   const capturedSettings = new Map();
-  for (const [file, path] of appSourceFiles(appDir, { manifest, mounts, output })) {
+  const files = appSourceFiles(appDir, { manifest, mounts, output });
+  if (fixture) files.set(fixture, resolve(realpathSync(appDir), fixture));
+  for (const [file, path] of files) {
     mkdirSync(dirname(resolve(stage, file)), { recursive: true });
     cpSync(path, resolve(stage, file));
-    if (/\.(ts|[cm]?js)$/.test(file) && !file.endsWith('.d.ts')) capturedSettings.set(file, readFileSync(path, 'utf8'));
+    if ((file === fixture || /\.(ts|[cm]?js)$/.test(file)) && !file.endsWith('.d.ts')) capturedSettings.set(file, readFileSync(path, 'utf8'));
   }
   writeFileSync(resolve(stage, 'app.contract.d.ts'), declarations);
   // The bake's optional data exports (js/bake/src/lib.rs `OPTIONAL_ENTRY`).
@@ -439,14 +450,17 @@ async function typecheck(checking) {
   // The app's id is app.json's; app.ts need not name it, and one it names is checked against it below. Under a variant
   // the id is the variant's, and an appId naming the base app is read as the variant's (LLP 1030.008 D2).
   const { app: { id }, variant } = (await import('../../scripts/app.mjs')).readManifest(appDir, app), base = variant?.base ?? id;
-  writeFileSync(resolve(stage, '__exact_entry.ts'), `import * as app from './app';\nimport type { TypeScriptAnswer } from './app.contract.d.ts';\nconst named = (app as unknown as { appId?: string }).appId;\nexport const appId: string = named === undefined || named === ${JSON.stringify(base)} ? ${JSON.stringify(id)} : named;\nexport const grants: string = app.grants;\nexport const answer: TypeScriptAnswer = app.answer;\n` + optional
+  const answerType = appTypes ? readFileSync(resolve(gen, 'entry-answer.ts'), 'utf8') : "import type { TypeScriptAnswer } from './app.contract.d.ts';";
+  if (fixture) writeFileSync(pageAppTs, frameAnswer(fixture, answerType));
+  const provider = fixture ? './__exact_frame' : './app';
+  writeFileSync(resolve(stage, '__exact_entry.ts'), `import * as app from '${provider}';\n${answerType}\nconst named = (app as unknown as { appId?: string }).appId;\nexport const appId: string = named === undefined || named === ${JSON.stringify(base)} ? ${JSON.stringify(id)} : named;\nexport const grants: string = app.grants;\nexport const answer: TypeScriptAnswer = app.answer;\n` + optional
     + "export const draw: ((surface: string, args: any, ctx: any, frame: any) => unknown) | undefined = (app as { draw?: unknown }).draw as Optional<'draw'>;\nexport const surfaces = (app as { surfaces?: unknown }).surfaces as Optional<'surfaces'>;\n");
-  writeFileSync(resolve(stage, '__exact_paths.json'), JSON.stringify({ app: realpathSync(appDir), mounts, target: 'web' }));
+  writeFileSync(resolve(stage, '__exact_paths.json'), JSON.stringify({ app: realpathSync(appDir), mounts, target: 'web', privateInputs: !!appTypes }));
   writeFileSync(resolve(stage,'__exact_backend_source.json'), JSON.stringify(Object.fromEntries(capturedSettings)));
   const real = realpathSync(stage);
   if (real !== tsStage) throw new Error(`the TypeScript stage moved: ${real}`);
   const { rolldown } = await import('rolldown');
-  const metadata = await configure(real, false, parseSync, true, rolldown);
+  const metadata = await configure(real, false, parseSync, true, rolldown, basename(pageAppTs));
   const backendWarning=JSON.parse(readFileSync(resolve(real,'__exact_backend.json'),'utf8')).warning;
   if (backendWarning) console.warn(`warning: ${backendWarning}`);
   // The packages whose declarations the check reads (typescript.mjs
@@ -817,7 +831,7 @@ const storageGrants = tsGrantSet.entries.some(([, , grant]) => ['fs-read', 'fs-w
 const storageFlag = 'const STORAGE_GRANTED = true;';
 const tsData = readFileSync(resolve(here, 'ts-data.js'), 'utf8');
 for (const line of [uploadsImport, storageFlag, streamImport]) if (!tsData.includes(line)) throw new Error(`host/web-js/ts-data.js: build.mjs replaces a line it no longer has: ${line}`);
-if (ts) writeFileSync(resolve(gen, 'ts-data.js'), (seamLazy ? "import './held-hooks.js';\n" : '') + tsData.replace("'__APP_TS__'", JSON.stringify(pageAppTs))
+if (ts) writeFileSync(resolve(gen, 'ts-data.js'), (seamLazy ? "import './held-hooks.js';\n" : '') + tsData.replace("'__APP_TS__'", () => JSON.stringify(pageAppTs))
   .replace(uploadsImport, streams ? uploadsImport : "import { data as runtime } from './rt.js'; const ledger = runtime.uploads, requestKey = () => undefined;")
   .replace(streamImport, streams ? streamImport : 'Promise.reject(new Error("this page was built without the stream reader"))')
   .replace(storageFlag, production && !storageGrants ? 'const STORAGE_GRANTED = false;' : storageFlag)

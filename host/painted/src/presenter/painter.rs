@@ -605,12 +605,49 @@ impl<D: DataSource> Presenter<D> {
         Ok(())
     }
 
-    /// Release the hidden window's device. The next visible frame reopens the configured painter.
+    /// Install the device the window kept while hidden, if it can still draw.
+    #[cfg(windows)]
+    fn reopen_hidden_device(&mut self, force_warp: bool) -> bool {
+        let Some(hidden) = self.surfaces.hidden_device.take() else {
+            return false;
+        };
+        match hidden.reopen() {
+            Ok(device) => {
+                let (backend, info) = d3d11_backend(device);
+                self.brush.replace_backend(backend);
+                self.painter = info;
+                self.surfaces.startup_device =
+                    Some(crate::surfaces::window::Startup::opened(force_warp));
+                self.choice = PainterChoice::Ink;
+                self.repaint();
+                true
+            }
+            Err(error) => {
+                eprintln!("exact-ink: opening a new device: {error}");
+                false
+            }
+        }
+    }
+
+    /// Release what the hidden window draws with: its swap chain, targets and
+    /// textures. A hardware D3D11 device and its shaders stay, trimmed, so the
+    /// next visible frame opens no device; every other painter is
+    /// reopened then.
     #[cfg(windows)]
     pub fn suspend_window_painter(&mut self, painter: PainterBoot) {
         self.surfaces.detach_painter_window();
         if self.deferred_painter.is_none() {
+            let kept = painter
+                .direct_d3d11()
+                .and_then(|_| self.brush.keep_hidden_device());
+            // Native editors hold texture IDs of the painter being dropped;
+            // the next frame makes them again from the presenter's state.
+            exact_ink::device::d3d11::fields::clear();
             self.brush.replace_backend(Box::new(Raster::new()));
+            if let Some(kept) = &kept {
+                kept.trim();
+            }
+            self.surfaces.hidden_device = kept;
             self.painter = cpu_info();
             self.choice = PainterChoice::Cpu;
             self.deferred_painter = Some(painter);
@@ -620,6 +657,15 @@ impl<D: DataSource> Presenter<D> {
     /// Start the hidden window's D3D11 workers while the page prepares its first visible frame.
     #[cfg(windows)]
     pub fn prepare_window_show(&mut self) {
+        if let Some(hidden) = &self.surfaces.hidden_device {
+            match hidden.usable() {
+                Ok(()) => return,
+                Err(error) => {
+                    eprintln!("exact-ink: opening a new device: {error}");
+                    self.surfaces.hidden_device = None;
+                }
+            }
+        }
         if let Some(force_warp) = self.deferred_painter.and_then(PainterBoot::direct_d3d11) {
             self.surfaces.preparing_device.get_or_insert_with(|| {
                 exact_ink::device::d3d11::Startup::start_for_first_present(force_warp)
@@ -640,6 +686,13 @@ impl<D: DataSource> Presenter<D> {
 
     #[cfg(any(windows, test))]
     fn open_deferred_painter(&mut self) -> Result<bool, String> {
+        #[cfg(windows)]
+        if let Some(force_warp) = self.deferred_painter.and_then(PainterBoot::direct_d3d11) {
+            if self.reopen_hidden_device(force_warp) {
+                self.deferred_painter = None;
+                return Ok(true);
+            }
+        }
         #[cfg(windows)]
         self.prepare_window_show();
         let Some(painter) = self.deferred_painter.take() else {

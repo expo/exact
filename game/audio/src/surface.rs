@@ -1,3 +1,5 @@
+#[cfg(all(not(test), target_os = "android"))]
+use crate::AndroidOutput as Device;
 #[cfg(all(
     not(test),
     any(target_os = "macos", target_os = "ios", target_os = "tvos")
@@ -13,11 +15,29 @@ use crate::WindowsOutput as Device;
     target_arch = "wasm32",
     target_os = "macos",
     target_os = "ios",
-    target_os = "tvos"
+    target_os = "tvos",
+    target_os = "android"
 ))]
 use crate::{Listener, Output, Player, Transport};
 #[cfg(test)]
 use exact_game::World;
+
+/// A line about the device: logcat on Android (`exact-audio`), else stderr.
+#[cfg(any(
+    windows,
+    test,
+    target_arch = "wasm32",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "android"
+))]
+fn say(line: &str) {
+    #[cfg(all(not(test), target_os = "android"))]
+    crate::native::android_log(true, line);
+    #[cfg(not(all(not(test), target_os = "android")))]
+    eprintln!("{line}");
+}
 
 /// Lazy audio owner for the renderer's dependency-free presentation hook.
 /// Default construction and every seekable/headless frame open no device.
@@ -28,7 +48,8 @@ pub struct SurfacePlayer {
         target_arch = "wasm32",
         target_os = "macos",
         target_os = "ios",
-        target_os = "tvos"
+        target_os = "tvos",
+        target_os = "android"
     ))]
     device: Option<Player<Device>>,
     #[cfg(any(
@@ -37,7 +58,8 @@ pub struct SurfacePlayer {
         target_arch = "wasm32",
         target_os = "macos",
         target_os = "ios",
-        target_os = "tvos"
+        target_os = "tvos",
+        target_os = "android"
     ))]
     retry_frames: u32,
     #[cfg(any(
@@ -46,7 +68,8 @@ pub struct SurfacePlayer {
         target_arch = "wasm32",
         target_os = "macos",
         target_os = "ios",
-        target_os = "tvos"
+        target_os = "tvos",
+        target_os = "android"
     ))]
     warned: bool,
     seekable: bool,
@@ -63,7 +86,8 @@ impl Default for SurfacePlayer {
                 target_arch = "wasm32",
                 target_os = "macos",
                 target_os = "ios",
-                target_os = "tvos"
+                target_os = "tvos",
+                target_os = "android"
             ))]
             device: None,
             #[cfg(any(
@@ -72,7 +96,8 @@ impl Default for SurfacePlayer {
                 target_arch = "wasm32",
                 target_os = "macos",
                 target_os = "ios",
-                target_os = "tvos"
+                target_os = "tvos",
+                target_os = "android"
             ))]
             retry_frames: 0,
             #[cfg(any(
@@ -81,7 +106,8 @@ impl Default for SurfacePlayer {
                 target_arch = "wasm32",
                 target_os = "macos",
                 target_os = "ios",
-                target_os = "tvos"
+                target_os = "tvos",
+                target_os = "android"
             ))]
             warned: false,
             seekable: true,
@@ -102,7 +128,8 @@ impl SurfacePlayer {
                 target_arch = "wasm32",
                 target_os = "macos",
                 target_os = "ios",
-                target_os = "tvos"
+                target_os = "tvos",
+                target_os = "android"
             ))]
             {
                 self.device = None;
@@ -125,7 +152,8 @@ impl SurfacePlayer {
             target_arch = "wasm32",
             target_os = "macos",
             target_os = "ios",
-            target_os = "tvos"
+            target_os = "tvos",
+            target_os = "android"
         ))]
         if let Some(player) = &mut self.device {
             let result = if suspended {
@@ -151,7 +179,8 @@ impl SurfacePlayer {
         target_arch = "wasm32",
         target_os = "macos",
         target_os = "ios",
-        target_os = "tvos"
+        target_os = "tvos",
+        target_os = "android"
     ))]
     fn ensure_device(&mut self) {
         if self.seekable || self.suspended || self.device.is_some() || self.retry_frames != 0 {
@@ -163,7 +192,9 @@ impl SurfacePlayer {
                 // Five seconds of frames at 60 Hz; input cannot defeat the bound.
                 self.retry_frames = 300;
                 if !self.warned {
-                    eprintln!("game audio unavailable (retrying every 300 live frames): {error:?}");
+                    say(&format!(
+                        "game audio unavailable (retrying every 300 live frames): {error:?}"
+                    ));
                     self.warned = true;
                 }
             }
@@ -184,7 +215,8 @@ impl SurfacePlayer {
             target_arch = "wasm32",
             target_os = "macos",
             target_os = "ios",
-            target_os = "tvos"
+            target_os = "tvos",
+            target_os = "android"
         ))]
         {
             if !seekable && !self.suspended {
@@ -193,7 +225,9 @@ impl SurfacePlayer {
                     self.device = None; // Drop joins the worker before releasing PCM.
                     self.unlocked = false;
                     self.retry_frames = 300;
-                    eprintln!("game audio failed (retrying in 300 live frames): {error}");
+                    say(&format!(
+                        "game audio failed (retrying in 300 live frames): {error}"
+                    ));
                 }
                 self.ensure_device();
                 if let Some(player) = &mut self.device {
@@ -225,7 +259,8 @@ impl SurfacePlayer {
         target_arch = "wasm32",
         target_os = "macos",
         target_os = "ios",
-        target_os = "tvos"
+        target_os = "tvos",
+        target_os = "android"
     ))]
     pub fn state(&self) -> Option<&'static str> {
         // The output as it is now, not as the last frame's sync found it: a
@@ -243,7 +278,8 @@ impl SurfacePlayer {
         target_arch = "wasm32",
         target_os = "macos",
         target_os = "ios",
-        target_os = "tvos"
+        target_os = "tvos",
+        target_os = "android"
     )))]
     pub fn state(&self) -> Option<&'static str> {
         None
@@ -255,7 +291,8 @@ impl SurfacePlayer {
             target_arch = "wasm32",
             target_os = "macos",
             target_os = "ios",
-            target_os = "tvos"
+            target_os = "tvos",
+            target_os = "android"
         ))]
         {
             if self.seekable || self.suspended {
@@ -298,7 +335,8 @@ mod tests {
             target_arch = "wasm32",
             target_os = "macos",
             target_os = "ios",
-            target_os = "tvos"
+            target_os = "tvos",
+            target_os = "android"
         ))]
         assert!(surface.device.is_none() && surface.retry_frames == 0);
     }

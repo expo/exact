@@ -1,10 +1,88 @@
 use FixtureActivity, FixtureState from "./activities.contract"
 
-// The packaging fixture for an app with Live Activities and no widgets (LLP
-// 1126.001 WP13): one text node, so an iOS build of it is the app, the
-// shared ExactCore framework and the WidgetKit extension with no widget in
-// its bundle. Its two entries exercise `push` and `frequent`; each draws one
-// line in every placement (WP8's eight).
+// The fixture for an app with Live Activities and no widgets (LLP 1126.001
+// WP13), with sends to drive them. On iOS its build is the app, the shared
+// ExactCore framework and the WidgetKit extension with no widget in its
+// bundle; its two entries exercise `push` and `frequent`, each drawing one
+// line in every placement (WP8's eight). On Android the departure is an
+// ongoing notification by its row's `android` mapping, and the alert, which
+// has none, is refused (LLP 1126 D13). Its three controls (app.json, LLP
+// 1126.004) are a tool control whose tool starts a departure, which iOS runs
+// in the app as a Live Activity intent; a URL control that opens the second
+// route, so a press shows which route it opened; and a plain tool control that
+// counts presses, which only a qualification build offers (§6d): the count on
+// screen says whether its intent ran in the app.
+routes nav
+  home "/"
+  detail "/detail"
+
+shape ActivityHandle
+  id: string
+
+shape ActivityFact
+  id: string
+  kind: string
+  activityState: string
+  promoted: bool
+
+shape Activities
+  linked: bool
+  activities: ActivityFact[]
+
+shape Clock
+  epochAtZero: number
+
 component ActivityFixture
+  derive current = top(nav)
+  resource activities = exactActivities() as shape Activities
+  resource clock = exactTime() as shape Clock
+  mutation sent as shape ActivityHandle
+  state count = 0
+  derive live = activities.activities.filter(a => a.activityState == "active" or a.activityState == "stale")
+  derive firstId = match first(live) { case some(a) => a.id, case none => "" }
+  state presses = 0
+  tool startDeparture writes "Start a departure." = startDeparture
+  tool tally writes "Count a press." = tally
+  action tally
+    presses = presses + 1
+  action follow(url: string)
+    nav = go(nav, url)
+  action startDeparture
+    let next = count + 1
+    count = next
+    send sent = startActivity("departure", FixtureState(label="Departure " + next.toString(), detail=some("Platform 2"), short=none, at=some(clock.epochAtZero + performanceNow() + 600000), done=some(0.25)))
+  action startElapsed
+    let next = count + 1
+    count = next
+    send sent = startActivity("departure", FixtureState(label="Attending " + next.toString(), detail=none, short=none, at=some(clock.epochAtZero + performanceNow() - 180000), done=none))
+  action startAlert
+    send sent = startActivity("alert", FixtureState(label="Delay", detail=none, short=none, at=none, done=none))
+  action updateFirst
+    if firstId != ""
+      send sent = updateActivity(firstId, FixtureState(label="Departure delayed", detail=some("Platform 3"), short=some("+10m"), at=some(clock.epochAtZero + performanceNow() + 1200000), done=some(0.5)), some("Delayed by 10 minutes"), none)
+  action endFirst
+    if firstId != ""
+      send sent = endActivity(firstId, FixtureState(label="Arrived", detail=none, short=none, at=none, done=some(1)), "immediate")
+  action endFirstKept
+    if firstId != ""
+      send sent = endActivity(firstId, FixtureState(label="Arrived", detail=some("Have a good day"), short=none, at=none, done=some(1)), "default")
   view
-    text "Activity fixture"
+    main navigationKey=`${current.id}` navigate=follow
+      text "Activity fixture"
+      text `Route ${current.name} · ${presses} ${presses == 1 ? "press" : "presses"}` testId="route" font-variant-numeric="tabular-nums"
+      if activities.linked
+        button press=startDeparture testId="start-departure"
+          text "Start departure"
+        button press=startElapsed testId="start-elapsed"
+          text "Start elapsed"
+        button press=startAlert testId="start-alert"
+          text "Start alert"
+        button press=updateFirst testId="update-first"
+          text "Update first"
+        button press=endFirst testId="end-first"
+          text "End first"
+        button press=endFirstKept testId="end-first-kept"
+          text "End first, kept"
+        text (failed(sent) ? "refused" : pending(sent) ? "sending" : "ok") testId="send"
+        for a in activities.activities key=a.id
+          text a.kind + " " + a.activityState + (a.promoted ? " promoted" : "") testId="activity"

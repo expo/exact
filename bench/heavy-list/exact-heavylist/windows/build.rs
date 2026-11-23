@@ -31,13 +31,7 @@ fn main() {
     .unwrap_or_else(|e| panic!("compatibility id: {e}"));
     std::fs::write(
         out_dir.join("window.rs"),
-        format!(
-            "const ADMIT_AGENT: bool = {};\nconst SERVICES: exact_windows::Services = {}({});\nfn window() -> exact_windows::Window {{ {} }}",
-            compat.admits_agent(),
-            compat.windows_image_services(&baked),
-            compat.windows_data_executor(),
-            manifest.windows_window().unwrap()
-        ),
+        compat.windows_shell(&baked, &manifest).unwrap(),
     )
     .unwrap();
     std::fs::write(out_dir.join("compat.json"), compat.to_json()).unwrap();

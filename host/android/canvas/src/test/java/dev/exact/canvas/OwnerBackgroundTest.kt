@@ -2,6 +2,7 @@ package dev.exact.canvas
 
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Looper
 import android.os.SystemClock
 import java.nio.ByteBuffer
 import java.time.Duration
@@ -14,6 +15,17 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
 import org.robolectric.annotation.LooperMode
+import org.robolectric.util.ReflectionHelpers.ClassParameter
+import org.robolectric.util.ReflectionHelpers.callInstanceMethod
+
+internal fun withMainSyncBarrier(work: () -> Unit) {
+    val looper = Looper.getMainLooper()
+    val barrier = callInstanceMethod<Int>(looper.queue, "postSyncBarrier")
+    try { work() } finally {
+        callInstanceMethod<Unit>(looper.queue, "removeSyncBarrier", ClassParameter.from(Int::class.javaPrimitiveType, barrier))
+    }
+    shadowOf(looper).idle()
+}
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], manifest = Config.NONE, shadows = [OwnerBackgroundTest.Host::class])
@@ -31,24 +43,128 @@ class OwnerBackgroundTest {
             var pending = false
             var delivered = 0
             var applying = false
+            var paint: ByteBuffer? = null
+            var chromeStatement: IntArray? = null
+            var request: IntArray? = null
             @JvmStatic @Implementation fun __staticInitializer__() {}
+            @JvmStatic @Implementation fun start(width: Int, height: Int, scale: Float, dir: String, store: String, live: Boolean) = true
+            @JvmStatic @Implementation fun fds() = IntArray(0)
             @JvmStatic @Implementation fun background(applying: Boolean): Double {
                 Host.applying = applying
                 if (SystemClock.uptimeMillis() >= due) { ticks++; due += 30000 }
                 if (pending) { pending = false; delivered++ }
                 return (due - SystemClock.uptimeMillis()).toDouble()
             }
-            @JvmStatic @Implementation fun frame(vsync: Boolean): ByteBuffer? { frames++; return null }
-            @JvmStatic @Implementation fun requests(): IntArray? = null
+            @JvmStatic @Implementation fun frame(vsync: Boolean): ByteBuffer? { frames++; return paint.also { paint = null } }
+            @JvmStatic @Implementation fun pendingPictures() = IntArray(0)
+            @JvmStatic @Implementation fun requests(): IntArray? = request.also { request = null }
             @JvmStatic @Implementation fun scrollers(): IntArray? = null
             @JvmStatic @Implementation fun fields(): IntArray? = null
             @JvmStatic @Implementation fun bars(): IntArray? = null
-            @JvmStatic @Implementation fun chrome(): IntArray? = null
+            @JvmStatic @Implementation fun chrome(): IntArray? = chromeStatement.also { chromeStatement = null }
             @JvmStatic @Implementation fun timerHeld() = 0
             @JvmStatic @Implementation fun animating(vsyncOnly: Boolean) = frameDemand
             @JvmStatic @Implementation fun displayFrame() {}
             @JvmStatic @Implementation fun owed() = false
             @JvmStatic @Implementation fun nextDue() = (due - SystemClock.uptimeMillis()).toDouble()
+        }
+    }
+
+    private fun withOwner(work: (Owner) -> Unit) {
+        val owner = Owner(false, false, 0) { "0" }
+        val thread = Owner::class.java.getDeclaredField("thread").apply { isAccessible = true }.get(owner) as HandlerThread
+        try { work(owner) } finally {
+            owner.ask { Host.paint = null; Host.chromeStatement = null; Host.request = null }
+            thread.quitSafely(); thread.join(5000)
+            assertFalse(thread.isAlive)
+        }
+    }
+
+    private fun turn(word: Int) {
+        Host.paint = ByteBuffer.allocate(0)
+        Host.chromeStatement = intArrayOf(word)
+    }
+
+    @Test fun aColdPlatformRequestPrecedesBootCompletionThroughTheBarrier() = withOwner { owner ->
+        val main = shadowOf(Looper.getMainLooper())
+        val calls = ArrayList<String>()
+        val landscape = intArrayOf(Requests.ORIENTATION, 0, 5, 1, 0b1100, 0, 0, 0)
+        owner.chrome = { calls += "chrome ${it[0]}" }
+        owner.asked = { assertArrayEquals(landscape, it); calls += "orientation" }
+        withMainSyncBarrier {
+            assertTrue(owner.boot(64, 64, 1f, "", "", false, started = {
+                turn(1)
+                Host.request = landscape
+            }) { calls += "done $it" })
+            owner.ask { }
+            main.idle()
+            assertEquals(listOf("chrome 1", "orientation", "done true"), calls)
+        }
+    }
+
+    @Test fun queuedColdChromeDoesNotReachTheAdoptingReader() = withOwner { owner ->
+        val main = shadowOf(Looper.getMainLooper())
+        val calls = ArrayList<String>()
+        owner.chrome = { calls += "cold chrome ${it[0]}" }
+        withMainSyncBarrier {
+            assertTrue(owner.boot(64, 64, 1f, "", "", false, started = { turn(1) }) { calls += "cold done $it" })
+            owner.ask { }
+            owner.chrome = { calls += "adopted chrome ${it[0]}" }
+            assertFalse(owner.boot(80, 64, 1f, "", "", false, started = { turn(2) }) { calls += "adopted done $it" })
+            owner.ask { }
+            main.idle()
+            assertEquals(listOf("cold done true"), calls)
+        }
+        assertEquals(listOf("cold done true", "adopted chrome 2", "adopted done true"), calls)
+    }
+
+    @Test fun adoptionKeepsOlderChromeAndTheRestoredAlertAheadOfCompletion() = withOwner { owner ->
+        val main = shadowOf(Looper.getMainLooper())
+        val calls = ArrayList<String>()
+        val alert = intArrayOf(Requests.SURFACE, 0, 10, 1, Surfaces.ALERT, 0, 0, 0, 64, 64, 0, 0, 0)
+        owner.published = { calls += "published" }
+        owner.chrome = { calls += "chrome ${it[0]}" }
+        owner.asked = { assertArrayEquals(alert, it); calls += "alert" }
+        assertTrue(owner.boot(64, 64, 1f, "", "", false) {})
+        owner.ask { }
+        main.idle()
+        owner.endColdDraw()
+        withMainSyncBarrier {
+            owner.sync { turn(1) }
+            val hold = owner.boot(64, 64, 1f, "", "", false, started = {
+                turn(2)
+                Host.request = alert
+            }) { calls += "done $it" }
+            owner.ask { }
+            main.idle()
+            assertEquals("adoption work waits for the traversal", emptyList<String>(), calls)
+            assertFalse("adoption leaves drawing to the platform", hold)
+        }
+        assertEquals(listOf("published", "chrome 1", "chrome 2", "alert", "done true"), calls)
+    }
+
+    @Test fun bootWhileStoppedKeepsCompletionAndResumedChromeInQueueOrder() = withOwner { owner ->
+        val main = shadowOf(Looper.getMainLooper())
+        val calls = ArrayList<String>()
+        owner.published = { calls += "published" }
+        owner.chrome = { calls += "chrome ${it[0]}" }
+        // First a Headless boot, then another boot after the owner has run and stopped.
+        repeat(2) {
+            calls.clear()
+            owner.running(false)
+            withMainSyncBarrier {
+                val hold = owner.boot(64, 64, 1f, "", "", false, started = { turn(1) }) { calls += "done $it" }
+                owner.ask { }
+                assertTrue(owner.queue.isEmpty())
+                main.idle()
+                assertEquals("completion waits for the traversal even without a frame", emptyList<String>(), calls)
+                assertFalse("a stopped boot leaves drawing to the platform", hold)
+                owner.running(true)
+                owner.ask { }
+                main.idle()
+                assertEquals("resumed chrome waits for the traversal too", emptyList<String>(), calls)
+            }
+            assertEquals(listOf("done true", "published", "chrome 1"), calls)
         }
     }
 

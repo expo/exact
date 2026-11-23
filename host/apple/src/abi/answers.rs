@@ -146,10 +146,17 @@ impl<D: DataSource> Bridge<D> {
     }
 
     /// A system's call of a tool (`{"op":"call"|"called"|"cancel",…}`, LLP
-    /// 1133.023 §10).
+    /// 1133.023 §10), or a person's press of a control the binary compiled
+    /// (`{"op":"press","control":K,"digest":D,"cold":B,"hidden":B}`, LLP
+    /// 1126.004 D2), answered with the call's id as a call is. Only the
+    /// tool door asks this export; the agent's operations reach `call_agent`
+    /// and never `press`.
     pub fn tool(&mut self, len: usize) -> u32 {
         self.answer(len, |h, request| {
             let op = json::field_str(request, "op").unwrap_or_default();
+            if op == "press" {
+                return press(h.runner_mut(), request);
+            }
             match h.runner_mut().call_agent(&op, request) {
                 Some(reply) => reply.unwrap_or_else(|e| json::error(&e)),
                 None => agent::tagged(h.runner(), json::error(&format!("unknown op: {op}"))),
@@ -164,6 +171,26 @@ impl<D: DataSource> Bridge<D> {
             let op = json::field_str(request, "op").unwrap_or_default();
             agent::answer_ticket(h.runner_mut(), &op, request).0
         })
+    }
+}
+
+/// A press of a compiled control, as [`Bridge::tool`] takes it.
+fn press<D: exact_runner::DataSource>(
+    runner: &mut exact_runner::Runner<D>,
+    request: &str,
+) -> String {
+    let v: serde_json::Value = serde_json::from_str(request).unwrap_or_default();
+    let how = exact_runner::CallHow {
+        door: "control".into(),
+        cold: v["cold"] == true,
+        hidden: v["hidden"] == true,
+        digest: None,
+    };
+    let kind = v["control"].as_str().unwrap_or_default();
+    let digest = v["digest"].as_str().unwrap_or_default();
+    match runner.press_control(kind, digest, how) {
+        Ok(id) => serde_json::json!({ "call": id, "control": kind }).to_string(),
+        Err(e) => json::error(&e),
     }
 }
 

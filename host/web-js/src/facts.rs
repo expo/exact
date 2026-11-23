@@ -133,6 +133,7 @@ pub fn reserved(plan: &Plan, body: &mut String) -> Result<String, String> {
         format!("import{{{}}}from\"./facts.js\";", imports.join(","))
     };
     // The tools after the modules, whose origins they stand beside (calls.js).
+    crate::calls::controls(plan, body);
     Ok(facts + &modules(plan, body) + &crate::calls::tools(plan, body))
 }
 

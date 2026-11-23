@@ -1,0 +1,17 @@
+# Merge into ~/.config/helix/languages.toml for Exact Contract and Forma syntax defaults.
+
+[[language]]
+name = "exact-contract"
+scope = "source.exact-contract"
+file-types = ["contract"]
+roots = ["app.json", "app.contract", "Cargo.toml"]
+comment-token = "//"
+indent = { tab-width = 2, unit = "  " }
+
+[[language]]
+name = "exact-forma"
+scope = "source.exact-forma"
+file-types = ["forma"]
+roots = ["app.json", "app.forma", "Cargo.toml"]
+comment-token = "//"
+indent = { tab-width = 2, unit = "  " }

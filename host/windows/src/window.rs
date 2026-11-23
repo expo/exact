@@ -95,6 +95,9 @@ struct App<D: DataSource> {
     hidden: bool,
     /// DWM is composing this window for its first frame after a show request.
     pending_show: Option<lifecycle::PendingShow>,
+    /// Whether a canvas's picture was still loading as the last show was revealed.
+    #[cfg(test)]
+    reveal_awaited: Option<bool>,
     /// The app's one instance, which later launches reach.
     instance: Option<crate::instance::Instance>,
     cold_documents: Vec<String>,
@@ -244,7 +247,7 @@ pub(super) fn run<D: DataSource + Default + 'static, const DEVELOPMENT: bool>(
     {
         std::thread::sleep(Duration::from_millis(200));
     }
-    let mut config = Config::from_bake_with_services::<DEVELOPMENT>(plan, compat, services);
+    let mut config = Config::from_bake::<DEVELOPMENT>(plan, compat, services);
     config.preferences = Some(exact_runner::Preferences {
         screen_reader: if config.agent {
             exact_runner::ScreenReader::Unknown
@@ -376,6 +379,8 @@ pub(super) fn run<D: DataSource + Default + 'static, const DEVELOPMENT: bool>(
         keep_running: opening.keep_running,
         hidden,
         pending_show: None,
+        #[cfg(test)]
+        reveal_awaited: None,
         instance,
         cold_documents,
         tray: None,
@@ -597,6 +602,11 @@ impl<D: DataSource + Default + 'static> App<D> {
         if self.frame_limit.is_some() {
             p.repaint();
         }
+        // A window being shown waits, bounded, for the pictures its draws
+        // asked for, so its first visible frame has them (LLP 1178 D3).
+        if let Some(pending) = &self.pending_show {
+            p.settle_pictures(lifecycle::REVEAL_PICTURES.saturating_sub(pending.began.elapsed()));
+        }
         let painting = p.dirty() || self.frames == 0;
         let paint = Instant::now();
         if let Some(previous) = self.caret.take_previous_frame() {
@@ -680,6 +690,10 @@ impl<D: DataSource + Default + 'static> App<D> {
             return Ok(());
         }
         if let Some(pending) = self.pending_show.take() {
+            #[cfg(test)]
+            {
+                self.reveal_awaited = Some(p.host().runner().canvas_images_pending());
+            }
             pending.reveal()?;
         }
         if painting && handed {
@@ -972,7 +986,7 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
                 self.dialogs
                     .install(handle.hwnd.get(), self.modal.clone(), self.proxy.clone());
                 self.desktop.set_window(handle.hwnd.get());
-                crate::displays::install(handle.hwnd.get());
+                crate::displays::install(handle.hwnd.get(), self.min_size);
                 if let Err(error) = self.clicks.install(handle.hwnd.get()) {
                     self.fail(events, error);
                     return;

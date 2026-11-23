@@ -72,8 +72,8 @@ export function googleServices(dir, id, path) {
  * is the bake's `reach.androidChannels`; `locales` and `base` its strings tables'; `firebase` is `googleServices`'
  * values, for an app that pushes. Without a `monochrome` icon, `exact_notification` is the platform's generic glyph,
  * so the drawable is there for every app that grants notifications and a manifest fragment can name it (Firebase's
- * `default_notification_icon`). */
-export function androidNotificationResources(manifest, dir, res, { channels, locales, base, firebase = null }) {
+ * `default_notification_icon`). `activities` is the bake's `reach.androidActivities`, each `{ kind, android }`. */
+export function androidNotificationResources(manifest, dir, res, { channels, locales, base, firebase = null, activities = null }) {
   rmSync(res, { recursive: true, force: true });
   if (!Array.isArray(channels)) return null;
   const write = (path, text) => { mkdirSync(dirname(resolve(res, path)), { recursive: true }); writeFileSync(resolve(res, path), text); };
@@ -98,6 +98,8 @@ export function androidNotificationResources(manifest, dir, res, { channels, loc
   });
   for (const [folder, lines] of strings) write(`${folder}/exact_channels.xml`, `<resources>\n${lines.join('\n')}\n</resources>\n`);
   write('xml/exact_channels.xml', `<channels>\n${items.map((l) => `${l}\n`).join('')}</channels>\n`);
+  // The live activities Android shows as ongoing notifications, which the reader's `Activities` reads (LLP 1126 D13).
+  if (Array.isArray(activities) && activities.length) write('raw/exact_activities.json', `${JSON.stringify(activities)}\n`);
   if (firebase) write('values/exact_google_services.xml', `<resources>\n${Object.entries(firebase)
     .map(([name, text]) => `    <string name="${name}" translatable="false">${resourceText(text)}</string>\n`).join('')}</resources>\n`);
   const icon = notificationIcon(manifest, dir);

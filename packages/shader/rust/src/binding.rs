@@ -1,11 +1,12 @@
 use exact_gpu::{color, SurfaceError, Value};
-use exact_shader_uniforms::{Builtins, Layout, Value as UniformValue};
+use exact_shader_uniforms::{self as uniforms, AlphaMode, Builtins, Layout, Value as UniformValue};
 
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct Binding {
     pub src: String,
     pub max_fps: u32,
     pub play: Option<bool>,
+    pub alpha_mode: AlphaMode,
     pub values: Vec<(String, Value)>,
 }
 
@@ -24,31 +25,15 @@ impl Binding {
         {
             return Err(SurfaceError("src: expected assets/<path>".into()));
         }
+        let read = |i: usize| inputs.get(i).map_or(UniformValue::Null, reading);
         let max_fps = match inputs.get(1) {
             None => 0,
-            Some(Value::Number(n))
-                if n.is_finite() && n.fract() == 0.0 && (0.0..=f64::from(u32::MAX)).contains(n) =>
-            {
-                *n as u32
-            }
-            _ => {
-                return Err(SurfaceError(
-                    "maxFps: expected a whole number from 0 to 4294967295".into(),
-                ))
-            }
+            Some(v) => uniforms::max_fps(reading(v)).map_err(SurfaceError)?,
         };
-        let play = match inputs.get(2) {
-            None | Some(Value::Unit) => None,
-            Some(v) if v.as_str() == Some("running") => Some(true),
-            Some(v) if v.as_str() == Some("paused") => Some(false),
-            _ => {
-                return Err(SurfaceError(
-                    "animationPlayState: expected running or paused".into(),
-                ))
-            }
-        };
+        let play = uniforms::animation_play_state(read(2)).map_err(SurfaceError)?;
+        let alpha_mode = uniforms::alpha_mode(read(3)).map_err(SurfaceError)?;
         let mut values = Vec::new();
-        if let Some(rest) = inputs.get(3) {
+        if let Some(rest) = inputs.get(4) {
             let Value::List(pairs) = rest else {
                 return Err(SurfaceError("expected named uniform arguments".into()));
             };
@@ -73,8 +58,14 @@ impl Binding {
             src: src.to_string(),
             max_fps,
             play,
+            alpha_mode,
             values,
         })
+    }
+
+    /// Whether a picture prepared for `self` can draw `other` by rebinding its uniforms.
+    pub fn draws_like(&self, other: &Self) -> bool {
+        self.src == other.src && self.alpha_mode == other.alpha_mode
     }
 
     pub fn pack(&self, layout: &Layout, builtins: Builtins) -> Result<Vec<u8>, SurfaceError> {
@@ -107,6 +98,20 @@ impl Binding {
         layout
             .pack(&values, builtins)
             .map_err(|e| SurfaceError(e.to_string()))
+    }
+}
+
+/// A value as one of the surface's own arguments reads it. Any value but a
+/// number, bool, string or unit is passed as an empty list, which none of
+/// them takes.
+fn reading(value: &Value) -> UniformValue<'_> {
+    match value {
+        Value::Number(n) => UniformValue::Number(*n),
+        Value::Bool(b) => UniformValue::Bool(*b),
+        Value::Unit => UniformValue::Null,
+        _ => value
+            .as_str()
+            .map_or(UniformValue::List(&[]), UniformValue::String),
     }
 }
 

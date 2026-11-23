@@ -86,7 +86,7 @@ impl<D: DataSource> Presenter<D> {
     pub fn picture_changed(&mut self, source: &str, revoked: bool) {
         if !revoked {
             self.images.file_changed(source);
-            self.host.canvas_picture_changed(source, &self.assets);
+            self.host.canvas_picture_changed(source, &mut self.images);
         }
         let reports = self.images.package_changed(source, revoked);
         self.apply_reports(reports);

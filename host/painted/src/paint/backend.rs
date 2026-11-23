@@ -139,6 +139,11 @@ pub trait Backend {
     fn present_statistics(&self) -> Option<exact_ink::device::d3d11::PresentStatistics> {
         None
     }
+    /// The hardware device a hidden window keeps (`D3d11::keep_hidden`).
+    #[cfg(windows)]
+    fn keep_hidden_device(&self) -> Option<exact_ink::device::d3d11::Hidden> {
+        None
+    }
     /// Attach the carrier's owned window when the device can present directly.
     #[cfg(windows)]
     fn attach_window(
@@ -558,6 +563,10 @@ impl super::Painter {
     #[cfg(windows)]
     pub(crate) fn present_statistics(&self) -> Option<exact_ink::device::d3d11::PresentStatistics> {
         self.backend.present_statistics()
+    }
+    #[cfg(windows)]
+    pub(crate) fn keep_hidden_device(&self) -> Option<exact_ink::device::d3d11::Hidden> {
+        self.backend.keep_hidden_device()
     }
     #[cfg(windows)]
     pub(crate) fn attach_window(

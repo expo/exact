@@ -551,3 +551,28 @@ fn colours_pack_as_encoded_unpremultiplied_numbers() {
         assert!(error.message.contains("tint"), "{error}");
     }
 }
+
+#[test]
+fn surface_arguments_accept_only_their_values() {
+    use exact_shader_uniforms::{alpha_mode, check_argument, AlphaMode};
+    assert_eq!(alpha_mode(Value::Null), Ok(AlphaMode::Opaque));
+    assert_eq!(alpha_mode(Value::String("opaque")), Ok(AlphaMode::Opaque));
+    assert_eq!(
+        alpha_mode(Value::String("premultiplied")),
+        Ok(AlphaMode::Premultiplied)
+    );
+    for value in [
+        Value::String("straight"),
+        Value::Bool(true),
+        Value::List(&[]),
+    ] {
+        assert_eq!(
+            check_argument("alphaMode", value),
+            Err("alphaMode: expected opaque or premultiplied".into())
+        );
+    }
+    assert!(check_argument("maxFps", Value::Number(30.)).is_ok());
+    assert!(check_argument("maxFps", Value::Number(-1.)).is_err());
+    assert!(check_argument("animationPlayState", Value::String("stopped")).is_err());
+    assert!(check_argument("speed", Value::String("anything")).is_ok());
+}

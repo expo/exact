@@ -5,28 +5,21 @@ import XCTest
 @testable import ExactNavigation
 
 extension NavigationBarIOSTests {
-    /// A drawn face is an image for one scheme: the scheme changing while
-    /// it shows draws it again in the other ink, though the app sends no batch.
-    func testADrawnBarItemIsDrawnAgainWhenTheSchemeChanges() throws {
+    /// A readout of a text in an authored size and ink is hosted, its own views in the bar,
+    /// which take the window's scheme as the page's do, though the app sends no batch (LLP
+    /// 1141.004 D1).
+    func testAHostedFaceFollowsTheSchemeAsThePageDoes() throws {
         let session = try fixture("scheme-face", module: false, plan: "BAR_FACE_SCHEME")
         let nav = try XCTUnwrap(session.presenter.navigationHost.primaryNavigation)
         let navigationItem = try XCTUnwrap(nav.topViewController?.navigationItem)
-        let title = { ((navigationItem.leftBarButtonItems ?? []) + (navigationItem.rightBarButtonItems ?? [])).first { $0.accessibilityIdentifier == "title-home" } }
-        // The brightest red among the face's opaque pixels: near 0 in black ink, near 255 in white.
-        let ink = { () -> UInt8? in
-            guard let image = title()?.image?.cgImage else { return nil }
-            var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
-            guard let context = CGContext(data: &bytes, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4,
-                                          space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
-            return stride(from: 0, to: bytes.count, by: 4).filter { bytes[$0 + 3] > 200 }.map { bytes[$0] }.max()
-        }
+        let item = try XCTUnwrap(((navigationItem.leftBarButtonItems ?? []) + (navigationItem.rightBarButtonItems ?? [])).first { $0.accessibilityIdentifier == "title-home" })
+        let view = try XCTUnwrap(item.customView as? HostedItemView, "hosted, drawn as written")
         let window = try XCTUnwrap(self.window)
         window.overrideUserInterfaceStyle = .light
-        until("the title is drawn in the light ink") { ink().map { $0 < 60 } == true }
+        until("its views are light") { view.node.traitCollection.userInterfaceStyle == .light }
         window.overrideUserInterfaceStyle = .dark
         defer { window.overrideUserInterfaceStyle = .unspecified }
-        until("the title is drawn again in the dark ink") { ink().map { $0 > 200 } == true }
+        until("its views are dark with the window") { view.node.traitCollection.userInterfaceStyle == .dark }
     }
 }
 #endif

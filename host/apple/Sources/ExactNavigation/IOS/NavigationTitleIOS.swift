@@ -50,7 +50,10 @@ struct HeaderTitle: Equatable {
     let tap: UInt32?
     let accessibilityDisabled: Bool
 
-    init?(header: NodeView, heading: NodeView, tap: NodeView?, apart: [NodeView]) {
+    /// `apart`: the nodes the title never reads (the items, the readouts, the
+    /// search field, the tablist); `kept`: the opted-out nodes, which stay in
+    /// the page.
+    init?(header: NodeView, heading: NodeView, tap: NodeView?, apart: [NodeView], kept: [NodeView] = []) {
         // The heading's ancestors below the header, innermost first.
         var chain: [NodeView] = [], at = heading.superview
         while let view = at, view !== header {
@@ -61,12 +64,17 @@ struct HeaderTitle: Equatable {
         // what wraps it holds a bar item): the header is the group, whose
         // walk passes over the items, the search field and the tablist as
         // controls (LLP 1116 D2, amending LLP 1075.003 §9.10).
-        let wrapper = tap ?? chain.last(where: { a in !apart.contains { $0.isDescendant(of: a) } })
+        // Inside, in the authored tree: a readout the bar lifted is still in its box.
+        func inside(_ node: NodeView, _ box: NodeView) -> Bool {
+            node.presenter?.logicalAncestry(of: node).contains { $0 === box } ?? node.isDescendant(of: box)
+        }
+        let wrapper = tap ?? chain.last(where: { a in !apart.contains { inside($0, a) } })
         let group = wrapper ?? header
         var avatar: BadgeFace?, subtitle = "", glyphs: [Glyph] = [], passed = false, spoken: String?, rtl = false
         var placed: [NodeView] = []
+        // A hosted element the bar lifted is read at its place: the title may take it.
         func shown(_ node: NodeView) -> [NodeView] {
-            node.container.subviews.compactMap { $0 as? NodeView }.filter { $0.style["display"]?.string != "none" }
+            node.authoredChildNodes.filter { $0.style["display"]?.string != "none" }
         }
         /// A passive box: no button, no press, no fill (a pill or badge
         /// keeps its own look, so it is no line of glyphs).
@@ -93,13 +101,15 @@ struct HeaderTitle: Equatable {
         /// A passive box of symbol images and texts only, one of each at
         /// least: a glyph line. A symbol with no name or an empty text adds
         /// nothing and costs the line nothing; any other child is not one.
-        func line(_ node: NodeView) -> [Glyph]? {
+        /// With the line, the children it is drawn from.
+        func line(_ node: NodeView) -> (glyphs: [Glyph], drawn: [NodeView])? {
             guard !node.isParagraph, passive(node) else { return nil }
-            var out: [Glyph] = [], symbols = false
+            var out: [Glyph] = [], drawn: [NodeView] = [], symbols = false
             for child in shown(node) {
                 // A readout beside the glyphs is its own item.
                 if apart.contains(where: { $0 === child }) { continue }
                 guard passive(child) else { return nil }
+                drawn.append(child)
                 if child.kind == "image", child.props["imageSource"]?.hasPrefix("symbol:") == true {
                     // A symbol source counts toward the shape even while its
                     // name is blank, so the line keeps its texts and label.
@@ -109,16 +119,19 @@ struct HeaderTitle: Equatable {
                     if !child.accessibleText.isEmpty { out.append(Glyph(symbol: nil, text: child.accessibleText)) }
                 } else { return nil }
             }
-            return symbols && out.contains { $0.symbol == nil } ? out : nil
+            return symbols && out.contains { $0.symbol == nil } ? (out, drawn) : nil
         }
         /// A control or a link is its own (a bar item), not the title's to
         /// read, unless it holds the heading (the pressable group).
         func control(_ node: NodeView) -> Bool {
             (node.isButton || node.actsAsButton || node.handlers.contains("press")) && !heading.isDescendant(of: node)
         }
-        func take(_ child: NodeView, _ pieces: [Glyph]) {
+        func take(_ child: NodeView, _ line: (glyphs: [Glyph], drawn: [NodeView])) {
+            let pieces = line.glyphs
             glyphs = pieces
-            placed.append(child)
+            // The line, unless an opted-out node in it stays in the page: then
+            // what the title draws of it, which the bar hides, and not the rest.
+            if kept.contains(where: { inside($0, child) }) { placed += line.drawn } else { placed.append(child) }
             subtitle = pieces.compactMap { $0.symbol == nil ? $0.text : nil }.joined(separator: "  ")
             // What it says, as the author named it, else its texts.
             spoken = child.authoredLabel ?? subtitle
@@ -133,7 +146,7 @@ struct HeaderTitle: Equatable {
                 // A box holding one is no avatar; a row of glyphs beside a
                 // readout is still the glyph line, without it; else what it
                 // holds is read alone.
-                if apart.contains(where: { $0.isDescendant(of: child) }) {
+                if apart.contains(where: { inside($0, child) }) {
                     if passed, subtitle.isEmpty, let pieces = line(child) { take(child, pieces); continue }
                     if !(passed && child.channels("background_color") != nil) { walk(child) }
                     continue
@@ -218,7 +231,7 @@ extension HeaderShape {
     /// header, or one the web does not show either (`display: none`), is
     /// not the bar's to judge.
     func presents(_ node: NodeView) -> Bool {
-        if authored.contains(where: { node === $0 || node.isDescendant(of: $0) }) { return true }
+        if authored.contains(where: { Self.inside(node, $0) }) { return true }
         guard node === header || node.isDescendant(of: header) else { return true }
         var at: UIView? = node
         while let view = at, view !== header.superview {
@@ -228,7 +241,9 @@ extension HeaderShape {
             if let box = view as? NodeView, box.props["popover"] != nil || box.props["semanticTag"] == "dialog" { return true }
             at = view.superview
         }
+        // A hosted element the bar lifted is still in its box in the authored tree.
         return placed.contains { node === $0 || node.isDescendant(of: $0) || $0.isDescendant(of: node) }
+            || hosted.contains { node.isDescendant(of: $0) || Self.inside($0, node) }
     }
 }
 

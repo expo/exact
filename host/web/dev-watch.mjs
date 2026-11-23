@@ -159,7 +159,7 @@ export function watchDirectoryInputs(directory, changed, { readNames = readdirSy
         : ['file', stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs].join(':');
     } catch { return null; }
   };
-  function scan(notify) {
+  function scan(notify, namesChanged = false) {
     if (closed) return;
     const next = new Map([['', metadata(directory)]]);
     try {
@@ -169,7 +169,7 @@ export function watchDirectoryInputs(directory, changed, { readNames = readdirSy
       }
     } catch { /* Root identity still reports disappearance or a change of type. */ }
     const changes = entries.get('') !== next.get('') ? ['']
-      : [...new Set([...entries.keys(), ...next.keys()])].filter(name => entries.get(name) !== next.get(name));
+      : [...new Set([...entries.keys(), ...next.keys()])].filter(name => (!namesChanged || (entries.has(name) && next.has(name))) && entries.get(name) !== next.get(name));
     const previous = entries;
     entries = next;
     if (notify) for (const name of changes) if (changed(name) === false) entries = previous;
@@ -187,5 +187,6 @@ export function watchDirectoryInputs(directory, changed, { readNames = readdirSy
   } catch { /* Polling also discovers roots that do not exist yet. */ }
   const poll = setInterval(() => scan(true), 100);
   poll.unref?.();
-  return { close() { closed = true; clearInterval(poll); watcher?.close(); entries.clear(); } };
+  // Reconcile a new subscription while still reporting edits to names both sets contain.
+  return { updateNames() { scan(true, true); }, close() { closed = true; clearInterval(poll); watcher?.close(); entries.clear(); } };
 }

@@ -634,18 +634,18 @@ fn pinned_old_allocation_causes_downsize_and_real_visible_progress() {
         PathBuf::new(),
         Arc::new(move |_| Ok(Some(bytes.clone()))),
     ));
-    let reservation = images
-        .backend
-        .session
-        .reserve_allocation(20 * 1024 * 1024)
-        .unwrap();
+    let session = &images.backend.session;
+    let budget = 48 * 1024 * 1024;
+    session.set_budget(budget);
+    let pinned_bytes = 36 * 1024 * 1024;
+    let reservation = session.reserve_allocation(pinned_bytes).unwrap();
     let charge = reservation.charge();
     let pinned = Bitmap::new(
-        tiny_skia::Pixmap::new(2560, 2048).unwrap(),
-        (2560, 2048),
+        tiny_skia::Pixmap::new(3072, 3072).unwrap(),
+        (3072, 3072),
         charge,
     );
-    drop(reservation.commit(20 * 1024 * 1024).unwrap());
+    drop(reservation.commit(pinned_bytes).unwrap());
     let k = kernel(1);
     images.sync(&k, &k.roots());
     images.wait(SETTLED);
@@ -653,7 +653,7 @@ fn pinned_old_allocation_causes_downsize_and_real_visible_progress() {
     assert_eq!(image.natural(), (2048, 2048));
     assert!(image.width() < 2048);
     assert_eq!(image.as_ref().as_ref()[0], 71);
-    assert!(images.stats().peak_bytes <= SESSION_BYTES);
+    assert!(images.stats().peak_bytes <= budget);
     drop(pinned);
 }
 
@@ -1207,4 +1207,54 @@ fn a_budget_thumbnail_follows_an_enlarged_box() {
     images.sync_visible(&k, &k.roots(), 1., |_| true);
     images.wait(SETTLED);
     assert_eq!(images.bitmaps[&1].width(), 1024);
+}
+
+#[test]
+fn a_canvas_read_is_decoded_once_its_header_is_read_with_no_second_poll() {
+    let mut images = Images::with_assets(Assets::selected(
+        PathBuf::new(),
+        Arc::new(|_| Ok(Some(encoded(640, 360, [30, 60, 90, 255])))),
+    ));
+    images.ask_canvas("still.png".into());
+    // The read registers what it will ask for; a worker reads the header and
+    // asks, though nothing polls again.
+    images.start_canvas_reads();
+    let deadline = Instant::now() + SETTLED;
+    while images.backend.session.stats().ready == 0 {
+        assert!(Instant::now() < deadline, "no decode without a second poll");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    images.start_canvas_reads();
+    let (name, answer) = images.canvas_answers.pop().unwrap();
+    assert_eq!(name, "still.png");
+    assert_eq!(
+        answer.unwrap().payload::<Arc<Bitmap>>().unwrap().natural(),
+        (640, 360)
+    );
+}
+
+#[test]
+fn a_canvas_read_that_leaves_before_its_header_cancels_the_ask() {
+    let mut images = Images::with_assets(Assets::selected(
+        PathBuf::new(),
+        Arc::new(|_| Ok(Some(encoded(640, 360, [30, 60, 90, 255])))),
+    ));
+    images.ask_canvas("gone.png".into());
+    images.start_canvas_reads();
+    images.cancel_canvas("gone.png");
+    // Whether the worker asked before or after the read went, nothing holds
+    // the picture: at most a decode under way lands in the cache, unheld.
+    let deadline = Instant::now() + SETTLED;
+    while images.backend.session.stats().running + images.backend.session.stats().queued > 0
+        || images.backend.sources() > 0
+    {
+        assert!(Instant::now() < deadline, "the workers settle");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let stats = images.backend.session.stats();
+    assert_eq!(
+        (stats.pinned_bytes, stats.pending_jobs),
+        (0, 0),
+        "{stats:?}"
+    );
 }

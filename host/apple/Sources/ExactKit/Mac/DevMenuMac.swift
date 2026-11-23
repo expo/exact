@@ -314,6 +314,9 @@ public enum DevMenu {
             let trace = dev.addItem(withTitle: "Save Trace", action: #selector(DevMenuTarget.saveTrace(_:)), keyEquivalent: "t")
             trace.keyEquivalentModifierMask = [.command, .option]
             trace.target = target
+            #if EXACT_ATTACH
+            AgentAttach.addMenuItems(to: dev) // LLP 1012.000 D1
+            #endif
             devItem.submenu = dev
         }
         // Help last, after Develop (LLP 1115 D8): AppKit puts its search

@@ -418,3 +418,36 @@ fn a_picture_with_no_implementation_is_refused() {
     let refused = r.admit_picture("photos:agent-1", "macos").unwrap();
     assert_eq!(refused["message"], "no implementation bound");
 }
+
+/// `photoChanges` (LLP 1133.019.000 D1, D5) is the implementation's own,
+/// under the read grant, its limit 1 to 500 with 500 unsaid, and the web's
+/// substitute refuses it.
+#[test]
+fn photo_changes_is_declared_as_the_list_is() {
+    let app = App::new("changes", false);
+    std::fs::write(
+        app.0.join("app.contract"),
+        APP.replace("photoAssets,", "photoAssets, photoChanges, PhotoChanges,")
+            .replace(
+                "  mutation added",
+                "  resource changes = photoChanges(since=\"\") as shape PhotoChanges\n  mutation added",
+            ),
+    )
+    .unwrap();
+    let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    let row = plan
+        .modules
+        .iter()
+        .find(|m| plan.str(m.declared) == "photoChanges")
+        .unwrap();
+    let sub: Json = serde_json::from_str(plan.str(row.substitute)).unwrap();
+    assert_eq!(sub["implementation"], true, "{sub}");
+    assert_eq!(sub["nameGrants"], json!(["device.photos"]), "{sub}");
+    assert_eq!(
+        sub["bounds"]["limit"],
+        json!({ "default": 500, "max": 500, "min": 1 }),
+        "{sub}"
+    );
+    assert_eq!(sub["unsupported"], json!(["web"]), "{sub}");
+}

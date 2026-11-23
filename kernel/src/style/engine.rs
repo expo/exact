@@ -2,6 +2,11 @@
 use super::StyleProps;
 use crate::generated::{GridAutoFlow, Overflow};
 
+/// The live slot's engine style in the containing block its host supplied.
+pub fn taffy_style(arena: &crate::arena::NodeArena, slot: u32) -> taffy::style::Style {
+    super::style_in_block(arena, slot, arena.blocks.get(slot))
+}
+
 pub(super) fn rare(style: &StyleProps, env: &crate::Env) -> taffy::style::Rare {
     taffy::style::RareStyle {
         grid_template_columns: style.rare.grid_template_columns.taffy_components(env),

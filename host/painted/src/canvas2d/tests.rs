@@ -720,6 +720,9 @@ fn prefix_checkpoint_reuses_finished_strokes_and_invalidates_soundly() {
     assert_eq!(Arc::as_ptr(&r.pixmap), ptr_before);
 
     // Replacing the background image invalidates the checkpoint and repaints it.
+    let previous = Arc::downgrade(&images["bg"].pixels);
+    images.remove("bg");
+    assert!(previous.upgrade().is_none());
     images.insert("bg".into(), make_bg(90, 120, 30));
     let lists_reloaded = record_frame(&ctx, 0., &strokes);
     r.apply_draw(

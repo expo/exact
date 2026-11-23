@@ -9,18 +9,31 @@ use crate::compat::{compatibility_digest, Compat};
 use exact_runner::{Capability, Uses};
 
 impl Compat {
-    /// The data executor linked into a Windows shell. Development can add source origins on reload.
-    pub fn windows_data_executor(&self) -> &'static str {
-        windows_data_executor(self.admits_agent(), self.inputs["grantCeiling"].as_str())
-    }
-
-    /// Development and signed updates can replace the plan with one that downloads pictures.
-    pub fn windows_image_services(&self, plan: &exact_plan::Plan) -> &'static str {
-        windows_image_services(
+    /// The Rust a Windows shell includes for `exact_windows::run_baked`:
+    /// `ADMIT_AGENT`, `SERVICES` (the data executor and image loader this
+    /// bake selected, as constructor paths the linker sees) and `window()`.
+    pub fn windows_shell(
+        &self,
+        plan: &exact_plan::Plan,
+        manifest: &contract::Manifest,
+    ) -> Result<String, String> {
+        // Development and signed updates can replace the plan with one that
+        // downloads pictures, and development can add source origins on reload.
+        let images = windows_image_services(
             plan,
             self.embedded["trust"].as_str(),
             self.inputs["store"]["L"].as_str(),
-        )
+        );
+        let executor =
+            windows_data_executor(self.admits_agent(), self.inputs["grantCeiling"].as_str());
+        Ok(format!(
+            "pub const ADMIT_AGENT: bool = {};\n\
+             pub const SERVICES: exact_windows::Services = {images}({executor});\n\
+             /// The window the app opens in (`host.windows.window`).\n\
+             pub fn window() -> exact_windows::Window {{ {} }}\n",
+            self.admits_agent(),
+            manifest.windows_window()?
+        ))
     }
 }
 

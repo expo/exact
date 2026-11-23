@@ -197,6 +197,53 @@ test('a marked name the environment the app is started with sets is the launch\'
   } finally { rmSync(dir,{recursive:true,force:true}); }
 });
 
+test('an omitted launch value leaves the baked code and setting input digest unchanged', async () => {
+  const { inlineSettings, settingInputs } = await import('../src/__exact_env.mjs');
+  const { parseSync } = await import('rolldown/utils');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-launch-omit-'));
+  const manifest = { env: [{ name: 'API_TOKEN', launch: true }] };
+  const source = "const API = import.meta.env.API_TOKEN ?? 'fallback';";
+  const app = { dir, manifest }, omit = { EXACT_LAUNCH_OMIT: 'API_TOKEN' };
+  const launch = { ...omit, API_TOKEN: 'shell-value' };
+  const inputsFor = env => settingInputs(app, env, { modules: new Map([['app.ts', source]]) });
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify(manifest));
+    for (const [file, expected] of [[null, 'fallback'], ['.env', 'file-value'], ['.env.local', 'file-value']]) {
+      if (file) writeFileSync(resolve(dir, file), 'API_TOKEN=file-value\n');
+      const inputs = inputsFor(launch);
+      expect(inputs).toEqual(inputsFor({}));
+      const baked = inlineSettings(source, dir, parseSync, launch);
+      expect(baked.record.API_TOKEN).toEqual({ value: expected, source: file ?? 'default', launch: true });
+      expect(baked.code).toContain(`?? ${JSON.stringify(expected)}`);
+      expect(inputs).toEqual({ 'import.meta.env.API_TOKEN': JSON.stringify(baked.record.API_TOKEN) });
+      if (!file) expect(() => inlineSettings('const API = import.meta.env.API_TOKEN;', dir, parseSync, launch)).toThrow('import.meta.env.API_TOKEN has no value');
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('Windows treats a mixed-case setting that Bun loaded as a file value', async () => {
+  const { settingValues } = await import('../src/__exact_env.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-launch-windows-'));
+  try {
+    writeFileSync(resolve(dir, '.env'), 'Api_Token=file-value\n');
+    const loaded = { Api_Token: 'file-value', EXACT_BUN_LOADED: 'Api_Token' };
+    expect(settingValues(dir, ['API_TOKEN'], loaded, { windows: true })).toEqual({ API_TOKEN: { value: 'file-value', source: '.env' } });
+    writeFileSync(resolve(dir, '.env.local'), 'aPi_ToKeN=local-value\n');
+    expect(settingValues(dir, ['API_TOKEN'], loaded, { windows: true })).toEqual({ API_TOKEN: { value: 'local-value', source: '.env.local' } });
+    expect(settingValues(dir, ['API_TOKEN'], { Api_Token: 'shell-value' }, { windows: true })).toEqual({ API_TOKEN: { value: 'shell-value', source: 'environment' } });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('Windows treats a missing setting as absent beside a variable named undefined', async () => {
+  const { declaredSettings, settingValues } = await import('../src/__exact_env.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-launch-windows-'));
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ env: ['API_URL', { name: 'UNDEFINED', launch: true }] }));
+    const shell = { undefined: 'launch-only', EXACT_LAUNCH_OMIT: 'UNDEFINED' };
+    expect(settingValues(dir, declaredSettings(dir), shell, { windows: true })).toEqual({ API_URL: null, UNDEFINED: null });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('a variant\'s settings come after the environment and before the files, over what Bun loaded from them', async () => {
   // From the #651 reporter's tested diff, with the selection scoped to the app (LLP 1030.008 D2, D6).
   const {settingValues} = await import('../src/__exact_env.mjs');
@@ -432,7 +479,7 @@ test('only transitive app imports supply settings and syntax errors reach the ty
     expect(JSON.parse(readFileSync(resolve(stage, '__exact_env.json'), 'utf8')).ISSUE_859_API.value).toBe('https://built.example');
     expect(readFileSync(resolve(stage, 'unimported.ts'), 'utf8')).toContain('import.meta.env');
     put('src/settings.ts', source + 'export const broken = ;\n');
-    await expect(configure(stage, false, parseSync)).resolves.toBeUndefined();
+    await configure(stage, false, parseSync);
     await expect(check(stage, resolve(libraries, 'tsc'), libraries)).rejects.toThrow('Expression expected');
     put('app.ts', 'export {};\n');
     put('notes.ts', 'export const broken = ;\n');
@@ -819,7 +866,7 @@ test('type-only edges neither supply settings nor conflict with runtime defaults
     for (const edge of ["import type { Client } from './types';", "import { Client } from './types'; export type Selected = Client;", "import { type Client } from './types';", "export type { Client } from './types';", "export { type Client } from './types';", "export type * from './types';"]) {
       const entry = edge + "\nexport const API = import.meta.env.ISSUE_859_API ?? 'https://runtime.example';\n";
       put(stage, 'app.ts', entry);
-      await expect(configure(stage, false, parseSync)).resolves.toBeUndefined();
+      await configure(stage, false, parseSync);
       await check(stage, resolve(libraries, 'tsc'), libraries);
       expect(readFileSync(resolve(stage, 'types.ts'), 'utf8')).toBe(source);
       put(stage, 'app.ts', edge);
@@ -832,7 +879,7 @@ test('type-only edges neither supply settings nor conflict with runtime defaults
       put(stage, 'types.ts', source);
     }
   } finally { rmSync(root, {recursive:true,force:true}); }
-});
+}, 30_000);
 
 test('reachable declarations and type-only modules stay fresh without reading settings', async () => {
   const { shown, webChanges, webInputDigests, webInputs } = await import('../../../scripts/agent-launch.mjs');

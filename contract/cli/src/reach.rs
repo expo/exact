@@ -4,7 +4,8 @@
 //! URL at the navigation root, so an app with any of them and no
 //! `navigate=` root is refused (`quick-actions-root`, `search-index-root`).
 //! The manifest's `intents` faces (D8) are checked against the tools they
-//! name and stored on the tools' rows.
+//! name and stored on the tools' rows, and its `controls` (LLP 1126.004)
+//! on the plan's.
 
 use crate::{native, CompileError, Manifest};
 use contract_syntax::{File, Node, Span};
@@ -53,14 +54,14 @@ pub(crate) fn from_manifest(
         .filter(|s| !s.is_empty())
         .cloned();
     let uses = |extension: &str| (plan.modules.iter()).any(|m| plan.str(m.extension) == extension);
-    let root = navigation_root(file);
-    if !root && (shortcuts.is_some() || uses("quick-actions")) {
+    let navigates = navigation_root(file);
+    if !navigates && (shortcuts.is_some() || uses("quick-actions")) {
         return Err(refused(
             "quick-actions-root",
             "a quick action opens its url at the navigation root, and the root component's outermost node has no `navigate=` (LLP 1133.023 D1; docs/recipes/navigation-stack.md)".into(),
         ));
     }
-    if !root && uses("search-index") {
+    if !navigates && uses("search-index") {
         return Err(refused(
             "search-index-root",
             "a search result opens its entry's url at the navigation root, and the root component's outermost node has no `navigate=` (LLP 1133.023 D1; docs/recipes/navigation-stack.md)".into(),
@@ -98,8 +99,24 @@ pub(crate) fn from_manifest(
             plan.set_module_substitute(i, &sub.to_string());
         }
     }
-    if let Some(intents) = manifest.json.get("intents") {
-        faces(intents, plan).map_err(|(id, m)| refused(id, m))?;
+    // Controls are the app's own entry's; a watch entry has none.
+    let controls = match path.file_name().is_some_and(|n| n == "app.contract") {
+        true => manifest
+            .controls()
+            .map_err(|m| refused("app-manifest", m))?,
+        false => Vec::new(),
+    };
+    let intents = manifest.json.get("intents");
+    if !controls.is_empty() || intents.is_some() {
+        // The calls the plan holds inline, as the effect walk reads them.
+        let root = contract_syntax::inline::expand(file)
+            .map_err(|e| refused("app-manifest", e.message))?
+            .root;
+        if let Some(intents) = intents {
+            faces(intents, &root, plan).map_err(|(id, m)| refused(id, m))?;
+        }
+        crate::controls::add(&controls, &root, navigates, plan)
+            .map_err(|(id, m)| refused(id, m))?;
     }
     plan.app_id = manifest.id;
     Ok(())
@@ -144,7 +161,11 @@ fn scalar(ty: &str) -> bool {
 
 /// Check each of `intents.tools`' faces against its tool and store it on
 /// the tool's row, with the doors it reaches spelled out and its digest.
-fn faces(intents: &Value, plan: &mut Plan) -> Result<(), (&'static str, String)> {
+fn faces(
+    intents: &Value,
+    root: &contract_syntax::Component,
+    plan: &mut Plan,
+) -> Result<(), (&'static str, String)> {
     let kinds = intents.get("entities").and_then(Value::as_object);
     let Some(tools) = intents.get("tools").and_then(Value::as_object) else {
         return Ok(());
@@ -153,6 +174,10 @@ fn faces(intents: &Value, plan: &mut Plan) -> Result<(), (&'static str, String)>
         let Some(i) = (plan.tools.iter()).position(|t| plan.str(t.name) == name) else {
             return Err(("intents-tool", format!("intents.tools names `{name}`, and the app has no `tool {name}` line (LLP 1133.023 D8)")));
         };
+        let action = plan.str(plan.action(plan.tools[i].action).name).to_owned();
+        if crate::controls::captures(&crate::controls::effects(root, plan, &action)) {
+            return Err(("intents-capture-face", format!("tool `{name}` can start a microphone, camera or screen capture, which a system caller's call may not (LLP 1133.009 D9); offer it as a control in app.json's `controls`, whose press may start audio capture (LLP 1126.004 D3), and remove its face")));
+        }
         let signature = crate::faces::tool_signature(plan, i);
         let destroys = signature["consequence"] == "destroys";
         let doors: Vec<String> = match face.get("doors").and_then(Value::as_array) {
@@ -275,13 +300,16 @@ fn faces(intents: &Value, plan: &mut Plan) -> Result<(), (&'static str, String)>
     Ok(())
 }
 
-/// Whether the root component's outermost node hears `navigate`.
+/// Whether the root component's outermost node hears `navigate`: an
+/// `iframe`'s is its guest's, which cannot open the app's own location.
 fn navigation_root(file: &File) -> bool {
     let Some(root) = file.components.first() else {
         return false;
     };
     (root.view.iter()).any(|n| match n {
-        Node::Element { attrs, .. } => attrs.iter().any(|a| a.name == "navigate"),
+        Node::Element { tag, attrs, .. } if tag != "iframe" => {
+            attrs.iter().any(|a| a.name == "navigate")
+        }
         _ => false,
     })
 }

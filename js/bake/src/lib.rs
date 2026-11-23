@@ -336,13 +336,7 @@ fn build_sources(
     )?;
     if platform == "windows" {
         let plan = exact_plan::Plan::decode(&baked.plan).map_err(|e| format!("{e:?}"))?;
-        metadata.push_str(&format!(
-            "pub const ADMIT_AGENT: bool = {};\npub const START_EXECUTOR: fn(&str) -> exact_windows::Executor = {};\npub const SERVICES: exact_windows::Services = {}(START_EXECUTOR);\n/// The window the app opens in (`host.windows.window`).\npub fn window() -> exact_windows::Window {{ {} }}\n",
-            compat.admits_agent(),
-            compat.windows_data_executor(),
-            compat.windows_image_services(&plan),
-            manifest.windows_window()?
-        ));
+        metadata.push_str(&compat.windows_shell(&plan, &manifest)?);
     }
     metadata.push_str(&linked::canvas_surfaces(
         &meta,
@@ -460,16 +454,24 @@ fn build_sources(
     if selection.exists() || std::env::var_os("EXACT_BACKEND_SELECTION").is_none() {
         println!("cargo:rerun-if-changed={}", selection.display());
     }
-    // The settings app.ts read: each name in the environment, and the files
-    // beside app.json, watched as the selection is (EXACT_ENV_FILES names the
-    // ones that exist).
-    // And the names Bun loaded (`noteBunLoaded`): a variable whose value stays
-    // may come from the environment once and from Bun's files the next time.
+    // Watch the setting's files and the lists that decide whether its shell
+    // value is a build input. EXACT_ENV_FILES names the files that exist.
     if let Some(settings) = meta["env"].as_object() {
         println!("cargo:rerun-if-env-changed=EXACT_ENV_FILES");
         println!("cargo:rerun-if-env-changed=EXACT_BUN_LOADED");
+        println!("cargo:rerun-if-env-changed=EXACT_LAUNCH_OMIT");
+        let launched = std::env::var("EXACT_LAUNCH_OMIT").unwrap_or_default();
+        let loaded = std::env::var("EXACT_BUN_LOADED").unwrap_or_default();
         for name in settings.keys() {
-            println!("cargo:rerun-if-env-changed={name}");
+            if !launched.split(',').chain(loaded.split(',')).any(|ignored| {
+                if cfg!(windows) {
+                    name.eq_ignore_ascii_case(ignored)
+                } else {
+                    name == ignored
+                }
+            }) {
+                println!("cargo:rerun-if-env-changed={name}");
+            }
         }
         for file in [".env.local", ".env"] {
             let path = root.join(file);

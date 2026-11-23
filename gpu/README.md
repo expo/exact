@@ -433,7 +433,11 @@ a layer the system compositor takes as it is. Otherwise the canvas is composed
 into the window, so each frame it draws makes HWUI's RenderThread redraw the
 window: the reporter's full-window gallery cost 32 % of a CPU core there until
 it declared itself opaque. Return `true` when every pixel the surface writes
-has alpha one.
+has alpha one. A canvas that returns `false` is composed as premultiplied
+colour: the web's canvas as WebGPU's `premultiplied` alpha mode, Apple's
+`CAMetalLayer` non-opaque, Android's in the window, Linux's and Windows'
+readback drawn source-over. The module reads it before each frame's `render`,
+so return `false` from before the first frame that writes alpha below one.
 
 **The pipeline cache.** `exact_gpu::PipelineCache::new(device)` gives a renderer
 the cache Exact installs for its module's device. On Vulkan, pass its `handle` as the

@@ -184,6 +184,7 @@ fn direct_window_blinks_without_a_softbuffer_surface() {
         keep_running: false,
         hidden: false,
         pending_show: None,
+        reveal_awaited: None,
         instance: None,
         cold_documents: Vec::new(),
         tray: None,
@@ -333,6 +334,8 @@ fn hiding_a_resident_window_releases_its_painter_and_preserves_its_canvas_and_ed
             flags & DWM_CLOAKED_APP != 0
         };
         for cancel_first in [true, false] {
+            let hardware =
+                app.presenter.as_ref().unwrap().painter.api.as_deref() == Some("direct D3D11");
             app.hide_by_app();
             assert_eq!(app.presenter.as_ref().unwrap().painter.name, "cpu");
             app.bring_forward();
@@ -365,11 +368,148 @@ fn hiding_a_resident_window_releases_its_painter_and_preserves_its_canvas_and_ed
             assert_eq!(app.window.as_ref().unwrap().is_visible(), Some(true));
             let p = app.presenter.as_mut().unwrap();
             assert_eq!(p.painter.name, name);
+            if hardware {
+                assert_eq!(p.painter.api.as_deref(), Some("direct D3D11"));
+                assert_eq!(
+                    p.painter.device_ms, 0.,
+                    "the hidden window's device reopened"
+                );
+            }
             verify(p);
         }
     }
 }
 
+#[test]
+#[ignore = "native Windows desktop with DirectComposition"]
+#[allow(deprecated)]
+fn a_shown_window_reveals_the_still_its_canvas_asked_for() {
+    use exact_painted::presenter::PainterChoice;
+    use exact_runner::{exact_canvas, DataError, Value};
+    use winit::platform::pump_events::EventLoopExtPumpEvents;
+
+    #[derive(Default)]
+    struct Still;
+    impl DataSource for Still {
+        fn query(&mut self, name: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::UnknownSource(name.into()))
+        }
+        fn canvas_surfaces(&self) -> Vec<(String, usize)> {
+            vec![("still".into(), 1)]
+        }
+        fn draw_2d(
+            &mut self,
+            _: &str,
+            args: &[Value],
+            ctx: &exact_canvas::Context2d,
+            frame: &exact_canvas::Frame,
+        ) -> Result<bool, exact_canvas::DrawError> {
+            ctx.clear_rect(0., 0., frame.width as f64, frame.height as f64);
+            if let Some(path) = args.first().and_then(|v| v.as_str()) {
+                if !path.is_empty() {
+                    ctx.draw_image_with_image_handle(path, 0., 0.)?;
+                }
+            }
+            Ok(false)
+        }
+    }
+
+    // A display-sized still written as an ordinary file, so it decodes.
+    let size = [2560u32, 1440u32];
+    let name = format!("reveal-still-{}.png", std::process::id());
+    let disk = exact_painted::picker::roots()[2].join(&name);
+    std::fs::create_dir_all(disk.parent().unwrap()).unwrap();
+    let mut encoded = Vec::new();
+    let mut encoder = png::Encoder::new(&mut encoded, size[0], size[1]);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_compression(png::Compression::Fast);
+    let rows: Vec<u8> = (0..size[0] * size[1])
+        .flat_map(|i| [(i % 251) as u8, 160, 40, 255])
+        .collect();
+    encoder
+        .write_header()
+        .unwrap()
+        .write_image_data(&rows)
+        .unwrap();
+    std::fs::write(&disk, &encoded).unwrap();
+    let path = format!("app:/tmp/{name}");
+
+    let mut events = EventLoop::<crate::accessibility::Event>::with_user_event()
+        .with_any_thread(true)
+        .build()
+        .unwrap();
+    let plan = contract::compile(
+        r#"component App
+  state path = ""
+  action choose(value: string)
+    path = value
+  view
+    main position="absolute" inset=0
+      canvas surface=still(path) position="absolute" inset=0 width="100%" height="100%"
+      input testId="path" value=path input=choose width=120 height=40
+"#,
+    )
+    .unwrap()
+    .encode();
+    let window = Rc::new(
+        events
+            .create_window(
+                Window::default_attributes()
+                    .with_title("Reveal still test")
+                    .with_no_redirection_bitmap(true)
+                    .with_inner_size(winit::dpi::PhysicalSize::new(size[0], size[1])),
+            )
+            .unwrap(),
+    );
+    let owned = exact_ink::device::d3d11::Window::from_owner(window.clone()).unwrap();
+    let (mut p, warning) = Presenter::boot_with(
+        &plan,
+        Still,
+        (size[0] as f32, size[1] as f32),
+        1.,
+        Default::default(),
+        PainterChoice::Ink,
+    )
+    .unwrap();
+    assert!(warning.is_none(), "{warning:?}");
+    p.attach_painter_window(owned.clone(), size).unwrap();
+    let mut app = test_app(events.create_proxy(), &plan, p);
+    app.window = Some(window);
+    app.keep_running = true;
+    app.direct = true;
+    app.painter = PainterBoot::windows::<false>(r#"{"painter":"ink"}"#);
+    present(app.presenter.as_mut().unwrap(), &owned);
+    app.hide_by_app();
+    // Hidden, the app points its canvas at the new still, as a capture's does.
+    let p = app.presenter.as_mut().unwrap();
+    let k = p.host().kernel();
+    let field = k.node_by_key(k.find_by_test_id("path")[0]).unwrap().id;
+    p.type_text(field, &path).unwrap();
+    app.bring_forward();
+    let previous = app.frames;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.frames == previous {
+        events.pump_app_events(Some(Duration::from_millis(1)), &mut app);
+        assert!(
+            !app.failed && Instant::now() < deadline,
+            "first window frame missing"
+        );
+    }
+    assert_eq!(app.window.as_ref().unwrap().is_visible(), Some(true));
+    assert_eq!(
+        app.reveal_awaited,
+        Some(false),
+        "the revealed frame lacks the still its canvas asked for"
+    );
+    let p = app.presenter.as_mut().unwrap();
+    let pixels = p.frame();
+    let _ = std::fs::remove_file(&disk);
+    let at = (size[1] / 2) * size[0] + 300;
+    assert_eq!(
+        &pixels.data()[at as usize * 4..][..4],
+        &[(at % 251) as u8, 160, 40, 255]
+    );
+}
 #[test]
 fn text_without_a_physical_key_reaches_the_editor() {
     use winit::keyboard::{Key, KeyCode, NamedKey, NativeKey, NativeKeyCode, PhysicalKey};
@@ -509,6 +649,7 @@ fn test_app<D: DataSource>(
         keep_running: false,
         hidden: false,
         pending_show: None,
+        reveal_awaited: None,
         instance: None,
         cold_documents: Vec::new(),
         tray: None,

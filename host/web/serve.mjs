@@ -14,6 +14,7 @@ import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from '
 import { fileURLToPath } from 'node:url';
 import { filesystem, filesystemRead, filesystemTree } from '../../scripts/filesystem.mjs';
 import { withLock } from './build-lock.mjs';
+import { linkedSourcesChanged } from '../../scripts/web-build.mjs';
 import { canonicalBytes, readAssetIndex } from '../../scripts/deploy-signing.mjs';
 import { copyShaders, developmentURLScheme, resolveApp, webDist, webHostFiles } from '../../scripts/app.mjs';
 import { settingChanges } from '../../js/bake/src/__exact_env.mjs';
@@ -1331,7 +1332,9 @@ function settleBuild(dist) {
   let marker;
   try { marker = JSON.parse(readFileSync(resolve(dist, '.exact-build.json'), 'utf8')); } catch { return 0; }
   if (!marker.env) return 0;
-  const app = sourcesOf(dist, marker.app?.id), changed = settingChanges(marker.env, process.env, app);
+  const source = sourcesOf(dist, marker.app?.id), app = source?.dir;
+  const env = source ? rebuildEnvironment(source, dist, marker.release) : process.env;
+  const changed = settingChanges(marker.env, env, app);
   if (!changed.length) return 0;
   const said = (s) => (s ? `${JSON.stringify(s.value)} (${s.source})` : 'unset');
   const what = changed.map(({ name, built, now }) => `import.meta.env.${name} was built as ${said(built)} and is ${said(now)} here`).join('; ');
@@ -1351,7 +1354,7 @@ function settleBuild(dist) {
   // development build into its.
   const target = marker.target === 'js' ? [] : ['--wasm'], release = marker.release ? ['--out', dist] : [];
   const built = spawnSync(process.execPath, [fileURLToPath(new URL('./build.mjs', import.meta.url)), app, ...target, ...release],
-    { stdio: 'inherit', env: { ...process.env, EXACT_APP_DIR: app, ...(marker.release ? {} : { EXACT_WEB_DIST: dist }) } });
+    { stdio: 'inherit', env });
   return built.status === 0 ? 0 : built.status ?? 1;
 }
 
@@ -1387,13 +1390,14 @@ export function appSources(app, out) {
 export function rebuildOnChange(dist, build = null) {
   let marker;
   try { marker = JSON.parse(readFileSync(resolve(dist, '.exact-build.json'), 'utf8')); } catch { return null; }
-  const app = sourcesOf(dist, marker.app?.id);
+  const source = sourcesOf(dist, marker.app?.id), app = source?.dir;
   if (!app || (!marker.release && resolve(dist) !== webDist())) return null;
+  const env = rebuildEnvironment(source, dist, marker.release);
   const out = resolve(dist), receipt = () => { try { return statSync(resolve(dist, '.exact-build.json')).mtimeMs; } catch { return 0; } };
   const target = marker.target === 'js' ? [] : ['--wasm'], release = marker.release ? ['--out', dist] : [];
   build ??= () => new Promise((done) => {
     const child = spawn(process.execPath, [fileURLToPath(new URL('./build.mjs', import.meta.url)), app, ...target, ...release],
-      { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, EXACT_APP_DIR: app, ...(marker.release ? {} : { EXACT_WEB_DIST: dist }) } });
+      { stdio: ['ignore', 'pipe', 'pipe'], env });
     let said = '';
     for (const stream of [child.stdout, child.stderr]) stream.on('data', (d) => { said += d; });
     child.on('close', (code) => done({ code, said }));
@@ -1402,12 +1406,16 @@ export function rebuildOnChange(dist, build = null) {
   // wrote, which tells a receipt another build wrote apart.
   let covered = receipt(), ours = null, checked = 0, running = null;
   const newer = (sources) => sources.newest > (receipt() === ours ? covered : Math.max(covered, receipt()));
+  const readMarker = () => {
+    try { return JSON.parse(readFileSync(resolve(out, '.exact-build.json'), 'utf8')); } catch { return null; }
+  };
+  const linkedChanged = card => !card || linkedSourcesChanged(app, out, card.linkedSources);
   const again = async () => {
     for (;;) {
       const basis = appSources(app, out).newest, { code, said } = await build();
       if (code !== 0) { console.error(said.trimEnd()); return said; }
       covered = basis; ours = receipt();
-      if (!newer(appSources(app, out))) return null;
+      if (!newer(appSources(app, out)) && !linkedChanged(readMarker())) return null;
       console.log(`${app}: a source changed while it built: building it again`);
     }
   };
@@ -1415,10 +1423,11 @@ export function rebuildOnChange(dist, build = null) {
     if (running) return running;
     if (Date.now() - checked < 300) return null;
     checked = Date.now();
-    let settings = [], built = null;
-    try { const now = JSON.parse(readFileSync(resolve(dist, '.exact-build.json'), 'utf8')); settings = settingChanges(now.env ?? {}, process.env, app); built = now.sources; } catch { /* being replaced */ }
+    const card = readMarker(), settings = settingChanges(card?.env ?? {}, env, app);
     const sources = appSources(app, out);
-    if (!settings.length && !newer(sources) && sources.digest === built) return null;
+    // Older local release receipts did not record their package imports.
+    const legacy = card?.release && card.target === 'js' && !('linkedSources' in card);
+    if (!legacy && !settings.length && !newer(sources) && sources.digest === card?.sources && !linkedChanged(card)) return null;
     console.log(`${app}: ${settings.length ? `the build has other settings than this server (${settings.map((c) => c.name).join(', ')})` : 'a source changed since the build'}: building it again`);
     running = again().finally(() => { running = null; });
     return running;
@@ -1429,13 +1438,29 @@ export function rebuildOnChange(dist, build = null) {
  * an `app.json` of that id, or of a variant with it (LLP 1030.008), above it, or the app whose own build directory it
  * is (an app of this checkout builds into host/web/dist); else null. */
 function sourcesOf(dist, id) {
-  const names = ({ app, variants }) => [app?.id, ...Object.values(variants ?? {}).map((v) => app?.id + v.idSuffix)];
+  if (!id) return null;
   for (let dir = dirname(dist); ; dir = dirname(dir)) {
-    try { if (names(JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8'))).includes(id)) return dir; } catch { /* none here */ }
+    try {
+      const { app, variants } = JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8'));
+      if (app?.id === id) return { dir };
+      for (const [variant, row] of Object.entries(variants ?? {})) {
+        if (app.id + row.idSuffix === id) return { dir, variant };
+      }
+    } catch { /* no app manifest here */ }
     if (dirname(dir) === dir) break;
   }
-  try { const app = resolveApp(); if (app.id === id && webDist() === dist) return app.dir; } catch { /* no app resolves */ }
+  try {
+    const app = resolveApp();
+    if (app.id === id && webDist() === dist) return { dir: app.dir, variant: app.manifest.variant?.name };
+  } catch { /* no app resolves */ }
   return null;
+}
+
+/** A serve process can be started outside the build's shell. Its receipt selects the same
+ * identity and settings for both the change check and the child that rebuilds the site. */
+function rebuildEnvironment({ dir, variant }, dist, release) {
+  return { ...process.env, EXACT_APP_DIR: dir, EXACT_VARIANT: variant ?? '', EXACT_VARIANT_APP: variant ? dir : '',
+    ...(release ? {} : { EXACT_WEB_DIST: dist }) };
 }
 
 /** A development page's trace (LLP 1079 D5): ⌥⇧T posts its journal, frames and

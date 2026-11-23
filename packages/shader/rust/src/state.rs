@@ -1,6 +1,6 @@
 use crate::{binding::Binding, Picture, Source};
 use exact_gpu::SurfaceError;
-use exact_shader_uniforms::Builtins;
+use exact_shader_uniforms::{AlphaMode, Builtins};
 use std::rc::Rc;
 
 #[derive(Default)]
@@ -23,6 +23,8 @@ enum Bound {
 pub(crate) struct State {
     source: File,
     binding: Bound,
+    // The bound alpha mode. A picture of another needs a new pipeline.
+    alpha_mode: AlphaMode,
     pub generation: u64,
     // Only a successful draw stamps this picture with the current generation.
     pub picture: Option<Picture>,
@@ -66,6 +68,7 @@ impl State {
     }
 
     pub fn bind(&mut self, arguments: &Binding) {
+        self.alpha_mode = arguments.alpha_mode;
         let File::Parsed(_, source) = &self.source else {
             return;
         };
@@ -82,14 +85,18 @@ impl State {
         if let Some(picture) = self
             .preparing
             .as_mut()
-            .filter(|p| Rc::ptr_eq(&p.source, source) && p.binding.src == arguments.src)
+            .filter(|p| Rc::ptr_eq(&p.source, source) && p.binding.draws_like(arguments))
         {
             picture.binding = arguments.clone();
-        } else if !self
+        } else if self
             .picture
             .as_ref()
-            .is_some_and(|p| Rc::ptr_eq(&p.source, source) && p.binding.src == arguments.src)
+            .is_some_and(|p| Rc::ptr_eq(&p.source, source) && p.binding.draws_like(arguments))
         {
+            // The alpha mode returned to the shown picture's before its
+            // replacement was ready.
+            self.preparing = None;
+        } else {
             self.preparing = Some(Picture {
                 generation: 0,
                 source: source.clone(),
@@ -102,7 +109,8 @@ impl State {
 
     pub fn current(&self, picture: &Picture) -> bool {
         matches!((&self.source, &self.binding), (File::Parsed(path, source), Bound::Ok)
-            if picture.binding.src == *path && Rc::ptr_eq(source, &picture.source))
+            if picture.binding.src == *path && Rc::ptr_eq(source, &picture.source)
+                && picture.binding.alpha_mode == self.alpha_mode)
     }
 
     pub fn bind_frame(&mut self, arguments: &Binding) {
@@ -163,6 +171,7 @@ impl State {
         matches!((&self.source, &self.binding, &self.picture),
             (File::Parsed(path, source), Bound::Ok, Some(picture))
             if picture.binding.src == *path && Rc::ptr_eq(source, &picture.source)
+                && picture.binding.alpha_mode == self.alpha_mode
                 && picture.generation == self.generation)
     }
 

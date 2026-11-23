@@ -86,8 +86,11 @@ impl<'a> Step<'a> {
     pub(crate) fn input(&self) -> bool {
         self.label.starts_with("tap ") || self.label.starts_with("type ")
     }
+    /// A clock advance, the work due at an input's arrival (`due`), or a
+    /// landing that no input's handler armed.
     pub(crate) fn clock(&self, previous: Option<&Self>) -> bool {
         self.label.starts_with("clock +")
+            || self.label == "due"
             || (self.label == "land"
                 && !previous.is_some_and(|s| {
                     s.input() && s.ran.iter().any(|(kind, _, _)| *kind == "handler")

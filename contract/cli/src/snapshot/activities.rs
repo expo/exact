@@ -187,6 +187,9 @@ pub(super) fn compile_file(
         },
         app,
     )?;
+    if let Some(android) = &activity.android {
+        android_fields(&plan, &activity.kind, android)?;
+    }
     let shape = shape_digest(&plan);
     payload_bytes(&activity.kind, &"0".repeat(64), &shape, &activity.preview).map_err(|m| {
         refusal(
@@ -225,6 +228,74 @@ pub(super) fn placements(plan: &mut Plan) -> Result<(), Vec<CompileError>> {
         plan.activity_slots.push(ActivitySlotsRow { name, root });
     }
     Ok(())
+}
+
+/// Each field an `android` row names is a field of the state shape, of the
+/// type the notification shows: a string, or a number for progress and the
+/// time. Every field but the title may be an option, which shows nothing
+/// while it is none (LLP 1126 D13).
+fn android_fields(
+    plan: &Plan,
+    kind: &str,
+    android: &crate::manifest::AndroidActivity,
+) -> Result<(), Vec<CompileError>> {
+    let state = plan.type_(state_type(plan));
+    let fields: Vec<_> = state.fields.iter().map(|i| plan.field(i)).collect();
+    let mut errors = Vec::new();
+    for (key, name, want, wanted) in [
+        ("title", Some(&android.title), TypeKind::String, "a string"),
+        (
+            "text",
+            android.text.as_ref(),
+            TypeKind::String,
+            "a string or option<string>",
+        ),
+        (
+            "chip",
+            android.chip.as_ref(),
+            TypeKind::String,
+            "a string or option<string>",
+        ),
+        (
+            "progress",
+            android.progress.as_ref(),
+            TypeKind::Number,
+            "a number from 0 to 1, or option<number>",
+        ),
+        (
+            "when",
+            android.when.as_ref(),
+            TypeKind::Number,
+            "a number of Unix milliseconds, or option<number>",
+        ),
+    ] {
+        let Some(name) = name else { continue };
+        let Some(field) = fields.iter().find(|f| plan.str(f.name) == name) else {
+            let names: Vec<_> = fields.iter().map(|f| plan.str(f.name)).collect();
+            errors.push(refusal(
+                "snapshot-activity-android",
+                format!("activity {kind}: android.{key} names `{name}`, which the state shape does not declare; use one of {}", names.join(", ")),
+                Span::default(),
+            ));
+            continue;
+        };
+        let mut ty = plan.type_(field.ty);
+        if ty.kind == TypeKind::Option && key != "title" {
+            ty = plan.type_(ty.elem.expect("option element"));
+        }
+        if ty.kind != want {
+            errors.push(refusal(
+                "snapshot-activity-android",
+                format!("activity {kind}: android.{key} names `{name}`, which is not {wanted}"),
+                Span::default(),
+            ));
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 fn state_type(plan: &Plan) -> TypesId {

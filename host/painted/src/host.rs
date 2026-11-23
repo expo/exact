@@ -7,6 +7,8 @@
 //! under the viewport, feeds the motion engine the commit (LLP 1003 §4),
 //! seeks the app's clock and keeps node presentation values.
 
+#[path = "activities.rs"]
+mod activities;
 #[path = "host_canvas.rs"]
 mod canvas;
 #[path = "host_replies.rs"]

@@ -579,6 +579,7 @@ internal object Extensions {
             application = app
         }
         Presence.application = app
+        Activities.application = app
         AudioFocus.application = app
         if (roster.isNotEmpty()) Exact.bindExtensions(roster.keys.joinToString("\n"))
     }

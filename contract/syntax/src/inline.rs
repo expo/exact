@@ -242,15 +242,20 @@ fn first((expanded, mut errors): (Expanded, Vec<SyntaxError>)) -> Result<Expande
 /// when no error is returned; a file without a component returns an empty
 /// expansion and a refusal. `mapped` keeps source provenance.
 pub fn expand_all(file: &File, mapped: bool) -> (Expanded, Vec<SyntaxError>) {
-    let (mut expanded, errors) = expand_with_sites(file, mapped, false);
+    let (mut expanded, errors) = expand_with_sites(file, mapped, false, &BTreeSet::new());
     hygiene(&mut expanded, file);
     (expanded, errors)
 }
 
 /// [`expand_all`] before [`hygiene`]: what the type pass checks, so a
 /// caller's own names are still the author's when a `let` is refused.
-pub fn expand_checked(file: &File, mapped: bool) -> (Expanded, Vec<SyntaxError>) {
-    expand_with_sites(file, mapped, false)
+/// Prop arguments and providers refused in their own scope read as missing.
+pub fn expand_checked(
+    file: &File,
+    mapped: bool,
+    refused_bindings: &BTreeSet<crate::Span>,
+) -> (Expanded, Vec<SyntaxError>) {
+    expand_with_sites(file, mapped, false, refused_bindings)
 }
 
 /// [`expand_all`] with every typed prop's and inject's argument ascribed
@@ -259,7 +264,7 @@ pub fn expand_checked(file: &File, mapped: bool) -> (Expanded, Vec<SyntaxError>)
 /// semantics' checker to judge. The plan compiler expands without it.
 /// Its calls are renamed apart as the plan's are ([`hygiene`]).
 pub fn expand_typed(file: &File) -> (Expanded, Vec<SyntaxError>) {
-    let (mut expanded, errors) = expand_with_sites(file, false, true);
+    let (mut expanded, errors) = expand_with_sites(file, false, true, &BTreeSet::new());
     hygiene(&mut expanded, file);
     (expanded, errors)
 }
@@ -391,6 +396,7 @@ fn expand_with_sites(
     file: &File,
     _capture_sites: bool,
     typed_props: bool,
+    refused_bindings: &BTreeSet<crate::Span>,
 ) -> (Expanded, Vec<SyntaxError>) {
     // Same-component calls first, each in its own component's scope (LLP
     // 1089 D7): lifting then substitutes caller and callee alike.
@@ -496,6 +502,7 @@ fn expand_with_sites(
         instance: 0,
         capture_sites: true,
         typed_props,
+        refused_bindings,
         errors: Vec::new(),
         instances: vec![Instance {
             component: file.components[0].name.clone(),
@@ -505,10 +512,7 @@ fn expand_with_sites(
     };
     let none = BTreeMap::new();
     let mut subst = Subst::new(&none, &records);
-    for b in &source.provides {
-        ctx.provides
-            .push((b.name.clone(), subst_expr(&b.expr, &mut subst)));
-    }
+    ctx.provides = substitute_providers(&source.provides, &mut subst);
     // @ref LLP 1116.009 D2 — an app with no `notfound` route is given one, and
     // its screen where the app draws a route per stack entry.
     let screen = implicit_notfound(file)
@@ -620,7 +624,7 @@ struct Ctx<'a> {
     site_depth: usize,
     /// Provided bindings in force, outermost component first, each already
     /// substituted into the scope of the component that provides it.
-    provides: Vec<(String, Expr)>,
+    provides: Vec<Binding>,
     /// What fills `children` here: `Some` inside a slot view that can render
     /// the supplied nodes, `None` elsewhere.
     fill: Option<Rc<Fill>>,
@@ -656,6 +660,7 @@ struct Ctx<'a> {
     capture_sites: bool,
     /// Ascribe every typed prop's and inject's argument (`expand_typed`).
     typed_props: bool,
+    refused_bindings: &'a BTreeSet<crate::Span>,
     /// Every instantiation so far, the root first (LLP 1035.005 D3).
     instances: Vec<Instance>,
     /// Uses that could not be expanded, in the order met.
@@ -672,11 +677,22 @@ struct Fill {
     nodes: Vec<Node>,
     subst: BTreeMap<String, Expr>,
     value_only: BTreeSet<String>,
-    provides: Vec<(String, Expr)>,
+    provides: Vec<Binding>,
     outer: Option<Rc<Fill>>,
     instance: u32,
     /// The use site's component path: a use in the fill is that site's.
     path: Vec<String>,
+}
+
+fn substitute_providers(bindings: &[Binding], subst: &mut Subst<'_, Expr>) -> Vec<Binding> {
+    bindings
+        .iter()
+        .map(|b| Binding {
+            name: b.name.clone(),
+            expr: subst_expr(&b.expr, subst),
+            span: b.span,
+        })
+        .collect()
 }
 
 impl Ctx<'_> {

@@ -339,12 +339,11 @@ package final class MenuHost {
         #else
         let custom = false
         #endif
-        // A bar item's `command="show-modal"` (`BarPress`): the page hides
-        // its button while the bar shows it, and what it opens presents with
-        // no invoker, as a pull-down's confirmation does. A bar item that
-        // opens a popover is its pull-down (`pullDown`), never this.
-        let barModal = !eligible(source) && eligible(source, inBar: true)
-            && presenter?.invocation(of: source)?.action == .showModal
+        // A bar item's `command="show-modal"` (`BarPress`): the page hides its button while the bar shows it, and
+        // what it opens presents with no invoker, as a pull-down's confirmation does; its `command="close"` (a
+        // dialog's Cancel in its sheet's bar) closes. One that opens a popover is its pull-down (`pullDown`).
+        let inBarOnly = !eligible(source) && eligible(source, inBar: true), barAction = presenter?.invocation(of: source)?.action
+        let barModal = inBarOnly && barAction == .showModal, barClose = inBarOnly && barAction == .close
         // A bar item's popover that was no menu when its item was made (a
         // pull-down item opens its own): with a press of its own, after it,
         // whatever the press made it; without one the bar opens it (`openFromBar`).
@@ -353,7 +352,7 @@ package final class MenuHost {
             _ = openFromBar(source)
             return
         }
-        guard custom || source.isNativeButton || barModal || closesPresentedContent(source), barModal || eligible(source),
+        guard custom || source.isNativeButton || barModal || closesPresentedContent(source), barModal || barClose || eligible(source),
               let invocation = presenter?.invocation(of: source), let name = invocation.target.props["id"] else { return }
         let pop = invocation.target, action = invocation.action
         if source === presentationOwner, action == .show || action == .showModal || action == .toggle && !isOpen(pop) { return }
@@ -487,11 +486,11 @@ package final class MenuHost {
     func eligible(_ node: NodeView, contextMenu: Bool = false, inertBoundary: UIView? = nil, inBar: Bool = false) -> Bool {
         guard live(node), !(contextMenu ? node.formDisabled : node.disabled), presenter?.navigation.isInactiveRoute(containing: node) == false else { return false }
         var ancestor: UIView? = node
-        var checksInert = true
+        var checksInert = true, inBar = inBar
         while let view = ancestor {
-            // A modal dialog escapes inertness above itself. Its issued command
-            // also survives the invoker subsequently becoming inert.
+            // A modal dialog escapes inertness above itself. Its issued command also survives the invoker subsequently becoming inert.
             if view === inertBoundary { checksInert = false }
+            if presenter?.navigation.lifted?.parent(of: view) != nil { inBar = true } // lifted into a bar's item, shown there (LLP 1141.004 D3)
             if let n = view as? NodeView, (contextMenu ? n.formDisabled : n.disabled) || (checksInert && n.props["inert"] == "true") { return false }
             let projectedSection = contextMenu && (view as? NodeView).map { presenter?.groupedLists?.hidSection($0) == true } == true
             if view.isHidden, !projectedSection, !(inBar && presenter?.navigation.hiddenForBar(view) == true), !groupedProjectionShows(node, behind: view) {

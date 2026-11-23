@@ -1,4 +1,5 @@
-//! One opaque fragment shader, with uniforms declared by its WGSL (LLP 1181).
+//! One fragment shader, with uniforms declared by its WGSL (LLP 1181). It is
+//! opaque unless the canvas writes `alphaMode="premultiplied"`.
 
 mod binding;
 mod pipeline;
@@ -8,7 +9,7 @@ mod timeline;
 use exact_gpu::{
     wgpu, AssetChanges, AssetError, Frame, FrameUniform, Surface, SurfaceError, Value,
 };
-use exact_shader_uniforms::{Builtins, Layout};
+use exact_shader_uniforms::{AlphaMode, Builtins, Layout};
 use pipeline::Shared;
 use std::rc::Rc;
 
@@ -95,6 +96,7 @@ impl Picture {
                 format,
                 self.source.text.clone(),
                 self.source.layout.clone(),
+                self.binding.alpha_mode,
             ));
             self.uniform = None;
         }
@@ -132,7 +134,12 @@ impl Surface for Shader {
     fn arguments(&self) -> Vec<(&'static str, Value)> {
         exact_shader_uniforms::ARGUMENTS
             .into_iter()
-            .zip([Value::str(""), Value::Number(0.0), Value::Unit])
+            .zip([
+                Value::str(""),
+                Value::Number(0.0),
+                Value::Unit,
+                Value::str("opaque"),
+            ])
             .collect()
     }
 
@@ -291,7 +298,10 @@ impl Surface for Shader {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    load: wgpu::LoadOp::Clear(match p.alpha_mode {
+                        AlphaMode::Opaque => wgpu::Color::BLACK,
+                        AlphaMode::Premultiplied => wgpu::Color::TRANSPARENT,
+                    }),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -321,7 +331,20 @@ impl Surface for Shader {
     }
 
     fn opaque(&self) -> bool {
-        true
+        // An opaque picture is right under either composition, a
+        // premultiplied one only under blending. So the canvas blends from
+        // before a premultiplied picture's first frame until it is replaced:
+        // the host configures the target before `render` swaps pictures.
+        let state = &self.state;
+        std::iter::once(&self.arguments)
+            .chain(
+                state
+                    .picture
+                    .iter()
+                    .chain(&state.preparing)
+                    .map(|p| &p.binding),
+            )
+            .all(|binding| binding.alpha_mode == AlphaMode::Opaque)
     }
 
     fn generation(&self) -> u64 {
@@ -384,7 +407,7 @@ mod tests {
         };
         for (surface, red) in canvases.iter_mut().zip([0.25_f64, 0.75]) {
             let args = exact_gpu::json::parse_values(&format!(
-                "[\"assets/test.wgsl\",0,null,[[\"red\",{red}]]]"
+                "[\"assets/test.wgsl\",0,null,null,[[\"red\",{red}]]]"
             ))
             .unwrap();
             surface.bind(&args, None).unwrap();

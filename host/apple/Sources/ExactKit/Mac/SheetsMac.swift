@@ -57,7 +57,8 @@ package final class DialogSheet {
     package let window: SheetWindow
     let rootEdits = RootEdits()
     package let content = BlockView(frame: .zero)
-    /// A modal route's sheet: its rows round the content. Nil for a dialog's.
+    /// The rows round the content: a modal route's, or a dialog's whose
+    /// header they show (LLP 1141.004 D6). Nil for any other dialog's.
     package let chrome: (any SheetChrome)?
     /// The page's window, or the sheet this one stands on.
     private(set) weak var over: NSWindow?
@@ -269,12 +270,17 @@ extension DialogHost {
         // sheet on one window back until the first has gone.
         var over = front
         while let top = over.attachedSheet { over = top }
-        let sheet = DialogSheet(over: over, size: entry.frame.size, chrome: entry.route ? presenter.navigation.makeRouteChrome() : nil)
+        // A dialog whose header the sheet's rows show has the rows a modal route's sheet has; one
+        // that paints its own surface is the author's box, its header its own.
+        let painted = entry.dialog.wrote("background_color") || entry.dialog.wrote("background_image")
+        if !entry.route, !painted { entry.header = presenter.navigation.dialogSheetHeader(entry.dialog) }
+        let rows = entry.route || entry.header != nil
+        let sheet = DialogSheet(over: over, size: entry.frame.size, chrome: rows ? presenter.navigation.makeRouteChrome() : nil)
         sheet.rootEdits.presenter = presenter
         sheet.rootEdits.join(sheet.window)
         sheet.content.pointerTracking = { [weak presenter] in presenter?.trackPointer($0) }
         entry.sheet = sheet
-        if entry.route { presenter.navigation.adoptRouteSheet(entry, sheet) }
+        if sheet.chrome != nil { presenter.navigation.adoptRouteSheet(entry, sheet) }
         guard let block = block(of: entry) else { return }
         presenter.blocks.show(entry.dialog, in: sheet.content, block: block) { [weak sheet] size in sheet?.fit(size) }
         entry.dialog.sheetGroundChanged()
@@ -308,7 +314,7 @@ extension DialogHost {
         sheet.paintDim(nil, shown: false)
         if let over, over.sheets.contains(sheet.window) { over.endSheet(sheet.window) }
         sheet.window.orderOut(nil)
-        if entry.route { presenter?.navigation.releaseRouteSheet(entry) }
+        if sheet.chrome != nil { presenter?.navigation.releaseRouteSheet(entry) }
         if live(dialog) { dialog.frame = entry.frame }
         presenter?.blocks.release(dialog)
         if live(dialog) { dialog.sheetGroundChanged() }

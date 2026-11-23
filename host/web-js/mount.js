@@ -61,6 +61,9 @@ export function unadopted(f) {
 }
 /** Whether construction is adopting a rendered page. */
 export const adopting = () => Adopt;
+/** Placement by `portal` (portal.js), installed by a plan that says it. */
+export let Portals = null;
+export const usePortals = p => (Portals = p);
 /** Adopt a rendered row under `w` (a virtualized list's, LLP 1048.001):
  * one that isn't this plan's projection is built afresh, alone. */
 export function adoptRow(w, f) {
@@ -96,6 +99,7 @@ function range(p) {
   return [a, b];
 }
 function leave(n) {
+  Portals?.rescue(n);
   const shell = n.nodeType === 1 && n.hasAttribute('data-exact-list-item') ? n : null;
   n = shell ? listRow(shell) : n;
   if (n && !exiting(n)) Leave ? Leave(n) : sheetLeaves(n) || n.remove();
@@ -362,6 +366,7 @@ export function each(p, list, key, row, pure) {
         !viewChildren(parent).some(r => r.getAttribute('navigationPresentation') === 'modal')
       ) {
         endAll(gone);
+        Portals?.rescue(parent);
         parent.textContent = '';
         parent.append(a, b);
       } else if (gone.size) {
@@ -402,7 +407,8 @@ export function each(p, list, key, row, pure) {
             continue;
           }
           flush();
-          if (!stay.has(i)) {
+          if (!stay.has(i) && Portals) Portals.moveRange(parent, r.start, r.end, anchor);
+          else if (!stay.has(i)) {
             const f = document.createDocumentFragment();
             let n = r.start;
             while (n) {

@@ -8,7 +8,7 @@
 //        machine, so no app's first build compiles them.
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
@@ -21,8 +21,42 @@ import { SETUP_FETCHES, withHostDeployment } from '../../scripts/filesystem.mjs'
 import { replaceBuild } from '../web/serve.mjs';
 import { proofInputs } from '../../game/inputs.mjs';
 import { keptProducts } from '../../scripts/kept.mjs';
-import { RustMissing, fromSet, fromSets, fetchedTool, launch, rustMissing, freshCompiler } from '../../scripts/tools.mjs';
-import { EXE } from '../../scripts/paths.mjs';
+import { RustMissing, compilerFrom, fromSet, fromSets, fetchedTool, launch, rustMissing, freshCompiler } from '../../scripts/tools.mjs';
+import { EXE, slashRelative, within } from '../../scripts/paths.mjs';
+/** The development URL for frames/<name>.contract. */
+export const frameURL = name => '/__dev/frames/' + encodeURIComponent(name).replaceAll("'", '%27');
+
+export const frameFixturePath = frame => frame.slice(0, -'.contract'.length) + '.fixture.mts';
+
+/** Only the selected frame's fixture enters its TypeScript capture. */
+export function frameFixture(app, frame) {
+  if (!frame) return null;
+  const path = frameFixturePath(frame), stat = lstatSync(path, { throwIfNoEntry: false });
+  if (!stat) return null;
+  const root = realpathSync(app), physical = realpathSync(path);
+  if (!stat.isFile() || !within(root, physical)) throw new Error(`${path}: a frame fixture must be a regular file inside the app`);
+  return slashRelative(root, physical);
+}
+
+/** The preview's dispatcher accepts the app's TypeScript sources and calls introduced by the frame.
+ * The app retains its grants, hooks and original handler for every unanswered call. */
+export function frameAnswer(file, types) {
+  return `import * as app from './app';
+${types}
+import fixture from ${JSON.stringify('./' + file)};
+import type { SourceMap as AppSources, TypeScriptSources } from './app.contract.d.ts';
+export * from './app';
+type Providers = { [S in TypeScriptSource]?: (args: Args<S>, store: Store, storage: Storage, native?: NativeModule | null) => Result<S> | Promise<Result<S>> };
+type Allowed = keyof TypeScriptSources | Exclude<TypeScriptSource, keyof AppSources>;
+const checked: Providers & Partial<TypeScriptSources> = fixture satisfies Record<Exclude<keyof typeof fixture, Allowed>, never>;
+const overrides: Providers = checked;
+const live: TypeScriptAnswer = app.answer;
+export const answer: TypeScriptAnswer = (source, args, store, storage, native) => {
+  const provide = Object.hasOwn(overrides, source) ? overrides[source] : undefined;
+  return provide ? provide(args, store, storage, native) : live(source, args, store, storage, native);
+};`;
+}
+
 export { EXE };
 import { buildScriptDir, crateDir, depInfoOf, fresh as cargoFresh, refreshCargoRustBindings } from '../../scripts/cargo-dep-info.mjs';
 export { buildScriptDir, crateDir, depInfoOf, freshCompiler };
@@ -590,38 +624,26 @@ export function withInspectHooks(file, text) {
 export const withRuntimeStamp = (text, files) => text.replace('"exact-runtime-unstamped"', JSON.stringify(createHash('sha256').update(files.map(f => `${f.path}\0${f.text}`).join('\0')).digest('hex').slice(0, 24)));
 export const withoutDev = (text) => text.replace(/^[ \t]*\/\/ dev-only \{.*\n[\s\S]*?^[ \t]*\/\/ dev-only \}.*\n/gm, '');
 
-/** The plan-to-JavaScript compiler (`exact-web-js`) to `launch`, in LLP 1174
- * D5's order: its binary when nothing it was built from changed, a tool set's
- * built on this machine, one kept for the machine, a fetched set's where one
- * may run, or `cargo run`, whose binary `done()` keeps. Throws `RustMissing`
- * where only Cargo could answer and Rust is missing. */
 const COMPILER = resolve(TARGET_DIR, `debug/exact-web-js${EXE}`);
 const compilerKept = () => kept({ crate: 'exact-web-js', product: COMPILER, depInfo: depInfoOf(COMPILER), group: ['debug'], buildDirs: [resolve(TARGET_DIR, 'debug/build')], stamp: resolve(MODULES, 'kept', 'exact-web-js.json') });
-export function webCompiler() {
-  // The optimised compiler (`host-dev`) the JS dev loop built for its design
-  // reader: a copy it makes for one build while that build is done and
-  // fresh (dev.mjs), the same output, about ten times faster on a large app
-  // (the Bluesky clone: 1.2 s, not 11.8).
-  const fast = process.env.EXACT_WEB_COMPILER;
-  if (fast && freshCompiler(fast)) return launch(fast);
-  if (freshCompiler(COMPILER)) return launch(COMPILER);
-  const built = fromSet('exact-web-js', 'built');
-  if (built) return launch(built.path);
-  const missing = rustMissing(), at = compilerKept();
-  const taken = missing ? null : at.find();
-  if (taken) return launch(taken);
-  const fetched = fetchedTool('exact-web-js');
-  if (fetched) return launch(fetched.path);
-  if (missing) throw new RustMissing('exact-web-js');
-  const started = Date.now();
-  return launch('cargo', ['run', '-q', '-p', 'exact-web-js', '--'], () => at.keep(started));
+export function webCompilerFrom(env = process.env, { rehash = false } = {}) {
+  // The dev loop can lend a fresh copy of its optimized design reader to this build.
+  const fast = env.EXACT_WEB_COMPILER;
+  if (fast && freshCompiler(fast)) return { path: fast, set: null };
+  return compilerFrom('exact-web-js', COMPILER, env, { rehash, kept: () => rustMissing(env) ? null : compilerKept().find() });
 }
-/** The tool set `webCompiler` takes the compiler from, when it would take it from one (null when this checkout's
- * own build is fresh, or no set matches): the web build then reads the set's record in place of Cargo's (LLP 1174 D5). */
+
+/** Launch the compiler selected by LLP 1174 D5, or build it with Cargo when none answers. */
+export function webCompiler(options) {
+  const selected = webCompilerFrom(process.env, options);
+  if (selected) return launch(selected.path);
+  if (rustMissing()) throw new RustMissing('exact-web-js');
+  const started = Date.now();
+  return launch('cargo', ['run', '-q', '-p', 'exact-web-js', '--'], () => compilerKept().keep(started));
+}
+/** The selected compiler's tool set supplies the web build's Cargo metadata (LLP 1174 D5). */
 export function compilerSet() {
-  const fast = process.env.EXACT_WEB_COMPILER;
-  if ((fast && freshCompiler(fast)) || freshCompiler(COMPILER)) return null;
-  return fromSets('exact-web-js')?.set ?? null;
+  return webCompilerFrom()?.set ?? null;
 }
 
 /** Everything an app's web build shares, compiled where it is not yet and

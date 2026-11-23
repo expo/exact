@@ -111,6 +111,31 @@ pub struct File {
     pub deferred: Vec<crate::members::Deferred>,
 }
 impl File {
+    /// Keep the selected component and every component placed by its view.
+    pub fn retain_component_tree(&mut self, root: usize) {
+        let components: BTreeMap<_, _> = self
+            .components
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.name.as_str(), i))
+            .collect();
+        let mut reached = vec![false; self.components.len()];
+        let mut next = vec![root];
+        while let Some(i) = next.pop() {
+            if std::mem::replace(&mut reached[i], true) {
+                continue;
+            }
+            next.extend(
+                Node::walk(&self.components[i].view).filter_map(|node| match node {
+                    Node::Use { name, .. } => components.get(name.as_str()).copied(),
+                    _ => None,
+                }),
+            );
+        }
+        let mut keep = reached.into_iter();
+        self.components.retain(|_| keep.next().unwrap());
+    }
+
     /// Describe an unknown component and the merged declarations in source order.
     /// Only refusal paths call this; valid uses allocate no diagnostic list.
     pub fn unknown_component_message(&self, name: &str) -> String {

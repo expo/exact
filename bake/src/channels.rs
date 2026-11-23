@@ -22,6 +22,9 @@ const IMPORTANCES: [&str; 4] = ["min", "low", "default", "high"];
 /// The sound files `res/raw` carries that SystemUI plays.
 const SOUNDS: [&str; 3] = ["ogg", "mp3", "wav"];
 
+/// The channel a post without one takes, which the host makes undeclared.
+const DEFAULT: &str = "default";
+
 /// Fill `compat.reach.androidChannels` for an Android bake. Every refusal in
 /// one run.
 pub(crate) fn derive(app_dir: &Path, manifest: &Value, compat: &mut Compat) -> Result<(), String> {
@@ -39,7 +42,16 @@ pub(crate) fn derive(app_dir: &Path, manifest: &Value, compat: &mut Compat) -> R
             )
         }
     };
+    // The activities Android shows as ongoing notifications (LLP 1126 D13):
+    // each posts on a channel, so it needs the grant a channel does.
+    let activities: Vec<Value> = (manifest["live_activities"].as_array().into_iter().flatten())
+        .filter(|row| row.get("android").is_some())
+        .cloned()
+        .collect();
     if !granted {
+        if let Some(row) = activities.first() {
+            return Err(format!("android-activity-needs-notifications: live_activities \"{}\" has an `android` mapping, which posts a notification, and the app does not grant `device.notifications <strings key>`; grant the line or remove the mapping", row["kind"].as_str().unwrap_or("?")));
+        }
         if list.is_empty() {
             return Ok(());
         }
@@ -149,11 +161,36 @@ pub(crate) fn derive(app_dir: &Path, manifest: &Value, compat: &mut Compat) -> R
             errors.push(format!("android-channel-undeclared: a post names android.channelId=\"{literal}\", which host.android.notificationChannels does not declare; declare it there, or post on \"default\""));
         }
     }
+    let mut rows = Vec::new();
+    for row in &activities {
+        let kind = row["kind"].as_str().unwrap_or("?");
+        let channel = row["android"]["channel"].as_str().unwrap_or(DEFAULT);
+        let declared = channels.iter().find(|c| c["id"] == channel);
+        if channel != DEFAULT && declared.is_none() {
+            errors.push(format!("android-activity-channel: live_activities \"{kind}\" posts on android.channel \"{channel}\", which host.android.notificationChannels does not declare; declare it there, or use \"default\""));
+        } else if declared.is_some_and(|c| c["importance"] == "min") {
+            // A promoted notification's channel is not IMPORTANCE_MIN
+            // (developer.android.com/develop/ui/views/notifications/live-update).
+            errors.push(format!("android-activity-channel: live_activities \"{kind}\" posts on \"{channel}\", whose importance is \"min\", which Android never promotes or shows in the status bar; give it \"low\" or higher, or post on another channel"));
+        }
+        let mut android = row["android"].clone();
+        android["channel"] = Value::String(channel.to_owned());
+        rows.push(json!({ "kind": kind, "android": android }));
+    }
     if !errors.is_empty() {
         return Err(errors.join("\n"));
     }
     if compat.reach.is_null() {
         compat.reach = json!({});
+    }
+    if !rows.is_empty() {
+        let mut canon = String::new();
+        canonical(&Value::Array(rows.clone()), &mut canon);
+        let digest = Sha256::digest(canon.as_bytes());
+        compat.inputs["androidActivities"] =
+            Value::String(digest[..16].iter().map(|b| format!("{b:02x}")).collect());
+        compat.id = compatibility_digest(&compat.inputs);
+        compat.reach["androidActivities"] = Value::Array(rows);
     }
     compat.reach["androidChannels"] = Value::Array(channels);
     if !list.is_empty() {
@@ -265,6 +302,87 @@ mod tests {
         assert_eq!(c.id, "old");
         let mut c = compat("net.fetch https://example.com");
         derive(&dir.0, &json!({}), &mut c).unwrap();
+        assert!(c.reach.is_null());
+    }
+
+    fn with_activity(mut manifest: Value, android: Value) -> Value {
+        manifest["live_activities"] = json!([
+            { "kind": "patrol", "component": "Patrol", "state": "State", "preview": {}, "android": android },
+            { "kind": "ios", "component": "Ios", "state": "State", "preview": {} }
+        ]);
+        manifest
+    }
+
+    #[test]
+    fn an_android_activity_rides_in_reach_with_its_channel_and_moves_the_id() {
+        let dir = app(&[("en", EN)]);
+        let declared =
+            manifest(json!([{ "id": "urgent", "name": "channel.urgent", "importance": "high" }]));
+        let mut c = compat(GRANT);
+        derive(&dir.0, &declared, &mut c).unwrap();
+        let before = c.id.clone();
+        let mut c = compat(GRANT);
+        let both = with_activity(
+            declared,
+            json!({ "channel": "urgent", "title": "title", "progress": "done" }),
+        );
+        derive(&dir.0, &both, &mut c).unwrap();
+        assert_eq!(
+            c.reach["androidActivities"],
+            json!([{ "kind": "patrol", "android": { "channel": "urgent", "title": "title", "progress": "done" } }])
+        );
+        assert_ne!(c.id, before);
+        // No channel: the default one, which the host makes.
+        let mut c = compat(GRANT);
+        derive(
+            &dir.0,
+            &with_activity(json!({}), json!({ "title": "title" })),
+            &mut c,
+        )
+        .unwrap();
+        assert_eq!(
+            c.reach["androidActivities"][0]["android"]["channel"],
+            "default"
+        );
+    }
+
+    #[test]
+    fn an_android_activity_needs_a_declared_channel_above_min_and_the_grant() {
+        let dir = app(&[("en", EN)]);
+        let declared =
+            manifest(json!([{ "id": "quiet", "name": "channel.urgent", "importance": "min" }]));
+        let error = derive(
+            &dir.0,
+            &with_activity(
+                declared.clone(),
+                json!({ "channel": "urgnet", "title": "t" }),
+            ),
+            &mut compat(GRANT),
+        )
+        .unwrap_err();
+        assert!(error.starts_with("android-activity-channel: live_activities \"patrol\" posts on android.channel \"urgnet\""), "{error}");
+        let error = derive(
+            &dir.0,
+            &with_activity(declared, json!({ "channel": "quiet", "title": "t" })),
+            &mut compat(GRANT),
+        )
+        .unwrap_err();
+        assert!(error.contains("whose importance is \"min\""), "{error}");
+        let error = derive(
+            &dir.0,
+            &with_activity(json!({}), json!({ "title": "t" })),
+            &mut compat(""),
+        )
+        .unwrap_err();
+        assert!(
+            error.starts_with("android-activity-needs-notifications:"),
+            "{error}"
+        );
+        // Without a mapping, an iOS activity asks nothing of Android.
+        let mut ios = with_activity(json!({}), json!({}));
+        ios["live_activities"].as_array_mut().unwrap().remove(0);
+        let mut c = compat("");
+        derive(&dir.0, &ios, &mut c).unwrap();
         assert!(c.reach.is_null());
     }
 

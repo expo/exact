@@ -399,6 +399,7 @@ mod tests {
             rect: [0., 0., 200., 40.],
             size: 16.,
             color: [0, 0, 0, 255],
+            selection_colors: None,
             value: "retained",
             placeholder: "",
             selection: [0, 0],

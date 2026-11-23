@@ -75,7 +75,7 @@ pub fn type_text(plan: &Plan, ty: TypesId) -> String {
 }
 
 /// `v` as JSON with every object's keys sorted.
-fn canonical(v: &Value) -> String {
+pub(crate) fn canonical(v: &Value) -> String {
     match v {
         Value::Object(map) => {
             let mut keys: Vec<&String> = map.keys().collect();

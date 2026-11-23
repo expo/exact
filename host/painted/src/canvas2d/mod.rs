@@ -156,13 +156,57 @@ enum Object {
 /// One decoded image handle and whether every pixel in it is opaque.
 #[derive(Clone)]
 pub(crate) struct CachedImage {
-    pub pixels: Arc<Pixmap>,
+    pub pixels: Arc<ImagePixels>,
     pub opaque: bool,
 }
 
+pub(crate) enum ImagePixels {
+    Owned(Pixmap),
+    Raster(exact_raster::RasterLease),
+}
+
+impl std::ops::Deref for ImagePixels {
+    type Target = Pixmap;
+    fn deref(&self) -> &Pixmap {
+        match self {
+            Self::Owned(pixels) => pixels,
+            Self::Raster(lease) => lease
+                .payload::<Arc<crate::image::Bitmap>>()
+                .expect("painted raster payload")
+                .pixmap(),
+        }
+    }
+}
+
 impl CachedImage {
+    /// Backing pixels per source pixel. Draws and patterns use natural coordinates.
+    fn sample_scale(&self) -> (f64, f64) {
+        match self.pixels.as_ref() {
+            ImagePixels::Owned(_) => (1., 1.),
+            ImagePixels::Raster(lease) => {
+                let size = lease.metadata().natural;
+                let pixels = lease.key().pixels;
+                (
+                    f64::from(pixels.width) / f64::from(size.width),
+                    f64::from(pixels.height) / f64::from(size.height),
+                )
+            }
+        }
+    }
+    #[cfg(test)]
     pub(crate) fn new(pixels: Pixmap) -> Self {
-        let opaque = pixels.data().as_chunks::<4>().0.iter().all(|p| p[3] == 255);
+        Self::from_pixels(ImagePixels::Owned(pixels))
+    }
+    pub(crate) fn from_pixels(pixels: ImagePixels) -> Self {
+        let opaque = match &pixels {
+            ImagePixels::Owned(p) => p.pixels().iter().all(|pixel| pixel.is_opaque()),
+            ImagePixels::Raster(lease) => {
+                lease
+                    .payload::<Arc<crate::image::Bitmap>>()
+                    .expect("painted raster payload")
+                    .opaque_for_canvas
+            }
+        };
         Self {
             pixels: Arc::new(pixels),
             opaque,
@@ -195,7 +239,7 @@ pub(crate) struct Replayer {
     objects_epoch: u64,
     /// Active while building/advancing a prefix checkpoint to record every
     /// `ImageCache` handle read.
-    image_reads: Option<Vec<(String, usize)>>,
+    image_reads: Option<prefix::ImageReads>,
     last_draw: Option<prefix::LastDraw>,
     checkpoint: Option<prefix::Checkpoint>,
 }

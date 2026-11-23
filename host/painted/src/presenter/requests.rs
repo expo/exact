@@ -112,6 +112,13 @@ pub enum Request {
     /// A node's drag out of the app (LLP 1094.000 D7): the reader starts the
     /// platform's drag with what it carries.
     Drag(super::drag_out::DragOut),
+    /// A live activity's send, `{"ticket", "command", "args"}` as the runner
+    /// wrote its `exact-activity:` body with the ticket added, or
+    /// `{"enumerate": true}`, the source's first demand (LLP 1126 D13).
+    /// Answered by `Native.activities` with the send's ticket, or with the
+    /// activities the reader shows, never by this request's id, as Apple's
+    /// arm answers (`host/apple/src/activities.rs`).
+    Activity(String),
 }
 
 /// What a picker is opened with, each value as HTML writes it and empty
@@ -161,6 +168,7 @@ impl Request {
             Request::FileDialog(_) => 21,
             Request::WindowTitle(_) => 22,
             Request::Drag(_) => 23,
+            Request::Activity(_) => 24,
         }
     }
 }
@@ -322,6 +330,7 @@ fn encode(id: u32, request: &Request, out: &mut Vec<i32>) {
         | Request::Module(text)
         | Request::Presence(text)
         | Request::Sound(text)
+        | Request::Activity(text)
         | Request::Assets(text) => string(out, text),
         Request::Auth(url, callback, state, logout) => {
             string(out, url);
@@ -500,6 +509,7 @@ impl<D: DataSource> Presenter<D> {
         // The shell's extensions answer the module calls the runner hands
         // the native slot, once their names are bound (`bind_extensions`).
         self.handle_modules();
+        self.link_activities();
     }
 
     /// The Android reader's share sheet: `exactPage()` says it shares text,
@@ -536,9 +546,16 @@ impl<D: DataSource> Presenter<D> {
         self.handle_modules();
         let native = self.host.runner().native_slot();
         self.requests.packages.slot(native);
+        self.packages_publish_to_images();
         let (real, under) = self.requests.packages.bound();
         let owned = |names: Vec<&str>| names.into_iter().map(str::to_owned).collect();
         self.bind_modules(owned(real), owned(under));
+    }
+
+    /// Packages publish written images to the session's images, again
+    /// whenever those are reset or replaced.
+    pub(super) fn packages_publish_to_images(&mut self) {
+        self.requests.packages.publish_to(&self.images.publisher);
     }
 
     /// The host's target, which a module's per-target words are read by.

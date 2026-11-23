@@ -58,6 +58,11 @@ package protocol NavigationHosting: AnyObject {
     func makeRouteChrome() -> (any SheetChrome)?
     func adoptRouteSheet(_ entry: DialogHost.Entry, _ sheet: DialogSheet)
     func releaseRouteSheet(_ entry: DialogHost.Entry)
+    /// What a `dialog`'s sheet shows of its header in the same rows
+    /// (LLP 1141.004 D6); nil where the header stays in the dialog.
+    func dialogSheetHeader(_ dialog: NodeView) -> (any SheetHeading)?
+    /// After a batch: a dialog's sheet's rows show its header as it now is.
+    func syncDialogSheet(_ entry: DialogHost.Entry)
 
     #if EXACT_AGENT
     /// `state.navigation.sheet` for a modal route painted in the window; nil with none.
@@ -264,6 +269,8 @@ package final class NoNavigation: NavigationHosting {
     package func makeRouteChrome() -> (any SheetChrome)? { nil }
     package func adoptRouteSheet(_ entry: DialogHost.Entry, _ sheet: DialogSheet) {}
     package func releaseRouteSheet(_ entry: DialogHost.Entry) {}
+    package func dialogSheetHeader(_ dialog: NodeView) -> (any SheetHeading)? { nil }
+    package func syncDialogSheet(_ entry: DialogHost.Entry) {}
 
     #if EXACT_AGENT
     package var paintedModalObservation: [String: Any]? { nil }

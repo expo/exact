@@ -18,11 +18,11 @@ use windows_sys::Win32::{
     },
     Foundation::{ERROR_SUCCESS, HWND, LPARAM, POINT, RECT},
     Graphics::Gdi::{
-        ClientToScreen, EnumDisplayMonitors, GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow,
-        HDC, HMONITOR, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST,
+        EnumDisplayMonitors, GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, HDC, HMONITOR,
+        MONITORINFOEXW, MONITOR_DEFAULTTONEAREST,
     },
     UI::{
-        HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI},
+        HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI},
         Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
         WindowsAndMessaging::{
             GetCursorPos, MONITORINFOF_PRIMARY, SPI_SETWORKAREA, WM_DISPLAYCHANGE, WM_DPICHANGED,
@@ -68,6 +68,8 @@ struct Watch {
 /// The host's display service for the session window `hwnd`.
 struct Displays {
     hwnd: isize,
+    /// The window's least client size in CSS pixels, for where it will show.
+    minimum: (f32, f32),
     watch: Rc<Watch>,
     /// Whether the display changes are heard.
     hears: Cell<bool>,
@@ -77,10 +79,12 @@ struct Displays {
 }
 
 /// Report the displays to every session on this thread, measured against
-/// the session window `hwnd`.
-pub(crate) fn install(hwnd: isize) {
+/// the session window `hwnd`, whose client area is at least `minimum` CSS
+/// pixels.
+pub(crate) fn install(hwnd: isize, minimum: (f32, f32)) {
     let displays = Rc::new(Displays {
         hwnd,
+        minimum,
         watch: Rc::default(),
         hears: Cell::new(false),
         settings: OnceCell::new(),
@@ -93,14 +97,16 @@ thread_local! {
     static CURRENT: RefCell<Option<Rc<Displays>>> = const { RefCell::new(None) };
 }
 
-/// No HWND is needed to enumerate the real desktop. A hidden window keeps
-/// its client geometry; a session without one reports null clientRect.
+/// No HWND is needed to enumerate the real desktop. A hidden window's
+/// clientRect is where it will show, at the DPI it will then have
+/// (`crate::placement`); a session without one reports null clientRect.
 pub(crate) fn capture_snapshot() -> Vec<(exact_painted::desktop::Screen, [i32; 4])> {
     let _dpi = crate::screen_capture::os::Dpi::new();
     CURRENT.with(|current| {
         let current = current.borrow();
         let fallback = Displays {
             hwnd: 0,
+            minimum: (0., 0.),
             watch: Rc::default(),
             hears: Cell::new(false),
             settings: OnceCell::new(),
@@ -233,15 +239,8 @@ impl Displays {
     }
 
     fn client(&self) -> Option<Client> {
-        let mut origin = POINT { x: 0, y: 0 };
-        if unsafe { ClientToScreen(self.window(), &mut origin) } == 0 {
-            return None;
-        }
-        let dpi = unsafe { GetDpiForWindow(self.window()) };
-        (dpi != 0).then_some(Client {
-            origin: [origin.x, origin.y],
-            dpi,
-        })
+        let shown = crate::placement::shown_now(self.hwnd, self.minimum)?;
+        (shown.client.dpi != 0).then_some(shown.client)
     }
 
     fn settings(&self) -> Option<&UISettings> {

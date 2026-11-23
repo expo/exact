@@ -47,6 +47,8 @@ component Blocks
     toggle: action
     pick: action
     seen: action
+    copiedId: string
+    copyBlock: action
   view
     if block.kind == "heading"
       if block.depth == 2
@@ -79,14 +81,14 @@ component Blocks
           if block.kind == "code"
             if block.lang == "prompt"
               view margin-top=24 margin-bottom=8
-                AgentPrompt(title=block.title, source=block.text)
+                AgentPrompt(id=block.id, title=block.title, source=block.text, copiedId=copiedId, copyBlock=copyBlock)
             else
               view margin-top=16 margin-left=(block.depth * 24)
-                CodeBlock(lang=block.lang, title=block.title, source=block.text, lines=block.lines)
+                CodeBlock(id=block.id, lang=block.lang, title=block.title, source=block.text, lines=block.lines, copiedId=copiedId, copyBlock=copyBlock)
           else
             if block.kind == "terminal"
               view margin-top=16 margin-left=(block.depth * 24)
-                Terminal(title=block.title, source=block.text, lines=block.lines)
+                Terminal(id=block.id, title=block.title, source=block.text, lines=block.lines, copiedId=copiedId, copyBlock=copyBlock)
             else
               if block.kind == "collapsible"
                 button press=toggle(block.href) appearance="none" aria-expanded=opened.includes(block.href) class=Box margin-top=16 padding="12px 16px" display="flex" align-items="center" gap=10 text-align="start" width="100%" box-sizing="border-box" testId=`collapsible-${block.href}`

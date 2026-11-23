@@ -158,8 +158,11 @@ fn trace_names_due_work_and_handlers_whose_arguments_refused() {
             "outcome refused",
             "ran task refuse refused",
             "outcome ok",
+            // The task due at the tap's arrival, in its own step; the tap's
+            // outcome is still the due work's refusal.
             "outcome refused",
             "ran task refuse refused",
+            "outcome refused",
             "ran handler add ok",
             "outcome ok",
         ]
@@ -238,11 +241,18 @@ fn land_has_no_timer_commit_and_an_unmodeled_receipt_is_marked() {
     assert!(steps[2].contains(&"ran then landed ok".into()));
     assert!(!steps[2].iter().any(|l| l.starts_with("ran task")));
     assert!(!steps[3].iter().any(|l| l.starts_with("ran ")));
+    // The timer due exactly now fires at the tap's arrival, in its own step.
+    assert_eq!(steps[4][0], "== due");
     assert!(steps[4].contains(&"ran task tick ok".into()));
-    let properties = contract::properties("after \"one\" \"isolated\"\n  writes none\n").unwrap();
+    let ran: Vec<_> = steps[5].iter().filter(|l| l.starts_with("ran ")).collect();
+    assert_eq!(ran, ["ran handler one ok"]);
+    // `old` is the configuration the handler met, after the tick.
+    let properties =
+        contract::properties("after \"one\" \"isolated\"\n  expect state ticks == old\n").unwrap();
     let report = crate::property::evaluate(&properties, &lines);
-    assert_eq!(report.counts[0][0].counted, 1);
-    assert_eq!(report.counts[0][0].checked, 0);
+    assert_eq!(report.counts[0][0].counted, 0);
+    assert_eq!(report.counts[0][0].checked, 1);
+    assert!(report.passed());
 
     let source = "component App\n  view\n    time datetime=0 format=\"timer\" testId=\"time\"\n\ntest \"tick\"\n  clock +1000\n";
     let s = script::scripted("time", source, None).unwrap().remove(0);
@@ -755,4 +765,98 @@ fn input_runs_after_every_change_due_at_its_arrival() {
         assert!(s.delivery.stopped.is_none(), "{:?}", s.delivery.stopped);
         crate::expectations(&s).unwrap_or_else(|e| panic!("{}: {e}", s.case.name));
     }
+}
+
+/// The fixture's test cases with the properties in its test file, each
+/// script's runner observation and its property report.
+fn fixture_report(name: &str) -> Vec<(Vec<String>, crate::property::Report)> {
+    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../corpus/properties")
+        .join(format!("{name}.contract"));
+    let source = std::fs::read_to_string(&file).unwrap();
+    let text = std::fs::read_to_string(file.with_extension("test.contract")).unwrap();
+    let properties = contract::properties(&text).unwrap();
+    crate::property_corpus::cases(&file, name, &source)
+        .unwrap()
+        .unwrap()
+        .into_iter()
+        .map(|s| {
+            crate::expectations(&s).unwrap_or_else(|e| panic!("{}: {e}", s.case.name));
+            let plan = compile(&s.case).unwrap();
+            let oracle = Oracle::for_case(&plan, &s.case);
+            let (lines, _) = observe::run(plan, oracle, &s.case.events);
+            let report = crate::property::evaluate(&properties, &lines);
+            (lines, report)
+        })
+        .collect()
+}
+
+#[test]
+fn an_after_pair_reads_the_configuration_the_due_changes_left() {
+    let mut scripts = fixture_report("due-press");
+    assert_eq!(scripts.len(), 1);
+    let (lines, report) = scripts.remove(0);
+    let steps: Vec<Vec<&str>> = crate::chunks(&lines)
+        .iter()
+        .map(|s| {
+            s.iter()
+                .filter(|l| l.starts_with("== ") || l.starts_with("ran "))
+                .map(String::as_str)
+                .collect()
+        })
+        .collect();
+    assert_eq!(
+        steps[1..3],
+        [
+            vec!["== due", "ran task markA ok", "ran task markB ok"],
+            vec!["== tap \"go\"", "ran handler press ok"],
+        ]
+    );
+    for count in &report.counts[0] {
+        assert_eq!((count.checked, count.counted, count.false_), (1, 0, 0));
+    }
+}
+
+#[test]
+fn after_clock_checks_the_work_due_at_an_inputs_arrival() {
+    let mut scripts = fixture_report("due-clock");
+    assert_eq!(scripts.len(), 1);
+    let (_, report) = scripts.remove(0);
+    assert_eq!(report.counts[0][0].false_, 1);
+    assert_eq!(report.failures[0].step, 1);
+}
+
+#[test]
+fn due_commands_stay_with_the_due_step_and_fold_ahead_of_the_handlers() {
+    let source = "component App\n  state n = 1\n  state d = 1\n  state done = false\n  action sync\n    copyText(\"due\")\n  action press\n    copyText(\"press\")\n    done = true\n  action broken\n    copyText(\"never\")\n    n = n / (d - 1)\n  task watch when not done key=done\n    change(sync)\n  view\n    column\n      button \"Go\" press=press testId=\"go\"\n      button \"Break\" press=broken testId=\"break\"\n\ntest \"press\"\n  tap \"go\"\n\ntest \"break\"\n  tap \"break\"\n";
+    let scripts = script::scripted("due commands", source, None).unwrap();
+    let observe = |s: &script::Scripted| {
+        let plan = compile(&s.case).unwrap();
+        let oracle = Oracle::for_case(&plan, &s.case);
+        observe::run(plan, oracle, &s.case.events).0
+    };
+    let lines = observe(&scripts[0]);
+    let steps = crate::chunks(&lines);
+    assert_eq!(steps[1][0], "== due");
+    assert!(steps[1].contains(&"command copyText \"due\"".into()));
+    assert!(!steps[2].contains(&"command copyText \"due\"".into()));
+    let folded = crate::fold_due(&lines);
+    let commands: Vec<_> = folded
+        .iter()
+        .filter(|l| l.starts_with("command "))
+        .collect();
+    assert_eq!(
+        commands,
+        ["command copyText \"due\"", "command copyText \"press\""]
+    );
+    assert_eq!(
+        crate::chunks(&folded).len(),
+        crate::chunks(&lines).len() - 1
+    );
+    // A refused handler after due commands moves nothing untraced.
+    let lines = observe(&scripts[1]);
+    let steps = crate::chunks(&lines);
+    assert_eq!(steps[1][0], "== due");
+    assert!(steps[2].contains(&"ran handler broken refused".into()));
+    assert!(!steps[2].iter().any(|l| l == observe::OMITTED_COMMIT));
 }

@@ -137,3 +137,67 @@ export async function waitAtMost(operation, ms, onTimeout) {
   try { return await Promise.race([operation, deadline]); }
   finally { clearTimeout(timer); }
 }
+
+/** An attached session's wire (LLP 1012.000 D1): the handshake, then one request at a time, each reply matched by its
+ * `request` number (`id` names a view on this wire). A request past its deadline, a reply over 32 MiB or a reply for
+ * another number ends the connection, so a late reply never answers a later request. `onWaiting` hears that the app is asking its person. */
+export async function attachWire(socket, { nonce, session, onWaiting, handshakeMs = 15000, approvalMs = 65000, requestMs = 35000, lineLimit = 32 << 20 }) {
+  const lines = [], waiters = [];
+  let failure = null, parts = [], size = 0, attached = false;
+  const fail = (why) => {
+    if (failure) return;
+    failure = why instanceof Error ? why : new Error(why);
+    socket.destroy();
+    for (const w of waiters.splice(0)) w.reject(failure);
+  };
+  // Bytes, so a line's length is checked whole, in bytes, before it is read.
+  socket.on('data', (d) => {
+    let i;
+    while ((i = d.indexOf(10)) >= 0) {
+      parts.push(d.subarray(0, i));
+      size += i;
+      d = d.subarray(i + 1);
+      if (size > lineLimit) return fail('the app sent a reply over 32 MiB');
+      const line = Buffer.concat(parts).toString('utf8');
+      parts = []; size = 0;
+      let reply;
+      try { reply = JSON.parse(line); } catch { return fail(`the app sent an unreadable line: ${line.slice(0, 200)}`); }
+      const w = waiters.shift();
+      // Once attached, every line answers the one request outstanding.
+      if (w) w.resolve(reply); else if (attached) return fail('the app sent a line no request asked for'); else lines.push(reply);
+    }
+    if (d.length) { parts.push(d); size += d.length; if (size > lineLimit) fail('the app sent a reply over 32 MiB'); }
+  });
+  socket.on('error', (e) => fail(`the attach connection failed: ${e.message}`));
+  socket.on('close', () => fail('the app closed the attach connection (Detach Agent, the window closed, or the app quit)'));
+  const next = (ms, what) => {
+    if (lines.length) return Promise.resolve(lines.shift());
+    if (failure) return Promise.reject(failure);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => fail(`${what} within ${ms / 1000} s, so the connection was closed`), ms);
+      waiters.push({ resolve: (v) => { clearTimeout(timer); resolve(v); }, reject: (e) => { clearTimeout(timer); reject(e); } });
+    });
+  };
+  socket.write(JSON.stringify({ attach: 1, nonce, ...(session ? { session } : {}) }) + '\n');
+  let first = await next(handshakeMs, 'the app did not answer the handshake');
+  if (first.waiting) {
+    onWaiting?.(first);
+    first = await next(approvalMs, 'the person did not allow reads');
+  }
+  if (!first.attached) {
+    const refusal = Object.assign(new Error(`attach: ${(first.error ?? 'refused').replace(/^attach: /, '')}`), { reply: first });
+    fail(refusal);
+    throw refusal;
+  }
+  attached = true;
+  let id = 0, chain = Promise.resolve();
+  const ask = (req) => (chain = chain.catch(() => {}).then(async () => {
+    if (failure) throw failure;
+    const mine = ++id;
+    socket.write(JSON.stringify({ ...req, request: mine }) + '\n');
+    const { request: answered, ...reply } = await next(requestMs, `the app did not answer ${req.op} (request ${mine})`);
+    if (answered !== mine) { fail(`the app answered request ${answered} where ${mine} was asked`); throw failure; }
+    return reply;
+  }));
+  return { attached: first, ask, close: () => { socket.end(); }, get failure() { return failure; } };
+}

@@ -493,6 +493,7 @@ pub fn compatibility_id_pinned(
     }
     if let Some(plan) = &plan {
         faces(&mut compat, plan, platform, target);
+        crate::controls::derive(&mut compat, plan, manifest, platform, target)?;
     }
     if let Some(out) = std::env::var_os("OUT_DIR") {
         // A native artifact's composition is part of its cohort (LLP
@@ -652,7 +653,7 @@ fn commands_digest() -> String {
         .collect()
 }
 
-fn compatibility_with_trust(
+pub(crate) fn compatibility_with_trust(
     app_dir: &Path,
     platform: &str,
     target: &str,

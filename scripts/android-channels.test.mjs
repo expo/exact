@@ -44,6 +44,15 @@ test('declared channels become a list, strings per table and raw sounds, with th
   assert.deepEqual(files(res), []);
 }));
 
+test('the mapped live activities ride as a raw list the reader reads, and none writes no file (LLP 1126 D13)', () => inDir((dir) => {
+  const res = resolve(dir, 'res');
+  const activities = [{ kind: 'patrol', android: { channel: 'default', title: 'title', progress: 'done' } }];
+  androidNotificationResources({}, dir, res, { channels: [], base: 'en', activities });
+  assert.deepEqual(JSON.parse(readFileSync(resolve(res, 'raw/exact_activities.json'), 'utf8')), activities);
+  androidNotificationResources({}, dir, res, { channels: [], base: 'en' });
+  assert.ok(!existsSync(resolve(res, 'raw/exact_activities.json')));
+}));
+
 test('the small icon is the monochrome glyph trimmed into 22 of 24 dp per density, drawn white by its alpha', () => inDir((dir) => {
   // A 432 px glyph whose opaque part is a 100 × 50 bar off centre, half transparent at its right end.
   const [w, h] = [432, 432], data = Buffer.alloc(w * h * 4);

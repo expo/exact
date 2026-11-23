@@ -232,3 +232,27 @@ test('Enter indents after every opener whose body is a block, and not after a li
   for (const whole of ['theme.accent', 'params x', 'members "./more.contract"', 'test "boots" on', 'expect perf layout <= 3', 'text "parts"'])
     assert.ok(!indents.test(whole), whole);
 });
+
+test('Forma grammar, Forma language config, and Contract snippets parse and match package.json', () => {
+  const pkg = JSON.parse(readFileSync(resolve(import.meta.dir, 'package.json'), 'utf8'));
+  const formaGrammar = JSON.parse(readFileSync(resolve(import.meta.dir, 'syntaxes/exact-forma.tmLanguage.json'), 'utf8'));
+  assert.equal(formaGrammar.scopeName, 'source.exact-forma');
+  assert.ok(Array.isArray(formaGrammar.patterns) && formaGrammar.patterns.length > 0);
+  const formaConfig = JSON.parse(readFileSync(resolve(import.meta.dir, 'forma-language-configuration.json'), 'utf8'));
+  assert.equal(formaConfig.comments.lineComment, '//');
+  const snippets = JSON.parse(readFileSync(resolve(import.meta.dir, 'snippets/exact-contract.code-snippets'), 'utf8'));
+  assert.ok(Object.keys(snippets).length >= 10);
+  for (const [name, snip] of Object.entries(snippets)) {
+    assert.ok(snip.prefix, `${name} has prefix`);
+    assert.ok(Array.isArray(snip.body) && snip.body.length > 0, `${name} has body`);
+  }
+  for (const lang of pkg.contributes.languages) {
+    assert.ok(existsSync(resolve(import.meta.dir, lang.configuration)), `missing ${lang.configuration}`);
+  }
+  for (const grammar of pkg.contributes.grammars) {
+    assert.ok(existsSync(resolve(import.meta.dir, grammar.path)), `missing ${grammar.path}`);
+  }
+  for (const snippet of pkg.contributes.snippets) {
+    assert.ok(existsSync(resolve(import.meta.dir, snippet.path)), `missing ${snippet.path}`);
+  }
+});

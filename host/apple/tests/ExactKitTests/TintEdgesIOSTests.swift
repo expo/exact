@@ -56,7 +56,7 @@ final class TintEdgesIOSTests: XCTestCase {
         view.layer.render(in: context)
         let at = ((h / 2) * w + Int(Double(w) * x)) * 4
         let alpha = Double(bytes[at + 3])
-        XCTAssertGreaterThan(alpha, 0, "the image draws at its centre")
+        XCTAssertGreaterThan(alpha, 0, "the sampled pixel is painted")
         return (0..<3).map { Double(bytes[at + $0]) * 255 / max(1, alpha) } + [alpha]
     }
 
@@ -70,7 +70,7 @@ final class TintEdgesIOSTests: XCTestCase {
     }
 
     // An original image retains a tint-derived colour, resolved in its image view's traits.
-    // This is the UIKit oracle for the page symbol and readout below.
+    // This is the UIKit oracle for the page symbols below.
     func testOriginalImagesResolveTintDerivedInkWithoutForcingNormal() throws {
         guard !UIApplication.shared.connectedScenes.isEmpty else { throw missing("scene", "an alert needs a scene window") }
         _ = mount()
@@ -175,22 +175,26 @@ final class TintEdgesIOSTests: XCTestCase {
         try check()
     }
 
+    /// A badge's face dims only its tint parts while UIKit dims tints (its
+    /// fill here, not its green symbol), and recovers; a plain symbol beside
+    /// words takes the bar's ink.
     func testBarFacesDimOnlyTheirTintPartsAndRecover() throws {
         guard !UIApplication.shared.connectedScenes.isEmpty else { throw missing("scene", "an alert needs a scene window") }
         let p = mount()
         p.viewport.tintColor = red
         p.apply(wireBatch([
             ["op": "create", "id": 1, "kind": "view"],
-            ["op": "create", "id": 2, "kind": "button", "handlers": ["press"]],
+            ["op": "create", "id": 2, "kind": "button", "handlers": ["press"], "props": ["accessibilityLabel": "Me"]],
             ["op": "create", "id": 3, "kind": "view", "style": ["background_color": tint, "width": 24, "height": 24]],
-            ["op": "create", "id": 4, "kind": "view", "style": ["background_color": [0, 255, 0, 255], "width": 24, "height": 24]],
+            ["op": "create", "id": 4, "kind": "image", "props": ["imageSource": "symbol:sf/square.fill", "symbolName": "square.fill"],
+             "style": ["font_size": 24, "text_color": [0, 255, 0, 255], "written": ["text_color"]]],
             ["op": "create", "id": 5, "kind": "button", "handlers": ["press"]],
             ["op": "create", "id": 6, "kind": "text", "props": ["text": "Go"],
              "style": ["font_size": 24, "written": ["font_size"]]],
             ["op": "create", "id": 7, "kind": "image", "props": ["imageSource": "symbol:sf/square.fill", "symbolName": "square.fill"],
              "style": ["font_size": 24]],
             ["op": "children", "id": 5, "ids": [6, 7]],
-            ["op": "children", "id": 2, "ids": [3, 4]], ["op": "children", "id": 1, "ids": [2, 5]], ["op": "roots", "ids": [1]],
+            ["op": "children", "id": 3, "ids": [4]], ["op": "children", "id": 2, "ids": [3]], ["op": "children", "id": 1, "ids": [2, 5]], ["op": "roots", "ids": [1]],
         ]))
         let route = RouteController(try XCTUnwrap(p.views[1]))
         let nav = p.navigationHost.makeNavigation(first: nil)
@@ -202,10 +206,10 @@ final class TintEdgesIOSTests: XCTestCase {
         controller = route
         nav.view.layoutIfNeeded()
         func check() throws {
-            let image = UIImageView(image: try XCTUnwrap(item.image)); image.frame.size = CGSize(width: 48, height: 24)
+            let image = UIImageView(image: try XCTUnwrap(item.image, "the badge's face"))
             let current = nav.navigationBar.tintAdjustmentMode == .dimmed ? dimmed(red) : red
-            assertColor(try pixel(image, x: 0.25), current, alpha: Double(current.cgColor.alpha) * 255)
-            assertColor(try pixel(image, x: 0.75), green)
+            assertColor(try pixel(image, x: 0.15), current, alpha: Double(current.cgColor.alpha) * 255)
+            assertColor(try pixel(image, x: 0.5), green)
             let plain = UIImageView(image: try XCTUnwrap(uncoloured.image))
             var ink = current
             if #available(iOS 26.0, *) { ink = UIColor.label.resolvedColor(with: nav.traitCollection) }
@@ -368,21 +372,11 @@ final class TintEdgesIOSTests: XCTestCase {
              "style": ["font_size": 24, "text_color": [0, 255, 0, 255], "written": ["text_color"], "tint_adjustment": "dimmed"]],
             ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 24, "h": 24], ["op": "roots", "ids": [1]],
         ]))
-        let node = try XCTUnwrap(p.views[1]), image = try XCTUnwrap(node.symbolView)
-        let face = try XCTUnwrap(ChipFace(node, readout: true))
-        let readout = ReadoutView(); readout.show(face, ReadoutFacts())
-        controller.view.addSubview(readout)
-        readout.tintAdjustmentMode = .dimmed
-        let readoutImage = try XCTUnwrap(readout.stack.arrangedSubviews.first as? UIImageView)
-        readoutImage.frame.size = CGSize(width: 24, height: 24)
+        let image = try XCTUnwrap(try XCTUnwrap(p.views[1]).symbolView)
         func check() throws {
-            readout.frame.size = readout.intrinsicContentSize
-            readout.layoutIfNeeded()
-            for view in [image, readoutImage] {
-                view.frame.size = CGSize(width: 24, height: 24)
-                XCTAssertEqual(view.tintAdjustmentMode, .dimmed, "explicit ink must not override the owner's mode")
-                assertColor(try pixel(view), green)
-            }
+            image.frame.size = CGSize(width: 24, height: 24)
+            XCTAssertEqual(image.tintAdjustmentMode, .dimmed, "explicit ink must not override the owner's mode")
+            assertColor(try pixel(image), green)
         }
         try check()
         try alert { try check() }

@@ -67,6 +67,7 @@ fn activity() -> Activity {
         description: None,
         push: true,
         frequent: false,
+        android: None,
     }
 }
 
@@ -483,4 +484,87 @@ fn a_source_text_activity_names_no_members_file() {
         source("text title").replace("  inject\n", "  members \"./more.contract\"\n  inject\n");
     let errors = compile_activity(&src, &activity()).unwrap_err();
     assert_eq!(errors[0].id, "contract-use-unresolved", "{errors:?}");
+}
+
+#[test]
+fn android_mapping_names_state_fields_of_the_kind_shown() {
+    // The state is `title: string` with these added fields.
+    let src = source("text title").replacen(
+        "shape State\n  title: string\n",
+        "shape State\n  title: string\n  done: number\n  eta: option<string>\n  late: option<number>\n",
+        1,
+    )
+    .replacen(
+        "  props\n    title: string\n",
+        "  props\n    title: string\n    done: number\n    eta: option<string>\n    late: option<number>\n",
+        1,
+    );
+    let mut a = activity();
+    a.preview = json!({"title":"Next train","done":40,"eta":null,"late":null});
+    let android = |title: &str, text: Option<&str>, progress: Option<&str>| {
+        crate::manifest::AndroidActivity {
+            channel: "default".into(),
+            title: title.into(),
+            text: text.map(Into::into),
+            progress: progress.map(Into::into),
+            chip: None,
+            when: None,
+        }
+    };
+    a.android = Some(android("title", Some("eta"), Some("late")));
+    compile_activity(&src, &a).unwrap();
+    let mut timed = android("title", None, None);
+    timed.when = Some("done".into());
+    a.android = Some(timed.clone());
+    compile_activity(&src, &a).unwrap();
+    timed.when = Some("eta".into());
+    for (mapping, edit) in [
+        (timed, "android.when names `eta`, which is not a number of Unix milliseconds"),
+        (android("titel", None, None), "android.title names `titel`, which the state shape does not declare; use one of title, done, eta, late"),
+        (android("title", None, Some("eta")), "android.progress names `eta`, which is not a number from 0 to 1"),
+        (android("done", None, None), "android.title names `done`, which is not a string"),
+        (android("eta", None, None), "android.title names `eta`, which is not a string"),
+        (android("title", Some("done"), None), "android.text names `done`, which is not a string or option<string>"),
+    ] {
+        a.android = Some(mapping);
+        let errors = compile_activity(&src, &a).unwrap_err();
+        assert!(
+            errors.iter().any(|e| e.id == "snapshot-activity-android" && e.message.contains(edit)),
+            "{errors:?}"
+        );
+    }
+}
+
+#[test]
+fn android_mapping_refuses_unknown_keys_and_needs_a_title() {
+    let m = Manifest {
+        json: json!({"live_activities":[{"kind":"train","component":"Activity","state":"State","preview":{},
+            "android":{"title":"title","progress":"done"}}]}),
+        id: "test.activities".into(),
+        name: "Activities".into(),
+        declared: true,
+    };
+    let android = m.live_activities().unwrap()[0].android.clone().unwrap();
+    assert_eq!(
+        (android.channel.as_str(), android.progress.as_deref()),
+        ("default", Some("done"))
+    );
+    for (value, edit) in [
+        (
+            json!({"title":"title","subtitle":"x"}),
+            "android.subtitle is unknown; use channel, title, text, progress, chip, when",
+        ),
+        (json!({"text":"title"}), "android.title is required"),
+        (json!({"title":""}), "android.title must name a field"),
+        (
+            json!({"title":"title","channel":""}),
+            "android.channel must be a channel id",
+        ),
+        (json!("title"), "android must be an object"),
+    ] {
+        let mut bad = m.clone();
+        bad.json["live_activities"][0]["android"] = value;
+        let error = bad.live_activities().unwrap_err();
+        assert!(error.contains(edit), "{error}");
+    }
 }

@@ -351,34 +351,13 @@ impl Config {
     /// Read the environment; `baked` is the plan compiled into the binary
     /// and `compat` its `compat.json` (LLP 1030 D3a).
     pub fn from_env(baked: &[u8], compat: &str) -> Config {
-        Self::from_bake::<true>(baked, compat)
+        Self::from_bake::<true>(baked, compat, Services::default())
     }
 
-    /// A shell that knows its baked trust can omit the unsigned plan loaders
-    /// from a production executable. Development shells also check the receipt.
-    pub fn from_bake<const DEVELOPMENT: bool>(baked: &[u8], compat: &str) -> Config {
-        Self::from_bake_with_executor::<DEVELOPMENT>(
-            baked,
-            compat,
-            crate::executor::Executor::start,
-        )
-    }
-
-    /// Load a baked shell with the data executor selected by its build.
-    pub fn from_bake_with_executor<const DEVELOPMENT: bool>(
-        baked: &[u8],
-        compat: &str,
-        start: crate::executor::Start,
-    ) -> Config {
-        Self::from_bake_with_services::<DEVELOPMENT>(
-            baked,
-            compat,
-            Services::with_image_downloads(start),
-        )
-    }
-
-    /// Boot with the data executor and image loader selected by the bake.
-    pub fn from_bake_with_services<const DEVELOPMENT: bool>(
+    /// Boot with the data executor and image loader selected by the bake. A
+    /// shell that knows its baked trust can omit the unsigned plan loaders
+    /// from a production executable; development shells also check the receipt.
+    pub fn from_bake<const DEVELOPMENT: bool>(
         baked: &[u8],
         compat: &str,
         services: Services,
@@ -1181,10 +1160,13 @@ mod scale_tests {
         std::fs::write(&path, b"local").unwrap();
         std::env::set_var("EXACT_PLAN", &path);
         let development = r#"{"embedded":{"trust":"development"}}"#;
-        let baked = super::Config::from_bake::<false>(b"baked", development);
-        let editable = super::Config::from_bake::<true>(b"baked", development);
-        let production =
-            super::Config::from_bake::<true>(b"baked", r#"{"embedded":{"trust":"production"}}"#);
+        let baked = super::Config::from_bake::<false>(b"baked", development, Default::default());
+        let editable = super::Config::from_bake::<true>(b"baked", development, Default::default());
+        let production = super::Config::from_bake::<true>(
+            b"baked",
+            r#"{"embedded":{"trust":"production"}}"#,
+            Default::default(),
+        );
         std::fs::remove_file(path).unwrap();
         assert_eq!(baked.plan.as_ref(), b"baked");
         assert_eq!(editable.plan.as_ref(), b"local");

@@ -10,6 +10,7 @@ impl<D: DataSource> Host<D> {
         scale: f64,
         frame: bool,
         assets: &crate::image::Assets,
+        images: &mut crate::image::Images,
     ) -> bool {
         if !self.runner.plan().surfaces.is_empty() {
             if self.canvas2d.text.is_none() {
@@ -26,14 +27,41 @@ impl<D: DataSource> Host<D> {
                 self.runner.canvas_frame();
             }
             self.runner.draw_canvases(&|_| true);
-            // The images the draws asked for, decoded now; each redraws the
-            // canvases that asked (LLP 1056 D9).
-            let asked = self.runner.take_canvas_image_requests();
-            for src in &asked {
-                self.load_canvas_picture(src, assets);
+            for source in self.runner.take_canvas_image_requests() {
+                images.ask_canvas(source);
             }
-            if !asked.is_empty() {
+            images.retain_canvas_reads(|source| {
+                if self.runner.canvas_image_named(source) {
+                    return true;
+                }
+                self.runner.canvas_image_released(source);
+                false
+            });
+            let answers = std::mem::take(&mut images.canvas_answers);
+            let redraw = !answers.is_empty();
+            for (source, answer) in answers {
+                if self.runner.canvas_image_named(&source) {
+                    let result = answer.map(|lease| {
+                        let size = lease.metadata().natural;
+                        let pixels = crate::canvas2d::ImagePixels::Raster(lease);
+                        self.canvas2d.images.insert(
+                            source.clone(),
+                            crate::canvas2d::CachedImage::from_pixels(pixels),
+                        );
+                        (size.width, size.height)
+                    });
+                    self.runner.canvas_image(&source, result, &[]);
+                } else {
+                    self.runner.canvas_image_released(&source);
+                }
+            }
+            if redraw {
                 self.runner.draw_canvases(&|_| true);
+                // An image-dependent draw can name a second source.
+                for source in self.runner.take_canvas_image_requests() {
+                    images.ask_canvas(source);
+                }
+                images.start_canvas_reads();
             }
         }
         let lists = self.runner.take_canvas_lists();
@@ -85,35 +113,22 @@ impl<D: DataSource> Host<D> {
     pub(crate) fn cached_canvas_image(
         &self,
         src: &str,
-    ) -> Option<&std::sync::Arc<tiny_skia::Pixmap>> {
+    ) -> Option<&std::sync::Arc<crate::canvas2d::ImagePixels>> {
         self.canvas2d.images.get(src).map(|image| &image.pixels)
     }
 
     /// `source` changed: forgotten, decoded or not, and decoded again
     /// when a mounted canvas's latest draw asked for it.
-    pub(crate) fn canvas_picture_changed(&mut self, source: &str, assets: &crate::image::Assets) {
+    pub(crate) fn canvas_picture_changed(
+        &mut self,
+        source: &str,
+        images: &mut crate::image::Images,
+    ) {
+        images.cancel_canvas(source);
         self.canvas2d.images.remove(source);
         self.runner.canvas_image_released(source);
         if self.runner.canvas_image_named(source) {
-            self.load_canvas_picture(source, assets);
+            images.ask_canvas(source.to_owned());
         }
-    }
-
-    fn load_canvas_picture(&mut self, source: &str, assets: &crate::image::Assets) {
-        let result = assets
-            .read(source)
-            .ok_or_else(|| format!("{source} is not an asset"))
-            .and_then(|bytes| {
-                tiny_skia::Pixmap::decode_png(&bytes)
-                    .map_err(|e| format!("{source} does not decode: {e}"))
-            })
-            .map(|pixels| {
-                let size = (pixels.width(), pixels.height());
-                self.canvas2d
-                    .images
-                    .insert(source.to_owned(), crate::canvas2d::CachedImage::new(pixels));
-                size
-            });
-        self.runner.canvas_image(source, result, &[]);
     }
 }

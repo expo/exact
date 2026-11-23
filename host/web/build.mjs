@@ -55,7 +55,7 @@ import { appManifestDigest, appSources, buildFileCards, copyStaticTreeIfPresent,
 import { foreignBeside } from './generations.mjs';
 import { writeLinkFiles } from './association.mjs';
 import { cargoInputPaths, compilerPaths, rustBindingInputs } from '../../scripts/cargo-dep-info.mjs';
-import { captureWebProducts, contractReadReceipt } from '../../scripts/web-build.mjs';
+import { captureWebProducts, contractReadReceipt, recordLinkedSources } from '../../scripts/web-build.mjs';
 
 const SDK_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const metadataCache = new Map();
@@ -381,6 +381,7 @@ if (target !== '--wasm' && !game && !bakeOnly) {
     writeFileSync(resolve(stage, '.exact-build.json'), JSON.stringify({ exactBuild: 1, target: 'js', app: { id: app.id, name: app.displayName },
       manifestSha256: appManifestDigest(app), files: buildFileCards(stage), ...(inputs ? { inputs, inputsAt, inputRoots } : {}), sources: sourcesBuilt(app, dist, sources),
       ...(inputs ? { reads: { contract: contractReadReceipt(resolve(stage, '.gen')) } } : {}),
+      linkedSources: recordLinkedSources(app.dir, dist, resolve(stage, '.gen'), inputsAt),
       ...builtSettings(stage), ...(outDir ? { release: true } : {}) }) + '\n');
     // A site to host holds the site, not the build's intermediates (`.gen`, the app's captured sources among them;
     // the receipt's file cards name no dot path), but for what `serve` renders a `render=request` or `cached` route's

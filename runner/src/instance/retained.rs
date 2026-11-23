@@ -77,7 +77,10 @@ impl Tree {
             let (Some(node), Some(site)) = (kernel.node(id), ids.site(id)) else {
                 return;
             };
-            let depth = match node.parent {
+            // A moved or hidden view is matched under its declaration parent,
+            // which the walk has visited (LLP 1013.002 D1).
+            let parent = self.declared_parent(id).or(node.parent);
+            let depth = match parent {
                 None if node.is_root => 0,
                 Some(parent) => match depths.get(&parent) {
                     Some(&depth) => depth,
@@ -92,7 +95,7 @@ impl Tree {
             let step = local.iter().map(Part::key).collect();
             views
                 .0
-                .entry(node.parent)
+                .entry(parent)
                 .or_default()
                 .entry(step)
                 .and_modify(|ambiguous| *ambiguous = None)

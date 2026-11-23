@@ -85,8 +85,10 @@ impl Tree {
         scanned: &mut usize,
     ) -> Option<(NodesId, Vec<Frame>)> {
         let mut chain = vec![view];
-        while let Some(up) = parent(*chain.last().expect("nonempty")) {
-            chain.push(up);
+        // A moved view's path runs through its declaration (LLP 1013.002 D1).
+        let up = |at| self.declared_parent(at).or_else(|| parent(at));
+        while let Some(next) = up(*chain.last().expect("nonempty")) {
+            chain.push(next);
         }
         let mut targets = chain.into_iter().rev().peekable();
         let mut frames = Vec::new();

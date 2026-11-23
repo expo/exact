@@ -22,12 +22,15 @@ package struct BadgeFace: Equatable {
     let corners: [CGSize]
     #if !os(macOS)
     private let darkScheme: Bool
+    private let textSize: CGFloat
+    private let textWeight: Int
     /// The fill's and the ink's share of the tint where each is the tint (`AccentColor` 1,
     /// `Highlight` 0.2), nil otherwise: the parts drawn in UIKit's grey while it dims tints.
     package let shares: [Double?]
     #endif
     package init?(_ button: NodeView) {
-        let kids = button.childNodes
+        // A child hidden as authored is no part of the face.
+        let kids = button.childNodes.filter { $0.style["display"]?.string != "none" }
         guard kids.count == 1, let box = kids.first else { return nil }
         self.init(box: box)
     }
@@ -38,8 +41,11 @@ package struct BadgeFace: Equatable {
     package init?(box: NodeView, authored: Bool = false) {
         guard box.channels("background_color") != nil else { return nil }
         var text = "", symbol: String?, ink: NodeView?, pictured: NodeView?
+        // Shown parts only: a part hidden as authored, or one `visibility`
+        // hides (a paragraph keeps a run that computes `visible`), is not drawn.
         func walk(_ node: NodeView) {
-            for child in node.childNodes {
+            for child in node.childNodes where child.style["display"]?.string != "none"
+                && !(child.isParagraph ? !child.accessibilityExposed : child.kind == "image" && child.cssVisibilityHidden) {
                 if child.kind == "image", let name = child.faceSymbol { symbol = symbol ?? name; ink = ink ?? child }
                 else if child.kind == "image", child.imageSource != nil { pictured = pictured ?? child }
                 else if child.isParagraph, text.isEmpty { text = child.accessibleText; ink = ink ?? child }
@@ -66,6 +72,13 @@ package struct BadgeFace: Equatable {
         corners = box.cornerSizes(in: CGRect(x: 0, y: 0, width: size, height: size))
         #if !os(macOS)
         darkScheme = box.drawsDark
+        let textNode = !authored && ink?.isParagraph == true ? ink : nil
+        func writtenNumber(_ row: String) -> Double? {
+            guard let textNode, textNode.wrote(row) else { return nil }
+            return textNode.style[row]?.number
+        }
+        textSize = writtenNumber("font_size").map { CGFloat($0) } ?? size * 0.42
+        textWeight = writtenNumber("font_weight").map(Int.init) ?? 500
         shares = [box.style["background_color"]?.tintAlpha, ink?.style[key]?.tintAlpha]
         #endif
     }
@@ -75,7 +88,7 @@ package struct BadgeFace: Equatable {
         let rgba = { (c: [[Double]]) in c.map { $0.map { String($0) }.joined(separator: ",") }.joined(separator: ";") }
         var source = "\(text)|\(symbol ?? "")|\(picture.map { "\(ObjectIdentifier($0))" } ?? "")|\(fit)|\(rgba(light))|\(rgba(dark))|\(corners.map { "\($0.width)x\($0.height)" }.joined(separator: ","))|\(size)"
         #if !os(macOS)
-        source += "|\(darkScheme)"
+        source += "|\(darkScheme)|\(textSize)|\(textWeight)"
         #endif
         return source
     }
@@ -138,7 +151,11 @@ package struct BadgeFace: Equatable {
                 let glyph = FaceSymbol.isOriginal(symbol) ? source : source.withTintColor(ink, renderingMode: .alwaysOriginal)
                 glyph.draw(at: CGPoint(x: (rect.width - glyph.size.width) / 2, y: (rect.height - glyph.size.height) / 2))
             } else {
-                let attrs: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: size * 0.42, weight: .medium), .foregroundColor: ink]
+                shape.addClip()
+                let font = TextEngine.cssWeight(textWeight, size: textSize) {
+                    UIFont.systemFont(ofSize: textSize, weight: TextEngine.namedWeight($0))
+                }
+                let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: ink]
                 let s = (text as NSString).size(withAttributes: attrs)
                 (text as NSString).draw(at: CGPoint(x: (rect.width - s.width) / 2, y: (rect.height - s.height) / 2), withAttributes: attrs)
             }

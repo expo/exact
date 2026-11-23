@@ -273,6 +273,8 @@ package protocol NavigationHosting: AnyObject {
     /// ancestor of it gives reaches a long press there, as one reaches a presentation's mount.
     var relayMounts: [(mount: any RelayMount, node: NodeView)] { get }
     #endif
+    /// The blocks the bars' hosted items are laid out in, by element (LLP 1141.004 D3).
+    var barItemBlocks: [UInt32: HostBlock] { get }
     /// Whether a grouped list shows as UIKit's sidebar: in a split's list column while the split is expanded (LLP 1127 D7).
     func showsAsSidebar(_ list: UIView) -> Bool
     /// The row of a sidebar list whose detail shows, which stays selected;
@@ -325,6 +327,17 @@ package protocol NavigationHosting: AnyObject {
     func shownBarItem(_ id: UInt32) -> UIBarButtonItem?
     func barItem(_ node: NodeView) -> Result<(bar: UIView, item: CGRect), BarItemMissing>?
     func tipItem(_ node: NodeView) -> (UIBarButtonItem, UIViewController)?
+    #if os(iOS)
+    /// Whether `dialog`'s sheet would show its header as its bar now: its
+    /// sheet is then presented in a navigation controller.
+    func wantsDialogBar(_ dialog: NodeView) -> Bool
+    /// Project `dialog`'s header onto `controller`'s navigation item, the root
+    /// of the navigation controller its sheet presents (LLP 1141.004 D6);
+    /// false where the header stays in the page, with the bar hidden.
+    func projectDialogBar(_ dialog: NodeView, on controller: UIViewController) -> Bool
+    /// `dialog`'s sheet has gone: its header shows in the page again.
+    func endDialogBar(_ dialog: NodeView)
+    #endif
     #if EXACT_INSPECT
     func barSegment(_ tab: NodeView) -> (control: UIControl, segment: CGRect)?
     #endif
@@ -381,9 +394,8 @@ package protocol NavigationHosting: AnyObject {
 package protocol LiftedNodes: AnyObject {
     /// The parent a lifted node, or a view in its place, is under in the authored tree.
     func parent(of view: UIView) -> NodeView?
-    /// Whether UIKit holds `view` away from its parent's box (the tab bar's
-    /// accessory), so a press on it lands in its own box, as in a presentation.
-    func heldApart(_ view: UIView) -> Bool
+    /// The release bounds for a press that bubbles out of a lifted view.
+    func pressBox(crossing view: UIView, from start: UIView) -> UIView?
     /// Whether `parent` lifted `node`, which `parent`'s children op then leaves where it is.
     func holds(_ node: NodeView, under parent: NodeView) -> Bool
     /// A children op on `parent`, before the presenter places it.
@@ -557,6 +569,7 @@ package final class NoNavigation: NavigationHosting {
     #if os(iOS)
     package var relayMounts: [(mount: any RelayMount, node: NodeView)] { [] }
     #endif
+    package var barItemBlocks: [UInt32: HostBlock] { [:] }
     package func showsAsSidebar(_ list: UIView) -> Bool { false }
     package func sidebarSelection(_ list: UIView) -> UInt32?? { .some(nil) }
     package func listPress(_ row: UInt32, in list: UIView, _ press: () -> Void) { press() }
@@ -604,6 +617,14 @@ package final class NoNavigation: NavigationHosting {
     package func shownBarItem(_ id: UInt32) -> UIBarButtonItem? { nil }
     package func barItem(_ node: NodeView) -> Result<(bar: UIView, item: CGRect), BarItemMissing>? { nil }
     package func tipItem(_ node: NodeView) -> (UIBarButtonItem, UIViewController)? { nil }
+    #if os(iOS)
+    package func wantsDialogBar(_ dialog: NodeView) -> Bool { false }
+    package func projectDialogBar(_ dialog: NodeView, on controller: UIViewController) -> Bool {
+        controller.navigationController?.setNavigationBarHidden(true, animated: false)
+        return false
+    }
+    package func endDialogBar(_ dialog: NodeView) {}
+    #endif
     #if EXACT_INSPECT
     package func barSegment(_ tab: NodeView) -> (control: UIControl, segment: CGRect)? { nil }
     #endif

@@ -415,8 +415,8 @@ platform's text prompt (UIAlertController, NSAlert); a header button whose
 face says more than a symbol or a title (a status dot, an authored font) is
 drawn as written in its bar item; swipe actions whose controls all say
 `appearance="none"` keep their paint. Take: none offered; waived by that
-instruction. Still out: an arbitrary subtree as a bar item, a prompt with
-several fields.
+instruction. Still out: an arbitrary subtree as a bar item (expanded for iOS
+below, 2026-11-21), a prompt with several fields.
 **Expanded (James, 2026-10-17: "Exact should allow the developer to
 configure this on platforms that support it"):** a sheet route's
 `navigationInitialDetent` names the `navigationDetent` word it opens at
@@ -430,6 +430,20 @@ shows as UIKit's centred `.formSheet`; a host whose sheets have one size
 ignores it. T3 Code's Add environment sheet (#216) is the consumer, and Nathan
 Schroeder implements it. Take: none offered; waived by Charlie. Still out:
 D7's `automatic` and `fitted`, which stay in stage 6.
+**Expanded (James, 2026-11-21: "We ideally can support any view and any role
+each host platform supports to be uncompromising in UX and aligned with the
+host platforms"), then narrowed (James, 2026-11-22: "on iOS we need to have
+more constraints ideally statically checkable and then allow more flexible UI
+on other platforms"):** on iOS a header readout (`role="status"`) of words,
+symbols, dots and a spinner is a bar item holding the element's own views,
+drawn as written and live (LLP 1141.004); the bar holds a closed set, and in
+an app that ships iOS the compiler refuses any other element in a header that
+is the bar (`lower-header-item`). The readout's redrawn face (`ReadoutView`,
+`ChipFace`) goes. Lexy's "Updating" spinner in its bar is the consumer. Take:
+none offered; waived by James, whom Charlie gave the call (James, 2026-11-21:
+"Charlie has given us permission to make decisions"). Still out: a readout as
+an item on the Mac, Android and tvOS; a header per platform in an app that
+ships iOS; the heading's own box drawn as written.
 **Expanded (Charlie, 2026-10-03: "A native grouped-list role mapped to
 UICollectionView list layout"):** `list appearance="auto"` is a grouped list
 (LLP 1084): sections with a header and footer, rows read by shape, UIKit's
@@ -540,8 +554,8 @@ renderer whose snapshot driver WidgetKit archives (LLP 1126). watchOS is an
 Apple platform like the others; it has no UIKit presenter, so its app is
 drawn by that renderer's live driver. Unblocks an app's content outside its
 window (the Home Screen, the Lock Screen, StandBy, CarPlay, HomeView, the
-Mac) and Exact apps on the watch. Templates (CarPlay apps, controls) await
-their own RFC. The take is waived.
+Mac) and Exact apps on the watch. Templates (CarPlay apps) await their own
+RFC; controls have LLP 1126.004 (below). The take is waived.
 
 **Expanded (Charlie, 2026-10-26, "Accept all (Recommended)", on LLP 1133.023
 §15 question 8):** the app's content and actions reached from outside its
@@ -554,7 +568,7 @@ origin `tool`. Consumer: Shelf's Add Book, Continue Reading, books in
 Spotlight and Log Pages. Unblocks reaching an app's screens and writes
 without opening it. Take: none named; the ruling is its own waiver. Still
 out, each until a consumer asks (LLP 1133.023 §13): further App Intents in
-widgets beyond the configuration below; controls and Live Activities; interactive snippets and
+widgets beyond the configuration below; Live Activities (controls: LLP 1126.004, below); interactive snippets and
 `requestConfirmation`'s snippet content; assistant schemas; `IndexedEntity`
 and Spotlight's semantic index; `NSUserActivity` and Handoff; long-running
 intents; an App Intents extension; a structured `returns` through a face;
@@ -583,6 +597,29 @@ The Expo Services Active Users widget can list the person’s projects. Edit
 Widget reads the list the app published to the App Group. Its refresh and
 render receive the selected ID. Computing options in the extension, images,
 dependent parameters and entity choices on watchOS and Android stay deferred.
+
+**Expanded (Charlie, 2026-11-18, #710, "the `rules/DEFERRED.md` waiver is
+granted"; LLP 1126.004):** controls, a button the system draws outside the
+app that runs one of its tools or opens one of its locations: `controls` in
+`app.json`, WidgetKit controls on Apple and Quick Settings tiles on
+Android. A press is the person's and enters as origin `action`; a recording
+control may start audio capture from a locked iPhone once that path is
+qualified on a device. Consumer: #710's app, which starts a voice recording
+from the Lock Screen without opening. Take: none named; Charlie waives the trade. Still out
+(LLP 1126.004 §3): toggles, state providers, configurable controls, fixed
+tool arguments, a control's tool run in the extension, Live Activity
+buttons, discoverable faces that capture or gain background activity
+authority, and the Android add-tile prompt.
+
+**Expanded (Charlie, 2026-11-22, confirming the Android mapping proposed on
+expo/exact#1057; LLP 1126 D13):** an activity
+on Android is an ongoing notification that asks to be promoted to a Live
+Update. A row's `android` object names state fields for its title, text,
+chip text, time and progress, on a declared channel; only a row with one is
+shown on Android. Consumer: the reporter's guard app, whose "Attend" stays in
+the status bar until resolved. Take: none named; the ruling stands as its own
+waiver. Still out: a custom view in it, which Android forbids; a direct link to
+the promotion setting; and hearing a dismissal before the app is next in front.
 
 **Admitted (Charlie, 2026-10-06: "this is pretty great. commit and push this
 and document that TUI is now an officially supported platform for Exact2";
@@ -699,9 +736,15 @@ person prefers reduced motion; any other rests. The compiler checks a literal
 `src` at build. It draws on the web, macOS, iOS, tvOS, Android, Linux and
 Windows. Consumer: the reporter's full-screen shader, which is a GPU crate and
 about 100 lines of wgpu today. Take: none offered; waived by Charlie. Still
-out: textures, the canvas's children as a texture, several passes, compute, a
-translucent canvas, Display P3 and HDR, matrices and arrays as uniforms, a
-built-in pointer, and inline or downloaded source (LLP 1181 §8).
+out: textures, the canvas's children as a texture, several passes, compute,
+Display P3 and HDR, matrices and arrays as uniforms, a built-in pointer, and
+inline or downloaded source (LLP 1181 §8).
+
+**Expanded (Charlie, 2026-11-22, #1240; LLP 1181 D8):** a shader canvas may
+write `alphaMode="premultiplied"`, so the page shows through the fragment's
+alpha. Consumer: the reporter's avatar, a soft glowing blob over a ground
+that changes. Take: none offered; waived by Charlie, 2026-11-22, after it
+landed.
 
 **Expanded (Charlie, 2026-11-17, expo/exact#724; LLP 1133.039):**
 `@exact/model-viewer`, a GPU package showing a binary glTF from the app's
@@ -1102,6 +1145,11 @@ reading. Nothing that isn't HTML is added by it.
   stage 3. What stays no from
   exact1's webview: `top` topology, navigation policy, the controller ops, `allow`,
   author-facing `srcdoc` — each with its return trigger in LLP 1020 §5.)
+- **Admitted (Charlie, 2026-11-18, waiver; LLP 1013.002):** LLP 1013.002 admits moving
+  a live element by `portal` to keep #698's playing video and counter through a
+  card-to-detail move. It also admits pairing the replacement destinations across a route
+  change **only when both route parts cut**. Flights between mounted places and element
+  flights composed with route motion remain deferred.
 - **Expanded (Daehyeon Mun, 2026-10-19; trade):** `postMessage(text, iframeId)` sends
   ordered strings to one mounted iframe: D2r's replies and host-initiated updates (LLP
   1020 §11). Unblocks T3 Code's HTML and MCP App documents: live theme, shortcut and
@@ -1583,6 +1631,17 @@ reading. Nothing that isn't HTML is added by it.
   copies, through LLP 1115.001 D5's existing request channel. This unblocks
   gallery attachments. Take waived by the scoped implementation request;
   document handles and export remain unavailable on Android.
+  **Expanded (Charlie, 2026-11-18, accepting LLP 1133.019.000 for build, for
+  expo/exact#714 after his issue panels 9 and 11):** `photoChanges` in
+  `@exact/photos` gives PhotoKit changes from an app-owned checkpoint under
+  full access without a fetch hatch. Other native views use a paged
+  replacement read. `photoAssets` and `photoChanges` share a `screenshot`
+  subtype on Apple and Android. Web reports absence. The module persists no
+  data. The consumer imports a library of screenshots and updates its index
+  on later launches. Take: waived by the acceptance. Still out (LLP
+  1133.019.000 D3 and §4): a change feed from MediaStore's deletion history,
+  album changes, videos, edits to pixels as an event of their own, date
+  filters and further subtypes.
 - **Expanded (Charlie, 2026-10-25, "Waive both (Recommended)", on LLP
   1133.026 §16 question 8):** the person's health store, read
   (`healthStatus`, `requestHealthAuthorization`, `healthStatistics` and
@@ -2102,6 +2161,10 @@ highlight is (a shrink is feedback, not motion).
 **Tooling** — no Design Mode, no Guide system, no devtools UI, no blog/CMS. (The
 TUI host came off on 2026-10-06: §Surfaces.)
 
+Prebuilt tool sets (LLP 1174 §5) are published for macOS and Linux x86-64 only:
+sets for Windows and Linux arm64 are out until something runs them, and every
+native build needs Rust.
+
 **Admitted (Charlie, 2026-10-14; LLP 1122 §9 Q2 and LLP 1121 §9 Q3), development
 builds only:** the Forma protocol server (`forma/1`, LLP 1121 D13) and the design tool
 (LLP 1122). The tool is a web JS-target app, and every client edits through the protocol.
@@ -2144,6 +2207,20 @@ authored tests. Virtual time stays frozen while it waits on the wall clock for
 at most `<ms>`, and a miss names the last value it saw. It is for state that a
 stream reaches after its first message, which settlement does not wait for
 (LLP 1016.000 D5).
+
+**Admitted (Charlie, 2026-11-18; LLP 1012.000, expo/exact#689), local development
+builds only:** an agent attaches to the development app a person already has open, once
+that person enables attach in the app and allows each connection in the window, and reads
+that window: `tree`, masked `state`, `logs`, `layout`, `perf` and a capture of the window.
+This is Charlie's scoped reversal of LLP 1012 §8's deferral and of the 2026-11-13
+no-new-carrier ruling (`issues/closed/20261113-agent-cannot-attach-to-an-app-on-real-time.md`),
+for an eligible app and window whose person opted in. An attached session keeps the app's
+wall clock: it never takes, seeks, settles or lands the clock, and its waits watch the wall
+clock (LLP 1012.000 D3). The frozen clock above holds for every drive the driver launches.
+Input needs a second grant the person gives in the window. A release, archive, embedded or
+tester build carries none of it. Charlie's waiver; no take is named. Still deferred:
+attaching to an arbitrary process, a sandboxed Mac app, a physical device, and any
+production attach.
 
 **An eleventh operation replaces one of the ten, same PR.** A new input is a form of
 `tap` or `type` (a wheel is a `tap`; so would a drag be); a new question is answered

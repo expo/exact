@@ -23,6 +23,74 @@ pub struct Activity {
     pub push: bool,
     /// Request ActivityKit's frequent-update budget.
     pub frequent: bool,
+    /// Android's ongoing notification for this activity, which asks to be
+    /// promoted to a Live Update (LLP 1126 D13). Absent, Android refuses the
+    /// activity's sends.
+    pub android: Option<AndroidActivity>,
+}
+
+/// The state fields an Android activity's notification shows, by name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AndroidActivity {
+    /// A channel `host.android.notificationChannels` declares, or `default`.
+    pub channel: String,
+    /// A string field: the notification's title.
+    pub title: String,
+    /// A string field: its text.
+    pub text: Option<String>,
+    /// A number field from 0 to 1: its progress bar.
+    pub progress: Option<String>,
+    /// A string field: the status-bar chip's text.
+    pub chip: Option<String>,
+    /// A number field, Unix milliseconds: the notification's time, counted
+    /// down in the chip while ahead and up while past.
+    pub when: Option<String>,
+}
+
+const ANDROID_KEYS: [&str; 6] = ["channel", "title", "text", "progress", "chip", "when"];
+
+fn android(at: &str, value: &Value) -> Result<AndroidActivity, String> {
+    let at = format!("{at}.android");
+    let object = value
+        .as_object()
+        .ok_or_else(|| format!("{at} must be an object naming state fields"))?;
+    for key in object.keys() {
+        if !ANDROID_KEYS.contains(&key.as_str()) {
+            return Err(format!(
+                "{at}.{key} is unknown; use {}",
+                ANDROID_KEYS.join(", ")
+            ));
+        }
+    }
+    let field = |key: &str| {
+        object
+            .get(key)
+            .map(|v| {
+                v.as_str()
+                    .filter(|v| !v.is_empty())
+                    .map(str::to_owned)
+                    .ok_or_else(|| format!("{at}.{key} must name a field of the state shape"))
+            })
+            .transpose()
+    };
+    let channel = match object.get("channel") {
+        None => "default".to_owned(),
+        Some(v) => v
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| format!("{at}.channel must be a channel id"))?,
+    };
+    Ok(AndroidActivity {
+        channel,
+        title: field("title")?.ok_or_else(|| {
+            format!("{at}.title is required: the state field the notification's title shows")
+        })?,
+        text: field("text")?,
+        progress: field("progress")?,
+        chip: field("chip")?,
+        when: field("when")?,
+    })
 }
 
 impl Manifest {
@@ -41,7 +109,7 @@ impl Manifest {
             let at = format!("live_activities[{i}]");
             let object = row.as_object().ok_or_else(|| format!("{at} must be an object"))?;
             for key in object.keys() {
-                if !["kind", "component", "state", "preview", "title", "description", "push", "frequent"].contains(&key.as_str()) {
+                if !["kind", "component", "state", "preview", "title", "description", "push", "frequent", "android"].contains(&key.as_str()) {
                     return Err(format!("{at}.{key} is unknown; remove it"));
                 }
             }
@@ -63,6 +131,7 @@ impl Manifest {
                 preview: object.get("preview").filter(|v| v.is_object())
                     .ok_or_else(|| format!("{at}.preview must be an object of state fields"))?.clone(),
                 push: flag("push")?, frequent: flag("frequent")?,
+                android: object.get("android").map(|v| android(&at, v)).transpose()?,
             })
         }).collect()
     }

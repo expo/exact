@@ -416,33 +416,48 @@ impl Blocks {
     }
 }
 
-/// Whether an ancestor of `slot` is `display: none`, as authored or as a
-/// box a host replaced whole.
+/// Whether `slot` is hidden from above (LLP 1141.004 D2): under a box its
+/// host replaced whole, which hides every block in it (a tab not yet built,
+/// LLP 1075.003 §9.12); under a box a bar replaced with no block its host
+/// gave on the way down to `slot`, `slot`'s own included, since the bar shows
+/// such a block in a view of its own; or, with `authored`, under a box
+/// authored `display: none`. `itself`: `slot`'s own cover counts too.
+fn hidden_by(arena: &NodeArena, slot: u32, itself: bool, authored: bool) -> bool {
+    let mut given = false;
+    let mut at = Some(slot);
+    while let Some(s) = at {
+        let above = s != slot;
+        if above || itself {
+            match arena.cover(s) {
+                Some(super::HostCover::Whole) => return true,
+                Some(super::HostCover::Bar) if !given => return true,
+                _ => {}
+            }
+        }
+        if authored && above && arena.style(s).display == crate::Display::None {
+            return true;
+        }
+        given |= arena.blocks.given(s).is_some();
+        at = arena.parent(s);
+    }
+    false
+}
+
+/// Whether an ancestor of `slot` is `display: none`, as authored or as a box
+/// a host replaced (`hidden_by`).
 fn hidden_above(arena: &NodeArena, slot: u32) -> bool {
-    let mut at = arena.parent(slot);
-    while let Some(s) = at {
-        if arena.style(s).display == crate::Display::None || replaced_whole(arena, s) {
-            return true;
-        }
-        at = arena.parent(s);
-    }
-    false
+    hidden_by(arena, slot, false, true)
 }
 
-fn replaced_whole(arena: &NodeArena, slot: u32) -> bool {
-    arena.cover(slot) == Some(super::HostCover::Whole)
+/// Whether `slot` is not laid out because it is, or is under, a box a host
+/// replaced (`hidden_by`).
+pub(crate) fn replaced_over(arena: &NodeArena, slot: u32) -> bool {
+    hidden_by(arena, slot, true, false)
 }
 
-/// Whether an ancestor of `slot` is a box a host replaced whole.
+/// Whether an ancestor of `slot` is a box a host replaced that hides it (`hidden_by`).
 fn replaced_above(arena: &NodeArena, slot: u32) -> bool {
-    let mut at = arena.parent(slot);
-    while let Some(s) = at {
-        if replaced_whole(arena, s) {
-            return true;
-        }
-        at = arena.parent(s);
-    }
-    false
+    hidden_by(arena, slot, false, false)
 }
 
 /// What publication starts a block's root with: whether an ancestor hides
@@ -451,7 +466,8 @@ fn replaced_above(arena: &NodeArena, slot: u32) -> bool {
 /// content root is in the block's space. None of them for a root without a
 /// block.
 pub(crate) fn publication_start(arena: &mut NodeArena, root: u32) -> (bool, bool, (f32, f32)) {
-    let hidden = hidden_above(arena, root) || replaced_whole(arena, root);
+    let hidden =
+        hidden_above(arena, root) || arena.cover(root).is_some_and(super::HostCover::replaces);
     let whole = arena.flags(root).has(NodeFlags::ATTACHED);
     let Some(held) = arena.blocks.held_mut(root) else {
         return (false, false, (0.0, 0.0));
@@ -476,11 +492,15 @@ pub(crate) fn publication_start(arena: &mut NodeArena, root: u32) -> (bool, bool
 ///
 /// A block in a box a host replaced whole (a tab not yet built, LLP
 /// 1075.003 §9.12) is `display: none` as that box is: none of its subtree
-/// is measured, and it is published hidden until the box is given back.
-pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
-    let Some(block) = arena.blocks.get(slot) else {
-        return;
-    };
+/// is measured, and it is published hidden until the box is given back. A
+/// box a bar replaced buries only the blocks its host did not give.
+pub(crate) fn apply(
+    arena: &NodeArena,
+    slot: u32,
+    block: Option<HostBlock>,
+    s: &mut taffy::style::Style,
+) {
+    let Some(block) = block else { return };
     if replaced_above(arena, slot) {
         s.display = taffy::style::Display::None;
         return;

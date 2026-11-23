@@ -16,6 +16,8 @@ use web_time::Instant;
 
 mod atlas;
 mod cache;
+#[cfg(any(target_os = "linux", test))]
+mod panel_blit;
 #[cfg(target_os = "macos")]
 mod present;
 mod programs;

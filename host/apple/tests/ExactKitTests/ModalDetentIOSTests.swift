@@ -28,27 +28,27 @@ final class ModalDetentIOSTests: XCTestCase {
     }
 
     func testTheWordsBecomeDetentsInOrder() {
-        let detents = ModalHost.detents("300 500 large nonsense") { 120 }
+        let detents = SheetDetents.detents("300 500 large nonsense") { 120 }
         XCTAssertEqual(detents.map(\.identifier.rawValue), ["authored-0", "authored-1", UISheetPresentationController.Detent.Identifier.large.rawValue])
         XCTAssertEqual(detents[0].resolvedValue(in: Context(700)), 300)
-        XCTAssertEqual(ModalHost.detents("fit-content large") { 120 }.map(\.identifier.rawValue), ["fit-content-0", UISheetPresentationController.Detent.Identifier.large.rawValue])
-        XCTAssertTrue(ModalHost.detents(nil) { nil }.isEmpty)
+        XCTAssertEqual(SheetDetents.detents("fit-content large") { 120 }.map(\.identifier.rawValue), ["fit-content-0", UISheetPresentationController.Detent.Identifier.large.rawValue])
+        XCTAssertTrue(SheetDetents.detents(nil) { nil }.isEmpty)
     }
 
     /// LLP 1075.003 §9.13: a percentage is that share of UIKit's maximum
     /// detent value, as RN's `sheetAllowedDetents: [0.45]` is.
     func testAPercentageIsAShareOfTheMaximum() {
         let large = UISheetPresentationController.Detent.Identifier.large.rawValue
-        let detents = ModalHost.detents("45% 70%") { nil }
+        let detents = SheetDetents.detents("45% 70%") { nil }
         XCTAssertEqual(detents.map(\.identifier.rawValue), ["authored-0", "authored-1"])
         XCTAssertEqual(detents[0].resolvedValue(in: Context(700)), 315)
         XCTAssertEqual(detents[0].resolvedValue(in: Context(600)), 270, "read at each resolution, as the maximum changes")
         XCTAssertEqual(detents[1].resolvedValue(in: Context(700)), 490)
         // All of the maximum is `large` itself (Grok's review): one rest, not
         // two at one height, and the status bar's covering sheet (LLP 1105 D2).
-        XCTAssertEqual(ModalHost.detents("100%") { nil }.map(\.identifier.rawValue), [large])
+        XCTAssertEqual(SheetDetents.detents("100%") { nil }.map(\.identifier.rawValue), [large])
         var refused: [Substring] = []
-        XCTAssertEqual(ModalHost.detents("45% 100% large", refused: { word, _ in refused.append(word) }) { nil }.map(\.identifier.rawValue), ["authored-0", large])
+        XCTAssertEqual(SheetDetents.detents("45% 100% large", refused: { word, _ in refused.append(word) }) { nil }.map(\.identifier.rawValue), ["authored-0", large])
         XCTAssertEqual(refused, ["large"])
     }
 
@@ -57,12 +57,12 @@ final class ModalDetentIOSTests: XCTestCase {
     /// so "900 large" on a phone is `large` alone, not two rests at one
     /// height; on a taller screen it is 900 then `large`.
     func testAPointHeightNeverTiesTheDetentAfterIt() {
-        let followed = ModalHost.detents("900 large") { nil }[0]
+        let followed = SheetDetents.detents("900 large") { nil }[0]
         XCTAssertNil(followed.resolvedValue(in: Context(800)))
         XCTAssertNil(followed.resolvedValue(in: Context(900)))
         XCTAssertEqual(followed.resolvedValue(in: Context(1000)), 900)
-        XCTAssertEqual(ModalHost.detents("300 900") { nil }[0].resolvedValue(in: Context(800)), 300)
-        XCTAssertEqual(ModalHost.detents("900") { nil }[0].resolvedValue(in: Context(800)), 800, "alone, it stops at the maximum")
+        XCTAssertEqual(SheetDetents.detents("300 900") { nil }[0].resolvedValue(in: Context(800)), 300)
+        XCTAssertEqual(SheetDetents.detents("900") { nil }[0].resolvedValue(in: Context(800)), 800, "alone, it stops at the maximum")
     }
 
     /// A bound value can carry what the compiler refuses in a literal; the
@@ -70,14 +70,14 @@ final class ModalDetentIOSTests: XCTestCase {
     /// line names the value, the route and what the sheet uses.
     func testWordsThatNameNoDetentAreRefusedAloud() {
         var refused: [Substring] = []
-        let detents = ModalHost.detents("0 -4 NaN nan inf 0% 150% x% 300 large", refused: { word, reason in
+        let detents = SheetDetents.detents("0 -4 NaN nan inf 0% 150% x% 300 large", refused: { word, reason in
             XCTAssertEqual(reason, .unknown)
             refused.append(word)
         }) { nil }
         XCTAssertEqual(refused, ["0", "-4", "NaN", "nan", "inf", "0%", "150%", "x%"])
         XCTAssertEqual(detents.count, 2)
         XCTAssertEqual(
-            ModalHost.refusal(detent: "-12", words: [("-12", .unknown)], route: "3", kept: false),
+            SheetDetents.refusal(detent: "-12", words: [("-12", .unknown)], owner: "route \"3\"", kept: false),
             "navigationDetent \"-12\" on route \"3\": \"-12\" is not large, medium, fit-content, a positive point height or a percentage above 0% and at most 100%; the sheet uses the platform's large detent")
     }
 
@@ -86,30 +86,30 @@ final class ModalDetentIOSTests: XCTestCase {
     /// (300, 270), so what a bound value keeps is one kind, ascending, with
     /// `large` last, which is in order on any screen; the rest is journaled.
     func testWhatIsKeptAscendsOnEveryScreen() {
-        var refused: [(Substring, ModalHost.DetentRefusal)] = []
-        let refuse = { (word: Substring, reason: ModalHost.DetentRefusal) in refused.append((word, reason)) }
+        var refused: [(Substring, SheetDetents.DetentRefusal)] = []
+        let refuse = { (word: Substring, reason: SheetDetents.DetentRefusal) in refused.append((word, reason)) }
         let large = UISheetPresentationController.Detent.Identifier.large.rawValue
-        let kept = ModalHost.detents("300 45% large", refused: refuse) { nil }
+        let kept = SheetDetents.detents("300 45% large", refused: refuse) { nil }
         XCTAssertEqual(kept.map(\.identifier.rawValue), ["authored-0", large])
         for value in ["medium 300", "500 300", "60% medium", "fit-content 300", "large medium", "large large"] {
             refused = []
-            XCTAssertEqual(ModalHost.detents(value, refused: refuse) { 120 }.count, 1, value)
+            XCTAssertEqual(SheetDetents.detents(value, refused: refuse) { 120 }.count, 1, value)
             XCTAssertEqual(refused.map { "\($0.0)" }, [String(value.split(separator: " ")[1])], value)
             XCTAssertTrue(refused.allSatisfy { $0.1 == .order }, value)
         }
-        let shares = ModalHost.detents("30% medium 80% large") { nil }
+        let shares = SheetDetents.detents("30% medium 80% large") { nil }
         for maximum: CGFloat in [500, 600, 800] {
             let custom = [shares[0], shares[2]].compactMap { $0.resolvedValue(in: Context(maximum)) }
             XCTAssertEqual(custom, custom.sorted(), "at \(maximum)")
         }
         XCTAssertTrue(
-            ModalHost.refusal(detent: "300 45%", words: [("45%", .order)], route: "3", kept: true)
+            SheetDetents.refusal(detent: "300 45%", words: [("45%", .order)], owner: "route \"3\"", kept: true)
                 .hasSuffix("\"45%\" is not taller than the detent before it on every screen (UIKit takes them shortest to tallest; a point height, a share of the maximum and the content's height do not mix, and large goes last); the sheet uses its other detents"))
     }
 
     func testFitContentIsTheContentHeightWithinTheMaximum() {
         var content: CGFloat? = 180.4
-        let detent = ModalHost.detents("fit-content") { content }[0]
+        let detent = SheetDetents.detents("fit-content") { content }[0]
         XCTAssertEqual(detent.resolvedValue(in: Context(700)), 181, "rounded up to a whole point")
         content = 900
         XCTAssertEqual(detent.resolvedValue(in: Context(700)), 700, "clamped to the sheet's maximum")
@@ -381,6 +381,50 @@ final class ModalDetentIOSTests: XCTestCase {
         session.presenter.modalHost.updatePermissions()
         XCTAssertEqual(controller.selectedDetentIdentifier, .large)
         XCTAssertTrue(session.agent(#"{"op":"logs","since":0}"#).contains(#"navigationInitialDetent \"medum\""#), "journaled when the sheet is made")
+    }
+
+    func testADialogUsesItsAuthoredDetentsAndKeepsTheSelectionWhenItsGrabberChanges() throws {
+        guard hostedWindowScene() != nil else {
+            throw missing("scene", "UIKit presents and dismisses the dialog in its window")
+        }
+        let session = try fixture("dialog-detents", planKey: "EXACT_DIALOG_SHEET_READS_PLAN")
+        let p = session.presenter
+        p.dialogCommand("showModal", "resizable")
+        until("dialog presented") { self.sheet() != nil && !p.menus.inTransition }
+        let presented = try XCTUnwrap(sheet()), sheet = try XCTUnwrap(presented.sheetPresentationController)
+        let dialog = try XCTUnwrap(p.views.values.first { $0.props["id"] == "resizable" })
+        let footer = try node(session, "dialog-footer")
+        let bottom = { footer.convert(footer.bounds, to: presented.view).maxY }
+        let port = { presented.view.safeAreaLayoutGuide.layoutFrame.maxY }
+        until("the footer reaches the large sheet's safe area") { abs(bottom() - port()) < 1 }
+        let large = port()
+        XCTAssertEqual(sheet.detents.map(\.identifier), [.medium, .large])
+        XCTAssertEqual(sheet.selectedDetentIdentifier, .large)
+        XCTAssertFalse(sheet.prefersGrabberVisible)
+        sheet.animateChanges { sheet.selectedDetentIdentifier = .medium }
+        until("the footer follows the sheet to medium") { port() < large - 100 && abs(bottom() - port()) < 1 }
+        dialog.props["navigationGrabber"] = "visible"
+        p.menus.sync()
+        XCTAssertTrue(sheet.prefersGrabberVisible)
+        XCTAssertEqual(sheet.selectedDetentIdentifier, .medium)
+        p.dialogCommand("close", "resizable")
+        until("dialog closed") { self.sheet() == nil && !p.menus.inTransition }
+    }
+
+    func testADialogsFitContentDetentFollowsItsOwnContents() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit resolves the dialog's resting heights") }
+        let session = try fixture("fitted-dialog", planKey: "EXACT_DIALOG_SHEET_READS_PLAN"), p = session.presenter
+        p.dialogCommand("showModal", "fitted-rests")
+        until("fitted dialog presented") { self.sheet() != nil && !p.menus.inTransition }
+        let sheet = try XCTUnwrap(sheet()?.sheetPresentationController)
+        let fitted = try XCTUnwrap(sheet.detents.first)
+        XCTAssertEqual(sheet.selectedDetentIdentifier, fitted.identifier)
+        XCTAssertEqual(sheet.largestUndimmedDetentIdentifier, .large, "the authored backdrop replaces UIKit's dimming at every height")
+        until("initial content height") { fitted.resolvedValue(in: Context(800)) == 100 }
+        try tap(session, "grow-fitted")
+        until("the content detent grows with its contents") { fitted.resolvedValue(in: Context(800)) == 300 }
+        p.dialogCommand("close", "fitted-rests")
+        until("fitted dialog closed") { self.sheet() == nil && !p.menus.inTransition }
     }
 
     /// Mounted, its route in its block (LLP 1123 D2), the sheet still

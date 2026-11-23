@@ -218,8 +218,8 @@ fn expansion_refuses_a_file_without_a_component() {
         for errors in [
             super::expand_all(&file, false).1,
             super::expand_all(&file, true).1,
-            super::expand_checked(&file, false).1,
-            super::expand_checked(&file, true).1,
+            super::expand_checked(&file, false, &Default::default()).1,
+            super::expand_checked(&file, true, &Default::default()).1,
             super::expand_typed(&file).1,
         ] {
             assert_eq!(errors, vec![expected.clone()]);

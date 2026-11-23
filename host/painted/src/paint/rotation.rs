@@ -12,7 +12,7 @@ use exact_ink::Wgpu;
 pub(crate) struct Output {
     pub rotation: Rotation,
     #[cfg(target_os = "linux")]
-    scanout: Option<wgpu::TextureView>,
+    scanout: Option<(wgpu::TextureView, Rotation)>,
     #[cfg(not(any(windows, target_arch = "wasm32")))]
     fallback: Option<Pixels>,
 }
@@ -34,9 +34,16 @@ impl Output {
         let target = {
             self.scanout = None;
             if let FrameTarget::Scanout { readback } = target {
-                if let Some(result) = backend.finish_scanout(self.rotation, readback) {
+                // A mirror reads the physical image. Otherwise the display can turn
+                // the logical image in the pass that writes the swapchain.
+                let (paint, panel) = if readback {
+                    (self.rotation, Rotation::R0)
+                } else {
+                    (Rotation::R0, self.rotation)
+                };
+                if let Some(result) = backend.finish_scanout(paint, readback) {
                     let (view, pixels) = result?;
-                    self.scanout = Some(view);
+                    self.scanout = Some((view, panel));
                     return Ok(pixels);
                 }
                 FrameTarget::Pixels
@@ -116,7 +123,7 @@ impl Output {
 
 impl Painter {
     #[cfg(target_os = "linux")]
-    pub(crate) fn take_scanout(&mut self) -> Option<wgpu::TextureView> {
+    pub(crate) fn take_scanout(&mut self) -> Option<(wgpu::TextureView, Rotation)> {
         self.output.scanout.take()
     }
 

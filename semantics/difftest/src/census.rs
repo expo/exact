@@ -26,7 +26,14 @@ impl Census {
     pub fn observe(&mut self, lines: &[String]) -> Vec<Finding> {
         let mut findings = Vec::new();
         let mut compared = 0;
+        let mut due: Option<&[String]> = None;
         for step in crate::chunks(lines) {
+            // An input's outcome can repeat the refusal of the `due` step
+            // before it, whose commit line owns that finding.
+            let arrived = due.take();
+            if crate::is_due(step) {
+                due = Some(step);
+            }
             self.steps += 1;
             self.omitted += usize::from(step.iter().any(|l| l == crate::observe::OMITTED_COMMIT));
             let commits = step.iter().filter(|l| l.starts_with("ran ")).count();
@@ -66,10 +73,12 @@ impl Census {
                 // Aggregate outcomes count, but a commit's own line owns its
                 // finding. Boot has no commit line.
                 let attributed = line.starts_with("outcome ")
-                    && step.windows(2).any(|pair| {
-                        pair[0].starts_with("ran ")
-                            && (pair[0].ends_with(" refused") || pair[0].ends_with(" poisoned"))
-                            && pair[1].strip_prefix("# ") == Some(reason)
+                    && [Some(step), arrived].into_iter().flatten().any(|s| {
+                        s.windows(2).any(|pair| {
+                            pair[0].starts_with("ran ")
+                                && (pair[0].ends_with(" refused") || pair[0].ends_with(" poisoned"))
+                                && pair[1].strip_prefix("# ") == Some(reason)
+                        })
                     });
                 if matches!(class, "app" | "type") && !attributed {
                     findings.push(Finding {

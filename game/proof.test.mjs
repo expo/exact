@@ -1266,9 +1266,11 @@ test('phone carrier copies before launch, saves over the socket and owns its pro
     const root = process.env.EXACT_PHONE_TEST_ROOT, dir = mkdtempSync(resolve(tmpdir(), 'phone-carrier-'));
     const bundle = resolve(dir, 'Phone.app'), input = resolve(dir, 'input.world'), output = resolve(dir, 'output.world');
     const bytes = Buffer.from([0, 1, 127, 255]), calls = [], children = [];
-    const app = {id:'com.exact.phone-fixture',dir,target:dir,crate:kind=>`phone-fixture-${kind}`};
+    const app = {id:'com.exact.phone-fixture',dir,target:dir,manifest:{},crate:kind=>`phone-fixture-${kind}`};
     mkdirSync(bundle); writeFileSync(input, bytes);
-    writeFileSync(resolve(bundle, 'Phone'), JSON.stringify({id:'0'.repeat(32),inputs:{app:app.id}}));
+    // A 64-bit Mach-O header with no load commands, then the identity the build embeds.
+    const header = Buffer.alloc(32); header.writeUInt32LE(0xfeedfacf);
+    writeFileSync(resolve(bundle, 'Phone'), Buffer.concat([header, Buffer.from(JSON.stringify({id:'0'.repeat(32),inputs:{app:app.id}}))]));
     const apps = await import(resolve(root, 'scripts/app.mjs'));
     const apple = await import(resolve(root, 'host/apple/build.mjs'));
     const devices = await import(resolve(root, 'host/apple/devices.mjs'));
@@ -1283,7 +1285,6 @@ test('phone carrier copies before launch, saves over the socket and owns its pro
       spawnSync(command, args, options) {
         // useXcode (6c03c1dec) asks which developer directory is selected before any xcrun.
         if (command === 'xcode-select') return cp.spawnSync(command, args, options);
-        if (command === 'otool') { assert.deepEqual(args, ['-L', resolve(bundle, 'Phone')]); return {status:0, stdout:''}; }
         assert.equal(command, 'xcrun'); calls.push(args);
         if (args.includes('copy')) {
           assert.equal(args[args.indexOf('--source') + 1], input);
