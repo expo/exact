@@ -74,3 +74,14 @@ search-only key, so it works the same locally and on the deployed site. As on do
 the index is the Algolia Crawler's: it crawls the deployed site from `sitemap.xml` on a schedule
 and writes DocSearch records (`hierarchy.lvl0` to `lvl6`, `content`, `url`), so nothing here
 holds a write key. Its configuration lives in the Algolia dashboard (Data sources, Crawler).
+
+## Descriptions
+
+A page's description is in `llms.txt`, `sitemap.md`, the page's head and the top of its Markdown.
+`constants/navigation.ts` holds a written one: `description` on a page's row, the map given to
+`pagesFromFolder` for a recipe, and `sectionDescriptions`, keyed by the section's anchor, for a
+section of a split guide. A page with none takes its first sentence of 40 characters or more. A
+section with no such sentence takes the first sentence of each item of its list, as many as fit in
+180 characters. A sentence over 180 characters ends at its last full stop that fits, or is cut.
+`bun run build` stops when two pages share a description, or when one is under 40 characters or
+ends with a colon. It names each page whose description is cut and carries on.

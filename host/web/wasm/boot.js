@@ -413,6 +413,7 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
     el.exactNative?.destroy();
     el.exactResize?.();
     el.exactIntersect?.();
+    el.exactPanRetire?.();
   }
   views.clear();
   messageFrames.clear();

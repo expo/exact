@@ -92,6 +92,8 @@ interface VideoPlayer {
     fun update(props: JSONObject, width: Int, height: Int, from: MediaRecord.Resume?)
     /** Whether a row of the node is in view, for Chrome's rule for a muted autoplaying video (LLP 1042 §7 B). */
     fun shown(inView: Boolean)
+    /** Its element is shown nowhere (a hidden `portal` mover, LLP 1013.002 D5): it leaves fullscreen. */
+    fun hidden() {}
     /** What the record keeps of this loan. */
     fun snapshot(): MediaRecord.Resume?
     /** The activity stopped or the row was parked: pause as the stop does (D8) and give up the surface. */
@@ -204,6 +206,8 @@ class Natives(
         var wanted = ""
         /** A row of the reader's placing has drawn it: when none of its rows is placed any more, they have left. */
         var placed = false
+        /** A video shown nowhere, in a hidden `portal` mover (LLP 1013.002 D5): kept, its player out of view. */
+        var hidden = false
     }
 
     /** Opaque full-window canvases present beneath the UI through SurfaceView.
@@ -423,7 +427,7 @@ class Natives(
         try {
             for (e in elements.values) {
                 if (e.kind != 0 || e.parked || players[e.view]?.lendable != false) continue
-                val drawn = origins?.transform(e.node, placeMatrix) == true
+                val drawn = !e.hidden && origins?.transform(e.node, placeMatrix) == true
                 val x: Float; val y: Float
                 if (drawn) {
                     placePoint[0] = 0f; placePoint[1] = 0f
@@ -593,7 +597,8 @@ class Natives(
     fun snapshot(): Map<Int, RenderNode> = nodes ?: elements.mapValues { it.value.node }.also { nodes = it }
 
     /** Op 28 seen while ingesting a stream: make or update the element; [row] draws it (0: not in a row). */
-    fun ensure(id: Int, kind: Int, w: Int, h: Int, props: String, row: Int, fullWindow: Boolean = false, layer: Int? = null) {
+    fun ensure(id: Int, kind: Int, w: Int, h: Int, props: String, row: Int, fullWindow: Boolean = false, layer: Int? = null,
+               hidden: Boolean = false) {
         val json = if (kind in 0..2) JSONObject(props) else null
         // A top-level WebView cannot enforce an iframe's sandbox (LLP 1020 D2).
         if (kind == 1 && json?.isNull("sandbox") == false) {
@@ -641,6 +646,17 @@ class Natives(
         if (layer == null) e.directRows.add(row) else inLayer(layer, e, row)
         e.rows.add(row)
         e.wanted = props
+        if (hidden) {
+            // Its size and view stay as they were shown, so showing it again only places the same player.
+            if (!e.hidden && !e.parked) players[e.view]?.hidden()
+            e.hidden = true
+            if (!e.parked && e.props != props) apply(e, props)
+            if (!e.parked) play(e, false)
+            return
+        }
+        // Shown again: its props first, so the player is told it is in view with the ones it shows.
+        val returned = e.hidden
+        e.hidden = false
         if (e.w != w || e.h != h) {
             e.w = w; e.h = h
             if (!e.parked) { place(e); askBuffers(e) }
@@ -650,6 +666,7 @@ class Natives(
         if (e.parked && (row == 0 || audio && (w <= 0 || h <= 0))) unpark(e)
         if (e.parked) return
         if (e.props != props) apply(e, props)
+        if (returned && (row == 0 || !lazy || !lazyVideo)) play(e, true)
         if (e.dirty && !e.buffers) record(e)
     }
 
@@ -688,7 +705,7 @@ class Natives(
         // A video plays while a row of its is in the view, as a list's player plays the row on screen: a row near
         // but out of view is prepared and paused on its first frame.
         if (lazyVideo) for (e in elements.values) if (e.kind == 0 && !e.parked) {
-            play(e, !e.placed || e.rows.contains(0) || e.rows.any { seen.contains(it) })
+            play(e, !e.hidden && (!e.placed || e.rows.contains(0) || e.rows.any { seen.contains(it) }))
         }
         // A page runs (its animations, its timers' drawing) while a row of its is in the view, and from when it is
         // made until then, so it loads and paints ahead; once its row has left the view it is paused, as a page in
@@ -738,9 +755,9 @@ class Natives(
     /** The reader cannot tell where rows are: every element has its view. */
     fun everywhere() {
         lazy = false
-        for (e in elements.values) if (e.kind == 0 && !e.parked) play(e, true)
+        for (e in elements.values) if (e.kind == 0 && !e.parked) play(e, !e.hidden)
         if (waiting == 0) return
-        for (e in elements.values) if (e.parked) { unpark(e); if (e.kind == 0) play(e, true) }
+        for (e in elements.values) if (e.parked) { unpark(e); if (e.kind == 0) play(e, !e.hidden) }
         frame()
     }
 
@@ -1315,7 +1332,7 @@ class Natives(
                 // exact2's focus left the controller: the reader's view takes the window's focus back (D4).
                 if (!json.optBoolean("focused") && view.hasFocus()) reader?.requestFocus()
                 // Until the reader says where its row is, a lazy video waits to be seen ([near] shows it).
-                val shown = e.inView || !lazyVideo || !lazy || e.rows.contains(0)
+                val shown = !e.hidden && (e.inView || !lazyVideo || !lazy || e.rows.contains(0))
                 if (shown != e.playing) { e.playing = shown; p.shown(shown) }
             }
             1 -> {

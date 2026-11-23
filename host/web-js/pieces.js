@@ -342,6 +342,7 @@ export function onPan(e, f) {
   let p;
   input();
   e.addEventListener('pointerdown', ev => (p ??= Input?.pan(e, id, (t, g) => e.addEventListener(t, g)))?.(ev));
+  onEnd(() => p?.retire?.());
 }
 /** `panrelease`: its velocity is the motion piece's tracker (LLP 1057 §10.6). */
 export function onPanRelease(e, f) {

@@ -4098,6 +4098,94 @@ in `android/exact.json`'s `maven` array; an app's own Kotlin uses
 `host.android.maven`. See [Maven libraries](../host/android/README.md#maven-libraries-one-locked-verified-gradle-graph-llp-1133008-d8-item-5)
 for the shared Gradle graph, lock and verification files.
 
+### A package's configuration
+
+A package that needs a value from the app, such as a vendor SDK's API key or a
+tile server, declares it per target in its interface's `exact.json` (LLP
+1133.021 §9 item 7):
+
+```json
+"config": {
+  "android": { "apiKey": { "type": "env", "required": "release", "missing": "yandex-mapkit-key-missing" } },
+  "ios": { "apiKey": { "type": "env", "required": "release", "missing": "yandex-mapkit-key-missing" } },
+  "web": { "tiles": { "type": "string", "required": true }, "maxZoom": "number" }
+}
+```
+
+A target is `web`, `android`, `ios`, `macos` or `tvos`; each is declared on its
+own, since a package binds per target. `type` is `string`, `number`, `boolean`
+or `env`, and `"maxZoom": "number"` is short for `{"type": "number"}`.
+`required` is `true` or `"release"`, and `missing` is the error code a build
+without the key reports (else `bake-config-missing`).
+
+The app gives the values in `app.json`, under the interface's name and the
+target. A key typed `env` names the environment variable that holds its value:
+
+```json
+"packages": {
+  "exact-yandex-mapkit": {
+    "android": { "apiKey": { "env": "YANDEX_MAPKIT_API_KEY" } },
+    "ios": { "apiKey": { "env": "YANDEX_MAPKIT_API_KEY" } }
+  }
+}
+```
+
+The build reads the values, with each variable's value as the build runs, and
+writes them into the code it generates for the app. The package's code reads
+the declared keys for its target from its context. A key given no value is
+absent.
+
+| Target | What the package reads |
+| --- | --- |
+| Android | `context.config`, a `JSONObject` on `ExtensionContext` |
+| iOS, macOS, tvOS | `context.config`, a `[String: Any]` on `ExactPackageContext` |
+| Web | `config`, an object passed to `implementation({ config })` |
+
+```kotlin
+val key = context.config.optString("apiKey")   // "" when absent
+```
+
+```swift
+let key = context.config["apiKey"] as? String
+```
+
+Every build refuses these, naming the key and never its value:
+
+- `bake-config-type`: a value of another type than declared, such as a key
+  written into `app.json` where `{"env": "…"}` is declared.
+- `bake-config-unknown`: a key the interface does not declare for that target.
+  The error suggests the nearest declared name.
+- The declared `missing` code: a required key with no value. A key that is
+  `"required": "release"` is required only in a release build. On Android, that
+  is `--release` or production trust. On Apple, it is production trust
+  (`--release`, or `EXACT_UPDATE_TRUST=production`) or a distributed build
+  (`--distribution`, or an archive that is not `--development`). On the web,
+  it is a site to host (`--out`).
+  A development build without the key warns and builds.
+
+An `app.json` entry for a package that is not installed is a warning.
+
+**`env` keeps a value out of the repository, not out of the app.** Anything in
+`config` ships inside the APK, the IPA or the page, and anyone with the app
+can read it, as with a setting an app reads through `import.meta.env` (LLP
+1153 D4). A value that must stay secret belongs on a server. Restrict a vendor key to the
+app instead: by package name and signing certificate for Google's keys, or by
+bundle id where the vendor offers it.
+
+A native app's configuration is part of its binary. Changing a value, or the
+value of a variable it names, needs a new binary, and `exact deploy` and
+`exact push` classify the change that way. The binary's receipt records an
+`env` value only as its SHA-256. Publishing an update therefore needs the same
+variables set as the build had.
+
+**A vendor SDK that reads its key from the Android manifest.** An `android` key
+may also fill a `<meta-data>` the SDK reads by its own name:
+`"metadata": "com.google.android.geo.API_KEY"`. The name must be on Exact's
+list (`CONFIG_METADATA` in `scripts/android-manifest.mjs`), which today holds
+only the Google Maps SDK's key. Two bound packages may not fill one name. A
+package that needs another name asks for a row. An SDK that takes its key in
+code, such as Yandex MapKit's `MapKitFactory.setApiKey`, needs no row.
+
 ### A package's storage and session
 
 A package's implementation finds the session's directories behind `app:/data`,

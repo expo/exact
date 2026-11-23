@@ -121,6 +121,23 @@ test.each([
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("a package's native configuration is a binary input, recorded by digest (LLP 1133.021 §9 item 7)", () => {
+  const { root, app, binaryInputChanges } = harness();
+  const key = 'push-test-config-sentinel', manifest = { app: { id: 'fixture', name: 'Fixture' }, packages: { '@exact/maps': { android: { apiKey: { env: 'PUSH_TEST_MAPS_KEY' } } } } };
+  try {
+    app.manifest = manifest;
+    app.target = resolve(root, 'target');
+    const compat = { target: 'aarch64-linux-android', delivery: {}, inputs: { platform: 'android', store: { L: 'A' }, keys: {} } };
+    const evidence = { version: 1, metadata: { ...nativeManifestMetadata(manifest, 'android', compat.target, { PUSH_TEST_MAPS_KEY: key }),
+      delivery: compat.delivery, store: compat.inputs.store, keys: compat.inputs.keys }, files: [], directories: [], absent: [], links: [] };
+    const bytes = Buffer.from(JSON.stringify(evidence));
+    expect(bytes.includes(key)).toBe(false);
+    expect(binaryInputChanges(bytes, app, compat, [], evidence, { PUSH_TEST_MAPS_KEY: key })).toEqual([]);
+    expect(binaryInputChanges(bytes, app, compat, [], evidence, { PUSH_TEST_MAPS_KEY: `${key}-rotated` })).toEqual(['packages.@exact/maps']);
+    expect(binaryInputChanges(bytes, app, compat, [], evidence, {})).toEqual(['packages.@exact/maps']);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('notification service cohort evidence ignores hidden entries', async () => {
   const { root, app, binaryInputChanges } = harness();
   const service = resolve(root, 'modules/apple/notification-service');

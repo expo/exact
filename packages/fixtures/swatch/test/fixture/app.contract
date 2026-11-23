@@ -1,5 +1,6 @@
 // The fixture of @fixture/swatch: its view placed, shown, hidden and rebound,
-// and what the session's instance heard of it, by testId for the suites.
+// what the session's instance heard of it, and what it reads of its
+// configuration, by testId for the suites.
 use swatchReports, SwatchReports from "@fixture/swatch"
 
 component Fixture
@@ -28,3 +29,4 @@ component Fixture
         swatch-box tint=tint caption="swatch" message=tapped display=(hidden ? "none" : "block") width=160 height=90 testId="box"
       text heard.text testId="heard"
       text last testId="last"
+      text heard.config testId="config"
