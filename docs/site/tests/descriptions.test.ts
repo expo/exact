@@ -25,6 +25,11 @@ test('a long sentence is cut at a word when its only earlier period ends e.g.', 
   expect(result.length).toBeLessThanOrEqual(180);
 });
 
+test('vs. stays inside a sentence before a separate lowercase API sentence', () => {
+  const sentence = 'This guide compares the memory cost of native vs. web rendering.';
+  expect(derive(`${sentence} renderOnWeb builds the preview.`)).toBe(sentence);
+});
+
 test('a full stop at character 180 fits before a lowercase API name', () => {
   const sentence = `The setting accepts ${'word, '.repeat(24)}or a local path.`;
   expect(sentence).toHaveLength(180);
@@ -52,6 +57,23 @@ test('a list item opening with a code block uses the fallback', () => {
 
 test('a list item containing only inline code uses the fallback', () => {
   expect(derive(`- \`${code}\``)).toBe(fallback);
+});
+
+test('a list item containing only code spans and punctuation uses the fallback', () => {
+  expect(derive('- `windowManagementStatus()`: `{available, state}`.')).toBe(fallback);
+});
+
+test('an overlong fallback ends at the last complete sentence that fits', () => {
+  const table = '| Setting | Value |\n| --- | --- |\n| Location | Local folder |';
+  const complete = 'The guide describes how the app opens a document from a local folder. It also covers where each window opens.';
+  const inherited = `${complete} The same configuration can set the initial location for each open window and choose whether to restore the previous session.`;
+  expect(descriptionOf(marked.lexer(table), inherited)).toBe(complete);
+});
+
+test('a cut without spaces keeps whole Unicode code points', () => {
+  const prefix = '界'.repeat(177);
+  expect(derive(`${prefix}界😀.`)).toBe(`${prefix}界…`);
+  expect(derive(`${prefix}😀。続`)).toBe(`${prefix}😀…`);
 });
 
 test('section overrides report every empty value and unmatched key together', () => {
