@@ -617,6 +617,7 @@ export function res(
       r.renderCall,
       r.stand,
       r.stale,
+      r.asked,
     ],
     restore: x => {
       [r.value, r.settled, r.ticket] = x;
@@ -646,6 +647,7 @@ export function res(
       r.renderCall = x[25];
       r.stand = x[26];
       r.stale = x[27];
+      r.asked = x[28];
       write(pend.n, x[19]);
       // and what it shows is read again, from what was put back
       write(ver.n, ver.n.v + 1);

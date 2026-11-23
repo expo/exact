@@ -1173,6 +1173,32 @@ test('a resource idle at its first settlement shows its placeholder over a build
   } finally { await browser.close(); server.stop(true); }
 }, 30000);
 
+// A refused commit puts back what a wake asked at too: a write over a resource idle since boot still shows over its
+// placeholder at no arguments, as over the runner's placeholder state.
+test('a write over a resource idle since boot is overlaid at no arguments after a refused wake', async () => {
+  const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    const observed = await page.evaluate(async () => {
+      const rt = await import('/host/web-js/rt.js');
+      rt.data.answer = source => source === 'save' ? { promise: new Promise(() => {}) } : { v: 'fresh' };
+      rt.data.overlay = (source, args, answer) => ({ value: `${answer} at ${JSON.stringify(args)}`, keep: [] });
+      const open = rt.sig(false), refusing = rt.sig(false), saved = rt.sig(null);
+      const idle = rt.res('idle', 'echo', Object.assign(() => ['wake'], { gate: () => open() }), undefined, undefined, 's', 'waiting');
+      const guard = rt.memo(() => { if (idle() && refusing()) throw new rt.Refusal('refused'); return ''; });
+      let write;
+      rt.mount(root => {
+        write = rt.mut('saved', saved, [idle], 'b');
+        rt.hd(root, { headTitle: () => idle() + guard() });
+      });
+      const woke = rt.commit(() => { rt.W(open, true); rt.W(refusing, true); });
+      rt.commit(() => rt.M(write, 'save', []));
+      return { woke, shown: idle() };
+    });
+    expect(observed).toEqual({ woke: false, shown: 'waiting at []' });
+  } finally { await browser.close(); server.stop(true); }
+}, 30000);
+
 // A build-time answer stands in until an answer lands, one asked at newer arguments included, and is journaled so at
 // the ask and when the answer lands (LLP 1102 §3.17, the runner's `revalidated`), a store reader's too, which names no
 // arguments; a placeholder is no build-time answer, so a store reader that shows one says neither line: one with
