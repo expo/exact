@@ -9,6 +9,7 @@
 //!
 //! @ref LLP 1015 §5; LLP 1012 §3–§4
 
+pub mod attached;
 pub(crate) mod contact;
 mod held;
 mod sensors;
