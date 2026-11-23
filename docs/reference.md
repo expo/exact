@@ -5763,9 +5763,34 @@ carries nothing: the answer reads again, as LLP 1016.002's `native.watch`.
 Call it inside an answer, on a `doc:` path the app may read (`fs.read
 doc:/`):
 
+```contract
+component Notes
+  state folder = ""
+  resource names = markdownIn(folder) when folder != "" as shape string[] else empty()
+  action pick
+    showDirectoryPicker("folder")
+  action chose(value)
+    folder = value
+  view
+    column
+      input id="folder" display="none" change=chose
+      button press=pick
+        text "Choose a folder"
+      for n in names key=n
+        text n
+```
+
 ```ts
-await storage.fs.watch(folder);                  // its own entries
-return (await storage.fs.readdir(folder)).filter((n) => n.endsWith('.md'));
+import type { Answer, Sources } from './app.contract.d.ts';
+
+export const grants = 'fs.read doc:/';
+const sources: Sources = {
+  markdownIn: async ([folder], _store, storage) => {
+    await storage.fs.watch(folder); // its own entries
+    return (await storage.fs.readdir(folder)).filter((n) => n.endsWith('.md'));
+  },
+};
+export const answer: Answer = (source, args, store, storage, native) => sources[source](args, store, storage, native);
 ```
 
 A Rust source records the same topic:
@@ -5793,12 +5818,43 @@ The kept set is File ▸ Open Recent's: Clear Menu, or an entry falling off
 the end of the list, ends its reopening (a window that has it open keeps it
 until the app quits).
 
+```contract
+shape Kept
+  path: string
+  name: string
+
+shape Done
+  ok: bool
+
+component Recent
+  resource kept = recentDocuments() as shape Kept[] else empty()
+  mutation forgot as shape Done refreshes kept
+  action forget(path: string)
+    send forgot = forgetDocument(path)
+  view
+    column
+      for k in kept key=k.path
+        button press=forget(k.path)
+          text `Forget ${k.name}`
+```
+
 ```ts
+import type { Answer, Sources } from './app.contract.d.ts';
+
 export const grants = ['fs.read doc:/', 'doc.keep'].join('\n');
-storage.fs.watch('doc:/');                       // asked again when the list changes
-const recent = await storage.fs.recentDocuments();
-// [{ path: 'doc:/12/notes', name: 'notes', kind: 'directory', mode: 'readwrite', opened: 1760572800000 }, …]
-await storage.fs.forgetDocument(recent[0].path); // off the list and Open Recent; ENOENT if not kept
+const sources: Sources = {
+  recentDocuments: async (_args, _store, storage) => {
+    storage.fs.watch('doc:/'); // asked again when the list changes
+    const recent = await storage.fs.recentDocuments();
+    // [{ path: 'doc:/12/notes', name: 'notes', kind: 'directory', mode: 'readwrite', opened: 1760572800000 }, …]
+    return recent.map(({ path, name }) => ({ path, name }));
+  },
+  forgetDocument: async ([path], _store, storage) => {
+    await storage.fs.forgetDocument(path); // off the list and Open Recent; ENOENT if not kept
+    return { ok: true };
+  },
+};
+export const answer: Answer = (source, args, store, storage, native) => sources[source](args, store, storage, native);
 ```
 
 A Rust source sends `fs.recentDocuments` and `fs.forgetDocument` storage

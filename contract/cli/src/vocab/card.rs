@@ -80,6 +80,31 @@ pub fn function_lines() -> (Vec<String>, String) {
     (lines, intrinsics)
 }
 
+/// Function lines with one form after their name, as one line that names
+/// each: `go|open|push|replace(router, location) -> Router`.
+fn shared_signatures(lines: &[String]) -> Vec<String> {
+    let mut grouped: Vec<(String, String)> = Vec::new();
+    for line in lines {
+        let name_end = line.find('(').filter(|&at| {
+            line[..at]
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        });
+        let (name, form) = name_end.map_or(("", line.as_str()), |at| line.split_at(at));
+        match grouped
+            .iter_mut()
+            .find(|(names, f)| !name.is_empty() && !names.is_empty() && f == form)
+        {
+            Some((names, _)) => *names += &format!("|{name}"),
+            None => grouped.push((name.to_owned(), form.to_owned())),
+        }
+    }
+    grouped
+        .into_iter()
+        .map(|(names, form)| names + &form)
+        .collect()
+}
+
 /// A `tags` line: the tags, their attributes, their events.
 pub struct TagLine {
     pub tags: Vec<&'static str>,
@@ -116,8 +141,9 @@ pub fn steps() -> Vec<String> {
         .collect()
 }
 
-/// The agent's operations: the lines under `agent --help`'s gallery line,
-/// from its source.
+/// The agent's operations: the lines under `agent --help`'s gallery line
+/// that name one, from its source; a note on a host (capitalized) is left
+/// to `agent --help`.
 pub fn operations() -> String {
     let start = HELP
         .find("Gallery: ")
@@ -125,7 +151,12 @@ pub fn operations() -> String {
         .expect("scripts/help.mjs has the agent's operations");
     let block = &HELP[start..];
     let end = block.find("`,").expect("the operations end the text");
-    format!("ops:\n{}", &block[..end])
+    let ops = block[..end].lines();
+    let ops = ops.filter(|line| {
+        line.trim_start()
+            .starts_with(|c: char| c.is_ascii_lowercase())
+    });
+    format!("ops:\n{}", ops.collect::<Vec<_>>().join("\n"))
 }
 
 /// The `exact:content` parts, each as its call.
@@ -191,7 +222,7 @@ pub fn card() -> String {
     let (functions, intrinsics) = function_lines();
     let mut out = format!("{}\n\n", section("intro"));
     out += "functions: call -> result\n";
-    for l in &functions {
+    for l in shared_signatures(&functions) {
         out += &format!("  {l}\n");
     }
     out += &format!("  {intrinsics}\n\n");
@@ -284,6 +315,22 @@ mod tests {
             .filter(|f| f.signature.is_some())
             .collect();
         assert_eq!(lines.len(), standard.len());
+        // The card's grouped lines name each function's line again.
+        let mut expanded: Vec<String> = shared_signatures(&lines)
+            .iter()
+            .flat_map(|l| {
+                let (names, form) = l.split_at(l.find('(').unwrap_or(l.len()));
+                let names = names.contains('|').then_some(names);
+                names.map_or_else(
+                    || vec![l.clone()],
+                    |n| n.split('|').map(|n| format!("{n}{form}")).collect(),
+                )
+            })
+            .collect();
+        expanded.sort();
+        let mut sorted = lines.clone();
+        sorted.sort();
+        assert_eq!(expanded, sorted);
         for f in &standard {
             assert!(
                 lines.iter().any(|l| l.starts_with(&format!("{}(", f.name))

@@ -464,6 +464,7 @@ export const classifications = [
     ["painted:host/painted/src/window_title.rs", "WindowTitle::caption WindowTitle::update"],
     ["runner:runner/src/head.rs", "Runner::head Runner::inactive"],
     ["runner:runner/src/runner.rs", "Runner::data_ref Runner::derive Runner::failed_resources Runner::grants Runner::handlers Runner::handlers_of Runner::is_poisoned Runner::kernel Runner::last_instance_work Runner::log Runner::now_ms Runner::resource Runner::roots Runner::site_of Runner::slot"],
+    ["runner:runner/src/runner/apply.rs", "Runner::declared_parent Runner::declared_parents Runner::hidden_movers"],
     ["runner:runner/src/runner/resources.rs", "Runner::resource_draws_entropy"],
     ["runner:runner/src/runner/checkpoint.rs", "Runner::document_checkpoint"],
     ["runner:runner/src/runner/document.rs", "Runner::document_tree"],

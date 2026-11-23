@@ -990,6 +990,7 @@ component App
   state greeted = ""
   state landings = 0
   mutation session as shape Session then signedIn
+  derive why = match failure(session) { case some(f) => `${f.code}: ${f.message}`, case none => "" }
   action submit
     send session = login(who, "pw")
   action quick
@@ -1068,9 +1069,15 @@ fn then_runs_after_an_answer_in_the_sending_commit_and_not_after_a_failure() {
     assert_eq!(r.timer_due_ms(), Some(0.0));
     assert_eq!(r.advance(0.0).unwrap().len(), 1);
     assert_eq!(text_of(&r, "greeted").as_deref(), Some("hello ada/1"));
-    // A refused send (`login` cannot answer now here) arms nothing.
-    assert!(r.dispatch(view_of(&r, "login"), Event::Press).is_err());
-    assert_eq!(r.timer_due_ms(), None, "a refused commit arms nothing");
+    // A send its source cannot answer now (`login` here) commits with its
+    // receipt failed, and a failure arms no `then`.
+    r.dispatch(view_of(&r, "login"), Event::Press).unwrap();
+    assert_eq!(
+        r.derive("why"),
+        Some(&Value::str("error: login answers later"))
+    );
+    assert_eq!(r.timer_due_ms(), None, "a failed send arms nothing");
+    assert_eq!(text_of(&r, "greeted").as_deref(), Some("hello ada/1"));
     // A reply the source cannot parse is let go, not an answer.
     let mut r = boot_then(true);
     r.source::<Castle>().fail_parse = true;

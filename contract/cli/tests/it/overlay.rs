@@ -48,7 +48,7 @@ component App
     send queued = streamAdd(t)
   action addAndRefuse(t: string)
     send added = add(t)
-    send plain = add("no")
+    send plain = add("gone")
   action flagNow(t: string)
     send flag = addNow(t)
   action stamp(t: string)
@@ -168,6 +168,11 @@ impl DataSource for Board {
                 Ok(Answer::Now(Value::record(vec![Value::str(&t)])))
             }
             "streamAdd" => Ok(Answer::stream(Request::get("https://board.test/stream"))),
+            // An `add` the board does not answer: the runner refuses the send.
+            "add" if args[0].as_str() == Some("gone") => {
+                Err(DataError::UnknownSource(source.into()))
+            }
+            // One it cannot take: the send commits with its receipt failed.
             "add" if args[0].as_str() == Some("no") => {
                 Err(DataError::Unavailable("refused at once".into()))
             }
@@ -542,8 +547,8 @@ fn a_reply_whose_commit_is_refused_ends_its_write() {
 fn a_queued_send_whose_ask_is_refused_ends_its_write() {
     let mut r = live();
     r.act("enqueue", vec![Value::str("b")]).unwrap();
-    r.act("enqueue", vec![Value::str("no")]).unwrap();
-    assert_eq!(shown(&r), "a,b,no");
+    r.act("enqueue", vec![Value::str("gone")]).unwrap();
+    assert_eq!(shown(&r), "a,b,gone");
     let first = ticket(&requests(&mut r), "queued");
     r.fulfill(first, ok()).unwrap();
     // The waiting send's turn: its ask is refused, and it ends in a commit
@@ -551,7 +556,7 @@ fn a_queued_send_whose_ask_is_refused_ends_its_write() {
     let advanced = r.advance(0.0);
     assert!(advanced.is_ok_and(|receipts| !receipts.is_empty()));
     assert!(r.journal().any(|l| l.contains("queued send refused")));
-    assert!(!shown(&r).contains("no"), "{}", shown(&r));
+    assert!(!shown(&r).contains("gone"), "{}", shown(&r));
 }
 
 #[test]

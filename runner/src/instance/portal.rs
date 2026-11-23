@@ -230,6 +230,33 @@ impl Tree {
         self.portals.as_ref().map_or(&[], |p| &p.extracted)
     }
 
+    /// The movers alive and shown nowhere (D5): kernel nodes with no parent
+    /// that are not roots, in id order.
+    pub(crate) fn hidden_movers(&self) -> Vec<ViewId> {
+        let Some(portals) = self.portals.as_ref() else {
+            return Vec::new();
+        };
+        let mut hidden: Vec<ViewId> = (portals.moved.iter())
+            .filter(|(_, (at, _))| at.is_none())
+            .map(|(&m, _)| m)
+            .collect();
+        hidden.sort_unstable();
+        hidden
+    }
+
+    /// Each mover shown away from its declaration or hidden, with its
+    /// declaration parent, in id order.
+    pub(crate) fn declared_parents(&self) -> Vec<(ViewId, ViewId)> {
+        let Some(portals) = self.portals.as_ref() else {
+            return Vec::new();
+        };
+        let mut moved: Vec<_> = (portals.moved.iter())
+            .map(|(&m, &(_, parent))| (m, parent))
+            .collect();
+        moved.sort_unstable();
+        moved
+    }
+
     /// The declaration parent of a moved or hidden view; `None` for one shown
     /// where it is declared, whose kernel parent is its declaration parent.
     pub(crate) fn declared_parent(&self, view: ViewId) -> Option<ViewId> {
@@ -420,9 +447,9 @@ impl Portals {
                 edge.insert(m, Err(why));
             }
         }
-        for (&m, kept) in &edge {
-            if let Err(why) = kept {
-                let e = &entries[m];
+        // In declaration order, so the journal reads the same on every run.
+        for (m, e) in entries.iter().enumerate() {
+            if let Some(Err(why)) = edge.get(&m) {
                 let value = e.portal.clone().unwrap_or_default();
                 if self.hidden.insert(e.view, value.clone()).as_ref() != Some(&value) {
                     notes.push(format!(
