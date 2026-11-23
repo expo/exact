@@ -577,116 +577,7 @@ impl Parser {
                 let target = self.str_lit("a testId")?;
                 if self.at_ident("drag") {
                     self.next();
-                    // `drag to "B" [at x y]` (LLP 1094 D12) or `drag dx dy`.
-                    let (dx, dy, to) = if self.at_ident("to") {
-                        self.next();
-                        let to = self.str_lit("the testId the drag ends on")?;
-                        let at = if self.at_ident("at") {
-                            self.next();
-                            let x = self.step_number("the end's x in the node's box")?;
-                            let y = self.step_number("the end's y in the node's box")?;
-                            Some((x, y))
-                        } else {
-                            None
-                        };
-                        (0.0, 0.0, Some((to, at)))
-                    } else {
-                        let dx = self.step_number("the drag's dx in points")?;
-                        let dy = self.step_number("the drag's dy in points")?;
-                        (dx, dy, None)
-                    };
-                    let (mut press, mut over, mut hold) = (None, None, None);
-                    let (mut from, mut mouse) = (None, false);
-                    let mut into = None;
-                    // Quoted reads or `clock`, last, while the finger is down (drums R8).
-                    let mut during = Vec::new();
-                    while let TokenKind::Ident(w) = self.peek_kind().clone() {
-                        let twice = match w.as_str() {
-                            "from" => from.is_some(),
-                            "mouse" => mouse,
-                            "into" => into.is_some(),
-                            _ => false,
-                        };
-                        if twice {
-                            return self.err(
-                                "syntax-expected-step",
-                                format!("`{w}` is given twice in one drag"),
-                            );
-                        }
-                        if w == "mouse" {
-                            self.next();
-                            mouse = true;
-                            continue;
-                        }
-                        if w == "into" {
-                            self.next();
-                            self.expect_word("keyboard")?;
-                            into = Some("keyboard".to_string());
-                            continue;
-                        }
-                        if w == "from" {
-                            self.next();
-                            let x = self.step_number("the start's x in the node's box")?;
-                            let y = self.step_number("the start's y in the node's box")?;
-                            from = Some((x, y));
-                            continue;
-                        }
-                        if w == "during" {
-                            self.next();
-                            while let TokenKind::Str(op) = self.peek_kind().clone() {
-                                self.next();
-                                if !during_read(&op) {
-                                    return self.err(
-                                        "syntax-expected-step",
-                                        format!("`during` {op:?} is not a read or the clock (tree, layout, state, logs, screenshot, clock)"),
-                                    );
-                                }
-                                during.push(op);
-                            }
-                            if during.is_empty() {
-                                return self.err(
-                                    "syntax-expected-step",
-                                    "`during` takes a quoted op, as during \"clock +500\", and it is the last option",
-                                );
-                            }
-                            if !matches!(self.peek_kind(), TokenKind::Newline | TokenKind::Eof) {
-                                return self.err(
-                                    "syntax-expected-step",
-                                    "`during` is the last option of a drag",
-                                );
-                            }
-                            break;
-                        }
-                        let slot = match w.as_str() {
-                            "press" => &mut press,
-                            "over" => &mut over,
-                            "hold" => &mut hold,
-                            _ => break,
-                        };
-                        if slot.is_some() {
-                            return self.err(
-                                "syntax-expected-step",
-                                format!("`{w}` is given twice in one drag"),
-                            );
-                        }
-                        self.next();
-                        *slot = Some(self.step_number("milliseconds")?);
-                    }
-                    self.newline()?;
-                    return Ok(Step::Drag {
-                        target,
-                        dx,
-                        dy,
-                        to,
-                        from,
-                        mouse,
-                        into,
-                        press,
-                        over,
-                        hold,
-                        during,
-                        span,
-                    });
+                    return self.drag_step(target, span);
                 }
                 let form = match self.peek_kind().clone() {
                     TokenKind::Ident(w) if w == "hover" || w == "dblclick" || w == "contextmenu" || w == "into" || w == "pinch" || w == "wheel" => {
@@ -1345,7 +1236,7 @@ fn json_string(s: &str) -> String {
 
 /// A drag's `during` op is a read or the clock, not a second finger (drums R8).
 /// A filmed screenshot (`over … every`) loops on the clock.
-fn during_read(op: &str) -> bool {
+pub(super) fn during_read(op: &str) -> bool {
     let mut words = op.split_whitespace();
     let Some(head) = words.next() else {
         return false;

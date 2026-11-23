@@ -20,6 +20,9 @@ import AppKit
 #endif
 
 public final class Agent {
+    /// While an attached session's tap or text entry runs (LLP 1012.000 D3): whether it may still take effect, asked
+    /// as the click or the text is about to be sent. Main thread.
+    nonisolated(unsafe) static var inputGate: (() -> Bool)?
     package static func installLink() {
         guard AgentLink.hooks == nil else { return }
         AgentLink.hooks = .init(

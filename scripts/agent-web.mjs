@@ -817,13 +817,13 @@ async function openWebUnlocked({
             // CDP wants epoch seconds; performance.timeOrigin plus the
             // runner's clock makes the DOM event's timeStamp that clock,
             // independent of how long the carrier took between operations.
-            const t = ((await evaluate('performance.timeOrigin')) + (await ask({ op: 'tags' })).clock) / 1000;
+            const origin = await evaluate('performance.timeOrigin'), t = (origin + (await ask({ op: 'tags' })).clock) / 1000;
             if (!mouse) await evaluate(`(${pageContact})('start', ${JSON.stringify({ x: px, y: py })})`);
             if (mouse) {
               await button('mouseMoved', { x: px, y: py }, t, 0);
               await button('mousePressed', { x: px, y: py }, t, 1);
             } else await finger('touchStart', [{ x: px, y: py }], t);
-            contact = { x: px, y: py, t, mouse, modifiers: held };
+            contact = { x: px, y: py, t, origin, mouse, modifiers: held };
             await frame();
             return {
               contact: id,
@@ -834,9 +834,13 @@ async function openWebUnlocked({
             };
           }
           if (!contact) throw new Error('no contact is down');
+          // A clock moved while the contact was down (`clock +500` between legs) moves its timestamps too, so a
+          // velocity read from them sees the pause; the move's own time ends at the clock's.
+          const caught = async (ms) => { contact.t = Math.max(contact.t, (contact.origin + (await ask({ op: 'tags' })).clock - ms) / 1000); };
           if (kind === 'move') {
             const to = { x: opts.x ?? contact.x + (opts.dx ?? 0), y: opts.y ?? contact.y + (opts.dy ?? 0) };
             const ms = Math.max(0, opts.ms ?? 0);
+            await caught(ms);
             const steps = Math.max(1, Math.round(ms / 16));
             for (let i = 1; i <= steps; i++) {
               const t = i / steps;
@@ -846,7 +850,7 @@ async function openWebUnlocked({
               else await finger('touchMove', [at], contact.t);
               if (ms) await sleep(ms / steps);
             }
-            contact = { ...to, t: contact.t, mouse, modifiers: held };
+            contact = { ...contact, ...to, mouse, modifiers: held };
             await frame();
             return { phase: 'move', at: [to.x, to.y], delivery: 'platform' };
           }
@@ -857,6 +861,7 @@ async function openWebUnlocked({
             }
             return { phase: 'hold', at: [contact.x, contact.y], delivery: 'platform' };
           }
+          await caught(0);
           // A mouse has no cancel: its button comes up where it is.
           if (mouse) await button('mouseReleased', contact, contact.t + 0.008, 0);
           else await finger(kind === 'up' ? 'touchEnd' : 'touchCancel', [], contact.t + 0.008);

@@ -54,6 +54,8 @@ public enum AgentAttach {
     /// A connection ended: its indicator, approval and grants go with it. Main thread.
     static func ended(_ connection: AttachConnection) {
         connection.reads = false
+        connection.input = false
+        connection.cancelCalls()
         connection.surface?.end()
         if current === connection { current = nil }
     }
@@ -70,6 +72,16 @@ public enum AgentAttach {
         }
         current = connection
         connection.start()
+    }
+
+    /// Whether a driver is attached, its reads allowed: Allow Agent Input has a connection to grant.
+    static var attached: Bool { current.map { !$0.isRetired && $0.reads } ?? false }
+    /// Whether the attached driver may tap, type and call.
+    static var inputAllowed: Bool { attached && current?.input == true }
+    /// Allow Agent Input, a checked command: grants the attached connection input, or revokes it and leaves its reads.
+    static func toggleInput() {
+        guard let current, attached else { return }
+        current.allowInput(!current.input)
     }
 
     /// Enable Agent Attach, a checked command: on, or off with any connection ended.
@@ -265,6 +277,10 @@ final class AttachConnection {
     /// The pinned window, its session, the person's approval and the indicator.
     var surface: AttachSurface?
     var reads = false
+    /// The second grant (LLP 1012.000 D1): tap, type and a declared tool's call. Main thread.
+    var input = false
+    /// The tool calls this connection made: one still queued when input ends is cancelled, never run. Main thread.
+    private var calls: [Int] = []
 
     init(fd: Int32, nonce: String, release: @escaping () -> Void) {
         self.fd = fd
@@ -435,6 +451,31 @@ final class AttachConnection {
         send(reply)
     }
 
+    /// Grant or revoke input; reads stay. Main thread.
+    func allowInput(_ on: Bool) {
+        guard reads, !isRetired, let surface else { return }
+        input = on
+        if !on { cancelCalls() }
+        surface.showAttached(input: on)
+        FileHandle.standardError.write(Data("exact: agent input \(on ? "allowed" : "revoked") in the app\n".utf8))
+    }
+
+    /// Cancel the calls this connection made: one still waiting for another to end is dropped; one running runs to
+    /// its end, since what it started is the app's (runner `calls.rs`). Main thread.
+    func cancelCalls() {
+        guard let session = surface?.session else { calls = []; return }
+        for id in calls { _ = session.agent("{\"op\":\"cancel\",\"id\":\(id)}") }
+        calls = []
+    }
+
+    /// Whether input may still take effect now: the connection live, the grant held, its request within its time,
+    /// and the app in front with no person's gesture down. Checked again as the effect is made, after the work
+    /// before it, in which the main loop may have run. Main thread.
+    func inputStill() -> Bool {
+        let live = lock.withLock { !retired && (outstanding.map { ProcessInfo.processInfo.systemUptime - $0.since <= AgentAttach.requestTimeout } ?? false) }
+        return live && input && surface?.inputRefusal() == nil
+    }
+
     /// Answer one admitted request against the pinned target. Main thread.
     private func dispatch(_ id: Int, _ request: AttachRequest) -> String {
         guard !isRetired, reads else { return AttachRequest.raw(id, ["error": "not attached"]) }
@@ -442,7 +483,38 @@ final class AttachConnection {
             retire("the attached window closed")
             return AttachRequest.raw(id, ["error": "the attached window closed"])
         }
-        return AttachRead.answer(id, request, session: session, surface: surface)
+        switch request {
+        case .grants: return AttachRequest.raw(id, ["read": reads, "input": input])
+        case let .input(form):
+            // Checked here, on the main thread, as the effect is made: a revocation or a hangup before now leaves none.
+            guard input else { return AttachRequest.raw(id, ["error": "input-not-granted: \(AttachRequest.ungranted)", "refused": "input-not-granted"]) }
+            // The dispatch log and a call's record are reads: the runner's own touch may still be down in the log.
+            switch form {
+            case .log, .called: break
+            default: if let refusal = surface.inputRefusal() { return AttachRequest.raw(id, refusal) }
+            }
+            if case let .call(tool, args) = form {
+                // A declared tool through the agent's own door, as the runner's `call` takes it; the host chooses the door.
+                let request = (try? JSONSerialization.data(withJSONObject: ["op": "call", "tool": tool, "args": args, "door": "agent"])).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+                let reply = session.agent(request)
+                if let data = reply.data(using: .utf8), let call = AttachRequest.count((try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["call"]) { calls.append(call) }
+                return AttachRequest.splice(id, reply)
+            }
+            if case let .called(call) = form {
+                guard calls.contains(call) else { return AttachRequest.raw(id, ["error": "target: call \(call) is not one this connection made", "refused": "target"]) }
+                return AttachRequest.splice(id, session.agent("{\"op\":\"called\",\"id\":\(call)}"))
+            }
+            Agent.inputGate = { [weak self] in self?.inputStill() ?? false }
+            defer { Agent.inputGate = nil }
+            let reply = surface.perform(form, session: session)
+            // An aim is the go-ahead for a touch the driver's runner plays after it: given only if the grant and the
+            // front still hold once the aim, which may wait out the keyboard, is made.
+            if case .aim = form, !inputStill() {
+                return AttachRequest.raw(id, surface.inputRefusal() ?? ["error": "input-not-granted: \(AttachRequest.ungranted)", "refused": "input-not-granted"])
+            }
+            return AttachRequest.raw(id, reply)
+        default: return AttachRead.answer(id, request, session: session, surface: surface)
+        }
     }
 
     // Replies. Any thread.
@@ -530,6 +602,24 @@ enum AttachRequest {
     case layout(id: Int?, plan: Bool)
     case frames(late: Int)
     case screenshot
+    case grants
+    case input(Input)
+
+    /// What input grants: a plain tap and a whole text entry at a target (a view id or a test ID), the touch
+    /// runner's aim and dispatch log in the iOS simulator, and a declared tool's call.
+    enum Input {
+        case tap(target: Any)
+        case aim(target: Any)
+        case log(after: Int)
+        case type(target: Any, text: String)
+        /// The simulator's text entry, before its tap and before its keystrokes: the target is a shown, editable
+        /// text input, and with `focused`, the one with the keyboard.
+        case textTarget(target: Any, focused: Bool)
+        case call(tool: String, args: String)
+        /// A call's record, one this connection made: whether it has left its queue, and its answer once it has one.
+        case called(id: Int)
+    }
+    static let ungranted = "this connection may read; input needs Allow Agent Input, which the person chooses in the app"
 
     struct Refusal: Error { let reply: [String: Any] }
 
@@ -543,8 +633,10 @@ enum AttachRequest {
         "perf": ["target": .count, "frames": .flag, "late": .count],
         "screenshot": [:],
         "tags": [:],
+        "grants": [:],
     ]
-    static let mutations: Set<String> = ["tap", "type", "prefer", "call", "post", "pick", "share", "midi", "back", "close", "resize", "background"]
+    /// Input an attached session never sends: held gestures, keys, pickers, window and preference changes.
+    static let withheld: Set<String> = ["prefer", "post", "pick", "share", "midi", "back", "close", "resize", "background"]
 
     static func admit(_ line: Data) -> Result<(Int, AttachRequest), Refusal> {
         func refuse(_ id: Int?, _ code: String, _ why: String) -> Result<(Int, AttachRequest), Refusal> {
@@ -560,7 +652,8 @@ enum AttachRequest {
         if op == "prefer", let substitute = ["faults", "extension", "permission", "midi"].first(where: { object[$0] != nil }) {
             return refuse(id, "unsupported", "prefer \(substitute) substitutes for the app's world, which an attached session never does")
         }
-        if mutations.contains(op) { return refuse(id, "input-not-granted", "this connection may read; input needs Allow Agent Input, which this build does not offer yet") }
+        if withheld.contains(op) { return refuse(id, "unsupported", "\(op) is not offered to an attached session: its input is a plain tap, a text entry and a declared tool's call") }
+        if ["tap", "type", "call", "called"].contains(op) { return admitInput(id, op, object).map { (id, .input($0)) } }
         guard let fields = forms[op] else { return refuse(id, "unsupported", "\(op) is not offered to an attached session") }
         if op == "state", object["reveal"] != nil { return refuse(id, "masked", "an attached session reads state masked") }
         if op == "perf", let control = ["capture", "hold", "track", "report", "health", "live", "source"].first(where: { object[$0] != nil }) {
@@ -583,12 +676,76 @@ enum AttachRequest {
         case "state": return .success((id, .state(request)))
         case "layout": return .success((id, .layout(id: request["id"] as? Int, plan: request["plan"] as? Bool == true)))
         case "screenshot": return .success((id, .screenshot))
+        case "grants": return .success((id, .grants))
         case "perf" where request["frames"] != nil:
             guard request["frames"] as? Bool == true, request["target"] == nil else { return refuse(id, "malformed", "perf frames takes late alone") }
             return .success((id, .frames(late: min(request["late"] as? Int ?? 20, 200))))
         case "perf" where request["late"] != nil: return refuse(id, "malformed", "late is perf frames'")
         default: return .success((id, .runner(request)))
         }
+    }
+
+    /// `tap`, `type` and `call`, each field checked; any other field, a key, a point, a phase or a door, refused.
+    static func admitInput(_ id: Int, _ op: String, _ object: [String: Any]) -> Result<Input, Refusal> {
+        func refuse(_ why: String) -> Result<Input, Refusal> {
+            .failure(Refusal(reply: ["request": id, "error": "malformed: \(why)", "refused": "malformed"]))
+        }
+        let fields = Set(object.keys).subtracting(["request", "op"])
+        let target: Any? = count(object["target"]) ?? (object["target"] as? String).flatMap { $0.isEmpty || $0.utf8.count > 256 ? nil : $0 }
+        switch op {
+        case "tap":
+            if fields == ["log"] { return count(object["log"]).map { .success(.log(after: $0)) } ?? refuse("log is a whole number") }
+            guard let target else { return refuse("tap names its target, a view id or a test ID") }
+            if fields == ["target"] { return .success(.tap(target: target)) }
+            // The runner's aim, `true` or a press's `{"press":true}`: a finger's landing at the target's own press.
+            let press = (object["aim"] as? [String: Any]).map { $0.count == 1 && flag($0["press"]) == true } ?? (flag(object["aim"]) == true)
+            guard fields == ["target", "aim"], press else { return refuse("an attached tap is `{target}`, or in the simulator `{target, aim}` or `{log}`: no point, phase, key, wheel or gesture") }
+            return .success(.aim(target: target))
+        case "type":
+            if let target, fields == ["target", "editable"] || fields == ["target", "focused"], flag(object["editable"] ?? object["focused"]) == true {
+                return .success(.textTarget(target: target, focused: fields.contains("focused")))
+            }
+            guard fields == ["target", "text"], let target else { return refuse("type is `{target, text}`: a whole text entry, no key or clipboard") }
+            guard let text = object["text"] as? String, text.utf8.count <= 8192 else { return refuse("text is a string up to 8 KiB") }
+            return .success(.type(target: target, text: text))
+        case "called":
+            guard fields == ["id"], let call = count(object["id"]) else { return refuse("called is `{id}`, a call's id") }
+            return .success(.called(id: call))
+        default:
+            guard fields.isSubset(of: ["tool", "args"]), let tool = object["tool"] as? String, !tool.isEmpty, tool.utf8.count <= 256 else { return refuse("call is `{tool, args}`") }
+            let args: String
+            switch object["args"] {
+            case nil: args = "{}"
+            case let text as String: args = text
+            case let value? where value is [String: Any] || value is [Any]:
+                args = (try? JSONSerialization.data(withJSONObject: value)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+            default: return refuse("args is a JSON object or its text")
+            }
+            guard args.utf8.count <= 65536 else { return refuse("args is at most 64 KiB") }
+            return .success(.call(tool: tool, args: args))
+        }
+    }
+
+    /// The one view `target` names in `session` and shows in `window`: its id, or the one such view with that test
+    /// ID. A view hidden itself or under a hidden ancestor is not shown. Main thread.
+    static func view(_ target: Any, in session: ExactSession, window: AnyObject?) -> Result<NodeView, Refusal> {
+        func refuse(_ why: String) -> Result<NodeView, Refusal> { .failure(Refusal(reply: ["error": why, "refused": "target"])) }
+        func shown(_ v: NodeView) -> Bool {
+            guard let window, v.window === window else { return false }
+            var at: PlatformView? = v
+            while let u = at { if u.isHidden { return false }; at = u.superview }
+            return true
+        }
+        if let id = target as? Int {
+            guard let v = session.presenter.views[UInt32(id)], shown(v) else { return refuse("no view #\(id) is shown in the attached window") }
+            return .success(v)
+        }
+        let name = target as? String ?? ""
+        let found = session.presenter.views.values.filter { $0.props["testId"] == name && shown($0) }
+        guard found.count == 1 else {
+            return refuse(found.isEmpty ? "no shown view has test ID \(name)" : "\(found.count) shown views have test ID \(name): name one by its id")
+        }
+        return .success(found[0])
     }
 
     /// A whole number, not a Boolean, which JSONSerialization also makes an NSNumber, within a view id's range: a
@@ -673,6 +830,8 @@ enum AttachRead {
             frames["health"] = session.frameHealth.reply(virtual: false)
             return AttachRequest.raw(id, frames)
         case .screenshot: return AttachRequest.raw(id, surface.picture())
+        // The connection's own: its dispatch answers these before a read.
+        case .grants, .input: return AttachRequest.raw(id, ["error": "not a read"])
         }
     }
 }
