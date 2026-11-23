@@ -77,7 +77,7 @@ jobs:
 
       - name: Test
         working-directory: docs/site
-        run: bun test --timeout 20000 ./tests/worker.test.ts ./tests/pages.test.ts
+        run: bun test --timeout 20000 ./tests/worker.test.ts ./tests/pages.test.ts ./tests/descriptions.test.ts
 
       # What a publish uploads. The installation files are under .exact/, a hidden directory.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

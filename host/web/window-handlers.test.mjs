@@ -66,3 +66,37 @@ test.each(['destroy', 'reload', 'editor replacement'])('beforeunload listeners e
   await end(41);
   expect(listeners.size).toBe(0);
 });
+
+// A pan's handler is retired with its view, at a `destroy` and at a reload, so a contact it holds goes with it.
+test.each(['destroy', 'reload'])('a pan retires with its view on %s', async mode => {
+  const f = fixture(false);
+  const retired = [];
+  Object.assign(f, {
+    AbortController,
+    log: message => {
+      throw new Error(message);
+    },
+    addEventListener() {},
+    removeEventListener() {},
+    inputHandlers: { pan: (el, id) => Object.assign(() => {}, { retire: () => retired.push(id) }), arrive() {} },
+    keyEvent: null, prepareContexts() {}, listSelection: null, pendingStore: { flush() {} },
+    focusAutofocus() {}, positionContexts() {}, markScrollDocument() {}, refreshSymbols() {}, syncLists() {},
+    forgetList() {}, followScroll() {}, sheetLeaves: () => false, dropSurface() {},
+    markupPending: new WeakSet(), composing: new WeakSet(),
+  });
+  f.pieces.canvas2d = () => {};
+  f.arrange.destroy = f.motion.destroy = () => {};
+  f.navigation.project = () => {};
+  f.collections.restyled = () => {};
+  vm.runInContext(['attach', 'apply'].map(declaration).join('\n'), f);
+  const heard = {};
+  const el = { localName: 'div', dataset: {}, isConnected: true, addEventListener(type, fn) { heard[type] = fn; }, remove() {} };
+  f.views.clear();
+  f.views.set(7, el);
+  f.attach(el, 7, ['pan']);
+  heard.pointerdown({});
+  if (mode === 'reload') await f.bootNow(new Uint8Array([1]), null, () => true, null, true);
+  else f.apply({ ops: [{ op: 'destroy', id: 7 }] });
+  // The destroy's pre-pass and its op both run the view's teardown hooks; retiring twice is retiring.
+  expect([...new Set(retired)]).toEqual([7]);
+});

@@ -1158,7 +1158,7 @@ export const navigation = {
       let source = event.target.closest?.('[draggable="true" i]'), press = event.target.closest?.('button, a[href], [data-exact-on~="press"]');
       while (source?.namespaceURI === "http://www.w3.org/2000/svg") source = source.parentElement?.closest('[draggable="true" i]');
       const spared = source && (!press || press === source || press.contains(source));
-      if (root.contains(event.target) && event.target.matches?.("img[data-symbol-source], :is(button, a[href], [data-exact-on~=\"press\"]) img") && !spared) {
+      if (event.isTrusted !== false && root.contains(event.target) && event.target.matches?.("img[data-symbol-source], :is(button, a[href], [data-exact-on~=\"press\"]) img") && !spared) {
         event.preventDefault();
       }
     });
