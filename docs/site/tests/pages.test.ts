@@ -48,7 +48,7 @@ test('a page answers at its path, and every other spelling of it redirects there
   expect(await get('/nope')).toEqual({ status: 404, type: 'text/html', location: null });
 });
 
-test('a rule in constants/_redirects answers for a path that is not a page', async () => {
+test('a path that is not a page redirects by its rule in constants/redirects.ts', async () => {
   expect(await get('/llms-full.txt')).toMatchObject({ status: 301, location: '/llms.txt' });
   expect(await get('/llms.txt')).toEqual({ status: 200, type: 'text/plain', location: null });
 });
