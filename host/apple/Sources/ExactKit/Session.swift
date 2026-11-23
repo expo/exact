@@ -737,8 +737,16 @@ public final class ExactSession {
         }
         takeEventResults(&batch)
         let advance: Bool = if case .advance = next.kind { true } else { false }
-        guard advance || !(changesNothing(batch) && clockUnchanged(batch)) else { logSkipped(batch); return landed() }
-        wait(PendingBatch(batch: batch, unlessEmpty: advance, landed: landed, dropped: { finished(); stale() }))
+        let empty = !advance && changesNothing(batch)
+        #if os(macOS)
+        let reply: Bool = if case .reply = next.kind { true } else { false }
+        let hasStoreEffects = batch.stored || !batch.announced.isEmpty || batch.windowState != nil
+        let emptyReply = reply && empty && !batch.layoutProvisional && !batch.replacesTree
+        #else
+        let hasStoreEffects = false, emptyReply = false
+        #endif
+        guard hasStoreEffects || !empty || !clockUnchanged(batch) else { logSkipped(batch); return landed() }
+        wait(PendingBatch(batch: batch, unlessEmpty: advance || emptyReply, landed: landed, dropped: { finished(); stale() }))
     }
 
     /// A stale slice can land inside a commit, before its replacement tree, so the work that waited runs after it.
@@ -792,8 +800,7 @@ public final class ExactSession {
             } else { applyInput(runtime.input(id, value, selection: presenter.fieldSelections.reported(id, value), now: now())) }
         } }
         presenter.fieldSelections.onReplacement = { [unowned self] id, value, selection in admit(id) { apply(runtime.fieldEvent(id, 54, (presenter.fieldSelections.input(id) ?? FieldInput(inputType: "insertReplacementText", cancelable: false)).payload(value, selection), now: now())) } }
-        presenter.fieldSelections.onChange = { [unowned self] id, value, selection in admit(id) { apply(runtime.fieldEvent(id, 52, selection.payload(value), now: now())) } }
-        presenter.fieldSelections.onBeforeInput = { [unowned self] id, value, selection, edit in applyInput(runtime.fieldEvent(id, 53, edit.payload(value, selection), now: now()), at: id) }
+        wireFieldAndKeyEvents()
         presenter.fieldSelections.onSelect = { [unowned self] id, value, selection in admit(id) { apply(runtime.fieldSelect(id, value, selection, now: now())) } }
         // @ref LLP 1069.001 D4 — a toggle is HTML's `input` then `change`,
         // each where the node hears it.
@@ -835,7 +842,6 @@ public final class ExactSession {
         presenter.onFocusEvent = { [unowned self] id, kind, target, related in admit(id) {
             apply(runtime.focusEvent(id, entering: kind == "focusin", target: target, related: related, now: now()))
         } }
-        presenter.onKey = { [unowned self] id, press in applyInput(runtime.key(id, press.payload, up: press.up, capture: press.capture, now: now()), at: id) }
         presenter.onContextmenu = { [unowned self] id in applyInput(runtime.contextmenu(id, now: now()), at: id) }
         presenter.onSwiperight = { [unowned self] id in applyInput(runtime.swiperight(id, now: now()), at: id) }
         presenter.onRefresh = { [unowned self] id in applyInput(runtime.refresh(id, now: now()), at: id) }
@@ -1071,16 +1077,8 @@ public final class ExactSession {
     /// Run `work` in the chain of covers corrections `cause` (`coversCause`)
     package func inCoversChain(_ cause: AnyObject?, _ work: () -> Void) { let outer = coversCause; coversCause = cause; defer { coversCause = outer }; work() }
 
-    /// A batch from a timer, a scroll event or a host's measurement: one that
-    /// changes nothing skips the presentation pass. An app's timer that writes nothing
-    /// (a poll that finds no news), a `scroll=` handler whose writes show
-    /// nowhere (every frame of a fling) and a size layout already had (a list
-    /// row's symbol, which the kernel measured) still commit, and the presenter's
-    /// whole pass cost ~4.5 ms a batch on the simulator. Other events
-    /// still apply an empty batch: a native control that changed itself
-    /// before its handler ran is reconciled by the pass (a refused tab), and
-    /// the agent's clock seeks native animations through it. Slices published
-    /// before it land first (T4), and it is asked again (a fling's fills).
+    /// Land earlier owner batches first (T4), then skip presentation if nothing changed.
+    /// Native controls and the agent's animation clock can require a full `apply`.
     func applyUnlessEmptyNow(_ batch: Batch, scrolled: Bool, resized: Bool, beside plan: StagePlan? = nil) {
         guard !batch.busy, !batch.held else { return }
         guard !applying else { applyNow(batch, beside: plan); return }
@@ -1093,6 +1091,9 @@ public final class ExactSession {
         guard !fillInFlight, !tickInFlight, !advanceInFlight, !canvasInFlight, noticesInFlight == 0, changesNothing(batch) else { applyNow(batch, beside: plan); return }
         // Its transactions are reported once (LLP 1079 D3): account for them, at no presentation cost.
         sampler?.batch(batch.seq, ms: 0); logSkipped(batch); relayStore(batch)
+        #if os(macOS)
+        defer { app.replacements.changed() }
+        #endif
         followRunner(batch)
         // Fixed roots can emit no operations while their viewport changes.
         if resized {

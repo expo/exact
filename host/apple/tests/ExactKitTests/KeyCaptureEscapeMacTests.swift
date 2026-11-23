@@ -88,6 +88,38 @@ final class KeyCaptureEscapeMacTests: XCTestCase {
         XCTAssertNotNil(field.currentEditor())
     }
 
+    func testHandlersThatOnlyCancelKeepTheEditorsText() throws {
+        let f = try SheetFixture(page: """
+        component CancelEdit
+          state caret = -1
+          action moved(e: InputEvent)
+            caret = e.selectionStart
+          action keys(k: string)
+            if k == "x"
+              preventDefault()
+          action editing(e: InputEvent)
+            if e.data == some("y") and caret == 1
+              preventDefault()
+          view
+            textarea testId="editor" value="a" keycapture=keys selectionchange=moved beforeinput=editing rows=3
+        """)
+        fixture = f
+        let editor = try XCTUnwrap(try f.node("editor").textArea)
+        XCTAssertTrue(f.window.makeFirstResponder(editor))
+        editor.setSelectedRange(NSRange(location: 0, length: 0))
+        f.settle()
+        editor.setSelectedRange(NSRange(location: 1, length: 0))
+        f.settle()
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                   windowNumber: f.window.windowNumber, context: nil, characters: "x",
+                                                   charactersIgnoringModifiers: "x", isARepeat: false, keyCode: 7))
+        XCTAssertTrue(f.presenter.routeKey(event, focused: true, in: f.window))
+        editor.insertText("y", replacementRange: editor.selectedRange())
+        XCTAssertEqual(editor.string, "a")
+        editor.insertText("z", replacementRange: editor.selectedRange())
+        XCTAssertEqual(editor.string, "az")
+    }
+
     /// A batch that changes the placeholder of a focused, empty field: AppKit
     /// restarts the field editor's editing to show it (with text in the
     /// field it does not), and the field keeps the focus and its caret, with

@@ -240,6 +240,60 @@ final class StoreRefreshTests: XCTestCase {
 
     }
 
+    #if os(macOS)
+    func testAnEmptyReplyRefreshesTheOtherWindow() throws {
+        _ = NSApplication.shared
+        let fixture = try isolatedStore()
+        defer { fixture.restore() }
+        let writer = fixture.app.makeSession(label: "store-reply-writer")
+        let reader = fixture.app.makeSession(label: "store-reply-reader")
+        defer { writer.destroy(); reader.destroy() }
+        let plan = try fixturePlan("STORE_REFRESH")
+        let size = CGSize(width: 300, height: 400)
+        reader.clock = 0
+        XCTAssertNil(reader.boot(plan: plan, size: size).error)
+        reader.apply(reader.runtime.dataReady())
+        let button = try XCTUnwrap(reader.presenter.views.values.first { $0.props["testId"] == "favourite" })
+        let control = try XCTUnwrap(reader.presenter.controls.controls[button.id] as? NSButton)
+        XCTAssertEqual(control.title, "Not a favourite")
+
+        let peer = try HeadlessSession(plan: plan, size: size, facts: SessionFacts(displayScale: 1, preferences: [], clock: 0))
+        defer { peer.close() }
+        try peer.refresh()
+        let node = try XCTUnwrap(try peer.snapshot().nodes.values.first { $0.props["testId"] == "favourite" })
+        try peer.press(node.id)
+
+        writer.clock = 0
+        func publish(_ reply: Batch) {
+            writer.repliesInFlight += 1
+            writer.replySubmissions.append(0)
+            writer.publish(.reply, RuntimeCompletion(lease: writer.runtime.completionLease, batch: reply))
+            writer.drainFill()
+        }
+        var write = Batch(ops: [], timers: false, motion: false, clock: nil, error: nil)
+        write.stored = true
+        publish(write)
+        waitFor("the other window displays the saved preference") { control.title == "Favourite" }
+
+        waitForMainQueue()
+        reader.drainFill()
+        var topic = Batch(ops: [], timers: false, motion: false, clock: nil, error: nil)
+        topic.announced = ["store-reply-test"]
+        for kind in ["reply", "tick"] {
+            let delivered = expectation(description: "the other window handles the topic from a \(kind)")
+            reader.onLandForTests = { [weak reader] publication, _ in
+                guard case .reply = publication else { return }
+                reader?.onLandForTests = nil
+                delivered.fulfill()
+            }
+            if kind == "reply" { publish(topic) }
+            else { writer.publishTickForTests(topic); writer.drainFill() }
+            wait(for: [delivered], timeout: 5)
+            reader.onLandForTests = nil
+        }
+    }
+    #endif
+
     func testBusyRefreshRetriesAndDestroyedFillDoesNotHoldCompletion() throws {
         let wasAsync = ExactSession.asyncFills
         ExactSession.asyncFills = true

@@ -161,6 +161,27 @@ extension Presenter {
 }
 
 extension ExactSession {
+    func wireFieldAndKeyEvents() {
+        presenter.fieldSelections.onChange = { [unowned self] id, value, selection in admit(id) {
+            let batch = runtime.fieldEvent(id, 52, selection.payload(value), now: now())
+            #if os(macOS)
+            // AppKit already moved the selection.
+            if clock == nil, !ExactEnv.agentFreezes, stage == nil, presenter.views[id]?.fieldComposing != true,
+               !batch.layoutProvisional, !batch.replacesTree, changesNothing(batch) {
+                applyUnlessEmpty(batch)
+                return
+            }
+            #endif
+            apply(batch)
+        } }
+        presenter.fieldSelections.onBeforeInput = { [unowned self] id, value, selection, edit in
+            applyInput(runtime.fieldEvent(id, 53, edit.payload(value, selection), now: now()), at: id, beforeDefault: true)
+        }
+        presenter.onKey = { [unowned self] id, press in
+            applyInput(runtime.key(id, press.payload, up: press.up, capture: press.capture, now: now()), at: id, beforeDefault: !press.up)
+        }
+    }
+
     /// Applies a batch a person's input caused: a press, an edit, a key, a
     /// pointer's hover, press or drag. The batch carries when it was marked,
     /// so on iOS a glass it adds to a group in the window materializes, as
@@ -171,7 +192,7 @@ extension ExactSession {
     /// dialog's close and a popover's `toggle`. Beside a staged batch the
     /// input on `id` is admitted as `admit` says (LLP 1072 T13).
     // Input without a touch hit test still installs ownership before its runner call.
-    package func applyInput(_ input: @autoclosure () -> Batch, at id: UInt32? = nil) {
+    package func applyInput(_ input: @autoclosure () -> Batch, at id: UInt32? = nil, beforeDefault: Bool = false) {
         guard admits(id) else { return }
         showBudgetWarning(nil)
         #if os(iOS)
@@ -180,6 +201,9 @@ extension ExactSession {
         if clock == nil { followOffset() } // (the input reads the date: after a sleep, a press can come before any frame)
         var batch = input()
         batch.input = CACurrentMediaTime()
+        #if os(macOS)
+        if beforeDefault, !batch.layoutProvisional, !batch.replacesTree { return applyUnlessEmpty(batch) }
+        #endif
         apply(batch)
     }
 }
