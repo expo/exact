@@ -76,9 +76,11 @@ struct HeaderShape: Equatable {
             var symbol: String?, text = "", ink: (NodeView, String)?
             func walk(_ node: NodeView) {
                 for child in Self.shown(node) {
-                    if child.kind == "image", let name = child.faceSymbol {
+                    if child.kind == "image", !child.cssVisibilityHidden, let name = child.faceSymbol {
                         if symbol == nil { symbol = name; ink = (child, "text_color") }
-                    } else if child.isParagraph, text.isEmpty { text = child.accessibleText; ink = ink ?? (child, "text_color") }
+                    } else if child.isParagraph, child.accessibilityExposed, text.isEmpty {
+                        text = child.accessibleText; ink = ink ?? (child, "text_color")
+                    }
                     else { walk(child) }
                 }
             }

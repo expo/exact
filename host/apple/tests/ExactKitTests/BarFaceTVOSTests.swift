@@ -7,22 +7,22 @@ import XCTest
 final class BarFaceTVOSTests: XCTestCase {
     private let red = [255, 0, 0, 255]
     private let blue = [0, 0, 255, 255]
+    private var dotStyle: [String: Any] {
+        ["width": 8, "height": 6, "background_color": red, "border_radius_top_left": 3]
+    }
 
-    private func bar(dot: [String: Any] = [:], button: [String: Any] = [:], collapsedSibling: Bool = false) throws
+    private func bar(dot: [String: Any] = [:], button: [String: Any] = [:], sibling: [String: Any]? = nil) throws
         -> (HeaderShape.Item, UIBarButtonItem) {
         let p = Presenter()
         defer { p.reset() }
-        let dotStyle: [String: Any] = ["width": 8, "height": 6, "background_color": red, "border_radius_top_left": 3]
         p.apply(wireBatch([
             ["op": "create", "id": 1, "kind": "view"],
             ["op": "create", "id": 2, "kind": "view", "props": ["semanticTag": "header"]],
             ["op": "create", "id": 3, "kind": "button", "props": ["accessibilityLabel": "Record"],
              "handlers": ["press"], "style": button],
             ["op": "create", "id": 4, "kind": "view", "style": dotStyle.merging(dot) { _, value in value }],
-        ] + (collapsedSibling ? [
-            ["op": "create", "id": 5, "kind": "view", "style": dotStyle.merging(["visibility": "collapse"]) { _, value in value }],
-        ] : []) + [
-            ["op": "children", "id": 3, "ids": collapsedSibling ? [4, 5] : [4]],
+        ] + (sibling.map { [$0.merging(["op": "create", "id": 5]) { _, value in value }] } ?? []) + [
+            ["op": "children", "id": 3, "ids": sibling == nil ? [4] : [4, 5]],
             ["op": "children", "id": 2, "ids": [3]],
             ["op": "children", "id": 1, "ids": [2]],
             ["op": "roots", "ids": [1]],
@@ -66,10 +66,24 @@ final class BarFaceTVOSTests: XCTestCase {
     }
 
     func testACollapsedDotDoesNotCountAsShown() throws {
-        let (_, visible) = try bar(collapsedSibling: true)
+        let (_, visible) = try bar(sibling: ["kind": "view", "style": dotStyle.merging(["visibility": "collapse"]) { $1 }])
         XCTAssertEqual(try pixel(XCTUnwrap(visible.image?.cgImage)), red)
         let (_, collapsed) = try bar(dot: ["visibility": "collapse"])
         XCTAssertNil(collapsed.image)
+    }
+
+    func testCollapsedTextAndSymbolsDoNotDisplaceTheDot() throws {
+        for (kind, props) in [("image", ["symbolName": "star"]), ("text", ["text": "Record"])] {
+            let (face, item) = try bar(sibling: ["kind": kind, "props": props, "style": ["visibility": "collapse"]])
+            XCTAssertNil(face.symbol, kind)
+            XCTAssertTrue(face.title.isEmpty, kind)
+            XCTAssertNotNil(face.dot, kind)
+            if let image = item.image?.cgImage {
+                XCTAssertEqual(try pixel(image), red, kind)
+            } else {
+                XCTFail("The bar lost the visible dot beside the collapsed \(kind)")
+            }
+        }
     }
 
     func testADotUsesItsOwnColorScheme() throws {

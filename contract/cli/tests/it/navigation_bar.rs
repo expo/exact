@@ -479,14 +479,38 @@ fn a_header_counts_headings_per_rendering() {
     let row = "            progress\n";
     for (name, header, count) in [
         ("two-choices", format!("{chosen}{second}{row}"), 0),
+        ("two-or-more", format!("{chosen}{second}            if on\n              text \"Bike\" role=\"heading\"\n{row}"), 0),
         ("one-choice", format!("{chosen}{row}"), 1),
         ("unrelated-choice", format!("{chosen}            if more\n              column\n{row}"), 1),
         ("nested-choice", format!("            if more\n              text \"Bike\" role=\"heading\"\n            else\n{}{row}", chosen.lines().map(|line| format!("  {line}\n")).collect::<String>()), 1),
         ("untitled-choice", "            if on\n              button press=go\n                progress\n".to_string(), 1),
     ] {
-        let (errors, _) = compile_header(name, ios, &header);
+        let (errors, warnings) = compile_header(name, ios, &header);
         assert_eq!(errors.len(), count, "{name}: {errors:?}");
+        if let Some(message) = match name {
+            "two-choices" => Some("holds 2 headings"),
+            "two-or-more" => Some("holds at least 2 headings"),
+            _ => None,
+        } {
+            assert_eq!(warnings.len(), 1, "{warnings:?}");
+            assert_eq!(warnings[0].0, "lower-header-no-bar");
+            assert!(warnings[0].1.contains(message), "{warnings:?}");
+        }
     }
+}
+
+#[test]
+fn a_choice_inside_a_pressable_title_can_leave_the_header_in_the_page() {
+    let header = "            row press=go\n              if on\n                row press=go\n                  text \"Car\" role=\"heading\"\n              else\n                row press=go\n                  text \"Van\" role=\"heading\"\n            progress\n";
+    let (errors, _) = compile_header("nested-title-press", "\"ios\": {}", header);
+    assert!(errors.is_empty(), "{errors:?}");
+
+    let header = "            if on\n              row press=go\n                row press=go\n                  text \"Car\" role=\"heading\"\n            row press=go\n              text \"Van\" role=\"heading\"\n            progress\n";
+    let (errors, warnings) = compile_header("conditional-title-press", "\"ios\": {}", header);
+    assert!(
+        errors.is_empty() && warnings.is_empty(),
+        "{errors:?} {warnings:?}"
+    );
 }
 
 #[test]
@@ -536,6 +560,32 @@ fn only_a_filled_box_with_a_face_inside_the_title_can_be_its_avatar() {
     let (errors, _) = compile_header("avatar-button", ios, &format!("{button}{heading}"));
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert!(errors[0].starts_with("this button"), "{errors:?}");
+    let photo_or_initials = avatar.replace("text \"AL\"", "if on\n                image \"https://example.com/photo.png\"\n              else\n                text \"AL\"");
+    let computed = photo_or_initials.replace(
+        "text \"AL\"",
+        "text \"AL\" display=(more ? \"block\" : \"none\")",
+    );
+    for (name, face) in [
+        ("avatar-photo-or-initials", photo_or_initials),
+        ("avatar-computed", computed),
+    ] {
+        let (errors, warnings) = compile_header(name, ios, &wrapped(&format!("{face}{heading}")));
+        assert!(
+            errors.is_empty() && warnings.is_empty(),
+            "{name}: {errors:?} {warnings:?}"
+        );
+    }
+    let conditional_button = avatar.replace(
+        "text \"AL\"",
+        "if on\n                button press=go\n                  progress",
+    );
+    let (errors, _) = compile_header(
+        "avatar-conditional-button",
+        ios,
+        &wrapped(&format!("{conditional_button}{heading}")),
+    );
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].starts_with("this button"), "{errors:?}");
     let (_, warnings) = compile_header("filled-spacer", ios, "            column background-color=\"blue\"\n            button press=go\n              text \"Save\"\n");
     assert!(warnings.is_empty(), "{warnings:?}");
 }
@@ -555,6 +605,13 @@ fn the_mac_warns_when_a_header_button_has_no_toolbar_face() {
     let painted = format!("{header}              text \"Edit\" font-size=13\n");
     let (_, warnings) = compile_header("two-symbols-painted", mac, &painted);
     assert!(warnings.is_empty(), "{warnings:?}");
+
+    let runs = format!("{header}              text font-size=13\n                text \"Edit\"\n");
+    let (errors, warnings) = compile_header("two-symbols-inline-runs", mac, &runs);
+    assert!(
+        errors.is_empty() && warnings.is_empty(),
+        "{errors:?} {warnings:?}"
+    );
 }
 
 #[test]

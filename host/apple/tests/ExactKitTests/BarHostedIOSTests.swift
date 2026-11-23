@@ -488,8 +488,26 @@ final class BarHostedIOSTests: XCTestCase {
         XCTAssertNil(element.accessibilityValue)
     }
 
+    func testAReadoutSpeaksOnlyExposedTextAsItsValue() throws {
+        let p = route([status(4, ["accessibilityLabelledBy": "sync"]),
+                       text(5, "Ready"), text(6, "Failed", style: ["visibility": "hidden"]),
+                       text(7, "Sync", ["id": "sync"], style: ["visibility": "hidden"])],
+                      kids: [4], more: [["op": "children", "id": 4, "ids": [5, 6, 7]]])
+        let route = RouteController(try XCTUnwrap(p.views[1]))
+        let view = try XCTUnwrap(p.navigationHost.barItems(try bar(p).trailing, route).first?.customView)
+        let element = try XCTUnwrap(stops(in: view).first)
+        XCTAssertEqual(element.accessibilityLabel, "Sync")
+        XCTAssertEqual(element.accessibilityValue, "Ready")
+        p.apply(wireBatch([["op": "style", "id": 6, "style": ["visibility": "visible"]]]))
+        XCTAssertEqual(element.accessibilityValue, "Ready Failed")
+        p.apply(wireBatch([["op": "style", "id": 6, "style": ["visibility": "hidden"]]]))
+        XCTAssertEqual(element.accessibilityValue, "Ready")
+        XCTAssertEqual(element.accessibilityLabel, "Sync")
+    }
+
     func testANamelessReadoutAddsNoVoiceOverStop() throws {
-        let p = route([status(4), progress(5)], kids: [4], more: [["op": "children", "id": 4, "ids": [5]]])
+        let p = route([status(4), progress(5), text(6, "Hidden", style: ["visibility": "hidden"])],
+                      kids: [4], more: [["op": "children", "id": 4, "ids": [5, 6]]])
         let navigation = p.navigationHost
         let route = RouteController(try XCTUnwrap(p.views[1]))
         let view = try XCTUnwrap(navigation.barItems(try bar(p).trailing, route).first?.customView)

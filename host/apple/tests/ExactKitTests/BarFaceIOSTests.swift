@@ -72,6 +72,25 @@ final class BarFaceIOSTests: XCTestCase {
         }
     }
 
+    func testOversizedBadgeTextKeepsTheRoundedCornerClear() throws {
+        let p = Presenter()
+        defer { p.reset() }
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view",
+             "style": ["background_color": [255, 255, 255, 255], "border_radius": 18, "overflow": "hidden"]],
+            ["op": "create", "id": 2, "kind": "text", "props": ["text": "███"],
+             "style": ["text_color": [0, 0, 0, 255], "font_size": 72, "written": ["font_size"]]],
+            ["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]],
+        ]))
+        let badge = try XCTUnwrap(BadgeFace(box: try XCTUnwrap(p.views[1])))
+        let image = try XCTUnwrap(badge.image.cgImage)
+        let center = try XCTUnwrap(SharePictureCase.rgba(image, x: image.width / 2, y: image.height / 2))
+        let corner = try XCTUnwrap(SharePictureCase.rgba(image, x: 1, y: 1))
+        XCTAssertEqual(center.0, 0)
+        XCTAssertEqual(center.3, 255)
+        XCTAssertEqual(corner.3, 0)
+    }
+
     func testABadgeOnAGlassButtonKeepsItsOwnGlass() throws {
         guard #available(iOS 26.0, *) else { throw XCTSkip("bar item glass is iOS 26") }
         let p = Presenter()

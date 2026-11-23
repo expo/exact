@@ -63,7 +63,8 @@ final class HostedItemView: UIView {
             readout = nil
             return
         }
-        let label = node.accessibleName
+        let authoredLabel = node.authoredLabel
+        let label = authoredLabel ?? node.exposedContentName
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             readout = nil
@@ -71,7 +72,7 @@ final class HostedItemView: UIView {
         }
         let element = readout ?? UIAccessibilityElement(accessibilityContainer: self)
         if element.accessibilityLabel != label { element.accessibilityLabel = label }
-        let text = node.authoredLabel == nil ? "" : node.accessibleText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = authoredLabel == nil ? "" : node.exposedText.trimmingCharacters(in: .whitespacesAndNewlines)
         let value = text.isEmpty || text == trimmed ? nil : text
         if element.accessibilityValue != value { element.accessibilityValue = value }
         if readout == nil {

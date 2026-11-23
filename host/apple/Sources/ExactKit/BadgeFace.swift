@@ -151,6 +151,7 @@ package struct BadgeFace: Equatable {
                 let glyph = FaceSymbol.isOriginal(symbol) ? source : source.withTintColor(ink, renderingMode: .alwaysOriginal)
                 glyph.draw(at: CGPoint(x: (rect.width - glyph.size.width) / 2, y: (rect.height - glyph.size.height) / 2))
             } else {
+                shape.addClip()
                 let font = TextEngine.cssWeight(textWeight, size: textSize) {
                     UIFont.systemFont(ofSize: textSize, weight: TextEngine.namedWeight($0))
                 }

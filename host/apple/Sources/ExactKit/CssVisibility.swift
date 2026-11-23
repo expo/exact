@@ -26,7 +26,7 @@ extension NodeView {
 
     /// In the accessibility tree when this element paints, or when a run inside
     /// a hidden paragraph still computes `visible` (the web keeps that span).
-    var accessibilityExposed: Bool { !cssVisibilityHidden || paintsVisibleInlineRun }
+    package var accessibilityExposed: Bool { !cssVisibilityHidden || paintsVisibleInlineRun }
 
     /// This node's own platform content. Child node views keep their own
     /// computed visibility, and so does a scroll or clip that holds them.

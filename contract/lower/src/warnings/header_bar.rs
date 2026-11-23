@@ -89,24 +89,21 @@ fn top_layer(tag: &str, attrs: &[Attr]) -> Option<&'static str> {
 }
 
 /// Whether the subtree holds something the bar decides itself (a button
-/// that presses nothing too) or the compiler cannot see through: then a box
-/// around it is walked, not shown whole as an item.
-fn holds_placed(node: Visit<'_>) -> bool {
+/// that presses nothing too) or the compiler cannot see through. For an
+/// avatar, look through choices for bar parts in their arms.
+fn holds_placed(node: Visit<'_>, walk_choices: bool) -> bool {
     node.regions()[0]
         .walk_regions_with((), |k, _| {
+            if walk_choices && k.is_choice() {
+                return [Some(()), Some(())];
+            }
             [matches!(part(k), Part::Box).then_some(()), None]
         })
-        .any(|(k, ())| {
-            matches!(
-                part(k),
-                Part::Doubt
-                    | Part::Heading
-                    | Part::Search
-                    | Part::Tablist
-                    | Part::Pressable
-                    | Part::Status
-            ) || !matches!(part(k), Part::Hidden)
-                && matches!(k.element(), Some(("button" | "link", _, _)))
+        .any(|(k, ())| match part(k) {
+            Part::Doubt => !walk_choices,
+            Part::Heading | Part::Search | Part::Tablist | Part::Pressable | Part::Status => true,
+            Part::Hidden => false,
+            _ => matches!(k.element(), Some(("button" | "link", _, _))),
         })
 }
 
@@ -289,7 +286,8 @@ struct Bar<'a> {
     avatar: bool,
     search: Place,
     tablist: Place,
-    tap: bool,
+    tap: Place,
+    uncertain_title_press: bool,
     /// A bar item, a readout, a search field or a tablist: what a header
     /// with no heading needs to be the bar.
     placed: bool,
@@ -688,7 +686,7 @@ impl Bar<'_> {
     /// Whether the header is the bar: one heading, or none and only what the
     /// bar places.
     fn is_the_bar(&self) -> bool {
-        self.headings == (1, 1) || self.untitled()
+        !self.uncertain_title_press && (self.headings == (1, 1) || self.untitled())
     }
 }
 
@@ -696,7 +694,7 @@ fn check_header(header: Visit<'_>, content: &[Visit<'_>], out: &mut Vec<LowerErr
     let mut bar = Bar::default();
     walk(header, &mut bar);
     if !bar.is_the_bar() {
-        if !bar.doubt {
+        if !bar.doubt || bar.headings.0 >= 2 {
             out.push(LowerError {
                 id: "lower-header-no-bar",
                 message: if let ((0, 0), true, Some((_, what))) =
@@ -707,7 +705,9 @@ fn check_header(header: Visit<'_>, content: &[Visit<'_>], out: &mut Vec<LowerErr
                 } else if bar.headings == (0, 0) {
                     format!("this route's `header` holds no heading, so on iOS it is not the navigation bar: {NOT_THE_BAR} Give it one `text role=\"heading\"` (`aria-level=1` for a large title) — its buttons become the bar's items{OR_NO_BAR} (docs/recipes/navigation-stack.md)")
                 } else {
-                    format!("this route's `header` holds {} headings, so on iOS it is not the navigation bar: {NOT_THE_BAR} Keep one `text role=\"heading\"` and make the others plain `text` (the first text after the heading is the bar's subtitle), or move them below the `header`{OR_NO_BAR} (docs/recipes/navigation-stack.md)", bar.headings.0)
+                    let (min, max) = bar.headings;
+                    let at_least = if min == max { "" } else { "at least " };
+                    format!("this route's `header` holds {at_least}{min} headings, so on iOS it is not the navigation bar: {NOT_THE_BAR} Keep one `text role=\"heading\"` and make the others plain `text` (the first text after the heading is the bar's subtitle), or move them below the `header`{OR_NO_BAR} (docs/recipes/navigation-stack.md)")
                 },
                 span: header.span(),
             });
@@ -779,6 +779,7 @@ impl<'a> Bar<'a> {
                 subtitle: self.subtitle,
                 search: self.search,
                 tablist: self.tablist,
+                tap: self.tap,
                 ..Bar::default()
             };
             walk_region(arm, state, &mut one);
@@ -796,6 +797,8 @@ impl<'a> Bar<'a> {
         self.subtitle = Place::join([first.subtitle, second.subtitle]);
         self.search = Place::join([first.search, second.search]);
         self.tablist = Place::join([first.tablist, second.tablist]);
+        self.tap = Place::join([first.tap, second.tap]);
+        self.uncertain_title_press |= first.uncertain_title_press || second.uncertain_title_press;
     }
 }
 
@@ -836,8 +839,14 @@ impl<'a> Bar<'a> {
             Part::Search => (bar.search, bar.placed) = (Place::Taken, true),
             Part::Tablist => (bar.tablist, bar.placed) = (Place::Taken, true),
             // A pressable box around the heading is the title, tapped.
-            Part::Pressable if !bar.tap && has_press(node) && holds_heading(node) => {
-                bar.tap = true;
+            Part::Pressable
+                if bar.tap != Place::Taken && has_press(node) && holds_heading(node) =>
+            {
+                if bar.tap == Place::Maybe {
+                    bar.uncertain_title_press = true;
+                    return false;
+                }
+                bar.tap = Place::Taken;
                 return true;
             }
             // One that neither presses nor opens around the heading (a link,
@@ -884,15 +893,16 @@ impl<'a> Bar<'a> {
                     bar.statuses.push(k);
                 }
             }
-            Part::Box if holds_placed(node) => return true,
             Part::Box
                 if title
                     && bar.passed != Place::Taken
                     && !bar.avatar
-                    && badge_face(node, false) =>
+                    && badge_face(node, false)
+                    && !holds_placed(node, true) =>
             {
                 bar.avatar = true;
             }
+            Part::Box if holds_placed(node, false) => return true,
             // A box with nothing in it lays the bar's items out (a spacer).
             Part::Box if empty_box(node) => {}
             // A plain box after the heading, the subtitle free, is read for
@@ -1017,7 +1027,8 @@ fn mac_painted(node: Visit<'_>, inherited_font: bool) -> Option<bool> {
             Part::Hidden => false,
             Part::Doubt => true,
             Part::Text => child.element().is_some_and(|(_, positional, attrs)| {
-                (font || writes_font(attrs)) && has_face_source(positional)
+                (font || writes_font(attrs))
+                    && (has_face_source(positional) || child.children().next().is_some())
             }),
             Part::Box if mac_dot(child) => true,
             Part::Box => mac_painted(child, font)?,
