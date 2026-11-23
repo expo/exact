@@ -103,8 +103,8 @@ impl SourceOwner {
 pub(super) struct Want {
     /// The reader is still there; cleared as it goes.
     pub alive: Arc<AtomicBool>,
-    /// Its demand from the header, and whether a published picture of any
-    /// size serves it ([`Backend::request`]).
+    /// Its demand from the header, and whether it is a canvas's
+    /// ([`Backend::request`]).
     pub demand: Box<
         dyn Fn(&Backend, png_decode::Header) -> Result<(exact_raster::Demand, bool), Refusal>
             + Send,
@@ -279,15 +279,22 @@ impl Backend {
         }
         result
     }
+    /// The file `name` was replaced: no ask reaches its source again, so
+    /// neither do the pictures decoded from it.
     pub fn forget_source(&self, generation: u64, name: &str) {
         let mut state = self.state.lock().unwrap();
         let owners: Vec<_> = state.sources.values().filter_map(Weak::upgrade).collect();
+        let mut forgotten = Vec::new();
         for source in &owners {
             if source.generation == generation && source.name == name {
                 state.sources.remove(&source.id);
+                forgotten.push(source.id);
             }
         }
         drop(state);
+        for id in forgotten {
+            self.session.forget_source(id, generation);
+        }
     }
 
     fn owners(&self) -> Vec<Arc<SourceOwner>> {
@@ -344,12 +351,14 @@ impl Backend {
     }
     /// Ask for `demand`, served by a package's pixels for the file when they
     /// are cached, still match it, and are not much larger than asked for
-    /// (as `covering` shares a decode). `whole`: any size will do, as for a
-    /// canvas, which shrinks its ask only to fit a decode in the budget.
+    /// (as `covering` shares a decode). `canvas`: any size will do, since a
+    /// canvas shrinks its ask only to fit a decode in the budget, and the
+    /// picture is the canvas's alone (`RasterSession::request_held`): the
+    /// canvas keeps what its draws name, and Apple's canvas frees the rest.
     pub fn request(
         &self,
         demand: exact_raster::Demand,
-        whole: bool,
+        canvas: bool,
     ) -> Result<exact_raster::RequestId, Refusal> {
         Workers::process().start();
         let source =
@@ -358,7 +367,7 @@ impl Backend {
         let published = source
             .as_ref()
             .and_then(|s| super::published::current(&self.published, s.generation, &s.name))
-            .filter(|p| whole || area(p.key.pixels) <= area(demand.key.pixels) * 5 / 2);
+            .filter(|p| canvas || area(p.key.pixels) <= area(demand.key.pixels) * 5 / 2);
         drop(source);
         let cached = published.and_then(|p| {
             self.session
@@ -371,6 +380,7 @@ impl Backend {
         });
         let id = match cached {
             Some(request) => request,
+            None if canvas => self.session.request_held(demand)?,
             None => self.session.request(demand)?,
         };
         self.requests.lock().unwrap().insert(id);
@@ -495,10 +505,10 @@ impl Backend {
             if !want.alive.load(Ordering::Acquire) {
                 continue;
             }
-            let Ok((demand, whole)) = (want.demand)(self, header) else {
+            let Ok((demand, canvas)) = (want.demand)(self, header) else {
                 continue;
             };
-            let Ok(id) = self.request(demand, whole) else {
+            let Ok(id) = self.request(demand, canvas) else {
                 continue;
             };
             // Gone after the check: its retirement may have preceded the ask.

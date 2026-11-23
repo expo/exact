@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { webCompiler } from './module.mjs';
 import { analyze } from './page-style.mjs';
 import { open } from '../../scripts/agent.mjs';
-import { drivable, need } from '../../scripts/coverage.mjs';
+import { drivable, engineTests, need } from '../../scripts/coverage.mjs';
 import { appDigest, chromium, suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { renderedPages, warmRustRenderer } from './rendered-pages.mjs';
 import { builtFile } from './content-names.mjs';
@@ -1098,46 +1098,58 @@ component Pages
   }, {}, {}, how);
 }, 240000);
 
-// LLP 1048.007 D4: a rendered page carries only the rules its document can match, and the runtime puts the whole sheet
-// back before its first render, so what it then shows is styled as on the shell.
-// The sheet the runtime restores is the plan's (LLP 1047.003 D1): the rules its elements can match, so the `select` a
-// press shows is styled, and no rule that needs a `dialog` or a `progress` inside the root, which the plan has none of.
-chromeTest("both document renderers give a page its own rules, and the runtime restores the plan's sheet", async () => {
+// The rendered page omits the select's rules (LLP 1048.007 D4), which the plan needs after the press (LLP 1047.003 D1).
+const sheetEngines = await engineTests();
+for (const engine of ['chromium', 'firefox', 'webkit']) sheetEngines[engine](`${engine}: both document renderers give a page its own rules, and the runtime restores the plan's sheet`, async () => {
   for (const how of ['js', 'rust']) await renderedPages(`routes nav
   home "/" render=build
 
 component Page
   state shown = false
-  state pick = "a"
   action show
     shown = true
-  action choose(v: string)
-    pick = v
   view
     main
       button "Show" press=show testId="show"
       if shown
-        select value=pick change=choose aria-label="Pick" testId="pick"
+        select value="a" aria-label="Pick" testId="pick"
           option "A" value="a"
-          option "B" value="b"
 `, async (_, html, dist) => {
     const page = html(''), sheet = builtFile(dist, 'style.css'), full = readFileSync(resolve(dist, sheet), 'utf8');
     const own = /<style data-exact-page>([\s\S]*?)<\/style>/.exec(page)?.[1];
     expect([how, own?.length < full.length, page.match(/<style[ >]/g)?.length, own?.includes('select:not([multiple])')]).toEqual([how, true, 1, false]);
     const rules = analyze(full), only = tag => rules.filter(([, , , within]) => within?.every(a => a.includes(`t:${tag}`))).length;
     expect([how, only('select') > 0, only('dialog'), only('progress')]).toEqual([how, true, 0, 0]);
-    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: req => {
-      const path = new URL(req.url).pathname;
-      return new Response(Bun.file(resolve(dist, path === '/' ? 'index.html' : path.slice(1))));
-    } });
-    const browser = await suiteBrowser();
+    const browser = await suiteBrowser(engine);
+    let sheetRequests = 0;
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, routes: {
+      [`/${sheet}`]: () => new Response(++sheetRequests === 1 ? `${full}\n:root { --plan-sheet: active; }\n` : null, {
+        status: sheetRequests === 1 ? 200 : 503, headers: { 'content-type': 'text/css', 'cache-control': 'no-store' },
+      }),
+    }, fetch: req => new Response(Bun.file(resolve(dist, new URL(req.url).pathname.slice(1) || 'index.html'))) });
     try {
-      const tab = await browser.newPage({ viewport: { width: 390, height: 844 } });
+      const tab = await browser.newPage();
+      await tab.addInitScript(sheet => {
+        // Give the loaded sheet a frame before boot's load handler can remove the page's sheet.
+        document.addEventListener('load', event => {
+          const link = event.target;
+          if (!(link instanceof HTMLLinkElement) || link.getAttribute('href') !== `./${sheet}`) return;
+          event.stopImmediatePropagation();
+          requestAnimationFrame(() => requestAnimationFrame(() => link.onload(event)));
+        }, true);
+        requestAnimationFrame(function sample() {
+          if (document.querySelector('style[data-exact-page]'))
+            globalThis.sheetsOverlapped ||= getComputedStyle(document.documentElement).getPropertyValue('--plan-sheet') === 'active';
+          requestAnimationFrame(sample);
+        });
+      }, sheet);
       await tab.goto(server.url.href);
       await tab.click('[data-testid="show"]');
-      await tab.waitForSelector('[data-testid="pick"]');
-      expect([how, await tab.evaluate(sheet => [!!document.querySelector('style[data-exact-page]'), !!document.querySelector(`link[rel=stylesheet][href="./${sheet}"]`),
-        getComputedStyle(document.querySelector('[data-testid="pick"]')).appearance], sheet)]).toEqual([how, [false, true, 'none']]);
+      const swap = await tab.locator('[data-testid="pick"]').evaluate((pick, sheet) => [
+        !!document.querySelector('style[data-exact-page]'), !!document.querySelector(`link[rel=stylesheet][href="./${sheet}"]`),
+        getComputedStyle(pick).appearance, globalThis.sheetsOverlapped,
+      ], sheet);
+      expect([how, sheetRequests, swap]).toEqual([how, 1, [false, true, 'none', false]]);
     } finally { await browser.close(); server.stop(true); }
   }, {}, {}, how);
 }, 240000);

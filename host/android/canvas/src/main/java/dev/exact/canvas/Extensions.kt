@@ -151,10 +151,17 @@ interface ExtensionRoster {
     /** The extensions whose interface says `"start": "load"`: made after the reader's first frame rather than at their
      * first call (LLP 1133.015 D16 item 1). */
     val startAtLoad: List<String> get() = emptyList()
+    /** Each extension's configuration as JSON, by extension ([ExtensionContext.config]). */
+    val config: Map<String, String> get() = emptyMap()
 }
 
 /** What an extension may use of the host. */
-class ExtensionContext internal constructor(val application: Context, private val name: String) {
+class ExtensionContext internal constructor(
+    val application: Context,
+    private val name: String,
+    /** A test's configuration in place of the generated roster's. */
+    private val configured: JSONObject? = null,
+) {
     /** The activity that shows the app now, if one does: a permission's rationale is read from it. */
     val activity: Activity? get() = Extensions.front()
 
@@ -163,6 +170,13 @@ class ExtensionContext internal constructor(val application: Context, private va
      * own substitute then opens no device and asks the OS for nothing (LLP 1133.006 D8).
      */
     val agent: Boolean = try { Native.underAgent(name) } catch (e: UnsatisfiedLinkError) { false }
+
+    /**
+     * The package's configuration (LLP 1133.021 §9 item 7): each key its interface's `exact.json` declares under
+     * `config.android` that the app's `app.json` gives under `packages.<interface>.android`, a key typed `env` as the
+     * variable's value when the APK was built. A key given no value is absent. Read at build: changing one is a new APK.
+     */
+    val config: JSONObject by lazy { configured ?: Extensions.config(name) }
 
     /** The session this instance belongs to. Android runs one session a process. */
     val session: String = "1"
@@ -528,6 +542,7 @@ internal object Extensions {
         type.getDeclaredConstructor().newInstance() as ExtensionRoster
     }
     private val roster: Map<String, (ExtensionContext) -> ExactExtension> get() = written?.extensions ?: emptyMap()
+    fun config(name: String): JSONObject = written?.config?.get(name)?.let { JSONObject(it) } ?: JSONObject()
     private val made = HashMap<String, ExactExtension>()
     /** The one session's track table. */
     val tracks = Tracks()

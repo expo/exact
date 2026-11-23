@@ -238,6 +238,7 @@ export function attach(el, id, handlers) {
     } else if (kind === "pan") {
       let pan;
       on("pointerdown", (e) => (pan ??= host.inputHandlers?.pan(el, id, on))?.(e));
+      el.exactPanRetire = () => pan?.retire?.();
     } else if (kind === "scroll") {
       // The offsets, then the extents an action's `ScrollEvent` reads (chat F4).
       on("scroll", () => {

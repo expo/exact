@@ -220,6 +220,32 @@ be absent. Animations that do not set `box-shadow` remain on the section. On
 iPad, pointer hover over a grouped section does not activate its `:hover` shadow;
 forwarding from UIKit’s visible cells, header and footer is not implemented yet.
 
+## A `portal` element on each host
+
+`portal="<id>"` shows an element written once inside the plain box with that `id`
+(`contract vocab portal`; [the recipe](recipes/keep-a-playing-video.md); LLP 1013.002).
+Every host keeps the element's state, and its press, pointer-button and key events
+bubble through where it is written; hover, focus on the web and the painted hosts'
+pan, swipe and long press still follow where it is shown. What each does with the
+element itself:
+
+| Host | The element as it moves | A video through the move | Shown nowhere |
+|---|---|---|---|
+| Web (the JS build) | the same DOM element, by `moveBefore()`, or `insertBefore` where the browser lacks it (WebKit) | plays on, no reload or seek (Chrome, Firefox; WebKit on a bare page); an `iframe` reloads under `insertBefore` | in a connected, `display: none`, inert holder: Chrome pauses a muted autoplay video and resumes it, Firefox keeps it playing |
+| Web (the wasm host) | the same DOM element, through the same holder; a reorder within one destination is an `insertBefore`, which reloads an `iframe` | plays on (Chrome) | in the same holder: Chrome pauses and resumes it (other browsers not run) |
+| macOS, iOS | the same view, its `AVPlayer` included; a native flight draws it live | plays on | out of the window: the off-screen rule pauses a muted autoplay video and resumes it |
+| Android | the same node and player | plays on; Material's container transform draws it in the arriving screen | kept with its player: paused and resumed as on Apple |
+| Linux, Windows | the same node | no video decoder: its state and `poster` carry, with no decoded frames; no flights | out of the tree |
+| Terminal | laid out where it is shown | no video | out of the tree |
+
+Not yet: a page rendered ahead (`render=build` or `request`) leaves the element out and
+builds the page afresh in the browser. On the native hosts a design-token colour inside
+the element resolves in its declaration's modes, not its destination's (`color-scheme`
+and plain inheritance follow the destination). tvOS and watchOS have not been run;
+watchOS has no video. On Android a mover placed in a
+box under `display: none` loses its player, which loads again when shown. Windows has
+been compiled, not run.
+
 ## Serve RealWorld
 
 RealWorld's public pages can be served by the native renderer:
@@ -2723,10 +2749,22 @@ driver is connected. **Detach Agent** in the same menu ends it, and so does send
 background. The picture is UIKit's snapshot of the app's window, without the indicator. The
 driver names a simulator that runs the app when the selected one does not.
 
+`bun scripts/agent.mjs web --app <app> --attach tree state logs layout` reads a tab of the app's
+running JS-target dev loop (`bun exact.mjs web`) the same way, in the person's own browser. The
+person presses **⌥⇧A** in the tab, which shows a pairing code that works once, for two minutes; the
+driver asks for it on a terminal, or reads the first line of stdin (`… --attach tree < code.txt`, or
+piped), and presents it on the loop's attach channel; then the tab asks the person to **Allow**. **Agent Attached** shows in the tab's corner
+while the driver is connected; **Detach**, ⌥⇧A again, a reload, loading another page or closing the tab
+ends it, and a code from before a reload is refused. The channel takes only a connection from this
+machine naming the loop by a loopback name, and no browser page. A tab is only read: it cannot take
+its own picture, and nothing a page does is a person's input, so `screenshot`, `tap`, `type` and
+`call` are refused `unsupported`. A tab the driver opened (`?agent`), a game's wasm loop and a
+release build have no attach.
+
 Only a Mac app or an iOS simulator app that `host/apple/build.mjs` builds to run carries the
 listener; a release, archive, embedded, physical-device or Apple TV build has none of it, and the
-driver refuses Android, Windows, Linux, the web, tvOS, watchOS and a physical iPhone before it
-runs any platform tool.
+driver refuses Android, Windows, Linux, tvOS, watchOS and a physical iPhone before it runs any
+platform tool.
 
 ### Inspect work and native presentation
 
@@ -6388,6 +6426,29 @@ whose module is TypeScript, and every Windows app, sets that platform's
 installed binary must supply the required runtime and admit the module's app
 identity and grants. An app with both TypeScript and Rust modules sets every
 `deploy.store` entry to `"0"`: delivery of both together is not implemented. See LLP 1027 for the design record.
+
+## Package configuration
+
+A package's interface declares the values it takes from the app in its
+`exact.json`, per target (`web`, `android`, `ios`, `macos`, `tvos`):
+`"config": {"<target>": {"<key>": {"type": "string" | "number" | "boolean" | "env",
+"required": true | "release", "missing": "<code>"}}}`. An `android` key may add
+`"metadata": "<name>"` to also fill a vendor SDK's `<meta-data>`, if the name is
+on `CONFIG_METADATA` in `scripts/android-manifest.mjs`.
+
+The app gives them in `app.json` as `"packages": {"<interface>": {"<target>":
+{"<key>": <value>}}}`. An `env` key's value is `{"env": "<VARIABLE>"}`, which
+the build reads from its environment. The package's code reads the values as
+`context.config` in Kotlin and Swift, and as `config` on the web. A build
+refuses a value of another type (`bake-config-type`), an undeclared key
+(`bake-config-unknown`) and a required key with no value (the declared
+`missing` code). It refuses a `"required": "release"` key only in a release
+build.
+
+`env` keeps a value out of the repository, not out of the app: everything in
+`config` ships in the APK, the IPA or the page. A changed native value needs
+a new binary. See
+[A package's configuration](contract-for-agents.md#a-packages-configuration).
 
 ## Access hatches
 

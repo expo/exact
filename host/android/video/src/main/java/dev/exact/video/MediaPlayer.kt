@@ -299,6 +299,8 @@ class MediaPlayer(
         exo.seekTo((seconds * 1000).roundToLong().coerceAtLeast(0))
     }
 
+    override fun hidden() = full.leave()
+
     override fun shown(inView: Boolean) {
         this.inView = inView
         if (!eligible()) return

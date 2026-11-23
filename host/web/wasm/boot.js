@@ -413,6 +413,7 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
     el.exactNative?.destroy();
     el.exactResize?.();
     el.exactIntersect?.();
+    el.exactPanRetire?.();
   }
   views.clear();
   messageFrames.clear();
@@ -436,6 +437,8 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
   globalThis.exact.holdQuiet?.();
   if (!host.page?.holding) {
     root.replaceChildren();
+    // The last plan's hidden `portal` movers (commit.js).
+    document.querySelector("[data-exact-portals]")?.remove();
   }
   document.getElementById("exact-theme")?.remove();
   document.getElementById("exact-looks")?.remove();

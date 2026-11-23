@@ -321,6 +321,63 @@ fn a_touch_a_scroll_won_presses_nothing_and_a_tap_after_it_still_does() {
 }
 
 #[test]
+fn the_readers_moves_stand_until_the_app_moves_a_scroller_it_is_not_yet_told_of() {
+    let mut p = boot(PAGE_OF_SCROLLERS);
+    let page = id(&p, "page");
+    p.reader_under(200., 50., 1.);
+    assert_eq!(p.reader_scrolled(page, (0., 120.), 0), Some((0., 120.)));
+    assert!(p.reader_moves_stand());
+    p.tap(id(&p, "jump")).unwrap();
+    settle(&mut p);
+    assert!(!p.reader_moves_stand());
+    p.reader_scrollers(&[], 1.).unwrap();
+    assert!(p.reader_moves_stand());
+}
+
+#[test]
+fn a_move_that_does_not_land_as_sent_leaves_the_reader_to_be_told() {
+    let mut p = boot(PAGE_OF_SCROLLERS);
+    let page = id(&p, "page");
+    p.reader_under(200., 50., 1.);
+    // Sent before the reader knew the app moved the page: dropped.
+    p.tap(id(&p, "jump")).unwrap();
+    settle(&mut p);
+    assert_eq!(p.reader_scrolled(page, (0., 20.), 0), None);
+    assert!(!p.reader_moves_stand());
+    p.reader_scrollers(&[], 1.).unwrap();
+    assert!(p.reader_moves_stand());
+    assert_eq!(p.reader_scrolled(page, (0., 20.), 1), Some((0., 20.)));
+    assert!(p.reader_moves_stand());
+    // Past the end (1,020), where the reader drew all of it.
+    assert_eq!(p.reader_scrolled(page, (0., 800.), 1), Some((0., 700.)));
+    assert!(!p.reader_moves_stand());
+}
+
+#[test]
+fn a_move_fully_clamped_at_the_end_repeats_the_statement() {
+    let mut p = boot(PAGE_OF_SCROLLERS);
+    let page = id(&p, "page");
+    p.reader_under(200., 50., 1.);
+    assert_eq!(p.reader_scrolled(page, (0., 1020.), 0), Some((0., 1020.)));
+    p.frame();
+    let at_end = p.reader_scrollers(&[], 1.).unwrap();
+    assert!(!p.dirty());
+
+    assert_eq!(p.reader_scrolled(page, (0., 10.), 0), Some((0., 0.)));
+    assert!(!p.dirty());
+    assert!(!p.reader_moves_stand());
+    assert_eq!(p.reader_scrollers(&[], 1.), Some(at_end));
+    assert!(p.reader_moves_stand());
+    assert_eq!(p.reader_scrollers(&[], 1.), None);
+
+    p.reader_forgets(page);
+    assert_eq!(p.reader_scrollers(&[], 1.), Some(vec![]));
+    assert_eq!(p.reader_scrolled(page, (0., 10.), 0), None);
+    assert_eq!(p.reader_scrollers(&[], 1.), Some(vec![]));
+    assert_eq!(p.reader_scrollers(&[], 1.), None);
+}
+
+#[test]
 fn a_scroll_the_app_makes_moves_the_revision_on_and_drops_a_stale_move() {
     let mut p = boot(PAGE_OF_SCROLLERS);
     let page = id(&p, "page");

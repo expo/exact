@@ -1143,9 +1143,10 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         // scroll view to hold; one there (CSS computes `overflow-x: hidden`'s
         // other axis to `auto`, an ellipsis's usual pair) only took the
         // clicks a button around the label should hear (files diary F15).
-        // Its overflow clips instead, as the box it paints in.
-        let paragraph = kind == "text"
-        let ox = paragraph ? "visible" : s["overflow_x"]?.string ?? "visible", oy = paragraph ? "visible" : s["overflow_y"]?.string ?? "visible"
+        // Its overflow clips instead, as the box it paints in. A text
+        // control's editor scrolls itself (`isTextControl`).
+        let ownScroller = kind == "text" || isTextControl
+        let ox = ownScroller ? "visible" : s["overflow_x"]?.string ?? "visible", oy = ownScroller ? "visible" : s["overflow_y"]?.string ?? "visible"
         if ((ox == "scroll" || ox == "auto") || (oy == "scroll" || oy == "auto")) && scroll == nil {
             let sv = ChainingScrollView(frame: bounds)
             sv.pointerOwner = self

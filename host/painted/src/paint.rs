@@ -829,6 +829,7 @@ impl Painter {
             dialog: None,
         };
         let old_bars = std::mem::take(&mut self.scrollbars.bars);
+        self.held_media(scene.kernel);
         self.rows_begin(&walk);
         let kept = self.kept_places(&walk, None, scene.roots);
         let space = Transform::from_translate(-scene.page.0, -scene.page.1);

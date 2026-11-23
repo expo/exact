@@ -95,7 +95,9 @@ impl<D: DataSource> Presenter<D> {
         while let Some(parent) = arena.parent(root) {
             root = parent;
         }
-        if !arena.is_root(root) {
+        // A hidden `portal` mover's top is alive and in no root (LLP 1013.002 D5).
+        let hidden = || (self.host.runner().hidden_movers()).contains(&arena.local_id(root));
+        if !arena.is_root(root) && !hidden() {
             return None;
         }
         let mut props = self.brush.media_props(&node);
@@ -181,6 +183,7 @@ impl<D: DataSource> Presenter<D> {
                 dirty.node(node.key);
             }
         }
+        self.brush.media.held = self.host.runner().hidden_movers();
         let kernel = self.host.kernel();
         let epoch = kernel.epoch();
         if self.brush.media.epoch == Some(epoch) {
@@ -190,7 +193,9 @@ impl<D: DataSource> Presenter<D> {
         (self.brush.media.commands).retain(|key, _| kernel.node_by_key(*key).is_some());
         (self.brush.media.framed).retain(|key| kernel.node_by_key(*key).is_some());
         let timed: std::collections::BTreeSet<_> = if kernel.has_type(NodeType::Video) {
-            (kernel.preorder_where(&self.host.roots(), |t, _| t == NodeType::Video))
+            let mut roots = self.host.roots();
+            roots.extend_from_slice(&self.brush.media.held);
+            (kernel.preorder_where(&roots, |t, _| t == NodeType::Video))
                 .into_iter()
                 .filter(|id| (self.host.runner().handlers_of(*id)).contains(&EventKind::Timeupdate))
                 .filter_map(|id| kernel.node(id).map(|n| n.key))
