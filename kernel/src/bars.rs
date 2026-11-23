@@ -32,6 +32,11 @@
 //! `ToolbarItemPlacement.automatic` places an action in a bar, except the
 //! stack's Back control, which leads.
 //!
+//! **A dialog's header** is read by the same rule, with the `dialog` in the
+//! route's place: a host that presents the dialog as the platform's sheet
+//! makes the sheet's bar of it (LLP 1141.004 D6). Its closing button
+//! (`command="close"`) is an item, as a button that opens a dialog is.
+//!
 //! **Two trees.** The rule is written once, over [`Tree`]: a node's facts
 //! ([`fact`]) and its children. A host that reads the kernel's tree calls
 //! [`Kernel::header_shape`]. A host that keeps a mirror of the tree (the
@@ -87,11 +92,12 @@ pub mod fact {
     pub const TABLIST: u32 = 1 << 2;
     /// It hears `press`.
     pub const PRESS: u32 = 1 << 3;
-    /// A button whose invocation opens what it names (`Invocation::opens`):
+    /// A button whose invocation opens what it names (`Invocation::opens`),
     /// a popover (the item's menu, or a popover shown from it) or a modal
-    /// dialog. It is an item with no `press` of its own, as HTML's
-    /// `commandfor` button is a button.
-    pub const OPENS: u32 = 1 << 4;
+    /// dialog, or closes a dialog (`command="close"`, a dialog's Cancel). It
+    /// is an item with no `press` of its own, as HTML's `commandfor` button
+    /// is a button. One that only hides a popover is none.
+    pub const COMMANDS: u32 = 1 << 4;
     /// Its `id` is the one the navigation root names as the stack's Back
     /// control (`navigationBack`).
     pub const BACK: u32 = 1 << 5;
@@ -139,10 +145,10 @@ pub mod fact {
 
     /// A node's facts, from its own facts and three that a tree supplies:
     /// whether it hears `press` (the runner's), whether it is a button whose
-    /// invocation opens what it names (`Invocation::opens`, which resolves
-    /// the name it gives), and the `id` the navigation root names as its
-    /// Back control.
-    pub fn of(node: &crate::NodeFacts<'_>, press: bool, opens: bool, back: Option<&str>) -> u32 {
+    /// invocation is an item's ([`COMMANDS`], `Invocation::of` resolving the
+    /// name it gives), and the `id` the navigation root names as its Back
+    /// control.
+    pub fn of(node: &crate::NodeFacts<'_>, press: bool, commands: bool, back: Option<&str>) -> u32 {
         let props = node.props;
         let role = props.str(PropId::AccessibilityRole);
         let heading = node.node_type == NodeType::Text && role == Some("heading");
@@ -170,7 +176,7 @@ pub mod fact {
                 LAYER,
             ),
             (press, PRESS),
-            (opens, OPENS),
+            (commands, COMMANDS),
             (back.is_some() && props.str(PropId::Id) == back, BACK),
             (props.str(PropId::SemanticTag) == Some("header"), HEADER),
             (node.style.display == Display::None, HIDDEN),
@@ -332,7 +338,7 @@ const PARTS: u32 = fact::HEADING
     | fact::SEARCH
     | fact::TABLIST
     | fact::PRESS
-    | fact::OPENS
+    | fact::COMMANDS
     | fact::DISABLED
     | fact::BUTTON
     | fact::STATUS;
@@ -381,7 +387,7 @@ impl<N: Copy + PartialEq> Walk<N> {
                 // bar items. One tablist, as one search field.
                 self.unplaced |= self.segments.is_some();
                 self.segments.get_or_insert(child);
-            } else if facts & (fact::PRESS | fact::OPENS) != 0
+            } else if facts & (fact::PRESS | fact::COMMANDS) != 0
                 // A link with nothing pressing it follows its `href` (LLP 1141.004 D1).
                 || (facts & fact::HREF != 0 && facts & fact::BUTTON != 0 && !holds_heading(tree, child))
                 // A disabled button around the heading is walked for it, as a box is.
@@ -605,8 +611,9 @@ impl Tree for Live<'_> {
         let Some(node) = self.kernel.node(id) else {
             return 0;
         };
-        let opens = crate::Invocation::of(self.kernel, &node).is_some_and(|i| i.opens());
-        fact::of(&node.facts(), (self.pressed)(id), opens, self.back)
+        let commands = crate::Invocation::of(self.kernel, &node)
+            .is_some_and(|i| i.opens() || i.action == crate::invocation::Action::Close);
+        fact::of(&node.facts(), (self.pressed)(id), commands, self.back)
     }
     fn children(&self, id: ViewId) -> Vec<ViewId> {
         self.kernel

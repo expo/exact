@@ -57,6 +57,8 @@ test('Recorder offers a missing local language and waits for installation before
 // Build first with `bun host/web/build.mjs recorder`.
 test('Recorder follows the scheme with readable recording and saved states', async () => {
   const manifest = JSON.parse(readFileSync(new URL('./app.json', import.meta.url), 'utf8'));
+  const launch = [manifest.background_color, manifest.color_scheme_light?.background_color, manifest.color_scheme_dark?.background_color];
+  expect(launch).toEqual([undefined, undefined, undefined]);
   const session = await open({ host: 'web', app: 'recorder', size: [420, 720], storage: `scheme-${Date.now()}`,
     env: { EXACT_AGENT_EPHEMERAL_PORT: '1' } });
   try {
@@ -73,7 +75,15 @@ test('Recorder follows the scheme with readable recording and saved states', asy
         const fill = background(element);
         return { fill, ink: over(rgba(getComputedStyle(label).color), fill) };
       };
+      // The web host's page colour, which the shell paints when the manifest names no launch colour, in the
+      // recorder's scheme.
+      const probe = document.body.appendChild(document.createElement('div'));
+      probe.style.colorScheme = getComputedStyle(node('recorder')).colorScheme;
+      probe.style.backgroundColor = 'var(--exact-background)';
+      const hostPage = rgba(getComputedStyle(probe).backgroundColor);
+      probe.remove();
       return {
+        hostPage,
         schemes: getComputedStyle(node('recorder')).colorScheme.split(' '),
         preference: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
         page: paint(node('recorder'), node('recorder').firstElementChild),
@@ -117,9 +127,8 @@ test('Recorder follows the scheme with readable recording and saved states', asy
           require(ratio(surface.ink, surface.fill) >= 4.5,
             { state, scheme, name, expected: 'contrast >= 4.5', surface });
         }
-        const launch = scheme === 'light' ? manifest.background_color : manifest.color_scheme_dark?.background_color;
-        const surface = '#' + paint.page.fill.map(n => n.toString(16).padStart(2, '0')).join('');
-        require(launch === surface, { state, scheme, expected: 'launch matches page', launch, surface });
+        require((paint.hostPage[3] ?? 1) === 1 && JSON.stringify(paint.page.fill) === JSON.stringify(paint.hostPage.slice(0, 3)),
+          { state, scheme, expected: 'host page', page: paint.page.fill, host: paint.hostPage });
         const checked = await checkOp(session, [scheme]);
         expect(checked.check.map(report => report.scheme)).toEqual([scheme]);
         failures.push(...checked.check[0].findings.filter(f => f.kind === 'contrast')

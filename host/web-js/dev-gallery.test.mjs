@@ -191,9 +191,10 @@ test("the gallery is told of a kept design only after the app's own publication:
 
 /** A stand-in root and target: a `contract` that writes the gallery's source (or waits, holding a child of its
  * own), and a builder that waits holding one; each records its pid and its child's. */
-function standIns(stall) {
-  const dir = mkdtempSync(join(tmpdir(), 'exact-gallery-life-'));
-  const pids = join(dir, 'pids');
+function standIns(stall, parent = tmpdir()) {
+  const dir = mkdtempSync(join(parent, 'exact-gallery-life-'));
+  const pids = join(dir, 'pids'), buildEnv = join(dir, 'build-env.json'), home = join(dir, 'home');
+  const env = { ...process.env, HOME: home, USERPROFILE: home, EXACT_TOOLS_ORIGIN: 'none', CARGO_TARGET_DIR: join(dir, 'target') };
   writeFileSync(pids, '');
   const hold = `sleep 30 & echo $! >> ${pids}; echo $$ >> ${pids};`;
   mkdirSync(join(dir, 'target/debug'), { recursive: true });
@@ -201,33 +202,52 @@ function standIns(stall) {
   writeFileSync(join(dir, 'target/debug/contract'), `#!/bin/sh\n${stall === 'generate' ? `${hold} sleep 30` : 'mkdir -p "$4"; echo "// Generated" > "$4/app.contract"; echo "{}" > "$4/app.json"; echo made'}\n`, { mode: 0o755 });
   writeFileSync(join(dir, 'target/debug/contract.d'), `${join(dir, 'target/debug/contract')}: ${join(dir, 'src.rs')}\n`);
   mkdirSync(join(dir, 'root/host/web-js'), { recursive: true });
-  writeFileSync(join(dir, 'root/host/web-js/build.mjs'), `const { spawn } = require('node:child_process'); const fs = require('node:fs'); const c = spawn('sleep', ['30']); fs.appendFileSync(${JSON.stringify(pids)}, c.pid + '\\n' + process.pid + '\\n'); setTimeout(() => {}, 30000);\n`);
+  writeFileSync(join(dir, 'root/host/web-js/build.mjs'), `
+    const { spawn } = require('node:child_process');
+    const fs = require('node:fs');
+    const { HOME, USERPROFILE, EXACT_TOOLS_ORIGIN } = process.env;
+    fs.writeFileSync(${JSON.stringify(buildEnv)}, JSON.stringify({ HOME, USERPROFILE, EXACT_TOOLS_ORIGIN }));
+    const c = spawn('sleep', ['30']);
+    fs.appendFileSync(${JSON.stringify(pids)}, c.pid + '\\n' + process.pid + '\\n');
+    setTimeout(() => {}, 30000);
+  `);
   mkdirSync(join(dir, 'app'), { recursive: true });
-  return { dir, pids: () => readFileSync(pids, 'utf8').split('\n').filter(Boolean).map(Number) };
+  return { dir, env, buildEnv, pids: () => readFileSync(pids, 'utf8').split('\n').filter(Boolean).map(Number) };
 }
 const fakeRes = () => { const handlers = {}; return { writeHead() {}, write() {}, end() {}, on: (e, f) => { handlers[e] = f; }, close: () => handlers.close?.() }; };
 const fakeReq = () => { const handlers = {}; return { method: 'GET', headers: {}, on: (e, f) => { handlers[e] = f; }, close: () => handlers.close?.() }; };
 
 test('every process the gallery starts, a child of its generator or its builder included, stops with it: at stop, at either stage, and when its last page has been gone a while', async () => {
   const { galleryLoop } = await import('./dev-gallery.mjs');
+  const parent = mkdtempSync(join(tmpdir(), 'exact-gallery-parent-'));
+  mkdirSync(join(parent, 'node_modules'));
   // ('build, res only': its page gone with only the response's close, as under Bun on a handed-off socket.)
-  for (const [stage, by] of [['generate', null], ['build', 'req'], ['build', 'res']]) {
-    const s = standIns(stage);
-    const loop = galleryLoop({ app: { dir: join(s.dir, 'app'), id: `life-${stage}` }, root: join(s.dir, 'root'), appDist: join(s.dir, 'dist'), env: { ...process.env, CARGO_TARGET_DIR: join(s.dir, 'target') }, client: () => '', log: () => {}, idleMs: 200 });
-    rmSync(loop.cache, { recursive: true, force: true });
-    const req = fakeReq(), res = fakeRes();
-    await loop.handle(req, res, new URL('http://x/__dev/gallery/stream'));
-    await until(() => s.pids().length >= 2, 30_000);
-    const started = s.pids();
-    expect(started.every(alive)).toBe(true);
-    if (stage === 'generate') await loop.stop();
-    // Its last page gone: after the quiet period, its processes stopped with it.
-    else { (by === 'req' ? req : res).close(); await until(() => !started.some(alive), 10_000); }
-    await until(() => !started.some(alive), 10_000);
-    expect(started.filter(alive)).toEqual([]);
-    rmSync(loop.cache, { recursive: true, force: true });
-    rmSync(s.dir, { recursive: true, force: true });
-  }
+  try {
+    for (const [stage, by] of [['generate', null], ['build', 'req'], ['build', 'res']]) {
+      const s = standIns(stage, parent);
+      const loop = galleryLoop({ app: { dir: join(s.dir, 'app'), id: `life-${stage}` }, root: join(s.dir, 'root'), appDist: join(s.dir, 'dist'), env: s.env, client: () => '', log: () => {}, idleMs: 200 });
+      const stale = join(loop.cache, 'previous-run');
+      mkdirSync(loop.cache, { recursive: true });
+      writeFileSync(stale, '');
+      rmSync(loop.cache, { recursive: true, force: true });
+      try {
+        const req = fakeReq(), res = fakeRes();
+        await loop.handle(req, res, new URL('http://x/__dev/gallery/stream'));
+        await until(() => s.pids().length >= 2, 30_000);
+        const started = s.pids();
+        expect(started.every(alive)).toBe(true);
+        if (stage === 'generate') await loop.stop();
+        else {
+          expect(JSON.parse(readFileSync(s.buildEnv, 'utf8'))).toEqual({ HOME: join(s.dir, 'home'), USERPROFILE: join(s.dir, 'home'), EXACT_TOOLS_ORIGIN: 'none' });
+          (by === 'req' ? req : res).close();
+        }
+        await until(() => !started.some(alive), 10_000);
+        expect(started.filter(alive)).toEqual([]);
+        expect(existsSync(stale)).toBe(false);
+      } finally { await loop.stop(); rmSync(loop.cache, { recursive: true, force: true }); rmSync(s.dir, { recursive: true, force: true }); }
+      expect(existsSync(loop.cache)).toBe(false);
+    }
+  } finally { rmSync(parent, { recursive: true, force: true }); }
 }, 120_000);
 
 test("an inspect table asked with no page of the gallery open is a process of the gallery's, stopped with it after the quiet period", async () => {
@@ -238,7 +258,7 @@ test("an inspect table asked with no page of the gallery open is a process of th
   writeFileSync(join(s.dir, 'table'), `#!/bin/sh\nsleep 30 & echo $! >> ${pids}; echo $$ >> ${pids}; sleep 30\n`, { mode: 0o755 });
   // (A quiet period longer than a loaded machine takes from the table writing its pids to the check that they run:
   // at 200 ms the gallery could already have stopped them, 1 run in 5 on main.)
-  const loop = galleryLoop({ app: { dir: join(s.dir, 'app'), id: 'life-table' }, root: join(s.dir, 'root'), appDist: join(s.dir, 'dist'), env: { ...process.env, CARGO_TARGET_DIR: join(s.dir, 'target') }, client: () => '', log: () => {}, idleMs: 3000, tableTool: () => ({ cmd: join(s.dir, 'table'), pre: [] }) });
+  const loop = galleryLoop({ app: { dir: join(s.dir, 'app'), id: 'life-table' }, root: join(s.dir, 'root'), appDist: join(s.dir, 'dist'), env: s.env, client: () => '', log: () => {}, idleMs: 3000, tableTool: () => ({ cmd: join(s.dir, 'table'), pre: [] }) });
   rmSync(loop.cache, { recursive: true, force: true });
   mkdirSync(join(loop.cache, 'dist'), { recursive: true });
   writeFileSync(join(loop.cache, 'dist', 'app.plan'), 'a plan');

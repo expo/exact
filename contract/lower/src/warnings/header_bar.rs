@@ -24,7 +24,7 @@ enum Part {
     Search,
     /// `role="tablist"`: the bar's segmented control.
     Tablist,
-    /// A button that presses, or opens a popover or a dialog: a bar item.
+    /// A button that presses, or commands a popover or a dialog: a bar item.
     Pressable,
     /// `role="status"`: a readout, a bar item that nothing presses (LLP
     /// 1075.003 §9.15), what it holds its face.
@@ -57,7 +57,7 @@ fn part(node: Visit<'_>) -> Part {
     }
     // A link navigates, given the benefit as a pressed thing; a disabled button is a dimmed item.
     let disabled = |a: &Attr| a.name == "disabled" && !matches!(a.value, Expr::Bool(false, _));
-    let item = attrs.iter().any(disabled) || opens(attrs);
+    let item = attrs.iter().any(disabled) || commands(attrs);
     // A link follows its `href`, unless it has none or an empty one (`fact::HREF`).
     let follows = has(attrs, "href") && literal(attrs, "href") != Some("");
     if has(attrs, "press")
@@ -318,7 +318,7 @@ pub(super) const OR_NO_BAR: &str = "; or, for a site's header, say `appearance=\
 /// bar takes one heading as its title (with the symbol images beside it in
 /// its row, `title_row`), the first text after it as the
 /// subtitle (a filled box before it as the avatar), one search field, one
-/// tablist, the buttons that press, open a popover or a dialog or are disabled, and the
+/// tablist, the buttons that press, command a popover or a dialog or are disabled, and the
 /// readouts (`role="status"`, LLP 1075.003 §9.15); the rest of the header is hidden
 /// with it. With two headings the bar takes nothing and the header is shown
 /// as written: `lower-header-no-bar`'s (LLP 1116.003 D2.2). With none, the
@@ -843,9 +843,9 @@ impl<'a> Bar<'a> {
                 bar.tap = Place::Taken;
                 return true;
             }
-            // One that neither presses nor opens around the heading (a link,
+            // One that neither presses nor commands around the heading (a link,
             // a disabled button) is walked for it, as the kernel walks it.
-            Part::Pressable if !has_press(node) && !opens_named(node) && holds_heading(node) => {
+            Part::Pressable if !has_press(node) && !commands_named(node) && holds_heading(node) => {
                 return true
             }
             Part::Pressable => {
@@ -931,27 +931,27 @@ impl<'a> Bar<'a> {
     }
 }
 
-/// Whether the node opens what it names, a popover or a dialog
-/// (`Invocation::opens`).
-fn opens_named(node: Visit<'_>) -> bool {
-    node.element().is_some_and(|(_, _, attrs)| opens(attrs))
+/// Whether the node makes a bar item by its command (`commands`).
+fn commands_named(node: Visit<'_>) -> bool {
+    node.element().is_some_and(|(_, _, attrs)| commands(attrs))
 }
 
-/// Whether these attributes open what they name, as the kernel resolves an
-/// invocation (`Invocation::opens`): a `commandfor` governs a `popovertarget`
-/// beside it, and a popover action `hide` closes, in any case. A computed
-/// command is given the benefit.
-fn opens(attrs: &[Attr]) -> bool {
+/// Whether these attributes make a bar item, as the kernel reads an
+/// invocation (`fact::COMMANDS`): a command that opens a popover or a dialog,
+/// or closes a dialog (a dialog's Cancel is `command="close"` alone), with a
+/// `commandfor` governing a `popovertarget` beside it, and a popover action
+/// `hide` an item in no case. A computed command is given the benefit.
+fn commands(attrs: &[Attr]) -> bool {
     // An empty `commandfor` names nothing, and the `popovertarget` decides.
     if has(attrs, "commandfor") && literal(attrs, "commandfor") != Some("") {
         return computed(attrs, "command")
             || literal(attrs, "command").is_some_and(|c| {
-                ["show-modal", "show-popover", "toggle-popover"]
+                ["show-modal", "close", "show-popover", "toggle-popover"]
                     .iter()
                     .any(|w| c.eq_ignore_ascii_case(w))
             });
     }
-    // An empty `popovertarget` names nothing either, and opens nothing.
+    // An empty `popovertarget` names nothing either.
     has(attrs, "popovertarget")
         && literal(attrs, "popovertarget") != Some("")
         && !literal(attrs, "popovertargetaction").is_some_and(|a| a.eq_ignore_ascii_case("hide"))

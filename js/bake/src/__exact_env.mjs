@@ -104,7 +104,14 @@ const loadedHere = () => {
   return has ? candidates.filter(name => !has(name)) : [];
 };
 // The names whose values in `env` are Bun's: those noted above, and, in `process.env`, those this process loaded.
-const bunNames = env => new Set([...(env.EXACT_BUN_LOADED ?? '').split(',').filter(Boolean), ...env === process.env ? loadedHere() : []]);
+const bunNames = (env, windows = process.platform === 'win32') => new Set([...(childValue(env, 'EXACT_BUN_LOADED', windows) ?? '').split(',').filter(Boolean), ...env === process.env ? loadedHere() : []]);
+
+// Both lists leave the shell value for other readers, including backend and package configuration.
+function settingEnvironment(env, windows) {
+  const fold = windows ? name => name.toUpperCase() : name => name;
+  const ignored = new Set([...bunNames(env, windows), ...(childValue(env, 'EXACT_LAUNCH_OMIT', windows) ?? '').split(',')].map(fold));
+  return name => ignored.has(fold(name)) ? undefined : childValue(env, name, windows);
+}
 
 /** Adds to EXACT_BUN_LOADED, which every process this one starts inherits, the names Bun loaded into this process from
  * `.env` files. Each exact2 script calls it before it starts a process (scripts/app.mjs on import), so the first
@@ -115,13 +122,19 @@ export function noteBunLoaded() {
 
 /** Each of `names` with its value and source (`environment`, `variants.<name>`, `.env.local` or `.env`), or null
  * where none sets it. */
-export function settingValues(app, names, env = process.env) {
-  const files = Object.fromEntries(ENV_FILES.map(file => [file, assignments(app, file)])), bun = bunNames(env), variant = variantEnv(app, env);
+export function settingValues(app, names, env = process.env, { windows = process.platform === 'win32' } = {}) {
+  const files = ENV_FILES.map(file => [file, assignments(app, file)]);
+  const shell = settingEnvironment(env, windows), variant = variantEnv(app, env);
   return Object.fromEntries(names.map(name => {
-    if (env[name] !== undefined && !bun.has(name)) return [name, { value: env[name], source: 'environment' }];
+    const value = shell(name);
+    if (value !== undefined) return [name, { value, source: 'environment' }];
     if (variant && Object.hasOwn(variant.values, name)) return [name, { value: variant.values[name], source: `variants.${variant.name}` }];
-    const file = ENV_FILES.find(f => Object.hasOwn(files[f], name));
-    return [name, file ? { value: files[file][name], source: file } : null];
+    for (const [file, values] of files) {
+      if (!windows && !Object.hasOwn(values, name)) continue;
+      const value = childValue(values, name, windows);
+      if (value !== undefined) return [name, { value, source: file }];
+    }
+    return [name, null];
   }));
 }
 
@@ -528,12 +541,14 @@ export const strayReads = (...args) => envReads(...args).map(read => read.why);
  * not and however it came there (what Bun loaded from `.env` too), is the launch's (an empty one reads the build's),
  * not a source of the build, and the name is not counted. With `windows`, the app is a Windows process, which reads a
  * name in `launch` without regard to case (`childValue`). */
-export function settingChanges(record, env = process.env, app = null, { launch = null, windows = false } = {}) {
-  const read = app ? settingValues(app, Object.keys(record), env) : {}, bun = bunNames(env);
+export function settingChanges(record, env = process.env, app = null, { launch = null, windows = process.platform === 'win32' } = {}) {
+  const read = app ? settingValues(app, Object.keys(record), env, { windows }) : null;
+  const shell = app ? null : settingEnvironment(env, windows);
   return Object.entries(record).flatMap(([name, was]) => {
     if (launch && was?.launch && childValue(launch, name, windows) !== undefined) return [];
-    const now = app ? read[name] ?? (was?.source === 'default' ? was : null)
-      : env[name] !== undefined && !bun.has(name) ? { value: env[name], source: 'environment' } : was;
+    const value = shell?.(name);
+    const now = read ? read[name] ?? (was?.source === 'default' ? was : null)
+      : value !== undefined ? { value, source: 'environment' } : was;
     return now?.value === was?.value ? [] : [{ name, built: was, now }];
   });
 }
@@ -541,7 +556,12 @@ export function settingChanges(record, env = process.env, app = null, { launch =
 /** `env`'s value for `name` in a process started with it. Windows reads a name without regard to case, and of
  * entries that differ only in case the child gets the first in sort order, which is the one Node's `child_process`
  * passes (https://nodejs.org/api/child_process.html#child_processspawncommand-args-options, `options.env`). */
-const childValue = (env, name, windows) => windows ? env[Object.keys(env).filter(key => key.toUpperCase() === name.toUpperCase()).sort()[0]] : env[name];
+export function childValue(env, name, windows) {
+  if (!windows) return env[name];
+  const upper = name.toUpperCase();
+  const key = Object.keys(env).filter(key => key.toUpperCase() === upper).sort()[0];
+  return key === undefined ? undefined : env[key];
+}
 
 /** `settingChanges` for the build in `dist`, from what its `.exact-build.json` says it inlined (`env`). */
 export function changedSettings(dist, env = process.env, app = null) {

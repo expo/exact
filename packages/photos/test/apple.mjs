@@ -30,6 +30,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, wri
 import { dirname, join, resolve } from 'node:path';
 import { loadedDylibs } from '../../../host/apple/link.mjs';
 import { checker, makeFixture, pkg, root, run, texts, until } from './fixture.mjs';
+import { photoKitChanges } from './photokit-changes.mjs';
 
 const argv = process.argv.slice(2), sim = argv.includes('--sim') ? argv[argv.indexOf('--sim') + 1] : process.env.EXACT_SIM;
 const hosts = argv.filter((a, i) => ['macos', 'ios'].includes(a) && argv[i - 1] !== '--sim');
@@ -187,6 +188,7 @@ for (const host of hosts.length ? hosts : ['ios', 'macos']) {
   // The container is read with the app closed: `simctl` waits on a driven app.
   const file = copy && containerFile(copy), known = [...fixtures, join(root, 'scripts/fixtures/picker/oriented-gps.jpg')].map(sha);
   check(where, "the copy is the photo's own file, byte for byte", !!file && known.includes(sha(file)), file ?? `no tmp/${copy ?? 'photos/<uuid>.jpg'} in the container`);
+  await photoKitChanges({ sim, id, name, open, check, dir, fixtures });
 
   // Denied: nothing is read, and no picture is asked.
   privacy('revoke', 'photos');
@@ -202,6 +204,9 @@ for (const host of hosts.length ? hosts : ['ios', 'macos']) {
     await s.tap('copy');
     const refused = await until(s, 'copy-error', (e) => !!e);
     check(where, 'a copy fails NotAllowedError, asking nothing', refused === 'NotAllowedError', refused);
+    await s.tap('watch');
+    const unread = await until(s, 'changes-error', (e) => !!e);
+    check(where, 'photoChanges fails NotAllowedError', unread === 'NotAllowedError', unread);
   } finally {
     await s.close();
   }

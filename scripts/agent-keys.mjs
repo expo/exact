@@ -3,7 +3,7 @@
 // `type` and `tap` forms. Split from agent.mjs, which re-exports each.
 import { randomBytes } from 'node:crypto';
 import { resolve } from 'node:path';
-import { dragArguments } from './agent-drag.mjs';
+import { dragArguments, dragWords } from './agent-drag.mjs';
 
 export function refusalMessage(reply) {
   const r = reply?.refused;
@@ -454,6 +454,25 @@ export function tapWords(args, held = false) {
   if (form === undefined) return [first, {}];
   // A held contact's phases name no target: the contact is the one `tap <target> down` began.
   if (['up', 'cancel', 'hold', 'move'].includes(form)) refuse(held ? `a held contact's phases take no target: \`tap ${[form, ...rest].join(' ')}\`` : `${form} is a phase of a held contact, which none is: \`tap <target> down\`, then \`tap ${form}${form === 'move' ? ' <x> <y>' : form === 'hold' ? ' <ms>' : ''}\``);
+  // A press point before `drag` (#1332): the drag's start point is its own `from`, and a held contact moves by phases.
+  if ((form === 'at' || form === 'down') && rest.includes('drag')) {
+    const words = args.slice(1), split = words.indexOf('drag'), press = words.slice(0, split);
+    // The drag's words as parseDrag reads them. Its head is `to <target>` or a distance `<dx> <dy>`; the first leg's
+    // own options follow it, up to `then`.
+    const after = dragWords(words.slice(split + 1).join(' '));
+    const head = after[0] === 'to' ? ['to', after[1] ?? '<target>'] : [after[0] ?? '<dx>', after[1] ?? '<dy>'], tail = after.slice(2);
+    const own = tail.includes('then') ? tail.slice(0, tail.indexOf('then')) : tail;
+    const point = (list, name) => list.includes(name) ? list.slice(list.indexOf(name) + 1, list.indexOf(name) + 3) : null;
+    const [x = '<x>', y = '<y>'] = point(press, 'at') ?? point(own, 'from') ?? [];
+    const held = press.indexOf('modifiers'), modifiers = held < 0 || press[held + 1] === undefined ? [] : press.slice(held, held + 2);
+    // The drag's own modifiers win; a bare one ending its leg takes the press's.
+    const mine = own.indexOf('modifiers'), fill = mine >= 0 && mine === own.length - 1 && modifiers.length;
+    const rest = fill ? [...tail.slice(0, mine + 1), modifiers[1], ...tail.slice(mine + 1)] : tail;
+    const drag = [...head, ...(own.includes('from') ? [] : ['from', x, y]), ...(mine < 0 ? modifiers : []), ...rest];
+    // A target of several words, or none, goes back in quotes, as the op reads it.
+    const target = first === '' || /[\s"\\]/.test(first) ? JSON.stringify(first) : first;
+    refuse(`a drag starts at a point with from: \`tap ${[target, 'drag', ...drag].join(' ')}\`; a held contact is \`tap ${[target, 'down', 'at', x, y, ...modifiers].join(' ')}\`, then \`tap hold <ms>\`, \`tap move [by] <x> <y> [over <ms>]\`, \`tap up\``);
+  }
   if (form.startsWith('{')) { try { return [first, JSON.parse(args.slice(1).join(' '))]; } catch (e) { refuse(e.message); } }
   switch (form) {
     // A click with modifiers held (gallery F20): `tap <target> modifiers Shift+Meta`.
@@ -475,6 +494,8 @@ export function tapWords(args, held = false) {
       if (rest.length !== 1) refuse('pictureinpicture <control>: minimize, back, close or hover');
       return [first, { pictureInPicture: rest[0] }];
     case 'pinch': return [first, { pinch: number(rest[0], 'pinch'), ...options(rest.slice(1), ['at']) }];
+    // Several fingers tapped together, as a window's recognizers read them (the iOS dev menu's four).
+    case 'fingers': return [first, { fingers: number(rest[0], 'fingers'), ...options(rest.slice(1), ['at']) }];
     // Files dragged in from outside, each a path (studio diary R19).
     case 'drop': if (!rest.length) refuse('drop takes one or more paths'); return [first, { drop: rest.map((path) => resolve(path)) }];
     // A drag of those files from outside comes over the target and stays there (`dragenter`), until a `drop` there
@@ -512,7 +533,7 @@ export function tapWords(args, held = false) {
       if (!['left', 'right'].includes(rest[0]) || !(rest.length === 3 || (rest.length === 5 && rest[3] === 'for'))) refuse('stick takes left or right, x and y in [-1, 1], and optionally for <ms>');
       return [first, { stick: rest[0], value: [number(rest[1], 'stick'), number(rest[2], 'stick')], ...(rest[3] === 'for' ? { for: number(rest[4], 'for') } : {}) }];
     // Most often a target of several words left unquoted (sb4 farm wave 4, 053: `tap Why are my…`).
-    default: refuse(`unknown word ${JSON.stringify(form)}; a target of several words is quoted inside the op (\`tap "${args.join(' ').replace(/["\\]/g, '\\$&')}"\`), and after a target come only: tap <target> [at <x> <y> [modifiers <M>] | modifiers <M> | down [at <x> <y>] [modifiers <M>] | wheel <dx> <dy> [gesture | fling | hold] [at <x> <y>] [modifiers <M>] | wheel 0 0 release | mouse | dblclick [touch] | contextmenu | auxclick | clicks <1-3> (each [at <x> <y>] [modifiers <M>]) | hover | drop <path…> | dragenter <path…> | dragleave | into <key> … | pinch <scale> [at <x> <y>] | history <n> | mediasession <action> [seconds] | pictureinpicture <control> | drag …]`);
+    default: refuse(`unknown word ${JSON.stringify(form)}; a target of several words is quoted inside the op (\`tap "${args.join(' ').replace(/["\\]/g, '\\$&')}"\`), and after a target come only: tap <target> [at <x> <y> [modifiers <M>] | modifiers <M> | down [at <x> <y>] [modifiers <M>] | wheel <dx> <dy> [gesture | fling | hold] [at <x> <y>] [modifiers <M>] | wheel 0 0 release | mouse | dblclick [touch] | contextmenu | auxclick | clicks <1-3> (each [at <x> <y>] [modifiers <M>]) | hover | drop <path…> | dragenter <path…> | dragleave | into <key> … | pinch <scale> [at <x> <y>] | fingers <2-5> [at <x> <y>] | history <n> | mediasession <action> [seconds] | pictureinpicture <control> | drag …]`);
   }
 }
 
@@ -535,8 +556,9 @@ export function clockSlices({ bpm, ms }) {
 export function tapArguments(opts) {
   if (opts.wheel !== undefined && ![opts.wheel?.[0], opts.wheel?.[1]].every(Number.isFinite)) throw new MalformedOperation('wheel: expected two finite deltas');
   if (opts.drag) dragArguments(opts.drag);
-  if (opts.mouse && ['contextmenu','dblclick','auxclick','clicks','down','drag','wheel','hover','pinch','history','into','gesture'].some(key => opts[key] !== undefined)) throw new MalformedOperation('mouse cannot be combined with another input mode');
+  if (opts.mouse && ['contextmenu','dblclick','auxclick','clicks','down','drag','wheel','hover','pinch','fingers','history','into','gesture'].some(key => opts[key] !== undefined)) throw new MalformedOperation('mouse cannot be combined with another input mode');
   if (opts.pinch !== undefined) pinchArguments(opts.pinch);
+  if (opts.fingers !== undefined && ![2, 3, 4, 5].includes(opts.fingers)) throw new MalformedOperation('tap … fingers: 2 to 5 fingers');
   if (opts.into) intoArguments(opts.into);
   if (opts.seconds != null && !Number.isFinite(opts.seconds)) throw new MalformedOperation('mediasession: expected finite seconds');
   if (opts.mediaSession === 'seekto' && !(Number.isFinite(opts.seconds) && opts.seconds >= 0)) throw new MalformedOperation('mediasession: seekto needs finite nonnegative seconds');
@@ -544,11 +566,11 @@ export function tapArguments(opts) {
   const button = ['mouse', 'contextmenu', 'auxclick', 'dblclick', 'clicks'].filter((k) => opts[k] !== undefined && opts[k] !== false);
   if (button.length > 1) throw new MalformedOperation(`tap: one of mouse, dblclick, contextmenu, auxclick and clicks at a time, not ${button.join(' and ')}`);
   if (opts.clicks !== undefined && ![1, 2, 3].includes(opts.clicks)) throw new MalformedOperation('tap … clicks: 1, 2 or 3');
-  if (opts.at !== undefined && ((opts.hover && !opts.wheel) || opts.history !== undefined || opts.drop || opts.dragenter || opts.dragleave || opts.into)) throw new MalformedOperation('at is a point on a press, a click (mouse, dblclick, contextmenu, auxclick, clicks), a wheel, a contact, a pinch or a drag');
+  if (opts.at !== undefined && ((opts.hover && !opts.wheel) || opts.history !== undefined || opts.drop || opts.dragenter || opts.dragleave || opts.into)) throw new MalformedOperation('at is a point on a press, a click (mouse, dblclick, contextmenu, auxclick, clicks), a wheel, a contact, a pinch, a tap of several fingers or a drag');
   if (opts.at !== undefined && (!Array.isArray(opts.at) || opts.at.length !== 2 || !opts.at.every(Number.isFinite))) throw new MalformedOperation('tap at needs two finite numbers');
   const modifiers = opts.modifiers ?? opts.drag?.modifiers;
   if (modifiers !== undefined && !String(modifiers).split('+').filter(Boolean).every(k => ['Shift', 'Control', 'Alt', 'Meta'].includes(k))) throw new MalformedOperation(`tap … modifiers: ${modifiers} is not Shift, Control, Alt and Meta joined by +`);
-  if (modifiers !== undefined && ((opts.hover && !opts.wheel) || opts.history !== undefined || opts.into || opts.drop || opts.pinch !== undefined)) throw new MalformedOperation('modifiers are held through a press, a click, a wheel, a contact or a drag');
+  if (modifiers !== undefined && ((opts.hover && !opts.wheel) || opts.history !== undefined || opts.into || opts.drop || opts.pinch !== undefined || opts.fingers !== undefined)) throw new MalformedOperation('modifiers are held through a press, a click, a wheel, a contact or a drag');
   return button;
 }
 
@@ -556,6 +578,8 @@ export function tapArguments(opts) {
  * Unsupported forms are refused before any input reaches the platform. */
 export function pointerGap(host, browser, opts) {
   if (opts.touch && !['ios', 'host-ios', 'android', 'windows'].includes(host) && !(host === 'web' && (browser ?? 'chrome') === 'chrome')) return `${host === 'web' ? browser ?? 'chrome' : host} does not carry a touch double tap (dblclick touch, LLP 1057.001.000 §6)`;
+  // Only the iOS touch runner puts several fingers down at once (touches.mjs `realFingers`).
+  if (opts.fingers !== undefined && !['ios', 'host-ios'].includes(host)) return `${host === 'web' ? browser ?? 'chrome' : host} does not carry a tap of ${opts.fingers} fingers (iOS --touch platform does)`;
   if (['macos', 'mac', 'host'].includes(host) || (host === 'web' && (browser ?? 'chrome') === 'chrome')) return null;
   const held = opts.modifiers ?? opts.drag?.modifiers;
   const gaps = [

@@ -10,8 +10,10 @@
 //   `ACCESS_MEDIA_LOCATION` in the same request. Adding asks nothing (API 29 and later).
 // - The app's own photos are read under the add line (D6): the runner lets a picture or a copy through as `owned`,
 //   and MediaStore decides by opening the id.
-// - Android has no event for a change in Settings: each resume reads the status again and, when it changed,
-//   announces it, and revokes the pictures it drew that the app may no longer read (D6).
+// - Android has no event for a change in Settings, and the module observes none in MediaStore (LLP 1133.019.000 D1):
+//   each resume reads the status again, announces it when it changed and the library's readers under a grant, and
+//   revokes the pictures it drew that the app may no longer read (D6).
+// - `photoChanges` is rescan-only (LLP 1133.019.000 D3): a token answers `expired`, and the app lists again.
 // - Tier 3 (D9): `queryArgsHatch` sees each `photoAssets` query's `Bundle` after the module's arguments, on the
 //   module's thread, and a page's key is joined to its selection after; `insertValuesHatch` each add's
 //   `ContentValues`, likewise.
@@ -85,14 +87,23 @@ class PhotosModule(context: ExtensionContext) : ExactExtension(context) {
         }
     }
 
+    /** The module observes no MediaStore change (LLP 1133.019.000 D1), and a selection can change in Settings with
+     * the same status, so each resume under a grant announces the readers: an app replaces its index then. Otherwise
+     * they are announced only when the read itself changed: a read announced while `prompt` asks again, so the resume
+     * after a person's refusal would show the dialog a second time. */
     override fun resumed() {
         if (context.agent) return
-        val before = said ?: return
+        val last = said
         val now = status()
-        if (now.toString() == before) return
-        context.changed("photos.photoLibraryStatus")
-        context.changed("photos.photoAssets")
-        context.changed("photos.photoChanges")
+        if (last != null) {
+            if (now.toString() != last) context.changed("photos.photoLibraryStatus")
+            val read = { status: JSONObject -> status.getString("state") to status.getString("access") }
+            if (now.getString("state") == "granted" || read(now) != read(JSONObject(last))) {
+                context.changed("photos.photoAssets")
+                context.changed("photos.photoChanges")
+            }
+        }
+        // A picture can be drawn from an id the app kept, with no status read before.
         if (now.getString("access") != "full") withdraw()
     }
 
@@ -100,7 +111,7 @@ class PhotosModule(context: ExtensionContext) : ExactExtension(context) {
     private fun withdraw() {
         val ids = drawn.toList()
         work.execute {
-            val gone = ids.filter { !opens(Uri.parse(it)) }
+            val gone = ids.filter { unreadable(Uri.parse(it)) }
             main.post { gone.forEach { drawn.remove(it); context.revokePicture("photos:$it") } }
         }
     }
@@ -202,7 +213,23 @@ class PhotosModule(context: ExtensionContext) : ExactExtension(context) {
         MediaStore.Images.Media.OWNER_PACKAGE_NAME, MediaStore.Images.Media.MIME_TYPE, MediaStore.Images.Media.DISPLAY_NAME,
     ) + if (Build.VERSION.SDK_INT >= 30) arrayOf(MediaStore.MediaColumns.IS_FAVORITE) else emptyArray()
 
-    private fun assets(args: JSONObject): JSONObject {
+    /** `photoAssets`. No cursor, or a failure of the provider or of the app's hatch, answers an error, never an empty
+     * last page, which would let a replacement drop the app's index (LLP 1133.019.000 D3). */
+    private fun assets(args: JSONObject): JSONObject = try {
+        page(args)
+    } catch (e: SecurityException) {
+        failed("NotAllowedError", e.javaClass.name)
+    } catch (e: android.os.OperationCanceledException) {
+        failed("AbortError", e.javaClass.name)
+    } catch (e: RuntimeException) { failed("UnknownError", e.javaClass.name) }
+
+    /** A failure of `photoAssets`, logged by its names alone: no ids, no selection, no provider message. */
+    private fun failed(code: String, cause: String): JSONObject {
+        say("photoAssets: $code ($cause)")
+        return error(code)
+    }
+
+    private fun page(args: JSONObject): JSONObject {
         val limit = args.optInt("limit", 60).coerceIn(1, 500)
         // The key's numbers: the date taken and the date added, either null, and the row.
         val after = try {
@@ -239,15 +266,14 @@ class PhotosModule(context: ExtensionContext) : ExactExtension(context) {
         val out = JSONArray()
         var last: List<Long?>? = null
         var more = false
-        try {
-            app.contentResolver.query(IMAGES, columns, query, null)?.use { c ->
-                while (c.moveToNext()) {
-                    if (out.length() == limit) { more = true; break }
-                    out.put(asset(c))
-                    last = listOf(if (c.isNull(4)) null else c.getLong(4), if (c.isNull(5)) null else c.getLong(5), c.getLong(0))
-                }
+        val c = app.contentResolver.query(IMAGES, columns, query, null) ?: return failed("UnknownError", "no cursor")
+        c.use {
+            while (c.moveToNext()) {
+                if (out.length() == limit) { more = true; break }
+                out.put(asset(c))
+                last = listOf(if (c.isNull(4)) null else c.getLong(4), if (c.isNull(5)) null else c.getLong(5), c.getLong(0))
             }
-        } catch (e: SecurityException) { return error("NotAllowedError", e.message) }
+        }
         val cursor = last?.takeIf { more }?.let { PageCursor.text("mediastore", it.map { v -> v?.toString() }) }
         return JSONObject().put("assets", out).put("cursor", cursor ?: JSONObject.NULL)
     }
@@ -303,6 +329,12 @@ class PhotosModule(context: ExtensionContext) : ExactExtension(context) {
             .put("apple", JSONObject.NULL)
             .put("android", JSONObject().put("relativePath", text(6)).put("bucketDisplayName", text(7)).put("ownerPackageName", text(8)))
     }
+
+    /** Whether the app may no longer open [uri]: refused, or no row. A query that fails otherwise, or answers no
+     * cursor, is no answer, and the picture stays. */
+    private fun unreadable(uri: Uri): Boolean = try {
+        app.contentResolver.query(uri, arrayOf(MediaStore.Images.Media._ID), null, null, null)?.use { !it.moveToFirst() } ?: false
+    } catch (e: SecurityException) { true } catch (e: RuntimeException) { false }
 
     /** Whether the app may open [uri] now. */
     private fun opens(uri: Uri): Boolean = try {

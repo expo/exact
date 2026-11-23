@@ -401,6 +401,14 @@ impl<'a> Visit<'a> {
         matches!(self.node, Node::When { .. } | Node::Match { .. })
     }
 
+    /// A view `if`'s condition.
+    pub fn condition(self) -> Option<&'a Expr> {
+        match self.node {
+            Node::When { cond, .. } => Some(cond),
+            _ => None,
+        }
+    }
+
     /// Names bound over each direct region, in the same order as `regions`.
     pub fn bindings(self) -> [contract_syntax::Binds<'a>; 2] {
         self.node.scoped_child_lists().map(|(_, binds)| binds)

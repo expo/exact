@@ -143,10 +143,13 @@ export function dragArguments(opts) {
   if (total > DRAG_BOUNDS.total) throw new MalformedOperation(`drag: the gesture lasts past ${DRAG_BOUNDS.total} ms`);
 }
 
+/** The words of a drag's text: a quoted target or read, escapes included, is one word. */
+export const dragWords = text => text.match(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s]+/g) ?? [];
+
 /** Parse the drag portion of one CLI operation; quoted reads belong to the preceding leg. */
 export function parseDrag(s, text) {
   // A read is quoted either way: `during 'state liked'` as `during "state liked"`.
-  const words = (text.match(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s]+/g) ?? []).map(w => w.length > 1 && w.startsWith("'") && w.endsWith("'") ? JSON.stringify(w.slice(1, -1).replace(/\\'/g, "'")) : w);
+  const words = dragWords(text).map(w => w.length > 1 && w.startsWith("'") && w.endsWith("'") ? JSON.stringify(w.slice(1, -1).replace(/\\'/g, "'")) : w);
   const drag = words[0] === 'to' ? { to: words[1] } : { dx: Number(words[0]), dy: Number(words[1]) };
   let leg = drag;
   for (let i = 2; i < words.length;) {

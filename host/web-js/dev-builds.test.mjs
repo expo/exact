@@ -5,12 +5,13 @@
 // carries it. EXACT_DEV_BUILD_HOLD_MS holds each build's end, as a slow one.
 import { afterEach, expect, test } from 'bun:test';
 import { spawnOwned, stopAll } from '../../scripts/test-children.mjs';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
-import { dirname, join, posix, resolve, win32 } from 'node:path';
+import { dirname, join, posix, relative, resolve, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { INPUT_TREE, OUTPUT, suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { shaderWatchRoots } from '../../scripts/app.mjs';
@@ -20,6 +21,8 @@ import { installLock } from '../../scripts/filesystem.mjs';
 import { besidePattern } from '../web/beside.mjs';
 import { appSources } from '../web/serve.mjs';
 import { loopWebDist } from '../../scripts/web-build.mjs';
+import { digest, lockClosure, workspaceManifest } from '../../scripts/kept.mjs';
+import { freshCompiler, hostTriple } from '../../scripts/tools.mjs';
 import { engagement } from '../web/engagement.js';
 
 const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
@@ -779,6 +782,214 @@ test('the JS loop: an edit stops a young build, leaving dist as it was; a value 
     rmSync(dir, { recursive: true, force: true });
   }
 }, 1_200_000);
+
+test.skipIf(process.platform === 'win32')('the design reader observes dev flags and rechecks kept inputs by content', async () => {
+  mkdirSync(join(ROOT, 'target'), { recursive: true });
+  const dir = mkdtempSync(join(ROOT, 'target/exact-reader-choice-')), app = join(dir, 'app'), target = join(dir, 'cargo');
+  const name = 'exact-web-js', debug = join(target, 'debug', name), input = join(dir, 'compiler source.rs');
+  const fast = join(target, 'host-dev', name), bin = join(dir, 'bin'), started = join(dir, 'started'), release = join(dir, 'release');
+  const invoked = join(dir, 'invoked');
+  const set = join(dir, '.cache/exact/tools', hostTriple(), 'reader');
+  const compiler = marker => `#!/bin/sh
+    if [ "$1" = js ]; then
+      printf '%s\\n' '${marker}' >> "$HOME/invoked"
+      exit 1
+    fi
+    [ "$1" = inspect-table ] || exit 1
+    case "$(/bin/cat "$2")" in
+      first) printf '%s' '${JSON.stringify({ plan: sha('first'), marker })}';;
+      second) printf '%s' '${JSON.stringify({ plan: sha('second'), marker })}';;
+    esac > "$3"
+  `;
+  const stamp = 1700000000;
+  const pin = Bun.TOML.parse(readFileSync(join(ROOT, 'rust-toolchain.toml'), 'utf8')).toolchain.channel;
+  const rustup = join(dir, 'rustup');
+  const env = { HOME: dir, USERPROFILE: dir, RUSTUP_HOME: rustup, PATH: `${bin}:${process.env.PATH}`,
+    CARGO_TARGET_DIR: target, EXACT_TOOLS_ORIGIN: 'none', EXACT_WEB_COMPILER: '',
+    RUSTFLAGS: undefined, CARGO_ENCODED_RUSTFLAGS: undefined };
+  for (const key of Object.keys(process.env)) if (key.startsWith('CARGO_PROFILE_DEV_')) env[key] = undefined;
+  const until = async pass => {
+    const end = Date.now() + 5000;
+    while (!pass()) {
+      if (Date.now() > end) throw new Error(loop.said());
+      await Bun.sleep(20);
+    }
+  };
+  let loop;
+  try {
+    for (const path of [app, dirname(debug), dirname(fast), set, bin, join(rustup, 'toolchains', `${pin}-${hostTriple()}`)]) mkdirSync(path, { recursive: true });
+    writeFileSync(join(app, 'app.json'), JSON.stringify({ name: 'Reader choice', app: { id: 'test.readerchoice', name: 'Reader choice' } }));
+    writeFileSync(join(app, 'app.contract'), 'component App\n  view\n    text "Reader"\n');
+    writeFileSync(input, 'old');
+    utimesSync(input, stamp, stamp);
+    const escape = path => path.replaceAll(' ', '\\ ');
+    const writeCompiler = (path, marker) => {
+      writeFileSync(path, compiler(marker), { mode: 0o755 });
+      writeFileSync(`${path}.d`, `${escape(path)}: ${escape(input)}\n`);
+    };
+    writeCompiler(debug, 'debug');
+    expect(freshCompiler(debug)).toBe(true);
+    writeCompiler(join(dir, 'optimized'), 'host-dev');
+    writeFileSync(join(bin, 'cargo'), `#!/bin/sh
+      [ "$1" = build ] && [ "$4" = host-dev ] || exit 1
+      : > "$HOME/started"
+      while [ ! -e "$HOME/release" ]; do /bin/sleep 0.02; done
+      /bin/cp "$HOME/optimized" "$CARGO_TARGET_DIR/host-dev/exact-web-js"
+      /bin/cp "$HOME/optimized.d" "$CARGO_TARGET_DIR/host-dev/exact-web-js.d"
+    `, { mode: 0o755 });
+    writeFileSync(join(set, name), compiler('set'), { mode: 0o755 });
+    writeFileSync(join(set, 'manifest.json'), JSON.stringify({ source: 'built', verifiedBuild: true, products: {
+      [name]: { file: name, crate: name, inputs: [[relative(ROOT, input), digest(input)]],
+        closure: lockClosure(ROOT, name), workspace: sha(JSON.stringify(workspaceManifest(ROOT))) },
+    } }));
+    const inspect = async plan => {
+      mkdirSync(loop.dist, { recursive: true });
+      writeFileSync(join(loop.dist, 'app.plan'), plan);
+      const response = await fetch(`${loop.base}/dev-inspect.json`);
+      expect(response.status).toBe(200);
+      return (await response.json()).marker;
+    };
+    loop = await devLoop(app, { ...env, RUSTFLAGS: '-g' });
+    expect(loop.said()).not.toContain('design reader ready');
+    await until(() => existsSync(started));
+    expect(await inspect('first')).toBe('debug');
+    writeFileSync(release, '');
+    await until(() => loop.said().includes('design reader ready'));
+    expect(await inspect('second')).toBe('host-dev');
+    await loop.stop();
+    for (const path of [fast, release, started]) rmSync(path);
+    loop = await devLoop(app, env);
+    expect(loop.said()).toContain("design reader ready (a tool set's)");
+    expect(await inspect('first')).toBe('set');
+    expect(existsSync(started)).toBe(false);
+    writeFileSync(input, 'new');
+    utimesSync(input, stamp, stamp);
+    await Bun.sleep(1000);
+    expect(await inspect('second')).toBe('debug');
+    await until(() => existsSync(started));
+    await loop.stop();
+    rmSync(started, { force: true });
+
+    const copy = join(target, 'web-js-dev-compiler-app');
+    writeCompiler(copy, 'copy');
+    writeFileSync(invoked, '');
+    loop = await devLoop(app, { ...env, EXACT_WEB_COMPILER: debug });
+    expect(loop.said()).not.toContain('design reader ready');
+    await until(() => existsSync(started));
+    expect(readFileSync(invoked, 'utf8').trim()).toBe('debug');
+    writeFileSync(join(app, 'app.contract'), 'component App\n  view\n    text "Reader edit"\n');
+    await until(() => readFileSync(invoked, 'utf8').trim().split('\n').length >= 2);
+    expect(readFileSync(invoked, 'utf8').trim().split('\n')).toEqual(['debug', 'debug']);
+  } finally {
+    await loop?.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test('a tool set is revalidated once a second through repeated reader requests', () => {
+  const source = readFileSync(new URL('./dev.mjs', import.meta.url), 'utf8');
+  const start = source.indexOf('  const readerCompiler = ');
+  const end = source.indexOf('  const toolExits = ', start);
+  let now = 1, calls = 0, selected = 'set';
+  const current = runInNewContext(source.slice(start, end) + '\ntoolCurrent', {
+    process: { env: {} }, ownTool: 'own', tool: { path: 'set' },
+    performance: { now: () => now },
+    webCompilerFrom(_env, options) {
+      expect(options?.rehash).toBe(true);
+      calls++;
+      return { path: selected };
+    },
+  });
+  expect(current()).toBe(true);
+  selected = 'debug';
+  for (now = 17; now < 1001; now += 16) expect(current()).toBe(true);
+  expect(calls).toBe(1);
+  now = 1001;
+  expect(current()).toBe(false);
+  expect(calls).toBe(2);
+});
+
+test.skipIf(process.platform === 'win32')('an inspect request retries when the selected reader was evicted', async () => {
+  const source = readFileSync(new URL('./dev.mjs', import.meta.url), 'utf8');
+  const current = source.slice(source.indexOf('  const readerCompiler = '), source.indexOf('  const patcher = '));
+  const reader = source.slice(source.indexOf('  const toolFresh = '), source.indexOf('  // The design\'s shape'));
+  const dir = mkdtempSync(join(tmpdir(), 'exact-reader-eviction-'));
+  const kept = join(dir, 'kept'), debug = join(dir, 'debug'), plan = join(dir, 'app.plan');
+  const launch = cmd => ({ cmd, pre: [], done() {} });
+  const writeReader = (path, marker) => writeFileSync(path, `#!/bin/sh
+    [ "$1" = inspect-table ] || exit 1
+    printf '{"plan":"%s","marker":"${marker}"}' "$(/bin/cat "$2")" > "$3"
+  `, { mode: 0o755 });
+  const launched = [], inspections = new Set();
+  try {
+    writeReader(kept, 'kept');
+    writeReader(debug, 'debug');
+    const inspectTable = runInNewContext(current + reader + '\ninspectTable', {
+      app: { target: dir }, root: dir, stopping: false, process, resolve, readFileSync, rmSync,
+      performance: { now: () => 1 }, ownTool: join(dir, 'host-dev'), tool: { path: kept, ready: true },
+      buildTool() {}, inspections, launch, webCompiler: () => launch(debug),
+      webCompilerFrom: () => ({ path: existsSync(kept) ? kept : debug }),
+      spawn(cmd, args, options) { launched.push(cmd); return spawn(cmd, args, options); },
+    });
+    const inspect = async name => {
+      const digest = sha(name);
+      writeFileSync(plan, digest);
+      const bytes = await inspectTable(digest, plan);
+      return bytes && JSON.parse(bytes).marker;
+    };
+    expect(await inspect('first')).toBe('kept');
+    rmSync(kept);
+    expect(await inspect('second')).toBe('debug');
+    expect(launched).toEqual([kept, kept, debug]);
+
+    rmSync(debug);
+    expect(await inspect('third')).toBeNull();
+    expect(launched.slice(3)).toEqual([debug, debug]);
+    expect(inspections.size).toBe(0);
+    writeReader(debug, 'debug');
+    expect(await inspect('third')).toBe('debug');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a resident design reader restarts when its executable is replaced at the same path', async () => {
+  const source = readFileSync(new URL('./dev.mjs', import.meta.url), 'utf8');
+  const start = source.indexOf('  const patcher = ');
+  const end = source.indexOf('  const toolExits = ', start);
+  const askStart = source.indexOf('  const patcherAsk = ');
+  const askEnd = source.indexOf('  /** A scrub', askStart);
+  const dir = mkdtempSync(join(tmpdir(), 'exact-reader-replace-')), path = join(dir, 'reader');
+  const spawned = [], stopped = [];
+  try {
+    writeFileSync(path, 'old');
+    const ask = runInNewContext(source.slice(start, end) + source.slice(askStart, askEnd) + '\npatcherAsk', {
+      stopping: false, toolFresh: () => true, statSync, tool: { path, built: null }, resolve,
+      root: dir, app: { dir }, toolEnv: () => ({}), stopGroup: child => { if (child) stopped.push(child); },
+      spawn(executable) {
+        const child = new EventEmitter();
+        child.stdin = new EventEmitter();
+        child.stdout = new EventEmitter();
+        const marker = readFileSync(executable, 'utf8');
+        child.stdin.write = text => { child.answer = () => child.stdout.emit('data', JSON.stringify({ id: JSON.parse(text).id, marker }) + '\n'); };
+        spawned.push(child);
+        return child;
+      },
+    });
+    const first = ask({});
+    spawned[0].answer();
+    expect((await first).marker).toBe('old');
+    const pending = ask({});
+    expect(spawned).toHaveLength(1);
+    writeFileSync(join(dir, 'replacement'), 'new');
+    renameSync(join(dir, 'replacement'), path);
+    const next = ask({});
+    expect(spawned).toHaveLength(2);
+    expect(stopped).toEqual([spawned[0]]);
+    spawned[0].emit('exit');
+    expect(await pending).toEqual({ fallback: true });
+    spawned[1].answer();
+    expect((await next).marker).toBe('new');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 
 test('the JS loop: a value-only design edit while the design reader builds waits for it, then is a batch, no full build', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'exact-reader-wait-'));

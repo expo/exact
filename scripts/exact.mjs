@@ -635,16 +635,17 @@ function prebuildCompiler() {
   if (!existsSync(COMPILER)) console.log(`\nBuilding the Contract compiler in the background (pid ${child.pid}), so \`contract\` answers at once when you need it.`);
 }
 
-/** `exact contract …` — this checkout's compiler, from anywhere (LLP 1086 D4), in LLP 1174 D5's order: its debug build
- * (as the guides use it) while fresh, a tool set's, or Cargo: the pinned toolchain whatever rustup would pick from the
- * caller's directory, in exact2's own target/, never an inherited one (an app's, or another checkout's). */
-export async function contract(args, env = process.env) {
+/** `exact contract …` runs this checkout's compiler from anywhere (LLP 1086 D4), with the tool selection in
+ * LLP 1174 D5. Cargo builds with the pinned toolchain in this checkout's target directory. */
+export async function contract(args, env = process.env, { debug } = {}) {
   // `build --json` is one JSON array on stdout and nothing on stderr: the compiler's diagnostics, then app.ts's.
   const jsonOutput = args.includes('--json'), json = args[0] === 'build' && jsonOutput;
   // A build of an app's `app.contract` refreshes the types its `app.ts` imports (LLP 1116.001 D4.5); of unsaved text
   // (`--stdin`), whose types no file holds, neither refreshes them nor type-checks app.ts.
   const input = args[0] === 'build' && !args.includes('--stdin') ? args.slice(1).find((arg, i, rest) => !arg.startsWith('-') && rest[i - 1] !== '-o') : null;
-  const tool = contractTool({ env, json, file: input ?? '' });
+  // The Forma server catches compiler panics, which requires the debug profile's unwinding (LLP 1174 D5).
+  const preferDebug = args[0] === 'forma' && args[1] === 'serve';
+  const tool = contractTool({ env, json, file: input ?? '', preferDebug, debug });
   if (!tool || !prepareContractGame(args)) return 1;
   const result = spawnSync(tool.cmd, [...tool.pre, ...args], {stdio: ['inherit', json ? 'pipe' : 'inherit', 'inherit'], env: tool.env, encoding: 'utf8', maxBuffer: 1 << 26});
   if (result.error) throw new Error(`${tool.cmd}: ${result.error.message}${tool.cmd === 'cargo' ? ' (install rustup from https://rustup.rs)' : ''}`);

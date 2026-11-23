@@ -250,11 +250,13 @@ pub(crate) fn read_only<'a>(
 
 /// The package a file is in, as a component's identity finds one (the
 /// nearest directory above it, below the app's, whose `package.json` has a
-/// name; one under a `node_modules`; or one a link anywhere in a
-/// `node_modules`, in the app's tree or above it, points to, a manifest there
-/// or not), whatever the app's load says: as `forma_contract::owned` judges
-/// a Contract source. `Err` when there are too many directories to tell
-/// (refused, not taken for none).
+/// name; one under a `node_modules`; or one a link points to, a manifest
+/// there or not: a link anywhere in a `node_modules` in the app's tree, or
+/// an entry or `@scope` entry of a `node_modules` above it, where a
+/// workspace's hoisted links are, the packages' insides not read), whatever
+/// the app's load says: as `forma_contract::owned` judges a Contract source.
+/// `Err` when there are too many directories to tell (refused, not taken
+/// for none).
 fn in_package(dir: &std::path::Path, file: &std::path::Path) -> Result<Option<String>, String> {
     const LIMIT: usize = 400_000;
     let Ok(app) = dir.canonicalize() else {
@@ -270,14 +272,38 @@ fn in_package(dir: &std::path::Path, file: &std::path::Path) -> Result<Option<St
                 .collect(),
         }
     };
-    // Every directory in the app's tree and each node_modules above it, links not followed: each link
-    // inside a node_modules (at any depth) is a package's root, and any directory under one a package's.
+    // A link in a node_modules is a package's root, and any directory under one a package's; a link back
+    // to the app or above it (a workspace's own) is no package.
+    let linked = |path: &std::path::Path| {
+        path.canonicalize()
+            .ok()
+            .filter(|root| !app.starts_with(root) && file.starts_with(root))
+            .map(|root| root.display().to_string())
+    };
+    // Each node_modules above the app: its entries and its @scope entries, where a workspace's hoisted
+    // links are, not the packages' insides (a Bun store there holds every package's sources).
+    for modules in app.ancestors().skip(1).map(|a| a.join("node_modules")) {
+        let mut entries = read(&modules)?;
+        while let Some(e) = entries.pop() {
+            let kind = e
+                .file_type()
+                .map_err(|err| format!("{}: {err}", e.path().display()))?;
+            let path = e.path();
+            if kind.is_symlink() {
+                if let Some(root) = linked(&path) {
+                    return Ok(Some(root));
+                }
+            } else if kind.is_dir()
+                && path.parent() == Some(modules.as_path())
+                && e.file_name().to_string_lossy().starts_with('@')
+            {
+                entries.extend(read(&path)?);
+            }
+        }
+    }
+    // Every directory in the app's tree, links not followed: each link inside a node_modules (at any
+    // depth) a package's root.
     let mut stack: Vec<(std::path::PathBuf, bool)> = vec![(app.clone(), false)];
-    stack.extend(
-        app.ancestors()
-            .skip(1)
-            .map(|a| (a.join("node_modules"), true)),
-    );
     let mut seen = 0;
     while let Some((d, modules)) = stack.pop() {
         seen += 1;
@@ -291,13 +317,8 @@ fn in_package(dir: &std::path::Path, file: &std::path::Path) -> Result<Option<St
             let name = e.file_name();
             let path = e.path();
             if kind.is_symlink() {
-                if modules {
-                    // A link back to the app or above it (a workspace's own) is no package.
-                    if let Ok(root) = path.canonicalize() {
-                        if !app.starts_with(&root) && file.starts_with(&root) {
-                            return Ok(Some(root.display().to_string()));
-                        }
-                    }
+                if let Some(root) = modules.then(|| linked(&path)).flatten() {
+                    return Ok(Some(root));
                 }
             } else if kind.is_dir() && !matches!(name.to_str(), Some(".git" | "target" | ".exact"))
             {

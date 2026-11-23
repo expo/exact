@@ -168,6 +168,10 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     var stacks: [ObjectIdentifier: NavigationStack] = [:]
     var stackCount = 0
     var covers: [UInt32: HostCover] = [:]
+    #if os(iOS)
+    /// The bars of the dialogs' sheets, by dialog (DialogBarIOS.swift).
+    var dialogBars: [UInt32: DialogBar] = [:]
+    #endif
     /// The covers the kernel was last told (`deliverCovers`), each route's local insets (LLP 1123 D9), and
     /// the clearance its scrollers' insets hold (D3, ClearanceIOS.swift).
     var delivered: [UInt32: HostCover] = [:], localInsets = LocalInsetsReport(), clearance: [ObjectIdentifier: ClearanceInset] = [:]
@@ -1222,10 +1226,16 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         #endif
         retireSplit()
         if let primaryNavigation { retireStack(primaryNavigation) }
-        if !covers.isEmpty || !delivered.isEmpty || !localInsets.wanted.isEmpty {
+        // An open dialog's header its sheet's bar stands for stays covered (DialogBarIOS.swift).
+        #if os(iOS)
+        let kept = dialogBarCovers
+        #else
+        let kept: [UInt32: HostCover] = [:]
+        #endif
+        if covers != kept || delivered != kept || !localInsets.wanted.isEmpty {
             // Clearing the covers or local insets changes them as a report does, and is answered as one
-            if !covers.isEmpty || !localInsets.wanted.isEmpty { countReport() }
-            covers = [:]; localInsets.wanted = [:]
+            if covers != kept || !localInsets.wanted.isEmpty { countReport() }
+            covers = kept; localInsets.wanted = [:]
             presenter.afterBatch { [weak self] in self?.deliverCovers() }
         }
         primaryNavigation?.willMove(toParent: nil)

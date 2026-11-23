@@ -200,23 +200,33 @@ pub fn apple_uses(plan: &Plan) -> Uses {
     // A navigation root or a route: lowering gives the first root with a
     // `navigationKey` its `navigationBack`, and every route has a key. The
     // others are a route's or a root's props, each read only by the family.
+    // A `dialog` beside a `header` too: the family makes the bar of a
+    // dialog's header on its sheet (LLP 1141.004 D6).
+    let tag = |name: &str| {
+        plan.bindings.iter().any(|b| {
+            b.kind == BindingKind::Prop
+                && b.id == PropId::SemanticTag as u16
+                && can_be(plan, &b, |v| v == name)
+        })
+    };
     add(
         Capability::Navigation,
-        [
-            PropId::NavigationBack,
-            PropId::NavigationKey,
-            PropId::NavigationPresentation,
-            PropId::NavigationDetent,
-            PropId::NavigationInitialDetent,
-            PropId::NavigationGrabber,
-            PropId::NavigationBar,
-            PropId::NavigationSplit,
-            PropId::NavigationHistory,
-            PropId::NavigationScroll,
-            PropId::NavigationSource,
-        ]
-        .into_iter()
-        .any(|id| binds(plan, BindingKind::Prop, id as u16)),
+        (tag("dialog") && tag("header"))
+            || [
+                PropId::NavigationBack,
+                PropId::NavigationKey,
+                PropId::NavigationPresentation,
+                PropId::NavigationDetent,
+                PropId::NavigationInitialDetent,
+                PropId::NavigationGrabber,
+                PropId::NavigationBar,
+                PropId::NavigationSplit,
+                PropId::NavigationHistory,
+                PropId::NavigationScroll,
+                PropId::NavigationSource,
+            ]
+            .into_iter()
+            .any(|id| binds(plan, BindingKind::Prop, id as u16)),
     );
     // `@exact/search-index`'s names: only that package writes the content
     // index. Without it the store refuses a change (`NotSupportedError`), a
@@ -239,14 +249,7 @@ pub fn apple_uses(plan: &Plan) -> Uses {
     // HTML's `dialog`: the host makes it a sheet unless its rows make it a
     // confirmation when it opens (`MenuHost.isSheet`), and the author's box
     // whatever its rows once its author paints it, so any `dialog` can be one.
-    add(
-        Capability::Dialogs,
-        plan.bindings.iter().any(|b| {
-            b.kind == BindingKind::Prop
-                && b.id == PropId::SemanticTag as u16
-                && can_be(plan, &b, |v| v == "dialog")
-        }),
-    );
+    add(Capability::Dialogs, tag("dialog"));
     // A swipe row, a reorder group, a reorder grip and a list whose rows
     // are cells (iOS draws them, LLP 1115.000 D16) reach the family without
     // a windowed list.

@@ -38,11 +38,12 @@ class SelectionTest {
         }
     }
 
-    /** A media provider that says its version and opens no photo: the person's selection no longer includes it. */
+    /** A media provider that says its version and has no row for a photo: the person's selection no longer includes it. */
     class Media : ContentProvider() {
         override fun onCreate() = true
         override fun call(method: String, arg: String?, extras: Bundle?) = Bundle().apply { putString(Intent.EXTRA_TEXT, "1") }
-        override fun query(uri: Uri, projection: Array<String>?, selection: String?, args: Array<String>?, order: String?) = null
+        override fun query(uri: Uri, projection: Array<String>?, selection: String?, args: Array<String>?, order: String?) =
+            android.database.MatrixCursor(arrayOf(MediaStore.Images.Media._ID))
         override fun getType(uri: Uri): String? = null
         override fun insert(uri: Uri, values: ContentValues?): Uri? = null
         override fun delete(uri: Uri, selection: String?, args: Array<String>?) = 0
