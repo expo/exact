@@ -60,25 +60,29 @@ extension NodeView {
     package var hasInlineContextMenu: Bool { inlineText.contains { $0.handlers.contains("contextmenu") || $0.props["contextPopover"]?.isEmpty == false } }
     var hasInlinePlainContextMenu: Bool { inlineText.contains { $0.handlers.contains("contextmenu") && $0.props["contextPopover"]?.isEmpty != false } }
     func inlineContextTarget(at point: CGPoint) -> InlineText? {
-        inlineRun(at: point) { $0.handlers.contains("contextmenu") || $0.props["contextPopover"]?.isEmpty == false }
+        inlineMatch(at: point) { run in
+            run.handlers.contains("contextmenu") || run.props["contextPopover"]?.isEmpty == false ? run : nil
+        }
     }
-    /// The innermost run under `point`, or one enclosing it, that `matches`; nil past an inert one.
-    private func inlineRun(at point: CGPoint, where matches: (InlineText) -> Bool) -> InlineText? {
+    /// The first match from the innermost run under `point` through its enclosing runs, stopping at an inert run
+    private func inlineMatch<Match>(at point: CGPoint, _ match: (InlineText) -> Match?) -> Match? {
         var run = inlineTarget(at: point)
         while let current = run {
             guard presenter?.inlineInert(current.id) == false else { return nil }
-            if matches(current) { return current }
+            if let found = match(current) { return found }
             run = presenter?.inlineText(current.parent)
         }
         return nil
     }
-    /// The link a long press here lifts with the host's own menu (LLP 1021
-    /// §5.1, "A link's own menu"): the nearest run with an `href` under
-    /// `point`, else the node's own, where nothing authored answers it.
-    func peekedLink(at point: CGPoint) -> (href: String, run: InlineText?)? {
+    /// Where no authored menu answers, a long press lifts the nearest run under `point`
+    /// whose `href` gets the host menu, or the node's own link
+    func peekedLink(at point: CGPoint, relativeTo base: URL?) -> (href: String, url: URL, run: InlineText?)? {
         guard !hasOwnContextMenu, inlineContextTarget(at: point) == nil else { return nil }
-        if let run = inlineRun(at: point, where: { $0.props["href"].map(Self.hasLinkMenu) == true }), let href = run.props["href"] { return (href, run) }
-        return props["href"].flatMap { Self.hasLinkMenu($0) ? ($0, nil) : nil }
+        func link(_ href: String?, run: InlineText?) -> (href: String, url: URL, run: InlineText?)? {
+            guard let href, let url = Self.linkURL(href, relativeTo: base) else { return nil }
+            return (href, url.absoluteURL, run)
+        }
+        return inlineMatch(at: point) { link($0.props["href"], run: $0) } ?? link(props["href"], run: nil)
     }
     /// A row's menu wins a long press over selectable text; an authored
     /// menu on the paragraph itself is the nearest menu. Disabled controls
@@ -116,13 +120,26 @@ extension NodeView {
 
     #endif
 
-    /// Whether a link to `href` gets the host's own menu: a web link, `http` or
-    /// `https`, or one with no scheme, which resolves in the app. A `mailto:`,
-    /// `tel:` or `javascript:` link, or an app's own scheme, gets none.
+    private static let linkMenuRoot = linkMenuBase(visit: "/")
+
+    /// Whether `href` qualifies for a host interaction. The visit changes the URL, while eligibility
+    /// depends on the `href` and the app's declared origin.
     static func hasLinkMenu(_ href: String) -> Bool {
-        guard !href.isEmpty else { return false }
-        guard let scheme = URL(string: href)?.scheme?.lowercased() else { return true }
-        return scheme == "http" || scheme == "https"
+        linkURL(href, relativeTo: linkMenuRoot) != nil
+    }
+
+    static func linkMenuBase(origin: String? = ExactEnv.appMetadata["ExactOrigin"] as? String, visit: String) -> URL? {
+        origin.flatMap { URL(string: $0 + visit) }
+    }
+
+    /// The URL the menu copies and shares (LLP 1021 §5.1). HTTP and HTTPS URLs need a host; any other scheme gets nil.
+    /// An `href` with no scheme resolves against the current visit on the app's declared origin
+    /// and has no URL to take out of the app when it lacks that base.
+    static func linkURL(_ href: String, relativeTo base: URL?) -> URL? {
+        guard !href.isEmpty, let url = URL(string: href, relativeTo: base),
+              let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              url.host?.isEmpty == false else { return nil }
+        return url
     }
 
     func deliverContext(at point: CGPoint, inline inlineID: UInt32? = nil) {

@@ -9,9 +9,9 @@
 // so the preview grows into the destination; any other is `.dismiss`.
 // The node's own `contextmenu` action fires as the menu is about to show,
 // before its rows or preview are read (D1's "both fire"), so a popover a
-// list's rows share shows the row pressed. A link no authored menu answers
-// gets the host's own (`linkMenu`). While the agent paints, this host is off
-// and the popover opens painted (D4, `MenuHost.agentContext`).
+// list's rows share shows the row pressed. A web link gets the host's own
+// menu when no authored menu answers. While the agent paints, this host is
+// off and the popover opens painted (D4, `MenuHost.agentContext`).
 #if os(iOS)
 import AVFoundation
 import UIKit
@@ -41,8 +41,9 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         /// The popover's name, or the `href` of the link the host's own menu is for (`isLink`).
         let name: String
         let inlineID: UInt32?
-        /// Whether this is a link's own menu (`linkMenu`) rather than an authored popover.
-        let isLink: Bool
+        /// The URL the host's own link menu copies and shares, resolved at the press; nil for an authored popover
+        let linkURL: URL?
+        var isLink: Bool { linkURL != nil }
         let point: CGPoint
         /// Whether the source's own `contextmenu` has fired (once, lazily).
         var fired = false
@@ -73,11 +74,13 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         var hiddenInk: CALayer?
         /// Whether the preview was tapped, and whether its press navigated.
         var committed = false, navigated = false
-        init(source: NodeView, popover: NodeView?, name: String, point: CGPoint, inlineID: UInt32? = nil, isLink: Bool = false) {
-            self.source = source; self.popover = popover; self.name = name; self.point = point; self.inlineID = inlineID; self.isLink = isLink
+        init(source: NodeView, popover: NodeView?, name: String, point: CGPoint, inlineID: UInt32? = nil, linkURL: URL? = nil) {
+            self.source = source; self.popover = popover; self.name = name; self.point = point; self.inlineID = inlineID; self.linkURL = linkURL
         }
     }
     private(set) var open: Open?
+    /// The menu that set focus aside, until dismissal finishes or its interaction comes off
+    private var focusOwner: (configuration: NSObject, interaction: UIInteraction)?
     private var animations = 0
     var inTransition: Bool { animations > 0 }
 
@@ -125,7 +128,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         } else if !wanted, let interaction = projected.removeValue(forKey: key) {
             if open?.interaction === interaction, let owner = open { restore(owner); open = nil }
             interaction.dismissMenu()
-            detach(interaction, from: view)
+            detach(interaction)
         }
     }
 
@@ -165,20 +168,21 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         }
         for (key, interaction) in projected {
             if let view = interaction.view as? (UIView & GroupedMenuSurface) { syncProjected(view) }
-            else { projected[key] = nil; recognizers[ObjectIdentifier(interaction)] = nil }
+            else { projected[key] = nil; detach(interaction) }
         }
         syncMounts(presenter, sources: Array(wanted.values))
         for (id, interaction) in interactions where wanted[id] == nil || interaction.view !== wanted[id] {
             // A commit in flight keeps its interaction until it completes.
             if let owner = open, owner.committed, owner.interaction === interaction { continue }
-            // A menu it shows ends with it: a link's interaction goes when an authored menu comes to answer above it.
-            if let owner = open, owner.interaction === interaction { restore(owner); open = nil; interaction.dismissMenu() }
-            // A view destroyed with it has taken it along: its record goes too.
-            if interaction.view == nil { recognizers[ObjectIdentifier(interaction)] = nil }
-            if let view = interaction.view {
-                detach(interaction, from: view)
-                (view as? NodeView)?.contextRecognizer?.isEnabled = true
+            // End the menu this interaction shows. An authored menu can replace a link's menu while its `href` stays the same.
+            if let owner = open, owner.interaction === interaction {
+                open = nil
+                interaction.dismissMenu()
+                restore(owner)
             }
+            let view = interaction.view as? NodeView
+            detach(interaction)
+            view?.contextRecognizer?.isEnabled = true
             interactions[id] = nil
         }
         // A parked view lent to a new node keeps its interaction if the node
@@ -187,7 +191,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
             // Taken (live again under its new node's id), or never parked.
             parkedViews.remove(v)
             guard !wanted.values.contains(where: { $0 === v }) else { continue }
-            ours(v).forEach { detach($0, from: v) }
+            ours(v).forEach(detach)
             v.contextRecognizer?.isEnabled = true
         }
         for (id, v) in wanted {
@@ -197,7 +201,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
             }
             if interactions[id] == nil {
                 // Anything else of ours on the view goes first.
-                ours(v).forEach { detach($0, from: v) }
+                ours(v).forEach(detach)
                 let interaction = UIContextMenuInteraction(delegate: self)
                 let before = companions(of: v)
                 v.addInteraction(interaction)
@@ -232,14 +236,18 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     private func came(_ id: ObjectIdentifier, on view: UIView) -> Bool {
         ours(view).contains { recognizers[ObjectIdentifier($0)]?.contains(id) == true }
     }
-    /// One of ours off `view`, with the interactions UIKit added beside it:
+    /// One of ours off its view, with the interactions UIKit added beside it:
     /// it leaves one of them (a click-presentation feedback generator) on
     /// the view when only the menu's is removed (measured), which would keep
     /// the view out of the node pool for good.
-    private func detach(_ interaction: UIContextMenuInteraction, from view: UIView) {
+    private func detach(_ interaction: UIContextMenuInteraction) {
         let added = recognizers.removeValue(forKey: ObjectIdentifier(interaction)) ?? []
-        view.removeInteraction(interaction)
-        for other in view.interactions where added.contains(ObjectIdentifier(other)) { view.removeInteraction(other) }
+        if let view = interaction.view {
+            view.removeInteraction(interaction)
+            for other in view.interactions where added.contains(ObjectIdentifier(other)) { view.removeInteraction(other) }
+        }
+        // UIKit may skip the dismissal callback for an interaction it no longer holds
+        if let owner = focusOwner, owner.interaction === interaction { restoreFocus(for: owner.configuration) }
     }
     private func companions(of view: UIView) -> Set<ObjectIdentifier> {
         Set((view.gestureRecognizers ?? []).map(ObjectIdentifier.init) + view.interactions.map(ObjectIdentifier.init))
@@ -259,7 +267,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     /// pressure): its interaction and what UIKit added with it go too.
     func dropped(_ view: NodeView) {
         parkedViews.remove(view)
-        ours(view).forEach { detach($0, from: view) }
+        ours(view).forEach(detach)
     }
     /// The lifted row at the controller's origin.
     private func place(_ owner: Open) {
@@ -332,16 +340,12 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
             }
         }
         for (key, interaction) in mountInteractions where !live.contains(key) {
-            // A menu open from it ends now, a shown one giving the focus back: UIKit may never call `willEnd`
-            // for an interaction it no longer holds
             if open?.interaction === interaction, let owner = open {
-                let shown = owner.toggled
                 restore(owner)
                 open = nil
-                if shown { menus?.focus.restore() }
             }
             interaction.dismissMenu()
-            interaction.view?.removeInteraction(interaction)
+            detach(interaction)
             mountInteractions[key] = nil
         }
     }
@@ -368,7 +372,8 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         } else { return nil }
         var run = source.inlineContextTarget(at: point)
         let authored = run?.props["contextPopover"] ?? (run == nil ? source.props["contextPopover"] : nil)
-        let link = authored == nil && view is NodeView ? source.peekedLink(at: point) : nil
+        let visit = presenter?.session?.routerOp?["url"] as? String ?? "/"
+        let link = authored == nil && view is NodeView ? source.peekedLink(at: point, relativeTo: NodeView.linkMenuBase(visit: visit)) : nil
         if let link { run = link.run }
         guard live(source), let name = authored ?? link?.href, menus.eligible(source, contextMenu: true) else { return nil }
         // UIKit's row menu wins over text selection. An authored menu
@@ -380,7 +385,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         guard link != nil || pop != nil else { log("context menu \(name) refused: no popover has that id"); return nil }
         // A press released before its menu showed never reached `willEnd`.
         if let previous = open { restore(previous) }
-        let owner = Open(source: source, popover: pop, name: name, point: point, inlineID: run?.id, isLink: link != nil)
+        let owner = Open(source: source, popover: pop, name: name, point: point, inlineID: run?.id, linkURL: link?.url)
         owner.interaction = interaction
         if !(view is NodeView) { owner.touched = hit }
         open = owner
@@ -423,6 +428,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         let configuration = UIEditMenuConfiguration(identifier: NSNumber(value: source.id), sourcePoint: point)
         owner.keyboardConfiguration = configuration
         source.addInteraction(keyboardInteraction)
+        focusOwner = (configuration, keyboardInteraction)
         menus.focus.setAside()
         keyboardInteraction.presentEditMenu(with: configuration)
         return true
@@ -451,10 +457,10 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
 
     /// The popover's menu rows as the UIMenu, titled by its `aria-label`.
     func menu(_ owner: Open) -> UIMenu? {
-        if owner.isLink {
+        if let url = owner.linkURL {
             // A link menu is only where no `contextmenu` answers (`sync`), so there is none to fire; marked fired, it shows in `observation`.
             owner.fired = true
-            return linkMenu(owner, owner.name)
+            return linkMenu(owner, url: url)
         }
         fire(owner)
         // A menu that ended gives none: a batch, its `contextmenu`'s included, may end it before UIKit asks
@@ -500,9 +506,9 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         owner.runPreview?.view.removeFromSuperview()
         owner.runPreview = nil
         if let pop = owner.popover, owner.toggled { owner.toggled = false; presenter?.popoverEvents.changed(pop, open: false) }
-        if owner.keyboardConfiguration != nil {
+        if let configuration = owner.keyboardConfiguration {
             keyboardInteraction.view?.removeInteraction(keyboardInteraction)
-            menus?.focus.restore()
+            restoreFocus(for: configuration)
         }
         guard let row = owner.preview else { return }
         owner.preview = nil
@@ -582,42 +588,28 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         owner.hiddenInk = ink
     }
 
-    /// A link's own menu, where nothing an author wrote answers its long
-    /// press: what a browser offers for a link, Open Link, Copy Link and
-    /// Share…, under its URL, over the link itself, lifted. The actions hold
-    /// `owner`, which UIKit may end (`open = nil`) before it runs them.
-    private func linkMenu(_ owner: Open, _ href: String) -> UIMenu {
-        let url = Self.linkURL(href, origin: ExactEnv.appMetadata["ExactOrigin"] as? String,
-                               visit: presenter?.session?.routerOp?["url"] as? String ?? "/")
-        var items: [UIMenuElement] = [UIAction(title: "Open Link", image: UIImage(systemName: "safari")) { [weak self, owner] _ in
-            self?.follow(owner)
-        }]
-        if let url {
-            items.append(UIAction(title: "Copy Link", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
+    /// Open Link, Copy Link and Share. Actions that use `owner` retain it because UIKit
+    /// can dismiss the menu before running them.
+    private func linkMenu(_ owner: Open, url: URL) -> UIMenu {
+        var items: [UIMenuElement] = [
+            UIAction(title: "Open Link", image: UIImage(systemName: "safari")) { [weak self, owner] _ in
+                self?.follow(owner)
+            },
+            UIAction(title: "Copy Link", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
                 guard let session = self?.presenter?.session else { return }
                 AgentPasteboard.copy(url.absoluteString, to: session.agentPasteboard, log: session.log)
-            })
-            if let share = ShareLink.installed {
-                items.append(UIAction(title: "Share…", image: UIImage(systemName: "square.and.arrow.up")) { [weak self, owner] _ in
-                    guard let self, let source = owner.source, self.live(source), let session = self.presenter?.session else { return }
-                    let rect = owner.inlineID.flatMap { self.presenter?.inlineText($0) }.flatMap { source.inlineRects($0).first } ?? source.bounds
-                    share.shareLink(url, from: source, at: rect) { session.log($0) }
-                })
             }
+        ]
+        if let share = ShareLink.installed {
+            items.append(UIAction(title: "Share…", image: UIImage(systemName: "square.and.arrow.up")) { [weak self, owner] _ in
+                guard let self, let source = owner.source, self.live(source), let session = self.presenter?.session else { return }
+                let rect = owner.inlineID.flatMap { self.presenter?.inlineText($0) }.flatMap { source.inlineRects($0).first } ?? source.bounds
+                share.shareLink(url, from: source, at: rect) { session.log($0) }
+            })
         }
-        return UIMenu(title: url?.absoluteString ?? href, children: items)
+        return UIMenu(title: url.absoluteString, children: items)
     }
-    /// `href` as a URL the reader can take out of the app (Copy Link and
-    /// Share): as written when it has a scheme, else resolved as a browser
-    /// resolves it, against the visit shown on the app's declared origin
-    /// (`app.origin`, baked as `ExactOrigin`). Nil without a declared origin,
-    /// and for a scheme `NodeView.hasLinkMenu` refuses.
-    static func linkURL(_ href: String, origin: String?, visit: String) -> URL? {
-        guard NodeView.hasLinkMenu(href) else { return nil }
-        if let url = URL(string: href), url.scheme != nil { return url }
-        guard let origin, let base = URL(string: origin + visit) else { return nil }
-        return URL(string: href, relativeTo: base)?.absoluteURL
-    }
+
     /// Open Link, and a tap on the lifted link: a run's own activation, else a tap where the press was.
     private func follow(_ owner: Open) {
         guard let source = owner.source, live(source), menus?.eligible(source, contextMenu: true) == true else { return }
@@ -1279,13 +1271,14 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     /// the software keyboard up over the menu (MenuFocusIOS.swift).
     func contextMenuInteraction(_ interaction: UIContextMenuInteraction, willDisplayMenuFor configuration: UIContextMenuConfiguration, animator: UIContextMenuInteractionAnimating?) {
         track(animator)
+        focusOwner = (configuration, interaction)
         menus?.focus.setAside()
         if let owner = open, let pop = owner.popover { owner.toggled = true; presenter?.popoverEvents.changed(pop, open: true) }
     }
 
     func contextMenuInteraction(_ interaction: UIContextMenuInteraction, willEndFor configuration: UIContextMenuConfiguration, animator: UIContextMenuInteractionAnimating?) {
         track(animator)
-        let focus: () -> Void = { [weak self] in self?.menus?.focus.restore() }
+        let focus: () -> Void = { [weak self] in self?.restoreFocus(for: configuration) }
         if let animator { animator.addCompletion(focus) } else { focus() }
         guard let owner = open, owner.configuration === configuration else { return }
         if let pop = owner.popover, owner.toggled { owner.toggled = false; presenter?.popoverEvents.changed(pop, open: false) }
@@ -1303,27 +1296,36 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         if let animator { animator.addCompletion(finish) } else { finish() }
     }
 
+    private func restoreFocus(for configuration: NSObject) {
+        guard focusOwner?.configuration === configuration else { return }
+        focusOwner = nil
+        menus?.focus.restore()
+    }
+
     func reset() {
+        focusOwner = nil
         keyboardInteraction.dismissMenu()
         for interaction in projected.values {
             interaction.dismissMenu()
-            if let view = interaction.view { detach(interaction, from: view) }
+            detach(interaction)
         }
         projected.removeAll()
         for interaction in interactions.values {
             interaction.dismissMenu()
-            if let view = interaction.view { detach(interaction, from: view); (view as? NodeView)?.contextRecognizer?.isEnabled = true }
+            let view = interaction.view as? NodeView
+            detach(interaction)
+            view?.contextRecognizer?.isEnabled = true
         }
         interactions.removeAll()
         // A mount's interaction goes with the views of the tree being replaced
         for interaction in mountInteractions.values {
             interaction.dismissMenu()
-            interaction.view?.removeInteraction(interaction)
+            detach(interaction)
         }
         mountInteractions.removeAll()
         // Parked views are no node's and out of the map: theirs come off too,
         // with what UIKit added beside them, before the records go.
-        for case let view as NodeView in parkedViews.allObjects { ours(view).forEach { detach($0, from: view) } }
+        for case let view as NodeView in parkedViews.allObjects { ours(view).forEach(detach) }
         parkedViews.removeAllObjects()
         recognizers.removeAll()
         if let owner = open { restore(owner); open = nil }
