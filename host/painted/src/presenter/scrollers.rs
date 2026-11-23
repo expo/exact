@@ -110,37 +110,33 @@ struct PixelTravel {
 #[derive(Clone, Copy, Default)]
 struct PixelAxis {
     start: f64,
-    device_start: f64,
     distance: f64,
 }
 
 impl PixelAxis {
-    fn at(start: f32, scale: f32) -> Self {
+    fn at(start: f32) -> Self {
         Self {
             start: f64::from(start),
-            device_start: device_pixel(start, scale),
             distance: 0.,
         }
     }
 
-    fn rebase(&mut self, was: f32, now: f32, scale: f32) {
+    fn rebase(&mut self, was: f32, now: f32) {
         self.start += f64::from(now) - f64::from(was);
-        self.device_start += device_pixel(now, scale) - device_pixel(was, scale);
     }
 
-    fn advance(&mut self, from: f32, by: f32, max: f32, scale: f32) -> (f32, f64) {
-        if by == 0. {
+    fn advance(&mut self, from: f32, by: f32, device: f32, max: f32, scale: f32) -> (f32, f64) {
+        if device.is_nan() {
             return (from, 0.);
         }
         self.distance += f64::from(by);
         let density = f64::from(scale);
         let points = self.start + self.distance / density;
-        // The reader stops sending deltas at its rounded ends. A sample
-        // that reaches one also takes the model to its logical end.
-        let device = self.device_start + self.distance;
-        let next = if by < 0. && device <= 0. {
+        // The reader clamps from its last acknowledged pixel plus pending moves.
+        // Its destination identifies the end even after a fractional sample rounds.
+        let next = if device <= 0. {
             0.
-        } else if by > 0. && device >= device_pixel(max, scale) {
+        } else if device >= pixel(max, scale) {
             max
         } else {
             let rounded = (points as f32).clamp(0., max);
@@ -161,7 +157,7 @@ impl PixelAxis {
             }
         };
         if next == 0. || next == max {
-            *self = Self::at(next, scale);
+            *self = Self::at(next);
         }
         // A pending rebase can still use travel beyond the acknowledged range.
         let requested = if (0. ..=f64::from(max)).contains(&points) {
@@ -185,8 +181,8 @@ impl Reader {
             let at = position.accepted;
             position.accepted = (axis(at.0, was.0, now.0), axis(at.1, was.1, now.1));
             if let Some(travel) = &mut position.travel {
-                travel.x.rebase(was.0, now.0, travel.scale);
-                travel.y.rebase(was.1, now.1, travel.scale);
+                travel.x.rebase(was.0, now.0);
+                travel.y.rebase(was.1, now.1);
             }
         }
     }
@@ -545,18 +541,18 @@ impl<D: DataSource> Presenter<D> {
         self.stamp_reader_sample(id, acknowledged, model, at)
     }
 
-    /// The Android reader reports device pixels, including any fractional
-    /// travel handed off by a sheet or a zoom pan.
+    /// The Android reader reports travel and its destination in device pixels.
+    /// A destination of NaN means that axis did not move.
     #[cfg(any(target_os = "android", test))]
     pub(crate) fn reader_pixels_at(
         &mut self,
         id: ViewId,
         by: (f32, f32),
-        scale: f32,
+        device: ((f32, f32), f32),
         rev: u32,
         at: f64,
     ) -> Option<(f32, f32)> {
-        let (acknowledged, model) = self.reader_sample_in(id, by, rev, Some(scale))?;
+        let (acknowledged, model) = self.reader_sample_in(id, by, rev, Some(device))?;
         self.stamp_reader_sample(id, acknowledged, model, at)
     }
 
@@ -591,7 +587,7 @@ impl<D: DataSource> Presenter<D> {
         id: ViewId,
         by: (f32, f32),
         rev: u32,
-        device_scale: Option<f32>,
+        device: Option<((f32, f32), f32)>,
     ) -> Option<((f32, f32), (f32, f32))> {
         if !by.0.is_finite() || !by.1.is_finite() {
             return None;
@@ -609,7 +605,7 @@ impl<D: DataSource> Presenter<D> {
         }
         let from = s.offset;
         let tracked = self.reader.tracked.get_mut(&id).expect("reader revision");
-        let (target, dy) = if let Some(scale) = device_scale {
+        let (target, dy) = if let Some((device, scale)) = device {
             if tracked
                 .travel
                 .as_ref()
@@ -617,18 +613,21 @@ impl<D: DataSource> Presenter<D> {
             {
                 tracked.travel = Some(PixelTravel {
                     scale,
-                    x: PixelAxis::at(from.0, scale),
-                    y: PixelAxis::at(from.1, scale),
+                    x: PixelAxis::at(from.0),
+                    y: PixelAxis::at(from.1),
                 });
             }
             let travel = tracked.travel.as_mut().expect("pixel travel");
-            let (x, _) = travel
-                .x
-                .advance(from.0, if s.axes.0 { by.0 } else { 0. }, s.max.0, scale);
-            let (y, dy) =
-                travel
-                    .y
-                    .advance(from.1, if s.axes.1 { by.1 } else { 0. }, s.max.1, scale);
+            let (x, _) = if s.axes.0 {
+                travel.x.advance(from.0, by.0, device.0, s.max.0, scale)
+            } else {
+                (from.0, 0.)
+            };
+            let (y, dy) = if s.axes.1 {
+                travel.y.advance(from.1, by.1, device.1, s.max.1, scale)
+            } else {
+                (from.1, 0.)
+            };
             ((x, y), dy)
         } else {
             tracked.travel = None;

@@ -154,6 +154,7 @@ pub(super) struct Sticky {
     recorded: (f32, f32),
     /// The display's scale, where it is drawn on its pixels (`grid.rs`).
     grid: Option<f32>,
+    snap_box: bool,
 }
 
 impl Sticky {
@@ -162,11 +163,13 @@ impl Sticky {
         let constraint = scene.kernel.sticky_constraint(node.key)?;
         let scroller = scene.kernel.node(constraint.scroller)?;
         let scroll = space::sticky_scroll(scene, &scroller);
+        let snap_box = grid.is_some() && !super::grid::leaves_grid(&node, &(scene.presented)(id));
         Some(Self {
             constraint,
             scroller: scroller.key,
-            recorded: super::grid::sticky_shift(constraint, &scroller, scroll, grid),
+            recorded: super::grid::sticky_shift(constraint, &scroller, scroll, grid, snap_box),
             grid,
+            snap_box,
         })
     }
 
@@ -180,6 +183,7 @@ impl Sticky {
                     &scroller,
                     scroll,
                     self.grid,
+                    self.snap_box,
                 ))
             })
             .unwrap_or(self.recorded)

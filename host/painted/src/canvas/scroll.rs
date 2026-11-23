@@ -133,15 +133,14 @@ impl<D: DataSource + Default> CanvasHost<D> {
         );
     }
 
-    /// The reader moved scroller `id` by (`dx`, `dy`) pixels, knowing
-    /// revision `rev` of it. Its rows mount after the frame, as a driver's
-    /// scroll leaves them.
-    pub fn scrolled(&mut self, id: u32, dx: f32, dy: f32, rev: u32) {
+    /// The reader moved scroller `id` by `by` pixels to `to`, knowing revision
+    /// `rev`. Its rows mount after the frame, as a driver's scroll leaves them.
+    pub fn scrolled(&mut self, id: u32, by: (f32, f32), to: (f32, f32), rev: u32) {
         let _s = Section::begin(c"exact scroll");
         let s = self.scale;
         self.p.hold_collections(self.prefetching);
         let at = self.now();
-        let went = self.p.reader_pixels_at(id, (dx, dy), s, rev, at);
+        let went = self.p.reader_pixels_at(id, by, (to, s), rev, at);
         self.p.hold_collections(false);
         let Some((_, down)) = went else {
             return;
@@ -522,16 +521,50 @@ mod tests {
         assert_eq!(words[3], port as i32);
         assert_eq!(f32::from_bits(words[9] as u32), 200.);
         let rev = words[5] as u32;
-        p.reader_pixels_at(port, (0., 199.25), 2., rev, 10.)
+        p.reader_pixels_at(port, (0., 199.25), ((f32::NAN, 199.25), 2.), rev, 10.)
             .unwrap();
         assert!(p.scroll_of(port).1 < 100.125);
-        p.reader_pixels_at(port, (0., 0.75), 2., rev, 11.).unwrap();
+        p.reader_pixels_at(port, (0., 0.75), ((f32::NAN, 200.), 2.), rev, 11.)
+            .unwrap();
         assert_eq!(p.scroll_of(port).1, 100.125);
-        p.reader_pixels_at(port, (0., -199.25), 2., rev, 20.)
+        p.reader_pixels_at(port, (0., -199.25), ((f32::NAN, 0.75), 2.), rev, 20.)
             .unwrap();
         assert!(p.scroll_of(port).1 > 0.);
-        p.reader_pixels_at(port, (0., -0.75), 2., rev, 21.).unwrap();
+        p.reader_pixels_at(port, (0., -0.75), ((f32::NAN, 0.), 2.), rev, 21.)
+            .unwrap();
         assert_eq!(p.scroll_of(port).1, 0.);
+    }
+
+    #[test]
+    fn a_reader_drag_reaches_both_ends_after_fractional_acknowledgements() {
+        let mut p = boot_at(
+            r#"component App
+  view
+    scroll width=200 height=100 testId="port"
+      box height=200.125
+"#,
+            2.,
+        );
+        let port = id(&p, "port");
+        let mut ends = Vec::new();
+        for (start, first, pending, acknowledged, end) in
+            [(0., 1.75, 1.75, 2., 200.), (100.125, -0.8, 199.2, 199., 0.)]
+        {
+            p.scroll_to(port, (0., start)).unwrap();
+            p.frame();
+            let rev = p.reader_under(10., 10., 2.)[5] as u32;
+            p.reader_pixels_at(port, (0., first), ((f32::NAN, pending), 2.), rev, 10.)
+                .unwrap();
+            p.frame();
+            let words = p.reader_scrollers(&[], 2.).unwrap();
+            let scroller = words.chunks_exact(9).find(|w| w[0] == port as i32).unwrap();
+            let at = f32::from_bits(scroller[4] as u32);
+            assert_eq!(at, acknowledged);
+            p.reader_pixels_at(port, (0., end - at), ((f32::NAN, end), 2.), rev, 11.)
+                .unwrap();
+            ends.push(p.scroll_of(port).1);
+        }
+        assert_eq!(ends, [100.125, 0.]);
     }
 
     #[test]
@@ -562,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    fn a_zoom_ports_own_box_stays_on_the_outer_grid() {
+    fn a_zoom_port_and_its_child_share_layout_geometry() {
         let mut p = boot(
             r#"component App
   view
@@ -576,29 +609,65 @@ mod tests {
         let port = p.rect_of(id(&p, "port")).unwrap();
         let child = id(&p, "child");
         let child = p.boxes().iter().find(|b| b.id == child).unwrap();
-        assert_eq!(port.0, before.0 + before.2);
-        assert_eq!(port.0, 11. / 2.625);
+        assert_eq!(before.0 + before.2, 11. / 2.625);
+        assert_eq!(port.0, 4.);
         assert_eq!(child.clip.unwrap().0, port.0);
         assert_eq!(child.rect.0, 4.);
     }
 
     #[test]
     fn a_scaled_sticky_header_stays_on_its_stick_line() {
+        use super::super::{stream, FINISHED, MATRIX, ROW_BEGIN, ROW_DRAW, RRECT};
+
         let mut p = boot(
             r#"component App
   view
-    scroll width=200 height=100 testId="port"
+    scroll width=400 height=100 testId="port"
       column
-        box position="sticky" top=0 width=100 height=20 scale=1.5 transform-origin="0 0" background-color="red" overflow="hidden" testId="heading"
+        box height=4
+        box position="sticky" top=0 width=100 height=20 scale=3 transform-origin="0 0" background-color="red" overflow="hidden" testId="heading"
           box width=0.1 height=2 background-color="blue" testId="divider"
         box height=200
 "#,
         );
         let (port, header, divider) = (id(&p, "port"), id(&p, "heading"), id(&p, "divider"));
-        p.scroll_to(port, (0., 1.)).unwrap();
+        p.scroll_to(port, (0., 5.)).unwrap();
         p.frame();
-        assert_eq!(p.rect_of(header).unwrap().1, p.rect_of(port).unwrap().1);
-        assert!((p.rect_of(divider).unwrap().2 - 0.15).abs() < 0.0001);
+        fn red_top(ops: &[u32]) -> Option<f32> {
+            let mut at = 0;
+            let mut matrix = (0., 0.);
+            let mut rows = std::collections::HashMap::new();
+            while at < ops.len() {
+                let end = stream::end(ops, at).unwrap();
+                let float = |i| f32::from_bits(ops[at + i]);
+                match ops[at] {
+                    MATRIX => matrix = (float(4), float(6)),
+                    RRECT if ops[at + 1] == 0xffff0000 => {
+                        return Some(matrix.0 * float(3) + matrix.1);
+                    }
+                    ROW_BEGIN => {
+                        if let Some(top) = red_top(&ops[at + 6..end - 1]) {
+                            rows.insert(ops[at + 1], top);
+                        }
+                    }
+                    ROW_DRAW => {
+                        if let Some(top) = rows.get(&ops[at + 1]) {
+                            return Some(top + float(3));
+                        }
+                    }
+                    _ => {}
+                }
+                at = end;
+            }
+            None
+        }
+
+        let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let top = red_top(&ops).expect("painted header");
+        assert!(top.abs() < 0.001, "painted top: {top} px");
+        let offset = p.rect_of(header).unwrap().1 - p.rect_of(port).unwrap().1;
+        assert!(offset.abs() < 0.0001, "hit top relative to port: {offset}");
+        assert!((p.rect_of(divider).unwrap().2 - 0.3).abs() < 0.0001);
         let clip = p
             .boxes()
             .iter()
@@ -606,7 +675,7 @@ mod tests {
             .unwrap()
             .clip
             .unwrap();
-        assert!((clip.2 * 2.625 - 394.5).abs() < 0.001);
+        assert!((clip.2 * 2.625 - 787.5).abs() < 0.001);
     }
 
     #[test]
@@ -616,7 +685,7 @@ mod tests {
         let mut p = boot(
             r#"component App
   view
-    scroll width=200 height=100 testId="port"
+    scroll width=200 height=100 translate="1px 0px" testId="port"
       column
         box height=400001
         box width=200 height=20 background-color="red" testId="row"
@@ -740,9 +809,15 @@ mod tests {
         assert_eq!((words[3], f32::from_bits(words[7] as u32)), (s as i32, at));
         for step in 1..=count {
             let by = delta(step);
-            p.reader_pixels_at(s, (0.0, by), 2.625, words[5] as u32, f64::from(step))
-                .unwrap();
             at += by;
+            p.reader_pixels_at(
+                s,
+                (0.0, by),
+                ((f32::NAN, at), 2.625),
+                words[5] as u32,
+                f64::from(step),
+            )
+            .unwrap();
             let all = p
                 .reader_scrollers(&[], 2.625)
                 .unwrap_or_else(|| panic!("no acknowledgement at {start} after {step} moves"));

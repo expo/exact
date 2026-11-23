@@ -583,14 +583,15 @@ internal class Scrolling(private val view: ExactView) {
         var waits = false
         for ((k, s) in active.withIndex()) {
             val at = s.at(sideways)
-            val took = (at + rest).coerceIn(0f, s.end(sideways)) - at
+            val to = (at + rest).coerceIn(0f, s.end(sideways))
+            val took = to - at
             if (abs(took) < 0.01f) continue
             s.own = true
             if (mover == null) mover = s
             // The finger drags it from its first move (`scrolldragstart`), as a nested scroller the hand-off reaches.
             if (mode == DRAGGING && held.add(s)) tell { Native.scrollDrag(s.id, false, 0f, 0f, false, 0f, 0f, false) }
             val dx = if (sideways) took else 0f; val dy = if (sideways) 0f else took
-            val seq = view.scrolled(s.id, dx, dy, s.rev)
+            val seq = view.scrolled(s.id, dx, dy, if (sideways) to else Float.NaN, if (sideways) Float.NaN else to, s.rev)
             // Told to exact2's own thread: it is ahead of exact2 by this much until a stream includes the move.
             if (seq != 0) { s.pendX += dx; s.pendY += dy; sent.addLast(Sent(seq, s, dx, dy)) }
             waits = waits || !s.node
@@ -609,11 +610,13 @@ internal class Scrolling(private val view: ExactView) {
 
     /** A zoomable scroller's pan ([Zooming]) moved [s] by ([dx], [dy]) px, both axes at once, within its travel. */
     private fun panBoth(s: Scroller, dx: Float, dy: Float) {
-        val tx = (s.at(true) + dx).coerceIn(0f, max(0f, s.maxX)) - s.at(true)
-        val ty = (s.at(false) + dy).coerceIn(0f, max(0f, s.maxY)) - s.at(false)
+        val fromX = s.at(true); val fromY = s.at(false)
+        val x = (fromX + dx).coerceIn(0f, max(0f, s.maxX))
+        val y = (fromY + dy).coerceIn(0f, max(0f, s.maxY))
+        val tx = x - fromX; val ty = y - fromY
         if (abs(tx) < 0.01f && abs(ty) < 0.01f) return
         s.own = true
-        val seq = view.scrolled(s.id, tx, ty, s.rev)
+        val seq = view.scrolled(s.id, tx, ty, if (tx == 0f) Float.NaN else x, if (ty == 0f) Float.NaN else y, s.rev)
         if (seq != 0) { s.pendX += tx; s.pendY += ty; sent.addLast(Sent(seq, s, tx, ty)) }
         indicate(s)
         view.tick()

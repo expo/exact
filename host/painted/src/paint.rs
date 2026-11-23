@@ -439,8 +439,8 @@ pub struct Painter {
     notes: Vec<String>,
     svg_warned: std::collections::BTreeSet<exact_kernel::NodeKey>,
     decoration_warning: bool,
-    /// A 3D island's root and its own surface in the island's space (LLP 1077 D8).
-    flatten: Option<(ViewId, Rect4)>,
+    /// The root of the 3D island being painted flat (LLP 1077 D8).
+    flatten: Option<ViewId>,
     /// The current focus's visibility decision, separate from the last input's modality.
     pub(crate) ringless: Option<ViewId>,
     /// The focus visual follows WinUI's input tracking, not Chrome's `:focus-visible` (LLP
@@ -950,11 +950,11 @@ impl Painter {
             self.damage.unsupported = true;
             return;
         }
-        let flat = self.flatten.filter(|(root, _)| *root == id);
-        let transformed = flat.is_none() && p.changes_axes();
-        let (rect, outer) = self.node_rects(&node, offset, transformed);
+        let flat = self.flatten == Some(id);
+        let transformed = grid::leaves_grid(&node, &p);
+        let rect = self.node_rect(&node, offset, &p);
         let (x, y, w, h) = rect;
-        let surface = p.surface(outer);
+        let surface = p.surface(rect);
         // Damage ignores shadows outside the box (LLP 1043.000 §3 D7).
         self.damage.unsupported |= p.moves()
             || p.dark.is_some_and(|dark| dark != self.dark)
@@ -969,7 +969,7 @@ impl Painter {
         let (hit_parent, hit_clip) = walk.hit_space.unwrap_or((ts, clip_rect));
         let mut hit_p = p;
         hit_p.press_translate = [0.; 4];
-        let layer = match flat.is_some() {
+        let layer = match flat {
             true => layer::Opened { lowered: 0 },
             false => self.box_layer(node.key, &p, (x, y, w, h), origin, ts),
         };
@@ -977,13 +977,13 @@ impl Painter {
         let ts = if layer.transform() {
             // The layer turns it; a layout transition's offset is drawn.
             ts.pre_translate(p.layout[0], p.layout[1])
-        } else if p.moves() && flat.is_none() {
+        } else if p.moves() && !flat {
             // About `transform-origin`, the centre unless authored (LLP 1061 D6).
             ts.pre_concat(p.transform((x, y, w, h), origin))
         } else {
             ts
         };
-        let hit_ts = if flat.is_some() {
+        let hit_ts = if flat {
             hit_parent
         } else if layer.transform() {
             hit_parent.pre_translate(p.layout[0], p.layout[1])
@@ -1050,9 +1050,9 @@ impl Painter {
         let previous = self.dark;
         self.dark = p.dark.unwrap_or(previous);
         // @ref LLP 1077 D2 — the mask is the border box's gradient's alpha.
-        let mask = gradient::Captured::mask(node.style, self.dark).map(|m| m.place(outer));
+        let mask = gradient::Captured::mask(node.style, self.dark).map(|m| m.place(rect));
         if mask.is_some() {
-            self.backend.push_mask(&Shape::rect(outer), ts);
+            self.backend.push_mask(&Shape::rect(rect), ts);
         }
         // @ref LLP 1043.000 §3 D7 — polygon demo ink and exclusion share an outline.
         let (sx, sy, sw, sh) = surface;
@@ -1060,7 +1060,7 @@ impl Painter {
         let clip_ts = ts.pre_translate(sx, sy);
         let path_clip = css.has_path() && self.backend.push_css_clip(&css, clip_ts);
         self.without_grid(transformed, |painter| {
-            painter.box_content(walk, &node, (rect, outer), ts, offset, clip_rect);
+            painter.box_content(walk, &node, rect, ts, offset, clip_rect);
         });
         shape::clip_hits(
             &mut walk.boxes[hit_start..],
@@ -1073,7 +1073,7 @@ impl Painter {
             self.backend.pop_clip();
         }
         if let Some(mask) = &mask {
-            self.backend.pop_mask(&Shape::rect(outer), mask, ts);
+            self.backend.pop_mask(&Shape::rect(rect), mask, ts);
         }
         match drawn {
             Some(picture) => drop(self.restore_picture_backend(walk.scene.kernel, picture)),
@@ -1087,7 +1087,7 @@ impl Painter {
         &mut self,
         walk: &mut Walk<'_, '_>,
         node: &NodeRef<'_>,
-        (rect, outer): (Rect4, Rect4),
+        rect: Rect4,
         ts: Transform,
         offset: PaintOffset,
         clip_rect: Option<Rect4>,
@@ -1107,7 +1107,7 @@ impl Painter {
         self.clipped = Some((node.id, paint.background));
         let mut geometry = paint.geometry(rect);
         // @ref LLP 1063 — a layout transition's size is the surface's alone.
-        let mut surface = paint.geometry(shown.surface(outer));
+        let mut surface = paint.geometry(shown.surface(rect));
         self.flight_geometry(node, &mut geometry);
         self.flight_geometry(node, &mut surface);
         // A text node still walks its runs so a visible inline paints.

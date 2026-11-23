@@ -304,9 +304,7 @@ impl Painter {
         clip: Option<Rect4>,
     ) -> bool {
         let s = node.style;
-        if self.flatten.is_some_and(|(root, _)| root == node.id)
-            || !(p.rotate_axis.is_3d() || s.translate_z != 0.0)
-        {
+        if self.flatten == Some(node.id) || !(p.rotate_axis.is_3d() || s.translate_z != 0.0) {
             return false;
         }
         let (x, y, w, h) = paint_rect(node.frame, offset);
@@ -314,7 +312,6 @@ impl Painter {
             self.boxless_audio(walk, node);
             return true;
         }
-        let outer = self.drawn_rect(node, offset);
         let parent = self.split_parent(walk.scene.kernel, node);
         let m = spatial_matrix(parent, node, p, (x, y, w, h), offset);
         let own = crate::placement::compose(plane(&m), ts, 0.0, 0.0);
@@ -335,14 +332,10 @@ impl Painter {
         let ((left, top, right, bottom), clamped) =
             reach(self, walk, node, (x, y, w, h), ts, offset, cap);
         let island = (x - left, y - top, w + left + right, h + top + bottom);
-        let island = if outer == (x, y, w, h) {
-            island
-        } else {
-            rows::union(Some(island), outer)
-        };
         let (ix, iy, iw, ih) = island;
-        // The plane z = 0 of the box, from its island (-left..w+right, …).
-        let m = mul(&m, &translate(ix, iy, 0.0));
+        // Both planes map from the origin of the painted island.
+        let island_origin = translate(ix, iy, 0.);
+        let m = mul(&m, &island_origin);
         let plane = plane(&m);
         // Turned away from the viewer: `backface-visibility: hidden` paints
         // nothing (the plane's normal is its z column after the turn).
@@ -358,7 +351,7 @@ impl Painter {
                 // descendants whose combined transforms escape `reach`.
                 self.backend
                     .push_clip(&Shape::rect(island), Transform::identity());
-                let flatten = self.flatten.replace((node.id, outer));
+                let flatten = self.flatten.replace(node.id);
                 let mut child_walk = Walk {
                     scene: walk.scene,
                     scrollbar_cover: walk.scrollbar_cover,
@@ -408,23 +401,22 @@ impl Painter {
         painter.canvases = self.canvases.clone();
         painter.pixel_grid = self.pixel_grid;
         painter.grid_suspended = true;
-        painter.flatten = Some((node.id, (outer.0 - ix, outer.1 - iy, outer.2, outer.3)));
+        painter.flatten = Some(node.id);
         painter.capture_boxless_audio(walk.scene.kernel);
         // An offscreen subtree includes the same outgoing drawings as the
         // live walk, under this plane's current placement and compositing.
         painter.stage = std::mem::take(&mut self.stage);
         painter.kept = std::mem::take(&mut self.kept);
-        painter.viewport = (iw, ih);
-        // The software island must cover the fractional edge of its layout box.
+        // Nested warps can fill the last backing pixel even when the CSS clip
+        // through that pixel is fractional.
         let backing = |size: f32| {
-            if self.pixel_grid {
-                let scale = f64::from(self.scale);
-                ((f64::from(size) * scale).ceil() / scale) as f32
-            } else {
-                size
-            }
+            let scale = f64::from(self.scale);
+            ((f64::from(size) * scale).ceil() / scale) as f32
         };
-        painter.backend.begin(backing(iw), backing(ih), self.scale);
+        painter.viewport = (backing(iw), backing(ih));
+        painter
+            .backend
+            .begin(painter.viewport.0, painter.viewport.1, self.scale);
         let mut child_walk = Walk {
             scene: walk.scene,
             scrollbar_cover: walk.scrollbar_cover,
@@ -458,7 +450,7 @@ impl Painter {
                 self.backend.surface_image(Arc::new(pixels), rect);
             }
         }
-        let hit_plane = self::plane(&mul(&hit_m, &translate(x - left, y - top, 0.)));
+        let hit_plane = self::plane(&mul(&hit_m, &island_origin));
         let hit_device = crate::placement::compose(hit_plane, hit_ts, 0., 0.);
         let hit_inv = crate::placement::inverse(hit_device).unwrap_or(inv);
         project(walk, child_walk, inv, clip, hit_inv, hit_clip);
@@ -591,25 +583,26 @@ pub(super) fn sticky(
     else {
         return offset;
     };
-    let (dx, dy) = sticky_displacement(scene, node.key, grid);
+    let (dx, dy) = sticky_displacement(scene, &node, grid);
     (offset.0 - dx, offset.1 - dy)
 }
 
 pub(super) fn sticky_displacement(
     scene: &Scene<'_>,
-    key: exact_kernel::NodeKey,
+    node: &NodeRef<'_>,
     grid: Option<f32>,
 ) -> PaintOffset {
     let kernel = scene.kernel;
     let Some((c, scroller)) = kernel
-        .sticky_constraint(key)
+        .sticky_constraint(node.key)
         .and_then(|c| Some((c, kernel.node(c.scroller)?)))
     else {
         return (0., 0.);
     };
     let scroll = sticky_scroll(scene, &scroller);
-    let (dx, dy) = grid::sticky_shift(c, &scroller, scroll, grid);
-    match grid {
+    let snap_box = grid.is_some() && !grid::leaves_grid(node, &(scene.presented)(node.id));
+    let (dx, dy) = grid::sticky_shift(c, &scroller, scroll, grid, snap_box);
+    match grid.filter(|_| snap_box) {
         Some(s) => (
             grid::device_pixel(dx, s) / f64::from(s),
             grid::device_pixel(dy, s) / f64::from(s),

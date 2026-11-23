@@ -122,13 +122,13 @@ impl Painter {
         clip: Option<Rect4>,
     ) {
         let hit_space = walk.hit_space;
-        let offset = if self.flatten.is_some_and(|(root, _)| root == id) {
-            offset
-        } else {
-            sticky(walk.scene, id, offset, self.grid())
-        };
-        self.record_sticky(walk, id, ts, |painter, walk| {
-            painter.without_grid(grid::changes_axes(ts), |painter| {
+        self.without_grid(grid::changes_axes(ts), |painter| {
+            let offset = if painter.flatten == Some(id) {
+                offset
+            } else {
+                sticky(walk.scene, id, offset, painter.grid())
+            };
+            painter.record_sticky(walk, id, ts, |painter, walk| {
                 painter.node_at_inner(walk, id, ts, offset, clip);
             });
         });
@@ -159,14 +159,13 @@ impl Painter {
         }
         let node = walk.scene.kernel.node(id).expect("named live node");
         let shown = (walk.scene.presented)(id);
-        let (layout, rect) = self.node_rects(&node, offset, shown.changes_axes());
+        let rect = self.node_rect(&node, offset, &shown);
         let paint = BoxPaint::capture(&node, walk.scene.kernel, self.dark);
         let geometry = paint.geometry(rect);
         let transform = if shown.lowered & crate::host::lower::LOWER_TRANSFORM == 0 {
-            ts.pre_concat(shown.transform(
-                layout,
-                node.style.transform_origin.resolve(layout.2, layout.3),
-            ))
+            ts.pre_concat(
+                shown.transform(rect, node.style.transform_origin.resolve(rect.2, rect.3)),
+            )
         } else {
             ts.pre_translate(shown.layout[0], shown.layout[1])
         };

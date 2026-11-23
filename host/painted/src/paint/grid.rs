@@ -127,12 +127,18 @@ pub(super) fn sticky_shift(
     scroller: &NodeRef<'_>,
     scroll: (f32, f32),
     grid: Option<f32>,
+    snap_box: bool,
 ) -> (f32, f32) {
-    match grid {
-        Some(s) => sticky_on_pixels(c, scroller.frame, s)
-            .offset((pixel(scroll.0, s) / s, pixel(scroll.1, s) / s)),
-        None => c.offset(scroll),
-    }
+    let Some(s) = grid else {
+        return c.offset(scroll);
+    };
+    let scroll = (pixel(scroll.0, s) / s, pixel(scroll.1, s) / s);
+    let constraint = if snap_box {
+        sticky_on_pixels(c, scroller.frame, s)
+    } else {
+        c
+    };
+    constraint.offset(scroll)
 }
 
 impl BoxPaint {
@@ -183,22 +189,17 @@ impl Painter {
         )
     }
 
-    /// The transformed content uses layout geometry. The node's own surface
-    /// keeps the box it had in the enclosing space.
-    pub(super) fn node_rects(
+    pub(super) fn node_rect(
         &self,
         node: &NodeRef<'_>,
         offset: PaintOffset,
-        transformed: bool,
-    ) -> (Rect4, Rect4) {
-        let flat = self.flatten.filter(|(root, _)| *root == node.id);
-        let outer = flat.map_or_else(|| self.drawn_rect(node, offset), |(_, rect)| rect);
-        let content = if transformed || flat.is_some() {
+        shown: &Presented,
+    ) -> Rect4 {
+        if leaves_grid(node, shown) {
             paint_rect(node.frame, offset)
         } else {
-            outer
-        };
-        (content, outer)
+            self.drawn_rect(node, offset)
+        }
     }
 
     pub(super) fn pixel_phase(&self, frame: Frame) -> Option<(f64, f64)> {
@@ -218,6 +219,13 @@ impl Painter {
             None => (f64::from(x), f64::from(y)),
         }
     }
+}
+
+pub(super) fn leaves_grid(node: &NodeRef<'_>, shown: &Presented) -> bool {
+    shown.changes_axes()
+        || shown.rotate_axis.is_3d()
+        || node.style.translate_z != 0.
+        || zoom::range(node).is_some()
 }
 
 pub(super) fn changes_axes(ts: Transform) -> bool {

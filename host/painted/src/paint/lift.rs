@@ -71,8 +71,6 @@ impl Painter {
         // A scroller's rows are its children; a scroller holding one
         // container (a column of settings) keeps that container's children
         // apart instead, so one of them changing records only itself.
-        let grid_suspended = self.grid_suspended;
-        self.grid_suspended |= self.zoom_of(node).is_some();
         let ts = self.zoom_children(walk.scene.kernel, node, ts, child_offset);
         let r = self.drawn_rect(node, child_offset);
         let space = ts.pre_translate(r.0, r.1);
@@ -109,7 +107,6 @@ impl Painter {
             self.node(walk, child, ts, child_offset, child_rect);
         }
         self.kept.pop_space();
-        self.grid_suspended = grid_suspended;
     }
 
     /// The row a list carries within itself, painted after its siblings.

@@ -114,7 +114,8 @@ pub(crate) fn warp_clipped(
     scale: f32,
     viewport: (f32, f32),
 ) -> Option<(Pixmap, Rect4)> {
-    warp_with(source, h, planes, scale, viewport, false)
+    let pixels = (viewport.0 * scale, viewport.1 * scale);
+    warp_with(source, h, planes, scale, pixels, false)
 }
 
 /// [`warp_clipped`] with soft edges: past the picture is transparent, so a
@@ -127,7 +128,8 @@ pub(crate) fn warp_soft(
     scale: f32,
     viewport: (f32, f32),
 ) -> Option<(Pixmap, Rect4)> {
-    warp_with(source, h, planes, scale, viewport, true)
+    let pixels = ((viewport.0 * scale).round(), (viewport.1 * scale).round());
+    warp_with(source, h, planes, scale, pixels, true)
 }
 
 fn warp_with(
@@ -135,7 +137,7 @@ fn warp_with(
     h: [f32; 9],
     planes: [[f32; 3]; 2],
     scale: f32,
-    viewport: (f32, f32),
+    pixels: (f32, f32),
     soft: bool,
 ) -> Option<(Pixmap, Rect4)> {
     let inv = inverse(h)?;
@@ -154,8 +156,8 @@ fn warp_with(
     }
     let x0 = (b.0 * scale).floor().max(0.);
     let y0 = (b.1 * scale).floor().max(0.);
-    let x1 = ((b.0 + b.2) * scale).ceil().min(viewport.0 * scale);
-    let y1 = ((b.1 + b.3) * scale).ceil().min(viewport.1 * scale);
+    let x1 = ((b.0 + b.2) * scale).ceil().min(pixels.0);
+    let y1 = ((b.1 + b.3) * scale).ceil().min(pixels.1);
     if x1 <= x0 || y1 <= y0 {
         return None;
     }

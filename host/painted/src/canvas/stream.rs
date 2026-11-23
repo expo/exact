@@ -991,6 +991,145 @@ component App
         assert!((50..100).contains(&alpha), "edge coverage: {alpha}");
     }
 
+    #[test]
+    fn a_nested_warp_paints_the_last_column_of_its_backing() {
+        let mut p = canvas_fixture(
+            r#"component App
+  view
+    box scale=2 transform-origin="0 0"
+      box width=100.375 height=20 position="relative" overflow="hidden" scale=0.5 transform-origin="0 0" translate="0px 0px 1px"
+        box position="absolute" left=100 top=4 width=0.375 height=8 translate="0px 0px 1px" background-color="red"
+"#,
+            2.,
+        );
+        p.frame();
+        let image = software_picture();
+        let y = 12;
+        assert_eq!(image.width(), 201);
+        assert!((0..200).all(|x| image.pixel(x, y).unwrap().alpha() == 0));
+        assert!(image.pixel(200, y).unwrap().red() > 0);
+    }
+
+    #[test]
+    fn a_software_island_hits_the_child_at_its_painted_left_edge() {
+        let mut p = canvas_fixture(
+            r#"component App
+  view
+    box width=40 height=20 margin-left=4.75 translate="0px 0px 1px" filter="brightness(1)"
+      box width=10 height=20 background-color="red" testId="child"
+"#,
+            2.625,
+        );
+        p.frame();
+        let image = software_picture();
+        assert_eq!(image.pixel(2, 10).unwrap().red(), 255);
+        let k = p.host().kernel();
+        let child = k.node_by_key(k.find_by_test_id("child")[0]).unwrap().id;
+        assert_eq!(p.hit(4.76, 5.), Some(child));
+        assert_ne!(p.hit(4.74, 5.), Some(child));
+    }
+
+    fn canvas_fixture(source: &str, scale: f32) -> crate::presenter::Presenter<()> {
+        use crate::presenter::{PainterChoice, Presenter};
+        let (p, error) = Presenter::boot_with_fixture_fonts(
+            &crate::test_plan(source),
+            (),
+            (220., 80.),
+            scale,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert_eq!(error, None);
+        p
+    }
+
+    fn software_picture() -> Arc<Pixmap> {
+        let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let mut at = 0;
+        while at < ops.len() {
+            if ops[at] == IMAGE_DEF {
+                let Some(Picture::Canvas(pixels)) = with_pending(|p| p.remove(&ops[at + 1])) else {
+                    panic!("software pixels");
+                };
+                return pixels;
+            }
+            at = end(&ops, at).unwrap();
+        }
+        panic!("the software island must emit a picture");
+    }
+
+    #[test]
+    fn a_scaled_background_and_its_hit_target_share_the_layout_width() {
+        let mut p = canvas_fixture(
+            r#"component App
+  state count = 0
+  action go
+    count = count + 1
+  view
+    box width=0.1 height=2 scale=8 transform-origin="0 0" background-color="red" press=go testId="slab"
+"#,
+            2.625,
+        );
+        p.frame();
+        let k = p.host().kernel();
+        let slab = k.node_by_key(k.find_by_test_id("slab")[0]).unwrap().id;
+        let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let mut at = 0;
+        let mut scale = 0.;
+        let mut width = None;
+        while at < ops.len() {
+            match ops[at] {
+                MATRIX => scale = f32::from_bits(ops[at + 1]),
+                RRECT if ops[at + 1] == 0xffff0000 => {
+                    width = Some(scale * f32::from_bits(ops[at + 4]));
+                }
+                _ => {}
+            }
+            at = end(&ops, at).unwrap();
+        }
+        assert!((width.unwrap() - 2.1).abs() < 0.0001);
+        assert_eq!(p.hit(2.05 / 2.625, 1.), Some(slab));
+        assert_ne!(p.hit(2.15 / 2.625, 1.), Some(slab));
+    }
+
+    #[test]
+    fn a_scaled_surface_mask_and_clips_follow_its_contents() {
+        let mut p = canvas_fixture(
+            r#"component App
+  view
+    box width=40 height=20 margin-left=4 scale=4 transform-origin="0 0" overflow="hidden" background-color="red" mask-image="linear-gradient(black, transparent)" clip-path="inset(0px)"
+      box width=44 height=10 background-color="blue" testId="child"
+"#,
+            2.625,
+        );
+        p.frame();
+        let k = p.host().kernel();
+        let child = k.node_by_key(k.find_by_test_id("child")[0]).unwrap().id;
+        let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let mut at = 0;
+        let mut matrix = (0., 0.);
+        let mut lefts = Vec::new();
+        let mut masking = false;
+        while at < ops.len() {
+            let float = |i| f32::from_bits(ops[at + i]);
+            match ops[at] {
+                MATRIX => matrix = (float(1), float(5)),
+                RRECT if masking || matches!(ops[at + 1], 0xffff0000 | 0xff0000ff) => {
+                    lefts.push(matrix.0 * float(2) + matrix.1);
+                }
+                CLIP_RRECT => lefts.push(matrix.0 * float(1) + matrix.1),
+                CLIP_PATH => lefts.push(matrix.0 * float(4) + matrix.1),
+                clip::MASK_LAYER => masking = true,
+                _ => {}
+            }
+            at = end(&ops, at).unwrap();
+        }
+        assert_eq!(lefts, [10.5; 5]);
+        assert_eq!(p.hit(4.1, 5.), Some(child));
+        assert_ne!(p.hit(164.1, 5.), Some(child));
+    }
+
     fn software_island_edge(outer: &str, x: usize) -> u8 {
         use crate::presenter::{PainterChoice, Presenter};
         let source = r#"component App

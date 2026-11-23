@@ -776,7 +776,7 @@ impl Painter {
                     c.sticky.push(RowSticky {
                         node: node.key,
                         grid,
-                        shift: space::sticky_displacement(scene, node.key, grid),
+                        shift: space::sticky_displacement(scene, node, grid),
                     });
                 }
             }
@@ -985,10 +985,11 @@ impl Painter {
                 .scrolls
                 .iter()
                 .all(|(id, at)| walk.scene.scroll.get(id).copied().unwrap_or((0.0, 0.0)) == *at)
-            && row
-                .sticky
-                .iter()
-                .all(|s| space::sticky_displacement(walk.scene, s.node, s.grid) == s.shift)
+            && row.sticky.iter().all(|s| {
+                walk.scene.kernel.node_by_key(s.node).is_some_and(|node| {
+                    space::sticky_displacement(walk.scene, &node, s.grid) == s.shift
+                })
+            })
             && (!pictures
                 || row
                     .images
@@ -1171,15 +1172,18 @@ impl Painter {
         self.rows.next += 1;
         let start = walk.boxes.len();
         let unsupported = std::mem::replace(&mut self.damage.unsupported, false);
-        // Without a transform, the row is walked in its own coordinates (its
-        // top-left at 0,0, from document positions alone): the same row records
-        // the same ops wherever it scrolled to, so one recorded again unchanged
-        // keeps its drawing. Its boxes move to the page after.
-        let local = self.backend.row_local() && ts == Transform::identity();
-        let (walk_offset, content) = if local {
-            (self.drawn_offset((node.frame.x, node.frame.y)), (0.0, 0.0))
+        // Walk a translated row from its own origin, then place its drawing
+        // and hits together. Subtracting large viewport positions on replay
+        // would lose the hit's fractional edge.
+        let local = self.backend.row_local() && !grid::changes_axes(ts);
+        let (walk_offset, walk_ts, content) = if local {
+            (
+                self.drawn_offset((node.frame.x, node.frame.y)),
+                Transform::identity(),
+                (0.0, 0.0),
+            )
         } else {
-            (offset, origin)
+            (offset, ts, origin)
         };
         self.backend.row_begin(self.rows.next, content, previous);
         self.rows.recording = Some(Capture {
@@ -1191,7 +1195,7 @@ impl Painter {
         if local {
             self.kept.to_page = page.pre_translate(origin.0, origin.1);
         }
-        self.node(walk, id, ts, walk_offset, None);
+        self.node(walk, id, walk_ts, walk_offset, None);
         self.kept.to_page = page;
         let capture = self.rows.recording.take().expect("recording");
         let boxes = walk.boxes[start..].to_vec();
@@ -1235,8 +1239,8 @@ impl Painter {
             .fold(None, |u, r| Some(union(u, r)))
             .unwrap_or((content.0, content.1, 0.0, 0.0));
         let placed = sticky(walk.scene, id, offset, self.grid());
-        let rect = self.drawn_rect(&node, placed);
         let p = (walk.scene.presented)(id);
+        let rect = self.node_rect(&node, placed, &p);
         let space =
             ts.pre_concat(p.transform(rect, node.style.transform_origin.resolve(rect.2, rect.3)));
         let covered = self

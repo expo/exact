@@ -119,7 +119,8 @@ fn an_anchored_reader_keeps_pixel_travel_through_display_acknowledgement() {
     let cursor = p.collection.cursors.entry(port).or_default();
     cursor.bind(key, cursor.sequence);
     cursor.anchored = true;
-    p.reader_pixels_at(port, (0., 180.), 2., rev, 10.).unwrap();
+    p.reader_pixels_at(port, (0., 180.), ((f32::NAN, 200.), 2.), rev, 10.)
+        .unwrap();
     assert_eq!(p.scroll_of(port).1, 100.125);
     attach(&mut p);
     assert_eq!(p.scroll_of(port).1, 100.125);
@@ -129,12 +130,14 @@ fn an_anchored_reader_keeps_pixel_travel_through_display_acknowledgement() {
     let cursor = p.collection.cursors.get_mut(&port).unwrap();
     cursor.anchored = true;
     cursor.model_scroll.as_mut().unwrap().rebase = cursor.rebased - 3.;
-    p.reader_pixels_at(port, (0., -2.), 2., rev, 20.).unwrap();
+    p.reader_pixels_at(port, (0., -2.), ((f32::NAN, 198.), 2.), rev, 20.)
+        .unwrap();
     attach(&mut p);
     assert_eq!(p.scroll_of(port).1, 96.125);
 
     for (at, expected) in [(21., 96.325), (22., 96.525)] {
-        p.reader_pixels_at(port, (0., 0.4), 2., rev, at).unwrap();
+        p.reader_pixels_at(port, (0., 0.4), ((f32::NAN, 192.4), 2.), rev, at)
+            .unwrap();
         attach(&mut p);
         assert_eq!(p.scroll_of(port).1, expected);
     }

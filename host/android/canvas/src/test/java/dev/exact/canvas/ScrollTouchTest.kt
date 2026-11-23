@@ -44,7 +44,7 @@ class ScrollTouchTest {
         /** What exact2 was told of the touch itself: down, then lifted. */
         val touching = ArrayList<Boolean>()
         @Implementation fun touching(on: Boolean) { touching.add(on) }
-        @Implementation fun scrolled(id: Int, dx: Float, dy: Float, rev: Int, seq: Int) {
+        @Implementation fun scrolled(id: Int, dx: Float, dy: Float, x: Float, y: Float, rev: Int, seq: Int) {
             moved[id] = (moved[id] ?: 0f) + dx + dy
             Host.told.add("move $id")
         }
