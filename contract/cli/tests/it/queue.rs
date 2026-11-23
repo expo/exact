@@ -116,7 +116,9 @@ impl DataSource for Desk {
             self.asks.push(format!("{source}:{op}"));
         }
         match source {
-            "broken" => Err(DataError::Unavailable("broken refuses".into())),
+            // A source the desk does not answer: the runner refuses the send.
+            // (`Unavailable` would commit it with its receipt failed.)
+            "broken" => Err(DataError::UnknownSource(source.into())),
             "two" => Ok(Answer::Later(Request::post_json(
                 "https://desk.test/step1",
                 &op,

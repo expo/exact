@@ -40,15 +40,16 @@ final class KeyboardNavigationMacTests: XCTestCase {
         return page(ops + [["op": "children", "id": 1, "ids": [2, 3, 4, 5, 6, 7, 8, 9, 10]]])
     }
     /// A page (1) in a window of its own, holding what `ops` create.
-    private func page(_ ops: [[String: Any]]) -> Presenter {
+    private func page(_ ops: [[String: Any]], session: ExactSession? = nil) -> Presenter {
         _ = NSApplication.shared
-        let p = Presenter()
+        let p = session?.presenter ?? Presenter()
         var face = ButtonFace(); face.title = "Go"
         p.buttonFace = { _ in face }
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 500), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.autorecalculatesKeyViewLoop = false
-        window.contentView = p.viewport
+        if let session { window.contentView = ExactView(session: session) }
+        else { window.contentView = p.viewport }
         p.apply(wireBatch([["op": "create", "id": 1, "kind": "view"], ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 400, "h": 500]] + ops + [["op": "roots", "ids": [1]]]))
         p.flushKeyViewLoop()
         return p
@@ -56,6 +57,27 @@ final class KeyboardNavigationMacTests: XCTestCase {
     private func row(_ id: Int, _ kind: String, _ props: [String: String] = [:], handlers: [String] = [], style: [String: Any] = [:]) -> [[String: Any]] {
         [["op": "create", "id": id, "kind": kind, "props": props, "handlers": handlers, "style": style],
          ["op": "frame", "id": id, "x": 10, "y": id * 40, "w": 200, "h": 30]]
+    }
+
+    private func typingPage(_ kind: String = "textarea") -> ExactSession {
+        _ = NSApplication.shared
+        let session = ExactApp.shared.makeSession(label: "typing-focus")
+        _ = page(row(2, kind, ["id": "editor", "value": ""], handlers: ["key"])
+            + row(3, "input", ["value": ""])
+            + row(4, "input", ["value": ""])
+            + row(5, "control", ["type": "button", "id": "native", "tabIndex": "0"], handlers: ["press"], style: ["appearance": "auto"])
+            + [["op": "children", "id": 1, "ids": [2, 3, 4, 5]]], session: session)
+        addTeardownBlock { [window] in
+            window?.contentView = nil
+            session.destroy()
+        }
+        return session
+    }
+
+    private func letter(_ characters: String = "a", flags: NSEvent.ModifierFlags = []) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+            timestamp: 0, windowNumber: window.windowNumber, context: nil,
+            characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: 0))
     }
 
     /// The stops Tab visits from the viewport, once around, by node id.
@@ -77,6 +99,115 @@ final class KeyboardNavigationMacTests: XCTestCase {
         let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: shift ? .shift : [], timestamp: 0, windowNumber: window.windowNumber,
                                                    context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: 48))
         if !p.routeKey(event, focused: true, in: window) { window.sendEvent(event) }
+    }
+
+    func testTypingLeavesTheLoopForDirectTraversalActions() throws {
+        keyboardNavigation(false)
+        for kind in ["textarea", "input"] {
+            window?.close()
+            let session = typingPage(kind), p = session.presenter
+            let source = p.keyView(of: try XCTUnwrap(p.views[2]))
+            let first = try XCTUnwrap(p.views[3]?.field)
+            let second = try XCTUnwrap(p.views[4]?.field)
+            p.focusElement(["editor"])
+            let editor = try XCTUnwrap(window.firstResponder as? NSTextView)
+            if kind == "input" { XCTAssertTrue(editor is FieldEditor) }
+            else { XCTAssertTrue(editor === source && editor is TextArea) }
+            XCTAssertTrue(source.nextKeyView === first, kind)
+
+            p.apply(wireBatch([["op": "props", "id": 3, "set": ["tabIndex": "1"]]]))
+            let typed = Agent(session: session).type(["id": 2, "key": "a"])
+            XCTAssertNil(typed["error"])
+            XCTAssertEqual(editor.string, "a", kind)
+            XCTAssertTrue(window.firstResponder === editor, kind)
+            XCTAssertTrue(source.nextKeyView === first, "ordinary typing leaves the old focus order for \(kind)")
+
+            editor.insertTab(nil)
+            XCTAssertNotNil(second.currentEditor(), "Tab follows the new order for \(kind)")
+            XCTAssertTrue(window.firstResponder === second.currentEditor(), kind)
+
+            p.focusElement(["editor"])
+            p.apply(wireBatch([["op": "props", "id": 4, "set": ["tabIndex": "1"]]]))
+            editor.insertBacktab(nil)
+            XCTAssertNotNil(second.currentEditor(), "Shift-Tab follows the latest order for \(kind)")
+        }
+    }
+
+    func testAnUnconsumedLetterRebuildsTheLoopWhenItsHandlerMovesFocus() throws {
+        keyboardNavigation(false)
+        for viaAgent in [false, true] {
+            let delivery = viaAgent ? "driver" : "event monitor"
+            window?.close()
+            let session = typingPage(), p = session.presenter
+            let source = try XCTUnwrap(p.views[2]?.textArea)
+            let first = try XCTUnwrap(p.views[3]?.field)
+            let button = try XCTUnwrap(p.controls.controls[5] as? NativeButtonMac)
+            p.focusElement(["editor"])
+            p.apply(wireBatch([["op": "props", "id": 3, "set": ["tabIndex": "1"]]]))
+            var heard: [KeyPress] = []
+            p.onKey = { [weak p] _, key in
+                heard.append(key)
+                XCTAssertTrue(button.nextKeyView === source, "the loop is still stale in the handler")
+                p?.focusElement(["native"])
+            }
+
+            if viaAgent {
+                XCTAssertNil(Agent(session: session).type(["id": 2, "key": "a", "phase": "down"])["error"])
+            } else {
+                NSApp.sendEvent(try letter())
+            }
+            XCTAssertEqual(heard.map(\.chord), ["a"], delivery)
+            XCTAssertTrue(window.firstResponder === button, delivery)
+            XCTAssertTrue(button.nextKeyView === first, "the \(delivery) gives the new responder the updated loop")
+        }
+    }
+
+    func testPreparationRebuildsForModifiersMarkedTextAndOtherResponders() throws {
+        keyboardNavigation(false)
+        let p = typingPage().presenter
+        let source = try XCTUnwrap(p.views[2]?.textArea)
+        let first = try XCTUnwrap(p.views[3]?.field)
+        let second = try XCTUnwrap(p.views[4]?.field)
+        func expectEagerRebuild(_ event: NSEvent, _ reason: String) {
+            p.apply(wireBatch([["op": "props", "id": 3, "set": ["tabIndex": "1"]]]))
+            XCTAssertTrue(source.nextKeyView === first, reason)
+            _ = p.prepareKeyViewLoop(for: event, in: window)
+            XCTAssertTrue(source.nextKeyView === second, reason)
+            p.apply(wireBatch([["op": "props", "id": 3, "set": ["tabIndex": "0"]]]))
+            p.flushKeyViewLoop()
+        }
+
+        p.focusElement(["native"])
+        XCTAssertTrue(window.firstResponder === p.controls.controls[5])
+        expectEagerRebuild(try letter(), "another responder")
+
+        p.focusElement(["editor"])
+        XCTAssertTrue(window.firstResponder === source)
+        expectEagerRebuild(try letter("A", flags: .shift), "a modified letter")
+        source.setMarkedText("あ", selectedRange: NSRange(location: 1, length: 0),
+                             replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(source.hasMarkedText())
+        expectEagerRebuild(try letter(), "marked text")
+    }
+
+    func testALetterInterpretedAsAnEditorCommandRebuildsTheLoop() throws {
+        keyboardNavigation(false)
+        for kind in ["textarea", "input"] {
+            window?.close()
+            let p = typingPage(kind).presenter
+            let source = p.keyView(of: try XCTUnwrap(p.views[2]))
+            let first = try XCTUnwrap(p.views[3]?.field)
+            let second = try XCTUnwrap(p.views[4]?.field)
+            p.focusElement(["editor"])
+            let editor = try XCTUnwrap(window.firstResponder as? NSTextView)
+            p.apply(wireBatch([["op": "props", "id": 3, "set": ["tabIndex": "1"]]]))
+            _ = p.prepareKeyViewLoop(for: try letter(), in: window)
+            XCTAssertTrue(source.nextKeyView === first, kind)
+
+            // AppKit delivers a custom text key binding through doCommand(by:).
+            editor.doCommand(by: #selector(NSResponder.moveLeft(_:)))
+            XCTAssertTrue(source.nextKeyView === second, "a letter bound to Move Left for \(kind)")
+        }
     }
 
     /// A date, a time and a `select` (X52, #280, #327): with Keyboard

@@ -484,3 +484,24 @@ fn a_reload_keeps_a_mover_declared_before_its_destination() {
     assert_eq!(view(&again, "v"), Some(v));
     assert_eq!(parent(&again, v), view(&again, "d"));
 }
+
+#[test]
+fn hidden_movers_are_journaled_in_declaration_order() {
+    let movers: String = (0..8)
+        .map(|i| format!("      box portal=gone testId=\"m{i}\"\n"))
+        .collect();
+    let r = boot(&format!(
+        "component App\n  state gone = \"nowhere\"\n  view\n    column\n{movers}"
+    ));
+    let said: Vec<&str> = r.journal().filter(|l| l.contains("hides it")).collect();
+    let expected: Vec<String> = (0..8)
+        .map(|i| {
+            let v = view(&r, &format!("m{i}")).unwrap();
+            format!("view {v}: `portal=\"nowhere\"` hides it")
+        })
+        .collect();
+    assert_eq!(said.len(), expected.len(), "{said:#?}");
+    for (line, want) in said.iter().zip(&expected) {
+        assert!(line.contains(want.as_str()), "{said:#?}");
+    }
+}

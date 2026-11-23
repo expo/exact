@@ -1088,7 +1088,7 @@ extension Agent {
             }
             // This driver sends directly to NSWindow, bypassing NSApplication's
             // local monitor. Use the same session command router first.
-            presenter.flushKeyViewLoop()
+            let deferredEditor = phase == "up" ? nil : presenter.prepareKeyViewLoop(for: down, in: win)
             // The monitor's route (`Presenter.routeKey`): shortcuts, the focus's
             // `key` handlers (a prevented key goes no further), then the menus'
             // and dialogs' defaults.
@@ -1106,6 +1106,7 @@ extension Agent {
                 }
                 return ["typed": Int(v.id), "key": chord, "value": Agent.shownValue(v.textArea?.string ?? v.field?.stringValue ?? "", of: v)]
             }
+            if let deferredEditor, win.firstResponder !== deferredEditor { presenter.flushKeyViewLoop() }
             // A native view takes the key itself; the chord's modifiers still come up here.
             if v.kind == "native" {
                 let reply = nativeType(v, req, token: nativeToken)
