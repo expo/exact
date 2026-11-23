@@ -11,6 +11,54 @@ fn cli_refuses_bad_arguments() {
     assert!(String::from_utf8_lossy(&status.stderr).contains("usage:"));
 }
 
+#[test]
+fn cargo_bake_watches_omission_and_bun_lists_and_the_shell_settings_it_uses() {
+    if !exact_js::ENGINE_LINKED {
+        return;
+    }
+    let f = Fixture::new();
+    f.write(
+        "app.json",
+        r#"{"app":{"id":"test.exact.logic","name":"Logic"},"env":[{"name":"LAUNCH_TOKEN","launch":true},{"name":"FILE_TOKEN","launch":true},"BUILD_TOKEN"]}"#,
+    );
+    f.write(
+        "logic.ts",
+        "const launch = import.meta.env.LAUNCH_TOKEN ?? 'fallback';\n\
+         const file = import.meta.env.FILE_TOKEN;\n\
+         const build = import.meta.env.BUILD_TOKEN;\n\
+         export const prefix = launch + file + build;\n",
+    );
+    f.write(".env", "FILE_TOKEN=from-file\n");
+    let result = Command::new(env!("CARGO_BIN_EXE_exact-js-bake"))
+        .arg(&f.0)
+        .args(["--cargo", "macos", "aarch64-apple-darwin"])
+        .arg(f.0.join("baked"))
+        .env("EXACT_UPDATE_TRUST", "development")
+        .env("EXACT_LAUNCH_OMIT", "LAUNCH_TOKEN")
+        .env("EXACT_BUN_LOADED", "FILE_TOKEN")
+        .env("LAUNCH_TOKEN", "launch-value")
+        .env("FILE_TOKEN", "bun-value")
+        .env("BUILD_TOKEN", "build-value")
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let output = String::from_utf8(result.stdout).unwrap();
+    let watches: Vec<_> = output
+        .lines()
+        .filter_map(|line| line.strip_prefix("cargo:rerun-if-env-changed="))
+        .collect();
+    for name in ["EXACT_LAUNCH_OMIT", "EXACT_BUN_LOADED", "BUILD_TOKEN"] {
+        assert!(watches.contains(&name), "missing watch for {name}");
+    }
+    for name in ["LAUNCH_TOKEN", "FILE_TOKEN"] {
+        assert!(!watches.contains(&name), "unexpected watch for {name}");
+    }
+}
+
 struct Server(Child);
 impl Drop for Server {
     fn drop(&mut self) {
