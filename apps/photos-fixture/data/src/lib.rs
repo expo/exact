@@ -5,9 +5,17 @@
 //! `fs.compressImage` of `path` into `app:/tmp/edits/<n>`, answering the
 //! call's record, or its failure, as JSON text. A `path` of
 //! `fixture:<name>` is one of the conformance's sources (§11), written to
-//! `app:/tmp/edits/source-<name>` first.
+//! `app:/tmp/edits/source-<name>` first. It also keeps the app's index of
+//! the photo library in step with it (`index.rs`).
 
 #![deny(missing_docs)]
+
+mod index;
+
+/// The module binding `build.rs` generates from the app's plan.
+pub mod modules {
+    include!(concat!(env!("OUT_DIR"), "/modules.rs"));
+}
 
 use exact_data::storage;
 use exact_plan::Value;
@@ -37,6 +45,7 @@ const SOURCES: [(&str, &[u8]); 3] = [
 /// The app's data source.
 #[derive(Default)]
 pub struct Fixture {
+    index: index::Index,
     edits: u32,
     /// The storage requests an `editImage` makes after the one in flight,
     /// in order: the image call last.
@@ -111,6 +120,8 @@ impl DataSource for Fixture {
     fn query(&mut self, source: &str, _args: &[Value]) -> Result<Value, DataError> {
         Err(if source == "editImage" {
             DataError::Unavailable("the codec is unavailable during bake".into())
+        } else if source == "photoIndex" || source == "photoListing" {
+            DataError::Unavailable("the photo library is read at run time".into())
         } else {
             DataError::UnknownSource(source.into())
         })
@@ -124,6 +135,8 @@ impl DataSource for Fixture {
     ) -> Result<Answer, DataError> {
         match source {
             "editImage" => self.edit(args),
+            "photoIndex" => Ok(self.index.sync(args)),
+            "photoListing" => Ok(self.index.listing(args)),
             _ => Err(DataError::UnknownSource(source.into())),
         }
     }
@@ -132,11 +145,14 @@ impl DataSource for Fixture {
         &mut self,
         _store: &mut Store,
         source: &str,
-        _args: &[Value],
+        args: &[Value],
         outcome: Outcome,
     ) -> Result<Answer, DataError> {
-        if source != "editImage" {
-            return Err(DataError::UnknownSource(source.into()));
+        match source {
+            "photoIndex" => return Ok(self.index.synced(args, outcome)),
+            "photoListing" => return Ok(self.index.listed(args, outcome)),
+            "editImage" => {}
+            _ => return Err(DataError::UnknownSource(source.into())),
         }
         let record = match storage::response(outcome) {
             Ok(value) => match self.steps.pop_front() {
@@ -152,7 +168,7 @@ impl DataSource for Fixture {
     }
 
     fn grants(&self) -> &str {
-        "device.photos recentsPurpose\ndevice.photos-add savePurpose\nfs.read app:/tmp\nfs.write app:/tmp"
+        "device.photos recentsPurpose\ndevice.photos-add savePurpose\nfs.read app:/tmp\nfs.write app:/tmp\nsqlite.open app:/data/photos.db"
     }
 
     fn app_id(&self) -> &str {

@@ -37,6 +37,18 @@ const once = (pages, owned, list) => owned.every((o) => pages.flatMap((p) => p[l
   && !pages.some((p) => ['added', 'updated', 'deleted'].some((l) => l !== list && p[l].includes(o))));
 const done = (r) => !r.stale && !r.more && !r.expired && !r.error;
 
+/** PhotoKit edits on simulator `sim`, made by the UI test's runner (PhotoChangesUITests.swift) beside app `id`, which
+ * fails an edit that reaches fewer photos than it names: the ids each reached or made. */
+export const photoKitEdit = ({ sim, id, dir }) => (edits) => {
+  const out = join(dir, 'ui');
+  rmSync(out, { recursive: true, force: true });
+  mkdirSync(out, { recursive: true });
+  writeFileSync(join(out, 'edits.json'), JSON.stringify(edits));
+  run('bun', [resolve(root, 'packages/quick-actions/test/apple-ui.mjs'), sim, out, 'testEdit'], root,
+    { ...process.env, EXACT_UI_TEST_SOURCE: join(pkg, 'test/PhotoChangesUITests.swift'), EXACT_UI_TEST_APP: id });
+  return JSON.parse(readFileSync(join(out, 'edited.json'), 'utf8'));
+};
+
 export async function photoKitChanges({ sim, id, name, open, check, dir, fixtures }) {
   const where = 'ios-simulator photokit';
   const say = (what, ok, detail) => check(where, what, ok, typeof detail === 'string' ? detail : JSON.stringify(detail));
@@ -47,17 +59,7 @@ export async function photoKitChanges({ sim, id, name, open, check, dir, fixture
     writeFileSync(file, Buffer.concat([readFileSync(fixtures[copies % fixtures.length]), Buffer.from(`change ${copies++}`)]));
     return file;
   });
-  /** PhotoKit edits made by the UI test's runner, which fails an edit that reaches fewer photos than it names: the
-   * ids each reached or made. */
-  const edit = (edits) => {
-    const out = join(dir, 'ui');
-    rmSync(out, { recursive: true, force: true });
-    mkdirSync(out, { recursive: true });
-    writeFileSync(join(out, 'edits.json'), JSON.stringify(edits));
-    run('bun', [resolve(root, 'packages/quick-actions/test/apple-ui.mjs'), sim, out, 'testEdit'], root,
-      { ...process.env, EXACT_UI_TEST_SOURCE: join(pkg, 'test/PhotoChangesUITests.swift'), EXACT_UI_TEST_APP: id });
-    return JSON.parse(readFileSync(join(out, 'edited.json'), 'utf8'));
-  };
+  const edit = photoKitEdit({ sim, id, dir });
   const owned = [];
   /** `n` photos imported: their ids, in the order the walk pages them. */
   const imports = (n) => {
