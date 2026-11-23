@@ -980,3 +980,36 @@ fn a_package_linked_from_outside_keeps_its_motion_sites_and_its_defaults() {
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&outside);
 }
+
+#[test]
+fn a_write_reads_only_the_top_of_each_node_modules_above_the_app() {
+    use std::os::unix::fs::PermissionsExt;
+    // A Bun store above the app, a directory deep in a package's sources unlistable: not looked into.
+    let ws = Scratch::new(format!(
+        "exact2-forma-serve-pkg-above-{}",
+        std::process::id()
+    ));
+    let dir = ws.join("demo");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("app.contract"),
+        "component App\n  view\n    text \"a\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("app.forma"),
+        "forma t\n\ntheme\n  brand = #123456\n",
+    )
+    .unwrap();
+    let deep = ws.join("node_modules/.bun/pkg@1.0.0/node_modules/pkg/src/deep");
+    std::fs::create_dir_all(&deep).unwrap();
+    std::fs::set_permissions(&deep, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let mut s = Serve::start(&dir, &[]);
+    let (hello, _) = s.ask(json!({"method": "hello"}));
+    let (set, _) = s.ask(json!({"method": "transaction", "client": "t", "files": hello["ok"]["files"], "ops": [{"op": "set-token", "name": "brand", "value": "#654321"}]}));
+    std::fs::set_permissions(&deep, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(set["ok"].is_object(), "{set}");
+    assert!(std::fs::read_to_string(dir.join("app.forma"))
+        .unwrap()
+        .contains("#654321"));
+}

@@ -46,8 +46,8 @@ extension DialogHost {
     /// button, when it has exactly one. A button the page hides, or one in a
     /// popover of the dialog's, is not among them.
     func defaultButton(of dialog: NodeView) -> NodeView? {
-        // A modal route's confirming action is its sheet's own default button (RouteSheetMac.swift).
-        if let confirm = entry(ofRoute: dialog)?.header?.confirm { return confirm }
+        // A sheet's confirming row (a modal route's, or a dialog's whose header its rows show) is its default button (RouteSheetMac.swift).
+        if let entry = entries.first(where: { $0.dialog === dialog && $0.sheet?.chrome != nil }), let confirm = entry.header?.confirm { return confirm }
         var buttons: [NodeView] = []
         func walk(_ node: NodeView) {
             for child in node.childNodes
@@ -97,7 +97,7 @@ extension DialogHost {
         } else if let view = responder as? NSView, view !== presenter.viewport, view !== presenter.session?.view {
             return false
         }
-        if let entry = entry(ofRoute: dialog), entry.header?.confirm === target, let row = entry.sheet?.chrome?.confirmButton { row.performClick(nil) }
+        if let entry = entries.first(where: { $0.dialog === dialog }), entry.header?.confirm === target, let row = entry.sheet?.chrome?.confirmButton { row.performClick(nil) }
         else if let button = presenter.controls.controls[target.id] as? NativeButtonMac { button.pressAsDefault() }
         else if target.pressable { presenter.press(target.id) }
         else { target.activateNative() }

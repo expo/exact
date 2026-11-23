@@ -10,9 +10,10 @@ import { tmpdir } from 'node:os';
 import { builtSettings, sourceInputChanges } from '../../js/bake/src/__exact_env.mjs';
 import { changedContractReads, contractReadReceipt } from '../../scripts/web-build.mjs';
 import { within } from '../../scripts/paths.mjs';
+import { compilerFrom, freshCompiler, toolEnv } from '../../scripts/tools.mjs';
 import { watchDirectoryInputs } from '../web/dev-watch.mjs';
 import { buildFileCards, buildTreeFileAsync as buildTreeFile, copyStaticTreeIfPresent, replaceBuild, sendStaticBody, webContentType } from '../web/serve.mjs';
-import { EXE, depInfoOf, frameFixturePath, frameURL, fresh, freshCompiler } from './module.mjs';
+import { EXE, frameFixturePath, frameURL } from './module.mjs';
 
 /** The gallery's build cache: under the app's nearest `node_modules` (which
  * package resolution reaches, and git and describe's files don't), else the
@@ -69,10 +70,8 @@ function previewLoop({ app, root, appDist, base, label, cache, frame, inputs, on
   const shown = frame ? label : 'gallery';
   const fail = (error) => { failed = error; log(`${shown}: ${String(error).split('\n')[0]}`); push({ error: String(error) }); };
 
-  // The contract compiler as built, while it is fresh by its dep-info (the design server's `cargo run` keeps it so),
-  // never another `cargo run` on the app's target and its lock: else Cargo builds it in a target of the gallery's own.
+  // If LLP 1174 D5's compiler search reaches Cargo, build in the gallery's own target to avoid taking the app's lock.
   const target = env.CARGO_TARGET_DIR ?? resolve(root, 'target'), contractBin = resolve(target, `debug/contract${EXE}`);
-  const debugCompiler = resolve(target, `debug/exact-web-js${EXE}`);
 
   /** `cmd args`, its output, in a process group of its own, which the gallery owns (`procs`) until the whole
    * group is gone (the builder's own children, its `git`, outlive it a moment), killed after 5 s more. */
@@ -100,8 +99,8 @@ function previewLoop({ app, root, appDist, base, label, cache, frame, inputs, on
   }
 
   async function generateGallery(mine) {
-    const own = fresh(contractBin, depInfoOf(contractBin));
-    let made = own ? await step(contractBin, ['gallery', app.dir, '-o', source], { env }) : { code: 2 };
+    const selected = compilerFrom('contract', contractBin, env);
+    let made = selected ? await step(selected.path, ['gallery', app.dir, '-o', source], { env: toolEnv(env) }) : { code: 2 };
     if (mine !== run) return;
     if (made.code === 2) made = await step('cargo', ['run', '-q', '-p', 'contract', '--', 'gallery', app.dir, '-o', source], { env: { ...env, CARGO_TARGET_DIR: resolve(cache, 'cargo') } });
     if (mine !== run) return;
@@ -131,12 +130,14 @@ function previewLoop({ app, root, appDist, base, label, cache, frame, inputs, on
       if (mine !== run) return;
       // The JS target's build, rendering no pages, into its own stage: nothing of the app's build is shared.
       rmSync(stage, { recursive: true, force: true });
-      const started = Date.now(), webCompiler = compiler() ?? (freshCompiler(debugCompiler) ? debugCompiler : null);
-      // The gallery uses the app's fresh compiler even while its optimized design reader builds.
+      const started = Date.now(), webCompiler = env.EXACT_WEB_COMPILER || compiler();
       const entry = frame ? [app.dir, '--frame', frame, '--serve-frame'] : [live];
       const buildEnv = { ...env };
       if (webCompiler) buildEnv.EXACT_WEB_COMPILER = webCompiler;
-      else if (!frame) buildEnv.CARGO_TARGET_DIR = resolve(cache, 'cargo');
+      if (!frame && !(webCompiler && freshCompiler(webCompiler)) &&
+        !compilerFrom('exact-web-js', resolve(target, `debug/exact-web-js${EXE}`), env)) {
+        buildEnv.CARGO_TARGET_DIR = resolve(cache, 'cargo');
+      }
       const out = await step(process.execPath, [resolve(root, 'host/web-js/build.mjs'), ...entry, '--out', stage, '--render', 'none', '--dev'], { env: buildEnv });
       if (mine !== run) return;
       if (frame) {

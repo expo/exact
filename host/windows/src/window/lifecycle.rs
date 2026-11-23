@@ -36,8 +36,9 @@ pub(super) struct PendingShow {
 }
 
 impl PendingShow {
+    /// `minimum` is the client's least size in CSS pixels.
     #[allow(unsafe_code)]
-    fn begin(window: &Rc<Window>) -> Option<Self> {
+    fn begin(window: &Rc<Window>, minimum: (f32, f32)) -> Option<Self> {
         use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNOACTIVATE};
         let RawWindowHandle::Win32(handle) = window.window_handle().ok()?.as_raw() else {
             return None;
@@ -47,8 +48,12 @@ impl PendingShow {
             window: window.clone(),
             hwnd: handle.hwnd.get() as _,
         };
+        let shown = crate::placement::shown_now(pending.hwnd as isize, minimum);
         pending.cloak(true).ok()?;
         unsafe { ShowWindow(pending.hwnd, SW_SHOWNOACTIVATE) };
+        if let Some(shown) = shown {
+            crate::placement::take_dpi(pending.hwnd as isize, shown);
+        }
         Some(pending)
     }
 
@@ -244,7 +249,7 @@ impl<D: DataSource + Default + 'static> App<D> {
                 p.prepare_window_show();
             }
             self.hidden = false;
-            self.pending_show = PendingShow::begin(&window);
+            self.pending_show = PendingShow::begin(&window, self.min_size);
             if self.pending_show.is_none() {
                 window.set_visible(true);
             }

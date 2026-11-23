@@ -6,9 +6,14 @@
 // a recognition on the same track writes the take's transcript beside it as
 // it records; where it takes a file, an older take is transcribed on request.
 // app.ts lists the takes and keeps each one's length, level and whether its
-// transcript is complete.
+// transcript is complete. The `record` control (app.json, LLP 1126.004) runs
+// `startRecording`: the `recording` Live Activity first, which iOS requires of
+// a recording started from a control, then the microphone, mixing with other
+// audio as a start from the background must, and the recorder. That take has
+// no live transcript, since a control may not start speech recognition.
 use getUserMedia, stopTrack, microphoneStatus, MediaStream, MediaStreamTrack, MicrophoneStatus from "@exact/media-capture"
 use startMediaRecorder, stopMediaRecorder, pauseMediaRecorder, resumeMediaRecorder, mediaRecorderState, audioLevel, MediaRecorderInfo, RecordedMedia, AudioLevel from "@exact/recording"
+use RecordingActivity, RecordingState from "./activities.contract"
 use startSpeechRecognition, stopSpeechRecognition, abortSpeechRecognition, speechRecognitionState, speechRecognitionStatus, speechRecognitionAvailability, installSpeechRecognition, SpeechRecognitionInfo, SpeechRecognitionState, SpeechRecognitionStatus, SpeechRecognitionAvailability, SpeechRecognitionInstall from "@exact/speech-recognition"
 
 shape Take
@@ -23,6 +28,10 @@ shape Takes
 shape Kept
   name: string
   message: string
+shape ActivityHandle
+  id: string
+shape Clock
+  epochAtZero: number
 
 component Recorder
   state trackId = ""
@@ -31,6 +40,11 @@ component Recorder
   state recognitionId = ""
   // The take a file recognition is transcribing, while it runs.
   state transcribing = ""
+  // The Live Activity of a take the control started, until it is filed.
+  state activityId = ""
+  // Whether the running press started a take that records.
+  state pressedTake = false
+  resource clock = exactTime() as shape Clock
   resource mic = microphoneStatus() as shape MicrophoneStatus else empty()
   resource library = takes() as shape Takes else empty()
   // Once a second, for the take's level: the bars are the waveform view's own, read below the runner (D13).
@@ -52,9 +66,13 @@ component Recorder
   mutation fileDone as shape SpeechRecognitionInfo then fileNoted
   mutation transcriptKept as shape Kept refreshes library
   mutation installed as shape SpeechRecognitionInstall refreshes language, speech
+  mutation shown as shape ActivityHandle then capture
+  mutation pressOpened as shape MediaStream then pressArm
+  mutation pressStarted as shape MediaRecorderInfo then pressBegun
+  mutation ended as shape ActivityHandle then forget
   derive recording = recorderId != ""
   derive visibleTakes = library.takes.filter(t => t.name != takeName)
-  derive busy = pending(opened) or pending(started) or pending(saved) or pending(transcribed)
+  derive busy = pending(opened) or pending(started) or pending(saved) or pending(transcribed) or pending(shown) or pending(pressOpened) or pending(pressStarted) or pending(ended)
   derive startFailure = match failure(started) { case some(f) => f.code, case none => "" }
   derive denied = mic.state == "denied"
   derive cannotRecord = busy or (not recording and (denied or not mic.available))
@@ -78,6 +96,50 @@ component Recorder
         send listening = abortSpeechRecognition(recognition="")
     else
       send opened = getUserMedia(audio=true)
+  // A press fails, and the control says so, unless it started a take that records: one running already, a refused
+  // activity or microphone, or a recorder that came back paused is a failure.
+  tool startRecording writes "Record an idea." = startRecording
+    fails when not pressedTake
+  action startRecording
+    pressedTake = false
+    // A previous take's activity whose end has not been answered is ended first; this press starts nothing.
+    if activityId != "" and not recording and not busy
+      dismiss()
+    else if not recording and not busy
+      send shown = startActivity("recording", RecordingState(startedAt=clock.epochAtZero + performanceNow()))
+  action capture
+    match shown
+      case some(a)
+        activityId = a.id
+        send pressOpened = getUserMedia(audio=true, apple.categoryOptions=["mixWithOthers"])
+      case none
+        activityId = ""
+  action pressArm
+    match pressOpened
+      case some(s)
+        trackId = match s.tracks.at(0) { case some(t) => t.id, case none => "" }
+        let name = `take-${library.next}`
+        takeName = name
+        send pressStarted = startMediaRecorder(stream=s.id, path=`app:/data/takes/${name}`)
+      case none
+        trackId = ""
+  action pressBegun
+    match pressStarted
+      case some(r)
+        recorderId = r.id
+        pressedTake = r.state == "recording"
+      case none
+        recorderId = ""
+  task unshown when failed(pressOpened) key=true
+    change(dismiss)
+  task abandonPress when failed(pressStarted) key=true
+    change(abandoned)
+  // The activity's id is kept until its end is answered, so a failed end is tried again at the next.
+  action dismiss
+    if activityId != ""
+      send ended = endActivity(activityId, RecordingState(startedAt=0), "immediate")
+  action forget
+    activityId = ""
   // Supersedes the microphone's request, whatever stage it is at.
   action cancelRecord
     send opened = getUserMedia(audio=false)
@@ -108,6 +170,7 @@ component Recorder
       send stopped = stopTrack(track=trackId)
     trackId = ""
     takeName = ""
+    dismiss()
   action listened
     match listening
       case some(r)
@@ -127,6 +190,7 @@ component Recorder
         trackId = ""
         recorderId = ""
         takeName = ""
+        dismiss()
       case none
         recorderId = recorderId
   // The live transcript is complete when it ended by this stop, not aborted or by an error.

@@ -640,8 +640,8 @@ export function markBars(node) {
     markBars(child);
   }
 }
-// Whether a button opens what it names, a header's item with no press of its own: a popover it shows or toggles, or a
-// dialog it shows modally (kernel/src/invocation.rs `opens`).
+// Whether a button is a header's item with no press of its own by what it names: a popover it shows or toggles, or a
+// dialog it shows modally or closes (kernel/src/bars.rs `fact::COMMANDS`).
 function opens(el) {
   if (el.localName !== "button") {
     return false;
@@ -649,7 +649,7 @@ function opens(el) {
   const commanded = document.getElementById(el.getAttribute("commandfor") || "");
   if (commanded) {
     const command = el.getAttribute("command") ?? "";
-    return commanded.hasAttribute("popover") && /^(show|toggle)-popover$/i.test(command) || commanded.localName === "dialog" && /^show-modal$/i.test(command);
+    return commanded.hasAttribute("popover") && /^(show|toggle)-popover$/i.test(command) || commanded.localName === "dialog" && /^(show-modal|close)$/i.test(command);
   }
   return !!document.getElementById(el.getAttribute("popovertarget") || "")?.hasAttribute("popover") && !/^hide$/i.test(el.getAttribute("popovertargetaction") ?? "");
 }

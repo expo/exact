@@ -5,10 +5,11 @@ import UIKit
 package enum SheetDetents {
     /// Replacing the resting heights also chooses the initial one. Updating a
     /// grabber on its own preserves the height the person dragged the sheet to.
-    @MainActor package static func select(on sheet: UISheetPresentationController, node: NodeView, owner: String) {
+    /// `above` is what the sheet shows over the node's content: a dialog's bar.
+    @MainActor package static func select(on sheet: UISheetPresentationController, node: NodeView, owner: String, above: @escaping () -> CGFloat = { 0 }) {
         let value = node.props["navigationDetent"]
         var refused: [(Substring, DetentRefusal)] = []
-        let heights = detents(value, refused: { refused.append(($0, $1)) }) { [weak node] in node?.fitContentHeight }
+        let heights = detents(value, refused: { refused.append(($0, $1)) }) { [weak node] in node?.fitContentHeight.map { $0 > 0 ? $0 + above() : $0 } }
         sheet.detents = heights.isEmpty ? [.large()] : heights
         if !refused.isEmpty {
             node.presenter?.session?.log(refusal(detent: value ?? "", words: refused, owner: owner, kept: !heights.isEmpty))

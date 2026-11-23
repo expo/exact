@@ -40,7 +40,7 @@ builds `release` (thin LTO) and Swift builds `-c release`.
 
 | Spec item | exact2 feature |
 |---|---|
-| Data read at startup | `resource initial = messages()`. The bake (`contract::bake` in `apple/build.rs`) compiles the 10,000 rows into the plan (7.8 MB), and the plan decode is the startup read. The DataSource's own editable copy is parsed with serde_json on a background thread at launch and turned into row values (~25 ms on an M-series Mac) on the first `config()`, tap or tick. |
+| Data read at startup | `resource initial = messages()`. The bake (`contract::bake` in `apple/build.rs`) compiles the 10,000 rows into the plan (7.8 MB), and the plan decode is the startup read. The DataSource's own editable copy is parsed with serde_json and turned into row values (~25 ms on an M-series Mac) on the first tap, or in live mode on a background thread at launch. |
 | One list, oldest first | `list virtualized=true estimated-item-height=160` + `for m in feed.rows key=m.id` |
 | Top bar | a `row` above the list: "Heavy list" and "Live: on/off" |
 | Hairline inset 68 | `box height=0.5 margin-left=68 background-color="#E5E5EA"` at the bottom of each row |

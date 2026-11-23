@@ -39,7 +39,7 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
             hold: true,
             delivery: kind =>
               (kind === 'drag' && carrier.touches) ||
-              (['press', 'down', 'hold', 'up', 'cancel'].includes(kind) && carrier.touch === 'platform')
+              (['press', 'down', 'hold', 'up', 'cancel', 'fingers'].includes(kind) && carrier.touch === 'platform')
                 ? 'platform'
                 : [
                       'contextmenu',
@@ -54,7 +54,7 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
                       'cancel',
                     ].includes(kind)
                   ? 'recognized'
-                  : kind === 'drag'
+                  : kind === 'drag' || kind === 'fingers'
                     ? 'unsupported'
                     : 'activation',
           }
@@ -152,6 +152,13 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
           throw new Error(`${host} does not carry explicit mouse clicks`);
         if (node.entity !== undefined) throw new Error('mouse cannot be combined with an entity target');
       }
+      // Several fingers at once are the iOS touch runner's alone (touches.mjs `realFingers`): refused before any other
+      // input reaches the app and before anything scrolls.
+      if (opts.fingers !== undefined) {
+        if (node.entity !== undefined) throw new Error(`fingers: ${target} is a world entity, which one finger taps`);
+        const reason = pointerGap(host, carrier.browser, opts) ?? (carrier.touches && touch === 'platform' ? null : 'several fingers at once are real touches: drive with --touch platform');
+        if (reason) return s.tagged({ tapped: node.id, target, fingers: opts.fingers, delivery: 'unsupported', reason, carrier: host, mode: timing });
+      }
       if (node.entity !== undefined) {
         if (opts.drag) throw new Error(`drag: ${target} is a world entity; a drag starts on a view`);
         const { entity } = await s.op({ op: 'layout', ...node });
@@ -230,6 +237,7 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
         !opts.wheel &&
         opts.down !== true &&
         opts.pinch === undefined &&
+        opts.fingers === undefined &&
         !opts.drag &&
         opts.at !== undefined;
       const form =
@@ -306,6 +314,8 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
           ? 'history'
           : opts.pinch !== undefined
             ? 'pinch'
+            : opts.fingers !== undefined
+            ? 'fingers'
             : opts.down
               ? 'down'
               : opts.drop

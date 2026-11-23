@@ -1,5 +1,9 @@
 //! Create-only known-folder operations under retained handles (LLP 1173 D4).
-use super::{fs::KnownFolder, windows_directory::Directory, windows_fs::token};
+use super::{
+    fs::KnownFolder,
+    windows_directory::{self, Directory},
+    windows_fs::token,
+};
 use crate::stdlib::fs::{FsOp, FsResult};
 use std::{
     fs::File,
@@ -60,17 +64,15 @@ pub(super) fn create(
 }
 
 /// Create every component exclusively. A failure removes what this call
-/// made, deepest first, each closed before its parent's removal; only the
-/// components below which another is created are held with `DELETE`.
+/// made, deepest first, each closed before its parent's removal.
 fn mkdir(
     root: Directory,
     parts: &[String],
-    create: impl Fn(&Directory, &str, bool) -> io::Result<Directory>,
+    create: impl Fn(&Directory, &str) -> io::Result<Directory>,
 ) -> io::Result<()> {
     let mut parents = vec![root];
     for (index, part) in parts.iter().enumerate() {
-        let removable = index + 1 < parts.len();
-        match create(parents.last().unwrap(), part, removable) {
+        match create(parents.last().unwrap(), part) {
             Ok(directory) => parents.push(directory),
             Err(error) => {
                 let mut kept = Vec::new();
@@ -84,7 +86,7 @@ fn mkdir(
                 }
                 return Err(io::Error::new(
                     error.kind(),
-                    format!("{error}; left behind {}", kept.join(", ")),
+                    format!("left behind {}; {error}", kept.join(", ")),
                 ));
             }
         }
@@ -106,9 +108,9 @@ fn atomic(
         before_commit()?;
         parent.rename_new(&file, leaf)
     })();
-    drop(file);
     if result.is_err() {
-        let _ = parent.unlink(&temp);
+        // Through the handle, so that another entry given the name since is kept.
+        let _ = windows_directory::delete(&file);
     }
     result
 }

@@ -184,6 +184,11 @@ pub trait Tools<D: DataSource> {
     fn press_revoked(&self, _: &Runner<D>, _: u64) -> bool {
         false
     }
+    /// Whether invocation `id` is a live press of a control the binary
+    /// offers as a recording.
+    fn press_records(&self, _: &Runner<D>, _: u64) -> bool {
+        false
+    }
     /// The host's placement of each control: [`Runner::place_controls`].
     fn place_controls(&self, _: &mut Runner<D>, _: Json) {}
     /// `state.controls`.
@@ -518,6 +523,13 @@ impl<D: DataSource> Runner<D> {
     /// further name held to the person (LLP 1126.004 D2).
     pub(in crate::runner) fn press_revoked(&self, id: u64) -> bool {
         self.links_tools().press_revoked(self, id)
+    }
+
+    /// Whether invocation `id` is a press running uncancelled within its
+    /// bound, of a control whose placement offers it as a recording, which
+    /// only a qualification build's bake does (LLP 1126.004 §6d).
+    pub(in crate::runner) fn press_records(&self, id: u64) -> bool {
+        self.links_tools().press_records(self, id)
     }
 
     /// `state.intents`: each tool with its word, modifiers, availability

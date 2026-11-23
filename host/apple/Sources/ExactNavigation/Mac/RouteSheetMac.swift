@@ -79,7 +79,25 @@ struct SheetHeader: SheetHeading {
 
     /// `route`'s header as its sheet shows it. `back` names the stack's Back control.
     static func read(route: NodeView, back: String?) -> Read {
-        guard let rule = HeaderRule(route: route, back: back, backIsPlatforms: false, projected: true) else { return .none }
+        read(route, back: back) { rule, button in back.flatMap { name in rule.items.first { $0.props["id"] == name && button($0) } } }
+    }
+
+    /// `dialog`'s header as its sheet shows it, where it is one (LLP 1141.004
+    /// D6): the one that cancels is the button that closes the dialog
+    /// (`command="close"`).
+    static func read(dialog: NodeView) -> SheetHeader? {
+        let shown = read(dialog, back: nil) { rule, button in
+            rule.items.first { item in
+                guard button(item), let invocation = item.presenter?.invocation(of: item) else { return false }
+                return invocation.action == .close && invocation.target === dialog
+            }
+        }
+        guard case .shown(let header) = shown else { return nil }
+        return header
+    }
+
+    private static func read(_ node: NodeView, back: String?, cancel: (HeaderRule, (NodeView) -> Bool) -> NodeView?) -> Read {
+        guard let rule = HeaderRule(route: node, back: back, backIsPlatforms: false, projected: true) else { return .none }
         if let tap = rule.tap { return .kept("its heading is inside a pressable (#\(tap.id)), and a sheet's title is not pressed") }
         let children = { (node: NodeView) in node.childNodes }
         // A push button says words and presses: one that opens a menu, shows no word or is not shown is not one.
@@ -87,7 +105,7 @@ struct SheetHeader: SheetHeading {
             node.pressable && node.presenter?.invocation(of: node).map({ $0.opens && $0.target.props["popover"] != nil }) != true
                 && node.style["display"]?.string != "none" && !words(of: node).isEmpty
         }
-        let cancel = back.flatMap { name in rule.items.first { $0.props["id"] == name && button($0) } }
+        let cancel = cancel(rule, button)
         let accented = rule.items.filter { $0 !== cancel && prominent.contains($0.face?.style ?? "") && $0.props["destructive"] != "true" }
         let confirm = accented.count == 1 && button(accented[0]) ? accented[0] : nil
         func others(in node: NodeView) -> Bool {
@@ -390,12 +408,13 @@ extension DialogHost {
         if sheet.window.title != name { sheet.window.title = name }
         let row = { (node: NodeView?) in node.map { (SheetHeader.words(of: $0), $0.id, !$0.disabled) } }
         chrome.onBack = { [weak presenter] in _ = presenter?.navigationHost.goBack() }
-        let back = entry.dialog.props["navigationBar"] != "none" && entry.routeBase !== entry.dialog && presenter.navigationHost.backOffered
+        let back = entry.route && entry.dialog.props["navigationBar"] != "none" && entry.routeBase !== entry.dialog && presenter.navigationHost.backOffered
         chrome.back.isEnabled = presenter.navigationHost.back != nil
         // The heading's authored typography on the title's words (LLP 1115 §2).
         let font = header?.heading?.authoredTitleFont(over: RouteChrome.titleFont) ?? RouteChrome.titleFont
+        // A dialog's Escape is its own close request, which fires `cancel` (DialogsMac.swift), not its Cancel's press.
         let changed = chrome.show(title: header?.title, font: font, back: back, cancel: back ? nil : row(header?.cancel), confirm: row(header?.confirm),
-                                  escapes: dismissalOwner(of: entry.dialog).props["closedby"] != "none")
+                                  escapes: entry.route && dismissalOwner(of: entry.dialog).props["closedby"] != "none")
         chrome.cancel.setAccessibilityIdentifier(back ? nil : header?.cancel?.props["testId"])
         chrome.confirm.setAccessibilityIdentifier(header?.confirm?.props["testId"])
         guard fits, changed else { return }
@@ -416,7 +435,7 @@ extension DialogHost {
     /// (D8.1), said in the step the rows show them and taken back when they stop.
     private func reportRouteCovers() {
         var covers: [UInt32: HostCover] = [:]
-        for entry in entries where entry.route { for node in entry.stoodFor { covers[node.id] = .whole } }
+        for entry in entries where entry.sheet?.chrome != nil { for node in entry.stoodFor { covers[node.id] = .whole } }
         presenter?.covers.report("route-sheet", covers)
     }
 

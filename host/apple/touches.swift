@@ -6,9 +6,12 @@
 // loopback port it listens on, and answers JSON lines until the driver hangs
 // up; then it waits on that port for the next session, which opens with
 // `{"token":T,"app":bundle id}`, and ends after ten idle minutes or `quit`.
-//   {"op":"tap","point":[x,y],"screen":[x,y]?,"display":[w,h]?}
+//   {"op":"tap","point":[x,y],"screen":[x,y]?,"display":[w,h]?,"double":bool?}
 //                                a tap at a point in the app's scene, points
 //                                → {"done":true,"injected":{"start":ms,"end":ms,"via":…}}
+//                                `screen` may instead be two to five points: that
+//                                many fingers, down together and lifted together
+//                                (a four-finger tap opens the dev menu)
 //   {"op":"drag","point":[x,y],"to":[x,y],"press":s,"velocity":v,"hold":s,"screen":[x,y]?,"screenTo":[x,y]?,"display":[w,h]?}
 //                                one whole gesture (LLP 1080.000 §11): press,
 //                                one straight drag at `v` points per second
@@ -25,7 +28,8 @@
 //                                → {"done":true}, {"tree":snapshot} or {"elements":[snapshot,…]}
 //                                snapshot: label, identifier, type, frame [x,y,w,h], children
 //   SpringBoard gestures with `screen` and `display` use the same synthesizer
-//   as app gestures: fixed portrait screen points on the named display.
+//   as app gestures: fixed portrait screen points on the named display. A tap's
+//   `screen` may be several fingers, as an app tap's.
 //   A swipe also needs `screenTo`; `velocity` (points/s, default 1000) and
 //   `hold` (seconds, default 0) control its move and hold before lifting.
 //   {"op":"tree","max":n?}       the app's accessibility hierarchy from one snapshot, in document order
@@ -112,11 +116,11 @@ final class ExactTouches: XCTestCase {
                 guard target.state == .runningForeground else { session.send(["error": "the app is \(Self.name(target.state)), not in the foreground"]); continue }
                 let start = Date().timeIntervalSince1970 * 1000
                 var via = "synthesizer"
-                let destination: (point: CGPoint, id: Int)?
-                do { destination = try Displays.target(req) }
+                let destination: (points: [CGPoint], id: Int)?
+                do { destination = try Displays.fingers(req) }
                 catch { session.send(["error": String(describing: error)]); continue }
                 let double = req["double"] as? Bool == true
-                switch destination.map({ Synthesizer.tap($0.point, display: $0.id, double: double) }) ?? .missing {
+                switch destination.map({ Synthesizer.tap($0.points, display: $0.id, double: double) }) ?? .missing {
                 case .injected: break
                 // An unfinished touch may still land, so never replay it
                 case .unfinished: session.send(["error": "XCTest's event synthesizer did not finish the tap in 5 s; nothing more was injected"]); continue
@@ -252,19 +256,22 @@ final class ExactTouches: XCTestCase {
                   let display = Displays.showing(CGSize(width: dimensions[0], height: dimensions[1])) else {
                 throw refuse("SpringBoard display does not match an XCTest display; supply its screen size in points")
             }
-            let from = try fixed("screen"), started = Date().timeIntervalSince1970 * 1000
+            let started = Date().timeIntervalSince1970 * 1000
             let outcome: Synthesizer.Outcome
             switch request["action"] as? String {
-            case "tap": outcome = Synthesizer.tap(from, display: display)
+            case "tap":
+                guard let fingers = Displays.points(request["screen"]) else { throw refuse("SpringBoard tap needs one finite screen point, or two to five, in fixed portrait screen points") }
+                outcome = Synthesizer.tap(fingers, display: display)
             case "hold":
                 guard let seconds = request["seconds"] as? Double, seconds.isFinite, seconds > 0, seconds <= 5 else { throw refuse("SpringBoard hold needs seconds in 0...5") }
+                let from = try fixed("screen")
                 outcome = Synthesizer.drag(from: from, to: from, press: seconds, velocity: 0, hold: 0, display: display, bounds: nil)
             case "swipe":
                 guard let velocity = (request["velocity"] ?? 1000.0) as? Double, velocity.isFinite, velocity > 0,
                       let hold = (request["hold"] ?? 0.0) as? Double, hold.isFinite, hold >= 0, hold <= 5 else {
                     throw refuse("SpringBoard swipe needs a positive velocity and hold in 0...5 seconds")
                 }
-                let to = try fixed("screenTo"), size = CGSize(width: dimensions[0], height: dimensions[1])
+                let from = try fixed("screen"), to = try fixed("screenTo"), size = CGSize(width: dimensions[0], height: dimensions[1])
                 // Leave the synthesizer's five-second completion allowance within the driver's 15-second request limit
                 let duration = 0.1 + Double(hypot(to.x - from.x, to.y - from.y)) / velocity + hold
                 guard duration.isFinite, duration <= 9 else { throw refuse("SpringBoard swipe exceeds 9 seconds; increase velocity or reduce the distance or hold") }
@@ -333,11 +340,11 @@ enum Synthesizer {
 
     enum Outcome { case injected, refused, unfinished, missing }
 
-    /// A touch down at `at`, in portrait screen points, lifted 50 ms later;
-    /// `double`, a second 150 ms after the first went down, as a finger's
-    /// double tap.
-    static func tap(_ at: CGPoint, display: Int?, double: Bool = false) -> Outcome {
-        touches([(at, 0, [], 0.05)] + (double ? [(at, 0.15, [], 0.2)] : []), display: display, within: 5)
+    /// A touch down at each point of `at`, in portrait screen points, all
+    /// together, lifted together 50 ms later; `double`, the same again 150 ms
+    /// after the first went down, as fingers' double tap.
+    static func tap(_ at: [CGPoint], display: Int?, double: Bool = false) -> Outcome {
+        touches(at.map { ($0, 0, [], 0.05) } + (double ? at.map { ($0, 0.15, [], 0.2) } : []), display: display, within: 5)
     }
 
     /// A touch down at `from` (portrait screen points, as `tap`), held `press`
@@ -562,15 +569,32 @@ enum Displays {
     }
 
     static func target(_ request: [String: Any]) throws -> (point: CGPoint, id: Int)? {
+        guard let found = try fingers(request) else { return nil }
+        guard found.points.count == 1 else { throw NSError(domain: "ExactTouches", code: 1, userInfo: [NSLocalizedDescriptionKey: "This gesture takes one finger's screen point. No touch was injected."]) }
+        return (found.points[0], found.id)
+    }
+
+    /// The screen points of a gesture's fingers, one or two to five, and its display.
+    static func fingers(_ request: [String: Any]) throws -> (points: [CGPoint], id: Int)? {
         guard screens.count > 1 || ["screen", "display", "screenTo", "path"].contains(where: { request[$0] != nil }) else { return nil }
-        guard let point = request["screen"] as? [Double], point.count == 2, point.allSatisfy(\.isFinite),
+        guard let points = points(request["screen"]),
               let dimensions = request["display"] as? [Double], dimensions.count == 2,
               dimensions.allSatisfy({ $0.isFinite && $0 > 0 }),
               let id = showing(CGSize(width: dimensions[0], height: dimensions[1])) else {
             throw NSError(domain: "ExactTouches", code: 1, userInfo: [NSLocalizedDescriptionKey:
-                "The gesture's display does not match exactly one XCTest display; supply a finite screen point and its display size. No touch was injected."])
+                "The gesture's display does not match exactly one XCTest display; supply finite screen points (one, or two to five fingers) and its display size. No touch was injected."])
         }
-        return (CGPoint(x: point[0], y: point[1]), id)
+        return (points, id)
+    }
+
+    /// `[x, y]`, one finger, or `[[x, y], …]`, two to five, all finite.
+    static func points(_ value: Any?) -> [CGPoint]? {
+        let pairs: [[Double]]
+        if let one = value as? [Double] { pairs = [one] }
+        else if let many = value as? [[Double]], (2...5).contains(many.count) { pairs = many }
+        else { return nil }
+        guard pairs.allSatisfy({ $0.count == 2 && $0.allSatisfy(\.isFinite) }) else { return nil }
+        return pairs.map { CGPoint(x: $0[0], y: $0[1]) }
     }
 
     /// Each display's short and long sides in points, as `display` in a request names it.

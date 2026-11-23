@@ -126,6 +126,14 @@ pub(in crate::runner) struct Calls {
 }
 
 impl<D: DataSource> Runner<D> {
+    /// The control of press `id` while it runs uncancelled within its bound.
+    fn live_press(&self, id: u64) -> Option<usize> {
+        let c = self.calls.current.as_ref()?;
+        let live =
+            c.id == id && !c.cancelled && c.dispatched.is_some_and(|at| self.now_ms < at + BOUND);
+        live.then_some(c.control).flatten()
+    }
+
     /// Refuse `busy` each waiting call whose [`WAIT`] has run out, whether
     /// a wake, another call or the data source held it.
     fn expire_waiting_calls(&mut self) {
@@ -478,10 +486,14 @@ impl<D: DataSource> Tools<D> for LinkedTools {
     /// Whether invocation `id` is a press that is not running uncancelled
     /// within its bound: its caller left, it ended, or its time is up.
     fn press_revoked(&self, r: &Runner<D>, id: u64) -> bool {
-        let live = (r.calls.current.as_ref()).is_some_and(|c| {
-            c.id == id && !c.cancelled && c.dispatched.is_some_and(|at| r.now_ms < at + BOUND)
-        });
-        r.calls.presses.contains(&id) && !live
+        r.calls.presses.contains(&id) && r.live_press(id).is_none()
+    }
+
+    fn press_records(&self, r: &Runner<D>, id: u64) -> bool {
+        let (Some(control), Some(placed)) = (r.live_press(id), &r.calls.placements) else {
+            return false;
+        };
+        placed[r.plan.str(r.plan.controls[control].kind)]["offered"][0]["intent"] == "recording"
     }
 
     /// Whether a call is between dispatch and its end.

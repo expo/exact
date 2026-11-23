@@ -76,10 +76,9 @@ final class InvocationTests: XCTestCase {
             }
             XCTAssertEqual(got?.opensPopover ?? false, row[4] == "menu", "\(why): a menu")
             let source = try XCTUnwrap(p.views[UInt32(100 + index)])
-            // Bit 16 is OPENS: a popover or a dialog shown modally (6a86bbc2c, "A header button that shows its dialog by
-            // its command alone is a bar item"), not only a menu.
-            let opens = row[3] != "-" && !["hide", "close"].contains(String(row[3].split(separator: " ")[1]))
-            XCTAssertEqual(HeaderRule.facts(source, back: nil) & 16 != 0, opens, "\(why): a header's opening button")
+            // Bit 16 is COMMANDS: a popover or a dialog shown modally, or a dialog closed (its Cancel), not only a menu.
+            let commands = row[3] != "-" && String(row[3].split(separator: " ")[1]) != "hide"
+            XCTAssertEqual(HeaderRule.facts(source, back: nil) & 16 != 0, commands, "\(why): a header's commanding button")
         }
     }
 
