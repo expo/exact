@@ -94,6 +94,18 @@ impl DataSource for Desk {
                     return Some(vec![Value::str(&text)]);
                 }
                 "saveNumber" => return Some(vec![Value::Number(3.0)]),
+                "increment" => {
+                    let delta = |arg: &Value| {
+                        let Value::Record(fields) = arg else {
+                            panic!("increment record");
+                        };
+                        fields[0].as_number().unwrap()
+                    };
+                    return Some(vec![Value::record(vec![
+                        Value::Number(delta(&previous[0]) + delta(&next[0])),
+                        Value::str(""),
+                    ])]);
+                }
                 _ => {}
             }
             let scope = |args: &[Value]| match args.first().and_then(Value::as_str) {
@@ -108,6 +120,13 @@ impl DataSource for Desk {
                 Some("room:invalid-merge") => Some(vec![Value::Number(f64::NAN)]),
                 Some("room:empty-merge") => Some(vec![]),
                 Some("room:wrong-type-merge") => Some(vec![Value::Number(42.0)]),
+                Some("room:shared-list-merge") => {
+                    let mut value = Value::Number(42.0);
+                    for _ in 0..40 {
+                        value = Value::list(vec![value.clone(), value]);
+                    }
+                    Some(vec![value])
+                }
                 Some("room:append") => Some(vec![Value::str(&format!(
                     "{}+room:append",
                     previous[0].as_str().unwrap()
@@ -163,9 +182,19 @@ impl DataSource for Desk {
         source: &str,
         args: &[Value],
     ) -> Result<Answer, DataError> {
-        if source == "append" || source == "saveNumber" {
+        if matches!(source, "append" | "saveNumber" | "increment") {
             let op = match source {
                 "append" => args[0].text().len().to_string(),
+                "increment" => {
+                    let Value::Record(fields) = &args[0] else {
+                        panic!("increment record");
+                    };
+                    format!(
+                        "{}:{}",
+                        fields[0].as_number().unwrap(),
+                        fields[1].text().len()
+                    )
+                }
                 _ => args[0].as_number().unwrap().to_string(),
             };
             self.asks.push(format!("{source}:{op}"));
@@ -499,6 +528,66 @@ fn an_empty_replacement_preserves_both_sends_and_their_optimistic_writes() {
 #[test]
 fn a_wrong_type_replacement_preserves_both_sends_and_their_optimistic_writes() {
     assert_replacement_refused("room:wrong-type-merge");
+}
+
+#[test]
+fn a_wrong_type_replacement_is_refused_without_walking_shared_children() {
+    let (done, completed) = std::sync::mpsc::channel();
+    let check = std::thread::spawn(move || {
+        assert_replacement_refused("room:shared-list-merge");
+        done.send(()).unwrap();
+    });
+    let result = completed.recv_timeout(std::time::Duration::from_secs(5));
+    assert_ne!(
+        result,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout),
+        "refusing a list for a string parameter must not walk the list"
+    );
+    check.join().unwrap();
+}
+
+#[test]
+fn an_oversized_queue_operand_keeps_both_sends() {
+    let src = format!(
+        "shape Increment\n  delta: number\n  note: string\n\n{}",
+        APP.replace(
+            "  view\n",
+            concat!(
+                "  action countPair(earlier: Increment, later: Increment)\n",
+                "    send rec = save(\"first\")\n",
+                "    send rec = increment(earlier)\n",
+                "    send rec = increment(later)\n",
+                "  view\n",
+            ),
+        )
+    );
+    let too_long = exact_runner::vm::MAX_STRING + 1;
+    let oversized = Value::record(vec![Value::Number(1.0), Value::str(&"x".repeat(too_long))]);
+    let valid = Value::record(vec![Value::Number(1.0), Value::str("")]);
+    let mut r = boot_with(
+        &src,
+        Desk {
+            replace_queue_tail: true,
+            ..Desk::default()
+        },
+    );
+    let oversized_ask = format!("increment:1:{too_long}");
+    for (inputs, expected) in [
+        (
+            [&oversized, &valid],
+            [oversized_ask.as_str(), "increment:1:0"],
+        ),
+        ([&valid, &oversized], ["increment:1:0", &oversized_ask]),
+    ] {
+        r.act("countPair", inputs.into_iter().cloned().collect())
+            .unwrap();
+        r.advance(0.0).unwrap();
+        assert_eq!(
+            r.source::<Desk>().asks,
+            ["save:first", expected[0], expected[1]]
+        );
+        r.source::<Desk>().asks.clear();
+    }
 }
 
 #[test]

@@ -88,7 +88,7 @@ mod tabs;
 pub use source::{
     Announce, BackgroundState, DataError, DataSource, DataSourceWrapper, InFlight, Interrupt,
     Native, NativeCall, NativeHandler, Overlaid, PreloadWake, QueuedSendReplacer, Report, Reporter,
-    ResourceChange, SnapshotModule, Target, Write, BACKGROUND,
+    ResourceChange, SendReplacers, SnapshotModule, Target, Write, BACKGROUND,
 };
 mod delivery;
 mod links;

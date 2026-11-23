@@ -119,6 +119,15 @@ fn entry(
         (Some(app), None) => format!(".named({app})"),
         (None, _) => String::new(),
     };
+    let fixed_send_replacers =
+        if place && (inputs["rustPlacement"] != "worker" || inputs["platform"] == "web") {
+            ".with_fixed_send_replacers()"
+        } else {
+            ""
+        };
+    let embedded = format!(
+        "exact_logic::Swappable::{mode}({constructor}){native}{named}{fixed_send_replacers}"
+    );
     let mut supplemental = if let Some(directory) = std::env::var_os("EXACT_RUST_BUNDLE") {
         let receipt: serde_json::Value = serde_json::from_slice(
             &std::fs::read(std::path::Path::new(&directory).join("app.module.json"))
@@ -138,9 +147,9 @@ fn entry(
         ) {
             return Err("invalid supplemental Rust module filename".into());
         }
-        format!("{{ use exact_logic::exact_runner::DataSource; exact_logic::Swappable::{mode}({constructor}){native}{named}.replacement(include_bytes!(concat!(env!(\"OUT_DIR\"), \"/app.plan\")), include_str!(concat!(env!(\"OUT_DIR\"), \"/rust/app.module.json\")), include_bytes!(concat!(env!(\"OUT_DIR\"), \"/rust/{file}\")).to_vec()).expect(\"validated baked Rust pair\") }}")
+        format!("{{ use exact_logic::exact_runner::DataSource; {embedded}.replacement(include_bytes!(concat!(env!(\"OUT_DIR\"), \"/app.plan\")), include_str!(concat!(env!(\"OUT_DIR\"), \"/rust/app.module.json\")), include_bytes!(concat!(env!(\"OUT_DIR\"), \"/rust/{file}\")).to_vec()).expect(\"validated baked Rust pair\") }}")
     } else {
-        format!("exact_logic::Swappable::{mode}({constructor}){native}{named}")
+        embedded
     };
     let has_preloads = inputs["preload"]
         .as_array()
@@ -719,8 +728,7 @@ mod tests {
             .contains("ibex2_sqlite::link();"));
     }
 
-    /// LLP 1027.002: a Rust-only app's entry places its source as `rust.placement` says, natively; `main`, a mixed
-    /// app's entry (`rust_entry`) and the web are today's entry.
+    /// LLP 1027.002: a Rust-only app's entry places its source as `rust.placement` says.
     #[test]
     fn a_rust_only_entry_places_its_source_as_the_manifest_says() {
         let inputs = |platform: &str, placement: &str| serde_json::json!({ "platform": platform, "rustMode": "off", "rustPlacement": placement, "app": "com.example.placed" });
@@ -736,12 +744,22 @@ mod tests {
             worker.contains("exact_logic::exact_data::Placed::new({ #[cfg(not(target_arch = \"wasm32\"))] ibex2_sqlite::link(); data() }, exact_logic::exact_runner::Placement::Worker)"),
             "{worker}"
         );
-        for (platform, placement) in [("ios", "main"), ("macos", "main"), ("web", "worker")] {
-            let inputs = inputs(platform, placement);
+        assert!(!worker.contains(".with_fixed_send_replacers()"), "{worker}");
+        for platform in ["ios", "macos"] {
+            let main =
+                super::rust_entry("Data", "data()", "off", &inputs(platform, "main")).unwrap();
+            assert!(
+                main.contains("exact_logic::configured!(AppData, Data,"),
+                "{main}"
+            );
+            assert!(main.contains(".with_fixed_send_replacers()"), "{main}");
+        }
+        for placement in ["main", "worker"] {
+            let inputs = inputs("web", placement);
             assert_eq!(
                 super::rust_entry("Data", "data()", "off", &inputs).unwrap(),
                 super::rust_entry_composed("Data", "data()", "off", &inputs, None).unwrap(),
-                "{platform} {placement}"
+                "web {placement}"
             );
         }
         // Rust updates run their module inline: worker is refused there, not dropped.
@@ -752,15 +770,11 @@ mod tests {
             "{tiered}"
         );
         // A mixed app's composer places its own children: its entry is never wrapped.
-        assert!(!super::rust_entry_composed(
-            "Data",
-            "data()",
-            "off",
-            &inputs("ios", "worker"),
-            None
-        )
-        .unwrap()
-        .contains("Placed"));
+        let mixed =
+            super::rust_entry_composed("Data", "data()", "off", &inputs("ios", "worker"), None)
+                .unwrap();
+        assert!(!mixed.contains("Placed"), "{mixed}");
+        assert!(!mixed.contains(".with_fixed_send_replacers()"), "{mixed}");
     }
 
     /// LLP 1153.003 D2: a build script passes the source app.json's `rust.data` names, which the web build runs.

@@ -189,8 +189,7 @@ impl<D: DataSource> Runner<D> {
                 .and_then(|merge| {
                     let tail = self.queues.waiting[m].back().expect("checked tail");
                     if self.has_intervening_write(m, tail.write)
-                        || self.check_send_arguments(m, &tail.args).is_err()
-                        || self.check_send_arguments(m, args).is_err()
+                        || !tail.args.iter().chain(args).all(Value::fits_codec)
                     {
                         return None;
                     }
@@ -202,15 +201,16 @@ impl<D: DataSource> Runner<D> {
         // A replacement must fit both the value codec and the source's
         // signature before it can displace an accepted send (LLP 1027 D2,
         // LLP 1027.002 D4, LLP 1092 D4).
+        // Check the signature first so a type mismatch can reject a value
+        // before the codec visits its children.
         .filter(|args| {
-            args.iter().all(Value::fits_codec)
-                && self.plan.sources.iter().any(|row| {
-                    self.plan.str(row.name) == source
-                        && row.params.len as usize == args.len()
-                        && row.params.iter().zip(args).all(|(p, arg)| {
-                            arg.conforms(&self.plan, self.plan.source_params[p.0 as usize].ty)
-                        })
-                })
+            self.plan.sources.iter().any(|row| {
+                self.plan.str(row.name) == source
+                    && row.params.len as usize == args.len()
+                    && row.params.iter().zip(args).all(|(p, arg)| {
+                        arg.conforms(&self.plan, self.plan.source_params[p.0 as usize].ty)
+                    })
+            }) && args.iter().all(Value::fits_codec)
         });
         if replacement.is_none() && self.queues.waiting[m].len() >= QUEUE_BOUND {
             return Err(RunnerError::QueueFull {

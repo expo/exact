@@ -10,6 +10,7 @@ pub use exact_plan;
 use exact_plan::{Plan, Value};
 #[doc(hidden)]
 pub use exact_runner;
+use exact_runner::runner::SendReplacers;
 use exact_runner::{Answer, DataError, DataSource, Outcome, Store, Target};
 use sha2::{Digest, Sha256};
 
@@ -62,6 +63,7 @@ type Preloader = fn(&[u8]) -> Result<bool, String>;
 /// replacements through its admitted development origin or signed update channel.
 pub struct Swappable<D> {
     embedded: Option<D>,
+    fixed_send_replacers: Option<FixedSendReplacers>,
     app_id: String,
     /// Under a variant, the base app's id (LLP 1030.008 D2): a module's own
     /// crate names it, and it is admitted where `app_id` is.
@@ -84,6 +86,12 @@ pub struct Swappable<D> {
     native: Option<Native<D>>,
 }
 
+#[derive(Default)]
+struct FixedSendReplacers {
+    names: Vec<String>,
+    rules: Option<SendReplacers>,
+}
+
 /// The source digest a binary compiled its data crate from, and its constructor.
 type Native<D> = (&'static str, fn() -> D);
 
@@ -97,6 +105,7 @@ impl<D: DataSource> Swappable<D> {
             launch: embedded.launch(),
             canvas_surfaces: embedded.canvas_surfaces(),
             embedded: Some(embedded),
+            fixed_send_replacers: None,
             mode,
             loader,
             preloader: None,
@@ -107,6 +116,13 @@ impl<D: DataSource> Swappable<D> {
             native: None,
         }
     }
+
+    /// Read a bare embedded source's queue rules once after it activates.
+    pub fn with_fixed_send_replacers(mut self) -> Self {
+        self.fixed_send_replacers = Some(FixedSendReplacers::default());
+        self
+    }
+
     /// The app's identity from its manifest (`app.json`'s `app.id`), for an
     /// embedded source that names none (`DataSource::app_id`'s default). The
     /// hosts key the app's storage roots, kept answers and persisted states by
@@ -302,6 +318,9 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
         &mut self,
         source: Option<&str>,
     ) -> Option<exact_runner::QueuedSendReplacer> {
+        if let Some(fixed) = &self.fixed_send_replacers {
+            return fixed.rules.as_ref()?.get(source);
+        }
         self.embedded.as_mut()?.queued_send_replacer(source)
     }
 
@@ -583,6 +602,14 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
     fn bind(&mut self, plan: &Plan) {
         if let Some(embedded) = &mut self.embedded {
             embedded.bind(plan);
+            if let Some(fixed) = &mut self.fixed_send_replacers {
+                fixed.rules = None;
+                fixed.names = plan
+                    .sources
+                    .iter()
+                    .map(|row| plan.str(row.name).to_owned())
+                    .collect();
+            }
         } else {
             self.plan = Some(plan.encode());
         }
@@ -595,7 +622,13 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
     }
     fn activate(&mut self) -> Result<(), DataError> {
         if let Some(embedded) = &mut self.embedded {
-            embedded.activate()
+            embedded.activate()?;
+            if let Some(fixed) = &mut self.fixed_send_replacers {
+                fixed.rules.get_or_insert_with(|| {
+                    SendReplacers::read(embedded, std::mem::take(&mut fixed.names))
+                });
+            }
+            Ok(())
         } else {
             self.activate_module().map_err(DataError::Unavailable)
         }
@@ -698,6 +731,7 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
             }
             Ok(Self {
                 embedded: None,
+                fixed_send_replacers: None,
                 app_id: self.app_id.clone(),
                 base: self.base.clone(),
                 grants: self.grants.clone(),
@@ -714,7 +748,12 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
                 native: self.native,
             })
         };
-        build().map_err(DataError::Unavailable)
+        let mut replacement = build().map_err(DataError::Unavailable)?;
+        replacement.fixed_send_replacers = self
+            .fixed_send_replacers
+            .as_ref()
+            .map(|_| FixedSendReplacers::default());
+        Ok(replacement)
     }
     fn canvas_surfaces(&self) -> Vec<(String, usize)> {
         self.canvas_surfaces.clone()

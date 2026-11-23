@@ -13,6 +13,7 @@ use order::{Running, Waiting};
 mod worker;
 use crate::envelope;
 use exact_plan::{Plan, Value};
+use exact_runner::runner::SendReplacers;
 use exact_runner::{
     Answer, DataError, DataSource, Dispatch, InFlight, Interrupt, Outcome, Placement, Reply,
     Request, Store, Target, Work,
@@ -254,26 +255,6 @@ enum Spawn<D> {
     Build(fn(&D, Arc<AtomicBool>) -> Obtain<D>),
 }
 
-struct SendReplacers {
-    default: Option<exact_runner::QueuedSendReplacer>,
-    named: BTreeMap<String, Option<exact_runner::QueuedSendReplacer>>,
-}
-
-impl SendReplacers {
-    fn read(source: &mut impl DataSource, names: Vec<String>) -> Self {
-        Self {
-            default: source.queued_send_replacer(None),
-            named: names
-                .into_iter()
-                .map(|name| {
-                    let replacer = source.queued_send_replacer(Some(&name));
-                    (name, replacer)
-                })
-                .collect(),
-        }
-    }
-}
-
 /// A source with a placement.
 pub struct Placed<D> {
     /// The source (`Main`), the template (`Worker`, built there), or nothing
@@ -457,13 +438,7 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
         if self.validation {
             return self.inner.as_mut()?.queued_send_replacer(source);
         }
-        if self.placement == Placement::Main {
-            self.read_main_send_replacers();
-        }
-        let replacers = self.queued_send_replacers.get()?;
-        source
-            .and_then(|name| replacers.named.get(name).copied())
-            .unwrap_or(replacers.default)
+        self.queued_send_replacers.get()?.get(source)
     }
 
     fn prepare_snapshot(
@@ -670,12 +645,9 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
             .iter()
             .map(|row| plan.str(row.name).to_owned())
             .collect();
-        let registered = self.queued_send_replacers.get().is_some();
         self.queued_send_replacers = Arc::default();
         if self.placement == Placement::Worker {
             self.request_send_replacers();
-        } else if registered {
-            self.read_main_send_replacers();
         }
     }
 

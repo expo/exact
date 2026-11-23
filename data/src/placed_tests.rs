@@ -38,8 +38,11 @@ fn placed_mergers_follow_the_bound_source_on_main_and_worker() {
     for placement in [Placement::Main, Placement::Worker] {
         let mut placed = Placed::new(Saves::default(), placement);
         placed.bind(&plan);
+        assert!(placed.queued_send_replacer(Some("save")).is_none());
         placed.activate().unwrap();
-        let replace = placed.queued_send_replacer(Some("save")).unwrap();
+        let replace = placed
+            .queued_send_replacer(Some("save"))
+            .unwrap_or_else(|| panic!("{placement:?} should publish its rule after activation"));
         let next = [Value::Number(2.0)];
         assert_eq!(
             replace("save", &[Value::Number(1.0)], &next),

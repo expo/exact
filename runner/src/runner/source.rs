@@ -413,6 +413,36 @@ impl Target {
 /// effects, or `None` to keep both. The merger never reads or writes the store.
 pub type QueuedSendReplacer = fn(&str, &[Value], &[Value]) -> Option<Vec<Value>>;
 
+/// The queue rules published by an activated source for its bound plan.
+#[doc(hidden)]
+pub struct SendReplacers {
+    default: Option<QueuedSendReplacer>,
+    named: std::collections::BTreeMap<String, Option<QueuedSendReplacer>>,
+}
+
+impl SendReplacers {
+    /// Read the default and the rule for each bound source name.
+    pub fn read(source: &mut impl DataSource, names: Vec<String>) -> Self {
+        Self {
+            default: source.queued_send_replacer(None),
+            named: names
+                .into_iter()
+                .map(|name| {
+                    let replacer = source.queued_send_replacer(Some(&name));
+                    (name, replacer)
+                })
+                .collect(),
+        }
+    }
+
+    /// An explicit refusal for a bound name takes precedence over the default.
+    pub fn get(&self, source: Option<&str>) -> Option<QueuedSendReplacer> {
+        source
+            .and_then(|name| self.named.get(name).copied())
+            .unwrap_or(self.default)
+    }
+}
+
 /// Borrowed bytes of one pinned snapshot cohort (LLP 1126 D8).
 #[derive(Clone, Copy)]
 pub struct SnapshotModule<'a> {
