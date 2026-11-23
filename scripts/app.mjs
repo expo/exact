@@ -917,13 +917,13 @@ export const windowsFile = (app, path) => basename(path) === `${app.crate('windo
 export function bakeTarget(platform) {
   if (platform === 'web') return 'wasm32-unknown-unknown';
   if (platform === 'ios') return 'aarch64-apple-ios';
-  // The Linux host is also a supported headless executable on macOS. This
-  // is the actual target Cargo will build here, never a guessed architecture.
-  // The pinned toolchain's rustc, as the build's: rustup may have no default, and an app's directory names none.
+  // Ask the pinned toolchain's rustc for the host triple, which names the build's output folder (the Linux host builds on macOS too); the pinned rustc answers even when rustup has no default.
   const result = spawnSync('rustc', ['-vV'], { cwd: ROOT, env: PINNED_RUST ? { ...process.env, RUSTUP_TOOLCHAIN: PINNED_RUST } : process.env, encoding: 'utf8' });
   const host = /^host: (.+)$/m.exec(result.stdout ?? '')?.[1];
-  if (result.status !== 0 || !host) throw new Error(`rustc did not report its host target: ${result.error?.message ?? result.stderr?.trim() ?? `exit ${result.status}`}`);
-  return host;
+  if (result.status === 0 && host) return host;
+  const install = PINNED_RUST ? `run \`rustup toolchain install ${PINNED_RUST}\`` : 'install a Rust toolchain', blind = 'so the build cannot tell which host triple names its output folder';
+  const why = result.error ? `could not start (${result.error.message}), ${blind}. Install rustup (https://rustup.rs) or put its \`rustc\` on PATH` : result.status === 0 ? `printed no \`host:\` line, ${blind}. Check that the \`rustc\` on PATH is rustup's` : `failed (${[result.stderr?.trim(), result.signal && `signal ${result.signal}`].filter(Boolean).join('; ') || `exit ${result.status}`}), ${blind}. To fix it, ${install}`;
+  throw new Error(`\`rustc -vV\` ${why}, then build again.`);
 }
 /** Cargo's metadata for a development bake, asked once for a lock and a set of
  * manifests (0.17 s of every build): kept in the target directory with the

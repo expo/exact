@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import { resolveApp, buildBake, bakeTarget, pendingBuildInputs } from './app.mjs';
+import { resolveApp, buildBake, bakeTarget, pendingBuildInputs, PINNED_RUST } from './app.mjs';
 import { contractCompiler, snapshotOf, materializeSnapshot, disposeSnapshot } from './deploy.mjs';
 import { binaryInputFile } from './deploy-heads.mjs';
 import { binaryInputChanges } from './publisher.mjs';
@@ -1217,6 +1217,23 @@ test('the host target is the pinned toolchain\'s when rustup has no default', ()
     assert.equal(run.status, 0, run.stderr);
     assert.equal(run.stdout.trim(), bakeTarget('linux'));
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test.skipIf(process.platform === 'win32')('the build says why and how to resume when rustc names no host target', () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'exact-rustc-'));
+  const fail = script => {
+    writeFileSync(resolve(directory, 'rustc'), `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+    const code = `const { bakeTarget } = await import(${JSON.stringify(resolve(import.meta.dir, 'app.mjs'))});\nprocess.env.PATH = ${JSON.stringify(directory)};\nbakeTarget('linux');`;
+    const run = spawnSync(process.execPath, ['-e', code], { encoding: 'utf8' });
+    assert.equal(run.status, 1, run.stderr);
+    return run.stderr;
+  };
+  try {
+    const silent = fail('exit 9');
+    assert.match(silent, /`rustc -vV` failed \(exit 9\)/);
+    assert.ok(silent.includes(PINNED_RUST ? `run \`rustup toolchain install ${PINNED_RUST}\`` : 'install a Rust toolchain'), silent);
+    assert.match(fail('echo "rustc 1.0.0"'), /`rustc -vV` printed no `host:` line.*the `rustc` on PATH is rustup's/);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
 // LLP 1153.003 D1: an app's own crates join the workspace exact2 generates, which keeps writing every host crate.
