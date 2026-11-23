@@ -85,7 +85,7 @@ pub(super) fn reach(
     node: &exact_kernel::NodeRef<'_>,
     (x, y, w, h): Rect4,
     ts: Transform,
-    offset: (f32, f32),
+    offset: PaintOffset,
     cap: f32,
 ) -> (Rect4, bool) {
     let mut out = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
@@ -172,7 +172,7 @@ fn spatial_matrix(
     node: &exact_kernel::NodeRef<'_>,
     p: &Presented,
     (x, y, w, h): Rect4,
-    offset: (f32, f32),
+    offset: PaintOffset,
 ) -> M4 {
     let s = node.style;
     let axis = p.rotate_axis.0;
@@ -229,7 +229,7 @@ pub(super) fn mapping_at(
     node: &NodeRef<'_>,
     p: &Presented,
     rect: Rect4,
-    offset: (f32, f32),
+    offset: PaintOffset,
 ) -> [f32; 9] {
     if p.rotate_axis.is_3d() || node.style.translate_z != 0. {
         plane(&spatial_matrix(parent, node, p, rect, offset))
@@ -299,15 +299,15 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         node: &exact_kernel::NodeRef<'_>,
         p: &Presented,
-        (x, y, w, h): Rect4,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip: Option<Rect4>,
     ) -> bool {
         let s = node.style;
         if self.flatten == Some(node.id) || !(p.rotate_axis.is_3d() || s.translate_z != 0.0) {
             return false;
         }
+        let (x, y, w, h) = paint_rect(node.frame, offset);
         if w <= 0.0 || h <= 0.0 {
             self.boxless_audio(walk, node);
             return true;
@@ -351,6 +351,7 @@ impl Painter {
                 self.backend
                     .push_clip(&Shape::rect(island), Transform::identity());
                 let flatten = self.flatten.replace(node.id);
+                let grid_suspended = std::mem::replace(&mut self.grid_suspended, true);
                 let mut child_walk = Walk {
                     scene: walk.scene,
                     scrollbar_cover: walk.scrollbar_cover,
@@ -374,6 +375,7 @@ impl Painter {
                     None,
                 );
                 self.flatten = flatten;
+                self.grid_suspended = grid_suspended;
                 self.backend.pop_clip();
                 self.backend.plane_end();
                 let hit_inv = crate::placement::inverse(hit_own).unwrap_or(inv);
@@ -403,7 +405,15 @@ impl Painter {
         painter.stage = std::mem::take(&mut self.stage);
         painter.kept = std::mem::take(&mut self.kept);
         painter.viewport = (iw, ih);
-        painter.backend.begin(iw, ih, self.scale);
+        // The software island must cover the fractional edge of its layout box.
+        let backing = |size: f32| {
+            if self.pixel_grid {
+                (size * self.scale).ceil() / self.scale
+            } else {
+                size
+            }
+        };
+        painter.backend.begin(backing(iw), backing(ih), self.scale);
         let mut child_walk = Walk {
             scene: walk.scene,
             scrollbar_cover: walk.scrollbar_cover,
@@ -424,7 +434,7 @@ impl Painter {
             &mut child_walk,
             node.id,
             Transform::identity(),
-            (f.x - left, f.y - top),
+            (f64::from(f.x - left), f64::from(f.y - top)),
             None,
         );
         self.stage = std::mem::take(&mut painter.stage);
@@ -561,9 +571,9 @@ impl PaintedBox {
 pub(super) fn sticky(
     scene: &Scene<'_>,
     id: ViewId,
-    offset: (f32, f32),
+    offset: PaintOffset,
     grid: Option<f32>,
-) -> (f32, f32) {
+) -> PaintOffset {
     let kernel = scene.kernel;
     let Some(node) = kernel
         .node(id)
@@ -571,15 +581,31 @@ pub(super) fn sticky(
     else {
         return offset;
     };
-    let Some(c) = kernel.sticky_constraint(node.key) else {
-        return offset;
-    };
-    let Some(scroller) = kernel.node(c.scroller) else {
-        return offset;
+    let (dx, dy) = sticky_displacement(scene, node.key, grid);
+    (offset.0 - dx, offset.1 - dy)
+}
+
+pub(super) fn sticky_displacement(
+    scene: &Scene<'_>,
+    key: exact_kernel::NodeKey,
+    grid: Option<f32>,
+) -> PaintOffset {
+    let kernel = scene.kernel;
+    let Some((c, scroller)) = kernel
+        .sticky_constraint(key)
+        .and_then(|c| Some((c, kernel.node(c.scroller)?)))
+    else {
+        return (0., 0.);
     };
     let scroll = sticky_scroll(scene, &scroller);
     let (dx, dy) = grid::sticky_shift(c, &scroller, scroll, grid);
-    (offset.0 - dx, offset.1 - dy)
+    match grid {
+        Some(s) => (
+            grid::device_pixel(dx, s) / f64::from(s),
+            grid::device_pixel(dy, s) / f64::from(s),
+        ),
+        None => (dx.into(), dy.into()),
+    }
 }
 
 pub(super) fn sticky_scroll(scene: &Scene<'_>, scroller: &NodeRef<'_>) -> (f32, f32) {

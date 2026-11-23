@@ -80,6 +80,12 @@ struct RowFrame {
     padding: (f32, f32, f32, f32),
 }
 
+struct RowSticky {
+    node: NodeKey,
+    grid: Option<f32>,
+    shift: PaintOffset,
+}
+
 /// One kept row.
 struct Row {
     id: u32,
@@ -89,6 +95,8 @@ struct Row {
     origin: (f32, f32),
     scale: (f32, f32),
     size: (f32, f32),
+    /// A whole-pixel move preserves the snapping of the row's children.
+    phase: Option<(f64, f64)>,
     boxes: Vec<PaintedBox>,
     text: Vec<(NodeKey, Rc<Paragraph>)>,
     inline: Vec<(ViewId, Rc<inline_frame::PaintedInline>)>,
@@ -103,6 +111,7 @@ struct Row {
     /// The scrollers inside it and their offsets when recorded: one moved
     /// (a swipe) records the row again.
     scrolls: Vec<(ViewId, (f32, f32))>,
+    sticky: Vec<RowSticky>,
     /// A fresh geometry walk can translate these hits without consulting descendants.
     can_translate_hits: bool,
     /// Whether a box in it may have hit slop.
@@ -202,6 +211,7 @@ struct Capture {
     field_texts: Vec<(ViewId, material::Part, material::FieldText)>,
     frames: Vec<RowFrame>,
     scrolls: Vec<(ViewId, (f32, f32))>,
+    sticky: Vec<RowSticky>,
 }
 
 #[derive(Default)]
@@ -212,6 +222,7 @@ pub(super) struct Rows {
     pub(super) frame: u64,
     /// [`sticky_parents`] and the walk it was found for.
     sections: Option<(u64, Rc<IdSet<ViewId>>)>,
+    sticky_scrollers: Option<IdSet<ViewId>>,
     /// The environment the kept rows resolved `env()` against.
     env: Option<exact_kernel::Env>,
     /// The controls' own states and choices the kept rows drew
@@ -528,6 +539,7 @@ impl Painter {
             .get_or_insert_with(|| std::env::var("EXACT_ROWS").is_ok_and(|v| v == "0"));
         self.rows.frame += 1;
         self.rows.groups.clear();
+        self.rows.sticky_scrollers = None;
         self.rows.active = !off
             && (self.backend.rows() || self.backend.geometry_rows())
             && walk.skip.is_none()
@@ -597,10 +609,26 @@ impl Painter {
             return;
         }
         let scroll = walk.scene.scroll.get(&id).copied().unwrap_or((0.0, 0.0));
-        self.backend.group_begin(id, self.drawn_offset(scroll));
+        self.backend.group_begin(id, scroll);
         self.rows
             .groups
             .push((id, walk.boxes.len(), walk.boxes.len()));
+    }
+
+    /// A sticky box moves with its constraint, independently of the group.
+    pub(super) fn group_can_move(&mut self, kernel: &Kernel, id: ViewId) -> bool {
+        !self.pixel_grid
+            || !self
+                .rows
+                .sticky_scrollers
+                .get_or_insert_with(|| {
+                    kernel
+                        .sticky_nodes()
+                        .into_iter()
+                        .filter_map(|key| kernel.sticky_constraint(key).map(|c| c.scroller))
+                        .collect()
+                })
+                .contains(&id)
     }
 
     pub(super) fn group_end(&mut self, walk: &Walk<'_, '_>) {
@@ -720,7 +748,7 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip_rect: Option<Rect4>,
     ) {
         let key = walk.scene.kernel.node(id).map(|n| n.key);
@@ -730,19 +758,27 @@ impl Painter {
     }
 
     /// Note a node walked while a row records.
-    pub(super) fn row_node(&mut self, kernel: &Kernel, node: &NodeRef<'_>, shown: &Presented) {
+    pub(super) fn row_node(&mut self, scene: &Scene<'_>, node: &NodeRef<'_>, shown: &Presented) {
+        let grid = self.grid();
         if let Some(c) = &mut self.rows.recording {
             c.frames.push(RowFrame {
                 node: node.key,
                 frame: node.frame,
-                padding: kernel.resolved_padding(node.key).unwrap_or_default(),
+                padding: scene.kernel.resolved_padding(node.key).unwrap_or_default(),
             });
             c.may_have_hit_slop |= c.split_sections && node.style.may_have_hit_slop();
             // The sticky offset can change independently of the row's origin.
-            c.refused |= (c.split_sections
-                && node.layout_position() == exact_kernel::PositionType::Sticky)
-                || shown.press != 1.0
-                || shown.press_translate != [0.; 4];
+            if node.layout_position() == exact_kernel::PositionType::Sticky {
+                c.refused |= c.split_sections;
+                if self.pixel_grid {
+                    c.sticky.push(RowSticky {
+                        node: node.key,
+                        grid,
+                        shift: space::sticky_displacement(scene, node.key, grid),
+                    });
+                }
+            }
+            c.refused |= shown.press != 1.0 || shown.press_translate != [0.; 4];
         }
     }
 
@@ -942,10 +978,15 @@ impl Painter {
         !row.stale
             && row.scale == scale
             && row.size == (drawn.width, drawn.height)
+            && row.phase == self.pixel_phase(node.frame)
             && row
                 .scrolls
                 .iter()
                 .all(|(id, at)| walk.scene.scroll.get(id).copied().unwrap_or((0.0, 0.0)) == *at)
+            && row
+                .sticky
+                .iter()
+                .all(|s| space::sticky_displacement(walk.scene, s.node, s.grid) == s.shift)
             && (!pictures
                 || row
                     .images
@@ -955,8 +996,15 @@ impl Painter {
                 || row.frames.iter().all(|saved| {
                     kernel.node_by_key(saved.node).is_some_and(|n| {
                         let (g, f) = (n.frame, saved.frame);
-                        (g.x - node.frame.x - f.x).abs() < 0.5
-                            && (g.y - node.frame.y - f.y).abs() < 0.5
+                        let same = |a: f32, b: f32| {
+                            if row.phase.is_some() {
+                                a == b
+                            } else {
+                                (a - b).abs() < 0.5
+                            }
+                        };
+                        same(g.x - node.frame.x, f.x)
+                            && same(g.y - node.frame.y, f.y)
                             && g.width == f.width
                             && g.height == f.height
                             && kernel.resolved_padding(saved.node).unwrap_or_default()
@@ -971,7 +1019,7 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip_rect: Option<Rect4>,
     ) {
         if self.rows.refer.is_some() {
@@ -1002,7 +1050,7 @@ impl Painter {
             return;
         }
         let drawn = self.drawn(&node);
-        let r = paint_rect(drawn, offset);
+        let r = self.drawn_rect(&node, offset);
         let origin = (ts.sx * r.0 + ts.tx, ts.sy * r.1 + ts.ty);
         let scale = (ts.sx, ts.sy);
         let frame = self.rows.frame;
@@ -1126,7 +1174,7 @@ impl Painter {
         // keeps its drawing. Its boxes move to the page after.
         let local = self.backend.row_local() && ts == Transform::identity();
         let (walk_offset, content) = if local {
-            ((drawn.x, drawn.y), (0.0, 0.0))
+            (self.drawn_offset((node.frame.x, node.frame.y)), (0.0, 0.0))
         } else {
             (offset, origin)
         };
@@ -1213,7 +1261,7 @@ impl Painter {
             .fold(None, |u, r| Some(union(u, r)))
             .unwrap_or((origin.0, origin.1, 0.0, 0.0));
         let placed = sticky(walk.scene, id, offset, self.grid());
-        let rect = paint_rect(drawn, placed);
+        let rect = self.drawn_rect(&node, placed);
         let p = (walk.scene.presented)(id);
         let space =
             ts.pre_concat(p.transform(rect, node.style.transform_origin.resolve(rect.2, rect.3)));
@@ -1255,6 +1303,7 @@ impl Painter {
                 origin,
                 scale,
                 size: (drawn.width, drawn.height),
+                phase: self.pixel_phase(node.frame),
                 can_translate_hits: boxes.iter().all(|b| b.hit.is_none()),
                 may_have_hit_slop: capture.may_have_hit_slop,
                 paint_stale: false,
@@ -1274,6 +1323,7 @@ impl Painter {
                     })
                     .collect(),
                 scrolls: capture.scrolls,
+                sticky: capture.sticky,
                 unsupported: row_unsupported,
                 bounds,
                 seen: frame,
@@ -1293,7 +1343,7 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip_rect: Option<Rect4>,
     ) {
         let Some(node) = walk.scene.kernel.node(id) else {
@@ -1334,7 +1384,7 @@ impl Painter {
                 pin
             }
         };
-        let r = paint_rect(self.drawn(&node), offset);
+        let r = self.drawn_rect(&node, offset);
         let origin = (ts.sx * r.0 + ts.tx, ts.sy * r.1 + ts.ty);
         let drawing = match self
             .rows

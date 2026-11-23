@@ -25,7 +25,7 @@ impl Painter {
         node: &NodeRef<'_>,
         rect: Rect4,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip_rect: Option<Rect4>,
     ) {
         // A running transition's list over the row (LLP 1003.002 D8).

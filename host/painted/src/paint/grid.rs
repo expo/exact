@@ -10,39 +10,64 @@
 use super::*;
 use exact_kernel::{Frame, StickyConstraint};
 
-/// `frame` with each edge at the device pixel nearest its place in the page,
-/// at `scale` pixels a point, as a browser paints a box (Chromium's
-/// `PhysicalRect::PixelSnappedIntRect`): two boxes that meet in layout share
-/// the edge, a box's size is the distance between its rounded edges, and no
-/// rounding adds up down the tree. An edge is taken to Chromium's layout unit
-/// first, 1/64 of a device pixel, so a half that float sums left a hair short
-/// is a half, then rounded a half up. (The Apple host takes 1/64 of a point,
-/// a whole number of these at its whole scales; at 2.625 that step would put
-/// the two edges of a box one pixel tall on one pixel.) A box layout gave a
-/// size keeps a pixel of it (`SnapSizeToPixel`).
-fn on_pixels(frame: Frame, scale: f32) -> Frame {
-    let k = f64::from(scale);
-    let pixel = |v: f32| f64::from(pixel(v, scale));
+/// A paint origin in document points. Keep the precision of the display's
+/// pixels until the painter subtracts this origin from a box's edges.
+pub(super) type PaintOffset = (f64, f64);
+
+pub(super) fn paint_origin((x, y): (f32, f32), offset: PaintOffset) -> (f32, f32) {
+    (
+        (f64::from(x) - offset.0) as f32,
+        (f64::from(y) - offset.1) as f32,
+    )
+}
+
+pub(super) fn paint_rect(frame: Frame, offset: PaintOffset) -> Rect4 {
+    let (x, y) = paint_origin((frame.x, frame.y), offset);
+    (x, y, frame.width, frame.height)
+}
+
+/// As in Chromium's `PhysicalRect::PixelSnappedIntRect`, adjoining boxes
+/// share their rounded edge. A box thinner than a pixel can keep one pixel
+/// of its size (`SnapSizeToPixel`).
+fn pixel_box(frame: Frame, scale: f32) -> [f64; 4] {
+    let pixel = |v| device_pixel(v, scale);
     let size = |from: f64, to: f64, laid: f32| match to - from {
-        d if d == 0.0 && f64::from(laid) * k > 1.0 / 16.0 => 1.0,
+        0.0 if f64::from(laid) * f64::from(scale) > 1.0 / 16.0 => 1.0,
         d => d,
     };
-    let (x0, y0) = (pixel(frame.x), pixel(frame.y));
-    let (x1, y1) = (pixel(frame.x + frame.width), pixel(frame.y + frame.height));
+    let (x, y) = (pixel(frame.x), pixel(frame.y));
+    [
+        x,
+        y,
+        size(x, pixel(frame.x + frame.width), frame.width),
+        size(y, pixel(frame.y + frame.height), frame.height),
+    ]
+}
+
+fn on_pixels(frame: Frame, scale: f32) -> Frame {
+    let [x, y, width, height] = pixel_box(frame, scale).map(|v| (v / f64::from(scale)) as f32);
     Frame {
-        x: (x0 / k) as f32,
-        y: (y0 / k) as f32,
-        width: (size(x0, x1, frame.width) / k) as f32,
-        height: (size(y0, y1, frame.height) / k) as f32,
+        x,
+        y,
+        width,
+        height,
     }
 }
 
-/// The device pixel `v` points round to at `scale` pixels a point, by
-/// [`on_pixels`]' rule: a scroll offset is rounded as an edge is, so one an
-/// app left on a half pixel is the same pixel after every move of whole
-/// pixels on from it, whatever a float sum left of the half.
+/// Quantize to 1/64 of a device pixel before rounding half up. This keeps
+/// float noise close to a half pixel from choosing a different edge.
+pub(super) fn device_pixel(v: f32, scale: f32) -> f64 {
+    ((f64::from(v) * f64::from(scale) * 64.0).round() / 64.0 + 0.5).floor()
+}
+
 pub(crate) fn pixel(v: f32, scale: f32) -> f32 {
-    ((f64::from(v) * f64::from(scale) * 64.0).round() / 64.0 + 0.5).floor() as f32
+    device_pixel(v, scale) as f32
+}
+
+#[cfg(any(target_os = "android", test))]
+pub(crate) fn pixel_delta(from: (f32, f32), to: (f32, f32), scale: f32) -> (f32, f32) {
+    let axis = |from, to| (device_pixel(from, scale) - device_pixel(to, scale)) as f32;
+    (axis(from.0, to.0), axis(from.1, to.1))
 }
 
 /// `c`, a sticky box's constraint in the space of its scroller at `origin`,
@@ -53,7 +78,11 @@ pub(crate) fn pixel(v: f32, scale: f32) -> f32 {
 /// all (the Apple host's `PixelGrid.shift`), would not at a fractional scale:
 /// a pixel of scroll is no whole number of layout units there.
 fn sticky_on_pixels(mut c: StickyConstraint, origin: Frame, scale: f32) -> StickyConstraint {
-    let o = on_pixels(origin, scale);
+    let k = f64::from(scale);
+    let ox = device_pixel(origin.x, scale);
+    let oy = device_pixel(origin.y, scale);
+    let edge_x = |x| ((device_pixel(origin.x + x, scale) - ox) / k) as f32;
+    let edge_y = |y| ((device_pixel(origin.y + y, scale) - oy) / k) as f32;
     let grid = |r: [f32; 4]| {
         let rect = Frame {
             x: origin.x + r[0],
@@ -61,13 +90,17 @@ fn sticky_on_pixels(mut c: StickyConstraint, origin: Frame, scale: f32) -> Stick
             width: r[2] - r[0],
             height: r[3] - r[1],
         };
-        let f = on_pixels(rect, scale);
-        let (x, y) = (f.x - o.x, f.y - o.y);
-        [x, y, x + f.width, y + f.height]
+        let [x, y, w, h] = pixel_box(rect, scale);
+        [x - ox, y - oy, x - ox + w, y - oy + h].map(|v| (v / k) as f32)
     };
     let [top, right, bottom, left] = c.insets.map(|i| i.unwrap_or(0.0));
     let p = c.port;
-    let lines = grid([p[0] + left, p[1] + top, p[2] - right, p[3] - bottom]);
+    let lines = [
+        edge_x(p[0] + left),
+        edge_y(p[1] + top),
+        edge_x(p[2] - right),
+        edge_y(p[3] - bottom),
+    ];
     (c.natural, c.limit, c.port) = (grid(c.natural), grid(c.limit), grid(p));
     let p = c.port;
     let at = [
@@ -108,7 +141,7 @@ impl BoxPaint {
 impl Painter {
     /// The display's scale, when this painter draws on its pixels.
     pub(super) fn grid(&self) -> Option<f32> {
-        self.pixel_grid.then_some(self.scale)
+        (self.pixel_grid && !self.grid_suspended).then_some(self.scale)
     }
 
     /// `node`'s frame as this painter draws it: on a display's pixels each
@@ -120,13 +153,35 @@ impl Painter {
         }
     }
 
-    /// A scroll offset as this painter draws it: a whole number of a
-    /// display's pixels ([`pixel`]), so what a box's rows are moved by
-    /// leaves them on the pixels their frames are on.
-    pub(super) fn drawn_offset(&self, (x, y): (f32, f32)) -> (f32, f32) {
+    pub(super) fn drawn_rect(&self, node: &NodeRef<'_>, offset: PaintOffset) -> Rect4 {
+        let Some(scale) = self.grid() else {
+            return paint_rect(node.frame, offset);
+        };
+        let k = f64::from(scale);
+        let [x, y, w, h] = pixel_box(node.frame, scale);
+        (
+            ((x - offset.0 * k) / k) as f32,
+            ((y - offset.1 * k) / k) as f32,
+            (w / k) as f32,
+            (h / k) as f32,
+        )
+    }
+
+    pub(super) fn pixel_phase(&self, frame: Frame) -> Option<(f64, f64)> {
+        let scale = self.grid()?;
+        let phase = |v| f64::from(v) * f64::from(scale) - device_pixel(v, scale);
+        Some((phase(frame.x), phase(frame.y)))
+    }
+
+    /// Scroll offsets and row recording origins are on the same grid as
+    /// boxes. Work in double precision until they are subtracted.
+    pub(super) fn drawn_offset(&self, (x, y): (f32, f32)) -> PaintOffset {
         match self.grid() {
-            Some(s) => (pixel(x, s) / s, pixel(y, s) / s),
-            None => (x, y),
+            Some(s) => (
+                device_pixel(x, s) / f64::from(s),
+                device_pixel(y, s) / f64::from(s),
+            ),
+            None => (f64::from(x), f64::from(y)),
         }
     }
 }
@@ -195,6 +250,39 @@ mod tests {
             let (_, dy) = c.offset((0.0, pixels as f32 / 2.625));
             let top = (c.natural[1] + dy) * 2.625 - pixels as f32;
             assert!((top - 31.0).abs() < 1e-3, "at {top} after {pixels} pixels");
+        }
+    }
+
+    #[test]
+    fn opposing_sticky_inset_lines_can_share_a_pixel() {
+        let origin = Frame {
+            x: 0.,
+            y: 0.,
+            width: 200.,
+            height: 200.,
+        };
+        for (start, end, line) in [(None, 199.9, 0.), (Some(100.), 99.9, 263.)] {
+            let c = sticky_on_pixels(
+                StickyConstraint {
+                    scroller: 1,
+                    natural: [0., 0., 20., 20.],
+                    limit: [0., 0., 200., 200.],
+                    port: [0., 0., 200., 200.],
+                    insets: [start, Some(end), Some(end), start],
+                },
+                origin,
+                2.625,
+            );
+            for v in [
+                c.port[2] - c.insets[1].unwrap(),
+                c.port[3] - c.insets[2].unwrap(),
+            ] {
+                assert!(
+                    (v * 2.625 - line).abs() < 0.001,
+                    "end line at {} px",
+                    v * 2.625
+                );
+            }
         }
     }
 }

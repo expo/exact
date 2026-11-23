@@ -118,13 +118,28 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip: Option<Rect4>,
     ) {
         let hit_space = walk.hit_space;
+        let grid_suspended = self.grid_suspended;
+        if self.grid().is_some() {
+            let p = (walk.scene.presented)(id);
+            self.grid_suspended = ts.sx != 1.
+                || ts.sy != 1.
+                || ts.kx != 0.
+                || ts.ky != 0.
+                || (!p.rotate_axis.is_3d() && (p.rotate != 0. || p.scale * p.press != 1.))
+                || walk
+                    .scene
+                    .kernel
+                    .node(id)
+                    .is_some_and(|n| zoom::range(&n).is_some());
+        }
         self.record_sticky(walk, id, ts, |painter, walk| {
             painter.node_at_inner(walk, id, ts, offset, clip);
         });
+        self.grid_suspended = grid_suspended;
         walk.hit_space = hit_space;
     }
 
@@ -133,7 +148,7 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip: Option<Rect4>,
     ) {
         let named = self.backend.name() == "canvas"
@@ -151,10 +166,7 @@ impl Painter {
             return;
         }
         let node = walk.scene.kernel.node(id).expect("named live node");
-        let rect = paint_rect(
-            self.drawn(&node),
-            sticky(walk.scene, id, offset, self.grid()),
-        );
+        let rect = self.drawn_rect(&node, sticky(walk.scene, id, offset, self.grid()));
         let shown = (walk.scene.presented)(id);
         let paint = BoxPaint::capture(&node, walk.scene.kernel, self.dark);
         let geometry = paint.geometry(rect);

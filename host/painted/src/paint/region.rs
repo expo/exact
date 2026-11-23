@@ -695,7 +695,9 @@ impl<'a> Replay<'a> {
                     if f.node != n.key || i != nodes.len() {
                         return Err("content recipe identity mismatch".into());
                     }
-                    let geometry = n.paint.geometry(paint_rect(f.frame, offset));
+                    let geometry = n
+                        .paint
+                        .geometry(paint_rect(f.frame, (offset.0.into(), offset.1.into())));
                     let rect = geometry.outer.rect;
                     let c = geometry.content;
                     let parent = transform;
@@ -726,7 +728,8 @@ impl<'a> Replay<'a> {
                             }
                             // EXACT ordinary node composition, including f32
                             // center association. Never translate baked pixels.
-                            let (x, y, w, h) = paint_rect(f.frame, offset);
+                            let (x, y, w, h) =
+                                paint_rect(f.frame, (offset.0.into(), offset.1.into()));
                             let (ox, oy) = node.style.transform_origin.resolve(w, h);
                             let (cx, cy) = (x + ox, y + oy);
                             let (tx, ty) = p.translate_at(w, h);
@@ -827,7 +830,7 @@ impl<'a> Replay<'a> {
         painter: &mut Painter,
         walk: &mut Walk<'_, '_>,
         _parent: Transform,
-        _offset: (f32, f32),
+        _offset: PaintOffset,
         outer_clip: Option<Rect4>,
     ) {
         let mut clip = outer_clip;
@@ -846,6 +849,7 @@ impl<'a> Replay<'a> {
                     if r.live_hit {
                         walk.boxes.push(PaintedBox {
                             baseline: None,
+                            text_origin: None,
                             rounded_border: if walk.scrollbar_cover {
                                 g.outer.rounded_outline()
                             } else {
@@ -1003,6 +1007,7 @@ mod hit_tests {
             let rect = (0.0, 0.0, 100.0, 100.0);
             let mut b = PaintedBox {
                 baseline: None,
+                text_origin: None,
                 rounded_border: None,
                 shape_clips: Vec::new(),
                 pointer_hit: true,

@@ -237,8 +237,10 @@ class ScrollTouchTest {
         answer(reply(scroller(1, 100f).also { it[1] = 6 }))
         // 49.4 px less the slop is 49 for the rows, and the 0.4 waits for the next move.
         move(380.3f); move(350.6f)
+        assertEquals(49f - slop, thread.moved[1]!!, 0f)
         assertEquals(slop - 49f, group.translationY, 0f)
         move(350f)
+        assertEquals(50f - slop, thread.moved[1]!!, 0f)
         assertEquals(slop - 50f, group.translationY, 0f)
     }
 

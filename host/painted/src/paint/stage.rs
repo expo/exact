@@ -179,7 +179,7 @@ struct KeptRoute {
     /// Its border box's size.
     size: (f32, f32),
     /// The page offset when recorded, for a replay among the roots.
-    page: (f32, f32),
+    page: PaintOffset,
     /// Its place in paint order and each ancestor's, from the route up.
     path: Vec<Step>,
     /// The split view's pane it was drawn in.
@@ -303,7 +303,7 @@ impl Painter {
         let kept = self.kept.routes.get(&branch.key)?;
         let space = match alive {
             Some(at) => path[at].space?,
-            None => Transform::from_translate(-kept.page.0, -kept.page.1),
+            None => Transform::from_translate(-kept.page.0 as f32, -kept.page.1 as f32),
         };
         let inverse = space.invert()?;
         Some(Replay {
@@ -344,7 +344,7 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip: Option<Rect4>,
         pane: Option<Pane>,
     ) {
@@ -379,7 +379,7 @@ impl Painter {
         walk: &Walk<'_, '_>,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
     ) -> bool {
         // A filter may have replaced the recorder with a raster. Its
         // descendants must draw into that raster, inside the filter.
@@ -394,8 +394,8 @@ impl Painter {
         else {
             return false;
         };
-        let f = self.drawn(&node);
-        let at = ts.pre_translate(f.x - offset.0, f.y - offset.1);
+        let (x, y, ..) = self.drawn_rect(&node, offset);
+        let at = ts.pre_translate(x, y);
         recorder.nest(kept.tape.clone(), at);
         true
     }
@@ -416,7 +416,7 @@ impl Painter {
         cross: usize,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip: Option<Rect4>,
     ) {
         let Some(node) = walk.scene.kernel.node(id) else {
@@ -424,9 +424,9 @@ impl Painter {
         };
         let cross = self.stage.crossing[cross].clone();
         let placed = sticky(walk.scene, id, offset, self.grid());
-        let f = self.drawn(&node);
-        let at = (f.x - placed.0, f.y - placed.1);
-        let size = (f.width, f.height);
+        let (x, y, w, h) = self.drawn_rect(&node, placed);
+        let at = (x, y);
+        let size = (w, h);
         let hit_space = walk.hit_space;
         self.cross_layer(
             &cross,
@@ -576,7 +576,7 @@ impl Painter {
         walk: &Walk<'_, '_>,
         root: &NodeRef<'_>,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
     ) -> Option<Rect4> {
         if self.kept.recording.is_some() || self.stage.replays.is_empty() {
             return None;
@@ -600,7 +600,7 @@ impl Painter {
                 let node = kernel.node(id)?;
                 if id != root.id {
                     offset = sticky(walk.scene, id, offset, self.grid());
-                    let rect = paint_rect(self.drawn(&node), offset);
+                    let rect = self.drawn_rect(&node, offset);
                     let p = (walk.scene.presented)(id);
                     space = space::mul3(
                         &space,
@@ -624,11 +624,8 @@ impl Painter {
                 let zoom = self.zoom_children(kernel, &node, Transform::identity(), offset);
                 space = space::mul3(&space, &affine(zoom));
             }
-            let f = self.drawn(&kernel.node(parent)?);
-            let space = space::mul3(
-                &space,
-                &affine(Transform::from_translate(f.x - offset.0, f.y - offset.1)),
-            );
+            let (x, y, ..) = self.drawn_rect(&kernel.node(parent)?, offset);
+            let space = space::mul3(&space, &affine(Transform::from_translate(x, y)));
             let origin = space::mul3(&space, &affine(replay.at));
             let cross = &self.stage.crossing[replay.cross];
             let motion = affine(cross.motion);
@@ -736,6 +733,7 @@ impl Painter {
                 }
                 Item::Hit(id, rect) => walk.boxes.push(PaintedBox {
                     baseline: None,
+                    text_origin: None,
                     rounded_border: None,
                     shape_clips: Vec::new(),
                     id: *id,
@@ -757,8 +755,7 @@ impl Painter {
         let Some(node) = walk.scene.kernel.node(id) else {
             return;
         };
-        let f = self.drawn(&node);
-        let at = (f.x, f.y);
+        let at = self.drawn_offset((node.frame.x, node.frame.y));
         self.node_at(walk, id, ts, at, None);
         if tape {
             self.keep_route(walk, id, ts, at, None);
@@ -778,7 +775,7 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         refer: bool,
     ) -> Tape {
         let recorder = Recorder::portable(&*self.backend);
@@ -869,7 +866,7 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         pane: Option<Pane>,
     ) {
         let Some(node) = walk.scene.kernel.node(id) else {
@@ -878,7 +875,8 @@ impl Painter {
         let f = self.drawn(&node);
         let (key, at) = (node.key, (f.x, f.y));
         let size = (f.width, f.height);
-        let local = ts.pre_translate(at.0 - offset.0, at.1 - offset.1);
+        let (x, y) = grid::paint_origin(at, offset);
+        let local = ts.pre_translate(x, y);
         let placement = self.kept.to_page.pre_concat(local);
         let Some(unplace) = local.invert() else {
             self.kept.routes.remove(&key);

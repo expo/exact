@@ -9,7 +9,7 @@
 //! what that hides. Its boxes are not hit: a ghost is the web's
 //! `pointer-events: none` popover.
 use super::shadow::ShadowPaint;
-use super::{Painter, Rect4, Shape, Walk};
+use super::{PaintOffset, Painter, Rect4, Shape, Walk};
 use exact_kernel::{NodeKey, NodeRef, NodeType, PropId, ViewId};
 use tiny_skia::Transform;
 
@@ -46,7 +46,7 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         node: &NodeRef<'_>,
         ts: Transform,
-        child_offset: (f32, f32),
+        child_offset: PaintOffset,
         child_rect: Option<Rect4>,
     ) {
         let lift = self.lifted_child(walk, node);
@@ -72,14 +72,17 @@ impl Painter {
         // container (a column of settings) keeps that container's children
         // apart instead, so one of them changing records only itself.
         let ts = self.zoom_children(walk.scene.kernel, node, ts, child_offset);
-        let f = self.drawn(node);
-        let space = ts.pre_translate(f.x - child_offset.0, f.y - child_offset.1);
+        let r = self.drawn_rect(node, child_offset);
+        let space = ts.pre_translate(r.0, r.1);
         self.kept.push_space(node.id, space);
         let rows = self.has_rows(walk, node);
         let group = rows && !self.rows_wrapper(node.key);
         let wrap = group && self.wraps_rows(walk, &children);
         let split_sections = rows && self.backend.independent_section_rows();
         let sections = (split_sections && !wrap).then(|| self.row_sections(walk.scene.kernel));
+        let group = group
+            && (!self.pixel_grid || self.grid().is_some())
+            && self.group_can_move(walk.scene.kernel, node.id);
         if group {
             self.group_begin(walk, node.id);
         }
@@ -150,7 +153,7 @@ impl Painter {
         // (LLP 1034 §8), else the app's.
         let previous = self.dark;
         self.dark = node.color_scheme_dark().unwrap_or(previous);
-        self.node(walk, node.id, ts, page, None);
+        self.node(walk, node.id, ts, (page.0.into(), page.1.into()), None);
         self.dark = previous;
         walk.reveal = reveal;
         walk.boxes.truncate(boxes);

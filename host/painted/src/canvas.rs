@@ -139,7 +139,7 @@ const SLOT_SET: u32 = 24;
 /// id and the move (device pixels) of its rows from where they were drawn.
 /// With `EXACT_MOVE_TRACKS=1`, `CLOCK` and `TRACKS` ops may follow: layers of
 /// the last stream whose plays changed since.
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 const SHIFT: u32 = 22;
 
 /// Room (points) left of and above a row's origin in its recording, so what
@@ -1357,34 +1357,20 @@ impl<D: DataSource + Default> CanvasHost<D> {
             return None;
         }
         let painted = self.painted.as_ref()?;
-        let now = p.scroll_offsets();
-        let grouped = |id: &ViewId| painted.groups.iter().any(|(g, _)| g == id);
-        let others = |m: &std::collections::BTreeMap<ViewId, (f32, f32)>| {
-            m.iter()
-                .filter(|(id, _)| !grouped(id))
-                .map(|(id, o)| (*id, o.0.to_bits(), o.1.to_bits()))
-                .collect::<Vec<_>>()
-        };
         let still = p.still()?;
         let same = still == painted.still
             || self
                 .quiet
                 .is_some_and(|epoch| painted.still.same_at(&still, epoch));
-        if others(now) != others(&painted.scroll) || !same {
+        if !same {
             return None;
         }
-        let s = self.scale;
-        let mut ops = vec![SHIFT, painted.groups.len() as u32];
-        for (id, at) in &painted.groups {
-            let to = now.get(id).copied().unwrap_or((0.0, 0.0));
-            // From the pixels the rows were painted at to those a paint
-            // would put them at now.
-            ops.extend([
-                *id,
-                (crate::paint::grid::pixel(at.0, s) - crate::paint::grid::pixel(to.0, s)).to_bits(),
-                (crate::paint::grid::pixel(at.1, s) - crate::paint::grid::pixel(to.1, s)).to_bits(),
-            ]);
-        }
+        let ops = scroll::shift_groups(
+            &painted.scroll,
+            p.scroll_offsets(),
+            &painted.groups,
+            self.scale,
+        )?;
         self.p.moved_without_paint();
         self.moved += 1;
         self.moved_at = at;

@@ -90,9 +90,62 @@ pub struct Under {
 /// revision it knows and where its own moves left the offset.
 #[derive(Default)]
 pub(super) struct Reader {
-    tracked: BTreeMap<ViewId, (u32, (f32, f32))>,
+    tracked: BTreeMap<ViewId, ReaderPosition>,
     /// The last statement [`Presenter::reader_scrollers`] returned.
     last: Vec<i32>,
+}
+
+struct ReaderPosition {
+    revision: u32,
+    accepted: (f32, f32),
+    travel: Option<PixelTravel>,
+}
+
+struct PixelTravel {
+    scale: f32,
+    x: PixelAxis,
+    y: PixelAxis,
+}
+
+#[derive(Clone, Copy, Default)]
+struct PixelAxis {
+    start: f64,
+    distance: f64,
+}
+
+impl PixelAxis {
+    fn at(start: f32) -> Self {
+        Self {
+            start: f64::from(start),
+            distance: 0.,
+        }
+    }
+
+    fn advance(&mut self, from: f32, by: f32, max: f32, scale: f32) -> f32 {
+        if by == 0. {
+            return from;
+        }
+        self.distance += f64::from(by);
+        let points = self.start + self.distance / f64::from(scale);
+        let next = Self::clamp(points, from, by, max, scale);
+        if next == 0. || next == max {
+            *self = Self::at(next);
+        }
+        next
+    }
+
+    fn clamp(points: f64, from: f32, by: f32, max: f32, scale: f32) -> f32 {
+        // The reader stops sending deltas at its rounded ends. A sample
+        // that reaches one also takes the model to its logical end.
+        let device = pixel(from, scale) + by;
+        if by < 0. && device <= 0. {
+            0.
+        } else if by > 0. && device >= pixel(max, scale) {
+            max
+        } else {
+            (points as f32).clamp(0., max)
+        }
+    }
 }
 
 impl Reader {
@@ -102,9 +155,14 @@ impl Reader {
     /// f32, `at + now - was` can miss `now` by an ulp, which the revision's
     /// exact compare would take for an app scroll.
     pub(super) fn rebased(&mut self, id: ViewId, was: (f32, f32), now: (f32, f32)) {
-        if let Some((_, at)) = self.tracked.get_mut(&id) {
+        if let Some(position) = self.tracked.get_mut(&id) {
             let axis = |at: f32, was: f32, now: f32| if at == was { now } else { at + now - was };
-            *at = (axis(at.0, was.0, now.0), axis(at.1, was.1, now.1));
+            let at = position.accepted;
+            position.accepted = (axis(at.0, was.0, now.0), axis(at.1, was.1, now.1));
+            if let Some(travel) = &mut position.travel {
+                travel.x.start += f64::from(now.0) - f64::from(was.0);
+                travel.y.start += f64::from(now.1) - f64::from(was.1);
+            }
         }
     }
 }
@@ -415,9 +473,9 @@ impl<D: DataSource> Presenter<D> {
         }
         let movement = (next.0 - s.offset.0, moved.unwrap_or(next.1 - s.offset.1));
         if completion == Completion::Reader {
-            if let Some((_, accepted)) = self.reader.tracked.get_mut(&id) {
+            if let Some(position) = self.reader.tracked.get_mut(&id) {
                 // A scroll handler may rebase this position before dispatch returns.
-                *accepted = next;
+                position.accepted = next;
             }
         }
         // A reader's move carries the list's own pending position across it (`ack.rs`).
@@ -450,7 +508,7 @@ impl<D: DataSource> Presenter<D> {
 
     /// Accept and stamp a shell sample if either offset moves. Return the
     /// model's movement for prefetching; acknowledged movement alone is no travel.
-    #[cfg(any(target_os = "android", all(test, not(windows))))]
+    #[cfg(all(test, not(windows)))]
     pub(crate) fn reader_sample_at(
         &mut self,
         id: ViewId,
@@ -459,6 +517,32 @@ impl<D: DataSource> Presenter<D> {
         at: f64,
     ) -> Option<(f32, f32)> {
         let (acknowledged, model) = self.reader_sample(id, by, rev)?;
+        self.stamp_reader_sample(id, acknowledged, model, at)
+    }
+
+    /// The Android reader reports device pixels, including any fractional
+    /// travel handed off by a sheet or a zoom pan.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn reader_pixels_at(
+        &mut self,
+        id: ViewId,
+        by: (f32, f32),
+        scale: f32,
+        rev: u32,
+        at: f64,
+    ) -> Option<(f32, f32)> {
+        let (acknowledged, model) = self.reader_sample_in(id, by, rev, Some(scale))?;
+        self.stamp_reader_sample(id, acknowledged, model, at)
+    }
+
+    #[cfg(any(target_os = "android", test))]
+    fn stamp_reader_sample(
+        &mut self,
+        id: ViewId,
+        acknowledged: (f32, f32),
+        model: (f32, f32),
+        at: f64,
+    ) -> Option<(f32, f32)> {
         if acknowledged == (0., 0.) && model == (0., 0.) {
             return None;
         }
@@ -474,6 +558,19 @@ impl<D: DataSource> Presenter<D> {
         by: (f32, f32),
         rev: u32,
     ) -> Option<((f32, f32), (f32, f32))> {
+        self.reader_sample_in(id, by, rev, None)
+    }
+
+    fn reader_sample_in(
+        &mut self,
+        id: ViewId,
+        by: (f32, f32),
+        rev: u32,
+        device_scale: Option<f32>,
+    ) -> Option<((f32, f32), (f32, f32))> {
+        if !by.0.is_finite() || !by.1.is_finite() {
+            return None;
+        }
         self.restore_scroll_anchors();
         if !self.reader.tracked.contains_key(&id) {
             return None;
@@ -486,12 +583,32 @@ impl<D: DataSource> Presenter<D> {
             return None;
         }
         let from = s.offset;
-        let (to, movement) = self.scroll_to_completion(
-            id,
-            (from.0 + by.0, from.1 + by.1),
-            Completion::Reader,
-            Some(by),
-        )?;
+        let tracked = self.reader.tracked.get_mut(&id).expect("reader revision");
+        let (target, by) = if let Some(scale) = device_scale {
+            if tracked
+                .travel
+                .as_ref()
+                .is_none_or(|travel| travel.scale != scale)
+            {
+                tracked.travel = Some(PixelTravel {
+                    scale,
+                    x: PixelAxis::at(from.0),
+                    y: PixelAxis::at(from.1),
+                });
+            }
+            let travel = tracked.travel.as_mut().expect("pixel travel");
+            let x = travel
+                .x
+                .advance(from.0, if s.axes.0 { by.0 } else { 0. }, s.max.0, scale);
+            let y = travel
+                .y
+                .advance(from.1, if s.axes.1 { by.1 } else { 0. }, s.max.1, scale);
+            ((x, y), (by.0 / scale, by.1 / scale))
+        } else {
+            tracked.travel = None;
+            ((from.0 + by.0, from.1 + by.1), by)
+        };
+        let (to, movement) = self.scroll_to_completion(id, target, Completion::Reader, Some(by))?;
         let moved = (to.0 - from.0, to.1 - from.1);
         // Only a sample that moves counts as the person's scroll: a dropped
         // one must not cancel a fragment scroll or a load's hold.
@@ -579,11 +696,17 @@ impl<D: DataSource> Presenter<D> {
     /// The reader's revision of scroller `id`, moved on when the offset is
     /// not where the reader's own moves left it; tracked from here on.
     fn reader_revision(&mut self, s: &Scroller) -> u32 {
-        let entry = self.reader.tracked.entry(s.id).or_insert((0, s.offset));
-        if entry.1 != s.offset {
-            *entry = (entry.0 + 1, s.offset);
+        let entry = self.reader.tracked.entry(s.id).or_insert(ReaderPosition {
+            revision: 0,
+            accepted: s.offset,
+            travel: None,
+        });
+        if entry.accepted != s.offset {
+            entry.revision += 1;
+            entry.accepted = s.offset;
+            entry.travel = None;
         }
-        entry.0
+        entry.revision
     }
 
     /// [`Presenter::scrollers_at`] for a reader, in its pixels (`scale` to a

@@ -131,14 +131,6 @@ impl BoxGeometry {
         self.outer.within(self.content)
     }
 }
-fn paint_rect(frame: exact_kernel::Frame, offset: (f32, f32)) -> Rect4 {
-    (
-        frame.x - offset.0,
-        frame.y - offset.1,
-        frame.width,
-        frame.height,
-    )
-}
 impl BoxPaint {
     fn capture(node: &NodeRef<'_>, kernel: &Kernel, dark: bool) -> Self {
         let effective = node.computed_style(exact_kernel::StyleMask::EMPTY);
@@ -308,6 +300,8 @@ pub struct PaintedBox {
     pub rect: Rect4,
     /// The first text baseline in the scroll plane of this painted box.
     pub(crate) baseline: Option<(f32, f32)>,
+    /// The paragraph's layout origin in the same plane as its border box.
+    pub(crate) text_origin: Option<(f32, f32)>,
     /// The clip, `None` when unclipped.
     pub clip: Option<Rect4>,
     /// The scroll offset for a scroll container.
@@ -376,6 +370,7 @@ pub use crate::canvas2d::CanvasUpdate;
 pub use backend::{Backend, FrameTarget, WindowLayer, POINTER};
 pub use exact_ink::Rotation;
 pub use frame::Frame;
+use grid::{paint_rect, PaintOffset};
 
 /// The painter: the walk over one backend.
 pub struct Painter {
@@ -394,6 +389,7 @@ pub struct Painter {
     pub scale: f32,
     /// The backend draws on a display's pixels ([`Backend::pixel_grid`]).
     pixel_grid: bool,
+    grid_suspended: bool,
     /// Which appearance a `light-dark()` colour resolves to (LLP 1034 D2):
     /// what the app's `setScheme` last said, else the system's, which the
     /// device's shell or an agent tells the presenter; `light` until one does.
@@ -544,6 +540,7 @@ impl Painter {
             text,
             scale,
             pixel_grid: backend.pixel_grid(),
+            grid_suspended: false,
             dark: false,
             dates: None,
             backend,
@@ -837,7 +834,7 @@ impl Painter {
         self.rows_begin(&walk);
         let kept = self.kept_places(&walk, None, scene.roots);
         let page = self.drawn_offset(scene.page);
-        let space = Transform::from_translate(-page.0, -page.1);
+        let space = Transform::from_translate(-page.0 as f32, -page.1 as f32);
         let last = self.stage_after(scene.roots);
         for (at, root) in scene.roots.iter().enumerate() {
             self.replay_kept(walk.scene, &kept, at, space);
@@ -911,7 +908,7 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip_rect: Option<Rect4>,
     ) {
         let offset = sticky(walk.scene, id, offset, self.grid());
@@ -947,12 +944,11 @@ impl Painter {
         // The roles drawn in the accent read the nearest authored
         // `accent-color`, for this node and, until one authors its own, below.
         let _accent = accent_scope(&node);
-        let f = self.drawn(&node);
-        let (x, y, w, h) = paint_rect(f, offset);
+        let (x, y, w, h) = self.drawn_rect(&node, offset);
         let p = (walk.scene.presented)(id);
-        self.row_node(walk.scene.kernel, &node, &p);
+        self.row_node(walk.scene, &node, &p);
         // @ref LLP 1077 D8 — turned or moved in space: painted apart, warped.
-        if self.spatial(walk, &node, &p, (x, y, w, h), ts, offset, clip_rect) {
+        if self.spatial(walk, &node, &p, ts, offset, clip_rect) {
             self.row_refuse();
             self.damage.unsupported = true;
             return;
@@ -1005,6 +1001,8 @@ impl Painter {
         let hit_start = walk.boxes.len();
         walk.boxes.push(PaintedBox {
             baseline: None,
+            text_origin: (node.node_type == NodeType::Text)
+                .then(|| grid::paint_origin((node.frame.x, node.frame.y), offset)),
             rounded_border: None,
             shape_clips: Vec::new(),
             id,
@@ -1094,7 +1092,7 @@ impl Painter {
         node: &NodeRef<'_>,
         rect: Rect4,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip_rect: Option<Rect4>,
     ) {
         let owner = walk.boxes.len() - 1;
@@ -1158,7 +1156,8 @@ impl Painter {
                     self.backend.push_clip(clip, ts);
                 }
                 let clips = (clip.as_ref().map(|c| c.rect), clip_rect);
-                let baseline = self.text_node(walk, node, &paint, &geometry, rect, clips, ts);
+                let place = (rect, walk.boxes[owner].text_origin.unwrap());
+                let baseline = self.text_node(walk, node, &paint, &geometry, place, clips, ts);
                 walk.boxes[owner].baseline = baseline;
                 if clip.is_some() {
                     self.backend.pop_clip();

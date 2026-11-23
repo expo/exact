@@ -19,16 +19,14 @@ impl Painter {
         node: &NodeRef<'_>,
         box_paint: &BoxPaint,
         geometry: &BoxGeometry,
-        rect: Rect4,
+        (rect, origin): (Rect4, (f32, f32)),
         (own, ancestors): (Option<Rect4>, Option<Rect4>),
         ts: Transform,
     ) -> Option<(f32, f32)> {
-        // The text where layout put it, not moved with its box's drawn edge:
-        // two texts on one baseline stay on it.
-        let drawn = self.drawn(node);
+        // Two texts on one baseline keep it when their boxes snap.
         let mut content = geometry.content;
-        content.0 += node.frame.x - drawn.x;
-        content.1 += node.frame.y - drawn.y;
+        content.0 = origin.0 + geometry.inset.0;
+        content.1 = origin.1 + geometry.inset.1;
         let s = node.style;
         let kernel = walk.scene.kernel;
         let frags = kernel.fragments(node.key).unwrap_or(&[]);

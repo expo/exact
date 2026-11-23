@@ -975,6 +975,46 @@ component App
     }
 
     #[test]
+    fn a_turned_software_island_preserves_the_layout_box() {
+        use crate::presenter::{PainterChoice, Presenter};
+        let plan = crate::test_plan(
+            r#"component App
+  view
+    box width=200 height=120 padding-left=0.195 perspective=600
+      box width=100.37 height=40 rotate="y 20deg" filter="brightness(1)" background-color="red" testId="turned"
+"#,
+        );
+        let paint = |choice| {
+            let (mut p, error) = Presenter::boot_with_fixture_fonts(
+                &plan,
+                (),
+                (200., 120.),
+                2.625,
+                std::path::PathBuf::new(),
+                choice,
+            )
+            .unwrap();
+            assert!(error.is_none(), "{error:?}");
+            p.frame();
+            let k = p.host().kernel();
+            let node = k.node_by_key(k.find_by_test_id("turned")[0]).unwrap();
+            assert_eq!((node.frame.x, node.frame.width), (0.195, 100.37));
+            p.rect_of(node.id).unwrap()
+        };
+        let software = paint(PainterChoice::Cpu);
+        let canvas = paint(PainterChoice::Canvas);
+        let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let mut at = 0;
+        let mut images = 0;
+        while at < ops.len() {
+            images += usize::from(ops[at] == IMAGE_DEF);
+            at = end(&ops, at).unwrap();
+        }
+        assert!(images > 0, "the filter takes the software path");
+        assert_eq!(canvas, software);
+    }
+
+    #[test]
     fn rows_first_walked_at_zero_opacity_are_recorded_when_shown() {
         use crate::presenter::{PainterChoice, Presenter};
 

@@ -16,6 +16,35 @@ use super::{CanvasHost, Section, GROUPS};
 use crate::presenter::PAGE;
 #[cfg(target_os = "android")]
 use exact_runner::DataSource;
+#[cfg(any(target_os = "android", test))]
+use std::collections::BTreeMap;
+
+/// A move-only frame can move just the offsets with a recorded group.
+#[cfg(any(target_os = "android", test))]
+pub(super) fn shift_groups(
+    before: &BTreeMap<u32, (f32, f32)>,
+    now: &BTreeMap<u32, (f32, f32)>,
+    groups: &[(u32, (f32, f32))],
+    scale: f32,
+) -> Option<Vec<u32>> {
+    let others = |offsets: &BTreeMap<u32, (f32, f32)>| {
+        offsets
+            .iter()
+            .filter(|(id, _)| !groups.iter().any(|(g, _)| g == *id))
+            .map(|(id, o)| (*id, o.0.to_bits(), o.1.to_bits()))
+            .collect::<Vec<_>>()
+    };
+    if others(now) != others(before) {
+        return None;
+    }
+    let mut ops = vec![super::SHIFT, groups.len() as u32];
+    for (id, at) in groups {
+        let to = now.get(id).copied().unwrap_or_default();
+        let shift = crate::paint::grid::pixel_delta(*at, to, scale);
+        ops.extend([*id, shift.0.to_bits(), shift.1.to_bits()]);
+    }
+    Some(ops)
+}
 
 /// Scroll deferral state shared by the Android canvas loop's `frame`,
 /// `requests`, `refine`, and input handlers: `scrolled` stays true until
@@ -112,7 +141,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
         let s = self.scale;
         self.p.hold_collections(self.prefetching);
         let at = self.now();
-        let went = self.p.reader_sample_at(id, (dx / s, dy / s), rev, at);
+        let went = self.p.reader_pixels_at(id, (dx, dy), s, rev, at);
         self.p.hold_collections(false);
         let Some((_, down)) = went else {
             return;
@@ -372,11 +401,15 @@ mod tests {
     }
 
     fn boot(source: &str) -> Presenter<()> {
+        boot_at(source, 2.625)
+    }
+
+    fn boot_at(source: &str, scale: f32) -> Presenter<()> {
         let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(source),
             (),
             (2000., 400.),
-            2.625,
+            scale,
             std::path::PathBuf::new(),
             PainterChoice::Canvas,
         )
@@ -389,6 +422,185 @@ mod tests {
     fn id(p: &Presenter<()>, name: &str) -> exact_kernel::ViewId {
         let k = p.host().kernel();
         k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id
+    }
+
+    #[test]
+    fn a_retained_sticky_header_stays_at_the_port() {
+        let mut p = boot(
+            r#"component App
+  view
+    scroll width=200 height=100 testId="port"
+      box width=200 height=200
+        box position="sticky" top=0 width=200 height=20 background-color="red" testId="heading"
+        box width=200 height=150 background-color="blue"
+      box width=200 height=200
+"#,
+        );
+        let (port, heading) = (id(&p, "port"), id(&p, "heading"));
+        assert_eq!(p.rect_of(heading).unwrap().1, 0.);
+        p.scroll_to(port, (0., 20. / 2.625)).unwrap();
+        p.frame();
+        assert_eq!(p.rect_of(heading).unwrap().1, 0.);
+    }
+
+    #[test]
+    fn a_sticky_scroller_is_not_offered_for_reader_translation() {
+        let mut p = boot(
+            r#"component App
+  view
+    scroll width=200 height=100 testId="port"
+      box position="sticky" top=0 width=200 height=20 background-color="red"
+      box width=200 height=200 background-color="blue"
+"#,
+        );
+        let port = id(&p, "port");
+        let words = p.reader_under(10., 10., 2.625);
+        assert_eq!(words[3], port as i32);
+        let groups = super::super::GROUPS.with(|groups| groups.borrow().clone());
+        let before = std::collections::BTreeMap::from([(port, p.scroll_of(port))]);
+        p.scroll_to(port, (0., 20. / 2.625)).unwrap();
+        let now = std::collections::BTreeMap::from([(port, p.scroll_of(port))]);
+        assert!(
+            super::shift_groups(&before, &now, &groups, 2.625).is_none(),
+            "a move-only frame would move the sticky box"
+        );
+        assert_eq!(
+            words[4] & 4,
+            0,
+            "a reader translation would move the sticky box"
+        );
+    }
+
+    #[test]
+    fn moving_a_row_a_fraction_of_a_pixel_repositions_its_child() {
+        let source = r#"component App
+  state lead = 0
+  action move
+    lead = 0.125
+  view
+    column
+      scroll width=200 height=100
+        column
+          box height=lead
+          column width=200 height=8 padding-top=0.125 box-sizing="border-box" testId="row"
+            box width=200 height=4 background-color="red" testId="child"
+          box height=200
+      button width=20 height=20 press=move testId="move"
+"#;
+        let mut p = boot(source);
+        let (row, child, button) = (id(&p, "row"), id(&p, "child"), id(&p, "move"));
+        let row_at = p.rect_of(row).unwrap();
+        assert_eq!(p.rect_of(child).unwrap().1, 0.);
+        assert_eq!(
+            p.host_mut()
+                .dispatch_at(button, exact_runner::Event::Press, 0.),
+            None
+        );
+        assert_eq!(p.after_commit(), None);
+        p.frame();
+        assert_eq!(p.rect_of(row).unwrap(), row_at);
+        let replay = p.rect_of(child).unwrap();
+        p.reader_replaced(Box::new(super::super::Recorder::new()));
+        p.frame();
+        let fresh = p.rect_of(child).unwrap();
+        assert_eq!(fresh.1 * 2.625, 1.);
+        assert_eq!(replay, fresh);
+    }
+
+    #[test]
+    fn a_reader_drag_reaches_the_exact_logical_ends() {
+        let mut p = boot_at(
+            r#"component App
+  view
+    scroll width=200 height=100 testId="port"
+      box height=200.125
+"#,
+            2.,
+        );
+        let port = id(&p, "port");
+        let words = p.reader_under(10., 10., 2.);
+        assert_eq!(words[3], port as i32);
+        assert_eq!(f32::from_bits(words[9] as u32), 200.);
+        let rev = words[5] as u32;
+        p.reader_pixels_at(port, (0., 200.), 2., rev, 10.).unwrap();
+        assert_eq!(p.scroll_of(port).1, 100.125);
+        p.reader_pixels_at(port, (0., -200.), 2., rev, 20.).unwrap();
+        assert_eq!(p.scroll_of(port).1, 0.);
+    }
+
+    #[test]
+    fn zoom_scales_the_layout_box_and_reaches_its_far_edge() {
+        let mut p = boot(
+            r#"component App
+  view
+    scroll width=100 height=100 -exact-max-zoom=10 scrollZoom=10 testId="port"
+      box width=100.1 height=30 position="relative"
+        box position="absolute" left=0 top=0 width=0.1 height=2 background-color="red" testId="divider"
+        box position="absolute" right=0 bottom=0 width=2 height=2 background-color="blue" testId="edge"
+"#,
+        );
+        let port = id(&p, "port");
+        let divider = id(&p, "divider");
+        let edge = id(&p, "edge");
+        let pixels = p.rect_of(divider).unwrap().2 * 2.625;
+        assert!((pixels - 2.625).abs() < 0.001, "{pixels} px");
+        let end = p.scroll_to(port, (10000., 10000.)).unwrap();
+        assert_eq!(end, (901., 200.));
+        p.frame();
+        let (x, y, w, h) = p.rect_of(edge).unwrap();
+        assert!(
+            (x + w - 100.).abs() < 0.001 && (y + h - 100.).abs() < 0.001,
+            "{:?}",
+            (x, y, w, h)
+        );
+    }
+
+    #[test]
+    fn kept_row_origins_and_child_boxes_at_large_scroll_offsets() {
+        use super::super::{stream, FINISHED, ROW_DRAW, ROW_PAD};
+
+        let mut positions = Vec::new();
+        for (scale, row, offset, expected, expected_child) in [
+            (2.625, 400001., 400000., 3., 5.),
+            (2.625, 65544.76, 65543.24, 4., 7.),
+            (3., 65536.664, 65536.336, 1., 4.),
+        ] {
+            let mut p = boot_at(
+                &format!(
+                    r#"component App
+  view
+    scroll width=200 height=100 scrollTop={offset}
+      column
+        box height={row}
+        column width=200 height=20 background-color="blue" testId="row"
+          box width=100 height=2 margin-top=1 background-color="red" testId="child"
+        box height=200
+"#
+                ),
+                scale,
+            );
+            let (row, child) = (id(&p, "row"), id(&p, "child"));
+            let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+            let mut at = 0;
+            let mut tops = Vec::new();
+            while at < ops.len() {
+                if ops[at] == ROW_DRAW {
+                    tops.push(f32::from_bits(ops[at + 3]) + ROW_PAD * scale);
+                }
+                at = stream::end(&ops, at).unwrap();
+            }
+            positions.push((tops[1], expected));
+            let row_top = p.rect_of(row).unwrap().1 * scale;
+            let child_top = p.rect_of(child).unwrap().1 * scale;
+            positions.push((row_top, expected));
+            positions.push((child_top, expected_child));
+        }
+        assert!(
+            positions
+                .iter()
+                .all(|(found, expected)| (found - expected).abs() < 0.0001),
+            "{positions:?}"
+        );
     }
 
     #[test]
@@ -417,30 +629,43 @@ mod tests {
         }
     }
 
-    #[test]
-    fn an_offset_left_on_a_half_pixel_is_told_as_one_pixel_after_every_move() {
-        // The app left the scroller at 100 px, 262.5 pixels: the reader was
-        // told 263, and after each of its moves by whole pixels it is told
-        // that many more, whatever a float sum left of the half.
-        let row = "        box height=20.3 width=200\n".repeat(400);
+    fn reader_travel(start: u32, mut at: f32, count: u32, delta: impl Fn(u32) -> f32) {
         let mut p = boot(&format!(
-            "component App\n  view\n    scroll testId=\"s\" width=200 height=200 scrollTop=100\n      column\n{row}"
+            "component App\n  view\n    scroll testId=\"s\" width=200 height=200 scrollTop={start}\n      box width=200 height=15000\n"
         ));
         let s = id(&p, "s");
         let words = p.reader_under(100.0 * 2.625, 100.0 * 2.625, 2.625);
-        assert_eq!(
-            (words[3], f32::from_bits(words[7] as u32)),
-            (s as i32, 263.0)
-        );
-        let mut at = 263.0;
-        for step in 1..400 {
-            let by = (step % 7 + 1) as f32;
-            p.reader_scrolled(s, (0.0, by / 2.625), words[5] as u32);
+        assert_eq!((words[3], f32::from_bits(words[7] as u32)), (s as i32, at));
+        for step in 1..=count {
+            let by = delta(step);
+            p.reader_pixels_at(s, (0.0, by), 2.625, words[5] as u32, f64::from(step))
+                .unwrap();
             at += by;
-            let all = p.reader_scrollers(&[], 2.625).unwrap();
+            let all = p
+                .reader_scrollers(&[], 2.625)
+                .unwrap_or_else(|| panic!("no acknowledgement at {start} after {step} moves"));
             let told = all.chunks(9).find(|w| w[0] == s as i32).unwrap()[4];
-            assert_eq!(f32::from_bits(told as u32), at, "after {step} moves");
+            assert_eq!(
+                f32::from_bits(told as u32),
+                at,
+                "from {start} after {step} moves"
+            );
         }
+    }
+
+    #[test]
+    fn one_pixel_moves_from_a_half_pixel_keep_their_acknowledgements() {
+        reader_travel(2052, 5387., 33, |_| 1.);
+    }
+
+    #[test]
+    fn varied_pixel_moves_from_a_half_pixel_keep_their_acknowledgements() {
+        reader_travel(100, 263., 8000, |step| (step % 7 + 1) as f32);
+    }
+
+    #[test]
+    fn a_long_scroll_from_zero_keeps_its_acknowledgements() {
+        reader_travel(0, 0., 8696, |_| 1.);
     }
 
     #[test]

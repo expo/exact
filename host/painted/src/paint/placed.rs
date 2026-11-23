@@ -8,7 +8,7 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip: Option<Rect4>,
     ) -> bool {
         use crate::placement::{self, Placement};
@@ -32,13 +32,9 @@ impl Painter {
             return true;
         };
         let (hit_ts, hit_clip) = walk.hit_space.unwrap_or((ts, clip));
-        let hit_h = placement::compose(
-            h,
-            hit_ts,
-            parent.frame.x - offset.0,
-            parent.frame.y - offset.1,
-        );
-        let h = placement::compose(h, ts, parent.frame.x - offset.0, parent.frame.y - offset.1);
+        let (x, y) = grid::paint_origin((parent.frame.x, parent.frame.y), offset);
+        let hit_h = placement::compose(h, hit_ts, x, y);
+        let h = placement::compose(h, ts, x, y);
         let Some(inv) = placement::inverse(h) else {
             return true;
         };
@@ -63,7 +59,13 @@ impl Painter {
             alert: walk.alert,
             dialog: walk.dialog,
         };
-        painter.node(&mut child_walk, id, Transform::identity(), (f.x, f.y), None);
+        painter.node(
+            &mut child_walk,
+            id,
+            Transform::identity(),
+            (f.x.into(), f.y.into()),
+            None,
+        );
         walk.text.extend(child_walk.text);
         walk.fields.extend(child_walk.fields);
         walk.inline.extend(child_walk.inline);
