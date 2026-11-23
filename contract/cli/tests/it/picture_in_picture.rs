@@ -2,7 +2,8 @@
 //! and `exitPictureInPicture()` reach the host, and the image hears
 //! `enterpictureinpicture`, `leavepictureinpicture` and, with its reason,
 //! `pictureinpictureerror` as the host reports them.
-use exact_runner::{DataError, DataSource, Event, Runner, Value};
+use crate::source::{boxed, NoData, Source};
+use exact_runner::{Event, Runner, Value};
 
 const APP: &str = r#"component App
   state floating = false
@@ -26,17 +27,10 @@ const APP: &str = r#"component App
       image "app:/tmp/frame.jpg" id="page" testId="page" width=1 height=1 enterpictureinpicture=entered leavepictureinpicture=left pictureinpictureerror=refused
 "#;
 
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.to_string()))
-    }
-}
-
-fn boot() -> Runner<NoData> {
+fn boot() -> Runner<Source> {
     Runner::boot(
         contract::compile(APP).unwrap(),
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -117,7 +111,7 @@ fn the_window_option_names_exacts_window() {
     );
     let mut r = Runner::boot(
         contract::compile(&source).unwrap(),
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -142,7 +136,7 @@ fn the_window_option_names_exacts_window() {
     );
     let mut r = Runner::boot(
         contract::compile(&bare).unwrap(),
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",

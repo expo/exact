@@ -1215,7 +1215,11 @@ presenter, in steps about the point; Linux answers it unsupported. The agent's
 the web, Android and Windows it zooms a zoomable scroll where no `dblclick`
 handler takes it (two real taps under `--touch platform`, two touch points in
 Chrome, two touch contacts on Android and Windows), and macOS and Linux answer it
-unsupported. On the web, Android, Windows and Linux, `tap <t> wheel 0 <dy>
+unsupported. The agent's `tap <t> fingers <n> [at x y]` puts two to five real
+fingers down together under iOS `--touch platform`, level about the node's middle
+or `at`, 50 points apart, and lifts them together, as the window's recognizers
+read several fingers (four open the developer menu); without the runner, and on
+other hosts, it answers unsupported. On the web, Android, Windows and Linux, `tap <t> wheel 0 <dy>
 modifiers Control` is a trackpad's pinch, as the platform delivers one.
 `tap "id" wheel <dx> <dy>` is the driver's wheel (the agent's `tap <t> wheel
 dx dy`) at the node's middle, in points (CSS pixels on the web): a positive `dy`

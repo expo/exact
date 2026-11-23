@@ -91,7 +91,10 @@ extension NavigationHost {
 
     /// The item a header's control is drawn as in a bar that shows, if it is one.
     func shownBarItem(_ id: UInt32) -> UIBarButtonItem? {
-        controllers.values.lazy.filter { $0.viewIfLoaded?.window != nil }.compactMap { $0.barItemsMade[id]?.bar }.first
+        #if os(iOS)
+        if let item = shownDialogBars.lazy.compactMap({ $0.barItemsMade[id]?.bar }).first { return item }
+        #endif
+        return controllers.values.lazy.filter { $0.viewIfLoaded?.window != nil }.compactMap { $0.barItemsMade[id]?.bar }.first
     }
 }
 #endif

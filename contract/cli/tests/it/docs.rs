@@ -11,6 +11,7 @@
 //! written into it.
 
 use crate::scratch::Scratch;
+use crate::source::{boxed, Read};
 use std::path::{Path, PathBuf};
 
 /// One fenced block: its document, the line of its opening fence, its info
@@ -168,7 +169,7 @@ fn the_paging_columns_recipe_ignores_leave_and_loads_until_the_last_page() {
         .body;
     let mut runner = Runner::boot(
         contract::compile(&source).unwrap(),
-        (),
+        boxed(()),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -255,7 +256,7 @@ fn the_long_list_recipe_appends_pages_and_stops_at_the_last() {
         .body;
     let mut runner = Runner::boot(
         contract::compile(&source).unwrap(),
-        Pager(1),
+        boxed(Pager(1)),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -264,7 +265,7 @@ fn the_long_list_recipe_appends_pages_and_stops_at_the_last() {
     assert_eq!(runner.collections()[0].count, 10);
     for pages in [2, 3, 3] {
         runner.act("loadMore", vec![]).unwrap();
-        assert_eq!(runner.data().0, pages);
+        assert_eq!(runner.source::<Pager>().0, pages);
         assert_eq!(runner.collections()[0].count, pages * 10);
     }
 }

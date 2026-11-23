@@ -26,18 +26,20 @@ fn creation_and_atomic_publication_never_replace_existing_entries() {
 }
 
 #[test]
-fn atomic_creation_keeps_its_parent_when_the_ancestor_is_replaced() {
+fn atomic_creation_holds_its_parent_against_an_ancestor_rename() {
     let base = std::env::temp_dir().join(format!("ibex-known-rename-{}", std::process::id()));
     std::fs::create_dir_all(base.join("root/sub")).unwrap();
     let root = Directory::known(&base.join("root"), None).unwrap();
     let parent = root.child("sub", false).unwrap();
+    // Windows refuses to rename a directory while a handle below it is open,
+    // so the walk's held parent cannot be moved out from under the write.
     atomic(&parent, "shot", b"png", || {
-        std::fs::rename(base.join("root"), base.join("held"))?;
-        std::fs::create_dir_all(base.join("root/sub"))
+        let refused = std::fs::rename(base.join("root"), base.join("held")).unwrap_err();
+        assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied);
+        Ok(())
     })
     .unwrap();
-    assert_eq!(std::fs::read(base.join("held/sub/shot")).unwrap(), b"png");
-    assert!(!base.join("root/sub/shot").exists());
+    assert_eq!(std::fs::read(base.join("root/sub/shot")).unwrap(), b"png");
     assert_eq!(
         atomic(&parent, "shot", b"replaced", || Ok(()))
             .unwrap_err()
@@ -46,6 +48,7 @@ fn atomic_creation_keeps_its_parent_when_the_ancestor_is_replaced() {
     );
     drop(parent);
     drop(root);
+    std::fs::rename(base.join("root"), base.join("held")).unwrap();
     std::fs::remove_dir_all(base).unwrap();
 }
 
@@ -116,11 +119,11 @@ fn mkdir_creates_every_component_and_refuses_an_existing_one() {
     let refused = mkdir(
         Directory::known(&base, None).unwrap(),
         &parts,
-        |parent: &Directory, leaf: &str, removable| {
+        |parent: &Directory, leaf: &str| {
             if leaf == "last" {
                 Err(io::Error::from_raw_os_error(5))
             } else {
-                parent.create_child(leaf, removable)
+                parent.create_child(leaf)
             }
         },
     )

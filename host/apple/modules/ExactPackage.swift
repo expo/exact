@@ -253,9 +253,11 @@ public final class ExactPackageContext {
     /// `app:/tmp`: the app's own, or under the agent its drive's store (a
     /// named one, `EXACT_AGENT_STORAGE`, kept across the drive's launches).
     public let data: URL, cache: URL, temporary: URL
-    /// Who made the call being answered now (`app`, `tool`, `wake`): set by
-    /// the host before each `later`, read by an implementation at its entry,
-    /// as a capture's first lease is refused to a tool's read (LLP 1133.009 D6).
+    /// Who made the call being answered now (`app`, `tool`, `wake`,
+    /// `action`, `device`, or `press`: a live press of a recording control,
+    /// which may start the microphone, LLP 1126.004 D4): set by the host before each `later`,
+    /// read by an implementation at its entry, as a capture's first lease is
+    /// refused to a tool's read (LLP 1133.009 D6).
     public var origin = "app"
     /// The runner's number for the send being answered now, set beside
     /// `origin`: the one `cancel(_:)` names when the call is let go (LLP
@@ -907,7 +909,7 @@ public final class ExactTrackEntry {
 /// joining takes the track's lease (D6), and tells it the track's changes.
 public protocol ExactTrackOwner: AnyObject {
     /// `consumer` joins track `id`; `start` is an explicit start, which
-    /// reopens an idle track; `origin` is `app`, `tool` or `wake`.
+    /// reopens an idle track; `origin` is `app`, `tool`, `wake` or `press`.
     func subscribe(_ id: String, _ consumer: ExactTrackConsumer, start: Bool, origin: String) throws -> ExactSubscription
     /// `observer` joins track `id` as an output that is not a consumer (LLP
     /// 1133.027 D17 item 1): told what a consumer is told, attaching its

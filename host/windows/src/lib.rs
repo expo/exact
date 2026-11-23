@@ -41,7 +41,7 @@ mod orientation;
 mod pad_poll;
 #[cfg(windows)]
 mod pads;
-#[cfg(windows)]
+#[cfg_attr(not(windows), allow(dead_code))]
 mod placement;
 #[cfg(windows)]
 mod probe;

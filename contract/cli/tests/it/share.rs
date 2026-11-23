@@ -4,6 +4,7 @@
 //! answer is a journal line (D2, D6); a file is an `app:/` path the
 //! `fs.read` grant covers or an element's `#id`.
 
+use crate::source::{boxed, Source};
 use exact_kernel::Kernel;
 use exact_plan::Value;
 use exact_runner::share::{arm, Arm, File, Reach, Share};
@@ -29,13 +30,13 @@ const NO_SHEET: Reach = Reach {
     pictures: None,
 };
 
-fn boot() -> Runner<NoData> {
+fn boot() -> Runner<Source> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../corpus/share.contract");
     let plan = contract::compile(&std::fs::read_to_string(path).unwrap()).unwrap();
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -43,12 +44,12 @@ fn boot() -> Runner<NoData> {
     .unwrap()
 }
 
-fn view(r: &Runner<NoData>, test_id: &str) -> u32 {
+fn view(r: &Runner<Source>, test_id: &str) -> u32 {
     let key = r.kernel().find_by_test_id(test_id)[0];
     r.kernel().node_by_key(key).unwrap().id
 }
 
-fn press(r: &mut Runner<NoData>, test_id: &str) -> u32 {
+fn press(r: &mut Runner<Source>, test_id: &str) -> u32 {
     let id = view(r, test_id);
     r.dispatch(id, Event::Press).unwrap();
     id

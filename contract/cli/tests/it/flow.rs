@@ -1,4 +1,5 @@
 //! @ref LLP 1043.000 §3 D1–D4 — authoring and state-to-layout commits.
+use crate::source::boxed;
 use exact_kernel::{FlowShape, Kernel, Offer, WrapFlow};
 use exact_plan::Value;
 use exact_runner::{DataError, DataSource, Runner};
@@ -113,7 +114,14 @@ fn every_new_row_and_offsets_update_through_one_commit() {
 "#;
     let p = contract::compile(source).unwrap();
     let p = exact_plan::Plan::decode(&p.encode()).unwrap();
-    let mut r = Runner::boot(p, NoData, Kernel::with_monospace(), Default::default(), "/").unwrap();
+    let mut r = Runner::boot(
+        p,
+        boxed(NoData),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
     let root = r.roots()[0];
     let leaf = r.kernel().find_by_test_id("p")[0];
     r.kernel_mut()

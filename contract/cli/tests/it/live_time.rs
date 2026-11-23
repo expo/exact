@@ -1,4 +1,5 @@
 //! Live HTML time and progress, on a seek clock with no app tasks.
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, PropId};
 use exact_runner::{DataError, DataSource, Runner, Value};
 
@@ -9,7 +10,7 @@ impl DataSource for NoData {
     }
 }
 
-fn text(r: &Runner<NoData>, id: &str) -> String {
+fn text(r: &Runner<Source>, id: &str) -> String {
     r.kernel()
         .node_by_key(r.kernel().find_by_test_id(id)[0])
         .unwrap()
@@ -33,10 +34,10 @@ fn live_time_advances_without_evaluating_the_app() {
       progress start=0 end=120000 testId="progress"
       text observed.toString() testId="app-clock"
 "#;
-    let plan = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(source).unwrap(), boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -94,7 +95,7 @@ fn live_time_validates_its_author_forms() {
     }
 }
 
-fn prop(r: &Runner<NoData>, id: &str, p: PropId) -> String {
+fn prop(r: &Runner<Source>, id: &str, p: PropId) -> String {
     r.kernel()
         .node_by_key(r.kernel().find_by_test_id(id)[0])
         .unwrap()
@@ -109,7 +110,7 @@ fn duration_reservations_keep_the_initial_fields_and_grow_at_hour_digits() {
     let source = "component App\n  view\n    row\n      time datetime=0 format=\"timer\" testId=\"timer\"\n      time datetime=7200000 format=\"countdown\" testId=\"countdown\"\n";
     let mut r = Runner::boot(
         contract::compile(source).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -141,7 +142,7 @@ fn relative_zero_is_now_at_the_instant_and_thirty_seconds_afterward() {
             "component App\n  view\n    time datetime=0 format=\"relative\" testId=\"time\"\n",
         )
         .unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -173,7 +174,7 @@ fn an_unrelated_commit_does_not_call_the_time_formatter() {
     let calls = Rc::new(Cell::new(0));
     let mut r = Runner::boot(
         contract::compile(source).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::new(Box::new(Counting(calls.clone()))),
         Default::default(),
         "/",
@@ -243,7 +244,7 @@ component App
 
 #[test]
 fn relative_uses_the_kernel_unit_and_rounding_above_an_hour() {
-    let mut r = Runner::boot(contract::compile("component App\n  view\n    time datetime=9000000 format=\"relative\" testId=\"time\"\n").unwrap(), NoData,
+    let mut r = Runner::boot(contract::compile("component App\n  view\n    time datetime=9000000 format=\"relative\" testId=\"time\"\n").unwrap(), boxed(NoData),
         Kernel::with_monospace(), Default::default(), "/").unwrap();
     assert_eq!(text(&r, "time"), "in 3 hr.");
     assert_eq!(r.timer_due_ms(), Some(60000.));
@@ -267,7 +268,7 @@ fn a_runtime_inverted_interval_has_no_range_and_can_recover() {
 "#;
     let mut r = Runner::boot(
         contract::compile(source).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -305,10 +306,10 @@ fn a_formatted_live_time_is_as_wide_without_its_fallback() {
         text "A fallback far longer than the formatted text"
       time datetime=-120000 format="relative" testId="without"
 "#;
-    let plan = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(source).unwrap(), boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -349,10 +350,10 @@ fn a_live_time_in_a_portal_keeps_ticking_after_its_destination_dies() {
       box portal="slot" testId="card"
         time datetime=0 format="timer" testId="timer"
 "#;
-    let plan = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(source).unwrap(), boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

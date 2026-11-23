@@ -2391,6 +2391,22 @@ web, which compiles no control, says `absent`:
 bun scripts/agent.mjs ios --app <app> "state controls"
 ```
 
+A qualification build (LLP 1126.004 §6d) offers on iOS what items 5 and 7
+omit only for want of a device run, so the device run can be made:
+`EXACT_QUALIFY_CONTROLS=1 bun host/apple/build.mjs <app> --ios --device --run`.
+Such a placement carries the omission it lifts, `{"offered": [{"from":
+"26.0", "intent": "tool"}], "qualifying": "control-process"}`, so its
+compatibility id is never an ordinary build's; a bake with production trust
+(`--release`, `--archive`, a deploy) refuses the variable. A plain tool's
+intent then asks to run in the app (`supportedModes = .background` from 26,
+`allowedExecutionTargets = .main` from 27); a recording tool's
+(`"intent": "recording"`) is an `AudioRecordingIntent` and a
+`LiveActivityIntent`, and while its press runs, the tool and the `then`s of
+its sends may call `getUserMedia` for audio alone and `startMediaRecorder`
+with the app not in front. A press never asks for the microphone: with its
+permission not yet granted, `getUserMedia` fails `NotAllowedError`.
+Recorder's `record` control is the device run's subject.
+
 ## Apple bundle metadata
 
 Exact writes Info.plist keys and entitlements from grants, named manifest fields,
@@ -2667,10 +2683,28 @@ Each new connection asks again. One driver attaches at a time, to one window: `-
 the window when several are open, and a PID chooses among several running copies.
 The connection only reads: `tree`, `state` (masked, as the tree shows a password field), `logs`,
 `layout`, `perf` and `screenshot` (the window server's picture of the window, which is not brought
-forward). The app refuses `clock` with `live-clock` and input with `input-not-granted`, and the
-driver refuses launch flags such as `--storage`, `--live` and `--url`. Only a Mac app that
-`host/apple/build.mjs` builds to run carries the listener; a release, archive or embedded build has
-none of it.
+forward). The app's clock is never taken, seeked, settled or landed: `clock` is refused with
+`live-clock`, except the waits, which watch the app's own wall clock through masked `state` reads
+while its timers go on. `clock until state <path> == <literal> within <ms>` refuses a value a
+password field masks; `clock held [<target>…] [<n>s|<n>ms]` waits for one reply to each held request;
+`clock replies [<n>s|<n>ms]` reports `{clock, settled, pending, waitedMs}` at the first read with no
+data request in flight (held, timer and device entries aside), or after 20 s. A read still out at a
+wait's deadline ends the connection. Input is refused with `input-not-granted`, and the driver
+refuses launch flags such as `--storage`, `--live` and `--url`.
+
+`bun scripts/agent.mjs ios --app <app> --attach [--sim <udid|name>] tree state logs layout "screenshot now.png"`
+reads the development app open in an iOS simulator the same way. The simulator is the one `--sim`
+or `EXACT_SIM` names, else the one a drive would choose; nothing is booted. The person opens the
+developer menu (four fingers, or ⌘D) and chooses **Enable Agent Attach**, then **Allow** in the
+alert the driver's connection raises; **Agent Attached** shows at the top of the screen while the
+driver is connected. **Detach Agent** in the same menu ends it, and so does sending the app to the
+background. The picture is UIKit's snapshot of the app's window, without the indicator. The
+driver names a simulator that runs the app when the selected one does not.
+
+Only a Mac app or an iOS simulator app that `host/apple/build.mjs` builds to run carries the
+listener; a release, archive, embedded, physical-device or Apple TV build has none of it, and the
+driver refuses Android, Windows, Linux, the web, tvOS, watchOS and a physical iPhone before it
+runs any platform tool.
 
 ### Inspect work and native presentation
 
@@ -3078,7 +3112,8 @@ answers; `doc:/` handles do not need that store.
 Generated declarations export Ibex2's `Storage` and related types; Rust sources
 can use the same implementations through `ibex2::host`.
 
-Native hosts, including Apple, bundle the pinned SQLite (3.54.1). Apple's
+Native hosts, including Apple, bundle the pinned SQLite (3.54.1); the web's
+storage worker runs the same release's official WebAssembly build. Apple's
 minimum supported OS versions have older SQLite libraries than rusqlite
 requires (3.45.3), so linking the OS library can prevent the app from launching.
 Rust and TypeScript storage share the bundled provider. Swift code in the same
@@ -5728,9 +5763,34 @@ carries nothing: the answer reads again, as LLP 1016.002's `native.watch`.
 Call it inside an answer, on a `doc:` path the app may read (`fs.read
 doc:/`):
 
+```contract
+component Notes
+  state folder = ""
+  resource names = markdownIn(folder) when folder != "" as shape string[] else empty()
+  action pick
+    showDirectoryPicker("folder")
+  action chose(value)
+    folder = value
+  view
+    column
+      input id="folder" display="none" change=chose
+      button press=pick
+        text "Choose a folder"
+      for n in names key=n
+        text n
+```
+
 ```ts
-await storage.fs.watch(folder);                  // its own entries
-return (await storage.fs.readdir(folder)).filter((n) => n.endsWith('.md'));
+import type { Answer, Sources } from './app.contract.d.ts';
+
+export const grants = 'fs.read doc:/';
+const sources: Sources = {
+  markdownIn: async ([folder], _store, storage) => {
+    await storage.fs.watch(folder); // its own entries
+    return (await storage.fs.readdir(folder)).filter((n) => n.endsWith('.md'));
+  },
+};
+export const answer: Answer = (source, args, store, storage, native) => sources[source](args, store, storage, native);
 ```
 
 A Rust source records the same topic:
@@ -5758,12 +5818,43 @@ The kept set is File ▸ Open Recent's: Clear Menu, or an entry falling off
 the end of the list, ends its reopening (a window that has it open keeps it
 until the app quits).
 
+```contract
+shape Kept
+  path: string
+  name: string
+
+shape Done
+  ok: bool
+
+component Recent
+  resource kept = recentDocuments() as shape Kept[] else empty()
+  mutation forgot as shape Done refreshes kept
+  action forget(path: string)
+    send forgot = forgetDocument(path)
+  view
+    column
+      for k in kept key=k.path
+        button press=forget(k.path)
+          text `Forget ${k.name}`
+```
+
 ```ts
+import type { Answer, Sources } from './app.contract.d.ts';
+
 export const grants = ['fs.read doc:/', 'doc.keep'].join('\n');
-storage.fs.watch('doc:/');                       // asked again when the list changes
-const recent = await storage.fs.recentDocuments();
-// [{ path: 'doc:/12/notes', name: 'notes', kind: 'directory', mode: 'readwrite', opened: 1760572800000 }, …]
-await storage.fs.forgetDocument(recent[0].path); // off the list and Open Recent; ENOENT if not kept
+const sources: Sources = {
+  recentDocuments: async (_args, _store, storage) => {
+    storage.fs.watch('doc:/'); // asked again when the list changes
+    const recent = await storage.fs.recentDocuments();
+    // [{ path: 'doc:/12/notes', name: 'notes', kind: 'directory', mode: 'readwrite', opened: 1760572800000 }, …]
+    return recent.map(({ path, name }) => ({ path, name }));
+  },
+  forgetDocument: async ([path], _store, storage) => {
+    await storage.fs.forgetDocument(path); // off the list and Open Recent; ENOENT if not kept
+    return { ok: true };
+  },
+};
+export const answer: Answer = (source, args, store, storage, native) => sources[source](args, store, storage, native);
 ```
 
 A Rust source sends `fs.recentDocuments` and `fs.forgetDocument` storage

@@ -2,17 +2,10 @@
 //! resolved in one session for a place, and what tells its observers.
 
 use crate::scratch::Scratch;
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{ColorValue, Kernel};
-use exact_plan::{Plan, Value};
-use exact_runner::{design, DataError, DataSource, Place, Runner};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_plan::Plan;
+use exact_runner::{design, Place, Runner};
 
 const DESIGN: &str = "forma t\n\naxes\n  dark-style = black | dim  under scheme=dark\n\ntheme\n  ink = light-dark(#111111, #eeeeee)\n    when dark-style=dim: light-dark(#111111, #cccccc)\n  CanvasText = #101010\n";
 const VIEW: &str = "component App\n  view\n    column color=\"ink\"\n      text \"a\" testId=\"outer\"\n      column testId=\"card\" -exact-mode=\"dark-style=dim\" color=\"ink\"\n        text \"b\" testId=\"inner\"\n";
@@ -26,10 +19,10 @@ fn plan(name: &str, design: &str) -> Plan {
     plan
 }
 
-fn booted(plan: Plan) -> Runner<NoData> {
+fn booted(plan: Plan) -> Runner<Source> {
     let mut r = Runner::boot(
-        contract::bake(plan, NoData).unwrap(),
-        NoData,
+        contract::bake(plan, boxed(NoData)).unwrap(),
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -45,7 +38,7 @@ fn parsed(text: &str) -> ColorValue {
         .unwrap()
 }
 
-fn node(r: &Runner<NoData>, id: &str) -> Place {
+fn node(r: &Runner<Source>, id: &str) -> Place {
     let k = r.kernel();
     Place::Node(k.node_by_key(k.find_by_test_id(id)[0]).unwrap().id)
 }
@@ -101,7 +94,7 @@ fn inputs_move_on_every_input_and_only_then() {
     let mut r = booted(a.clone());
     let place = node(&r, "outer");
     let mut last = r.forma().inputs(place);
-    let mut moved = |r: &mut Runner<NoData>, what: &str| {
+    let mut moved = |r: &mut Runner<Source>, what: &str| {
         let now = r.forma().inputs(place);
         assert_ne!(now, last, "{what} moves the inputs");
         last = now;
@@ -183,7 +176,7 @@ fn a_refused_scrub_frame_is_not_recorded_as_shown() {
         });
         edit
     };
-    let canvas = |r: &mut Runner<NoData>| r.forma().color("CanvasText", Place::Root);
+    let canvas = |r: &mut Runner<Source>| r.forma().color("CanvasText", Place::Root);
     r.apply_live(&frame("one", 1, "#202020")).unwrap();
     assert_eq!(canvas(&mut r), Some(parsed("#202020")));
     let refused = frame("two", 2, "nonesuch");
@@ -323,8 +316,8 @@ fn an_app_that_can_name_tokens_outside_its_views_keeps_them_all() {
     );
     assert_eq!(names(&native), ["brand", "badge.ink", "CanvasText"]);
     let mut r = Runner::boot(
-        contract::bake(native, NoData).unwrap(),
-        NoData,
+        contract::bake(native, boxed(NoData)).unwrap(),
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

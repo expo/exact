@@ -2,6 +2,7 @@
 //! one request in flight, each asked in a `next` commit of its own after
 //! the reply before it and its `then`.
 
+use crate::source::{boxed, Read, Source};
 use exact_kernel::Kernel;
 use exact_runner::{
     Answer, DataError, DataSource, FailureKind, Outcome, Request, Response, Runner, RunnerError,
@@ -133,8 +134,8 @@ impl DataSource for Desk {
             self.asks.push(format!("{source}:{op}"));
         }
         match source {
-            // An unknown source refuses the ask. Unavailable from a Rust mutation
-            // is an accepted domain failure, so it does not exercise queue rollback.
+            // A source the desk does not answer: the runner refuses the send.
+            // (`Unavailable` would commit it with its receipt failed.)
             "broken" => Err(DataError::UnknownSource(source.into())),
             "storage" => Ok(Answer::Later(Request::storage(b"load".to_vec()))),
             "two" => Ok(Answer::Later(Request::post_json(
@@ -187,11 +188,11 @@ impl DataSource for Desk {
     }
 }
 
-fn boot_with(src: &str, desk: Desk) -> Runner<Desk> {
-    let baked = contract::bake(contract::compile(src).unwrap(), Desk::default()).unwrap();
+fn boot_with(src: &str, desk: Desk) -> Runner<Source> {
+    let baked = contract::bake(contract::compile(src).unwrap(), boxed(Desk::default())).unwrap();
     Runner::boot(
         baked,
-        desk,
+        boxed(desk),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -199,7 +200,7 @@ fn boot_with(src: &str, desk: Desk) -> Runner<Desk> {
     .unwrap()
 }
 
-fn boot(later: bool) -> Runner<Desk> {
+fn boot(later: bool) -> Runner<Source> {
     boot_with(
         APP,
         Desk {
@@ -217,14 +218,14 @@ fn reply(body: &str) -> Outcome {
     })
 }
 
-fn slot(r: &Runner<Desk>, name: &str) -> String {
+fn slot(r: &Runner<Source>, name: &str) -> String {
     r.slot(name)
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string()
 }
 
-fn busy(r: &Runner<Desk>) -> bool {
+fn busy(r: &Runner<Source>) -> bool {
     let k = r.kernel();
     let key = k.find_by_test_id("busy")[0];
     k.node_by_key(key)
@@ -234,7 +235,7 @@ fn busy(r: &Runner<Desk>) -> bool {
         == Some("busy")
 }
 
-fn tickets(r: &mut Runner<Desk>) -> Vec<u64> {
+fn tickets(r: &mut Runner<Source>) -> Vec<u64> {
     r.take_requests().iter().map(|q| q.ticket).collect()
 }
 
@@ -244,13 +245,13 @@ fn two_sends_in_one_action_answered_now_run_in_order_each_with_its_then() {
     r.act("pair", vec![]).unwrap();
     // The first is asked in the action; the second waits for its reply's
     // `then`, which reads the slot as that reply set it.
-    assert_eq!(r.data().asks, ["save:a"]);
+    assert_eq!(r.source::<Desk>().asks, ["save:a"]);
     assert_eq!(r.queued(), [("wrote".to_string(), 1)]);
     assert!(busy(&r), "a waiting send is pending");
     assert_eq!(r.timer_due_ms(), Some(0.0));
     let commits = r.advance(0.0).unwrap();
     assert_eq!(commits.len(), 3, "then a, next b, then b");
-    assert_eq!(r.data().asks, ["save:a", "save:b"]);
+    assert_eq!(r.source::<Desk>().asks, ["save:a", "save:b"]);
     assert_eq!(slot(&r, "log"), " a b");
     assert!(!busy(&r));
     assert_eq!(r.timer_due_ms(), None);
@@ -265,7 +266,7 @@ fn two_sends_answered_later_ask_one_at_a_time_with_send_time_arguments() {
     r.act("tap", vec![]).unwrap();
     let first = tickets(&mut r);
     assert_eq!(first.len(), 1, "one request in flight");
-    assert_eq!(r.data().asks, ["save:x"]);
+    assert_eq!(r.source::<Desk>().asks, ["save:x"]);
     assert_eq!(r.queued(), [("wrote".to_string(), 1)]);
     assert_eq!(
         r.timer_due_ms(),
@@ -277,7 +278,7 @@ fn two_sends_answered_later_ask_one_at_a_time_with_send_time_arguments() {
     // Its `then` first, then the waiting send, asked with `y`.
     r.advance(0.0).unwrap();
     assert_eq!(slot(&r, "log"), " x");
-    assert_eq!(r.data().asks, ["save:x", "save:y"]);
+    assert_eq!(r.source::<Desk>().asks, ["save:x", "save:y"]);
     let second = tickets(&mut r);
     assert_eq!(second.len(), 1);
     assert!(busy(&r));
@@ -298,12 +299,12 @@ fn replaceable_queue_tail_preserves_first_write_and_barriers() {
             ..Desk::default()
         },
     );
-    let send = |r: &mut Runner<Desk>, body: &str| {
+    let send = |r: &mut Runner<Source>, body: &str| {
         r.act("one", vec![Value::str(body)]).unwrap();
     };
     send(&mut r, "room:first");
     let first = tickets(&mut r);
-    assert_eq!(r.data().asks, ["save:room:first"]);
+    assert_eq!(r.source_ref::<Desk>().asks, ["save:room:first"]);
     for i in 0..160 {
         send(&mut r, &format!("room:https://example.org/{i}"));
     }
@@ -325,13 +326,13 @@ fn replaceable_queue_tail_preserves_first_write_and_barriers() {
     ] {
         r.fulfill(ticket, reply("ok")).unwrap();
         r.advance(0.0).unwrap();
-        assert_eq!(r.data().asks.last().unwrap(), expected);
+        assert_eq!(r.source_ref::<Desk>().asks.last().unwrap(), expected);
         ticket = tickets(&mut r)[0];
     }
     r.fulfill(ticket, reply("ok")).unwrap();
     r.advance(0.0).unwrap();
     assert_eq!(
-        r.data().asks,
+        r.source_ref::<Desk>().asks,
         [
             "save:room:first",
             "save:room:https://example.org/159",
@@ -370,17 +371,17 @@ fn failure_from_the_replacement_surfaces_and_a_later_save_recovers() {
     r.fulfill(first, reply("ok")).unwrap();
     r.advance(0.0).unwrap();
     let newest = tickets(&mut r)[0];
-    r.data().fail_parse = true;
+    r.source::<Desk>().fail_parse = true;
     r.fulfill(newest, reply("ok")).unwrap();
     assert_eq!(r.derive("why"), Some(&Value::str("FULL")));
     assert!(r.queued().is_empty());
-    r.data().fail_parse = false;
+    r.source::<Desk>().fail_parse = false;
     r.act("one", vec![Value::str("room:retry")]).unwrap();
     let retry = tickets(&mut r)[0];
     r.fulfill(retry, reply("ok")).unwrap();
     assert_eq!(r.derive("why"), Some(&Value::str("ok")));
     assert_eq!(
-        r.data().asks,
+        r.source_ref::<Desk>().asks,
         ["save:room:in-flight", "save:room:latest", "save:room:retry"]
     );
 }
@@ -419,7 +420,7 @@ fn replacement_leaves_the_previous_tail_if_the_action_refuses() {
     assert_eq!(r.queued(), [("wrote".to_string(), 1)]);
     r.fulfill(first, reply("ok")).unwrap();
     r.advance(0.0).unwrap();
-    assert_eq!(r.data().asks.last().unwrap(), "save:room:previous");
+    assert_eq!(r.source_ref::<Desk>().asks.last().unwrap(), "save:room:previous");
 }
 
 #[test]
@@ -493,7 +494,7 @@ fn a_send_while_one_is_in_flight_waits_and_a_queue_without_then_is_due_alone() {
     assert_eq!(r.timer_due_ms(), Some(0.0));
     r.advance(0.0).unwrap();
     assert_eq!(tickets(&mut r).len(), 1);
-    assert_eq!(r.data().asks, ["save:p", "save:q"]);
+    assert_eq!(r.source::<Desk>().asks, ["save:p", "save:q"]);
 }
 
 #[test]
@@ -513,7 +514,10 @@ fn a_next_refused_by_its_own_ask_is_dropped_and_its_successor_goes_before_a_time
     assert_eq!(r.queued(), [("rec".to_string(), 1)]);
     assert_eq!(r.timer_due_ms(), Some(0.0), "the successor is due");
     r.advance(1000.0).unwrap();
-    assert_eq!(r.data().asks, ["save:p", "broken:z", "save:after"]);
+    assert_eq!(
+        r.source::<Desk>().asks,
+        ["save:p", "broken:z", "save:after"]
+    );
     assert_eq!(slot(&r, "log"), " t:after", "asked before the timer");
 }
 
@@ -521,7 +525,7 @@ fn a_next_refused_by_its_own_ask_is_dropped_and_its_successor_goes_before_a_time
 fn a_next_refused_by_settlement_stalls_until_a_commit_changes_state() {
     let mut r = boot(false);
     r.act("pair", vec![]).unwrap();
-    r.data().fail_check = true;
+    r.source::<Desk>().fail_check = true;
     // The `then` stands; the `next` re-reads `probe`, whose source refuses.
     assert!(r.advance(0.0).is_err());
     assert_eq!(slot(&r, "log"), " a");
@@ -534,13 +538,13 @@ fn a_next_refused_by_settlement_stalls_until_a_commit_changes_state() {
     assert!(!r.must_finish());
     assert!(busy(&r));
     // A commit that changes nothing leaves it stalled.
-    let checks = r.data().checks;
+    let checks = r.source::<Desk>().checks;
     r.act("nothing", vec![]).unwrap();
     assert_eq!(r.timer_due_ms(), None);
     assert!(r.advance(10.0).unwrap().is_empty());
-    assert_eq!(r.data().checks, checks, "not retried");
+    assert_eq!(r.source::<Desk>().checks, checks, "not retried");
     // One that changes a slot asks it again.
-    r.data().fail_check = false;
+    r.source::<Desk>().fail_check = false;
     r.act("bump", vec![]).unwrap();
     assert_eq!(r.timer_due_ms(), Some(10.0));
     r.advance(10.0).unwrap();
@@ -558,17 +562,17 @@ fn frame_tasks_fire_every_frame_while_a_next_is_stalled() {
         let mut r = boot_with(&src, Desk::default());
         r.present_frames(true);
         r.act("pair", vec![]).unwrap();
-        r.data().fail_check = true;
+        r.source::<Desk>().fail_check = true;
         for k in 1..=5 {
             let a = r.frame(k as f64 * 16.0);
             // Each frame's own frame task fires, whatever its prelude met.
             assert!(!a.receipts.is_empty(), "frame {k} ({task}): {:?}", a.error);
         }
-        let checks = r.data().checks;
+        let checks = r.source::<Desk>().checks;
         r.frame(100.0);
         // A frame task that changes nothing never clears the stall; one
         // that changes a slot lets the `next` try again on the next wake.
-        assert_eq!(r.data().checks > checks, retried, "{task}");
+        assert_eq!(r.source::<Desk>().checks > checks, retried, "{task}");
         assert_eq!(r.queued(), [("wrote".to_string(), 1)]);
     }
 }
@@ -583,7 +587,10 @@ fn a_refused_then_does_not_stall_its_queue() {
     assert!(r.advance(0.0).is_err());
     assert_eq!(r.timer_due_ms(), Some(0.0));
     r.advance(0.0).unwrap();
-    assert_eq!(r.data().asks, ["save:boom", "broken:then", "save:after"]);
+    assert_eq!(
+        r.source::<Desk>().asks,
+        ["save:boom", "broken:then", "save:after"]
+    );
     assert_eq!(slot(&r, "log"), " after");
 }
 
@@ -605,16 +612,16 @@ fn a_failure_that_brings_no_answer_frees_the_queue() {
     let mut r = boot(true);
     r.act("pair", vec![]).unwrap();
     let t = tickets(&mut r);
-    r.data().fail_parse = true;
+    r.source::<Desk>().fail_parse = true;
     let _ = r.fulfill(t[0], reply("ok"));
-    r.data().fail_parse = false;
+    r.source::<Desk>().fail_parse = false;
     assert!(r
         .journal()
         .any(|l| l.contains("failed and is no longer pending: it is not retried")));
     assert_eq!(slot(&r, "log"), "", "no `then` for no answer");
     assert_eq!(r.timer_due_ms(), Some(0.0));
     r.advance(0.0).unwrap();
-    assert_eq!(r.data().asks, ["save:a", "save:b"]);
+    assert_eq!(r.source::<Desk>().asks, ["save:a", "save:b"]);
     let t = tickets(&mut r);
     r.fulfill(t[0], reply("ok")).unwrap();
     r.advance(0.0).unwrap();
@@ -637,11 +644,11 @@ fn a_two_step_send_completes_behind_a_second_send() {
     let step2 = tickets(&mut r);
     assert_eq!(step2.len(), 1, "one more round, same send");
     assert_eq!(r.timer_due_ms(), None, "not a reply: no `then`, no `next`");
-    assert_eq!(r.data().asks, ["two:m"]);
+    assert_eq!(r.source::<Desk>().asks, ["two:m"]);
     r.fulfill(step2[0], reply("done")).unwrap();
     r.advance(0.0).unwrap();
     assert_eq!(slot(&r, "log"), " m");
-    assert_eq!(r.data().asks, ["two:m", "save:n"]);
+    assert_eq!(r.source::<Desk>().asks, ["two:m", "save:n"]);
     let t = tickets(&mut r);
     r.fulfill(t[0], reply("ok")).unwrap();
     r.advance(0.0).unwrap();
@@ -663,7 +670,7 @@ fn the_sixty_fifth_waiter_refuses_its_action() {
         Err(RunnerError::QueueFull { mutation }) if mutation == "wrote"
     ));
     assert_eq!(r.queued(), [("wrote".to_string(), 64)]);
-    assert_eq!(r.data().asks.len(), 1);
+    assert_eq!(r.source::<Desk>().asks.len(), 1);
 }
 
 #[test]
@@ -681,14 +688,14 @@ fn poison_and_reload_forget_waiting_sends_without_asking() {
         .any(|l| l.ends_with(" forgot 2 waiting sends (wrote)")));
     assert!(r.queued().is_empty());
     assert_eq!(r.timer_due_ms(), None);
-    assert_eq!(r.data().asks, ["save:a"]);
+    assert_eq!(r.source::<Desk>().asks, ["save:a"]);
     // A reload carries the slot, never the queue, and says so once.
     let again = Runner::boot_carrying(
         contract::compile(APP).unwrap(),
-        Desk {
+        boxed(Desk {
             later: true,
             ..Desk::default()
-        },
+        }),
         Kernel::with_monospace(),
         &carried,
         Default::default(),
@@ -762,7 +769,7 @@ fn a_shaped_failure_is_an_answer_and_runs_then() {
     .unwrap();
     r.advance(0.0).unwrap();
     assert_eq!(slot(&r, "log"), " offline");
-    assert_eq!(r.data().asks, ["save:a", "save:b"]);
+    assert_eq!(r.source::<Desk>().asks, ["save:a", "save:b"]);
 }
 
 /// LLP 1092 D3, D8: a `next` whose answer makes a task's key no key is
@@ -789,7 +796,7 @@ fn a_next_refused_by_a_task_key_keeps_its_head_and_stalls() {
     // A change asks it again; it is refused the same way and waits again.
     r.act("bump", vec![]).unwrap();
     assert!(r.advance(0.0).is_err());
-    assert_eq!(r.data().asks, ["save:ok", "save:nan", "save:nan"]);
+    assert_eq!(r.source::<Desk>().asks, ["save:ok", "save:nan", "save:nan"]);
     assert_eq!(r.queued(), [("rec".to_string(), 1)]);
 }
 
@@ -836,7 +843,7 @@ fn a_task_key_refuses_a_reply_and_a_commit_made_again() {
     );
     r.act("arm", vec![]).unwrap();
     let t = tickets(&mut r);
-    r.data().fail_parse = true;
+    r.source::<Desk>().fail_parse = true;
     assert!(matches!(
         r.fulfill(t[0], reply("ok")),
         Err(RunnerError::TaskKey { .. })
@@ -887,16 +894,16 @@ impl DataSource for Shelf {
 #[test]
 fn a_next_answered_at_once_forces_what_it_refreshes() {
     let src = "shape Ack\n  op: string\n  n: number\ncomponent App\n  resource items = items() as shape number\n  mutation save as shape Ack queue refreshes items\n  action pair\n    send save = save(\"a\")\n    send save = save(\"b\")\n  view\n    text `${items}`\n";
-    let baked = contract::bake(contract::compile(src).unwrap(), Shelf::default()).unwrap();
+    let baked = contract::bake(contract::compile(src).unwrap(), boxed(Shelf::default())).unwrap();
     let mut r = Runner::boot(
         baked,
-        Shelf::default(),
+        boxed(Shelf::default()),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let items = |r: &mut Runner<Shelf>| {
+    let items = |r: &mut Runner<Source>| {
         r.take_requests()
             .iter()
             .filter(|q| q.target == "items")
@@ -950,9 +957,9 @@ fn data_ready_s_sends_open_a_gate_and_a_bad_key_refuses_them() {
         let loaded = std::rc::Rc::new(std::cell::Cell::new(false));
         let r = Runner::boot(
             contract::compile(src).unwrap(),
-            Late {
+            boxed(Late {
                 loaded: loaded.clone(),
-            },
+            }),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -1024,7 +1031,7 @@ fn mutation_failures_are_readable_clear_on_send_and_do_not_run_then() {
     );
     r.act("one", vec![Value::str("a")]).unwrap();
     let t = tickets(&mut r);
-    r.data().fail_parse = true;
+    r.source::<Desk>().fail_parse = true;
     r.fulfill(t[0], reply("ok")).unwrap();
     assert_eq!(r.derive("broken"), Some(&Value::Bool(true)));
     assert_eq!(r.derive("why"), Some(&Value::str("FULL")));
@@ -1035,13 +1042,13 @@ fn mutation_failures_are_readable_clear_on_send_and_do_not_run_then() {
         Some(&Value::str("ok")),
         "assignment clears a queued mutation failure"
     );
-    r.data().fail_parse = false;
-    r.data().malformed = true;
+    r.source::<Desk>().fail_parse = false;
+    r.source::<Desk>().malformed = true;
     r.act("one", vec![Value::str("bad")]).unwrap();
     let t = tickets(&mut r);
     r.fulfill(t[0], reply("ok")).unwrap();
     assert_eq!(r.derive("why"), Some(&Value::str("shape")));
-    r.data().malformed = false;
+    r.source::<Desk>().malformed = false;
     r.act("one", vec![Value::str("b")]).unwrap();
     assert_eq!(r.derive("why"), Some(&Value::str("ok")));
     assert_eq!(r.derive("broken"), Some(&Value::Bool(false)));
@@ -1064,11 +1071,11 @@ fn a_queue_next_clears_failure_for_immediate_and_deferred_answers() {
         );
         r.act("pair", vec![]).unwrap();
         let first = tickets(&mut r)[0];
-        r.data().fail_parse = true;
+        r.source::<Desk>().fail_parse = true;
         r.fulfill(first, reply("ok")).unwrap();
         assert_eq!(r.derive("why"), Some(&Value::str("FULL")));
-        r.data().fail_parse = false;
-        r.data().later = deferred;
+        r.source::<Desk>().fail_parse = false;
+        r.source::<Desk>().later = deferred;
         r.advance(0.0).unwrap();
         assert_eq!(
             r.derive("why"),
@@ -1095,15 +1102,15 @@ fn a_refused_queue_next_restores_the_previous_failure() {
     );
     r.act("pair", vec![]).unwrap();
     let first = tickets(&mut r)[0];
-    r.data().fail_parse = true;
+    r.source::<Desk>().fail_parse = true;
     r.fulfill(first, reply("ok")).unwrap();
-    r.data().fail_parse = false;
-    r.data().later = false;
-    r.data().fail_check = true;
+    r.source::<Desk>().fail_parse = false;
+    r.source::<Desk>().later = false;
+    r.source::<Desk>().fail_check = true;
     assert!(r.advance(0.0).is_err());
     assert_eq!(r.derive("why"), Some(&Value::str("FULL")));
     assert_eq!(r.queued(), [("wrote".to_string(), 1)]);
-    r.data().fail_check = false;
+    r.source::<Desk>().fail_check = false;
     r.act("bump", vec![]).unwrap();
     r.advance(0.0).unwrap();
     assert_eq!(r.derive("why"), Some(&Value::str("ok")));
@@ -1135,7 +1142,7 @@ fn immediate_mutation_refusals_expose_domain_failures_and_clear_on_retry() {
         assert_eq!(r.derive("why"), Some(&Value::str("FULL")));
         assert_eq!(slot(&r, "log"), "");
         assert!(!busy(&r));
-        r.data().fail_now = false;
+        r.source::<Desk>().fail_now = false;
         r.act("one", vec![Value::str("b")]).unwrap();
         assert_eq!(r.derive("broken"), Some(&Value::Bool(false)));
         assert_eq!(r.derive("why"), Some(&Value::str("ok")));

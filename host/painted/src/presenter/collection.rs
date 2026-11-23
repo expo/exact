@@ -83,8 +83,8 @@ struct Cursor {
     sequence: u64,
     corrected: Option<u64>,
     dimensions: Option<(f64, f64, f64, [f64; 2])>,
-    /// The last report.
-    sent: Option<CollectionFeedback>,
+    /// The last report and the velocity it led by.
+    sent: Option<(CollectionFeedback, f64)>,
     queued: bool,
     requested_top: Option<f64>,
     model_scroll: Option<ModelScroll>,
@@ -242,9 +242,13 @@ impl State {
     pub(super) fn pending(&self) -> bool {
         !self.queue.is_empty()
     }
-    /// `view` reports again in this pass or the next.
+    /// Collection `view` reports again in this pass or the next.
     fn requeue(&mut self, view: ViewId) {
-        if let Some(cursor) = self.cursors.get_mut(&view).filter(|c| !c.queued) {
+        if let Some(cursor) = self
+            .cursors
+            .get_mut(&view)
+            .filter(|c| !c.ordinary && !c.queued)
+        {
             cursor.queued = true;
             self.queue.push_back(view);
         }
@@ -1002,12 +1006,12 @@ impl<D: DataSource> Presenter<D> {
         self.dirty
     }
 
-    /// The scrolled list's rows that show where its port now is start what
-    /// waited for that ([`exact_runner::Runner::collection_shown`]), without
-    /// a report: for a pass that waits.
+    /// The scrolled list `view`'s rows that show where its port now is start
+    /// what waited for that ([`exact_runner::Runner::collection_shown`]),
+    /// without a report: for a pass that waits.
     #[cfg(target_os = "android")]
-    pub(crate) fn show_collection(&mut self) {
-        let Some(view) = self.last_wheel else {
+    pub(crate) fn show_collection(&mut self, view: Option<ViewId>) {
+        let Some(view) = view else {
             return;
         };
         let Some(snapshot) = self.host.collection(view) else {
@@ -1033,12 +1037,24 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
-    /// Slice the next passes ([`State::limit`]) with the scrolled list's
-    /// velocity, or build whole windows (`None`).
-    #[cfg(target_os = "android")]
-    pub(crate) fn slice_collections(&mut self, limit: Option<u32>, velocity: f64) {
+    /// Slice the next passes ([`State::limit`]) with the scrolled list
+    /// `view`'s velocity, or build whole windows (`None`). The host names the
+    /// list: a finger's drag or fling moves one no wheel did.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn slice_collections(
+        &mut self,
+        view: Option<ViewId>,
+        limit: Option<u32>,
+        velocity: f64,
+    ) {
         self.collection.limit = limit;
-        self.collection.velocity = self.last_wheel.map(|v| (v, velocity));
+        let lead = view.filter(|_| velocity != 0.0).map(|v| (v, velocity));
+        let previous = std::mem::replace(&mut self.collection.velocity, lead);
+        if lead != previous {
+            for (view, _) in previous.into_iter().chain(lead) {
+                self.collection.requeue(view);
+            }
+        }
     }
 
     /// Whether any list owes another report (a slice left rows unbuilt).
@@ -1346,17 +1362,24 @@ impl<D: DataSource> Presenter<D> {
                         == Some(view)
                 }),
             };
-            // Unchanged facts, the padding among them (LLP 1010 §6.9), are
-            // news only to a list a slice left pending.
-            let unchanged = cursor.sent.as_ref() == Some(&feedback)
+            // A `scrollIntoView` owns the port until the reader moves it.
+            // The report then carries the reader's travel and ends the request
+            // (LLP 1070.000 §2.5).
+            let reader_moved = cursor.reader_moved;
+            let velocity = (self.collection.velocity)
+                .filter(|(v, _)| *v == view && (!snapshot.seeking || reader_moved))
+                .map_or(0.0, |(_, v)| v);
+            let unchanged = cursor
+                .sent
+                .as_ref()
+                .is_some_and(|(last, lead)| *last == feedback && *lead == velocity)
                 && !snapshot.pending
                 && cursor.animating == gliding.is_some();
             let landing = cursor.animating && gliding.is_none();
             if !unchanged {
-                cursor.sent = Some(feedback.clone());
+                cursor.sent = Some((feedback.clone(), velocity));
                 cursor.animating = gliding.is_some();
             }
-            let reader_moved = cursor.reader_moved;
             if let Some(completion) = requested_scroll {
                 self.scroll_end_requested(view, before.unwrap_or_default(), completion);
             } else if tracks_end {
@@ -1365,14 +1388,6 @@ impl<D: DataSource> Presenter<D> {
             if unchanged {
                 continue;
             }
-            // A `scrollIntoView`'s moves are its own until the reader moves
-            // the port: no travel is reported meanwhile, the lead sampled
-            // before its jump included. The reader's move then makes it the
-            // reader's, and the report says so, which ends it (LLP 1070.000
-            // §2.5), as on Apple and the web.
-            let velocity = (self.collection.velocity)
-                .filter(|(v, _)| *v == view && (!snapshot.seeking || reader_moved))
-                .map_or(0.0, |(_, v)| v);
             let fill = CollectionFill {
                 velocity,
                 gesture: snapshot.seeking && reader_moved,

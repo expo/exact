@@ -13,6 +13,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], manifest = Config.NONE)
@@ -227,5 +229,37 @@ class PlayerTest {
         assertTrue(Bounds().apply { row = { node } }.measure(buffer, 0, ops.size, bounds))
         // The node's 100×50 at half size from (10, 20), not its unscaled box.
         assertTrue("$bounds", bounds.contains(RectF(10f, 20f, 60f, 45f)) && bounds.right < 70f && bounds.bottom < 50f)
+    }
+
+    /** A paragraph's lines in one style are one text blob; a run in another colour is its own. */
+    @Test fun runsInOneStyleAreDrawnTogether() {
+        val font = android.graphics.fonts.Font.Builder(java.io.File("../../../apps/canvas-gallery/assets/ExposureSansOriginal03-Regular.ttf")).build()
+        val calls = ArrayList<Int>()
+        val canvas = object : Canvas(Bitmap.createBitmap(80, 80, Bitmap.Config.ARGB_8888)) {
+            override fun drawGlyphs(ids: IntArray, idOffset: Int, positions: FloatArray, posOffset: Int, count: Int,
+                font: android.graphics.fonts.Font, paint: android.graphics.Paint) { calls.add(count) }
+        }
+        fun run(color: Int, y: Int) = intArrayOf(9, 1, f(12), color, 0, 2, 36, f(0), f(y), 37, f(8), f(y))
+        val ops = identity + run(Color.BLACK, 12) + run(Color.BLACK, 28) + run(Color.BLUE, 44)
+        Player(mapOf(1 to font)).apply { width = 80; height = 80 }.replay(canvas, IntBuffer.wrap(ops), 0, ops.size)
+        assertEquals(listOf(4, 2), calls)
+    }
+
+    @Implements(LegacyGlyphs::class, isInAndroidSdk = false)
+    class GlyphOutlines {
+        companion object {
+            @JvmStatic @Implementation fun glyph(font: java.nio.ByteBuffer, index: Int, axes: IntArray, id: Int) =
+                intArrayOf(1, 4, 0, 0, 0, 1, 1f.toBits(), 0, 1, 0, 1f.toBits(), 4)
+        }
+    }
+
+    @Test @Config(sdk = [30], shadows = [GlyphOutlines::class])
+    fun overlappingLegacyRunsCompositeSeparately() {
+        val font = android.graphics.fonts.Font.Builder(java.io.File("../../../apps/canvas-gallery/assets/ExposureSansOriginal03-Regular.ttf")).build()
+        val run = intArrayOf(9, 1, f(12), 0x80000000.toInt(), 0, 1, 36, f(5), f(5))
+        val ops = identity + run + run
+        val bitmap = Bitmap.createBitmap(24, 24, Bitmap.Config.ARGB_8888)
+        Player(mapOf(1 to font)).apply { width = 24; height = 24 }.replay(Canvas(bitmap), IntBuffer.wrap(ops), 0, ops.size)
+        assertEquals(192, Color.alpha(bitmap.getPixel(7, 7)))
     }
 }

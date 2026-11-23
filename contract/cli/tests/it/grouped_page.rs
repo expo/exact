@@ -5,17 +5,10 @@
 //! on the route or on what sits between the header and the list, wins.
 //! Any other scroll leaves the page's.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::style::roles::role;
 use exact_kernel::{ColorValue, Kernel};
-use exact_runner::{DataError, DataSource, Runner, Value};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::Runner;
 
 /// The polls screen of round 9: a header (the bar), a segmented switcher,
 /// and the list that is the route's scroll. `ROUTE` and `BAND` are the
@@ -46,11 +39,11 @@ fn screen(named: &str, route: &str, band: &str, list: &str) -> String {
         .replace("LIST", list)
 }
 
-fn boot(source: &str) -> Runner<NoData> {
+fn boot(source: &str) -> Runner<Source> {
     let plan = contract::compile(source).unwrap_or_else(|e| panic!("{e}"));
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -59,7 +52,7 @@ fn boot(source: &str) -> Runner<NoData> {
 }
 
 /// A box's own `background-color`, by test id: `None` where it paints nothing.
-fn fill(r: &Runner<NoData>, id: &str) -> Option<ColorValue> {
+fn fill(r: &Runner<Source>, id: &str) -> Option<ColorValue> {
     let _roles = r.bind_roles(); // Its own: the test's other runners live too.
     let key = r.kernel().find_by_test_id(id)[0];
     let fill = r.kernel().node_by_key(key).unwrap().style.background_color;

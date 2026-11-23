@@ -2,7 +2,7 @@
 // count of replies to rise, never takes a request let go (or no longer counted held) for a reply, and says who had
 // none past its bound. `clock until state` (the same file) over a stand-in whose state changes on the wall clock.
 import { test, expect } from 'bun:test';
-import { heldClock, inFlightNote, untilClock } from './agent-held.mjs';
+import { attachedClock, heldClock, inFlightNote, untilClock } from './agent-held.mjs';
 
 /** A session whose `state` is `states[i]`, the last repeated, answered through the host's light `held` op (or,
  * `heldOp: false`, only through `state`), and whose `clock data` is recorded. */
@@ -231,4 +231,119 @@ test('clock until state refuses what is not its form; on Apple it takes the cloc
     ['until state gateway.state == 1 within 0', 'a bound is 1 ms up to an hour'],
     ['until state nothing == 1 within 10', 'no state named "nothing" (gateway, rows, saved)'],
   ]) await expect(untilClock(flipping(0).s, spec)).rejects.toThrow(says);
+});
+
+/** An attached session (LLP 1012.000 D3): `states(ms)` is its masked state `ms` after the wait began, answered `delay`
+ *  ms after each read, or never once `hangAfter` reads have answered; what it was asked, and whether it was abandoned. */
+function attached(states, { delay = 0, hangAfter = Infinity, failAfter = Infinity, block = 0 } = {}) {
+  const t0 = performance.now(), asked = [];
+  let abandoned = null, answered = 0;
+  const s = {
+    carrier: { host: 'ios', abandon: (why) => { abandoned = why; } },
+    async op(req) {
+      asked.push(req);
+      if (answered >= hangAfter) return new Promise(() => {});
+      if (answered >= failAfter) throw new Error('the app closed the attach connection (Detach Agent, the window closed, or the app quit)');
+      answered += 1;
+      // The driver's event loop held up past the deadline (a long synchronous step): the reply is there, but late.
+      if (block) { const until = performance.now() + block; while (performance.now() < until); }
+      if (delay) await new Promise((ok) => setTimeout(ok, delay));
+      return structuredClone(states(performance.now() - t0));
+    },
+  };
+  return { s, asked, abandoned: () => abandoned };
+}
+
+test('an attached wait never takes, lands or settles the clock: anything but its waits is live-clock', async () => {
+  const { s, asked } = attached(() => ({ clock: 5, slots: { n: 1 }, pending: [] }));
+  for (const spec of ['settle', '+100', '1000', 'take', 'data', '+1 real']) await expect(attachedClock(s, spec)).rejects.toThrow('clock: live-clock');
+  expect(asked).toEqual([]);
+  expect(await attachedClock(s, 'until state n == 1 within 100')).toMatchObject({ clock: 5, until: 'met', value: 1 });
+  expect(asked).toEqual([{ op: 'state' }]); // masked: never `reveal`, never `clock`
+});
+
+test('clock until state watches the app\'s own clock go by, and a miss says the last value read', async () => {
+  const { s } = attached((ms) => ({ clock: 1000 + ms, slots: { phase: ms > 120 ? 'ready' : 'connecting' } }));
+  const met = await attachedClock(s, 'until state phase == "ready" within 1000');
+  expect(met).toMatchObject({ until: 'met', value: 'ready' });
+  expect(met.clock).toBeGreaterThan(1120);
+  const { s: late } = attached(() => ({ clock: 1, slots: { phase: 'connecting' } }));
+  await expect(attachedClock(late, 'until state phase == "ready" within 120')).rejects.toThrow(/phase was "connecting" after 1\d\d ms of the app's own wall clock/);
+});
+
+test('clock until state refuses a masked value, and a literal that is the mask', async () => {
+  const { s } = attached(() => ({ clock: 1, slots: { keyDraft: '•••', form: { key: '•••', name: 'a' } } }));
+  await expect(attachedClock(s, 'until state keyDraft == "sk-1" within 100')).rejects.toThrow('masked: it holds a password field\'s value');
+  await expect(attachedClock(s, 'until state form == "x" within 100')).rejects.toThrow('masked');
+  await expect(attachedClock(s, 'until state form.name == "•••" within 100')).rejects.toThrow('masked');
+  expect(await attachedClock(s, 'until state form.name == "a" within 100')).toMatchObject({ until: 'met' });
+});
+
+test('a read still out at the deadline retires the connection, and the miss says no read answered', async () => {
+  const w = attached(() => ({ clock: 1, slots: { n: 0 } }), { hangAfter: 0 });
+  const started = performance.now();
+  await expect(attachedClock(w.s, 'until state n == 1 within 80')).rejects.toThrow('no read answered within the bound');
+  expect(performance.now() - started).toBeLessThan(200);
+  expect(w.abandoned()).toMatch(/state read was not answered before the wait's 80 ms deadline/);
+  const r = attached(() => ({ clock: 1, pending: [{ name: 'a', ticket: 1 }] }), { hangAfter: 0 });
+  expect(await attachedClock(r.s, 'replies 60ms')).toEqual({ clock: null, settled: false, pending: null, waitedMs: expect.any(Number) });
+  expect(r.abandoned()).toBeTruthy();
+});
+
+test('clock held counts each target\'s replies rising; a target let go is no reply', async () => {
+  const held = (name, ticket) => ({ name, ticket, held: true });
+  const { s } = attached((ms) => ms < 80 ? { clock: 1, pending: [held('feed', 1), held('chat', 2)], heldReplies: { feed: 3 } }
+    : { clock: 2, pending: [held('chat', 2)], heldReplies: { feed: 4 } });
+  expect(await attachedClock(s, 'held feed 2s')).toMatchObject({ clock: 2, settled: true, held: 1 });
+  const { s: all } = attached((ms) => ms < 80 ? { clock: 1, pending: [held('feed', 1), held('chat', 2)], heldReplies: { feed: 3 } }
+    : { clock: 2, pending: [], heldReplies: { feed: 4 } });
+  // chat stopped being held without a reply counted: not a reply.
+  expect(await attachedClock(all, 'held 300ms')).toMatchObject({ settled: false, reason: 'held', heldTargets: ['chat'] });
+  await expect(attachedClock(all, 'held nope')).rejects.toThrow('nope is not a held request in flight');
+  const { s: none } = attached(() => ({ clock: 1, pending: [] }));
+  expect(await attachedClock(none, 'held')).toMatchObject({ settled: true, diagnostic: 'clock held: no held request was in flight, so it waited for none' });
+});
+
+test('clock replies reports the first read with no data request in flight, not counting held, timer or device ones', async () => {
+  const waiting = [{ name: 'held', ticket: 1, held: true }, { name: 'later', ticket: 2, timer: 9000 }, { name: 'mic', ticket: 3, device: { capability: 'audio' } }];
+  const { s } = attached((ms) => ({ clock: 100 + ms, pending: ms < 100 ? [{ name: 'board', ticket: 4 }, ...waiting] : waiting }));
+  const r = await attachedClock(s, 'replies');
+  expect(r).toMatchObject({ settled: true, pending: [] });
+  expect(r.waitedMs).toBeGreaterThanOrEqual(90);
+  const { s: busy } = attached(() => ({ clock: 7, pending: [{ name: 'board', ticket: 4 }] }));
+  expect(await attachedClock(busy, 'replies 120ms')).toMatchObject({ clock: 7, settled: false, pending: [{ name: 'board', ticket: 4 }] });
+  const { s: blind } = attached(() => ({ clock: 7 }));
+  await expect(attachedClock(blind, 'replies')).rejects.toThrow('clock replies: unsupported');
+  await expect(attachedClock(blind, 'replies board')).rejects.toThrow('names none');
+});
+
+test('a reply the driver reaches only after the deadline is not counted, and retires the connection', async () => {
+  const r = attached(() => ({ clock: 1, pending: [] }), { block: 60 });
+  expect(await attachedClock(r.s, 'replies 20ms')).toMatchObject({ clock: null, settled: false, pending: null });
+  expect(r.abandoned()).toMatch(/not answered before the wait's 20 ms deadline/);
+});
+
+test('a connection that ends mid-wait keeps what the wait saw, and says why it stopped', async () => {
+  const gone = 'the app closed the attach connection';
+  const r = attached(() => ({ clock: 4, pending: [{ name: 'board', ticket: 1 }] }), { failAfter: 2 });
+  expect(await attachedClock(r.s, 'replies 2s')).toMatchObject({ clock: 4, settled: false, pending: [{ name: 'board', ticket: 1 }], ended: expect.stringContaining(gone) });
+  const u = attached(() => ({ clock: 4, slots: { phase: 'connecting' } }), { failAfter: 1 });
+  await expect(attachedClock(u.s, 'until state phase == "ready" within 2000')).rejects.toThrow(/phase was "connecting" after \d+ ms of the app's own wall clock; it stopped there: the app closed/);
+  const h = attached(() => ({ clock: 4, pending: [{ name: 'feed', ticket: 1, held: true }] }), { failAfter: 1 });
+  expect((await attachedClock(h.s, 'held 2s')).diagnostic).toMatch(/the server still holds feed.*the wait stopped: the app closed/);
+});
+
+test('clock held refuses a state with no pending, counts own replies only, and tells a target let go from one held', async () => {
+  const { s: blind } = attached(() => ({ clock: 5 }));
+  await expect(attachedClock(blind, 'held')).rejects.toThrow('clock held: unsupported');
+  const { s: ctor } = attached((ms) => ({ clock: 1, pending: [{ name: 'constructor', ticket: 1, held: true }], ...(ms > 60 ? { heldReplies: { constructor: 1 } } : {}) }));
+  expect(await attachedClock(ctor, 'held constructor 1s')).toMatchObject({ settled: true });
+  const held = (name) => ({ name, ticket: 1, held: true });
+  const { s: mixed } = attached((ms) => ({ clock: 1, pending: ms < 40 ? [held('feed'), held('chat')] : [held('feed')] }));
+  expect((await attachedClock(mixed, 'held 200ms')).diagnostic).toMatch(/the server still holds feed.*; chat is no longer held, with no reply counted/);
+});
+
+test('a wait reports the wall clock the observation took, where the state has one', async () => {
+  const { s } = attached(() => ({ clock: 100, observation: { clock: 2500, wall: 2500 }, pending: [] }));
+  expect(await attachedClock(s, 'replies')).toMatchObject({ clock: 2500, settled: true });
 });

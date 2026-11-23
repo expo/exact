@@ -13,6 +13,7 @@
 //! - a request a tool's commit asks carries the tool's origin and the
 //!   substitute's state, which the executor's hop check reads (D6).
 
+use crate::source::{boxed, Source};
 use exact_runner::local_network::State;
 use exact_runner::{CallOrigin, Dispatch, Outcome, Reply, Runner, Work};
 use std::path::PathBuf;
@@ -106,14 +107,14 @@ impl exact_runner::DataSource for Data {
     }
 }
 
-fn boot(name: &str) -> (App, Runner<Data>) {
+fn boot(name: &str) -> (App, Runner<Source>) {
     let app = App::new(name);
     let plan = contract::compile_path_all(&app.0.join("app.contract"), false)
         .map(|(plan, _)| plan)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Data,
+        boxed(Data),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -132,14 +133,14 @@ thread_local! {
 
 /// The host's part: module work run, released work run, outcomes
 /// fulfilled; the HTTP requests the data code asks are kept, unsent.
-fn pump(r: &mut Runner<Data>, sent: &mut Vec<exact_runner::RequestOut>) {
+fn pump(r: &mut Runner<Source>, sent: &mut Vec<exact_runner::RequestOut>) {
     let mut parked = PARKED.take();
     pump_parked(r, sent, &mut parked);
     PARKED.set(parked);
 }
 
 fn pump_parked(
-    r: &mut Runner<Data>,
+    r: &mut Runner<Source>,
     sent: &mut Vec<exact_runner::RequestOut>,
     parked: &mut Vec<(u64, u64)>,
 ) {
@@ -166,7 +167,7 @@ fn pump_parked(
     }
 }
 
-fn run(r: &mut Runner<Data>, ticket: u64, dispatch: Dispatch) {
+fn run(r: &mut Runner<Source>, ticket: u64, dispatch: Dispatch) {
     let outcome: Outcome = match dispatch {
         Dispatch::Run(Work::Now(work)) => work(),
         Dispatch::Run(Work::Later(work)) => {
@@ -182,20 +183,20 @@ fn run(r: &mut Runner<Data>, ticket: u64, dispatch: Dispatch) {
     let _ = r.fulfill(ticket, outcome);
 }
 
-fn agent(r: &mut Runner<Data>, request: &str) {
+fn agent(r: &mut Runner<Source>, request: &str) {
     let (_, reply) = r.extension_agent(request).expect("a prefer");
     reply.unwrap();
 }
 
-fn show(r: &Runner<Data>, name: &str) -> String {
+fn show(r: &Runner<Source>, name: &str) -> String {
     format!("{:?}", r.resource(name))
 }
 
-fn logs(r: &Runner<Data>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     exact_runner::agent::handle(r, r#"{"op":"logs"}"#)
 }
 
-fn tap(r: &mut Runner<Data>, choice: &str) {
+fn tap(r: &mut Runner<Source>, choice: &str) {
     let hold = (r.device_holds().iter())
         .find(|h| h.capability == "permission")
         .unwrap_or_else(|| panic!("no permission ticket: {:?}\n{}", r.device_holds(), logs(r)))

@@ -1,5 +1,6 @@
 //! `observe(…)`, `observeAttributes(…)`, `observeError(…)` and `observeFeedback(…)` reach the host as
 //! commands, in order, with their arguments. Malformed calls fail to compile.
+use crate::source::{boxed, NoData, Source};
 use exact_runner::{DataError, DataSource, Runner, Value};
 
 const APP: &str = r#"shape Checkout
@@ -31,17 +32,10 @@ component App
         text "Buy"
 "#;
 
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.to_string()))
-    }
-}
-
-fn boot(source: &str) -> Runner<NoData> {
+fn boot(source: &str) -> Runner<Source> {
     Runner::boot(
         contract::compile(source).unwrap(),
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -245,7 +239,7 @@ fn reply() -> exact_runner::Outcome {
 fn only_a_placeholders_request_holds_the_ledger() {
     let mut r = Runner::boot(
         contract::compile(FEED).unwrap(),
-        Later,
+        boxed(Later),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",

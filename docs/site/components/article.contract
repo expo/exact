@@ -125,6 +125,8 @@ component Article
     copied: bool
     copyLink: action
     linked: bool
+    copiedId: string
+    copyBlock: action
     voted: string
     vote: action
     roomy: bool
@@ -142,7 +144,7 @@ component Article
           LoadFailed(retry=retry)
         else
           if page.slug == "home"
-            Home(page=page, nav=nav)
+            Home(page=page, nav=nav, copiedId=copiedId, copyBlock=copyBlock)
           else
             if from != ""
               row gap=8 align-items="center" margin-bottom=20 padding="8px 12px" border-radius="var(--radius-lg)" background-color="var(--color-background-element)" testId="redirected"
@@ -159,7 +161,7 @@ component Article
             view height=1 background-color="var(--color-border-secondary)" margin="28px 0 20px" testId="header-rule"
             for b in page.blocks key=b.id
               view display=((b.group == "" or tabShown(b.group, opened)) ? "block" : "none") padding-left=((b.group != "" and not b.group.startsWith("tabs-")) ? 16 : 0) testId=((b.group != "" and tabShown(b.group, opened)) ? `open-${b.group}` : `block-${b.id}`)
-                Blocks(block=b, path=page.path, opened=opened, toggle=toggle, pick=pick, seen=seen)
+                Blocks(block=b, path=page.path, opened=opened, toggle=toggle, pick=pick, seen=seen, copiedId=copiedId, copyBlock=copyBlock)
             view overflow="hidden" inert=roomy max-height="clamp(0px, (1280px - 100vw) * 1000, 400px)" margin-top="clamp(0px, (1280px - 100vw) * 1000, 48px)"
               Helpful(href=page.feedbackUrl, voted=voted, vote=vote, place="-end")
             view height=1 background-color="var(--color-border-secondary)" margin="48px 0 24px"

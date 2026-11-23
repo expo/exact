@@ -17,6 +17,7 @@ fn vertical_collections_accept_fixed_content_and_name_unsupported_shapes() {
     }
 }
 
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, Offer};
 use exact_runner::{CollectionFeedback, DataError, DataSource, RowMeasurement, Runner, Value};
 
@@ -27,11 +28,11 @@ impl DataSource for NoData {
     }
 }
 
-fn boot(rows: &str, follow: bool) -> Runner<NoData> {
+fn boot(rows: &str, follow: bool) -> Runner<Source> {
     boot_start(rows, follow, "start")
 }
 
-fn boot_start(rows: &str, follow: bool, start: &str) -> Runner<NoData> {
+fn boot_start(rows: &str, follow: bool, start: &str) -> Runner<Source> {
     let source = format!(
         r#"component App
   state rows: number[] = {rows}
@@ -55,7 +56,7 @@ fn boot_start(rows: &str, follow: bool, start: &str) -> Runner<NoData> {
     );
     Runner::boot(
         contract::compile(&source).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -63,11 +64,11 @@ fn boot_start(rows: &str, follow: bool, start: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn report(r: &mut Runner<NoData>, at: f64, fixed: [f64; 2]) -> f64 {
+fn report(r: &mut Runner<Source>, at: f64, fixed: [f64; 2]) -> f64 {
     report_velocity(r, at, fixed, 0.)
 }
 
-fn report_velocity(r: &mut Runner<NoData>, at: f64, fixed: [f64; 2], velocity: f64) -> f64 {
+fn report_velocity(r: &mut Runner<Source>, at: f64, fixed: [f64; 2], velocity: f64) -> f64 {
     let c = r.collections().remove(0);
     let measurements = c
         .rows
@@ -225,7 +226,7 @@ fn nested_fixed_reading_positions_survive_outer_row_retirement() {
               view height=100
             view height=800
 "#;
-    fn feedback(r: &mut Runner<NoData>, view: u32, offset: f64) {
+    fn feedback(r: &mut Runner<Source>, view: u32, offset: f64) {
         let c = r
             .collections()
             .into_iter()
@@ -263,7 +264,7 @@ fn nested_fixed_reading_positions_survive_outer_row_retirement() {
     for at in [150., 850.] {
         let mut r = Runner::boot(
             contract::compile(source).unwrap(),
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -321,7 +322,7 @@ fn hidden_fixed_margins_have_eager_scroll_extents_and_corrections() {
                 .replace(" scroll-start=\"end\" scrollFollowEnd=true", ""),
         )
         .unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -329,7 +330,7 @@ fn hidden_fixed_margins_have_eager_scroll_extents_and_corrections() {
     .unwrap();
     let mut r = Runner::boot(
         contract::compile(source).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -416,7 +417,7 @@ fn bounded_snapshots_charge_fixed_roots_without_mounted_data() {
     let source = format!("component App\n  view\n    list virtualized=true appearance=\"none\" height=200\n{lead}      for x in range(0) key=x\n        text `${{x}}`\n");
     let r = Runner::boot(
         contract::compile(&source).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -760,13 +761,13 @@ fn the_trail_restores_authored_inertness_including_updates_while_gated() {
 "#;
     let mut r = Runner::boot(
         contract::compile(source).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let id = |r: &Runner<NoData>, name| {
+    let id = |r: &Runner<Source>, name| {
         r.kernel()
             .node_by_key(r.kernel().find_by_test_id(name)[0])
             .unwrap()
@@ -774,7 +775,7 @@ fn the_trail_restores_authored_inertness_including_updates_while_gated() {
     };
     let trail = id(&r, "trail");
     let toggle = id(&r, "toggle");
-    let inert = |r: &Runner<NoData>| {
+    let inert = |r: &Runner<Source>| {
         r.kernel()
             .node(trail)
             .unwrap()
@@ -829,7 +830,7 @@ fn events_in_fixed_content_reach_their_authored_scope() {
 "#;
     let mut r = Runner::boot(
         contract::compile(source).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -880,7 +881,7 @@ fn an_eager_for_inside_fixed_content_still_reports_the_long_list_notice() {
 "#;
     let mut r = Runner::boot(
         contract::compile(source).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -952,7 +953,7 @@ fn logical_copy_excludes_a_nested_collections_fixed_content() {
 "#;
     let r = Runner::boot(
         contract::compile(source).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

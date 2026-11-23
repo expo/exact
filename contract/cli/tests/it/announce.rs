@@ -1,5 +1,6 @@
 //! @ref LLP 1016.002 — the device says a topic changed; the answers that
 //! watch it are asked again, and nothing else is.
+use crate::source::{boxed, Read, Source};
 use exact_kernel::Kernel;
 use exact_runner::{Answer, DataError, DataSource, Native, Runner, Store, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -38,7 +39,7 @@ impl DataSource for Device {
 
 const APP: &str = "shape Line\n  text: string\ncomponent App\n  resource meter = meter() as shape Line\n  resource other = other() as shape Line\n  view\n    column\n      text meter.text testId=\"meter\"\n      text other.text testId=\"other\"\n";
 
-fn text(r: &mut Runner<Device>, id: &str) -> String {
+fn text(r: &mut Runner<Source>, id: &str) -> String {
     let key = r.kernel().find_by_test_id(id)[0];
     let node = r.kernel().node_by_key(key).unwrap();
     node.props
@@ -59,7 +60,7 @@ fn an_announced_topic_asks_again_exactly_the_answers_that_watch_it() {
     let plan = contract::compile(APP).unwrap();
     let mut r = Runner::boot(
         plan,
-        device(),
+        boxed(device()),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -71,7 +72,7 @@ fn an_announced_topic_asks_again_exactly_the_answers_that_watch_it() {
     r.listen(Arc::new(move || {
         wake.fetch_add(1, Ordering::SeqCst);
     }));
-    let asks = r.data().asks;
+    let asks = r.source::<Device>().asks;
     // From the device's own thread, twice before the host applies: one re-ask.
     level.store(7, Ordering::SeqCst);
     let announcer = native.clone();
@@ -88,7 +89,11 @@ fn an_announced_topic_asks_again_exactly_the_answers_that_watch_it() {
     assert_eq!(receipts.len(), 1);
     assert_eq!(text(&mut r, "meter"), "level 7");
     assert_eq!(text(&mut r, "other"), "still");
-    assert_eq!(r.data().asks, asks + 1, "only the watching answer is asked");
+    assert_eq!(
+        r.source::<Device>().asks,
+        asks + 1,
+        "only the watching answer is asked"
+    );
     // A topic nothing watches commits nothing.
     native.changed("weather");
     assert!(r.apply_announced().0.is_empty());
@@ -147,7 +152,7 @@ fn a_topic_watched_before_a_yield_is_kept() {
     };
     let mut r = Runner::boot(
         contract::compile(ONE).unwrap(),
-        source,
+        boxed(source),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -165,12 +170,16 @@ fn a_topic_watched_before_a_yield_is_kept() {
     r.fulfill(first, reply(b"first")).unwrap();
     let second = r.take_requests()[0].ticket;
     r.fulfill(second, reply(b"second")).unwrap();
-    let asks = r.data().asks;
+    let asks = r.source::<Yielding>().asks;
     native.changed("meter");
     let (receipts, error) = r.apply_announced();
     assert!(error.is_none());
     assert_eq!(receipts.len(), 1);
-    assert_eq!(r.data().asks, asks + 1, "the announcement asked again");
+    assert_eq!(
+        r.source::<Yielding>().asks,
+        asks + 1,
+        "the announcement asked again"
+    );
 }
 
 #[test]
@@ -196,8 +205,11 @@ fn a_refused_answer_restores_the_standing_answers_topics() {
                 if self.later {
                     return Ok(Answer::Later(Request::get("https://meter.test/")));
                 }
+                // Read `B`, then a refusal: an unknown source refuses the
+                // commit, where an answer outside the shape would fail the
+                // resource and let the commit stand.
                 store.observe_topic("B");
-                return Ok(Answer::Now(Value::Bool(false)));
+                return Err(DataError::UnknownSource("meter".into()));
             }
             store.observe_topic("A");
             Ok(Answer::Now(Value::record(vec![Value::str("standing")])))
@@ -221,11 +233,11 @@ fn a_refused_answer_restores_the_standing_answers_topics() {
         let native = Native::default();
         let mut r = Runner::boot(
             contract::compile(src).unwrap(),
-            Watching {
+            boxed(Watching {
                 later,
                 asks: 0,
                 native: native.clone(),
-            },
+            }),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -250,12 +262,17 @@ fn a_refused_answer_restores_the_standing_answers_topics() {
         } else {
             assert!(r.act("change", vec![]).is_err());
             assert_eq!(r.slot("changed"), Some(&Value::Bool(false)));
-            let asks = r.data().asks;
+            assert_eq!(
+                r.watched_topics(),
+                ["A"],
+                "the refused answer's `B` is gone"
+            );
+            let asks = r.source::<Watching>().asks;
             native.changed("A");
             let (receipts, error) = r.apply_announced();
             assert!(error.is_none());
             assert_eq!(receipts.len(), 1);
-            assert_eq!(r.data().asks, asks + 1);
+            assert_eq!(r.source::<Watching>().asks, asks + 1);
             native.changed("B");
             assert!(r.apply_announced().0.is_empty());
         }

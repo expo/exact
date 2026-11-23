@@ -420,9 +420,9 @@ impl Portals {
                 edge.insert(m, Err(why));
             }
         }
-        for (&m, kept) in &edge {
-            if let Err(why) = kept {
-                let e = &entries[m];
+        // In declaration order, so the journal reads the same on every run.
+        for (m, e) in entries.iter().enumerate() {
+            if let Some(Err(why)) = edge.get(&m) {
                 let value = e.portal.clone().unwrap_or_default();
                 if self.hidden.insert(e.view, value.clone()).as_ref() != Some(&value) {
                     notes.push(format!(

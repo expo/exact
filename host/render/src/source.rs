@@ -73,6 +73,13 @@ fn a_render_holds_no_scheme_wide_or_local_network_line() {
 }
 
 impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
+    fn queued_send_replacer(
+        &mut self,
+        _: Option<&str>,
+    ) -> Option<exact_runner::QueuedSendReplacer> {
+        None
+    }
+
     fn prepare_snapshot(
         &mut self,
         module: Option<exact_runner::SnapshotModule<'_>>,

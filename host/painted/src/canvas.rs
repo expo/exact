@@ -1172,7 +1172,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
         let frame = self.frame_held(now, vsync);
         self.p.hold_collections(false);
         if std::mem::take(&mut self.responding) {
-            self.p.slice_collections(None, 0.0);
+            self.p.slice_collections(self.feed, None, 0.0);
         }
         frame
     }

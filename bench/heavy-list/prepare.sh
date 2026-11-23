@@ -5,6 +5,7 @@
 #   exact-heavylist/data/messages.json, exact-heavylist/assets/   the exact2 build refuses inputs outside its app directory
 #   exact-heavylist/Cargo.lock               the root's, which build.mjs resolves for that workspace offline
 #   expo/data/messages.json, expo/assets/images/
+#   android/common/src/main/assets/                  the Views and Compose apps (android/)
 # The SwiftUI and UIKit builds read data/ directly. FORCE=1 regenerates data/.
 set -euo pipefail
 H=$(cd "$(dirname "$0")" && pwd)
@@ -21,4 +22,7 @@ rsync -a --delete "$H/data/images/" "$H/exact-heavylist/assets/"
 cp "$H/../../Cargo.lock" "$H/exact-heavylist/Cargo.lock"
 rsync -a "$H/data/messages.json" "$H/expo/data/messages.json"
 rsync -a --delete "$H/data/images/" "$H/expo/assets/images/"
-echo "prepared: data/, exact-heavylist/, expo/"
+mkdir -p "$H/android/common/src/main/assets/images"
+rsync -a "$H/data/messages.json" "$H/android/common/src/main/assets/messages.json"
+rsync -a --delete "$H/data/images/" "$H/android/common/src/main/assets/images/"
+echo "prepared: data/, exact-heavylist/, expo/, android/"

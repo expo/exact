@@ -4,15 +4,9 @@
 //! The rule (`contract/lower/src/disabled_look.rs`): `disabled`, and an
 //! `opacity` written, or a paint style that reads a name `disabled` reads.
 
+use crate::source::{boxed, NoData};
 use exact_kernel::{Kernel, PropId};
-use exact_runner::{DataError, DataSource, Runner, Value};
-
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::Runner;
 
 const APP: &str = r##"style Faint
   opacity=0.4
@@ -56,7 +50,7 @@ fn a_node_that_styles_its_own_disabled_state_is_marked_and_no_other() {
     let plan = contract::compile(APP).unwrap_or_else(|e| panic!("{e}"));
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

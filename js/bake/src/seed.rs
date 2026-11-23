@@ -98,6 +98,13 @@ impl Seeded {
 }
 
 impl exact_runner::DataSourceWrapper for Seeded {
+    fn queued_send_replacer(
+        &mut self,
+        _: Option<&str>,
+    ) -> Option<exact_runner::QueuedSendReplacer> {
+        None
+    }
+
     fn query(&mut self, source: &str, args: &[Value]) -> Result<Value, DataError> {
         match self.seed.values.get(source) {
             Some(Ok(value)) => Ok(value.clone()),

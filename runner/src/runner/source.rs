@@ -8,6 +8,9 @@ use exact_plan::{Plan, Value};
 pub enum ResourceChange<'a> {
     /// Readers watching this topic in their last answer.
     Topic(&'a str),
+    /// Readers watching any of these topics, announced together: each is
+    /// asked once, however many of them it watches.
+    Topics(&'a [String]),
     /// Readers of this source, for every argument list.
     Source(&'a str),
 }
@@ -1093,15 +1096,15 @@ data_source! {
         let _ = retired;
     }
 
-    defaults {
-        /// The embedded source's optional queue-tail replacement rule.
-        /// A leaf's rule stays with the runner when it moves to a worker.
-        /// `None` asks for that rule before placement, without a source name.
-        fn queued_send_replacer(&mut self, source: Option<&str>) -> Option<QueuedSendReplacer> {
-            let _ = source;
-            None
-        }
+    /// The embedded source's optional queue-tail replacement rule.
+    /// A leaf's rule stays with the runner when it moves to a worker.
+    /// `None` asks for that rule before placement, without a source name.
+    fn queued_send_replacer(&mut self, source: Option<&str>) -> Option<QueuedSendReplacer> {
+        let _ = source;
+        None
+    }
 
+    defaults {
         /// Requests made by the last `Later` answer for `target`, after its
         /// first request, in order. Taken once per turn (LLP 1162 D2).
         /// A source forwarding request sets forwards this too.
@@ -1184,6 +1187,8 @@ impl std::fmt::Display for DataError {
         }
     }
 }
+
+mod boxed;
 
 #[cfg(test)]
 mod native_tests {

@@ -2,22 +2,15 @@
 //! `View` its `semanticTag` names, a cell's `colspan`, `rowspan` and `scope`
 //! are props, and the compiler holds them to HTML's content model.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, PropId, PropValue};
-use exact_runner::{DataError, DataSource, Runner, Value};
+use exact_runner::Runner;
 use std::process::Command;
 
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _args: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.to_string()))
-    }
-}
-
-fn boot(src: &str) -> Runner<NoData> {
+fn boot(src: &str) -> Runner<Source> {
     Runner::boot(
         contract::compile(src).unwrap_or_else(|e| panic!("{e}")),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -25,12 +18,12 @@ fn boot(src: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn prop(r: &Runner<NoData>, test_id: &str, id: PropId) -> Option<PropValue> {
+fn prop(r: &Runner<Source>, test_id: &str, id: PropId) -> Option<PropValue> {
     let key = r.kernel().find_by_test_id(test_id)[0];
     r.kernel().node_by_key(key).unwrap().props.get(id).cloned()
 }
 
-fn tag(r: &Runner<NoData>, test_id: &str) -> Option<String> {
+fn tag(r: &Runner<Source>, test_id: &str) -> Option<String> {
     match prop(r, test_id, PropId::SemanticTag) {
         Some(PropValue::Str(s)) => Some(s.to_string()),
         _ => None,

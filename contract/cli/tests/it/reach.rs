@@ -4,6 +4,7 @@
 //! content index the host's stores would, refuses what the platforms do,
 //! and a source of the index's entries is asked again when they change.
 
+use crate::source::{boxed, NoData, Source};
 use exact_runner::Runner;
 use serde_json::{json, Value as Json};
 #[cfg(unix)]
@@ -66,24 +67,13 @@ impl Drop for App {
     }
 }
 
-struct NoData;
-impl exact_runner::DataSource for NoData {
-    fn query(
-        &mut self,
-        source: &str,
-        _: &[exact_runner::Value],
-    ) -> Result<exact_runner::Value, exact_runner::DataError> {
-        Err(exact_runner::DataError::UnknownSource(source.into()))
-    }
-}
-
-fn boot(name: &str) -> (App, Runner<NoData>) {
+fn boot(name: &str) -> (App, Runner<Source>) {
     let app = App::new(name, SOURCE);
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -94,7 +84,7 @@ fn boot(name: &str) -> (App, Runner<NoData>) {
     (app, r)
 }
 
-fn settle(r: &mut Runner<NoData>) {
+fn settle(r: &mut Runner<Source>) {
     for _ in 0..8 {
         if r.apply_announced().0.is_empty() {
             return;
@@ -102,7 +92,7 @@ fn settle(r: &mut Runner<NoData>) {
     }
 }
 
-fn act(r: &mut Runner<NoData>, name: &str, args: Vec<exact_runner::Value>) {
+fn act(r: &mut Runner<Source>, name: &str, args: Vec<exact_runner::Value>) {
     r.act(name, args).unwrap();
     settle(r);
 }
@@ -115,11 +105,11 @@ fn ids(ids: &[&str]) -> exact_runner::Value {
     exact_runner::Value::list(ids.iter().map(|i| s(i)).collect())
 }
 
-fn logs(r: &Runner<NoData>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     exact_runner::agent::handle(r, r#"{"op":"logs"}"#)
 }
 
-fn extension(r: &Runner<NoData>, name: &str) -> Json {
+fn extension(r: &Runner<Source>, name: &str) -> Json {
     let all: Json = serde_json::from_str(&r.extensions_json().unwrap()).unwrap();
     all[name].clone()
 }
@@ -134,7 +124,7 @@ fn the_index_keeps_entries_by_kind_and_tells_its_readers() {
     let index = extension(&r, "search-index");
     assert_eq!(index["counts"], json!({ "book": 3 }), "{}", logs(&r));
     assert_eq!(index["last"]["added"], json!(["a", "b", "c"]));
-    let entries = |r: &Runner<NoData>| match r.resource("entries") {
+    let entries = |r: &Runner<Source>| match r.resource("entries") {
         Some(exact_runner::Value::List(items)) => items.len(),
         other => panic!("{other:?}"),
     };
@@ -260,7 +250,7 @@ fn a_file_face_keeps_the_tools_string_parameter() {
     let selected = exact_runner::uses(&plan);
     let mut runner = Runner::boot(
         plan.clone(),
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -448,7 +438,7 @@ fn a_face_is_checked_against_its_tool_and_holds_its_door() {
     assert_ne!(face(&plan, "log")["digest"], json!(digest));
 
     let kernel = exact_kernel::Kernel::with_monospace();
-    let mut r = Runner::boot(plan, NoData, kernel, Default::default(), "/").unwrap();
+    let mut r = Runner::boot(plan, boxed(NoData), kernel, Default::default(), "/").unwrap();
     let mut call = |door: &str, digest: Option<&str>| {
         let how = exact_runner::CallHow {
             door: door.into(),

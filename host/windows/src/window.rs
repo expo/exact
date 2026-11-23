@@ -986,7 +986,7 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
                 self.dialogs
                     .install(handle.hwnd.get(), self.modal.clone(), self.proxy.clone());
                 self.desktop.set_window(handle.hwnd.get());
-                crate::displays::install(handle.hwnd.get());
+                crate::displays::install(handle.hwnd.get(), self.min_size);
                 if let Err(error) = self.clicks.install(handle.hwnd.get()) {
                     self.fail(events, error);
                     return;

@@ -1,6 +1,8 @@
 //! LLP 1116.016 D5: TypeScript that Contract refuses is refused with an edit,
 //! and the edit compiles.
 
+use crate::source::{boxed, Source};
+
 /// A component whose derive `c` is `expr`, over a few states.
 fn app(expr: &str) -> String {
     format!(
@@ -37,13 +39,13 @@ fn the_reversal_reverse_names_is_the_list_last_to_first() {
     let plan = contract::compile(&src).unwrap();
     let mut r = exact_runner::Runner::boot(
         plan,
-        Nothing,
+        boxed(Nothing),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let text = |r: &exact_runner::Runner<Nothing>| {
+    let text = |r: &exact_runner::Runner<Source>| {
         let k = r.kernel();
         k.node_by_key(k.find_by_test_id("r")[0])
             .unwrap()

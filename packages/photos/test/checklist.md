@@ -59,6 +59,50 @@ off: on return the strip is gone and the denied line shows.
 5. Turn photo access off in Settings > Photo Editor: on return the strip is
    gone and the editor says it can't see your photos, with Open Settings.
 
+## Changes since a token, by a person (LLP 1133.019.000 piece 4)
+
+`apple.mjs ios` walks PhotoKit's history on a simulator with full access
+(`photokit-changes.mjs`). What it cannot do:
+
+1. Limited access, iPhone: in the fixture, tap Watch, keep the token, then
+   choose "Limit Access…" in Settings > Privacy & Security > Photos and
+   return. Pasting the token into Since answers `expired` with a token whose
+   access is `limited` and which has no `at`; any token pasted after that
+   answers `expired` again (rescan-only). Add a photo to the selection with
+   Manage: the same.
+2. A Mac, with Photos consent given to the fixture's `.app`: tap Watch, add
+   a photo in Photos, paste the first token: the photo is in the added list.
+3. A screenshot, iPhone: tap Watch, then Screenshots, keep the token,
+   take a screenshot with the side and volume-up buttons and paste the
+   token: the screenshot is in the added list. A simulator cannot make a
+   photo PhotoKit marks `photoScreenshot`.
+4. An iPhone signed in to iCloud: favourite a photo on another device and
+   wait for sync, then paste a token kept from before: the photo is in the
+   updated list. A token kept for months may answer `expired`, which is
+   PhotoKit's to decide.
+
+## The photo index, by a person (LLP 1133.019.000 piece 6)
+
+`apps/photos-fixture`'s Import keeps the app's own index of the library in
+step with it, as D1 says an app does (`data/src/index.rs`). `apple.mjs
+importer --sim <udid>` drives it against PhotoKit on a simulator and
+`android.mjs --emulator` (drive 9) against MediaStore: the first import of
+more than 500, a walk stopped and resumed across a relaunch, an add during a
+walk, a replacement stopped mid-list, and a denial. Under Import, "in step"
+says the index holds the ids of the same view listed whole. What they cannot
+do:
+
+1. A screenshot, iPhone: `bun host/apple/build.mjs --device
+   photos-fixture-apple --run`, allow access, then tap Import, Screenshots
+   and Sync: the index and the list agree ("in step"). Take a screenshot with
+   the side and volume-up buttons and return: the index's count is one more,
+   by a walk, and still in step.
+2. A screenshot, Android phone: the same in the fixture's APK. The count
+   grows by a replacement, which every return under a grant makes.
+3. Limited access, iPhone: with "Limit Access…" chosen, Import and Sync
+   replace the index from the selection; add a photo with Manage and return:
+   in step.
+
 ## Android, in the fixture app (stage 3)
 
 `apps/photos-fixture` is the library's consumer on Android (the photo editor
@@ -69,8 +113,14 @@ copy byte for byte, an add, limited access and a revocation), the codec's
 conformance (step 9's checks among it) and MediaStore for real, bound,
 granted by `pm grant` (the list, a copy with its location, an add no longer
 pending) on an arm64 emulator (`ANDROID_SERIAL`) whose adb runs as root. It
-passed on API 29, 33 and 34 emulators on 2026-10-28. The steps below are what
-it cannot do: the platform's dialogs and what a person chooses in them.
+passed on API 29, 33 and 34 emulators on 2026-10-28. Its drive 8 is the
+replacement path (LLP 1133.019.000 D3) from API 30: a `photoChanges` token
+answers `expired`; after a screenshot is added, a photo moved into
+`Screenshots/` and out, trashed, restored or deleted while the app is away,
+the list on return is MediaStore's, with nothing pressed; under a denial the
+list and a token answer `NotAllowedError`; limited access (API 34) lists the
+app's own photo and none of the shell's. The steps below are what it cannot
+do: the platform's dialogs and what a person chooses in them.
 
 Install it outside the agent with `bun scripts/agent-android.mjs build
 photos-fixture --apk`, then `adb install -r

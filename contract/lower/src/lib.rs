@@ -262,8 +262,7 @@ pub(crate) struct Lowerer<'a> {
     /// Literal decoration rows and the aliases visible to each source file.
     pub decorations: BTreeMap<String, serde_json::Value>,
     pub decoration_scopes: BTreeMap<u32, Vec<(String, String)>>,
-    /// The `atom` declarations by name, and the aliases each source file sees
-    /// (LLP 1045.000 D3).
+    /// The `atom` declarations by name, and the aliases each source file sees (LLP 1045.000 D3).
     pub(crate) atoms: BTreeMap<String, atoms::Declared>,
     pub atom_scopes: BTreeMap<u32, Vec<(String, String)>>,
     /// The `keyframes` declarations, by name, with what each animates (LLP 1055 D5).
@@ -282,13 +281,11 @@ pub(crate) struct Lowerer<'a> {
     /// Each font file whose faces' weights `declare_fonts` read from it, as
     /// it was then (the design server's write check, `theme::rows`).
     font_files: Vec<theme::rows::FontFile>,
-    /// How many `fn` bodies are being expanded right now (a guard; the type
-    /// pass already refuses a cycle).
+    /// How many `fn` bodies are being expanded now (a guard; the type pass refuses a cycle).
     pub fn_depth: u32,
     /// Tags' fixed row values already built (`Lowerer::fixed`).
     fixed: BTreeMap<(bool, &'static str), Code>,
-    /// Refusals so far: an element or attribute that fails is recorded and
-    /// its siblings are lowered anyway.
+    /// Refusals so far: an element or attribute that fails is recorded, its siblings lowered anyway.
     errors: Vec<LowerError>,
     /// The locale slot, once a `t` call made it (LLP 1060 D4).
     locale: Option<exact_plan::SlotsId>,
@@ -334,6 +331,7 @@ pub(crate) struct Lowerer<'a> {
     parent_horizontal_flex: Option<bool>,
     /// Where a native button may not be, from the nearest ancestor that says.
     pub(crate) button_context: Option<&'static str>,
+    pub(crate) guards: Vec<Expr>,
     /// Whether the element being lowered is a popover's direct child.
     pub(crate) popover_child: bool,
     /// Where the element being lowered sits relative to a navigation root.
@@ -344,8 +342,7 @@ pub(crate) struct Lowerer<'a> {
 #[derive(Debug, Clone, PartialEq)]
 struct DeclaredFont {
     stack: StacksId,
-    /// Each face's heaviest weight (a variable face's range reaches it) and
-    /// whether it is italic.
+    /// Each face's heaviest weight (a variable face's range reaches it) and whether it is italic.
     faces: Vec<(u16, bool)>,
 }
 
@@ -501,6 +498,7 @@ fn lower_with_sites(
         parent_stacks: true,
         parent_horizontal_flex: Some(false),
         button_context: None,
+        guards: Vec::new(),
         popover_child: false,
         nav_place: Default::default(),
         host_transforms: Default::default(),
@@ -1063,7 +1061,9 @@ impl<'a> Lowerer<'a> {
                 inner.push_none();
                 self.arm_scopes.insert((*tag, 0), (arms[0], inner.clone()));
                 self.arm_scopes.insert((*tag, 1), (arms[1], inner.clone()));
-                self.nodes(then, None, Some(arms[0]), &inner, locals, parent_tag)?;
+                self.under_guard(cond, |l| {
+                    l.nodes(then, None, Some(arms[0]), &inner, locals, parent_tag)
+                })?;
                 self.nodes(otherwise, None, Some(arms[1]), &inner, locals, parent_tag)
             }
             Node::Each {
@@ -1090,12 +1090,14 @@ impl<'a> Lowerer<'a> {
                     sites.region(*tag);
                 }
                 self.arm_scopes.insert((*tag, 0), (arms[0], inner.clone()));
-                self.nodes(body, None, Some(arms[0]), &inner, locals, parent_tag)
+                self.under_bindings(n.scoped_child_lists()[0].1, |l| {
+                    l.nodes(body, None, Some(arms[0]), &inner, locals, parent_tag)
+                })
             }
             Node::Match {
                 tag,
                 subject,
-                some,
+                some: (name, body),
                 none,
                 ..
             } => {
@@ -1107,18 +1109,12 @@ impl<'a> Lowerer<'a> {
                 if let Some(sites) = &mut self.sites {
                     sites.region(*tag);
                 }
-                let mut some_scope = scope.clone();
-                some_scope.push_some_of(&some.0, subject_ty);
-                self.arm_scopes
-                    .insert((*tag, 0), (arms[0], some_scope.clone()));
-                self.nodes(
-                    &some.1,
-                    None,
-                    Some(arms[0]),
-                    &some_scope,
-                    locals,
-                    parent_tag,
-                )?;
+                let mut inner = scope.clone();
+                inner.push_some_of(name, subject_ty);
+                self.arm_scopes.insert((*tag, 0), (arms[0], inner.clone()));
+                self.under_bindings(n.scoped_child_lists()[0].1, |l| {
+                    l.nodes(body, None, Some(arms[0]), &inner, locals, parent_tag)
+                })?;
                 let mut none_scope = scope.clone();
                 none_scope.push_none();
                 self.arm_scopes

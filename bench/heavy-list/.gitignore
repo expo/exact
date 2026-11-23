@@ -5,6 +5,7 @@
 # prepare.sh copies the root Cargo.lock; build.mjs resolves it for this workspace.
 /exact-heavylist/Cargo.lock
 /expo/data/
+/android/common/src/main/assets/
 /expo/assets/
 # Build products.
 build/
@@ -13,4 +14,6 @@ build-sim/
 /expo/node_modules/
 /expo/ios/
 /expo/.expo/
+/android/.gradle/
+/android/.kotlin/
 /probe/*.dylib

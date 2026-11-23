@@ -1116,11 +1116,13 @@ for retry. This avoids requiring another response-sized allocation at publicatio
 LLP 1173 D4's create-only namespaces use an OS-selected root, UNC included,
 and retain handles below it. Their walk refuses name-surrogate reparse tags
 and reopens admitted directories with normal reparse processing so cloud
-filters can recall placeholders. The reopened handle must identify the same
-object; tags are checked again before use. Every directory it opens is reopened
-because Windows can hide cloud tags; an entry it has just created with
-`FILE_CREATE` is not, having nothing to recall, unless it already carries a tag. The app and native drive walks keep refusing all
-reparse points. Leaf validation shares the native path rule. Exclusive
+filters can recall placeholders: an `NtCreateFile` with an empty name relative
+to the held handle, since `ReOpenFile` refuses directories. The reopened handle
+must identify the same object; tags are checked again before use. Every
+directory it opens is reopened because Windows can hide cloud tags; an entry it
+has just created with `FILE_CREATE` is not, having nothing to recall, unless it
+already carries a tag. Such an entry is held with `DELETE`, and removed if that
+check fails. The app and native drive walks keep refusing all reparse points. Leaf validation shares the native path rule. Exclusive
 creation uses `FILE_CREATE`; atomic publication uses the retained parent and
 `FileRenameInformation` with `ReplaceIfExists` false. Known-folder `mkdir`
 creates every component exclusively, with `FILE_CREATE` on Windows and
