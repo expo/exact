@@ -736,11 +736,6 @@ public final class ExactSession {
             if case .fill(let view) = next.kind { landedFill(view) }
         }
         takeEventResults(&batch)
-        if batch.unchanged {
-            logSkipped(batch)
-            if !hasEarlierBatch(than: batch.sequence) { relayStore(batch) }
-            return landed()
-        }
         guard let presentation = presentation(for: batch, published: next.kind) else { logSkipped(batch); return landed() }
         wait(PendingBatch(batch: batch, presentation: presentation, landed: landed, dropped: { finished(); stale() }))
     }
@@ -1225,7 +1220,8 @@ public final class ExactSession {
         if !batch.canvasImages.isEmpty { presenter.canvas2d.load(batch.canvasImages) }
         ImageLink.animated?.poke()
         presenter.reorders.observe(outputs.reorders)
-        followRunner(batch)
+        // An unchanged store receipt carries no runner schedule.
+        if !batch.unchanged { followRunner(batch) }
         // The GPU module: after the first painted frame, only when a canvas exists.
         if firstDrawMs != nil {
             afterBootOwner { [weak self] in

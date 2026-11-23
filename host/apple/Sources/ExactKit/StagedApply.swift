@@ -373,6 +373,12 @@ extension ExactSession {
     }
 
     func presentation(for batch: Batch, published: Published) -> PendingBatch.Presentation? {
+        if batch.unchanged {
+            // Match the original intake. An admission wait alone did not force a pass.
+            let scheduled = frames.motion || frames.spatial || frames.presentOnly || canvasOwed
+                || frames.canvas2d || frames.tasks || timerDue != nil || taskTimers.hasReady
+            return scheduled ? .full : nil
+        }
         if case .advance = published { return .unlessEmpty }
         #if os(macOS)
         if !hasEarlierBatch(than: batch.sequence), batch.hasStoreEffects || batch.layoutProvisional || batch.replacesTree {

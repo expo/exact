@@ -240,14 +240,126 @@ final class StoreRefreshTests: XCTestCase {
 
     }
 
-    private func publishReply(_ reply: Batch, to session: ExactSession) {
+    private let unchangedStoreReply = Batch.decode(Data(#"{"ops":[],"unchanged":true,"stored":true,"storeReadPending":false,"storeActivationPending":false}"#.utf8))
+
+    private func enqueueReply(_ reply: Batch, to session: ExactSession) {
         session.repliesInFlight += 1
         session.replySubmissions.append(0)
         session.publish(.reply, RuntimeCompletion(lease: session.runtime.completionLease, batch: reply))
+    }
+
+    private func publishReply(_ reply: Batch, to session: ExactSession) {
+        enqueueReply(reply, to: session)
         session.landPublished()
     }
 
-    #if os(iOS)
+    func testAnUnchangedStoreReplyRelaysWithFramesRunning() throws {
+        try checkUnchangedStoreRelay(staged: false)
+    }
+
+    func testAnUnchangedStoreReplyRelaysBesideAStageWithFramesRunning() throws {
+        try checkUnchangedStoreRelay(staged: true)
+    }
+
+    private func checkUnchangedStoreRelay(staged: Bool) throws {
+        #if os(macOS)
+        _ = NSApplication.shared
+        #endif
+        let fixture = try isolatedStore()
+        defer { fixture.restore() }
+        let writer = fixture.app.makeSession(label: "unchanged-store-writer")
+        let reader = fixture.app.makeSession(label: "unchanged-store-reader")
+        defer { writer.destroy(); reader.destroy() }
+        let size = CGSize(width: 300, height: 400)
+        let plan = try fixturePlan("STORE_REFRESH")
+        reader.clock = 0
+        XCTAssertNil(reader.boot(plan: plan, size: size).error)
+        reader.apply(reader.runtime.dataReady())
+        let button = try XCTUnwrap(reader.presenter.views.values.first { $0.props["testId"] == "favourite" })
+        func title() -> String? {
+            #if os(macOS)
+            (reader.presenter.controls.controls[button.id] as? NSButton)?.title
+            #else
+            (reader.presenter.controls.controls[button.id] as? UIButton)?.titleLabel?.text
+            #endif
+        }
+        XCTAssertEqual(title(), "Not a favourite")
+        let peer = try HeadlessSession(plan: plan, size: size, facts: SessionFacts(displayScale: 1, preferences: [], clock: 0))
+        defer { peer.close() }
+        try peer.refresh()
+        let node = try XCTUnwrap(try peer.snapshot().nodes.values.first { $0.props["testId"] == "favourite" })
+        try peer.press(node.id)
+
+        #if os(macOS)
+        let window = staged ? NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false) : nil
+        window?.isReleasedWhenClosed = false
+        window?.contentView = writer.presenter.viewport
+        defer { window?.close() }
+        #endif
+        var frames = wireBatch([])
+        frames.frames = true
+        writer.apply(frames)
+        if staged {
+            let parent: UInt32 = 9000
+            let children = (1...StagePlan.minimumOps).map { parent + UInt32($0) }
+            var ops: [[String: Any]] = children.map { ["op": "create", "id": $0, "kind": "view"] }
+            ops.append(["op": "children", "id": parent, "ids": children])
+            var batch = wireBatch(ops)
+            batch.frames = true
+            #if os(macOS)
+            writer.apply(wireBatch([["op": "create", "id": parent, "kind": "view"], ["op": "roots", "ids": [parent]]]))
+            writer.apply(batch)
+            #else
+            // UIKit does not open stages. Put one in the shared session queue.
+            writer.stage = try XCTUnwrap(StagePlan(batch, joins: { $0 == parent }, holds: { _, _ in false }))
+            #endif
+            XCTAssertNotNil(writer.stage)
+        }
+        XCTAssertTrue(writer.frames.tasks)
+        let applied = writer.appliedBatches
+        let originalReplication = fixture.app.replicateStore
+        var replications = 0
+        fixture.app.replicateStore = { replications += 1 }
+        defer { fixture.app.replicateStore = originalReplication }
+        publishReply(unchangedStoreReply, to: writer)
+        XCTAssertEqual(replications, 1)
+        XCTAssertEqual(writer.appliedBatches, applied + 1)
+        XCTAssertTrue(writer.frames.tasks)
+        XCTAssertEqual(writer.stage != nil, staged)
+        waitFor("the sibling window reads the committed preference", cap: 5) { title() == "Favourite" }
+        XCTAssertEqual(replications, 1)
+    }
+
+    func testAnUnchangedStoreReplyCanDrainWithAnotherReplyPublished() {
+        let app = ExactApp.shared
+        let session = app.makeSession(label: "unchanged-store-drain")
+        defer { session.destroy() }
+        var frames = wireBatch([])
+        frames.frames = true
+        session.apply(frames)
+        let applied = session.appliedBatches
+        var next = frames
+        let due = session.now() + 60_000
+        next.timerDueMs = due
+        let originalReplication = app.replicateStore
+        var drained = false
+        app.replicateStore = {
+            guard session.appliedBatches == applied + 1 else {
+                return XCTFail("the intake callback would spin on the second publication")
+            }
+            XCTAssertTrue(session.hasPublished(), "the callback runs before the second reply lands")
+            session.drainFill()
+            drained = true
+        }
+        defer { app.replicateStore = originalReplication }
+        enqueueReply(unchangedStoreReply, to: session)
+        enqueueReply(next, to: session)
+        session.landPublished()
+        XCTAssertTrue(drained)
+        XCTAssertFalse(session.hasPublished())
+        XCTAssertEqual(session.clockDue, due)
+    }
+
     func testAnUnchangedStoreReplyPreservesAnArmedScrollEndWake() throws {
         let app = ExactApp.shared
         let session = app.makeSession(label: "unchanged-store-timer")
@@ -264,15 +376,13 @@ final class StoreRefreshTests: XCTestCase {
         var replications = 0
         app.replicateStore = { replications += 1 }
         defer { app.replicateStore = originalReplication }
-        let receipt = Batch.decode(Data(#"{"ops":[],"unchanged":true,"stored":true,"storeReadPending":false,"storeActivationPending":false}"#.utf8))
-        publishReply(receipt, to: session)
-        XCTAssertEqual(replications, 1)
+        publishReply(unchangedStoreReply, to: session)
+        XCTAssertEqual(replications, 0, "main skips a receipt beside a scroll-end wait alone")
         XCTAssertEqual(session.timerAdmissions.waits, waits)
         waitFor("the unchanged receipt leaves the wake armed", cap: 5) {
             session.presenter.views.values.contains { $0.props["testId"] == "rests" && $0.props["text"] == "1" }
         }
     }
-    #endif
 
     #if os(macOS)
     func testAnEmptyReplyRefreshesTheOtherWindow() throws {
