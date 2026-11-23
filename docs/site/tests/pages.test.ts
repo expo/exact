@@ -2,6 +2,7 @@ import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { existsSync, readdirSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { resolve } from 'node:path';
+import { marked } from 'marked';
 import pages from '../content/pages.json';
 
 // Pages' own rules meet the tree tools/pages.ts makes here: `wrangler pages dev` serves dist.pages as Cloudflare
@@ -60,6 +61,16 @@ test('Recipes lists every Markdown recipe in name order', () => {
     .map(entry => `/recipes/${entry.name.slice(0, -3)}`)
     .sort();
   expect(pages.filter(page => page.section === 'Recipes').map(page => page.path)).toEqual(expected);
+});
+
+test('every recipe has a Markdown prompt that names its source', async () => {
+  for (const page of pages.filter(page => page.section === 'Recipes')) {
+    const source = `docs${page.path}.md`;
+    const markdown = await Bun.file(resolve(site, 'dist.pages', `${page.path.slice(1)}.md`)).text();
+    const prompt = marked.lexer(markdown).find(token => token.type === 'code' && token.lang?.split(/\s+/, 1)[0] === 'prompt');
+    expect(prompt?.text, source).toContain(source);
+    expect(prompt?.raw, source).not.toMatch(/\{\{[^{}]*\}\}/);
+  }
 });
 
 test('a chat fetcher gets Markdown at a published page path', async () => {

@@ -3,7 +3,7 @@ Make the data module of the Exact app in this folder send its errors and unhandl
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. If I did not say the URL that takes the reports, ask me. The recipe's report holds a `kind` and a `text` (the error's name and message): ask me before a report holds anything more. The server that takes the `POST` is mine to set up.
-3. In app.ts, add the reports URL to the `net.fetch` grant, beside the API's.
+3. In app.ts, add a separate `net.fetch` line for the reporting origin. Use the full reporting endpoint for the `POST`.
 4. Write the `report` function, and listen for `error` and `unhandledrejection` with `addEventListener` on the module's global, as the recipe shows. Call `fetch` in the listener itself, before any `await`, and catch its failure with `.catch(() => {})`. Send a plain HTTP request only. Do not fetch in the reply's `.then`, in a microtask the listener queued, or over a stream or socket: natively, each is refused.
 5. In the `catch` of each answer that can fail, call `reportError(e)`, then throw `e` again. A failed answer is not an `error` event: without this call, the answer only fails and no listener hears it.
 6. Do not report at bake, during the module's evaluation, or from a worker placement. Do not call `event.preventDefault()` unless I ask: without it, a report also reaches the platform's log.
