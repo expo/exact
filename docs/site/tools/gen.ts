@@ -6,6 +6,7 @@ import { dirname, join, normalize, relative, resolve } from 'node:path';
 import { agentRows, sections, tabs, type NavPage } from '../constants/navigation.ts';
 import { redirects } from '../constants/redirects.ts';
 import { site } from '../constants/site.ts';
+import { decode, descriptionOf, plain, sectionDescriptionProblems } from './descriptions.ts';
 import { promptOf } from './prompts.ts';
 
 const SITE = resolve(import.meta.dir, '..');
@@ -40,8 +41,6 @@ type Section = { title: string; anchor: string; tokens: Token[] };
 type Doc = { nav: NavPage; title: string; description: string; intro: Token[]; sections: Section[]; anchors: Map<string, string> };
 type SitePage = { route: string; path: string; title: string; description: string; source: string; tokens: Token[]; tocDepth: number; skipHeading: string; hidden: boolean; landing: boolean };
 
-const DESCRIPTION_MIN = 40;
-const DESCRIPTION_MAX = 180;
 const THEMES = { light: 'github-light', dark: 'github-dark' } as const;
 const contractGrammar = JSON.parse(readFileSync(join(REPO, 'editors/vscode/syntaxes/exact-contract.tmLanguage.json'), 'utf8'));
 const highlighter = await createHighlighter({
@@ -83,14 +82,6 @@ function slugger() {
   };
 }
 
-function plain(tokens: Token[] | undefined): string {
-  return (tokens ?? []).map(t => ('tokens' in t && t.tokens ? plain(t.tokens) : 'text' in t ? decode(String(t.text)) : '')).join('');
-}
-
-function decode(s: string): string {
-  return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
-}
-
 function routeName(path: string): string {
   if (path === '/') return 'home';
   return path.split(/[/-]/).filter(Boolean).map((w, i) => (i ? w[0].toUpperCase() + w.slice(1) : w)).join('');
@@ -129,10 +120,15 @@ function read(nav: NavPage): Doc {
     }
     (parts.at(-1)?.tokens ?? intro).push(t);
   }
-  return { nav, title, description: nav.description ?? lead(intro, title), intro, sections: parts.filter(s => !SKIPPED_SECTIONS.has(s.anchor)), anchors };
+  return { nav, title, description: nav.description ?? descriptionOf(intro, title), intro, sections: parts.filter(s => !SKIPPED_SECTIONS.has(s.anchor)), anchors };
 }
 
 const docs = sections.flatMap(s => s.pages).map(read);
+const descriptionProblems = sectionDescriptionProblems(docs);
+if (descriptionProblems.length) {
+  console.error(descriptionProblems.join('\n'));
+  process.exit(1);
+}
 const bySource = new Map(docs.map(d => [d.nav.source, d]));
 const links: { from: string; to: string; anchor: string; ok: boolean }[] = [];
 
@@ -344,43 +340,17 @@ function render(page: SitePage): { blocks: Block[]; toc: TocItem[] } {
   return { blocks: out, toc };
 }
 
-function sentencesOf(tokens: Token[] | undefined): string[] {
-  return plain(tokens).replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s+(?=[A-Z])/).map(x => x.trim());
-}
-
-function firstSentencesOfListItems(tokens: Token[]): string | undefined {
-  const list = tokens.find((t): t is Tokens.List => t.type === 'list');
-  const firsts = (list?.items ?? []).map(item => sentencesOf(item.tokens.slice(0, 1))[0]).filter(Boolean);
-  let fitting = 1;
-  while (fitting < firsts.length && firsts.slice(0, fitting + 1).join(' ').length <= DESCRIPTION_MAX) fitting++;
-  return firsts.slice(0, fitting).join(' ') || undefined;
-}
-
-function lead(tokens: Token[], fallback: string): string {
-  const sentence = tokens
-    .filter((t): t is Tokens.Paragraph => t.type === 'paragraph')
-    .flatMap(p => sentencesOf(p.tokens))
-    .find(x => x.length >= DESCRIPTION_MIN && !x.endsWith(':')) ?? firstSentencesOfListItems(tokens) ?? fallback;
-  if (sentence.length <= DESCRIPTION_MAX) return sentence;
-  const lastFullStop = [...sentence.slice(0, DESCRIPTION_MAX).matchAll(/[.!?](?=\s)/g)].at(-1)?.index ?? -1;
-  if (lastFullStop + 1 >= DESCRIPTION_MIN) return sentence.slice(0, lastFullStop + 1);
-  const boundary = Math.max(0, sentence.lastIndexOf(' ', DESCRIPTION_MAX - 3));
-  return `${sentence.slice(0, boundary).trimEnd()}…`;
-}
-
 const pages: SitePage[] = docs.flatMap(doc => {
   const base: SitePage = { route: doc.nav.route, path: doc.nav.path, title: doc.title, description: doc.description, source: doc.nav.source, tokens: doc.intro, tocDepth: 2, skipHeading: '', hidden: !!doc.nav.hidden, landing: !!doc.nav.landing };
   if (!doc.nav.split) return [{ ...base, tokens: [...doc.intro, ...doc.sections.flatMap(s => s.tokens)] }];
   const written = doc.nav.sectionDescriptions ?? {};
-  const unknown = Object.keys(written).find(anchor => !doc.sections.some(s => s.anchor === anchor));
-  if (unknown) throw new Error(`${doc.nav.source}: sectionDescriptions names "${unknown}", which is not one of its sections`);
   return [
     base,
     ...doc.sections.map(s => ({
       route: routeName(`${doc.nav.path}/${s.anchor}`),
       path: `${doc.nav.path}/${s.anchor}`,
       title: s.title,
-      description: Object.hasOwn(written, s.anchor) ? written[s.anchor] : lead(s.tokens, doc.description),
+      description: Object.hasOwn(written, s.anchor) ? written[s.anchor] : descriptionOf(s.tokens, doc.description),
       source: doc.nav.source,
       tokens: s.tokens,
       tocDepth: 3,
