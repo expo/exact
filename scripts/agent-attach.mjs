@@ -98,11 +98,11 @@ const simulatorProcess = (line) => {
 };
 
 /** The running development app in the selected iOS simulator that `--attach` joins (LLP 1012.000 D1, D2): the
- * simulator `--sim` or `EXACT_SIM` names, else the one a drive of the app in `dir` would choose, booting nothing; the marker the
+ * simulator `--sim` or `EXACT_SIM` names, else the one a drive of the app in `appDir` would choose, booting nothing; the marker the
  * developer menu's Enable Agent Attach wrote in the app's container `tmp`, which `simctl get_app_container` names; a
  * live process of the app on that device. An Apple TV, a watch or a simulator that is not running is refused. */
-export function attachTargetIOS({ id, name, app, dir, pid = null, run = spawnSync, choose = chooseSimulator }) {
-  const dev = choose(undefined, { app: id, dir, hint: '--sim <udid|name> (or EXACT_SIM)' });
+export function attachTargetIOS({ id, name, app, appDir, pid = null, run = spawnSync, choose = chooseSimulator }) {
+  const dev = choose(undefined, { app: id, dir: appDir, hint: '--sim <udid|name> (or EXACT_SIM)' });
   const other = /SimRuntime\.(tvOS|watchOS|xrOS)/.exec(dev.runtime)?.[1];
   if (other) throw new Error(`--attach: unsupported on ${other} (simulator ${dev.name}): ${{ tvOS: 'an Apple TV build', watchOS: 'a watch app', xrOS: 'a visionOS app' }[other]} carries no attach. An agent attaches to a development macOS app or an app in the iOS simulator (LLP 1012.000 D2)`);
   const device = `simulator ${dev.name} (${dev.udid})`;
@@ -134,7 +134,7 @@ export async function openAttached({ host, app, pid = null, session, device = fa
   const refused = attachUnsupported(host, { device });
   if (refused) throw new Error(refused);
   const a = resolveApp(app), name = a.manifest?.name ?? a.name;
-  const m = find({ id: a.id, name, app: basename(a.dir), dir: a.dir, pid });
+  const m = find({ id: a.id, name, app: basename(a.dir), appDir: a.dir, pid });
   const where = m.device ? ` in simulator ${m.device.name}` : '';
   const wire = await attachWire(dial({ path: m.socket }), { nonce: m.nonce, session, onWaiting: () => say(`attach: waiting for Allow in ${name}${where} (pid ${m.pid})`) }).catch((e) => {
     // iOS suspends an app in the background, listener and all, until it is opened again.

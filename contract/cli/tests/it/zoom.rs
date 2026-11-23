@@ -1,15 +1,9 @@
 //! LLP 1057.001.000: a zoomable scroll container's rows, its `scrollZoom`
 //! prop and `ScrollEvent`'s zoom, and the refusals of D4.
 
+use crate::source::{boxed, NoData};
 use exact_kernel::{Kernel, PropId, PropValue};
-use exact_runner::{DataError, DataSource, Event, Runner, ScrollEvent, Value};
-
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::{Event, Runner, ScrollEvent, Value};
 
 fn app(body: &str) -> String {
     let body = body
@@ -37,7 +31,7 @@ fn a_zoomable_scroll_carries_its_range_and_zoom() {
     let plan = contract::compile(&source).unwrap_or_else(|e| panic!("{e}"));
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

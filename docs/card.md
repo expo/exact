@@ -45,6 +45,7 @@ functions: call -> result
   replace(router, location) -> Router
   text.replaceAll(find, with) -> string
   round(n) -> number  (half up)
+  scrollMetrics(id) -> option<ScrollMetrics>
   searchParam(entry, name) -> string
   select(router, tabName) -> Router
   sharedFiles(entry, name) -> SharedFiles
@@ -99,19 +100,18 @@ test steps (app.test.contract, docs/contract-grammar.md)
   clock data · clock settle · clock +5000 · reload
   back
   presence allow (cancel, fail, lockout, invalidated)
-  fail fetch "<prefix>", pass fetch …
-  drop stream "<prefix>"
+  fail fetch, pass fetch, drop stream "<prefix>"
   answer fetch "<prefix>" with 200 {…}, answer source s with {…}
   request POST "/items" {…} as grace expect 409
   size 390x844, at "/item/7#moves", epoch, time-zone, locale, seed, before data
 
-ops: a target is a testId, else a view's exact text or label
+ops:
   tree [<target>|--ax] · logs · layout|perf [<target>] · resize <w>x<h> · close · back
   state [<name>] [--full]  a state, resource or field, dotted: groceries.0.done; >8 KB: sizes
-  tap <target> [contextmenu|hover|drag <dx> <dy>|down|…] · tap up
+  tap <target> [contextmenu|hover|drag <dx> <dy>|down|…] · tap up (testId, exact text or label)
   type <target> <text>|key <Name>   (a select, date or checkbox: its value)
   clock data|settle|held|+<ms> [real]    replies · transitions · push
-  check [dark|both]  what is wrong · screenshot <png> [over <ms> every <ms>] [window]  window: bars
+  check [dark|both]  what is wrong · screenshot <png> [over <ms> every <ms>] [window]  window: bars · --device captures display
   Android reader drives refuse film and play layers only under --live. Record a live or normal run with adb shell screenrecord.
   screenshot <png> compare <ref> · prefer <feature> <value> · fail|pass fetch <prefix>
 

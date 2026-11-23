@@ -2,6 +2,7 @@
 //! `var(--exact-safe-area-inset-*)` in a length and `--exact-safe-area-inset-*`
 //! declared on a box, through the compiler to the kernel's layout.
 
+use crate::source::{boxed, Source};
 use exact_kernel::{HostCover, Kernel, Offer};
 use exact_plan::Plan;
 use exact_runner::Runner;
@@ -20,16 +21,23 @@ component App
             column height="var(--exact-safe-area-inset-top)" testId="own-probe"
 "#;
 
-fn boot(safe: &str) -> Runner<()> {
+fn boot(safe: &str) -> Runner<Source> {
     let source = APP.replace("SAFE", safe);
     let plan = contract::compile(&source).unwrap_or_else(|e| panic!("{e}"));
     let plan = Plan::decode(&plan.encode()).unwrap();
-    Runner::boot(plan, (), Kernel::with_monospace(), Default::default(), "/").unwrap()
+    Runner::boot(
+        plan,
+        boxed(()),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap()
 }
 
 /// The route as a host bar covers it: 106 points of clearance at its top,
 /// its local inset.
-fn covered(runner: &mut Runner<()>) -> exact_kernel::ViewId {
+fn covered(runner: &mut Runner<Source>) -> exact_kernel::ViewId {
     let kernel = runner.kernel_mut();
     let route = kernel
         .node_by_key(kernel.find_by_test_id("route")[0])
@@ -47,7 +55,7 @@ fn covered(runner: &mut Runner<()>) -> exact_kernel::ViewId {
     route
 }
 
-fn y(runner: &Runner<()>, test_id: &str) -> (f32, f32) {
+fn y(runner: &Runner<Source>, test_id: &str) -> (f32, f32) {
     let kernel = runner.kernel();
     let node = kernel
         .node_by_key(kernel.find_by_test_id(test_id)[0])
@@ -84,8 +92,14 @@ fn a_route_opted_out_of_its_top_starts_under_the_bar() {
     );
     let plan = contract::compile(&source).unwrap_or_else(|e| panic!("{e}"));
     let plan = Plan::decode(&plan.encode()).unwrap();
-    let mut runner =
-        Runner::boot(plan, (), Kernel::with_monospace(), Default::default(), "/").unwrap();
+    let mut runner = Runner::boot(
+        plan,
+        boxed(()),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
     covered(&mut runner);
     assert_eq!(y(&runner, "hero").0, 0.0);
     assert_eq!(y(&runner, "hero-text").0, 106.0);

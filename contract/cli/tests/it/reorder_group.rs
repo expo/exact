@@ -2,6 +2,7 @@
 //! empty, driven through the runner's session with no host: the previews
 //! on both lists, the drop on the target with its `ReorderEvent`, the hold
 //! and its endings, the keyboard's steps, and the compiler's refusals.
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, NodeKey};
 use exact_runner::{
     Answer, CollectionFeedback, DataError, DataSource, Outcome, ReorderEnding, ReorderPhase,
@@ -141,18 +142,18 @@ impl DataSource for Board {
     }
 }
 
-fn boot(mode: Mode) -> Runner<Board> {
+fn boot(mode: Mode) -> Runner<Source> {
     boot_with(Board::new(mode))
 }
 
-fn boot_with(board: Board) -> Runner<Board> {
+fn boot_with(board: Board) -> Runner<Source> {
     boot_source(board, BOARD)
 }
 
-fn boot_source(board: Board, source: &str) -> Runner<Board> {
+fn boot_source(board: Board, source: &str) -> Runner<Source> {
     let mut r = Runner::boot(
         contract::compile(source).unwrap_or_else(|e| panic!("{e}")),
-        board,
+        boxed(board),
         Kernel::with_monospace(),
         Default::default(),
         "/",

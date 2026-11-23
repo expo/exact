@@ -4,17 +4,11 @@
 //! text is the value at the far edge (round 19's grocery-list). A lone button
 //! row stays an action cell, and an authored `text-align` wins.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, Offer, StyleMask, TextAlign};
-use exact_runner::{DataError, DataSource, Runner, Value};
+use exact_runner::Runner;
 
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-
-fn boot(body: &str) -> Runner<NoData> {
+fn boot(body: &str) -> Runner<Source> {
     let body = body
         .lines()
         .map(|l| format!("      {l}\n"))
@@ -24,12 +18,12 @@ fn boot(body: &str) -> Runner<NoData> {
     );
     let plan = contract::bake(
         contract::compile(&source).unwrap_or_else(|e| panic!("{e}")),
-        NoData,
+        boxed(NoData),
     )
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -42,7 +36,7 @@ fn boot(body: &str) -> Runner<NoData> {
     r
 }
 
-fn id(r: &Runner<NoData>, test_id: &str) -> u32 {
+fn id(r: &Runner<Source>, test_id: &str) -> u32 {
     let k = r.kernel();
     k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap().id
 }

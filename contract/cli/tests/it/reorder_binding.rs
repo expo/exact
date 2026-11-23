@@ -1,4 +1,5 @@
 //! Arrange payloads preserve exact string keys; physical admission is Runner-owned.
+use crate::source::boxed;
 use exact_kernel::{Kernel, PropId};
 use exact_plan::{EventKind, Value};
 use exact_runner::{DataError, DataSource, Event, Runner};
@@ -21,7 +22,14 @@ fn reorder_prop_event_roundtrip_and_exact_payload_types() {
     ))
     .unwrap();
     let p = exact_plan::Plan::decode(&p.encode()).unwrap();
-    let mut r = Runner::boot(p, Rows, Kernel::with_monospace(), Default::default(), "/").unwrap();
+    let mut r = Runner::boot(
+        p,
+        boxed(Rows),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
     assert_eq!(PropId::from_name("reorderFor").unwrap() as u16, 77);
     assert_eq!(EventKind::from_name("reorderdrop").unwrap() as u8, 17);
     let list = r

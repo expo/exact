@@ -6,6 +6,7 @@
 //! (`asks`), the raise from write-only, the editor's taps, the targets a
 //! name does not exist on, and the origin rule.
 
+use crate::source::{boxed, Source};
 use exact_runner::{CallOrigin, Dispatch, Outcome, Reply, Response, Runner, Work};
 use serde_json::{json, Value as Json};
 #[cfg(unix)]
@@ -96,13 +97,13 @@ type Calls = Arc<Mutex<Vec<Json>>>;
 
 /// A runner over the app, both implementations bound under the agent and
 /// played by the native slot, which answers each call with its own body.
-fn boot(name: &str, source: &str, grants: &'static str) -> (App, Runner<Grants>, Calls) {
+fn boot(name: &str, source: &str, grants: &'static str) -> (App, Runner<Source>, Calls) {
     let app = App::new(name, source);
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Grants(grants),
+        boxed(Grants(grants)),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -135,7 +136,7 @@ fn boot(name: &str, source: &str, grants: &'static str) -> (App, Runner<Grants>,
 
 /// The host's part: each request dispatched, released work run, each
 /// outcome fulfilled, until nothing is left to do.
-fn pump(r: &mut Runner<Grants>, parked: &mut Vec<(u64, u64)>) {
+fn pump(r: &mut Runner<Source>, parked: &mut Vec<(u64, u64)>) {
     for _ in 0..8 {
         let outs = r.take_requests();
         let released = r.release_work();
@@ -159,7 +160,7 @@ fn pump(r: &mut Runner<Grants>, parked: &mut Vec<(u64, u64)>) {
     }
 }
 
-fn run(r: &mut Runner<Grants>, ticket: u64, dispatch: Dispatch) {
+fn run(r: &mut Runner<Source>, ticket: u64, dispatch: Dispatch) {
     let outcome = match dispatch {
         Dispatch::Run(Work::Now(work)) => work(),
         Dispatch::Run(Work::Later(work)) => {
@@ -180,17 +181,17 @@ fn sent(calls: &Calls, name: &str) -> Vec<Json> {
         .collect()
 }
 
-fn logs(r: &Runner<Grants>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     exact_runner::agent::handle(r, r#"{"op":"logs"}"#)
 }
 
 /// The status the runner answers now, as JSON.
-fn status(r: &Runner<Grants>) -> String {
+fn status(r: &Runner<Source>) -> String {
     format!("{:?}", r.resource("status"))
 }
 
 /// The one ticket held: its capability, choices and arguments.
-fn held(r: &Runner<Grants>) -> (u64, String, Vec<String>, Json) {
+fn held(r: &Runner<Source>) -> (u64, String, Vec<String>, Json) {
     let holds = r.device_holds();
     assert_eq!(holds.len(), 1, "{}", logs(r));
     let hold = holds[0].clone();
@@ -203,7 +204,7 @@ fn held(r: &Runner<Grants>) -> (u64, String, Vec<String>, Json) {
 
 /// Ticket `ticket` answered with `op` (`tap` and a choice, or `type` and a text).
 fn answer(
-    r: &mut Runner<Grants>,
+    r: &mut Runner<Source>,
     parked: &mut Vec<(u64, u64)>,
     ticket: u64,
     op: &str,

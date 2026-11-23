@@ -2,27 +2,20 @@
 //! is `display: block`. Each named case is laid out too: the child stays at
 //! the box's left edge, as in a bare `<div>`, and the named repair centres it.
 
+use crate::source::{boxed, NoData};
 use crate::warnings::warned;
 use exact_kernel::{Kernel, Offer};
-use exact_runner::{DataError, DataSource, Runner, Value};
+use exact_runner::Runner;
 
 const ID: &str = "lower-flex-on-block";
 
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
+/// An app whose box is `kind`, 100 points wide, around a 20-point child.
+fn app(kind: &str) -> String {
+    format!("component App\n  view\n    column width=100\n      {kind} width=100 height=40\n        view id=\"c\" width=20 height=10\n")
 }
 
-/// An app whose box is `boxed`, 100 points wide, around a 20-point child.
-fn app(boxed: &str) -> String {
-    format!("component App\n  view\n    column width=100\n      {boxed} width=100 height=40\n        view id=\"c\" width=20 height=10\n")
-}
-
-fn flagged(boxed: &str) -> Vec<String> {
-    let src = app(boxed);
+fn flagged(kind: &str) -> Vec<String> {
+    let src = app(kind);
     let (_, warnings) = contract::compile_warned(&src);
     assert_eq!(
         warned(&src).iter().filter(|(id, _)| id == ID).count(),
@@ -35,11 +28,11 @@ fn flagged(boxed: &str) -> Vec<String> {
         .collect()
 }
 
-fn child_x(boxed: &str) -> f32 {
-    let plan = contract::compile(&app(boxed)).unwrap();
+fn child_x(kind: &str) -> f32 {
+    let plan = contract::compile(&app(kind)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -56,7 +49,7 @@ fn child_x(boxed: &str) -> f32 {
 
 #[test]
 fn a_flex_property_on_a_block_is_named_with_its_repair() {
-    for (boxed, says) in [
+    for (kind, says) in [
         (
             "view align-items=\"center\"",
             "`align-items` does nothing on this `view`: it is `display: block`",
@@ -75,10 +68,10 @@ fn a_flex_property_on_a_block_is_named_with_its_repair() {
         ),
         ("scroll align-items=\"center\"", "this `scroll`"),
     ] {
-        let messages = flagged(boxed);
-        assert_eq!(messages.len(), 1, "{boxed}: {messages:?}");
-        assert!(messages[0].contains(says), "{boxed}: {}", messages[0]);
-        assert_eq!(child_x(boxed), 0.0, "{boxed}: CSS ignores it");
+        let messages = flagged(kind);
+        assert_eq!(messages.len(), 1, "{kind}: {messages:?}");
+        assert!(messages[0].contains(says), "{kind}: {}", messages[0]);
+        assert_eq!(child_x(kind), 0.0, "{kind}: CSS ignores it");
     }
     // A button is a block too, as Chrome's is: its children stack (the euxy port).
     let button = flagged("button appearance=\"none\" flex-direction=\"row\"");
@@ -122,7 +115,7 @@ fn a_flex_property_on_a_block_is_named_with_its_repair() {
 
 #[test]
 fn what_the_walk_cannot_be_sure_of_or_css_gives_a_meaning_is_not_named() {
-    for boxed in [
+    for kind in [
         "row justify-content=\"center\"",
         "view display=\"grid\" justify-items=\"center\"",
         // The children's default `justify-self` (Box Alignment 3), which Chrome draws.
@@ -135,7 +128,7 @@ fn what_the_walk_cannot_be_sure_of_or_css_gives_a_meaning_is_not_named() {
         "view column-count=2 gap=4 row-gap=4 column-gap=4 justify-content=\"center\"",
         "view columns=\"2\" justify-content=\"center\"",
     ] {
-        assert_eq!(flagged(boxed), Vec::<String>::new(), "{boxed}");
+        assert_eq!(flagged(kind), Vec::<String>::new(), "{kind}");
     }
 }
 
@@ -217,7 +210,7 @@ fn multicol_exemptions_follow_the_winning_count_and_width() {
         if !multicol {
             let mut r = Runner::boot(
                 plan,
-                NoData,
+                boxed(NoData),
                 Kernel::with_monospace(),
                 Default::default(),
                 "/",

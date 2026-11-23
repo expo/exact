@@ -2,31 +2,23 @@
 //! `system-bars-hidden` lower to props, a literal outside their sets is
 //! refused, and a bound one follows state.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, PropId};
-use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Event, Runner};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::{Event, Runner};
 
 #[test]
 fn the_status_bar_props_lower_and_follow_state() {
     let src = "component App\n  state compact = false\n  action flip\n    compact = not compact\n  view\n    column testId=\"route\" status-bar-style=\"light-content\" system-bars-hidden=true\n      button press=flip testId=\"header\" status-bar-style=(compact ? \"dark-content\" : \"auto\") status-bar-animation=\"fade\" system-bars-hidden=compact\n        text \"Flip\"\n";
-    let plan = contract::bake(contract::compile(src).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let prop = |r: &Runner<NoData>, id: &str, p: PropId| {
+    let prop = |r: &Runner<Source>, id: &str, p: PropId| {
         let k = r.kernel();
         k.node_by_key(k.find_by_test_id(id)[0])
             .unwrap()
@@ -34,7 +26,7 @@ fn the_status_bar_props_lower_and_follow_state() {
             .str(p)
             .map(str::to_string)
     };
-    let hidden = |r: &Runner<NoData>, id: &str| {
+    let hidden = |r: &Runner<Source>, id: &str| {
         let k = r.kernel();
         k.node_by_key(k.find_by_test_id(id)[0])
             .unwrap()

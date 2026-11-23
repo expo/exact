@@ -5,6 +5,7 @@
 //! role whose Apple name it is or the icon whose `sf` it is.
 
 use crate::scratch::Scratch;
+use crate::source::boxed;
 use std::path::PathBuf;
 
 /// The template subset (`contract_lower`'s `icons::TEMPLATE`).
@@ -797,10 +798,10 @@ fn a_grouped_row_carries_an_svg_only_icon() {
         "component App\n  action go\n  view\n    column testId=\"root\" width=402 height=874\n      list appearance=\"auto\" testId=\"list\" flex=1\n        section\n          button press=go\n            image \"symbol:icon.svg\"\n            text \"Reply\"\n          button press=go\n            image \"symbol:icon.sf\"\n            text \"Answer\"\n          button press=go\n            image \"symbol:icon.two\" -exact-symbol-rendering=\"multicolor\"\n            text \"Colours\"\n",
     );
     let plan = contract::compile_path(&path).unwrap_or_else(|e| panic!("{e:?}"));
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     let mut r = exact_runner::Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",

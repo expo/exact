@@ -1,4 +1,5 @@
 //! The apps' actions must use newly computed values at timer boundaries.
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, Offer};
 use exact_runner::{Answer, DataError, DataSource, Request, Runner, Store, Value};
 use std::path::PathBuf;
@@ -32,7 +33,7 @@ impl DataSource for Replies {
 
 // Seed timing and an arriving reply without a network or a wall-clock wait.
 // The action under test and the rest of the app remain the authored source.
-fn boot(app: &str, setup: &str, bubble: bool) -> Runner<Replies> {
+fn boot(app: &str, setup: &str, bubble: bool) -> Runner<Source> {
     let path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("../../apps/{app}/app.contract"));
     let source = std::fs::read_to_string(&path).unwrap();
@@ -47,7 +48,7 @@ fn boot(app: &str, setup: &str, bubble: bool) -> Runner<Replies> {
     let plan = contract::compile_path_source(&path, &source).unwrap();
     Runner::boot(
         plan,
-        Replies,
+        boxed(Replies),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -55,7 +56,7 @@ fn boot(app: &str, setup: &str, bubble: bool) -> Runner<Replies> {
     .unwrap()
 }
 
-fn number(r: &Runner<Replies>, name: &str) -> f64 {
+fn number(r: &Runner<Source>, name: &str) -> f64 {
     r.slot(name).and_then(Value::as_number).unwrap()
 }
 

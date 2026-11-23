@@ -2,6 +2,7 @@
 //! from its mutations' `then` actions (LLP 1016.001), not from a polling
 //! tick, and its signed-out guard is a task `me`'s answer arms. Driven
 //! offline: every source answers later, and the test lands the replies.
+use crate::source::{boxed, Source};
 use exact_kernel::Kernel;
 use exact_runner::{
     agent, Answer, DataError, DataSource, Outcome, Request, Response, Runner, Store, Value,
@@ -59,13 +60,13 @@ impl DataSource for Api {
     }
 }
 
-fn boot(launch: &str) -> Runner<Api> {
+fn boot(launch: &str) -> Runner<Source> {
     let src = std::fs::read_to_string(APP).unwrap();
     let plan = contract::compile_path_source(std::path::Path::new(APP), &src).unwrap();
-    let plan = contract::bake(plan, Api).unwrap();
+    let plan = contract::bake(plan, boxed(Api)).unwrap();
     Runner::boot(
         plan,
-        Api,
+        boxed(Api),
         Kernel::with_monospace(),
         Default::default(),
         launch,
@@ -74,7 +75,7 @@ fn boot(launch: &str) -> Runner<Api> {
 }
 
 /// The top entry: (route name, url).
-fn current(r: &Runner<Api>) -> (String, String) {
+fn current(r: &Runner<Source>) -> (String, String) {
     let s: Json = serde_json::from_str(&agent::state(r)).unwrap();
     let c = &s["derives"]["current"];
     (
@@ -84,7 +85,7 @@ fn current(r: &Runner<Api>) -> (String, String) {
 }
 
 /// Land the reply to the request `target` sent.
-fn reply(r: &mut Runner<Api>, target: &str) {
+fn reply(r: &mut Runner<Source>, target: &str) {
     let ticket = r
         .take_requests()
         .into_iter()
@@ -142,7 +143,7 @@ fn publish_opens_the_article_and_delete_goes_home() {
 }
 
 /// Run every timer due now, as the host does once a frame.
-fn settle(r: &mut Runner<Api>) {
+fn settle(r: &mut Runner<Source>) {
     while let Some(due) = r.timer_due_ms().filter(|&due| due <= r.now_ms() + 1.0) {
         r.advance(due).unwrap();
     }
@@ -185,7 +186,7 @@ fn the_signed_out_guard_keeps_a_push_when_following_is_revisited_before_it_lands
 }
 
 /// The `testId` views on the shown screen, and on the covered ones.
-fn views(r: &Runner<Api>, id: &str) -> (Vec<exact_kernel::ViewId>, Vec<exact_kernel::ViewId>) {
+fn views(r: &Runner<Source>, id: &str) -> (Vec<exact_kernel::ViewId>, Vec<exact_kernel::ViewId>) {
     let k = r.kernel();
     k.find_by_test_id(id)
         .into_iter()
@@ -193,7 +194,7 @@ fn views(r: &Runner<Api>, id: &str) -> (Vec<exact_kernel::ViewId>, Vec<exact_ker
         .partition(|v| !r.inactive(*v))
 }
 
-fn value(r: &Runner<Api>, view: exact_kernel::ViewId) -> String {
+fn value(r: &Runner<Source>, view: exact_kernel::ViewId) -> String {
     let node = r.kernel().node(view).unwrap();
     node.props
         .str(exact_kernel::PropId::Value)

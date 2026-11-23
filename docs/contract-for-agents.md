@@ -119,7 +119,7 @@ To preview a component declared in your app's root, add a frame such as
 `frames/card.contract` inside the app. Its first component is the preview's
 root. It can pass props to the app's components and use the app's data handlers.
 
-```contract
+```text
 use Inspector from "../app.contract"
 component Frame
   view

@@ -2,27 +2,21 @@
 //! (the tennis game's `text has no attribute flex-grow`), and can be hidden
 //! from assistive technology (`aria-hidden`, its decorative glyph).
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, Offer, PropId};
-use exact_runner::{DataError, DataSource, Runner, Value};
+use exact_runner::Runner;
 
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-
-fn boot(body: &str) -> Runner<NoData> {
+fn boot(body: &str) -> Runner<Source> {
     let src =
         format!("component App\n  view\n    column testId=\"root\" width=300 height=400\n{body}");
     let plan = contract::bake(
         contract::compile(&src).unwrap_or_else(|e| panic!("{e}")),
-        NoData,
+        boxed(NoData),
     )
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -36,7 +30,7 @@ fn boot(body: &str) -> Runner<NoData> {
 }
 
 /// (x, y, width, height) of each test id, in the order asked.
-fn frames(r: &Runner<NoData>, ids: &[&str]) -> Vec<(f32, f32, f32, f32)> {
+fn frames(r: &Runner<Source>, ids: &[&str]) -> Vec<(f32, f32, f32, f32)> {
     ids.iter()
         .map(|id| {
             let f = r

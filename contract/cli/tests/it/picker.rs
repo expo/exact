@@ -3,16 +3,9 @@
 //! `Picked[]` and `cancel` nothing; `accept` is bounded at bake.
 
 use crate::scratch::Scratch;
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, NodeType, PropId};
-use exact_runner::{ControlValue, DataError, DataSource, Event, Picked, Runner, Value};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _args: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.to_string()))
-    }
-}
+use exact_runner::{ControlValue, Event, Picked, Runner, Value};
 
 const COMPOSE: &str = r#"component App
   state summary = ""
@@ -31,10 +24,10 @@ const COMPOSE: &str = r#"component App
         text "Add"
 "#;
 
-fn boot(src: &str) -> Runner<NoData> {
+fn boot(src: &str) -> Runner<Source> {
     Runner::boot(
         contract::compile(src).unwrap_or_else(|e| panic!("{e}")),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -42,12 +35,12 @@ fn boot(src: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn view_of(r: &Runner<NoData>, test_id: &str) -> u32 {
+fn view_of(r: &Runner<Source>, test_id: &str) -> u32 {
     let key = r.kernel().find_by_test_id(test_id)[0];
     r.kernel().node_by_key(key).unwrap().id
 }
 
-fn slot(r: &Runner<NoData>, name: &str) -> String {
+fn slot(r: &Runner<Source>, name: &str) -> String {
     let state = exact_runner::agent::state(r);
     let v: serde_json::Value = serde_json::from_str(&state).unwrap();
     v["slots"][name].to_string()
@@ -213,7 +206,7 @@ fn declared_audio_and_xhtml_types_compile_and_accept_agent_picks() {
             let plan = contract::compile_path(&dir.join("app.contract")).unwrap();
             let mut r = Runner::boot(
                 plan,
-                NoData,
+                boxed(NoData),
                 Kernel::with_monospace(),
                 Default::default(),
                 "/",

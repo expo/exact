@@ -5,6 +5,7 @@
 //! and `audio=` the microphone's, one after the other; a tool's capture
 //! start is refused before anything is asked.
 
+use crate::source::{boxed, Read, Source};
 use exact_runner::{CallOrigin, Dispatch, Outcome, Reply, Response, Runner, Value, Work};
 use serde_json::{json, Value as Json};
 #[cfg(unix)]
@@ -114,7 +115,7 @@ fn a_view_only_camera_accepts_a_typed_preferred_picture() {
         .all(|m| plan.str(m.extension) == "camera"));
     let mut r = Runner::boot(
         plan,
-        Granted(CAMERA_LINES, false),
+        boxed(Granted(CAMERA_LINES, false)),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -187,7 +188,7 @@ fn an_unused_camera_view_does_not_admit_preferences() {
     assert!(plan.views.is_empty());
     let mut r = Runner::boot(
         plan,
-        Granted(CAMERA_LINES, false),
+        boxed(Granted(CAMERA_LINES, false)),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -211,7 +212,7 @@ fn shelfs_viewfinder_receives_the_preferred_scan_fixture() {
     assert!(plan.view_named("exact-camera").is_some());
     let mut r = Runner::boot(
         plan,
-        Granted(CAMERA_LINES, false),
+        boxed(Granted(CAMERA_LINES, false)),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -271,17 +272,17 @@ type Calls = Arc<Mutex<Vec<Json>>>;
 
 /// A runner over the app, the two implementations bound under the agent and
 /// played by the native slot: `getUserMedia` answers a stream of one track.
-fn boot(name: &str) -> (App, Runner<Granted>, Calls) {
+fn boot(name: &str) -> (App, Runner<Source>, Calls) {
     boot_with(App::new(name), CAMERA_LINES)
 }
 
 /// [`boot`] over `app`, which grants `lines`.
-fn boot_with(app: App, lines: &'static str) -> (App, Runner<Granted>, Calls) {
+fn boot_with(app: App, lines: &'static str) -> (App, Runner<Source>, Calls) {
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Granted(lines, false),
+        boxed(Granted(lines, false)),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -321,7 +322,7 @@ fn boot_with(app: App, lines: &'static str) -> (App, Runner<Granted>, Calls) {
 
 /// The host's part: each request dispatched, released work run, each
 /// outcome fulfilled, until nothing is left to do.
-fn pump(r: &mut Runner<Granted>, parked: &mut Vec<(u64, u64)>) {
+fn pump(r: &mut Runner<Source>, parked: &mut Vec<(u64, u64)>) {
     for _ in 0..8 {
         let outs = r.take_requests();
         let released = r.release_work();
@@ -345,7 +346,7 @@ fn pump(r: &mut Runner<Granted>, parked: &mut Vec<(u64, u64)>) {
     }
 }
 
-fn run(r: &mut Runner<Granted>, ticket: u64, dispatch: Dispatch) {
+fn run(r: &mut Runner<Source>, ticket: u64, dispatch: Dispatch) {
     let outcome = match dispatch {
         Dispatch::Run(Work::Now(work)) => work(),
         Dispatch::Run(Work::Later(work)) => {
@@ -364,12 +365,12 @@ fn sent(calls: &Calls, name: &str) -> usize {
         .count()
 }
 
-fn logs(r: &Runner<Granted>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     exact_runner::agent::handle(r, r#"{"op":"logs"}"#)
 }
 
 /// The one ticket held: its capability's permission, answered `allow`.
-fn allow(r: &mut Runner<Granted>, parked: &mut Vec<(u64, u64)>) -> String {
+fn allow(r: &mut Runner<Source>, parked: &mut Vec<(u64, u64)>) -> String {
     let holds = r.device_holds();
     assert_eq!(holds.len(), 1, "{}", logs(r));
     let args: Json = serde_json::from_str(&holds[0].args).unwrap();
@@ -445,7 +446,7 @@ fn a_tool_s_capture_start_is_refused() {
 #[test]
 fn a_send_kept_for_the_data_source_reaches_its_package() {
     let (_app, mut r, calls) = boot("kept-send");
-    r.data().1 = true;
+    r.source::<Granted>().1 = true;
     let mut parked = Vec::new();
     pump(&mut r, &mut parked);
     r.act("shutter", Vec::new()).unwrap();
@@ -455,7 +456,7 @@ fn a_send_kept_for_the_data_source_reaches_its_package() {
         0,
         "kept until the source is ready"
     );
-    r.data().1 = false;
+    r.source::<Granted>().1 = false;
     r.data_ready().unwrap();
     pump(&mut r, &mut parked);
     assert_eq!(sent(&calls, "takePhoto"), 1, "{}", logs(&r));
@@ -470,14 +471,14 @@ fn a_kept_send_to_a_package_fails_as_one_made_later_does() {
     for kept in [false, true] {
         let (_app, mut r, _calls) = boot_with(App::with_source("kept-fail", CAMERA_APP), "");
         r.set_module_target("macos");
-        r.data().1 = kept;
+        r.source::<Granted>().1 = kept;
         let mut parked = Vec::new();
         pump(&mut r, &mut parked);
         r.act("snap", Vec::new()).unwrap();
         pump(&mut r, &mut parked);
         if kept {
             assert_eq!(r.derive("shotError"), Some(&Value::str("")), "still kept");
-            r.data().1 = false;
+            r.source::<Granted>().1 = false;
             r.data_ready().unwrap();
             pump(&mut r, &mut parked);
         }
@@ -500,7 +501,7 @@ fn an_implementation_s_disclosure_is_listed() {
     let mut parked = Vec::new();
     pump(&mut r, &mut parked);
     r.listen(Arc::new(|| {}));
-    let say = |r: &Runner<Granted>, extension: &str, state: Json| {
+    let say = |r: &Runner<Source>, extension: &str, state: Json| {
         let body = json!({ "extension": extension, "state": state });
         r.native_slot().changed(&format!("exact-state:{body}"));
     };
@@ -577,7 +578,7 @@ fn the_camera_app_needs_no_line_and_its_sheet_takes_take_or_cancel() {
     assert_eq!(args["options"]["facingMode"], "environment");
     assert_eq!(sent(&calls, "takePhotoWithCameraApp"), 0, "held");
 
-    let tap = |r: &mut Runner<Granted>, parked: &mut Vec<(u64, u64)>, choice: &str| {
+    let tap = |r: &mut Runner<Source>, parked: &mut Vec<(u64, u64)>, choice: &str| {
         let ticket = r.device_holds()[0].ticket;
         let line = json!({ "op": "tap", "ticket": ticket, "choice": choice }).to_string();
         exact_runner::agent::answer(r, &line).unwrap();
@@ -657,7 +658,7 @@ fn a_video_from_the_camera_app_holds_the_same_sheet_and_answers_a_video() {
     let (app, mut r, calls) = boot_with(App::with_source("camera-video", VIDEO_APP), "");
     let mut parked = Vec::new();
     pump(&mut r, &mut parked);
-    let tap = |r: &mut Runner<Granted>, parked: &mut Vec<(u64, u64)>, choice: &str| {
+    let tap = |r: &mut Runner<Source>, parked: &mut Vec<(u64, u64)>, choice: &str| {
         let ticket = r.device_holds()[0].ticket;
         let line = json!({ "op": "tap", "ticket": ticket, "choice": choice }).to_string();
         exact_runner::agent::answer(r, &line).unwrap();
