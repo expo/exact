@@ -11,6 +11,99 @@ pub struct FileDialog {
     pub command: &'static str,
     /// The dialog's kind, suggested name, selection mode and starting folder.
     pub picker: Picker,
+    /// The file types the dialog offers, one filter each; none offers every
+    /// file.
+    pub types: Vec<FileType>,
+}
+
+/// A file type the manifest declares in `file_handlers`, as the binary's
+/// compatibility record carries it. A document picker offers one filter per
+/// type, labelled with the handler's `name` (LLP 1069.010 D2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileType {
+    /// The handler's `name`, when it has one.
+    pub name: Option<String>,
+    /// Canonical suffixes: a leading dot, lowercase (`.md`, `.tar.gz`).
+    pub suffixes: Vec<String>,
+    /// The MIME types it declares.
+    pub mimes: Vec<String>,
+}
+
+/// The file types in a compatibility record's `inputs.fileHandlers`, in the
+/// manifest's order. A directory declaration is the directory picker's, and a
+/// handler declaring nothing else offers no type. A record without
+/// `fileHandlers` (no handlers, or a binary from before they were embedded)
+/// declares none, as does a presenter booted with no record. The build wrote
+/// canonical suffixes, so one that is not is refused rather than repaired.
+pub fn declared_types(compat: &str) -> Result<Vec<FileType>, String> {
+    if compat.is_empty() {
+        return Ok(Vec::new());
+    }
+    let json = serde_json::from_str::<serde_json::Value>(compat)
+        .map_err(|error| format!("compatibility metadata is not JSON: {error}"))?;
+    let Some(handlers) = json.pointer("/inputs/fileHandlers") else {
+        return Ok(Vec::new());
+    };
+    let handlers = handlers
+        .as_array()
+        .ok_or_else(|| "compatibility metadata's fileHandlers is not an array".to_owned())?;
+    let mut types = Vec::new();
+    for (handler_index, handler) in handlers.iter().enumerate() {
+        let accept = handler
+            .get("accept")
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| format!("file handler {handler_index}'s accept is not an object"))?;
+        let (mut suffixes, mut mimes) = (Vec::new(), Vec::new());
+        for (mime, extensions) in accept {
+            if mime == "inode/directory" {
+                continue;
+            }
+            mimes.push(mime.clone());
+            let extensions = extensions.as_array().ok_or_else(|| {
+                format!("file handler {handler_index}'s extensions for {mime} are not an array")
+            })?;
+            for (extension_index, extension) in extensions.iter().enumerate() {
+                match extension.as_str().filter(|s| canonical_suffix(s)) {
+                    Some(suffix) => suffixes.push(suffix.to_owned()),
+                    None => {
+                        return Err(format!(
+                            "file handler {handler_index}'s extension {extension_index} is invalid"
+                        ))
+                    }
+                }
+            }
+        }
+        if mimes.is_empty() {
+            continue;
+        }
+        let name = match handler.get("name") {
+            Some(name) => Some(
+                name.as_str()
+                    .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))
+                    .ok_or_else(|| {
+                        format!("file handler {handler_index}'s name is not a valid label")
+                    })?
+                    .to_owned(),
+            ),
+            None => None,
+        };
+        types.push(FileType {
+            name,
+            suffixes,
+            mimes,
+        });
+    }
+    Ok(types)
+}
+
+/// The File System Access API's suffix, as the manifest readers write it.
+fn canonical_suffix(value: &str) -> bool {
+    value.starts_with('.')
+        && !value.ends_with('.')
+        && value.len() <= 16
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'+' | b'.')
+        })
 }
 
 /// What the person chose, or why the window could not show the dialog.

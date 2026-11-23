@@ -203,3 +203,53 @@ fn start_in_accepts_names_and_held_documents_and_stale_answers_are_dropped() {
     );
     std::fs::remove_dir_all(folder).unwrap();
 }
+
+#[test]
+fn document_dialogs_offer_the_declared_types_and_a_bad_record_refuses() {
+    use exact_painted::presenter::file_dialog::FileType;
+    let mut p = presenter("documents");
+    p.serve_file_dialogs();
+    p.set_delivery_from_compat(
+        r#"{"inputs":{"fileHandlers":[
+          {"action":"/","name":"Documents","accept":{"application/pdf":[".pdf"]}},
+          {"action":"/","accept":{"application/json":[]}},
+          {"action":"/","name":"Folder","accept":{"inode/directory":[]}}
+        ]}}"#,
+    );
+    let declared = vec![
+        FileType {
+            name: Some("Documents".into()),
+            suffixes: vec![".pdf".into()],
+            mimes: vec!["application/pdf".into()],
+        },
+        FileType {
+            name: None,
+            suffixes: Vec::new(),
+            mimes: vec!["application/json".into()],
+        },
+    ];
+    for (target, types) in [
+        ("open", declared.clone()),
+        ("save", declared),
+        ("directory", Vec::new()),
+        ("export", Vec::new()),
+        ("import", Vec::new()),
+    ] {
+        tap(&mut p, target);
+        let (id, request) = take(&mut p);
+        assert_eq!(request.types, types, "{target}");
+        p.answer_file_dialog(id, Outcome::Cancelled);
+    }
+    p.set_delivery_from_compat(
+        r#"{"inputs":{"fileHandlers":[{"action":"/","accept":{"text/markdown":[".MD"]}}]}}"#,
+    );
+    let cancels = p.host().runner().slot("cancels").cloned();
+    tap(&mut p, "open");
+    assert!(p.take_file_dialogs().is_empty());
+    assert_ne!(p.host().runner().slot("cancels").cloned(), cancels);
+    let journal = p.host().runner().journal().collect::<Vec<_>>().join("\n");
+    assert!(
+        journal.contains("showOpenFilePicker: refused: file handler 0's extension 0 is invalid"),
+        "{journal}"
+    );
+}

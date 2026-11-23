@@ -119,7 +119,7 @@ chromeTest('a kept document reopens after a reload, asks again under a press, an
     const declared = await run(`(async () => {
       const root = await navigator.storage.getDirectory();
       const picked = await root.getFileHandle('picked.board', { create: true });
-      globalThis.showOpenFilePicker = async (options) => { globalThis.pickerTypes = options.types; return [picked]; };
+      globalThis.showOpenFilePicker = async (options) => { globalThis.pickerTypes = options.types; globalThis.acceptAll = !options.excludeAcceptAllOption; return [picked]; };
       await host.show({ present: true, view: 1 }, 'showOpenFilePicker');
       const pickedPath = chosen;
       await exact.documents.forget(pickedPath, grants);
@@ -129,11 +129,12 @@ chromeTest('a kept document reopens after a reload, asks again under a press, an
         [drops[name]] = await host.dropped([dropped], [await dropped.getFile()]);
       }
       const recent = await listed();
-      return { types: pickerTypes, drops, recent };
+      return { types: pickerTypes, acceptAll, drops, recent };
     })()`);
     expect(declared.types).toEqual([{ description: 'Documents', accept: {
       'application/x-studio-board+json': ['.board'], 'text/markdown': ['.md'], 'application/octet-stream': ['.tar.gz'],
     } }]);
+    expect(declared.acceptAll).toBe(false);
     const recentPaths = new Set(declared.recent.map(row => row.split(' ')[0]));
     for (const name of ['notes.MD', 'archive.TAR.GZ']) expect(recentPaths.has(declared.drops[name]), name).toBe(true);
     for (const name of ['cardboard', 'archive.gz', 'notes.gz']) expect(recentPaths.has(declared.drops[name]), name).toBe(false);

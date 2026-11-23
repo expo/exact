@@ -122,6 +122,7 @@ impl<D: DataSource> Presenter<D> {
                     file_dialog::FileDialog {
                         command: "picker",
                         picker,
+                        types: Vec::new(),
                     },
                     input.view,
                     file_dialog::Route::Import,
@@ -526,6 +527,7 @@ impl<D: DataSource> Presenter<D> {
                     file_dialog::FileDialog {
                         command: "saveFile",
                         picker,
+                        types: Vec::new(),
                     },
                     view,
                     file_dialog::Route::Export(save),
@@ -617,14 +619,25 @@ impl<D: DataSource> Presenter<D> {
                 }
             }
             Arm::Present(picker, view) if self.requests.file_dialogs => {
-                self.queue_file_dialog(
-                    file_dialog::FileDialog {
-                        command: kind.command(),
-                        picker,
-                    },
-                    view,
-                    file_dialog::Route::Document(kind),
-                );
+                let types = match kind {
+                    Kind::Directory => Ok(Vec::new()),
+                    _ => file_dialog::declared_types(&self.compat),
+                };
+                match types {
+                    Ok(types) => self.queue_file_dialog(
+                        file_dialog::FileDialog {
+                            command: kind.command(),
+                            picker,
+                            types,
+                        },
+                        view,
+                        file_dialog::Route::Document(kind),
+                    ),
+                    Err(reason) => {
+                        self.host.log(format!("{name}: refused: {reason}"));
+                        self.deliver_picker(view, Event::Cancel);
+                    }
+                }
             }
             #[cfg(unix)]
             Arm::Present(request, view) => {

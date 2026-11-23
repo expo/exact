@@ -693,9 +693,12 @@ override func destroy() {
 
 An app says what it opens with `file_handlers` in `app.json` — the W3C Web App
 Manifest's own key — and the macOS bake derives `CFBundleDocumentTypes` from
-it. A Linux binary carries the same declarations into the desktop portal's
-Open and Save filters; a directory pick remains a directory pick rather than a
-file-type filter. Each MIME type it accepts must be one the Apple hosts map to
+it. Linux and Windows binaries carry the same declarations into their Open and
+Save dialogs; a directory pick remains a directory pick rather than a file-type
+filter. Each handler is one file type in the document pickers, labelled with its
+`name`, so an app that wants a "Documents" choice showing only PDFs declares
+`{ "action": "/", "name": "Documents", "accept": { "application/pdf": [".pdf"] } }`
+(below, "Documents the person chose"). Each MIME type it accepts must be one the Apple hosts map to
 a system type (`DOCUMENT_UTIS` in `scripts/app.mjs`; `application/octet-stream`
 is `public.data`), which the app views (`Viewer`, rank `Alternate`), or the
 app's own format: a vendor or unregistered type (`application/vnd.studio.board+json`,
@@ -5702,6 +5705,26 @@ remains a compound suffix. Their Bun and Rust tests read the same cases from
 `scripts/fixtures/document-suffixes.json`. An invalid suffix or an empty or
 control-bearing handler name makes the build fail.
 
+The open picker, and the save picker where the platform's save dialog lists
+types, offer the declared types and nothing else: each handler's `name` labels
+its type where the platform lists types by name (Windows, Linux and the web),
+and macOS and iOS offer their union, as their panels do. The pickers take their
+types from the manifest, never from the call.
+
+| Host | `showOpenFilePicker`, `showSaveFilePicker` |
+| --- | --- |
+| Web (Chromium) | `types`, one `{ description: name, accept }` per handler, and `excludeAcceptAllOption: true` |
+| Windows | one `SetFileTypes` entry per handler, `Documents (*.pdf)`, the first selected; Save starts on the type with the longest suffix ending `suggestedName` and adds that type's extension to a name typed without one |
+| Linux | one portal filter per handler, the first as `current_filter` |
+| macOS | `NSOpenPanel`'s `allowedContentTypes`, the union, with no type menu; the save panel takes no types |
+| iOS | Open: the document picker's content types, the union; Save exports with no types |
+
+On Windows a handler with MIME types and no extension matches the extension the
+system registers for each MIME type. Where there is none, the dialog cannot
+offer that type and the journal names the MIME type; where it can offer none
+of the declared types, the pick is refused. Give such a handler its
+extensions. With no handlers a picker offers every file.
+
 The web passes those suffixes to its picker and matches a drop by the whole
 filename suffix. Apple registers each without its leading dot; its picker offers
 the handler's content types and the complete extension tokens the system resolves,
@@ -5725,8 +5748,8 @@ the app keeps what the person chose (below).
 
 On Windows, the three document pickers, file inputs and `saveFile` use the
 shell's common item dialogs, owned by the app's window. A headless host refuses
-them; under the agent they remain held pickers. Document pickers offer every
-file until the Windows build carries `file_handlers`. File inputs copy the
+them; under the agent they remain held pickers. Open and Save offer the
+`file_handlers` types, as the table above says. File inputs copy the
 chosen files into `app:/tmp/picked/` and leave the originals in place.
 
 **Where a picker opens** (LLP 1173 D2). The three pickers and `saveFile`
