@@ -660,22 +660,6 @@ macro_rules! canvas_jni {
                 with(|h| h.module_event(id as u32, key, session as u64, &kind, payload));
             }
 
-            #[no_mangle]
-            pub unsafe extern "system" fn Java_dev_exact_canvas_Native_frameLoaded(
-                _env: *mut JNIEnv,
-                _class: jclass,
-                id: jint,
-                slot: jint,
-                generation: jint,
-                session: jlong,
-            ) {
-                let key = $crate::canvas::ModuleKey {
-                    index: slot as u32,
-                    generation: generation as u32,
-                };
-                with(|h| h.frame_loaded(id as u32, key, session as u64));
-            }
-
             /// A media element's event, or (an empty `event`) its state (LLP 1042.001 D7).
             #[no_mangle]
             #[allow(clippy::too_many_arguments)]
