@@ -50,8 +50,8 @@ test('a page answers at its path, and every other spelling of it redirects there
 
 test('Markdown, the worker and the files it does not see', async () => {
   const response = await fetch(`${origin}/start`, { headers: { Accept: 'text/markdown' } });
-  expect([response.status, response.headers.get('Content-Type'), response.headers.get('Vary'), response.headers.get('X-Llms-Txt'), response.headers.get('X-Robots-Tag')])
-    .toEqual([200, 'text/markdown; charset=utf-8', 'Accept', '/llms.txt', 'noindex']);
+  expect([response.status, response.headers.get('Content-Type'), response.headers.get('Vary'), response.headers.get('Link'), response.headers.get('X-Llms-Txt'), response.headers.get('X-Robots-Tag')])
+    .toEqual([200, 'text/markdown; charset=utf-8', 'Accept', '</llms.txt>; rel="llms-txt", </sitemap.xml>; rel="sitemap"', '/llms.txt', 'noindex']);
   expect((await response.text()).startsWith('---\ntitle: ')).toBe(true);
   expect(await get('/start.md')).toEqual({ status: 200, type: 'text/markdown', location: null });
   expect(await get('/nope.md')).toEqual({ status: 404, type: 'text/markdown', location: null });
