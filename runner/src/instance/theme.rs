@@ -7,6 +7,7 @@
 
 use exact_kernel::{StyleId, ViewId};
 use exact_plan::{BindingKind, NodesRow, Plan, Value};
+use std::{collections::HashMap, rc::Rc};
 
 /// The inherited rows that hold a colour, which a mode boundary writes
 /// again (D7): every one the schema marks inherited, in this order.
@@ -101,13 +102,13 @@ pub(crate) fn newly_refused(now: &[String], set: &[String]) -> Vec<String> {
 
 /// Every row that read a token, by view and row (D7's index): what a
 /// token's new value sets again, with no tree visited and no binding
-/// evaluated. One map, so a themed list's rows allocate only its growth.
+/// evaluated. Checkpoints share the large row and look maps until they change.
 #[derive(Debug, Default, Clone)]
 pub struct ThemeIndex {
-    rows: std::collections::HashMap<(ViewId, u16), ThemedRow>,
+    rows: Rc<HashMap<(ViewId, u16), ThemedRow>>,
     /// Each node's state looks that read a token (LLP 1121 D8): what a
     /// token's new value resolves again, as `rows` are.
-    pub(super) looks: std::collections::HashMap<ViewId, super::looks::Looks>,
+    looks: Rc<HashMap<ViewId, super::looks::Looks>>,
     /// Each Markdown node's faces that read a token, likewise.
     faces: std::collections::HashMap<ViewId, ThemedFaces>,
     /// Each field's decoration declarations that read a token, likewise.
@@ -122,7 +123,15 @@ pub struct ThemeIndex {
 impl ThemeIndex {
     /// `view`'s `row`, which read a token.
     pub(super) fn put(&mut self, view: ViewId, row: ThemedRow) {
-        self.rows.insert((view, row.style as u16), row);
+        Rc::make_mut(&mut self.rows).insert((view, row.style as u16), row);
+    }
+
+    pub(super) fn set_look(&mut self, view: ViewId, looks: super::looks::Looks) {
+        if looks.tokens != 0 {
+            Rc::make_mut(&mut self.looks).insert(view, looks);
+        } else if Rc::strong_count(&self.looks) == 1 || self.looks.contains_key(&view) {
+            Rc::make_mut(&mut self.looks).remove(&view);
+        }
     }
 
     /// `view`'s `style`, when it read a token.
@@ -138,16 +147,25 @@ impl ThemeIndex {
     /// that changes nothing (bits are already shared by names, `name_bit`),
     /// where replacing them could drop a read the parse didn't repeat.
     pub(crate) fn also_read(&mut self, view: ViewId, style: StyleId, tokens: u64) {
-        if let Some(row) = self.rows.get_mut(&(view, style as u16)) {
-            row.tokens |= tokens;
+        let key = (view, style as u16);
+        if self
+            .rows
+            .get(&key)
+            .is_some_and(|row| tokens & !row.tokens != 0)
+        {
+            Rc::make_mut(&mut self.rows).get_mut(&key).unwrap().tokens |= tokens;
         }
     }
 
     /// `view`'s state looks, resolved again, read `tokens` too, added as
     /// [`ThemeIndex::also_read`] adds a row's.
     pub(crate) fn looks_read(&mut self, view: ViewId, tokens: u64) {
-        if let Some(l) = self.looks.get_mut(&view) {
-            l.tokens |= tokens;
+        if self
+            .looks
+            .get(&view)
+            .is_some_and(|l| tokens & !l.tokens != 0)
+        {
+            Rc::make_mut(&mut self.looks).get_mut(&view).unwrap().tokens |= tokens;
         }
     }
 
@@ -184,15 +202,16 @@ impl ThemeIndex {
 
     /// `view`'s `style` reads no token now.
     pub(super) fn drop_row(&mut self, view: ViewId, style: StyleId) {
-        if !self.rows.is_empty() {
-            self.rows.remove(&(view, style as u16));
+        let key = (view, style as u16);
+        if Rc::strong_count(&self.rows) == 1 || self.rows.contains_key(&key) {
+            Rc::make_mut(&mut self.rows).remove(&key);
         }
     }
 
     /// Forget the views `live` says are gone.
     pub(super) fn retain(&mut self, live: &impl Fn(ViewId) -> bool) {
-        self.rows.retain(|(view, _), _| live(*view));
-        self.looks.retain(|view, _| live(*view));
+        Rc::make_mut(&mut self.rows).retain(|(view, _), _| live(*view));
+        Rc::make_mut(&mut self.looks).retain(|view, _| live(*view));
         self.faces.retain(|view, _| live(*view));
         self.decorations.retain(|view, _| live(*view));
     }
