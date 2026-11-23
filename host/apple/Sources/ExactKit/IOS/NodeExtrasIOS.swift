@@ -141,6 +141,9 @@ final class NodeExtras {
     var swipeOrigin: Double = 0
     var contextRecognizer: UILongPressGestureRecognizer?
     var doubleRecognizer: UITapGestureRecognizer?
+    #if os(iOS)
+    var portalRelay: MountRelay?
+    #endif
     #if !os(tvOS)
     var hoverRecognizer: UIHoverGestureRecognizer?
     var lookHoverRecognizer: UIHoverGestureRecognizer?
@@ -381,6 +384,10 @@ extension NodeView {
     var swipeOrigin: Double { get { extras?.swipeOrigin ?? 0 } set { if newValue != 0 || extras != nil { more.swipeOrigin = newValue } } }
     var contextRecognizer: UILongPressGestureRecognizer? { get { extras?.contextRecognizer } set { if newValue != nil || extras != nil { more.contextRecognizer = newValue } } }
     var doubleRecognizer: UITapGestureRecognizer? { get { extras?.doubleRecognizer } set { if newValue != nil || extras != nil { more.doubleRecognizer = newValue } } }
+    #if os(iOS)
+    /// A `portal` mover's relay to its declaration's listeners (`syncPortalRelay`).
+    var portalRelay: MountRelay? { get { extras?.portalRelay } set { if newValue != nil || extras != nil { more.portalRelay = newValue } } }
+    #endif
     #if !os(tvOS)
     var hoverRecognizer: UIHoverGestureRecognizer? { get { extras?.hoverRecognizer } set { if newValue != nil || extras != nil { more.hoverRecognizer = newValue } } }
     var lookHoverRecognizer: UIHoverGestureRecognizer? { get { extras?.lookHoverRecognizer } set { if newValue != nil || extras != nil { more.lookHoverRecognizer = newValue } } }
