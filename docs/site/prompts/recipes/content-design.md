@@ -1,0 +1,14 @@
+```prompt Make my app's screens look designed
+Make each screen of the Exact app in this folder show its purpose: a focal point, emphasis from parts, and a layout that fits a wide window. Use https://github.com/expo/exact/blob/main/docs/recipes/content-design.md as the source for each step. The Exact checkout has the same page at docs/recipes/content-design.md.
+
+1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
+2. Read app.contract and list each screen with its purpose and what you would change. Show me the list and ask before you change anything.
+3. Leave the chrome to the platform: write no colour, font or size on bars, sheets, alerts, tabs or a form's controls. Give each screen's purpose a focal point: large type, a fill (the accent or a system colour) and room.
+4. Replace each `button` that has a `background-color`, a `border` or a `font-size` with `RoundButton` or `AnswerTile`, the two parts that are controls. Draw content with the others: `SummaryCard`, `RingProgress`, `StatBar`, `RowText`, `Badge`, `DoneMark`, `EmptyState`. Import it with `use <Part> from "exact:content"`, and run `bun exact.mjs contract vocab <Part>` for its props and a call to paste. A `RoundButton` holds about 7 characters: for more words, use `button buttonStyle="filled"`.
+5. Show a status as a `Badge`. Disable an action that cannot be taken and write the reason under it (in a grouped list, in the section's `footer`): never leave it enabled to refuse after the tap. Show each value once.
+6. Fit a wide window. One number and its actions (a tracker, a timer) get a centred column with a `max-width`, and the row of buttons says `align-self="stretch"`. A list and its detail, or a dashboard of cards, get two columns: `flex="1 1 320px"` in a row that wraps.
+7. Keep each `testId` and keep the existing tests passing without changing what they check.
+8. Follow the platform checks in docs/start-here.md (`bun exact.mjs docs platform checks`) for the targets in the app's AGENTS.md and app.json until they pass. Read the reports, including counted findings; a zero exit code alone does not mean clean. Fix the app, not the test. If a finding stays after three rounds of fixes, or the app had it before you changed anything, record it (step 9) and report it; do not keep trying.
+9. When a doc was wrong or missing, or a step needed a workaround, read `bun exact.mjs feedback status`. Under `never`, keep no note. Otherwise record it: `bun exact.mjs feedback note "<what happened>"`, which goes to Expo only as that status says. Do not change the policy; tell me how many notes you kept.
+10. Tell me what changed on each screen and which parts you used, any screen you left as it was and why, what the tests and checks reported, and the launch command for each target platform.
+```

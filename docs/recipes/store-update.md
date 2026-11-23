@@ -18,8 +18,8 @@ binary and opens it (LLP 1133.038), for what Exact's own signed updates
    - `listed` (Apple): a row the person may ignore, with `apple.version`
      and an `openStorePage()` button. Never block on it: the store may not
      offer that version to this device.
-   - `offered` (Play): `startStoreUpdate(appUpdateType="flexible")` from a
-     button, then `completeStoreUpdate()` from a Restart button once
+   - `offered` (Play) with `android.flexibleAllowed`: `startStoreUpdate(appUpdateType="flexible")`
+     from a button. Call `completeStoreUpdate()` from a Restart button once
      `android.installStatus` is `downloaded`, including on a later launch.
 4. **Block only on Play's offer** (`offered` and `android.immediateAllowed`:
    `startStoreUpdate(appUpdateType="immediate")`), or on a minimum version
@@ -50,11 +50,11 @@ component App
     openStorePage()
   view
     column
-      if store.updateAvailability == "offered"
-        button press=update testId="update"
-          text "Update"
       match store.android
         case some(p)
+          if store.updateAvailability == "offered" and p.flexibleAllowed
+            button press=update testId="update"
+              text "Update"
           if p.installStatus == "downloaded"
             button press=restart
               text "Restart to Update"

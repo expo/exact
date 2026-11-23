@@ -192,7 +192,7 @@ export function listen(root = globalThis.document, owns = () => true, { signal, 
   // Heard first, before any listener can stop the drag's event or change what it reads: the drag is decided and given
   // its data as it begins, while the transfer is writable; a listener after may still cancel it, a swipe's on the
   // contact among them.
-  const given = new WeakMap();
+  const given = new WeakMap(), inPage = (el) => el?.getRootNode({ composed: true }) === root;
   root.addEventListener('dragstart', (event) => {
     if (event.isTrusted === false) return;
     const node = decide(event, owns, downForDrag(presses, event));
@@ -201,14 +201,17 @@ export function listen(root = globalThis.document, owns = () => true, { signal, 
     if (data) given.set(event, { node, data });
   }, { capture: true, signal });
   // Given again where the event reaches the document, over what a listener at the node wrote: the drag carries the
-  // data the node declared as it began. A listener that took the node or the browser's source out of the page, or
-  // the node from the app, meanwhile cancels the drag, which already holds the node's data.
+  // data the node declared as it began. A listener that took the node or the browser's source out of the page, into
+  // another document too (a same-origin frame's, where it still reads as connected), or the node from the app,
+  // meanwhile cancels the drag, which already holds the node's data. The source is read inside an open shadow root,
+  // whose host the event's target is; a closed one's is its host.
   root.addEventListener('dragstart', (event) => {
     if (event.isTrusted === false) return;
     const payload = given.get(event);
     given.delete(event);
     if (!payload) return;
-    if (payload.node.isConnected && elementOf(event.target)?.isConnected && owns(payload.node)) give(event, payload.node, payload.data);
+    const source = elementOf(event.composedPath?.()[0] ?? event.target);
+    if (inPage(payload.node) && inPage(source) && owns(payload.node)) give(event, payload.node, payload.data);
     else event.preventDefault();
   }, { signal });
 }
