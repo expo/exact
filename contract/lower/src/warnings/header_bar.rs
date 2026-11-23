@@ -123,6 +123,9 @@ fn empty_box(node: Visit<'_>) -> bool {
 fn holds_heading(node: Visit<'_>) -> bool {
     node.regions()[0]
         .walk_regions_with((), |k, _| {
+            if k.is_choice() {
+                return [Some(()), Some(())];
+            }
             [
                 (matches!(part(k), Part::Box | Part::Pressable | Part::Status)
                     || matches!(part(k), Part::Other)
@@ -142,7 +145,7 @@ fn filled(node: Visit<'_>) -> bool {
 }
 
 /// `BadgeFace` reads a filled box for shown words, a symbol or a picture.
-fn badge_face(node: Visit<'_>) -> bool {
+fn badge_face(node: Visit<'_>, allow_class: bool) -> bool {
     fn content(node: Visit<'_>, visible: bool) -> bool {
         node.children().any(|child| {
             let Some((tag, positional, attrs)) = child.element() else {
@@ -163,7 +166,11 @@ fn badge_face(node: Visit<'_>) -> bool {
     let visible = node.element().is_some_and(|(_, _, attrs)| {
         !matches!(literal(attrs, "visibility"), Some("hidden" | "collapse"))
     });
-    filled(node) && content(node, visible)
+    let classed = allow_class
+        && node
+            .element()
+            .is_some_and(|(_, _, attrs)| has(attrs, "class"));
+    (filled(node) || classed) && content(node, visible)
 }
 
 fn has_face_source(positional: &[Expr]) -> bool {
@@ -878,7 +885,12 @@ impl<'a> Bar<'a> {
                 }
             }
             Part::Box if holds_placed(node) => return true,
-            Part::Box if title && bar.passed != Place::Taken && !bar.avatar && badge_face(node) => {
+            Part::Box
+                if title
+                    && bar.passed != Place::Taken
+                    && !bar.avatar
+                    && badge_face(node, false) =>
+            {
                 bar.avatar = true;
             }
             // A box with nothing in it lays the bar's items out (a spacer).
@@ -988,7 +1000,7 @@ fn mac_button(button: Visit<'_>) -> bool {
     let mut shown = button
         .children()
         .filter(|k| !matches!(part(*k), Part::Hidden));
-    (shown.next().is_some_and(badge_face) && shown.next().is_none())
+    (shown.next().is_some_and(|child| badge_face(child, true)) && shown.next().is_none())
         || mac_painted(button, false) == Some(true)
 }
 
@@ -1027,11 +1039,12 @@ fn mac_dot(node: Visit<'_>) -> bool {
             .find(|a| a.name == name)
             .is_some_and(|a| match &a.value {
                 Expr::Number(n, _) => *n > 0.,
+                // The kernel resolves relative lengths with the layout's font and viewport.
                 Expr::Str(s, _) => s
                     .strip_suffix("px")
                     .unwrap_or(s)
                     .parse::<f64>()
-                    .is_ok_and(|n| n > 0.),
+                    .map_or(true, |n| n > 0.),
                 _ => true,
             })
     };

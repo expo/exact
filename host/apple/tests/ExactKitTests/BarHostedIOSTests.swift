@@ -284,6 +284,25 @@ final class BarHostedIOSTests: XCTestCase {
         XCTAssertEqual(p.views[2]?.container.subviews.compactMap { ($0 as? NodeView)?.id }, [3, 4, 5], "at its place")
     }
 
+    func testAPressInAReadoutsPopoverUsesThePopoversMount() throws {
+        let popover: [String: Any] = ["op": "create", "id": 5, "kind": "view",
+                                      "props": ["id": "details", "popover": "manual"]]
+        let p = route([status(4), popover, text(6, "Details"), text(7, "Ready")], kids: [4], more: [
+            ["op": "props", "id": 2, "handlers": ["press"]],
+            ["op": "children", "id": 4, "ids": [5, 7]],
+            ["op": "children", "id": 5, "ids": [6]],
+        ])
+        let route = RouteController(try XCTUnwrap(p.views[1]))
+        let view = try XCTUnwrap(p.navigationHost.barItems(try bar(p).trailing, route).first?.customView)
+        window.addSubview(view)
+        let header = try XCTUnwrap(p.views[2]), readout = try XCTUnwrap(p.views[4])
+        let pop = try XCTUnwrap(p.views[5]), start = try XCTUnwrap(p.views[6])
+        p.menus.action("showPopover", ["details"])
+        XCTAssertTrue(p.listenerParent(of: pop) === readout.container)
+        XCTAssertFalse(pop.isDescendant(of: readout))
+        XCTAssertTrue(p.pressBox(of: header, from: start) === start)
+    }
+
     func testADestroyedReadoutParentLosesItsRecordedChildren() throws {
         let wrapper: [String: Any] = ["op": "create", "id": 20, "kind": "view"]
         let p = route([wrapper, status(22)], kids: [20], more: [["op": "children", "id": 20, "ids": [22]]])
@@ -465,6 +484,8 @@ final class BarHostedIOSTests: XCTestCase {
         XCTAssertTrue(stops(in: view).first === element)
         XCTAssertEqual(element.accessibilityLabel, "Elapsed time")
         XCTAssertEqual(element.accessibilityValue, "1:06.07")
+        p.apply(wireBatch([["op": "props", "id": 5, "set": ["text": "  Elapsed time\n"]]]))
+        XCTAssertNil(element.accessibilityValue)
     }
 
     func testANamelessReadoutAddsNoVoiceOverStop() throws {
@@ -472,6 +493,17 @@ final class BarHostedIOSTests: XCTestCase {
         let navigation = p.navigationHost
         let route = RouteController(try XCTUnwrap(p.views[1]))
         let view = try XCTUnwrap(navigation.barItems(try bar(p).trailing, route).first?.customView)
+        XCTAssertTrue(stops(in: view).isEmpty)
+    }
+
+    func testAReadoutThatLosesItsNameLeavesNoVoiceOverStop() throws {
+        let p = route([text(4, "Ready", ["accessibilityRole": "status"], style: ["width": 50, "height": 20])],
+                      kids: [4], more: [["op": "frame", "id": 4, "x": 0, "y": 0, "w": 50, "h": 20]])
+        let route = RouteController(try XCTUnwrap(p.views[1]))
+        let view = try XCTUnwrap(p.navigationHost.barItems(try bar(p).trailing, route).first?.customView)
+        XCTAssertEqual(stops(in: view).map(\.accessibilityLabel), ["Ready"])
+        p.apply(wireBatch([["op": "props", "id": 4, "set": ["text": ""]]]))
+        XCTAssertEqual(view.accessibilityElements?.count, 0)
         XCTAssertTrue(stops(in: view).isEmpty)
     }
 
@@ -495,6 +527,7 @@ final class BarHostedIOSTests: XCTestCase {
         let spinning = stops(in: syncing)
         XCTAssertEqual(spinning.map(\.accessibilityLabel), ["Syncing"], "its spinner is no stop of its own")
         let element = try XCTUnwrap(spinning.first)
+        XCTAssertNil(element.accessibilityValue)
         XCTAssertEqual(element.accessibilityFrame, UIAccessibility.convertToScreenCoordinates(syncing.bounds, in: syncing))
         p.press(try node("retry", in: p).id)
         waitFor("the accessibility element's label follows the readout", cap: 5) { self.stops(in: ready).first?.accessibilityLabel == "Retrying" }

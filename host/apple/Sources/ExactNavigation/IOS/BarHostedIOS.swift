@@ -64,14 +64,15 @@ final class HostedItemView: UIView {
             return
         }
         let label = node.accessibleName
-        guard !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
             readout = nil
             return
         }
         let element = readout ?? UIAccessibilityElement(accessibilityContainer: self)
         if element.accessibilityLabel != label { element.accessibilityLabel = label }
-        let text = node.authoredLabel == nil ? "" : node.accessibleText
-        let value = text.isEmpty ? nil : text
+        let text = node.authoredLabel == nil ? "" : node.accessibleText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = text.isEmpty || text == trimmed ? nil : text
         if element.accessibilityValue != value { element.accessibilityValue = value }
         if readout == nil {
             element.accessibilityTraits = .staticText
@@ -82,8 +83,9 @@ final class HostedItemView: UIView {
 
     override var accessibilityElements: [Any]? {
         get {
-            guard let readout else { return super.accessibilityElements }
-            return [readout as NSObject] + Self.readoutControls(in: stand)
+            guard node.props["accessibilityRole"] == "status" else { return super.accessibilityElements }
+            let stops: [NSObject] = readout.map { [$0] } ?? []
+            return stops + Self.readoutControls(in: stand)
         }
         set { super.accessibilityElements = newValue }
     }

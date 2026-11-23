@@ -8,9 +8,13 @@ import AppKit
 import UIKit
 #endif
 
+/// Computed visibility hides the box unless it is `visible`, the initial value.
+package func cssVisibilityHides(_ style: NodeStyle) -> Bool {
+    (style["visibility"]?.string ?? "visible") != "visible"
+}
+
 extension NodeView {
-    /// Computed visibility hides the box unless it is `visible`, the initial value.
-    package var cssVisibilityHidden: Bool { (style["visibility"]?.string ?? "visible") != "visible" }
+    package var cssVisibilityHidden: Bool { cssVisibilityHides(style) }
 
     /// A hidden paragraph that still has an inline run computing `visible`.
     /// A paragraph that is not hidden answers false without walking its runs,

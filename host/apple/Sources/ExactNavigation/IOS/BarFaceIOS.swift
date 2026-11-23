@@ -5,6 +5,9 @@ import ExactKit
 
 #if os(tvOS)
 struct BarDotFace: Equatable {
+    /// A dot is a bar icon. Bound each bitmap dimension even for oversized authored boxes.
+    private static let pixelLimit: CGFloat = 256
+
     let rect: CGRect
     let size: CGSize
     let color: [Double]
@@ -16,8 +19,8 @@ struct BarDotFace: Equatable {
         guard button.kind == "button", let presenter = button.presenter else { return nil }
         let children = presenter.flats.children(of: button.id) ?? button.childNodes.map(\.id)
         let shown = children.filter { id in
-            let style = presenter.flats.leaves[id]?.style ?? presenter.views[id]?.style
-            return style != nil && style?["display"]?.string != "none" && style?["visibility"]?.string != "hidden"
+            guard let style = presenter.flats.leaves[id]?.style ?? presenter.views[id]?.style else { return false }
+            return style["display"]?.string != "none" && !cssVisibilityHides(style)
         }
         guard shown.count == 1, let id = shown.first else { return nil }
         let leaf = presenter.flats.leaves[id], node = presenter.views[id]
@@ -27,10 +30,12 @@ struct BarDotFace: Equatable {
               let fill = style["background_color"] else { return nil }
         let host = node ?? button
         let left = max(0, button.number("padding_left")), right = max(0, button.number("padding_right"))
+        let totalWidth = left + width + right
+        guard totalWidth.isFinite, height.isFinite else { return nil }
         rect = CGRect(x: left, y: 0, width: width, height: height)
-        size = CGSize(width: left + width + right, height: height)
+        size = CGSize(width: totalWidth, height: height)
         let tint = fill.namesTint ? host.carriedTint : nil
-        guard let color = fill.channels(dark: button.drawsDark, contrast: host.drawsHighContrast, elevated: host.drawsElevated, tint: tint) else { return nil }
+        guard let color = fill.channels(dark: host.drawsDark, contrast: host.drawsHighContrast, elevated: host.drawsElevated, tint: tint) else { return nil }
         self.color = color
         corners = BorderPaint.reduced(BorderPaint.radii(style, in: rect), in: rect)
         opacity = leaf.map { CGFloat($0.opacity) } ?? node?.alpha ?? 1
@@ -41,7 +46,14 @@ struct BarDotFace: Equatable {
 
     func image(dimmed: Bool) -> UIImage {
         let ink = TextEngine.color(color)
-        return UIGraphicsImageRenderer(size: size).image { context in
+        let format = UIGraphicsImageRendererFormat.default()
+        let side = Self.pixelLimit / format.scale
+        let scale = min(1, side / max(size.width, size.height))
+        let pixel = 1 / format.scale
+        let output = CGSize(width: max(pixel, min(side, size.width * scale)),
+                            height: max(pixel, min(side, size.height * scale)))
+        return UIGraphicsImageRenderer(size: output, format: format).image { context in
+            context.cgContext.scaleBy(x: scale, y: scale)
             context.cgContext.setAlpha(opacity)
             let fill = dimmed ? tintShare.map { ink.dimmedTint(share: $0) } ?? ink : ink
             fill.setFill()

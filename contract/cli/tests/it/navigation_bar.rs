@@ -450,7 +450,7 @@ fn compile_header(name: &str, targets: &str, header: &str) -> (Vec<String>, Vec<
     )
     .unwrap();
     let source = format!(
-        "routes nav\n  home \"/\"\ncomponent App\n  state on = true\n  state more = false\n  action go\n    more = !more\n  view\n    main navigationKey=`${{top(nav).id}}`\n      for e in stack(nav) key=e.id\n        column navigationKey=`${{e.id}}`\n          header\n{header}          text \"Body\"\n"
+        "style AvatarBox\n  width=32\n  height=32\n  border-radius=16\n  background-color=\"-exact-fill\"\nroutes nav\n  home \"/\"\ncomponent App\n  state on = true\n  state more = false\n  action go\n    more = !more\n  view\n    main navigationKey=`${{top(nav).id}}`\n      for e in stack(nav) key=e.id\n        column navigationKey=`${{e.id}}`\n          header\n{header}          text \"Body\"\n"
     );
     std::fs::write(dir.join("app.contract"), source).unwrap();
     let (plan, warnings) = contract::compile_path_all_warned(&dir.at("app.contract"), false);
@@ -482,12 +482,18 @@ fn a_header_counts_headings_per_rendering() {
         ("one-choice", format!("{chosen}{row}"), 1),
         ("unrelated-choice", format!("{chosen}            if more\n              column\n{row}"), 1),
         ("nested-choice", format!("            if more\n              text \"Bike\" role=\"heading\"\n            else\n{}{row}", chosen.lines().map(|line| format!("  {line}\n")).collect::<String>()), 1),
-        ("sometimes-two", format!("{chosen}            if more\n              text \"Bike\" role=\"heading\"\n              progress\n"), 0),
         ("untitled-choice", "            if on\n              button press=go\n                progress\n".to_string(), 1),
     ] {
         let (errors, _) = compile_header(name, ios, &header);
         assert_eq!(errors.len(), count, "{name}: {errors:?}");
     }
+}
+
+#[test]
+fn a_header_arm_with_a_second_heading_can_show_a_spinner() {
+    let header = "            text \"Car\" role=\"heading\"\n            if more\n              text \"Bike\" role=\"heading\"\n              progress\n";
+    let (errors, _) = compile_header("sometimes-two", "\"ios\": {}", header);
+    assert!(errors.is_empty(), "{errors:?}");
 }
 
 #[test]
@@ -507,15 +513,17 @@ fn only_a_filled_box_with_a_face_inside_the_title_can_be_its_avatar() {
                 .collect::<String>()
         )
     };
-    let (errors, warnings) = compile_header(
-        "avatar-inside",
-        ios,
-        &wrapped(&format!("{avatar}{heading}")),
-    );
-    assert!(
-        errors.is_empty() && warnings.is_empty(),
-        "{errors:?} {warnings:?}"
-    );
+    let choice = format!("            if on\n  {heading}            else\n  {heading}");
+    for (name, title) in [
+        ("avatar-inside", heading),
+        ("avatar-choice", choice.as_str()),
+    ] {
+        let (errors, warnings) = compile_header(name, ios, &wrapped(&format!("{avatar}{title}")));
+        assert!(
+            errors.is_empty() && warnings.is_empty(),
+            "{name}: {errors:?} {warnings:?}"
+        );
+    }
     let spinner = avatar.replace("text \"AL\"", "progress");
     let (_, warnings) = compile_header(
         "avatar-spinner",
@@ -547,6 +555,22 @@ fn the_mac_warns_when_a_header_button_has_no_toolbar_face() {
     let painted = format!("{header}              text \"Edit\" font-size=13\n");
     let (_, warnings) = compile_header("two-symbols-painted", mac, &painted);
     assert!(warnings.is_empty(), "{warnings:?}");
+}
+
+#[test]
+fn the_mac_accepts_classed_badges_and_sized_dots() {
+    let mac = "\"macos\": {}";
+    let refusals: Vec<_> = [
+        ("classed-picture", "column class=AvatarBox\n                image \"https://example.com/photo.png\""),
+        ("classed-symbol", "column class=AvatarBox\n                image \"symbol:add\""),
+        ("dot-px", "column width=\"16px\" height=\"16px\" background-color=\"blue\""),
+        ("dot-rem", "column width=\"1rem\" height=\"1rem\" background-color=\"blue\""),
+    ].into_iter().filter_map(|(name, face)| {
+        let header = format!("            text \"Car\" role=\"heading\"\n            button press=go aria-label=\"Profile\"\n              {face}\n");
+        let (errors, warnings) = compile_header(name, mac, &header);
+        (!(errors.is_empty() && warnings.is_empty())).then_some((name, errors, warnings))
+    }).collect();
+    assert!(refusals.is_empty(), "{refusals:?}");
 }
 
 #[test]

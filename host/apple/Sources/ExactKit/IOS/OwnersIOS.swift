@@ -99,9 +99,9 @@ extension Presenter {
             let up = listenerParent(of: cur)
             // Panel siblings stay within their parent's box. Bar items and the
             // tab accessory are held apart from it.
-            if up !== cur.superview {
+            if box == nil, up !== cur.superview {
                 if let liftedBox = navigation.lifted?.pressBox(crossing: cur, from: start) { box = liftedBox }
-                else if box == nil, up !== navigation.lifted?.parent(of: cur) { box = start }
+                else if up !== navigation.lifted?.parent(of: cur) { box = start }
             }
             at = up
         }

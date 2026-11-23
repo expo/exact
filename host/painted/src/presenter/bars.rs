@@ -649,8 +649,8 @@ impl<D: DataSource> Presenter<D> {
                 self.system_back(now_ms);
             }
             What::Item(node) => {
-                if let Some(invoker) = self.top_invoker(node) {
-                    self.invoke(invoker, now_ms, true);
+                if self.top_invoker(node) == Some(node) {
+                    self.invoke(node, now_ms, true);
                     return;
                 }
                 // A link follows its `href` after its press, and at once where

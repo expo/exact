@@ -25,6 +25,7 @@ struct HeaderShape: Equatable {
         #if os(tvOS)
         let dot: BarDotFace?
         #endif
+        let hasPaintedFace: Bool
         /// Whether the button opens a menu-shaped popover or a confirmation
         /// (`MenuHost.pullsDown`): the item's menu, its rows read when it
         /// opens, as LLP 1021 D3's pull-down. Any other popover opens as
@@ -57,7 +58,7 @@ struct HeaderShape: Equatable {
         let font: UIFont?
         let active: NativeButtonState
         let activeTitleColor: BatchValue?
-        var supportsActiveColor: Bool { symbol == nil && badge == nil && !hosted }
+        var supportsActiveColor: Bool { symbol == nil && !hasPaintedFace && !hosted }
         /// A readout (LLP 1141.004 D1): an item nothing presses, whose
         /// custom view holds the element's own views (BarHostedIOS.swift).
         let hosted: Bool
@@ -104,6 +105,9 @@ struct HeaderShape: Equatable {
             badge = button.isNativeButton || hosted ? nil : BadgeFace(button)
             #if os(tvOS)
             dot = badge == nil && symbol == nil && text.isEmpty ? BarDotFace(button) : nil
+            hasPaintedFace = badge != nil || dot != nil
+            #else
+            hasPaintedFace = badge != nil
             #endif
             let invocation = button.presenter?.invocation(of: button)
             menu = invocation.map { $0.opensPopover && button.presenter?.menus.pullsDown($0.target) == true } == true
@@ -135,7 +139,7 @@ struct HeaderShape: Equatable {
             active = NativeButtonState(button)
             let ownership = face.map { NativeButtonState.colorOwnership($0.rows) }
             let ownsTitle = ownership?.title ?? (ink?.0.wrote("text_color") == true)
-            activeTitleColor = symbol == nil && badge == nil && !hosted && !ownsTitle
+            activeTitleColor = symbol == nil && !hasPaintedFace && !hosted && !ownsTitle
                 && active.style.keys.allSatisfy { $0 == "press_color" } ? active.style["press_color"] : nil
             let source = ink.flatMap { $0.0.ownColor("text_color") != nil ? $0.0 : nil } ?? (button.ownColor("text_color") != nil ? button : nil)
             let faceInk: BatchValue? = face.flatMap { face in

@@ -1402,7 +1402,7 @@ extension NavigationHost {
         else { item.accessibilityTraits.remove(.notEnabled) }
         // The authored `color` of a plain item's face; a prominent item's
         // tint is its fill, which `color` is not.
-        let plain = !i.prominent && i.badge == nil
+        let plain = !i.prominent && !i.hasPaintedFace
         item.tintColor = !plain ? nil : i.followsTint ? presenter.views[i.id]?.ownAccent ?? SystemColor.tint(1) : i.tint.map { tint in UIColor { TextEngine.color(tint[$0.userInterfaceStyle == .dark ? 1 : 0]) } }
         // UIKit's font where none is written, also once a kept item's author removes theirs.
         let font = image == nil ? i.font : nil
