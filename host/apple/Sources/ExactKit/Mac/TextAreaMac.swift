@@ -26,6 +26,40 @@ package final class TextArea: NSTextView {
     /// An edit is under way: the selection it moves is the edit's, not the
     /// person's, and stays where the edit puts it (`MarkupHidden.swift`).
     var changingText = false
+    var nativeTextInput: Bool { owner?.props["nativeTextInput"] == "true" }
+
+    func ordinaryInsertionKey(_ event: NSEvent, presenter: Presenter) -> Bool {
+        guard nativeTextInput, event.type == .keyDown, let owner, owner.presenter === presenter,
+              !owner.disabled, !owner.inert, window?.firstResponder === self,
+              isEditable, selectedRange().length == 0, !hasMarkedText(), !markingText,
+              event.modifierFlags.isDisjoint(with: [.command, .control, .option, .function, .numericPad]),
+              let characters = event.characters, characters.utf8.count == 1, let first = characters.utf8.first else { return false }
+        return (0x20...0x7E).contains(first)
+    }
+
+    package override func keyDown(with event: NSEvent) {
+        interpretKey(event) { super.keyDown(with: event) }
+    }
+
+    func interpretKey(_ event: NSEvent, _ interpret: () -> Void) {
+        let bubble = deferredKeyBubble
+        deferredKeyBubble = nil
+        guard let (original, deliver) = bubble, original === event else { return interpret() }
+        guard let presenter = owner?.presenter, ordinaryInsertionKey(event, presenter: presenter) else {
+            if !deliver() { interpret() }
+            return
+        }
+        guard let text = event.characters else { return interpret() }
+        ordinaryInsertion = OrdinaryInsertion(text: text, bubble: deliver)
+        defer { ordinaryInsertion = nil }
+        interpret()
+    }
+
+    private func deliverCommandKey() -> Bool {
+        let deliver = ordinaryInsertion?.bubble
+        ordinaryInsertion = nil
+        return deliver?() ?? false
+    }
     /// The host is moving the caret across a hidden link destination.
     var placingCaret = false
     /// An input method is marking text: its edit stays the platform's.
@@ -153,6 +187,7 @@ package final class TextArea: NSTextView {
     }
 
     package override func doCommand(by selector: Selector) {
+        if ordinaryInsertion != nil, deliverCommandKey() { return }
         owner?.presenter?.flushKeyViewLoop()
         let types = ["deleteBackward:": "deleteContentBackward", "deleteForward:": "deleteContentForward", "deleteWordBackward:": "deleteWordBackward", "deleteWordForward:": "deleteWordForward", "deleteToBeginningOfLine:": "deleteSoftLineBackward", "deleteToEndOfLine:": "deleteSoftLineForward", "deleteToBeginningOfParagraph:": "deleteHardLineBackward", "deleteToEndOfParagraph:": "deleteHardLineForward"]
         let name = NSStringFromSelector(selector)
@@ -176,17 +211,21 @@ package final class TextArea: NSTextView {
         if let fields = owner?.presenter?.fieldSelections { fields.quietly(place) } else { place() }
     }
     package override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
+        let ordinary = ordinaryInsertion != nil && replacementString == ordinaryInsertion?.text && affectedCharRange == selectedRange() && !hasMarkedText() && !markingText
+        if ordinaryInsertion != nil, !ordinary, deliverCommandKey() { return false }
         // Asked before `super`, which registers the native edit's undo: the
         // editor's own edit replaces it and registers its own.
         if let markup, !markup.applying, !hasMarkedText(), !markingText, let text = replacementString, let storage = textStorage,
            let rewrite = markup.rewrite(affectedCharRange, with: text, caret: selectedRange().length == 0 ? selectedRange().location : nil, in: storage) {
+            if ordinaryInsertion != nil, deliverCommandKey() { return false }
             if let owner, owner.presenter?.fieldSelections.shouldEdit(owner, range: affectedCharRange, replacement: text, marked: false) == false { return false }
             apply(rewrite, markup)
             return false
         }
         guard super.shouldChangeText(in: affectedCharRange, replacementString: replacementString) else { return false }
         guard let owner else { return true }
-        guard owner.presenter?.fieldSelections.shouldEdit(owner, range: affectedCharRange, replacement: replacementString ?? "", marked: hasMarkedText()) ?? true else { return false }
+        guard owner.presenter?.fieldSelections.shouldEdit(owner, range: affectedCharRange, replacement: replacementString ?? "", marked: hasMarkedText(), ordinaryTyping: ordinary) ?? true else { return false }
+        ordinaryInsertion?.editing = ordinary
         changingText = true
         DispatchQueue.main.async { [weak self] in self?.changingText = false }
         return true
@@ -212,6 +251,7 @@ package final class TextArea: NSTextView {
     /// AppKit posts no change while text is marked: the owner hears each one
     /// here, and a commit's steps as one (`settlingComposition`).
     package override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        if ordinaryInsertion != nil, deliverCommandKey() { return }
         // A composition that starts over a selection holding a hidden link
         // destination first deletes what the selection shows, as the editor
         // deletes it, and then composes at the caret.
@@ -324,9 +364,15 @@ package final class TextArea: NSTextView {
         }
     }
 
-    package override func cut(_ sender: Any?) { NodeView.fieldEdit(owner, #selector(NodeView.cut(_:))) { super.cut(sender) } }
-    package override func paste(_ sender: Any?) { NodeView.fieldPaste(owner, self) { super.paste(sender) } }
-    package override func pasteAsPlainText(_ sender: Any?) { NodeView.fieldPaste(owner, self) { super.pasteAsPlainText(sender) } }
+    package override func cut(_ sender: Any?) {
+        NodeView.fieldEdit(owner, #selector(NodeView.cut(_:))) { super.cut(sender) }
+    }
+    package override func paste(_ sender: Any?) {
+        NodeView.fieldPaste(owner, self) { super.paste(sender) }
+    }
+    package override func pasteAsPlainText(_ sender: Any?) {
+        NodeView.fieldPaste(owner, self) { super.pasteAsPlainText(sender) }
+    }
 
     var placeholder = "" { didSet { needsDisplay = true } }
     /// The authored `::placeholder` colour (LLP 1104 D3); nil, the platform's.
@@ -360,6 +406,18 @@ package final class TextArea: NSTextView {
             drawingAntialiased(owner?.drawsAntialiased == true) { (placeholder as NSString).draw(in: rect, withAttributes: attributes) }
         }
     }
+
+    // Key capture has run. If AppKit turns the key into a command instead
+    // of inserting its literal text, dispatch the saved bubble first.
+    var deferredKeyBubble: (NSEvent, () -> Bool)?
+    private struct OrdinaryInsertion {
+        let text: String
+        let bubble: () -> Bool
+        var editing = false
+    }
+    private var ordinaryInsertion: OrdinaryInsertion?
+    var ordinaryInsertionInProgress: Bool { ordinaryInsertion?.editing == true }
+    var ordinaryInputSelection: (String, FieldSelection)?
 }
 
 extension NodeView {

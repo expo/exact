@@ -75,7 +75,7 @@ package final class FieldSelections {
     var editIntent: [UInt32: String] = [:]
     var composing: Set<UInt32> = []
     var editing: Set<UInt32> = []
-    private var changedTasks: [UInt32: ObjectIdentifier] = [:]
+    private var changedTasks: [UInt32: (identity: ObjectIdentifier, onlyOrdinaryTyping: Bool)] = [:]
     /// A text field's `select` (`Bridge.fieldSelect`), where it has a handler.
     var onSelect: ((UInt32, String, FieldSelection) -> Void)?
     /// An insertReplacementText input, from the command or a hatch.
@@ -180,7 +180,13 @@ package final class FieldSelections {
         var next = FieldSelection(range)
         let before = last[node.id]
         guard !next.same(before) else { return }
+        #if os(macOS)
+        let ordinaryTyping = quiet == 0 && !applying
+            && (node.textArea as? TextArea)?.ordinaryInsertionInProgress == true
+        selectionChanged(node, ordinaryTyping: ordinaryTyping)
+        #else
         selectionChanged(node)
+        #endif
         // A batch's value written in, a focus's own select-all, a script's
         // range: not the person's.
         if quiet > 0 || applying {
@@ -399,16 +405,37 @@ package final class FieldSelections {
         if node.handlers.contains("input") { onReplacement?(node.id, value, selection) }
     }
 
-    func selectionChanged(_ node: NodeView) {
+    func selectionChanged(_ node: NodeView, ordinaryTyping: Bool = false) {
         let id = node.id, identity = ObjectIdentifier(node)
-        guard node.handlers.contains("selectionchange"), changedTasks[id] != identity else { return }
-        changedTasks[id] = identity
-        DispatchQueue.main.async { [weak self, weak node] in
-            guard let self, changedTasks[id] == identity else { return }
-            changedTasks[id] = nil
-            guard let node, presenter.views[id] === node else { return }
-            onChange?(id, node.fieldText, current(node))
+        guard node.handlers.contains("selectionchange") else { return }
+        if changedTasks[id]?.identity == identity {
+            if !ordinaryTyping { changedTasks[id]?.onlyOrdinaryTyping = false }
+            return
         }
+        changedTasks[id] = (identity, ordinaryTyping)
+        DispatchQueue.main.async { [weak self, weak node] in
+            guard let self, let task = changedTasks[id], task.identity == identity else { return }
+            #if os(macOS)
+            let editor = node?.textArea as? TextArea
+            if let node, let editor, editor.nativeTextInput {
+                let ordinary = editor.ordinaryInputSelection
+                editor.ordinaryInputSelection = nil
+                if task.onlyOrdinaryTyping, !editor.hasMarkedText(), let (inputValue, inputSelection) = ordinary,
+                   inputSelection == current(node), inputValue.utf16.elementsEqual(node.fieldText.utf16) {
+                    changedTasks[id] = nil
+                    return
+                }
+            }
+            #endif
+            deliverSelection(id, identity: identity, node: node)
+        }
+    }
+
+    private func deliverSelection(_ id: UInt32, identity: ObjectIdentifier, node: NodeView?) {
+        guard changedTasks[id]?.identity == identity else { return }
+        changedTasks[id] = nil
+        guard let node, presenter.views[id] === node else { return }
+        onChange?(id, node.fieldText, current(node))
     }
 
     private func select(_ node: NodeView, _ s: FieldSelection) {

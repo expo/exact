@@ -73,6 +73,19 @@ extension ExactSession {
         if state != .destroyed, !ownerInFlight, let due = timerDue, due <= now() { sendAdvance(now: now()) }
     }
 
+    func wireFieldInput() {
+        presenter.onInput = { [unowned self] id, value in admit(id) {
+            if let edit = presenter.fieldSelections.input(id), let selection = presenter.fieldSelections.reported(id, value) {
+                #if os(macOS)
+                if edit.ordinaryTyping {
+                    (presenter.views[id]?.textArea as? TextArea)?.ordinaryInputSelection = (value, selection)
+                }
+                #endif
+                applyInput(runtime.fieldEvent(id, 54, edit.payload(value, selection), now: now()))
+            } else { applyInput(runtime.input(id, value, selection: presenter.fieldSelections.reported(id, value), now: now())) }
+        } }
+    }
+
     /// A timer advance on the owner, not waited for (LLP 1072.000 §4 B):
     /// its batch lands in the owner's order, a main-queue turn after the
     /// owner made it, and until then a frame shows the last batch applied.

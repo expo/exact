@@ -2756,6 +2756,16 @@ extended), and when `setSelectionRange` changes the selection, collapsed
 included; typing and a plain caret move do not fire it. Its payload is the
 `InputEvent`.
 
+On macOS, `textarea -exact-native-text-input=true` lets AppKit insert
+one printable ASCII character at a collapsed caret. Shift can be held.
+The attribute takes a literal boolean. Exact delivers `input` with the
+new value and selection before returning to AppKit. It skips `key` on the
+editor and its ancestors, `beforeinput` on the editor, and a
+`selectionchange` that repeats the selection sent with `input`. A
+`keycapture` handler on the route keeps normal dispatch. Commands, paste,
+undo, selection-only moves and IME keep their usual events. Other
+platforms use their usual dispatch.
+
 While an input method composes in a text field or a textarea (Japanese kana
 before its kanji, pinyin, a Korean syllable), `input` fires at every change
 with the composing text in the value, as the DOM's does, on every host that

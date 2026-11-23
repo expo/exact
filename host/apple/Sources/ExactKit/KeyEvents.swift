@@ -160,7 +160,8 @@ extension Presenter {
     package func logicalAncestry(of view: KeyPlatformView) -> UnfoldFirstSequence<KeyPlatformView> {
         sequence(first: view, next: { self.eventParent(of: $0) })
     }
-    private func keyEvent(_ handler: String, at target: NodeView?, _ press: KeyPress, inline: UInt32? = nil) -> Bool {
+    private func keyEvent(_ handler: String, at target: NodeView?, _ press: KeyPress, inline: UInt32? = nil,
+                          deferBubble: ((@escaping () -> Bool) -> Void)? = nil) -> Bool {
         if handler == "key", let target { MainActor.assumeIsolated { HeldState.input(at: target) } } // a key on a held node lets its hold go (HeldState.swift)
         var path: [(id: UInt32, handlers: Set<String>)] = []
         var run = inline.flatMap(inlineText)
@@ -184,6 +185,16 @@ extension Presenter {
             next = eventParent(of: view)
             #endif
         }
+        if let deferBubble, !path.contains(where: { $0.handlers.contains("keycapture") }) {
+            deferBubble { [weak self] in self?.dispatchKey(handler, press, path: path) ?? false }
+            defaultPrevented = false
+            propagationStopped = false
+            return false
+        }
+        return dispatchKey(handler, press, path: path)
+    }
+
+    private func dispatchKey(_ handler: String, _ press: KeyPress, path: [(id: UInt32, handlers: Set<String>)]) -> Bool {
         var prevented = false
         func deliver(_ node: (id: UInt32, handlers: Set<String>), _ press: KeyPress) -> Bool {
             defaultPrevented = false
@@ -249,8 +260,13 @@ extension Presenter {
         let responder = (window ?? event.window)?.firstResponder
         let composing = composes(event, at: responder)
         if !passesComposition(event, at: responder) { return false }
+        var deferBubble: ((@escaping () -> Bool) -> Void)?
+        if let editor = responder as? TextArea, editor.ordinaryInsertionKey(event, presenter: self) {
+            deferBubble = { bubble in editor.deferredKeyBubble = (event, bubble) }
+        }
         return keyEvent("key", at: keyPath(responder, in: window ?? event.window), KeyPress(KeyCodes.held(event.modifierFlags) + NodeView.keyName(event),
-                        code: KeyCodes.code(event), repeats: event.type == .keyDown && event.isARepeat, composing: composing), inline: (responder as? InlineKeyView)?.id)
+                        code: KeyCodes.code(event), repeats: event.type == .keyDown && event.isARepeat, composing: composing),
+                        inline: (responder as? InlineKeyView)?.id, deferBubble: deferBubble)
     }
     /// A keyup at the window's first responder, a modifier's (a flags change
     /// that released it) included (#140): the `keyup` handlers there and

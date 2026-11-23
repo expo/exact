@@ -685,6 +685,7 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "-exact-menu-remove" => AttrTarget::Prop(p("menuRemove")),
         "-exact-menu-keys" => AttrTarget::Prop(p("menuKeys")),
         "-exact-return-presses" => AttrTarget::Prop(p("returnPresses")),
+        "-exact-native-text-input" => AttrTarget::Prop(p("nativeTextInput")),
         "aria-keyshortcuts" => AttrTarget::Prop(p("accessibilityKeyShortcuts")),
         "aria-description" => AttrTarget::Prop(p("accessibilityHint")),
         "aria-level" => AttrTarget::Prop(p("accessibilityHeadingLevel")),

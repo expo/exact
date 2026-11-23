@@ -1279,6 +1279,7 @@ impl<'a> Lowerer<'a> {
                 a.span,
             );
         }
+        fields::check_native_input(tag, a)?;
         // @ref LLP 1045 D3 — `none` or `markdown`, styling a `text`'s or a
         // `textarea`'s own string; another word did nothing (notes #1).
         if a.name == "markup" {

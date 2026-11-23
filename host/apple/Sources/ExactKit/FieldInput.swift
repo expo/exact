@@ -11,6 +11,7 @@ struct FieldInput {
     var data: String?
     var cancelable = true
     var isComposing = false
+    var ordinaryTyping = false
 
     func payload(_ value: String, _ selection: FieldSelection) -> String {
         FieldWire.input(type: inputType, data: data, cancelable: cancelable, composing: isComposing,
@@ -68,7 +69,7 @@ extension FieldSelections {
         }
     }
 
-    func shouldEdit(_ node: NodeView, range: NSRange, replacement: String, marked: Bool) -> Bool {
+    func shouldEdit(_ node: NodeView, range: NSRange, replacement: String, marked: Bool, ordinaryTyping: Bool = false) -> Bool {
         guard Self.tracks(node), !editing.contains(node.id), !replacing.contains(node.id), !Self.applying(node) else { return true }
         let value = node.fieldText, selection = current(node)
         let ime = marked || composing.contains(node.id)
@@ -76,10 +77,11 @@ extension FieldSelections {
             (replacement.isEmpty ? "deleteContentBackward" : replacement == "\n" ? "insertLineBreak" : "insertText")
         if type.hasPrefix("history"), inputDetails[node.id]?.inputType == type { return true }
         let data = type.hasPrefix("delete") || type.hasPrefix("history") || type == "insertLineBreak" ? nil : replacement
-        let edit = FieldInput(inputType: type, data: data, cancelable: !ime, isComposing: ime)
+        let plain = ordinaryTyping && !ime && editIntent[node.id] == nil && type == "insertText"
+        let edit = FieldInput(inputType: type, data: data, cancelable: !ime, isComposing: ime, ordinaryTyping: plain)
         let outer = presenter.defaultPrevented
         presenter.defaultPrevented = false
-        let heard = node.handlers.contains("beforeinput")
+        let heard = node.handlers.contains("beforeinput") && !plain
         if heard { onBeforeInput?(node.id, value, selection, edit) }
         let prevented = presenter.defaultPrevented && edit.cancelable
         presenter.defaultPrevented = outer

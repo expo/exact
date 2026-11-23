@@ -18,6 +18,26 @@ pub enum Profile {
     Terminal,
 }
 
+pub(crate) fn check_native_input(tag: &str, a: &Attr) -> Result<(), LowerError> {
+    if a.name == "-exact-native-text-input" {
+        if tag != "textarea" {
+            return err(
+                "lower-attr-tag",
+                "`-exact-native-text-input` belongs to `textarea`",
+                a.span,
+            );
+        }
+        if !matches!(&a.value, Expr::Bool(..)) {
+            return err(
+                "lower-attr-value",
+                "`-exact-native-text-input` takes literal `true` or `false`",
+                a.span,
+            );
+        }
+    }
+    Ok(())
+}
+
 const TYPES: &[&str] = &[
     "text", "email", "password", "search", "tel", "url", "number",
 ];

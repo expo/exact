@@ -1,0 +1,27 @@
+component Test
+  state keys = ""
+  state checkedInput = ""
+  state before = ""
+  action capture(k: string)
+    keys = keys + "capture " + k + ";"
+    if k == "x"
+      preventDefault()
+  action key(k: string)
+    keys = keys + "bubble " + k + ";"
+    if k == "c"
+      preventDefault()
+  action beforeEdit(e: InputEvent)
+    before = e.inputType
+    if e.inputType == "insertFromPaste"
+      preventDefault()
+  action checked(value: string)
+    checkedInput = value
+  action keyRelease(k: string)
+    keys = keys + "up " + k + ";"
+  view
+    column
+      textarea -exact-native-text-input=true testId="checked" width="15rem" height=50 value=checkedInput input=checked keycapture=capture key=key keyup=keyRelease beforeinput=beforeEdit
+      textarea -exact-native-text-input=true testId="binding" width="15rem" height=50 value=checkedInput input=checked key=key keyup=keyRelease beforeinput=beforeEdit
+      textarea testId="plain" width="15rem" height=50 keycapture=capture key=key beforeinput=beforeEdit
+      text keys testId="keys"
+      text before testId="before"

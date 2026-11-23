@@ -786,11 +786,7 @@ public final class ExactSession {
             let value = documentValue(id, value)
             applyInput(runtime.change(id, value, selection: presenter.fieldSelections.reported(id, value), now: now()))
         } }
-        presenter.onInput = { [unowned self] id, value in admit(id) {
-            if let edit = presenter.fieldSelections.input(id), let selection = presenter.fieldSelections.reported(id, value) {
-                applyInput(runtime.fieldEvent(id, 54, edit.payload(value, selection), now: now()))
-            } else { applyInput(runtime.input(id, value, selection: presenter.fieldSelections.reported(id, value), now: now())) }
-        } }
+        wireFieldInput()
         presenter.fieldSelections.onReplacement = { [unowned self] id, value, selection in admit(id) { apply(runtime.fieldEvent(id, 54, (presenter.fieldSelections.input(id) ?? FieldInput(inputType: "insertReplacementText", cancelable: false)).payload(value, selection), now: now())) } }
         presenter.fieldSelections.onChange = { [unowned self] id, value, selection in admit(id) { apply(runtime.fieldEvent(id, 52, selection.payload(value), now: now())) } }
         presenter.fieldSelections.onBeforeInput = { [unowned self] id, value, selection, edit in applyInput(runtime.fieldEvent(id, 53, edit.payload(value, selection), now: now()), at: id) }
