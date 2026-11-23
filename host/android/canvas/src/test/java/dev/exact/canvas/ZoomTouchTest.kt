@@ -173,6 +173,23 @@ class ZoomTouchTest {
         assertEquals("exact2 hears the move within the slop, then is cancelled", listOf(0, 2, 3), thread.touches)
     }
 
+    @Test fun aPanMovesTheZoomedRowsWithoutAStream() {
+        val rows = android.graphics.RenderNode("rows")
+        @Suppress("UNCHECKED_CAST")
+        (ExactView::class.java.getDeclaredField("groups").apply { isAccessible = true }.get(view)
+            as HashMap<Int, android.graphics.RenderNode>)[1] = rows
+        val scrolling = ExactView::class.java.getDeclaredField("scrolling").apply { isAccessible = true }.get(view) as Scrolling
+        // Its rows have a node of their own, painted at the origin.
+        scrolling.told(intArrayOf(1, 3 or 4 or Scrolling.ZOOM_FLAG, 0, 0, 0, 0, 0, 500f.toBits(), 500f.toBits()))
+        touch(MotionEvent.ACTION_DOWN, 200f to 400f)
+        answer(reply(scroller(1, 4 or Scrolling.ZOOM_FLAG, 500f)))
+        for (k in 1..5) touch(MotionEvent.ACTION_MOVE, 200f - 12f * k to 400f - 8f * k, step = 100)
+        val m = thread.moved[1]!!
+        assertTrue("y ${m[1]}", m[1] > 0f)
+        assertEquals(-Math.round(m[0]).toFloat(), rows.translationX)
+        assertEquals(-Math.round(m[1]).toFloat(), rows.translationY)
+    }
+
     @Test fun aDragOfAScrollerThatCannotMoveScrollsTheOneOutside() {
         // The photo at its fit: the page outside it scrolls, as it would over anything else.
         val page = intArrayOf(2, 2, 0, 0, 0, 0, 900f.toBits(), 0, 0, 400f.toBits(), 800f.toBits())

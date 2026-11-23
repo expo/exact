@@ -599,8 +599,7 @@ internal class Scrolling(private val view: ExactView) {
             rest -= took
             if (abs(rest) < 0.01f) { rest = 0f; break }
         }
-        place()
-        view.fields?.place()
+        view.placeScrolled()
         view.tick()
         if (waits) view.awaitScrolled()
         return rest
@@ -615,6 +614,7 @@ internal class Scrolling(private val view: ExactView) {
         val seq = view.scrolled(s.id, tx, ty, s.rev)
         if (seq != 0) { s.pendX += tx; s.pendY += ty; sent.addLast(Sent(seq, s, tx, ty)) }
         indicate(s)
+        view.placeScrolled()
         view.tick()
         if (!s.node) view.awaitScrolled()
     }

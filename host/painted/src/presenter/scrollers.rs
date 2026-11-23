@@ -92,6 +92,10 @@ pub(super) struct Reader {
     tracked: BTreeMap<ViewId, (u32, (f32, f32))>,
     /// The last statement [`Presenter::reader_scrollers`] returned.
     last: Vec<i32>,
+    /// A move since the last statement did not land as the reader sent it
+    /// (dropped, or stopped at an end): the reader draws it as sent until
+    /// a stream acknowledges it.
+    missed: bool,
 }
 
 impl Reader {
@@ -474,6 +478,8 @@ impl<D: DataSource> Presenter<D> {
         rev: u32,
     ) -> Option<((f32, f32), (f32, f32))> {
         self.restore_scroll_anchors();
+        // Missed unless it lands where it was sent.
+        let missed = std::mem::replace(&mut self.reader.missed, true);
         if !self.reader.tracked.contains_key(&id) {
             return None;
         }
@@ -485,12 +491,9 @@ impl<D: DataSource> Presenter<D> {
             return None;
         }
         let from = s.offset;
-        let (to, movement) = self.scroll_to_completion(
-            id,
-            (from.0 + by.0, from.1 + by.1),
-            Completion::Reader,
-            Some(by),
-        )?;
+        let sent = (from.0 + by.0, from.1 + by.1);
+        let (to, movement) = self.scroll_to_completion(id, sent, Completion::Reader, Some(by))?;
+        self.reader.missed = missed || to != sent;
         let moved = (to.0 - from.0, to.1 - from.1);
         // Only a sample that moves counts as the person's scroll: a dropped
         // one must not cancel a fragment scroll or a load's hold.
@@ -529,6 +532,21 @@ impl<D: DataSource> Presenter<D> {
     /// Whether the reader was told of scroller `id`, and so may drag it.
     pub(super) fn reader_knows(&self, id: ViewId) -> bool {
         self.reader.tracked.contains_key(&id)
+    }
+
+    /// Whether each scroller the reader knows is where its own moves left
+    /// it, each landed as sent: no revision would move on, so a statement
+    /// would tell it only those moves.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn reader_moves_stand(&self) -> bool {
+        !self.reader.missed
+            && self.reader.tracked.iter().all(|(id, (_, at))| {
+                *at == if *id == PAGE {
+                    self.page
+                } else {
+                    self.scroll.get(id).copied().unwrap_or_default()
+                }
+            })
     }
 
     /// The scrollers the clamp leaves alone: each a list kept while its route is hidden (a
@@ -640,6 +658,7 @@ impl<D: DataSource> Presenter<D> {
         drawn: &[(ViewId, (f32, f32))],
         scale: f32,
     ) -> Option<Vec<i32>> {
+        self.reader.missed = false;
         if self.reader.tracked.is_empty() {
             // The last scroller it knew went: said once, with nothing in it.
             return (!std::mem::take(&mut self.reader.last).is_empty()).then(Vec::new);

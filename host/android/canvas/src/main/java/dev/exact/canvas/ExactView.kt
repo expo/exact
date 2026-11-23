@@ -561,11 +561,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
             applyMove(moveOps)
             groups[feed]?.let { feedBaseX = it.translationX; feedBaseY = it.translationY }
         }
-        // The feed where a driver's scrolls put it, then every scroller a finger moved where the reader has it, and
-        // the hosted fields with their scrollers' rows.
-        if (any) { placeFeed(); scrolling.place(); fields?.place() }
-        // A view lent to another element by these streams (a paint, or a move's `placeFeed`) is asked at its new place.
-        if (any) { Formas.placed(); textSelection.refresh() }
+        if (any) placeScrolled()
         if (coverTrace && painted) traceNewRows()
         moved = !painted
         quiet = painted && allQuiet && move == null
@@ -598,6 +594,10 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         groupSigs.clear(); groupSigs.putAll(structure.groupSigs)
         return same
     }
+
+    /** After a stream, and each move of the reader's own, which may make none ([Owner]): the feed, the scrollers' rows,
+     * the hosted fields, a view lent to another element (a paint, or [placeFeed]'s native rows) and the selection. */
+    internal fun placeScrolled() { placeFeed(); scrolling.place(); fields?.place(); Formas.placed(); textSelection.refresh() }
 
     private fun placeFeed() {
         nearNatives()

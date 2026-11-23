@@ -50,6 +50,9 @@ class ScrollTouchTest {
         }
         @Implementation fun answer(waitMs: Long, f: () -> Unit) = false
         @Implementation fun call(f: () -> Unit) = f()
+        /** What was asked of exact2's thread that publishes nothing (the text selection's geometry). */
+        var tells = 0
+        @Implementation fun tell(f: () -> Unit) { tells++ }
         @Implementation fun input() {}
         @Implementation fun held(on: Boolean) {}
         @Implementation fun running(on: Boolean) {}
@@ -123,6 +126,61 @@ class ScrollTouchTest {
     private fun down(y: Float) = touch(MotionEvent.ACTION_DOWN, 100f to y)
     private fun move(y: Float) = touch(MotionEvent.ACTION_MOVE, 100f to y)
     private fun up(y: Float) = touch(MotionEvent.ACTION_UP, 100f to y)
+
+    @Test fun aReaderMoveBringsAParkedNativeRowIntoViewWithoutAStream() {
+        val module = object : NativeModule {
+            override fun create(context: android.content.Context, props: org.json.JSONObject) = View(context)
+            override fun update(view: View, props: org.json.JSONObject) {}
+        }
+        val natives = Natives(activity, { java.io.File(".") }, mapOf("test" to module))
+        fun field(name: String) = ExactView::class.java.getDeclaredField(name).apply { isAccessible = true }
+        try {
+            view.layout(0, 0, 400, 800)
+            view.natives = natives
+            field("feed").setInt(view, 7)
+            field("feedCount").setInt(view, 1)
+            (field("feedIds").get(view) as IntArray)[0] = 21
+            (field("feedTops").get(view) as FloatArray)[0] = 1220f
+            val scrolling = field("scrolling").get(view) as Scrolling
+            scrolling.told(intArrayOf(7, 14, 0, 0, 0, 0, 0, 0, 800f.toBits()))
+            natives.lazy = true
+            natives.ensure(1, 2, 100, 100, """{"module":"test"}""", 21)
+            natives.near(emptySet(), emptySet(), setOf(21))
+            assertEquals(0, natives.childCount)
+
+            down(720f)
+            answer(reply(scroller(7, 0f, 800f).also { it[1] = 14 }))
+            move(100f)
+            assertTrue(thread.moved.getValue(7) > 420f)
+            assertEquals("the entering row got its native view", 1, natives.childCount)
+        } finally {
+            (view.parent as FrameLayout).removeView(view)
+            natives.destroyAll()
+        }
+    }
+
+    @Test fun aReaderMoveAsksWhereTheSelectedTextWent() {
+        val mode = object : android.view.ActionMode() {
+            override fun setTitle(title: CharSequence?) {}
+            override fun setTitle(resId: Int) {}
+            override fun setSubtitle(subtitle: CharSequence?) {}
+            override fun setSubtitle(resId: Int) {}
+            override fun setCustomView(view: View?) {}
+            override fun invalidate() {}
+            override fun finish() {}
+            override fun getMenu(): android.view.Menu? = null
+            override fun getTitle(): CharSequence? = null
+            override fun getSubtitle(): CharSequence? = null
+            override fun getCustomView(): View? = null
+            override fun getMenuInflater(): android.view.MenuInflater? = null
+        }
+        TextSelection::class.java.getDeclaredField("mode").apply { isAccessible = true }.set(view.textSelection, mode)
+        down(400f)
+        answer(reply(scroller(7, 0f)))
+        move(300f)
+        assertTrue(thread.moved.getValue(7) > 0f)
+        assertEquals("its geometry is asked for again", 1, thread.tells)
+    }
 
     /** [gesture] from a down at y 400, its answer [words] given at once and then given after it: what each scrolled,
      * by scroller, and what exact2 heard. */

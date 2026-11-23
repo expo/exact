@@ -65,8 +65,51 @@ class OwnerBackgroundTest {
             @JvmStatic @Implementation fun timerHeld() = 0
             @JvmStatic @Implementation fun animating(vsyncOnly: Boolean) = frameDemand
             @JvmStatic @Implementation fun displayFrame() {}
-            @JvmStatic @Implementation fun owed() = false
+            var owing = false
+            @JvmStatic @Implementation fun owed() = owing
             @JvmStatic @Implementation fun nextDue() = (due - SystemClock.uptimeMillis()).toDouble()
+            var moves = false
+            @JvmStatic @Implementation fun moved() = moves
+        }
+    }
+
+    @Test fun aStepThatOnlyMovesMakesNoFrameAndStillDoesWhatFollowsOne() {
+        Host.due = SystemClock.uptimeMillis() + 30000
+        val owner = Owner(false, false, 0) { "0" }
+        val thread = Owner::class.java.getDeclaredField("thread").apply { isAccessible = true }.get(owner) as HandlerThread
+        val handler = Owner::class.java.getDeclaredField("handler").apply { isAccessible = true }.get(owner) as Handler
+        val timer = Owner::class.java.getDeclaredField("timer").apply { isAccessible = true }.get(owner) as Runnable
+        val chrome = ArrayList<Int>()
+        owner.chrome = { chrome += it[0] }
+        try {
+            owner.ask { handler.removeCallbacks(timer) }
+            val frames = Host.frames
+            Host.moves = true
+            Host.owing = true
+            Host.chromeStatement = intArrayOf(7)
+            owner.scrolled(1, 0f, 10f, 0, 1)
+            owner.ask { }
+            shadowOf(Looper.getMainLooper()).idle()
+            assertEquals("no frame", frames, Host.frames)
+            assertEquals("the chrome still goes", listOf(7), chrome)
+            assertTrue("the paint the move owes is timed",
+                shadowOf(thread.looper).nextScheduledTaskTime.toMillis() <= SystemClock.uptimeMillis() + 16)
+            Host.moves = false
+            Host.owing = false
+            Host.due = SystemClock.uptimeMillis() + 5
+            owner.scrolled(1, 0f, 10f, 0, 2)
+            owner.ask { }
+            assertEquals("a step that does more makes its frame", frames + 1, Host.frames)
+            Host.moves = true
+            owner.scrolled(1, 0f, 10f, 0, 3)
+            owner.ask { }
+            assertTrue("a timer due sooner keeps its time",
+                shadowOf(thread.looper).nextScheduledTaskTime.toMillis() <= SystemClock.uptimeMillis() + 5)
+        } finally {
+            Host.moves = false; Host.owing = false
+            handler.removeCallbacksAndMessages(null)
+            thread.quitSafely(); thread.join(5000)
+            assertFalse(thread.isAlive)
         }
     }
 

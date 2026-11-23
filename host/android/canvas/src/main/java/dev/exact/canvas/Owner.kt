@@ -434,7 +434,9 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
         if (fingers == null || dy != 0f) Native.scroll(dy)
         android.os.Trace.endSection()
         seq = s
-        produce()
+        // A step of the reader's own moves whose frame would only move what it moved itself makes none, unless an
+        // accessibility service is on (each frame tells it the scrollers' offsets). What follows a frame still runs.
+        if (running && !accessible && fingers != null && dy == 0f && Native.moved()) produced() else produce()
         // Every third step: the window's lead mounts, off the main thread.
         if (prefetch && ++steps % 3 == 0) { handler.removeCallbacks(refiner); handler.post(refiner) }
         if (led) { handler.removeCallbacks(settle); handler.postDelayed(settle, SETTLE_MS) }
@@ -607,6 +609,11 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
             Native.timerObservation(readerScrolling, readerSampling, true, false)
             if (!notifying.getAndSet(true)) postMain { notifying.set(false); published() }
         }
+        produced()
+    }
+
+    /** After a turn, with or without a stream: the chrome, the requests, and the next turn and timer. */
+    private fun produced() {
         val c = Native.chrome()
         val cold = coldChrome
         val number = windowRead
