@@ -242,11 +242,6 @@ final class ExactWindow: ExactDrivenWindow {
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
         agentMode ? frameRect : super.constrainFrameRect(frameRect, to: screen)
     }
-    /// A navigation is timed from its input: a mouse-up or key press.
-    override func sendEvent(_ event: NSEvent) {
-        super.sendEvent(event)
-        if [.leftMouseUp, .keyDown].contains(event.type) { ExactLaunch.shared.input(at: event.timestamp) }
-    }
 }
 
 /// One window: its own session and view (LLP 1031 D1). The first is the
@@ -709,7 +704,7 @@ func openTarget(_ location: String, _ target: String, resume: Bool = false) {
         return
     }
     if !resume, !open.session.shows(location) {
-        if !open.rooted { open.session.navigate(location) }
+        if !open.rooted { open.session.navigate(location, followed: true) }
         else if open.session.beforeUnload() { open.session.reroot(location) }
     }
     open.front()

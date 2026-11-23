@@ -269,10 +269,11 @@ if (!checkOnly || prerequisitesOnly) {
 // The checked capture of app.ts and what it imports (typecheck, below): the
 // page and its server render bundle it, never the app's own directory.
 const tsStage = resolve(realpathSync(gen), 'typescript'), pageAppTs = resolve(tsStage, fixture ? '__exact_frame.ts' : 'app.ts');
-// App generation may create files imported by app.ts. A mixed app's composer
-// also owns the Rust source roster, so take its declarations from that bake.
-// A generated workspace's web crate composes the two when app.json names rust.data (LLP 1153.003 D2).
+// App generation may create files imported by app.ts. A mixed app's composer owns the Rust source roster: take its
+// declarations, and the sources its crate's RUST_SOURCES lists (Rust's; app.ts answers the rest, as natively), from
+// that bake, which a generated workspace's web crate runs when app.json names rust.data (LLP 1153.003 D2).
 const composed = mixed && !!rustData;
+let rustSources = null;
 const generatedWeb = composed && resolveApp(appDir).generated;
 const webCrate = generatedWeb ? resolve(appDir, '.exact/shells/web') : resolve(appDir, 'web');
 if (ts && (composed || authoredWebBake(webCrate))) {
@@ -284,13 +285,15 @@ if (ts && (composed || authoredWebBake(webCrate))) {
   const messages = (r.stdout ?? '').split('\n').filter(Boolean).map(line => JSON.parse(line));
   for (const message of messages) if (message.reason === 'compiler-message' && message.message.rendered) process.stderr.write(message.message.rendered);
   if (r.status !== 0) { console.error(`${app}: its web build script failed`); process.exit(1); }
-  if (composed) {
+  if (mixed) {
     const owner = messages.find(m => m.reason === 'compiler-artifact' && resolve(m.manifest_path) === crate)?.package_id;
     const baked = messages.find(m => m.reason === 'build-script-executed' && m.package_id === owner)?.out_dir;
     if (!baked) throw new Error(`${app}: Cargo did not report its mixed bake output`);
-    cpSync(resolve(baked, 'app.contract.d.ts'), resolve(gen, 'app.contract.d.ts'));
+    if (composed) cpSync(resolve(baked, 'app.contract.d.ts'), resolve(gen, 'app.contract.d.ts'));
+    rustSources = JSON.parse(readFileSync(resolve(baked, 'app.module.json'), 'utf8')).rustSources;
   }
 }
+if (mixed && !rustSources) { console.error(`${app}: app.ts beside a Rust module needs app.json's rust.data, whose crate's RUST_SOURCES names what Rust answers`); process.exit(1); }
 // `app.ts` is captured and type-checked as the native bake does it: the
 // same configuration and check (js/bake/src/typescript.mjs) over the same
 // capture and entry, against this plan's declarations, so an app.ts the web
@@ -657,7 +660,7 @@ writeFileSync(resolve(gen, 'main.js'), [
   ...(ts ? ["import './ts-link.js';", ...(seamLazy ? [
     "import { seam } from './ts-load.js';",
     'const loadSeam = seam(data, inflight, journal, clock);',
-  ] : [`import { install as ts${production ? '' : ', watchState'} } from './ts-data.js';`, `ts(data, ${mixed}${pageModules ? ", () => import('./native.js')" : ''});`, "import { answering } from './ts-fetch.js';"])] : []),
+  ] : [`import { install as ts${production ? '' : ', watchState'} } from './ts-data.js';`, `ts(data, ${JSON.stringify(rustSources)}${pageModules ? ", () => import('./native.js')" : ''});`, "import { answering } from './ts-fetch.js';"])] : []),
   // File commands can run before the lazy Rust module has loaded.
   ...rustAdmissionImports, ...rustAdmission,
   ...(ts && !production ? ['globalThis.exact = Object.assign(globalThis.exact ?? {}, { watchState });'] : []),
@@ -719,18 +722,15 @@ writeFileSync(resolve(gen, 'main.js'), [
   // follows the agent's clock), as the wasm host holds each commit's at once.
   ...(production ? [] : ["if (agentMode()) { const early = (globalThis.exact ??= {}).early = new WeakMap(); After.push(globalThis.exact.holdEarly = () => { for (const a of document.getAnimations()) if (!early.has(a) && a.playState === 'running' && (!a.timeline || a.timeline instanceof DocumentTimeline)) { early.set(a, clock.now); a.pause(); a.currentTime = 0; } }); }"]),
   ...(rustLinked ? [
-    // Rust data: loaded after first pixel, asked synchronously once ready;
-    // a plan with a resource that has no compiled value waits for it.
-    // Counted in flight, so `clock settle` waits for the source to be ready.
+    // Rust data: loaded after first pixel, asked synchronously once ready; a plan with a resource that has no compiled
+    // value waits for it. Counted in flight, so `clock settle` waits for the source to be ready.
     // One that did not load (its chunk, its fetch, its binding) is said once in the journal, as LLP 1027.007 §5 has
     // a failed load reported once. Once the app has started, with what the module owns not ready (its compiled
     // value or placeholder shown), each such source fails when asked, as one whose call failed (LLP 1071 §7): the
-    // resource keeps what it shows and `failed` is true. A mixed app starts anyway, its TypeScript module answering;
-    // what that module throws may be a source the Rust module owns, so its error names the failed load too.
+    // resource keeps what it shows and `failed` is true. A mixed app starts anyway, app.ts answering the rest.
     "let unloaded = null;",
     "const load = () => import('./rust-data.js').then(m => m.install(data, sources)).catch(e => { unloaded = `the Rust module did not load: ${e?.message ?? e}`; journal.push(`t=${clock.now} ${unloaded}`); }).finally(() => inflight.n--);",
-    "const also = e => { if (!(e instanceof Error)) return new Error(`${e}; ${unloaded}`); if (!e.message.endsWith(unloaded)) e.message += `; ${unloaded}`; return e; };",
-    "const fail = () => { if (!unloaded) return; const ts = data.ts; data.answer = ts ? (...a) => { try { return ts(...a); } catch (e) { throw also(e); } } : () => { throw new Error(unloaded); }; for (const f of data.q.splice(0)) f(); };",
+    "const fail = () => { if (!unloaded) return; const ts = data.ts, owns = data.rustSources; data.answer = (source, ...a) => { if (!ts || owns.has(source)) throw new Error(unloaded); return ts(source, ...a); }; for (const f of data.q.splice(0)) f(); };",
     "inflight.n++;",
     `if (wait || ${mixed}) load().then(() => go(() => { start(); fail(); })); else go(() => { start(); requestAnimationFrame(() => setTimeout(() => load().then(fail))); });`,
   ] : [seamLazy ? "if (typeof document === 'object' && !document.querySelector('script[type=\"application/vnd.exact.checkpoint\"]')) loadSeam().then(() => go(start)); else go(start);" : 'go(start);']),
@@ -919,7 +919,7 @@ writeFileSync(resolve(gen, 'main-server.js'), [
   `globalThis.__exactRenderOrigin = ${JSON.stringify(renderOrigin)};`,
   'let t0, route, planResources;',
   'const prepare = async () => {',
-  ...(ts ? [`  ts(data, ${mixed});`] : []),
+  ...(ts ? [`  ts(data, ${JSON.stringify(rustSources)});`] : []),
   ...rustAdmission,
   ...(rustLinked ? ['  await install(data, sources, async p => __files(p));'] : []),
   ...(declared ? ['  prepareSources();'] : []),

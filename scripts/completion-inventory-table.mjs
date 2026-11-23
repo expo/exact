@@ -218,7 +218,7 @@ export const classifications = [
     ["runner:runner/src/runner/canvas2d.rs",
       "Canvases::draw#next_seq:1 Canvases::publish#LIFETIMES.fetch_add:1 Canvases::reply#generation:1 Canvases::set_geometry#generation:1 Runner::canvas_bitmap " +
       "Runner::canvas_describe Runner::canvas_frame Runner::canvas_owed Runner::canvas_settings Runner::canvas_views Runner::canvas_wants_frame " +
-      "Runner::draw_canvases Runner::is_canvas_2d Runner::layout_canvases Runner::retire_canvas_generations Runner::set_canvas_geometry Runner::set_canvas_limits Runner::set_canvas_text " +
+      "Runner::draw_canvases Runner::is_canvas_2d Runner::layout_canvases Runner::reread_canvas_bitmaps Runner::retire_canvas_generations Runner::set_canvas_geometry Runner::set_canvas_limits Runner::set_canvas_text " +
       "Runner::take_canvas_lists"],
     ["runner:runner/src/runner/canvas2d/completion.rs", "Runner::canvas_draw_completion Runner::canvas_reply"],
     ["runner:runner/src/runner/canvas_performance.rs", "Runner::set_canvas_performance Runner::wants_canvas_performance"],

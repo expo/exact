@@ -87,6 +87,7 @@ fn cases() -> Vec<(&'static str, String)> {
                     visits: vec![(1, "/".into()), (5, "/tag/\"x\"?q=1".into())],
                     pattern: String::new(),
                     params: vec![],
+                    due: false,
                 })
             }),
         ),
@@ -103,6 +104,7 @@ fn cases() -> Vec<(&'static str, String)> {
                     visits: vec![(18_446_744_073_709_551_615, "/".into())],
                     pattern: String::new(),
                     params: vec![],
+                    due: false,
                 })
             }),
         ),

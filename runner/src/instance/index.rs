@@ -19,6 +19,8 @@ pub(crate) struct SiteData {
     sites: Vec<(u32, Site)>,
     pub(super) deps: Deps,
     pub(super) projections: Vec<vm::Prepared>,
+    /// The type and family tokens that vary by an app axis, sorted.
+    varying_type: Vec<Box<str>>,
 }
 
 impl SiteIndex {
@@ -59,6 +61,16 @@ impl SiteIndex {
             sites.push((order, site));
         }
         groups.shrink_to_fit();
+        use exact_kernel::style::theme::Kind;
+        let mut varying_type: Vec<Box<str>> = plan
+            .theme
+            .iter()
+            .filter(|r| {
+                matches!(Kind::of(r.kind), Some(Kind::Type | Kind::Family)) && r.slices.len > 0
+            })
+            .map(|r| plan.str(r.name).into())
+            .collect();
+        varying_type.sort_unstable();
         let mut index = Self {
             data: std::sync::Arc::new(SiteData {
                 groups,
@@ -69,6 +81,7 @@ impl SiteIndex {
                     .iter()
                     .map(|b| vm::Prepared::new(plan.code(b.expr)))
                     .collect(),
+                varying_type,
             }),
             keyframes: bridge::keyframes(plan),
             resolve_keyframes: keyframes,
@@ -102,6 +115,22 @@ impl SiteIndex {
         self.data.deps.row_dependencies(region.0 as usize)
     }
 
+    /// Whether `name` is a type or family token that varies by an app axis.
+    pub(super) fn varying_type(&self, name: &str) -> bool {
+        (self.data.varying_type)
+            .binary_search_by(|n| (**n).cmp(name))
+            .is_ok()
+    }
+
+    /// Whether site `node` has child sites: nodes, or regions, in any arm.
+    pub(super) fn has_children(&self, node: NodesId) -> bool {
+        let groups = &self.data.groups;
+        let at = groups.partition_point(|((parent, _), _)| *parent < Some(node));
+        groups
+            .get(at)
+            .is_some_and(|((parent, _), _)| *parent == Some(node))
+    }
+
     pub(super) fn children(&self, parent: Option<NodesId>, arm: Option<ArmsId>) -> &[(u32, Site)] {
         self.data
             .groups
@@ -109,3 +138,7 @@ impl SiteIndex {
             .map_or(&[], |i| &self.data.sites[self.data.groups[i].1.clone()])
     }
 }
+
+#[cfg(test)]
+#[path = "index_tests.rs"]
+mod tests;

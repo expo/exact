@@ -5099,6 +5099,23 @@ is taken or released. Under the agent the picker stays held. Image pixel readbac
 synchronous readback (`getImageData`, `toDataURL`, `toBlob`) remain deferred;
 a canvas's pixels go to a file (below).
 
+### Canvas 2D surfaces (`draw`)
+
+`canvas surface=board(nodes)` is drawn by the data module when no GPU module
+registers `board`: `app.ts` exports `surfaces`, each surface's name and its
+number of arguments, and `draw(surface, args, ctx, frame)`, which draws on `ctx`
+with `CanvasRenderingContext2D`'s names and returns `true` to be asked for
+another frame (LLP 1056).
+
+The context's space is the content box in CSS px, at the device's scale.
+`bitmap-width` and `bitmap-height` give the canvas a fixed bitmap instead, as
+HTML's `width` and `height` attributes do: `frame.width` × `frame.height`
+pixels, stretched to the box, with 300 or 150 for one left unset. Either may be
+computed, as may `color-space` and `color-type`. On every host a change clears
+the bitmap and draws again with `frame.cause` `"size"`, as assigning
+`canvas.width` does on the web. A size is a whole number of pixels: a negative
+one is 0, and a fraction leaves it unset.
+
 ### A 2D canvas's pixels as an image file (`captureCanvas`)
 
 `captureCanvas(surface, path, type, quality)` writes what the host has drawn and

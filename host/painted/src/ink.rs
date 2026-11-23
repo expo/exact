@@ -29,6 +29,8 @@ mod memory_tests;
 #[cfg(all(test, not(windows)))]
 mod ordered_tests;
 mod rows;
+#[cfg(all(test, not(windows)))]
+mod stream_tests;
 mod svg;
 #[cfg(test)]
 mod tests;

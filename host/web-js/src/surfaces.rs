@@ -107,4 +107,36 @@ impl Em<'_> {
         }
         Ok(())
     }
+
+    /// A computed bitmap size or getContext setting (LLP 1056 D6): written by
+    /// pieces.js `cb`, which redraws the canvas at a new size generation.
+    pub(super) fn canvas_setting(&mut self, b: &exact_plan::BindingsRow, e: &str, f: &str) -> bool {
+        let Some(name) = crate::style::canvas_setting(b) else {
+            return false;
+        };
+        let cb = self.uses.rt("cb");
+        let _ = write!(self.out, "{cb}({e},\"{name}\",{f});");
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// A computed bitmap size or setting is bound (LLP 1056 D6), a literal one written as the element's attribute.
+    #[test]
+    fn a_computed_bitmap_size_is_bound() {
+        let plan = contract::compile(
+            "component App\n  state wide = 640\n  state p3 = false\n  view\n    canvas surface=pad() bitmap-width=wide bitmap-height=480 color-space=(p3 ? \"display-p3\" : \"srgb\")\n",
+        )
+        .unwrap();
+        let js = crate::emit::emit(&plan, false, false).unwrap().js;
+        for bound in ["\"data-bitmap-width\"", "\"data-color-space\""] {
+            assert!(js.contains(&format!("cb(e0,{bound},")), "{js}");
+        }
+        assert!(
+            js.contains("\"data-bitmap-height\":\"480\"")
+                && !js.contains("cb(e0,\"data-bitmap-height\""),
+            "{js}"
+        );
+    }
 }

@@ -478,6 +478,47 @@ fn a_canvas_settings_reach_the_draw_and_the_host() {
     assert_eq!(log.borrow().p3.last(), Some(&false));
 }
 
+/// A computed bitmap size read again at the canvas's last box (the web's
+/// wasm target, LLP 1056 D6): a change is a new generation at the new size,
+/// and a fraction leaves the size unset.
+#[test]
+fn a_computed_bitmap_size_is_read_again_at_the_last_box() {
+    let (mut r, log) = boot_source(
+        "component App
+  state wide = 64
+  action widen
+    wide = wide * 2
+  action split
+    wide = 0.5
+  view
+    canvas surface=spark(1) width=100 height=50 bitmap-width=wide bitmap-height=32
+",
+    );
+    let view = r.canvas_views()[0];
+    let bitmap = r.canvas_bitmap(view);
+    r.set_canvas_geometry(
+        view,
+        Geometry {
+            bitmap,
+            ..geometry(100.0, 50.0, 2.0)
+        },
+    );
+    r.draw_canvases(&|_| true);
+    r.act("widen", vec![]).unwrap();
+    r.reread_canvas_bitmaps();
+    r.draw_canvases(&|_| true);
+    r.act("split", vec![]).unwrap();
+    r.reread_canvas_bitmaps();
+    r.draw_canvases(&|_| true);
+    let sizes: Vec<_> = log
+        .borrow()
+        .frames
+        .iter()
+        .map(|f| (f.pixel_width, f.pixel_height))
+        .collect();
+    assert_eq!(sizes, [(64, 32), (128, 32), (300, 32)]);
+}
+
 /// `-exact-system-green` in a scheme, as a draw's `currentColor`.
 fn green(dark: bool) -> Option<exact_canvas::Rgba> {
     let role = exact_kernel::style::roles::role("-exact-system-green").unwrap();

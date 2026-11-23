@@ -1190,7 +1190,7 @@ public final class ExactSession {
         if let must = batch.mustFinish { finishHold.moved(must) }
         HostLog.capabilities(self, batch)
         let outputs = SessionBatchOps(batch.ops)
-        for op in outputs.routers { routerOp = op.payload; presenter.armFragment(op.payload["activation"]); NavigationMarks.shared.routerChanged(self, payload: op.payload) } // a scroll to its fragment, which the runner's `scrollToFragment` makes (LLP 1153 D5)
+        for op in outputs.routers { routerOp = op.payload; presenter.armFragment(op.payload["activation"]); NavigationMarks.shared.routerChanged(self, payload: op.payload, input: batch.input) } // a scroll to its fragment, which the runner's `scrollToFragment` makes (LLP 1153 D5)
         // @ref LLP 1048.003 D1 — the head's title, for the app that owns the chrome.
         for op in outputs.titles {
             presenter.headTitle(op.title)

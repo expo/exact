@@ -111,6 +111,19 @@ export function c2(e, name, values, types, names) {
     Canvas2d.then(m => m?.args(c));
   });
 }
+/** A canvas's computed `bitmap-width`, `bitmap-height`, `color-space` or `color-type` (LLP 1056 D6; LLP 1100 D12a), as
+ * the attribute `canvas2d.js` reads: a change is a new size generation there. A size is a whole number of pixels, a
+ * negative one 0; any other number leaves it unset, as the runner's prop bridge refuses it for an integer prop. */
+export function cb(e, name, f) {
+  effect(() => {
+    const v = f();
+    const value = !name.startsWith('data-bitmap') ? (v == null ? null : String(v))
+      : Number.isInteger(v) && Math.abs(v) < 2 ** 63 ? String(Math.min(Math.max(v, 0), 4294967295)) : null;
+    if (value === e.getAttribute(name)) return;
+    if (value == null) e.removeAttribute(name); else e.setAttribute(name, value);
+    Canvas2d?.then(m => m?.resized(e));
+  });
+}
 /** When native code may load (LLP 1024 D7): after the browser's first paint entry, or two frames and 250 ms where it
  * records none (glue.js `afterNativePaint`). */
 let Painted = null,

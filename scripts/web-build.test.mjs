@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { captureWebProducts, cargoContractReads, changedContractReads, contractReadReceipt, loopWebDist, privateNativeBuild, privateWebBuild } from './web-build.mjs';
 import { appleArtifacts } from '../host/apple/build.mjs';
 import { buildFirst, failureSummary, nativeBuild, planOverride } from './agent-build.mjs';
-import { webBuildFailure } from './app-cli.mjs';
+import { oneScheme, webBuildFailure } from './app-cli.mjs';
 import { linkedBakeDir } from './linked-plan.mjs';
 import { resolveApp } from './app.mjs';
 import { webChanges, webInputDigests, webInputPresent } from './agent-launch.mjs';
@@ -43,6 +43,50 @@ test("a failed build's summary keeps the compiler's first error", () => {
   // A native build: from the first when the tail would leave it out.
   const many = Array.from({ length: 12 }, (_, i) => error(i + 1, 'type-unknown-name', `unknown name \`n${i}\``)).join('\n');
   expect(failureSummary(`app: the bake failed:\n${many}\n`, { host: 'macos', code: 1, log: 'x.log' })).toStartWith(error(1, 'type-unknown-name', 'unknown name `n0`'));
+});
+
+// A failed build script's stderr is its reason, whatever it says (#1396): Cargo indents it under `--- stderr`, and a
+// mixed app's bake says its refusals there (js/bake, the generated shell's build.rs).
+test("a failed build script's stderr is said under Cargo's line", () => {
+  const line = 'error: failed to run custom build command for `demo-web v0.1.0 (/app/.exact/shells/web)`';
+  const ran = "process didn't exit successfully: `/app/target/debug/build/demo-web-1/build-script-build` (exit status: 1)";
+  const failed = (stderr, { stdout = ['cargo:rerun-if-env-changed=EXACT_VARIANT'], causes = [ran], note = false } = {}) => [
+    '   Compiling demo-web v0.1.0 (/app/.exact/shells/web)',
+    line,
+    ...(note ? ['note: To improve backtraces for build dependencies, set the CARGO_PROFILE_DEV_BUILD_OVERRIDE_DEBUG=true environment variable to enable debug information generation.'] : []),
+    '',
+    'Caused by:',
+    ...causes.map((l) => l && l !== 'Caused by:' ? `  ${l}` : l),
+    ...(stdout ? ['  --- stdout', ...stdout.map((l) => l && `  ${l}`), ''] : []),
+    ...(stderr ? ['  --- stderr', ...stderr.map((l) => l && `  ${l}`)] : []),
+    'demo: its web build script failed',
+  ].join('\n');
+  const said = (...reason) => [[line, ...reason].join('\n')];
+  const panic = ["thread 'main' panicked at web/build.rs:17:18:", 'app.ts and the data crate answer different sources, for one app: Unavailable("duplicate or empty data source: greeting")', 'note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace'];
+  for (const stderr of [
+    ['source links are not captured: /app/helper.ts'],
+    ['__exact_* and app.js (the bundle) are reserved for the producer'],
+    panic,
+    ['warning: Running the check', '', 'Compiling went wrong'],
+  ]) expect(webBuildFailure(failed(stderr))).toEqual(said(...stderr));
+  expect(webBuildFailure(failed(['', ...panic, ''], { note: true }))).toEqual(said(...panic));
+  expect(webBuildFailure(failed(['refused']).replaceAll('\n', '\r\n'))).toEqual(said('refused'));
+  // As a terminal shows it: Cargo's colours, and a progress bar drawn before `\r` on its line.
+  expect(webBuildFailure(failed(['refused']).replace(line, `\x1b[1m\x1b[91merror\x1b[0m${line.slice(5)}`))).toEqual(said('refused'));
+  expect(webBuildFailure(failed(['refused']).replace(line, `[====>   ] 1/3: demo-web(build)    \r\x1b[K${line}`))).toEqual(said('refused'));
+  // The script's own `--- stderr` line, as pkg-config's panic says one, and what it wrote to stdout besides directives.
+  expect(webBuildFailure(failed(['failed:', '--- stderr', 'Package helper was not found']))).toEqual(said('failed:', '--- stderr', 'Package helper was not found'));
+  expect(webBuildFailure(failed(['refused'], { stdout: ['cargo:rerun-if-changed=x', 'error: on stdout'] }))).toEqual(said('error: on stdout', 'refused'));
+  // A script that wrote nothing to stderr: how it ended, and what it wrote to stdout besides Cargo's directives.
+  expect(webBuildFailure(failed(null, { stdout: ['cargo:rerun-if-changed=x', 'error: missing schema'] }))).toEqual(said(ran, 'error: missing schema'));
+  const never = ['could not execute process `/app/target/debug/build/demo-web-1/build-script-build` (never executed)', '', 'Caused by:', 'Permission denied (os error 13)'];
+  expect(webBuildFailure(failed(null, { stdout: null, causes: never }))).toEqual(said(never[0], never[3]));
+  // A colour warning the script quotes is its own line, not a site the colours' one line folds in.
+  const colour = (n) => `app.contract:${n}:3 warning [lower-colour-one-scheme] colour ${n}`;
+  const stderr = [colour(1), 'error: actual cause'], close = 'app.contract:9:1 warning [lower-colour-one-scheme] these 2 colours …';
+  const failure = webBuildFailure(failed(stderr));
+  expect(failure).toEqual(said(...stderr));
+  expect(oneScheme([colour(5), ...failure, colour(6), close])).toContain(failure[0]);
 });
 
 test('loops and concurrent checks publish into directories they alone own', () => {

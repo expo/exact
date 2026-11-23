@@ -1068,9 +1068,12 @@ impl NodeInst {
                             id,
                             plan.stacks.len() + u.fonts.as_ref().unwrap().borrow().names().len(),
                         )
-                    } else if let Err(e) =
-                        bridge::inherited_varying(plan, &binding, family_value, self.node)
-                    {
+                    } else if let Err(e) = bridge::inherited_varying(
+                        &binding,
+                        family_value,
+                        |name| u.sites.varying_type(name),
+                        || u.sites.has_children(self.node),
+                    ) {
                         if let (true, Some(row)) = (themed_plan, row) {
                             self.unthemed(u, i, row);
                         }
