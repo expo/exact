@@ -110,7 +110,7 @@ mod zone;
 
 /// Install the window event-loop wake for native work, images and text results.
 /// Removing it at shutdown releases the event loop without stopping shared workers.
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 pub fn set_event_waker(waker: Option<std::sync::Arc<dyn Fn() + Send + Sync>>) {
     wake::install(waker);
 }

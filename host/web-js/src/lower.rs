@@ -282,7 +282,7 @@ impl Em<'_> {
         );
         // The one `Pc` where the rows were (contiguous: `Interleaved`
         // refuses another binding between them), then the rows' chunks out.
-        let text = match crate::reads::field_mask(&text) {
+        let text = match self.mount_templates.field_mask(scope, &text) {
             Some(m) => format!("{}({m},()=>{{{text}}});", self.uses.rt("fm")),
             None => text,
         };

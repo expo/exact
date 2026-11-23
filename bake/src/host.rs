@@ -257,10 +257,12 @@ include!(concat!(env!("OUT_DIR"), "/hatches.rs"));"#
             "fn main() {{ std::process::exit(exact_linux::run_composed::<AppData>(PLAN, COMPAT, {composed})); }}"
         ),
         "windows" => format!(
-            "fn main() {{ std::process::exit(exact_windows::run_baked::<AppData, {}>({:?}, {}, PLAN, COMPAT, {composed})); }}",
+            "fn main() {{ std::process::exit(exact_windows::run_with_services::<AppData, {}>({:?}, {}, PLAN, COMPAT, {composed}, {}({}))); }}",
             compat.admits_agent(),
             manifest.name,
-            manifest.windows_window().unwrap_or_else(|e| panic!("app.json: {e}"))
+            manifest.windows_window().unwrap_or_else(|e| panic!("app.json: {e}")),
+            compat.windows_image_services(baked),
+            compat.windows_data_executor()
         ),
         "web" => "exact_web::host!(AppData, PLAN, COMPAT, app_data);".into(),
         "macos" | "ios" if shape.apple_linked => {

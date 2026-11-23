@@ -1,7 +1,7 @@
 use exact_gpu::{fixture, Frame, Module, Registry};
 
 static REGISTRY: Registry = Registry {
-    surfaces: &[("shader", 3, exact_shader::surface)],
+    surfaces: &[("shader", 4, exact_shader::surface)],
     shaders: &[],
 };
 
@@ -112,6 +112,25 @@ fn source_binding_and_picture_transitions_publish_only_the_current_picture() {
             ],
         ),
         (
+            "a named alpha mode rebuilds the picture and a refused one keeps it",
+            &[
+                (Bind(r#"{"src":"assets/a.wgsl","red":0.25}"#, true), false),
+                (Asset("a.wgsl", RED, true), false),
+                (Read([64, 0, 0, 255]), true),
+                (
+                    Bind(
+                        r#"{"src":"assets/a.wgsl","red":0.25,"alphaMode":"premultiplied"}"#,
+                        true,
+                    ),
+                    false,
+                ),
+                (Read([64, 0, 0, 0]), true),
+                (Bind(r#"{"alphaMode":"straight"}"#, false), true),
+                (Bind(r#"{"src":"assets/a.wgsl","red":0.75}"#, true), false),
+                (Read([191, 0, 0, 255]), true),
+            ],
+        ),
+        (
             "a failed parse accepts the fixed file",
             &[
                 (Bind(r#"{"src":"assets/a.wgsl","red":0.5}"#, true), false),
@@ -166,7 +185,14 @@ fn source_binding_and_picture_transitions_publish_only_the_current_picture() {
                         true,
                         "readback",
                     );
-                    if pixels[..4] != *expected {
+                    // A fractional channel, 0.5 as 127.5, may round either way
+                    // (Vulkan, "Conversion From Floating-Point to Normalized
+                    // Fixed-Point"); 0 and 255 are exact.
+                    let off = |(a, b): (&u8, &u8)| match b {
+                        0 | 255 => a != b,
+                        _ => a.abs_diff(*b) > 1,
+                    };
+                    if pixels[..4].iter().zip(expected).any(off) {
                         failures.push(format!(
                             "{name}, step {index}: pixel {:?} != {expected:?}",
                             &pixels[..4]

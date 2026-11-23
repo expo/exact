@@ -141,7 +141,7 @@ impl crate::delivery::Store for StagedModule {
     fn fd(&self) -> std::os::unix::io::RawFd {
         -1
     }
-    fn check(&self) -> bool {
+    fn check(&self, _: fn()) -> bool {
         true
     }
     fn take_line(&mut self) -> Option<String> {

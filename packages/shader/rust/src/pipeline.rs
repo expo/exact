@@ -1,5 +1,5 @@
 use exact_gpu::wgpu;
-use exact_shader_uniforms::Layout;
+use exact_shader_uniforms::{AlphaMode, Layout};
 use std::{
     cell::RefCell,
     future::Future,
@@ -19,6 +19,7 @@ pub(crate) struct Pipeline {
     device: wgpu::Device,
     format: wgpu::TextureFormat,
     text: Rc<str>,
+    pub alpha_mode: AlphaMode,
     pub render: wgpu::RenderPipeline,
     pub bind_layout: Option<wgpu::BindGroupLayout>,
     validation: Option<Validation>,
@@ -56,12 +57,13 @@ pub(crate) fn get(
     format: wgpu::TextureFormat,
     text: Rc<str>,
     layout: Layout,
+    alpha_mode: AlphaMode,
 ) -> Shared {
     PIPELINES.with_borrow_mut(|cache| {
         cache.retain(|p| p.strong_count() != 0);
         if let Some(pipeline) = cache.iter().filter_map(Weak::upgrade).find(|p| {
             let p = p.borrow();
-            p.matches(device, format) && p.text == text
+            p.matches(device, format) && p.text == text && p.alpha_mode == alpha_mode
         }) {
             return pipeline;
         }
@@ -110,9 +112,11 @@ pub(crate) fn get(
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: None,
-                    write_mask: wgpu::ColorWrites::RED
-                        | wgpu::ColorWrites::GREEN
-                        | wgpu::ColorWrites::BLUE,
+                    // An opaque picture keeps the pass's cleared alpha of one.
+                    write_mask: match alpha_mode {
+                        AlphaMode::Opaque => wgpu::ColorWrites::COLOR,
+                        AlphaMode::Premultiplied => wgpu::ColorWrites::ALL,
+                    },
                 })],
                 compilation_options: Default::default(),
             }),
@@ -126,6 +130,7 @@ pub(crate) fn get(
             device: device.clone(),
             format,
             text,
+            alpha_mode,
             render,
             bind_layout,
             validation: Some(Box::pin(scope.pop())),
@@ -171,6 +176,7 @@ mod tests {
             wgpu::TextureFormat::Rgba8Unorm,
             source.text.clone(),
             source.layout.clone(),
+            AlphaMode::Opaque,
         );
         pipeline.borrow_mut().validation = Some(Box::pin(std::future::pending()));
         assert!(fixture::render(&gpu, &mut surface, &frame).unwrap().1);
@@ -198,6 +204,7 @@ mod tests {
             wgpu::TextureFormat::Rgba8Unorm,
             source.text.clone(),
             source.layout.clone(),
+            AlphaMode::Opaque,
         );
         replacement.borrow_mut().validation = Some(Box::pin(std::future::pending()));
         let (pixels, wants) = fixture::render(&gpu, &mut surface, &frame).unwrap();
@@ -212,5 +219,65 @@ mod tests {
             [0, 0, 255, 255]
         );
         assert!(!surface.preparing());
+    }
+
+    #[test]
+    fn an_alpha_mode_switch_blends_the_shown_picture_until_its_replacement_draws() {
+        let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
+            return;
+        };
+        let frame = Frame {
+            width: 4.,
+            height: 4.,
+            scale: 1.,
+            now_ms: 0.,
+            seekable: true,
+            period_ms: 0.,
+            children_generation: 0,
+            shader_generation: 0,
+            headroom: 1.,
+        };
+        let bind = |surface: &mut Shader, mode| {
+            let src = exact_gpu::Value::str("assets/a.wgsl");
+            let inputs = [
+                src,
+                exact_gpu::Value::Number(0.),
+                exact_gpu::Value::Unit,
+                exact_gpu::Value::str(mode),
+            ];
+            surface.bind(&inputs, None).unwrap();
+        };
+        let mut surface = Shader::default();
+        bind(&mut surface, "premultiplied");
+        surface.asset(
+            "a.wgsl",
+            Ok(b"@fragment fn half() -> @location(0) vec4f { return vec4f(0.25, 0., 0., 0.5); }"),
+        );
+        let blended = fixture::render(&gpu, &mut surface, &frame).unwrap().0;
+        assert!(
+            blended.at(2, 2)[3].abs_diff(128) <= 1,
+            "{:?}",
+            blended.at(2, 2)
+        );
+        assert!(!surface.opaque());
+
+        bind(&mut surface, "opaque");
+        let source = &surface.state.preparing.as_ref().unwrap().source;
+        let replacement = get(
+            &gpu.device,
+            wgpu::TextureFormat::Rgba8Unorm,
+            source.text.clone(),
+            source.layout.clone(),
+            AlphaMode::Opaque,
+        );
+        replacement.borrow_mut().validation = Some(Box::pin(std::future::pending()));
+        let (pixels, wants) = fixture::render(&gpu, &mut surface, &frame).unwrap();
+        assert_eq!(pixels, blended);
+        assert!(wants);
+        assert!(!surface.opaque());
+        replacement.borrow_mut().validation = None;
+        let pixels = fixture::render(&gpu, &mut surface, &frame).unwrap().0;
+        assert_eq!(pixels.at(2, 2)[3], 255);
+        assert!(surface.opaque());
     }
 }

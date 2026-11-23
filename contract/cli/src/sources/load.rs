@@ -4,8 +4,84 @@ use super::{contract_text, digest, name_error, Loader, Unit};
 use crate::resolve::Resolved;
 use crate::CompileError;
 use contract_syntax::Span;
+use std::path::Path;
 
 impl Loader<'_> {
+    /// Load the app first so a frame importing its root gets the same declarations
+    /// and source identities as the app. Each entry has its own import stack.
+    pub(super) fn load_entries(
+        &mut self,
+        root: &Path,
+        src: &str,
+        frame: Option<&Path>,
+    ) -> Result<(), Vec<CompileError>> {
+        self.load_source(root, src, 0)?;
+        let Some(frame) = frame else { return Ok(()) };
+        let refused = |message| {
+            vec![CompileError {
+                file: Some(frame.into()),
+                ..name_error("contract-frame-path", message, Span::point(1, 1))
+            }]
+        };
+        let key = frame
+            .canonicalize()
+            .map_err(|e| refused(format!("{}: {e}", frame.display())))?;
+        if key.extension().is_none_or(|ext| ext != "contract")
+            || key == root
+            || !key.starts_with(self.app_root)
+            || key
+                .ancestors()
+                .skip(1)
+                .take_while(|dir| *dir != self.app_root)
+                .any(|dir| {
+                    dir.ends_with("node_modules")
+                        || dir.join("app.json").is_file()
+                        || dir.join("package.json").is_file()
+                })
+        {
+            return Err(refused(
+                "a frame must be a separate Contract file owned by the app".into(),
+            ));
+        }
+        self.sources.consulted.push(frame.to_owned());
+        self.cache.insert(root.to_owned(), 0);
+        self.active.pop();
+        let unit = self.load_resolved(
+            Resolved {
+                key,
+                origin: crate::Origin::App,
+                builtin: None,
+            },
+            "frame",
+            Span::point(1, 1),
+        )?;
+        self.entry = unit;
+        let file = &self.units[unit].file;
+        if let Some(span) = file
+            .theme
+            .as_ref()
+            .map(|t| t.span)
+            .or_else(|| file.sources.first().map(|s| s.span))
+        {
+            return Err(vec![name_error(
+                "contract-frame-declaration",
+                "declare the app's theme and data sources in app.contract".into(),
+                span,
+            )]);
+        }
+        if file.components.is_empty() {
+            return Err(vec![name_error(
+                "analyze-no-component",
+                "a frame needs a component".into(),
+                Span {
+                    source_id: unit as u32,
+                    ..Span::point(1, 1)
+                },
+            )]);
+        }
+        Ok(())
+    }
+
     /// The unit of the file `resolved` names, loaded and linked unless an
     /// earlier line loaded it. `described` is the line as a refusal names
     /// it, and `span` where it is written.

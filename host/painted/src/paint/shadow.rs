@@ -6,13 +6,9 @@
 //! padding box, over the background and under the border. The first shadow
 //! is on top.
 //!
-//! Neither backend has a blur, and a blurred picture per node would be a
-//! second raster pass. A Gaussian of a straight edge falls off as the normal
-//! CDF of the distance to it, and the outline's offset curves are its
-//! contours, so the shadow is a stack of offset outlines (radius grown or
-//! shrunk with the distance), each filled with the alpha that brings the
-//! stack to the CDF at that band: one fill per band, through the border
-//! fill every backend already draws (a region inside a clip).
+//! A backend can blur the spread shape directly. The fallback draws its
+//! offset contours, each with the alpha that brings the straight edge to
+//! the Gaussian's cumulative coverage at that distance.
 
 use super::border::{shaped_rect, BorderFill, PathOp};
 use super::{Rect4, Shape};

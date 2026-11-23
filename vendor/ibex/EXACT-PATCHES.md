@@ -1269,3 +1269,8 @@ before returning the Windows error (expo/exact#1096).
 a local consumer. Its HTTP and WebSocket bindings report the capability as
 unavailable. Exact gives this host to its Hermes storage context. The runner
 executes the app’s network work on a separate host with its own transports.
+
+## Standalone HTTP binding
+
+`Fetch::new` binds grants to a supplied HTTP transport. Exact's driver uses
+it for a fixture response without constructing a WebSocket client or stores.

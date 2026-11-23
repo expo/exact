@@ -59,7 +59,7 @@ final class RouteOverflowIOSTests: XCTestCase {
         settle(session)
         let detail = try named("route-detail")
         XCTAssertNotNil(p.owners.told[detail.id])
-        XCTAssertEqual(p.navigationHost.covers[try named("header-detail").id], .whole, "the navigation bar lifted the header")
+        XCTAssertEqual(p.navigationHost.covers[try named("header-detail").id], .bar, "the navigation bar lifted the header")
         XCTAssertEqual(warnings(session), 0, "a push must wait for its native geometry")
         p.press(try named("back-detail").id)
         settle(session)

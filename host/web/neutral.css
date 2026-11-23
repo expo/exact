@@ -452,7 +452,7 @@
   :where(#exact-root dialog) { --exact-backdrop-color: initial; }
   :where(#exact-root dialog)::backdrop { background-color: var(--exact-backdrop-color, var(--exact-scrim)); transition: background-color .25s; }
   @starting-style { :where(#exact-root dialog[open])::backdrop { background-color: transparent; } }
-  :where(#exact-root dialog[data-exiting])::backdrop { background-color: transparent; }
+  :where(#exact-root dialog:is([data-exiting], [data-exact-dialog-closing]))::backdrop { background-color: transparent; }
   :where(#exact-root dialog[role="alertdialog"]) { width: min(26rem, calc(100vw - 32px)); padding: 24px; gap: 8px 12px; text-align: start; }
   :where(#exact-root dialog[role="alertdialog"][aria-label])::before { font-size: 1.125em; }
   :where(#exact-root dialog[role="alertdialog"] > :not(button, [data-alertpart="message"], [data-alertpart="actions"]), #exact-root dialog[role="alertdialog"] > [data-alertpart="message"] > *) { font-size: 1em; color: var(--exact-secondary-label); }

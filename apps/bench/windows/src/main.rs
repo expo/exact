@@ -20,11 +20,12 @@ fn main() {
         packages: exact_packages(),
         ..Default::default()
     };
-    std::process::exit(exact_windows::run_baked::<AppData, ADMIT_AGENT>(
+    std::process::exit(exact_windows::run_with_services::<AppData, ADMIT_AGENT>(
         "Bench",
         window(),
         PLAN,
         COMPAT,
         composed,
+        SERVICES,
     ));
 }

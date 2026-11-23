@@ -73,6 +73,20 @@ impl Em<'_> {
         Ok(Some(callback))
     }
 
+    /// A shared program still reads this mount's bindings and starts a fresh budget on each call.
+    pub(super) fn mount_function(
+        &mut self,
+        code: exact_plan::Code,
+        scope: &Scope,
+    ) -> Result<String, String> {
+        let f = self.f(code, scope)?;
+        if self.site_attrs || self.dev_reload || !f.starts_with("()=>{") {
+            return Ok(f);
+        }
+        let call = self.mount_templates.expression(f["()=>".len()..].into());
+        Ok(format!("()=>{call}"))
+    }
+
     pub(super) fn site_number(&self, scope: &Scope, n: u32) -> String {
         if scope.capture_sites {
             scope.operand(n.to_string())

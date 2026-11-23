@@ -274,6 +274,56 @@ fn a_publication_is_admitted_whole_and_releases_the_blobs_it_abandons() {
 }
 
 #[test]
+#[cfg(unix)]
+fn files_lists_times_and_remove_takes_only_a_regular_file() {
+    let fixture = Fixture::new();
+    let root = fixture.dir("origin");
+    fixture.dir("origin/.exact/blobs");
+    fixture.dir("origin/.exact/prod/c");
+    fixture.dir("outside");
+    fs::write(fixture.path("origin/.exact/blobs/a"), "a").unwrap();
+    fs::write(fixture.path("origin/.exact/prod/c/.lock"), "").unwrap();
+    fs::write(fixture.path("outside/a"), "kept").unwrap();
+    let files = operate(&root, &json!({"op":"files", "path":".exact"}), None).unwrap();
+    assert_eq!(
+        files.as_object().unwrap().keys().collect::<Vec<_>>(),
+        [".exact/blobs/a", ".exact/prod/c/.lock"]
+    );
+    assert!(files[".exact/blobs/a"].as_u64().unwrap() > 1_700_000_000_000);
+    assert!(operate(
+        &root,
+        &json!({"op":"remove", "path":".exact/prod/c/.lock"}),
+        None
+    )
+    .is_err());
+    assert!(operate(&root, &json!({"op":"remove", "path":".exact/blobs"}), None).is_err());
+    assert_eq!(
+        operate(
+            &root,
+            &json!({"op":"remove", "path":".exact/blobs/a"}),
+            None
+        )
+        .unwrap(),
+        json!(true)
+    );
+    assert!(!fixture.path("origin/.exact/blobs/a").exists());
+    // A linked directory is refused, never followed to what it names.
+    symlink(
+        fixture.path("outside"),
+        fixture.path("origin/.exact/linked"),
+    )
+    .unwrap();
+    assert!(operate(
+        &root,
+        &json!({"op":"remove", "path":".exact/linked/a"}),
+        None
+    )
+    .is_err());
+    assert!(operate(&root, &json!({"op":"files", "path":".exact"}), None).is_err());
+    assert!(fixture.path("outside/a").exists());
+}
+
+#[test]
 fn a_tree_page_reads_to_its_limit_and_names_the_rest() {
     let fixture = Fixture::new();
     let root = fixture.dir("tree");

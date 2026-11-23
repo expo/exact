@@ -197,7 +197,11 @@ impl<D: DataSource> Runner<D> {
                     if let Some(node) = self.kernel.node(*id) {
                         let arena = self.kernel.arena();
                         let slots = arena.subtree(node.key.index);
-                        destroyed.extend(slots.into_iter().map(|s| arena.local_id(s)));
+                        let kept = self.kept_by_portals();
+                        destroyed.extend(
+                            (slots.into_iter().map(|s| arena.local_id(s)))
+                                .filter(|v| !kept.contains(v)),
+                        );
                     }
                     continue;
                 }

@@ -107,28 +107,9 @@ impl Em<'_> {
     pub(super) fn region(&mut self, r: u32, parent: &str, scope: &Scope) -> Result<(), String> {
         let plan = self.plan;
         let row = &plan.regions[r as usize];
-        let subject = self
-            .f(
-                row.subject,
-                &self.site_evaluation(
-                    scope,
-                    region_site(plan, r),
-                    format!(
-                        "{} subject",
-                        match row.kind {
-                            RegionKind::Each => "each",
-                            RegionKind::When => "when",
-                            RegionKind::Match => "match",
-                        }
-                    ),
-                    true,
-                ),
-            )
-            .map_err(|x| format!("region {r}: {x}"))?;
-        let subject = self.status_subject(r, parent, subject);
-        let arms: Vec<u32> = row.arms.iter().map(|a| a.0).collect();
         match row.kind {
             RegionKind::When | RegionKind::Match => {
+                let subject = self.region_subject(r, parent, scope)?;
                 let depth = scope.frames.len();
                 let bound = (row.kind == RegionKind::Match).then(|| format!("b{depth}"));
                 let mut inner = scope.clone();
@@ -137,7 +118,7 @@ impl Em<'_> {
                     ..Frame::default()
                 });
                 let mut bodies = Vec::new();
-                for (k, arm) in arms.iter().enumerate() {
+                for (k, arm) in row.arms.iter().map(|a| a.0).enumerate() {
                     let saved = std::mem::take(&mut self.out);
                     // `match`'s none arm holds no binding.
                     let mut sc = if k == 0 {
@@ -157,9 +138,9 @@ impl Em<'_> {
                             .parent
                             .is_some_and(|p| self.panels.binary_search(&p).is_ok());
                     let carry = panel.then(|| format!("{parent}.getAttribute(\"id\")"));
-                    let path = self.instance_path(&mut sc, format!("\"/{r}:{k}\""), *arm);
+                    let path = self.instance_path(&mut sc, format!("\"/{r}:{k}\""), arm);
                     self.out.push_str(&path);
-                    let decl = self.owned(*arm, &format!("$a{arm}"), &mut sc, carry.as_deref())?;
+                    let decl = self.owned(arm, &format!("$a{arm}"), &mut sc, carry.as_deref())?;
                     self.out.push_str(&decl);
                     let outer_names = self.next_local_element;
                     self.next_local_element = (!self.site_attrs && !self.dev_reload).then_some(0);
@@ -168,12 +149,12 @@ impl Em<'_> {
                         // This arm binds only getters and the row state object. A mount shared
                         // outside the arm takes either binding from the instance that calls it.
                         self.mount_templates.scope_depth += 1;
-                        let children = self.children(self.sites.of_arm(*arm), "p", &sc);
+                        let children = self.children(self.sites.of_arm(arm), "p", &sc);
                         self.mount_templates.scope_depth -= 1;
                         children?;
                     } else {
                         self.template_scope(binds, |em| {
-                            em.children(em.sites.of_arm(*arm), "p", &sc)
+                            em.children(em.sites.of_arm(arm), "p", &sc)
                         })?;
                     }
                     self.next_local_element = outer_names;
@@ -208,13 +189,30 @@ impl Em<'_> {
         Ok(())
     }
 
-    fn status_subject(&mut self, region: u32, parent: &str, subject: String) -> String {
-        let Some(owners) = self.answers.status_region(region) else {
-            return subject;
+    fn region_subject(&mut self, r: u32, parent: &str, scope: &Scope) -> Result<String, String> {
+        let row = &self.plan.regions[r as usize];
+        let kind = match row.kind {
+            RegionKind::Each => "each",
+            RegionKind::When => "when",
+            RegionKind::Match => "match",
+        };
+        let scope = self.site_evaluation(
+            scope,
+            region_site(self.plan, r),
+            format!("{kind} subject"),
+            true,
+        );
+        let subject = self
+            .mount_function(row.subject, &scope)
+            .map_err(|x| format!("region {r}: {x}"))?;
+        let Some(owners) = self.answers.status_region(r) else {
+            return Ok(subject);
         };
         let owners = super::answers::status_owners(owners);
         let guard = self.uses.rt("statusSubject");
-        format!("(globalThis.__exactRender?{guard}({parent},{subject},{owners}):{subject})")
+        Ok(format!(
+            "(globalThis.__exactRender?{guard}({parent},{subject},{owners}):{subject})"
+        ))
     }
 
     /// The declaration of arm `arm`'s own slots, as `name` (the enclosing
@@ -350,25 +348,7 @@ impl Em<'_> {
     ) -> Result<(), String> {
         let plan = self.plan;
         let row = &plan.regions[r as usize];
-        let subject = self
-            .f(
-                row.subject,
-                &self.site_evaluation(
-                    scope,
-                    region_site(plan, r),
-                    format!(
-                        "{} subject",
-                        match row.kind {
-                            RegionKind::Each => "each",
-                            RegionKind::When => "when",
-                            RegionKind::Match => "match",
-                        }
-                    ),
-                    true,
-                ),
-            )
-            .map_err(|x| format!("region {r}: {x}"))?;
-        let subject = self.status_subject(r, parent, subject);
+        let subject = self.region_subject(r, parent, scope)?;
         let arms: Vec<u32> = row.arms.iter().map(|a| a.0).collect();
         let depth = scope.frames.len();
         let (item, index) = (format!("i{depth}"), format!("x{depth}"));

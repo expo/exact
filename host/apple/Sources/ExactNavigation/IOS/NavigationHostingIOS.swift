@@ -42,7 +42,13 @@ extension Presenter {
 }
 
 extension NavigationHost: NavigationHosting {
+    #if os(iOS)
+    package var lifted: (any LiftedNodes)? { liftedNodes }
+    package var barItemBlocks: [UInt32: HostBlock] { barHosted.blocks }
+    #else
     package var lifted: (any LiftedNodes)? { siblings }
+    package var barItemBlocks: [UInt32: HostBlock] { [:] }
+    #endif
     var routeSurfaces: [UInt32: any RouteSurface] { controllers }
     var primaryRouteSurfaces: [any RouteSurface] { primaryRoutes }
     var activeRouteSurface: (any RouteSurface)? { activeRoute }

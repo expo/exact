@@ -37,6 +37,57 @@ export function contextAt(e, find) {
     addEventListener(type, end, true);
   }
 }
+const closingDialogs = new WeakMap();
+const closingMark = "data-exact-dialog-closing";
+
+function clearDialogExit(dialog) {
+  closingDialogs.delete(dialog);
+  dialog.removeAttribute(closingMark);
+}
+
+function leaveDialog(dialog, returnValue) {
+  if (closingDialogs.has(dialog)) return true;
+  const exit = dialog.style.getPropertyValue("--exact-exit-animation").trim();
+  if (!dialog.open || !exit || exit === "none" || matchMedia("(prefers-reduced-motion: reduce)").matches) return false;
+  // Stop the entrance before starting the exit, even when both use the same named keyframes.
+  dialog.setAttribute(closingMark, "start");
+  dialog.getAnimations();
+  dialog.setAttribute(closingMark, "play");
+  const animations = dialog.getAnimations().filter(a => a.animationName !== undefined && a.effect?.target === dialog);
+  if (!animations.length) { clearDialogExit(dialog); return false; }
+  closingDialogs.set(dialog, animations);
+  Promise.allSettled(animations.map(a => a.finished)).then(() => {
+    if (closingDialogs.get(dialog) !== animations) return;
+    clearDialogExit(dialog);
+    if (dialog.open && dialog.isConnected && !dialog.closest("[data-exiting]")) dialog.close(returnValue);
+  });
+  return true;
+}
+
+function requestDialogExit(event) {
+  if (event.cancelable && !event.defaultPrevented && leaveDialog(event.currentTarget)) event.preventDefault();
+}
+
+function dialogCommand(event) {
+  if (event.defaultPrevented || !event.cancelable) return;
+  if (event.command === "close" && leaveDialog(event.currentTarget, event.source?.getAttribute("value") ?? undefined)) event.preventDefault();
+  if (event.command === "show-modal" && closingDialogs.has(event.currentTarget)) clearDialogExit(event.currentTarget);
+}
+
+// A dialog stays in the top layer during its authored exit. Its native close then returns focus and fires the event.
+export function modalCommand(element, id, method, say) {
+  if (element instanceof HTMLDialogElement) {
+    if (method === "close") {
+      if (!leaveDialog(element)) element.close();
+    } else if (closingDialogs.has(element)) clearDialogExit(element);
+    else if (!element.open) element.showModal();
+    else say(`showModal "${id}" ignored: dialog is already open`);
+  } else if (element?.popover != null && element.getAttribute("role") === "alertdialog") {
+    if (method === "close") element.hidePopover();
+    else if (!element.matches(":popover-open")) element.showPopover();
+  } else if (method === "showModal") say(`showModal "${id}" refused: no dialog or alertdialog popover has that id`);
+}
+
 // HTML's methods and source, shared by both web targets (LLP 1021 §4).
 export function popoverCommand(method, id, source, say) {
   const pop = liveById(id), anchor = source == null ? null : liveById(source);
@@ -99,6 +150,12 @@ export function placePopovers() {
   if (placing) return;
   placing = true;
   globalThis.document?.addEventListener?.("beforetoggle", (e) => {
+    if (e.target.localName === "dialog") {
+      if (e.newState === "open") {
+        e.target.addEventListener("cancel", requestDialogExit);
+        e.target.addEventListener("command", dialogCommand);
+      } else if (closingDialogs.has(e.target)) clearDialogExit(e.target);
+    }
     if (e.target.hasAttribute("popover") && e.newState === "open") {
       popoverSources.set(e.target, e.source ?? null);
       e.target.toggleAttribute("data-exact-chooser", !!e.source?.checkVisibility() && e.target.getAttribute("role") === "alertdialog" && !e.target.querySelector(":scope > [data-exact-text], input"));

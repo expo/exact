@@ -363,6 +363,51 @@ fn a_shown_block_replaced_whole_is_hidden_and_given_back_as_it_was() {
     }
 }
 
+/// LLP 1141.004 D2: a box a bar replaces takes no space, as one replaced
+/// whole does, and what it holds is hidden, but a block its host gives a node
+/// inside it is laid out and shown, since the bar shows that node in a view
+/// of its own. Replaced whole instead, the block waits; covered by the bar
+/// again, it is as it was; taken back, it is hidden with the box.
+#[test]
+fn a_block_given_inside_a_bars_box_is_laid_out_and_shown() {
+    let mut k = laid_out(small());
+    let hidden = |k: &Kernel, id| {
+        k.arena
+            .flags(k.arena.slot_of(id).unwrap())
+            .has(NodeFlags::HIDDEN)
+    };
+    let width = |k: &Kernel, id| k.node(id).unwrap().frame.width;
+    k.set_host_cover(2, Some(HostCover::Bar)).unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(width(&k, 4), 0.0, "no block: hidden with the box");
+    k.set_host_block(3, at_most(300.0, 200.0)).unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(k.host_block_size(3), Some((150.0, 40.0)));
+    assert!(!hidden(&k, 3) && !hidden(&k, 4));
+    let shown = k.node(4).unwrap().frame;
+    assert_eq!((shown.width, shown.height), (150.0, 40.0));
+    assert_eq!(
+        k.node(2).unwrap().frame.height,
+        0.0,
+        "the box takes no space"
+    );
+    k.set_host_cover(2, Some(HostCover::Whole)).unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(
+        k.host_block_size(3),
+        Some((0.0, 0.0)),
+        "replaced whole: waits"
+    );
+    assert!(hidden(&k, 4));
+    k.set_host_cover(2, Some(HostCover::Bar)).unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    assert!(k.node(4).unwrap().frame.bits_eq(shown), "the bar's again");
+    assert!(!hidden(&k, 4));
+    k.set_host_block(3, None).unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(width(&k, 4), 0.0, "taken back: hidden with the box");
+}
+
 fn laid_out(ops: Vec<Op>) -> Kernel {
     let mut k = Kernel::with_monospace();
     k.apply(0, 1, &ops).unwrap();
@@ -700,4 +745,24 @@ fn a_blocks_root_fits_its_content_at_the_blocks_width() {
     k.set_host_block(3, is(300.0, 50.0)).unwrap();
     k.compute_layout(1, OFFER).unwrap();
     assert_eq!(fit(&mut k), wide, "nor its own measure");
+    let sheet = HostBlock {
+        width: BlockAxis::Is(300.0),
+        height: BlockAxis::Fit(20.0),
+        tactic: Default::default(),
+    };
+    k.set_host_block(3, Some(sheet)).unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(
+        fit(&mut k),
+        wide,
+        "a dialog can grow beyond its current detent"
+    );
+    k.apply(
+        0,
+        k.epoch() + 1,
+        &[style(3, &[(StyleId::MaxHeight, n(30.0))])],
+    )
+    .unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(fit(&mut k), 30.0, "the author's maximum still applies");
 }

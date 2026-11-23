@@ -216,9 +216,8 @@ export function orderImportEdges(edges, modules) {
 
 /** Record build inputs, mapping the captured layout back to its sources. */
 export function recordSourceInputs(stage, field, files, edges) {
-  const {app,mounts=[]} = existsSync(resolve(stage,'__exact_paths.json')) ? JSON.parse(readFileSync(resolve(stage,'__exact_paths.json'),'utf8')) : {app:stage};
+  const {app,mounts=[],privateInputs=false} = existsSync(resolve(stage,'__exact_paths.json')) ? JSON.parse(readFileSync(resolve(stage,'__exact_paths.json'),'utf8')) : {app:stage};
   const roots = [...mounts.map(([name,path]) => [resolve(stage,name),path]),[stage,app]];
-  if (app !== stage) mkdirSync(resolve(app, '.exact'), {recursive:true});
   const reads = new Map();
   let declarations = {};
   if (field === 'types' || field === 'resolution') {
@@ -252,7 +251,7 @@ export function recordSourceInputs(stage, field, files, edges) {
   if (edges) record.edges = edges;
   record.reads = [...new Map([...reads, ...(record.reads ?? []).map(entry => [entry.path,entry])]).values()].sort((a,b) => a.path.localeCompare(b.path));
   writeFileSync(path,JSON.stringify(record));
-  if (app !== stage) writeSourceInputs(app, record);
+  if (app !== stage && !privateInputs) writeSourceInputs(app, record);
 }
 
 /** The same discovery record for web, Cargo and Apple builds, including a reused bake. */

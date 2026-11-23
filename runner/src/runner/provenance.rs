@@ -556,12 +556,17 @@ impl<D: DataSource> Runner<D> {
     /// a call cannot be traced to the answer that made it.
     pub(in crate::runner) fn data_origin(&self) -> CallOrigin {
         let o = &self.origins;
+        // A press's work is the person's only while the press is.
+        let held = |origin: CallOrigin, id: u64| match origin {
+            CallOrigin::Action if self.press_revoked(id) => CallOrigin::Tool,
+            origin => origin,
+        };
         // (a re-ask's wait runs nothing, `overrun.rs`)
         (self.pending.iter())
             .filter(|p| p.reask_at.is_none())
-            .filter_map(|p| o.tickets.get(&p.ticket).copied())
+            .filter_map(|p| (o.tickets.get(&p.ticket)).map(|t| held(*t, self.ticket_id(p.ticket))))
             .chain(self.tool_origin())
-            .fold(o.now, CallOrigin::min)
+            .fold(held(o.now, o.id), CallOrigin::min)
     }
 
     /// [`Self::data_origin`] for a call that arrives now, outside any commit:

@@ -414,6 +414,8 @@ enum Portal {
     Old,
     /// It quits with the chooser up.
     Quits,
+    #[cfg(target_os = "linux")]
+    Settings(&'static str),
     /// The bus never says `Hello`.
     Silent,
 }
@@ -526,6 +528,97 @@ fn bus(name: &str, portal: Portal) -> (String, std::thread::JoinHandle<Vec<Messa
                     );
                 }
                 "AddMatch" => send(&mut s, wire::METHOD_RETURN, reply, "", "", "", &[]),
+                #[cfg(target_os = "linux")]
+                "ReadAll" | "ReadOne" if matches!(portal, Portal::Settings(method) if method != m.member) =>
+                {
+                    s.write_all(&error(
+                        m.serial,
+                        "org.freedesktop.DBus.Error.UnknownMethod",
+                        &m.member,
+                    ))
+                    .unwrap();
+                }
+                #[cfg(target_os = "linux")]
+                "ReadAll" | "Read" | "ReadOne" => {
+                    let namespace = "org.freedesktop.appearance";
+                    let key = "color-scheme";
+                    let variant = |v| Value::Variant(Box::new(v));
+                    let path = "/org/freedesktop/portal/desktop";
+                    let iface = "org.freedesktop.portal.Settings";
+                    let setting = |ns, n| [Value::str(ns), Value::str(key), variant(Value::U32(n))];
+
+                    send(
+                        &mut s,
+                        wire::SIGNAL,
+                        None,
+                        path,
+                        iface,
+                        "SettingChanged",
+                        &setting(namespace, 2),
+                    );
+                    let gnome = "org.gnome.desktop.interface";
+                    let result = if m.member == "ReadAll" {
+                        assert_eq!(
+                            m.body,
+                            [Value::Array(
+                                "s".into(),
+                                vec![Value::str(namespace), Value::str(gnome)]
+                            )]
+                        );
+                        let group = |ns, entries| {
+                            Value::Entry(Box::new(Value::str(ns)), Box::new(Value::dict(entries)))
+                        };
+                        Value::Array(
+                            "{sa{sv}}".into(),
+                            vec![
+                                group(namespace, vec![(key, Value::U32(1))]),
+                                group(
+                                    gnome,
+                                    vec![
+                                        ("cursor-blink", Value::Bool(false)),
+                                        ("cursor-blink-time", Value::U32(640)),
+                                        ("cursor-blink-timeout", Value::U32(3)),
+                                    ],
+                                ),
+                            ],
+                        )
+                    } else {
+                        assert_eq!(m.body, [Value::str(namespace), Value::str(key)]);
+                        let value = variant(Value::U32(1));
+                        if m.member == "Read" {
+                            variant(value)
+                        } else {
+                            value
+                        }
+                    };
+                    send(&mut s, wire::METHOD_RETURN, reply, "", "", "", &[result]);
+                    for (ns, n) in [("other", 0), (namespace, 2), (namespace, 2), (namespace, 0)] {
+                        send(
+                            &mut s,
+                            wire::SIGNAL,
+                            None,
+                            path,
+                            iface,
+                            "SettingChanged",
+                            &setting(ns, n),
+                        );
+                    }
+                    if m.member == "ReadAll" {
+                        send(
+                            &mut s,
+                            wire::SIGNAL,
+                            None,
+                            path,
+                            iface,
+                            "SettingChanged",
+                            &[
+                                Value::str(gnome),
+                                Value::str("cursor-blink"),
+                                variant(Value::Bool(true)),
+                            ],
+                        );
+                    }
+                }
                 "OpenFile" | "SaveFile" => {
                     let token = match m.body[2].get("handle_token") {
                         Some(Value::Str(t)) => t.clone(),
@@ -595,6 +688,53 @@ fn bus(name: &str, portal: Portal) -> (String, std::thread::JoinHandle<Vec<Messa
         asked
     });
     (address, served)
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn desktop_appearance_follows_the_settings_portal() {
+    use crate::desktop::{CursorSettings, WindowSettings};
+    for method in ["ReadAll", "ReadOne", "Read"] {
+        let (address, served) = bus(method, Portal::Settings(method));
+        let (send, updates) = std::sync::mpsc::channel();
+        let watch = watch_settings(
+            &address,
+            |s| s,
+            move |s| {
+                let _ = send.send(s);
+            },
+        )
+        .unwrap();
+        let mut cursor = if method == "ReadAll" {
+            CursorSettings {
+                blink: false,
+                cycle: Duration::from_millis(640),
+                timeout: Duration::from_secs(3),
+            }
+        } else {
+            CursorSettings::default()
+        };
+        for dark in [Some(true), Some(false), None] {
+            assert_eq!(
+                updates.recv_timeout(Duration::from_secs(3)).unwrap(),
+                WindowSettings { dark, cursor }
+            );
+        }
+        if method == "ReadAll" {
+            cursor.blink = true;
+            assert_eq!(
+                updates.recv_timeout(Duration::from_secs(3)).unwrap(),
+                WindowSettings { dark: None, cursor }
+            );
+        }
+        drop(watch);
+        let asked = served.join().unwrap();
+        let methods: Vec<_> = asked.iter().map(|m| m.member.as_str()).collect();
+        let attempts = ["Hello", "AddMatch", "ReadAll", "ReadOne", "Read"];
+        let last = attempts.iter().position(|m| *m == method).unwrap();
+        assert_eq!(methods, attempts[..=last]);
+        assert!(updates.into_iter().next().is_none());
+    }
 }
 
 #[test]

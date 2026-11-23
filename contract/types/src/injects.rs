@@ -1,28 +1,24 @@
 //! Provider checks along component paths, bounded by emitted site depth.
 
-use super::{err, infer, Ref, Scope, Ty, TypeError, Types};
+use super::{err, infer, Ref, Scope, Sink, Ty, TypeError, Types};
 use crate::checks::can_unify;
-use contract_syntax::{Binding, File, Node};
+use contract_syntax::{Binding, Component, File, Node, Span};
+use std::collections::BTreeSet;
 
 #[derive(Clone)]
 struct Provider<'a> {
     binding: &'a Binding,
-    ty: Ty,
+    ty: Result<Ty, TypeError>,
     computed_action: bool,
 }
 
 impl<'a> Provider<'a> {
-    fn new(
-        binding: &'a Binding,
-        scope: &Scope,
-        types: &Types,
-        file: &File,
-    ) -> Result<Self, TypeError> {
-        Ok(Self {
+    fn new(binding: &'a Binding, scope: &Scope, types: &Types, file: &File) -> Self {
+        Self {
             binding,
-            ty: infer(&binding.expr, scope, &types.shapes)?,
+            ty: infer(&binding.expr, scope, &types.shapes),
             computed_action: super::uses::computed_action(&binding.expr, scope, types, file),
-        })
+        }
     }
 }
 
@@ -37,20 +33,48 @@ struct Fill<'a> {
     outer: Option<Box<Fill<'a>>>,
 }
 
-/// Check the concrete provider path to every inject after component typing:
-/// `provides` is the root's `provide` section, `scope` its scope.
-pub(super) fn check_injects<'a>(
-    nodes: &'a [Node],
-    provides: &'a [Binding],
+/// Check each inject against the nearest provider on its component path.
+/// A data inject that would repeat its provider's error can be replaced on recovery.
+pub(super) fn check_injects(
+    root: &Component,
     scope: &Scope,
     types: &Types,
-    file: &'a File,
-) -> Result<(), TypeError> {
+    file: &File,
+    sink: &mut Sink,
+    refused: &mut BTreeSet<Span>,
+) -> Vec<TypeError> {
     let mut provided = Vec::new();
-    for b in provides {
-        provided.push(Provider::new(b, scope, types, file)?);
+    for b in &root.provides {
+        let provider = Provider::new(b, scope, types, file);
+        if let Err(error) = &provider.ty {
+            sink.push(error.clone());
+        }
+        provided.push(provider);
     }
-    check_inject_nodes(nodes, scope, types, file, &mut provided, None, 0, 0)
+    let mut errors = InjectErrors {
+        sink,
+        refused,
+        invalid: Vec::new(),
+    };
+    let result = check_inject_nodes(
+        &root.view,
+        scope,
+        types,
+        file,
+        &mut provided,
+        None,
+        0,
+        0,
+        &mut errors,
+    );
+    errors.sink.keep_unit(result);
+    errors.invalid
+}
+
+struct InjectErrors<'a> {
+    sink: &'a mut Sink,
+    refused: &'a mut BTreeSet<Span>,
+    invalid: Vec<TypeError>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -63,6 +87,7 @@ fn check_inject_nodes<'a>(
     fill: Option<&Fill<'a>>,
     depth: u32,
     site_depth: usize,
+    errors: &mut InjectErrors<'_>,
 ) -> Result<(), TypeError> {
     for node in nodes {
         let is_site = !matches!(node, Node::Use { .. } | Node::Children { .. });
@@ -85,6 +110,7 @@ fn check_inject_nodes<'a>(
                     fill,
                     depth,
                     next_site_depth,
+                    errors,
                 )?;
             }
             Node::Use {
@@ -117,24 +143,36 @@ fn check_inject_nodes<'a>(
                         computed_action,
                     } = provider;
                     let want = &target_t.props[target_c.props.len() + j];
+                    let got = match got {
+                        Ok(ty) => ty,
+                        Err(error) => {
+                            // Actions are checked where invoked so their diagnostics can
+                            // name the handler and the binding that supplied it.
+                            if !matches!(want, Ty::Action(_)) && errors.refused.insert(binding.span)
+                            {
+                                errors.invalid.push(error.clone());
+                            }
+                            continue;
+                        }
+                    };
                     if matches!(want, Ty::Action(_)) {
-                        super::uses::check_action_binding(
+                        errors.sink.keep_unit(super::uses::check_action_binding(
                             &binding.name,
                             &binding.expr,
                             binding.span,
                             *computed_action,
                             true,
-                        )?;
+                        ));
                     }
                     if !can_unify(want, got) {
-                        return err(
-                            "type-provide",
-                            format!(
+                        errors.sink.push(TypeError {
+                            id: "type-provide",
+                            message: format!(
                                 "the provided `{}` is `{got}`, but `{name}` injects `{want}`",
                                 inject.name
                             ),
-                            binding.span,
-                        );
+                            span: binding.span,
+                        });
                     }
                 }
                 if depth >= 32 {
@@ -153,7 +191,7 @@ fn check_inject_nodes<'a>(
                 });
                 let outer = provides.len();
                 for b in &target_c.provides {
-                    provides.push(Provider::new(b, &target_scope, types, file)?);
+                    provides.push(Provider::new(b, &target_scope, types, file));
                 }
                 let checked = check_inject_nodes(
                     &target_c.view,
@@ -164,6 +202,7 @@ fn check_inject_nodes<'a>(
                     child_fill.as_ref(),
                     depth + 1,
                     next_site_depth,
+                    errors,
                 );
                 provides.truncate(outer);
                 checked?;
@@ -179,6 +218,7 @@ fn check_inject_nodes<'a>(
                         fill.outer.as_deref(),
                         depth,
                         next_site_depth,
+                        errors,
                     )?;
                 }
             }
@@ -194,6 +234,7 @@ fn check_inject_nodes<'a>(
                     fill,
                     depth,
                     next_site_depth,
+                    errors,
                 )?;
                 check_inject_nodes(
                     otherwise,
@@ -204,6 +245,7 @@ fn check_inject_nodes<'a>(
                     fill,
                     depth,
                     next_site_depth,
+                    errors,
                 )?;
             }
             Node::Each {
@@ -232,6 +274,7 @@ fn check_inject_nodes<'a>(
                     fill,
                     depth,
                     next_site_depth,
+                    errors,
                 )?;
             }
             Node::Match {
@@ -259,6 +302,7 @@ fn check_inject_nodes<'a>(
                     fill,
                     depth,
                     next_site_depth,
+                    errors,
                 )?;
                 let mut none_scope = scope.clone();
                 none_scope.push_region(None);
@@ -271,6 +315,7 @@ fn check_inject_nodes<'a>(
                     fill,
                     depth,
                     next_site_depth,
+                    errors,
                 )?;
             }
         }

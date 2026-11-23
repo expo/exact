@@ -65,13 +65,15 @@ pub fn web_only(id: &str, message: &str) -> bool {
 }
 
 /// A warning that is information, not a problem: `forma-unreachable` names
-/// a control whose host draws the platform's own look, and `style-undrawn` a
-/// style a host the app ships does not draw (LLP 1159.000 D4), each of which
+/// a control whose host draws the platform's own look, `style-undrawn` a
+/// style a host the app ships does not draw (LLP 1159.000 D4), and
+/// `header-item-left-out` a header element a target's bar has no place for
+/// (LLP 1141.004 D5), each of which
 /// the author should know of and cannot change (LLP 1121 D9, amended
 /// 2026-10-30). A build counts it apart, and verify and `test` do not count
 /// it (`scripts/app-cli.mjs` `information`).
 pub fn information(id: &str) -> bool {
-    id == "forma-unreachable" || id == "style-undrawn"
+    id == "forma-unreachable" || id == "style-undrawn" || id == "header-item-left-out"
 }
 
 /// Keep up to `limit` ranked warnings, preserving source order within a rank.

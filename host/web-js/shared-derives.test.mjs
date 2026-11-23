@@ -72,6 +72,82 @@ component Row
   });
 }, 60000);
 
+test('two bindings share a conditional program and follow its field in each keyed row', async () => {
+  await pageFor(`shape Item
+  id: number
+  level: number
+fn label(n: number): string = n > 1 ? "Large frame" : "Small frame"
+component App
+  state items = [Item(id=1, level=1), Item(id=2, level=2)]
+  action change
+    items = [Item(id=2, level=1), Item(id=1, level=2)]
+  view
+    column
+      button "Change" press=change testId="change"
+      for item in items key=item.id
+        text label(item.level) aria-label=label(item.level) testId=item.id.toString()
+`, async (page, js) => {
+    expect(js.split('"Large frame"')).toHaveLength(2);
+    const values = id => page.getByTestId(id).evaluate(e => [e.textContent, e.getAttribute('aria-label')]);
+    expect(await values('1')).toEqual(['Small frame', 'Small frame']);
+    expect(await values('2')).toEqual(['Large frame', 'Large frame']);
+    await page.getByTestId('change').click();
+    expect(await values('1')).toEqual(['Large frame', 'Large frame']);
+    expect(await values('2')).toEqual(['Small frame', 'Small frame']);
+  });
+}, 60000);
+
+test('two regions share their condition and update the right keyed row', async () => {
+  await pageFor(`shape Item
+  id: string
+  detail: string
+fn shows(item: Item): bool = item.detail == "expanded" ? item.id != "archived" : false
+component App
+  state items = [Item(id="one", detail="compact"), Item(id="two", detail="expanded")]
+  action change
+    items = [Item(id="two", detail="compact"), Item(id="one", detail="expanded")]
+  view
+    column
+      button "Change" press=change testId="change"
+      for item in items key=item.id
+        column testId=item.id
+          if shows(item)
+            text "Title"
+          if shows(item)
+            link href="/details"
+              text "Details"
+`, async (page, js) => {
+    expect(js.split('"archived"')).toHaveLength(2);
+    const content = id => page.getByTestId(id).textContent();
+    expect(await content('one')).toBe('');
+    expect(await content('two')).toBe('TitleDetails');
+    await page.getByTestId('change').click();
+    expect(await content('one')).toBe('TitleDetails');
+    expect(await content('two')).toBe('');
+  });
+}, 60000);
+
+test('a symbol uses its current colour through disabled state changes', async () => {
+  await pageFor(`component App
+  state off = false
+  action go
+    off = not off
+  view
+    column color="#0000ff"
+      button "Toggle" press=go testId="toggle"
+      button press=go appearance="none"
+        image "symbol:star" testId="stated" disabled=off -exact-tint-color="#ff0000"
+          :disabled
+            -exact-tint-color="#00ff00"
+`, async page => {
+    const image = page.getByTestId('stated');
+    const ink = () => image.evaluate(e => [e.hasAttribute('disabled'), e.style.getPropertyValue('--exact-tint').trim().toLowerCase()]);
+    expect(await ink()).toEqual([false, 'currentcolor']);
+    await page.getByTestId('toggle').click();
+    expect(await ink()).toEqual([true, 'currentcolor']);
+  });
+}, 60000);
+
 test('a metric keyword behind transitive shared rows writes CSS on each branch', async () => {
   await pageFor(`component App
   state wide = true

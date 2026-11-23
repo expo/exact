@@ -8,6 +8,7 @@ pub struct Bitmap {
     // Field order matters: pixels are destroyed before the last charge drops.
     pixels: Pixels,
     natural: (u32, u32),
+    pub(crate) opaque_for_canvas: bool,
     /// The part of the picture the pixels are, when not all of it
     /// ([`Bitmap::placed`]).
     crop: exact_raster::Crop,
@@ -54,6 +55,7 @@ impl Bitmap {
     pub(crate) fn new(pixels: Pixmap, natural: (u32, u32), charge: AllocationCharge) -> Self {
         Self {
             pixels: pixels.into(),
+            opaque_for_canvas: false,
             natural,
             crop: exact_raster::Crop::default(),
             _charge: charge,
@@ -65,6 +67,7 @@ impl Bitmap {
     pub(super) fn decoded(pixels: Pixmap, natural: (u32, u32), charge: AllocationCharge) -> Self {
         Self {
             pixels: pixels.into(),
+            opaque_for_canvas: false,
             natural,
             crop: exact_raster::Crop::default(),
             _charge: charge,
@@ -78,7 +81,16 @@ impl Bitmap {
         charge: AllocationCharge,
         source: std::sync::Arc<super::workers::SourceOwner>,
     ) -> Self {
+        // Only a canvas uses opacity for its unscaled copy. Inspect CPU pixels during
+        // decode so the presentation thread can use the result without scanning a still.
+        let opaque_for_canvas = source.canvas.load(std::sync::atomic::Ordering::Relaxed)
+            && match &pixels {
+                Pixels::Cpu(p) => p.pixels().iter().all(|pixel| pixel.is_opaque()),
+                #[cfg(target_os = "android")]
+                Pixels::Hardware(_) => false,
+            };
         Self {
+            opaque_for_canvas,
             pixels,
             natural,
             crop,
@@ -155,9 +167,12 @@ impl Bitmap {
             Pixels::Cpu(_) => None,
         }
     }
-    /// Borrow the immutable pixels; this never detaches them from their charge.
+    pub(crate) fn pixmap(&self) -> &Pixmap {
+        self.pixels.cpu()
+    }
+    /// Borrow the immutable pixels with their allocation charge.
     pub fn pixels(&self) -> tiny_skia::PixmapRef<'_> {
-        self.pixels.cpu().as_ref()
+        self.pixmap().as_ref()
     }
 }
 impl AsRef<[u8]> for Bitmap {

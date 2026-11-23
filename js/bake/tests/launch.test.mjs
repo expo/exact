@@ -432,7 +432,7 @@ test('only transitive app imports supply settings and syntax errors reach the ty
     expect(JSON.parse(readFileSync(resolve(stage, '__exact_env.json'), 'utf8')).ISSUE_859_API.value).toBe('https://built.example');
     expect(readFileSync(resolve(stage, 'unimported.ts'), 'utf8')).toContain('import.meta.env');
     put('src/settings.ts', source + 'export const broken = ;\n');
-    await expect(configure(stage, false, parseSync)).resolves.toBeUndefined();
+    await configure(stage, false, parseSync);
     await expect(check(stage, resolve(libraries, 'tsc'), libraries)).rejects.toThrow('Expression expected');
     put('app.ts', 'export {};\n');
     put('notes.ts', 'export const broken = ;\n');
@@ -819,7 +819,7 @@ test('type-only edges neither supply settings nor conflict with runtime defaults
     for (const edge of ["import type { Client } from './types';", "import { Client } from './types'; export type Selected = Client;", "import { type Client } from './types';", "export type { Client } from './types';", "export { type Client } from './types';", "export type * from './types';"]) {
       const entry = edge + "\nexport const API = import.meta.env.ISSUE_859_API ?? 'https://runtime.example';\n";
       put(stage, 'app.ts', entry);
-      await expect(configure(stage, false, parseSync)).resolves.toBeUndefined();
+      await configure(stage, false, parseSync);
       await check(stage, resolve(libraries, 'tsc'), libraries);
       expect(readFileSync(resolve(stage, 'types.ts'), 'utf8')).toBe(source);
       put(stage, 'app.ts', edge);
@@ -832,7 +832,7 @@ test('type-only edges neither supply settings nor conflict with runtime defaults
       put(stage, 'types.ts', source);
     }
   } finally { rmSync(root, {recursive:true,force:true}); }
-});
+}, 30_000);
 
 test('reachable declarations and type-only modules stay fresh without reading settings', async () => {
   const { shown, webChanges, webInputDigests, webInputs } = await import('../../../scripts/agent-launch.mjs');

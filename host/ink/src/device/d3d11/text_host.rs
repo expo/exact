@@ -37,6 +37,7 @@ pub(super) struct State {
     pub caret: Cell<[i32; 4]>,
     pub caret_visible: Cell<bool>,
     pub properties: Cell<u32>,
+    pub selection_colors: Cell<Option<[COLORREF; 2]>>,
     window: Window,
     character: CHARFORMATW,
     paragraph: PARAFORMAT,
@@ -62,6 +63,7 @@ impl State {
             origin: Cell::new(POINT::default()),
             caret: Cell::new([0; 4]),
             caret_visible: Cell::new(false),
+            selection_colors: Cell::new(None),
             properties: Cell::new(
                 TXTBIT_RICHTEXT
                     | TXTBIT_MULTILINE
@@ -207,7 +209,11 @@ impl ITextHost_Impl for Host_Impl {
         put(out.cast_mut(), &self.0.paragraph)
     }
     fn TxGetSysColor(&self, index: SYS_COLOR_INDEX) -> COLORREF {
-        COLORREF(unsafe { GetSysColor(index) })
+        match (self.0.selection_colors.get(), index) {
+            (Some([background, _]), COLOR_HIGHLIGHT) => background,
+            (Some([_, text]), COLOR_HIGHLIGHTTEXT) => text,
+            _ => COLORREF(unsafe { GetSysColor(index) }),
+        }
     }
     fn TxGetBackStyle(&self, out: *mut TXTBACKSTYLE) -> windows_core::Result<()> {
         put(out, TXTBACK_TRANSPARENT)

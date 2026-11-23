@@ -903,6 +903,8 @@ internal object Exact {
     /** A turn on exact2's thread, which asks for a display frame while a canvas input's samples wait. */
     fun wake() { owner?.call {} }
     fun presence(answer: String) { val o = owner; if (o != null) o.call { Native.presence(answer) } else Native.presence(answer) }
+    /** A live activity's answer or list ([Activities]), on exact2's thread. */
+    fun activities(report: String) { val o = owner; if (o != null) o.call { Native.activities(report) } else Native.activities(report) }
     // Until the activity or Headless says otherwise, the host boots with a visible page.
     private var pageHidden: Boolean? = null
     /** Execution sources: a started Activity, or a successfully promoted microphone, call or screen-capture

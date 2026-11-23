@@ -1076,7 +1076,12 @@ fn a_variant_names_its_bytes_per_pixel_and_an_unknown_one_is_refused() {
     let session = gate.session();
     // 256 pixels wide: 1024 bytes a row at 4 bytes a pixel, 2048 at 8.
     let base = demand(1, 1, 1, 0);
-    for v in [variant::SRGB8, variant::OWN8, variant::REDUCED8] {
+    for v in [
+        variant::SRGB8,
+        variant::OWN8,
+        variant::REDUCED8,
+        variant::HARDWARE_SRGB8,
+    ] {
         let mut d = base;
         d.key.variant = v;
         d.view.view = u64::from(v);
@@ -1095,7 +1100,7 @@ fn a_variant_names_its_bytes_per_pixel_and_an_unknown_one_is_refused() {
         d.key.pixels.height /= 2;
         assert!(session.request(d).is_ok(), "variant {v} at 8 bytes a pixel");
     }
-    for v in [0, 6, u32::MAX] {
+    for v in [0, 7, u32::MAX] {
         let mut d = base;
         d.key.variant = v;
         d.view.view = 100 + u64::from(v % 1000);
@@ -1187,4 +1192,35 @@ fn a_wake_while_the_worker_looked_ends_its_wait_at_once() {
         .is_none());
     let waited = started.elapsed();
     assert!(waited < std::time::Duration::from_secs(5), "{waited:?}");
+}
+
+#[test]
+fn published_images_share_the_budget_and_eviction_falls_back_to_the_file() {
+    let gate = Gate::new();
+    let session = gate.session();
+    let first = demand(1, 1, 16, 0);
+    let second = demand(2, 2, 16, 0);
+    let third = demand(3, 3, 16, 0);
+    for d in [first, second] {
+        session.publish(d, |charge| (d.key.source, charge)).unwrap();
+    }
+    let sub = session.request_cached(first).unwrap();
+    let lease = session.take_ready(sub).unwrap();
+    session.cancel(sub);
+    assert_eq!(session.stats().pinned_bytes, 16 * MIB);
+    session.publish(third, |charge| (3u64, charge)).unwrap();
+    assert_eq!(session.request_cached(second), Err(Refusal::Stale));
+    assert_eq!(session.stats().resident_bytes, 32 * MIB);
+    assert_eq!(session.stats().pending_jobs, 0);
+    // An offer that cannot fit even after evicting every cold picture evicts none.
+    let fourth = demand(4, 4, 24, 0);
+    assert_eq!(
+        session.publish(fourth, |charge| (4u64, charge)),
+        Err(Refusal::Budget)
+    );
+    assert_eq!(session.stats().cold_bytes, 16 * MIB);
+    assert_eq!(lease.payload::<(u64, AllocationCharge)>().unwrap().0, 1);
+    drop(lease);
+    session.retire_generation(first.key.generation);
+    assert_eq!(session.stats().resident_bytes, 0);
 }

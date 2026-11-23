@@ -43,7 +43,7 @@ pub(crate) struct Sources {
     /// Every package a `use` reached, by each name it was reached by (one
     /// directory installed under two names is two), in order.
     pub(crate) packages: Vec<Package>,
-    /// Every `package.json` a resolution read, refused or not.
+    /// Files checked while resolving imports, package designs and library components.
     pub(crate) consulted: Vec<PathBuf>,
     /// Each source's text as compiled, its SHA-256 (hex), by source id: the
     /// source map says them, so a reader knows a file has not moved since
@@ -140,7 +140,9 @@ impl Sources {
         &self.paths[span.source_id as usize]
     }
     pub(crate) fn resolve(&self, mut error: CompileError) -> CompileError {
-        error.file = Some(self.path(error.span).into());
+        error
+            .file
+            .get_or_insert_with(|| self.path(error.span).into());
         for related in error.related.iter_mut() {
             related.file = Some(self.path(related.span).to_path_buf());
         }
@@ -167,18 +169,19 @@ pub(crate) fn load_partial(
     app_root: &Path,
     refused: &mut Refused,
 ) -> Result<(File, Sources), Vec<CompileError>> {
-    load_partial_visiting_views(path, src, app_root, refused, None)
+    load_partial_with(path, src, app_root, refused, None, None)
 }
 
 pub(crate) type ViewVisitor<'a> = &'a mut dyn FnMut(&Sources, &File);
 
-/// Visit parsed files with their authored view ranges before scoping and rewriting.
-pub(crate) fn load_partial_visiting_views(
+/// Optionally load a frame or visit each file's authored view ranges before scoping.
+pub(crate) fn load_partial_with(
     path: &Path,
     src: &str,
     app_root: &Path,
     refused: &mut Refused,
     visit: Option<ViewVisitor<'_>>,
+    frame: Option<&Path>,
 ) -> Result<(File, Sources), Vec<CompileError>> {
     #[cfg(test)]
     LOADS.with(|loads| loads.set(loads.get() + 1));
@@ -189,7 +192,7 @@ pub(crate) fn load_partial_visiting_views(
     });
     let mut loader = Loader::new(app_root, path, path.to_path_buf(), src, &root_key);
     loader.view_ranges = visit.is_some();
-    let loaded = loader.load_all(path, src, root_key, visit);
+    let loaded = loader.load_all(path, src, root_key, visit, frame);
     *refused = std::mem::take(&mut loader.refused);
     loaded.map(|file| (file, loader.sources))
 }
@@ -213,6 +216,7 @@ impl Loader<'_> {
         src: &str,
         root_key: PathBuf,
         visit: Option<ViewVisitor<'_>>,
+        frame: Option<&Path>,
     ) -> Result<File, Vec<CompileError>> {
         let resolve = |sources: &Sources, all: Vec<CompileError>| {
             all.into_iter()
@@ -220,7 +224,7 @@ impl Loader<'_> {
                 .collect::<Vec<_>>()
         };
         if let Err(all) = self
-            .load_source(&root_key, src, 0)
+            .load_entries(&root_key, src, frame)
             .and_then(|()| self.load_data_packages())
             .and_then(|()| self.load_view_packages())
         {
@@ -306,6 +310,7 @@ impl Loader<'_> {
             .with_runtime(self.units.iter().map(|u| &u.file)),
         );
         let library = library::read(&self.sources, self.app_root);
+        self.sources.consulted.extend(library.read);
         match self.scope() {
             Ok((mut file, scopes)) => {
                 let escaped = contract_lower::params::escaped(&file, &owned);
@@ -583,10 +588,15 @@ pub struct SourceGraph {
 
 /// [`graph`]'s Contract half: every source loaded and scoped, which reads no design file (the design server's walk keeps
 /// it across a design-only edit and re-runs [`GraphBase::tail`] alone: the third hands-on pass's latency).
-pub(crate) fn graph_base(path: &Path, src: &str, app_root: &Path) -> GraphBase {
+pub(crate) fn graph_base(
+    path: &Path,
+    src: &str,
+    app_root: &Path,
+    frame: Option<&Path>,
+) -> GraphBase {
     let root_key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let mut loader = Loader::new(app_root, path, root_key.clone(), src, &root_key);
-    let loaded = loader.load_source(&root_key, src, 0);
+    let loaded = loader.load_entries(&root_key, src, frame);
     // The components' params (LLP 1121 D15), named as the build names them
     // (an icon param naming another): an icon param's SVG is read too.
     for unit in &mut loader.units {
@@ -662,6 +672,8 @@ struct Loader<'a> {
     /// The root file as it was named: one linked into the app's tree is
     /// named where the link sits ([`linked_home`]).
     root_given: PathBuf,
+    /// The unit whose first component runs. Source zero always owns the app.
+    entry: usize,
     sources: Sources,
     // Each file is loaded once, whichever paths reach it; a unit's index is
     // its source id. Only the active stack decides cycles.
@@ -696,6 +708,7 @@ impl<'a> Loader<'a> {
         Loader {
             app_root,
             root_given: path.to_path_buf(),
+            entry: 0,
             sources: Sources {
                 paths: vec![first],
                 origins: vec![Origin::App],
@@ -1304,12 +1317,17 @@ impl Loader<'_> {
                     .collect()
             };
         }
-        File {
+        let entry = self.entry;
+        let mut components = std::mem::take(&mut files[entry].components);
+        for file in &mut files {
+            components.append(&mut file.components);
+        }
+        let mut file = File {
             names,
-            routes: files[0].routes.take(),
-            tests: std::mem::take(&mut files[0].tests),
-            properties: std::mem::take(&mut files[0].properties),
-            launch: std::mem::take(&mut files[0].launch),
+            routes: files[entry].routes.take(),
+            tests: std::mem::take(&mut files[entry].tests),
+            properties: std::mem::take(&mut files[entry].properties),
+            launch: std::mem::take(&mut files[entry].launch),
             uses: Vec::new(),
             fonts,
             sounds,
@@ -1340,11 +1358,15 @@ impl Loader<'_> {
             // A declared source is the root file's (LLP 1162.001 D1).
             sources: std::mem::take(&mut files[0].sources),
             modules: all!(modules),
-            components: all!(components),
+            components,
             // Each block is spliced into its component (LLP 1091.002 D4).
             members: None,
             deferred: Vec::new(),
+        };
+        if entry != 0 {
+            file.retain_component_tree(0);
         }
+        file
     }
 }
 

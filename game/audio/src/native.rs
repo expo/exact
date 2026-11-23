@@ -961,3 +961,11 @@ mod regression_tests;
 mod windows;
 #[cfg(windows)]
 pub use windows::WindowsOutput;
+
+#[cfg(target_os = "android")]
+#[path = "android.rs"]
+mod android;
+#[cfg(target_os = "android")]
+pub use android::AndroidOutput;
+#[cfg(target_os = "android")]
+pub(crate) use android::log as android_log;

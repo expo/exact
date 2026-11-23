@@ -31,6 +31,7 @@ use std::time::Duration;
 use tiny_skia::Pixmap;
 
 pub mod access;
+mod activities;
 mod addressed_tap;
 mod ahead;
 mod alert;
@@ -279,6 +280,8 @@ pub struct Presenter<D: DataSource> {
     /// when another replaces the one it measured (LLP 1079 D3).
     pub(crate) hosts: u64,
     pub(crate) focus: Option<ViewId>,
+    /// A focus command selected a node before its first presented layout.
+    pub(crate) focus_reveal: Option<exact_kernel::NodeKey>,
     /// What was typed into a menu in its last half second (`tabs.rs`).
     type_ahead: exact_kernel::TypeAhead,
     /// Last connected path from the focused node, for a removal commit.
@@ -412,6 +415,7 @@ pub struct Presenter<D: DataSource> {
     pub painter: PainterInfo,
     /// The executor for a request that leaves the process (LLP 1016 D2).
     executor: crate::executor::Executor,
+    start_executor: crate::executor::Start,
     /// Requests held at dispatch until a commit or source wake releases them (LLP 1027.002 D3).
     parked: BTreeMap<u64, exact_runner::RequestOut>,
     refusal_turn: bool,
@@ -497,6 +501,7 @@ impl<D: DataSource> Presenter<D> {
         launch: &str,
         region: Option<crate::content_region::ContentRegionRegistration>,
         painter: PainterBoot,
+        services: crate::app::Services,
     ) -> Result<(Presenter<D>, Option<String>), HostError> {
         let assets = match selected {
             Some(set) => Assets::selected(root, set),
@@ -513,6 +518,7 @@ impl<D: DataSource> Presenter<D> {
             Some(delivery),
             launch,
             region,
+            services,
         )?;
         presenter.compat = compat.to_string();
         presenter.host.web_mount = crate::app::web_mount(compat);
@@ -532,6 +538,7 @@ impl<D: DataSource> Presenter<D> {
         delivery: Option<exact_runner::Delivery>,
         launch: &str,
         region: Option<crate::content_region::ContentRegionRegistration>,
+        services: crate::app::Services,
     ) -> Result<(Presenter<D>, Option<String>), HostError> {
         let choice = painter.choice;
         if region.is_some() && choice != PainterChoice::Cpu {
@@ -569,7 +576,7 @@ impl<D: DataSource> Presenter<D> {
             .map_err(HostError::Painter)?;
         #[cfg(not(windows))]
         let (backend, painter) = painter.open().map_err(HostError::Painter)?;
-        let mut images = Images::with_assets(assets.clone());
+        let mut images = (services.open_images)(assets.clone());
         images.fit(viewport, scale);
         let (mut host, error) = Host::boot_decoded(
             decoded,
@@ -612,7 +619,8 @@ impl<D: DataSource> Presenter<D> {
         // Initial selected layout and asset metadata/integrity accepted.
         // Decoded pixels and their natural dimensions arrive together later.
         // Only now may the app's queued requests reach its executor.
-        let executor = host.executor();
+        let start_executor = services.start_executor;
+        let executor = host.executor_with(start_executor);
         if let Some(note) = executor.note() {
             host.log(note.to_string());
         }
@@ -624,6 +632,7 @@ impl<D: DataSource> Presenter<D> {
             snap_rested: BTreeMap::new(),
             host,
             executor,
+            start_executor,
             parked: BTreeMap::new(),
             refusal_turn: false,
             collection: collection::State::default(),
@@ -645,6 +654,7 @@ impl<D: DataSource> Presenter<D> {
             compat: String::new(),
             hosts: 0,
             focus: None,
+            focus_reveal: None,
             type_ahead: Default::default(),
             focus_out: Vec::new(),
             autofocus_from: None,
@@ -975,6 +985,14 @@ impl<D: DataSource> Presenter<D> {
                 self.surfaces.enqueue(r, &admitted);
                 continue;
             }
+            // A live activity's send: the reader posts its notification and
+            // answers the ticket (`Native.activities`, LLP 1126 D13). The
+            // runner refuses a send before `link_activities`, so only a shell
+            // that links them sees one.
+            if r.request.url == "exact-activity:" && self.has_shell() {
+                self.activity_send(r.ticket, &r.request.body);
+                continue;
+            }
             // Android's reader opens the browser. The headless hosts keep D5's 501;
             // the agent holds the request before either path (LLP 1146 D4).
             if r.request.is_auth() {
@@ -1004,6 +1022,10 @@ impl<D: DataSource> Presenter<D> {
         // An abort made in this batch's turns is answered at the next pump: wake it.
         if self.host.runner_mut().collected_aborts() {
             self.executor.notify();
+        }
+        // `exactActivities`' first read: the reader lists what it shows.
+        if self.host.runner_mut().take_activities_demand() {
+            self.request(requests::Request::Activity(r#"{"enumerate":true}"#.into()));
         }
         // The platform's checks for presence calls: the shell's (LLP 1133.010 D8).
         for ask in self.host.runner_mut().take_presence_asks() {
@@ -1363,6 +1385,8 @@ impl<D: DataSource> Presenter<D> {
         self.host.runner_mut().measure(on, true);
         // The live table is development's too (LLP 1121 stage 4).
         self.host.runner_mut().admit_live(Some(&self.compat));
+        self.host.runner_mut().place_controls(&self.compat);
+        self.link_activities();
     }
 
     /// The binary's delivery facts (LLP 1030 D7), from its `compat.json`:

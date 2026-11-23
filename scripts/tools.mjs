@@ -502,9 +502,8 @@ function manifestId(value) {
   return value;
 }
 
-function recentSets(bytes) {
-  if (bytes === null) return [];
-  const list = JSON.parse(bytes.toString('utf8'));
+const recentSets = bytes => bytes === null ? [] : recentList(JSON.parse(bytes.toString('utf8')));
+function recentList(list) {
   if (!Array.isArray(list)) throw new Error('recent tool lookup must be an array');
   return list.map(manifestId);
 }
@@ -602,21 +601,26 @@ async function fetchProduct(name) {
 }
 
 async function recordCommit(origin, stream, base, commit, id, newer) {
+  const path = `${base}/recent.json`;
   await origin.withLock(stream, async () => {
-    const path = `${base}/recent.json`;
-    const recent = recentSets(await origin.get(path));
-    // Backfill can finish after a newer set. Keep the eight most recent
-    // distinct input states in main's order, including a tip that reverts.
-    const ordered = new Set();
-    for (const revision of newer) {
-      const mapped = await origin.get(`${base}/commits/${revision}.json`);
-      if (mapped !== null) ordered.add(manifestId(JSON.parse(mapped.toString('utf8'))));
-      if (ordered.size === 8) break;
+    // An object store has no lock: recent.json is replaced only if no other publisher replaced it since it was read.
+    for (let attempt = 1; ; attempt++) {
+      const read = await origin.getVersion(path);
+      const recent = recentSets(read.bytes);
+      // Backfill can finish after a newer set. Keep the eight most recent
+      // distinct input states in main's order, including a tip that reverts.
+      const ordered = new Set();
+      for (const revision of newer) {
+        const mapped = await origin.get(`${base}/commits/${revision}.json`);
+        if (mapped !== null) ordered.add(manifestId(JSON.parse(mapped.toString('utf8'))));
+        if (ordered.size === 8) break;
+      }
+      ordered.add(id);
+      for (const previous of recent) ordered.add(previous);
+      await origin.put(`${base}/commits/${commit}.json`, Buffer.from(JSON.stringify(id)));
+      if (await origin.replace(path, Buffer.from(JSON.stringify([...ordered].slice(0, 8))), read.version)) return;
+      if (attempt === 5) throw new Error(`${path} changed under each of five attempts to replace it`);
     }
-    ordered.add(id);
-    for (const previous of recent) ordered.add(previous);
-    await origin.put(`${base}/commits/${commit}.json`, Buffer.from(JSON.stringify(id)));
-    await origin.put(path, Buffer.from(JSON.stringify([...ordered].slice(0, 8))));
   });
 }
 
@@ -654,27 +658,147 @@ async function publishRevision(tree, origin, privateKey, triple, commit, newer =
     if (cleanRevision(tree) !== commit) throw new Error('producer checkout changed during publication');
   };
   checkRevision();
-  const exact = await origin.get(`${base}/commits/${commit}.json`);
-  const recent = recentSets(await origin.get(`${base}/recent.json`));
-  const candidates = new Set(exact === null ? recent : [manifestId(JSON.parse(exact.toString('utf8'))), ...recent]);
-  const publicKey = createPublicKey(privateKey);
-  for (const id of candidates) {
-    const bytes = await origin.get(`${base}/manifests/${id}.json`);
-    if (!bytes) throw new Error(`missing published tool manifest ${id}`);
-    const manifest = readToolManifest(bytes, id, triple, publicKey);
-    if (!matchesRevision(manifest, tree)) continue;
-    checkRevision();
-    await recordCommit(origin, stream, base, commit, id, newer);
-    console.log(`tools: ${short(commit)} matches published set ${id}`);
-    return;
-  }
+  const reused = await withPublication(origin, async () => {
+    const exact = await origin.get(`${base}/commits/${commit}.json`);
+    const recent = recentSets(await origin.get(`${base}/recent.json`));
+    const candidates = new Set(exact === null ? recent : [manifestId(JSON.parse(exact.toString('utf8'))), ...recent]);
+    const publicKey = createPublicKey(privateKey);
+    for (const id of candidates) {
+      const bytes = await origin.get(`${base}/manifests/${id}.json`);
+      if (!bytes) throw new Error(`missing published tool manifest ${id}`);
+      const manifest = readToolManifest(bytes, id, triple, publicKey);
+      if (!matchesRevision(manifest, tree)) continue;
+      checkRevision();
+      await recordCommit(origin, stream, base, commit, id, newer);
+      console.log(`tools: ${short(commit)} matches published set ${id}`);
+      return true;
+    }
+    return false;
+  });
+  if (reused) return;
   const set = await buildIn(tree, commit, triple);
   if (set.manifest.commit !== commit) throw new Error('producer checkout changed during build');
   if (set.manifest.triple !== triple) throw new Error(`candidate set belongs to ${set.manifest.triple}, expected ${triple}`);
   runProducts(set, tree);
   checkRevision();
-  const id = await publishToolSet(origin, set, privateKey, newer);
+  const id = await withPublication(origin, () => publishToolSet(origin, set, privateKey, newer));
   console.log(`tools: published ${triple} set ${id} for ${short(commit)}`);
+}
+
+/** The origin a publisher writes: a directory, or an object store's S3 endpoint (`s3+https://<endpoint>/<bucket>`).
+ * Readers fetch the store's public https URL instead, which is read-only here. */
+async function openToolsOrigin(spec) {
+  const { DirectoryOrigin, ObjectStoreOrigin } = await import('./origin.mjs');
+  if (/^s3\+https?:\/\//.test(spec)) return new ObjectStoreOrigin(spec);
+  if (/^[a-z][a-z\d+.-]*:\/\//i.test(spec)) throw new Error(`${spec}: publish to a directory or to a bucket's S3 endpoint, s3+https://<endpoint>/<bucket>; its public https URL is for readers`);
+  return new DirectoryOrigin(spec);
+}
+
+/** Every publisher holds the producer key, so all run on the producer's Mac (D4.2). There they and the pruner of one
+ * origin take turns through this lock, so a pruning pass never sees a set half-published. */
+export async function withPublication(origin, fn, env = process.env) {
+  const root = resolve(home(env), '.cache/exact/tools/.publish'), name = sha(origin.describe()).slice(0, 32);
+  mkdirSync(resolve(root, name), { recursive: true });
+  for (let waited = 0; ; waited += 1000) {
+    let started = false;
+    try { return await filesystemLock(root, `${name}/.lock`, () => { started = true; return fn(); }); }
+    catch (error) {
+      // The lock is taken without blocking; another holder is waited out for up to an hour.
+      if (started || !/locked by another publisher/.test(error.message) || waited >= 3_600_000) throw error;
+      if (waited === 0) console.error(`tools: waiting for another publisher or pruner of ${origin.describe()}`);
+      await Bun.sleep(1000);
+    }
+  }
+}
+
+const DAY = 86_400_000;
+const PRUNED = '.exact/tools/pruned.json';
+// What a manifest (content-addressed) or a lookup at an object-store ETag names, kept across a watcher's passes.
+const named = new Map();
+
+/** `fn` over `items`, sixteen at a time. After a failure nothing more starts, and it rejects only once every call
+ * started has finished, so no delete outlives the publication lock its caller holds. */
+async function eachLimited(items, fn, limit = 16) {
+  const results = [];
+  let next = 0, failed = false;
+  const settled = await Promise.allSettled(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (!failed && next < items.length) {
+      const i = next++;
+      try { results[i] = await fn(items[i]); } catch (error) { failed = true; throw error; }
+    }
+  }));
+  const failure = settled.find(({ status }) => status === 'rejected');
+  if (failure) throw failure.reason;
+  return results;
+}
+
+// Everything a tools origin holds. Anything else means it is shared, and a blob no tool manifest names may be another's.
+const TOOL_FILE = /^\.exact\/(?:blobs\/[0-9a-f]{64}|tools\/pruned\.json|tools\/[a-z0-9_]+(?:-[a-z0-9_]+)+\/(?:manifests\/[0-9a-f]{64}\.json|commits\/[0-9a-f]{40}(?:[0-9a-f]{24})?\.json|recent\.json|\.lock))$/;
+
+/**
+ * One pruning pass (D4.2). What may go is a commit lookup older than the retention, a manifest older than it that no
+ * recent.json and no lookup names, and a blob no manifest names, judged by everything present when the pass begins.
+ * A pass deletes only what the previous pass, at least a day earlier, also found could go, lookups first, then
+ * manifests, then blobs, and records the rest for the next. So anything a reader has just read a reference to stays a
+ * day after the reference goes, and a pass that stops part way leaves nothing the next may take at once. The caller
+ * holds `withPublication`, so no publisher writes during the pass.
+ */
+export async function pruneOrigin(origin, { now = Date.now(), retention = 90 * DAY } = {}) {
+  const stamp = await origin.get(PRUNED);
+  const last = stamp ? JSON.parse(stamp.toString('utf8')) : { at: -Infinity, condemned: [] };
+  if (stamp && (!Number.isFinite(last.at) || !Array.isArray(last.condemned))) throw new Error(`${PRUNED} is not a pruning record`);
+  if (now - last.at < DAY) return null;
+  const files = await origin.files('.exact');
+  const foreign = files.find(({ path }) => !TOOL_FILE.test(path));
+  if (foreign) throw new Error(`${origin.describe()} holds ${foreign.path}: pruning deletes blobs no tool manifest names, so tool sets need an origin of their own`);
+  const lookups = [], manifests = [], blobs = [], recents = [];
+  for (const file of files) {
+    let m;
+    if ((m = /^\.exact\/blobs\/([0-9a-f]{64})$/.exec(file.path))) blobs.push({ ...file, digest: m[1] });
+    else if ((m = /^\.exact\/tools\/([^/]+)\/manifests\/([0-9a-f]{64})\.json$/.exec(file.path))) manifests.push({ ...file, key: `${m[1]}/${m[2]}`, cache: file.path });
+    else if ((m = /^\.exact\/tools\/([^/]+)\/commits\/[0-9a-f]+\.json$/.exec(file.path))) lookups.push({ ...file, triple: m[1], cache: file.version && `${file.path} ${file.version}` });
+    else if ((m = /^\.exact\/tools\/([^/]+)\/recent\.json$/.exec(file.path))) recents.push({ ...file, triple: m[1] });
+  }
+  // Every read comes before the first delete: a file that cannot be read stops the pass.
+  const names = (file, parse) => {
+    const key = file.cache && JSON.stringify([origin.describe(), file.cache]);
+    if (key && named.has(key)) return named.get(key);
+    return origin.get(file.path).then(bytes => {
+      if (bytes === null) throw new Error(`${file.path} disappeared during pruning`);
+      const value = parse(JSON.parse(bytes.toString('utf8')));
+      if (key) named.set(key, value);
+      return value;
+    });
+  };
+  const kept = new Set();
+  for (const [i, ids] of (await eachLimited(recents, file => names(file, recentList))).entries())
+    for (const id of ids) kept.add(`${recents[i].triple}/${id}`);
+  for (const [i, id] of (await eachLimited(lookups, file => names(file, manifestId))).entries()) kept.add(`${lookups[i].triple}/${id}`);
+  const digests = new Set((await eachLimited(manifests, file => names(file, ({ products }) => {
+    const listed = products && typeof products === 'object' ? Object.values(products) : [];
+    if (!listed.length || listed.some(product => !/^[0-9a-f]{64}$/.test(product?.sha256))) throw new Error(`${file.path} does not name its blobs`);
+    return listed.map(({ sha256 }) => sha256);
+  }))).flat());
+  const groups = [
+    lookups.filter(({ modified }) => now - modified > retention),
+    manifests.filter(({ key, modified }) => !kept.has(key) && now - modified > retention),
+    blobs.filter(({ digest }) => !digests.has(digest)),
+  ];
+  const condemned = new Set(last.condemned), counts = [];
+  for (const group of groups) {
+    const due = group.filter(({ path }) => condemned.has(path));
+    await eachLimited(due, ({ path }) => origin.delete(path));
+    counts.push(due.length);
+  }
+  const next = groups.flat().filter(({ path }) => !condemned.has(path)).map(({ path }) => path);
+  await origin.put(PRUNED, Buffer.from(JSON.stringify({ at: now, condemned: next })));
+  return { lookups: counts[0], manifests: counts[1], blobs: counts[2], condemned: next.length };
+}
+
+async function prune(origin) {
+  const pruned = await withPublication(origin, () => pruneOrigin(origin));
+  if (pruned) console.log(`tools: pruned ${pruned.lookups} commit lookups, ${pruned.manifests} manifests and ${pruned.blobs} blobs from ${origin.describe()}; ${pruned.condemned} more go at the next pass unless named again`);
+  return pruned;
 }
 
 /** One poll of the private producer worktree. Persist skipped commits before
@@ -724,7 +848,7 @@ async function watchProducer(tree, origin, privateKey, triple) {
   if (admin === gitAt(ROOT, 'rev-parse', '--absolute-git-dir') || admin === gitAt(tree, 'rev-parse', '--path-format=absolute', '--git-common-dir'))
     throw new Error('tools watch needs its own linked worktree');
   if (gitAt(tree, 'rev-parse', '--abbrev-ref', 'HEAD') !== 'HEAD') throw new Error(`tools watch needs a detached worktree: ${tree}`);
-  const key = sha(JSON.stringify([origin.dir, triple]));
+  const key = sha(JSON.stringify([origin.describe(), triple]));
   const state = resolve(admin, `tools-${key}.json`), retryAt = new Map();
   for (;;) {
     try {
@@ -734,6 +858,7 @@ async function watchProducer(tree, origin, privateKey, triple) {
         return publishWatchedTip(tree, state, tip, (commit, newer) => publishRevision(tree, origin, privateKey, triple, commit, newer), retryAt);
       });
       if (attempt?.error) console.error(`tools watch: ${short(attempt.commit)}: ${attempt.error.message}`);
+      await prune(origin);
       if (attempt) continue;
     } catch (error) { console.error(`tools watch: ${error.message}`); }
     await Bun.sleep(60_000);
@@ -742,13 +867,11 @@ async function watchProducer(tree, origin, privateKey, triple) {
 
 async function publish(args) {
   const { values } = parseArgs({ args, options: { target: { type: 'string' }, origin: { type: 'string' }, key: { type: 'string' }, watch: { type: 'boolean' }, worktree: { type: 'string' } } });
-  if (!values.origin || !values.key) throw new Error('publish needs --origin <directory> and --key <producer.pem>');
+  if (!values.origin || !values.key) throw new Error('publish needs --origin <directory or s3+https://endpoint/bucket> and --key <producer.pem>');
   if (values.worktree && !values.watch) throw new Error('--worktree belongs to publish --watch');
   const triple = values.target ?? hostTriple();
   if (hostTriple() !== 'aarch64-apple-darwin' || !buildsToolSet(triple)) throw new Error(`cannot publish a ${triple} tool set from ${hostTriple()}`);
-  if (/^[a-z][a-z\d+.-]*:\/\//i.test(values.origin)) throw new Error('--origin needs a local directory');
-  const { DirectoryOrigin } = await import('./origin.mjs');
-  const origin = new DirectoryOrigin(values.origin), privateKey = createPrivateKey(readFileSync(values.key));
+  const origin = await openToolsOrigin(values.origin), privateKey = createPrivateKey(readFileSync(values.key));
   if (privateKey.asymmetricKeyType !== 'ed25519') throw new Error('the tools producer needs an Ed25519 private key');
   if (values.watch) {
     const tree = resolve(values.worktree ?? resolve(ROOT, '..', basename(ROOT) + '-tools-producer' + (triple === hostTriple() ? '' : '-' + triple)));
@@ -757,7 +880,8 @@ async function publish(args) {
 }
 
 const USAGE = `usage: bun scripts/tools.mjs keep [--target <triple>]
-       bun scripts/tools.mjs publish --origin <directory> --key <producer.pem> [--target <triple>] [--watch [--worktree <directory>]]
+       bun scripts/tools.mjs publish --origin <origin> --key <producer.pem> [--target <triple>] [--watch [--worktree <directory>]]
+       bun scripts/tools.mjs prune --origin <origin>
 
 keep  build this checkout's tool set (the Contract compiler, the web compiler, the
       filesystem helper and the web's four leaf modules) from its committed sources, and keep it in
@@ -770,15 +894,26 @@ publish  sign and publish this revision’s tool set, or record its commit again
          worktree at ~/projects/exact-tools-verifier on that machine.
          --watch follows origin/main in a dedicated detached worktree, publishing the tip first
          and filling skipped commits newest first. The default worktree is a sibling named
-         <checkout>-tools-producer, suffixed with the triple for a cross build. An existing worktree must be clean and detached.`;
+         <checkout>-tools-producer, suffixed with the triple for a cross build. An existing worktree must be clean and detached.
+         It prunes the origin once a day.
+         The origin is a directory, or a bucket's S3 endpoint, s3+https://<endpoint>/<bucket>, written with
+         the token in EXACT_S3_ACCESS_KEY_ID and EXACT_S3_SECRET_ACCESS_KEY (EXACT_S3_REGION, default auto).
+prune    delete what the origin keeps past 90 days: commit lookups, the manifests no lookup or recent
+         set names, then the blobs no manifest names. At most once a day.`;
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [verb, ...args] = process.argv.slice(2);
   // Not awaited at the top level: this module is in an import cycle with filesystem.mjs, and with a top-level await
   // a dynamic import of a module in that cycle waits for this module's evaluation, so `keep` never finishes.
-  if (verb === 'keep' || verb === 'publish' || verb === 'fetch') {
+  if (verb === 'keep' || verb === 'publish' || verb === 'fetch' || verb === 'prune') {
     const run = async () => {
       if (verb === 'publish') return publish(args);
+      if (verb === 'prune') {
+        const { values } = parseArgs({ args, options: { origin: { type: 'string' } } });
+        if (!values.origin) throw new Error('prune needs --origin <origin>');
+        if (!await prune(await openToolsOrigin(values.origin))) console.log('tools: the origin was pruned less than a day ago');
+        return;
+      }
       if (verb === 'fetch') { if (!await fetchProduct(args[0])) process.exitCode = 1; return; }
       const { values } = parseArgs({ args, options: { target: { type: 'string' } } });
       return keep(values.target);

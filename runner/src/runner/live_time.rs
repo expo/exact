@@ -106,9 +106,10 @@ impl<D: DataSource> Runner<D> {
                 Op::DestroyView { id } => {
                     if let Some(node) = self.kernel.node(*id) {
                         let arena = self.kernel.arena();
+                        let kept = self.kept_by_portals();
                         for slot in arena.subtree(node.key.index) {
                             let id = arena.local_id(slot);
-                            if self.live_times.0.contains_key(&id) {
+                            if !kept.contains(&id) && self.live_times.0.contains_key(&id) {
                                 undo.remember(&self.live_times, id);
                                 self.live_times.0.remove(&id);
                             }

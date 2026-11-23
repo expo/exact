@@ -305,6 +305,9 @@ object Native {
     @JvmStatic external fun bindExtensions(names: String)
     /** How a presence check ended ([Presence]), on the store's completion path: never journaled. On the host's thread. */
     @JvmStatic external fun presence(answer: String)
+    /** A live activity send's answer by its ticket, or the activities the shade shows ([Activities], LLP 1126 D13).
+     * On the host's thread. */
+    @JvmStatic external fun activities(report: String)
     /** A package's picture for request [id] (LLP 1133.019 D11 item 1): [bitmap], software `ARGB_8888`, or why there is
      * none ([error]) when it is null. On the host's thread. */
     @JvmStatic external fun picture(id: Int, bitmap: android.graphics.Bitmap?, error: String?)

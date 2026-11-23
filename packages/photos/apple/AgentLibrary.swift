@@ -2,12 +2,14 @@
 // adds to under the agent, where it asks PhotoKit for nothing. Its photos
 // are this checkout's `fixture/agent-1.jpg` to `agent-6.jpg` (a drive runs
 // on this Mac or its simulators), with fixed creation dates, agent-1 the
-// newest; agent-3 is stored turned (EXIF orientation 6) and agent-5 is in
-// Display P3. An add joins it, its file kept under the session's
-// `app:/tmp/photos-library/`.
+// newest; agent-3 is stored turned (EXIF orientation 6), agent-5 is in
+// Display P3, and agent-2 is marked a screenshot (LLP 1133.019.000 D4). An
+// add joins it, its file kept under the session's `app:/tmp/photos-library/`.
 // What the app may see of it is the access the runner's status gives
 // (`full`, `limited`, `none`) and, under `limited`, the selection (the
-// agent's `selection`, else `agent-1` to `agent-3`) with the app's own adds.
+// agent's `selection`, else `agent-1` to `agent-3`) with the app's own adds,
+// less the fixtures the agent's `deleted` names. Its journal is what
+// `photoChanges` walks (LLP 1133.019.000 D5).
 import CryptoKit
 import Foundation
 import ImageIO
@@ -24,6 +26,7 @@ final class AgentLibrary {
         /// Added by the app in this session.
         let own: Bool
         let type: String
+        var screenshot = false
     }
 
     /// The fixtures, beside this file's directory in the checkout.
@@ -33,7 +36,25 @@ final class AgentLibrary {
 
     private(set) var assets: [Asset] = []
     var access = "none"
-    var selection = AgentLibrary.defaultSelection
+    /// A new selection names a new store, so a token from before it expires.
+    var selection = AgentLibrary.defaultSelection {
+        didSet { if Set(selection) != Set(oldValue) { epoch = UUID().uuidString } }
+    }
+    /// The photos deleted, each journalled as it goes and as it comes back;
+    /// an id the library never had is no photo to delete.
+    var deleted: Set<String> = [] {
+        didSet {
+            deleted.formIntersection(assets.map(\.id))
+            journal += deleted.subtracting(oldValue).sorted().map { ($0, false) }
+            journal += oldValue.subtracting(deleted).sorted().map { ($0, true) }
+        }
+    }
+    /// Each change in order, and whether it inserted the photo; a token's
+    /// position counts them.
+    private(set) var journal: [(id: String, insert: Bool)] = []
+    /// This store's name: each launch makes a new library, so a token from
+    /// another launch expires.
+    private(set) var epoch = UUID().uuidString
 
     init() {
         // 2026-0(7-n)-1n 10:(7n):00 UTC, as the fixtures' EXIF dates say.
@@ -44,7 +65,7 @@ final class AgentLibrary {
             parts.timeZone = TimeZone(identifier: "UTC")
             let created = (Calendar(identifier: .gregorian).date(from: parts)?.timeIntervalSince1970 ?? 0) * 1000
             if let (w, h, type) = Self.size(file) {
-                assets.append(Asset(id: "agent-\(n)", file: file, width: w, height: h, created: created, own: false, type: type))
+                assets.append(Asset(id: "agent-\(n)", file: file, width: w, height: h, created: created, own: false, type: type, screenshot: n == 2))
             }
         }
     }
@@ -52,19 +73,20 @@ final class AgentLibrary {
     /// The ids the app may read now.
     var visible: Set<String> {
         switch access {
-        case "full": return Set(assets.map(\.id))
-        case "limited": return Set(selection).union(assets.filter(\.own).map(\.id))
+        case "full": return Set(assets.map(\.id)).subtracting(deleted)
+        case "limited": return Set(selection).union(assets.filter(\.own).map(\.id)).subtracting(deleted)
         default: return []
         }
     }
 
     func asset(_ id: String) -> Asset? { visible.contains(id) ? assets.first { $0.id == id } : nil }
 
-    /// Of what the app may read, newest first with the id ordering one
-    /// date, at most `limit` that sort after `after`, and whether more do.
-    func page(_ limit: Int, after: PageCursor.Key?) -> (assets: [Asset], more: Bool) {
+    /// Of what the app may read, the screenshots alone when `screenshots`,
+    /// newest first with the id ordering one date, at most `limit` that sort
+    /// after `after`, and whether more do.
+    func page(_ limit: Int, after: PageCursor.Key?, screenshots: Bool = false) -> (assets: [Asset], more: Bool) {
         let seen = visible
-        var rest = assets.filter { seen.contains($0.id) }.sorted { ($0.created, $0.id) > ($1.created, $1.id) }
+        var rest = assets.filter { seen.contains($0.id) && (!screenshots || $0.screenshot) }.sorted { ($0.created, $0.id) > ($1.created, $1.id) }
         if let after { rest = rest.filter { ($0.created, $0.id) < (after.date ?? -.infinity, after.id) } }
         return (Array(rest.prefix(limit)), rest.count > limit)
     }
@@ -87,7 +109,32 @@ final class AgentLibrary {
         let newest = assets.filter { !$0.own }.map(\.created).max() ?? 0
         let asset = Asset(id: id, file: file, width: w, height: h, created: newest + 86_400_000 + now, own: true, type: mime)
         assets.append(asset)
+        journal.append((id, true))
         return asset
+    }
+
+    /// One page of the journal's changes from `from` up to `end` (LLP
+    /// 1133.019.000 D2's fold): each photo changed once, by id after `after`,
+    /// at most `limit`. A photo the app may read in the view is an upsert,
+    /// `inserted` when its first change inserted it; any other is a removal.
+    /// Nil when `after` is no photo the window changed, or its last, which no
+    /// page of it ended on.
+    func changes(from: Int, end: Int, after: String?, limit: Int, screenshots: Bool)
+        -> (upserts: [(asset: Asset, inserted: Bool)], removed: [String], last: String?, more: Bool)? {
+        var first: [String: Bool] = [:]
+        for change in journal[from..<end] where first[change.id] == nil { first[change.id] = change.insert }
+        if let after, first[after] == nil || !first.keys.contains(where: { $0 > after }) { return nil }
+        let ids = first.keys.filter { id in after.map { id > $0 } ?? true }.sorted()
+        let page = ids.prefix(limit), seen = visible
+        var upserts: [(asset: Asset, inserted: Bool)] = [], removed: [String] = []
+        for id in page {
+            if seen.contains(id), let a = assets.first(where: { $0.id == id }), !screenshots || a.screenshot {
+                upserts.append((a, first[id]!))
+            } else {
+                removed.append(id)
+            }
+        }
+        return (upserts, removed, page.last, ids.count > page.count)
     }
 
     /// `asset` drawn upright for a box of `width` by `height` device pixels

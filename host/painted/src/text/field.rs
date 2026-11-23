@@ -13,7 +13,7 @@ pub(crate) struct Cursor {
     pub upstream: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct Span {
     start: u32,
     end: u32,
@@ -62,12 +62,12 @@ pub struct FieldTextRun<'a> {
 }
 
 impl FieldTextRun<'_> {
-    /// Whether two paints retained the same glyph placements in this run.
+    /// Whether the glyph placements match, relative to each hard line.
     pub fn same_metrics(&self, other: &Self) -> bool {
         self.bounds == other.bounds
             && self.rtl == other.rtl
             && self.start - self.base == other.start - other.base
-            && std::ptr::eq(self.spans, other.spans)
+            && (std::ptr::eq(self.spans, other.spans) || self.spans == other.spans)
     }
 
     /// Positions and widths of the editor's graphemes in logical order. Offsets
@@ -703,6 +703,10 @@ mod tests {
         let new = engine.edited_field(&spec(&after), Some(70.), Some(&old));
         let edited = Geometry::new(&new, &after, false, 0., 0., Some((&old, &original)));
         let fresh = Geometry::new(&new, &after, false, 0., 0., None);
+        assert!(edited
+            .access_runs()
+            .zip(fresh.access_runs())
+            .all(|(a, b)| a.same_metrics(&b)));
 
         let old_tail = old.layout_runs().position(|run| run.line_i == 1).unwrap();
         let new_tail = new.layout_runs().position(|run| run.line_i == 2).unwrap();

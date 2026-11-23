@@ -325,7 +325,7 @@ test('the shader surface tests run in its generated workspace without SDK depend
   try {
     const module = { ...JSON.parse(readFileSync(resolve(root, 'exact.json'), 'utf8')).gpu,
       package: '@exact/shader', name: 'exact-shader', root, surfaces: ['shader'],
-      declarations: { shader: { arity: 3, factory: 'exact_shader::surface' } } };
+      declarations: { shader: { arity: 4, factory: 'exact_shader::surface' } } };
     const app = { dir, crate: kind => `fixture-${kind}` };
     const workspace = ensurePackageGpu(app, module);
     const metadata = spawnSync('cargo', ['metadata', '--locked', '--offline', '--format-version', '1'], { cwd: workspace, encoding: 'utf8' });

@@ -17,11 +17,23 @@ pub(super) struct Input {
     occluded: bool,
     allowed: Option<Target>,
     session: Option<Target>,
-    composing: bool,
+    preedit: Preedit,
     ime_area: Option<(f32, f32, f32, f32)>,
 }
 
+#[derive(Default, PartialEq, Eq)]
+enum Preedit {
+    #[default]
+    Idle,
+    Active,
+    Clearing,
+}
+
 impl Input {
+    pub(super) fn active(&self) -> bool {
+        self.focused && !self.occluded
+    }
+
     pub(super) fn handle<D: DataSource>(
         &mut self,
         presenter: &mut Presenter<D>,
@@ -37,8 +49,8 @@ impl Input {
                     presenter.ime_end();
                     presenter.pointer_lost(now_ms)?;
                     self.buttons = 0;
-                    self.composing = false;
                     self.session = None;
+                    self.preedit = Preedit::Idle;
                     presenter.forget_pads();
                 }
                 presenter.set_window_active(focused);
@@ -139,10 +151,11 @@ impl Input {
                 self.previous_click = None;
                 let (code, key) = key_names(event.physical_key, &event.logical_key);
                 let down = event.state == ElementState::Pressed;
-                if is_synthetic && down || self.composing {
+                if is_synthetic && down || self.preedit == Preedit::Active {
                     presenter.hold_modifier(&code, down);
                 } else {
                     presenter.ime_end();
+                    self.preedit = Preedit::Idle;
                     if down && code == "Escape" {
                         presenter.pointer_abandoned(now_ms)?;
                     }
@@ -172,7 +185,7 @@ impl Input {
         if target != self.allowed {
             presenter.ime_end();
             self.session = None;
-            self.composing = false;
+            self.preedit = Preedit::Idle;
             self.ime_area = None;
             if self.allowed.is_some() {
                 window.set_ime_allowed(false);
@@ -198,12 +211,19 @@ impl Input {
         match event {
             // Wayland enables text input for a focused field before composition starts.
             Ime::Enabled => self.session = self.allowed,
+            Ime::Preedit(text, _) if text.is_empty() => {
+                // Winit also clears preedit immediately before a Commit in the
+                // same batch. Keep the original selection until that result arrives.
+                if self.preedit == Preedit::Active {
+                    self.preedit = Preedit::Clearing;
+                }
+            }
             Ime::Preedit(text, cursor) => {
                 if self
                     .session
                     .is_some_and(|target| presenter.ime_begin(target))
                 {
-                    self.composing = !text.is_empty();
+                    self.preedit = Preedit::Active;
                     presenter.ime_preedit(&text, cursor);
                 }
             }
@@ -214,13 +234,20 @@ impl Input {
                 {
                     presenter.ime_commit(&text);
                 }
-                self.composing = false;
+                self.preedit = Preedit::Idle;
             }
             Ime::Disabled => {
                 presenter.ime_end();
                 self.session = None;
-                self.composing = false;
+                self.preedit = Preedit::Idle;
             }
+        }
+    }
+
+    pub(super) fn finish_ime_events<D: DataSource>(&mut self, presenter: &mut Presenter<D>) {
+        if self.preedit == Preedit::Clearing {
+            presenter.ime_end();
+            self.preedit = Preedit::Idle;
         }
     }
 
@@ -373,21 +400,65 @@ mod tests {
     }
 
     #[test]
-    fn enabling_wayland_ime_keeps_enter_available_and_composition_commits_once() {
+    fn empty_wayland_preedit_leaves_the_insertion_caret_visible() {
         let mut presenter = editor();
         let mut input = Input {
             allowed: presenter.ime_target(),
             ..Default::default()
         };
         input.ime(&mut presenter, Ime::Enabled);
-        assert!(!input.composing);
-        input.ime(&mut presenter, Ime::Preedit("ni".into(), Some((2, 2))));
-        assert!(input.composing);
+        let focused = presenter.frame();
+        assert!(presenter.caret_frame().is_some());
+
         input.ime(&mut presenter, Ime::Preedit(String::new(), None));
-        assert!(!input.composing);
+        input.finish_ime_events(&mut presenter);
+        let cleared = presenter.frame();
+        assert!(
+            focused.data() == cleared.data(),
+            "an empty Wayland update must preserve the focused caret pixels"
+        );
+        assert!(presenter.caret_frame().is_some());
+
+        input.ime(&mut presenter, Ime::Preedit("ni".into(), None));
+        presenter.frame();
+        assert!(presenter.caret_frame().is_none());
+        input.ime(&mut presenter, Ime::Preedit(String::new(), None));
+        input.finish_ime_events(&mut presenter);
+        assert_eq!(value(&mut presenter), "");
+        let cancelled = presenter.frame();
+        assert!(
+            focused.data() == cancelled.data(),
+            "clearing an unfinished composition must restore the focused caret"
+        );
+    }
+
+    #[test]
+    fn enabling_wayland_ime_keeps_enter_available_and_composition_commits_once() {
+        let mut presenter = editor();
+        press(&mut presenter, "KeyX", "x", Some("x"), true, false);
+        press(&mut presenter, "KeyX", "x", None, false, false);
+        presenter.frame();
+        presenter.hold_modifier("ShiftLeft", true);
+        press(&mut presenter, "Home", "Home", None, true, false);
+        press(&mut presenter, "Home", "Home", None, false, false);
+        presenter.hold_modifier("ShiftLeft", false);
+        let mut input = Input {
+            allowed: presenter.ime_target(),
+            ..Default::default()
+        };
+        input.ime(&mut presenter, Ime::Enabled);
+        assert!(input.preedit == Preedit::Idle);
+        input.ime(&mut presenter, Ime::Preedit("ni".into(), Some((2, 2))));
+        assert!(input.preedit == Preedit::Active);
+        assert_eq!(value(&mut presenter), "ni");
+        input.ime(&mut presenter, Ime::Preedit(String::new(), None));
         input.ime(&mut presenter, Ime::Commit("你好".into()));
-        assert!(!input.composing);
+        input.ime(&mut presenter, Ime::Preedit(String::new(), None));
+        input.finish_ime_events(&mut presenter);
+        assert!(input.preedit == Preedit::Idle);
         assert_eq!(value(&mut presenter), "你好");
+        presenter.frame();
+        assert!(presenter.caret_frame().is_some());
         press(&mut presenter, "Enter", "Enter", Some("\r"), true, false);
         press(&mut presenter, "Enter", "Enter", None, false, false);
         let submitted = view(&presenter, "submitted");

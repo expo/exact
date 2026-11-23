@@ -928,7 +928,7 @@ export function snapbackMutationTypes(declarations) {
 
 /** With `web`, for the web's bundles: a setting a launch may give is inlined as any other, as no launch gives one
  * there (LLP 1153.002 D2). */
-export async function configure(stage, incremental=false, parse, web=false, build) {
+export async function configure(stage, incremental=false, parse, web=false, build, discoveryEntry='app.ts') {
   const app=capturedOrigins(stage).at(-1)[1];
   const inside = (path) => {
     if (path !== stage && !path.startsWith(stage+sep)) throw new Error('tsconfig: path outside captured app: '+path);
@@ -1009,7 +1009,7 @@ export async function configure(stage, incremental=false, parse, web=false, buil
     for (const [file,code] of modules) if (readFileSync(resolve(stage,file),'utf8')!==code) writeFileSync(resolve(stage,file),code);
     build ??= createRequire(import.meta.url)('rolldown').rolldown;
     try {
-      const bundle=await build({...bundleOptions,cwd:stage,input:modulePath,tsconfig:path,logLevel:'silent',plugins:[capturedSources(stage,null,true)]});
+      const bundle=await build({...bundleOptions,cwd:stage,input:resolve(stage,discoveryEntry),tsconfig:path,logLevel:'silent',plugins:[capturedSources(stage,null,true)]});
       try {
         await bundle.generate({format:'esm'});
         recordSourceInputs(stage,'resolution',[...await bundle.watchFiles,...configs].map(file=>[file,packageOrigin(stage,file)]));

@@ -69,7 +69,9 @@ async function copies(wasm) {
   // router's tests hold.)
   const app = wasm ? resolve(ROOT, 'apps/theme-fixture') : mkdtempSync(join(tmpdir(), 'exact-dev-copies-'));
   if (!wasm) {
-    for (const f of ['app.forma', 'app.json']) cpSync(resolve(ROOT, 'apps/theme-fixture', f), join(app, f));
+    cpSync(resolve(ROOT, 'apps/theme-fixture/app.forma'), join(app, 'app.forma'));
+    const identity = { id: 'com.exact.dev-copies', name: 'Dev copies' };
+    writeFileSync(join(app, 'app.json'), JSON.stringify({ ...identity, app: identity }));
     writeFileSync(join(app, 'app.contract'), APP);
   }
   // The build's lock and kept generations go beside its dist (serve.mjs `replaceBuild`): the dist sits in a directory of its own.

@@ -1,6 +1,6 @@
 import { AGENT_ADMITTED, views, retiredViews, presence, host, followedScrolls, motion, loadAfterPaint, root, agentMode, log, t0, readOut, writeIn, loadLiveTime, lists, arrange, pieces, loadGpuIfNeeded, afterNativePaint, deferFulfill, holds, agentKeepsStore, pendingStore, moduleReady, safelyFulfill, encoder, track, byTicket, forgettable, surfaceGranted, HOST_WORK_BASE64, loadPageNative, localAssetURL, controllers, pageFile, heldAsks, httpHelpers, now, postSurface, ask, picker, inflight, documentsGlue, frameNav, followScroll, messageFrames, messageViews, dropSurface, register, seek, settleFollow, pendingScrolls, rememberScroll, ownFollowed, releaseFollowed, collections, focusAutofocus, markScrollDocument, letGo, holdWake, holdOrientation, clocks } from "../glue.js";
 import { prepareContexts, positionContexts } from "./context.js";
-import { pageTitle, navigation, noteFit, syncListItemRoles, listItem, settleValue, afterPaint, createGrantSet, rawGrantText, grantError, grantWords, scopedGrantSet, refusal, appRootFontSize, liveById, navigableURL, sheetLeaves, popoverCommand, runFocusCommands, inertAncestor, refitTexts } from "../navigation.js";
+import { pageTitle, navigation, noteFit, syncListItemRoles, listItem, settleValue, afterPaint, createGrantSet, rawGrantText, grantError, grantWords, scopedGrantSet, refusal, appRootFontSize, liveById, navigableURL, sheetLeaves, modalCommand, popoverCommand, runFocusCommands, inertAncestor, refitTexts } from "../navigation.js";
 import { applyProps, nativeCreate, listView, appSource, syncMedia, forgetList, syncViewportFit, refreshSymbols, syncLists } from "./views.js";
 import { attach } from "./input.js";
 import { flowBatch } from "./flow.js";
@@ -557,27 +557,9 @@ function apply(batch) {
           } else if (op.name === "close" && op.args?.[0] == null) {
             window.close();
           } else if (op.name === "showModal" || op.name === "close") {
-            /* studio diary R17 */
-            const id = op.args?.[0], el = [...views.values()].find((el) => el.id === id), close = op.name === "close";
-            if (el instanceof HTMLDialogElement) {
-              if (close) {
-                el.close();
-              } else if (!el.open) {
-                el.showModal();
-              } else {
-                log(`showModal "${id}" ignored: dialog is already open`);
-              }
-            } else if (el?.popover != null && el.getAttribute("role") === "alertdialog") {
-              if (close) {
-                el.hidePopover();
-              } else if (!el.matches(":popover-open")) {
-                el.showPopover();
-              }
-            } else if (!close) {
-              log(`showModal "${id}" refused: no dialog or alertdialog popover has that id`);
-            }
+            const id = op.args?.[0];
+            modalCommand([...views.values()].find(el => el.id === id), id, op.name, log);
           } else if (op.name === "stopPropagation") {
-            // `showModal(id)`, `close(id)` from an action: the dialog's own, or an alertdialog popover's (LLP 1101.001 P5, LLP 1115 D6), as host/web-js/commands.js `modal`
             const e = host.keyEvent ?? (host.sending === host.pointerDepth ? host.pointerEvent : null);
             if (e) {
               e.exactStopped = true;

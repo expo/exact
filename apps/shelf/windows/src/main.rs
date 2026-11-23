@@ -14,11 +14,12 @@ fn embedded_data() -> ExactEmbeddedData {
 }
 include!(concat!(env!("OUT_DIR"), "/logic.rs"));
 fn main() {
-    std::process::exit(exact_windows::run_baked::<AppData, ADMIT_AGENT>(
+    std::process::exit(exact_windows::run_with_services::<AppData, ADMIT_AGENT>(
         "Shelf",
         window(),
         PLAN,
         COMPAT,
         Default::default(),
+        SERVICES,
     ));
 }

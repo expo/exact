@@ -652,11 +652,11 @@ fn failure_read(resource: bool, over: bool, pending: bool) -> Observation {
     }
     let (plan, row) = root_row(builder, body);
     let reason = "x".repeat(1 << 25);
-    let failure = Failure {
-        code: FailureCode::Error,
-        message: if over { "x".into() } else { String::new() },
-        reason,
-    };
+    let message = if over { "x".into() } else { String::new() };
+    let failure = Failure::of(&exact_runner::RunnerError::Data {
+        resource: "source".into(),
+        error: exact_runner::DataError::Failed(FailureCode::Error, message, reason),
+    });
     let resources = [(!pending).then(|| Held::new(Value::Unit))];
     let failed_resources = [Some(Vec::new())];
     let failed_why = [Some(failure.clone())];

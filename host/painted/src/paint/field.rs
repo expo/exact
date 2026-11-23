@@ -23,6 +23,7 @@ pub(crate) struct Composition {
     pub(crate) unconverted: Vec<(u32, u32)>,
 }
 
+#[derive(Clone)]
 pub(crate) struct PaintedField {
     pub(crate) geometry: Rc<Geometry>,
     paragraph: Rc<Paragraph>,
@@ -376,9 +377,12 @@ impl PaintedField {
         Some((point.x - origin.0, point.y - origin.1))
     }
 
+    pub(super) fn caret_rect(&self, cursor: Cursor) -> Rect4 {
+        super::intersect(self.place(self.geometry.caret(cursor)), self.text_clip)
+    }
+
     pub(crate) fn caret_frame(&self, cursor: Cursor) -> Rect4 {
-        let caret = super::intersect(self.place(self.geometry.caret(cursor)), self.text_clip);
-        super::bbox(self.transform, caret)
+        super::bbox(self.transform, self.caret_rect(cursor))
     }
 
     /// `rangeFrame` (LLP 1114.007): the UTF-16 range `start..end` of the
@@ -655,6 +659,7 @@ impl Painter {
                 ],
                 size: computed.font_size * self.scale,
                 color: value_ink,
+                selection_colors: look::contrast().map(|p| [p.highlight, p.highlighted_text]),
                 value,
                 placeholder: node.props.str(PropId::Placeholder).unwrap_or(""),
                 selection: [selection.start, selection.end],
@@ -674,7 +679,7 @@ impl Painter {
                         ts,
                     );
                 }
-                if focused && !self.caret_hidden {
+                if focused && self.caret_opacity != 0 {
                     if let Some([x, y, w, h]) = exact_ink::device::d3d11::fields::caret(node.id) {
                         self.backend.fill(
                             &Shape::rect((
@@ -683,7 +688,7 @@ impl Painter {
                                 w / self.scale,
                                 h / self.scale,
                             )),
-                            value_ink,
+                            self.caret_ink(value_ink),
                             ts,
                         );
                     }
@@ -717,21 +722,33 @@ impl Painter {
         }
         // Windows reports the active conversion clause as a selection. Its
         // native editor underlines that clause without a selection background.
-        if let Some(s) = selection.filter(|_| !cfg!(target_os = "windows") || composition.is_none())
-        {
-            let top = padding.rect.1 - oy;
-            self.field_highlight(&field, s, top..top + padding.rect.3);
+        let marks = selection
+            .filter(|s| s.start != s.end && (!cfg!(windows) || composition.is_none()))
+            .map(|s| {
+                let top = padding.rect.1 - oy;
+                field.selection_rects(s, top..top + padding.rect.3, self.scale)
+            })
+            .unwrap_or_default();
+        let contrast = (!marks.is_empty()).then(look::contrast).flatten();
+        if contrast.is_none() {
+            for &rect in &marks {
+                self.backend.fill(
+                    &Shape::rect(rect),
+                    super::caret::HIGHLIGHT[usize::from(self.dark)],
+                    ts,
+                );
+            }
         }
         if !placeholder {
             let painted = material::FieldText::painted(&paragraph, (ox, oy), ts);
             self.row_field_text(node.id, material::Part::Value, painted);
         }
-        if let Some(shadows) = shadows {
+        if let Some(shadows) = &shadows {
             let ink = self.capture_field_ink(
                 walk.scene.kernel,
                 &paragraph,
                 &palette,
-                &shadows,
+                shadows,
                 walk.reveal,
             );
             self.paint_text_ink(
@@ -742,14 +759,39 @@ impl Painter {
                 None,
                 Some((text_clip, padding.rect)),
             );
-        } else {
-            self.backend.push_clip(&Shape::rect(text_clip), ts);
+        }
+        self.backend.push_clip(&Shape::rect(text_clip), ts);
+        if shadows.is_none() {
             let mut engine = self.text.borrow_mut();
             self.backend
                 .text(&mut engine, &paragraph, &palette, (ox, oy), ts);
-            self.backend.pop_clip();
         }
-        self.backend.push_clip(&Shape::rect(text_clip), ts);
+        if let Some(contrast) = contrast {
+            // Replace the background and its antialiased glyphs together, including
+            // where the selection cuts through a decorated or bidirectional run.
+            let depth = self.push_selection_clip(&marks, ts);
+            if depth > 0 {
+                self.backend
+                    .fill(&Shape::rect(text_clip), contrast.highlight, ts);
+                let selected = vec![
+                    RunPaint {
+                        color: contrast.highlighted_text,
+                        ..base
+                    };
+                    palette.len()
+                ];
+                self.backend.text(
+                    &mut self.text.borrow_mut(),
+                    &paragraph,
+                    &selected,
+                    (ox, oy),
+                    ts,
+                );
+                for _ in 0..depth {
+                    self.backend.pop_clip();
+                }
+            }
+        }
         if let Some(composition) = &composition {
             let line = 1. / self.scale.max(1.);
             let mut underline = |start, end, dotted| {
@@ -784,6 +826,7 @@ impl Painter {
             }
             underline(start, composition.range.end, false);
         }
+        self.backend.pop_clip();
         if focused && composition.as_ref().is_none_or(|c| c.cursor) {
             let caret = computed
                 .caret_color
@@ -796,7 +839,6 @@ impl Painter {
                 walk.scene.caret_upstream,
             );
         }
-        self.backend.pop_clip();
         self.backend.pop_clip();
         if ringed {
             let accent = control::ring(node, self.dark);

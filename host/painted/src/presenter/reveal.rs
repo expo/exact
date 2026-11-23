@@ -12,7 +12,7 @@ use crate::placement::inverse;
 pub(super) enum Cause {
     InsetAdjustment,
     FieldNavigation,
-    /// Tab or a remote's arrow moved the focus (LLP 1115.001.003 D4).
+    /// A focus command, Tab or a remote arrow moved focus (LLP 1115.001.003 D4).
     FocusMove,
 }
 
@@ -24,9 +24,14 @@ enum Geometry {
 }
 
 impl<D: DataSource> Presenter<D> {
-    pub(super) fn reveal_flights(&mut self) {
+    pub(super) fn reveal_before_paint(&mut self) {
         let arrivals = std::mem::take(&mut self.host.flights.reveal);
-        for key in arrivals {
+        let focus = self.focus_reveal.take().filter(|key| {
+            self.focus
+                .and_then(|id| self.host.kernel().node(id))
+                .is_some_and(|n| n.key == *key)
+        });
+        for key in arrivals.into_iter().chain(focus) {
             let Some(id) = self.host.kernel().node_by_key(key).map(|n| n.id) else {
                 continue;
             };

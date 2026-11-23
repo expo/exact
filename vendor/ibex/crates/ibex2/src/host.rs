@@ -148,11 +148,7 @@ impl Host {
                 .map_or_else(Default::default, |s| s.limits),
         );
         Bindings {
-            fetch: Fetch {
-                transport: Arc::clone(&self.transport),
-                grants: Arc::clone(&grants),
-                gate: None,
-            },
+            fetch: Fetch::new(Arc::clone(&self.transport), Arc::clone(&grants)),
             fs: Fs {
                 grants: Arc::clone(&grants),
                 directories: self.app_directories.clone(),
@@ -473,6 +469,15 @@ pub struct Fetch {
 }
 
 impl Fetch {
+    /// Bind HTTP grants to a transport, including a fixture that supplies its own responses.
+    pub fn new(transport: Arc<dyn Transport>, grants: Arc<GrantSet>) -> Self {
+        Self {
+            transport,
+            grants,
+            gate: None,
+        }
+    }
+
     /// Admit a URL without sending it, using this binding's grants and hop gate.
     /// A later `stream` rechecks it and every redirect under the same authority.
     pub fn admit(&self, url: &str) -> Result<(), HostError> {

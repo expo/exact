@@ -55,7 +55,7 @@ function stopModule(error) {
   host.textflow = null;
   root.dataset.error = String(error);
   const unloaded = error instanceof StageNotLoaded
-    ? "; every call into a stage goes through its gate, which loads the stage first (glue.js `ask`, LLP 1047.000 §9): the stack names the caller that did not, and a development build, which is whole, shows the page without the split"
+    ? "; every call into a stage waits for it to load (glue.js `loadStage`, LLP 1047.000 §9): the stack names the caller that entered it before it loaded, and a development build, which is whole, shows the page without the split"
     : "";
   console.error(`exact: app.wasm trapped, and the page no longer calls it${unloaded}:`, error);
   globalThis.exact.onTrap?.(error);

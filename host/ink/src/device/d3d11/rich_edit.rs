@@ -134,6 +134,15 @@ impl RichEdit {
             Ok(result == S_OK)
         }
     }
+    pub fn selection_colors(&self, colors: Option<[[u8; 4]; 2]>) -> Result<()> {
+        let colors =
+            colors.map(|pair| pair.map(|[r, g, b, _]| COLORREF(u32::from_le_bytes([r, g, b, 0]))));
+        if self.state.selection_colors.replace(colors) != colors {
+            self.state.dirty.set(true);
+            self.message(WM_SYSCOLORCHANGE, 0, 0)?;
+        }
+        Ok(())
+    }
     /// Configure in device pixels. The D2D target uses 96 DPI; font size and
     /// bounds carry the window scale together, including fractional scales.
     pub fn configure(

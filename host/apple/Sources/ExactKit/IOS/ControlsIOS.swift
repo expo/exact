@@ -130,10 +130,12 @@ package final class ControlHost: NSObject {
     private func unshown(_ node: NodeView) -> Bool {
         if presenter.menus.inClosedBox(node) { return true }
         let covers = presenter.navigation.covers
-        guard covers.values.contains(.whole) else { return false }
+        // A bar's hosted item (LLP 1141.004 D2) is in the bar's own view, outside the header it replaced.
+        let replaced = { (cover: HostCover?) in cover == .whole || cover == .bar }
+        guard covers.values.contains(where: replaced) else { return false }
         var at: UIView? = node
         while let view = at {
-            if let box = view as? NodeView, covers[box.id] == .whole, box.hiddenByHost { return true }
+            if let box = view as? NodeView, replaced(covers[box.id]), box.hiddenByHost { return true }
             at = view.superview
         }
         return false

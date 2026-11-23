@@ -273,6 +273,8 @@ package protocol NavigationHosting: AnyObject {
     /// ancestor of it gives reaches a long press there, as one reaches a presentation's mount.
     var relayMounts: [(mount: any RelayMount, node: NodeView)] { get }
     #endif
+    /// The blocks the bars' hosted items are laid out in, by element (LLP 1141.004 D3).
+    var barItemBlocks: [UInt32: HostBlock] { get }
     /// Whether a grouped list shows as UIKit's sidebar: in a split's list column while the split is expanded (LLP 1127 D7).
     func showsAsSidebar(_ list: UIView) -> Bool
     /// The row of a sidebar list whose detail shows, which stays selected;
@@ -381,9 +383,8 @@ package protocol NavigationHosting: AnyObject {
 package protocol LiftedNodes: AnyObject {
     /// The parent a lifted node, or a view in its place, is under in the authored tree.
     func parent(of view: UIView) -> NodeView?
-    /// Whether UIKit holds `view` away from its parent's box (the tab bar's
-    /// accessory), so a press on it lands in its own box, as in a presentation.
-    func heldApart(_ view: UIView) -> Bool
+    /// The release bounds for a press that bubbles out of a lifted view.
+    func pressBox(crossing view: UIView, from start: UIView) -> UIView?
     /// Whether `parent` lifted `node`, which `parent`'s children op then leaves where it is.
     func holds(_ node: NodeView, under parent: NodeView) -> Bool
     /// A children op on `parent`, before the presenter places it.
@@ -557,6 +558,7 @@ package final class NoNavigation: NavigationHosting {
     #if os(iOS)
     package var relayMounts: [(mount: any RelayMount, node: NodeView)] { [] }
     #endif
+    package var barItemBlocks: [UInt32: HostBlock] { [:] }
     package func showsAsSidebar(_ list: UIView) -> Bool { false }
     package func sidebarSelection(_ list: UIView) -> UInt32?? { .some(nil) }
     package func listPress(_ row: UInt32, in list: UIView, _ press: () -> Void) { press() }

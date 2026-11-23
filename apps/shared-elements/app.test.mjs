@@ -181,3 +181,70 @@ test('launch colours and the dark empty web shell match the first frame', async 
     try { await session.close(); } finally { await browser.close(); }
   }
 }, 30000);
+
+// LLP 1013.002 §8: the Player screen's video and counter are one element, written once and shown in the card or the
+// detail by `portal`. After DorianMazur's interrupted round trip (#698).
+test('a portal keeps one playing video and its count through an interrupted round trip', async () => {
+  const session = await open({ host: 'web', app: 'shared-elements', size: [420, 900],
+    env: { EXACT_AGENT_EPHEMERAL_PORT: '1' } });
+  const ev = s => session.carrier.evaluate(s);
+  const wait = ms => ev(`new Promise(r => setTimeout(r, ${ms}))`);
+  const sample = () => ev(`(() => {
+    const v = document.querySelector('[data-testid="player-video"]');
+    return v && { t: v.currentTime, marked: v.$mark === 1, loads: v.$loads ?? 0,
+      at: v.parentElement.parentElement.dataset.testid ?? null, shown: v.checkVisibility() };
+  })()`);
+  const count = () => ev(`document.querySelector('[data-testid="player-count"]').textContent`);
+  try {
+    await session.clock('data');
+    await session.tap('tab-player');
+    await session.clock('settle');
+    const plays = await ev(`(() => { const v = document.querySelector('[data-testid="player-video"]'); v.$mark = 1;
+      v.addEventListener('loadstart', () => v.$loads = (v.$loads ?? 0) + 1);
+      return v.canPlayType('video/mp4; codecs="avc1.42E01E"') !== '' })()`);
+    if (plays) for (let k = 0; k < 40 && (await sample()).t < 0.2; k++) await wait(100);
+    await session.tap('player-count');
+    await session.clock('settle');
+    const samples = [await sample()];
+    await session.tap('player-open');
+    await session.clock('+60');
+    await wait(250);
+    samples.push(await sample());
+    await session.tap('watch-back');
+    await session.clock('+60');
+    await wait(250);
+    samples.push(await sample());
+    await session.tap('player-open');
+    await session.clock('settle');
+    await wait(250);
+    samples.push(await sample());
+    expect(samples.map(s => s.at)).toEqual(['card-player', 'detail-player', 'card-player', 'detail-player']);
+    expect(samples.every(s => s.marked && s.shown && s.loads === 0)).toBe(true);
+    if (plays) for (let k = 1; k < samples.length; k++) expect(samples[k].t).toBeGreaterThan(samples[k - 1].t);
+    if (plays) expect((await session.state()).slots.loads).toBe(1);
+    expect(await count()).toBe('Count 1');
+    await session.tap('player-count');
+    await session.clock('settle');
+    expect(await count()).toBe('Count 2');
+    await session.tap('watch-back');
+    await session.clock('settle');
+    // Another tab has no card: the player waits, alive, unseen and out of reach.
+    await session.tap('tab-grid');
+    await session.clock('settle');
+    expect(await ev(`(() => { const b = document.querySelector('[data-testid="player-count"]'); b.focus();
+      return [document.activeElement === b, b.checkVisibility(), document.getElementById('exact-root').contains(b)] })()`))
+      .toEqual([false, false, false]);
+    await session.tap('tab-player');
+    await session.clock('settle');
+    expect(await sample()).toMatchObject({ at: 'card-player', marked: true, loads: 0 });
+    expect(await count()).toBe('Count 2');
+    await session.tap('player-remove');
+    await session.clock('settle');
+    await session.tap('player-remove');
+    await session.clock('settle');
+    expect((await sample()).marked).toBe(false);
+    expect(await count()).toBe('Count 0');
+  } finally {
+    await session.close();
+  }
+}, 60000);

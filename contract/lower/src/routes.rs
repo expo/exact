@@ -427,10 +427,10 @@ impl NavPlace {
             .rev()
             .find(|a| a.name == "navigationInitialDetent")
         {
-            if !self.is_route(attrs) {
+            if tag != "dialog" && !self.is_route(attrs) {
                 return err(
                     "lower-attr-value",
-                    "`navigationInitialDetent` is read only on a route (an element with a `navigationKey`, a child of the navigation root or of a linked `role=\"tabpanel\"` in it), beside its `navigationDetent`: move both onto the sheet's route",
+                    "`navigationInitialDetent` is read only on a route or a dialog. A route is an element with a `navigationKey` in the navigation stack. Write both detent attributes on the element that presents the sheet",
                     a.span,
                 );
             }
@@ -439,15 +439,19 @@ impl NavPlace {
             {
                 return err(
                     "lower-attr-value",
-                    "`navigationInitialDetent` takes one word of the route's `navigationDetent`, the height its sheet opens at",
+                    "`navigationInitialDetent` takes one word of the sheet's `navigationDetent`, the height its sheet opens at",
                     a.span,
                 );
             }
             let detents = attrs.iter().rev().find(|a| a.name == "navigationDetent");
-            // The words, and whether the route wrote them.
+            let default = if tag == "dialog" {
+                "fit-content"
+            } else {
+                "large"
+            };
             let heights = match detents.map(|a| &a.value) {
                 Some(Expr::Str(s, _)) if !s.trim().is_empty() => Some((s.as_str(), true)),
-                Some(Expr::Str(..)) | None => Some(("large", false)),
+                Some(Expr::Str(..)) | None => Some((default, false)),
                 Some(_) => None,
             };
             if let (Expr::Str(word, _), Some((heights, written))) = (&a.value, heights) {
@@ -455,7 +459,7 @@ impl NavPlace {
                     let said = if written {
                         format!("`navigationDetent=\"{heights}\"`")
                     } else {
-                        "`large` alone, as the route says no `navigationDetent`".into()
+                        format!("`{default}` alone, as the sheet says no `navigationDetent`")
                     };
                     return err(
                         "lower-attr-value",

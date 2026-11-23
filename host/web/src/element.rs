@@ -648,16 +648,9 @@ pub fn css_style_of<'a>(
 ) -> std::borrow::Cow<'a, exact_kernel::StyleProps> {
     let as_attributes = attribute_rows(node.node_type);
     let url = |p: &Paint| matches!(p, Paint::Url(..));
-    // @ref LLP 1069.001 D2 — an option is `display: none` to layout, never
-    // to the browser's menu, which a hidden `<option>` leaves out.
-    if exact_kernel::control::is_option_node(node.node_type, node.props) {
-        let mut style = node.style.clone();
-        let mut mask = exact_kernel::StyleMask::EMPTY;
-        mask.set(exact_kernel::StyleId::Display);
-        style.clear(mask);
-        return std::borrow::Cow::Owned(style);
-    }
+    let browser_row = semantic::browser_row(node);
     if as_attributes.is_empty()
+        && browser_row.is_none()
         && node.node_type != NodeType::Video
         && !url(&node.style.fill)
         && !url(&node.style.stroke)
@@ -685,6 +678,9 @@ pub fn css_style_of<'a>(
     let mut mask = exact_kernel::StyleMask::EMPTY;
     for row in as_attributes {
         mask.set(row.0);
+    }
+    if let Some(row) = browser_row {
+        mask.set(row);
     }
     style.clear(mask);
     // @ref LLP 1055.000 D10 — a clipPath by the id the page gives it.

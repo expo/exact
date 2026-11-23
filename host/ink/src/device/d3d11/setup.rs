@@ -1,6 +1,7 @@
 use super::*;
 use windows::core::s;
 
+#[derive(Clone)]
 pub(super) struct Pipeline {
     pub vertex: ID3D11VertexShader,
     pub pixel: ID3D11PixelShader,

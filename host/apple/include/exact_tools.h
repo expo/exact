@@ -14,7 +14,9 @@ extern "C" {
 #endif
 
 /* A system's call of a tool (LLP 1133.023 §10): {"op":"call",…}, and
- * {"op":"called","id":N} or {"op":"cancel","id":N} for the call it named. */
+ * {"op":"called","id":N} or {"op":"cancel","id":N} for the call it named.
+ * {"op":"press","control":K,"digest":D,"cold":B,"hidden":B} is a person's
+ * press of a compiled control (LLP 1126.004 D2), answered as a call is. */
 uint32_t exact_tool(ExactRuntime rt, size_t len);
 
 #ifdef __cplusplus

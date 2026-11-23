@@ -24,9 +24,12 @@ pub(super) enum Prepared {
 pub(super) struct SourceOwner {
     pub id: u64,
     generation: u64,
+    pub(super) canvas: std::sync::atomic::AtomicBool,
     name: String,
     assets: Weak<Assets>,
     prepared: Mutex<Prepared>,
+    /// A package's pixels for this file, verified against it (`published`).
+    published: OnceLock<super::published::Verified>,
     /// A URL's download: the body a worker reads once it is settled.
     remote: Option<Arc<remote::Load>>,
     /// Its download failed in a way asking again may mend (`Failure::transient`):
@@ -57,13 +60,22 @@ impl SourceOwner {
         &self.name
     }
 
+    /// The image generation it was asked for in.
+    pub(super) fn generation(&self) -> u64 {
+        self.generation
+    }
+
     /// A URL's body this host cannot decode: let go of its spool file (the
     /// cache's hold too, so the URL is fetched again when next asked for),
     /// and say so once.
     /// One that came with a status that is not 2xx fails as that status,
     /// asked again as a bodiless one is.
-    fn release(&self, refusal: Refusal, downloads: &remote::Downloads) {
-        let status = (self.remote.as_ref().and_then(|load| load.outcome()))
+    fn release(&self, refusal: Refusal, downloads: Option<&remote::Downloads>) {
+        let (Some(load), Some(downloads)) = (&self.remote, downloads) else {
+            return;
+        };
+        let status = load
+            .outcome()
             .and_then(|outcome| outcome.ok()?.status.clone());
         let failure = status.unwrap_or_else(|| remote::Failure {
             refusal,
@@ -78,7 +90,7 @@ impl SourceOwner {
         if let Some(at) = failure.after {
             downloads.cool(&self.name, at, &message);
         }
-        let Some(body) = self.remote.as_ref().and_then(|load| load.release(failure)) else {
+        let Some(body) = load.release(failure) else {
             return;
         };
         *self.transient.lock().unwrap() = transient;
@@ -97,8 +109,9 @@ struct State {
 }
 pub(super) struct Backend {
     pub session: RasterSession,
+    pub(super) published: super::published::Files,
     /// Where a URL's body comes from.
-    pub downloads: Arc<remote::Downloads>,
+    pub downloads: Option<Arc<remote::Downloads>>,
     /// This backend, for a download to wake its workers when it lands.
     me: Weak<Backend>,
     state: Mutex<State>,
@@ -125,12 +138,19 @@ impl Backend {
         Self::for_workers(Workers::process())
     }
     fn for_workers(workers: &Workers) -> Arc<Self> {
+        Self::with_downloads(workers, Some(remote::Downloads::process().clone()))
+    }
+    pub fn local() -> Arc<Self> {
+        Self::with_downloads(Workers::process(), None)
+    }
+    fn with_downloads(workers: &Workers, downloads: Option<Arc<remote::Downloads>>) -> Arc<Self> {
         let (wake_read, wake_write) = UnixStream::pair().expect("raster wake pair");
         wake_read.set_nonblocking(true).unwrap();
         wake_write.set_nonblocking(true).unwrap();
         let backend = Arc::new_cyclic(|me| Self {
             session: workers.gate.session(),
-            downloads: remote::Downloads::process().clone(),
+            published: Default::default(),
+            downloads,
             me: me.clone(),
             state: Mutex::new(State {
                 sources: BTreeMap::new(),
@@ -184,8 +204,8 @@ impl Backend {
             .find(|s| s.generation == generation && s.name == name)
         {
             // Now one that fills the screen: its download, still waiting, goes first.
-            if let Some(load) = source.remote.as_ref().filter(|_| urgent) {
-                self.downloads.promote(load);
+            if urgent {
+                self.promote(source);
             }
             Ok(source.clone())
         } else if state.sources.len() >= SUBSCRIPTIONS + COLD_ENTRIES + 2
@@ -209,10 +229,14 @@ impl Backend {
             let remote = if exact_plan::has_http_scheme(name) {
                 let me = self.me.clone();
                 self.downloads
-                    .load(name, urgent, move || {
-                        if let Some(backend) = me.upgrade() {
-                            backend.session.wake();
-                        }
+                    .as_ref()
+                    .ok_or(Refusal::DecodeFailed)
+                    .and_then(|downloads| {
+                        downloads.load(name, urgent, move || {
+                            if let Some(backend) = me.upgrade() {
+                                backend.session.wake();
+                            }
+                        })
                     })
                     .map(Some)
             } else {
@@ -224,7 +248,9 @@ impl Backend {
                     generation,
                     name: name.to_owned(),
                     assets: Arc::downgrade(assets),
+                    canvas: Default::default(),
                     prepared: Mutex::new(Prepared::Queued),
+                    published: OnceLock::new(),
                     remote,
                     transient: Default::default(),
                     message: Default::default(),
@@ -289,8 +315,8 @@ impl Backend {
     /// `source`'s download, if it still waits for a thread, goes first: its
     /// picture now fills the screen ([`remote::Downloads::promote`]).
     pub fn promote(&self, source: &SourceOwner) {
-        if let Some(load) = &source.remote {
-            self.downloads.promote(load);
+        if let (Some(load), Some(downloads)) = (&source.remote, &self.downloads) {
+            downloads.promote(load);
         }
     }
     /// Source `id`, failed, is found no more: the next ask for its name
@@ -308,12 +334,37 @@ impl Backend {
         state.sources.retain(|_, source| source.strong_count() > 0);
         state.sources.len()
     }
+    /// Ask for `demand`, served by a package's pixels for the file when they
+    /// are cached, still match it, and are not much larger than asked for
+    /// (as `covering` shares a decode). `whole`: any size will do, as for a
+    /// canvas, which shrinks its ask only to fit a decode in the budget.
     pub fn request(
         &self,
         demand: exact_raster::Demand,
+        whole: bool,
     ) -> Result<exact_raster::RequestId, Refusal> {
         Workers::process().start();
-        let id = self.session.request(demand)?;
+        let source =
+            (self.state.lock().unwrap().sources.get(&demand.key.source)).and_then(Weak::upgrade);
+        let area = |p: exact_raster::PixelSize| u64::from(p.width) * u64::from(p.height);
+        let published = source
+            .as_ref()
+            .and_then(|s| s.published.get()?.current(s))
+            .filter(|p| whole || area(p.key.pixels) <= area(demand.key.pixels) * 5 / 2);
+        drop(source);
+        let cached = published.and_then(|p| {
+            self.session
+                .request_cached(exact_raster::Demand {
+                    view: demand.view,
+                    priority: demand.priority,
+                    ..p
+                })
+                .ok()
+        });
+        let id = match cached {
+            Some(request) => request,
+            None => self.session.request(demand)?,
+        };
         self.requests.lock().unwrap().insert(id);
         Ok(id)
     }
@@ -411,8 +462,20 @@ impl Backend {
                 Err(failure.refusal)
             }
             _ => open(source)
-                .and_then(|(mut input, bytes)| png_decode::inspect(&mut input, bytes))
-                .inspect_err(|e| source.release(*e, &self.downloads)),
+                .and_then(|(mut input, bytes, modified)| {
+                    let header = png_decode::inspect(&mut input, bytes)?;
+                    let opened = modified.map(|modified| (bytes, modified));
+                    if let Some(verified) = super::published::verify(
+                        &self.published,
+                        source,
+                        (input, opened),
+                        header.metadata,
+                    ) {
+                        let _ = source.published.set(verified);
+                    }
+                    Ok(header)
+                })
+                .inspect_err(|e| source.release(*e, self.downloads.as_deref())),
         };
         *source.prepared.lock().unwrap() = match result {
             Ok(header) => Prepared::Ready(header),
@@ -446,7 +509,7 @@ impl Backend {
             if plan.cost != permit.cost() || header.metadata != permit.metadata() {
                 return Err(Refusal::ConflictingMetadata);
             }
-            let (mut input, bytes) = open(&source)?;
+            let (mut input, bytes, _) = open(&source)?;
             if bytes != header.metadata.encoded_bytes {
                 return Err(Refusal::ConflictingMetadata);
             }
@@ -488,7 +551,9 @@ impl Backend {
             // This charge precedes the decoder and output allocations. On an
             // error decode_rows destroys both before the permit can retire.
             let charge = permit.allocation_charge();
-            let pixels = super::jpeg_decode::decode_pixels(input, &plan, || permit.is_cancelled())?;
+            let pixels = super::jpeg_decode::decode_pixels(input, &plan, key.variant, || {
+                permit.is_cancelled()
+            })?;
             let bitmap = Arc::new(Bitmap::from_source(
                 pixels,
                 plan.natural(),
@@ -533,7 +598,7 @@ impl Backend {
             Err(e) => {
                 if e == Refusal::DecodeFailed {
                     if let Some(source) = &decoded_source {
-                        source.release(e, &self.downloads);
+                        source.release(e, self.downloads.as_deref());
                     }
                 }
                 permit.fail()
@@ -550,7 +615,9 @@ impl Drop for Backend {
 
 trait Input: Read + Seek + Send {}
 impl<T: Read + Seek + Send> Input for T {}
-fn open(source: &SourceOwner) -> Result<(Box<dyn Input>, u64), Refusal> {
+/// A source's input, its length, and, for a file, when it was last written.
+type Opened = (Box<dyn Input>, u64, Option<std::time::SystemTime>);
+fn open(source: &SourceOwner) -> Result<Opened, Refusal> {
     if let Some(load) = &source.remote {
         let Some(Ok(body)) = load.outcome() else {
             return Err(Refusal::DecodeFailed);
@@ -559,7 +626,7 @@ fn open(source: &SourceOwner) -> Result<(Box<dyn Input>, u64), Refusal> {
         if file.metadata().map_err(|_| Refusal::DecodeFailed)?.len() != body.len {
             return Err(Refusal::DecodeFailed);
         }
-        return Ok((Box::new(file), body.len));
+        return Ok((Box::new(file), body.len, None));
     }
     let assets = source.assets.upgrade().ok_or(Refusal::Stale)?;
     match assets
@@ -571,7 +638,7 @@ fn open(source: &SourceOwner) -> Result<(Box<dyn Input>, u64), Refusal> {
             if len > exact_raster::MAX_ENCODED_BYTES {
                 return Err(Refusal::EncodedLimit);
             }
-            Ok((Box::new(Cursor::new(bytes)), len))
+            Ok((Box::new(Cursor::new(bytes)), len, None))
         }
         ImageInput::Path(path) => {
             bounded(crate::file::open_regular(&path).map_err(|_| Refusal::DecodeFailed)?)
@@ -581,7 +648,7 @@ fn open(source: &SourceOwner) -> Result<(Box<dyn Input>, u64), Refusal> {
 }
 
 /// A source's regular file, refused past the encoded bound.
-fn bounded(file: std::fs::File) -> Result<(Box<dyn Input>, u64), Refusal> {
+fn bounded(file: std::fs::File) -> Result<Opened, Refusal> {
     let metadata = file.metadata().map_err(|_| Refusal::DecodeFailed)?;
     if !metadata.is_file() {
         return Err(Refusal::DecodeFailed);
@@ -589,7 +656,7 @@ fn bounded(file: std::fs::File) -> Result<(Box<dyn Input>, u64), Refusal> {
     if metadata.len() > exact_raster::MAX_ENCODED_BYTES {
         return Err(Refusal::EncodedLimit);
     }
-    Ok((Box::new(file), metadata.len()))
+    Ok((Box::new(file), metadata.len(), metadata.modified().ok()))
 }
 
 struct Workers {

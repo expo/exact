@@ -54,11 +54,19 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
     private var backdropTap: UITapGestureRecognizer?
     #if !os(tvOS)
     private var maximumDetentHeight: CGFloat?
+    private var authoredDetents: String?
+    private var grabber: String?
+    private var fitContentHeight: CGFloat?
     #endif
-    /// The presentation's height offer stays independent of the chosen detent.
+    /// A content-fitted sheet measures against its maximum. A sheet with
+    /// authored detents lays out the dialog in the currently visible area.
     var availableHeight: CGFloat? {
         if topLayer { return viewIfLoaded.map(\.bounds.height) }
         #if !os(tvOS)
+        if authoredDetents != nil, scroller.window != nil {
+            let inset = scroller.adjustedContentInset
+            return max(0, scroller.bounds.height - inset.top - inset.bottom)
+        }
         if let maximumDetentHeight { return maximumDetentHeight }
         #endif
         return presentationController?.containerView?.safeAreaLayoutGuide.layoutFrame.height
@@ -85,16 +93,52 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
         modalPresentationStyle = .overFullScreen
         #else
         modalPresentationStyle = .pageSheet
-        // One resting height, the content's: overscroll and dismissal stay
-        // UIKit's, and there is no grabber, as for a route's single detent.
-        sheetPresentationController?.detents = [.custom(identifier: .init("exact.dialog")) { [weak self] context in
+        sheetPresentationController?.detents = [fittedDetent()]
+        #endif
+    }
+    #if os(iOS)
+    /// UIKit adds the bottom safe area to a custom detent's height.
+    private func fittedDetent() -> UISheetPresentationController.Detent {
+        .custom(identifier: .init("exact.dialog")) { [weak self] context in
             guard let self else { return context.maximumDetentValue }
             maximumDetentHeight = context.maximumDetentValue
             let height = box.height
             return height > 0 ? min(height.rounded(.up), context.maximumDetentValue) : context.maximumDetentValue
-        }]
-        #endif
+        }
     }
+
+    fileprivate func updateSheet(for dialog: NodeView) {
+        guard !topLayer, let sheet = sheetPresentationController else { return }
+        let value = dialog.props["navigationDetent"].flatMap { $0.split(separator: " ").isEmpty ? nil : $0 }
+        let nextGrabber = dialog.props["navigationGrabber"]
+        let initial = dialog.props["navigationInitialDetent"] ?? ""
+        let selectFitted = value == nil && !initial.isEmpty && sheet.selectedDetentIdentifier == nil
+        let newHeights = value != authoredDetents || selectFitted
+        let newContentHeight = dialog.fitContentHeight != fitContentHeight
+        guard newHeights || nextGrabber != grabber || newContentHeight else { return }
+        authoredDetents = value
+        grabber = nextGrabber
+        fitContentHeight = dialog.fitContentHeight
+        let configure = {
+            if newHeights {
+                if value != nil {
+                    SheetDetents.select(on: sheet, node: dialog, owner: "dialog \"\(dialog.props["id"] ?? "")\"")
+                } else {
+                    if !initial.isEmpty, initial != "fit-content" {
+                        dialog.presenter?.session?.log("navigationInitialDetent \"\(initial)\" on dialog \"\(dialog.props["id"] ?? "")\" names no height of its content-fitted sheet")
+                    }
+                    sheet.detents = [self.fittedDetent()]
+                    sheet.selectedDetentIdentifier = sheet.detents.first?.identifier
+                }
+            } else if newContentHeight && value != nil {
+                sheet.invalidateDetents()
+            }
+            SheetDetents.updateGrabber(nextGrabber, on: sheet)
+        }
+        if viewIfLoaded?.window != nil, !ExactEnv.agentFreezes { sheet.animateChanges(configure) }
+        else { configure() }
+    }
+    #endif
     package required init?(coder: NSCoder) { nil }
     #if os(iOS)
     // LLP 1133.029 D5: UIKit asks a presented controller, whose default is
@@ -187,8 +231,9 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
             return
         }
         #if !os(tvOS)
-        let undimmed: UISheetPresentationController.Detent.Identifier? = authored == nil ? nil : .init("exact.dialog")
-        if let sheet = sheetPresentationController, sheet.largestUndimmedDetentIdentifier != undimmed {
+        let sheet = sheetPresentationController
+        let undimmed = authored == nil ? nil : sheet?.detents.last?.identifier
+        if let sheet, sheet.largestUndimmedDetentIdentifier != undimmed {
             if viewIfLoaded?.window != nil, !ExactEnv.agentFreezes { sheet.animateChanges { sheet.largestUndimmedDetentIdentifier = undimmed } }
             else { sheet.largestUndimmedDetentIdentifier = undimmed }
         }
@@ -299,7 +344,7 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
         place()
         guard resized, !topLayer else { return }
         #if !os(tvOS)
-        if let sheet = sheetPresentationController {
+        if authoredDetents == nil, let sheet = sheetPresentationController {
             if viewIfLoaded?.window != nil, !ExactEnv.agentFreezes { sheet.animateChanges { sheet.invalidateDetents() } }
             else { sheet.invalidateDetents() }
         }
@@ -540,6 +585,7 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate, Di
         if old == nil { previous?.resignFirstResponder() }
         controller.loadViewIfNeeded()
         #if os(iOS)
+        controller.updateSheet(for: dialog)
         controller.relay = MountRelay(presenter, mount: controller.view)
         #endif
         controller.scroller.addSubview(dialog)
@@ -808,6 +854,9 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate, Di
                 dismiss(entry, animated: false, cancelled: false)
             } else {
                 assign(entry.controller, \.isModalInPresentation, refuses(dialog))
+                #if os(iOS)
+                entry.controller.updateSheet(for: dialog)
+                #endif
                 entry.controller.paintBackdrop()
                 // Its children's frames came after its own: the overflow the sheet scrolls.
                 entry.controller.place()

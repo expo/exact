@@ -1,11 +1,20 @@
 // The fixture's two activities share one component: one line in each of WP8's
-// eight placements (LLP 1126.001 WP8).
+// eight placements (LLP 1126.001 WP8). The optional fields are what the
+// departure's Android mapping shows (LLP 1126 D13).
 shape FixtureState
   label: string
+  detail: option<string>
+  short: option<string>
+  at: option<number>
+  done: option<number>
 
 component FixtureActivity
   props
     label: string
+    detail: option<string>
+    short: option<string>
+    at: option<number>
+    done: option<number>
   view
     view slot="lockScreen"
       text label

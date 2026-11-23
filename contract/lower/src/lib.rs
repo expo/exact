@@ -396,7 +396,7 @@ pub fn lower_all(
             bundled::check(&checking.expanded(), root)
         })
         .unwrap_or_default();
-    asset_errors.extend(routes::tab_accessory::check(checked));
+    asset_errors.extend(tags::id_refusals(checked));
     let mut text_styles = warnings::TextStyles::new();
     let result = lower_with_sites(
         checked,
@@ -414,6 +414,7 @@ pub fn lower_all(
             selection,
         ));
     }
+    asset_errors.extend(warnings::header_bar::refused(checked, profile));
     let result = match result {
         Ok(built) if asset_errors.is_empty() => Ok(built),
         Ok(_) => {
@@ -519,8 +520,7 @@ fn lower_with_sites(
         library_nodes: Vec::new(),
     };
     // A refusal that stops lowering is said after those collected before it
-    // (a refused token, then a statement no plan can hold), never in their
-    // place.
+    // (a refused token, then a statement no plan can hold), never in their place.
     match lower_body(&mut l, checked, asset_root) {
         Ok(()) => {
             let mut plan = l.b.finish().map_err(|e| LowerError {

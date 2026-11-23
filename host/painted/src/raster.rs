@@ -21,6 +21,7 @@ mod mask;
 use mask::intersect_mask;
 mod opacity;
 mod reach;
+mod shadow;
 #[cfg(target_arch = "x86_64")]
 mod solid_rect;
 mod target;
@@ -800,6 +801,21 @@ impl Backend for Raster {
         if let Some(t) = self.target.bounded_pixels(path.bounds(), dev) {
             t.fill_path(&path, &paint, FillRule::Winding, dev, mask.as_deref());
         }
+    }
+
+    fn blurred_shadow(
+        &mut self,
+        shape: &Shape,
+        color: [u8; 4],
+        sigma: f32,
+        outer: &Shape,
+        ts: Transform,
+    ) -> bool {
+        self.gaussian_shadow(shape, color, sigma, outer, ts)
+    }
+
+    fn shadow_bands(&mut self, bands: Vec<BorderFill>, ts: Transform) {
+        self.composite_bands(bands, ts);
     }
 
     fn fill_border(&mut self, part: &BorderFill, ts: Transform) {

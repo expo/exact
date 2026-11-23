@@ -13,6 +13,7 @@ export function implementation() {
   return {
     async photoLibraryStatus() { return STATUS; },
     photoAssets: absent,
+    photoChanges: absent,
     copyPhotoAsset: absent,
     addToPhotoLibrary: absent,
     managePhotoSelection: absent,

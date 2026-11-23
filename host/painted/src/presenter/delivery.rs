@@ -360,7 +360,7 @@ impl<D: DataSource> Presenter<D> {
     /// already running.
     pub fn check_update(&mut self) -> bool {
         match &self.updates {
-            Some(u) => u.check(),
+            Some(u) => u.check(crate::wake::notify),
             None => false,
         }
     }
@@ -583,7 +583,7 @@ impl<D: DataSource> Presenter<D> {
         // begun to go out; the rest never left (LLP 1016.000 D10).
         self.executor.forget(|_| false);
         let started = self.executor.let_go_started(|_| false);
-        self.executor = self.host.executor();
+        self.executor = self.host.executor_with(self.start_executor);
         self.host.runner_mut().uploads_started(&started);
         self.replaced();
         if self.display.new_session() {
@@ -597,6 +597,7 @@ impl<D: DataSource> Presenter<D> {
         images.enable_decode();
         images.fit(self.viewport, self.brush.scale);
         self.images = images;
+        self.packages_publish_to_images();
         self.restore_focus(kept);
         self.pointer = None;
         // The reader opens sounds, videos and pages by path: it resolves
@@ -774,7 +775,7 @@ component App
         fn fd(&self) -> std::os::unix::io::RawFd {
             -1
         }
-        fn check(&self) -> bool {
+        fn check(&self, _: fn()) -> bool {
             false
         }
         fn take_line(&mut self) -> Option<String> {

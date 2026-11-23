@@ -21,6 +21,7 @@ mod clock_sync;
 mod compare;
 mod content_region;
 mod cover;
+mod detached;
 mod env;
 mod export;
 mod field_text;

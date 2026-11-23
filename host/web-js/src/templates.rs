@@ -218,6 +218,24 @@ impl Templates {
         self.intern(None, source, None, None)
     }
 
+    /// A list effect depends on the fields read inside its getters as well as in its own code.
+    pub fn field_mask(&self, scope: &crate::code::Scope, source: &str) -> Option<u32> {
+        if !scope.frames.iter().any(|frame| frame.item.is_some()) {
+            return None;
+        }
+        if !source.contains('\0') {
+            return crate::reads::field_mask(source);
+        }
+        let inline = Render {
+            templates: self,
+            names: &[],
+            enclosing: false,
+        };
+        let mut expanded = String::new();
+        inline.expand(&self.parts(source), Base::Absolute(0), &[], &mut expanded);
+        crate::reads::field_mask(&expanded)
+    }
+
     fn intern(
         &mut self,
         params: Option<&str>,
@@ -504,7 +522,7 @@ impl Render<'_> {
         out: &mut String,
     ) {
         let t = &self.templates.bodies[call.id];
-        if let Some(name) = &self.names[call.id] {
+        if let Some(Some(name)) = self.names.get(call.id) {
             out.push_str(name);
             let mut inputs: Vec<_> = call.base.map(|n| base.plus(n).js()).into_iter().collect();
             let captures: Vec<_> = t

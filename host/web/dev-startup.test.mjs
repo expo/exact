@@ -2,6 +2,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, watch, writeFileSync } from 'node:fs';
+import { partitionWebRoots } from './build.mjs';
 import { declaredSources } from '../../scripts/file-dependencies.mjs';
 import { request } from 'node:http';
 import { createServer } from 'node:net';
@@ -396,13 +397,13 @@ test('Cargo watchers ignore reads and observe edits through installed source lin
   const source = readFileSync(resolve(root, 'host/web-js/dev.mjs'), 'utf8');
   const times = source.slice(source.indexOf('const changedSince ='), source.indexOf('/** The inputs that moved'));
   const changed = source.slice(source.indexOf('  const changed = (base'), source.indexOf('  // The resident loop\'s start'));
-  const watchStart = source.indexOf('  const packages = new Set();');
+  const watchStart = source.indexOf('\n  const packages = ');
   const watches = source.slice(watchStart, source.indexOf('  watchPackages(built.packages);', watchStart));
   const crate = '/app/node_modules/fixture/rust', file = `${crate}/src/lib.rs`, sdk = '/sdk/compiler';
   const entries = new Set([crate, file, `${crate}/src`, sdk, `${sdk}/src/lib.rs`]), handlers = new Map(), edits = new Set();
   let targetTime = 1;
   const old = { mtimeMs: 1, ctimeMs: 1, birthtimeMs: 1, isSymbolicLink: () => false };
-  const env = { resolve, dirname, basename, sep, declaredSources: () => () => null, app: { dir: '/app', manifest: {} },
+  const env = { resolve, dirname, basename, sep, partitionWebRoots, declaredSources: () => () => null, app: { dir: '/app', manifest: {} },
     built: { packages: { roots: [crate, sdk, { file }], sources: [file] } }, edited: edits,
     skipped: /(^|\/)(node_modules|target)(\/|$)/, settingsFile: () => false,
     existsSync: path => entries.has(path),
@@ -410,7 +411,7 @@ test('Cargo watchers ignore reads and observe edits through installed source lin
     statSync: path => { if (!entries.has(path)) throw Error('missing'); return { ...old, mtimeMs: path === file ? targetTime : 1 }; },
     Date: class extends Date { static now() { return 60_000; } },
     watch(path, options, callback) { handlers.set(path, callback ?? options); return { close() {} }; },
-    temporaryOfDesign: () => false, OUTPUT: /^$/, INPUT_TREE: /^$/, stopYoungBuild() {}, rebuild() {},
+    temporaryOfSource: () => false, OUTPUT: /^$/, INPUT_TREE: /^$/, stopYoungBuild() {}, rebuild() {},
     setTimeout: () => 1, clearTimeout() {},
   };
   new Function('env', `const {${Object.keys(env).join(',')}} = env;
@@ -438,7 +439,7 @@ test('a Cargo watcher sees an edit made at a linked file: package\'s declared di
   const source = readFileSync(resolve(root, 'host/web-js/dev.mjs'), 'utf8');
   const times = source.slice(source.indexOf('const changedSince ='), source.indexOf('/** The inputs that moved'));
   const changed = source.slice(source.indexOf('  const changed = (base'), source.indexOf('  // The resident loop\'s start'));
-  const watchStart = source.indexOf('  const packages = new Set();');
+  const watchStart = source.indexOf('\n  const packages = ');
   const watches = source.slice(watchStart, source.indexOf('  watchPackages(built.packages);', watchStart));
   const dir = realpathSync(mkdtempSync(resolve(root, 'target/linked-watch-'))), app = resolve(dir, 'app'), pkg = resolve(dir, 'pkg');
   const crate = resolve(app, 'node_modules/fixture/rust'), file = resolve(crate, 'src/lib.rs'), edits = new Set(), watchers = [];
@@ -457,9 +458,9 @@ test('a Cargo watcher sees an edit made at a linked file: package\'s declared di
       if (at === resolve(pkg, 'rust') && String(name).endsWith('probe')) ready = true;
       listener(event, name);
     });
-    const env = { resolve, dirname, basename, sep, existsSync, lstatSync, statSync, watch: watching, declaredSources, watchers, edited: edits,
+    const env = { resolve, dirname, basename, sep, existsSync, lstatSync, statSync, watch: watching, partitionWebRoots, declaredSources, watchers, edited: edits,
       app: { dir: app, manifest: {} }, built: { packages: { roots: [crate, { file }], sources: [file] } },
-      skipped: /(^|\/)(node_modules|target)(\/|$)/, settingsFile: () => false, temporaryOfDesign: () => false, OUTPUT: /^$/, INPUT_TREE: /^$/,
+      skipped: /(^|\/)(node_modules|target)(\/|$)/, settingsFile: () => false, temporaryOfSource: () => false, OUTPUT: /^$/, INPUT_TREE: /^$/,
       stopYoungBuild() {}, rebuild() {}, setTimeout: () => 1, clearTimeout() {} };
     new Function('env', `const {${Object.keys(env).join(',')}} = env;
       const stopping = false, since = Date.now() + 1, movedSinceBuild = new Set(), appeared = new Set();

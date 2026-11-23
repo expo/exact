@@ -139,6 +139,11 @@ pub trait Backend {
     fn present_statistics(&self) -> Option<exact_ink::device::d3d11::PresentStatistics> {
         None
     }
+    /// The hardware device a hidden window keeps (`D3d11::keep_hidden`).
+    #[cfg(windows)]
+    fn keep_hidden_device(&self) -> Option<exact_ink::device::d3d11::Hidden> {
+        None
+    }
     /// Attach the carrier's owned window when the device can present directly.
     #[cfg(windows)]
     fn attach_window(
@@ -205,7 +210,7 @@ pub trait Backend {
     ) -> bool {
         false
     }
-    /// One outer `box-shadow`: through [`Self::blurred_shadow`] when it can
+    /// One `box-shadow`: through [`Self::blurred_shadow`] when it can
     /// be blurred (`blurred`: its colour, sigma and shape) and the backend
     /// draws it, else as `bands`' fills.
     fn box_shadow(
@@ -220,7 +225,12 @@ pub trait Backend {
                 return;
             }
         }
-        for band in bands() {
+        self.shadow_bands(bands(), ts);
+    }
+
+    /// Composite the contours of one shadow in their shared colour.
+    fn shadow_bands(&mut self, bands: Vec<border::BorderFill>, ts: Transform) {
+        for band in bands {
             self.fill_border(&band, ts);
         }
     }
@@ -553,6 +563,10 @@ impl super::Painter {
     #[cfg(windows)]
     pub(crate) fn present_statistics(&self) -> Option<exact_ink::device::d3d11::PresentStatistics> {
         self.backend.present_statistics()
+    }
+    #[cfg(windows)]
+    pub(crate) fn keep_hidden_device(&self) -> Option<exact_ink::device::d3d11::Hidden> {
+        self.backend.keep_hidden_device()
     }
     #[cfg(windows)]
     pub(crate) fn attach_window(

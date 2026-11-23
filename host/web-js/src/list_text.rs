@@ -58,7 +58,9 @@ impl Em<'_> {
                             }
                             _ => continue,
                         };
-                        let value = code::called_expression(self.bound(i, "{}", &b, scope)?);
+                        // Logical text has its own item and match bindings outside the DOM mount.
+                        let f = self.binding_value(i, "{}", &b, scope, false)?;
+                        let value = code::called_expression(self.status_read(i, "{}", &b, f));
                         props.push(format!("{name}:{value}"));
                     }
                     let children = self.logical_children(self.sites.of_node(i), scope)?;

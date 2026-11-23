@@ -22,6 +22,75 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+/// Cursor preferences exported by GTK desktops through the settings portal.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CursorSettings {
+    /// Whether a focused insertion caret blinks.
+    pub blink: bool,
+    /// Length of the full blink cycle.
+    pub cycle: std::time::Duration,
+    /// Time since the last interaction before the caret stays visible.
+    pub timeout: std::time::Duration,
+}
+
+#[cfg(target_os = "linux")]
+impl Default for CursorSettings {
+    fn default() -> Self {
+        Self {
+            blink: true,
+            cycle: std::time::Duration::from_millis(1200),
+            timeout: std::time::Duration::from_secs(10),
+        }
+    }
+}
+
+/// Preferences a Wayland window follows for its lifetime.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct WindowSettings {
+    /// System dark or light preference. An unset preference uses the host default.
+    pub dark: Option<bool>,
+    /// Desktop insertion caret preferences.
+    pub cursor: CursorSettings,
+}
+
+/// Keeps the settings subscription alive until the window closes.
+#[cfg(target_os = "linux")]
+pub struct SettingsWatch<T> {
+    /// The initial preferences available before first paint.
+    pub initial: T,
+    pub(crate) socket: std::os::unix::net::UnixStream,
+}
+
+#[cfg(target_os = "linux")]
+impl<T> Drop for SettingsWatch<T> {
+    fn drop(&mut self) {
+        let _ = self.socket.shutdown(std::net::Shutdown::Both);
+    }
+}
+
+/// A subscription to the XDG colour scheme.
+#[cfg(target_os = "linux")]
+pub type Appearance = SettingsWatch<Option<bool>>;
+
+/// Report the initial dark or light preference and subsequent portal changes.
+/// A value of `None` restores the host default.
+#[cfg(target_os = "linux")]
+pub fn watch_appearance(changed: impl Fn(Option<bool>) + Send + 'static) -> Option<Appearance> {
+    let address = std::env::var("DBUS_SESSION_BUS_ADDRESS").ok()?;
+    crate::portal::watch_settings(&address, |s| s.dark, changed)
+}
+
+/// Report the colour scheme and cursor preferences together on the window's subscription.
+#[cfg(target_os = "linux")]
+pub fn watch_window_settings(
+    changed: impl Fn(WindowSettings) + Send + 'static,
+) -> Option<SettingsWatch<WindowSettings>> {
+    let address = std::env::var("DBUS_SESSION_BUS_ADDRESS").ok()?;
+    crate::portal::watch_settings(&address, |s| s, changed)
+}
+
 /// Why a chord is not registered, in `@exact/global-shortcuts`' words.
 pub type Refusal = &'static str;
 

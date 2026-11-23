@@ -653,8 +653,10 @@ export const deferFulfill = deferredFulfill(safelyFulfill, inflight);
 // D3), and the GPU module's picture. `tap`, `type`, and `screenshot` are
 // the driver's, over CDP: real input, real pixels.
 export function ask(request) {
-  // entering an unloaded stage traps mid-call; callers load it first (LLP 1047.000 §9)
-  if (!stageLoaded("inspection")) {
+  // Entering an unloaded stage traps mid-call, so a caller loads it first (LLP 1047.000 §9). A picker's hold is the
+  // core's (`exact_runner::agent::answer` takes it before the stage's `handle`), so a press asks for it at once, inside
+  // its activation.
+  if (request.op !== "showPicker" && !stageLoaded("inspection")) {
     throw new Error("inspection is a stage that has not loaded (LLP 1047.000): load it before asking");
   }
   return JSON.parse(readOut(host.wasm.exact_agent(writeIn(JSON.stringify(request)))));

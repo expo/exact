@@ -40,6 +40,8 @@ pub(crate) use allocation_tests::measure_allocations;
 mod assets;
 #[path = "image/bitmap.rs"]
 mod bitmap;
+#[path = "image/canvas.rs"]
+mod canvas;
 #[cfg(test)]
 #[path = "image/control_tests.rs"]
 mod control_tests;
@@ -59,6 +61,10 @@ mod windows_bitmap;
 pub use package::Ask as PackageAsk;
 #[path = "image/png.rs"]
 mod png_decode;
+#[path = "image/published.rs"]
+mod published;
+pub use published::PublishedImage;
+pub(crate) use published::Publisher;
 #[path = "image/remote.rs"]
 mod remote;
 #[path = "image/svg.rs"]
@@ -147,6 +153,14 @@ impl View {
     }
 }
 
+fn source_limit(source: &str) -> usize {
+    if source.starts_with("data:") {
+        exact_raster::MAX_DATA_URL_BYTES
+    } else {
+        4096
+    }
+}
+
 /// An over-long source's identity, which is kept instead of the string.
 fn source_hash(source: &str) -> u64 {
     use std::hash::{Hash, Hasher};
@@ -226,6 +240,10 @@ pub struct Images {
     assets: Arc<Assets>,
     backend: Arc<Backend>,
     generation: u64,
+    pub(crate) publisher: Arc<Publisher>,
+    canvas_generation: u64,
+    canvas_reads: BTreeMap<String, canvas::Read>,
+    pub(crate) canvas_answers: Vec<(String, Result<RasterLease, String>)>,
     views: BTreeMap<ViewId, View>,
     /// Shared immutable pictures. Removing a view never refunds another owner.
     pub bitmaps: BTreeMap<ViewId, Arc<Bitmap>>,
@@ -283,9 +301,17 @@ impl Images {
     pub(crate) fn with_assets(assets: Assets) -> Self {
         Self::make(assets, Backend::new())
     }
+    pub(crate) fn local(assets: Assets) -> Self {
+        Self::make(assets, Backend::local())
+    }
     fn make(assets: Assets, backend: Arc<Backend>) -> Self {
+        let generation = backend.generation();
         Self {
-            generation: backend.generation(),
+            publisher: Publisher::new(&backend, generation),
+            generation,
+            canvas_generation: backend.generation(),
+            canvas_reads: Default::default(),
+            canvas_answers: Vec::new(),
             assets: Arc::new(assets),
             backend,
             views: BTreeMap::new(),
@@ -548,11 +574,7 @@ impl Images {
                 view.lease = None;
                 self.bitmaps.remove(id);
             }
-            let limit = if source.starts_with("data:") {
-                exact_raster::MAX_DATA_URL_BYTES
-            } else {
-                4096
-            };
+            let limit = source_limit(source);
             if source.len() > limit {
                 if let Some((request, _)) = view.request.take() {
                     self.backend.cancel(request);
@@ -685,6 +707,7 @@ impl Images {
     /// Consume bounded completions and retry metadata/decode admission once.
     pub fn poll(&mut self) -> Vec<Report> {
         self.backend.drain_wake();
+        self.start_canvas_reads();
         if let Some(text) = &self.painter {
             self.backend.finish_pictures(text);
         }
@@ -844,9 +867,8 @@ impl Images {
                         continue;
                     }
                     Some(RequestStatus::WaitingBudget) => {
-                        let stats = self.backend.session.stats();
                         admission_budget =
-                            SESSION_BYTES - stats.resident_bytes - stats.reserved_bytes;
+                            admission_budget.min(self.backend.session.available_bytes());
                         let smaller = plan_view(header, view, scale, admission_budget);
                         if smaller.as_ref().is_ok_and(|p| p.pixels != pixels) {
                             self.backend.cancel(request);
@@ -895,7 +917,7 @@ impl Images {
                         (self.backend.session).covering(
                             source,
                             self.generation,
-                            1,
+                            decode.storage(),
                             decode.pixels,
                             wanted * 5 / 2,
                         )
@@ -921,7 +943,7 @@ impl Images {
                         source,
                         generation: self.generation,
                         pixels: decode.pixels,
-                        variant: 1,
+                        variant: decode.storage(),
                         crop: decode.crop,
                     },
                     metadata: header.metadata,
@@ -931,7 +953,7 @@ impl Images {
                 if header.is_svg() {
                     self.backend.note_scale(source, decode.pixels, scale);
                 }
-                match self.backend.request(demand) {
+                match self.backend.request(demand, false) {
                     Ok(request) => {
                         #[cfg(target_os = "macos")]
                         exact_ink::device::apple::trace_mark(c"image request", || source as f64);
@@ -996,6 +1018,9 @@ impl Images {
     }
     /// Pending work, including capacity waits; this is not an animation request.
     pub fn pending(&self) -> bool {
+        if !self.canvas_reads.is_empty() {
+            return true;
+        }
         // A package's picture is answered through the host's turn, not the
         // workers: nothing here to wait on.
         self.views.values().any(|v| {
@@ -1144,6 +1169,8 @@ impl Images {
     /// Retire this generation. Old worker/backing ownership remains charged.
     pub fn reset(&mut self) {
         self.backend.retire(self.generation);
+        self.canvas_reads.clear();
+        self.canvas_answers.clear();
         self.views.clear();
         self.package = std::mem::take(&mut self.package).reset();
         self.bitmaps.clear();
@@ -1151,6 +1178,7 @@ impl Images {
         self.loaded.clear();
         self.load_events.clear();
         self.generation = self.backend.generation();
+        self.publisher = Publisher::new(&self.backend, self.generation);
         self.settled = None;
     }
     #[cfg(unix)]
@@ -1179,8 +1207,8 @@ impl Images {
             "peakBytes":s.peak_bytes,"running":s.running,"processRunning":g.running,
             "ready":s.ready,"deliveryCells":s.delivery_cells,"pendingJobs":s.pending_jobs,
             "subscribers":s.subscribers,"coldEntries":s.cold_entries,"sourceEntries":self.backend.sources(),
-            "remoteFetches":self.backend.downloads.fetches.load(std::sync::atomic::Ordering::Relaxed),
-            "remoteCacheBytes":self.backend.downloads.cached_bytes(),
+            "remoteFetches":self.backend.downloads.as_ref().map_or(0, |d| d.fetches.load(std::sync::atomic::Ordering::Relaxed)),
+            "remoteCacheBytes":self.backend.downloads.as_ref().map_or(0, |d| d.cached_bytes()),
             "liveDiagnostics":self.loaded.len(),"deferred":self.deferred,
             "budgetWaits":waiting,"refusalReasons":reasons,
             "refused":self.views.values().filter(|v| v.refusal.is_some()).count()})

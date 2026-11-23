@@ -226,6 +226,7 @@ mod placeholder;
 mod plan_surface;
 mod pointer;
 mod popover_surface;
+mod portal;
 mod post_message;
 mod presence;
 mod purchases;

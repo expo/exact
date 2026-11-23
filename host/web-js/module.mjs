@@ -8,7 +8,7 @@
 //        machine, so no app's first build compiles them.
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
@@ -22,7 +22,41 @@ import { replaceBuild } from '../web/serve.mjs';
 import { proofInputs } from '../../game/inputs.mjs';
 import { keptProducts } from '../../scripts/kept.mjs';
 import { RustMissing, fromSet, fromSets, fetchedTool, launch, rustMissing, freshCompiler } from '../../scripts/tools.mjs';
-import { EXE } from '../../scripts/paths.mjs';
+import { EXE, slashRelative, within } from '../../scripts/paths.mjs';
+/** The development URL for frames/<name>.contract. */
+export const frameURL = name => '/__dev/frames/' + encodeURIComponent(name).replaceAll("'", '%27');
+
+export const frameFixturePath = frame => frame.slice(0, -'.contract'.length) + '.fixture.mts';
+
+/** Only the selected frame's fixture enters its TypeScript capture. */
+export function frameFixture(app, frame) {
+  if (!frame) return null;
+  const path = frameFixturePath(frame), stat = lstatSync(path, { throwIfNoEntry: false });
+  if (!stat) return null;
+  const root = realpathSync(app), physical = realpathSync(path);
+  if (!stat.isFile() || !within(root, physical)) throw new Error(`${path}: a frame fixture must be a regular file inside the app`);
+  return slashRelative(root, physical);
+}
+
+/** The preview's dispatcher accepts the app's TypeScript sources and calls introduced by the frame.
+ * The app retains its grants, hooks and original handler for every unanswered call. */
+export function frameAnswer(file, types) {
+  return `import * as app from './app';
+${types}
+import fixture from ${JSON.stringify('./' + file)};
+import type { SourceMap as AppSources, TypeScriptSources } from './app.contract.d.ts';
+export * from './app';
+type Providers = { [S in TypeScriptSource]?: (args: Args<S>, store: Store, storage: Storage, native?: NativeModule | null) => Result<S> | Promise<Result<S>> };
+type Allowed = keyof TypeScriptSources | Exclude<TypeScriptSource, keyof AppSources>;
+const checked: Providers & Partial<TypeScriptSources> = fixture satisfies Record<Exclude<keyof typeof fixture, Allowed>, never>;
+const overrides: Providers = checked;
+const live: TypeScriptAnswer = app.answer;
+export const answer: TypeScriptAnswer = (source, args, store, storage, native) => {
+  const provide = Object.hasOwn(overrides, source) ? overrides[source] : undefined;
+  return provide ? provide(args, store, storage, native) : live(source, args, store, storage, native);
+};`;
+}
+
 export { EXE };
 import { buildScriptDir, crateDir, depInfoOf, fresh as cargoFresh, refreshCargoRustBindings } from '../../scripts/cargo-dep-info.mjs';
 export { buildScriptDir, crateDir, depInfoOf, freshCompiler };

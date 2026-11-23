@@ -208,3 +208,34 @@ fn the_share_export_opens_a_granted_app_file_for_a_drag() {
         "{refused}"
     );
 }
+
+/// A control's press (LLP 1126.004 D2) enters through the tool door's
+/// export, which the agent's dispatcher does not answer.
+#[test]
+fn only_the_tool_export_takes_a_press() {
+    let tooled = APP.replacen(
+        "  action add",
+        "  tool add writes \"Add.\" = add\n  action add",
+        1,
+    );
+    let mut plan = contract::compile(&tooled).unwrap();
+    plan.add_control("go", Some(exact_plan::ToolsId(0)), "", "{}", "d");
+    let mut bridge = Bridge::new();
+    bridge.boot(&plan.encode(), NoData, Hooks::none(), 400., 800.);
+    let press = r#"{"op":"press","control":"go","digest":"d"}"#;
+    let answered: serde_json::Value =
+        serde_json::from_str(&reply(&mut bridge, press, Bridge::tool)).unwrap();
+    assert_eq!(answered["control"], "go", "{answered}");
+    let id = answered["call"].as_u64().unwrap();
+    let general = reply(&mut bridge, press, Bridge::agent);
+    assert!(general.contains("error"), "{general}");
+    let polled = reply(
+        &mut bridge,
+        &format!(r#"{{"op":"called","id":{id}}}"#),
+        Bridge::tool,
+    );
+    assert!(
+        polled.contains("\"call\"") || polled.contains("outcome"),
+        "{polled}"
+    );
+}

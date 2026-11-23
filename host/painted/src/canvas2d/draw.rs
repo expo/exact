@@ -69,7 +69,7 @@ pub(super) enum Source {
     },
     /// An image: `space` maps its pixels to device pixels.
     Pixmap {
-        pixmap: Arc<Pixmap>,
+        pixmap: Arc<super::ImagePixels>,
         space: Transform,
         spread: SpreadMode,
         quality: FilterQuality,
@@ -318,9 +318,13 @@ impl Replayer {
                 let Some(cached) = self.image(image, env) else {
                     return Source::Nothing;
                 };
+                let (sx, sy) = cached.sample_scale();
                 Source::Pixmap {
                     pixmap: cached.pixels,
-                    space: self.device().pre_concat(transform),
+                    space: self
+                        .device()
+                        .pre_concat(transform)
+                        .pre_scale(sx.recip() as f32, sy.recip() as f32),
                     spread: SpreadMode::Repeat,
                     quality: self.quality(),
                     opacity: alpha,
@@ -338,11 +342,11 @@ impl Replayer {
         };
         let found = env.images.get(src).cloned();
         if let Some(reads) = self.image_reads.as_mut() {
-            let ptr = found
-                .as_ref()
-                .map_or(0, |img| Arc::as_ptr(&img.pixels) as usize);
             if !reads.iter().any(|(name, _)| name == src) {
-                reads.push((src.to_owned(), ptr));
+                reads.push((
+                    src.to_owned(),
+                    found.as_ref().map(|img| Arc::downgrade(&img.pixels)),
+                ));
             }
         }
         found
@@ -381,7 +385,7 @@ impl Replayer {
             }
         }
         Source::Pixmap {
-            pixmap: Arc::new(pm),
+            pixmap: Arc::new(super::ImagePixels::Owned(pm)),
             space: Transform::identity(),
             spread: SpreadMode::Pad,
             quality: FilterQuality::Nearest,
@@ -506,7 +510,13 @@ impl Replayer {
         let Some(cached) = self.image(r.at(0) as u32, env) else {
             return;
         };
-        let (sx64, sy64, sw64, sh64) = (r.at(1), r.at(2), r.at(3), r.at(4));
+        let (scale_x, scale_y) = cached.sample_scale();
+        let (sx64, sy64, sw64, sh64) = (
+            r.at(1) * scale_x,
+            r.at(2) * scale_y,
+            r.at(3) * scale_x,
+            r.at(4) * scale_y,
+        );
         let (dx64, dy64, dw64, dh64) = (r.at(5), r.at(6), r.at(7), r.at(8));
         if self.blit_whole_pixels(&cached, [sx64, sy64, sw64, sh64], [dx64, dy64, dw64, dh64]) {
             return;
@@ -525,7 +535,11 @@ impl Replayer {
         let (pixmap, ox, oy) = match crop {
             Some(c) if (c.width(), c.height()) != (image.width(), image.height()) => {
                 match image.clone_rect(c) {
-                    Some(p) => (Arc::new(p), c.x() as f32, c.y() as f32),
+                    Some(p) => (
+                        Arc::new(super::ImagePixels::Owned(p)),
+                        c.x() as f32,
+                        c.y() as f32,
+                    ),
                     None => return,
                 }
             }

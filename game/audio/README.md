@@ -218,6 +218,17 @@ the saved world offsets. A fatal device error closes the old worker and retries
 opening the current default endpoint after 300 live frames. Changing the default
 route while the old endpoint stays healthy is not yet followed automatically.
 
+Android opens one shared, low-latency AAudio stream, stereo float at the device's
+rate (usage GAME, content SONIFICATION), and renders the same native mixer from its
+data callback. It opens at the first live frame, as Apple's does: no gesture is
+needed. The host hides the canvas at the activity's stop and shows it at its start;
+suspend pauses the stream and clears pre-suspend voices. A stream error (a
+disconnected route) is reported as a failure, and the owner drops the stream and
+opens the current default after 300 live frames. Its lines go to logcat, `adb
+logcat -s exact-audio`: `game audio: AAudio stereo float at 48000 Hz, …` when the
+stream opens, and why it did not or failed. The Contract's own sounds are a
+separate path, `host/android/soundarm`.
+
 The Windows host forwards focus loss/return as interruption/resumption, and
 minimize/occlusion as hidden/visible. The two causes stay independent and apply to
 replacement surfaces before their first bind. Game pause still uses transport.

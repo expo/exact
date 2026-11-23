@@ -38,7 +38,8 @@
     "swift": [
       "Photos.swift",
       "Library.swift",
-      "AgentLibrary.swift"
+      "AgentLibrary.swift",
+      "Changes.swift"
     ]
   },
   "artifacts": [],

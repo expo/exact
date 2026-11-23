@@ -14,6 +14,10 @@
 //
 // A call that launched the app with no scene boots the session with none,
 // as a wake does (LLP 1133.017 D7): `boot`, which the app's host sets.
+//
+// A control's press (LLP 1126.004 D2) takes the same way in through
+// `press`, which names only the compiled control's kind and digest; the
+// runner runs its tool as the person's action, origin `action`.
 import CExact
 import ExactKit
 import Foundation
@@ -114,6 +118,29 @@ public enum ExactTools {
     /// plan's. `cancellation` is the caller's. Main thread.
     public static func call(tool: String, args: [String: Any], door: String = "apple", digest: String? = nil,
                             cancellation: Cancellation = Cancellation(), reply: @escaping ([String: Any]) -> Void) {
+        enter(tool, cancellation: cancellation, reply: reply) { cold, hidden in
+            var request: [String: Any] = ["op": "call", "tool": tool, "args": args, "door": door, "cold": cold, "hidden": hidden]
+            if let digest { request["digest"] = digest }
+            return request
+        }
+    }
+
+    /// A person's press of the control `kind` this binary compiled, which
+    /// carries `digest` (LLP 1126.004 D2): the runner calls the control's
+    /// tool as the person's action and answers as `call` does. Only the
+    /// generated control intent's `perform()` calls this, while it runs.
+    @MainActor public static func press(control kind: String, digest: String, cancellation: Cancellation = Cancellation(),
+                             reply: @escaping ([String: Any]) -> Void) {
+        enter("control \(kind)", cancellation: cancellation, reply: reply) { cold, hidden in
+            ["op": "press", "control": kind, "digest": digest, "cold": cold, "hidden": hidden]
+        }
+    }
+
+    /// Hand the runner `request(cold, hidden)` once a session has booted,
+    /// booting one with no view for a call that launched the app, and follow
+    /// the call it answers. `name` is the journal's.
+    private static func enter(_ name: String, cancellation: Cancellation, reply: @escaping ([String: Any]) -> Void,
+                              request: @escaping (Bool, Bool) -> [String: Any]) {
         let started = Date()
         let refuse = { (reason: String, message: String) in
             reply(["outcome": "refused", "certainty": "none", "reason": reason, "message": message])
@@ -126,7 +153,7 @@ public enum ExactTools {
         let cold = !session.booted || session.firstDrawMs == nil
         #if os(iOS)
         if cold, UIApplication.shared.applicationState == .background {
-            log(session, "tools: \(tool) found no session ready; booting one with no view")
+            log(session, "tools: \(name) found no session ready; booting one with no view")
             boot?()
         }
         #endif
@@ -137,9 +164,7 @@ public enum ExactTools {
                 if Date().timeIntervalSince(started) > bootBound { return refuse("busy", "The app did not start in time.") }
                 return DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: hand)
             }
-            var request: [String: Any] = ["op": "call", "tool": tool, "args": args, "door": door, "cold": cold, "hidden": hidden(session)]
-            if let digest { request["digest"] = digest }
-            let answer = json(session.runtime.ask(exact_tool, text(request)))
+            let answer = json(session.runtime.ask(exact_tool, text(request(cold, hidden(session)))))
             guard let id = answer["call"] as? Int else {
                 return refuse("unavailable", answer["error"] as? String ?? "The app refused the call.")
             }
@@ -166,6 +191,7 @@ public enum ExactTools {
                        reply: @escaping ([String: Any]) -> Void) {
         let handed = Date()
         cancellation.tell = { _ = agent(text(["op": "cancel", "id": id])) }
+        if cancellation.isCancelled { cancellation.tell?() }
         func answer(_ envelope: [String: Any]) {
             cancellation.tell = nil
             reply(envelope)
@@ -177,6 +203,8 @@ public enum ExactTools {
             }
             if polled["outcome"] != nil { return answer(polled) }
             if polled["error"] != nil || Date().timeIntervalSince(handed) > endBound {
+                // Its caller is answered now: what it started runs on, with no press behind it.
+                _ = agent(text(["op": "cancel", "id": id]))
                 return answer(["outcome": "timeout", "certainty": "uncertain", "reason": "",
                                "message": "It may or may not have taken effect: read before calling again."])
             }

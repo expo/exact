@@ -23,6 +23,7 @@ pub(in crate::presenter) struct Packages {
     lines: Rc<RefCell<Vec<String>>>,
     /// The runner's native slot, which every instance announces into.
     native: Slot,
+    publisher: std::sync::Weak<crate::image::Publisher>,
     pictures: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 }
 
@@ -61,6 +62,14 @@ impl Packages {
     /// The instances announce into `native` from now on.
     pub(super) fn slot(&self, native: exact_runner::Native) {
         *self.native.lock().unwrap_or_else(|e| e.into_inner()) = native;
+    }
+
+    /// The instances publish written images to `publisher` from now on.
+    pub(super) fn publish_to(&mut self, publisher: &std::sync::Arc<crate::image::Publisher>) {
+        self.publisher = std::sync::Arc::downgrade(publisher);
+        for (_, _, context) in &self.made {
+            context.0.notifier.borrow_mut().publisher = self.publisher.clone();
+        }
     }
 
     pub(super) fn is_empty(&self) -> bool {
@@ -194,6 +203,7 @@ impl Packages {
                 wake();
             }),
         );
+        context.0.notifier.borrow_mut().publisher = self.publisher.clone();
         let package = entry.make(context.clone());
         self.made.push((entry.extension, package, context));
         Some(self.made.len() - 1)

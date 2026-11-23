@@ -312,8 +312,10 @@ fn field(line: &serde_json::Value, name: &str) -> Option<Vec<String>> {
 
 fn verdict(rust: Vec<String>, text: &str) -> JsVerdict {
     // The JS module exposes no commit trace. Compare configurations and
-    // outcomes, omitting `ran` lines on both sides (LLP 1148 D3).
-    let rust: Vec<String> = rust
+    // outcomes, omitting `ran` lines on both sides (LLP 1148 D3), with the
+    // runner's `due` steps folded into their inputs', as the JS target
+    // prints them.
+    let rust: Vec<String> = crate::fold_due(&rust)
         .into_iter()
         .filter(|l| !l.starts_with("ran "))
         .collect();

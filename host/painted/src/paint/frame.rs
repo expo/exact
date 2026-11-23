@@ -31,8 +31,8 @@ impl Painter {
         self.reader_highlights.clear();
     }
 
-    /// Place a new shared destination without publishing a stream before its reveal.
-    pub(crate) fn flight_probe(
+    /// Locate a target for scrolling before publishing its first frame.
+    pub(crate) fn reveal_probe(
         &mut self,
         scene: &Scene<'_>,
         viewport: (f32, f32),

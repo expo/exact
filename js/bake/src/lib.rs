@@ -335,9 +335,12 @@ fn build_sources(
         &compat.inputs["preload"],
     )?;
     if platform == "windows" {
+        let plan = exact_plan::Plan::decode(&baked.plan).map_err(|e| format!("{e:?}"))?;
         metadata.push_str(&format!(
-            "pub const ADMIT_AGENT: bool = {};\n/// The window the app opens in (`host.windows.window`).\npub fn window() -> exact_windows::Window {{ {} }}\n",
+            "pub const ADMIT_AGENT: bool = {};\npub const START_EXECUTOR: fn(&str) -> exact_windows::Executor = {};\npub const SERVICES: exact_windows::Services = {}(START_EXECUTOR);\n/// The window the app opens in (`host.windows.window`).\npub fn window() -> exact_windows::Window {{ {} }}\n",
             compat.admits_agent(),
+            compat.windows_data_executor(),
+            compat.windows_image_services(&plan),
             manifest.windows_window()?
         ));
     }

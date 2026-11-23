@@ -17,6 +17,7 @@
 // (a scale undone), DOM's button, buttons and pressure, the device and its id, the
 // viewport point (`frame()`'s space, LLP 1094 D11), the modifiers held.
 import { inertAncestor } from './navigation.js';
+import { Portals } from './mount.js';
 export function record(e, ev, lifted = false) {
   const r = e.getBoundingClientRect(), cs = getComputedStyle(e);
   const sx = e.offsetWidth ? r.width / e.offsetWidth : 1, sy = e.offsetHeight ? r.height / e.offsetHeight : 1;
@@ -32,7 +33,7 @@ export function pointer(e, kind, f) {
   if (!walking) {
     walking = true;
     // Every holder is fixed before any down runs, as the native hosts fix the path: a node a handler further in disables or removes still hears the up.
-    document.addEventListener("pointerdown", ev => { const path = ev.composedPath(); for (const n of path) n.$pointer?.hold(ev); for (const n of path) n.$pointer?.down(ev); }, true);
+    document.addEventListener("pointerdown", ev => { const path = Portals?.path(ev) ?? ev.composedPath(); for (const n of path) n.$pointer?.hold(ev); for (const n of path) n.$pointer?.down(ev); }, true);
   }
   let s = e.$pointer;
   if (!s) {

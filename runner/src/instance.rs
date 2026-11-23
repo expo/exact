@@ -23,6 +23,7 @@ mod list_places;
 pub mod looks;
 mod owners;
 pub(crate) mod place;
+mod portal;
 mod retained;
 pub(crate) use list_places::CandidateLists;
 pub use list_places::RetainedLists;
@@ -1298,6 +1299,8 @@ pub struct Tree {
     seen: Seen,
     /// Work performed by the last instance update.
     pub last_work: InstanceWork,
+    /// Placement by `portal`, for a plan that says it (`portal.rs`).
+    portals: Option<Box<portal::Portals>>,
 }
 
 impl Tree {
@@ -1321,6 +1324,7 @@ impl Tree {
             last_roots: Vec::new(),
             seen: Seen::of(&u.env),
             last_work: u.work,
+            portals: Tree::portals_for(u.env.plan),
         };
         tree.open_tabs(u)?;
         tree.emit_roots(u);

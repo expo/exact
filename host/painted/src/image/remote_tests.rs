@@ -508,7 +508,7 @@ fn a_url_is_decoded_and_a_failed_one_keeps_what_was_shown() {
     }
     // A body this host cannot decode is not kept, so it is fetched again
     // when next asked for; a picture is.
-    let downloads = &images.backend.downloads;
+    let downloads = images.backend.downloads.as_ref().unwrap();
     assert!(!downloads.holds(&format!("{origin}/text")));
     assert!(downloads.holds(&format!("{origin}/a.png")));
 }

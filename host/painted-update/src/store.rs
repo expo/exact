@@ -169,6 +169,10 @@ impl Updates {
 
     /// Start a check on its own thread; `false` when one is running.
     pub fn check(&self) -> bool {
+        self.check_and_wake(|| {})
+    }
+
+    pub(crate) fn check_and_wake(&self, wake: fn()) -> bool {
         if self.checking.swap(true, Ordering::SeqCst) {
             return false;
         }
@@ -187,6 +191,7 @@ impl Updates {
                 checking.store(false, Ordering::SeqCst);
                 let _ = tx.send(line);
                 let _ = signal.write_all(&[1]);
+                wake();
             });
         if spawned.is_err() {
             self.checking.store(false, Ordering::SeqCst);

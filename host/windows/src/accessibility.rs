@@ -507,7 +507,7 @@ impl FieldRuns {
             let i = runs.len();
             let shape = shapes.get(i);
             let older = old_shapes.next();
-            let same_geometry = match (shape, older) {
+            let same_geometry = || match (shape, older) {
                 (Some(new), Some(old)) => new.same_metrics(&old),
                 (None, None) => true,
                 _ => false,
@@ -519,9 +519,9 @@ impl FieldRuns {
             let offsets = match previous.next() {
                 Some((old, run))
                     if old == line
-                        && same_geometry
                         && previous_on_line == run.previous_on_line
-                        && next_on_line == run.next_on_line =>
+                        && next_on_line == run.next_on_line
+                        && same_geometry() =>
                 {
                     run.offsets
                 }

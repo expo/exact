@@ -615,7 +615,8 @@ impl<D: DataSource> Runner<D> {
         // A background action is the person's act: it may call a name held
         // to the app, which shows nothing there (the foreground rule below
         // refuses one that would).
-        let persons = matches!(origin, CallOrigin::App | CallOrigin::Action);
+        let persons = origin == CallOrigin::App
+            || (origin == CallOrigin::Action && !self.press_revoked(self.invocation_id()));
         if applies && app_only && !persons && !joins {
             return Err(format!("person-required ({} origin)", origin.word()));
         }

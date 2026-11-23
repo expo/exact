@@ -159,9 +159,10 @@ test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('a cached names b
 });
 
 // A seam the planner cannot show to be the one way into its stage ships the module whole: a seam wasm-opt merged with an
-// identical core callback, which then fills the callback's table slot too or is exported in its place; a start function,
-// which the call graph does not root; a second crate that shares the SDK's path. A direct call from a table root,
-// whatever its name, fails the build.
+// identical core callback, which then fills the callback's table slot too or is exported in its place; a second crate
+// that shares the SDK's path; a start function, which may call through the table at instantiation; a call graph it
+// cannot read, as a function name holding a quote or a line break makes it. A direct call from a root, whatever its
+// name, a start function included, fails the build.
 test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('a seam that may not be the one way into its stage is refused', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-merged-seam-'));
   const other = HANDLE.replace('C12exact_runner', 'Cs1_12exact_runner');
@@ -171,16 +172,30 @@ test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('a seam that may 
       (global $slot (export "slot") (mut i32) (i32.const 1)) (func (export "boot") (result i32) global.get $slot call_indirect (type $read))`],
     ['exported', true, `(table 1 funcref) (elem (i32.const 0) $${HANDLE})
       (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $callback (export "boot") (type $read) (result i32) i32.const 0)`],
-    ['start function', false, `(table 1 funcref) (elem (i32.const 0) $${HANDLE}) (global $g (mut i32) (i32.const 0))
-      (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $boot (global.set $g (call $${HANDLE}))) (start $boot)`],
+    ['directly from start', false, `(table 1 funcref) (elem (i32.const 0) $${HANDLE}) (global $g (mut i32) (i32.const 0))
+      (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $start (global.set $g (call $${HANDLE}))) (start $start)`],
+    ['has a start function', false, `(table 1 funcref) (elem (i32.const 0) $${HANDLE}) (global $g (mut i32) (i32.const 0))
+      (func $${HANDLE} (type $read) (result i32) i32.const 0)
+      (func $start (global.set $g (call_indirect (type $read) (i32.const 0)))) (start $start)`],
     ['2 crates', false, `(table 2 funcref) (elem (i32.const 0) $${HANDLE} $${other})
       (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $${other} (type $read) (result i32) i32.const 1)`],
     // A function the graph's key shares its name with ("B") is a table root that calls the seam directly.
     ['directly from B', false, `(table 2 funcref) (elem (i32.const 0) $${HANDLE} $B)
       (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $B (type $read) (result i32) call $${HANDLE})`],
-    // A direct call fails the build even where the seam, in no slot, would otherwise ship the module whole.
+    // Names the call graph prints unescaped: one holding its edge syntax, and others that make that edge read as a call
+    // between them; and a line break
+    ['holds a quote or a line break', false, `(table 1 funcref) (elem (i32.const 0) $${HANDLE})
+      (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $"boot\\" -> \\"decoy" (export "boot") (result i32) call $${HANDLE})`],
+    ['holds a quote or a line break', false, `(table 1 funcref) (elem (i32.const 0) $${HANDLE})
+      (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $"boot\\" -> \\"decoy" (export "boot") (result i32) call $${HANDLE})
+      (func $boot (export "b") (result i32) i32.const 0) (func $"decoy\\" -> \\"${HANDLE}" (export "d") (result i32) i32.const 0)`],
+    ['holds a quote or a line break', false, `(table 1 funcref) (elem (i32.const 0) $${HANDLE})
+      (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $"a\\nb" (export "boot") (result i32) i32.const 0)`],
+    // A direct call fails the build even where the seam, in no slot or exported, would otherwise ship the module whole.
     ['directly from boot', false, `(table 1 funcref) (func $${HANDLE} (type $read) (result i32) i32.const 0)
       (func $boot (export "boot") (result i32) call $${HANDLE})`],
+    ['directly from B', false, `(table 2 funcref) (elem (i32.const 0) $${HANDLE} $B) (export "seam" (func $${HANDLE}))
+      (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $B (type $read) (result i32) call $${HANDLE})`],
   ];
   try {
     for (const [refusal, optimized, body] of cases) {
@@ -196,15 +211,90 @@ test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('a seam that may 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+// Every stage's direct calls are checked before any stage ships the module whole: a later stage's direct call fails the
+// build though an earlier stage's seam is exported, and so does one from a start function that is another stage's
+// seam. Where a seam's pattern matches two crates' functions, a direct call to one ships the module whole, and the build
+// fails when the core calls each crate's, the other's counted as the core's: from a root, or one through the other.
+// The error names each crate's candidate with its disambiguator, as handlers of two crates print alike. Another stage's
+// matches stay blocked in each crate's check, so overlapping patterns can ship the module whole.
+test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('every stage is checked for a direct call first', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-stage-order-'));
+  // Two crates' handlers that print alike, by a pattern whose group takes the disambiguator's digits: none for one
+  const first = HANDLE.replace('C12exact_runner', 'Cs_12exact_runner'), handle = 'exact_runner::agent::handle::<caltrain::AppData>';
+  const digits = [{ name: 'inspection', seam: /^_RINvNtC(?:s([0-9A-Za-z]*)_)?12exact_runner5agent6handle/ }];
+  const cases = [
+    ['directly from boot', false, [{ name: 'one', seam: /^one(.*)$/ }, { name: 'two', seam: /^two(.*)$/ }],
+      `(table 1 funcref) (elem (i32.const 0) $two) (func $one (export "one") (result i32) i32.const 0)
+      (func $two (type $read) (result i32) i32.const 0) (func $boot (export "boot") (result i32) call $two)`],
+    ['directly from one', false, [{ name: 'one', seam: /^one(.*)$/ }, { name: 'two', seam: /^two(.*)$/ }],
+      `(table 1 funcref) (elem (i32.const 0) $two) (global $g (mut i32) (i32.const 0))
+      (func $two (type $read) (result i32) i32.const 0) (func $one (global.set $g (call $two))) (start $one)`],
+    ['2 crates', true, [{ name: 'two', seam: /^two(_a|_b)$/ }],
+      `(table 2 funcref) (elem (i32.const 0) $two_a $two_b) (func $two_a (type $read) (result i32) i32.const 0)
+      (func $two_b (type $read) (result i32) i32.const 1) (func $boot (export "boot") (result i32) call $two_a)`],
+    [`${handle} (no crate disambiguator) directly from boot; ${handle} (crate disambiguator "") directly from boot`, false,
+      digits, `(table 2 funcref) (elem (i32.const 0) $${HANDLE} $${first}) (func $${HANDLE} (type $read) (result i32) i32.const 0)
+      (func $${first} (type $read) (result i32) i32.const 1)
+      (func $boot (export "boot") (result i32) (i32.add (call $${HANDLE}) (call $${first})))`],
+    ['two_a (crate disambiguator "_a") directly from boot; two_b (crate disambiguator "_b") directly from two_a', false,
+      [{ name: 'two', seam: /^two(_a|_b)$/ }],
+      `(table 2 funcref) (elem (i32.const 0) $two_a $two_b) (func $two_a (type $read) (result i32) call $two_b)
+      (func $two_b (type $read) (result i32) i32.const 1) (func $boot (export "boot") (result i32) call $two_a)`],
+    ['2 crates', true, [{ name: 'one', seam: /^(a|b)$/ }, { name: 'two', seam: /^(a)$/ }],
+      `(table 2 funcref) (elem (i32.const 0) $a $b) (func $a (type $read) (result i32) call $b)
+      (func $b (type $read) (result i32) call $a)`],
+  ];
+  try {
+    for (const [refusal, unsplittable, stages, body] of cases) {
+      const input = resolve(dir, 'app.wasm'), wat = resolve(dir, 'app.wat');
+      writeFileSync(wat, `(module (type $read (func (result i32))) ${body})`);
+      expect(spawnSync('wasm-as', [wat, '-g', '--enable-reference-types', '--enable-bulk-memory', '-o', input]).status).toBe(0);
+      let thrown;
+      try { planStages(input, stages); } catch (e) { thrown = e; }
+      expect([refusal, thrown?.message.includes(refusal), thrown instanceof Unsplittable]).toEqual([refusal, true, unsplittable]);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// A line break in the last function's name, whose second line reads as the next entry of the function map and whose
+// two lines name other functions, hides that function's call: the map then names fewer functions than it has lines.
+test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('a line break in the last function name is seen', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-last-name-'));
+  try {
+    const input = resolve(dir, 'app.wasm'), wat = resolve(dir, 'app.wat');
+    writeFileSync(wat, `(module (type $read (func (result i32))) (table 1 funcref) (elem (i32.const 0) $${HANDLE})
+      (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $a (export "a") (result i32) i32.const 0)
+      (func $b (export "b") (result i32) i32.const 0) (func $"a\\n4:b" (export "boot") (result i32) call $${HANDLE}))`);
+    expect(spawnSync('wasm-as', [wat, '-g', '--enable-reference-types', '--enable-bulk-memory', '-o', input]).status).toBe(0);
+    expect(() => planStages(input)).toThrow(Unsplittable);
+    expect(() => planStages(input)).toThrow('holds a quote or a line break');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// A name whose lines after its first forge the call graph's header and a node for each function the map names before
+// it: the map ends cleanly, its names are the forged nodes, and the forged graph has no calls; the real one follows.
+test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('a name that forges the call graph is seen', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-forged-graph-'));
+  const id = (name) => `$"${name.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('\n', '\\n')}"`;
+  const forged = id(`y\ndigraph call {\n  "${HANDLE}" [style="rounded"];\n  "boot" [fillcolor="gray"];\n  "y" [];`);
+  try {
+    const input = resolve(dir, 'app.wasm'), wat = resolve(dir, 'app.wat');
+    writeFileSync(wat, `(module (type $read (func (result i32))) (table 1 funcref) (elem (i32.const 0) $${HANDLE})
+      (func $${HANDLE} (type $read) (result i32) i32.const 0) (func $boot (export "boot") (result i32) call ${forged})
+      (func ${forged} (result i32) call $${HANDLE}))`);
+    expect(spawnSync('wasm-as', [wat, '-g', '--enable-reference-types', '--enable-bulk-memory', '-o', input]).status).toBe(0);
+    expect(() => planStages(input)).toThrow('holds a quote or a line break');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 // Every other way the core may call into a stage before it loads reaches the stage's placeholder, which reports it:
-// a call through a slot index the code holds, as the gated hook is held; a constant slot; a direct call the call graph
-// mislabels, from a function whose name holds its edge syntax; and a reference to the seam returned to a script.
+// a call through a slot index the code holds, as the gated hook is held; a constant slot; and a reference to the seam
+// returned to a script.
 test.skipIf(unsplitReason() !== null || !Bun.which('wasm-as'))('a call into a stage before it loads reports the stage', async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-early-stage-'));
   const cases = [
     ['a held slot index', `(func (export "early") (result i32) global.get $hook call_indirect (type $read))`],
     ['a constant slot', `(func (export "early") (result i32) i32.const 0 call_indirect (type $read))`],
-    ['an edge in a name', `(func $"boot\\" -> \\"decoy" (export "early") (result i32) call $${HANDLE})`],
     ['an escaping reference', `(elem declare func $${HANDLE}) (func (export "get") (result funcref) ref.func $${HANDLE})`, core => core.get()()],
   ];
   try {
@@ -250,6 +340,6 @@ test('a call that reached an unloaded stage stops the module and says how calls 
     expect(context.host.trapped).toBeTruthy();
     return said[0];
   };
-  expect(report('early')).toContain('every call into a stage goes through its gate, which loads the stage first');
+  expect(report('early')).toContain('every call into a stage waits for it to load (glue.js `loadStage`');
   expect(report('trap')).toBe('exact: app.wasm trapped, and the page no longer calls it:');
 });

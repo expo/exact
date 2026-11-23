@@ -294,7 +294,7 @@ theorem dispatch_cases {p o c target event payload c' out}
 /-- `advance`'s loop, for any choice of the due timer that picks one of
 the configuration's timers, any choice of the `then` that runs an action
 of `T`, and any way of finishing that keeps `J`. -/
-theorem advance_go {p o due pick finish} (J : Config → Prop) (A T : List String)
+theorem advance_go {p o applyChanges due pick finish} (J : Config → Prop) (A T : List String)
     (hdue : ∀ c tm i, due c = Option.some (tm, i) → tm ∈ c.timers)
     (hpick : ∀ c m w a, pick c = Option.some (.andThen m w a) → a ∈ T)
     (hpickO : ∀ c i w a, pick c = Option.some (.owned i w a) → a ∈ T)
@@ -306,8 +306,8 @@ theorem advance_go {p o due pick finish} (J : Config → Prop) (A T : List Strin
     (hrun : ∀ c c' out a args rows, J c → (a ∈ A ∨ a ∈ T) → runAction p o c a args rows = (c', out) → J c')
     (hdrain : ∀ c c' out m, J c → isQueue p m = true → nextCommit p o c m = (c', out) → J c') :
     ∀ n c, J c → (∀ tm ∈ c.timers, tm.action ∈ A) →
-      J (advance.go p o due pick finish n c).1 ∧
-        ∀ tm ∈ (advance.go p o due pick finish n c).1.timers, tm.action ∈ A
+      J (advance.go p o applyChanges due pick finish n c).1 ∧
+        ∀ tm ∈ (advance.go p o applyChanges due pick finish n c).1.timers, tm.action ∈ A
   | 0, c, hJ, hA => by
     rw [advance.go]
     split
@@ -332,7 +332,11 @@ theorem advance_go {p o due pick finish} (J : Config → Prop) (A T : List Strin
         exact he ▸ hA y₀ hy₀
       cases out₂ with
       | ok => exact advance_go J A T hdue hpick hpickO hpickN hfinish hclock hrun hdrain n c₂ hJ₂ hA₂
-      | refused => exact ⟨hJ₂, hA₂⟩
+      | refused =>
+        dsimp only [resumeRefused]
+        split
+        · exact advance_go (applyChanges := applyChanges) J A T hdue hpick hpickO hpickN hfinish hclock hrun hdrain n c₂ hJ₂ hA₂
+        · exact ⟨hJ₂, hA₂⟩
       | poisoned => exact ⟨hJ₂, hA₂⟩
     next m w a hp =>
       dsimp only
@@ -351,7 +355,11 @@ theorem advance_go {p o due pick finish} (J : Config → Prop) (A T : List Strin
       obtain ⟨hJ₂, hA₂⟩ := hrun'
       cases out₂ with
       | ok => exact advance_go J A T hdue hpick hpickO hpickN hfinish hclock hrun hdrain n c₂ hJ₂ hA₂
-      | refused => exact ⟨hclock c₂ c₂.timers c₂.now c₂.armed _ c₂.sendRows hJ₂ hA₂, hA₂⟩
+      | refused =>
+        dsimp only [resumeRefused]
+        split
+        · exact advance_go (applyChanges := applyChanges) J A T hdue hpick hpickO hpickN hfinish hclock hrun hdrain n (c₂.armNexts p) (hclock c₂ c₂.timers c₂.now c₂.armed _ c₂.sendRows hJ₂ hA₂) hA₂
+        · exact ⟨hclock c₂ c₂.timers c₂.now c₂.armed _ c₂.sendRows hJ₂ hA₂, hA₂⟩
       | poisoned => exact ⟨hclock c₂ c₂.timers c₂.now c₂.armed _ c₂.sendRows hJ₂ hA₂, hA₂⟩
     next i w a hp =>
       dsimp only
@@ -369,7 +377,11 @@ theorem advance_go {p o due pick finish} (J : Config → Prop) (A T : List Strin
       obtain ⟨hJ₂, hA₂⟩ := hrun'
       cases out₂ with
       | ok => exact advance_go J A T hdue hpick hpickO hpickN hfinish hclock hrun hdrain n c₂ hJ₂ hA₂
-      | refused => exact ⟨hclock c₂ c₂.timers c₂.now c₂.armed _ c₂.sendRows hJ₂ hA₂, hA₂⟩
+      | refused =>
+        dsimp only [resumeRefused]
+        split
+        · exact advance_go (applyChanges := applyChanges) J A T hdue hpick hpickO hpickN hfinish hclock hrun hdrain n (c₂.armNexts p) (hclock c₂ c₂.timers c₂.now c₂.armed _ c₂.sendRows hJ₂ hA₂) hA₂
+        · exact ⟨hclock c₂ c₂.timers c₂.now c₂.armed _ c₂.sendRows hJ₂ hA₂, hA₂⟩
       | poisoned => exact ⟨hclock c₂ c₂.timers c₂.now c₂.armed _ c₂.sendRows hJ₂ hA₂, hA₂⟩
     split
     · exact hfinish c hJ hA
@@ -400,10 +412,14 @@ theorem advance_go {p o due pick finish} (J : Config → Prop) (A T : List Strin
       split
       · exact ⟨hJ₂, hA₂⟩
       · exact advance_go J A T hdue hpick hpickO hpickN hfinish hclock hrun hdrain n c₂ hJ₂ hA₂
-    | refused => exact ⟨hJ₂, hA₂⟩
+    | refused =>
+      dsimp only [resumeRefused]
+      split
+      · exact advance_go (applyChanges := applyChanges) J A T hdue hpick hpickO hpickN hfinish hclock hrun hdrain n c₂ hJ₂ hA₂
+      · exact ⟨hJ₂, hA₂⟩
     | poisoned => exact ⟨hJ₂, hA₂⟩
 
-theorem advance_go_eq {p o due pick finish} (J : Config → Prop) (A T : List String)
+theorem advance_go_eq {p o applyChanges due pick finish} (J : Config → Prop) (A T : List String)
     (hdue : ∀ c tm i, due c = Option.some (tm, i) → tm ∈ c.timers)
     (hpick : ∀ c m w a, pick c = Option.some (.andThen m w a) → a ∈ T)
     (hpickO : ∀ c i w a, pick c = Option.some (.owned i w a) → a ∈ T)
@@ -415,8 +431,8 @@ theorem advance_go_eq {p o due pick finish} (J : Config → Prop) (A T : List St
     (hrun : ∀ c c' out a args rows, J c → (a ∈ A ∨ a ∈ T) → runAction p o c a args rows = (c', out) → J c')
     (hdrain : ∀ c c' out m, J c → isQueue p m = true → nextCommit p o c m = (c', out) → J c')
     {n c c' out} (hJ : J c) (hA : ∀ tm ∈ c.timers, tm.action ∈ A)
-    (h : advance.go p o due pick finish n c = (c', out)) : J c' ∧ ∀ tm ∈ c'.timers, tm.action ∈ A := by
-  have := advance_go J A T hdue hpick hpickO hpickN hfinish hclock hrun hdrain n c hJ hA
+    (h : advance.go p o applyChanges due pick finish n c = (c', out)) : J c' ∧ ∀ tm ∈ c'.timers, tm.action ∈ A := by
+  have := advance_go (applyChanges := applyChanges) J A T hdue hpick hpickO hpickN hfinish hclock hrun hdrain n c hJ hA
   rw [h] at this; exact this
 
 theorem foldl_pick{α : Type} {f : Option α → α → Option α} (hf : ∀ b x, f b x = b ∨ f b x = .some x) :
@@ -554,14 +570,14 @@ theorem clockPick_next {p c t timer m w} (h : clockPick p c t timer = .some (.ne
 
 /-- An invariant kept by timer actions, continuations and queued send
 commits survives an advance, provided changing scheduling fields keeps it. -/
-theorem advance_preserves {p o} (I : Config → Prop) (A : List String)
+theorem advance_preserves {p o applyChanges} (I : Config → Prop) (A : List String)
     (hclock : ∀ (c : Config) ts t ar ns srs,
       I c → I { c with timers := ts, now := t, armed := ar, nexts := ns, sendRows := srs })
     (hrun : ∀ c c' out a args rows, I c → (a ∈ A ∨ a ∈ thenActions p) →
       runAction p o c a args rows = (c', out) → I c')
     (hdrain : ∀ c c' out m, I c → isQueue p m = true → nextCommit p o c m = (c', out) → I c')
     {c t c' out} (hI : I c) (hA : ∀ tm ∈ c.timers, tm.action ∈ A)
-    (h : advance p o c t = (c', out)) : I c' ∧ ∀ tm ∈ c'.timers, tm.action ∈ A := by
+    (h : advance p o c t applyChanges = (c', out)) : I c' ∧ ∀ tm ∈ c'.timers, tm.action ∈ A := by
   simp only [advance] at h
   split at h
   · cases h; exact ⟨hI, hA⟩
@@ -755,11 +771,11 @@ theorem boot_slots_origin {p o c out} (h : boot p o = (c, out)) :
 /-- What a host can do to a configuration. -/
 inductive Event where
   | dispatch (target event : String) (payload : Option Value)
-  | advance (t : F64)
+  | advance (t : F64) (applyChanges : Bool := false)
 
 def Event.step (p : Program) (o : Oracle) (c : Config) : Event → Config × Outcome
   | .dispatch target event payload => Contract.dispatch p o c target event payload
-  | .advance t => Contract.advance p o c t
+  | .advance t applyChanges => Contract.advance p o c t applyChanges
 
 /-- The configurations a program reaches: its boot, then any sequence of
 events. Each step may meet a different oracle: the sources need not answer
@@ -822,9 +838,9 @@ theorem Reachable.invariant_framed {p : Program} (I : Config → Prop)
       · subst h; exact ⟨hI, hF⟩
       · obtain ⟨n, ev, a, args, env, vs, hn, hh, hvs, hr⟩ := h
         exact ⟨hhandler o _ _ _ ev a args env _ vs _ _ hI (hF.1 n hn _ hh) hvs hr, runAction_framed hF hr⟩
-    | advance t =>
+    | advance t applyChanges =>
       simp only [Event.step]
-      generalize hd : Contract.advance p o _ t = r
+      generalize hd : Contract.advance p o _ t applyChanges = r
       obtain ⟨c', out⟩ := r
       have := advance_preserves (p := p) (o := o) (fun c => I c ∧ HandlersFrom (Node.handlerLists p.view) c.view)
         (p.tasks.map (·.action)) (fun c ts t ar ns srs h => ⟨hclock c ts t ar ns srs h.1, h.2⟩)
@@ -1305,9 +1321,9 @@ theorem Event.step_slotInvariant {p o c x V} (ev : Event)
     rcases dispatch_cases hd with h | ⟨n, ev, a, args, env, vs, -, -, -, hr⟩
     · subst h; exact hs
     · exact runAction_slotInvariant hs (hk _ _ _ _ hs.1) hr
-  | advance t =>
+  | advance t applyChanges =>
     simp only [Event.step]
-    generalize hd : Contract.advance p o c t = r
+    generalize hd : Contract.advance p o c t applyChanges = r
     obtain ⟨c', out⟩ := r
     exact (advance_preserves (SlotInvariant x V) (c.timers.map (·.action))
       (fun _ _ _ _ _ _ h => h)
@@ -1328,9 +1344,9 @@ theorem Event.step_slotIn {p o c x V} (ev : Event) (hq : isQueue p x = false)
     rcases dispatch_cases hd with h | ⟨n, ev, a, args, env, vs, -, -, -, hr⟩
     · subst h; exact hs
     · exact runAction_slotIn hs (hk _ _ _ _ hs) hr
-  | advance t =>
+  | advance t applyChanges =>
     simp only [Event.step]
-    generalize hd : Contract.advance p o c t = r
+    generalize hd : Contract.advance p o c t applyChanges = r
     obtain ⟨c', out⟩ := r
     exact (advance_preserves (fun c => SlotIn x V c.slots) (c.timers.map (·.action))
       (fun _ _ _ _ _ _ h => h) (fun _ _ _ _ _ _ h _ hr => runAction_slotIn h (hk _ _ _ _ h) hr)

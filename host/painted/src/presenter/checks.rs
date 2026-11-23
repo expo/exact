@@ -225,7 +225,7 @@ mod presenter_tests {
         fn fd(&self) -> std::os::unix::io::RawFd {
             -1
         }
-        fn check(&self) -> bool {
+        fn check(&self, _: fn()) -> bool {
             self.0.lock().unwrap().checks += 1;
             true
         }

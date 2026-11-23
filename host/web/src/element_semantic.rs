@@ -3,12 +3,28 @@
 //! and what data can give a node, beside what its literal props and styles do:
 //! its tag, and the attributes element.rs `props_of` derives.
 
-use exact_kernel::{NodeType, PropId};
+use exact_kernel::{NodeFacts, NodeType, PropId, StyleId};
 
 /// The element for `tag`, a `semanticTag`; `None` where the node's type
 /// decides (a `textarea`, an `option`, an `audio`).
 pub(super) fn element(tag: &str) -> Option<&'static str> {
     ELEMENTS.iter().find(|e| **e == tag).copied()
+}
+
+/// The layout row whose presentation belongs to the HTML element. An option
+/// remains visible in its native menu (LLP 1069.001 D2). A modal dialog is
+/// fixed to the viewport unless its author positions it.
+pub(super) fn browser_row(node: &NodeFacts<'_>) -> Option<StyleId> {
+    if exact_kernel::control::is_option_node(node.node_type, node.props) {
+        Some(StyleId::Display)
+    } else if node.props.str(PropId::SemanticTag) == Some("dialog")
+        && node.style.mask.has(StyleId::PositionType)
+        && !node.style.written.has(StyleId::PositionType)
+    {
+        Some(StyleId::PositionType)
+    } else {
+        None
+    }
 }
 
 const ELEMENTS: &[&str] = &[

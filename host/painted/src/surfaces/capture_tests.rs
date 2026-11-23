@@ -362,7 +362,7 @@ fn several_completed_frames_can_supply_a_pending_capture() {
     press(&mut p, "capture");
     for time in [16., 32., 48.] {
         p.host.advance(time);
-        p.host.sync_canvases(1., true, &p.assets);
+        p.sync_canvases(true);
     }
     p.sync_surfaces();
     let png = tiny_skia::Pixmap::load_png(p.host.app_roots().unwrap()[2].join("shot.png")).unwrap();

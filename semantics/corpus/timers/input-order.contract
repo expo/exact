@@ -1,0 +1,40 @@
+component App
+  state log = ""
+  state handled = false
+  action first
+    log = `${log}A`
+  action second
+    log = `${log}B`
+  action input(value: string)
+    log = `${log}${value}`
+    handled = true
+  action changed
+    log = `${log}C`
+  task a when not handled key=handled
+    change(first)
+  task b when not handled key=handled
+    change(second)
+  task c when handled key=handled
+    change(changed)
+  view
+    column key=input testId="window"
+      input value="" input=input testId="field"
+      button "Go" press=input("press") testId="button"
+
+test "the first tap sees both due changes and arms a third"
+  tap "button"
+  expect state log == "ABpressC"
+
+test "the first text input sees both due changes"
+  type "field" "hello"
+  expect state log == "ABhelloC"
+
+test "the first key sees both due changes"
+  type "window" key "Escape"
+  expect state log == "ABEscapeC"
+
+test "a clock step yields after one change"
+  clock +0
+  expect state log == "A"
+  clock +0
+  expect state log == "AB"

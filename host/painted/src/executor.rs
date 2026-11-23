@@ -16,6 +16,9 @@ const BUDGET: WorkerBudget = if cfg!(any(test, feature = "test-budget")) {
     WorkerBudget::Process
 };
 
+/// The executor a shell links for its data modules.
+pub type Start = fn(&str) -> Executor;
+
 /// Ordered native work plus explicitly independent HTTP, with a poll wake.
 pub struct Executor {
     core: Core,
@@ -41,28 +44,46 @@ impl Executor {
         grants: &str,
         notified: impl Fn() + Send + Sync + 'static,
     ) -> Self {
-        #[cfg(unix)]
-        exact_executor::listen::install(listen_module());
-        let (wake, signal) = UnixStream::pair().expect("executor socketpair");
-        wake.set_nonblocking(true).expect("nonblocking wake");
-        signal.set_nonblocking(true).expect("nonblocking signal");
         // A Mac build takes the platform's transports, but under conformance's network
         // (`EXACT_NET_PROXY`, host/web-js/conformance/net.mjs) speaks as the Linux one
         // does: rustls and portable sockets take the run's proxy and trust from the
         // environment, and NSURLSession takes neither
         let portable =
             cfg!(not(target_vendor = "apple")) || std::env::var_os("EXACT_NET_PROXY").is_some();
-        let (host, note) = if portable {
+        if portable {
             let roots = ibex2::transport::RustlsHttpTransport::new().roots();
-            (portable_host(), Some(format!("trust roots: {roots}")))
+            Self::with_host(
+                grants,
+                notified,
+                portable_host,
+                Some(format!("trust roots: {roots}")),
+            )
         } else {
-            (ibex2::host::Host::new(), None)
-        };
+            Self::with_host(grants, notified, ibex2::host::Host::new, None)
+        }
+    }
+
+    /// Local I/O and host work for a binary whose data grants admit no network.
+    pub fn local(grants: &str) -> Self {
+        Self::with_host(grants, || (), ibex2::host::Host::without_network, None)
+    }
+
+    fn with_host(
+        grants: &str,
+        notified: impl Fn() + Send + Sync + 'static,
+        host: fn() -> ibex2::host::Host,
+        note: Option<String>,
+    ) -> Self {
+        #[cfg(unix)]
+        exact_executor::listen::install(listen_module());
+        let (wake, signal) = UnixStream::pair().expect("executor socketpair");
+        wake.set_nonblocking(true).expect("nonblocking wake");
+        signal.set_nonblocking(true).expect("nonblocking signal");
         // Grants that do not parse hold nothing: the journal says so once,
         // and every request's refusal names the line (the core's).
         let (bindings, note) = match ibex2::grant::GrantSet::parse(&exact_runner::io_grants(grants))
         {
-            Ok(g) => (Some(host.endow(g)), note),
+            Ok(g) => (Some(host().endow(g)), note),
             Err(e) => {
                 let why = format!("the app's grants did not parse: {e}; every request is refused");
                 (
@@ -81,11 +102,7 @@ impl Executor {
                 let _ = (&signal).write(&[1]);
                 notified();
             }),
-            if portable {
-                std::sync::Arc::new(portable_host)
-            } else {
-                std::sync::Arc::new(ibex2::host::Host::new)
-            },
+            std::sync::Arc::new(host),
             BUDGET,
         );
         core.enable_http_cache();

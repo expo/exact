@@ -31,7 +31,7 @@ pub(super) fn shape(plan: &Plan) -> Result<(), BakeError> {
                 return Err(BakeError::Lint {
                     site: None,
                     id: "bake-activities-field",
-                    message: format!("`{}`: exactActivities.{name} needs activities: Activity[], pushToStartToken: option<string>, pushToStartActivities: PushStartActivity[], or a bool fact; Activity fields are id, kind, state, activityState (string), token (option<string>); PushStartActivity fields are kind, generation, shape (string)", plan.str(resource.name)),
+                    message: format!("`{}`: exactActivities.{name} needs activities: Activity[], pushToStartToken: option<string>, pushToStartActivities: PushStartActivity[], or a bool fact; Activity fields are id, kind, state, activityState (string), token (option<string>), promoted (bool); PushStartActivity fields are kind, generation, shape (string)", plan.str(resource.name)),
                 });
             }
         }
@@ -57,6 +57,9 @@ fn item_shape(plan: &Plan, id: TypesId) -> bool {
             let ty = plan.type_(field.ty);
             match plan.str(field.name) {
                 "id" | "kind" | "state" | "activityState" => ty.kind == TypeKind::String,
+                // Android's word that the system promoted its notification
+                // to a Live Update (LLP 1126 D13); false elsewhere.
+                "promoted" => ty.kind == TypeKind::Bool,
                 "token" => {
                     ty.kind == TypeKind::Option
                         && ty

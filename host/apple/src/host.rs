@@ -619,6 +619,9 @@ impl<D: DataSource> Host<D> {
         // release build from the first ask (`Bridge::measure_work`).
         crate::abi::measure_at_boot(&mut runner, compat);
         runner.admit_live(compat);
+        if let Some(compat) = compat {
+            runner.place_controls(compat);
+        }
         if let Some(action) = region.and_then(|r| r.activate) {
             runner.act(action, Vec::new()).map_err(HostError::Runner)?;
         }

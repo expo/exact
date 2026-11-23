@@ -164,8 +164,41 @@ fn has_explicit_locator(plan: Option<&str>, dev_plan: Option<&str>) -> bool {
     plan.is_some() || dev_plan.is_some()
 }
 
+/// Native services the shell links for its data modules and pictures.
+#[derive(Clone, Copy)]
+pub struct Services {
+    pub(crate) start_executor: crate::executor::Start,
+    pub(crate) open_images: fn(crate::image::Assets) -> crate::image::Images,
+}
+
+impl Services {
+    /// Share the process's downloader for remote images and video posters.
+    pub const fn with_image_downloads(start_executor: crate::executor::Start) -> Self {
+        Self {
+            start_executor,
+            open_images: crate::image::Images::with_assets,
+        }
+    }
+
+    /// Decode local pictures for a fixed plan that cannot name a remote source.
+    pub const fn with_local_images(start_executor: crate::executor::Start) -> Self {
+        Self {
+            start_executor,
+            open_images: crate::image::Images::local,
+        }
+    }
+}
+
+impl Default for Services {
+    fn default() -> Self {
+        Self::with_image_downloads(crate::executor::Executor::start)
+    }
+}
+
 /// What the environment asked for.
 pub struct Config {
+    /// Constructors selected by the shell before it starts the presenter.
+    pub services: Services,
     /// Viewport preferences the carrier read before boot (LLP 1039 D10).
     pub preferences: Option<exact_runner::Preferences>,
     /// Explicit consumer registration before the first layout; ordinary default
@@ -324,20 +357,47 @@ impl Config {
     /// A shell that knows its baked trust can omit the unsigned plan loaders
     /// from a production executable. Development shells also check the receipt.
     pub fn from_bake<const DEVELOPMENT: bool>(baked: &[u8], compat: &str) -> Config {
-        Self::from_env_lent::<DEVELOPMENT>(baked, None, compat)
+        Self::from_bake_with_executor::<DEVELOPMENT>(
+            baked,
+            compat,
+            crate::executor::Executor::start,
+        )
+    }
+
+    /// Load a baked shell with the data executor selected by its build.
+    pub fn from_bake_with_executor<const DEVELOPMENT: bool>(
+        baked: &[u8],
+        compat: &str,
+        start: crate::executor::Start,
+    ) -> Config {
+        Self::from_bake_with_services::<DEVELOPMENT>(
+            baked,
+            compat,
+            Services::with_image_downloads(start),
+        )
+    }
+
+    /// Boot with the data executor and image loader selected by the bake.
+    pub fn from_bake_with_services<const DEVELOPMENT: bool>(
+        baked: &[u8],
+        compat: &str,
+        services: Services,
+    ) -> Config {
+        Self::from_env_lent::<DEVELOPMENT>(baked, None, compat, services)
     }
 
     /// [`Config::from_env`] of a plan linked into the binary: booting it
     /// copies none of it (its data pool, a baked app's largest part, is
     /// read in place).
     pub fn from_env_static(baked: &'static [u8], compat: &str) -> Config {
-        Self::from_env_lent::<true>(baked, Some(baked), compat)
+        Self::from_env_lent::<true>(baked, Some(baked), compat, Services::default())
     }
 
     fn from_env_lent<const DEVELOPMENT: bool>(
         baked: &[u8],
         lent: Option<&'static [u8]>,
         compat: &str,
+        services: Services,
     ) -> Config {
         // Drop development overrides before reading plans, storage or launch mode (LLP 1069.007 D2).
         prepare_environment(compat);
@@ -417,6 +477,7 @@ impl Config {
             })
             .unwrap_or((420.0, 860.0));
         Config {
+            services,
             preferences: None,
             content_region: None,
             // An argument, else `EXACT_LAUNCH_URL`: the Android reader's launching intent's data has no
@@ -771,6 +832,7 @@ pub(crate) fn boot_presenter_with_painter<D: DataSource + Default>(
                     &config.launch,
                     config.content_region,
                     painter,
+                    config.services,
                 )
             })
         });
@@ -823,6 +885,7 @@ pub(crate) fn boot_presenter_with_painter<D: DataSource + Default>(
                     &config.launch,
                     config.content_region,
                     painter,
+                    config.services,
                 )
             })
             .map(|v| delivered(v, updates, None))

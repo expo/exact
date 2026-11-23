@@ -1,20 +1,36 @@
-//! Unix keeps pollable sockets; macOS also wakes its window loop. Windows
-//! posts the event-loop wake and retains one coalesced readiness bit.
-#[cfg(all(unix, not(target_os = "macos")))]
+//! Desktop windows wake their native event loop when a worker publishes a
+//! result. Unix also retains a readable descriptor for poll-based hosts.
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+static NOTIFY: std::sync::Mutex<Option<std::sync::Arc<dyn Fn() + Send + Sync>>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+pub(crate) fn install(waker: Option<std::sync::Arc<dyn Fn() + Send + Sync>>) {
+    *NOTIFY.lock().unwrap() = waker;
+}
+
+pub(crate) fn notify() {
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+    {
+        let waker = NOTIFY.lock().unwrap().clone();
+        if let Some(waker) = waker {
+            waker();
+        }
+    }
+}
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
 pub(crate) use std::os::unix::net::UnixStream as Stream;
 
-#[cfg(target_os = "macos")]
-mod macos {
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod desktop_unix {
     use std::{
         io::{self, Read, Write},
         os::{
             fd::{AsRawFd, RawFd},
             unix::net::UnixStream,
         },
-        sync::{Arc, Mutex},
     };
-    type Notify = Arc<dyn Fn() + Send + Sync>;
-    static NOTIFY: Mutex<Option<Notify>> = Mutex::new(None);
     pub(crate) struct Stream(UnixStream);
     impl std::ops::Deref for Stream {
         type Target = UnixStream;
@@ -47,8 +63,8 @@ mod macos {
     impl Write for &Stream {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
             let result = (&self.0).write(bytes);
-            if let Some(notify) = NOTIFY.lock().unwrap().clone() {
-                notify();
+            if result.as_ref().is_ok_and(|written| *written > 0) {
+                super::notify();
             }
             result
         }
@@ -69,23 +85,17 @@ mod macos {
             (&*self).flush()
         }
     }
-    pub(crate) fn install(notify: Option<Notify>) {
-        *NOTIFY.lock().unwrap() = notify;
-    }
 }
-#[cfg(target_os = "macos")]
-pub(crate) use macos::{install, Stream};
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(crate) use desktop_unix::Stream;
 
 #[cfg(windows)]
 mod windows {
     use std::io::{self, Read, Write};
     use std::sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc,
     };
-
-    type Notify = Arc<dyn Fn() + Send + Sync>;
-    static NOTIFY: Mutex<Option<Notify>> = Mutex::new(None);
 
     pub(crate) struct Stream(Arc<AtomicBool>);
     impl Stream {
@@ -112,10 +122,7 @@ mod windows {
     impl Write for &Stream {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
             if !bytes.is_empty() && !self.0.swap(true, Ordering::AcqRel) {
-                let notify = NOTIFY.lock().unwrap().clone();
-                if let Some(notify) = notify {
-                    notify();
-                }
+                super::notify();
             }
             Ok(bytes.len())
         }
@@ -136,12 +143,9 @@ mod windows {
             Ok(())
         }
     }
-    pub(crate) fn install(notify: Option<Notify>) {
-        *NOTIFY.lock().unwrap() = notify;
-    }
 }
 #[cfg(windows)]
-pub(crate) use windows::{install, Stream};
+pub(crate) use windows::Stream;
 
 #[cfg(all(test, windows))]
 mod tests {

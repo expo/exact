@@ -550,6 +550,9 @@ fn a_box_shadow_paints_outside_the_box_as_a_gaussian() {
       view testId="hard" width=100 height=60 background-color="#eeeeee" box-shadow="10px 10px 0 #0000ff"
       view testId="soft" width=100 height=60 border-radius=16 background-color="#eeeeee" box-shadow="0 0 20px #000000"
       view testId="ghost" width=100 height=60 background-color="rgba(255, 255, 255, 0.5)" overflow="hidden" box-shadow="0 30px 0 #ff0000"
+      column width=180 height=160 padding=30 gap=32 background-color="#151b18"
+        view testId="card" width=100 height=56 background-color="#1a211e" box-shadow="0 16px 42px rgba(0, 0, 0, 0.38)"
+        view testId="inset" width=100 height=56 background-color="#151b18" box-shadow="inset 0 16px 42px rgba(0, 0, 0, 0.38)"
 "##;
     for choice in painters() {
         let mut p = compiled(source, 1.0, choice);
@@ -558,7 +561,21 @@ fn a_box_shadow_paints_outside_the_box_as_a_gaussian() {
             rect(&mut p, "soft"),
             rect(&mut p, "ghost"),
         );
+        let card = rect(&mut p, "card");
+        let inset = rect(&mut p, "inset");
         let frame = p.frame();
+        let (r, g, b) = px(&frame, card.0 + card.2 / 2., card.1 + card.3 + 1.);
+        // Near the lower edge the shadow covers about 28% of the dark page.
+        assert!(
+            r.abs_diff(15) <= 2 && g.abs_diff(19) <= 2 && b.abs_diff(17) <= 2,
+            "{choice:?} dark-card shadow: {r} {g} {b}"
+        );
+        if choice == PainterChoice::Cpu {
+            let (x, y, w, _) = inset;
+            let (r, g, b) = px(&frame, x + w / 2., y + 1.);
+            assert!(r < 19 && g < 24 && b < 22, "inset shadow: {r} {g} {b}");
+            assert_eq!(px(&frame, x - 2., y + 30.), (21, 27, 24));
+        }
         assert_eq!(
             px(&frame, hard.0 + 105.0, hard.1 + 65.0),
             (0, 0, 255),

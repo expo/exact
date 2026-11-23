@@ -70,6 +70,13 @@ def OutcomeOK : Outcome → Prop
   | .refused e => Legitimate e
   | .poisoned e => Legitimate e
 
+theorem OutcomeOK.afterRefusal {later : Outcome} {e : Err} (h : OutcomeOK later) (he : Legitimate e) :
+    OutcomeOK (later.afterRefusal e) := by
+  cases later with
+  | ok => exact he
+  | poisoned => exact h
+  | refused => dsimp only [Outcome.afterRefusal]; split <;> assumption
+
 /-! ## Well-typed configurations -/
 
 /-- Every timer runs an existing action; a root task's gate and key are
@@ -730,14 +737,14 @@ theorem timerCommit_sound {p : Program} (hp : WellTyped p) {o c tm c' out}
   · exact runAction_sound hp hc hlive ha h
   all_goals (simp only [Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h; exact ⟨hc, by constructor⟩)
 
-theorem advance_go_sound {p : Program} (hp : WellTyped p) {o due pick finish}
+theorem advance_go_sound {p : Program} (hp : WellTyped p) {o applyChanges due pick finish}
     (hdue : ∀ c tm i, due c = Option.some (tm, i) → tm ∈ c.timers)
     (hpick : ∀ c m w a, pick c = Option.some (.andThen m w a) → a ∈ thenActions p ∧ c.armed ≠ [])
     (hpickO : ∀ c i w a, pick c = Option.some (.owned i w a) → a ∈ thenActions p ∧ c.sendRows ≠ [])
     (hpickN : ∀ c m w, pick c = Option.some (.next m w) → isQueue p m = true ∧ c.nexts ≠ [])
     (hfinish : ∀ c, ConfigOK p c → ConfigOK p (finish c).1 ∧ (finish c).2 = .ok) :
-    ∀ n c, ConfigOK p c → ConfigOK p (advance.go p o due pick finish n c).1 ∧
-      OutcomeOK (advance.go p o due pick finish n c).2
+    ∀ n c, ConfigOK p c → ConfigOK p (advance.go p o applyChanges due pick finish n c).1 ∧
+      OutcomeOK (advance.go p o applyChanges due pick finish n c).2
   | 0, c, hc => by
     rw [advance.go]
     split
@@ -760,7 +767,12 @@ theorem advance_go_sound {p : Program} (hp : WellTyped p) {o due pick finish}
       obtain ⟨hc₂, hout₂⟩ := nextCommit_sound hp hc₁ hpres (hpickN c m w hpk).1 hr
       cases out₂ with
       | ok => exact advance_go_sound hp hdue hpick hpickO hpickN hfinish n c₂ hc₂
-      | refused => exact ⟨hc₂, hout₂⟩
+      | refused =>
+        dsimp only [resumeRefused]
+        split
+        · obtain ⟨hs, ho⟩ := advance_go_sound (applyChanges := applyChanges) hp hdue hpick hpickO hpickN hfinish n _ hc₂
+          exact ⟨hs, ho.afterRefusal hout₂⟩
+        · exact ⟨hc₂, hout₂⟩
       | poisoned => exact ⟨hc₂, hout₂⟩
     next m w a hpk =>
       dsimp only
@@ -775,7 +787,12 @@ theorem advance_go_sound {p : Program} (hp : WellTyped p) {o due pick finish}
       obtain ⟨hc₂, hout₂⟩ := thenCommit_sound hp hc₁ hpres (hpick c m w a hpk).1 hr
       cases out₂ with
       | ok => exact advance_go_sound hp hdue hpick hpickO hpickN hfinish n c₂ hc₂
-      | refused => exact ⟨hc₂.armNexts, hout₂⟩
+      | refused =>
+        dsimp only [resumeRefused]
+        split
+        · obtain ⟨hs, ho⟩ := advance_go_sound (applyChanges := applyChanges) hp hdue hpick hpickO hpickN hfinish n _ hc₂.armNexts
+          exact ⟨hs, ho.afterRefusal hout₂⟩
+        · exact ⟨hc₂.armNexts, hout₂⟩
       | poisoned => exact ⟨hc₂.armNexts, hout₂⟩
     next i w a hpk =>
       dsimp only
@@ -787,7 +804,12 @@ theorem advance_go_sound {p : Program} (hp : WellTyped p) {o due pick finish}
       obtain ⟨hc₂, hout₂⟩ := ownedThen_sound hp hc₁ hpres (hpickO c i w a hpk).1 hr
       cases out₂ with
       | ok => exact advance_go_sound hp hdue hpick hpickO hpickN hfinish n c₂ hc₂
-      | refused => exact ⟨hc₂.armNexts, hout₂⟩
+      | refused =>
+        dsimp only [resumeRefused]
+        split
+        · obtain ⟨hs, ho⟩ := advance_go_sound (applyChanges := applyChanges) hp hdue hpick hpickO hpickN hfinish n _ hc₂.armNexts
+          exact ⟨hs, ho.afterRefusal hout₂⟩
+        · exact ⟨hc₂.armNexts, hout₂⟩
       | poisoned => exact ⟨hc₂.armNexts, hout₂⟩
     split
     · obtain ⟨h1, h2⟩ := hfinish c hc; rw [h2]; exact ⟨h1, trivial⟩
@@ -813,12 +835,17 @@ theorem advance_go_sound {p : Program} (hp : WellTyped p) {o due pick finish}
       split
       · exact ⟨hc₂, trivial⟩
       · exact advance_go_sound hp hdue hpick hpickO hpickN hfinish n c₂ hc₂
-    | refused => exact ⟨hc₂, hout₂⟩
+    | refused =>
+      dsimp only [resumeRefused]
+      split
+      · obtain ⟨hs, ho⟩ := advance_go_sound (applyChanges := applyChanges) hp hdue hpick hpickO hpickN hfinish n _ hc₂
+        exact ⟨hs, ho.afterRefusal hout₂⟩
+      · exact ⟨hc₂, hout₂⟩
     | poisoned => exact ⟨hc₂, hout₂⟩
 
 /-- **Moving the clock is safe.** -/
-theorem advance_sound {p : Program} (hp : WellTyped p) {o c t c' out}
-    (hc : ConfigOK p c) (h : advance p o c t = (c', out)) : ConfigOK p c' ∧ OutcomeOK out := by
+theorem advance_sound {p : Program} (hp : WellTyped p) {o c t applyChanges c' out}
+    (hc : ConfigOK p c) (h : advance p o c t applyChanges = (c', out)) : ConfigOK p c' ∧ OutcomeOK out := by
   simp only [advance] at h
   split at h
   · simp only [Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h; exact ⟨hc, trivial⟩
@@ -996,7 +1023,7 @@ theorem reachable_configOK {p : Program} (hp : WellTyped p) {c : Config} (h : Re
     cases ev with
     | dispatch target event payload =>
       exact (dispatch_sound (o := o) (target := target) (event := event) (payload := payload) hp ih rfl).1
-    | advance t => exact (advance_sound (o := o) (t := t) hp ih rfl).1
+    | advance t applyChanges => exact (advance_sound (o := o) (t := t) (applyChanges := applyChanges) hp ih rfl).1
 
 /-- **Every step is safe.** From a well-typed configuration, an event
 (`dispatch` or `advance`, whatever the oracle answers) lands in a
@@ -1006,6 +1033,6 @@ theorem step_sound {p : Program} (hp : WellTyped p) {c : Config} (hc : ConfigOK 
     (ev : Event) : ConfigOK p (ev.step p o c).1 ∧ OutcomeOK (ev.step p o c).2 := by
   cases ev with
   | dispatch target event payload => exact dispatch_sound hp hc rfl
-  | advance t => exact advance_sound hp hc rfl
+  | advance t applyChanges => exact advance_sound hp hc rfl
 
 end Contract

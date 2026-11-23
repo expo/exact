@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { need } from '../../../scripts/coverage.mjs';
 import { grantOrigins } from '../navigation/grant-origins.js';
 import { createTimerScheduler } from '../timer-glue.js';
+import { placeholderImports } from '../stages.mjs';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
@@ -26,11 +27,8 @@ async function bridge() {
     plan = readFileSync(file);
   }
   const unexpected = () => { throw new Error('the timer fixture called a data or geometry import'); };
-  // A split core's stage placeholders (host/web/stages.mjs) are imports too.
   const module = new WebAssembly.Module(readFileSync(wasm));
-  const placeholders = Object.fromEntries(WebAssembly.Module.imports(module).filter(({ module }) => module.startsWith('placeholder.'))
-    .map(({ module }) => [module, new Proxy({}, { get: () => unexpected })]));
-  const instance = await WebAssembly.instantiate(module, { ...placeholders,
+  const instance = await WebAssembly.instantiate(module, { ...placeholderImports(module, unexpected),
     exact_grants: grantOrigins(() => instance.exports.memory), exact_js: { call: unexpected },
     exact_rust: { load: unexpected, call: unexpected, read: unexpected, drop: unexpected },
     exact_data: { random: unexpected, agent_seed: unexpected }, exact_clock: { now: unexpected },

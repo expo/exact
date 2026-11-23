@@ -19,7 +19,7 @@ impl Em<'_> {
         b: &BindingsRow,
         scope: &Scope,
     ) -> Result<String, String> {
-        let f = self.binding_value(i, e, b, scope)?;
+        let f = self.binding_value(i, e, b, scope, true)?;
         Ok(self.status_read(i, e, b, f))
     }
 
@@ -41,9 +41,14 @@ impl Em<'_> {
         owner: &str,
         b: &BindingsRow,
         scope: &Scope,
+        in_mount: bool,
     ) -> Result<String, String> {
         let before = self.uses.metered;
-        let f = self.f(b.expr, scope)?;
+        let f = if in_mount {
+            self.mount_function(b.expr, scope)?
+        } else {
+            self.f(b.expr, scope)?
+        };
         let metered = self.uses.metered != before;
         if !metered {
             return Ok(f);

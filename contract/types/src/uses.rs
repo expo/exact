@@ -3,7 +3,8 @@
 //! rather than inside the component it was substituted into.
 
 use super::{checks, err, infer, ComponentTypes, Ref, Scope, Sink, Ty, TypeError, Types};
-use contract_syntax::{Component, Expr, File, Node, Span};
+use contract_syntax::{Attr, Component, Expr, File, Node, Span};
+use std::collections::BTreeSet;
 
 /// Every use names only the used component's props (before expansion, which
 /// would otherwise report the prop a misspelling left missing).
@@ -128,7 +129,14 @@ pub(crate) fn check_root_uses(
 ) {
     let scope = provisional_scope(expanded, types, file.routes.is_some());
     let mut found = Sink::default();
-    walk_uses(&root.view, &scope, types, file, false, &mut found);
+    walk_uses(
+        &root.view,
+        &scope,
+        types,
+        file,
+        false,
+        &mut UseErrors::new(&mut found),
+    );
     for e in found.errors {
         if !e.message.contains("`?`") {
             sink.push(e);
@@ -143,7 +151,56 @@ pub(crate) fn check_uses(
     file: &File,
     sink: &mut Sink,
 ) {
-    walk_uses(nodes, scope, types, file, true, sink)
+    walk_uses(nodes, scope, types, file, true, &mut UseErrors::new(sink));
+}
+
+/// Report child calls in their authored scopes and mark the data arguments
+/// whose substitutions would repeat those errors in their consumers.
+pub(crate) fn check_child_uses(file: &File, types: &Types, sink: &mut Sink) -> BTreeSet<Span> {
+    let mut errors = UseErrors::new(sink);
+    for (c, ct) in file.components.iter().zip(&types.components).skip(1) {
+        walk_uses(
+            &c.view,
+            &types.component_scope(c, ct),
+            types,
+            file,
+            true,
+            &mut errors,
+        );
+    }
+    errors.arguments
+}
+
+struct UseErrors<'a> {
+    sink: &'a mut Sink,
+    arguments: BTreeSet<Span>,
+}
+
+impl<'a> UseErrors<'a> {
+    fn new(sink: &'a mut Sink) -> Self {
+        Self {
+            sink,
+            arguments: BTreeSet::new(),
+        }
+    }
+}
+
+fn check_argument(
+    arg: &Attr,
+    expected: &Ty,
+    scope: &Scope,
+    types: &Types,
+) -> Result<(), TypeError> {
+    let given = infer(&arg.value, scope, &types.shapes)?;
+    if checks::accepts_expr(expected, &arg.value, &given, scope, &types.shapes) {
+        Ok(())
+    } else {
+        err(
+            "type-prop",
+            format!("`{}` expects `{expected}`, given `{given}`", arg.name),
+            arg.span,
+        )
+    }
 }
 
 /// `actions: false` checks only data arguments. Action bindings are checked
@@ -154,11 +211,11 @@ fn walk_uses(
     types: &Types,
     file: &File,
     actions: bool,
-    sink: &mut Sink,
+    errors: &mut UseErrors,
 ) {
     for n in nodes {
-        let checked = walk_use(n, scope, types, file, actions, sink);
-        sink.keep_unit(checked);
+        let checked = walk_use(n, scope, types, file, actions, errors);
+        errors.sink.keep_unit(checked);
     }
 }
 
@@ -169,7 +226,7 @@ fn walk_use(
     types: &Types,
     file: &File,
     actions: bool,
-    sink: &mut Sink,
+    errors: &mut UseErrors,
 ) -> Result<(), TypeError> {
     {
         match n {
@@ -179,7 +236,7 @@ fn walk_use(
                 children,
                 span,
             } => {
-                walk_uses(children, scope, types, file, actions, sink);
+                walk_uses(children, scope, types, file, actions, errors);
                 let Some(target) = file.components.iter().position(|c| &c.name == name) else {
                     return err(
                         "type-unknown-component",
@@ -192,40 +249,35 @@ fn walk_use(
                 for (i, p) in target_c.props.iter().enumerate() {
                     let Some(arg) = args.iter().find(|a| a.name == p.name) else {
                         // At a use the root expands, a missing prop is expansion's refusal.
-                        if !actions {
-                            continue;
+                        if actions {
+                            errors.sink.push(TypeError {
+                                id: "type-missing-prop",
+                                message: target_c.missing_props_message(args),
+                                span: *span,
+                            });
                         }
-                        return err(
-                            "type-missing-prop",
-                            target_c.missing_props_message(args),
-                            *span,
-                        );
+                        continue;
                     };
                     if matches!(target_t.props[i], Ty::Action(_)) {
                         if !actions {
                             continue;
                         }
-                        check_action_binding(
+                        if let Err(error) = check_action_binding(
                             &p.name,
                             &arg.value,
                             arg.span,
                             computed_action(&arg.value, scope, types, file),
                             false,
-                        )?;
+                        ) {
+                            errors.sink.push(error);
+                            continue;
+                        }
                     }
-                    let t = infer(&arg.value, scope, &types.shapes)?;
-                    if !checks::accepts_expr(
-                        &target_t.props[i],
-                        &arg.value,
-                        &t,
-                        scope,
-                        &types.shapes,
-                    ) {
-                        return err(
-                            "type-prop",
-                            format!("`{}` expects `{}`, given `{t}`", p.name, target_t.props[i]),
-                            arg.span,
-                        );
+                    if let Err(error) = check_argument(arg, &target_t.props[i], scope, types) {
+                        if !matches!(target_t.props[i], Ty::Action(_)) {
+                            errors.arguments.insert(arg.span);
+                        }
+                        errors.sink.push(error);
                     }
                 }
                 for a in args {
@@ -235,14 +287,14 @@ fn walk_use(
                 }
             }
             Node::Element { children, .. } => {
-                walk_uses(children, scope, types, file, actions, sink)
+                walk_uses(children, scope, types, file, actions, errors)
             }
             Node::Children { .. } => {}
             Node::When {
                 then, otherwise, ..
             } => {
-                walk_uses(then, scope, types, file, actions, sink);
-                walk_uses(otherwise, scope, types, file, actions, sink);
+                walk_uses(then, scope, types, file, actions, errors);
+                walk_uses(otherwise, scope, types, file, actions, errors);
             }
             Node::Each {
                 var,
@@ -261,7 +313,7 @@ fn walk_use(
                 };
                 let mut inner = scope.clone();
                 inner.push_each(var, index.as_deref(), *item);
-                walk_uses(body, &inner, types, file, actions, sink);
+                walk_uses(body, &inner, types, file, actions, errors);
             }
             Node::Match {
                 subject,
@@ -279,10 +331,10 @@ fn walk_use(
                 };
                 let mut inner = scope.clone();
                 inner.push_region(Some((some.0.clone(), Ref::Bound(0), *item)));
-                walk_uses(&some.1, &inner, types, file, actions, sink);
+                walk_uses(&some.1, &inner, types, file, actions, errors);
                 let mut none_scope = scope.clone();
                 none_scope.push_region(None);
-                walk_uses(none, &none_scope, types, file, actions, sink);
+                walk_uses(none, &none_scope, types, file, actions, errors);
             }
         }
     }

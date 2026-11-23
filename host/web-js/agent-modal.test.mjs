@@ -5,7 +5,29 @@ import { resolve } from 'node:path';
 import { open } from '../../scripts/agent.mjs';
 import { webCompiler } from './module.mjs';
 import { chromium, suiteBrowser } from '../../scripts/agent-launch.mjs';
-import { need } from '../../scripts/coverage.mjs';
+import { engineTests, need } from '../../scripts/coverage.mjs';
+
+const exitSheet = `keyframes fade
+  from opacity=1
+  to opacity=0
+component Sheet
+  state calls = 0
+  action present
+    showModal("sheet")
+  action dismiss
+    close("sheet")
+  action closed
+    calls = calls + 1
+  view
+    column
+      button "Open" id="launch" press=present
+      text \`Closed \${calls}\` id="status"
+      dialog id="sheet" closedby="any" close=closed animation="fade 100ms reverse both" -exact-exit-animation="fade 10s linear both"
+        button "Close" id="dismiss" press=dismiss
+        button "Close by command" id="command" command="close" commandfor="sheet"
+        button "Stay open" id="stay" press=present
+      dialog id="positioned" position="absolute"
+`;
 
 const fixtures = new Map();
 const chromeTest = need('chrome', chromium().unavailable);
@@ -32,7 +54,7 @@ async function buildFixture(kind) {
   const dir = mkdtempSync(resolve(root, 'target/modal-agent-test-'));
   try {
     writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Modal Agent Test', app: { id: 'test.modal-agent', name: 'Modal Agent Test' }, host: { web: {} }, file_handlers: [{ action: '/', accept: { 'text/plain': ['.txt'] } }] }));
-    writeFileSync(resolve(dir, 'app.contract'), kind === 'busy' ? `component BusyModal
+    writeFileSync(resolve(dir, 'app.contract'), kind === 'exit' ? exitSheet : kind === 'busy' ? `component BusyModal
   state spinning = true
   action stop
     spinning = false
@@ -277,3 +299,54 @@ test('a dev checkpoint restores modal focus past inert ancestors, but not within
     expect(await page.evaluate(() => { document.querySelector('input').inert = false; document.querySelector('dialog').inert = true; restore(); return document.activeElement.localName; })).toBe('body');
   } finally { await browser?.close(); server.stop(true); }
 }, 30000);
+
+const engines = await engineTests();
+for (const engine of ['chromium', 'firefox', 'webkit']) engines[engine](`${engine}: a dialog closes and returns focus after its authored exit`, async () => {
+  const { server } = await fixture('exit');
+  const browser = await suiteBrowser(engine);
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await page.goto(server.url.href);
+    const launch = page.locator('#launch'), sheet = page.locator('#sheet');
+    const open = async () => {
+      await launch.focus();
+      await launch.press('Enter');
+      await sheet.evaluate(el => el.getAnimations().forEach(a => a.finish()));
+    };
+    let calls = 0;
+    for (const how of ['action', 'command', 'Escape', 'outside']) {
+      await open();
+      expect(await sheet.evaluate(el => getComputedStyle(el).position)).toBe('fixed');
+      if (how === 'Escape') await page.keyboard.press('Escape');
+      else if (how === 'outside') await page.mouse.click(2, 2);
+      else await page.locator(how === 'command' ? '#command' : '#dismiss').click();
+      const sample = await sheet.evaluate(el => {
+        const animation = el.getAnimations().find(a => a.animationName === 'fade');
+        if (!animation) return { modal: el.matches(':modal') };
+        animation.pause();
+        animation.currentTime = 5000;
+        const sample = { modal: el.matches(':modal'), opacity: Number(getComputedStyle(el).opacity) };
+        animation.finish();
+        return sample;
+      });
+      expect(sample.modal).toBe(true);
+      expect(sample.opacity).toBeCloseTo(0.5, 2);
+      await page.waitForFunction(count => document.querySelector('#status').textContent === 'Closed ' + count, ++calls);
+      expect(await launch.evaluate(el => el === document.activeElement)).toBe(true);
+    }
+    await open();
+    await page.locator('#dismiss').click();
+    await page.locator('#stay').evaluate(el => el.click());
+    expect(await sheet.evaluate(async el => {
+      await Promise.resolve();
+      return el.matches(':modal') && !el.hasAttribute('data-exact-dialog-closing');
+    })).toBe(true);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    expect(await sheet.evaluate(el => { document.querySelector('#dismiss').click(); return el.open; })).toBe(false);
+    await page.waitForFunction(count => document.querySelector('#status').textContent === 'Closed ' + count, ++calls);
+    expect(await page.locator('#positioned').evaluate(el => {
+      el.showModal();
+      return getComputedStyle(el).position;
+    })).toBe('absolute');
+  } finally { await browser.close(); }
+}, 60_000);

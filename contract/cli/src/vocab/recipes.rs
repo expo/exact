@@ -103,6 +103,7 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("snapback-tests"),
     recipe!("socket-ticket"),
     recipe!("store-update"),
+    recipe!("supabase"),
     recipe!("suspending-feed"),
     recipe!("symbols"),
     recipe!("tabs"),
@@ -120,6 +121,7 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("web-sessions"),
     recipe!("website"),
     recipe!("website-hosting"),
+    recipe!("white-label"),
 ];
 
 pub const PATTERNS: &[(&str, &str)] = &[

@@ -14,6 +14,11 @@ const FILE_CHOOSER: &str = "org.freedesktop.portal.FileChooser";
 const DBUS: &str = "org.freedesktop.DBus";
 const DBUS_PATH: &str = "/org/freedesktop/DBus";
 
+#[cfg(target_os = "linux")]
+mod settings;
+#[cfg(target_os = "linux")]
+pub(crate) use settings::watch_settings;
+
 /// A connection to a message bus, authenticated and named.
 pub(crate) struct Bus {
     stream: UnixStream,

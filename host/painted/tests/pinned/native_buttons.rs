@@ -423,3 +423,60 @@ fn outline_none_paints_no_ring_on_a_focused_button() {
         }
     }
 }
+
+#[test]
+fn scripted_focus_reveals_an_offscreen_button() {
+    super::pin_font();
+    let present = |p: &mut Presenter<()>| {
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
+        {
+            let frame = p.display_frame().unwrap();
+            assert!(p.display_complete(&frame));
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "android")))]
+        p.frame();
+    };
+    for initial in ["true", "false"] {
+        let source = format!(
+            r#"component App
+  state listed = {initial}
+  action jump
+    listed = true
+    focus("last")
+  view
+    column width=360 height=250
+      button "Focus last" testId="jump" press=jump
+      column testId="port" width=260 height=110 overflow-y="auto"
+        box height=280 flex-shrink=0
+        if listed
+          button "Last row" id="last" testId="last" height=36 flex-shrink=0
+"#
+        );
+        let plan = contract::compile(&source).unwrap();
+        let (mut p, error) = Presenter::boot_with(
+            &plan.encode(),
+            (),
+            (360., 250.),
+            1.,
+            Default::default(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none());
+        let id = |p: &Presenter<()>, name| {
+            let kernel = p.host().kernel();
+            kernel
+                .node_by_key(kernel.find_by_test_id(name)[0])
+                .unwrap()
+                .id
+        };
+        present(&mut p);
+        let (jump, port) = (id(&p, "jump"), id(&p, "port"));
+        assert_eq!(p.scroll_of(port).1, 0.);
+        p.tap(jump).unwrap();
+        p.run_commands(<()>::default);
+        assert_eq!(p.focus(), Some(id(&p, "last")));
+        present(&mut p);
+        assert_eq!(p.scroll_of(port).1, 206., "listed at launch: {initial}");
+    }
+}

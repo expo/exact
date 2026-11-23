@@ -853,7 +853,8 @@ def cadvance (p : CProgram) (o : Oracle) (c : CConfig) (t : F64)
         let c := { c with armed := c.armed.filter (·.1 != m), now := if c.now < w then w else c.now }
         match crunAction p o c .root a [] with
         | (c, .ok) => go n c
-        | (c, out) => (c, out)
+        | (c, .refused e) => resumeRefused applyChanges c e (go n)
+        | (c, out@(.poisoned _)) => (c, out)
       | .none =>
       match due c with
       | .none => finish c
@@ -867,7 +868,8 @@ def cadvance (p : CProgram) (o : Oracle) (c : CConfig) (t : F64)
         let c := { c with timers, now := if tm.change && tm.next < c.now then c.now else tm.next }
         match crunAction p o c .root tm.action [] with
         | (c, .ok) => if tm.change && !applyChanges then (c, .ok) else go n c
-        | (c, out) => (c, out)
+        | (c, .refused e) => resumeRefused applyChanges c e (go n)
+        | (c, out@(.poisoned _)) => (c, out)
   if t < c.now then (c, .ok) else go timerFireLimit c
 
 /-! ## Observation -/
@@ -892,7 +894,7 @@ def cdispatchAt (p : CProgram) (o : Oracle) (c : CConfig) (target event : String
   | .none => cdispatch p o c target event payload
   | .some n =>
     if (n.handlers.find? (·.event == event)).isNone then cdispatch p o c target event payload else
-    match cadvance p o c c.now with
+    match cadvance p o c c.now true with
     | (c₁, .poisoned e) => (c₁, .poisoned e)
     | (c₁, o₁) =>
       match cdispatch p o c₁ target event payload with

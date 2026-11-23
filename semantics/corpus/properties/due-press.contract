@@ -1,0 +1,20 @@
+// The boot leaves two change actions due; the press runs after them, and its
+// `after` pair reads the configuration they left.
+component App
+  state pressed = false
+  state a = 0
+  state b = 0
+  action markA
+    a = a + 1
+  action markB
+    b = b + 1
+  action press
+    pressed = true
+  task watchA when not pressed key=pressed
+    change(markA)
+  task watchB when not pressed key=pressed
+    change(markB)
+  view
+    column
+      if not pressed
+        button "Go" press=press testId="go"

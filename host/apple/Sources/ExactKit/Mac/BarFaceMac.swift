@@ -2,7 +2,7 @@
 import AppKit
 import CoreText
 
-/// The bounded bar face UIKit's ChipFace draws: text, symbols and sized dots.
+/// A readout's face in the Mac toolbar: text, symbols and sized dots.
 /// Read styles because a projected header has no laid-out page geometry.
 struct MacBarFace {
     private let parts: [(CGSize, CGFloat, (CGRect) -> Void)]

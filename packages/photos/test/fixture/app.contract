@@ -2,8 +2,9 @@
 // @exact/photos, its answers shown by testId for the suite. The list is read
 // once `read` is pressed; its first six photos are drawn as pictures, each
 // counting its `load` and `error`. `read-all` and `read-all-2` read every
-// page, 500 or 2 a page.
-use photoLibraryStatus, copyPhotoAsset, addToPhotoLibrary, managePhotoSelection, PhotoLibraryStatus, PhotoAssetList, PhotoCopy, PhotoAdded from "@exact/photos"
+// page, 500 or 2 a page; `read-shots` and `read-shots-2` the screenshots
+// alone (LLP 1133.019.000 D4); `watch` shows what changed since a token.
+use photoLibraryStatus, photoChanges, copyPhotoAsset, addToPhotoLibrary, managePhotoSelection, PhotoLibraryStatus, PhotoAssetList, PhotoCopy, PhotoAdded, PhotoChanges from "@exact/photos"
 
 // Every page of the list, read by following its cursors.
 shape Paged
@@ -11,16 +12,21 @@ shape Paged
   count: number
   distinct: number
   ordered: bool
+  marked: bool
+  first: string
 
 component Fixture
   state reading = false
   state pageSize = 0
+  state shotSize = 0
+  state watching = false
   state loads = 0
   state errors = 0
   state lastError = ""
   resource status = photoLibraryStatus() as shape PhotoLibraryStatus else empty()
   resource list = assets(reading) as shape PhotoAssetList else empty()
-  resource all = everything(pageSize) as shape Paged else empty()
+  resource all = everything(pageSize, false) as shape Paged else empty()
+  resource shots = everything(shotSize, true) as shape Paged else empty()
   mutation copied as shape PhotoCopy
   mutation added as shape PhotoAdded
   mutation managed as shape PhotoLibraryStatus
@@ -32,6 +38,10 @@ component Fixture
     reading = true
   action readAll(size: number)
     pageSize = size
+  action readShots(size: number)
+    shotSize = size
+  action watch
+    watching = true
   action copyFirst
     send copied = copyPhotoAsset(asset=first)
   action addCopy
@@ -49,6 +59,7 @@ component Fixture
       text (match status.apple { case some(a) => a.authorizationStatus + " " + a.addOnlyAuthorizationStatus, case none => "none" }) testId="apple"
       text `${list.assets.length}` testId="count"
       text `${all.pages} ${all.count} ${all.distinct} ${all.ordered}` testId="all"
+      text `${shots.pages} ${shots.count} ${shots.distinct} ${shots.ordered} ${shots.marked} ${shots.first}` testId="shots"
       text first testId="first"
       text (match list.assets.at(0) { case some(a) => `${a.width}x${a.height} ${a.picture == "photos:" + a.id}`, case none => "" }) testId="first-size"
       text `${loads} ${errors} ${lastError}` testId="pictures"
@@ -67,9 +78,48 @@ component Fixture
         text "Read all"
       button press=readAll(2) testId="read-all-2"
         text "Read all, 2 a page"
+      button press=readShots(500) testId="read-shots"
+        text "Read screenshots"
+      button press=readShots(2) testId="read-shots-2"
+        text "Read screenshots, 2 a page"
+      button press=watch testId="watch"
+        text "Watch"
+      if watching
+        Changes()
       button press=copyFirst testId="copy"
         text "Copy"
       button press=addCopy testId="add"
         text "Add"
       button press=manage testId="manage"
         text "Manage"
+
+// What changed since a token (LLP 1133.019.000), shown by testId for the
+// drives: the ids of each list, the flags, the error and the token. Advance
+// takes the answer's token; Since takes any text; Screenshots narrows the
+// view, its word given twice, as the module takes it once.
+component Changes
+  state since = ""
+  state limit = 500
+  state shots = false
+  resource changes = photoChanges(since=since, limit=limit, subtypes=(shots ? ["screenshot", "screenshot"] : [])) as shape PhotoChanges else empty()
+  action advance(next: string)
+    since = next
+  action setSince(value)
+    since = value
+  action pageOfOne
+    limit = 1
+  action onlyScreenshots
+    shots = true
+  view
+    column gap=4
+      text `${changes.added.map(a => a.id).join(",")}|${changes.updated.map(a => a.id).join(",")}|${changes.deleted.join(",")}|${changes.more} ${changes.expired}` testId="changes"
+      text (match failure(changes) { case some(f) => f.code, case none => "" }) testId="changes-error"
+      text changes.token testId="token"
+      row gap=8
+        button press=advance(changes.token) testId="advance"
+          text "Advance"
+        button press=pageOfOne testId="page-of-one"
+          text "One a page"
+        button press=onlyScreenshots testId="only-screenshots"
+          text "Screenshots"
+      input value=since input=setSince aria-label="Since" testId="since"

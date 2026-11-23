@@ -4,9 +4,7 @@ use super::*;
 impl<D: DataSource> Presenter<D> {
     pub(crate) fn draw_and_capture_canvases(&mut self, frame: bool) {
         // LLP 1056: the 2D canvases' draws for this turn's commits.
-        self.dirty |= self
-            .host
-            .sync_canvases(self.brush.scale as f64, frame, &self.assets);
+        self.dirty |= self.sync_canvases(frame);
         for r in std::mem::take(&mut self.surfaces.captures) {
             if !self.host.runner().holds(r.ticket) {
                 continue;

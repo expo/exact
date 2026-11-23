@@ -730,7 +730,7 @@ impl crate::delivery::Store for StagedPlan {
     fn fd(&self) -> std::os::unix::io::RawFd {
         -1
     }
-    fn check(&self) -> bool {
+    fn check(&self, _: fn()) -> bool {
         false
     }
     fn take_line(&mut self) -> Option<String> {

@@ -32,6 +32,7 @@ impl<D: DataSource> Presenter<D> {
             None,
             "/",
             Some(region),
+            crate::app::Services::default(),
         )?;
         presenter.measure(); // LLP 1079 D1
         Ok((presenter, error))
@@ -82,10 +83,10 @@ impl<D: DataSource> Presenter<D> {
         let _roles = self.host.runner().bind_roles();
         let frame = crate::text::cache::deferring_eviction(|| {
             // The probe draws nothing, so the canvases' tick stays with the frame's own paint.
-            if !self.host.flights.reveal.is_empty() {
+            if self.focus_reveal.is_some() || !self.host.flights.reveal.is_empty() {
                 self.paint_frame(FrameTarget::Geometry, false, true);
                 if self.last_frame_succeeded {
-                    self.reveal_flights();
+                    self.reveal_before_paint();
                 }
             }
             let frame = self.paint_frame(target, canvas_frame, false);
@@ -135,7 +136,7 @@ impl<D: DataSource> Presenter<D> {
         &mut self,
         target: FrameTarget,
         canvas_frame: bool,
-        flight_probe: bool,
+        reveal_probe: bool,
     ) -> Option<Arc<Pixmap>> {
         self.brush.shared.update(&self.host);
         self.brush.composition = self.ime_paint();
@@ -260,7 +261,7 @@ impl<D: DataSource> Presenter<D> {
             motion: &motion,
         };
         let mut paint = |brush: &mut Painter| match region {
-            _ if flight_probe => brush.flight_probe(&scene, self.viewport),
+            _ if reveal_probe => brush.reveal_probe(&scene, self.viewport),
             Some(region) => brush
                 .paint_region(
                     &scene,
@@ -323,7 +324,7 @@ impl<D: DataSource> Presenter<D> {
                 }
             }
         };
-        if self.last_frame_succeeded && !flight_probe && self.host.flights.enabled {
+        if self.last_frame_succeeded && !reveal_probe && self.host.flights.enabled {
             self.host
                 .flights
                 .recorded

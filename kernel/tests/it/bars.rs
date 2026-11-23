@@ -239,7 +239,7 @@ fn a_header_of_buttons_alone_is_a_bar_with_no_title() {
                 HEADER,
                 vec![
                     button(22, BACK),
-                    view(17, vec![]),
+                    view(17, vec![view(19, vec![])]),
                     view(
                         18,
                         vec![button(13, &[]), Node(70, NodeType::Text, STATUS, vec![])],
@@ -450,7 +450,140 @@ fn a_readout_is_an_item_that_is_no_button() {
     );
 }
 
+/// LLP 1141.004 D1: an element the bar has no object for (a row of a
+/// progress and its words, a picture, a second text) is no item. A box
+/// holding a button, pressed or not, is walked for it. A button that presses
+/// nothing is no item, and a box of spacers none. Inside the heading's
+/// wrapper what is not a part is the title's.
+#[test]
+fn an_element_the_bar_has_no_object_for_is_no_item() {
+    const IDLE: Props = &[
+        (PropId::Type, "button"),
+        (PropId::AccessibilityRole, "button"),
+    ];
+    let tree = kernel(view(
+        10,
+        vec![Node(
+            11,
+            NodeType::View,
+            HEADER,
+            vec![
+                view(
+                    60,
+                    vec![Node(61, NodeType::Control, &[], vec![]), text(62, &[])],
+                ),
+                text(12, HEADING),
+                view(
+                    70,
+                    vec![button(13, &[]), Node(71, NodeType::Image, &[], vec![])],
+                ),
+                text(72, &[]),
+                Node(73, NodeType::Control, IDLE, vec![]),
+                view(74, vec![]),
+                // A box around a button that presses nothing is walked: the
+                // button is an item once it presses, or nothing.
+                view(75, vec![Node(76, NodeType::Control, IDLE, vec![])]),
+                // A box of spacers shows nothing.
+                view(77, vec![view(78, vec![])]),
+                // A link with nothing pressing it follows its `href`: an item.
+                Node(
+                    79,
+                    NodeType::Pressable,
+                    &[(PropId::Href, "/history")],
+                    vec![],
+                ),
+                // `role="link"` alone, or an `href` cleared to nothing,
+                // follows nothing: a button that presses nothing.
+                Node(
+                    84,
+                    NodeType::Pressable,
+                    &[(PropId::AccessibilityRole, "link")],
+                    vec![],
+                ),
+                Node(85, NodeType::Pressable, &[(PropId::Href, "")], vec![]),
+            ],
+        )],
+    ));
+    let shape = tree.header_shape(10, None, true, &pressed).unwrap();
+    assert_eq!(shape.leading, Vec::<u32>::new(), "the row is no item");
+    assert_eq!(shape.trailing, vec![13, 79], "the buttons alone");
+    assert_eq!(shape.items, vec![13, 79]);
+    // The heading's wrapper: its picture and its second line are the title's.
+    let wrapped = kernel(view(
+        10,
+        vec![Node(
+            11,
+            NodeType::View,
+            HEADER,
+            vec![
+                view(
+                    80,
+                    vec![
+                        Node(81, NodeType::Image, &[], vec![]),
+                        text(12, HEADING),
+                        text(82, &[]),
+                    ],
+                ),
+                button(41, &[]),
+            ],
+        )],
+    ));
+    let shape = wrapped.header_shape(10, None, true, &pressed).unwrap();
+    assert_eq!((shape.leading, shape.trailing), (vec![], vec![41]));
+    // With no heading, such an element keeps the header in the page.
+    let untitled = kernel(view(
+        10,
+        vec![Node(
+            11,
+            NodeType::View,
+            HEADER,
+            vec![button(41, &[]), text(83, &[])],
+        )],
+    ));
+    assert_eq!(untitled.header_shape(10, None, true, &pressed), None);
+    // A host's mirror: route > header > [heading, image, idle button].
+    let words = [
+        0,
+        1,
+        fact::HEADER,
+        3,
+        fact::HEADING,
+        0,
+        0,
+        0,
+        fact::BUTTON,
+        0,
+    ];
+    // No item: the image is none, the idle button none.
+    assert_eq!(
+        bars::header_shape_words(&words, 0),
+        Some(vec![1, 3, 2, 0, 0, 0, 0, 0, 0])
+    );
+}
+
 type Props = &'static [(PropId, &'static str)];
+
+/// A heading's level is its own three bits: an `href` on the heading
+/// (`fact::HREF`, above them) leaves a level-1 heading level 1.
+#[test]
+fn a_heading_with_an_href_keeps_its_level() {
+    const LINKED_HEADING: Props = &[
+        (PropId::AccessibilityRole, "heading"),
+        (PropId::AccessibilityHeadingLevel, "1"),
+        (PropId::Href, "/history"),
+    ];
+    let tree = kernel(view(
+        10,
+        vec![Node(
+            11,
+            NodeType::View,
+            HEADER,
+            vec![text(12, LINKED_HEADING)],
+        )],
+    ));
+    let shape = tree.header_shape(10, None, true, &pressed).unwrap();
+    assert_eq!((shape.heading, shape.level), (Some(12), 1));
+}
 
 /// Whether a header button with no `press` is an item is whether what it
 /// invokes, as HTML resolves it (`exact_kernel::Invocation`), opens what it

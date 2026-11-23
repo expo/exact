@@ -9,13 +9,17 @@
 
 use super::{is_full_clear_rect, Env, State};
 use exact_canvas::list::{Op, Record, HEADER, MAGIC, VERSION};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use tiny_skia::{PathBuilder, Pixmap, Transform};
 
 /// The last single-list full-redraw recorded for prefix comparison.
 pub(super) struct LastDraw {
     pub bytes: Vec<u8>,
 }
+
+/// A weak reference distinguishes a replaced handle even if the allocator
+/// reuses its address. A missing handle also invalidates when it arrives.
+pub(super) type ImageReads = Vec<(String, Option<Weak<super::ImagePixels>>)>;
 
 /// Snapshot of a canvas after replaying `bytes` from `entry_state`.
 pub(super) struct Checkpoint {
@@ -25,9 +29,7 @@ pub(super) struct Checkpoint {
     pub entry_state: State,
     pub objects_epoch: u64,
     pub text_ptr: usize,
-    /// `(source, Arc::as_ptr)` for every image looked up in `0..recs`; `0`
-    /// records a missing handle so a later load invalidates the checkpoint.
-    pub images: Vec<(String, usize)>,
+    pub images: ImageReads,
     pub pixmap: Arc<Pixmap>,
     /// Pixels painted after this checkpoint in the previous draw.
     pub tail: Option<tiny_skia::IntRect>,
@@ -56,13 +58,15 @@ impl Checkpoint {
         {
             return false;
         }
-        self.images.iter().all(|(src, ptr)| {
-            let current = env
-                .images
-                .get(src)
-                .map_or(0, |img| Arc::as_ptr(&img.pixels) as usize);
-            current == *ptr
-        })
+        self.images
+            .iter()
+            .all(|(src, previous)| match (previous, env.images.get(src)) {
+                (None, None) => true,
+                (Some(previous), Some(current)) => {
+                    previous.as_ptr() == Arc::as_ptr(&current.pixels)
+                }
+                _ => false,
+            })
     }
 }
 

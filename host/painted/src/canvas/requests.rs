@@ -140,6 +140,15 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.force = true;
     }
 
+    /// What the reader reported of the live activities it shows
+    /// (`Activities.kt`, LLP 1126 D13): a send's answer, or the list.
+    pub fn activities(&mut self, json: &str) {
+        if let Some(error) = self.p.activities(json) {
+            self.p.host_mut().log(&error);
+        }
+        self.force = true;
+    }
+
     /// What the activity asked for the session's orientation lock
     /// (`Orientation.kt`, LLP 1133.029 D6), and a line its resolution
     /// journals: a conflict, or a type this device does not show.

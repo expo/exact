@@ -51,8 +51,8 @@ impl Store for Updates {
     fn fd(&self) -> std::os::unix::io::RawFd {
         Updates::fd(self)
     }
-    fn check(&self) -> bool {
-        Updates::check(self)
+    fn check(&self, wake: fn()) -> bool {
+        self.check_and_wake(wake)
     }
     fn take_line(&mut self) -> Option<String> {
         Updates::take_line(self)

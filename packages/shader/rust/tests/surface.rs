@@ -19,6 +19,7 @@ fn inputs(play: Option<&str>, values: &[(&str, Value)]) -> Vec<Value> {
         Value::str("assets/test.wgsl"),
         Value::Number(30.0),
         play.map(Value::str).unwrap_or(Value::Unit),
+        Value::Unit,
         Value::List(
             values
                 .iter()
@@ -79,7 +80,8 @@ fn a_fragment_file_draws_encoded_srgb_with_opaque_alpha() {
     );
     let (pixels, wants) = draw(&gpu, surface.as_mut(), &frame(0.0));
     for point in [(0, 0), (8, 6), (15, 11)] {
-        assert_eq!(pixels.at(point.0, point.1), [64, 128, 191, 255]);
+        near(pixels.at(point.0, point.1), [64, 128, 191, 255]);
+        assert_eq!(pixels.at(point.0, point.1)[3], 255);
     }
     assert!(!wants);
     assert!(surface.opaque());
@@ -90,9 +92,44 @@ fn a_fragment_file_draws_encoded_srgb_with_opaque_alpha() {
 }
 
 #[test]
+fn premultiplied_alpha_reaches_the_page_and_a_switch_blends_until_its_picture_draws() {
+    let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
+        return;
+    };
+    let text = "@fragment fn edge(@builtin(position) at: vec4f) -> @location(0) vec4f {
+        return select(vec4f(0.25, 0.125, 0., 0.5), vec4f(0.), at.x > 8.);
+    }";
+    let mut surface = load(text, None, &[]);
+    let (pixels, _) = draw(&gpu, surface.as_mut(), &frame(0.0));
+    near(pixels.at(2, 6), [64, 32, 0, 255]);
+    assert_eq!(pixels.at(12, 6), [0, 0, 0, 255]);
+    assert!(surface.opaque());
+
+    let mut bound = inputs(None, &[]);
+    for (mode, inside, outside) in [
+        ("premultiplied", [64, 32, 0, 128], [0, 0, 0, 0]),
+        ("opaque", [64, 32, 0, 255], [0, 0, 0, 255]),
+    ] {
+        bound[3] = Value::str(mode);
+        surface.bind(&bound, None).unwrap();
+        // Until the new picture draws, the one shown may write alpha.
+        assert!(!surface.opaque(), "{mode}");
+        let (pixels, _) = draw(&gpu, surface.as_mut(), &frame(0.0));
+        near(pixels.at(2, 6), inside);
+        assert_eq!(pixels.at(12, 6), outside);
+        assert_eq!(surface.opaque(), mode == "opaque");
+    }
+
+    bound[3] = Value::str("straight");
+    let error = surface.bind(&bound, None).unwrap_err();
+    assert_eq!(error.0, "alphaMode: expected opaque or premultiplied");
+    assert!(surface.opaque());
+}
+
+#[test]
 fn clearing_a_loaded_source_discards_retained_pixels_until_a_new_frame() {
     static REGISTRY: exact_gpu::Registry = exact_gpu::Registry {
-        surfaces: &[("shader", 3, exact_shader::surface)],
+        surfaces: &[("shader", 4, exact_shader::surface)],
         shaders: &[],
     };
     let Some(gpu) = fixture::device_or_skip(fixture::device()) else {

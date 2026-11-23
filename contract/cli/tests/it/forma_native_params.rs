@@ -456,13 +456,13 @@ fn the_bindings_name_a_param_by_its_component() {
     let swift = read("forma.swift");
     assert!(
         swift.contains(&format!(
-            "    static let mapCardPin = ExactFormaToken(\"{pin}\")"
+            "    static let `mapCardPin` = ExactFormaToken(\"{pin}\")"
         )),
         "{swift}"
     );
     assert!(
         swift.contains(&format!(
-            "    static let mapCardInset = ExactFormaToken(\"{inset}\")"
+            "    static let `mapCardInset` = ExactFormaToken(\"{inset}\")"
         )),
         "a length too: {swift}"
     );
@@ -557,7 +557,7 @@ fn the_bindings_follow_the_build_and_an_icon_param_is_kept() {
     let pin = contract_lower::params::token_name("design/theme.forma#MapCard", "pin");
     assert!(
         swift.contains(&format!(
-            "static let mapCardPin = ExactFormaToken(\"{pin}\")"
+            "static let `mapCardPin` = ExactFormaToken(\"{pin}\")"
         )),
         "{swift}"
     );
@@ -566,7 +566,7 @@ fn the_bindings_follow_the_build_and_an_icon_param_is_kept() {
     let (ok, said) = gen("swift", &dir.join("design/theme.forma"));
     assert!(ok, "{said}");
     let swift = std::fs::read_to_string(dir.join(".exact/forma/forma.swift")).unwrap();
-    assert!(swift.contains("static let mapCardPin"), "{swift}");
+    assert!(swift.contains("static let `mapCardPin`"), "{swift}");
     // A design the build refuses writes no names.
     std::fs::write(
         dir.join("design/theme.forma"),

@@ -185,7 +185,7 @@ test('native verification owns its captures, products, bundle and receipt throug
 test.each(['ios', 'macos'])('repeated private %s drives reuse a validated build', async host => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-native-reuse-')), saved = { ...process.env };
   const sha256 = text => createHash('sha256').update(text).digest('hex');
-  let builds = 0, bakes = 0, signed;
+  let builds = 0, bakes = 0, signed, said = [];
   const module = { appId: 'test.reuse', abi: 1, grants: '', surfaces: {}, bytecodeVersion: 96 };
   const outputs = [];
   try {
@@ -193,11 +193,11 @@ test.each(['ios', 'macos'])('repeated private %s drives reuse a validated build'
     writeFileSync(resolve(dir, 'app.contract'), 'component App\n  text "Ready"\n');
     const source = resolve(dir, 'native.swift'); writeFileSync(source, 'native source');
     const app = resolveApp(dir);
-    const drive = async (plan = false) => {
+    const drive = async (plan = false, exit = 0) => {
       const owned = privateNativeBuild(app, 'agent'); outputs.push(owned);
       Object.assign(process.env, owned.env);
       await owned.seed?.(host);
-      const code = await buildFirst(host, app, { say() {}, wait() {}, bake: async (app, into) => {
+      const code = await buildFirst(host, app, { say: line => said.push(line), wait() {}, bake: async (app, into) => {
         bakes++; mkdirSync(into, { recursive: true });
         for (const [file, text] of [['app.plan', 'new plan'], ['app.hbc', 'bytecode'], ['app.module.json', JSON.stringify(module)]]) writeFileSync(resolve(into, file), text);
         return { code: 0, output: '' };
@@ -227,7 +227,7 @@ test.each(['ios', 'macos'])('repeated private %s drives reuse a validated build'
       else expect(state.changed).toEqual([]);
       const paths = appleArtifacts(app, { destination: host === 'ios' ? 'ios-simulator' : 'macos' });
       expect(readFileSync(host === 'ios' ? resolve(paths.bundle, 'receipt.json') : resolve(paths.bundle, 'Contents/Resources/receipt.json'), 'utf8')).toBe(signed);
-      owned.close();
+      owned.close(exit);
       expect(existsSync(owned.env.EXACT_APPLE_OUTPUT)).toBe(false);
     };
     const identity = createHash('sha256').update(resolve(app.dir)).digest('hex').slice(0, 16);
@@ -243,13 +243,31 @@ test.each(['ios', 'macos'])('repeated private %s drives reuse a validated build'
     expect(builds).toBe(1); expect(bakes).toBe(1);
     utimesSync(resolve(dir, 'app.contract'), 1, 1);
     writeFileSync(source, 'changed native source');
+    said = [];
     await drive();
     expect(builds).toBe(2);
+    // The reused build is kept, so the drive names what changed rather than finding no build.
+    expect(said.some(line => /^building for (iOS|macOS): the build is older than its sources \(.*native\.swift changed\)/.test(line))).toBe(true);
+    // A command that failed over a kept stale build publishes nothing: the cache keeps the build it had.
+    const before = readFileSync(resolve(cache, 'artifact.json'), 'utf8');
+    writeFileSync(source, 'native source of a failed command');
+    await drive(false, 1);
+    expect(builds).toBe(3);
+    expect(readFileSync(resolve(cache, 'artifact.json'), 'utf8')).toBe(before);
+    writeFileSync(source, 'changed native source');
     const artifact = JSON.parse(readFileSync(resolve(cache, 'artifact.json'), 'utf8'));
     const executable = artifact.files.find(([path, kind]) => kind === 'file' && path.includes('.app/') && !path.endsWith('.json'))[0];
     writeFileSync(resolve(cache, 'files', executable), 'corrupt cached executable');
     await drive();
-    expect(builds).toBe(3);
+    expect(builds).toBe(4);
+    // A stale build baked for another backend than the drive selects is not kept: its check would refuse it.
+    writeFileSync(resolve(dir, 'app.ts'), "export const origin = 'http://127.0.0.1:4400';\n");
+    writeFileSync(source, 'native source for the selected backend');
+    said = [];
+    const owned = privateNativeBuild(app, 'agent'); outputs.push(owned);
+    Object.assign(process.env, owned.env);
+    await owned.seed(host);
+    expect(nativeBuild(host, app).missing).toBe(true);
   } finally {
     for (const owned of outputs) owned.close();
     for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];

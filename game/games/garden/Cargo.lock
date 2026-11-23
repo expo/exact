@@ -444,6 +444,7 @@ dependencies = [
  "exact-gpu-reflect",
  "exact-kernel",
  "exact-plan",
+ "exact-route",
  "exact-runner",
  "exact-shader-uniforms",
  "libc",

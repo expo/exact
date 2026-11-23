@@ -292,6 +292,7 @@ fn shader_declarations_follow_the_fragment_and_uniform_rules() {
         ("src: f32", "src"),
         ("maxFps: f32", "maxFps"),
         ("animationPlayState: f32", "animationPlayState"),
+        ("alphaMode: f32", "alphaMode"),
         ("time: u32", "time"),
         ("resolution: vec3f", "resolution"),
         ("devicePixelRatio: vec2f", "devicePixelRatio"),
@@ -318,7 +319,7 @@ fn shader_declarations_follow_the_fragment_and_uniform_rules() {
 #[test]
 fn uniform_names_and_literal_values_are_checked() {
     let app = App::new();
-    app.compile("fragment(src=\"assets/plain.wgsl\", speed=2, tint=\"color(display-p3 1 0 0)\", maxFps=30, animationPlayState=\"paused\")").unwrap();
+    app.compile("fragment(src=\"assets/plain.wgsl\", speed=2, tint=\"color(display-p3 1 0 0)\", maxFps=30, animationPlayState=\"paused\", alphaMode=\"premultiplied\")").unwrap();
     app.compile("fragment(src=\"assets/plain.wgsl\", tint=[0.1, 0.2, 0.3, 1])")
         .unwrap();
     for argument in [
@@ -362,6 +363,40 @@ fn uniform_names_and_literal_values_are_checked() {
             .unwrap_err();
         assert_eq!(error.id, "analyze-surface-shader", "{error}");
     }
+}
+
+#[test]
+fn literal_surface_arguments_are_checked_whatever_the_source() {
+    let app = App::new();
+    app.compile("fragment(\"assets/plain.wgsl\", 30, \"running\", \"premultiplied\")")
+        .unwrap();
+    app.compile("fragment(src=\"assets/plain.wgsl\", alphaMode=\"opaque\")")
+        .unwrap();
+    for call in [
+        "fragment(src=\"assets/plain.wgsl\", alphaMode=\"straight\")",
+        "fragment(src=\"assets/plain.wgsl\", alphaMode=[\"premultiplied\"])",
+        "fragment(\"assets/plain.wgsl\", 0, none, \"straight\")",
+        "fragment(src=\"assets/plain.wgsl\", maxFps=1.5)",
+        "fragment(src=\"assets/plain.wgsl\", animationPlayState=\"stopped\")",
+        "fragment(\"assets/plain.wgsl\", 0, \"stopped\")",
+        "fragment(src=\"assets/plain.wgsl\", alphaMode=`straight`)",
+        "fragment(src=\"assets/plain.wgsl\", maxFps=some(-1))",
+    ] {
+        let error = app.compile(call).unwrap_err();
+        assert_eq!(error.id, "analyze-surface-shader", "{call}: {error}");
+        assert_eq!((error.span.line, error.span.col), (3, 5), "{call}");
+        assert!(error.message.contains("expected"), "{call}: {error}");
+    }
+    app.write("app.contract", "component App\n  state file = \"assets/plain.wgsl\"\n  state mode = \"straight\"\n  view\n    column\n      canvas surface=fragment(src=file, alphaMode=mode)\n      canvas surface=fragment(src=file, alphaMode=\"straight\")\n");
+    let errors = contract::compile_path_all(&app.0.join("app.contract"), false)
+        .err()
+        .unwrap();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(
+        errors[0].message,
+        "alphaMode: expected opaque or premultiplied"
+    );
+    assert_eq!(errors[0].span.line, 7);
 }
 
 #[test]

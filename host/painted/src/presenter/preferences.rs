@@ -152,6 +152,9 @@ impl<D: DataSource> Presenter<D> {
     pub(crate) fn page_execution(&mut self, hidden: bool, eligible: bool, seekable: bool) -> bool {
         let page = self.host.runner().page();
         let frozen = if seekable { page.frozen } else { !eligible };
+        // A canvas's device work, its game audio among it, stops with the
+        // activity and starts again with it, as on Apple and Windows.
+        self.surface_lifecycle(hidden, false);
         if page.hidden == hidden && page.frozen == frozen {
             return false;
         }
@@ -587,6 +590,7 @@ mod tests {
             let page = p.host.runner().page();
             assert_eq!(page.hidden, hidden);
             assert_eq!(page.frozen, frozen);
+            assert_eq!(p.surfaces.hidden, hidden, "the canvases are told");
             assert!(
                 !p.page_execution(hidden, eligible, false),
                 "duplicate reports make no commit"

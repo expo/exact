@@ -1,0 +1,5 @@
+after clock "clock work writes nothing"
+  writes none
+test "press at boot"
+  tap "go"
+  expect state synced == 1

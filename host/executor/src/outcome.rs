@@ -379,12 +379,9 @@ impl ibex2::stdlib::fetch::Transport for Fixture {
 }
 
 pub(super) fn fixture_fetch(grants: &str, work: super::ResponseWork) -> ibex2::host::Fetch {
-    ibex2::host::Host::with_transport(Box::new(Fixture(work)))
-        .endow(
-            ibex2::grant::GrantSet::parse(&exact_runner::io_grants(grants))
-                .expect("admitted grants"),
-        )
-        .fetch
+    let grants =
+        ibex2::grant::GrantSet::parse(&exact_runner::io_grants(grants)).expect("admitted grants");
+    ibex2::host::Fetch::new(std::sync::Arc::new(Fixture(work)), grants.into())
 }
 
 #[cfg(test)]

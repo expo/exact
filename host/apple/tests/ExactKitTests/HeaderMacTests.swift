@@ -377,6 +377,7 @@ final class HeaderMacTests: XCTestCase {
         XCTAssertTrue(p.toolbar.attach(to: window))
         XCTAssertEqual(window.title, "Library")
         XCTAssertEqual(window.subtitle, "3 books")
+        XCTAssertNil(p.toolbar.items[16], "the subtitle is no toolbar item")
         XCTAssertTrue(try node(p, 10).isHidden)
         let avatar = try XCTUnwrap(p.toolbar.items[17])
         XCTAssertEqual(avatar.label, "Profile")
@@ -405,6 +406,8 @@ final class HeaderMacTests: XCTestCase {
             ("a field", view(16, "input", ["type": "text"]), [11, 12, 13, 14, 16]),
             ("a button drawn as a filled box", view(16, "button", ["accessibilityLabel": "Profile"], press: true) + view(160) + view(161, "text", ["text": "AB"]) + [children(160, [161]), children(16, [160])], [11, 12, 13, 14, 16]),
             ("a pressable around the heading", view(16, "view", [:], press: true) + [children(16, [12])], [11, 16, 13, 14]),
+            // A row the iOS bar hosts (LLP 1141.004) and the toolbar has no item for.
+            ("a spinner and its words", view(16) + view(160, "control", ["type": "progress"]) + view(161, "text", ["text": "Updating"]) + [children(16, [160, 161])], [11, 12, 13, 14, 16]),
         ]
         for (what, extra, header) in cases {
             let p = fixture(extra: extra + [children(10, header)])

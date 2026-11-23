@@ -53,7 +53,7 @@ struct Prepared {
     fill: Option<Rc<Fill>>,
     instance: u32,
     /// The callee's `provide` bindings, in this use's scope.
-    provides: Vec<(String, Expr)>,
+    provides: Vec<Binding>,
 }
 
 /// Inline a component use. The stack holds this frame once for each use
@@ -141,7 +141,11 @@ fn prepare_use(node: &Node, subst: &mut Subst<'_, Expr>, ctx: &mut Ctx<'_>) -> O
         ctx.refuse("syntax-missing-prop", c.missing_props_message(args), *span);
     }
     for p in &c.props {
-        let Some(a) = args.iter().find(|a| a.name == p.name) else {
+        let Some(a) = args
+            .iter()
+            .find(|a| a.name == p.name)
+            .filter(|a| !ctx.refused_bindings.contains(&a.span))
+        else {
             child_subst.insert(p.name.clone(), absent(*span));
             continue;
         };
@@ -163,11 +167,11 @@ fn prepare_use(node: &Node, subst: &mut Subst<'_, Expr>, ctx: &mut Ctx<'_>) -> O
         child_subst.insert(p.name.clone(), value);
     }
     for p in &c.injects {
-        let Some((_, e)) = ctx.provides.iter().rev().find(|(n, _)| n == &p.name) else {
+        let Some(binding) = ctx.provides.iter().rev().find(|b| b.name == p.name) else {
             let missing: Vec<_> = c
                 .injects
                 .iter()
-                .filter(|inject| !ctx.provides.iter().any(|(n, _)| n == &inject.name))
+                .filter(|inject| !ctx.provides.iter().any(|b| b.name == inject.name))
                 .collect();
             let names = missing
                 .iter()
@@ -189,6 +193,11 @@ fn prepare_use(node: &Node, subst: &mut Subst<'_, Expr>, ctx: &mut Ctx<'_>) -> O
             child_subst.insert(p.name.clone(), absent(*span));
             continue;
         };
+        if ctx.refused_bindings.contains(&binding.span) && !p.ty.as_ref().is_some_and(is_action) {
+            child_subst.insert(p.name.clone(), absent(*span));
+            continue;
+        }
+        let e = &binding.expr;
         let e = match &p.ty {
             Some(ty) if ctx.typed_props && !is_action(ty) => {
                 Expr::Typed(Box::new(e.clone()), ty.clone(), e.span())
@@ -552,11 +561,7 @@ fn prepare_use(node: &Node, subst: &mut Subst<'_, Expr>, ctx: &mut Ctx<'_>) -> O
         &mut ctx.source_keys,
     );
     share_instance_props(c, &mut renamed, &child_subst, &derives, &value_names, ctx);
-    let provides = c
-        .provides
-        .iter()
-        .map(|b| (b.name.clone(), subst_expr(&b.expr, &mut child)))
-        .collect();
+    let provides = substitute_providers(&c.provides, &mut child);
     Some(Prepared {
         view: renamed,
         subst: child_subst,

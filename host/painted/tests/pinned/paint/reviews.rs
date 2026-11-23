@@ -378,3 +378,53 @@ fn agent_state_reports_the_current_painter_and_device() {
         assert!(painter["lastRefusal"].is_null());
     }
 }
+
+#[test]
+fn a_list_row_paints_its_caret_at_the_ime_cursor_area() {
+    let source = r##"component App
+  state draft = ""
+  action edit(value: string)
+    draft = value
+  view
+    column width="100%" height="100%"
+      text "Tasks" height=80
+      list flex=1
+        section
+          row
+            input testId="editor" value=draft input=edit placeholder="New task" caret-color="#ff0000"
+"##;
+    for choice in painters() {
+        let scale = 1.25;
+        let mut p = compiled(source, scale, choice);
+        p.frame();
+        let editor = view(&p, "editor");
+        p.tap(editor).unwrap();
+        for value in ["", "apple"] {
+            if !value.is_empty() {
+                p.type_text(editor, value).unwrap();
+            }
+            let frame = p.display_frame().unwrap();
+            assert!(p.display_complete(&frame));
+            p.display_presented(&frame, 0.);
+            let caret = p
+                .caret_frame()
+                .unwrap_or_else(|| panic!("{choice:?} has no caret geometry for {value:?}"));
+            assert_eq!(p.ime_cursor_area(), Some(caret));
+            let (_, row_y, _, row_height) = rect(&mut p, "editor");
+            assert!(row_y >= 80. && caret.1 >= row_y && caret.1 < row_y + row_height);
+            let (x, y, w, h) = caret;
+            let image = frame.as_ref();
+            let red = ((y * scale) as u32..((y + h) * scale).ceil() as u32).any(|iy| {
+                ((x * scale) as u32..((x + w) * scale).ceil() as u32).any(|ix| {
+                    image
+                        .pixel(ix, iy)
+                        .is_some_and(|p| p.red() > 180 && p.green() < 100 && p.blue() < 100)
+                })
+            });
+            assert!(
+                red,
+                "{choice:?} missed the caret at {caret:?} for {value:?}"
+            );
+        }
+    }
+}

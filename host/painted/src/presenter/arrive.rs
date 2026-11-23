@@ -135,7 +135,7 @@ impl<D: DataSource> Presenter<D> {
         }
         let error = match asked.filter(|&id| self.focusable(id) && self.focus_refusal(id).is_none())
         {
-            Some(id) => self.set_focus(Some(id), self.host.now()),
+            Some(id) => self.focus_and_reveal(id),
             None => self.autofocus(),
         };
         if let Some(error) = error {

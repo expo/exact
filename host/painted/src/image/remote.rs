@@ -252,7 +252,7 @@ const URGENT_STREAK: usize = 2;
 /// The process's image downloads.
 pub(super) struct Downloads {
     policy: Policy,
-    transport: RustlsHttpTransport,
+    transport: Box<dyn Transport>,
     queue: Mutex<VecDeque<Job>>,
     queued: Condvar,
     running: AtomicUsize,
@@ -276,7 +276,7 @@ impl Downloads {
     pub fn new(policy: Policy) -> Arc<Self> {
         Arc::new(Self {
             policy,
-            transport: RustlsHttpTransport::new(),
+            transport: Box::new(RustlsHttpTransport::new()),
             queue: Mutex::new(VecDeque::new()),
             queued: Condvar::new(),
             running: AtomicUsize::new(0),

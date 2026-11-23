@@ -105,6 +105,19 @@ test('static imports: import, export and side-effect forms, with comments, not d
   expect(staticImports(`function h(require) { return require('./h.js'); }`)).toEqual([]);
 });
 
+test('the shipped wasm drag-out listener has no imports for a retry to reuse', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-web-drag-out-'));
+  try {
+    await buildHostGlue(ROOT, { out: dir });
+    const files = webHostFiles('base'), source = files['drag-out.js'];
+    const code = readFileSync(source.startsWith('target/web-host/') ? join(dir, 'drag-out.js') : join(ROOT, source), 'utf8');
+    expect(new Bun.Transpiler({ loader: 'js' }).scanImports(code)).toEqual([]);
+    expect(files).not.toHaveProperty('drag-input.js');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("each group's files import statically only from their own group or base", async () => {
   await buildHostGlue(ROOT);
   const base = new Set(Object.keys(webHostFiles('base')));
@@ -133,6 +146,7 @@ test('concurrent host builds preserve modules already opened by a reader', async
       'glue.js': "export { value } from './navigation.js';\n",
       'navigation.js': "export { grant } from './grant-admission.js';\nexport const value = 'complete';\n",
       'grant-admission.js': 'export const grant = true;\n',
+      'drag-out.js': 'export const drag = true;\n',
     };
     for (const [name, text] of Object.entries(modules)) {
       writeFileSync(join(source, name), text);

@@ -773,12 +773,17 @@ fn locate(
 ) -> String {
     let rust_original = rust;
     let rust: Vec<&String> = rust.iter().filter(|l| !l.starts_with('#')).collect();
-    let step = rust
+    let headers: Vec<&&String> = rust
         .iter()
         .take(at + 1)
         .filter(|l| l.starts_with("== "))
-        .count()
-        .saturating_sub(1);
+        .collect();
+    // The printed step holding `at`, and the event it belongs to: a `due`
+    // step is its input's.
+    let chunk = headers.len().saturating_sub(1);
+    let due = headers.last().is_some_and(|l| l.as_str() == "== due");
+    let step = headers.iter().filter(|l| l.as_str() != "== due").count() + usize::from(due);
+    let step = step.saturating_sub(1);
     let mut out = String::new();
     let site = |events: &[Event], id: &str| -> Option<String> {
         let plan = compile(case).ok()?;
@@ -790,7 +795,15 @@ fn locate(
         out.push_str("  at boot\n");
     } else {
         let event = &case.events[step - 1];
-        out.push_str(&format!("  at step {step}: {}", event.label()));
+        out.push_str(&format!(
+            "  at step {step}: {}{}",
+            event.label(),
+            if due {
+                ", the work due at its arrival"
+            } else {
+                ""
+            }
+        ));
         if let Some((f, s)) = steps.get(step - 1) {
             out.push_str(&format!(" ({})", at_span(f, *s)));
         }
@@ -830,7 +843,7 @@ fn locate(
         _ => {}
     }
     if crate::chunks(rust_original)
-        .get(step)
+        .get(chunk)
         .is_some_and(|s| s.iter().any(|l| l == crate::observe::OMITTED_COMMIT))
     {
         out.push_str("  a commit the semantics has no branch for\n");

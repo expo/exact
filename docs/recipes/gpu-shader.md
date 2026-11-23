@@ -44,3 +44,12 @@ To add a parameter, declare a member such as `speed: f32` in `Uniforms`, then su
 `speed=0.5` beside `src`. A shader that reads time animates. `maxFps=30` caps its frame
 rate, and Reduce Motion holds it still. For texture channels or multiple passes, use the
 [Rust GPU surface](gpu-module.md).
+
+A shader's canvas is opaque: the alpha it returns is ignored. For a soft or irregular edge
+over the page, write `alphaMode="premultiplied"` beside `src` (WebGPU's
+[canvas alpha mode](https://www.w3.org/TR/webgpu/#enumdef-gpucanvasalphamode)) and return
+colour already multiplied by alpha, as in `vec4f(color * a, a)`, with no channel above `a`.
+The canvas then starts each frame transparent, and its `background-color` and the page show
+where alpha is below one. Every host that draws shaders composes it. On Android a
+premultiplied canvas is drawn into the window, so a full-window shader that can be opaque
+should stay opaque.

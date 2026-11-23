@@ -11,6 +11,7 @@ pub struct Field<'a> {
     pub rect: [f32; 4],
     pub size: f32,
     pub color: [u8; 4],
+    pub selection_colors: Option<[[u8; 4]; 2]>,
     pub value: &'a str,
     pub placeholder: &'a str,
     pub selection: [u32; 2],
@@ -157,6 +158,7 @@ pub fn paint(device: &mut D3d11, window: Window, field: &Field<'_>) -> Result<Op
         editor.rect = field.rect;
         editor.edit.resize(device, size)?;
         editor.edit.name(field.placeholder)?;
+        editor.edit.selection_colors(field.selection_colors)?;
         editor.edit.configure(
             [field.rect[0].round() as i32, field.rect[1].round() as i32],
             field.size,
@@ -397,6 +399,7 @@ mod tests {
             rect: [0., 0., 200., 40.],
             size: 16.,
             color: [0, 0, 0, 255],
+            selection_colors: None,
             value: "retained",
             placeholder: "",
             selection: [0, 0],

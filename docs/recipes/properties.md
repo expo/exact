@@ -32,8 +32,9 @@ never refuses "reset"
 Read root states or derives by name. Use `Component.action` for a child action.
 Derives may read state, pure functions and, in `always`, resources. A refusal
 shows the dependency chain. Once true, `stays true` must hold at each observed
-step. `after` checks an eligible commit and its landed continuations. Extra
-commits can make a line counted only. The [grammar](../contract-grammar.md#authored-tests)
+step. `after` checks an input's handler and its landed continuations from the
+state it met; `after clock` checks the work due when the input arrived.
+Other commits make a line counted only. The [grammar](../contract-grammar.md#authored-tests)
 defines each form.
 
 Run `bun exact.mjs contract verify app.contract`. It delivers test prefixes, explores

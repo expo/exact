@@ -528,7 +528,9 @@ fn main() {
     println!("cargo:rerun-if-changed={SCHEMA_PATH}");
     println!("cargo:rerun-if-changed=build.rs");
     let text = std::fs::read_to_string(SCHEMA_PATH).expect("read tables/format.json");
-    let value: serde_json::Value = serde_json::from_str(&text).expect("format.json parses");
+    let mut value: serde_json::Value = serde_json::from_str(&text).expect("format.json parses");
+    // A host can enable serde_json's preserve_order feature through another build dependency.
+    value.sort_all_objects();
     let schema: Schema = serde_json::from_value(value.clone()).expect("format.json shape");
     validate(&schema);
     let canonical = serde_json::to_string(&value).unwrap();

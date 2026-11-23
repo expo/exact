@@ -61,7 +61,10 @@ use contract_syntax::{BinOp, Component, Expr, File, Span, TemplatePart, TypeExpr
 use exact_plan::Stdlib;
 use frame::Frame;
 use injects::check_injects;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 /// A closed type.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1357,21 +1360,46 @@ fn check_with_sites(
         });
     }
     check_children(&called, &mut types, &mut sink);
+    let mut child_uses = Sink::default();
+    let mut refused_bindings = uses::check_child_uses(file, &types, &mut child_uses);
     // The root is checked against its inlined view, so a handler's real call
     // site (behind a child's prop) types the action's parameters.
     // The expanded root (LLP 1017 P4c): the inlined view plus every stateful
     // child's own declarations, lifted in — what lowering will lower.
     // A use that cannot be expanded is refused and left out; the rest of the
     // root is still checked, what it lacked reading as `?`.
-    let (mut expanded, refused) = contract_syntax::expand_checked(&called, capture_sites);
-    for e in refused {
-        sink.push(TypeError {
-            id: e.id,
-            message: e.message,
-            span: e.span,
-        });
-    }
-    let independent = check_root(file, &mut types, &expanded, &mut sink);
+    let mut before_expansion = sink.errors.len();
+    let (mut expanded, independent) = loop {
+        let (expanded, refused) =
+            contract_syntax::expand_checked(&called, capture_sites, &refused_bindings);
+        for e in refused {
+            sink.push(TypeError {
+                id: e.id,
+                message: e.message,
+                span: e.span,
+            });
+        }
+        for error in &child_uses.errors {
+            sink.push(error.clone());
+        }
+        let (independent, provider_errors) = check_root(
+            file,
+            &mut types,
+            &expanded,
+            &mut sink,
+            &mut refused_bindings,
+        );
+        if provider_errors.is_empty() {
+            break (expanded, independent);
+        }
+        // Provider types depend on expanded handlers. Once their scopes are
+        // known, replace a refused value only where a data inject reads it.
+        sink.errors.truncate(before_expansion);
+        for error in provider_errors {
+            sink.push(error);
+        }
+        before_expansion = sink.errors.len();
+    };
     persist::check(file, &types, &expanded, &mut sink);
     // What lowering lowers: each caller's names renamed apart from what its
     // callees read, after the checks spoke in the author's (LLP 1089 D7).
@@ -1421,17 +1449,15 @@ fn check_children(file: &File, types: &mut Types, sink: &mut Sink) {
     }
 }
 
-/// Check child uses before the expanded root; return the boundary between
-/// independent errors and errors substitution may have caused.
+/// Check the expanded root and return the boundary between independent
+/// errors and errors substitution may have caused, plus newly refused providers.
 fn check_root(
     file: &File,
     types: &mut Types,
     expanded: &contract_syntax::Expanded,
     sink: &mut Sink,
-) -> usize {
-    for (c, ct) in file.components.iter().zip(&types.components).skip(1) {
-        uses::check_uses(&c.view, &types.component_scope(c, ct), types, file, sink);
-    }
+    refused_bindings: &mut BTreeSet<Span>,
+) -> (usize, Vec<TypeError>) {
     for u in &expanded.owned_uses {
         if let Some(repeat) = u.repeat {
             sink.push(tasks::repeated_owner(file, u, repeat));
@@ -1455,17 +1481,8 @@ fn check_root(
     let scope = types.component_scope(&expanded.root, &types.components[0]);
     let root = &file.components[0];
     uses::check_uses(&root.view, &scope, types, file, sink);
-    for b in &root.provides {
-        sink.keep(infer(&b.expr, &scope, &types.shapes));
-    }
-    sink.keep_unit(check_injects(
-        &root.view,
-        &root.provides,
-        &scope,
-        types,
-        file,
-    ));
-    independent
+    let invalid = check_injects(root, &scope, types, file, sink, refused_bindings);
+    (independent, invalid)
 }
 
 #[cfg(test)]

@@ -18,6 +18,9 @@ use exact_runner::file_pickers::Kind;
 use exact_runner::file_pickers::Picker;
 use std::path::PathBuf;
 
+#[cfg(target_os = "linux")]
+pub(crate) use bus::watch_settings;
+
 #[cfg(unix)]
 pub(crate) mod wire;
 

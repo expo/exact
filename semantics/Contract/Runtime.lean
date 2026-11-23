@@ -586,6 +586,21 @@ inductive Outcome where
   | poisoned (why : Err)
   deriving Inhabited
 
+/-- A host keeps the first refusal while running the work ahead of an input.
+Poison and exhaustion of the firing budget end the advance. -/
+def Outcome.afterRefusal (later : Outcome) (first : Err) : Outcome :=
+  match later with
+  | .poisoned _ => later
+  | .refused e => if e == .refused "too many timer fires" then later else .refused first
+  | .ok => .refused first
+
+def resumeRefused {α} (applyChanges : Bool) (c : α) (e : Err)
+    (resume : α → α × Outcome) : α × Outcome :=
+  if applyChanges then
+    let rest := resume c
+    (rest.1, rest.2.afterRefusal e)
+  else (c, .refused e)
+
 def setSlot (slots : List (String × Value)) (x : String) (v : Value) : List (String × Value) :=
   slots.map fun (y, w) => if x == y then (y, v) else (y, w)
 
@@ -1400,8 +1415,10 @@ time (ties by declaration order), each at its own due time. An armed
 time (the answer landed first). A `queue` mutation's armed `next` runs
 before a `then` due at or after its time and before a timer due after it
 (LLP 1092 D3; the runner's `advance`). A refusal stops the advance there,
-with the clock at the refusing timer's due time. -/
-def advance (p : Program) (o : Oracle) (c : Config) (t : F64) : Config × Outcome :=
+with the clock at the refusing timer's due time. Before an input, the host
+applies each change receipt and continues to the same cutoff. -/
+def advance (p : Program) (o : Oracle) (c : Config) (t : F64)
+    (applyChanges : Bool := false) : Config × Outcome :=
   let due (c : Config) : Option (Timer × Nat) :=
     (c.timers.zipIdx).foldl (fun best (tm, i) =>
       if tm.next ≤ t then
@@ -1426,27 +1443,31 @@ def advance (p : Program) (o : Oracle) (c : Config) (t : F64) : Config × Outcom
         let c := { c with nexts := c.nexts.filter (·.1 != m), now := if c.now < w then w else c.now }
         match nextCommit p o c m with
         | (c, .ok) => go n c
-        | (c, out) => (c, out)
+        | (c, .refused e) => resumeRefused applyChanges c e (go n)
+        | (c, out@(.poisoned _)) => (c, out)
       | .some (.andThen m w a) =>
         let c := { c with armed := c.armed.filter (·.1 != m), now := if c.now < w then w else c.now }
         match thenCommit p o c a (thenArgsOf p m) [] [] with
         | (c, .ok) => go n c
-        | (c, out) => (c.armNexts p, out)
+        | (c, .refused e) => resumeRefused applyChanges (c.armNexts p) e (go n)
+        | (c, out@(.poisoned _)) => (c.armNexts p, out)
       | .some (.owned i w a) =>
         let c := { c with sendRows := disarm c.sendRows i, now := if c.now < w then w else c.now }
         match ownedThen p o c i a with
         | (c, .ok) => go n c
-        | (c, out) => (c.armNexts p, out)
+        | (c, .refused e) => resumeRefused applyChanges (c.armNexts p) e (go n)
+        | (c, out@(.poisoned _)) => (c.armNexts p, out)
       | .none =>
       match due c with
       | .none => finish c
       | .some (tm, i) =>
-        if tm.change && n + 1 < timerFireLimit then (c, .ok) else
+        if tm.change && !applyChanges && n + 1 < timerFireLimit then (c, .ok) else
         let timers := c.timers.set i tm.fired
         let c := { c with timers, now := if tm.change && tm.next < c.now then c.now else tm.next }
         match timerCommit p o c tm with
-        | (c, .ok) => if tm.change then (c, .ok) else go n c
-        | (c, out) => (c, out)
+        | (c, .ok) => if tm.change && !applyChanges then (c, .ok) else go n c
+        | (c, .refused e) => resumeRefused applyChanges c e (go n)
+        | (c, out@(.poisoned _)) => (c, out)
   if t < c.now then (c, .ok) else go timerFireLimit c
 
 end Contract

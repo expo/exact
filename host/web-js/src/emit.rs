@@ -169,6 +169,8 @@ struct Em<'a> {
     zoom: bool,
     /// Whether a `video` or `audio` is in the plan (`media.js` is installed).
     media: bool,
+    /// Whether the plan says `portal`: its boxes carry `data-exact-view` for portal.js's D3 checks.
+    portals: bool,
     /// Whether a route declares its own entrance or exit (shared.js plays it).
     route_parts: bool,
     /// Whether an image draws a symbol (`symbols.js`), and whether a
@@ -217,6 +219,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
     // Emitting parses the plan's CSS, and a plan decoded from a file has
     // not passed the compiler, which links every grammar.
     exact_kernel::style::link_all();
+    // @ref LLP 1013.002 §8 — placement comes to the JS target as its own piece.
     // A development build makes every token a property (LLP 1121 stage 4).
     let _every = crate::modes::every_for(plan, dev_reload);
     // And every overridden role its sheet's property (stage 5).
@@ -286,6 +289,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         follow: false,
         zoom: false,
         media: false,
+        portals: exact_runner::uses::portals(plan),
         route_parts: false,
         symbols: (false, false),
         heights: Default::default(),
@@ -742,6 +746,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             (em.follow, "import\"./follow.js\";"),
             (em.zoom, "import{zoom as $zoom}from\"./zoom.js\";"),
             (em.media, "import{mediaUse as $media}from\"./media.js\";"),
+            (em.portals, "import{portal as $portal}from\"./portal.js\";"),
             (links, "import{linkUse as $links}from\"./links.js\";"),
             (iframes, "import\"./iframes.js\";"),
             (lists, "import\"./list-items.js\";"),
@@ -915,6 +920,10 @@ impl Em<'_> {
             self.symbols.1 |= bound;
         }
         let (mut attrs, content, extra) = rows::attributes(element, &parts.props);
+        attrs.retain(|(k, _)| k != "data-portal");
+        if self.portals && matches!(node_type, NodeType::View | NodeType::SvgForeignObject) {
+            attrs.push(("data-exact-view".into(), String::new()));
+        }
         crate::symbols::path_in_source(&mut attrs);
         if element == "img" && exact_runner::rows::repeated(plan, exact_plan::NodesId(i)) {
             attrs.push(("loading".into(), "lazy".into()));
@@ -1078,7 +1087,7 @@ impl Em<'_> {
                     continue;
                 }
                 // A trap belongs to this binding instance even before it has a DOM element.
-                let f = self.binding_value(i, "{}", &b, scope)?;
+                let f = self.binding_value(i, "{}", &b, scope, true)?;
                 let f = self.counted(i, k, f);
                 let read = format!("{e}{name}");
                 let memo = self.uses.rt("bindingMemo");
@@ -1160,6 +1169,12 @@ impl Em<'_> {
         for (k, b) in row.bindings.iter().enumerate() {
             let b = plan.binding(b);
             if self.named_record(i, &b, &e, scope)? {
+                continue;
+            }
+            // @ref LLP 1013.002 D6 — placement is portal.js's, after each flush.
+            if b.kind == BindingKind::Prop && b.id == PropId::Portal as u16 {
+                let f = self.bound(i, &e, &b, scope)?;
+                let _ = write!(self.out, "$portal({e},{f});");
                 continue;
             }
             // tvOS's focus guide has no DOM property, whether literal or bound.
@@ -1266,7 +1281,7 @@ impl Em<'_> {
             }
             let raw = (lowers && b.kind == BindingKind::Style).then(|| self.out[at..].to_string());
             // Include dependencies added by lowering, such as a text row's shorthand.
-            if let Some(m) = crate::reads::field_mask(&self.out[at..]) {
+            if let Some(m) = self.mount_templates.field_mask(scope, &self.out[at..]) {
                 let (fm, stmt) = (self.uses.rt("fm"), self.out.split_off(at));
                 let _ = write!(self.out, "{fm}({m},()=>{{{stmt}}});");
             }

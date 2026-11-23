@@ -31,6 +31,11 @@ impl SourceMap {
         Self { sites, sources }
     }
 
+    /// Paths checked while resolving imports, including candidates that did not exist.
+    pub fn resolution_paths(&self) -> &[std::path::PathBuf] {
+        &self.sources.consulted
+    }
+
     /// A producer compiled a verified copy of the app tree. Restore its original
     /// filenames by relative path, without reading newer source contents. Every
     /// source must belong to the captured tree; a refusal changes no locations.

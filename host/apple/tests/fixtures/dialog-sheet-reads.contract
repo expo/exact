@@ -25,6 +25,16 @@ component App
           text "Clipped"
       dialog id="responsive" width="100%" height=180
         text "Sheet width"
+      dialog id="resizable" width="100%" padding=0 navigationDetent="medium large" navigationInitialDetent="large" navigationGrabber="hidden"
+        column height="100%" min-height=0
+          column flex=1 min-height=0 overflow-y="auto"
+            column height=1200
+          button testId="dialog-footer" flex-shrink=0
+            text "Footer"
+      dialog id="fitted-rests" navigationDetent="fit-content large"
+        ::backdrop
+          background-color="#20304080"
+        view width=100 height=contentHeight press=grow testId="grow-fitted"
       dialog id="growing" width=300
         view width=100 height=contentHeight press=grow testId="grow-sheet"
       dialog id="percentage" width=300 height="50%"

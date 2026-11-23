@@ -8,10 +8,7 @@ use crate::{
 use contract_syntax::{Attr, Binding, Expr, File, Node, Span, TypeExpr};
 use exact_plan::Plan;
 use serde_json::Value;
-use std::{
-    collections::{BTreeMap, HashSet},
-    path::Path,
-};
+use std::{collections::BTreeMap, path::Path};
 
 /// A compiled entry and the manifest that supplies its placeholder and refresh.
 #[derive(Debug, Clone)]
@@ -373,18 +370,18 @@ pub(super) fn compile_file(
     app: Option<&Path>,
 ) -> Result<Plan, Vec<CompileError>> {
     let fail = |m: String| refusal("snapshot-entry", m, Span::default());
-    let root = file
+    let index = file
         .components
         .iter()
-        .find(|c| c.name == widget.component)
+        .position(|c| c.name == widget.component)
         .ok_or_else(|| {
             fail(format!(
                 "entry {}: {}; name its component in app.contract",
                 widget.kind,
                 file.unknown_component_message(widget.component)
             ))
-        })?
-        .clone();
+        })?;
+    let root = file.components[index].clone();
     let shape = file
         .shapes
         .iter()
@@ -418,23 +415,7 @@ pub(super) fn compile_file(
         0,
     )
     .map_err(|m| fail(format!("entry {} preview: {m}", widget.kind)))?;
-    let mut reached = HashSet::from([root.name.clone()]);
-    loop {
-        let before = reached.len();
-        for c in &file.components {
-            if reached.contains(&c.name) {
-                Node::walk(&c.view).for_each(|n| {
-                    if let Node::Use { name, .. } = n {
-                        reached.insert(name.clone());
-                    }
-                });
-            }
-        }
-        if reached.len() == before {
-            break;
-        }
-    }
-    file.components.retain(|c| reached.contains(&c.name));
+    file.retain_component_tree(index);
     let routes = file.routes.take();
     file.tests.clear();
     file.launch.clear();

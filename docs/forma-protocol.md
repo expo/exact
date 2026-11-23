@@ -225,7 +225,10 @@ on macOS and Linux.
   pages, the auth callback, `/__dev/open`) carries
   `Content-Security-Policy: frame-ancestors 'self' http://127.0.0.1:7740` (*1.3*): the tool's
   origin and the page's own may frame it, no other. `'self'` lets a page the canvas shows frame
-  its own pages. No `X-Frame-Options`. Development only; the tool never scripts the frame.
+  its own pages. To frame the app from your own canvas at `http://127.0.0.1:7420`, start
+  the app with `EXACT_TOOL_PORT=7420 bun exact.mjs web`. This replaces port 7740 in the
+  development header. Open the canvas at that exact origin and use the dev loop's printed
+  URL as the iframe source. No `X-Frame-Options`. Development only; the tool never scripts the frame.
 - **Alone.** `bun exact.mjs forma serve <app> [--port <n>] [--lan] [--remote <host:port>] [--trust-tunnel <port>]` runs it with no app running.
   It binds loopback unless `--lan`, and a client reaching it over the LAN still can't get the token.
 - **One writer per project.** The design process holds `.exact/forma.lock`. When a second server

@@ -1171,6 +1171,12 @@ impl Painter {
                     b.affine = b
                         .affine
                         .map(|(t, r)| (t.post_translate(origin.0, origin.1), r));
+                    // Field geometry leaves the recording with its box so
+                    // the caret and pointer use the same viewport coordinates.
+                    if let Some(field) = walk.fields.get_mut(&b.id) {
+                        let field = Rc::make_mut(field);
+                        field.transform = field.transform.post_translate(origin.0, origin.1);
+                    }
                 }
             }
             for (id, inline) in &mut capture.inline {

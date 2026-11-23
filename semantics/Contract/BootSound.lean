@@ -440,7 +440,7 @@ theorem observe_step_sound {p : Program} (hcheck : check p = true) {c : Config}
     · exact one (.dispatch target event payload) h
     · split
       · exact one (.dispatch target event payload) h
-      obtain ⟨h₁, o₁⟩ := one (.advance c.now) h
+      obtain ⟨h₁, o₁⟩ := one (.advance c.now true) h
       simp only [Event.step] at h₁ o₁
       split
       · next c₁ e heq => rw [heq] at h₁ o₁; exact ⟨h₁, o₁⟩

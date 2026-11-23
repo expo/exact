@@ -413,7 +413,7 @@ impl<D: DataSource> Presenter<D> {
                     self.host.log(format!("focus \"{name}\" refused: {reason}"));
                     return None;
                 }
-                if let Some(e) = self.set_focus(Some(id), self.host.now()) {
+                if let Some(e) = self.focus_and_reveal(id) {
                     eprintln!("exact: {e}");
                 }
                 return (self.focus == Some(id)).then_some(id);
@@ -421,6 +421,19 @@ impl<D: DataSource> Presenter<D> {
         };
         self.host.log(format!("focus \"{name}\" refused: {reason}"));
         None
+    }
+
+    pub(super) fn focus_and_reveal(&mut self, id: ViewId) -> Option<String> {
+        let before = self.focus;
+        let error = self.set_focus(Some(id), self.host.now());
+        if before != Some(id) && self.focus == Some(id) {
+            if self.display.allows(self.host.kernel(), id) {
+                self.keep_in_view(id, reveal::Cause::FocusMove);
+            } else {
+                self.focus_reveal = self.host.kernel().node(id).map(|n| n.key);
+            }
+        }
+        error
     }
 
     /// `id` as the focus no ring marks, unless it is a text field, which
@@ -520,6 +533,7 @@ impl<D: DataSource> Presenter<D> {
             .map(|id| self.host.runner().focus_bubble(id, previous, true))
             .unwrap_or_default();
         self.focus = next;
+        self.focus_reveal = None;
         if reveal {
             self.field_reveal = true;
         }

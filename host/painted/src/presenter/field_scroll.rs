@@ -56,7 +56,12 @@ impl<D: DataSource> Presenter<D> {
 
     /// Set the next paint's caret visibility without changing selection or focus.
     pub fn set_caret_visible(&mut self, visible: bool) {
-        self.brush.caret_hidden = !visible;
+        self.set_caret_opacity(if visible { 255 } else { 0 });
+    }
+
+    /// Set insertion caret opacity for the next paint and report whether it changed.
+    pub fn set_caret_opacity(&mut self, opacity: u8) -> bool {
+        std::mem::replace(&mut self.brush.caret_opacity, opacity) != opacity
     }
 
     pub(crate) fn reveal_field_cursor(&mut self) -> Option<ViewId> {

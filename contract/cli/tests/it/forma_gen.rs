@@ -312,13 +312,11 @@ fn contract_types_follows_exports() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `gen swift` writes an `ExactFormaToken` member per colour token, a Swift
-/// keyword backquoted, for a native view's `ExactForma(view).color(_:)`.
 #[test]
 fn swift_names_each_token_as_a_member() {
     let dir = app(
         "swift",
-        "forma t\n\ntheme\n  surface.card = #ffffff\n  default = #000000\n",
+        "forma t\n\ntheme\n  surface.card = #ffffff\n  default = #000000\n  switch = 8px\n  precedencegroup = 4px\n",
         "component App\n  view\n    column\n",
     );
     let (ok, said) = gen("swift", &dir);
@@ -329,13 +327,17 @@ fn swift_names_each_token_as_a_member() {
         "{swift}"
     );
     assert!(
-        swift.contains(r#"    static let surfaceCard = ExactFormaToken("surface.card")"#),
+        swift.contains(r#"    static let `surfaceCard` = ExactFormaToken("surface.card")"#),
         "{swift}"
     );
-    assert!(
-        swift.contains(r#"    static let `default` = ExactFormaToken("default")"#),
-        "{swift}"
-    );
+    for name in ["default", "switch", "precedencegroup"] {
+        assert!(
+            swift.contains(&format!(
+                r#"    static let `{name}` = ExactFormaToken("{name}")"#
+            )),
+            "{swift}"
+        );
+    }
     let (ok, said) = gen("swift", &dir);
     assert!(ok && said.is_empty(), "unchanged, not written: {said}");
     let _ = std::fs::remove_dir_all(&dir);

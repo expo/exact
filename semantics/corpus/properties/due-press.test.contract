@@ -1,0 +1,9 @@
+after "press" "a press sets pressed and nothing else"
+  expect state pressed == true
+  expect state a == old
+  only writes pressed
+test "press at boot"
+  tap "go"
+  expect state pressed == true
+  expect state a == 1
+  expect state b == 1

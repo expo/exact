@@ -16,33 +16,13 @@ pub fn typescript(plan: &Plan) -> Result<String, String> {
     typescript_exporting(plan, None, &[])
 }
 
-/// [`typescript`], its `ColorToken` union bounded by the design's `exports`
-/// when it lists them ([`design_exports`]): what a binding may name (LLP
-/// 1121 D7), though a view may name more. `rust_sources` is the composer's
-/// ownership list: `TypeScriptSources` and `TypeScriptAnswer` exclude it,
-/// while `Sources` and `Answer` describe the complete data seam.
-pub fn typescript_exporting(
-    plan: &Plan,
-    exports: Option<&[String]>,
-    rust_sources: &[String],
-) -> Result<String, String> {
-    // Public callers may construct a Plan directly. Refuse malformed tables
-    // before following any indices, just as the runtime decoder does.
-    plan.redecode()
-        .map_err(|e| format!("invalid plan: {e:?}"))?;
-    let quoted = |s: &str| serde_json::to_string(s).expect("a string is JSON");
-    let mut out = String::from(
-        "// @generated from Contract source signatures; do not edit.\n\
-         // Static types do not replace runtime shape, identity, or grant checks.\n",
-    );
-    summary(plan, rust_sources, &mut out);
-    out.push('\n');
-    // Ibex2 owns the storage surface. Include its declaration source directly:
-    // this compiler needs neither its Rust runtime nor a JavaScript engine.
-    out.push_str(include_str!(
-        "../../../vendor/ibex/crates/ibex2/src/bindings/storage.d.ts"
-    ));
-    out.push('\n');
+const ANSWER: &str = "export type TypeScriptAnswer = <S extends TypeScriptSource>(source: S, args: Args<S>, store: Store, storage: Storage, native?: NativeModule | null) => Result<S> | Promise<Result<S>>;\n";
+
+fn quoted(value: &str) -> String {
+    serde_json::to_string(value).expect("a string is JSON")
+}
+
+fn type_rows(plan: &Plan, out: &mut String) -> Result<(), String> {
     for (i, row) in plan.types.iter().enumerate() {
         write!(out, "type T{i} = ").unwrap();
         match row.kind {
@@ -76,26 +56,10 @@ pub fn typescript_exporting(
         }
         out.push_str(";\n");
     }
-    let mutation_sources: BTreeSet<_> = plan
-        .actions
-        .iter()
-        .flat_map(|action| exact_runner::vm::instructions(plan.read_code(plan.code(action.body)).0))
-        .flatten()
-        .filter(|instruction| instruction.op == Opcode::Send)
-        .map(|instruction| plan.str(StrId(instruction.args[1] as u32)))
-        .filter(|source| plan.module_named(source).is_none() && plan.fetch_named(source).is_none())
-        .map(quoted)
-        .collect();
-    writeln!(
-        out,
-        "\n/** Sources called by compiled mutation sends. */\nexport type MutationSource = {};",
-        if mutation_sources.is_empty() {
-            "never".into()
-        } else {
-            mutation_sources.into_iter().collect::<Vec<_>>().join(" | ")
-        }
-    )
-    .unwrap();
+    Ok(())
+}
+
+fn source_map(plan: &Plan, out: &mut String) {
     out.push_str("\nexport interface SourceMap {\n");
     for row in &plan.sources {
         let name = plan.str(row.name);
@@ -120,8 +84,73 @@ pub fn typescript_exporting(
         }
         writeln!(out, "]; result: T{} }};", row.ty.0).unwrap();
     }
+    out.push('}');
+}
+
+/// The selected entry's data interface for checking its calls to the app's dispatcher.
+/// Storage and native capabilities use the app's ordinary declarations.
+pub fn typescript_entry_answer(plan: &Plan) -> Result<String, String> {
+    plan.redecode()
+        .map_err(|e| format!("invalid plan: {e:?}"))?;
+    let mut out =
+        String::from("import type { Store, Storage, NativeModule } from './app.contract.d.ts';\n");
+    type_rows(plan, &mut out)?;
+    source_map(plan, &mut out);
+    out.push_str("\ntype TypeScriptSource = keyof SourceMap;\ntype Args<S extends TypeScriptSource> = SourceMap[S]['args'];\ntype Result<S extends TypeScriptSource> = SourceMap[S]['result'];\n");
+    out.push_str(ANSWER);
+    Ok(out)
+}
+
+/// [`typescript`], its `ColorToken` union bounded by the design's `exports`
+/// when it lists them ([`design_exports`]): what a binding may name (LLP
+/// 1121 D7), though a view may name more. `rust_sources` is the composer's
+/// ownership list: `TypeScriptSources` and `TypeScriptAnswer` exclude it,
+/// while `Sources` and `Answer` describe the complete data seam.
+pub fn typescript_exporting(
+    plan: &Plan,
+    exports: Option<&[String]>,
+    rust_sources: &[String],
+) -> Result<String, String> {
+    // Public callers may construct a Plan directly. Refuse malformed tables
+    // before following any indices, just as the runtime decoder does.
+    plan.redecode()
+        .map_err(|e| format!("invalid plan: {e:?}"))?;
+    let mut out = String::from(
+        "// @generated from Contract source signatures; do not edit.\n\
+         // Static types do not replace runtime shape, identity, or grant checks.\n",
+    );
+    summary(plan, rust_sources, &mut out);
+    out.push('\n');
+    // Ibex2 owns the storage surface. Include its declaration source directly:
+    // this compiler needs neither its Rust runtime nor a JavaScript engine.
+    out.push_str(include_str!(
+        "../../../vendor/ibex/crates/ibex2/src/bindings/storage.d.ts"
+    ));
+    out.push('\n');
+    type_rows(plan, &mut out)?;
+    let mutation_sources: BTreeSet<_> = plan
+        .actions
+        .iter()
+        .flat_map(|action| exact_runner::vm::instructions(plan.read_code(plan.code(action.body)).0))
+        .flatten()
+        .filter(|instruction| instruction.op == Opcode::Send)
+        .map(|instruction| plan.str(StrId(instruction.args[1] as u32)))
+        .filter(|source| plan.module_named(source).is_none() && plan.fetch_named(source).is_none())
+        .map(quoted)
+        .collect();
+    writeln!(
+        out,
+        "\n/** Sources called by compiled mutation sends. */\nexport type MutationSource = {};",
+        if mutation_sources.is_empty() {
+            "never".into()
+        } else {
+            mutation_sources.into_iter().collect::<Vec<_>>().join(" | ")
+        }
+    )
+    .unwrap();
+    source_map(plan, &mut out);
     out.push_str(
-        "}\n\n\
+        "\n\n\
          export type Source = keyof SourceMap;\n\
          export type Args<S extends Source> = SourceMap[S]['args'];\n\
          /** A generated backend operation's arguments (distinct from this app's source tuple). */\n\
@@ -197,10 +226,8 @@ pub fn typescript_exporting(
         }
     )
     .unwrap();
-    out.push_str(
-        "export type TypeScriptSources = Pick<Sources, TypeScriptSource>;\n\
-         export type TypeScriptAnswer = <S extends TypeScriptSource>(source: S, args: Args<S>, store: Store, storage: Storage, native?: NativeModule | null) => Result<S> | Promise<Result<S>>;\n",
-    );
+    out.push_str("export type TypeScriptSources = Pick<Sources, TypeScriptSource>;\n");
+    out.push_str(ANSWER);
     tokens(plan, exports, &mut out);
     // Canvas types describe the data seam even when `draw` is exported from
     // another module; no producer needs to inspect app.ts to include them (LLP 1056 D1).

@@ -57,7 +57,10 @@ test('each verb of a new app\'s exact.mjs, and no verb, answers help from exact2
     const own = { seed: ['bun', 'seed.mjs'] }, index = indexText({ verbs: APP_VERBS, own }), forms = new Set();
     for (const text of [index, ...APP_VERBS.map((v) => helpText(v))]) for (const [, form] of text.matchAll(/bun exact\.mjs ((?:[\w<>-]+ )?(?:--help|-h)(?: all)?|help(?: all)?)(?=[:\s]|$)/g)) forms.add(form);
     assert.ok(forms.has('<verb> --help') && forms.has('<verb> --help all'), `the forms named: ${[...forms]}`);
-    const expected = (args) => { const verb = args.find((a) => HELP[a]); return verb ? helpText(verb, { all: args.includes('all') }) : index; };
+    const expected = (args) => {
+      const verb = args.find((a) => HELP[a]);
+      return verb ? helpText(verb, { all: args.includes('all') }) : `${index}\n\nExact checkout: ${realpathSync(sdk)}`;
+    };
     for (const form of forms) for (const verb of form.includes('<verb>') ? APP_VERBS : ['']) {
       const args = form.replace('<verb>', verb).split(' ').filter(Boolean), r = exact(...args);
       assert.equal(r.status, 0, `${args.join(' ')}: ${r.stderr}`);
@@ -208,6 +211,9 @@ test('a first build\'s helps are short, and --help all has every flag', () => {
     assert.match(all, /^Ports {4}/m, `${verb} --help all says its ports`);
     assert.doesNotMatch(all, /^More /m);
   }
+  const checkout = timed([resolve(ROOT, 'scripts/exact.mjs'), 'web', '--help', 'all'], { cwd: ROOT });
+  assert.equal(checkout.status, 0, checkout.stderr);
+  assert.equal(checkout.stdout.trim(), helpText('web', { all: true }));
   // LLP 1116.008 D2: web's help does not teach a background dev server (builders followed it into five steps).
   assert.match(helpText('web', { all: true }), /The dev loop is for a person watching\n\s+the app change: verify, test and agent build and serve their own copy, so checking\n\s+the app needs no dev server\./);
   assert.doesNotMatch(helpText('web', { all: true }), /web\.log| &\s|background|\$!/);
