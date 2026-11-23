@@ -915,8 +915,13 @@ package final class Runtime {
     package func advance(now: Double, untilRequest: Bool = false) -> Batch { on { read(exact_advance(rt, now, untilRequest ? 1 : 0)).made(by: .advance) } }
     /// The `then`s an agent's input settled, the clock unmoved (LLP 1012 §2).
     package func landThen() -> Batch { on { read(exact_advance(rt, 0, 2)).made(by: .advance) } }
-    /// Those `then`s only when one is the earliest work due (LLP 1072.000 §4 B).
-    package func landThenFirst() -> Batch { on { read(exact_advance(rt, 0, 3)).made(by: .advance) } }
+    /// Land the earliest due `then`s (LLP 1072.000 §4 B), or only due queue turns on close (LLP 1092 D3).
+    package func landThenFirst(queuesOnly: Bool = false) -> Batch {
+        on {
+            let length = exact_advance(rt, 0, queuesOnly ? 4 : 3)
+            return length == 0 ? Self.busy : read(length).made(by: .advance)
+        }
+    }
     /// A timer advance on the owner, not waited for (LLP 1072.000): what is
     /// due by `now`, or with `frame` that display frame's (`frame(now:wall:)`).
     package func advanceAsync(now: Double, frame: Double? = nil, admitted: Bool = false, capture: UInt64 = 0, measureFrame: Bool = false, done: @escaping (RuntimeCompletion) -> Void) {

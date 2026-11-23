@@ -48,6 +48,70 @@ fn placed_mergers_follow_the_bound_source_on_main_and_worker() {
     }
 }
 
+#[test]
+fn built_worker_publishes_its_own_mergers() {
+    struct Saves {
+        build_gate: Option<Arc<Mutex<std::sync::mpsc::Receiver<()>>>>,
+    }
+    impl DataSource for Saves {
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            Ok(Value::Number(0.0))
+        }
+
+        fn queued_send_replacer(
+            &mut self,
+            source: Option<&str>,
+        ) -> Option<exact_runner::QueuedSendReplacer> {
+            match (self.build_gate.is_some(), source) {
+                (true, Some("save")) | (false, Some("publish")) => {
+                    Some(|_, _, next| Some(next.to_vec()))
+                }
+                (false, None) => Some(|_, previous, _| Some(previous.to_vec())),
+                _ => None,
+            }
+        }
+    }
+
+    let (release, gate) = channel();
+    let template = Saves {
+        build_gate: Some(Arc::new(Mutex::new(gate))),
+    };
+    let mut placed = Placed::built(template, Placement::Worker, |template, _| {
+        let gate = template.build_gate.clone().unwrap();
+        Box::new(move || {
+            gate.lock().unwrap().recv().unwrap();
+            Ok(Saves { build_gate: None })
+        })
+    });
+    let mut plan = exact_plan::builder::PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let ty = plan.primitive(exact_plan::TypeKind::Number);
+    plan.source("save", &[ty], ty);
+    plan.source("publish", &[ty], ty);
+    placed.bind(&plan.finish().unwrap());
+    placed.activate().unwrap();
+    let before_build = placed.queued_send_replacer(Some("save"));
+    release.send(()).unwrap();
+    assert!(before_build.is_none(), "use FIFO while the owner builds");
+
+    let mut store = Store::new("", []);
+    let Answer::Later(request) = placed.answer(&mut store, "save", &[]).unwrap() else {
+        panic!("a worker answer");
+    };
+    send(placed.dispatch(request.continuation.unwrap(), &store))
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    assert!(placed.queued_send_replacer(Some("save")).is_none());
+    let previous = [Value::Number(1.0)];
+    let next = [Value::Number(2.0)];
+    let named = placed.queued_send_replacer(Some("publish")).unwrap();
+    let default = placed.queued_send_replacer(Some("unbound")).unwrap();
+    assert_eq!(named("publish", &previous, &next), Some(next.to_vec()));
+    assert_eq!(
+        default("unbound", &previous, &next),
+        Some(previous.to_vec())
+    );
+}
+
 struct Slow {
     started: Sender<()>,
     release: std::sync::mpsc::Receiver<()>,
@@ -586,7 +650,7 @@ fn coalesced_retirements_let_go_what_retiring_each_in_order_does() {
                     parked.push((*ids, (target, source, args.concat())));
                 }
                 Job::Resume { .. } => {}
-                Job::Keep { .. } | Job::KeptReply { .. } => {
+                Job::Keep { .. } | Job::KeptReply { .. } | Job::SendReplacers(..) => {
                     unreachable!("this fixture queues only ordinary turns")
                 }
             }

@@ -57,9 +57,35 @@ final class QuitHoldTests: XCTestCase {
     }
 
     #if os(macOS)
-    func testClosingOnAFrozenClockDrainsSendsArmedByLaterReplies() throws {
+    private func frozenSession(_ label: String, _ source: String) throws -> ExactSession {
         _ = NSApplication.shared
-        let plan = try TableFixture.plan("""
+        let plan = try TableFixture.plan(source)
+        let session = ExactApp.shared.makeSession(label: label)
+        session.clock = 0
+        XCTAssertNil(session.boot(plan: plan, size: CGSize(width: 400, height: 500)).error)
+        return session
+    }
+
+    private func answer(_ session: ExactSession, path: String, method: String, n: Int) {
+        let fixtures = session.agent("""
+        {"op":"prefer","faults":{"answer":"https://desk.test/\(path)","method":"\(method)","response":{"status":200,"headers":{},"body":"{\\"n\\":\(n)}"}}}
+        """)
+        XCTAssertFalse(fixtures.contains("\"error\""), fixtures)
+    }
+
+    private func press(_ session: ExactSession, _ testID: String) throws {
+        let button = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == testID })
+        session.apply(session.runtime.press(button.id, now: 0))
+    }
+
+    private func derive(_ session: ExactSession, _ name: String) -> Int? {
+        let state = try? JSONSerialization.jsonObject(with: Data(session.agent(#"{"op":"state"}"#).utf8)) as? [String: Any]
+        return (state?["derives"] as? [String: Any])?[name] as? Int
+    }
+
+    private func saveSession(_ label: String, count: Int) throws -> ExactSession {
+        let sends = (1...count).map { "    send saved = save(\($0))" }.joined(separator: "\n")
+        let session = try frozenSession(label, """
         shape Ack
           n: number
         source save(n: number) as shape Ack
@@ -67,33 +93,28 @@ final class QuitHoldTests: XCTestCase {
           method "POST"
           body json
         component App
-          mutation saved as shape Ack queue
+          state marks = 0
+          mutation saved as shape Ack queue then mark
           derive answer = match saved { case some(a) => a.n, case none => 0 }
+          derive marked = marks
+          action mark
+            marks = marks + 1
           action saveAll
-            send saved = save(1)
-            send saved = save(2)
-            send saved = save(3)
+        \(sends)
           view
             button press=saveAll testId="save"
               text `${answer}`
 
         """)
-        let session = ExactApp.shared.makeSession(label: "close-queue")
+        for n in 1...count { answer(session, path: "save/\(n)", method: "POST", n: n) }
+        return session
+    }
+
+    func testClosingOnAFrozenClockDrainsSendsArmedByLaterReplies() throws {
+        let session = try saveSession("close-queue", count: 3)
         defer { session.destroy() }
-        session.clock = 0
-        XCTAssertNil(session.boot(plan: plan, size: CGSize(width: 400, height: 500)).error)
-        for n in 1...3 {
-            let fixtures = session.agent("""
-            {"op":"prefer","faults":{"answer":"https://desk.test/save/\(n)","method":"POST","response":{"status":200,"headers":{},"body":"{\\"n\\":\(n)}"}}}
-            """)
-            guard !fixtures.contains("\"error\"") else { return XCTFail(fixtures) }
-        }
-        let button = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == "save" })
-        session.apply(session.runtime.press(button.id, now: 0))
-        func answered(_ n: Int) -> Bool {
-            let state = try? JSONSerialization.jsonObject(with: Data(session.agent(#"{"op":"state"}"#).utf8)) as? [String: Any]
-            return (state?["derives"] as? [String: Any])?["answer"] as? Int == n
-        }
+        try press(session, "save")
+        func answered(_ n: Int) -> Bool { derive(session, "answer") == n }
         waitFor("the first save's reply") { answered(1) }
         guard answered(1) else { return }
         func startedNext(waiting: Int) -> Bool {
@@ -102,7 +123,7 @@ final class QuitHoldTests: XCTestCase {
         XCTAssertFalse(startedNext(waiting: 1))
 
         var ended = false
-        let hold = QuitHold(every: 60, pending: session.drainQueuedMutationsOnClose) { ended = true }
+        let hold = QuitHold(every: 60, pending: { session.finishOnClose(queuedOnly: true) }) { ended = true }
         defer { hold.release() }
         XCTAssertTrue(hold.hold())
         guard startedNext(waiting: 1) else { return XCTFail("the second save was due on close") }
@@ -114,6 +135,77 @@ final class QuitHoldTests: XCTestCase {
         waitFor("the third save's reply") { answered(3) }
         hold.check()
         XCTAssertTrue(ended)
+        XCTAssertEqual(derive(session, "marked"), 2, "only the two turns with waiting sends need their then")
+        XCTAssertEqual(session.clock, 0)
+    }
+
+    func testAgentQuitDrainsTwoSavesOnAFrozenClock() throws {
+        let session = try saveSession("agent-quit-queue", count: 2)
+        let routes = Agent.routes
+        let exiting = Agent.exiting
+        var ended = false
+        defer {
+            Agent.exiting?.release()
+            Agent.exiting = exiting
+            Agent.routes = routes
+            session.destroy()
+        }
+        Agent.routes = [("quit", session)]
+        try press(session, "save")
+        XCTAssertEqual(derive(session, "answer"), 0, "the first save is still in flight")
+        Agent.handle(#"{"op":"quit"}"#, quit: { ended = true })
+        XCTAssertTrue(Agent.exiting?.holding == true)
+        waitFor("the first save's reply", giveUp: { ended }) { (derive(session, "answer") ?? 0) >= 1 }
+        Agent.exiting?.check()
+        XCTAssertTrue(session.agent(#"{"op":"logs"}"#).contains("saved next (0 waiting)"))
+        waitFor("the quit hold to end") { ended }
+        XCTAssertEqual(derive(session, "answer"), 2)
+        XCTAssertEqual(session.clock, 0)
+    }
+
+    func testClosingWithAQueuedGetLeavesAnUnrelatedThenDue() throws {
+        let pages = try FramePages()
+        let session = try frozenSession("close-queue-only", """
+        shape Ack
+          n: number
+        source read() as shape Ack
+          url "http://127.0.0.1:\(pages.port)/slow"
+        source save(n: number) as shape Ack
+          url "https://desk.test/save/{n}"
+          method "POST"
+          body json
+        component App
+          mutation queuedRead as shape Ack queue
+          mutation unrelated as shape Ack then followUp
+          mutation sent as shape Ack
+          derive ready = match unrelated { case some(a) => a.n, case none => 0 }
+          derive readAnswer = match queuedRead { case some(a) => a.n, case none => 0 }
+          action start
+            send unrelated = save(1)
+            send queuedRead = read()
+          action followUp
+            send sent = save(2)
+          view
+            button press=start testId="start"
+              text `${ready}`
+
+        """)
+        defer { session.destroy() }
+        answer(session, path: "save/1", method: "POST", n: 1)
+        answer(session, path: "save/2", method: "POST", n: 2)
+        try press(session, "start")
+        waitFor("the unrelated reply and the GET held at the server", cap: 5) {
+            derive(session, "ready") == 1 && pages.referers["/slow"] != nil
+        }
+        XCTAssertEqual(derive(session, "readAnswer"), 0, "the GET reply is still in flight")
+        func sentFollowUp() -> Bool {
+            session.agent(#"{"op":"logs"}"#).contains("(sent): POST https://desk.test/save/2")
+        }
+        XCTAssertFalse(sentFollowUp())
+        XCTAssertTrue(session.finishOnClose(queuedOnly: true), "the queued GET still holds the session")
+        XCTAssertFalse(sentFollowUp(), "close leaves the unrelated then due")
+        session.applyUnlessEmpty(session.runtime.landThen())
+        XCTAssertTrue(sentFollowUp(), "a regular landing runs the unrelated then")
         XCTAssertEqual(session.clock, 0)
     }
     #endif

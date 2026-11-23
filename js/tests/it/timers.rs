@@ -11,7 +11,8 @@ use exact_runner::{DataSource, FailureKind, Outcome, Placement, RequestOut, Runn
 
 const HBC: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/timers.hbc"));
 const APP: &str = "test.timers";
-const GRANTS: &str = "net.fetch https://fixture.exact.test\nsecret.keep shared\n";
+const GRANTS: &str =
+    "net.fetch https://fixture.exact.test\nsecret.keep shared\nfs.write app:/data\n";
 
 const SRC: &str = r#"
 component App
@@ -65,6 +66,10 @@ component App
 
 fn plan() -> Plan {
     contract::compile(SRC).expect("timers fixture compiles")
+}
+
+pub(super) fn unloaded_module() -> Module {
+    Module::new(HBC.to_vec(), APP, GRANTS)
 }
 
 fn module() -> Module {
@@ -499,6 +504,60 @@ fn an_answer_racing_another_answers_fetch_wakes_on_the_fetch() {
     pump(&mut r);
     assert_eq!(result(&r, "result"), said("shared"));
     assert_eq!(r.data_timer_due_ms(), None);
+}
+
+#[test]
+fn a_queue_holds_close_when_another_answers_fetch_can_end_its_timer_wait() {
+    let src = SRC
+        .replace(
+            "mutation result as shape string",
+            "mutation result as shape string queue",
+        )
+        .replace(
+            "  action raceFetch",
+            "  action save\n    send result = save()\n  action raceFetch",
+        );
+    let plan = contract::compile(&src).unwrap();
+    let root = super::storage::Root::new();
+    let mut module = unloaded_module();
+    module.set_budget_ms(f64::INFINITY);
+    module
+        .configure_storage(
+            root.0.join("data"),
+            root.0.join("cache"),
+            root.0.join("tmp"),
+        )
+        .unwrap();
+    module.bind(&plan);
+    module.activate().unwrap();
+    let mut r = Runner::boot(
+        plan,
+        module,
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    r.act("starter", vec![]).unwrap();
+    let fetches = pump(&mut r);
+    r.act("racer", vec![]).unwrap();
+    pump(&mut r);
+    r.act("save", vec![]).unwrap();
+    assert_eq!(r.data_timer_due_ms(), Some(10_000.));
+    assert_eq!(r.queued(), [("result".to_string(), 1)]);
+    assert!(
+        r.queued_must_finish(),
+        "the outstanding GET can resume the queue"
+    );
+    r.fulfill(fetches[0].ticket, ok()).unwrap();
+    pump(&mut r);
+    assert_eq!(result(&r, "result"), said("shared"));
+    r.land_then();
+    pump(&mut r);
+    assert_eq!(result(&r, "result"), said("saved"));
+    assert_eq!(std::fs::read(root.0.join("data/saved")).unwrap(), [1]);
+    assert_eq!(r.now_ms(), 0.);
+    assert!(!r.queued_must_finish());
 }
 
 /// A timer raced against its answer's own fetch wins when it comes due

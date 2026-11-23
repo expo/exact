@@ -191,9 +191,18 @@ impl<D: DataSource> Runner<D> {
         } else {
             None
         }
-        // An argument the executor cannot carry cannot displace an accepted
-        // send or its optimistic write (LLP 1027 D2, LLP 1092 D4).
-        .filter(|args| self.check_send_arguments(m, args).is_ok());
+        // A replacement must fit the source's signature before it can
+        // displace an accepted send or its optimistic write (LLP 1027 D2,
+        // LLP 1092 D4).
+        .filter(|args| {
+            self.plan.sources.iter().any(|row| {
+                self.plan.str(row.name) == source
+                    && row.params.len as usize == args.len()
+                    && row.params.iter().zip(args).all(|(p, arg)| {
+                        arg.conforms(&self.plan, self.plan.source_params[p.0 as usize].ty)
+                    })
+            })
+        });
         if replacement.is_none() && self.queues.waiting[m].len() >= QUEUE_BOUND {
             return Err(RunnerError::QueueFull {
                 mutation: self.mutation_name(m).to_string(),

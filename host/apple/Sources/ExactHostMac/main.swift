@@ -221,7 +221,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if quitting?.holding == true { return .terminateLater }
         for (_, s) in sessions { s.willQuit() }
-        let hold = QuitHold(bound: 5, pending: { sessions.contains { $0.1.quitWorkPending || $0.1.mustFinish } },
+        let hold = QuitHold(bound: 5, pending: { sessions.map { $0.1.finishOnClose() || $0.1.quitWorkPending }.contains(true) },
                             end: { NSApp.reply(toApplicationShouldTerminate: true) })
         guard hold.hold() else { return .terminateNow }
         quitting = hold

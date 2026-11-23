@@ -4,16 +4,19 @@ use super::*;
 use std::fmt::Write;
 
 impl<D: DataSource> Host<D> {
-    /// The `then`s an agent's input settled, the clock unmoved
-    /// ([`exact_runner::Runner::land_then`]); `first`, only when one is the
-    /// earliest work due ([`exact_runner::Runner::land_then_first`]).
-    pub fn land_then(&mut self, first: bool) -> String {
-        let a = if first {
-            self.runner.land_then_first()
-        } else {
-            self.runner.land_then()
+    /// Land settled turns without moving the clock. Mode 3 runs them when
+    /// they are the earliest work due. Mode 4 drains only due queue turns.
+    pub fn land_then(&mut self, mode: u32) -> String {
+        let a = match mode {
+            3 => self.runner.land_then_first(false),
+            4 => self.runner.land_then_first(true),
+            _ => self.runner.land_then(),
         };
-        self.advanced(a)
+        if mode == 4 && a.receipts.is_empty() && a.error.is_none() {
+            String::new()
+        } else {
+            self.advanced(a)
+        }
     }
 
     /// Action endings are delivery, separate from the agent's recent history.

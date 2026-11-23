@@ -102,6 +102,8 @@ impl DataSource for Desk {
             }
             match next[0].as_str() {
                 Some("room:invalid-merge") => Some(vec![Value::Number(f64::NAN)]),
+                Some("room:empty-merge") => Some(vec![]),
+                Some("room:wrong-type-merge") => Some(vec![Value::Number(42.0)]),
                 Some("room:append") => Some(vec![Value::str(&format!(
                     "{}+room:append",
                     previous[0].as_str().unwrap()
@@ -486,6 +488,20 @@ fn replacement_leaves_the_previous_tail_if_the_action_refuses() {
 
 #[test]
 fn invalid_replacement_preserves_both_sends_and_their_optimistic_writes() {
+    assert_replacement_refused("room:invalid-merge");
+}
+
+#[test]
+fn an_empty_replacement_preserves_both_sends_and_their_optimistic_writes() {
+    assert_replacement_refused("room:empty-merge");
+}
+
+#[test]
+fn a_wrong_type_replacement_preserves_both_sends_and_their_optimistic_writes() {
+    assert_replacement_refused("room:wrong-type-merge");
+}
+
+fn assert_replacement_refused(last: &str) {
     let mut r = boot_with(
         &previewing_queue(),
         Desk {
@@ -494,14 +510,14 @@ fn invalid_replacement_preserves_both_sends_and_their_optimistic_writes() {
             ..Desk::default()
         },
     );
-    for body in ["room:first", "room:previous", "room:invalid-merge"] {
+    for body in ["room:first", "room:previous", last] {
         r.act("one", vec![Value::str(body)]).unwrap();
     }
     assert_eq!(r.queued(), [("wrote".to_string(), 2)]);
     assert_eq!(r.writes().len(), 3);
     assert_eq!(
         preview(&r),
-        Some("room:first room:previous room:invalid-merge")
+        Some(format!("room:first room:previous {last}").as_str())
     );
     for _ in 0..3 {
         let ticket = tickets(&mut r)[0];
@@ -511,9 +527,9 @@ fn invalid_replacement_preserves_both_sends_and_their_optimistic_writes() {
     assert_eq!(
         r.data().asks,
         [
-            "save:room:first",
-            "save:room:previous",
-            "save:room:invalid-merge"
+            "save:room:first".to_string(),
+            "save:room:previous".to_string(),
+            format!("save:{last}")
         ]
     );
     assert!(r.writes().is_empty());
@@ -687,6 +703,27 @@ fn a_queue_holds_quit_between_a_reply_and_its_waiting_write() {
     r.advance(0.0).unwrap();
     assert!(!r.queued_must_finish(), "the queue drained");
     assert!(!r.must_finish(), "the effects drained");
+}
+
+#[test]
+fn an_admission_refused_queue_head_holds_close_while_a_send_waits() {
+    let mut r = boot(true);
+    r.act("record", vec![Value::str("refused")]).unwrap();
+    let first = tickets(&mut r)[0];
+    r.refuse_request(first, "native executor admission limit reached", true);
+    assert!(!r.queued_must_finish(), "a refused head alone may close");
+    r.act("record", vec![Value::str("waiting")]).unwrap();
+    assert!(r.queued_must_finish(), "the pump still owes the refusal");
+    let (ticket, outcome) = r.take_request_refusal(true).unwrap();
+    assert_eq!(ticket, first);
+    assert!(r.queued_must_finish(), "the refusal has yet to land");
+    r.fulfill(ticket, outcome).unwrap();
+    assert!(r.queued_must_finish(), "the waiting send is due");
+    r.advance(0.0).unwrap();
+    let second = tickets(&mut r)[0];
+    r.fulfill(second, reply("ok")).unwrap();
+    assert_eq!(r.derive("recd"), Some(&Value::str("waiting")));
+    assert!(!r.queued_must_finish());
 }
 
 #[test]

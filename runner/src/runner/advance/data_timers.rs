@@ -100,6 +100,24 @@ impl<D: DataSource> Runner<D> {
         self.data_timer_due(ticket).is_some()
     }
 
+    /// A wake shares its wait with other work (LLP 1027.000 D1).
+    pub(in crate::runner) fn data_has_wake(&self, ticket: u64) -> bool {
+        self.clock.data.wakes.iter().any(|(t, _, _)| *t == ticket)
+            || self.requests.iter().any(|r| {
+                r.ticket == ticket
+                    && r.request.continuation.is_some()
+                    && r.request.wake_ms.is_some()
+            })
+    }
+
+    /// An ordinary request may reply before its own race timer. A parked
+    /// fixture reply and an unreleased timer continuation need the clock.
+    pub(in crate::runner) fn data_reply_can_land(&self, ticket: u64, continuation: bool) -> bool {
+        self.fixture_due(Some(ticket))
+            .is_none_or(|at| at <= self.now_ms)
+            && (!continuation || !self.data_timer_held(ticket))
+    }
+
     /// When request `ticket`'s answer's timer is due, while that is ahead.
     fn data_timer_due(&self, ticket: u64) -> Option<f64> {
         let now = self.now_ms;

@@ -589,7 +589,7 @@ final class DocumentWindow: NSObject, NSWindowDelegate, NSWindowRestoration {
                 closedForQuit.append(self)
                 return
             }
-            let hold = QuitHold(bound: 5, pending: session.drainQueuedMutationsOnClose) { [weak self] in
+            let hold = QuitHold(bound: 5, pending: { session.finishOnClose(queuedOnly: true) }) { [weak self] in
                 guard let self else { return }
                 closeHold = nil
                 // A quit that started while this window was draining owns
@@ -867,8 +867,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         let sessions = (windows + closedForQuit).map(\.session)
         for session in sessions { session.willQuit() }
         let hold = QuitHold(bound: 5, pending: {
-            for session in sessions { _ = session.drainQueuedMutationsOnClose() }
-            return sessions.contains { $0.quitWorkPending || $0.mustFinish }
+            sessions.map { $0.finishOnClose() || $0.quitWorkPending }.contains(true)
         }) { NSApp.reply(toApplicationShouldTerminate: true) }
         guard hold.hold() else { return .terminateNow }
         quitting = hold

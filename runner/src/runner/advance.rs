@@ -365,7 +365,14 @@ impl<D: DataSource> Runner<D> {
     /// timer advances without waiting for them runs this while it waits, so
     /// an answer and what its `then` does show in one frame (LLP 1016.001
     /// D3, LLP 1072.000 §4 B).
-    pub fn land_then_first(&mut self) -> Advanced {
+    ///
+    /// `queues_only` drains due queue turns on a frozen clock during a
+    /// Mac close (LLP 1092 D3). A queue needs its `then` only while another
+    /// send waits.
+    pub fn land_then_first(&mut self, queues_only: bool) -> Advanced {
+        if queues_only {
+            return self.advance_steps(self.now_ms, false, false, true);
+        }
         let answer_due = self.audio_due()[2];
         let then = self
             .then_due
@@ -436,21 +443,12 @@ impl<D: DataSource> Runner<D> {
 
     /// [`Self::advance_within`] with no input held.
     fn advance_due(&mut self, now_ms: f64, until_request: bool, timers: bool) -> Advanced {
-        if self.poisoned {
-            return Advanced {
-                receipts: Vec::new(),
-                now_ms: self.now_ms,
-                error: Some(RunnerError::Poisoned),
-                stopped_on_request: false,
-                needs_apply: false,
-            };
-        }
         let unseen = self.invocation_stops_timers();
         let deadline = self
             .wake_deadline()
             .filter(|d| now_ms.is_finite() && *d <= now_ms);
         let Some(deadline) = deadline else {
-            let mut a = self.advance_steps(now_ms, until_request, timers && !unseen);
+            let mut a = self.advance_steps(now_ms, until_request, timers && !unseen, false);
             if a.error.is_none() && !a.stopped_on_request && !a.needs_apply {
                 let at_ms = self.now_ms;
                 let (woke, error) = self.step_invocations();
@@ -460,7 +458,12 @@ impl<D: DataSource> Runner<D> {
             }
             return a;
         };
-        let mut a = self.advance_steps(deadline.max(self.now_ms), until_request, timers && !unseen);
+        let mut a = self.advance_steps(
+            deadline.max(self.now_ms),
+            until_request,
+            timers && !unseen,
+            false,
+        );
         if a.error.is_some() || a.stopped_on_request || a.needs_apply {
             return a;
         }
@@ -485,12 +488,27 @@ impl<D: DataSource> Runner<D> {
         a
     }
 
-    fn advance_steps(&mut self, now_ms: f64, until_request: bool, timers: bool) -> Advanced {
+    fn advance_steps(
+        &mut self,
+        now_ms: f64,
+        until_request: bool,
+        timers: bool,
+        queues_only: bool,
+    ) -> Advanced {
         let live = self.clock.sample.is_some();
         // A host that presents frames fires frame tasks at `frame`; else
         // their virtual frames are timers (LLP 1073 D3).
         let frames = !self.clock.presenting;
         let mut receipts = Vec::new();
+        if self.poisoned {
+            return Advanced {
+                receipts,
+                now_ms: self.now_ms,
+                error: Some(RunnerError::Poisoned),
+                stopped_on_request: false,
+                needs_apply: false,
+            };
+        }
         if !now_ms.is_finite() {
             return Advanced {
                 receipts,
@@ -523,14 +541,16 @@ impl<D: DataSource> Runner<D> {
         let mut landed = now_ms;
         let mut stopped_on_request = false;
         self.queues.stopped_on_next = false;
-        let before = self.trace_configuration();
-        // A module's value ticket that timed out by now (LLP 1133.002 §6).
-        self.module_deadlines(now_ms);
-        // A listed entry now due, and an app's list another session changed.
-        self.listed_due(now_ms);
-        self.pump_presence();
-        if before.is_some() && before != self.trace_configuration() {
-            self.clock.untraced_change = true;
+        if !queues_only {
+            let before = self.trace_configuration();
+            // A module's value ticket that timed out by now (LLP 1133.002 §6).
+            self.module_deadlines(now_ms);
+            // A listed entry now due, and an app's list another session changed.
+            self.listed_due(now_ms);
+            self.pump_presence();
+            if before.is_some() && before != self.trace_configuration() {
+                self.clock.untraced_change = true;
+            }
         }
         let mut work_spent = None;
         loop {
@@ -540,7 +560,9 @@ impl<D: DataSource> Runner<D> {
                 .iter()
                 .enumerate()
                 .filter(|(i, _)| {
-                    timers || (self.timer_row(*i).change && !self.invocation_stops_timers())
+                    !queues_only
+                        && (timers
+                            || (self.timer_row(*i).change && !self.invocation_stops_timers()))
                 })
                 .filter(|(i, _)| frames || !self.timer_row(*i).frame)
                 .map(|(i, _)| (i, self.timer_execution(i)))
@@ -588,7 +610,10 @@ impl<D: DataSource> Runner<D> {
             // the timers held until its expiry.
             let hold = self.reorder_deadline().filter(|at| *at <= now_ms);
             let earliest = self.reask_due(now_ms).filter(|(_, at)| {
-                timer_at.is_none_or(|timer| *at <= timer) && before_wake(*at) && before_data(*at)
+                !queues_only
+                    && timer_at.is_none_or(|timer| *at <= timer)
+                    && before_wake(*at)
+                    && before_data(*at)
             });
             let reask = earliest.filter(|(_, at)| hold.is_none_or(|hold| *at < hold));
             let order = if timers { earliest } else { reask };
@@ -608,14 +633,15 @@ impl<D: DataSource> Runner<D> {
                 .then_due
                 .iter()
                 .enumerate()
-                .filter(|(_, at)| **at <= now_ms)
+                .filter(|(m, at)| **at <= now_ms && (!queues_only || self.queues.waits(*m)))
                 .min_by(|(ia, a), (ib, b)| {
                     let site = |m: &usize| (self.mutation_site(*m), *m);
                     a.partial_cmp(b).unwrap().then(site(ia).cmp(&site(ib)))
                 })
                 .map(|(m, at)| (m, *at));
-            let answer = Some(self.audio_due()[2])
-                .filter(|at| *at <= now_ms && then.is_none_or(|(_, then)| *at < then));
+            let answer = Some(self.audio_due()[2]).filter(|at| {
+                !queues_only && *at <= now_ms && then.is_none_or(|(_, then)| *at < then)
+            });
             let then_at = answer.or(then.map(|(_, at)| at));
             let next = self
                 .due_next(now_ms)
@@ -790,6 +816,15 @@ impl<D: DataSource> Runner<D> {
                     break;
                 }
                 continue;
+            }
+            if queues_only {
+                return Advanced {
+                    receipts,
+                    now_ms: self.now_ms,
+                    error: None,
+                    stopped_on_request: false,
+                    needs_apply: false,
+                };
             }
             // A drop's hold ends at its deadline (LLP 1094 D8), before a
             // timer due at the same time: the drop came first.

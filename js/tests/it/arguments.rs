@@ -2,7 +2,6 @@
 #![cfg(exact_js_engine)]
 
 use exact_data::Placed;
-use exact_js::Module;
 use exact_kernel::Kernel;
 use exact_plan::Value;
 use exact_runner::{DataError, DataSource, Placement, Runner, RunnerError};
@@ -50,11 +49,7 @@ component App
 fn non_finite_resource_arguments_are_refused_before_either_executor_runs() {
     for expr in ["1 / b", "-1 / b", "0 / b"] {
         for placement in [Placement::Main, Placement::Worker] {
-            let module = Module::new(
-                include_bytes!(concat!(env!("OUT_DIR"), "/timers.hbc")).to_vec(),
-                "test.timers",
-                "net.fetch https://fixture.exact.test\nsecret.keep shared\n",
-            );
+            let module = super::timers::unloaded_module();
             for result in [
                 boot(Placed::new(Kind, placement), expr),
                 boot(module.placed(placement), expr),
