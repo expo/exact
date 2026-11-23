@@ -187,6 +187,9 @@ mod device;
 #[path = "canvas/field.rs"]
 pub mod field;
 #[cfg(target_os = "android")]
+#[path = "canvas/frame_partitions.rs"]
+pub mod frame_partitions;
+#[cfg(target_os = "android")]
 #[doc(hidden)]
 #[path = "canvas/frames.rs"]
 pub mod frames;

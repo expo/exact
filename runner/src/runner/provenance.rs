@@ -267,6 +267,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Whether a cause is installed.
+    #[cfg(test)]
     pub(in crate::runner) fn has_cause(&self) -> bool {
         self.origins.current.is_some()
     }
@@ -467,11 +468,6 @@ impl<D: DataSource> Runner<D> {
         let rank = |c: Cause| (c.origin, !grants(c) || self.persons(c));
         let least = if rank(b) < rank(a) { b } else { a };
         least.joined(a.causes.union(b.causes))
-    }
-
-    /// Request `ticket`'s causes.
-    pub(in crate::runner) fn ticket_causes(&self, ticket: u64) -> Causes {
-        self.ticket_cause(ticket).causes
     }
 
     /// Request `ticket` of `target`, in flight, is kept with the newer

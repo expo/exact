@@ -13,7 +13,9 @@ publish = false
 
 [lib]
 name = "exact_canvas_vello"
-crate-type = ["rlib", "cdylib"]
+# The dylib is `cargo rustc --crate-type cdylib` (host/apple/build.mjs), as
+# the other loaded modules' are.
+crate-type = ["rlib"]
 
 # Apple only: elsewhere the crate is empty (Linux replays Canvas 2D into
 # tiny-skia, LLP 1056 D7), so `cargo build --workspace` still builds there.

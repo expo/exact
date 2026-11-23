@@ -103,3 +103,27 @@ fn a_reader_record_reaches_only_its_frame() {
     let journal = crate::agent::handle(&mut p, r#"{"op":"logs"}"#);
     assert!(!journal.contains("NoHandler"), "{journal}");
 }
+
+/// `exactPage().iframePartition` asks the platform only for a plan with an iframe.
+#[test]
+fn only_a_plan_with_a_frame_asks_whether_partitions_are_kept() {
+    let boot = |source: &str| {
+        let (p, error) = Presenter::boot_with(
+            &crate::test_plan(source),
+            (),
+            (400., 800.),
+            1.,
+            PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p
+    };
+    let mut plain = boot("component App\n  view\n    text \"no frame\"\n");
+    plain.serve_frame_partitions(|| panic!("a plan without an iframe asked"));
+    assert!(!plain.host.runner().page().iframe_partition);
+    let mut framed = boot(APP);
+    framed.serve_frame_partitions(|| true);
+    assert!(framed.host.runner().page().iframe_partition);
+}

@@ -340,6 +340,7 @@ component App
             surface: "test",
             args: &[],
             names: &[],
+            args_json: "[]",
             frame: Default::default(),
             current_color: None,
             rtl: false,

@@ -580,6 +580,7 @@ fn assert_drawing(baked: &Baked) {
         surface: "spark",
         args: &[],
         names: &[],
+        args_json: "[]",
         frame: Default::default(),
         current_color: None,
         rtl: false,

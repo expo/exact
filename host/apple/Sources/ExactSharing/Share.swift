@@ -33,15 +33,13 @@ extension ExactSession {
         if let source { request["source"] = source }
         let ruling = runtime.command(request)
         guard ruling["present"] as? Bool == true else { return }
-        // The hold a shown sheet answers with its outcome (`share: shared`
-        // is `tap @t shared`; dismissed or failed, `cancel`).
+        // The hold a shown sheet answers with its outcome, which the runner journals.
         let ticket = (ruling["ticket"] as? NSNumber)?.uint64Value
         let outcome: (String) -> Void = { [weak self] line in
             guard let self else { return }
             guard let ticket else { self.log(line); return }
             ShareSheet.shown[ShareSheet.Key(self, ticket)] = nil
-            if line.hasPrefix("share: refused") { self.log(line) }
-            _ = self.runtime.ask(exact_answer_ticket, "{\"op\":\"tap\",\"ticket\":\(ticket),\"choice\":\"\(line == "share: shared" ? "shared" : "cancel")\"}")
+            _ = self.runtime.ask(exact_answer_ticket, ShareSheet.answer(to: line, ticket: ticket))
         }
         var items: [Any] = []
         if let text = request["text"] as? String { items.append(text) }
@@ -114,6 +112,15 @@ final class BuiltInShare: ShareHosting {
 }
 
 enum ShareSheet {
+    /// The hold's answer for a presented share's outcome `line`: `share: shared` is `tap @t shared`, and any other
+    /// `cancel`, a refusal's reason given as `refused`, which the runner journals in place of a dismissal (LLP 1069.003).
+    static func answer(to line: String, ticket: UInt64) -> String {
+        var answer: [String: Any] = ["op": "tap", "ticket": ticket, "choice": line == "share: shared" ? "shared" : "cancel"]
+        let refusal = "share: refused: "
+        if line.hasPrefix(refusal) { answer["refused"] = String(line.dropFirst(refusal.count)) }
+        // Strings and a number always serialize
+        return String(decoding: try! JSONSerialization.data(withJSONObject: answer), as: UTF8.self)
+    }
     /// A shown sheet's hold: tickets are each session's runner's, and a
     /// process can hold two sessions (the sample host, LLP 1031).
     struct Key: Hashable {

@@ -49,6 +49,30 @@ component Discover
         text \"Reload\"
 ";
 
+#[test]
+fn grouped_subtitle_can_read_state_owned_by_its_arm() {
+    let plan = contract::compile(
+        r#"component App
+  state show = true
+  view
+    list appearance="auto"
+      section
+        column
+          text "Title"
+          if show
+            Detail()
+
+component Detail
+  state expanded = true
+  view
+    if expanded
+      text "Supporting text"
+"#,
+    )
+    .unwrap();
+    crate::emit::emit(&plan, false, false).expect("the grouped list builds");
+}
+
 /// The row is an aggregate at the root; each instance makes its own request,
 /// which its action refreshes, and its path follows the runner's.
 #[test]

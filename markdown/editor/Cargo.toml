@@ -11,7 +11,10 @@ publish = false
 
 [lib]
 name = "exact_markdown_editor"
-crate-type = ["rlib", "cdylib"]
+# rlib alone: Cargo names a cdylib package's rlib without its unit hash, so
+# two builds in one target would share one rlib that exact-apple links. The
+# web's wasm is a generated crate over this one (host/web-js/module.mjs).
+crate-type = ["rlib"]
 
 [dependencies]
 exact-markdown = { path = ".." }

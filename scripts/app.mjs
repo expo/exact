@@ -36,7 +36,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { basename, delimiter, dirname, isAbsolute, relative, resolve, sep, toNamespacedPath } from 'node:path';
 import { pathFrom, preservePaths, samePath, within } from './paths.mjs';
 import { parseColour, schemeColours } from './scheme-colours.mjs';
-export { pathFrom } from './paths.mjs';
+export { INHERITING_KEYS, cargoCheckout, checkoutPathDependencies, checkoutPathRefusal, pathFrom } from './paths.mjs';
 import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { BINARYEN, packageGpuWasm, webGpuTools } from '../host/web/stages.mjs';

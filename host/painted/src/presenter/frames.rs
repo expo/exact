@@ -28,6 +28,24 @@ pub(super) fn id(args: &[exact_plan::Value]) -> &str {
 }
 
 impl<D: DataSource> Presenter<D> {
+    /// `exactPage().iframePartition`: what `kept` answers, asked only by a
+    /// plan with an `iframe`, as asking may load the platform's web engine.
+    pub fn serve_frame_partitions(&mut self, kept: impl FnOnce() -> bool) {
+        let plan = self.host.runner().plan();
+        if !(plan.nodes.iter())
+            .any(|node| NodeType::from_wire(node.node_type) == Some(NodeType::WebView))
+        {
+            return;
+        }
+        let page = exact_runner::Page {
+            iframe_partition: kept(),
+            ..self.host.runner().page()
+        };
+        if let Some(e) = self.set_page(page) {
+            self.host.log(format!("page: {e}"));
+        }
+    }
+
     /// Refuses a frame command once the commit's commands have run, at the
     /// frame it named when it was issued, if that frame is still mounted.
     pub(super) fn frame_command(

@@ -71,6 +71,7 @@ macro_rules! canvas_jni_start {
             $crate::canvas::field::attach(env, scale);
             $crate::canvas::legacy::attach(env);
             $crate::canvas::presence::attach(env);
+            $crate::canvas::frame_partitions::attach(env);
             $crate::canvas::secrets::attach(env);
             environment(env, dir, live);
             let store = string(env, store);
@@ -128,6 +129,7 @@ macro_rules! canvas_jni_start {
             $crate::canvas::field::attach(env, scale);
             $crate::canvas::legacy::attach(env);
             $crate::canvas::presence::attach(env);
+            $crate::canvas::frame_partitions::attach(env);
             $crate::canvas::secrets::attach(env);
             // The environment is set here, before any other thread reads it.
             environment(env, dir, live);

@@ -59,6 +59,6 @@ component App
   `activate=interaction` registers them only when its script starts (the pitfall's triggers).
   `document.modelContext` exists only in a secure context: `https`, `localhost` or `127.0.0.1`,
   not a LAN address over `http`. Chrome: `chrome://flags/#enable-webmcp-testing`, or
-  `--enable-features=WebMCPTesting`; without it the page runs as before.
+  `--enable-features=WebMCP`; without it the page runs as before.
 - **Drive:** `bun exact.mjs agent web 'call addItem {"name":"Milk","aisle":"dairy","quantity":2}'
   state`; `state.intents` lists the tools and each call's `outcome`. `call` is not a test step.

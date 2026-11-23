@@ -1059,9 +1059,10 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         // @ref LLP 1038 D6/D11; LLP 1035.001 D2 — a cancelled swipe calls
         // willShow again for its source, in the transition already begun.
         guard let transition = pushOrPop(on: navigationController), transition.viewController(forKey: .to) === viewController else { return }
-        // UIKit's own (its Back button, its menu, a swipe): Observe's render
-        // mark is this transition's first frame, unless it is cancelled.
-        if !syncing {
+        // A swipe, UIKit's own: the router follows at its end, so Observe's
+        // render mark is this transition's first frame, unless it is
+        // cancelled. A pop UIKit commits at once was followed above.
+        if !syncing, navigationController.transitionCoordinator?.initiallyInteractive == true {
             NavigationMarks.shared.platformBeganShowing()
             transition.animate(alongsideTransition: nil) { context in
                 if context.isCancelled { NavigationMarks.shared.platformCancelled() }

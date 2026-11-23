@@ -54,7 +54,15 @@ class NativesPartitionTest {
     @Implements(WebViewFeature::class, isInAndroidSdk = false)
     class Features {
         companion object {
-            @JvmStatic @Implementation fun isFeatureSupported(feature: String) = feature == WebViewFeature.NAVIGATION_LISTENER
+            var profiles = false
+            var navigation = true
+
+            @JvmStatic @Implementation fun isFeatureSupported(feature: String) = when (feature) {
+                WebViewFeature.NAVIGATION_LISTENER -> navigation
+                WebViewFeature.MULTI_PROFILE -> profiles
+                WebViewFeature.WEB_MESSAGE_LISTENER, WebViewFeature.DOCUMENT_START_SCRIPT -> !navigation
+                else -> false
+            }
         }
     }
 
@@ -62,6 +70,28 @@ class NativesPartitionTest {
     class Compat {
         companion object {
             val listeners = HashMap<WebView, NavigationListener>()
+            /** Each view's profile, set before anything else was done with it. */
+            val profiles = LinkedHashMap<WebView, String>()
+            fun last() = profiles.keys.last()
+
+            /** The views given a page-world object, as the old-provider load observer gives one. */
+            val pageWorld = HashSet<WebView>()
+
+            @JvmStatic @Implementation
+            fun addWebMessageListener(web: WebView, name: String, origins: Set<String>, listener: WebViewCompat.WebMessageListener) {
+                pageWorld.add(web)
+            }
+
+            @JvmStatic @Implementation
+            fun addDocumentStartJavaScript(web: WebView, script: String, origins: Set<String>): androidx.webkit.ScriptHandler =
+                androidx.webkit.ScriptHandler { }
+
+            @JvmStatic @Implementation fun setProfile(web: WebView, name: String) {
+                assertNull(shadowOf(web).lastLoadedUrl)
+                assertNull(shadowOf(web).webViewClient)
+                assertNull(profiles.put(web, name))
+            }
+
 
             @JvmStatic @Implementation
             fun addNavigationListener(web: WebView, executor: Executor, listener: NavigationListener) { listeners[web] = listener }
@@ -76,7 +106,7 @@ class NativesPartitionTest {
 
     private fun settle() = shadowOf(Looper.getMainLooper()).idle()
 
-    @Before fun clear() { Host.sent.clear(); Host.loads.clear() }
+    @Before fun clear() { Host.sent.clear(); Host.loads.clear(); Compat.profiles.clear(); Compat.pageWorld.clear(); Features.profiles = false; Features.navigation = true }
 
     private class Peer(private val properties: Map<String, Any?> = emptyMap()) : InvocationHandler {
         private var peer: Any? = null
@@ -154,6 +184,72 @@ class NativesPartitionTest {
         val shown = natives.getChildAt(natives.childCount - 1) as WebView
         assertNotSame(refused, shown)
         assertEquals("https://example.com/", shadowOf(shown).lastLoadedUrl)
+        natives.destroyAll()
+    }
+
+    private fun profiled(): Natives {
+        Features.profiles = true
+        return natives()
+    }
+
+    /** A `persist:` partition is its own profile in a view made for it, never a lent one, and never lent after. */
+    @Test fun aPersistentPartitionIsAProfileOfItsOwn() {
+        val natives = profiled()
+        natives.ensure(9, 1, 0, 0, props(null), 0)
+        natives.ensure(9, 1, 0, 0, JSONObject(props(null)).put("generation", 1).toString(), 0)
+        val pooled = natives.getChildAt(0) as WebView
+        natives.ensure(1, 1, 0, 0, props("persist:one"), 0)
+        natives.ensure(2, 1, 0, 0, props("persist:two"), 0)
+        natives.ensure(3, 1, 0, 0, props("persist:one"), 0)
+        settle()
+        val views = Compat.profiles.keys.toList()
+        assertFalse(views.any { it === pooled })
+        assertEquals(listOf("exact.persist.one", "exact.persist.two", "exact.persist.one"), views.map { Compat.profiles[it] })
+        assertTrue(views.all { shadowOf(it).lastLoadedUrl == "https://example.com/" })
+        assertTrue(Host.sent.isEmpty())
+        // A partition that changes is a new view in the new profile; the old one is destroyed, not lent.
+        natives.ensure(1, 1, 0, 0, props("persist:two"), 0)
+        assertTrue(shadowOf(views[0]).wasDestroyCalled())
+        assertEquals(4, Compat.profiles.size)
+        assertEquals("exact.persist.two", Compat.profiles[Compat.last()])
+        // A renderer's end makes the view again in its profile.
+        assertTrue(gone(views[1]))
+        settle()
+        assertEquals(5, Compat.profiles.size)
+        assertEquals("exact.persist.two", Compat.profiles[Compat.last()])
+        natives.destroyAll()
+    }
+
+    /** What Android cannot keep is refused, never loaded in the default store or in a profile. */
+    @Test fun whatAProfileCannotKeepIsRefused() {
+        val natives = profiled()
+        natives.ensure(1, 1, 0, 0, props("work"), 0)
+        natives.ensure(2, 1, 0, 0, props("persist:a", sandbox = ""), 0)
+        natives.ensure(3, 1, 0, 0, JSONObject(props("persist:a")).put("src", "file:///sdcard/x.html").toString(), 0)
+        settle()
+        assertTrue(Compat.profiles.isEmpty())
+        assertEquals(listOf(1, 2, 3), Host.sent.map { it.id })
+        assertTrue(Host.sent.all { it.record.getString("error") == "NotSupportedError" && it.record.getBoolean("partitioned") })
+        // A src it can show makes the frame again in its profile.
+        natives.ensure(3, 1, 0, 0, props("persist:a"), 0)
+        assertEquals("exact.persist.a", Compat.profiles.values.single())
+        assertEquals("https://example.com/", shadowOf(Compat.last()).lastLoadedUrl)
+        natives.destroyAll()
+    }
+
+    /** On a provider without the navigation listener a refused partition is still a partition's view: never lent,
+     * and never given the page-world object the load observer installs. */
+    @Test fun aRefusedPartitionHasNoPageWorldObjectAndNoLentView() {
+        Features.navigation = false
+        val natives = natives()
+        natives.ensure(9, 1, 0, 0, props(null), 0)
+        natives.ensure(9, 1, 0, 0, JSONObject(props(null)).put("generation", 1).toString(), 0)
+        val plain = Compat.pageWorld.toSet()
+        assertFalse(plain.isEmpty())
+        natives.ensure(1, 1, 0, 0, props("persist:a"), 0)
+        settle()
+        assertEquals("NotSupportedError", Host.sent.single().record.getString("error"))
+        assertEquals(plain, Compat.pageWorld)
         natives.destroyAll()
     }
 }

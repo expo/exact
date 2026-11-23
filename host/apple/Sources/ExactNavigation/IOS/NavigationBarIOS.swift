@@ -376,7 +376,7 @@ final class SegmentPress: NSObject {
         let i = control.selectedSegmentIndex
         settled = i
         guard tabs.indices.contains(i) else { return }
-        _ = host?.presenter.hatchAct(tabs[i], 0)
+        _ = host?.presenter.hatchAct(tabs[i], 0, NavigationMarks.shared.personNow())
     }
 }
 
@@ -408,7 +408,7 @@ final class BarPress: NSObject {
             if !node.disabled, !node.inert { host.presenter.press(id) }
             return
         }
-        _ = host.presenter.hatchAct(id, 0)
+        _ = host.presenter.hatchAct(id, 0, NavigationMarks.shared.personNow())
     }
 }
 

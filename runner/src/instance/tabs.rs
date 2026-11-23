@@ -498,7 +498,7 @@ impl Tree {
                 Child::Node(n) => {
                     let id = n.bound_prop(plan, index, PropId::Id);
                     let id = id.as_ref().and_then(Value::as_str);
-                    if let ([Child::Region(r)], Some(id)) = (n.children.as_slice(), id) {
+                    if let ([Child::Region(r)], Some(id)) = (&n.children[..], id) {
                         if let Active::Arm {
                             frame:
                                 ArmFrame {
@@ -515,7 +515,7 @@ impl Tree {
                             }
                         }
                     }
-                    stack.extend(&n.children);
+                    stack.extend(n.children.iter());
                 }
                 Child::Region(r) => match &r.active {
                     Active::Arm { roots, .. } => stack.extend(roots),
@@ -549,15 +549,10 @@ fn open_in(
                     *left -= 1;
                     // A virtualized list that is a panel makes its window's
                     // rows now, as it would have when made.
-                    match u.env.lists {
-                        Some(lists) => (lists.create)(u, n.node, n.view, frames, &mut n.children)
-                            .map(|made| n.set_list(made)),
-                        None => Ok(()),
-                    }
-                    .and_then(|()| match n.list() {
+                    n.create_list(u, frames).and_then(|()| match n.list() {
                         Some(_) => Ok(()),
                         None => open_panel(u, n, frames).map(|made| {
-                            n.children = made;
+                            n.children = made.into();
                             n.emit_children(u);
                         }),
                     })

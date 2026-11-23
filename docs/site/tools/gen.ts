@@ -1,12 +1,14 @@
 import { marked, type Token, type Tokens } from 'marked';
 import { createHighlighter } from 'shiki';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, normalize, relative, resolve } from 'node:path';
 import { agentRows, sections, tabs, type NavPage } from '../constants/navigation.ts';
 import { redirects } from '../constants/redirects.ts';
 import { site } from '../constants/site.ts';
 import { decode, descriptionOf, plain, sectionDescriptionProblems } from './descriptions.ts';
+import { markdownHeadings, pageMarkdown } from './markdown-headings.ts';
 import { promptOf } from './prompts.ts';
 
 const SITE = resolve(import.meta.dir, '..');
@@ -23,6 +25,7 @@ const ORIGIN = site.origin;
 const START_URL = 'https://github.com/expo/exact/blob/main/docs/start-here.md';
 const START_PROMPT = `Read ${START_URL} before building an app with Exact. It is the only required reading.`;
 const MARKDOWN = join(SITE, 'assets/markdown');
+const TOOL_MARKDOWN = join(MARKDOWN, 'tools');
 const EDIT = `https://github.com/expo/exact/edit/main/docs`;
 const IMAGES = join(SITE, 'assets/images');
 
@@ -374,19 +377,16 @@ function markdownHref(href: string, from: string, image: boolean): string {
   const [path, anchor] = at.split('#');
   return `${ORIGIN}${path === '/' ? '/index' : path}.md${anchor ? `#${anchor}` : ''}`;
 }
-function markdownOf(tokens: Token[], from: string): string {
-  return tokens.map(t => {
-    if (t.type === 'code') return t.raw;
-    const spans: string[] = [];
-    return t.raw
-      .replace(/(`+)[\s\S]*?\1/g, span => `\u0000${spans.push(span) - 1}\u0000`)
-      .replace(/(!?)\[([^\[\]]*)\]\(([^)\s]+)((?:\s+"[^"]*")?)\)/g, (_, bang: string, text: string, href: string, title: string) => `${bang}[${text}](${markdownHref(href, from, bang === '!')}${title})`)
-      .replace(/\u0000(\d+)\u0000/g, (_, i: string) => spans[Number(i)]);
-  }).join('').trim();
+function rewriteMarkdown(raw: string, from: string): string {
+  const spans: string[] = [];
+  return raw
+    .replace(/(`+)[\s\S]*?\1/g, span => `\u0000${spans.push(span) - 1}\u0000`)
+    .replace(/(!?)\[([^\[\]]*)\]\(([^)\s]+)((?:\s+"[^"]*")?)\)/g, (_, bang: string, text: string, href: string, title: string) => `${bang}[${text}](${markdownHref(href, from, bang === '!')}${title})`)
+    .replace(/\u0000(\d+)\u0000/g, (_, i: string) => spans[Number(i)]);
 }
 
 mkdirSync(OUT, { recursive: true });
-mkdirSync(MARKDOWN, { recursive: true });
+mkdirSync(TOOL_MARKDOWN, { recursive: true });
 const updated = new Map<string, string>();
 const isoDateOf = (source: string) => {
   if (!updated.has(source)) updated.set(source, execFileSync('git', ['log', '-1', '--format=%cs', '--', join('docs', source)], { cwd: REPO, encoding: 'utf8' }).trim());
@@ -443,8 +443,16 @@ pages.forEach(page => {
   const { blocks, toc } = render(page);
   const markdownPath = page.path === '/' ? '/index.md' : `${page.path}.md`;
   const markdownUrl = ORIGIN ? ORIGIN + markdownPath : GITHUB_DOCS + page.source;
-  const markdown = markdownOf(page.tokens, page.source);
-  writeFileSync(join(MARKDOWN, `${page.route}.md`), `${page.tocDepth === 3 ? `# ${page.title}\n\n` : ''}${markdown.replace(/^## .*\n+/, '')}\n${page.route === 'home' ? homeMarkdown() : ''}`);
+  const markdown = pageMarkdown(page.tokens, raw => rewriteMarkdown(raw, page.source), page.tocDepth === 3 ? page.title : undefined);
+  const body = `${markdown}\n${page.route === 'home' ? homeMarkdown() : ''}`;
+  writeFileSync(join(MARKDOWN, `${page.route}.md`), body);
+  if (!page.hidden) {
+    const { route, path, title, description } = page;
+    // The digest ties the section offsets to this Markdown across deployments.
+    const digest = createHash('sha256').update(body).digest('hex');
+    const info = { path, title, description, modificationDate: isoDateOf(page.source), headings: markdownHeadings(body), digest };
+    writeFileSync(join(TOOL_MARKDOWN, `${route}.json`), JSON.stringify(info));
+  }
   const data = {
     slug: page.route,
     path: page.path,
@@ -496,7 +504,7 @@ const badRedirects = Object.entries(redirects).flatMap(([from, to]) => [
   ...(paths.has(to) ? [] : [`redirect ${from} -> ${to}: no page lives at ${to}`]),
 ]);
 for (const e of badRedirects) console.error(e);
-writeFileSync(join(OUT, 'redirects.ts'), `const moved: { redirects: Record<string, string>; pages: { path: string; title: string }[] } = ${JSON.stringify({ redirects, pages: listed.map(p => ({ path: p.path, title: p.title })) })};\nexport default moved;\n`);
+writeFileSync(join(OUT, 'redirects.ts'), `const moved: { origin: string; redirects: Record<string, string>; pages: { path: string; title: string; route: string }[] } = ${JSON.stringify({ origin: ORIGIN, redirects, pages: listed.map(p => ({ path: p.path, title: p.title, route: p.route })) })};\nexport default moved;\n`);
 writeFileSync(join(OUT, 'pages.json'), JSON.stringify(listed.map(p => ({ path: p.path, route: p.route, title: p.title, description: p.description, source: p.source, section: sections.find(x => x.pages.some(n => n.source === p.source))?.title ?? '', updated: isoDateOf(p.source) })), null, 2));
 
 const app = readFileSync(APP, 'utf8');

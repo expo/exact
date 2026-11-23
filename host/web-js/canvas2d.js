@@ -23,8 +23,11 @@ import { drawer } from './draw.js';
 function client(logic) {
   const { writer, reader, encode, ABI } = logic;
   if (!logic.exports.exact_logic_draw) return null;
-  // A computed argument has no declared type: encoded by its shape.
-  const value = (w, v, t) => t ? encode(w, v, t) : Array.isArray(v) ? (w.u8(6), w.u32(v.length), v.forEach(x => value(w, x))) : v == null ? w.u8(4) : encode(w, v, typeof v === 'number' ? 'n' : typeof v === 'boolean' ? 'b' : 's');
+  // An argument's declared type (ts-data.js's: `"n"`, `["?",T]`, `["[",T]`, `{field:T}`) as rust-data.js's code; one
+  // without a type is encoded by its shape.
+  const codes = new WeakMap(), code = t => typeof t !== 'object' ? t
+    : codes.get(t) ?? codes.set(t, Array.isArray(t) ? t[0] + code(t[1]) : `{${Object.values(t).map(code).join('')}}`).get(t);
+  const value = (w, v, t) => t ? encode(w, v, code(t)) : Array.isArray(v) ? (w.u8(6), w.u32(v.length), v.forEach(x => value(w, x))) : v == null ? w.u8(4) : encode(w, v, typeof v === 'number' ? 'n' : typeof v === 'boolean' ? 'b' : 's');
   const u64 = (w, v) => { w.u32(v >>> 0); w.u32(Math.floor(v / 4294967296)); };
   const call = fill => {
     const w = writer(); w.u32(ABI); w.u8(5); fill(w);
@@ -126,12 +129,17 @@ export function engine(rt) {
     if (frames !== wanting) { wanting = frames; glue.op({ frames }); }
   }
   let wanting = false;
+  // A commit's new arguments and bitmap attributes (pieces.js `c2`, `cb`) draw once all of its effects have run,
+  // whichever ran first: one draw with every cause, as the runner's.
+  let due = false, holding = false;
+  const soon = () => { if (!due) { due = true; queueMicrotask(() => { due = false; drawAll(); }); } };
   // What the glue calls the wasm for.
   const wasm = x.wasm ??= {};
   Object.defineProperty(wasm, 'memory', { get: () => memory, configurable: true });
   wasm.exact_canvas_geometry = (id, width, height, scale) => {
     const r = records.get(id);
     if (!r) return 0;
+    r.box = [width, height, scale];
     // An explicit bitmap size (`bitmap-width`/`bitmap-height`, LLP 1056 D6
     // r3; an unset one is the web's 300 or 150) is its own coordinate
     // space, stretched to the box: the runner's `Backing::of`.
@@ -140,13 +148,18 @@ export function engine(rt) {
       : { w: Math.max(0, Math.round(width * scale)), h: Math.max(0, Math.round(height * scale)), width, height, scale, stretch: false };
     // Its getContext settings (LLP 1100 D12a): the runner's `canvas_settings`.
     b.p3 = colorSpace === 'display-p3'; b.float16 = colorType === 'float16';
-    if (r.backing && r.backing.w === b.w && r.backing.h === b.h && r.backing.stretch === b.stretch && (b.stretch || r.backing.scale === b.scale)) { r.backing = b; return 0; }
+    // The runner's `Limits::WEB`: a bitmap past them is refused, and nothing draws.
+    r.refused = b.w > 65535 || b.h > 65535 ? `${b.w} × ${b.h} px is over the 65535 px side limit`
+      : b.w * b.h > 268435456 ? `${b.w} × ${b.h} px is over the 268435456 px area limit` : null;
+    if (r.refused) b.w = b.h = 0;
+    const o = r.backing;
+    if (o && o.w === b.w && o.h === b.h && o.stretch === b.stretch && o.p3 === b.p3 && o.float16 === b.float16 && (b.stretch || o.scale === b.scale)) { r.backing = b; return 0; }
     // A new size generation: a fresh bitmap and recorder (D4).
     if (r.backing) { r.generation++; r.causes |= SIZE; }
     r.backing = b;
     glue.op({ id, lifetime: r.lifetime, generation: r.generation, seq: 0, fresh: true, w: b.w, h: b.h, scale: b.scale, stretch: b.stretch, p3: b.p3, float16: b.float16, lists: [] });
     if (r.waiting) { r.waiting = false; inflight.n--; }
-    drawAll();
+    if (holding) soon(); else drawAll();
     return 0;
   };
   // A presented frame: the clock moves to the page's time (its timers fire),
@@ -222,7 +235,7 @@ export function engine(rt) {
   x.canvas2dState = () => [...records].map(([view, r]) => ({ view, surface: r.c.name, context: '2d', artifact: 'data', lifetime: r.lifetime, generation: r.generation,
     pending: !r.draws || !!r.causes, animating: !!r.frames, draws: r.draws ?? 0,
     width: r.backing?.w ?? null, height: r.backing?.h ?? null, scale: r.backing?.scale ?? null, stretch: !!r.backing?.stretch,
-    colorSpace: r.backing ? (r.backing.p3 ? 'display-p3' : 'srgb') : null, colorType: r.backing ? (r.backing.float16 ? 'float16' : 'unorm8') : null, error: r.error ?? undrawn, refused: null }));
+    colorSpace: r.backing ? (r.backing.p3 ? 'display-p3' : 'srgb') : null, colorType: r.backing ? (r.backing.float16 ? 'float16' : 'unorm8') : null, error: r.error ?? undrawn, refused: r.refused ?? null }));
   if (clock.agent && x.advance) { const advance = x.advance; x.advance = (to, wall, stop) => { const r = advance(to, wall, stop); frame(); return r; }; }
   const glue = x.canvas2dGlue({ views: rt.views, now: () => clock.now });
   // A capture's canvas (ts-data.js `captureCanvas`): the runner's checks
@@ -289,7 +302,14 @@ export function engine(rt) {
         glue.op({ id, watch: true });
         sayUndrawn();
       }
-      drawAll();
+      soon();
+    },
+    // A bitmap attribute changed (pieces.js `cb`): the box as layout has it now, which the glue reports if it moved,
+    // else the last one, read with the attribute.
+    resized(el) {
+      holding = true;
+      try { for (const [id, r] of records) if (r.c.e === el && r.box) { glue.geometry(id); wasm.exact_canvas_geometry(id, ...r.box); } }
+      finally { holding = false; }
     },
     gone(c) {
       for (const [id, r] of records) if (r.c === c) {

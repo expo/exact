@@ -1,4 +1,5 @@
 use TextStyles from "./text-styles.contract"
+use DragDrop, DragNote from "./drag.contract"
 
 shape Display
   colorGamut: string
@@ -97,7 +98,7 @@ style Page
   margin-left="auto"
   margin-right="auto"
 
-fn sectionTitle(s: string): string = s == "typography" ? "Typography" : s == "textcolors" ? "Text colors" : s == "css" ? "CSS color spaces" : s == "profiles" ? "Platform profiles" : s == "images" ? "Image profiles" : s == "hdr" ? "HDR" : s == "effects" ? "Effects & controls" : s == "media" ? "Canvas & video" : s == "menus" ? "Context menus" : ""
+fn sectionTitle(s: string): string = s == "typography" ? "Typography" : s == "textcolors" ? "Text colors" : s == "css" ? "CSS color spaces" : s == "profiles" ? "Platform profiles" : s == "images" ? "Image profiles" : s == "hdr" ? "HDR" : s == "effects" ? "Effects & controls" : s == "media" ? "Canvas & video" : s == "menus" ? "Context menus" : s == "drag" ? "Drag and drop" : ""
 
 component GalleryDemo
   props
@@ -126,6 +127,8 @@ component GalleryDemo
     videoSource: string
     videoPlaying: bool
     liftPicked: string
+    os: string
+    dragNote: DragNote
     active: bool
     chooseVideo: action
     toggleVideo: action
@@ -146,7 +149,7 @@ component GalleryDemo
           text sectionTitle(section) role="heading" aria-level=1 font-size=(authoredHeader ? 22 : 34) font-weight=600
         if sectionTitle(section) != "" and not authoredHeader and host != "web"
           text sectionTitle(section) role="heading" aria-level=1
-      if section != "hdr" and section != "menus" and (host != "web" or section == "images") and (section != "media" or nativeFeatures.video)
+      if section != "hdr" and section != "menus" and section != "drag" and (host != "web" or section == "images") and (section != "media" or nativeFeatures.video)
         // Keep it as tall as the list column's inline navigation bar at least, while the split is expanded, so
         // both columns' headers end level once scrolled and the page's bar hides (the Duo, iOS 27.1); a wrapped
         // label or a larger text size makes it taller.
@@ -386,6 +389,9 @@ component GalleryDemo
                 text "Share"
               button press=pickLift("favorite") popovertarget="lift-menu" popovertargetaction="hide"
                 text "Favorite"
+          if section == "drag"
+            text "Text, links, photos, video, sound and documents dragged out of the app." font="-exact-subheadline" color="-exact-secondary-label" padding-bottom=8 testId=`intro-${section}`
+            DragDrop(host=os, note=dragNote)
 
 component LimitControl
   props

@@ -84,8 +84,9 @@ public struct Batch {
     public var routeInspectors: [RouteInspector]? = nil
     /// The kernel transactions it carries, while the runner measures (LLP 1079 D3).
     public var seq: (UInt64, UInt64)?
-    /// When `ExactSession.applyInput` marked it as a person's input: on iOS
-    /// a glass it adds to a group in the window materializes.
+    /// When `ExactSession.applyInput` took it as a person's input: a
+    /// navigation it makes is the person's (`NavigationMarks`), and on iOS a
+    /// glass it adds to a group in the window materializes.
     public var input: Double? = nil
     /// Failure lines the session writes to the unified log, each once (LLP 1142 D4).
     public var alerts: [String] = []

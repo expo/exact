@@ -72,6 +72,9 @@ pub(super) struct Clock {
     fixtures: Vec<fixture_replies::Delayed>,
     /// Inputs waiting on the work due by their arrival (`inputs.rs`)
     held: std::collections::VecDeque<inputs::Held>,
+    /// Work that fell due is running, not an input's own action
+    /// (`RouterChange::due`)
+    pub(super) due: bool,
 }
 
 impl<D: DataSource> Runner<D> {
@@ -436,6 +439,13 @@ impl<D: DataSource> Runner<D> {
 
     /// [`Self::advance_within`] with no input held.
     fn advance_due(&mut self, now_ms: f64, until_request: bool, timers: bool) -> Advanced {
+        let outer = std::mem::replace(&mut self.clock.due, true);
+        let a = self.run_due(now_ms, until_request, timers);
+        self.clock.due = outer;
+        a
+    }
+
+    fn run_due(&mut self, now_ms: f64, until_request: bool, timers: bool) -> Advanced {
         if self.poisoned {
             return Advanced {
                 receipts: Vec::new(),

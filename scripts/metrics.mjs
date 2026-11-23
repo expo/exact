@@ -789,7 +789,7 @@ const macParse = (o) => {
   const stampOf = (line, label) => Number(new RegExp(`${label.replace(/[.()]/g, '\\$&')} ([\\d.]+)`).exec(line)?.[1] ?? NaN);
   const st = /^stamps: (.*)$/m.exec(o)?.[1] ?? '';
   out.macos_finish_launching_ms = stampOf(st, 'didFinishLaunching');
-  out.macos_first_frame_ms = stampOf(st, 'first frame applied');
+  out.macos_run_ms = stampOf(st, 'run');
 };
 // The platform floor: an empty AppKit app with the same stamps, built once.
 const floorBin = resolve(ROOT, 'target/exact-floor');
@@ -1175,7 +1175,7 @@ if (Number.isFinite(out.macos_paint_ms)) rows.push(
   ['  AppKit: exec → main', ms(out.macos_exec_ms), 'dyld, the Swift runtime'],
   ['  AppKit: NSApplication', ms(out.macos_nsapp_ms), `floor ${ms(out.floor_nsapp_ms)} (waits on the window server)`],
   ['  AppKit: NSWindow', ms(out.macos_window_ms), `floor ${ms(out.floor_window_ms)} (NSThemeFrame, a dlopen)`],
-  ['  AppKit: run → didFinishLaunching', ms(out.macos_finish_launching_ms - out.macos_first_frame_ms), `floor ${ms(out.floor_finish_launching_ms)} (Dock registration ≈ 65 ms of it)`],
+  ['  AppKit: run → didFinishLaunching', ms(out.macos_finish_launching_ms - out.macos_run_ms), `floor ${ms(out.floor_finish_launching_ms)} (Dock registration ≈ 65 ms of it)`],
   ['  main → first paint', ms(out.macos_paint_ms), `floor ${ms(out.floor_draw_ms)}: an empty window on this machine`],
   ['  GPU module (dlopen + device)', ms(out.macos_gpu_ms), 'after first paint, first canvas'],
   ['  web arm (dlopen)', out.macos_web_loaded ? 'loaded' : 'not loaded', out.macos_web_loaded ? 'VIOLATION: first screen has no iframe' : 'first iframe commit only'],

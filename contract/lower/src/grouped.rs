@@ -32,7 +32,7 @@ pub(crate) mod shadow;
 mod title;
 mod value;
 
-use cell::{lines as cell_lines, one_line, stacks, standard, text_stack};
+use cell::{one_line, stacks, standard_text_lines};
 use inputs::{column_row, field_beside_label, field_kind, hidden, switch, text_field, Field};
 use native::native_row;
 pub(crate) use native::{margins_said, native_rows};
@@ -857,16 +857,8 @@ fn s_val(value: &str, span: Span) -> Expr {
     Expr::Str(value.into(), span)
 }
 
-/// A row and its direct parts: a cell's metrics (on iOS 52 high, 16 in, the
-/// text at 56 after an icon; on the Mac 36 high with 10 around its content),
-/// its separator, the icon, a value or subtitle in the secondary colour, an
-/// accessory's size and colour, and what a `destructive` row is: red text
-/// where the platform's list shows that, the platform's push button where
-/// its form shows one (the Mac's, LLP 1115.002 D6).
-/// `swiped`: the row is a swipe's content, which the platform's list
-/// carries as a custom row.
 /// A grouped list's row: the sheet's rows, without the look of an element
-/// that yields it to the row (`row_look`).
+/// that yields it to the row (`row_look`). A swipe's content is a custom row.
 pub(crate) fn row(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> Node {
     match crate::row_look::yielded(node) {
         Some(own) => styled(&own, separated, swiped, class),
@@ -955,8 +947,15 @@ fn styled(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> N
     // a subtitle cell's space above and below (on iOS 15, 52 high for one
     // line). One or two texts are the subtitle cell's lines, which the kernel
     // reads as one; anything else is the author's own layout.
-    if column_row(tag, attrs) {
-        let stack = cell_lines(children);
+    let column = column_row(tag, attrs);
+    let subtitle = cell::has_subtitle(attrs, children, column, class);
+    let row_minimum = if subtitle {
+        "stack-min-height"
+    } else {
+        "row-min-height"
+    };
+    if column {
+        let stack = standard_text_lines(children);
         let mut rows = context;
         rows.extend([
             s("display", "flex", span),
@@ -964,7 +963,7 @@ fn styled(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> N
             s("justify-content", "center", span),
             m("gap", if stack { "stack-gap" } else { "row-gap" }, span),
             s("box-sizing", "border-box", span),
-            m("min-height", "stack-min-height", span),
+            m("min-height", row_minimum, span),
             m("padding-left", "row-inset", span),
             m("padding-right", "row-padding-end", span),
             m("padding-top", "stack-padding-block", span),
@@ -998,7 +997,9 @@ fn styled(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> N
             place: *place,
         };
     }
-    let stack = text_stack(children);
+    let content = cell::texts(children.iter().filter(|c| !hidden(c)).collect(), false);
+    let stack = matches!(content.as_slice(), [Node::Element { tag, children, .. }]
+        if tag == "column" && standard_text_lines(children));
     // A stack of lines in the row (an author's `column` that is not the
     // subtitle cell) keeps the cell's margins, as a hand-built cell pins its
     // content to its content view's: the subtitle cell's space above and
@@ -1015,7 +1016,6 @@ fn styled(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> N
                 "padding" | "padding-top" | "padding-bottom"
             )
         });
-    let row_height = mv("row-min-height", span);
     // A label beside a field: the row wraps, so where both do not fit (the
     // accessibility text sizes) the field goes under the label, as in a
     // SwiftUI `Form`, rather than squeezing the label to nothing.
@@ -1024,11 +1024,20 @@ fn styled(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> N
         s("display", "flex", span),
         s("flex-direction", "row", span),
         s("align-items", "center", span),
-        m("gap", "row-gap", span),
+        m("row-gap", "row-gap", span),
+        m("column-gap", "row-inline-gap", span),
         if destructive {
-            button("min-height", "button-min-height", row_height)
+            button(
+                "min-height",
+                if subtitle {
+                    "button-stack-min-height"
+                } else {
+                    "button-min-height"
+                },
+                mv(row_minimum, span),
+            )
         } else {
-            attr("min-height", row_height, span)
+            m("min-height", row_minimum, span)
         },
         m("padding-top", "row-padding-block", span),
         m("padding-bottom", "row-padding-block", span),
@@ -1043,7 +1052,7 @@ fn styled(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> N
     // text has a hyphenationFactor of 1, iOS 27: "Alice Ander-son"). An
     // author's own content is a custom cell's, whose UILabel's factor is 0,
     // as SwiftUI's `Text` is: CSS's `manual`.
-    if standard(children) {
+    if stack || standard_text_lines(content) {
         sheet.push(s("hyphens", "auto", span));
     }
     if field.is_some() {
@@ -1170,7 +1179,7 @@ fn styled(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> N
 struct Place<'a> {
     i: usize,
     last: usize,
-    /// Whether a `column` here is the row's text stack (`text_stack`).
+    /// Whether a `column` here is the row's text stack.
     stack: bool,
     row_attrs: &'a [Attr],
     class: ClassRows<'a>,

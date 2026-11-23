@@ -1555,7 +1555,12 @@ Not built of D11:
   matches Compose's height, corners, outline, colours and baselines, headless and on an API 36 emulator; a hugging
   group is 2 dp wider (QUEUE). The outline is whole pixels, as `Modifier.border` rounds it. A phone run remains
   owed, as does Compose's motion (the label slides and the check grows; here both change at once).
-- **List items** and their dividers (rows as cells land on every host at once).
+- **List items' slots and type.** A grouped list's rows take `ListItem`'s padding, leading gap and 56 dp
+  minimum height. A statically visible title and subtitle stacked in a column take a 72 dp minimum.
+  Conditional content grows from the 56 dp minimum. The page, list and cards share `ListItem`'s
+  `surface` colour, and rows have no separator (`grouped-*` rows' Material cells).
+  The leading and trailing slots' sizes and colours, the supporting text's style, the three-line item
+  and Material's section headers remain open.
 - **A header's rich title**: the avatar, the subtitle and the tap on the title that iOS shows are not read here.
 - **`onSecondaryContainer`** for the selected symbol, badges, a navigation rail on a wide window, and hiding the
   navigation bar for a route pushed while the tablist is hidden (the bar follows the tablist's own `display`).

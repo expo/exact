@@ -9,6 +9,7 @@
 //! cannot start a device through the world's later emissions. The hosts
 //! carry the text unchanged.
 
+use super::provenance::Cause;
 use super::{CallOrigin, Command};
 use exact_plan::Value;
 
@@ -27,6 +28,22 @@ pub(super) fn unmark(text: &str) -> Option<(CallOrigin, &str)> {
         _ => CallOrigin::Device,
     };
     Some((origin, text))
+}
+
+/// The origin a world's posts from a commit of `cause` carry: its own; or,
+/// for the app's commit that a background action's or a tool's commit
+/// joined (a request it asked that theirs kept), the action's, else the
+/// tool's (LLP 1133.023 D7a). A wake or the device that joined is left out:
+/// the world keeps the highest-ranked mark posted into it
+/// (`game/engine/src/sim/origin.rs`), and either would replace a tool's,
+/// losing its command rules.
+pub(super) fn mark_origin(cause: Cause) -> CallOrigin {
+    match cause.origin {
+        CallOrigin::App => ([CallOrigin::Action, CallOrigin::Tool].into_iter())
+            .find(|o| cause.causes.has(*o))
+            .unwrap_or(CallOrigin::App),
+        origin => origin,
+    }
 }
 
 /// Each `postMessage` to a canvas (two arguments: an iframe's carries a
@@ -50,6 +67,26 @@ pub(super) fn mark_world_posts(origin: CallOrigin, commands: &mut [Command]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The app's commit an action or a tool joined posts under it; any
+    /// other commit under its own origin.
+    #[test]
+    fn an_apps_commit_an_action_or_a_tool_joined_posts_under_it() {
+        let app = Cause::of(CallOrigin::App, 0, false);
+        let action = Cause::of(CallOrigin::Action, 3, true);
+        let tool = Cause::of(CallOrigin::Tool, 4, true);
+        let wake = Cause::of(CallOrigin::Wake, 5, false);
+        let device = Cause::none();
+        assert_eq!(mark_origin(app), CallOrigin::App);
+        assert_eq!(mark_origin(app.joined(action.causes)), CallOrigin::Action);
+        let both = app.joined(tool.causes).joined(action.causes);
+        assert_eq!(mark_origin(both), CallOrigin::Action);
+        assert_eq!(mark_origin(app.joined(tool.causes)), CallOrigin::Tool);
+        assert_eq!(mark_origin(app.joined(wake.causes)), CallOrigin::App);
+        assert_eq!(mark_origin(app.joined(device.causes)), CallOrigin::App);
+        assert_eq!(mark_origin(tool.joined(action.causes)), CallOrigin::Tool);
+        assert_eq!(mark_origin(device.joined(tool.causes)), CallOrigin::Device);
+    }
 
     #[test]
     fn a_mark_reads_as_its_origin_and_never_as_the_apps() {

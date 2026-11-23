@@ -649,35 +649,24 @@ pub fn family_binding<'v>(
     (value, id)
 }
 
-/// A refusal when binding `b`'s `value` on site `node` names a type or
-/// family token that varies by an app axis on a node whose children
-/// inherit its rows (stage 6 C, theme2's ruling): the compiler refuses a
+/// A refusal when binding `b`'s `value` names a type or family token that
+/// varies by an app axis (`varying`) on a node whose children inherit its
+/// rows (`inherits`; stage 6 C, theme2's ruling): the compiler refuses a
 /// literal so; a value computed at run time is refused here, as invalid.
 pub fn inherited_varying(
-    plan: &exact_plan::Plan,
     b: &exact_plan::BindingsRow,
     value: &Value,
-    node: exact_plan::NodesId,
+    varying: impl FnOnce(&str) -> bool,
+    inherits: impl FnOnce() -> bool,
 ) -> Result<(), BridgeError> {
-    use exact_kernel::style::theme::{typeface, Kind};
+    use exact_kernel::style::theme::typeface;
     let Some(row) = StyleId::from_bit(u32::from(b.id)).filter(|r| typeface::admits_type(*r)) else {
         return Ok(());
     };
     let Some(text) = value.as_str().map(str::trim) else {
         return Ok(());
     };
-    let varying = plan.theme.iter().any(|r| {
-        matches!(Kind::of(r.kind), Some(Kind::Type | Kind::Family))
-            && r.slices.len > 0
-            && plan.str(r.name) == text
-    });
-    // Its children: its own nodes, and a choice's or a list's under it. A
-    // scan of the plan, so only for a row that varies.
-    let children = || {
-        plan.nodes.iter().any(|n| n.parent == Some(node))
-            || plan.regions.iter().any(|r| r.parent == Some(node))
-    };
-    if b.kind == exact_plan::BindingKind::Style && varying && children() {
+    if b.kind == exact_plan::BindingKind::Style && varying(text) && inherits() {
         return Err(BridgeError::StyleKind {
             style: row,
             value: value.clone(),

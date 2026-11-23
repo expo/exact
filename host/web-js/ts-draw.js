@@ -19,6 +19,17 @@ globalThis.Path2D = browserPath2D;
 
 const CAUSES = ['mount', 'args', 'size', 'frame', 'image', 'font', 'style'];
 const recorders = new Map(); // canvas lifetime -> { generation, rec }
+// An argument as the runtime holds it (a list or a record) -> as `draw` receives it. A value the runtime keeps is
+// converted once however many draws, canvases or commits read it; what `draw` gets is frozen, so no draw changes
+// what the next one reads.
+const converted = new WeakMap();
+const frozen = v => { if (v !== null && typeof v === 'object' && !Object.isFrozen(v)) { Object.freeze(v); for (const k in v) frozen(v[k]); } return v; };
+const value = (v, t) => {
+  if (!t || v === null || typeof v !== 'object') return v;
+  let c = converted.get(v);
+  if (c === undefined) converted.set(v, c = frozen(named(v, t)));
+  return c;
+};
 
 export const drawer = {
   color: parseColor,
@@ -29,10 +40,13 @@ export const drawer = {
     inner.env = { canvas: q.canvas, currentColor: q.color ?? null, rtl: q.rtl === true, p3: q.p3 === true, host: globalThis.exact?.canvas2dHost ?? null };
     const [time, mounted, bits, width, height, pixelWidth, pixelHeight, scale] = q.frame;
     const causes = CAUSES.filter((_, i) => bits & (1 << i));
-    // The arguments as a GPU surface's `bind` receives them: by name when
-    // the surface names them, records as objects by their declared types.
-    const value = (v, i) => named(v, q.types[i] || null);
-    const args = q.names.length ? Object.fromEntries(q.names.map((n, i) => [n, value(q.args[i], i)])) : q.args.map(value);
+    // The arguments by name when the call names them, records as objects by
+    // their declared types (LLP 1056 D1).
+    let args = converted.get(q.args);
+    if (args === undefined) {
+      args = q.names.length ? Object.fromEntries(q.names.map((n, i) => [n, value(q.args[i], q.types[i])])) : q.args.map((v, i) => value(v, q.types[i]));
+      converted.set(q.args, Object.freeze(args));
+    }
     let wants = false, error = null;
     globalThis.Path2D = Path2D;
     try {

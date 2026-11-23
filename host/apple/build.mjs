@@ -71,7 +71,7 @@ import { alternativeNames, backgroundKeys, firstFrameKeys, declaredOrigin, inter
 import { compileFixtures, iosTestRuns, macTests, onlyClasses } from './xctest.mjs';
 import { APPLE_STATIC_TREES, appIcon, appleRefusals, buildInfo, iosAssets, appleAssets, appleAssetCatalogInventory, copyNativeResources, signingOrder, helperEntitlements, plistFile, wrapFramework, signedGpuProduct, assertArchiveFrameworks } from './assets.mjs';
 import { auditLaunchParts, launchModules, launchPartsObjects, launchServices, serviceArgs, writeLaunchParts } from './launch-parts.mjs';
-import { keptModules } from './modules.mjs';
+import { dylibArgs, keptModules } from './modules.mjs';
 import { nativeIntentModule, launchIntentModule, pressesTools, swiftPMImports } from './intents.mjs';
 import { appleLinkArgs, embedLibrary, prepareLibrary } from '../../scripts/package-libraries.mjs';
 import { quiet, quietFor } from './quiet.mjs';
@@ -845,8 +845,8 @@ async function main(args, lockHeld = false) {
   // `release` the kernel went through one codegen unit and thin LTO, 27 of
   // the 35 s a touched kernel line cost (LLP 1036.000 §5, §7). Their build
   // directory is their own, since Cargo runs one build at a time in a
-  // directory and they would wait for the whole bake; the kernel is compiled
-  // for both at once. Unstripped: Xcode 27's strip leaves the SVG dylib with
+  // directory and they would wait for the whole bake; what they share is
+  // compiled once. Unstripped: Xcode 27's strip leaves the SVG dylib with
   // a mis-aligned LINKEDIT string pool that dyld refuses (as Cargo.toml says
   // of build scripts) and the iOS canvas module unloadable the same way
   // (2026-09-30); that crate's build.rs omits its local symbols (-Wl,-x).
@@ -874,9 +874,8 @@ async function main(args, lockHeld = false) {
     const started = Date.now(), compile = crates.filter(crate => !(moduleLib[crate] = kept?.find(crate)));
     for (const crate of compile) moduleLib[crate] = resolve(moduleLibDir, `lib${crate.replaceAll('-', '_')}.dylib`);
     if (compile.length) keptRegistry?.take(moduleTarget, 'modules');
-    const step = compile.length ? startApple('cargo', ['build', '--profile', cargoProfile, ...compile.flatMap(crate => ['-p', crate]), '--lib', '--target', target, '--target-dir', moduleTarget, '--manifest-path', resolve(root, 'Cargo.toml')], resolve(webBuildDir, log), { env: moduleEnv }) : null;
-    if (step) beside.push(step);
-    return { async done() { await step?.done(); for (const crate of compile) kept?.keep(crate, started); if (compile.length) keptRegistry?.keep(moduleTarget, 'modules', resolve(root, 'Cargo.lock')); } };
+    const steps = compile.map(crate => { const step = startApple('cargo', dylibArgs(crate, cargoProfile, target, moduleTarget, resolve(root, 'Cargo.toml')), resolve(webBuildDir, log.replace(/\.log$/, `-${crate}.log`)), { env: moduleEnv }); beside.push(step); return step; });
+    return { async done() { await Promise.all(steps.map(step => step.done())); for (const crate of compile) kept?.keep(crate, started); if (compile.length) keptRegistry?.keep(moduleTarget, 'modules', resolve(root, 'Cargo.lock')); } };
   };
   // A production binary whose plan is its own for good (store level 0) may
   // reach neither module, and then compiles neither: its build waits for the
@@ -1447,7 +1446,7 @@ async function test(args) {
     env[`${named}EXACT_TEST_WEB_MODULE`] = arm('ExactWebArm', ['WebArm.swift', 'FrameBrowser.swift', 'FrameWindows.swift', 'FrameCapture.swift', 'FramePDF.swift', 'FrameAutomation.swift', 'FrameFiles.swift', 'FrameInspector.swift', 'FramePrint.swift'].map(f => resolve(root, 'host/apple/webarm', f)).concat(['-D', 'EXACT_DEVELOPMENT']), ['WebKit', 'PDFKit']);
     // The GPU module goes to its own tests alone: loaded, every canvas draws on the GPU (xctest.mjs).
     const modules = resolve(process.env.CARGO_TARGET_DIR ?? resolve(root, 'target'), 'apple-modules');
-    run('cargo', ['build', '--profile', HOST_DEV, '-p', 'exact-canvas-vello', '--lib', ...(ios ? ['--target', iosTarget] : []), '--target-dir', modules, '--manifest-path', resolve(root, 'Cargo.toml')],
+    run('cargo', dylibArgs('exact-canvas-vello', HOST_DEV, ios ? iosTarget : null, modules, resolve(root, 'Cargo.toml')),
       { env: { ...cargoEnv, [`CARGO_PROFILE_${HOST_DEV.toUpperCase().replace(/-/g, '_')}_STRIP`]: 'false' } });
     const canvasGpu = resolve(modules, ...(ios ? [iosTarget] : []), HOST_DEV, 'libexact_canvas_vello.dylib');
     run('cargo', ['build', '-q', '-p', 'contract', '--bin', 'contract', '--manifest-path', resolve(root, 'Cargo.toml')]);

@@ -141,8 +141,10 @@ class Natives(
 
     private class Element(val id: Int, val kind: Int, var view: View, val node: RenderNode, val audio: Boolean = false) {
         var props = ""
-        /** An iframe's `partition`, and what its refusal was last sent for ([refuseFrame]). */
+        /** An iframe's `partition`, the profile its view was made in ([Partitions.profile]), and what its refusal
+         * was last sent for ([refuseFrame]). */
         var partition: String? = null
+        var profile: String? = null
         var refusedFor: String? = null
         var module: String? = null
         var generation = 0
@@ -608,7 +610,7 @@ class Natives(
         var e = elements[id]
         if (e == null || e.kind != kind || e.audio != audio || (json != null &&
                 (e.generation != generation || e.slot != slot || e.module != module || e.session != session ||
-                    kind == 1 && e.partition != json.partition()))) {
+                    kind == 1 && (e.partition != json.partition() || e.profile != Partitions.profile(json))))) {
             e?.let { release(it) }
             val lazyMedia = kind == 0 && videos != null && lazyVideo &&
                 (!audio || w > 0 && h > 0 && !BackgroundAudio.contains(MediaAllocation(id, slot, generation, session)))
@@ -622,7 +624,7 @@ class Natives(
             created.generation = generation
             created.slot = slot
             created.session = session
-            created.partition = json?.partition()
+            if (kind == 1) { created.partition = json!!.partition(); created.profile = Partitions.profile(json) }
             e = created
             elements[id] = e
             nodes = null
@@ -907,7 +909,9 @@ class Natives(
                 audioLoans[view] = loan
             }
         } else videoPool.removeLastOrNull() ?: videoView(audio = false)
-        1 -> readyWeb().takeIf { it >= 0 }?.let { webPool.removeAt(it) }
+        // A partitioned frame's profile is set before its view does anything (`WebViewCompat.setProfile`): never a lent one.
+        1 -> if (json.partition() != null) webView(Partitions.profile(json), partitioned = true)
+        else readyWeb().takeIf { it >= 0 }?.let { webPool.removeAt(it) }
             ?.apply { settings.javaScriptEnabled = true; onResume() } ?: webView()
         else -> {
             val name = json.optString("module")
@@ -941,10 +945,14 @@ class Natives(
         }
     }
 
-    private fun webView(): WebView = WebView(context).apply {
+    /** A frame's view; a [partitioned] one, kept or refused, never has a page-world object ([FrameClient]). */
+    private fun webView(profile: String? = null, partitioned: Boolean = profile != null): WebView = WebView(context).apply {
+        profile?.let { Partitions.enter(this, it) }
         settings.javaScriptEnabled = true
+        // A page's `localStorage` and `sessionStorage`, as a browser gives it; WebView's default has none.
+        settings.domStorageEnabled = true
         val hasNavigationListener = WebViewFeature.isFeatureSupported(WebViewFeature.NAVIGATION_LISTENER)
-        val client = FrameClient(this, hasNavigationListener, frames)
+        val client = FrameClient(this, hasNavigationListener, frames, partitioned)
         webViewClient = client
         if (hasNavigationListener) {
             // Take the navigation identity before a new src can supersede a recovery request.
@@ -968,7 +976,7 @@ class Natives(
         web.destroy()
         if (e == null) return
         android.util.Log.w("exact", "iframe ${e.id}: the page's renderer ${if (crashed) "crashed" else "was ended by Android"}; loading its src again")
-        val fresh = webView()
+        val fresh = webView(e.profile, partitioned = e.partition != null)
         val client = fresh.webViewClient as FrameClient
         client.recoveryPending = true
         addView(fresh, LayoutParams(1, 1))
@@ -1139,7 +1147,7 @@ class Natives(
         e.refusedFor = key
         if (refused == null) return
         android.util.Log.w("exact", "iframe ${e.id}: ${refused.second}")
-        val record = refusalRecord(refused.first, refused.second, partitioned = false)
+        val record = refusalRecord(refused.first, refused.second, partitioned = Partitions.kept)
         android.os.Handler(context.mainLooper).post {
             if (elements[e.id] === e && e.refusedFor == key) Exact.frameEvent(e.id, e.slot, e.generation, e.session, "navigateerror", record)
         }
@@ -1305,7 +1313,7 @@ class Natives(
         } else if (e.kind == 2 && module != null && (pool[e.module!!]?.size ?: 0) < modulePool && module.reset(e.view)) {
             lifecycle.unbind(e.view)
             pool.getOrPut(e.module!!) { ArrayList() }.add(e.view)
-        } else if (e.kind == 1 && reuse && webPool.size < WEB_POOL && webs) {
+        } else if (e.kind == 1 && e.partition == null && reuse && webPool.size < WEB_POOL && webs) {
             val web = e.view as WebView
             webPool.add(web)
             web.apply {

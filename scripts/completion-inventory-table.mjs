@@ -218,7 +218,7 @@ export const classifications = [
     ["runner:runner/src/runner/canvas2d.rs",
       "Canvases::draw#next_seq:1 Canvases::publish#LIFETIMES.fetch_add:1 Canvases::reply#generation:1 Canvases::set_geometry#generation:1 Runner::canvas_bitmap " +
       "Runner::canvas_describe Runner::canvas_frame Runner::canvas_owed Runner::canvas_settings Runner::canvas_views Runner::canvas_wants_frame " +
-      "Runner::draw_canvases Runner::is_canvas_2d Runner::layout_canvases Runner::retire_canvas_generations Runner::set_canvas_geometry Runner::set_canvas_limits Runner::set_canvas_text " +
+      "Runner::draw_canvases Runner::is_canvas_2d Runner::layout_canvases Runner::reread_canvas_bitmaps Runner::retire_canvas_generations Runner::set_canvas_geometry Runner::set_canvas_limits Runner::set_canvas_text " +
       "Runner::take_canvas_lists"],
     ["runner:runner/src/runner/canvas2d/completion.rs", "Runner::canvas_draw_completion Runner::canvas_reply"],
     ["runner:runner/src/runner/canvas_performance.rs", "Runner::set_canvas_performance Runner::wants_canvas_performance"],
@@ -426,7 +426,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/clock.rs", "Presenter::background_due_ms"],
     ["painted:host/painted/src/presenter/collection/anchoring.rs", "Presenter::publish_scroll"],
     ["painted:host/painted/src/presenter/commands.rs", "Presenter::refuse_picture_in_picture"],
-    ["painted:host/painted/src/presenter/frames.rs", "Presenter::frame_by_id Presenter::frame_command Presenter::frame_event"],
+    ["painted:host/painted/src/presenter/frames.rs", "Presenter::frame_by_id Presenter::frame_command Presenter::frame_event Presenter::serve_frame_partitions"],
     ["painted:host/painted/src/presenter/device.rs", "Presenter::device"],
     ["painted:host/painted/src/presenter/display_frame.rs", "Presenter::activation_refused Presenter::display_input_mapping"],
     ["painted:host/painted/src/presenter/feedback.rs", "Presenter::feedback_at"],
@@ -876,6 +876,7 @@ export const classifications = [
       "Config::initial_window_background Config::painter Config::use_updates Config::windowed Config::windowed_from_env incoming_location launch_argument launch_location " +
       "prepare_environment prepare_window_painter print_baked_receipt row_reuse_from_env run_headless Services::with_image_downloads Services::with_local_images show_material_look show_neutral_look"],
     ["painted:host/painted/src/canvas/codec.rs", "attach"],
+    ["painted:host/painted/src/canvas/frame_partitions.rs", "attach kept"],
     ["painted:host/painted/src/canvas/legacy.rs", "attach decode glyph"],
     ["painted:host/painted/src/canvas/presence.rs", "attach"],
     ["painted:host/painted/src/canvas/secrets.rs", "attach"],
@@ -1070,8 +1071,9 @@ export const classifications = [
     ["runner:runner/src/frame_health/history.rs", "History::push#retained:1"],
     ["runner:runner/src/instance.rs",
       "Ids::evaluated#evaluated:1 Ids::evaluated#unchanged:1 Ids::retain#forgotten:1 NodeInst::create#created:1 NodeInst::create#nodes_visited:1 " +
-      "NodeInst::emit_bindings#bindings_evaluated:1 NodeInst::emit_bindings#bindings_evaluated:2 NodeInst::update#nodes_visited:1 update_all#regions_skipped:1 " +
+      "NodeInst::emit_bindings#bindings_evaluated:1 NodeInst::emit_bindings#bindings_evaluated:2 NodeInst::update#nodes_visited:1 " +
       "update_row#rows_reused:1 update_row#rows_scanned:1"],
+    ["runner:runner/src/instance/children.rs", "needs_update#regions_skipped:1"],
     ["runner:runner/src/instance/collection/index.rs", "SumTree::fill#zeros:1"],
     ["runner:runner/src/instance/collection/into_view.rs", "Collection::settle_target#reports:1"],
     ["runner:runner/src/instance/collection/mod.rs", "Collection::build_row#row_constructed:1 Collection::feedback#size:1 Collection::realize_window_with_row#rows_reused:1 Collection::update_data#regions_skipped:1"],
@@ -1342,7 +1344,7 @@ export const classifications = [
   group("inspection", ["one-shot"], "synchronous session inspection or diagnostics; no delivered completion", "UI-owned",
     "The named public runner-crate source is the inspection API or its value/admission helper. The declaration reads or reports the current session. It does not establish a durable operation.", [
     ["runner:runner/src/agent.rs", "base64 frames handle holds logs logs_request node node_request picker shown_value state state_at state_with tags tree tree_request unbase64"],
-    ["runner:runner/src/json.rs", "error field_bool field_num field_str num quote typed_json untyped_json"],
+    ["runner:runner/src/json.rs", "error field_bool field_num field_str num quote surface_args typed_json untyped_json untyped_signed_json"],
     ["runner:runner/src/agent/row.rs", "row_json"],
     ["runner:runner/src/agent/tree.rs", "tagged"],
     ["runner:runner/src/runner/carry.rs", "Runner::generation Runner::set_replacement_pending"],

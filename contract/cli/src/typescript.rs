@@ -232,8 +232,42 @@ pub fn typescript_exporting(
     // Canvas types describe the data seam even when `draw` is exported from
     // another module; no producer needs to inspect app.ts to include them (LLP 1056 D1).
     out.push_str(include_str!("../../../canvas/types.d.ts"));
+    surface_map(plan, &mut out);
     language_model_tools(plan, &mut out);
     Ok(out)
+}
+
+/// Each canvas surface's `args` as `draw` receives them (LLP 1056 D1): a
+/// call's values in order, or an object by its argument names, each of its
+/// declared type. A surface its canvases call differently takes any of them.
+fn surface_map(plan: &Plan, out: &mut String) {
+    let mut surfaces = std::collections::BTreeMap::<&str, BTreeSet<String>>::new();
+    for row in &plan.surfaces {
+        let args = &plan.surface_args
+            [row.args.start as usize..row.args.start as usize + row.args.len as usize];
+        let ty =
+            |a: &exact_plan::SurfaceArgsRow| a.ty.map_or("unknown".into(), |t| format!("T{}", t.0));
+        let args = if row.mode == exact_plan::SurfaceArgsMode::Named && !args.is_empty() {
+            let fields: Vec<_> = args
+                .iter()
+                .map(|a| format!("{}: {}", quoted(plan.str(a.name)), ty(a)))
+                .collect();
+            format!("{{ {} }}", fields.join("; "))
+        } else {
+            format!("[{}]", args.iter().map(ty).collect::<Vec<_>>().join(", "))
+        };
+        surfaces.entry(plan.str(row.name)).or_default().insert(args);
+    }
+    out.push_str("export interface SurfaceMap {\n");
+    for (name, args) in surfaces {
+        let args: Vec<_> = args.into_iter().collect();
+        writeln!(out, "  {}: {};", quoted(name), args.join(" | ")).unwrap();
+    }
+    out.push_str("}\nexport type Surface = keyof SurfaceMap;\n");
+    // With no canvas in the plan the union is empty, which would leave a
+    // `Draw`'s parameters `never`: a module that still draws keeps its types.
+    out.push_str("export type DrawCall = [Surface] extends [never] ? [surface: string, args: unknown, ctx: Ctx2D, frame: Frame]\n  : { [S in Surface]: [surface: S, args: SurfaceMap[S], ctx: Ctx2D, frame: Frame] }[Surface];\n");
+    out.push_str("/** A module's `draw`: `if (surface === \"board\")` narrows `args` when all four parameters are named; true asks\n * for another frame. */\nexport type Draw = (...call: DrawCall) => boolean;\n");
 }
 
 fn language_model_tools(plan: &Plan, out: &mut String) {
