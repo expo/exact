@@ -170,6 +170,10 @@ pub trait Backend {
     /// A new frame of this size in points at this scale, cleared to the
     /// page's colour ([`Backend::page`]; white until one is told).
     fn begin(&mut self, width: f32, height: f32, scale: f32);
+    /// The raster backing's size in device pixels after `begin`.
+    fn raster_extent(&self) -> Option<(u32, u32)> {
+        None
+    }
     /// Release idle renderer storage, keeping the visible frame unless hidden.
     fn trim(&mut self, _hidden: bool) {}
     /// Storage from a presented frame after its last reader releases it.

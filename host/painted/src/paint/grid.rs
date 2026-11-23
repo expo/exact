@@ -60,17 +60,18 @@ pub(crate) fn device_pixel(v: f32, scale: f32) -> f64 {
     round_device_pixel(f64::from(v) * f64::from(scale))
 }
 
-pub(crate) fn round_device_pixel(pixels: f64) -> f64 {
+fn round_device_pixel(pixels: f64) -> f64 {
     ((pixels * 64.0).round() / 64.0 + 0.5).floor()
 }
 
-pub(crate) fn pixel(v: f32, scale: f32) -> f32 {
-    device_pixel(v, scale) as f32
+// Match the precision of the fractional device offsets sent to the reader.
+fn scroll_pixel(v: f32, scale: f32) -> f64 {
+    round_device_pixel(f64::from(v * scale))
 }
 
 #[cfg(any(target_os = "android", test))]
 pub(crate) fn pixel_delta(from: (f32, f32), to: (f32, f32), scale: f32) -> (f32, f32) {
-    let axis = |from, to| (device_pixel(from, scale) - device_pixel(to, scale)) as f32;
+    let axis = |from, to| (scroll_pixel(from, scale) - scroll_pixel(to, scale)) as f32;
     (axis(from.0, to.0), axis(from.1, to.1))
 }
 
@@ -120,8 +121,8 @@ fn sticky_on_pixels(mut c: StickyConstraint, origin: Frame, scale: f32) -> Stick
 }
 
 /// How far a sticky box moves from where layout put it, in `scroller`
-/// scrolled to `scroll`; on a display's pixels (`grid`, its scale) a whole
-/// number of them ([`sticky_on_pixels`]).
+/// scrolled to `scroll`. With a grid, use the drawn scroll offset and snap
+/// the constraint too when the sticky box is drawn on the grid.
 pub(super) fn sticky_shift(
     c: StickyConstraint,
     scroller: &NodeRef<'_>,
@@ -132,7 +133,10 @@ pub(super) fn sticky_shift(
     let Some(s) = grid else {
         return c.offset(scroll);
     };
-    let scroll = (pixel(scroll.0, s) / s, pixel(scroll.1, s) / s);
+    let scroll = (
+        scroll_pixel(scroll.0, s) as f32 / s,
+        scroll_pixel(scroll.1, s) as f32 / s,
+    );
     let constraint = if snap_box {
         sticky_on_pixels(c, scroller.frame, s)
     } else {
@@ -208,13 +212,22 @@ impl Painter {
         Some((phase(frame.x), phase(frame.y)))
     }
 
-    /// Scroll offsets and row recording origins are on the same grid as
-    /// boxes. Work in double precision until they are subtracted.
+    /// Row recording origins are on the same grid as boxes.
     pub(super) fn drawn_offset(&self, (x, y): (f32, f32)) -> PaintOffset {
         match self.grid() {
             Some(s) => (
                 device_pixel(x, s) / f64::from(s),
                 device_pixel(y, s) / f64::from(s),
+            ),
+            None => (f64::from(x), f64::from(y)),
+        }
+    }
+
+    pub(super) fn drawn_scroll(&self, (x, y): (f32, f32)) -> PaintOffset {
+        match self.grid() {
+            Some(s) => (
+                scroll_pixel(x, s) / f64::from(s),
+                scroll_pixel(y, s) / f64::from(s),
             ),
             None => (f64::from(x), f64::from(y)),
         }

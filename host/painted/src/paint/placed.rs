@@ -3,6 +3,13 @@
 use super::*;
 
 impl Painter {
+    pub(super) fn warp_extent(&self) -> (u32, u32) {
+        self.backend.raster_extent().unwrap_or_else(|| {
+            let pixels = |points: f32| (points * self.scale).round() as u32;
+            (pixels(self.viewport.0), pixels(self.viewport.1))
+        })
+    }
+
     pub(super) fn placed(
         &mut self,
         walk: &mut Walk<'_, '_>,
@@ -72,7 +79,7 @@ impl Painter {
         self.gather(walk.scene.kernel, &mut painter);
         if let Ok(source) = painter.backend.finish() {
             if let Some((pixels, rect)) =
-                placement::warp_clipped(&source, h, clip_depth, self.scale, self.viewport)
+                placement::warp_clipped(&source, h, clip_depth, self.scale, self.warp_extent())
             {
                 if opacity < 1. {
                     self.backend.push_opacity(opacity);
@@ -109,6 +116,73 @@ impl Painter {
 mod tests {
     use super::*;
     use crate::presenter::{PainterChoice, Presenter};
+
+    #[test]
+    fn placed_child_paints_the_last_column_of_a_software_backing() {
+        let (p, error) = Presenter::boot_with(
+            &crate::test_plan(
+                r#"component App
+  view
+    box width=4.7 height=4 overflow="hidden" translate="0px 0px 1px"
+      canvas width=4.7 height=4 testId="canvas"
+        box width=0.4 height=2 background-color="red" testId="ink"
+"#,
+            ),
+            (),
+            (20., 20.),
+            2.75,
+            std::path::PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert_eq!(error, None);
+        let kernel = p.host().kernel();
+        let id = |name| {
+            kernel
+                .node_by_key(kernel.find_by_test_id(name)[0])
+                .unwrap()
+                .id
+        };
+        let mut painter = Painter::new(
+            p.text().clone(),
+            2.75,
+            Box::new(crate::raster::Raster::new()),
+        );
+        painter.placements.insert(
+            id("ink"),
+            crate::placement::Placement::Visible {
+                h: [1., 0., 4.4, 0., 1., 0., 0., 0., 1.],
+                depth: 0.,
+                opacity: 1.,
+                clip_depth: [[0., 0., 1.]; 2],
+                canvas: id("canvas"),
+            },
+        );
+        let scene = Scene {
+            kernel,
+            roots: &kernel.roots(),
+            hidden: &|_| false,
+            presented: &|_| Presented::IDENTITY,
+            paths: &|_| None,
+            filters: &|_| None,
+            scroll: &BTreeMap::new(),
+            page: (0., 0.),
+            images: &BTreeMap::new(),
+            focus: None,
+            selection: None,
+            caret_upstream: false,
+            pointer: None,
+            controls: &BTreeMap::new(),
+            chosen: &BTreeMap::new(),
+            menu: None,
+        };
+        let frame = painter.paint(&scene, (20., 20.)).unwrap();
+        let pixels = frame.pixmap;
+        assert!(pixels.pixel(12, 2).unwrap().green() < 255);
+        for x in (0..12).chain(13..pixels.width()) {
+            assert_eq!(pixels.pixel(x, 2).unwrap().green(), 255, "column {x}");
+        }
+    }
 
     #[test]
     fn placed_paragraph_keeps_inline_ownership_and_geometry() {

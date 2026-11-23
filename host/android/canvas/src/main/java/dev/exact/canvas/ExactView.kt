@@ -369,20 +369,20 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         if (started) pump()
     }
 
-    /** The reader moved scroller [id] by ([dx], [dy]) px to ([x], [y]), with NaN for an unmoved axis. The
+    /** The reader moved scroller [id] by ([dx], [dy]) px ([Scrolling]): exact2 is told, on its thread or here. The
      * move's number among those sent to exact2's thread (each stream names the last it includes), or 0 where exact2
      * runs here and has taken it. */
-    internal fun scrolled(id: Int, dx: Float, dy: Float, x: Float, y: Float, rev: Int): Int {
+    internal fun scrolled(id: Int, dx: Float, dy: Float, rev: Int): Int {
         if (dy != 0f) travelled(dy)
         val o = owner
         if (o == null) {
-            Native.scrolled(id, dx, dy, x, y, rev)
+            Native.scrolled(id, dx, dy, rev)
             Native.scrollers()?.let { scrolling.told(it) }
             step()
             return 0
         }
         val s = ++mainSeq
-        o.scrolled(id, dx, dy, x, y, rev, s)
+        o.scrolled(id, dx, dy, rev, s)
         return s
     }
 

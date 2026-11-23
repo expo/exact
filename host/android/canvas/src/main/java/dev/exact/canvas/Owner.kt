@@ -194,7 +194,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     private var owedSeq = 0
     private var stepPosted = false
     /** A finger's moves the exact thread has not taken, summed by scroller: how far, and the revision known. */
-    private class Moved(var dx: Float, var dy: Float, var x: Float, var y: Float, val rev: Int)
+    private class Moved(var dx: Float, var dy: Float, var rev: Int)
     private val owedMoves = LinkedHashMap<Int, Moved>()
     /** lead=1: the velocity the window leads by (px/s, positive toward the end; otherwise none, a viewport each side).
      * Fast travel ([LEAD_ON] dp/s and on, until it slows below [LEAD_OFF]) leads by all exact2 allows (two viewports
@@ -394,19 +394,14 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
         handler.post(step)
     }
 
-    /** The reader moved scroller [id] by ([dx], [dy]) px to ([x], [y]) under revision [rev]. Sum the main
-     * thread's moves under that revision and keep the last destination on each axis that moved. */
-    fun scrolled(id: Int, dx: Float, dy: Float, x: Float, y: Float, rev: Int, seq: Int) {
+    /** The reader moved scroller [id] by ([dx], [dy]) px, knowing revision [rev] of it ([Scrolling]); the main
+     * thread's [seq]th scroll. Summed like a driver's, so a busy thread catches up at once. */
+    fun scrolled(id: Int, dx: Float, dy: Float, rev: Int, seq: Int) {
         synchronized(lock) {
-            val m = owedMoves[id]
+            val m = owedMoves.getOrPut(id) { Moved(0f, 0f, rev) }
             // What was sent under an older revision is dropped by exact2 anyway.
-            if (m == null || m.rev != rev) {
-                owedMoves[id] = Moved(dx, dy, x, y, rev)
-            } else {
-                m.dx += dx; m.dy += dy
-                if (!x.isNaN()) m.x = x
-                if (!y.isNaN()) m.y = y
-            }
+            if (m.rev != rev) { m.dx = 0f; m.dy = 0f; m.rev = rev }
+            m.dx += dx; m.dy += dy
             owedSeq = seq
             if (stepPosted) return
             stepPosted = true
@@ -435,7 +430,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
         }
         android.os.Trace.beginSection("exact scroll")
         val fingers = moves
-        if (fingers != null) for (k in fingers.indices) Native.scrolled(ids!![k], fingers[k].dx, fingers[k].dy, fingers[k].x, fingers[k].y, fingers[k].rev)
+        if (fingers != null) for (k in fingers.indices) Native.scrolled(ids!![k], fingers[k].dx, fingers[k].dy, fingers[k].rev)
         if (fingers == null || dy != 0f) Native.scroll(dy)
         android.os.Trace.endSection()
         seq = s

@@ -445,7 +445,7 @@ impl Painter {
         let planes = [[0., 0., 1.]; 2];
         if let Ok(source) = painter.backend.finish() {
             if let Some((pixels, rect)) =
-                crate::placement::warp_soft(&source, device, planes, self.scale, self.viewport)
+                crate::placement::warp_soft(&source, device, planes, self.scale, self.warp_extent())
             {
                 self.backend.surface_image(Arc::new(pixels), rect);
             }

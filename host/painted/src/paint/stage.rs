@@ -900,7 +900,7 @@ impl Painter {
                 tape: Rc::new(normalized.tape()),
                 placement,
                 size,
-                page: self.drawn_offset(walk.scene.page),
+                page: self.drawn_scroll(walk.scene.page),
                 path,
                 pane: pane.map(|pane| Pane {
                     ts: self.kept.to_page.pre_concat(pane.ts),

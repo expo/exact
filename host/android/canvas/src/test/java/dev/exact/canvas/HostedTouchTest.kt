@@ -79,7 +79,7 @@ class HostedTouchTest {
             @Implementation @JvmStatic fun finger(action: Int, id: Int, x: Float, y: Float) {
                 fingers.add(action to id); fingerPoints.add(x to y)
             }
-            @Implementation @JvmStatic fun scrolled(id: Int, x: Float, y: Float, toX: Float, toY: Float, rev: Int) {
+            @Implementation @JvmStatic fun scrolled(id: Int, x: Float, y: Float, rev: Int) {
                 scrolls.add(y); deltas.add(Triple(id, x, y))
             }
             @Implementation @JvmStatic fun scrollers(): IntArray? {

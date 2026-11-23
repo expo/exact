@@ -1172,10 +1172,10 @@ impl Painter {
         self.rows.next += 1;
         let start = walk.boxes.len();
         let unsupported = std::mem::replace(&mut self.damage.unsupported, false);
-        // Walk a translated row from its own origin, then place its drawing
-        // and hits together. Subtracting large viewport positions on replay
-        // would lose the hit's fractional edge.
-        let local = self.backend.row_local() && !grid::changes_axes(ts);
+        // Keep untransformed rows' hits in recording coordinates so replay
+        // preserves fractional edges. Transformed rows walk in viewport
+        // coordinates, where software warps clip.
+        let local = self.backend.row_local() && ts == Transform::identity();
         let (walk_offset, walk_ts, content) = if local {
             (
                 self.drawn_offset((node.frame.x, node.frame.y)),

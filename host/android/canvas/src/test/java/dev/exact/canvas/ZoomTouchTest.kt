@@ -38,7 +38,7 @@ class ZoomTouchTest {
         @Implementation fun touch(action: Int, x: Float, y: Float, tool: Int, waitMs: Long): Boolean { touches.add(action); return false }
         @Implementation fun finger(action: Int, id: Int, x: Float, y: Float, waitMs: Long) = false
         @Implementation fun touching(on: Boolean) {}
-        @Implementation fun scrolled(id: Int, dx: Float, dy: Float, x: Float, y: Float, rev: Int, seq: Int) {
+        @Implementation fun scrolled(id: Int, dx: Float, dy: Float, rev: Int, seq: Int) {
             val m = moved.getOrPut(id) { FloatArray(2) }
             m[0] += dx; m[1] += dy
         }

@@ -833,7 +833,7 @@ impl Painter {
         let old_bars = std::mem::take(&mut self.scrollbars.bars);
         self.rows_begin(&walk);
         let kept = self.kept_places(&walk, None, scene.roots);
-        let page = self.drawn_offset(scene.page);
+        let page = self.drawn_scroll(scene.page);
         let space = Transform::from_translate(-page.0 as f32, -page.1 as f32);
         let last = self.stage_after(scene.roots);
         for (at, root) in scene.roots.iter().enumerate() {

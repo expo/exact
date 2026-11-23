@@ -5,7 +5,7 @@
 #[macro_export]
 macro_rules! canvas_jni_scroll {
     () => {
-        /// The reader moved scroller `id` by (`dx`, `dy`) pixels to (`x`, `y`),
+        /// The reader moved scroller `id` by (`dx`, `dy`) pixels,
         /// knowing revision `rev` of it.
         #[no_mangle]
         pub unsafe extern "system" fn Java_dev_exact_canvas_Native_scrolled(
@@ -14,11 +14,9 @@ macro_rules! canvas_jni_scroll {
             id: $crate::canvas::jni_sys::jint,
             dx: $crate::canvas::jni_sys::jfloat,
             dy: $crate::canvas::jni_sys::jfloat,
-            x: $crate::canvas::jni_sys::jfloat,
-            y: $crate::canvas::jni_sys::jfloat,
             rev: $crate::canvas::jni_sys::jint,
         ) {
-            with(|h| h.scrolled(id as u32, (dx, dy), (x, y), rev as u32));
+            with(|h| h.scrolled(id as u32, dx, dy, rev as u32));
         }
 
         /// List `id`'s snap areas around a release's projection

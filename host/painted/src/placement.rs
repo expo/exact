@@ -62,9 +62,9 @@ pub(crate) fn warp(
     source: &Pixmap,
     h: [f32; 9],
     scale: f32,
-    viewport: (f32, f32),
+    pixels: (u32, u32),
 ) -> Option<(Pixmap, Rect4)> {
-    warp_clipped(source, h, [[0., 0., 1.]; 2], scale, viewport)
+    warp_clipped(source, h, [[0., 0., 1.]; 2], scale, pixels)
 }
 pub(crate) fn accepts(planes: &[[f32; 3]; 2], x: f32, y: f32) -> bool {
     planes.iter().all(|p| p[0] * x + p[1] * y + p[2] >= 0.)
@@ -112,9 +112,8 @@ pub(crate) fn warp_clipped(
     h: [f32; 9],
     planes: [[f32; 3]; 2],
     scale: f32,
-    viewport: (f32, f32),
+    pixels: (u32, u32),
 ) -> Option<(Pixmap, Rect4)> {
-    let pixels = (viewport.0 * scale, viewport.1 * scale);
     warp_with(source, h, planes, scale, pixels, false)
 }
 
@@ -126,9 +125,8 @@ pub(crate) fn warp_soft(
     h: [f32; 9],
     planes: [[f32; 3]; 2],
     scale: f32,
-    viewport: (f32, f32),
+    pixels: (u32, u32),
 ) -> Option<(Pixmap, Rect4)> {
-    let pixels = ((viewport.0 * scale).round(), (viewport.1 * scale).round());
     warp_with(source, h, planes, scale, pixels, true)
 }
 
@@ -137,7 +135,7 @@ fn warp_with(
     h: [f32; 9],
     planes: [[f32; 3]; 2],
     scale: f32,
-    pixels: (f32, f32),
+    pixels: (u32, u32),
     soft: bool,
 ) -> Option<(Pixmap, Rect4)> {
     let inv = inverse(h)?;
@@ -156,8 +154,8 @@ fn warp_with(
     }
     let x0 = (b.0 * scale).floor().max(0.);
     let y0 = (b.1 * scale).floor().max(0.);
-    let x1 = ((b.0 + b.2) * scale).ceil().min(pixels.0);
-    let y1 = ((b.1 + b.3) * scale).ceil().min(pixels.1);
+    let x1 = ((b.0 + b.2) * scale).ceil().min(pixels.0 as f32);
+    let y1 = ((b.1 + b.3) * scale).ceil().min(pixels.1 as f32);
     if x1 <= x0 || y1 <= y0 {
         return None;
     }
@@ -234,7 +232,7 @@ mod tests {
         }
         let (c, s) = (0.8, 0.6);
         let h = [2. * c, -2. * s, 20., 2. * s, 2. * c, 10., 0., 0., 1.];
-        let (out, b) = warp(&src, h, 1., (50., 50.)).unwrap();
+        let (out, b) = warp(&src, h, 1., (50, 50)).unwrap();
         let mut edge = 0;
         for y in 0..out.height() {
             for x in 0..out.width() {
@@ -264,7 +262,7 @@ mod tests {
         src.fill(tiny_skia::Color::WHITE);
         let h = [1., 0., 0., 0., 1., 0., 0., 0., 1.];
         let clip = [[1., 0., -50.], [0., 0., 1.]];
-        let (out, rect) = warp_clipped(&src, h, clip, 1., (100., 50.)).unwrap();
+        let (out, rect) = warp_clipped(&src, h, clip, 1., (100, 50)).unwrap();
         assert_eq!(rect, (50., 0., 50., 50.));
         assert!(out.data().as_chunks::<4>().0.iter().all(|p| *p == [255; 4]));
         assert_eq!(
@@ -276,7 +274,7 @@ mod tests {
         // An eye crossing is bounded by near before projecting, never by the invalid full quad.
         let h = [1., 0., 0., 0., 1., 0., 0.02, 0., -0.5];
         let (out, rect) =
-            warp_clipped(&src, h, [[1., 0., -30.], [0., 0., 1.]], 1., (400., 400.)).unwrap();
+            warp_clipped(&src, h, [[1., 0., -30.], [0., 0., 1.]], 1., (400, 400)).unwrap();
         assert!(out.data().as_chunks::<4>().0.iter().any(|p| p[3] != 0));
         assert!(rect.0.is_finite() && rect.2 > 0.);
     }
@@ -284,7 +282,7 @@ mod tests {
     fn opaque_texel_scaled_to_two_pixels_has_no_transparent_border() {
         let mut src = Pixmap::new(1, 1).unwrap();
         src.fill(tiny_skia::Color::from_rgba8(200, 50, 10, 255));
-        let (out, _) = warp(&src, [2., 0., 0., 0., 2., 0., 0., 0., 1.], 1., (2., 2.)).unwrap();
+        let (out, _) = warp(&src, [2., 0., 0., 0., 2., 0., 0., 0., 1.], 1., (2, 2)).unwrap();
         assert!(
             out.data()
                 .as_chunks::<4>()
@@ -309,7 +307,7 @@ mod tests {
             p.copy_from_slice(&colors[usize::from(i % 40 >= 20) + 2 * usize::from(i / 40 >= 20)]);
         }
         let h = [2., 0.3, 10., 0.2, 2., 10., 0.02, 0.005, 1.];
-        let (out, b) = warp(&src, h, 1., (100., 100.)).unwrap();
+        let (out, b) = warp(&src, h, 1., (100, 100)).unwrap();
         for ((x, y), color) in [(2., 2.), (38., 2.), (2., 38.), (38., 38.)]
             .into_iter()
             .zip(colors)
@@ -331,7 +329,7 @@ mod tests {
         }
         let mut src = Pixmap::new(80, 40).unwrap();
         src.fill(tiny_skia::Color::from_rgba8(200, 50, 10, 255));
-        let (pixels, b) = warp(&src, h, 1., (150., 100.)).unwrap();
+        let (pixels, b) = warp(&src, h, 1., (150, 100)).unwrap();
         let p = map(&h, 40., 20.);
         let pixel = pixels
             .pixel((p.0 - b.0) as u32, (p.1 - b.1) as u32)

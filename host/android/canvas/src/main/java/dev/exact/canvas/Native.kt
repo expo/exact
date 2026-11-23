@@ -159,7 +159,7 @@ object Native {
     @JvmStatic external fun backgroundAudio(id: Int, slot: Int, generation: Int, session: Long): ByteArray?
     /** The reader moved scroller [id] by ([dx], [dy]) px, knowing revision [rev] of it. exact2 clamps the move to
      * the scroller's travel, and drops one sent under a revision the app's own scroll has moved on from. */
-    @JvmStatic external fun scrolled(id: Int, dx: Float, dy: Float, x: Float, y: Float, rev: Int)
+    @JvmStatic external fun scrolled(id: Int, dx: Float, dy: Float, rev: Int)
     /** A finger began dragging scroller [id] (its `scrolldragstart`), or ([ended]) let go of it (its
      * `scrolldragend`): at ([vx], [vy]) px/s, positive as its offset grows, and, with [rest], to come to rest at
      * ([restX], [restY]) px; [flings] when it threw a fling. From the start until the lift, or the fling's end

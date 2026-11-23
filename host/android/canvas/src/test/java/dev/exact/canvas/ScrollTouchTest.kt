@@ -1,6 +1,7 @@
 package dev.exact.canvas
 
 import android.app.Activity
+import android.graphics.RenderNode
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -17,6 +18,7 @@ import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
 import org.robolectric.annotation.LooperMode
 import org.robolectric.shadow.api.Shadow
+import org.robolectric.util.ReflectionHelpers
 
 /**
  * A finger on the reader's view, through [ExactView.onTouchEvent] as the platform delivers it: [Scrolling], the
@@ -44,7 +46,7 @@ class ScrollTouchTest {
         /** What exact2 was told of the touch itself: down, then lifted. */
         val touching = ArrayList<Boolean>()
         @Implementation fun touching(on: Boolean) { touching.add(on) }
-        @Implementation fun scrolled(id: Int, dx: Float, dy: Float, x: Float, y: Float, rev: Int, seq: Int) {
+        @Implementation fun scrolled(id: Int, dx: Float, dy: Float, rev: Int, seq: Int) {
             moved[id] = (moved[id] ?: 0f) + dx + dy
             Host.told.add("move $id")
         }
@@ -228,20 +230,31 @@ class ScrollTouchTest {
         assertEquals(soon.second, late.second)
     }
 
-    @Test fun aDragMovesAScrollerByWholePixels() {
-        val group = android.graphics.RenderNode("group")
-        org.robolectric.util.ReflectionHelpers.getField<HashMap<Int, android.graphics.RenderNode>>(view, "groups")[1] = group
-        org.robolectric.util.ReflectionHelpers.getField<Scrolling>(view, "scrolling")
-            .told(intArrayOf(1, 6, 0, 0, 100f.toBits(), 0, 100f.toBits(), 0, 500f.toBits()))
-        down(400f)
-        answer(reply(scroller(1, 100f).also { it[1] = 6 }))
-        // 49.4 px less the slop is 49 for the rows, and the 0.4 waits for the next move.
-        move(380.3f); move(350.6f)
-        assertEquals(49f - slop, thread.moved[1]!!, 0f)
-        assertEquals(slop - 49f, group.translationY, 0f)
-        move(350f)
-        assertEquals(50f - slop, thread.moved[1]!!, 0f)
-        assertEquals(slop - 50f, group.translationY, 0f)
+    @Test fun aFractionalDragPlacesRowsOnTheRepaintPixel() {
+        for ((start, travel) in listOf(0.49f to 0.01953125f, 0.4765625f to 0.015625f)) {
+            setUp()
+            val group = RenderNode("group")
+            ReflectionHelpers.getField<HashMap<Int, RenderNode>>(view, "groups")[1] = group
+            val scrolling = ReflectionHelpers.getField<Scrolling>(view, "scrolling")
+            fun told(now: Float, drawn: Float) {
+                scrolling.told(intArrayOf(1, 6, 0, 0, now.toBits(), 0, drawn.toBits(), 0, 500f.toBits()))
+            }
+            told(start, start)
+            down(400f)
+            answer(reply(scroller(1, start).also { it[1] = 6 }))
+            move(400f - slop - travel)
+            assertEquals(travel, thread.moved[1]!!, 0.000001f)
+            assertEquals(-1f, group.translationY, 0f)
+
+            scrolling.acked(Int.MAX_VALUE)
+            told(start + travel, start)
+            scrolling.place()
+            assertEquals(-1f, group.translationY, 0f)
+
+            told(start + travel, start + travel)
+            scrolling.place()
+            assertEquals(0f, group.translationY, 0f)
+        }
     }
 
     @Test fun theUpsOwnSampleMovesNothing() {

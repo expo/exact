@@ -122,7 +122,7 @@ impl Painter {
         if range(node).is_some() {
             (f64::from(scroll.0), f64::from(scroll.1))
         } else {
-            self.drawn_offset(scroll)
+            self.drawn_scroll(scroll)
         }
     }
 

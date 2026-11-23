@@ -992,6 +992,23 @@ component App
     }
 
     #[test]
+    fn a_translated_row_paints_a_software_child_scrolled_into_view() {
+        let mut p = canvas_fixture(
+            r#"component App
+  view
+    scroll width=200 height=80 scrollTop=200 translate="1px 0px"
+      column
+        box height=400 width=200 position="relative"
+          box position="absolute" top=250 width=10 height=10 background-color="red" filter="brightness(1)" translate="0px 0px 1px"
+"#,
+            1.,
+        );
+        p.frame();
+        let image = software_picture();
+        assert_eq!(image.pixel(5, 5).unwrap().red(), 255);
+    }
+
+    #[test]
     fn a_nested_warp_paints_the_last_column_of_its_backing() {
         let mut p = canvas_fixture(
             r#"component App
@@ -1048,13 +1065,14 @@ component App
         let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
         let mut at = 0;
         while at < ops.len() {
-            if ops[at] == IMAGE_DEF {
-                let Some(Picture::Canvas(pixels)) = with_pending(|p| p.remove(&ops[at + 1])) else {
-                    panic!("software pixels");
-                };
-                return pixels;
+            match ops[at] {
+                ROW_BEGIN => at += 6,
+                IMAGE_DEF => match with_pending(|p| p.remove(&ops[at + 1])) {
+                    Some(Picture::Canvas(pixels)) => return pixels,
+                    _ => panic!("software pixels"),
+                },
+                _ => at = end(&ops, at).unwrap(),
             }
-            at = end(&ops, at).unwrap();
         }
         panic!("the software island must emit a picture");
     }

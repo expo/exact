@@ -92,12 +92,11 @@ impl<D: DataSource> Presenter<D> {
         &mut self,
         view: ViewId,
         from: (f32, f32),
-        dy: impl Into<f64>,
+        dy: f32,
         next: (f32, f32),
     ) -> Option<f32> {
         let (corrected, max) = self.anchor_input_position(view, from.1)?;
-        let dy = dy.into();
-        let top = ((f64::from(corrected) + dy) as f32).clamp(0., max);
+        let top = (corrected + dy).clamp(0., max);
         let cursor = self.collection.cursors.get_mut(&view)?;
         if next == from && (dy == 0. || top == corrected) {
             return Some(0.);

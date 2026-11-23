@@ -249,9 +249,8 @@ internal class Scrolling(private val view: ExactView) {
                 val x = e.getX(i); val y = e.getY(i)
                 if (mode == WATCHING && !disallowIntercept) decide(x, y)
                 if (mode != DRAGGING) return false
-                // Whole pixels, as the platform's scrollers drag: what is left of one waits for the next move.
-                val d = Math.round(if (sideways) lastX - x else lastY - y).toFloat()
-                if (sideways) { lastX -= d; lastY = y } else { lastX = x; lastY -= d }
+                val d = if (sideways) lastX - x else lastY - y
+                lastX = x; lastY = y
                 if (d != 0f) drag(d, x, y)
                 dismissal.moved(y)
                 return true
@@ -583,15 +582,14 @@ internal class Scrolling(private val view: ExactView) {
         var waits = false
         for ((k, s) in active.withIndex()) {
             val at = s.at(sideways)
-            val to = (at + rest).coerceIn(0f, s.end(sideways))
-            val took = to - at
+            val took = (at + rest).coerceIn(0f, s.end(sideways)) - at
             if (abs(took) < 0.01f) continue
             s.own = true
             if (mover == null) mover = s
             // The finger drags it from its first move (`scrolldragstart`), as a nested scroller the hand-off reaches.
             if (mode == DRAGGING && held.add(s)) tell { Native.scrollDrag(s.id, false, 0f, 0f, false, 0f, 0f, false) }
             val dx = if (sideways) took else 0f; val dy = if (sideways) 0f else took
-            val seq = view.scrolled(s.id, dx, dy, if (sideways) to else Float.NaN, if (sideways) Float.NaN else to, s.rev)
+            val seq = view.scrolled(s.id, dx, dy, s.rev)
             // Told to exact2's own thread: it is ahead of exact2 by this much until a stream includes the move.
             if (seq != 0) { s.pendX += dx; s.pendY += dy; sent.addLast(Sent(seq, s, dx, dy)) }
             waits = waits || !s.node
@@ -610,13 +608,11 @@ internal class Scrolling(private val view: ExactView) {
 
     /** A zoomable scroller's pan ([Zooming]) moved [s] by ([dx], [dy]) px, both axes at once, within its travel. */
     private fun panBoth(s: Scroller, dx: Float, dy: Float) {
-        val fromX = s.at(true); val fromY = s.at(false)
-        val x = (fromX + dx).coerceIn(0f, max(0f, s.maxX))
-        val y = (fromY + dy).coerceIn(0f, max(0f, s.maxY))
-        val tx = x - fromX; val ty = y - fromY
+        val tx = (s.at(true) + dx).coerceIn(0f, max(0f, s.maxX)) - s.at(true)
+        val ty = (s.at(false) + dy).coerceIn(0f, max(0f, s.maxY)) - s.at(false)
         if (abs(tx) < 0.01f && abs(ty) < 0.01f) return
         s.own = true
-        val seq = view.scrolled(s.id, tx, ty, if (tx == 0f) Float.NaN else x, if (ty == 0f) Float.NaN else y, s.rev)
+        val seq = view.scrolled(s.id, tx, ty, s.rev)
         if (seq != 0) { s.pendX += tx; s.pendY += ty; sent.addLast(Sent(seq, s, tx, ty)) }
         indicate(s)
         view.tick()
@@ -629,16 +625,21 @@ internal class Scrolling(private val view: ExactView) {
         for (s in scrollers.values) {
             if (!s.own || !s.node || !s.told) continue
             val g = view.group(s.id) ?: continue
-            // In whole pixels: Skia reuses a text run's glyphs from frame to frame only while its translation moves by
-            // whole pixels, and these offsets are exact2's points times the density (the heavy list's text drawing on
-            // the RenderThread, Galaxy A57: 31 ms/s with fractional translations, 23 with whole).
-            g.translationX = Math.round(s.drawnX - s.nowX - s.pendX).toFloat()
-            g.translationY = Math.round(s.drawnY - s.nowY - s.pendY).toFloat()
+            g.translationX = paintedOffset(s.drawnX) - paintedOffset(s.at(true))
+            g.translationY = paintedOffset(s.drawnY) - paintedOffset(s.at(false))
         }
     }
 
+    // Match the painter's 1/64-pixel quantization and half-up rounding (paint/grid.rs).
+    private fun paintedOffset(pixels: Float): Float {
+        val subpixels = pixels.toDouble() * 64
+        val quantized = if (subpixels < 0) -Math.round(-subpixels) else Math.round(subpixels)
+        return Math.floor(quantized / 64.0 + 0.5).toFloat()
+    }
+
     /** How far scroller [id]'s rows are drawn from where they were painted, down, when the reader moves it. */
-    fun shift(id: Int): Float? = scrollers[id]?.takeIf { it.own && it.node && it.told }?.let { it.drawnY - it.nowY - it.pendY }
+    fun shift(id: Int): Float? = scrollers[id]?.takeIf { it.own && it.node && it.told }
+        ?.let { paintedOffset(it.drawnY) - paintedOffset(it.at(false)) }
 
     /** A stream that includes the reader's moves up to number [seq] was taken. */
     fun acked(seq: Int) {
