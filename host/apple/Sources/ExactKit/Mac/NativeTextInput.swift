@@ -3,13 +3,30 @@ import AppKit
 import ExactCore
 
 extension ExactSession {
-    var nativeTextThenWaiting: Bool { nativeText.owed || nativeText.posted || nativeText.stalled }
+    var nativeTextThenWaiting: Bool { nativeText.owed || nativeText.posted != nil || nativeText.stalled }
 
     func applyNativeTextInput(_ id: UInt32, _ value: String, _ selection: FieldSelection, _ edit: FieldInput) {
         (presenter.views[id]?.textArea as? TextArea)?.ordinaryInputSelection = (value, selection)
         let kind: UInt32 = postsTimerAdvances && clock == nil && !ExactEnv.agentFreezes ? 65 : 54
         nativeText.advances = 0
-        applyInput(runtime.fieldEvent(id, kind, edit.payload(value, selection), now: now()), at: id)
+        let payload = edit.payload(value, selection)
+        if kind == 65, canPostNativeText, pending.isEmpty, !landing, !insideApply,
+           !fillInFlight, !fillLanding, !tickInFlight, !canvasInFlight, noticesInFlight == 0 {
+            followOffset()
+            nativeText.posted = .input
+            runtime.postNativeTextInput(id, payload, now: now(), input: CACurrentMediaTime()) { [weak self] batch in
+                self?.publish(.nativeTextInput, batch)
+            }
+        } else {
+            applyInput(runtime.fieldEvent(id, kind, payload, now: now()), at: id)
+        }
+    }
+
+    private var canPostNativeText: Bool {
+        guard postsTimerAdvances, state == .ready, !frames.tasks, stage == nil, !runtime.held,
+              !Owner.shared.isServingMain, nativeText.posted == nil else { return false }
+        let layer = presenter.openTopLayer
+        return layer.frames.isEmpty && layer.modal == nil && layer.backdrop == nil
     }
 
     func advanceNativeText() {
@@ -17,10 +34,8 @@ extension ExactSession {
         // A change can yield for presentation and then rearm itself.
         guard nativeText.advances < 128 else { stallNativeText(); return }
         nativeText.advances += 1
-        let layer = presenter.openTopLayer
-        if !nativeText.settling, postsTimerAdvances, !frames.tasks, stage == nil, !runtime.held,
-           layer.frames.isEmpty, layer.modal == nil, layer.backdrop == nil {
-            nativeText.posted = true
+        if !nativeText.settling, canPostNativeText {
+            nativeText.posted = .continuation
             advanceInFlight = true
             runtime.advanceNativeTextAsync { [weak self] batch in self?.publish(.advance, batch) }
         } else {
@@ -34,9 +49,11 @@ extension ExactSession {
     }
 
     func nativeTextAdvancePublished(_ completion: RuntimeCompletion) {
-        guard nativeText.posted else { return }
-        nativeText.posted = false
-        if runtime.accepts(completion.lease), completion.batch.held || completion.batch.busy { stallNativeText() }
+        guard nativeText.posted == .continuation else { return }
+        nativeText.posted = nil
+        if runtime.accepts(completion.lease), completion.batch.held || completion.batch.busy {
+            stallNativeText()
+        }
     }
 
     private func stallNativeText() {
@@ -58,7 +75,7 @@ extension ExactSession {
         defer { nativeText.settling = false; deliverAfterNativeText() }
         repeat {
             drainFill()
-            if !nativeText.posted, nativeText.owed, state != .destroyed {
+            if nativeText.posted == nil, nativeText.owed, state != .destroyed {
                 advanceNativeText()
                 drainFill()
             }
@@ -84,9 +101,11 @@ extension Presenter {
     }
 }
 
+enum NativeTextJob: Equatable { case input, continuation }
+
 struct NativeTextContinuation {
     var owed = false
-    var posted = false
+    var posted: NativeTextJob?
     var stalled = false
     var settling = false
     var advances = 0

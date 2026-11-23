@@ -735,6 +735,17 @@ package final class Runtime {
     package func fieldEvent(_ view: UInt32, _ kind: UInt32, _ payload: String, now: Double) -> Batch {
         on { read(exact_dispatch(rt, view, kind, write(payload), now)) }
     }
+    #if os(macOS)
+    package func postNativeTextInput(_ view: UInt32, _ payload: String, now: Double, input: Double,
+                                     done: @escaping (RuntimeCompletion) -> Void) {
+        post(caller: "fieldEvent(_:_:_:now:)", done: done) { [self] _ in
+            installTopLayer([], modal: nil, backdrop: nil)
+            var batch = read(exact_dispatch(rt, view, 65, write(payload), now))
+            batch.input = input
+            return batch
+        }
+    }
+    #endif
     /// A checkbox's state: `change` when `commit`, else `input`.
     package func checked(_ view: UInt32, _ checked: Bool, commit: Bool, now: Double) -> Batch {
         return on {

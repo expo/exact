@@ -76,7 +76,7 @@ extension ExactSession {
         guard !nativeText.settling else { return }
         if nativeText.owed {
             advanceNativeText()
-            if !nativeText.posted, nativeText.owed, !nativeText.stalled {
+            if nativeText.posted == nil, nativeText.owed, !nativeText.stalled {
                 DispatchQueue.main.async { [weak self] in self?.advanceIfDue() }
             }
             return

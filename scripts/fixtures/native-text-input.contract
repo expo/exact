@@ -16,6 +16,12 @@ component Test
   state future = ""
   state submitted = ""
   state loop = false
+  state reader = false persist window
+  state draft = "" persist window
+  state sharedDraft = "" persist
+  action saveDraft(value: string)
+    draft = value
+    sharedDraft = value
   action enableLoop
     loop = true
   action typeAsync(value: string)
@@ -84,6 +90,10 @@ component Test
     keys = keys + "up " + k + ";"
   view
     column beforeunload=keep
+      if reader
+        text sharedDraft testId="shared-draft"
+      else
+        textarea -exact-native-text-input=true testId="store-editor" width="10rem" height=32 input=saveDraft
       if not removed
         textarea -exact-native-text-input=true testId="async" width="15rem" height=50 value=recorded input=typeAsync selectionchange=nativeSelection key=submit
       textarea -exact-native-text-input=true id="checked" testId="checked" width="15rem" height=50 value=checkedInput input=checked keycapture=capture key=key keyup=keyRelease beforeinput=beforeEdit

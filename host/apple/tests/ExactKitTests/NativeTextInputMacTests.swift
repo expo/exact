@@ -59,16 +59,25 @@ final class NativeTextInputMacTests: XCTestCase {
         return cancelled
     }
 
-    func testNativeInputCommitsBeforeReturningAndCloseSettlesIt() throws {
+    func testNativeInputPostsBehindAReplyAndCloseSettlesIt() throws {
         try boot()
         let editor = try focus("async")
         waitForMainQueue()
         let previousSelection = text("selection")
 
-        XCTAssertFalse(press(try event("a", kVK_ANSI_A), editor: editor))
+        let down = try event("a", kVK_ANSI_A)
+        XCTAssertFalse(session.presenter.routeKey(down, focused: true, in: window))
+        let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+        Owner.shared.post {
+            entered.signal()
+            XCTAssertEqual(release.wait(timeout: .now() + 5), .success)
+        }
+        XCTAssertEqual(entered.wait(timeout: .now() + 5), .success)
+        session.pumpReplies()
+        editor.keyDown(with: down)
         XCTAssertEqual(editor.string, "a")
-        XCTAssertEqual(text("recorded"), "a", "the field input commits synchronously")
-        XCTAssertEqual(text("settled"), "", "the immediate continuation runs later")
+        XCTAssertEqual(text("recorded"), "", "AppKit inserts while the owner is held")
+        release.signal()
         XCTAssertFalse(session.beforeUnload())
         XCTAssertEqual(text("settled"), "a")
         XCTAssertEqual(text("first"), "a")

@@ -74,6 +74,44 @@ final class StoreRefreshTests: XCTestCase {
         XCTAssertEqual(second.windowState, ["local": "0"])
     }
 
+    #if os(macOS)
+    func testNativeTextPublishesPersistedSlotsWithNoWriterViewChange() throws {
+        _ = NSApplication.shared
+        let fixture = try isolatedStore()
+        defer { fixture.restore() }
+        let writer = fixture.app.makeSession(label: "text-store-writer")
+        let reader = fixture.app.makeSession(label: "text-store-reader")
+        defer { writer.destroy(); reader.destroy() }
+        let size = CGSize(width: 400, height: 440)
+        let plan = try fixturePlan("NATIVE_TEXT_INPUT")
+        let windows = [writer, reader].map { session in
+            let window = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = session.presenter.viewport
+            return window
+        }
+        defer { windows.forEach { $0.close() } }
+        writer.postsTimerAdvances = true
+        reader.restoreWindowState(["reader": "true"])
+        for session in [writer, reader] {
+            XCTAssertNil(session.boot(plan: plan, size: size).error)
+            session.apply(session.runtime.dataReady())
+            session.drainFill()
+        }
+        let editor = try XCTUnwrap(writer.presenter.views.values.first { $0.props["testId"] == "store-editor" }?.textArea as? TextArea)
+        let readout = try XCTUnwrap(reader.presenter.views.values.first { $0.props["testId"] == "shared-draft" })
+        XCTAssertTrue(windows[0].makeFirstResponder(editor))
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: windows[0].windowNumber,
+            context: nil, characters: "a", charactersIgnoringModifiers: "a", isARepeat: false, keyCode: 0))
+        XCTAssertFalse(writer.presenter.routeKey(event, focused: true, in: windows[0]))
+        editor.keyDown(with: event)
+        waitFor("the posted edit published its window archive and shared draft") {
+            writer.windowState["draft"] == "\"a\"" && readout.paragraphText == "a"
+        }
+    }
+    #endif
+
     func testABurstOfStoreWritesReloadsTheWidgetsOnceItIsQuiet() {
         let refresh = SharedStoreRefresh()
         refresh.quiet = 0.2

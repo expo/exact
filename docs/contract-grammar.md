@@ -2759,13 +2759,13 @@ included; typing and a plain caret move do not fire it. Its payload is the
 On macOS, `textarea -exact-native-text-input=true` lets AppKit insert
 one printable ASCII character at a collapsed caret. Shift can be held.
 The attribute takes a literal boolean. Exact delivers `input` with the
-new value and selection before returning to AppKit. It skips `key` on the
+new value and selection. It skips `key` on the
 editor and its ancestors, `beforeinput` on the editor, and a
 `selectionchange` that repeats the selection sent with `input`. A
 `keycapture` handler on the route keeps normal dispatch. Commands, paste,
-undo, selection-only moves and IME keep their usual events. Immediate
-work armed by the input can run after AppKit returns. The next edit,
-press, submit or close request waits for that work. Other platforms use
+undo, selection-only moves and IME keep their usual events. The input
+handler and its immediate work can run after AppKit returns. The next
+edit, press, submit or close request waits for both. Other platforms use
 their usual dispatch.
 
 While an input method composes in a text field or a textarea (Japanese kana

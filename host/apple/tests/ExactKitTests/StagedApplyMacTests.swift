@@ -243,6 +243,57 @@ final class StagedApplyMacTests: XCTestCase {
         XCTAssertEqual(session.presenter.views[9004]?.props["title"], "later", "and lands after the earlier one's")
     }
 
+    func testClosingSettlesANativeInputThatWaitsBehindAStagedReply() throws {
+        let session = try session("staged-native-text")
+        defer { session.destroy() }
+        reply(session, replacement(rows: 400))
+        session.nativeText.posted = .input
+        let edit = wireBatch([title(9004, "typed")])
+        session.publish(.nativeTextInput, RuntimeCompletion(lease: session.runtime.completionLease, batch: edit))
+        session.landPublished()
+
+        XCTAssertNotNil(session.stage, "the earlier reply staged")
+        XCTAssertTrue(session.nativeTextThenWaiting, "the edit remains pending until its batch lands")
+        XCTAssertEqual(session.pending.count, 1)
+        XCTAssertTrue(session.beforeUnload())
+        XCTAssertNil(session.stage)
+        XCTAssertFalse(session.nativeTextThenWaiting)
+        XCTAssertEqual(session.presenter.views[9004]?.props["title"], "typed")
+    }
+
+    func testClosingSeesTheVetoMountedByTheNativeInput() throws {
+        let session = ExactSession(app: ExactApp.shared, label: "staged-unload", launchPlace: LaunchPlace(environment: [:]))
+        defer { session.destroy() }
+        let plan = try TableFixture.plan("""
+            component App
+              state mounted = false
+              action showSheet
+                mounted = true
+              action keepOpen
+                preventDefault()
+              view
+                column
+                  button testId="mount" press=showSheet
+                    text "Mount"
+                  if mounted
+                    column beforeunload=keepOpen
+                      for i in range(160) key=i
+                        text `${i}`
+            """)
+        XCTAssertNil(session.boot(plan: plan, size: CGSize(width: 400, height: 600)).error)
+        show(session.presenter.viewport)
+        let mount = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == "mount" })
+        let edit = session.runtime.press(mount.id, now: session.now())
+        session.nativeText.posted = .input
+        session.publish(.nativeTextInput, RuntimeCompletion(lease: session.runtime.completionLease, batch: edit))
+        session.landPublished()
+
+        XCTAssertNotNil(session.stage)
+        XCTAssertFalse(session.nativeTextThenWaiting, "the runner handled the edit but the new views are still preparing")
+        XCTAssertFalse(session.beforeUnload(), "close sees the listener mounted by the edit")
+        XCTAssertNil(session.stage)
+    }
+
     func testTheRevealPublishesTooltipsAndCursorRectsOnlyWhereRequested() throws {
         let p = Presenter()
         show(p.viewport)

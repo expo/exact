@@ -480,20 +480,6 @@ public final class ExactSession {
     #if os(macOS)
     var nativeText = NativeTextContinuation()
     #endif
-    /// Native work that still prevents this session from settling
-    var hostOutstanding: [String] {
-        var out: [String] = []
-        if fillInFlight || !afterFill.isEmpty { out.append("fill") }
-        // Count a published batch only if it shows something new: one that shows nothing is not loading, nor is a hold it moves or an error it logs (LLP 1132 D5)
-        if hasPublished({ !showsNothing($0) }) { out.append("published") }
-        if canvasInFlight || canvasOwed || presenter.canvas2d.loadingCount > 0 { out.append("canvas") }
-        #if os(iOS)
-        if (SvgLink.drawing?() ?? 0) > 0 { out.append("svgPicture") }
-        #endif
-        return out
-    }
-    /// What the owner committed without main waiting.
-    enum Published { case fill(UInt32), tick, advance, canvas, notice, reply }
     /// Batches the owner committed without main waiting, in its order: a
     /// slice's (with its list), a frame's tick's and a canvas draw's.
     let published = PublishedBatches()
@@ -509,8 +495,6 @@ public final class ExactSession {
     var noticesInFlight = 0 { didSet { releaseWaitingFirings() } }
     var repliesInFlight = 0 { didSet { releaseWaitingFirings() } }
     var replySubmissions: [Double] = []
-    /// Owner work main did not wait for, whose batches land before any made later (T4).
-    var ownerInFlight: Bool { fillInFlight || tickInFlight || advanceInFlight || canvasInFlight || noticesInFlight > 0 || repliesInFlight > 0 }
     /// Whether this generation's plan reads `onLine`, learned by a synchronous `tellPage`.
     var readsOnLineKnown: (generation: Int, value: Bool)?
     /// `prefer presented` under the agent, told again to each runner (LLP 1069.000 D6).
@@ -712,13 +696,21 @@ public final class ExactSession {
         case .canvas: canvasInFlight = false
         case .notice: noticesInFlight -= 1
         case .reply: submitted = retireReply()
+        #if os(macOS)
+        case .nativeTextInput: break
+        #endif
         }
         let stale = { [unowned self] in
+            nativeTextInputLanded(next.kind)
             if case .reply = next.kind { retryActivation(generation: completion.lease.generation) }
             if case .fill(let view) = next.kind { landedFill(view, stale: true) }
         }
         guard runtime.accepts(completion.lease) else { return stale() }
-        if completion.batch.held { if case .fill(let view) = next.kind { landedFill(view, stale: true) }; return } // (held over a reset: as stale, ResetGate replays its work)
+        if completion.batch.held {
+            nativeTextInputLanded(next.kind)
+            if case .fill(let view) = next.kind { landedFill(view, stale: true) }
+            return // (held over a reset: as stale, ResetGate replays its work)
+        }
         frameHealth.expireCapture(at: began)
         var batch = completion.batch
         if batch.frameWorkTiming != nil { batch.frameWorkTiming?.landed = began }
@@ -729,6 +721,7 @@ public final class ExactSession {
         }
         // What follows its landing runs once it has applied: now, or after what it waits for (T13).
         let landed = { [unowned self] in
+            nativeTextInputLanded(next.kind)
             #if DEBUG
             onLandForTests?(next.kind, batch)
             #endif
@@ -743,7 +736,7 @@ public final class ExactSession {
         }
         takeEventResults(&batch)
         let advance: Bool = if case .advance = next.kind { true } else { false }
-        guard advance || !(changesNothing(batch) && clockUnchanged(batch)) else { logSkipped(batch); return landed() }
+        guard advance || next.kind.isNativeTextInput || !(changesNothing(batch) && clockUnchanged(batch)) else { logSkipped(batch); return landed() }
         wait(PendingBatch(batch: batch, unlessEmpty: advance, landed: landed, dropped: { finished(); stale() }))
     }
 

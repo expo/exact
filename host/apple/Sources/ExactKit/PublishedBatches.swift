@@ -89,6 +89,49 @@ final class PublishedBatches {
 }
 
 extension ExactSession {
+    /// What the owner committed without main waiting.
+    enum Published {
+        case fill(UInt32), tick, advance, canvas, notice, reply
+        #if os(macOS)
+        case nativeTextInput
+        #endif
+
+        var isNativeTextInput: Bool {
+            #if os(macOS)
+            if case .nativeTextInput = self { return true }
+            #endif
+            return false
+        }
+    }
+
+    func nativeTextInputLanded(_ kind: Published) {
+        #if os(macOS)
+        if kind.isNativeTextInput, nativeText.posted == .input {
+            nativeText.posted = nil
+            releaseWaitingFirings()
+        }
+        #endif
+    }
+
+    /// Native work that still prevents this session from settling
+    var hostOutstanding: [String] {
+        var out: [String] = []
+        if fillInFlight || !afterFill.isEmpty { out.append("fill") }
+        // Count a published batch only if it shows something new: one that shows nothing is not loading, nor is a hold it moves or an error it logs (LLP 1132 D5)
+        if hasPublished({ !showsNothing($0) }) { out.append("published") }
+        if canvasInFlight || canvasOwed || presenter.canvas2d.loadingCount > 0 { out.append("canvas") }
+        #if os(iOS)
+        if (SvgLink.drawing?() ?? 0) > 0 { out.append("svgPicture") }
+        #endif
+        return out
+    }
+    /// Owner work main did not wait for, whose batches land before any made later (T4).
+    var ownerInFlight: Bool {
+        #if os(macOS)
+        if nativeText.posted == .input { return true }
+        #endif
+        return fillInFlight || tickInFlight || advanceInFlight || canvasInFlight || noticesInFlight > 0 || repliesInFlight > 0
+    }
     /// On the owner: queue a batch for main, in the owner's order.
     func publish(_ kind: Published, _ completion: RuntimeCompletion) {
         var completion = completion
