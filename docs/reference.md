@@ -1103,6 +1103,11 @@ tag, so a relaunched process lists it again. If the person dismisses it (Android
 14 and later let them swipe away an ongoing notification the system has not
 promoted), it leaves the list when the app is next in front, and a later send to
 it is refused. A send is answered once the system shows its notification.
+Several activities stay separate notifications where Android would bundle an
+app's notifications into one whose collapsed rows show only titles: each is a
+notification group of its own (LLP 1126 D13). Android 16 still bundles six or
+more activities it has not promoted, and those left stay in that bundle; a
+manufacturer's shade may group differently.
 An `updateActivity` with an alert alerts again, with its text as the
 accessibility ticker; a stale date is listed as `stale` once past.
 `endActivity` with `"immediate"` removes the notification; `"default"` leaves an
