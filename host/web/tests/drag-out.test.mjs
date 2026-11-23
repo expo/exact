@@ -224,6 +224,76 @@ for (const [engine, missing] of [['chromium', chromium().unavailable], ['firefox
   }, 60_000);
 }
 
+need('chromium', chromium().unavailable).each([
+  ['in the page', false],
+  ['moved into a frame before capture', true],
+])('chromium: a draggable form with a control named getRootNode %s', async (_, move) => {
+  const browser = await suiteBrowser('chromium');
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    await page.goto(`http://127.0.0.1:${server.port}/`);
+    await page.waitForFunction('window.ready');
+    const shadowed = await page.evaluate((move) => {
+      const form = document.createElement('form'), input = document.createElement('input');
+      form.id = 'drag-form';
+      form.style.top = '520px';
+      form.setAttribute('data-datatransfertext', 'form');
+      input.type = 'hidden';
+      input.name = 'getRootNode';
+      form.append(input);
+      document.getElementById('exact-root').append(form);
+      writeDraggable(form, 'true');
+      if (move) {
+        const frame = document.createElement('iframe');
+        frame.hidden = true;
+        document.body.append(frame);
+        window.addEventListener('dragstart', () => frame.contentDocument.body.append(form), { capture: true, once: true });
+      }
+      form.addEventListener('dragstart', (event) => {
+        if (move) {
+          window.formDrag = [event.defaultPrevented, event.dataTransfer.getData('text/plain')];
+          event.stopPropagation();
+        } else {
+          event.dataTransfer.setData('text/plain', 'target listener');
+        }
+      });
+      return form.getRootNode === input;
+    }, move);
+    expect(shadowed).toBe(true);
+    const seen = await drag(page, '#drag-form', [0, 20]);
+    if (move) expect(await page.evaluate(() => window.formDrag)).toEqual([true, '']);
+    else expect(went(seen).map((drag) => drag.text)).toEqual(['form']);
+  } finally {
+    await browser.close();
+  }
+});
+
+need('chromium', chromium().unavailable)('chromium: capture cancels a card’s drag after only its image moves into a frame', async () => {
+  const browser = await suiteBrowser('chromium');
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    await page.goto(`http://127.0.0.1:${server.port}/`);
+    await page.waitForFunction('window.ready');
+    await page.evaluate(() => {
+      const card = document.getElementById('card2'), image = document.getElementById('picture');
+      card.replaceChildren(image);
+      const frame = document.createElement('iframe');
+      frame.hidden = true;
+      document.body.append(frame);
+      window.addEventListener('dragstart', () => frame.contentDocument.body.append(image), { capture: true, once: true });
+      image.addEventListener('dragstart', (event) => {
+        window.imageDrag = [event.target === image, image.ownerDocument === frame.contentDocument,
+          card.ownerDocument === document, event.defaultPrevented, event.dataTransfer.getData('text/plain')];
+        event.stopPropagation();
+      });
+    });
+    await drag(page, '#picture', [0, 20]);
+    expect(await page.evaluate(() => window.imageDrag)).toEqual([true, true, true, true, '']);
+  } finally {
+    await browser.close();
+  }
+});
+
 // Chrome's own DragData for a drag out of the page, intercepted under the DevTools protocol (`Input.setInterceptDrags`)
 // with the mouse sent through it, so no test helper reads the page's `dataTransfer` in its place: the stage 4 exit of
 // LLP 1094.000 §5.
