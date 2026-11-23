@@ -4,8 +4,11 @@ import { EventEmitter } from 'node:events';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, watch, writeFileSync } from 'node:fs';
 import { partitionWebRoots } from './build.mjs';
 import { declaredSources } from '../../scripts/file-dependencies.mjs';
+import { depInfoOf } from '../../scripts/cargo-dep-info.mjs';
+import { EXE } from '../../scripts/paths.mjs';
 import { request } from 'node:http';
 import { createServer } from 'node:net';
+import { homedir } from 'node:os';
 import { basename, dirname, resolve, sep } from 'node:path';
 import { spawnOwned, stopAll } from '../../scripts/test-children.mjs';
 import { claimDevLoop, stopBuildTree } from './dev-startup.mjs';
@@ -73,9 +76,11 @@ import * as serve from ${JSON.stringify(resolve(root, 'host/web/serve.mjs'))};
 import * as startup from ${JSON.stringify(resolve(root, 'host/web/dev-startup.mjs'))};
 import * as modules from ${JSON.stringify(resolve(root, 'host/web-js/module.mjs'))};
 import * as webBuild from ${JSON.stringify(resolve(root, 'host/web/build.mjs'))};
+import * as sweep from ${JSON.stringify(resolve(root, 'scripts/sweep.mjs'))};
 const spawn = children.spawn, spawnSync = children.spawnSync;
 const watch = files.watch;
 mock.module(${JSON.stringify(resolve(root, 'host/web/build.mjs'))}, () => ({ ...webBuild, webSourceRoots: () => [] }));
+mock.module(${JSON.stringify(resolve(root, 'scripts/sweep.mjs'))}, () => ({ ...sweep, startSweep() {} }));
 mock.module('node:fs', () => ({ ...files, watch(...args) {
   if (process.env.FIXTURE_PHASE !== 'queued-edit' || args[0] !== process.env.FIXTURE_DIR) return watch(...args);
   const callback = args.at(-1); let signalled = false;
@@ -250,9 +255,17 @@ for (const signal of ['SIGINT', 'SIGTERM']) for (const phase of ['js', 'producer
     writeFileSync(resolve(dir, 'tool.mjs'), tool);
     mkdirSync(dist); writeFileSync(resolve(dist, 'index.html'), 'kept');
     if (phase === 'inspect') writeFileSync(resolve(dist, 'app.plan'), 'fixture');
+    if (phase.startsWith('reader') || ['queued-edit', 'inspect'].includes(phase)) {
+      const debug = resolve(dir, `target/debug/exact-web-js${EXE}`);
+      mkdirSync(dirname(debug), { recursive: true });
+      writeFileSync(debug, '', { mode: 0o755 });
+      writeFileSync(depInfoOf(debug), `reader: ${resolve(root, 'Cargo.toml').replaceAll(' ', '\\ ')}\n`);
+    }
     const socket = createServer(); await new Promise(ok => socket.listen(0, '127.0.0.1', ok));
     const port = socket.address().port; await new Promise(ok => socket.close(ok));
     const env = { ...process.env, BUN: process.execPath, EXACT_WEB_DIST: dist, FIXTURE_DIR: dir, FIXTURE_TOOL: resolve(dir, 'tool.mjs'),
+      HOME: dir, USERPROFILE: dir, EXACT_TOOLS_ORIGIN: 'none', EXACT_WEB_COMPILER: '',
+      CARGO_HOME: process.env.CARGO_HOME ?? resolve(homedir(), '.cargo'), RUSTUP_HOME: process.env.RUSTUP_HOME ?? resolve(homedir(), '.rustup'),
       CARGO_TARGET_DIR: resolve(dir, 'target'), FIXTURE_PHASE: phase, FIXTURE_SIGNAL: signal, FIXTURE_STUBBORN: signal === 'SIGINT' ? '1' : '0',
       EXACT_TEST_TIMING: '1', EXACT_DEV_LISTEN_DELAY_MS: phase === 'producer' ? '60000' : '0' };
     const args = ['--preload', resolve(dir, 'preload.mjs'), resolve(root, 'host/web/dev.mjs'), '--app', dir, '--port', String(port)];

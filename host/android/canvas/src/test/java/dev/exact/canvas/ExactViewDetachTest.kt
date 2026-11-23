@@ -4,6 +4,7 @@ import android.app.Activity
 import android.graphics.Bitmap
 import android.graphics.RenderNode
 import android.os.Looper
+import android.os.SystemClock
 import android.view.Choreographer
 import android.view.ViewGroup
 import java.nio.IntBuffer
@@ -40,6 +41,11 @@ class ExactViewDetachTest {
             @JvmStatic @Implementation fun frame(vsync: Boolean): java.nio.ByteBuffer? = null
             @JvmStatic @Implementation fun requests(): IntArray? = null
             @JvmStatic @Implementation fun timerObservation(a: Boolean, b: Boolean, c: Boolean, d: Boolean) = false
+            var due = -1.0
+            @JvmStatic @Implementation fun nextDue() = due
+            @JvmStatic @Implementation fun timerHeld() = 0
+            @JvmStatic @Implementation fun animating(vsyncOnly: Boolean) = false
+            @JvmStatic @Implementation fun owed() = false
         }
     }
 
@@ -93,6 +99,20 @@ class ExactViewDetachTest {
     private fun ExactView.call(name: String, vararg args: Any) = ExactView::class.java.declaredMethods
         .single { it.name == name }.apply { isAccessible = true }.invoke(this, *args)
 
+    @Test fun theMainThreadTimerWaitsUntilItsFractionalDeadline() {
+        val view = view()
+        try {
+            val looper = shadowOf(Looper.getMainLooper())
+            looper.idle()
+            Host.due = 0.8
+            view.call("schedule")
+            assertEquals(SystemClock.uptimeMillis() + 1, looper.nextScheduledTaskTime.toMillis())
+        } finally {
+            Host.due = -1.0
+            view.detach()
+        }
+    }
+
     @Test fun detachCancelsEveryPostedFrame() {
         for (stopped in listOf(false, true)) detachWithFrames(stopped)
     }
@@ -144,6 +164,37 @@ class ExactViewDetachTest {
         val fling = Scrolling::class.java.getDeclaredField("fling").apply { isAccessible = true }
             .get(scrolling) as android.widget.OverScroller
         assertTrue(fling.isFinished)
+    }
+
+    /** A waiting row made between streams is drawn by its group once it is made, not only once the next stream records
+     * the group again: one the scroll brings near, made here in that frame ([ExactView]'s `makeSoon`), and one that
+     * replaces another, made on the worker. */
+    @Test fun aWaitingRowMadeBetweenStreamsIsDrawnByItsGroup() {
+        val f = { v: Float -> v.toRawBits() }
+        for ((top, previous) in listOf(-1f to 0, 10_000f to 5)) {
+            val view = view()
+            val worker = view.get<ExecutorService>("worker")
+            try {
+                // The feed's group 7 places row 21, which the stream left waiting: it was out of view.
+                field("ops").set(view, IntBuffer.wrap(intArrayOf(20, 7, 17, 21, 0, f(top), 21)))
+                view.get<HashMap<Int, RenderNode>>("groups")[7] = RenderNode("group")
+                val row = intArrayOf(15, 21, previous, f(200f), f(80f), 1, 16)
+                val wait = Structure.Later(IntBuffer.wrap(row), 0, row.size).also { it.top = top }
+                view.get<HashMap<Int, Structure.Later>>("laterRows")[21] = wait
+                view.get<java.util.ArrayDeque<Structure.Later>>("later").add(wait)
+                val main = view.get<Player>("main")
+                val rowOf = main.row
+                val drawn = ArrayList<Boolean>()
+                main.row = { id -> rowOf(id).also { if (id == 21) drawn.add(it != null) } }
+                view.get<Choreographer.FrameCallback>("laterFrame").doFrame(0L)
+                worker.submit {}.get()
+                shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(32))
+                assertEquals("top $top", listOf(true), drawn)
+            } finally {
+                view.detach()
+            }
+            assertTrue(worker.isShutdown)
+        }
     }
 
     @Test fun aDetachedViewRecordsNoRows() {

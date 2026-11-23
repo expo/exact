@@ -74,7 +74,7 @@ class AuthTest {
     }
 
     private fun intent(url: String? = null) = Intent(Intent.ACTION_VIEW, url?.let(Uri::parse))
-        .putExtra("owner", "0").putExtra("asyncboot", "0").putExtra("splashfade", "1")
+        .putExtra("owner", "0").putExtra("asyncboot", "0").putExtra("splashfade", "1").putExtra("warmlaunch", "0")
     private var controller = Robolectric.buildActivity(Reader::class.java, intent())
     private val activity get() = controller.get()
 

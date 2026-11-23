@@ -2,13 +2,18 @@
 // person already has open and reads the one window that person approved, on the
 // app's own wall clock. Only a local development build compiles this file
 // (`EXACT_ATTACH`, which `build.mjs` sets with the `ExactBuildPurpose` stamp),
-// and its listener opens only when the person chooses Develop ▸ Enable Agent
-// Attach. The wire is JSON lines over a Unix socket: a handshake, then
-// `{"request":n,"op":…}` requests, each answered `{"request":n,…}`.
-#if EXACT_ATTACH && os(macOS)
-import AppKit
+// and its listener opens only when the person enables it: Develop ▸ Enable
+// Agent Attach on the Mac, the developer menu's Enable Agent Attach in the iOS
+// simulator. The wire is JSON lines over a Unix socket: a handshake, then
+// `{"request":n,"op":…}` requests, each answered `{"request":n,…}`. What the
+// person sees (the window, the approval, the indicator, the picture) is each
+// platform's `AttachSurface`: `Mac/AgentAttachMac.swift`, `IOS/AgentAttachIOS.swift`.
+#if EXACT_ATTACH && (os(macOS) || (os(iOS) && targetEnvironment(simulator)))
+import Foundation
 import Darwin
+#if os(macOS)
 import Security
+#endif
 
 public enum AgentAttach {
     static let version = 1
@@ -28,27 +33,14 @@ public enum AgentAttach {
     /// The one connection: asking, or attached. Main thread.
     nonisolated(unsafe) static var current: AttachConnection?
     static var listening: Bool { listener != nil }
-
-    static let menuTarget = AttachMenuTarget()
-
-    /// Develop's two items (LLP 1012.000 D1), after the app's first paint.
-    public static func addMenuItems(to menu: NSMenu) {
-        guard admitted else { return }
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "Enable Agent Attach", action: #selector(AttachMenuTarget.toggle(_:)), keyEquivalent: "").target = menuTarget
-        menu.addItem(withTitle: "Detach Agent", action: #selector(AttachMenuTarget.detach(_:)), keyEquivalent: "").target = menuTarget
-    }
+    /// Whether a driver is connected, asking or attached: Detach has something to end.
+    static var connected: Bool { current.map { !$0.isRetired } ?? false }
 
     /// Open the listener and publish its marker, or say why not.
     static func enable() {
         guard listener == nil else { return }
         do { listener = try AttachListener.open() }
-        catch {
-            let alert = NSAlert()
-            alert.messageText = "Agent Attach could not start"
-            alert.informativeText = "\(error)"
-            alert.runModal()
-        }
+        catch { AttachSurface.couldNotStart("\(error)") }
     }
 
     /// Revoke every grant, close the connection and unpublish the listener
@@ -59,16 +51,10 @@ public enum AgentAttach {
         listener = nil
     }
 
-    /// A connection ended: its indicator, sheet and grants go with it. Main thread.
+    /// A connection ended: its indicator, approval and grants go with it. Main thread.
     static func ended(_ connection: AttachConnection) {
         connection.reads = false
-        connection.indicator?.removeFromParent()
-        connection.indicator = nil
-        if let alert = connection.alert, let window = connection.window { window.endSheet(alert.window, returnCode: .abort) }
-        connection.alert = nil
-        if let observer = connection.closeObserver { NotificationCenter.default.removeObserver(observer) }
-        connection.shownObserver?.invalidate()
-        connection.shownObserver = nil
+        connection.surface?.end()
         if current === connection { current = nil }
     }
 
@@ -79,42 +65,20 @@ public enum AgentAttach {
             return
         }
         if let current, !current.isRetired {
-            connection.refuseAndClose(["error": "busy: another agent is attached to this app (Develop ▸ Detach Agent ends it)", "refused": "busy"])
+            connection.refuseAndClose(["error": "busy: another agent is attached to this app (Detach Agent, in the app, ends it)", "refused": "busy"])
             return
         }
         current = connection
         connection.start()
     }
 
-    /// The windows a driver can attach to: each visible window that shows one session.
-    static func eligible() -> [(NSWindow, ExactSession)] {
-        func sessions(in view: NSView) -> [ExactSession] {
-            if let exact = view as? ExactView { return [exact.session] }
-            return view.subviews.flatMap { sessions(in: $0) }
-        }
-        return NSApp.windows.compactMap { window in
-            guard window.isVisible, window.sheetParent == nil, let root = window.contentView else { return nil }
-            let found = sessions(in: root)
-            return found.count == 1 ? (window, found[0]) : nil
-        }
+    /// Enable Agent Attach, a checked command: on, or off with any connection ended.
+    static func toggle() {
+        if listening { detach("Agent Attach was turned off in the app") } else { enable() }
     }
 
     /// Unlink the socket and marker as the process ends.
     static func unpublish() { listener?.unlinkPaths() }
-}
-
-final class AttachMenuTarget: NSObject, NSMenuItemValidation {
-    @objc func toggle(_ sender: Any?) {
-        if AgentAttach.listening { AgentAttach.detach("Agent Attach was turned off in the app") } else { AgentAttach.enable() }
-    }
-    @objc func detach(_ sender: Any?) { AgentAttach.detach("detached in the app") }
-    func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        if item.action == #selector(toggle(_:)) {
-            item.state = AgentAttach.listening ? .on : .off
-            return AgentAttach.listening || DevMenu.session?.firstDrawMs != nil
-        }
-        return AgentAttach.current.map { !$0.isRetired } ?? false
-    }
 }
 
 /// The socket and the marker that names it, for one launch.
@@ -140,11 +104,17 @@ final class AttachListener {
     }
 
     static func open() throws -> AttachListener {
-        if sandboxed() { throw Failure.sandboxed }
         let temp = userTemp(), pid = getpid(), uid = getuid()
+        #if os(macOS)
+        if sandboxed() { throw Failure.sandboxed }
         var socketPath = (try privateDirectory((temp as NSString).appendingPathComponent("exact-attach"), uid: uid) as NSString).appendingPathComponent("\(pid)")
         // LLP 1111.000 D4's fallback for a long per-user path.
         if socketPath.utf8.count > 103 { socketPath = try privateDirectory("/tmp/exact-\(uid)", uid: uid) + "/a\(pid)" }
+        #else
+        // A simulator app's container `tmp` is past the 103 bytes a socket path can be (LLP 1012.000 piece 1); the
+        // simulator's processes share the Mac's `/tmp`.
+        let socketPath = try privateDirectory("/tmp/exact-\(uid)", uid: uid) + "/a\(pid)"
+        #endif
         if socketPath.utf8.count > 103 { throw Failure.path(socketPath) }
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw Failure.system("socket", errno) }
@@ -210,10 +180,16 @@ final class AttachListener {
         unlink(socketPath)
     }
 
+    /// Where the marker goes: the Mac's per-user temporary directory, beside `exact-trace-<pid>.ready`, or the
+    /// simulator app's container `tmp`, which `simctl get_app_container` names to the driver.
     static func userTemp() -> String {
+        #if os(macOS)
         var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
         let n = confstr(_CS_DARWIN_USER_TEMP_DIR, &buffer, buffer.count)
         return n > 0 ? String(cString: buffer) : NSTemporaryDirectory()
+        #else
+        return NSTemporaryDirectory()
+        #endif
     }
 
     /// `path` as a `0700` directory this user owns and no link leads to, made if missing.
@@ -239,6 +215,7 @@ final class AttachListener {
         guard written == data.count, rename(staging, path) == 0 else { unlink(staging); throw Failure.system("write \(path)", errno) }
     }
 
+    #if os(macOS)
     /// Whether this process is signed into the App Sandbox, by its own entitlement; a
     /// process that cannot read its entitlements is taken to be.
     static func sandboxed() -> Bool {
@@ -246,6 +223,7 @@ final class AttachListener {
         let value = SecTaskCopyValueForEntitlement(task, "com.apple.security.app-sandbox" as CFString, nil)
         return (value as? Bool) ?? (value != nil)
     }
+    #endif
 
     /// The process's start, seconds since 1970, which the driver checks against `ps`.
     static func processStart() -> Double {
@@ -284,13 +262,9 @@ final class AttachConnection {
     private var watchdog: DispatchSourceTimer?
 
     // Main thread.
-    weak var window: NSWindow?
-    weak var session: ExactSession?
+    /// The pinned window, its session, the person's approval and the indicator.
+    var surface: AttachSurface?
     var reads = false
-    var alert: NSAlert?
-    var indicator: NSTitlebarAccessoryViewController?
-    var closeObserver: NSObjectProtocol?
-    var shownObserver: NSKeyValueObservation?
 
     init(fd: Int32, nonce: String, release: @escaping () -> Void) {
         self.fd = fd
@@ -320,8 +294,12 @@ final class AttachConnection {
     private func check() {
         let now = ProcessInfo.processInfo.systemUptime
         let (shook, ok, request) = lock.withLock { (handshaken, approved, outstanding) }
-        if !shook, now - accepted > AgentAttach.handshakeTimeout { retire("no handshake within \(Int(AgentAttach.handshakeTimeout)) s") }
-        else if !ok, now - accepted > AgentAttach.approvalTimeout { retire("not approved in the app within \(Int(AgentAttach.approvalTimeout)) s") }
+        // The driver is told why: it waits longer than these, so an unexplained close would read as Detach.
+        if !shook, now - accepted > AgentAttach.handshakeTimeout {
+            refuseAndClose(["error": "handshake: none arrived within \(Int(AgentAttach.handshakeTimeout)) s", "refused": "handshake"])
+        } else if !ok, now - accepted > AgentAttach.approvalTimeout {
+            refuseAndClose(["error": "attach: not allowed in the app within \(Int(AgentAttach.approvalTimeout)) s", "refused": "declined"])
+        }
         else if let request, now - request.since > AgentAttach.requestTimeout {
             retire("request \(request.id) was not answered within \(Int(AgentAttach.requestTimeout)) s")
         }
@@ -417,47 +395,18 @@ final class AttachConnection {
     /// Pin the one window, then ask its person. Main thread.
     private func pin(_ wanted: String?) {
         guard !isRetired else { return }
-        let windows = AgentAttach.eligible()
-        let chosen = wanted.map { label in windows.filter { $0.1.label == label } } ?? windows
-        // Before the person allows it, the driver learns only the labels it chooses a window by (`main`, `window-2`, a
-        // link's target), and only when it named none of several; never a window's title.
-        guard chosen.count == 1, let (window, session) = chosen.first else {
-            let why = windows.isEmpty ? "no window of this app shows a session"
-                : wanted.map { "no window shows session \($0)" } ?? "the app has \(windows.count) windows: name one with --session <label>"
-            refuseAndClose(["error": "attach: \(why)", "refused": "window", "sessions": windows.map(\.1.label)])
-            return
+        let surface: AttachSurface
+        switch AttachSurface.pin(wanted) {
+        case let .failure(refusal): refuseAndClose(refusal.reply); return
+        case let .success(pinned): surface = pinned
         }
-        // The indicator is a title bar accessory, so a window without one cannot say it is attached.
-        guard window.styleMask.contains(.titled) else {
-            refuseAndClose(["error": "attach: the window has no title bar to show Agent Attached in", "refused": "window"])
-            return
-        }
-        self.window = window
-        self.session = session
-        closeObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
-            self?.retire("the attached window closed")
-        }
-        // A kept window's close orders it out (`ExactDocuments.hidesOnClose`): that ends the attachment too.
-        // Minimizing it or hiding the app does not.
-        shownObserver = window.observe(\.isVisible) { [weak self] window, _ in
-            if !window.isVisible, PageFacts.hiddenForClose(window) { self?.retire("the attached window closed"); return }
-            DispatchQueue.main.async {
-                if !window.isVisible, !window.isMiniaturized, !NSApp.isHidden { self?.retire("the attached window closed") }
-            }
-        }
+        self.surface = surface
+        surface.watch { [weak self] why in self?.retire(why) }
         send(["attach": AgentAttach.version, "waiting": "approval", "pid": Int(getpid())])
-        let alert = NSAlert()
-        alert.messageText = "Allow an agent to read this window?"
-        alert.informativeText = "A program running as you asks to read “\(window.title.isEmpty ? ExactEnv.appName : window.title)”: its views, state, logs and pictures. These can show private information. Password fields are masked; logs and pictures are not. It cannot tap, type or change the app’s clock."
-        // Allow is a deliberate click: Return, typed into the document as the sheet appears, answers nothing.
-        alert.addButton(withTitle: "Allow").keyEquivalent = ""
-        alert.addButton(withTitle: "Don’t Allow").keyEquivalent = "\u{1b}"
-        self.alert = alert
-        alert.beginSheetModal(for: window) { [weak self] response in
+        surface.ask { [weak self] allowed in
             guard let self else { return }
-            self.alert = nil
-            guard response == .alertFirstButtonReturn, !self.isRetired else {
-                if response == .alertSecondButtonReturn { self.refuseAndClose(["error": "attach: the person did not allow it", "refused": "declined"]) }
+            guard allowed == true, !self.isRetired else {
+                if allowed == false { self.refuseAndClose(["error": "attach: the person did not allow it", "refused": "declined"]) }
                 return
             }
             self.approve()
@@ -466,7 +415,7 @@ final class AttachConnection {
 
     /// Reads are granted: say so in the window, then to the driver. Main thread.
     private func approve() {
-        guard let window, let session, !isRetired else { retire("the attached window closed"); return }
+        guard let surface, let session = surface.session, surface.isOpen, !isRetired else { retire("the attached window closed"); return }
         // The grant and its deadline are one decision, which the watchdog's expiry cannot fall between.
         let inTime = lock.withLock { () -> Bool in
             guard !retired, ProcessInfo.processInfo.systemUptime - accepted <= AgentAttach.approvalTimeout else { return false }
@@ -475,34 +424,25 @@ final class AttachConnection {
         }
         guard inTime else { retire("not approved in the app within \(Int(AgentAttach.approvalTimeout)) s"); return }
         reads = true
-        let label = NSTextField(labelWithString: "Agent Attached")
-        label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        label.textColor = .secondaryLabelColor
-        label.sizeToFit()
-        let holder = NSView(frame: NSRect(x: 0, y: 0, width: label.frame.width + 16, height: label.frame.height))
-        label.frame.origin = NSPoint(x: 8, y: 0)
-        holder.addSubview(label)
-        let accessory = NSTitlebarAccessoryViewController()
-        accessory.view = holder
-        accessory.layoutAttribute = .trailing
-        window.addTitlebarAccessoryViewController(accessory)
-        indicator = accessory
+        surface.showAttached()
         let info = ExactEnv.appMetadata
-        send(["attached": true, "pid": Int(getpid()), "session": session.label, "window": window.title, "windowNumber": window.windowNumber,
+        var reply: [String: Any] = ["attached": true, "pid": Int(getpid()), "session": session.label, "window": surface.title,
               "grants": ["read": true, "input": false],
               "build": ["commit": info["ExactCommit"] ?? NSNull(), "dirty": info["ExactCommitDirty"] ?? NSNull(),
                         "appCommit": info["ExactAppCommit"] ?? NSNull(), "builtAt": info["ExactBuildTime"] ?? NSNull()],
-              "planDigest": session.runtime.planDigest() ?? NSNull()])
+              "planDigest": session.runtime.planDigest() ?? NSNull()]
+        if let number = surface.number { reply["windowNumber"] = number }
+        send(reply)
     }
 
     /// Answer one admitted request against the pinned target. Main thread.
     private func dispatch(_ id: Int, _ request: AttachRequest) -> String {
         guard !isRetired, reads else { return AttachRequest.raw(id, ["error": "not attached"]) }
-        guard let window, let session, session.state != .destroyed else {
+        guard let surface, let session = surface.session, surface.isOpen, session.state != .destroyed else {
             retire("the attached window closed")
             return AttachRequest.raw(id, ["error": "the attached window closed"])
         }
-        return AttachRead.answer(id, request, session: session, window: window)
+        return AttachRead.answer(id, request, session: session, surface: surface)
     }
 
     // Replies. Any thread.
@@ -631,7 +571,7 @@ enum AttachRequest {
             guard let field = fields[key] else { return refuse(id, "malformed", "\(op) takes no field \(key)") }
             switch field {
             case .flag: guard let b = flag(value) else { return refuse(id, "malformed", "\(key) is true or false") }; request[key] = b
-            case .count: guard let n = count(value) else { return refuse(id, "malformed", "\(key) is a whole number") }; request[key] = n
+            case .count: guard let n = count(value) else { return refuse(id, "malformed", "\(key) is a whole number up to \(UInt32.max)") }; request[key] = n
             case .text: guard let t = value as? String, t.utf8.count <= 256 else { return refuse(id, "malformed", "\(key) is a short string") }; request[key] = t
             case .target:
                 if let n = count(value) { request[key] = n }
@@ -651,9 +591,11 @@ enum AttachRequest {
         }
     }
 
-    /// A whole number, not a Boolean, which JSONSerialization also makes an NSNumber.
+    /// A whole number, not a Boolean, which JSONSerialization also makes an NSNumber, within a view id's range: a
+    /// host converts an id to `UInt32`, and a larger one would end the app there.
     static func count(_ value: Any?) -> Int? {
-        guard let n = value as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), CFNumberIsFloatType(n) == false, n.intValue >= 0 else { return nil }
+        guard let n = value as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), CFNumberIsFloatType(n) == false,
+              n.int64Value >= 0, n.int64Value <= Int64(UInt32.max), n.stringValue == String(n.int64Value) else { return nil }
         return n.intValue
     }
     static func flag(_ value: Any?) -> Bool? {
@@ -706,7 +648,7 @@ enum AttachRequest {
 /// committed views and pixels, with no draining, settling, guest script or
 /// change to the window. Main thread.
 enum AttachRead {
-    static func answer(_ id: Int, _ request: AttachRequest, session: ExactSession, window: NSWindow) -> String {
+    static func answer(_ id: Int, _ request: AttachRequest, session: ExactSession, surface: AttachSurface) -> String {
         func ask(_ object: [String: Any]) -> String {
             let json = (try? JSONSerialization.data(withJSONObject: object)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
             return session.agent(json)
@@ -730,21 +672,8 @@ enum AttachRead {
             var frames = session.sampler?.reply(late: late, all: false) ?? ["unavailable": true]
             frames["health"] = session.frameHealth.reply(virtual: false)
             return AttachRequest.raw(id, frames)
-        case .screenshot: return AttachRequest.raw(id, picture(of: window))
+        case .screenshot: return AttachRequest.raw(id, surface.picture())
         }
-    }
-
-    /// The window server's picture of the whole window as it is, its title
-    /// bar and every pane included: no draw, no reorder, no activation.
-    static func picture(of window: NSWindow) -> [String: Any] {
-        guard let image = WindowServerPicture.ownWindow(window.windowNumber),
-              let rep = NSBitmapImageRep(cgImage: image).converting(to: .sRGB, renderingIntent: .default),
-              let png = rep.representation(using: .png, properties: [:]) else {
-            return ["error": "the window server gave no picture of the window: it is minimized, the screen is locked or the display is asleep"]
-        }
-        return ["data": png.base64EncodedString(), "bytes": png.count, "width": image.width, "height": image.height,
-                "scale": Double(image.width) / window.frame.width, "captureSpace": "window", "capture": "window-server",
-                "key": window.isKeyWindow, "occlusion": window.occlusionState.contains(.visible) ? "visible" : "occluded"]
     }
 }
 #endif

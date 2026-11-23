@@ -6,6 +6,28 @@
   "start_url": "/",
   "display": "standalone",
   "audio_session": "playback",
+  "data": [
+    "privacy"
+  ],
+  "live_activities": [
+    {
+      "kind": "recording",
+      "component": "RecordingActivity",
+      "state": "RecordingState",
+      "preview": {
+        "startedAt": 1787915700000
+      }
+    }
+  ],
+  "controls": [
+    {
+      "kind": "record",
+      "title": "Record an idea",
+      "symbol": "mic.fill",
+      "tool": "startRecording",
+      "authentication": "always"
+    }
+  ],
   "app": {
     "id": "com.exact.recorder",
     "name": "Recorder"

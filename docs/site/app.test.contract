@@ -1,8 +1,12 @@
-test "the home page has the hero, the agent prompt, the setup commands and a card for each section"
+test "the home page has the hero, the agent prompt, the setup prompt and a card for each section"
   size 1440x900
   expect tree has "home-page"
   expect tree has "agent-pill"
-  expect tree has "terminal"
+  expect tree has "setup-prompt"
+  expect tree missing "setup-prompt-full"
+  tap "setup-more"
+  expect tree has "setup-prompt-full"
+  expect text "setup-more" == "Show less"
   expect tree has "card-startHere"
   expect tree has "card-contractForHumans"
   expect tree has "card-recipeAfterAWrite"
@@ -99,6 +103,8 @@ test "the page header has Edit page, and Copy link copies the page's address"
   expect tree has "edit-page"
   tap "copy-link"
   expect text "copy-link" == "Copied"
+  clock +2000
+  expect text "copy-link" == "Copy link"
 
 test "the Actions menu copies the Markdown and opens the page in each AI app"
   size 1440x900
@@ -229,6 +235,17 @@ test "Start here's prompt copies, and shows its text on request"
   tap "agent-prompt-toggle"
   expect tree has "agent-prompt-text"
   tap "agent-prompt-copy"
+  expect text "agent-prompt-copy" == "Copied"
+  clock +1500
+  tap "agent-prompt-copy"
+  clock +1999
+  expect text "agent-prompt-copy" == "Copied"
+  clock +1
+  expect text "agent-prompt-copy" == "Copy prompt"
+  tap "copy-link"
+  expect text "copy-link" == "Copied"
+  tap "agent-prompt-copy"
+  expect text "copy-link" == "Copy link"
   expect text "agent-prompt-copy" == "Copied"
 
 test "Search opens from the sidebar and hints until two letters"

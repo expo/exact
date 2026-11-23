@@ -137,11 +137,13 @@ let agentSources = ProcessInfo.processInfo.environment["EXACT_UPDATE_TRUST"] == 
     "Mac/AgentStdio.swift",
 ] : []
 
-// Attached agent sessions (LLP 1012.000 D2): the listener and its Develop
-// items are a local development build's alone. `build.mjs` sets EXACT_ATTACH
-// for one and stamps its Info.plist to match; nothing else compiles the file.
+// Attached agent sessions (LLP 1012.000 D2): the listener and its controls
+// are a local development build's alone, a Mac app or an iOS simulator app.
+// `build.mjs` sets EXACT_ATTACH for one and stamps its Info.plist to match;
+// nothing else compiles the files.
 let attach = ProcessInfo.processInfo.environment["EXACT_ATTACH"] == "1" && ProcessInfo.processInfo.environment["EXACT_UPDATE_TRUST"] != "production"
 let attachSettings: [SwiftSetting] = attach ? [.define("EXACT_ATTACH")] : []
+let attachSources = ["AgentAttach.swift", "Mac/AgentAttachMac.swift", "IOS/AgentAttachIOS.swift"]
 
 let gallery = ProcessInfo.processInfo.environment["EXACT_UPDATE_TRUST"] != "production"
     && (testing || ProcessInfo.processInfo.environment["EXACT_WIDGET_GALLERY"] == "1")
@@ -171,7 +173,7 @@ var core: [Target] = [
     // entry's extension, the watch app and a development build's widget
     // gallery; a production presenter never links it.
     .target(name: "ExactSnapshot", dependencies: ["ExactCore", "CExact"], path: "Sources/ExactSnapshot", swiftSettings: [.unsafeFlags(["-application-extension"])] + devTools),
-    .target(name: "ExactKit", dependencies: [.target(name: "ExactCore"), .target(name: "CExact"), .target(name: "CExactLaunch")] + (gallery ? [.target(name: "ExactSnapshot")] : []), path: "Sources/ExactKit", exclude: agentSources + (attach ? [] : ["AgentAttach.swift"]) + (intentFiles ? [] : ["IntentFiles.swift"]), swiftSettings: devTools + attachSettings + gallerySettings + intentFileSettings),
+    .target(name: "ExactKit", dependencies: [.target(name: "ExactCore"), .target(name: "CExact"), .target(name: "CExactLaunch")] + (gallery ? [.target(name: "ExactSnapshot")] : []), path: "Sources/ExactKit", exclude: agentSources + (attach ? [] : attachSources) + (intentFiles ? [] : ["IntentFiles.swift"]), swiftSettings: devTools + attachSettings + gallerySettings + intentFileSettings),
     .target(name: "ExactWatchSync", dependencies: ["ExactCore", "CExact"], path: "Sources/ExactWatchSync"),
     .target(name: "ExactUpdates", dependencies: ["ExactKit", "CExact"], path: "Sources/ExactUpdates"),
     // The binding core (LLP 1121 D12): no roster row of its own; the native

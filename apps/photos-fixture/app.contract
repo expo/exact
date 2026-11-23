@@ -55,6 +55,7 @@ component Fixture
   view
     column gap=8 padding=16
       text `${status.state} ${status.access} ${status.addState}` testId="status"
+      text (match failure(recent) { case some(f) => f.code, case none => "" }) testId="recent-error"
       row gap=4 flex-wrap="wrap" testId="grid"
         for a, i in recent.assets key=a.id
           button press=copy(a.id) testId=`photo-${i + 1}` aria-label=`Photo ${i + 1}` padding=0

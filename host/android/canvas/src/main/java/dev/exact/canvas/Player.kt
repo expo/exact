@@ -988,21 +988,32 @@ internal class Player(private val fonts: Map<Int, Font>) {
                 26 -> i += 3 + (b.get(i + 2) + 3) / 4
                 9 -> {
                     val font = fonts[b.get(i + 1)]
-                    val count = b.get(i + 5)
+                    // The runs that follow in the same font, size, colour and slant (a paragraph's lines) are drawn
+                    // with this one: HWUI makes a text blob of each call, and the RenderThread looks each one up
+                    // again every frame. A blurred run is drawn alone. Legacy draws each run as a filled path.
+                    val drawGlyphs = android.os.Build.VERSION.SDK_INT >= 31
+                    var count = 0
+                    var j = i
+                    while (j < n && b.get(j) == 9 && (j == i || drawGlyphs && glyphBlur == 0f && b.get(j + 1) == b.get(i + 1) &&
+                            b.get(j + 2) == b.get(i + 2) && b.get(j + 3) == b.get(i + 3) && b.get(j + 4) == b.get(i + 4))) {
+                        val k = b.get(j + 5)
+                        if (glyphIds.size < count + k) { glyphIds = glyphIds.copyOf((count + k) * 2); positions = positions.copyOf((count + k) * 4) }
+                        var at = j + 6
+                        for (g in count until count + k) {
+                            glyphIds[g] = b.get(at); positions[2 * g] = f(b, at + 1); positions[2 * g + 1] = f(b, at + 2); at += 3
+                        }
+                        count += k
+                        j = at
+                    }
                     if (font != null && count > 0) {
                         glyphPaint.textSize = f(b, i + 2)
                         glyphPaint.color = b.get(i + 3)
                         glyphPaint.textSkewX = f(b, i + 4)
                         glyphPaint.maskFilter = blurFilter(glyphBlur); glyphBlur = 0f
-                        if (glyphIds.size < count) { glyphIds = IntArray(count * 2); positions = FloatArray(count * 4) }
-                        var at = i + 6
-                        for (g in 0 until count) {
-                            glyphIds[g] = b.get(at); positions[2 * g] = f(b, at + 1); positions[2 * g + 1] = f(b, at + 2); at += 3
-                        }
-                        if (android.os.Build.VERSION.SDK_INT >= 31) c.drawGlyphs(glyphIds, 0, positions, 0, count, font, glyphPaint)
+                        if (drawGlyphs) c.drawGlyphs(glyphIds, 0, positions, 0, count, font, glyphPaint)
                         else LegacyGlyphs.draw(c, glyphIds, positions, count, font, glyphPaint)
                     }
-                    i += 6 + 3 * count
+                    i = j
                 }
                 10 -> i += 5 + (b.get(i + 4) + 3) / 4
                 41 -> i = fontAxesEnd(b, i)

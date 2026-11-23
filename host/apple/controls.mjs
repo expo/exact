@@ -4,9 +4,10 @@
 //
 // A URL control's intent is an `OpenIntent`: the system opens the app and runs it there, and it hands the
 // location to the app's open-location channel (`exact.contentIndex.open`, ShortcutItems.swift), which queues it
-// as the launch location before boot and navigates after. A tool control's intent is a `LiveActivityIntent`,
-// which Apple runs in the app's process; there it calls `ExactTools.press`, the tool door's press, directly
-// with the compiled kind and digest. The app compiles it against ExactToolDoor's module; the extension cannot
+// as the launch location before boot and navigates after. A tool control's intent takes the bake's conformances:
+// a `LiveActivityIntent`, which Apple runs in the app's process, and an `AudioRecordingIntent` besides for a
+// recording; a plain `AppIntent` (a qualification build's, LLP 1126.004 §6d) asks for the app's process. In the
+// app it calls `ExactTools.press`, the tool door's press, directly with the compiled kind and digest. The app compiles it against ExactToolDoor's module; the extension cannot
 // import that module, so its copy refuses without dispatch. Neither intent is discoverable, and nothing else
 // names their types.
 // [Apple: creating controls](https://developer.apple.com/documentation/widgetkit/creating-controls-to-perform-actions-across-the-system)
@@ -87,12 +88,17 @@ struct ${T}: OpenIntent {
 `);
       continue;
     }
+    // A plain intent asks to run in the app, in the background, as LLP 1126.004 D3's table says for 26 and 27.
+    const plain = !c.conformances?.length;
+    const placement = plain ? `
+    static let supportedModes: IntentModes = .background
+    @available(iOS 27.0, *) static var allowedExecutionTargets: IntentExecutionTargets { .main }` : '';
     out.push(`
 ${available(c)}
-struct ${T}: LiveActivityIntent {
+struct ${T}: ${plain ? 'AppIntent' : c.conformances.join(', ')} {
     static let title: LocalizedStringResource = ${literal(control.title)}${description}
     static let isDiscoverable = false
-    static let authenticationPolicy: IntentAuthenticationPolicy = ${authentication(control.authentication)}
+    static let authenticationPolicy: IntentAuthenticationPolicy = ${authentication(control.authentication)}${placement}
     @MainActor func perform() async throws -> some IntentResult {
         try await ExactControlPress.run(${literal(control.kind)}, digest: ${literal(c.digest)}, title: ${literal(control.title)})
         return .result()

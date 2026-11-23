@@ -2391,6 +2391,22 @@ web, which compiles no control, says `absent`:
 bun scripts/agent.mjs ios --app <app> "state controls"
 ```
 
+A qualification build (LLP 1126.004 §6d) offers on iOS what items 5 and 7
+omit only for want of a device run, so the device run can be made:
+`EXACT_QUALIFY_CONTROLS=1 bun host/apple/build.mjs <app> --ios --device --run`.
+Such a placement carries the omission it lifts, `{"offered": [{"from":
+"26.0", "intent": "tool"}], "qualifying": "control-process"}`, so its
+compatibility id is never an ordinary build's; a bake with production trust
+(`--release`, `--archive`, a deploy) refuses the variable. A plain tool's
+intent then asks to run in the app (`supportedModes = .background` from 26,
+`allowedExecutionTargets = .main` from 27); a recording tool's
+(`"intent": "recording"`) is an `AudioRecordingIntent` and a
+`LiveActivityIntent`, and while its press runs, the tool and the `then`s of
+its sends may call `getUserMedia` for audio alone and `startMediaRecorder`
+with the app not in front. A press never asks for the microphone: with its
+permission not yet granted, `getUserMedia` fails `NotAllowedError`.
+Recorder's `record` control is the device run's subject.
+
 ## Apple bundle metadata
 
 Exact writes Info.plist keys and entitlements from grants, named manifest fields,
@@ -2668,9 +2684,21 @@ the window when several are open, and a PID chooses among several running copies
 The connection only reads: `tree`, `state` (masked, as the tree shows a password field), `logs`,
 `layout`, `perf` and `screenshot` (the window server's picture of the window, which is not brought
 forward). The app refuses `clock` with `live-clock` and input with `input-not-granted`, and the
-driver refuses launch flags such as `--storage`, `--live` and `--url`. Only a Mac app that
-`host/apple/build.mjs` builds to run carries the listener; a release, archive or embedded build has
-none of it.
+driver refuses launch flags such as `--storage`, `--live` and `--url`.
+
+`bun scripts/agent.mjs ios --app <app> --attach [--sim <udid|name>] tree state logs layout "screenshot now.png"`
+reads the development app open in an iOS simulator the same way. The simulator is the one `--sim`
+or `EXACT_SIM` names, else the one a drive would choose; nothing is booted. The person opens the
+developer menu (four fingers, or ⌘D) and chooses **Enable Agent Attach**, then **Allow** in the
+alert the driver's connection raises; **Agent Attached** shows at the top of the screen while the
+driver is connected. **Detach Agent** in the same menu ends it, and so does sending the app to the
+background. The picture is UIKit's snapshot of the app's window, without the indicator. The
+driver names a simulator that runs the app when the selected one does not.
+
+Only a Mac app or an iOS simulator app that `host/apple/build.mjs` builds to run carries the
+listener; a release, archive, embedded, physical-device or Apple TV build has none of it, and the
+driver refuses Android, Windows, Linux, the web, tvOS, watchOS and a physical iPhone before it
+runs any platform tool.
 
 ### Inspect work and native presentation
 

@@ -32,6 +32,8 @@ import { compilerError, compilerWarnings, warningLines, depInfoInputs, newerThan
 import { CONFIG_JSON, DECLARATIONS, moduleGraph } from './module-graph.mjs';
 import { bakeOutput, bakeTarget, claimLive, developmentBuildEnv, executableName, resolveApp, shaderWatchRoots } from './app.mjs';
 import { bakeTool, linkedBakeDir } from './linked-plan.mjs';
+import { childValue, launchNames } from '../js/bake/src/__exact_env.mjs';
+import { simulatorLaunch } from '../host/apple/devices.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const label = host => host === 'ios' ? 'iOS' : host === 'windows' ? 'Windows' : 'macOS';
@@ -189,10 +191,30 @@ export function logged(command, args, log, { cwd, env, append = false, say = nul
     });
   });
 }
+/** Tell the bake which shell values belong to the launch (LLP 1153.002 D1). Build tools
+ * still read the full environment. */
+export function driveBuildEnv(app, env = process.env, launch = env, { windows = false } = {}) {
+  const fold = windows ? name => name.toUpperCase() : name => name;
+  const loaded = new Set((childValue(env, 'EXACT_BUN_LOADED', windows) ?? '').split(',').filter(Boolean).map(fold));
+  const available = new Set(Object.keys(env).map(fold));
+  const omit = [...launchNames(app.manifest?.env)].filter(name =>
+    available.has(fold(name)) && !loaded.has(fold(name)) && Boolean(childValue(launch, name, windows)));
+  const { EXACT_LAUNCH_OMIT: _, ...build } = env;
+  if (omit.length) build.EXACT_LAUNCH_OMIT = omit.sort().join(',');
+  return build;
+}
+/** The environment a drive on `host` starts the app with: a simulator's (`simulatorLaunch`), else this process's. */
+const driveLaunch = host => host === 'ios' ? simulatorLaunch() : process.env;
+
 /** host/apple/build.mjs with `args`, its output into `log`; its exit code and output. */
 // The bake's warnings whole (`bakeWarnings`): the drive says them in one line itself and lists each in its file.
-const appleBuild = (args, log, say, app) => logged(process.execPath, [resolve(ROOT, 'host/apple/build.mjs'), ...args], log,
-  { say, env: { ...process.env, EXACT_WARNINGS_WHOLE: '1', ...(app.outside ? { EXACT_APP_DIR: app.dir } : {}) } });
+const appleBuild = (args, log, say, app) => {
+  const host = args.includes('--ios') ? 'ios' : 'macos';
+  const launch = process.env.EXACT_UPDATE_TRUST === 'production' ? {} : driveLaunch(host);
+  const env = driveBuildEnv(app, process.env, launch);
+  return logged(process.execPath, [resolve(ROOT, 'host/apple/build.mjs'), ...args], log,
+    { say, env: { ...env, EXACT_WARNINGS_WHOLE: '1', ...(app.outside ? { EXACT_APP_DIR: app.dir } : {}) } });
+};
 
 // ---------------------------------------------------------------- a plan-only edit (LLP 1116.003)
 
@@ -284,11 +306,11 @@ export function moduleRefusal(built, baked) {
   return null;
 }
 
-/** The bake tool baking `app` into the new directory `out`. */
-async function bakePlan(app, out, log) {
+/** The bake tool baking `app` into the new directory `out`, for a drive on `host`. */
+async function bakePlan(app, out, log, host) {
   const options = bakeTool.options(), tool = await logged(bakeTool.command, bakeTool.args, log, options);
   if (tool.code) return { ...tool, tool: true };
-  return logged(bakeTool.built, [app.dir, '--out', out], log, { ...options, append: true });
+  return logged(bakeTool.built, [app.dir, '--out', out], log, { ...options, env: driveBuildEnv(app, options.env, driveLaunch(host)), append: true });
 }
 
 /** Bakes the plan of `state`'s plan-only edit and keeps it beside the build:
@@ -302,7 +324,7 @@ export async function makeOverride(host, app, state, { bake = bakePlan, log } = 
   rmSync(stage, { recursive: true, force: true });
   mkdirSync(dirname(dir), { recursive: true });
   try {
-    const { code, output = '', tool } = await bake(app, stage, log);
+    const { code, output = '', tool } = await bake(app, stage, log, host);
     if (tool) return { refusal: `the bake tool did not build (exit ${code}; its log: ${shown(log)})` };
     if (code) return { failed: output.trim() || `the bake exited ${code}` };
     const why = moduleRefusal(builtModule(app, receipt), JSON.parse(readFileSync(resolve(stage, 'app.module.json'), 'utf8')));
@@ -444,7 +466,9 @@ export async function windowsBuildFirst(app, { say = line => console.error(line)
   if (changed && !changed.length) return 0;
   const log = resolve(app.dir, '.exact', 'windows-build.log');
   say(`building for Windows: ${changed ? `the build is older than its sources (${named(app, changed)} changed)` : 'there is no build yet'}; its log: ${shown(log)}`);
-  const { code, output } = await logged(process.execPath, [resolve(ROOT, 'host/windows/build.mjs'), app.name], log, { env: { ...process.env, EXACT_APP_DIR: app.dir }, say });
+  const launch = process.env.EXACT_UPDATE_TRUST === 'production' ? {} : process.env;
+  const env = driveBuildEnv(app, process.env, launch, { windows: true });
+  const { code, output } = await logged(process.execPath, [resolve(ROOT, 'host/windows/build.mjs'), app.name], log, { env: { ...env, EXACT_APP_DIR: app.dir }, say });
   if (code) say(failureSummary(output, { host: 'windows', code, log: shown(log) }));
   else for (const line of warningLines(app.dir, 'windows', compilerWarnings(output))) say(line);
   return code;
@@ -474,8 +498,12 @@ export async function prebuild(app, args, { timeout = 30_000, say = line => cons
   const sources = prebuildSources(app);
   const out = openSync(log, 'w');
   const build = [resolve(ROOT, 'host/apple/build.mjs'), ...built];
+  const production = process.env.EXACT_UPDATE_TRUST === 'production' || ['--release', '--distribution', '--appstore'].some(flag => args.includes(flag))
+    || (args.includes('--archive') && !args.includes('--development'));
+  const drive = !production && host !== 'tvos' && !['--embed', '--device', '--watchos'].some(flag => args.includes(flag));
+  const env = driveBuildEnv(app, process.env, drive ? driveLaunch(host) : {});
   const child = spawn('/bin/sh', ['-c', '"$0" "$@"; built=$?; "$0" "$TOOL" --tool "$built"; exit $built', process.execPath, ...build],
-    { detached: true, stdio: ['ignore', out, out], env: { ...process.env, TOOL: fileURLToPath(import.meta.url), EXACT_PREBUILD_RECORD: record, EXACT_PREBUILD_LOG: log, EXACT_PREBUILD_ID: id } });
+    { detached: true, stdio: ['ignore', out, out], env: { ...env, TOOL: fileURLToPath(import.meta.url), EXACT_PREBUILD_RECORD: record, EXACT_PREBUILD_LOG: log, EXACT_PREBUILD_ID: id } });
   publish(record, { id, args: built, sources, started: new Date().toLocaleTimeString('en-GB'), pid: child.pid });
   closeSync(out);
   let ended = null;
