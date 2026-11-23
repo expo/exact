@@ -6,7 +6,7 @@
 // receiver reads the URL. A node that carries nothing begins no drag. The JS target loads it from
 // `drag.js`; the wasm target's glue loads it when a node first turns draggable.
 
-import { DRAG_FIELDS, downForDrag, elementOf, observeDragInput, pressedAt } from './drag-input.js';
+import { DRAG_FIELDS, downForDrag, observeDragInput, pressedAt } from './drag-input.js';
 
 /** Whether `el` is a drag's source by its own `draggable`, HTML's enumerated attribute, read in any case. Firefox ignores
  * it on an SVG element and begins the drag of the draggable node around it; Chromium and WebKit begin the drag at the
@@ -71,7 +71,7 @@ export function start(event, base = globalThis.document?.baseURI, owns = () => t
  * for a mouse's down a press, between the element and the node keeps the node's drag from starting, and leaves the
  * keeper's own drag (a link's, a field's text) to the browser. A detached source or a node that carries nothing
  * begins no drag. */
-function decide(event, owns, down) {
+function decide(event, owns, down, inPage) {
   // A script's `dragstart` is no drag, and a selection's begins at its text, not an element (Firefox). A shadow root's
   // content is its host's, as the document sees it.
   const target = event.isTrusted !== false && event.target?.nodeType === 1 ? event.target : null;
@@ -94,7 +94,8 @@ function decide(event, owns, down) {
   // there; anything else, a link's, is its own.
   const link = target.closest('a[href]');
   if (target !== node && node.contains(target) && (target.localName !== 'img' || (link !== node && node.contains(link)))) return;
-  return node.isConnected ? node : CANCEL;
+  const inDocument = inPage ? inPage(node) && inPage(event.composedPath?.()[0] ?? target) : node.isConnected;
+  return inDocument ? node : CANCEL;
 }
 
 /** A drag that begins nothing. */
@@ -189,13 +190,15 @@ export function listen(root = globalThis.document, owns = () => true, { signal, 
   };
   const presses = observeDragInput(root, signal, input, protect);
   if (input) protect(input, waiting);
-  // Heard first, before any listener can stop the drag's event or change what it reads: the drag is decided and given
-  // its data as it begins, while the transfer is writable; a listener after may still cancel it, a swipe's on the
-  // contact among them.
-  const given = new WeakMap(), inPage = (el) => el?.getRootNode({ composed: true }) === root;
+  // Capture gives the drag its data before the target's listeners run, while the transfer is writable. A later
+  // listener may still cancel it, such as a swipe's listener on the contact.
+  // A form control named `getRootNode` shadows the form's method.
+  const getRootNode = (root.defaultView?.Node ?? globalThis.Node)?.prototype.getRootNode;
+  const inPage = (node) => node != null && (getRootNode ?? node.getRootNode).call(node, { composed: true }) === root;
+  const given = new WeakMap();
   root.addEventListener('dragstart', (event) => {
     if (event.isTrusted === false) return;
-    const node = decide(event, owns, downForDrag(presses, event));
+    const node = decide(event, owns, downForDrag(presses, event), inPage);
     const data = readPayload(event, node, root.baseURI ?? globalThis.document?.baseURI);
     give(event, node, data);
     if (data) given.set(event, { node, data });
@@ -210,7 +213,7 @@ export function listen(root = globalThis.document, owns = () => true, { signal, 
     const payload = given.get(event);
     given.delete(event);
     if (!payload) return;
-    const source = elementOf(event.composedPath?.()[0] ?? event.target);
+    const source = event.composedPath?.()[0] ?? event.target;
     if (inPage(payload.node) && inPage(source) && owns(payload.node)) give(event, payload.node, payload.data);
     else event.preventDefault();
   }, { signal });
