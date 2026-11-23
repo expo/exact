@@ -1390,6 +1390,7 @@ mod tests {
             (StyleId::TextBoxEdge, text("cap-alphabetic")),
             (StyleId::TextWrapStyle, text("balance")),
             (StyleId::FontSmoothing, text("antialiased")),
+            (StyleId::ListStyleType, text("decimal")),
         ];
         let mut covered = StyleMask::EMPTY;
         let insets = crate::kernel::owner::OVERRIDES.map(|id| (id, number(8.0)));

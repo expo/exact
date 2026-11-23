@@ -572,7 +572,7 @@ if (rustLinked) {
     sources.trees = [...new Set([...(sources.trees ?? []), ...outside])];
     writeFileSync(listed, JSON.stringify(sources));
   }
-  rustGrants = await moduleGrants(resolve(out, 'rust/wasm/app.module.wasm'));
+  rustGrants = await moduleGrants(resolve(out, 'rust/wasm/app.module.wasm'), { production });
   rustGrantSet = normalizeGrants(ts ? 'Rust module' : 'app', rustGrants, 'rust');
   moduleStorage = rustGrantSet.entries.some(([, , grant]) => ['fs-read', 'fs-write', 'sqlite-open'].includes(grant?.[0]));
 }

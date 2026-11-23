@@ -426,6 +426,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/clock.rs", "Presenter::background_due_ms"],
     ["painted:host/painted/src/presenter/collection/anchoring.rs", "Presenter::publish_scroll"],
     ["painted:host/painted/src/presenter/commands.rs", "Presenter::refuse_picture_in_picture"],
+    ["painted:host/painted/src/presenter/frames.rs", "Presenter::frame_by_id Presenter::frame_command Presenter::frame_event Presenter::serve_frame_partitions"],
     ["painted:host/painted/src/presenter/device.rs", "Presenter::device"],
     ["painted:host/painted/src/presenter/display_frame.rs", "Presenter::activation_refused Presenter::display_input_mapping"],
     ["painted:host/painted/src/presenter/feedback.rs", "Presenter::feedback_at"],
@@ -538,7 +539,7 @@ export const classifications = [
     ["runner:runner/src/runner/module_seam/forward.rs", "Runner::polls_asking"],
     ["runner:runner/src/runner/module_seam/forward.rs", "Runner::report_views Runner::view_origin"],
     ["runner:runner/src/runner/processes.rs", "Runner::set_work_clock"],
-    ["runner:runner/src/runner/provenance.rs", "Runner::act_from Runner::call_origin"],
+    ["runner:runner/src/runner/provenance.rs", "Runner::act_from Runner::as_person Runner::call_origin"],
     ["runner:runner/src/runner/seams.rs", "Runner::call_agent Runner::call_tool Runner::intents_state Runner::place_controls Runner::press_control"],
     ["web:host/web/src/abi.rs", "exact_data_ready"],
   ]),
@@ -843,10 +844,10 @@ export const classifications = [
       "exact_web_set_sandbox exact_web_set_src exact_web_snapshot"],
   ]),
   group("web frames", ["subscription"], "live Android iframe allocation and native session", "UI-owned",
-    "Natives.kt consumes each document completion and drops it when the WebView binding is retired. The painted presenter checks the session and iframe allocation before dispatch.", [
-    ["painted:host/painted/src/canvas/jni.rs", "Java_dev_exact_canvas_Native_frameLoaded"],
-    ["painted:host/painted/src/canvas/requests.rs", "CanvasHost::frame_loaded"],
-    ["painted:host/painted/src/presenter/events.rs", "Presenter::reader_frame_loaded"],
+    "Natives.kt and FrameClient.kt consume each document completion and frame record and drop it when the WebView binding is retired. The painted presenter checks the session and iframe allocation before dispatch.", [
+    ["painted:host/painted/src/canvas/jni_frames.rs", "Java_dev_exact_canvas_Native_frameEvent Java_dev_exact_canvas_Native_frameLoaded"],
+    ["painted:host/painted/src/canvas/requests.rs", "CanvasHost::frame_event CanvasHost::frame_loaded"],
+    ["painted:host/painted/src/presenter/events.rs", "Presenter::reader_frame_event Presenter::reader_frame_loaded"],
   ]),
   group("storage", ["durable operation"], "committed app store/secret values and write queue", "durable",
     "host/painted/src/store_writer.rs drains already committed writes and reports write warnings; runner/src/store.rs and store/presence.rs revisions version durable store contents, not UI continuations. host/apple/webarm/WebArm.swift exactWebClearSiteData clears the named browser partition and calls its completion context.", [
@@ -875,6 +876,7 @@ export const classifications = [
       "Config::initial_window_background Config::painter Config::use_updates Config::windowed Config::windowed_from_env incoming_location launch_argument launch_location " +
       "prepare_environment prepare_window_painter print_baked_receipt row_reuse_from_env run_headless Services::with_image_downloads Services::with_local_images show_material_look show_neutral_look"],
     ["painted:host/painted/src/canvas/codec.rs", "attach"],
+    ["painted:host/painted/src/canvas/frame_partitions.rs", "attach kept"],
     ["painted:host/painted/src/canvas/legacy.rs", "attach decode glyph"],
     ["painted:host/painted/src/canvas/presence.rs", "attach"],
     ["painted:host/painted/src/canvas/secrets.rs", "attach"],
@@ -1117,7 +1119,7 @@ export const classifications = [
     ["runner:runner/src/store.rs", "Store::remember#copied:1"],
     ["runner:runner/src/stream_timing.rs", "committed#busy_us:1 committed#commits:1 committed#refused:1 decoded#decoded_bytes:1 decoded#decodes:1 entered#messages:1"],
     ["runner:runner/src/surface_record.rs", "Reader::digits#at:1 Reader::eat#at:1 Reader::hex#at:1 Reader::space#at:1 Reader::string#at:1 Reader::string#at:2 Reader::value#at:1 Reader::value#at:2 Reader::word#at:1"],
-    ["runner:runner/src/transport.rs", "Transport::segment#recorded:1"],
+    ["runner:runner/src/transport.rs", "Transport::arm#starts:1 Transport::segment#recorded:1"],
     ["runner:runner/src/transport/clock.rs", "Follow::feed#ticks:1"],
     ["runner:runner/src/vm.rs", "Extent::with#bytes:1 Extent::with#nodes:1 measure#bytes:1 measure#nodes:1 Run::load_derive#calls:1"],
     ["runner:runner/src/vm/column.rs", "Iter::next#at:1"],

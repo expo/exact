@@ -1015,12 +1015,31 @@ impl<D: DataSource> Runner<D> {
         if let Event::Message(text) = &event {
             if let Some((origin, text)) = super::world_origin::unmark(text) {
                 let event = Event::Message(text.to_owned());
-                return self.as_origin(origin, |r| r.arrived(|r| r.dispatch_event(view, event)));
+                // A tool's or a press's work keeps D4a's command rules (LLP
+                // 1133.023 D7a); the mark cannot tell a press from another action.
+                let call = matches!(origin, super::CallOrigin::Tool | super::CallOrigin::Action);
+                let cause = super::provenance::Cause::of(origin, 0, call);
+                return self.as_cause(cause, |r| r.arrived(|r| r.dispatch_event(view, event)));
             }
         }
-        self.arrived(|r| {
-            r.note_input(&event);
-            r.dispatch_event(view, event)
+        // The person's act in the app's own UI is an `app` cause; what the
+        // host observes of the page is the device's (LLP 1133.023 D7a).
+        // A package view's message is its implementation's event.
+        let package = matches!(event, Event::Message(_))
+            && (self.kernel.node(view)).is_some_and(|n| {
+                n.props
+                    .str(exact_kernel::PropId::NativeViewModuleName)
+                    .is_some()
+            });
+        let cause = match observed(&event) || package {
+            true => super::provenance::Cause::of(super::CallOrigin::Device, 0, false),
+            false => super::provenance::Cause::person(),
+        };
+        self.as_cause(cause, |r| {
+            r.arrived(|r| {
+                r.note_input(&event);
+                r.dispatch_event(view, event)
+            })
         })
     }
 
@@ -1423,3 +1442,24 @@ impl<D: DataSource> Runner<D> {
 mod retained_binding_tests;
 
 mod projection;
+
+/// Whether `event` is the host's observation of the page rather than the
+/// person's act: a load, a resize, an intersection, a media element's
+/// progress, a frame's navigation, a geometry's report or a MIDI message.
+fn observed(event: &Event) -> bool {
+    match event {
+        // A media session's action is the person's, on the platform's controls.
+        Event::Media(kind, _) => !super::media_session::ACTIONS.contains(kind),
+        Event::Load
+        | Event::Resize(..)
+        | Event::Intersect { .. }
+        | Event::Beforeunload
+        | Event::MidiMessage(..)
+        | Event::FrameNavigation(..)
+        | Event::FrameRecord(..)
+        | Event::HeightRelease { .. }
+        | Event::TransformGeometry { .. }
+        | Event::TransformRelease { .. } => true,
+        _ => false,
+    }
+}

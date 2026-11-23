@@ -65,8 +65,8 @@ pub struct Font {
     pub weight: u16,
     /// Italic.
     pub italic: bool,
-    /// The line height in points, where the token writes one (`normal`:
-    /// none).
+    /// The token's line height in points or the text style's when omitted.
+    /// `None` means `normal`.
     pub line_height: Option<f64>,
     /// The family's plan stack, where the token writes one.
     pub family: Option<u16>,
@@ -302,17 +302,18 @@ impl<D: DataSource> Forma<'_, D> {
 
     /// Type token `name` at `place`: the font a host draws (stage 6 G).
     pub fn font(&mut self, name: &str, place: Place) -> Option<Font> {
-        use exact_kernel::style::relative::{text_style, text_style_weight};
+        use exact_kernel::style::metrics::column;
+        use exact_kernel::style::relative::{text_style, text_style_leading, text_style_weight};
         use exact_kernel::style::theme::typeface;
         let text = self.entry(name, exact_kernel::style::theme::Kind::Type, place)?;
         let parts = typeface::parts(&text)?;
         let size = self.points(parts.size, place)?;
         let family = parts.family.and_then(|f| f.strip_prefix('#')?.parse().ok());
+        let style = text_style(parts.size);
+        let column = column();
         let weight = match parts.weight.and_then(|w| w.parse().ok()) {
             Some(w) => w,
-            None => text_style(parts.size).map_or(400, |id| {
-                text_style_weight(id, exact_kernel::style::metrics::column())
-            }),
+            None => style.map_or(400, |id| text_style_weight(id, column)),
         };
         let weight = match self.runner.kernel().bold_text_weights(family.unwrap_or(0)) {
             true => exact_kernel::bolder(weight),
@@ -321,7 +322,10 @@ impl<D: DataSource> Forma<'_, D> {
         // A ratio, or a length whose `em` is the token's own size, as a
         // `line-height` reads it beside the `font-size` it writes.
         let line_height = match parts.leading {
-            Some("normal") | None => None,
+            None => style
+                .and_then(|id| text_style_leading(id, column).resolve(size as f32))
+                .map(f64::from),
+            Some("normal") => None,
             Some(l) => match exact_num::parse_f64(l) {
                 Ok(n) => Some(n * size),
                 Err(_) => match exact_kernel::style::relative::parse(l) {

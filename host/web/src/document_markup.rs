@@ -85,7 +85,11 @@ pub(super) fn markup_pieces(json: &str) -> Result<Vec<Piece>, String> {
 /// §3.3): the runner's object of strings (`NativeProps`,
 /// LLP 1024 §9), written without whitespace and with JSON's escapes for
 /// `"`, `\\` and control characters only. Anything else yields what it
-/// parsed so far.
+/// parsed so far. A drag's carrier words (`datatransferurl`,
+/// `datatransferfiles` and `datatransfertext`) are left out: the
+/// host writes those attributes from the props the runner admitted (LLP
+/// 1094.000 D2), and Contract refuses them as an app's words, which a plan
+/// baked before it did may still hold.
 pub fn dataset(json: &str) -> Vec<(String, String)> {
     let mut p = Json::new(json);
     let mut pairs = Vec::new();
@@ -97,7 +101,12 @@ pub fn dataset(json: &str) -> Vec<(String, String)> {
         let (Ok(()), Ok(value)) = (p.expect(b':'), p.string()) else {
             break;
         };
-        pairs.push((key, value));
+        if !matches!(
+            key.as_str(),
+            "datatransferurl" | "datatransferfiles" | "datatransfertext"
+        ) {
+            pairs.push((key, value));
+        }
         if p.peek() == Some(b',') {
             p.next();
         }

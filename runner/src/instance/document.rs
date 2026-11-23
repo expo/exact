@@ -461,13 +461,6 @@ impl Build<'_> {
             let value = &value;
             match binding.kind {
                 BindingKind::Prop => match bridge::prop_value(binding.id, value) {
-                    // A drag's URL the commit refuses (`Runner::admit_drag_files`, LLP 1094.000 D1) is none.
-                    Ok((
-                        exact_kernel::PropId::DataTransferUrl,
-                        exact_kernel::PropValue::Str(url),
-                    )) if exact_plan::http_url_refusal(&url).is_some() => {
-                        props.remove(exact_kernel::PropId::DataTransferUrl);
-                    }
                     Ok((prop, value)) => {
                         let value = bridge::icon_source(plan, prop, value);
                         let value = match prop {

@@ -96,6 +96,8 @@ impl<D: DataSource> Runner<D> {
                     Match::Admit => {
                         out.kept_seed = true;
                         self.resources[i].kept_admitted = true;
+                        // `data_ready`'s ask of it is this commit's.
+                        self.note_ask(i);
                     }
                     Match::Wait => {
                         out.hold = true;

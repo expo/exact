@@ -151,14 +151,19 @@ export function pathWithin(from, to) {
   return slashRelative(resolvedPath(from), resolvedPath(to)) || '.';
 }
 
-/** Committed checkout references pass through the app's machine-local link. Cargo paths start at each manifest. */
+/** Whether `dir` is part of the checkout (both real): under it, and in its repository rather than one nested below it. */
+const inRepository = (checkout, dir) => within(checkout, dir) && appBoundary(dir).boundary === appBoundary(checkout).boundary;
+
+/** Committed checkout references pass through the app's machine-local link, except from the checkout's own repository,
+ * where a relative path holds in every worktree and is the one the checkout's own workspace uses (`cargoCheckout`).
+ * Cargo paths start at each manifest. */
 export function pathFrom(from, to) {
   const base = resolvedPath(from), target = resolvedPath(to);
   for (let app = base; ; app = dirname(app)) {
     const link = resolve(app, '.exact/checkout');
     if (existsSync(link)) {
       const checkout = realpathSync(link);
-      if (within(checkout, target)) return slashRelative(base, resolve(link, relative(checkout, target))) || '.';
+      if (within(checkout, target) && !inRepository(checkout, base)) return slashRelative(base, resolve(link, relative(checkout, target))) || '.';
     }
     if (existsSync(resolve(app, 'app.json')) || dirname(app) === app) break;
   }
@@ -168,6 +173,68 @@ export function pathFrom(from, to) {
     : resolvedPath(resolve(base, reference)) === target ? reference : slashRelative(base, named) || '.';
   if (nodePath.isAbsolute(result)) throw new Error(`${from}: link the checkout from this volume to record a relative seed`);
   return result;
+}
+
+/** How one Cargo graph of the app at `app` names the checkout (LLP 1086 D5). Cargo tells path packages apart by the
+ * path written, not the directory it reaches, so a crate named both through the app's `.exact/checkout` link and by
+ * its real path is two packages of one name, and the graph does not resolve. A workspace exact2 generates (`generated`:
+ * an app's `.exact/shells` and `.exact/gpu`, a game's `.shells`) names the real path, so every app of the checkout
+ * compiles the same packages and `host/apple/crates.mjs` can give one app's units to the next; its members take
+ * exact2's crates from its `[workspace.dependencies]` (`checkoutPathDependencies`). A workspace the app authored is
+ * committed, so it names the link (`pathFrom`), and what exact2 adds to its graph does too, unless the app is in the
+ * checkout's own repository, whose workspace names it by relative path (expo/exact-build#755). Returns the checkout's
+ * directory as that graph names it. */
+export function cargoCheckout(app, generated, checkout = CHECKOUT) {
+  const link = resolve(app, '.exact/checkout'), real = realpathSync(checkout);
+  return !generated && sameFile(link, checkout) && !inRepository(real, resolvedPath(app)) ? link : real;
+}
+
+/** A crate manifest's dependency tables, `[keys, table]`, in every form Cargo reads (the underscore spellings too). */
+export const dependencyTables = doc => ['dependencies', 'build-dependencies', 'build_dependencies', 'dev-dependencies', 'dev_dependencies']
+  .flatMap(kind => [[[kind], doc[kind]], ...Object.entries(doc.target ?? {}).map(([target, value]) => [['target', target, kind], value?.[kind]])])
+  .filter(([, table]) => table);
+
+/** The dependencies of the crate whose manifest is `manifest` that reach a directory of the checkout through a link
+ * (the app's `.exact/checkout`), each `{ keys, key, dep, dir }` (`keys` the dependency's table, `dir` its real
+ * directory). In a workspace exact2 generates, which names the checkout by its real path, each is a second package of
+ * its name (`cargoCheckout`); a member writes `<name>.workspace = true` instead. */
+export function checkoutPathDependencies(manifest, doc = Bun.TOML.parse(readFileSync(manifest, 'utf8')), checkout = CHECKOUT) {
+  const real = realpathSync(checkout), from = realpathSync(dirname(manifest)), found = [];
+  for (const [keys, table] of dependencyTables(doc)) {
+    for (const [key, dep] of Object.entries(table)) {
+      if (typeof dep?.path !== 'string') continue;
+      const written = resolve(from, dep.path), dir = resolvedPath(written);
+      if (written !== dir && within(real, dir)) found.push({ keys, key, dep, dir });
+    }
+  }
+  return found;
+}
+/** The keys a dependency that inherits from its workspace may keep beside `workspace = true`. */
+export const INHERITING_KEYS = ['features', 'optional', 'default-features', 'default_features', 'public'];
+
+/** The refusal of the members `manifests` of a generated workspace, and of the crates they reach by path outside the
+ * checkout, that name exact2's crates through the link (`checkoutPathDependencies`), or null. A renamed dependency is
+ * taken under exact2's name; a crate that is not a member cannot inherit at all. */
+export function checkoutPathRefusal(manifests, checkout = CHECKOUT) {
+  const real = realpathSync(checkout), members = new Set(manifests.map(m => resolvedPath(m))), queue = [...members], seen = new Set(queue), lines = [];
+  while (queue.length) {
+    const manifest = queue.shift(), doc = Bun.TOML.parse(readFileSync(manifest, 'utf8'));
+    for (const [, table] of dependencyTables(doc)) {
+      for (const dep of Object.values(table)) {
+        if (typeof dep?.path !== 'string') continue;
+        const next = resolvedPath(resolve(realpathSync(dirname(manifest)), dep.path, 'Cargo.toml'));
+        if (!within(real, next) && !seen.has(next) && existsSync(next)) { seen.add(next); queue.push(next); }
+      }
+    }
+    for (const { keys, key, dep } of checkoutPathDependencies(manifest, doc, checkout)) {
+      const name = dep.package ?? key, own = Object.keys(dep).every(k => k === 'path' || INHERITING_KEYS.includes(k));
+      const at = `${manifest}: [${keys.join('.')}] ${key} names exact2's ${name} through the app's .exact/checkout link, a second copy of the one the generated workspace names`;
+      lines.push(!members.has(manifest) ? `${at}; only a crate beside app.json that joins the workspace can take it from there, so make this crate one`
+        : `${at}; take it from that workspace: ${name}.workspace = true` + (own ? ' (`bun exact.mjs update` rewrites it)'
+          : `, without ${Object.keys(dep).filter(k => k !== 'path' && !INHERITING_KEYS.includes(k)).concat('path').join(' or ')}${dep.package ? ` (Rust then names it ${name.replaceAll('-', '_')})` : ''}`));
+    }
+  }
+  return lines.length ? lines.join('\n') : null;
 }
 
 /** The seed is only a discovery hint: a merge puts the app at its main-worktree location. */

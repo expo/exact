@@ -633,7 +633,9 @@ pub fn write_color_roles(w: &mut String, colors: &[[String; 8]], rgba: impl Fn(&
 }
 /// A `textStyles` row: name, WebKit alias, UIFont's and NSFont's text
 /// style, the weight in each metric column, the size at each of
-/// `textStyleBodies`, and the leading in each column (`None`: `normal`).
+/// `textStyleBodies`, the leading in each column (`None`: `normal`), and
+/// Material's: its `TypeScaleTokens` key, size and line height in sp, and
+/// weight.
 type TextStyleRow = (
     String,
     String,
@@ -642,6 +644,7 @@ type TextStyleRow = (
     [u16; 4],
     Vec<f32>,
     [Option<f32>; 4],
+    (String, f32, f32, u16),
 );
 /// `textStyles` (LLP 1115 D3): the platform's type ramp.
 pub fn write_text_styles(w: &mut String, bodies: &[f32], styles: &[TextStyleRow]) {
@@ -660,20 +663,24 @@ pub fn write_text_styles(w: &mut String, bodies: &[f32], styles: &[TextStyleRow]
         "    /// `UIFont.TextStyle`'s.\n    pub ios: &'static str,\n",
         "    /// `NSFont.TextStyle`'s.\n    pub macos: &'static str,\n",
         "    /// Its weight, CSS's number, in each column of the metric table: the\n",
-        "    /// web, iOS, the Mac, neutral (LLP 1115.000 D12.2).\n    pub weights: [u16; 4],\n",
+        "    /// web, iOS, the Mac, neutral (LLP 1115.000 D12.2) and Material (LLP 1115.001 D4).\n    pub weights: [u16; 5],\n",
         "    /// Its size at each of [`TEXT_STYLE_BODIES`].\n    pub sizes: &'static [f32],\n",
         "    /// Its leading in each column, a line height over its size; `None` is\n",
-        "    /// `normal`, the face's own (LLP 1115.000 D12.2).\n    pub leadings: [Option<f32>; 4],\n",
+        "    /// `normal`, the face's own (LLP 1115.000 D12.2).\n    pub leadings: [Option<f32>; 5],\n",
+        "    /// Material's size at a root of 16, in sp (LLP 1115.001 D4).\n    pub material_size: f32,\n",
         "}\n",
     ));
     w.push_str(&format!(
         "/// The body sizes (root font sizes) the ramp is given at.\npub const TEXT_STYLE_BODIES: &[f32] = &{bodies:?};\n"
     ));
     w.push_str("/// Every text style, by id.\npub const TEXT_STYLES: &[TextStyle] = &[\n");
-    for (name, alias, ios, macos, weights, sizes, leadings) in styles {
+    for (name, alias, ios, macos, weights, sizes, leadings, (_, size, line, weight)) in styles {
         assert_eq!(sizes.len(), bodies.len(), "schema: text style {name} has a size per body");
+        assert!(*size > 0.0 && *line >= 0.0, "schema: text style {name} has a positive Material size and a nonnegative line height");
+        let weights = [weights[0], weights[1], weights[2], weights[3], *weight];
+        let leadings = [leadings[0], leadings[1], leadings[2], leadings[3], Some(line / size)];
         w.push_str(&format!(
-            "TextStyle {{ name: {name:?}, alias: {alias:?}, ios: {ios:?}, macos: {macos:?}, weights: {weights:?}, sizes: &{sizes:?}, leadings: {leadings:?} }},\n"
+            "TextStyle {{ name: {name:?}, alias: {alias:?}, ios: {ios:?}, macos: {macos:?}, weights: {weights:?}, sizes: &{sizes:?}, leadings: {leadings:?}, material_size: {size:?} }},\n"
         ));
     }
     w.push_str("];\n");

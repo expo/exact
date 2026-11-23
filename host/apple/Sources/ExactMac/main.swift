@@ -14,11 +14,15 @@ import ExactKit
 import ExactComposition
 import ExactLaunchParts
 
+// The session's clock starts with `main` (`ExactEnv.t0`).
+let mainAt = Date().timeIntervalSince1970
+_ = ExactEnv.t0
 AgentLink.install()
 
 ProcessRelaunch.waitIfRequested()
 // The app's preloads leave before AppKit starts (LLP 1162.000 D4).
 ExactLaunch.beginPreloads()
+ExactEnv.stamp("preloads")
 
 // The process's own start (exec), from the kernel: what happened before
 // `main` — dyld, the Swift runtime, the static library's initializers.
@@ -30,7 +34,6 @@ func processStart() -> Double? {
     let t = info.kp_proc.p_starttime
     return Double(t.tv_sec) + Double(t.tv_usec) / 1e6
 }
-let mainAt = Date().timeIntervalSince1970
 let execToMainMs = processStart().map { (mainAt - $0) * 1000 }
 
 let smoke = ExactEnv.smoke
@@ -104,6 +107,7 @@ let appReadyMs = ExactEnv.wall()
 
 /// The one session and its view; the session's clock is the agent's under a script.
 let exact = ExactComposition.app
+ExactEnv.stamp("composition")
 final class Adapter: ExactSessionDelegate {
     /// The capabilities: `setScheme` is the app's appearance — `light`,
     /// `dark`, or `system`, as the web's `color-scheme`, where following the
@@ -790,6 +794,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         return true
     }
     override init() {
+        ExactEnv.stamp("delegate init")
         ExactLaunch.shared.delegateInit()
         ExactLaunch.shared.runLaunchParts(ExactLaunchParts.all)
         super.init()
@@ -1087,4 +1092,5 @@ func agentReady() {
     AgentLink.reply(["ready": true, "boot": session.bootMs, "views": session.viewCount, "error": planRefusal ?? session.bootError ?? session.nativeArtifactFailure ?? NSNull()])
     AgentLink.startStdio(sessions: [("main", session)])
 }
+ExactEnv.stamp("run")
 app.run()

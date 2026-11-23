@@ -26,7 +26,7 @@
 //! Each call is admitted under its origin and causes (`provenance.rs`).
 
 use super::super::processes::{given, held_to_app};
-use super::super::provenance::{CallOrigin, ORIGINS};
+use super::super::provenance::{CallOrigin, Cause, ORIGINS};
 use super::super::{DataSource, Runner};
 use super::{error_code, Decision, Json, ModulesRow, Waits};
 use serde_json::json;
@@ -127,10 +127,11 @@ impl<D: DataSource> Runner<D> {
         &mut self,
         row: &ModulesRow,
         args: &Json,
-        origin: CallOrigin,
+        cause: Cause,
         send: bool,
         timeout: Option<f64>,
     ) -> Decision {
+        let origin = cause.origin;
         // A member is an option of its owner's call, never a call of its own.
         if let Some(owner) = self.substitute(row)["memberOf"].as_str() {
             let why = format!(
@@ -161,7 +162,7 @@ impl<D: DataSource> Runner<D> {
         if let Some(refused) = self.undeclared(row, args) {
             return Decision::Now(refused);
         }
-        if let Err(why) = self.admit(row, args, origin) {
+        if let Err(why) = self.admit(row, args, cause) {
             self.log(format!("{}: refused, {why}", self.key(row)));
             if why.starts_with("person-required") {
                 self.call_person_required();
@@ -471,12 +472,8 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// The checks before any decision: why the call is refused, if it is.
-    pub(super) fn admit(
-        &self,
-        row: &ModulesRow,
-        args: &Json,
-        origin: CallOrigin,
-    ) -> Result<(), String> {
+    pub(super) fn admit(&self, row: &ModulesRow, args: &Json, cause: Cause) -> Result<(), String> {
+        let origin = cause.origin;
         let sub = self.substitute(row);
         let lines: Vec<&str> = (self.data.grants().lines())
             .filter_map(|l| l.split_whitespace().next())
@@ -598,7 +595,7 @@ impl<D: DataSource> Runner<D> {
         // call's possible causes, read before they are folded to one (LLP
         // 1133.035 D16 item 6).
         if let Some(none) = sub["origin"]["none"].as_array().filter(|_| applies) {
-            let causes = self.calling_causes();
+            let causes = cause.causes;
             let found = (none.iter().filter_map(Json::as_str))
                 .find(|w| ORIGINS.iter().any(|o| o.word() == *w && causes.has(*o)));
             if let Some(word) = found {
@@ -612,11 +609,11 @@ impl<D: DataSource> Runner<D> {
         // (LLP 1133.036 D3).
         let joins = (sub["samples"]["stream"].as_str()).is_some_and(|s| self.app_rate(s).is_some())
             || self.joins_running(row, args);
-        // A background action is the person's act: it may call a name held
-        // to the app, which shows nothing there (the foreground rule below
-        // refuses one that would).
-        let persons = origin == CallOrigin::App
-            || (origin == CallOrigin::Action && !self.press_revoked(self.invocation_id()));
+        // A background action is the person's act while it is live: it may
+        // call a name held to the app, which shows nothing there (the
+        // foreground rule below refuses one that would). Its work after it
+        // ends may not (LLP 1133.023 D7a).
+        let persons = self.persons(cause);
         if applies && app_only && !persons && !joins {
             return Err(format!("person-required ({} origin)", origin.word()));
         }
@@ -629,10 +626,12 @@ impl<D: DataSource> Runner<D> {
                 && origin == CallOrigin::App
                 && self.in_call()
         };
+        // A background action among the call's causes holds it to the
+        // action's rule however the origins fold (LLP 1133.023 D7a).
         if applies
             && sub["foreground"] == true
-            && (origin == CallOrigin::Action || (self.page.in_background() && !calling()))
-            && !(origin == CallOrigin::Action && self.press_starts_audio(row, args))
+            && (cause.causes.has(CallOrigin::Action) || (self.page.in_background() && !calling()))
+            && !(origin == CallOrigin::Action && self.press_starts_audio(row, args, cause))
         {
             return Err("not in the foreground".into());
         }
@@ -644,7 +643,7 @@ impl<D: DataSource> Runner<D> {
     /// `getUserMedia` for audio and no video, and `startMediaRecorder`.
     /// Which tracks the recorder's stream holds, and the press's own Live
     /// Activity, are piece 4's checks.
-    pub(super) fn press_starts_audio(&self, row: &ModulesRow, args: &Json) -> bool {
+    pub(super) fn press_starts_audio(&self, row: &ModulesRow, args: &Json, cause: Cause) -> bool {
         let audio_only = match (self.plan.str(row.package), self.plan.str(row.declared)) {
             ("@exact/media-capture", "getUserMedia") => {
                 (args["audio"] == true || args["audioConstraints"].is_object())
@@ -654,7 +653,8 @@ impl<D: DataSource> Runner<D> {
             ("@exact/recording", "startMediaRecorder") => true,
             _ => false,
         };
-        audio_only && self.press_records(self.invocation_id())
+        // Data code holds no press record (LLP 1126.004 D2).
+        audio_only && !cause.data && self.press_records(cause.id)
     }
 
     /// The implementation's answer for `row` under the agent, the agent's

@@ -116,13 +116,24 @@ pub fn report(state: State) -> bool {
 }
 
 /// Who asked a request, for the rule this module states.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Reach {
     /// The origin of the answer that asked it (LLP 1133.002 D12).
     pub origin: CallOrigin,
     /// Under the agent, the substitute's local-network state, which stands
     /// for the host's fact; `None` in production.
     pub substitute: Option<State>,
+}
+
+/// A request the runner has not stamped has no cause: it is the least
+/// privileged origin's (LLP 1133.023 D7a).
+impl Default for Reach {
+    fn default() -> Reach {
+        Reach {
+            origin: CallOrigin::Device,
+            substitute: None,
+        }
+    }
 }
 
 impl Reach {

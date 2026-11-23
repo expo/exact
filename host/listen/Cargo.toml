@@ -14,7 +14,10 @@ publish = false
 
 [lib]
 name = "exact_listen"
-crate-type = ["rlib", "cdylib"]
+# rlib alone: Cargo names a cdylib package's rlib without its unit hash, so
+# two builds in one target would share one rlib that exact-painted links. The
+# dylib is `cargo rustc --crate-type cdylib` (host/apple/build.mjs).
+crate-type = ["rlib"]
 
 [dependencies]
 libc = "0.2"

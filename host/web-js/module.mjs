@@ -14,7 +14,7 @@ import { gzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 // Also for its PATH: the pinned binaryen (and Cargo) as every web build has
 // them, so a prebuild optimizes and keeps what an app's build would.
-import { awaitBuildOutput, WEB_STD, WEB_SIZE, WEB_TOOLCHAIN, injectedProfiles, resolveApp, wasmRemapFlags, webToolchainEnv } from '../../scripts/app.mjs';
+import { awaitBuildOutput, cargoCheckout, WEB_STD, WEB_SIZE, WEB_TOOLCHAIN, injectedProfiles, resolveApp, wasmRemapFlags, webToolchainEnv } from '../../scripts/app.mjs';
 import { rustDataOf, undeclaredDataCrate } from '../../scripts/app-shells.mjs';
 import { appCrates, linkedCrate } from '../../scripts/cargo-check.mjs';
 import { SETUP_FETCHES, withHostDeployment } from '../../scripts/filesystem.mjs';
@@ -187,9 +187,23 @@ function replace(path, write) {
   try { written = write(temp); } catch (error) { clean(); throw error; }
   return written instanceof Promise ? written.then(land, (error) => { clean(); throw error; }) : land(written);
 }
-const cargoWasmArgs = (manifest) => [`+${WEB}`, 'build', '--release', '--target', 'wasm32-unknown-unknown', '--manifest-path', manifest, ...LINK_FLAGS()];
-function cargoWasm(manifest, args) {
-  return spawnSync('cargo', [...cargoWasmArgs(manifest), ...args], { stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, CARGO_TARGET_DIR: TARGET, EXACT_RUST_BINDINGS: '1' } });
+const cargoWasmArgs = (manifest, profile = ['--release']) => [`+${WEB}`, 'build', ...profile, '--target', 'wasm32-unknown-unknown', '--manifest-path', manifest, ...LINK_FLAGS()];
+function cargoWasm(manifest, args, profile) {
+  return spawnSync('cargo', [...cargoWasmArgs(manifest, profile), ...args], { stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, CARGO_TARGET_DIR: TARGET, EXACT_RUST_BINDINGS: '1' } });
+}
+// The dev loop's app module: the profile a build ships (`inherits`) without whole-module LTO, in parallel units and
+// incremental, so an edit recompiles the data crate and relinks. It is given on Cargo's command line, so no manifest,
+// and no other build's arguments or cache keys, carry it. The page takes it without `wasm-opt`, marked so that no
+// production build ships it (`moduleGrants`).
+export const DEV_PROFILE = 'web-dev';
+const devProfile = inherits => [['inherits', inherits], ['opt-level', 1], ['lto', false], ['codegen-units', 16], ['incremental', true]]
+  .flatMap(([key, value]) => ['--config', `profile.${DEV_PROFILE}.${key}=${JSON.stringify(value)}`]).concat('--profile', DEV_PROFILE);
+const DEV_MARK = 'exact.dev-module';
+/** A custom section named DEV_MARK (WebAssembly core spec 5.5.3), appended to a module. */
+function devMarked(bytes) {
+  const leb = n => { const out = []; do { out.push((n & 0x7f) | (n > 0x7f ? 0x80 : 0)); n >>>= 7; } while (n); return out; };
+  const name = [...new TextEncoder().encode(DEV_MARK)], body = [...leb(name.length), ...name];
+  return Buffer.concat([bytes, Buffer.from([0, ...leb(body.length), ...body])]);
 }
 /** The dep-info and generated wrapper of each module, by its staged path. */
 const moduleDepInfo = new Map();
@@ -272,21 +286,21 @@ export const dirKey = (dir) => createHash('sha256').update(realpathSync(dir)).di
 // backslashes (`C:\Users`) are not read as escapes.
 const tomlString = (path) => JSON.stringify(path);
 
-// The workspace's `[patch.crates-io]` table, its vendor paths made absolute for a crate outside the workspace.
-const workspacePatch = (ws) => ws.slice(ws.indexOf('[patch.crates-io]')).split('\n[')[0]
-  .replace(/path = "(vendor[^"]*)"/g, (_, path) => `path = ${tomlString(resolve(root, path))}`);
+// The workspace's `[patch.crates-io]` table, its vendor paths made absolute, under `checkout`, for a crate outside the workspace.
+const workspacePatch = (ws, checkout = root) => ws.slice(ws.indexOf('[patch.crates-io]')).split('\n[')[0]
+  .replace(/path = "(vendor[^"]*)"/g, (_, path) => `path = ${tomlString(resolve(checkout, path))}`);
 
-/** Cargo's module at `wasm`, optimized to `<out>/app.module.wasm`. */
+/** Cargo's module at `wasm`, optimized to `<out>/app.module.wasm`, or for the dev loop (`dev`) as Cargo linked it. */
 function module(manifest, name, out, label, writeInputs, dev = false) {
-  const wasm = resolve(TARGET, 'wasm32-unknown-unknown/release', `${name}.wasm`), done = resolve(out, 'app.module.wasm');
+  const wasm = resolve(TARGET, 'wasm32-unknown-unknown', dev ? DEV_PROFILE : 'release', `${name}.wasm`), done = resolve(out, 'app.module.wasm');
   mkdirSync(out, { recursive: true });
   const crate = dirname(manifest);
   const release = awaitBuildOutput({ id: label, dir: crate }, resolve(TARGET, '.claims', `${name}.lock`));
   try {
     writeInputs?.();
-    prepareModule(wasm, done, { manifest, targetDir: TARGET, profile: 'release', dev }, locked => {
+    prepareModule(wasm, done, { manifest, targetDir: TARGET, profile: dev ? DEV_PROFILE : 'release', wrapper: dev && !!writeInputs, dev }, locked => {
       const args = locked ? ['--locked'] : [];
-      if (cargoWasm(manifest, args).status !== 0) throw new Error(`${label} did not build`);
+      if (cargoWasm(manifest, args, dev ? devProfile('release') : undefined).status !== 0) throw new Error(`${label} did not build`);
     });
     moduleDepInfo.set(done, { depInfo: wasm.replace(/\.wasm$/, '.d'), wrapper: writeInputs ? realpathSync(crate) : undefined });
     return done;
@@ -295,12 +309,15 @@ function module(manifest, name, out, label, writeInputs, dev = false) {
 
 // A dev build's staging directory is replaced each time. Keep the optimized
 // module beside Cargo's artifact so a new stage need not optimize it again.
-function prepareModule(wasm, done, { manifest, targetDir, profile, dev }, build) {
+// `wrapper`: a dev wrapper, whose lock `moduleMetadata` resolves; `dev`: the
+// dev loop's module, served as Cargo linked it.
+function prepareModule(wasm, done, { manifest, targetDir, profile, wrapper = false, dev = false }, build) {
   const cached = wasm.replace(/\.wasm$/, '.optimized.wasm'), from = `${cached}.from`;
   const env = { ...process.env, CARGO_TARGET_DIR: targetDir, EXACT_RUST_BINDINGS: '1' };
-  const { metadata, locked } = moduleMetadata(manifest, env, dev);
+  const { metadata, locked } = moduleMetadata(manifest, env, wrapper);
   refreshCargoRustBindings(targetDir, 'wasm32-unknown-unknown', profile, metadata.packages, env, metadata.build_directory);
   build(locked);
+  if (dev) return void replace(done, temp => writeFileSync(temp, devMarked(readFileSync(wasm))));
   // Cargo may restore an older artifact when features change back.
   const id = createHash('sha256').update(readFileSync(wasm)).update(JSON.stringify([WASM_OPT(), OPT])).digest('hex');
   if (!existsSync(cached) || !existsSync(from) || readFileSync(from, 'utf8') !== id) {
@@ -314,11 +331,11 @@ export function buildModule(app, out, draw = false, dir = resolve(root, 'apps', 
   const key = dirKey(dir);
   out ??= resolve(MODULES, `${app}-${key}`);
   const manifest = JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8'));
-  if (manifest.rust?.module?.package) return ownModule(app, out, dir);
+  if (manifest.rust?.module?.package) return ownModule(app, out, dir, dev);
   // The source app.json's rust.data names (LLP 1153.003 D2), exported from a crate of its own whose one dependency is
   // the data crate.
   const data = rustDataOf(manifest);
-  if (!data) return ownModule(app, out, dir);
+  if (!data) return ownModule(app, out, dir, dev);
   // Canvas 2D draws only for a plan that has a 2D surface (logic/abi/src/draw.rs).
   const lib = `exact_logic_abi::export!(${data.ty}, ${data.source});\n${draw ? `exact_logic_abi::export_draw!(${data.ty});\n` : ''}`;
   const resolved = resolveApp(dir);
@@ -327,14 +344,14 @@ export function buildModule(app, out, draw = false, dir = resolve(root, 'apps', 
   if (resolved.generated) {
     const workspace = resolved.rust(), crate = resolve(workspace, 'module');
     const manifestPath = resolve(crate, 'Cargo.toml'), name = Bun.TOML.parse(readFileSync(manifestPath, 'utf8')).package.name;
-    const wasm = resolve(resolved.target, 'wasm32-unknown-unknown/web', `${name.replaceAll('-', '_')}.wasm`), done = resolve(out, 'app.module.wasm');
+    const wasm = resolve(resolved.target, 'wasm32-unknown-unknown', dev ? DEV_PROFILE : 'web', `${name.replaceAll('-', '_')}.wasm`), done = resolve(out, 'app.module.wasm');
     mkdirSync(out, { recursive: true });
     moduleDepInfo.set(done, { depInfo: wasm.replace(/\.wasm$/, '.d') });
     const release = awaitBuildOutput(resolved, resolve(resolved.target, '.claims', `${name}.lock`));
     try {
       keep(resolve(crate, 'src/lib.rs'), lib);
-      prepareModule(wasm, done, { manifest: manifestPath, targetDir: resolved.target, profile: 'web' }, () => {
-        const args = [`+${WEB}`, 'build', '--locked', '--offline', '--profile', 'web', '--target', 'wasm32-unknown-unknown', '--manifest-path', manifestPath, ...injectedProfiles({ manifest }, workspace), ...LINK_FLAGS()];
+      prepareModule(wasm, done, { manifest: manifestPath, targetDir: resolved.target, profile: dev ? DEV_PROFILE : 'web', dev }, () => {
+        const args = [`+${WEB}`, 'build', '--locked', '--offline', ...dev ? devProfile('web') : ['--profile', 'web'], '--target', 'wasm32-unknown-unknown', '--manifest-path', manifestPath, ...injectedProfiles({ manifest }, workspace), ...LINK_FLAGS()];
         if (spawnSync('cargo', args, { stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, CARGO_TARGET_DIR: resolved.target, EXACT_RUST_BINDINGS: '1' } }).status !== 0) throw new Error(`${app}: the module did not build; if Cargo says above that it could not download a crate offline, ${SETUP_FETCHES}`);
       });
       return done;
@@ -349,9 +366,11 @@ export function buildModule(app, out, draw = false, dir = resolve(root, 'apps', 
   // own package name keeps Cargo from reusing a stage-local wrapper's artifact.
   const crate = dev ? resolve(MODULES, 'wrappers', packageName) : resolve(out, 'crate');
   mkdirSync(resolve(crate, 'src'), { recursive: true });
+  // The data crate's workspace was authored, so the wrapper names the checkout as it does (scripts/paths.mjs).
+  const checkout = cargoCheckout(resolved.dir, false);
   const writeInputs = () => {
     const ws = readFileSync(resolve(root, 'Cargo.toml'), 'utf8');
-    const patch = workspacePatch(ws);
+    const patch = workspacePatch(ws, checkout);
     keep(resolve(crate, 'Cargo.toml'), `[package]
 name = "${packageName}"
 version = "0.1.0"
@@ -361,7 +380,7 @@ publish = false
 crate-type = ["cdylib"]
 [dependencies]
 ${data.krate} = { path = ${tomlString(dataCrate)} }
-exact-logic-abi = { path = ${tomlString(resolve(root, 'logic/abi'))} }
+exact-logic-abi = { path = ${tomlString(resolve(checkout, 'logic/abi'))} }
 [profile.release]
 opt-level = "z"
 lto = "fat"
@@ -402,19 +421,20 @@ export function undeclaredRustData(app, dir, manifest) {
 
 /** The app's explicit logic module (`rust.module.package`, LLP 1029.000):
  * its crate already exports the ABI, built as the generated one is. */
-function ownModule(app, out, dir) {
+function ownModule(app, out, dir, dev) {
   const pkg = JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8')).rust?.module?.package;
   if (!pkg) throw new Error(`${app}: its web build bakes with no Rust data source, and app.json names no rust.module.package`);
   const manifest = readdirSync(dir).map(d => resolve(dir, d, 'Cargo.toml')).find(f => existsSync(f) && new RegExp(`^name\\s*=\\s*"${pkg}"`, 'm').test(readFileSync(f, 'utf8')));
   if (!manifest) throw new Error(`${app}: no crate in ${dir} is ${pkg}`);
-  return module(manifest, pkg.replaceAll('-', '_'), out, `${app}: ${pkg}`);
+  return module(manifest, pkg.replaceAll('-', '_'), out, `${app}: ${pkg}`, undefined, dev);
 }
 
 /** A logic module's grants (the seam's first call, `meta`): what its storage
  * requests may name, which decides whether the page ships the storage
- * adapters. */
-export async function moduleGrants(path) {
-  const { instance } = await WebAssembly.instantiate(readFileSync(path), {}), e = instance.exports;
+ * adapters. A `production` build refuses a dev loop's module. */
+export async function moduleGrants(path, { production = false } = {}) {
+  const { module, instance } = await WebAssembly.instantiate(readFileSync(path), {}), e = instance.exports;
+  if (production && WebAssembly.Module.customSections(module, DEV_MARK).length) throw new Error(`this production build was given a dev loop's Rust module (built at ${DEV_PROFILE}, not optimized): give --data or --plan a build made without --dev`);
   const abi = e.exact_logic_abi();
   if (abi !== 12) throw new Error(`${path}: Rust module ABI ${abi} is not 12; rebuild it with this checkout`);
   const session = e.exact_logic_create(), request = new Uint8Array(5), p = e.exact_logic_alloc(request.length);

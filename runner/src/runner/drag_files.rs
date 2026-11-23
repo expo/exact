@@ -10,7 +10,6 @@ use exact_kernel::{Op, PropId, PropValue};
 
 impl<D: DataSource> Runner<D> {
     pub(super) fn admit_drag_files(&mut self, ops: &mut [Op]) {
-        let web = self.platform == crate::page::Platform::Web;
         for op in ops.iter_mut() {
             let Op::SetProp {
                 id,
@@ -21,33 +20,10 @@ impl<D: DataSource> Runner<D> {
                 continue;
             };
             let (id, prop) = (*id, *prop);
-            let kept = if prop == PropId::DataTransferUrl {
-                let url = value.to_string();
-                match exact_plan::http_url_refusal(&url).filter(|_| !url.is_empty()) {
-                    None => url,
-                    Some(why) => {
-                        // The URL itself stays out of the journal: it may hold a password or a token.
-                        self.log(format!(
-                            "drag: refused: url is not an absolute http: or https: URL: {why}"
-                        ));
-                        String::new()
-                    }
-                }
-            } else {
-                let entries: Vec<String> = value
-                    .split('\n')
-                    .filter(|e| !e.is_empty())
-                    .map(String::from)
-                    .collect();
-                let mut kept = Vec::with_capacity(entries.len());
-                for entry in entries {
-                    match crate::transfer::drag_file(self, &entry, web) {
-                        Ok(()) => kept.push(entry),
-                        Err(reason) => self.log(format!("drag: refused: {reason}")),
-                    }
-                }
-                kept.join("\n")
-            };
+            let (kept, refused) = self.admitted_drag(prop, value);
+            for why in refused {
+                self.log(format!("drag: refused: {why}"));
+            }
             *op = if kept.is_empty() {
                 Op::ClearProp { id, prop }
             } else {
@@ -58,5 +34,35 @@ impl<D: DataSource> Runner<D> {
                 }
             };
         }
+    }
+
+    /// A drag prop's value as this host carries it, and why each part it
+    /// leaves out is refused.
+    pub(super) fn admitted_drag(&self, prop: PropId, value: &str) -> (String, Vec<String>) {
+        let mut refused = Vec::new();
+        if prop == PropId::DataTransferUrl {
+            let kept = match exact_plan::http_url_refusal(value).filter(|_| !value.is_empty()) {
+                None => value.to_owned(),
+                Some(why) => {
+                    // The URL itself stays out of the journal: it may hold a password or a token.
+                    refused.push(format!("url is not an absolute http: or https: URL: {why}"));
+                    String::new()
+                }
+            };
+            return (kept, refused);
+        }
+        let web = self.platform == crate::page::Platform::Web;
+        let kept: Vec<&str> = value
+            .split('\n')
+            .filter(|e| !e.is_empty())
+            .filter(|e| match crate::transfer::drag_file(self, e, web) {
+                Ok(()) => true,
+                Err(why) => {
+                    refused.push(why);
+                    false
+                }
+            })
+            .collect();
+        (kept.join("\n"), refused)
     }
 }

@@ -626,9 +626,9 @@ impl<D: DataSource> Runner<D> {
         m.tool_landed(self, ticket, outcome)
     }
 
-    /// The least privileged origin of a handler running now, if one is.
-    pub(in crate::runner) fn tool_origin(&self) -> Option<CallOrigin> {
-        self.seams.modules.tool_origin(self)
+    /// The cause of the least privileged handler running now, if one is.
+    pub(in crate::runner) fn tool_cause(&self) -> Option<crate::runner::provenance::Cause> {
+        self.seams.modules.tool_cause(self)
     }
 
     /// A handler's refused request that may settle now.

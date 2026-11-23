@@ -2,7 +2,8 @@
 //! invocation of origin `action`, from the compiled control's kind and
 //! digest alone; the agent's seam and the tool doors cannot make one, and
 //! a press whose caller cancelled it is admitted no further name held to
-//! the person.
+//! the person. Work a press scheduled keeps its cause after it ends (LLP
+//! 1133.023 D7a).
 
 use crate::source::{boxed, Source};
 use exact_runner::{agent, CallHow, Runner, Value};
@@ -13,6 +14,7 @@ use std::os::windows::fs::symlink_dir;
 use std::path::{Path, PathBuf};
 
 const SOURCE: &str = r#"use requestPinShortcut, ShortcutItem, PinShortcutResult from "@exact/quick-actions"
+use speak, SpeechUtteranceInfo from "@exact/speech-synthesis"
 
 routes nav
   home "/"
@@ -23,16 +25,30 @@ shape Ack
 component App
   derive current = top(nav)
   state n = 0
+  state ticking = false
   mutation logged as shape Ack then pin
   mutation pinned as shape PinShortcutResult
+  mutation spoken as shape SpeechUtteranceInfo
   tool tick writes "Tick." = tick
   tool note writes "Note." = note
+  tool count writes "Count." = count
   action tick
     send logged = add(1)
   action note(text: option<string>)
     n = n + 1
   action pin
     send pinned = requestPinShortcut(shortcut=ShortcutItem(name="Pinned", short_name=none, description=none, url="/", icons=none, apple=none, android=none))
+  action say
+    send spoken = speak(text="hi")
+  action count
+    ticking = true
+  action beat
+    ticking = false
+    n = n + 1
+    focus("nothing")
+    pin()
+  task countdown when ticking
+    after(2000, beat)
   action follow(url: string)
     nav = go(nav, url)
   view
@@ -50,12 +66,15 @@ impl App {
         let _ = std::fs::remove_dir_all(&path);
         let packages = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages");
         std::fs::create_dir_all(path.join("node_modules/@exact")).unwrap();
-        let to = packages.join("quick-actions").canonicalize().unwrap();
-        symlink_dir(to, path.join("node_modules/@exact/quick-actions")).unwrap();
+        for package in ["quick-actions", "speech-synthesis"] {
+            let to = packages.join(package).canonicalize().unwrap();
+            symlink_dir(to, path.join("node_modules/@exact").join(package)).unwrap();
+        }
         std::fs::write(path.join("app.contract"), SOURCE).unwrap();
         let controls = serde_json::json!([
             { "kind": "go", "title": "Tick", "symbol": "plus", "tool": "tick" },
             { "kind": "jot", "title": "Note", "symbol": "pencil", "tool": "note" },
+            { "kind": "count", "title": "Count", "symbol": "timer", "tool": "count" },
             { "kind": "home", "title": "Home", "symbol": "house", "url": "/" },
         ]);
         let manifest = serde_json::json!({ "app": { "id": "com.exact.presses", "name": "Presses" }, "controls": controls });
@@ -331,4 +350,51 @@ fn a_binary_presses_only_the_controls_its_bake_offered() {
         .unwrap_err();
     assert!(err.contains("not offered"), "{err}");
     press(&mut r, "go", &go);
+}
+
+/// LLP 1133.023 D7a: a countdown a press starts runs on after the press, as
+/// the press's work: it may not ask for the pin, and D4a's command rules
+/// hold. The person's own act in the app still may.
+#[test]
+fn a_task_a_press_armed_keeps_the_presss_cause_after_it_ends() {
+    let app = App::new("countdown");
+    let mut r = boot(&app);
+    let count = digest(&r, "count");
+    press(&mut r, "count", &count);
+    assert_eq!(calls(&r)[0]["outcome"], "ok", "{}", logs(&r));
+    let at = r.now_ms() + 2_000.0;
+    r.advance(at).unwrap();
+    assert_eq!(state(&r)["slots"]["n"], 1, "the countdown ran");
+    let logs_now = logs(&r);
+    assert!(logs_now.contains("person-required"), "{logs_now}");
+    assert!(
+        logs_now.contains("focus: skipped in a tool call"),
+        "{logs_now}"
+    );
+    let before = logs_now.matches("person-required").count();
+    r.act("pin", Vec::new()).unwrap();
+    settle(&mut r);
+    assert_eq!(logs(&r).matches("person-required").count(), before);
+}
+
+/// LLP 1133.023 D7a: data code under a cancelled press's request in flight
+/// keeps the press's origin, `action`, which may not use a foreground name
+/// on a page that shows; it is not read as a `tool`, which may.
+#[test]
+fn data_code_under_a_cancelled_press_is_held_to_the_actions_rules() {
+    let app = App::new("data");
+    let mut r = boot(&app);
+    let go = digest(&r, "go");
+    let id = press(&mut r, "go", &go);
+    r.call_agent("cancel", &format!(r#"{{"op":"cancel","id":{id}}}"#))
+        .unwrap()
+        .unwrap();
+    let body = r#"{"extension":"speech-synthesis","send":"speak","args":{"text":"hi"}}"#;
+    let request = exact_runner::Request::native(body.as_bytes().to_vec());
+    let _ = r.native_work(&request);
+    assert!(
+        logs(&r).contains("speak: refused, not in the foreground"),
+        "{}",
+        logs(&r)
+    );
 }

@@ -118,12 +118,19 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip: Option<Rect4>,
     ) {
         let hit_space = walk.hit_space;
-        self.record_sticky(walk, id, ts, |painter, walk| {
-            painter.node_at_inner(walk, id, ts, offset, clip);
+        self.without_grid(grid::changes_axes(ts), |painter| {
+            let offset = if painter.flatten == Some(id) {
+                offset
+            } else {
+                sticky(walk.scene, id, offset, painter.grid(), &walk.scroll_grids)
+            };
+            painter.record_sticky(walk, id, ts, |painter, walk| {
+                painter.node_at_inner(walk, id, ts, offset, clip);
+            });
         });
         walk.hit_space = hit_space;
     }
@@ -133,7 +140,7 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip: Option<Rect4>,
     ) {
         let named = self.backend.name() == "canvas"
@@ -151,8 +158,8 @@ impl Painter {
             return;
         }
         let node = walk.scene.kernel.node(id).expect("named live node");
-        let rect = paint_rect(node.frame, sticky(walk.scene, id, offset));
         let shown = (walk.scene.presented)(id);
+        let rect = self.node_rect(&node, offset, &shown);
         let paint = BoxPaint::capture(&node, walk.scene.kernel, self.dark);
         let geometry = paint.geometry(rect);
         let transform = if shown.lowered & crate::host::lower::LOWER_TRANSFORM == 0 {

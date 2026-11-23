@@ -6651,7 +6651,10 @@ named in app.json's `rust.module.package` (Update Lab's `logic/`), which supplie
 
 The crate sits beside app.json and joins the workspace exact2 generates: its `Cargo.toml` sets
 `package.workspace = "../.exact/shells"` and takes exact2's crates as workspace dependencies
-(`exact-runner.workspace = true`; `contract.workspace = true` for a build script). The host crates are
+(`exact-runner.workspace = true`; `contract.workspace = true` for a build script). Any other crate of
+exact2's is taken the same way (`exact-canvas.workspace = true`), never by a path through
+`.exact/checkout`: the workspace names exact2 by its real path, and a second path to the same crate is a
+second package to Cargo, so a build refuses one and `bun exact.mjs update` rewrites it. The host crates are
 generated under `.exact/shells/` and link it; without `app.ts` they link no JavaScript engine. With
 `app.ts` beside it the two compose: Rust answers the sources the crate lists in `pub const RUST_SOURCES:
 &[&str]`, TypeScript the rest. `exact new <path> --rust` writes such an app: `data/`, whose type answers

@@ -329,7 +329,8 @@ pub fn answer<D: DataSource>(
     if !matches!(op.as_str(), "tap" | "type") || after_key(request, "ticket").is_none() {
         return None;
     }
-    Some(answer_ticket(runner, &op, request))
+    // An agent's answer is the person's choice, never a host's refusal
+    Some(answer_hold(runner, &op, request, None))
 }
 
 /// `{"op":"showPicker","id":I}` or `{…,"view":V}` (LLP 1069.002 D9): hold
@@ -365,12 +366,25 @@ pub fn picked_path<D: DataSource>(runner: &mut Runner<D>, request: &str) -> Stri
     s
 }
 
-/// `{"op":"tap","ticket":T,"choice":C}` or `{"op":"type","ticket":T,
-/// "text":V}`: answer held device request `T`, as [`answer`] describes.
+/// A host's answer to held device request `T`, `{"op":"tap","ticket":T,
+/// "choice":C}` or `{"op":"type","ticket":T,"text":V}`, as [`answer`]
+/// describes for the agent's: a host that presents a held share answers with
+/// the sheet's outcome, and with `"refused":"<reason>"` when it failed to
+/// present or complete the share, which the runner journals in place of a
+/// dismissal (LLP 1069.003).
 pub fn answer_ticket<D: DataSource>(
     runner: &mut Runner<D>,
     op: &str,
     request: &str,
+) -> (String, Option<crate::Hold>) {
+    answer_hold(runner, op, request, field_str(request, "refused"))
+}
+
+fn answer_hold<D: DataSource>(
+    runner: &mut Runner<D>,
+    op: &str,
+    request: &str,
+    refused: Option<String>,
 ) -> (String, Option<crate::Hold>) {
     let Some(ticket) = field_num(request, "ticket")
         .filter(|n| *n >= 1.0 && *n <= u32::MAX as f64 && *n == n.trunc())
@@ -402,7 +416,7 @@ pub fn answer_ticket<D: DataSource>(
                 &reply,
                 runner.device_links().share,
             ) {
-                answered(runner, c);
+                answered(runner, c, refused.as_deref());
             }
             let mut s = format!("{{\"ticket\":{ticket},\"capability\":");
             quote(&hold.capability, &mut s);

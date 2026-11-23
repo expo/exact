@@ -54,7 +54,7 @@ impl Painter {
         canvas: &NodeRef<'_>,
         children: &[ViewId],
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip: Option<Rect4>,
     ) {
         use crate::placement;
@@ -68,6 +68,7 @@ impl Painter {
         let mut apart = Walk {
             scene: walk.scene,
             scrollbar_cover: walk.scrollbar_cover,
+            scroll_grids: walk.scroll_grids.clone(),
             hit_space: None,
             boxes: Vec::new(),
             text: BTreeMap::new(),
@@ -82,7 +83,13 @@ impl Painter {
         };
         // Kernel frames are the page's: the canvas's own origin is the picture's.
         for child in children {
-            painter.node(&mut apart, *child, Transform::identity(), (f.x, f.y), None);
+            painter.node(
+                &mut apart,
+                *child,
+                Transform::identity(),
+                (f.x.into(), f.y.into()),
+                None,
+            );
         }
         walk.text.extend(apart.text);
         walk.fields.extend(apart.fields);
@@ -94,8 +101,9 @@ impl Painter {
         // Hit boxes map from the picture to the page as the canvas does.
         let identity = [1., 0., 0., 0., 1., 0., 0., 0., 1.];
         let (hit_ts, hit_clip) = walk.hit_space.unwrap_or((ts, clip));
-        let hit_h = placement::compose(identity, hit_ts, f.x - offset.0, f.y - offset.1);
-        let h = placement::compose(identity, ts, f.x - offset.0, f.y - offset.1);
+        let (x, y) = grid::paint_origin((f.x, f.y), offset);
+        let hit_h = placement::compose(identity, hit_ts, x, y);
+        let h = placement::compose(identity, ts, x, y);
         let Some(inverse) = placement::inverse(h) else {
             return;
         };

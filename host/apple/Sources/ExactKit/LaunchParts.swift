@@ -292,6 +292,7 @@ extension ExactLaunch {
             let took = CACurrentMediaTime() - t
             total += took
             ExactJournal.shared.record("launchPart", ["module": part.module, "ms": took * 1000])
+            ExactEnv.stamp("launch part \(part.module)")
         }
         if total > Self.launchBudget {
             ExactJournal.shared.record("launchBudget", ["ms": total * 1000])

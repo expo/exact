@@ -1,4 +1,4 @@
-//! Background turns and `perf frames`' JNI methods (LLP 1079.000 §6.2; `canvas/frames.rs`),
+//! Background turns, `perf frames`' (LLP 1079.000 §6.2; `canvas/frames.rs`) and an iframe's JNI methods,
 //! expanded by `canvas_jni!` inside its module, where `with` reaches the
 //! thread's host. The reader calls each on exact2's thread; frame times are
 //! `System.nanoTime`, `CLOCK_MONOTONIC`.
@@ -7,6 +7,45 @@
 #[macro_export]
 macro_rules! canvas_jni_frames {
     () => {
+        /// The reader's iframe finished a document (LLP 1020 D1).
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_frameLoaded(
+            _env: *mut JNIEnv,
+            _class: jclass,
+            id: jint,
+            slot: jint,
+            generation: jint,
+            session: jlong,
+        ) {
+            let key = $crate::canvas::ModuleKey {
+                index: slot as u32,
+                generation: generation as u32,
+            };
+            with(|h| h.frame_loaded(id as u32, key, session as u64));
+        }
+
+        /// An iframe's `FrameNavigation` record (LLP 1020.002 D2).
+        #[no_mangle]
+        #[allow(clippy::too_many_arguments)]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_frameEvent(
+            env: *mut JNIEnv,
+            _class: jclass,
+            id: jint,
+            slot: jint,
+            generation: jint,
+            session: jlong,
+            event: jstring,
+            record: jstring,
+        ) {
+            let event = string(env, event);
+            let record = string(env, record);
+            let key = $crate::canvas::ModuleKey {
+                index: slot as u32,
+                generation: generation as u32,
+            };
+            with(|h| h.frame_event(id as u32, key, session as u64, &event, &record));
+        }
+
         /// The current props of an audio player without a reader.
         #[no_mangle]
         pub unsafe extern "system" fn Java_dev_exact_canvas_Native_backgroundAudio(

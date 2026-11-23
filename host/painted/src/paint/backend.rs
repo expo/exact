@@ -170,6 +170,10 @@ pub trait Backend {
     /// A new frame of this size in points at this scale, cleared to the
     /// page's colour ([`Backend::page`]; white until one is told).
     fn begin(&mut self, width: f32, height: f32, scale: f32);
+    /// The raster backing's origin and size in device pixels after `begin`.
+    fn raster_extent(&self) -> Option<crate::placement::RasterExtent> {
+        None
+    }
     /// Release idle renderer storage, keeping the visible frame unless hidden.
     fn trim(&mut self, _hidden: bool) {}
     /// Storage from a presented frame after its last reader releases it.
@@ -410,6 +414,12 @@ pub trait Backend {
     }
     /// Whether this backend keeps rows' recordings ([`rows`]).
     fn rows(&self) -> bool {
+        false
+    }
+    /// Whether what this backend draws is replayed on a display's pixels,
+    /// box by box: the painter then draws each box on whole pixels
+    /// (`Painter::drawn`).
+    fn pixel_grid(&self) -> bool {
         false
     }
     /// Whether this geometry walk can read existing row metadata without

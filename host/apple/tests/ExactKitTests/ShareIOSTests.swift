@@ -17,14 +17,35 @@ final class ShareIOSTests: XCTestCase {
     func testAnchor() throws { try ShareAnchorCase.run(self) }
     func testPicture() throws { try SharePictureCase.run() }
     func testLink() { ShareLinkCase.run() }
+    func testAnswer() { ShareAnswerCase.run() }
 }
 #else
 final class ShareMacTests: XCTestCase {
     func testAnchor() throws { try ShareAnchorCase.run(self) }
     func testPicture() throws { try SharePictureCase.run() }
     func testLink() { ShareLinkCase.run() }
+    func testAnswer() { ShareAnswerCase.run() }
 }
 #endif
+
+/// A presented share's outcome answers its hold (LLP 1069.003): a refusal, such as a granted `app:/` file that is
+/// missing, gives its reason for the runner's one journal line.
+enum ShareAnswerCase {
+    static func run() {
+        func answer(_ line: String) -> [String: Any] {
+            (try? JSONSerialization.jsonObject(with: Data(ShareSheet.answer(to: line, ticket: 7).utf8))) as? [String: Any] ?? [:]
+        }
+        let refused = answer("share: refused: app:/data/missing.pdf: No such file or directory")
+        XCTAssertEqual(refused["op"] as? String, "tap")
+        XCTAssertEqual((refused["ticket"] as? NSNumber)?.uint64Value, 7)
+        XCTAssertEqual(refused["choice"] as? String, "cancel")
+        XCTAssertEqual(refused["refused"] as? String, "app:/data/missing.pdf: No such file or directory")
+        XCTAssertEqual(answer("share: shared")["choice"] as? String, "shared")
+        XCTAssertNil(answer("share: shared")["refused"])
+        XCTAssertEqual(answer("share: dismissed")["choice"] as? String, "cancel")
+        XCTAssertNil(answer("share: dismissed")["refused"])
+    }
+}
 
 /// A share's URL (LLP 1094.000 D1): what Foundation reads, and one it cannot
 /// read left out with a journal line that does not echo it.

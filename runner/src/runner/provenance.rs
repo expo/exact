@@ -1,32 +1,39 @@
-//! Call provenance (LLP 1133.002 D12, LLP 1133.023 D7, LLP 1133.035 D16):
-//! who each commit, request, armed `then` and queued send comes from, and
-//! the invocation it is part of. Every commit has an origin, so this is the
-//! core's; a module's admission (`modules/admit.rs`) is one of its readers.
+//! Call provenance (LLP 1133.002 D12, LLP 1133.023 D7 and D7a, LLP
+//! 1133.035 D16): who caused each commit, request, armed `then`, queued
+//! send, task and continuation, and the invocation it is part of. Every
+//! commit has a cause, so this is the core's; a module's admission
+//! (`modules/admit.rs`) is one of its readers.
 //!
-//! **Origin** (D12). Each commit has one: a person's input or the app's own
-//! code (`app`), a tool invocation, a wake. Each request carries its
-//! commit's, an answer's commit carries its request's, and a re-ask the
-//! device causes carries each reader's own last ask's. A data-code call
-//! cannot be traced to its answer here, so it is admitted under the least
-//! privileged origin in flight. A permission ticket is never raised for a
-//! tool or a wake: the call fails `person-required` instead.
+//! **A cause is a value** ([`Cause`]): an origin (D12), the invocation it is
+//! part of, its set of causes (D16 item 6) and whether that invocation is a
+//! call. Each primitive that schedules work captures the cause of the commit
+//! scheduling it and installs it when the work runs ([`Runner::as_cause`]);
+//! there is no default. A commit with none installed is refused what the
+//! least privileged origin is refused and holds no grant: it never reads as
+//! the app's. Only boot and the host's delivery of the person's act in the
+//! app's own UI start an `app` cause ([`Cause::person`]).
 //!
-//! **Invocations** (LLP 1133.023 D7). A wake's event and a tool call each
-//! run as an invocation with an id, which its dispatch commit stamps on
-//! every request, armed `then`, held call and queued send it makes; a
-//! commit that answers a stamped request, or runs a stamped `then` or
-//! queued send, is stamped too. A resource's re-ask by the device and a
-//! model's handler (`modules/invoke.rs`) carry none. What an invocation
-//! owns, and what lets go of it, is read by id alone. The tables are part
-//! of a commit's checkpoint, and an invocation is superseded only when the
-//! commit that let go of its work stands (`let_go`).
+//! **Provenance is permanent; grants end with the invocation** (D7a). Work
+//! keeps its origin's restrictions for its whole life. An invocation's
+//! grants (for a background action, the names held to the app and a
+//! recording press's two captures) hold only while it is live
+//! ([`Runner::invocation_live`]).
+//!
+//! **Ownership** (D7) is separate: an invocation owns the requests, armed
+//! `then`s, held calls and queued sends its commits stamped
+//! ([`Cause::owned`]). A resource's re-ask by the device carries its last
+//! ask's cause, invocation included, but is no invocation's work. What an
+//! invocation owns, and what lets go of it, is read by id alone. The tables
+//! are part of a commit's checkpoint, and an invocation is superseded only
+//! when the commit that let go of its work stands (`let_go`).
 
 use super::{CommitReceipt, DataSource, Event, Runner, RunnerError, Target};
 use exact_plan::Value;
 use std::collections::BTreeMap;
 
-/// Who a call comes from (LLP 1133.002 D12), least privileged first.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+/// Who a call comes from (LLP 1133.002 D12), least privileged first. It has
+/// no default: a cause is always someone's (LLP 1133.023 D7a).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CallOrigin {
     /// The device: an event a package emitted (LLP 1133.004 D6).
     Device,
@@ -42,7 +49,6 @@ pub enum CallOrigin {
     /// the host commands a wake may not run are refused, as for a wake.
     Action,
     /// A person's input, or the app's own code in a foreground session.
-    #[default]
     App,
 }
 
@@ -63,18 +69,14 @@ impl CallOrigin {
 /// D16 item 6). A request that a later commit keeps with newer arguments
 /// takes that commit's causes too, and its answer's commit, its `then` and
 /// what they ask carry them all, so a rule that refuses a tool sees a
-/// tool's arguments however they arrived. The rest of admission reads one
-/// origin; only the `none` rule reads the set.
+/// tool's arguments however they arrived. The `none` rule and the
+/// foreground rule read the set; the rest of admission reads one origin.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(in crate::runner) struct Causes(u8);
 
 impl Causes {
-    fn bit(origin: CallOrigin) -> u8 {
+    const fn bit(origin: CallOrigin) -> u8 {
         1 << origin as u8
-    }
-
-    pub(in crate::runner) fn with(self, origin: CallOrigin) -> Causes {
-        Causes(self.0 | Self::bit(origin))
     }
 
     pub(in crate::runner) fn union(self, other: Causes) -> Causes {
@@ -84,54 +86,113 @@ impl Causes {
     pub(in crate::runner) fn has(self, origin: CallOrigin) -> bool {
         self.0 & Self::bit(origin) != 0
     }
+}
 
-    /// Whether the app (a person, or its own code) is the only cause.
-    fn app_only(self) -> bool {
-        self.0 & !Self::bit(CallOrigin::App) == 0
+impl Origins {
+    /// A booting runner's: boot is the app's.
+    pub(in crate::runner) fn booting() -> Origins {
+        Origins {
+            current: Some(Cause::person()),
+            ..Default::default()
+        }
+    }
+
+    /// Boot is done: work after it brings its own cause.
+    pub(in crate::runner) fn booted(&mut self) {
+        self.current = None;
     }
 }
 
-/// The origins the runner keeps. Only those other than `app` are kept, so
-/// an app with no tool or wake keeps nothing.
+/// Who caused a piece of work (LLP 1133.023 D7a): captured when it is
+/// scheduled and installed when it runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Cause {
+    pub(in crate::runner) origin: CallOrigin,
+    /// The invocation it is part of; 0 for the app's.
+    pub(in crate::runner) id: u64,
+    /// Every cause it has, its origin's included.
+    pub(in crate::runner) causes: Causes,
+    /// The invocation is a call: LLP 1111 D4a's command rules hold for its
+    /// work, after the call too.
+    pub(in crate::runner) call: bool,
+    /// The work is the invocation's own (D7's ownership): its commits stamp
+    /// what they start with the id. A device's re-ask is not.
+    pub(in crate::runner) owned: bool,
+    /// A data-code call admitted under the causes in flight: it holds no
+    /// press record (LLP 1126.004 D2).
+    pub(in crate::runner) data: bool,
+}
+
+impl Cause {
+    /// The app's: boot, or the person's act in the app's own UI.
+    pub(in crate::runner) const fn person() -> Cause {
+        Cause::of(CallOrigin::App, 0, false)
+    }
+
+    /// No cause: what work with none installed runs as, the least
+    /// privileged origin with no grant.
+    pub(in crate::runner) const fn none() -> Cause {
+        Cause::of(CallOrigin::Device, 0, false)
+    }
+
+    /// Invocation `id`'s own work, of `origin`.
+    pub(in crate::runner) const fn of(origin: CallOrigin, id: u64, call: bool) -> Cause {
+        Cause {
+            origin,
+            id,
+            causes: Causes(Causes::bit(origin)),
+            call,
+            owned: id != 0,
+            data: false,
+        }
+    }
+
+    /// The same cause, not owned by its invocation: a device's re-ask.
+    pub(in crate::runner) fn unowned(self) -> Cause {
+        Cause {
+            owned: false,
+            ..self
+        }
+    }
+
+    /// The same cause with `more` among its causes.
+    pub(in crate::runner) fn joined(self, more: Causes) -> Cause {
+        Cause {
+            causes: self.causes.union(more),
+            ..self
+        }
+    }
+
+    /// The invocation that owns the work, 0 for none.
+    pub(in crate::runner) fn owner(self) -> u64 {
+        if self.owned {
+            self.id
+        } else {
+            0
+        }
+    }
+}
+
+/// The causes the runner keeps: every request's, resource ask's and armed
+/// `then`'s, the app's included, so a missing one is no cause.
 #[derive(Default)]
 pub(in crate::runner) struct Origins {
-    /// The commit being made.
-    now: CallOrigin,
-    /// The commit being made's causes beside `now`: for an answer's commit
-    /// and its `then`, the request's whole set.
-    causes: Causes,
-    /// Each request in flight's causes, by ticket, where one is not the app.
-    ticket_causes: BTreeMap<u64, Causes>,
-    /// Each resource's last ask's causes, where one is not the app.
-    asked_causes: BTreeMap<usize, Causes>,
-    /// Each armed `then`'s causes, where one is not the app.
-    then_causes: BTreeMap<usize, Causes>,
-    /// The causes of the call being admitted where the caller knows them
-    /// better than the commit does: a data-code call's are every cause in
-    /// flight (`data_causes`).
-    calling: Option<Causes>,
-    /// Each request in flight, by ticket.
-    tickets: BTreeMap<u64, CallOrigin>,
-    /// Each resource's last ask, by resource.
-    asked: BTreeMap<usize, CallOrigin>,
-    /// Each resource whose ask waits for the data source (`stale`), where
-    /// that ask's origin is not the app's: the origin, and the arguments it
-    /// asked. `data_ready` asks it under that origin.
-    deferred: BTreeMap<usize, (CallOrigin, Vec<Value>)>,
+    /// The cause of the commit being made, or of the work running.
+    current: Option<Cause>,
+    /// Each request in flight's cause, by ticket.
+    tickets: BTreeMap<u64, Cause>,
+    /// Each resource's last ask's cause, by resource.
+    asked: BTreeMap<usize, Cause>,
+    /// Each resource whose ask waits for the data source (`stale`): that
+    /// ask's cause, and the arguments it asked. `data_ready` asks it so.
+    deferred: BTreeMap<usize, (Cause, Vec<Value>)>,
     /// A re-ask the device causes is being made: each resource asks under
-    /// its own last ask's origin, or its waiting ask's.
+    /// its own last ask's cause, or its waiting ask's.
     reasking: bool,
-    /// Each armed `then`, by mutation, whose answer's commit was not the
-    /// app's: the `then` runs under it (LLP 1133.002 D12).
-    thens: BTreeMap<usize, CallOrigin>,
-    /// The invocation the commit being made is part of; 0 for none.
-    id: u64,
+    /// Each armed `then`'s cause, its answer's commit's, by mutation.
+    thens: BTreeMap<usize, Cause>,
     /// The last invocation id given.
     last_id: u64,
-    /// Each stamped request in flight, by ticket.
-    ids: BTreeMap<u64, u64>,
-    /// Each stamped armed `then`, by mutation.
-    then_ids: BTreeMap<usize, u64>,
     /// The invocations whose work a commit let go of, each with whether
     /// that work was a send; taken when the commit stands.
     let_go: Vec<(u64, bool)>,
@@ -170,15 +231,10 @@ fn activates(event: &Event) -> bool {
 
 /// The origin tables as a commit found them (`commit.rs`'s checkpoint).
 pub(in crate::runner) struct OriginsSaved {
-    tickets: BTreeMap<u64, CallOrigin>,
-    asked: BTreeMap<usize, CallOrigin>,
-    deferred: BTreeMap<usize, (CallOrigin, Vec<Value>)>,
-    thens: BTreeMap<usize, CallOrigin>,
-    ticket_causes: BTreeMap<u64, Causes>,
-    asked_causes: BTreeMap<usize, Causes>,
-    then_causes: BTreeMap<usize, Causes>,
-    ids: BTreeMap<u64, u64>,
-    then_ids: BTreeMap<usize, u64>,
+    tickets: BTreeMap<u64, Cause>,
+    asked: BTreeMap<usize, Cause>,
+    deferred: BTreeMap<usize, (Cause, Vec<Value>)>,
+    thens: BTreeMap<usize, Cause>,
     let_go: usize,
 }
 
@@ -200,17 +256,24 @@ impl<D: DataSource> Runner<D> {
         name: &str,
         args: Vec<Value>,
     ) -> Result<CommitReceipt, RunnerError> {
-        let before = std::mem::replace(&mut self.origins.now, origin);
-        let out = self.act(name, args);
-        // Its data calls' reports keep its origin (LLP 1175 D3).
-        self.take_reports();
-        self.origins.now = before;
-        out
+        let cause = Cause::of(origin, 0, origin == CallOrigin::Tool);
+        self.as_cause(cause, |r| r.act_named(name, args))
     }
 
-    /// The origin of the commit being made.
+    /// The origin of the commit being made; with no cause installed, the
+    /// least privileged.
     pub fn call_origin(&self) -> CallOrigin {
-        self.origins.now
+        self.cause().origin
+    }
+
+    /// Whether a cause is installed.
+    pub(in crate::runner) fn has_cause(&self) -> bool {
+        self.origins.current.is_some()
+    }
+
+    /// The cause of the commit being made, or [`Cause::none`].
+    pub(in crate::runner) fn cause(&self) -> Cause {
+        self.origins.current.unwrap_or(Cause::none())
     }
 
     /// The host delivers `event`, the app's own commit: an activation
@@ -243,22 +306,30 @@ impl<D: DataSource> Runner<D> {
             && at.is_some_and(|at| (0.0..TRANSIENT_ACTIVATION_MS).contains(&(self.now_ms - at)))
     }
 
-    /// Run `f` as a commit of `origin`, part of invocation `id` (0: none).
-    pub(in crate::runner) fn as_invocation<T>(
+    /// Run `f` under `cause`: the one way work gets a cause (D7a).
+    pub(in crate::runner) fn as_cause<T>(
         &mut self,
-        origin: CallOrigin,
-        id: u64,
+        cause: Cause,
         f: impl FnOnce(&mut Self) -> T,
     ) -> T {
-        let before = std::mem::replace(&mut self.origins.id, id);
-        let out = self.as_origin(origin, f);
-        self.origins.id = before;
+        let before = self.origins.current.replace(cause);
+        let out = f(self);
+        // The reports its data calls made take its authority (LLP 1175 D3).
+        self.take_reports();
+        self.origins.current = before;
         out
     }
 
-    /// The invocation the commit being made is part of; 0 for none.
+    /// Run `f` as the person's act in the app's own UI (LLP 1133.023 D7a):
+    /// for an act a host delivers other than through [`Runner::dispatch`],
+    /// and a test of the app's own data code.
+    pub fn as_person<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.as_cause(Cause::person(), f)
+    }
+
+    /// The invocation that owns the commit being made; 0 for none.
     pub(in crate::runner) fn invocation_id(&self) -> u64 {
-        self.origins.id
+        self.cause().owner()
     }
 
     /// A new invocation's id.
@@ -267,38 +338,60 @@ impl<D: DataSource> Runner<D> {
         self.origins.last_id
     }
 
-    /// The invocation request `ticket` is stamped with; 0 for none.
+    /// Whether invocation `id` is live: a call running uncancelled within
+    /// its bound, or the current wake's running invocation. Its grants hold
+    /// only while it is (D7a).
+    pub(in crate::runner) fn invocation_live(&self, id: u64) -> bool {
+        id != 0 && (self.call_live(id) || self.wake_invocation_live(id))
+    }
+
+    /// Whether work of `cause` holds the person's grants: the app's always,
+    /// a background action's while its invocation is live.
+    pub(in crate::runner) fn persons(&self, cause: Cause) -> bool {
+        match cause.origin {
+            CallOrigin::App => true,
+            CallOrigin::Action => self.invocation_live(cause.id),
+            _ => false,
+        }
+    }
+
+    /// The cause request `ticket` was asked under; none for a ticket the
+    /// runner did not ask.
+    pub(in crate::runner) fn ticket_cause(&self, ticket: u64) -> Cause {
+        (self.origins.tickets.get(&ticket).copied()).unwrap_or(Cause::none())
+    }
+
+    /// The invocation request `ticket` is owned by; 0 for none.
     pub(in crate::runner) fn ticket_id(&self, ticket: u64) -> u64 {
-        self.origins.ids.get(&ticket).copied().unwrap_or(0)
+        self.ticket_cause(ticket).owner()
     }
 
     /// Whether invocation `id` owns work in flight: a request, an armed
     /// `then`, a native statement, a held call or a queued send stamped with it.
     pub(in crate::runner) fn invocation_owns(&self, id: u64) -> bool {
         !self.invocation_tickets(id).is_empty()
-            || (self.origins.then_ids.iter())
-                .any(|(m, i)| *i == id && self.then_due[*m].is_finite())
+            || (self.origins.thens.iter())
+                .any(|(m, c)| id != 0 && c.owner() == id && self.then_due[*m].is_finite())
             || self.queued_of(id)
             || self.modules_own(id)
     }
 
-    /// The requests in flight stamped with invocation `id`, by ticket.
+    /// The requests in flight stamped with invocation `id`, by ticket; none
+    /// for id 0, which owns nothing.
     pub(in crate::runner) fn invocation_tickets(&self, id: u64) -> Vec<u64> {
-        let o = &self.origins;
         (self.pending.iter())
-            .filter(|p| o.ids.get(&p.ticket) == Some(&id))
+            .filter(|p| id != 0 && self.ticket_id(p.ticket) == id)
             .map(|p| p.ticket)
             .collect()
     }
 
     /// Drop the `then`s stamped with invocation `id`.
     pub(in crate::runner) fn drop_invocation_thens(&mut self, id: u64) {
-        let thens: Vec<usize> = (self.origins.then_ids.iter())
-            .filter(|(_, i)| **i == id)
+        let thens: Vec<usize> = (self.origins.thens.iter())
+            .filter(|(_, c)| id != 0 && c.owner() == id)
             .map(|(m, _)| *m)
             .collect();
         for m in thens {
-            self.origins.then_ids.remove(&m);
             self.origins.thens.remove(&m);
             self.then_due[m] = f64::INFINITY;
         }
@@ -308,12 +401,8 @@ impl<D: DataSource> Runner<D> {
     /// invocation's request, let go by a commit not its own (a device's
     /// re-ask is none's), supersedes it when that commit stands.
     pub(in crate::runner) fn note_let_go(&mut self, ticket: u64, target: Target) {
-        let o = &self.origins;
-        let owner = o.ids.get(&ticket).copied().unwrap_or(0);
-        let by = match target {
-            Target::Resource(_) if o.reasking => 0,
-            _ => o.id,
-        };
+        let owner = self.ticket_id(ticket);
+        let by = self.cause_for(target).owner();
         if owner != 0 && owner != by {
             let send = target.mutation().is_some();
             self.origins.let_go.push((owner, send));
@@ -328,11 +417,6 @@ impl<D: DataSource> Runner<D> {
             asked: o.asked.clone(),
             deferred: o.deferred.clone(),
             thens: o.thens.clone(),
-            ticket_causes: o.ticket_causes.clone(),
-            asked_causes: o.asked_causes.clone(),
-            then_causes: o.then_causes.clone(),
-            ids: o.ids.clone(),
-            then_ids: o.then_ids.clone(),
             let_go: o.let_go.len(),
         }
     }
@@ -344,11 +428,6 @@ impl<D: DataSource> Runner<D> {
         o.asked = saved.asked;
         o.deferred = saved.deferred;
         o.thens = saved.thens;
-        o.ticket_causes = saved.ticket_causes;
-        o.asked_causes = saved.asked_causes;
-        o.then_causes = saved.then_causes;
-        o.ids = saved.ids;
-        o.then_ids = saved.then_ids;
         o.let_go.truncate(saved.let_go);
     }
 
@@ -360,93 +439,47 @@ impl<D: DataSource> Runner<D> {
         }
     }
 
-    /// Run `f` as a commit of `origin`.
-    pub(in crate::runner) fn as_origin<T>(
-        &mut self,
-        origin: CallOrigin,
-        f: impl FnOnce(&mut Self) -> T,
-    ) -> T {
-        self.as_caused(origin, Causes::default(), f)
-    }
-
-    /// Run `f` as a commit of `origin` with `causes` besides.
-    fn as_caused<T>(
-        &mut self,
-        origin: CallOrigin,
-        causes: Causes,
-        f: impl FnOnce(&mut Self) -> T,
-    ) -> T {
-        let o = &mut self.origins;
-        let before = std::mem::replace(&mut o.now, origin);
-        let caused = std::mem::replace(&mut o.causes, causes);
-        let out = f(self);
-        // The reports its data calls made take its authority (LLP 1175 D3).
-        self.take_reports();
-        let o = &mut self.origins;
-        o.now = before;
-        o.causes = caused;
-        out
-    }
-
-    /// [`Self::as_invocation`] with the causes of the request or `then`
-    /// whose commit this is.
-    pub(in crate::runner) fn as_invocation_caused<T>(
-        &mut self,
-        origin: CallOrigin,
-        id: u64,
-        causes: Causes,
-        f: impl FnOnce(&mut Self) -> T,
-    ) -> T {
-        let before = std::mem::replace(&mut self.origins.id, id);
-        let out = self.as_caused(origin, causes, f);
-        self.origins.id = before;
-        out
-    }
-
-    /// The causes of the commit being made: its origin and its request's.
-    pub(in crate::runner) fn commit_causes(&self) -> Causes {
-        let o = &self.origins;
-        o.causes.with(o.now)
-    }
-
-    /// The causes a request of `target` asked now carries: the commit's,
-    /// or, for the device's re-ask of a resource, its last ask's.
-    pub(in crate::runner) fn causes_for(&self, target: Target) -> Causes {
+    /// The cause a request of `target` asked now carries: the commit's, or,
+    /// for a resource asked by the device's re-ask or by a commit with no
+    /// cause (a clock's, a reconciliation's), the least privileged of its
+    /// last ask's and its waiting ask's, owned by no invocation.
+    pub(in crate::runner) fn cause_for(&self, target: Target) -> Cause {
         let o = &self.origins;
         match target {
-            Target::Resource(i) if o.reasking => {
-                let causes = o.asked_causes.get(&i).copied().unwrap_or_default();
-                causes.with(self.origin_for(Some(target)))
+            Target::Resource(i) if o.reasking || o.current.is_none() => {
+                let asked = o.asked.get(&i).copied();
+                let waiting = o.deferred.get(&i).map(|(c, _)| *c);
+                let cause = match (asked, waiting) {
+                    (Some(a), Some(w)) => self.least(a, w),
+                    (Some(c), None) | (None, Some(c)) => c,
+                    (None, None) => self.cause(),
+                };
+                cause.unowned()
             }
-            _ => self.commit_causes(),
+            _ => self.cause(),
         }
+    }
+
+    /// Of two causes, the one that may do less: the lower origin, else the
+    /// one that holds no grant; with the causes of both.
+    pub(in crate::runner) fn least(&self, a: Cause, b: Cause) -> Cause {
+        let grants = |c: Cause| matches!(c.origin, CallOrigin::App | CallOrigin::Action);
+        let rank = |c: Cause| (c.origin, !grants(c) || self.persons(c));
+        let least = if rank(b) < rank(a) { b } else { a };
+        least.joined(a.causes.union(b.causes))
     }
 
     /// Request `ticket`'s causes.
     pub(in crate::runner) fn ticket_causes(&self, ticket: u64) -> Causes {
-        let o = &self.origins;
-        (o.ticket_causes.get(&ticket).copied().unwrap_or_default()).with(self.ticket_origin(ticket))
+        self.ticket_cause(ticket).causes
     }
 
     /// Request `ticket` of `target`, in flight, is kept with the newer
     /// arguments of the commit being made: it takes that commit's causes.
     pub(in crate::runner) fn note_kept(&mut self, target: Target, ticket: u64) {
-        let causes = self.ticket_causes(ticket).union(self.causes_for(target));
-        if !causes.app_only() {
-            self.origins.ticket_causes.insert(ticket, causes);
-        }
-    }
-
-    /// Run `f`, admitting the call it makes with `causes` as its own.
-    pub(in crate::runner) fn calling<T>(
-        &mut self,
-        causes: Causes,
-        f: impl FnOnce(&mut Self) -> T,
-    ) -> T {
-        let before = self.origins.calling.replace(causes);
-        let out = f(self);
-        self.origins.calling = before;
-        out
+        let more = self.cause_for(target).causes;
+        let cause = self.ticket_cause(ticket).joined(more);
+        self.origins.tickets.insert(ticket, cause);
     }
 
     /// Run `f` as the device's re-ask of its readers (D12).
@@ -457,37 +490,32 @@ impl<D: DataSource> Runner<D> {
         out
     }
 
-    /// The origin a request of `target` asked now carries: in a re-ask,
-    /// the least privileged of a resource's last ask's and its waiting
-    /// ask's.
+    /// The origin a request of `target` asked now carries.
     pub(in crate::runner) fn origin_for(&self, target: Option<Target>) -> CallOrigin {
-        let o = &self.origins;
         match target {
-            Some(Target::Resource(i)) if o.reasking => {
-                let asked = o.asked.get(&i).copied().unwrap_or_default();
-                o.deferred
-                    .get(&i)
-                    .map_or(asked, |(waiting, _)| asked.min(*waiting))
-            }
-            _ => o.now,
+            Some(target) => self.cause_for(target).origin,
+            None => self.call_origin(),
         }
     }
 
     /// Resource `i`'s ask at `args` waits for the data source (LLP 1027
-    /// D4): its origin is kept for `data_ready`'s ask (D12), the least
+    /// D4): its cause is kept for `data_ready`'s ask (D12), the least
     /// privileged of the commits that asked these arguments; a commit that
     /// changes them asks under its own.
     pub(in crate::runner) fn note_deferred(&mut self, i: usize, args: &[Value]) {
-        let now = self.origin_for(Some(Target::Resource(i)));
-        let deferred = &mut self.origins.deferred;
-        let origin = match deferred.get(&i) {
-            Some((was, asked)) if asked[..] == *args => now.min(*was),
+        let now = self.cause_for(Target::Resource(i));
+        let cause = match self.origins.deferred.get(&i) {
+            Some((was, asked)) if asked[..] == *args => self.least(now, *was),
             _ => now,
         };
-        match origin {
-            CallOrigin::App => deferred.remove(&i),
-            _ => deferred.insert(i, (origin, args.to_vec())),
-        };
+        self.origins.deferred.insert(i, (cause, args.to_vec()));
+    }
+
+    /// Resource `i` was asked, however it answered: its readers' cause is
+    /// this ask's for the device's re-asks.
+    pub(in crate::runner) fn note_ask(&mut self, i: usize) {
+        let cause = self.cause_for(Target::Resource(i)).unowned();
+        self.origins.asked.insert(i, cause);
     }
 
     /// Resource `i` answered at once: no ask of it waits.
@@ -499,170 +527,109 @@ impl<D: DataSource> Runner<D> {
     /// later commit (a send `data_ready` makes): that ask is no more
     /// privileged than this commit (D12).
     pub(in crate::runner) fn note_reasked(&mut self, i: usize) {
-        let o = &mut self.origins;
-        if o.now != CallOrigin::App {
-            let asked = o.asked.get(&i).copied().unwrap_or_default();
-            o.asked.insert(i, asked.min(o.now));
-        }
+        let now = self.cause().unowned();
+        let cause = match self.origins.asked.get(&i) {
+            Some(asked) => self.least(*asked, now),
+            None => now,
+        };
+        self.origins.asked.insert(i, cause);
     }
 
-    /// The origin of resource `i`'s last ask, when it was not the app's.
+    /// The origin of resource `i`'s last ask, if it was asked.
     pub(in crate::runner) fn origin_asked(&self, i: usize) -> Option<CallOrigin> {
-        self.origins.asked.get(&i).copied()
+        self.origins.asked.get(&i).map(|c| c.origin)
     }
 
     /// The origin of request `ticket`'s answer, the commit it lands in.
     pub(in crate::runner) fn ticket_origin(&self, ticket: u64) -> CallOrigin {
-        let o = &self.origins;
-        o.tickets.get(&ticket).copied().unwrap_or_default()
+        self.ticket_cause(ticket).origin
     }
 
-    /// Request `ticket` of `target` goes out: it keeps its origin, and a
-    /// resource's ask is its readers' origin for the device's re-asks.
+    /// Request `ticket` of `target` goes out: it keeps its cause, and a
+    /// resource's ask is its readers' cause for the device's re-asks.
     pub(in crate::runner) fn note_asked(&mut self, target: Target, ticket: u64) {
-        let origin = self.origin_for(Some(target));
-        let causes = self.causes_for(target);
+        let cause = self.cause_for(target);
         let o = &mut self.origins;
-        if origin != CallOrigin::App {
-            o.tickets.insert(ticket, origin);
-        }
-        if !causes.app_only() {
-            o.ticket_causes.insert(ticket, causes);
-        }
+        o.tickets.insert(ticket, cause);
         if let Target::Resource(i) = target {
-            match causes.app_only() {
-                true => o.asked_causes.remove(&i),
-                false => o.asked_causes.insert(i, causes),
-            };
             o.deferred.remove(&i);
-        }
-        let id = match target {
-            Target::Resource(_) if o.reasking => 0,
-            _ => o.id,
-        };
-        if id != 0 {
-            o.ids.insert(ticket, id);
-        }
-        if let Target::Resource(i) = target {
-            match origin {
-                CallOrigin::App => o.asked.remove(&i),
-                other => o.asked.insert(i, other),
-            };
+            o.asked.insert(i, cause.unowned());
         }
     }
 
-    /// A data-code call's origin: the least privileged of the commit being
-    /// made, every request in flight and every handler running, since such
-    /// a call cannot be traced to the answer that made it.
-    pub(in crate::runner) fn data_origin(&self) -> CallOrigin {
-        let o = &self.origins;
-        // A press's work is the person's only while the press is.
-        let held = |origin: CallOrigin, id: u64| match origin {
-            CallOrigin::Action if self.press_revoked(id) => CallOrigin::Tool,
-            origin => origin,
-        };
+    /// A data-code call's cause, since such a call cannot be traced to the
+    /// answer that made it: the least privileged of the commit being made,
+    /// every request in flight and every handler running, with all their
+    /// causes; none when nothing is in flight. It holds no press record.
+    pub(in crate::runner) fn data_cause(&self) -> Cause {
         // (a re-ask's wait runs nothing, `overrun.rs`)
-        (self.pending.iter())
+        let tickets = (self.pending.iter())
             .filter(|p| p.reask_at.is_none())
-            .filter_map(|p| (o.tickets.get(&p.ticket)).map(|t| held(*t, self.ticket_id(p.ticket))))
-            .chain(self.tool_origin())
-            .fold(held(o.now, o.id), CallOrigin::min)
+            .map(|p| self.ticket_cause(p.ticket));
+        let folded = (self.origins.current.into_iter())
+            .chain(tickets)
+            .chain(self.tool_cause())
+            .reduce(|a, b| self.least(a, b));
+        // Its invocation ranks it, but the call is not its own: it owns
+        // nothing and D4a's rules are for the call's commits.
+        Cause {
+            owned: false,
+            call: false,
+            data: true,
+            ..folded.unwrap_or(Cause::none())
+        }
     }
 
-    /// [`Self::data_origin`] for a call that arrives now, outside any commit:
-    /// the clock is sampled first, so [`Self::user_activation`] reads the
-    /// window against the time of the call and not of the last commit.
-    pub(in crate::runner) fn arriving_data_origin(&mut self) -> CallOrigin {
+    /// [`Self::data_cause`] for a call that arrives now, outside any commit:
+    /// the clock is sampled first, so [`Self::user_activation`] and
+    /// [`Self::invocation_live`] read the time of the call and not of the
+    /// last commit.
+    pub(in crate::runner) fn arriving_data_cause(&mut self) -> Cause {
         self.sample();
-        self.data_origin()
+        self.data_cause()
     }
 
-    /// Every input [`Self::data_origin`] folds, kept apart: the commit's
-    /// causes, each request in flight's, and each handler running (LLP
-    /// 1133.035 D16 item 6).
-    pub(in crate::runner) fn data_causes(&self) -> Causes {
-        let tools = self.tool_origin().into_iter();
-        (self.pending.iter())
-            .map(|p| self.ticket_causes(p.ticket))
-            .fold(self.commit_causes(), Causes::union)
-            .union(tools.fold(Causes::default(), Causes::with))
+    /// Mutation `m`'s `then` is armed under `cause`, that of the commit its
+    /// answer landed in.
+    pub(in crate::runner) fn note_then(&mut self, m: usize, cause: Cause) {
+        self.origins.thens.insert(m, cause);
     }
 
-    /// Mutation `m`'s `then` is armed by the commit being made.
-    pub(in crate::runner) fn note_then(&mut self, m: usize) {
-        let causes = self.commit_causes();
-        let o = &mut self.origins;
-        match o.now {
-            CallOrigin::App => o.thens.remove(&m),
-            other => o.thens.insert(m, other),
-        };
-        match causes.app_only() {
-            true => o.then_causes.remove(&m),
-            false => o.then_causes.insert(m, causes),
-        };
-        match o.id {
-            0 => o.then_ids.remove(&m),
-            id => o.then_ids.insert(m, id),
-        };
+    /// The cause mutation `m`'s armed `then` runs under, its answer's
+    /// commit's; spent here.
+    pub(in crate::runner) fn then_cause(&mut self, m: usize) -> Cause {
+        (self.origins.thens.remove(&m)).unwrap_or(Cause::none())
     }
 
-    /// The origin, invocation and causes mutation `m`'s armed `then` runs
-    /// under, its answer's commit's; spent here.
-    pub(in crate::runner) fn then_origin(&mut self, m: usize) -> (CallOrigin, u64, Causes) {
-        let o = &mut self.origins;
-        let origin = o.thens.remove(&m).unwrap_or_default();
-        let causes = o.then_causes.remove(&m).unwrap_or_default();
-        (origin, o.then_ids.remove(&m).unwrap_or(0), causes)
-    }
-
-    /// Request `to` carries on request `from`'s ask: its origin and invocation.
+    /// Request `to` carries on request `from`'s ask: its cause.
     pub(in crate::runner) fn restamp(&mut self, from: u64, to: u64) {
         let o = &mut self.origins;
-        if let Some(origin) = o.tickets.remove(&from) {
-            o.tickets.insert(to, origin);
-        }
-        if let Some(id) = o.ids.remove(&from) {
-            o.ids.insert(to, id);
+        if let Some(cause) = o.tickets.remove(&from) {
+            o.tickets.insert(to, cause);
         }
     }
 
-    /// Request `to` takes request `from`'s place: its origin, invocation and
-    /// causes.
-    pub(in crate::runner) fn pass_on(&mut self, from: u64, to: u64) {
-        self.restamp(from, to);
-        let o = &mut self.origins;
-        if let Some(causes) = o.ticket_causes.remove(&from) {
-            o.ticket_causes.insert(to, causes);
-        }
-    }
-
-    /// Forget the origins of requests no longer in flight.
+    /// Forget the causes of requests no longer in flight.
     pub(in crate::runner) fn prune_origins(&mut self) {
         let pending = &self.pending;
-        let o = &mut self.origins;
-        (o.tickets).retain(|t, _| pending.iter().any(|p| p.ticket == *t));
-        (o.ticket_causes).retain(|t, _| pending.iter().any(|p| p.ticket == *t));
-        (o.ids).retain(|t, _| pending.iter().any(|p| p.ticket == *t));
+        (self.origins.tickets).retain(|t, _| pending.iter().any(|p| p.ticket == *t));
     }
 
     /// Resource row `i` is a new member's (`each.rs`): nothing an earlier
-    /// member asked through it stands: its asks' origins, the arguments a
+    /// member asked through it stands: its asks' causes, the arguments a
     /// child's start refused, and what the modules keep of it.
     pub(in crate::runner) fn forget_resource_row(&mut self, i: usize) {
         let o = &mut self.origins;
         o.asked.remove(&i);
-        o.asked_causes.remove(&i);
         o.deferred.remove(&i);
         self.forget_refused_row(i);
         self.forget_module_row(i);
     }
-
-    /// The causes the call being admitted has: the caller's, where it knows
-    /// them better than the commit does ([`Self::calling`]), else the commit's.
-    pub(in crate::runner) fn calling_causes(&self) -> Causes {
-        (self.origins.calling).unwrap_or_else(|| self.commit_causes())
-    }
 }
+
+#[cfg(test)]
+#[path = "cause_tests.rs"]
+mod cause_tests;
 
 #[cfg(test)]
 mod tests {
@@ -716,6 +683,41 @@ mod tests {
             body: b"{}".to_vec(),
         });
         r.fulfill(sent[0].ticket, ok).unwrap();
-        assert!(r.origins.tickets.is_empty() && r.origins.ids.is_empty());
+        assert!(r.origins.tickets.is_empty());
+    }
+
+    /// LLP 1133.023 D7a: the device's re-ask of a resource an invocation
+    /// asked carries that invocation's cause, but is not its work.
+    #[test]
+    fn a_device_reask_keeps_the_invocation_s_cause_and_is_not_its_work() {
+        let source = "component App\n  state k = 0\n  resource v = load(k) as shape number\n  action go\n    k = 1\n  view\n    text \"x\"\n";
+        let plan = contract::compile(source).unwrap();
+        let mut r = Runner::boot(
+            plan,
+            Later,
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        let ok = || {
+            Outcome::Response(Response {
+                status: 200,
+                headers: Vec::new(),
+                body: b"{}".to_vec(),
+            })
+        };
+        let boot = r.take_requests();
+        r.fulfill(boot[0].ticket, ok()).unwrap();
+        let tool = super::Cause::of(CallOrigin::Tool, 7, true);
+        r.as_cause(tool, |r| r.act_named("go", vec![])).unwrap();
+        let asked = r.take_requests();
+        assert_eq!(r.ticket_id(asked[0].ticket), 7, "the call's own ask");
+        r.fulfill(asked[0].ticket, ok()).unwrap();
+        r.reasking(|r| r.commit_again(vec![0], "changed")).unwrap();
+        let again = r.take_requests();
+        let cause = r.ticket_cause(again[0].ticket);
+        assert_eq!((cause.origin, cause.id), (CallOrigin::Tool, 7));
+        assert!(!r.invocation_owns(7), "a re-ask is no invocation's work");
     }
 }

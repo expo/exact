@@ -355,7 +355,7 @@ test('JS Rust producers generate privately and read grants from their captured m
   try {
     mkdirSync(gen, { recursive: true }); writeFileSync(resolve(gen, 'app.bind.plan'), 'plan');
     const env = { resolve, mkdirSync, existsSync, dirname: path => resolve(path, '..'), cpSync, readFileSync, createHash,
-      rustLinked: true, root: dir, sep: '/', moduleSourceDirs: () => [], devReload: true, devLogic: [], opt: () => null, out, gen, app: 'fixture', canvas2d: false, appDir: dir, ts: false,
+      rustLinked: true, root: dir, sep: '/', moduleSourceDirs: () => [], devReload: true, production: false, devLogic: [], opt: () => null, out, gen, app: 'fixture', canvas2d: false, appDir: dir, ts: false,
       normalizeGrants: () => ({ entries: [] }),
       buildModule(app, at, draw, appDir, options) {
         expect(options.dev).toBe(true);

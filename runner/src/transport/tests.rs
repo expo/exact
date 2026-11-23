@@ -824,6 +824,24 @@ fn ended_runs_at_the_last_track_s_end() {
     assert!(voices(&r).iter().all(|v| v.at < 6000.0));
 }
 
+/// LLP 1133.023 D7a: a sequence's `ended` runs under the cause of the
+/// commit that started it: a wake's, which may not play a sound.
+#[test]
+fn ended_runs_under_the_cause_that_started_the_sequence() {
+    let source = SOURCE.replace(
+        "    endedAt = performanceNow()\n",
+        "    endedAt = performanceNow()\n    playSounds(far)\n",
+    );
+    let mut r = boot_with(&source);
+    r.act("finite", vec![]).unwrap();
+    r.act_from(crate::CallOrigin::Wake, "start", vec![])
+        .unwrap();
+    r.advance(10_000.0).unwrap();
+    assert_eq!(slot(&r, "endedAt"), 6000.0);
+    let refused = "playSounds: refused: during a wake";
+    assert!(r.journal().any(|l| l.contains(refused)), "{:?}", said(&r));
+}
+
 #[test]
 fn exact_transport_is_answered_by_a_commit_of_its_own() {
     let mut r = boot();

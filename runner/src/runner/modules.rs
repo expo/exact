@@ -365,7 +365,8 @@ impl<D: DataSource> Runner<D> {
         self.resolve_of(&row, &mut args);
         let send = target.mutation().is_some();
         let timeout = send.then(|| self.timeout(&row, &args)).flatten();
-        let origin = self.origin_for(Some(target));
+        let cause = self.cause_for(target);
+        let origin = cause.origin;
         let reader = match target {
             Target::Resource(i) => Some(samples::Reader::Resource(i)),
             Target::Mutation(_) | Target::Sent(..) => None,
@@ -373,8 +374,7 @@ impl<D: DataSource> Runner<D> {
         // A sampled source's reader is known to its answer (`samples.rs`).
         self.extensions.samples.asking = reader.map(|r| (r, origin));
         self.sampled_ask(&row, &args);
-        let causes = self.causes_for(target);
-        let decision = self.calling(causes, |r| r.admitted(&row, &args, origin, send, timeout));
+        let decision = self.admitted(&row, &args, cause, send, timeout);
         let called = Called {
             target,
             source,
@@ -1105,12 +1105,12 @@ impl<D: DataSource> Runner<D> {
         let mut args = v.get("args").cloned().unwrap_or(json!({}));
         self.clamp_bounds(&row, &mut args);
         self.resolve_of(&row, &mut args);
-        let origin = self.arriving_data_origin();
-        let causes = self.data_causes();
+        let cause = self.arriving_data_cause();
+        let origin = cause.origin;
         // A send that answers nothing (LLP 1133.004 D5) settles once done,
         // as does one that lists what it answers (`region_list.rs`).
         if self.is_effect(&row) || self.lists_answer(&row) {
-            return Some(self.calling(causes, |r| r.effect_call(&row, args, origin)));
+            return Some(self.effect_call(&row, args, cause));
         }
         let held_args = args.clone();
         let timeout = self.timeout(&row, &args);
@@ -1120,7 +1120,7 @@ impl<D: DataSource> Runner<D> {
         self.sampled_ask(&row, &args);
         // The call's request, when its reply carries handles (`handles.rs`).
         let request = self.claim_request(body);
-        let decision = self.calling(causes, |r| r.admitted(&row, &args, origin, send, timeout));
+        let decision = self.admitted(&row, &args, cause, send, timeout);
         let out = match decision {
             Decision::Forward => {
                 if !send {
@@ -1129,7 +1129,7 @@ impl<D: DataSource> Runner<D> {
                 let sampled = self.samples_of(&row);
                 // The implementation hears the origin admission read, and a
                 // Contract send keeps the number it went out with (`bound.rs`).
-                let mut body = self.as_origin(origin, |r| r.forward_body(&row, args, None));
+                let mut body = self.as_cause(cause, |r| r.forward_body(&row, args, None));
                 // A send starts work that may outlive the call, so it names
                 // the grants it was admitted under: the scope of a mixed
                 // app's source, else the app's.
@@ -1202,7 +1202,8 @@ impl<D: DataSource> Runner<D> {
                         .filter(|_| waits == Waits::Value)
                         .map(|t| self.now_ms + t),
                 };
-                let forward = (route == Route::Agent).then(|| self.forward_body(&row, args, None));
+                let forward = (route == Route::Agent)
+                    .then(|| self.as_cause(cause, |r| r.forward_body(&row, args, None)));
                 let invocation = self.invocation_id();
                 self.extensions.held.push(Held {
                     token,
