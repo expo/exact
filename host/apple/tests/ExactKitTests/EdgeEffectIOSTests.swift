@@ -135,6 +135,43 @@ final class EdgeEffectIOSTests: XCTestCase {
         XCTAssertNil(route.contentViewport, "a late content backend becomes the only scroller without another batch")
     }
 
+    /// A route whose page scrolls in a viewport (`resizes-visual`) shows the
+    /// viewport's top effect only while its list is scrolled from its top. A
+    /// route node that sets any aspect of its edge effect, by LLP 1123 D14's
+    /// forms or by the retired one, stops the follow from the reach pass after
+    /// the restyle: the top shows again, or stays as it stands where the node
+    /// hides its top, since the property does not style the viewport (LLP 1077
+    /// D16).
+    func testARouteThatSetsItsEdgeEffectStopsItsViewportFollowingTheList() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("scroll edge effects require iOS 26") }
+        guard let scene = hostedWindowScene() else { throw missing("scene", "the bar and its edge effect are shown in a scene's window") }
+        let session = try fixture(in: scene), p = session.presenter
+        p.apply(wireBatch([["op": "props", "id": Int(try node("app").id), "set": ["interactiveWidget": "resizes-visual"]]]))
+        XCTAssertNil(Agent(session: session).tap(["id": Int(try node("tab-inline").id)])["error"])
+        try waitForRoute("inline")
+        let route = try XCTUnwrap(p.navigationHost.primaryNavigation?.topViewController as? RouteController)
+        let page = try XCTUnwrap(route.contentViewport, "the visual policy scrolls the route's page in a viewport")
+        let list = try XCTUnwrap(try node("content-inline").scrollView)
+        XCTAssertTrue(route.contentScrollView(for: .top) === list, "the bar follows the list in the page")
+        XCTAssertTrue(page.topEdgeEffect.isHidden, "the viewport shows no effect over the list at rest")
+        let style = route.node.style, rest = -list.adjustedContentInset.top
+        route.node.style["scroll_edge_effect_hidden"] = .number(1)
+        p.reachPageEdges()
+        list.contentOffset.y = rest + 200
+        XCTAssertTrue(page.topEdgeEffect.isHidden, "a node hiding its top leaves the top as it stands, hidden, the list followed no more")
+        route.node.style["scroll_edge_effect_hidden"] = .number(4)
+        p.reachPageEdges()
+        XCTAssertFalse(page.topEdgeEffect.isHidden, "and one hiding only its bottom shows it again")
+        list.contentOffset.y = rest
+        route.node.style = style
+        route.node.style["scroll_edge_effect"] = .string("none")
+        p.reachPageEdges()
+        XCTAssertFalse(page.topEdgeEffect.isHidden, "the retired `none` leaves it as it stands, shown, the list at rest")
+        route.node.style = style
+        p.reachPageEdges()
+        XCTAssertTrue(page.topEdgeEffect.isHidden, "and one that sets no form has it follow the list again, at rest")
+    }
+
     func testADocumentScrollerRevealsContentOutsideItsInnerScroller() throws {
         guard let scene = hostedWindowScene() else { throw missing("scene", "the bar and its edge effect are shown in a scene's window") }
         let session = try fixture(in: scene)

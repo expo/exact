@@ -103,8 +103,11 @@ package final class ControlBars {
     /// side, every one a bar placed wholly beyond it, which spans its parent's
     /// width and fills what they leave; a box with none is at its parent's
     /// edge. No parent transforms, scrolls or hides, and none below `c` clips. Empty
-    /// when nothing is between them; nil when anything else is.
+    /// when nothing is between them; nil when anything else is, or when `s` hides its
+    /// edge effect on that side, as content must not run sharp under a bar there
+    /// (LLP 1123 D14, `edgeEffectHidden`).
     func bars(of s: NodeView, in c: NodeView, top: Bool) -> [NodeView]? {
+        if s.edgeEffectHidden(top ? .top : .bottom) { return nil }
         var x = s, found: [NodeView] = []
         while x !== c {
             var up = x.superview

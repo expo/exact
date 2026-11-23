@@ -1079,11 +1079,17 @@ fn style_json_shown(
     // PlaceholderColor's and BackdropColor's initial payloads are unread
     // sentinels; absence selects the platform's placeholder colour or dim,
     // including after a clear. So for the pressed paint: a cleared row is no
-    // pressed look (LLP 1061 D7).
+    // pressed look (LLP 1061 D7). And for the edge effect's style and hidden
+    // edges: a form the author clears (`unset`) gives its aspect back to the
+    // retired `-exact-scroll-edge-effect` until activation, so each crosses
+    // only while the kernel holds it set (LLP 1123 D14, §"What it replaces").
     computed.mask = computed.mask.union(
         computed.written.minus(
             StyleMask::of(StyleId::PlaceholderColor)
                 .union(StyleMask::of(StyleId::BackdropColor))
+                .union(StyleMask::of(StyleId::ScrollEdgeEffectSoft))
+                .union(StyleMask::of(StyleId::ScrollEdgeEffectHard))
+                .union(StyleMask::of(StyleId::ScrollEdgeEffectHidden))
                 .union(crate::looks::press_paint_rows()),
         ),
     );

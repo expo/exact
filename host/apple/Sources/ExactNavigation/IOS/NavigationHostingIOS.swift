@@ -25,6 +25,8 @@ extension RouteController: RouteSurface {
     func bandEdges(top: UIScrollView?, bottom: UIScrollView?) {
         if bandedTop !== top { bandedTop = top; projectContentScrollView(automaticTopScroll, for: .top) }
         if bandedBottom !== bottom { bandedBottom = bottom; projectContentScrollView(automaticBottomScroll, for: .bottom) }
+        // A batch that restyled the node can change what its viewport's top follows
+        refollowTopEdge()
     }
     #endif
 }

@@ -435,6 +435,54 @@ fn basic_clips_cross_as_relative_geometry() {
 }
 
 #[test]
+fn an_edge_effect_form_crosses_only_while_it_is_set() {
+    // @ref LLP 1123 D14 — each form crosses only while the kernel holds it set, so one the author
+    // clears with `unset` leaves its aspect to the retired `-exact-scroll-edge-effect` until
+    // activation (§"What it replaces"); a written `automatic` or `none` is set, and crosses as no edge
+    let source = "component App\n  view\n    column\n      column testId=\"both\" height=100 overflow-y=\"scroll\" -exact-scroll-edge-effect-style=\"top soft, bottom hard\" -exact-scroll-edge-effect-hidden=\"left start\"\n      column testId=\"written\" height=100 overflow-y=\"scroll\" -exact-scroll-edge-effect-style=\"top automatic\" -exact-scroll-edge-effect-hidden=\"none\"\n      column testId=\"cleared\" height=100 overflow-y=\"scroll\" -exact-scroll-edge-effect=\"none\" -exact-scroll-edge-effect-style=\"unset\" -exact-scroll-edge-effect-hidden=\"unset\"\n";
+    let plan = contract::compile(source).unwrap().encode();
+    let (host, boot) = crate::Host::boot(
+        &plan,
+        NoData,
+        Box::new(exact_kernel::MonospaceMeasurer::default()),
+        400.,
+        800.,
+    )
+    .unwrap();
+    let batch: serde_json::Value = serde_json::from_str(&boot).unwrap();
+    let kernel = host.runner().kernel();
+    let style = |test_id: &str| {
+        let id = kernel
+            .node_by_key(kernel.find_by_test_id(test_id)[0])
+            .unwrap()
+            .id;
+        batch["ops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|op| op["op"] == "create" && op["id"] == id)
+            .map(|op| op["style"].clone())
+            .unwrap_or_else(|| panic!("{test_id} is created: {boot}"))
+    };
+    let rows = |s: &serde_json::Value| {
+        [
+            "scroll_edge_effect_soft",
+            "scroll_edge_effect_hard",
+            "scroll_edge_effect_hidden",
+        ]
+        .map(|row| s.get(row).and_then(serde_json::Value::as_u64))
+    };
+    // The edges' bits: top 1, right 2, bottom 4, left 8, start 16, end 32
+    let both = style("both");
+    assert_eq!(rows(&both), [Some(1), Some(4), Some(8 | 16)], "{both}");
+    let written = style("written");
+    assert_eq!(rows(&written), [Some(0), Some(0), Some(0)], "{written}");
+    let cleared = style("cleared");
+    assert_eq!(rows(&cleared), [None, None, None], "{cleared}");
+    assert_eq!(cleared["scroll_edge_effect"], "none", "{cleared}");
+}
+
+#[test]
 fn a_scrollers_d14_rows_cross_by_name_in_points_and_words() {
     // @ref LLP 1123 D14 — as `ScrollInsetsIOS.Rows(style:)` reads them: lengths in points, a
     // negative one kept, the policies by their words

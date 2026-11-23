@@ -454,12 +454,16 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     /// list that is the controller's own: no effect over a list at rest. Its style stays
     /// `automatic`: the rows blurred and faded under the whole bar to a line at its foot, as a
     /// UIKit or SwiftUI list or scroll view draws them there (iOS 27, measured), where `soft` left
-    /// them legible under the title.
+    /// them legible under the title. A route node that sets any aspect of its edge effect (LLP 1123
+    /// D14) stops the follow: the top shows again, or stays as it stands where the node hides its
+    /// own top, since the viewport keeps UIKit's default edge effects, which the property does not
+    /// style (LLP 1077 D16).
     private func followTopEdge(_ scrollView: UIScrollView?) {
         topEdgeWatch = nil
         guard #available(iOS 26.0, tvOS 26.0, *), let page = contentViewport else { return }
-        guard let scrollView, scrollView !== page, node.style["scroll_edge_effect"] == nil else {
-            if page.topEdgeEffect.isHidden, node.style["scroll_edge_effect"]?.string != "none" { page.topEdgeEffect.isHidden = false }
+        topEdgeRead = (node.setsEdgeEffect, node.edgeEffectHidden(.top))
+        guard let scrollView, scrollView !== page, !node.setsEdgeEffect else {
+            if page.topEdgeEffect.isHidden, !node.edgeEffectHidden(.top) { page.topEdgeEffect.isHidden = false }
             return
         }
         let follow = { [weak page] (sv: UIScrollView) in
@@ -468,6 +472,14 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         }
         follow(scrollView)
         topEdgeWatch = scrollView.observe(\.contentOffset) { sv, _ in follow(sv) }
+    }
+
+    /// What `followTopEdge` last read of the node's own edge effect: whether it sets one, and whether it hides its top.
+    private var topEdgeRead: (sets: Bool, hidden: Bool)?
+    /// Follows the top edge again where a restyle of the node changed what `followTopEdge` read of it.
+    func refollowTopEdge() {
+        guard let read = topEdgeRead, read != (node.setsEdgeEffect, node.edgeEffectHidden(.top)) else { return }
+        followTopEdge(contentScrollView(for: .top))
     }
 }
 

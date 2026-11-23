@@ -1083,8 +1083,7 @@ extension NavigationHost {
             ?? (shows || whole ? kids.first(where: flowing) : nil)
         var riders: [NodeView] = []
         #if os(iOS)
-        if #available(iOS 26.0, *), shape?.level == 1, let scroller,
-           scroller.style["scroll_edge_effect"]?.string != "none", !RouteGeometry.transparentBar(c.node),
+        if #available(iOS 26.0, *), shape?.level == 1, let scroller, !RouteGeometry.transparentBar(c.node),
            case let bands = presenter.controlBands(of: scroller, in: c.node, ControlBars(presenter)), !bands.top.isEmpty {
             riders = bands.top
         }

@@ -331,6 +331,23 @@ final class PageEdgesIOSTests: XCTestCase {
         let hit = try XCTUnwrap(filter.window?.hitTest(filter.convert(CGPoint(x: filter.bounds.midX, y: filter.bounds.midY), to: nil), with: nil))
         XCTAssertTrue(hit.isDescendant(of: filter), "a tap on the switcher is the switcher's, not \(type(of: hit))")
         XCTAssertTrue(filter.interactions.contains { $0 is UIScrollEdgeElementContainerInteraction }, "UIKit's edge effect over the list")
+        // An edge whose effect the list hides is neither banded nor open (LLP 1131 D2): here, with no open foot over a
+        // bottom cover, a hidden top keeps both edges where they are, as a top with more than bars does, and a hidden foot
+        // leaves the top its band
+        let style = list.style, board = list.pageBand
+        list.style["scroll_edge_effect_hidden"] = .number(1)
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, .zero, "a hidden top keeps both edges where they are")
+        list.style["scroll_edge_effect_hidden"] = .number(4)
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, UIEdgeInsets(top: board.top, left: 0, bottom: 0, right: 0), "a hidden foot leaves the top its band")
+        list.style = style
+        list.style["scroll_edge_effect"] = .string("none")
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, .zero, "the retired `none` hides both")
+        list.style = style
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, board)
         // An app's own scroll view holds the bar's edge through a batch, and its nil gives the edge
         // back to the list by the route's next layout, through the list's band under the switcher,
         // since the title does not collapse with the list
@@ -353,6 +370,16 @@ final class PageEdgesIOSTests: XCTestCase {
         XCTAssertNil(filter.window, "the switcher is gone")
         XCTAssertEqual(sv.convert(sv.bounds, to: nil).maxY, try XCTUnwrap(list.window).bounds.maxY, accuracy: 0.5, "the transcript runs under the composer to the screen's foot")
         XCTAssertGreaterThan(try node(session, "composer").layer.zPosition, list.layer.zPosition, "the composer draws over it")
+        let chat = list.pageBand
+        list.style["scroll_edge_effect_hidden"] = .number(1)
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, .zero, "a hidden top keeps the transcript above the composer too")
+        list.style["scroll_edge_effect_hidden"] = .number(4)
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, .zero, "a hidden foot leaves the composer no band, and the open top none without it")
+        list.style = style
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, chat)
         for shape in ["caption", "painted", "large"] {
             p.press(try node(session, "pick-\(shape)").id)
             until("\(shape) is no bar over the list") { list.pageBand == .zero }
@@ -483,6 +510,18 @@ final class PageEdgesIOSTests: XCTestCase {
         XCTAssertTrue(route.collapseScroll === list)
         p.onCovers = nil
         let originalStyle = list.style, originalFrame = list.frame
+        // Riders need both edges banded or open, and an edge whose effect the list hides is neither (LLP 1131 D2)
+        for hide in ["top", "bottom", "none"] {
+            p.navigationHost.prepareRoutes([route], in: nav)
+            p.reachPageEdges()
+            XCTAssertFalse(route.ridingBars.isEmpty, "the filter rides the title with both edges shown")
+            if hide == "none" { list.style["scroll_edge_effect"] = .string("none") } else { list.style["scroll_edge_effect_hidden"] = .number(hide == "top" ? 1 : 4) }
+            p.navigationHost.prepareRoutes([route], in: nav)
+            p.reachPageEdges()
+            XCTAssertTrue(route.ridingBars.isEmpty, "a hidden \(hide) keeps the filter from riding")
+            XCTAssertEqual(filter.controlRide, 0)
+            list.style = originalStyle
+        }
         list.style["written"] = .array([.string("z_index")])
         list.style["z_index"] = .number(100)
         list.setRank(filter.paintRank + 100)
@@ -504,6 +543,39 @@ final class PageEdgesIOSTests: XCTestCase {
             XCTAssertTrue(route.ridingBars.isEmpty)
             XCTAssertEqual(list.pageBand.top, 0)
         }
+    }
+
+    /// A page's scroller at the area's top over a control bar runs under the bar to the area's foot (LLP 1131 D2), but
+    /// not with its top hidden: an edge whose effect the scroller hides is neither banded nor open at the area's edge
+    /// too, so the foot keeps its place, and the top keeps the status bar's margin (LLP 1130), whatever its effect. The
+    /// same holds at the area's foot under a bar.
+    func testAPageScrollerHidingAnEdgeKeepsItsPlaceBesideABar() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the status bar and the safe area are a scene window's") }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("control bars require iOS 26") }
+        let (session, view) = try fixture()
+        let p = session.presenter, list = try node(session, "list"), safe = view.safeAreaInsets
+        // Not `node`: its XCTUnwrap records a failure while a bar is on its way or gone
+        let shown = { (testId: String) in p.views.values.contains { $0.props["testId"] == testId && $0.window != nil } }
+        p.press(try node(session, "foot-toggle").id)
+        until("the foot is a bar under the list") { shown("foot") && list.pageBand.bottom > safe.bottom + 0.5 }
+        let banded = list.pageBand
+        XCTAssertEqual(banded.top, safe.top, accuracy: 0.5)
+        list.style["scroll_edge_effect_hidden"] = .number(1)
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, UIEdgeInsets(top: safe.top, left: 0, bottom: 0, right: 0))
+        list.style["scroll_edge_effect_hidden"] = nil
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, banded)
+        p.press(try node(session, "foot-toggle").id)
+        p.press(try node(session, "top-toggle").id)
+        until("the list is at the area's foot under a bar") { !shown("foot") && shown("top") && list.pageBand.top > safe.top + 0.5 }
+        let under = list.pageBand
+        list.style["scroll_edge_effect_hidden"] = .number(4)
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, UIEdgeInsets(top: 0, left: 0, bottom: safe.bottom, right: 0), "a hidden foot keeps its place too")
+        list.style["scroll_edge_effect_hidden"] = nil
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, under)
     }
 
     /// A route that opts out of its sides (`-exact-safe-area="left right"`, LLP 1123 D4) lays its content
@@ -610,6 +682,14 @@ final class PageEdgesIOSTests: XCTestCase {
         XCTAssertEqual(sv.convert(sv.bounds, to: nil).maxY, foot(), accuracy: 0.5, "its scroll view reaches the route's foot, under the bar")
         XCTAssertEqual(sv.adjustedContentInset.bottom, cover.bottom, accuracy: 0.5, "inset by the band alone")
         XCTAssertTrue(route.contentScrollView(for: .bottom) === sv, "the tab bar's edge effect follows it")
+        // A hidden top keeps its place, and the open foot keeps its band over the tab bar (LLP 1131 D2)
+        let banded = v.pageBand, shown = v.style
+        v.style["scroll_edge_effect_hidden"] = .number(1)
+        p.reachPageEdges()
+        XCTAssertEqual(v.pageBand, UIEdgeInsets(top: 0, left: 0, bottom: cover.bottom, right: 0), "a hidden top keeps its place over the tab bar")
+        v.style = shown
+        p.reachPageEdges()
+        XCTAssertEqual(v.pageBand, banded)
         sv.contentOffset.y = sv.contentSize.height + sv.adjustedContentInset.bottom - sv.bounds.height
         let end = try node(session, "end")
         XCTAssertEqual(end.convert(end.bounds, to: nil).maxY, box.maxY, accuracy: 0.5, "at its end the content rests where the box ends, above the bar")

@@ -17,16 +17,68 @@ extension NodeView {
         applyHoverEffect()
     }
 
-    /// D16: the edge effect where content meets a bar; `none` hides it.
-    private func applyScrollEdge(_ sv: UIScrollView) {
+    /// D16, LLP 1123 D14: the edge effect where content meets a bar, a style
+    /// and a visibility per edge, as UIKit holds them.
+    func applyScrollEdge(_ sv: UIScrollView) {
         guard #available(iOS 26.0, tvOS 26.0, *) else { return }
-        let value = style["scroll_edge_effect"]?.string ?? "automatic"
-        for edge in [sv.topEdgeEffect, sv.bottomEdgeEffect, sv.leftEdgeEffect, sv.rightEdgeEffect] {
-            let hidden = value == "none"
-            if edge.isHidden != hidden { edge.isHidden = hidden }
-            let style: UIScrollEdgeEffect.Style = value == "soft" ? .soft : value == "hard" ? .hard : .automatic
-            if edge.style != style { edge.style = style }
+        for (effect, edge) in [(sv.topEdgeEffect, UIRectEdge.top), (sv.leftEdgeEffect, .left),
+                               (sv.bottomEdgeEffect, .bottom), (sv.rightEdgeEffect, .right)] {
+            let hidden = edgeEffectHidden(edge), style = edgeEffectStyle(edge)
+            if effect.isHidden != hidden { effect.isHidden = hidden }
+            if effect.style != style { effect.style = style }
         }
+    }
+
+    /// Whether the scroller hides its edge effect on the physical `edge`
+    /// (LLP 1123 D14). Where `-exact-scroll-edge-effect-hidden` is set, the
+    /// edges it names are hidden, physically or by `start` or `end`; elsewhere
+    /// the retired `-exact-scroll-edge-effect` decides until activation, its
+    /// `none` hiding every edge (§"What it replaces"). The Apple style record
+    /// sends a form only while the kernel holds it set, so a form cleared with
+    /// `unset` gives its aspect back to the retired one.
+    package func edgeEffectHidden(_ edge: UIRectEdge) -> Bool {
+        guard style["scroll_edge_effect_hidden"] != nil else { return style["scroll_edge_effect"]?.string == "none" }
+        return edgeName("scroll_edge_effect_hidden", edge) != nil
+    }
+
+    /// The scroller's edge effect style on the physical `edge` (D14). Where
+    /// `-exact-scroll-edge-effect-style` is set, an edge in its soft set is
+    /// soft, one in its hard set hard, and one in neither `automatic`; an edge
+    /// one set names by `start` or `end` and the other by `left` or `right`
+    /// takes the first set's style, and one in both alike is hard (the
+    /// schema's rows). Elsewhere the retired form's word styles every edge,
+    /// its `none` leaving them `automatic`.
+    @available(iOS 26.0, tvOS 26.0, *)
+    private func edgeEffectStyle(_ edge: UIRectEdge) -> UIScrollEdgeEffect.Style {
+        guard style["scroll_edge_effect_soft"] != nil || style["scroll_edge_effect_hard"] != nil else {
+            switch style["scroll_edge_effect"]?.string {
+            case "soft": return .soft
+            case "hard": return .hard
+            default: return .automatic
+            }
+        }
+        let soft = edgeName("scroll_edge_effect_soft", edge), hard = edgeName("scroll_edge_effect_hard", edge)
+        if soft == .logical, hard != .logical { return .soft }
+        return hard != nil ? .hard : soft != nil ? .soft : .automatic
+    }
+
+    /// Whether the box sets any aspect of its edge effect, by the retired form
+    /// or by either of D14's.
+    package var setsEdgeEffect: Bool {
+        ["scroll_edge_effect", "scroll_edge_effect_soft", "scroll_edge_effect_hard", "scroll_edge_effect_hidden"]
+            .contains { style[$0] != nil }
+    }
+
+    /// How the `<edges>` row `key` names the physical `edge` (D13, D14: bits
+    /// for top, right, bottom, left, start and end): by `start` or `end`,
+    /// resolved against the box's direction, physically, or not at all.
+    private func edgeName(_ key: String, _ edge: UIRectEdge) -> EdgeName? {
+        let bits = Int(style[key]?.number ?? 0)
+        let rtl = (style["direction"]?.string ?? presenter?.documentDirection) == "rtl"
+        let start = rtl ? UIRectEdge.right : .left, end = rtl ? UIRectEdge.left : .right
+        if edge == start && bits & 16 != 0 || edge == end && bits & 32 != 0 { return .logical }
+        let physical = edge == .top ? 1 : edge == .right ? 2 : edge == .bottom ? 4 : edge == .left ? 8 : 0
+        return bits & physical != 0 ? .physical : nil
     }
 
     /// D17: a pointer interaction whose style is the node's effect.
@@ -120,4 +172,7 @@ extension NodeView {
     }
 }
 #endif
+
+/// How an `<edges>` row names an edge (`edgeName`).
+private enum EdgeName { case logical, physical }
 #endif

@@ -57,9 +57,8 @@ extension Presenter {
             guard let v = views[id] else { continue }
             var found = Bands(), own = UIEdgeInsets.zero
             if let sv = v.scrollView, (sv as? ScrollView)?.scrollsY ?? true, v.window != nil {
-                let edgeEffect = v.style["scroll_edge_effect"]?.string != "none"
                 if let route = ViewPresentation.controllers(for: v, layout: true).lazy.compactMap({ $0 as? any RouteSurface }).first(where: { $0.hosting === navigation && v.isDescendant(of: $0.node) }) {
-                    if let judge, edgeEffect { found = routeBands(of: v, sv, in: route, judge) }
+                    if let judge { found = routeBands(of: v, sv, in: route, judge) }
                     #if os(iOS)
                     if route.edgeScroll === v, let top = keyboardTop,
                        abs(route.node.convert(route.node.bounds, to: nil).maxY - top) < 1 {
@@ -76,7 +75,7 @@ extension Presenter {
                     if !found.top.isEmpty || found.band.top > 0.5, navigation.automaticContentScroller(of: route) === v { r.top = sv }
                     if !found.bottom.isEmpty || found.band.bottom > 0.5 { r.bottom = sv }
                     routes[ObjectIdentifier(route)] = r
-                } else { found = pageBands(of: v, sv, margins: m, area: area, edgeEffect ? judge : nil); own = found.band }
+                } else { found = pageBands(of: v, sv, margins: m, area: area, judge); own = found.band }
             }
             if v.pageBand != found.band || v.bandInset != own { v.setPageBand(found.band, inset: own) }
             bars += found.top.map { ($0, v, .top) } + found.bottom.map { ($0, v, .bottom) }
@@ -116,7 +115,8 @@ extension Presenter {
         let r = v.convert(v.bounds, to: root), fits = root.bounds.height <= area.height + 0.5
         let atTop = r.minY <= 0.5, atFoot = r.maxY >= area.height - 0.5 && fits
         let margins = Bands(band: UIEdgeInsets(top: atTop ? m.top : 0, left: 0, bottom: atFoot ? m.bottom : 0, right: 0))
-        guard let judge else { return margins }
+        // Bands only with both edges' effects shown: a hidden edge is neither banded nor open, at the area's edge too (LLP 1131 D2)
+        guard let judge, !v.edgeEffectHidden(.top), !v.edgeEffectHidden(.bottom) else { return margins }
         guard let top = atTop ? [] : judge.bars(of: v, in: page, top: true), let bottom = atFoot ? [] : judge.bars(of: v, in: page, top: false),
               !top.isEmpty || !bottom.isEmpty, page.frame.minY <= 0.5, page.frame.maxY >= area.height - 0.5, fits,
               Self.over(top, v), Self.over(bottom, v) else { return margins }
