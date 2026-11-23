@@ -146,10 +146,8 @@ extension NodeView {
         // positioned route holders it stands for: among equals its subview
         // place — the routes' place in the tree (`placeOwner`) — orders it,
         // as CSS paints positioned siblings in tree order.
-        // A control bar over its scroller (LLP 1131 D3) goes half a step above the scroller's place: over it and
-        // its equals, under the next rank.
         #if os(macOS)
-        let place = { (child: PaintView) in position(child.siblingPaintRank)! }
+        let depths = children.map { position($0.siblingPaintRank)! }
         #else
         // A child beside the routes can clear the native navigation view, whose box extends beyond them.
         // Its peers at the navigation rank already in front of that view share the top of the same step.
@@ -160,25 +158,37 @@ extension NodeView {
             return position(child.siblingPaintRank)
         }.min()
         var pastNavigation = false
-        let place = { (child: PaintView) -> CGFloat in
+        // Each child's place, and the sibling a control bar is lifted over.
+        let placed = children.map { (child: PaintView) -> (depth: CGFloat, over: NodeView?) in
             let rank = child.siblingPaintRank
             let own = position(rank)!
             let node = child as? NodeView
-            var depth = own
             if let plane, let lowest, own <= plane {
                 if rank == 1 && child.paintForeground {
                     pastNavigation = true
                 } else if node?.navigationPaint == .besideRoutes || (pastNavigation && rank == 1 && node?.navigationPaint != .represented) {
-                    depth = plane + 0.0001 + 0.0008 * (plane > lowest ? (own - lowest) / (plane - lowest) : 1)
+                    return (plane + 0.0001 + 0.0008 * (plane > lowest ? (own - lowest) / (plane - lowest) : 1), node?.bandOver)
                 }
             }
-            guard let over = node?.bandOver, let under = position(over) else { return depth }
-            return max(depth, under + 0.0005)
+            return (own, node?.bandOver)
+        }
+        var depths = placed.map(\.depth)
+        // A control bar (LLP 1131 D3) goes over its sibling that holds its scroller, as that sibling is placed:
+        // halfway to the next place above it, the origin's included, where native layers stay (or half a step past
+        // the last place). Each lift reads the places before any lift, so bars over one sibling start from one
+        // place and keep their tree order. A sibling no longer among these children lifts nothing.
+        if placed.contains(where: { $0.over != nil }) {
+            let places = depths
+            for (i, lift) in placed.enumerated() {
+                guard let over = lift.over, let j = children.firstIndex(where: { $0 === over }) else { continue }
+                let under = places[j]
+                let next = (places + [0]).filter { $0 > under }.min() ?? under + 0.001
+                depths[i] = max(places[i], (under + next) / 2)
+            }
         }
         #endif
         var top: CGFloat = 0
-        for child in children {
-            let z = place(child)
+        for (child, z) in zip(children, depths) {
             child.setPaintPosition(z)
             top = max(top, z)
         }
