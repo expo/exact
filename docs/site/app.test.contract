@@ -95,7 +95,9 @@ test "previous and next follow the sidebar, within its tab"
   at "/agents"
   expect tree missing "page-next"
   tap "page-previous"
-  expect tree has "h-a-deep-link"
+  expect tree has "page-next"
+  tap "page-next"
+  expect tree missing "page-next"
 
 test "the page header has Edit page, and Copy link copies the page's address"
   size 1440x900

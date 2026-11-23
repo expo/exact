@@ -34,7 +34,10 @@ impl DataSource for Source {
         if source != "status" {
             return Err(DataError::UnknownSource(source.into()));
         }
+        // One change the module announces under two names, as a library's
+        // list and its change feed are.
         store.observe_topic("status");
+        store.observe_topic("status.feed");
         Ok(Answer::Later(Request::native(
             br#"{"op":"status"}"#.to_vec(),
         )))
@@ -209,6 +212,41 @@ fn an_announcement_while_a_call_is_in_flight_lets_its_reply_land_then_asks_once_
         !journal.iter().any(|l| l.contains("forget request")),
         "{journal:#?}"
     );
+}
+
+/// Two topics a resource watches, announced together, ask it once.
+#[test]
+fn topics_announced_together_ask_their_reader_once() {
+    let plan = contract::compile(SOURCE).unwrap();
+    let mut r = Runner::boot(
+        plan,
+        Source,
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let asked = Arc::new(AtomicUsize::new(0));
+    let count = asked.clone();
+    r.native_slot()
+        .host(Some(Arc::new(move |_: Vec<u8>, reply: Reply| {
+            let n = count.fetch_add(1, Ordering::SeqCst) + 1;
+            reply.send(Outcome::Response(Response {
+                status: 200,
+                headers: Vec::new(),
+                body: format!("{{\"n\":{n}}}").into_bytes(),
+            }));
+        })));
+    r.listen(Arc::new(|| {}));
+    r.data_ready().unwrap();
+    assert_eq!(run_native(&mut r), 1);
+    r.native_slot().changed("status");
+    r.native_slot().changed("status.feed");
+    r.apply_announced();
+    assert_eq!(run_native(&mut r), 1, "one ask for both names");
+    assert_eq!(run_native(&mut r), 0, "and none after its reply");
+    assert_eq!(r.resource("status"), status(2.0).as_ref());
+    assert_eq!(asked.load(Ordering::SeqCst), 2);
 }
 
 /// A reply that fails after the topic changed is still asked again: the

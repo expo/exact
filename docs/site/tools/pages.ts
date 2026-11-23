@@ -52,9 +52,11 @@ if (missing.length) throw new Error(`no page file for ${missing.map(p => p.path)
 const dotted = pages.filter(p => p.path.includes('.'));
 if (dotted.length) throw new Error(`the worker reads a path with a "." as a file's: ${dotted.map(p => p.path).join(', ')}`);
 
+const entry = join(SITE, 'worker/entry.ts');
 // process is not a worker's, so the one variable constants/site.ts reads becomes its value.
 const worker = await Bun.build({
-  entrypoints: [join(SITE, 'worker/index.ts')],
+  entrypoints: [entry],
+  files: { [entry]: `import createWorker from './index.ts';\nexport default createWorker(${JSON.stringify([...paths])});` },
   target: 'browser',
   format: 'esm',
   define: { 'process.env.SITE_ORIGIN': process.env.SITE_ORIGIN ? JSON.stringify(process.env.SITE_ORIGIN) : 'undefined' },
