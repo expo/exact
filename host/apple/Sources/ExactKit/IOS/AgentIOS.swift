@@ -126,16 +126,14 @@ extension Agent {
         return true
     }
 
-    /// Whether the navigation, modal or menu host is in a transition, or a
-    /// sync that a move of UIKit's owes in the next turn (`syncNextTurn`) has
-    /// not run, so Exact has not followed the move: what an input waits for
-    /// under frozen timing, and part of what `clock settle` waits for. The
-    /// owed sync counts here and not in `NavigationHost.inTransition`, which a
-    /// confirmation waiting to show also reads (`resumeAfterRouteDismissal`)
-    /// and that sync does not retry.
+    /// Native transitions and scheduled navigation work that an input waits
+    /// for under frozen timing and that `clock settle` waits for. A scheduled
+    /// sync can follow a UIKit move, continue a yielded projection or retry
+    /// a stack write UIKit declined. A queued sync alone leaves the route
+    /// available for a confirmation to show (`resumeAfterRouteDismissal`).
     var hostsInTransition: Bool {
         let navigation = presenter.navigation
-        return navigation.inTransition || navigation.resyncOwed || presenter.modals.inTransition || presenter.menus.inTransition
+        return navigation.inTransition || navigation.syncScheduled || presenter.modals.inTransition || presenter.menus.inTransition
     }
 
     /// Under platform timing UIKit animates an alert's dismissal, and a

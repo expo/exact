@@ -362,7 +362,7 @@ package protocol NavigationHosting: AnyObject {
     func inspectNode(in bar: UINavigationBar, at p: CGPoint) -> UInt32?
     #endif
     #if EXACT_AGENT
-    var resyncOwed: Bool { get }
+    var syncScheduled: Bool { get }
     /// Every stack Exact built: the tabs' in tab order (or the one), then the sheets'.
     var allNavigations: [UINavigationController] { get }
     /// Whether UIKit's tab bar draws the tablist (not authored chrome, not `appearance: none`).
@@ -653,7 +653,7 @@ package final class NoNavigation: NavigationHosting {
     package func inspectNode(in bar: UINavigationBar, at p: CGPoint) -> UInt32? { nil }
     #endif
     #if EXACT_AGENT
-    package var resyncOwed: Bool { false }
+    package var syncScheduled: Bool { false }
     package var allNavigations: [UINavigationController] { [] }
     package var tabBarShows: Bool { false }
     package var retiringRoots: [NodeView] { [] }

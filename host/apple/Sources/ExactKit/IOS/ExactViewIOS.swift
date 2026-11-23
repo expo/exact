@@ -35,8 +35,10 @@ enum LaunchScreenColor {
 
 public final class ExactView: UIView {
     public let session: ExactSession
-    /// A fit or a layout this view has queued, for the main queue or for the end of the batch being applied
+    /// A fit or a layout this view has queued for the main queue
     private(set) var fitPending = false
+    /// A fit owed when the presenter finishes applying its batch
+    private var fitAfterBatch = false
     private var fitting = false
     /// The canvas's colour, which this view shows wherever the viewport does
     /// not reach (`paintUnderKeys`).
@@ -437,16 +439,14 @@ public final class ExactView: UIView {
             }
             return
         }
-        // Containment may synchronously lay us out during a partial batch.
-        // Finish that batch, then resize synchronously before returning to UIKit.
         if presenter.applying {
-            if !fitPending {
-                fitPending = true
+            // Fit the latest geometry at the batch's end even with a layout queued for the next turn
+            if !fitAfterBatch {
+                fitAfterBatch = true
                 presenter.afterBatch { [weak self] in
                     guard let self else { return }
-                    self.fitPending = false
-                    guard self.session.state != .destroyed else { return }
-                    self.fit()
+                    fitAfterBatch = false
+                    fit()
                 }
             }
             return

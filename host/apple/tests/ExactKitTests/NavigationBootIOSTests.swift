@@ -85,6 +85,36 @@ final class NavigationBootIOSTests: XCTestCase {
         return (object as? UIView)?.subviews.flatMap(accessibilityOrder) ?? []
     }
 
+    /// A command arriving during the temporary owner's layout requires the
+    /// real owner as soon as the held sync runs.
+    func testACommandDuringBootLayoutInstallsTheNavigationOwner() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "the boot owner needs a visible scene") }
+        let session = try fixture("BARLESS_ROUTE"), presenter = session.presenter
+        let navigation = presenter.navigationHost
+        let holder = try XCTUnwrap(navigation.bootOwner)
+        XCTAssertNil(session.firstDrawMs)
+        let probe = NavigationLayoutProbe(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
+        holder.view.addSubview(probe)
+        defer { probe.removeFromSuperview() }
+        let deliver = presenter.onCommand
+        defer { presenter.onCommand = deliver }
+        var commands: [String] = []
+        presenter.onCommand = { name, _, _ in commands.append(name) }
+        probe.run = {
+            XCTAssertTrue(navigation.syncing)
+            presenter.apply(wireBatch([["op": "command", "name": "test-boot-owner", "args": []]]))
+            XCTAssertTrue(navigation.bootOwner === holder)
+        }
+        probe.setNeedsLayout()
+        holder.view.setNeedsLayout()
+
+        navigation.resync()
+
+        XCTAssertEqual(commands, ["test-boot-owner"])
+        XCTAssertNil(navigation.bootOwner)
+        XCTAssertNotNil(navigation.primaryOwner)
+    }
+
     func testHiddenBarsCommitBeforeTheOwnerAndKeepGeometryBeforeTheNextEvent() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "the navigation owner is installed in a window scene") }
         var before: [UInt32: [CGFloat]]?

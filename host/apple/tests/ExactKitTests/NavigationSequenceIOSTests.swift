@@ -262,7 +262,7 @@ final class NavigationSequenceIOSTests: XCTestCase {
             XCTAssertEqual(journal(session, "press view \(back) (back)"), 1, "\(label): the Back reached the router once")
         }
         XCTAssertEqual(journal(session, "the router's stacks are written back"), 0, "\(label): no pop was left unfollowed")
-        XCTAssertFalse(navigation.tabsHeld, "\(label): no write waits")
+        XCTAssertFalse(navigation.tabsHeld || navigation.pendingSync || navigation.stackWritesOwed, "\(label): no write waits")
     }
 
     /// How many times the session's journal holds `line`.
@@ -275,10 +275,10 @@ final class NavigationSequenceIOSTests: XCTestCase {
     /// deferred work.
     private func settle(_ navigation: NavigationHost, _ more: UINavigationController, _ label: String = "") {
         waitFor("\(label): nothing is under way", cap: 8, facts: {
-            "navigation's transition \(navigation.navigation?.transitionCoordinator != nil), routes in flight \(navigation.routesInFlight(navigation.selectedStack)), held sync \(navigation.pendingSync), router tab \(navigation.routerTab), selected \(navigation.selectedKey ?? "none"), UIKit holds \(navigation.navigation?.viewControllers.map { ($0 as? RouteController)?.key ?? "list" } ?? []), More's transition \(more.transitionCoordinator != nil)"
+            "navigation's transition \(navigation.navigation?.transitionCoordinator != nil), routes in flight \(navigation.routesInFlight(navigation.selectedStack)), held sync \(navigation.pendingSync), scheduled sync \(navigation.syncScheduled), router tab \(navigation.routerTab), selected \(navigation.selectedKey ?? "none"), UIKit holds \(navigation.navigation?.viewControllers.map { ($0 as? RouteController)?.key ?? "list" } ?? []), More's transition \(more.transitionCoordinator != nil)"
         }) {
             // A stack off screen can keep a transition UIKit dropped (LLP 1075.003 §9.16)
-            !navigation.inTransition && more.transitionCoordinator == nil
+            !navigation.inTransition && !navigation.syncScheduled && more.transitionCoordinator == nil
                 && navigation.navigation.map { $0.viewIfLoaded?.window == nil || $0.transitionCoordinator == nil } ?? true
         }
         let until = Date().addingTimeInterval(0.6)

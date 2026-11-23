@@ -138,7 +138,7 @@ extension NavigationHost {
         prepareRoutes(routes, in: stack)
         if let plain = stack as? PlainTab { return plain.show(routes.first) }
         guard let nav else { return }
-        if !nav.stackRoutes.elementsEqual(routes, by: ===) { nav.setViewControllers(nav.stackFront + routes, animated: false) }
+        if !nav.stackRoutes.elementsEqual(routes, by: ===) { writeStack(nav.stackFront + routes, in: nav, animated: false) }
     }
 
     /// Build the tabs More's list shows a row for that the runner has not

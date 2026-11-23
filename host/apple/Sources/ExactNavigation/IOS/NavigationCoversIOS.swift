@@ -650,9 +650,9 @@ extension NavigationHost {
     /// Journal that `what`'s `property`, which Exact owns, changed outside it, the first time the check finds it.
     private func say(_ what: String, _ property: String) { reportOnce("\(what): \(property) changed outside Exact, which owns it") }
 
-    /// Journal `line` the first time the development check finds it.
-    private func reportOnce(_ line: String) {
-        if ownedReported.insert(line).inserted { presenter.session?.log(line) }
+    /// Journal a navigation diagnostic once per host.
+    func reportOnce(_ line: String) {
+        if reportedDiagnostics.insert(line).inserted { presenter.session?.log(line) }
     }
 
 }
