@@ -1,7 +1,7 @@
 // @fixture/swatch on Apple: a box filled with its `tint`, which sends
 // `message` "tap" when clicked or tapped, made by the session's one instance,
-// which keeps what it was told of its views and answers it as
-// `swatchReports`.
+// which keeps what it was told of its views and answers it, with what it
+// reads of its configuration, as `swatchReports`.
 import ExactPackage
 import Foundation
 #if os(macOS)
@@ -23,7 +23,14 @@ public final class SwatchModule: ExactPackage {
 
     public func later(_ name: String, _ args: [String: Any], preferred: Any?, reply: @escaping ([String: Any]) -> Void) {
         guard name == "swatchReports" else { return reply(["error": "NotSupportedError"]) }
-        reply(["text": heard.joined(separator: "; "), "count": heard.count])
+        reply(["text": heard.joined(separator: "; "), "count": heard.count, "config": config])
+    }
+
+    /// What it reads of its configuration: the label, and the key by its
+    /// length and last four characters only.
+    private var config: String {
+        let key = context.config["apiKey"] as? String ?? ""
+        return "label=\(context.config["label"] as? String ?? "none") apiKey=\(key.isEmpty ? "none" : "\(key.count) chars ending \(key.suffix(4))")"
     }
 
     public func view(_ tag: String, id: String, props: [String: String], events: ExactPackageEvents) throws -> ExactPackageView {

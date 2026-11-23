@@ -171,3 +171,62 @@ test('a page whose app replaces fetch still registers and inspects: the dev clie
     rmSync(dirname(dist), { recursive: true, force: true });
   }
 }, 1_200_000);
+
+test('an agent reads the tab whose person gave it the code and allowed it there, until that tab reloads', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-page-attach-')), dist = join(mkdtempSync(join(tmpdir(), 'exact-page-attach-dist-')), 'dist');
+  writeFileSync(join(dir, 'app.json'), JSON.stringify({ name: 'Attached', app: { id: 'com.exact.attached', name: 'Attached' } }));
+  writeFileSync(join(dir, 'app.contract'), 'component App\n  state ticks = 0\n  state note = ""\n  task tick when true\n    every(250, step)\n  action step\n    ticks = ticks + 1\n  action edit(v: string)\n    note = v\n  view\n    column\n      text `ticks ${ticks}` testId="ticks"\n      input value=note input=edit aria-label="Note" testId="note"\n');
+  const listener = createServer();
+  await new Promise(ok => listener.listen(0, '127.0.0.1', ok));
+  const port = listener.address().port;
+  await new Promise(ok => listener.close(ok));
+  const dev = spawnOwned(process.execPath, [resolve(ROOT, 'host/web/dev.mjs'), '--app', dir, '--port', String(port)], { cwd: ROOT, env: { ...process.env, EXACT_WEB_DIST: dist }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let out = '', browser;
+  dev.stdout.on('data', d => { out += d; });
+  dev.stderr.on('data', d => { out = (out + d).slice(-8000); });
+  const until = async (pass, ms, what) => { const end = Date.now() + ms; while (!(await pass())) { if (Date.now() > end) throw new Error(`${what}: not seen in ${out.slice(-2000)}`); await new Promise(ok => setTimeout(ok, 100)); } };
+  const panel = (page) => page.evaluate(() => document.querySelector('exact-agent-attach')?.shadowRoot.querySelector('.box').innerText ?? null);
+  const press = async (page, label) => {
+    const box = await page.evaluate((l) => { const b = [...document.querySelector('exact-agent-attach').shadowRoot.querySelectorAll('button')].find(b => b.textContent === l).getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; }, label);
+    await page.mouse.click(box.x, box.y);
+  };
+  try {
+    await until(() => out.includes('plan ready'), 900_000, 'the first build');
+    browser = await suiteBrowser('chromium');
+    const context = await browser.newContext(), tabs = [await context.newPage(), await context.newPage()];
+    for (const [i, tab] of tabs.entries()) { await tab.goto(`http://127.0.0.1:${port}/`); await tab.getByTestId('note').fill(`tab ${i}`); }
+    await tabs[0].keyboard.press('Alt+Shift+KeyA');
+    let code;
+    await until(async () => (code = /[A-Z2-9]{4}(-[A-Z2-9]{4}){4}/.exec(await panel(tabs[0]) ?? '')?.[0]), 10_000, 'the pairing code');
+    const agent = spawnOwned(process.execPath, [resolve(ROOT, 'scripts/agent.mjs'), 'web', '--app', dir, '--attach', 'tree', 'clock until state ticks == 9999 within 60000'], { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'] });
+    let said = '', err = '';
+    agent.stdout.on('data', d => { said += d; });
+    agent.stderr.on('data', d => { err += d; });
+    agent.stdin.end(`${code}\n`);
+    await until(async () => /asks to read/.test(await panel(tabs[0]) ?? ''), 30_000, `the ask (${err})`);
+    // A script's click is not the person's.
+    await tabs[0].evaluate(() => [...document.querySelector('exact-agent-attach').shadowRoot.querySelectorAll('button')].find(b => b.textContent === 'Allow').click());
+    await new Promise(ok => setTimeout(ok, 300));
+    expect(said).toBe('');
+    await press(tabs[0], 'Allow');
+    await until(() => said.includes('"tab 0"'), 30_000, `the tab's tree (${err})`);
+    expect(said).not.toContain('tab 1');
+    expect(await panel(tabs[0])).toContain('Agent Attached');
+    // The tab reloads: the wait ends, with the app's clock as it last read it.
+    await tabs[0].reload();
+    await until(() => agent.exitCode !== null, 15_000, 'the driver to end');
+    expect(err).toMatch(/ticks was \d+[^]*the tab reloaded/);
+    // A code is good once.
+    const again = spawnOwned(process.execPath, [resolve(ROOT, 'scripts/agent.mjs'), 'web', '--app', dir, '--attach', 'tree'], { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'] });
+    let refusal = '';
+    again.stderr.on('data', d => { refusal += d; });
+    again.stdin.end(`${code}\n`);
+    await until(() => again.exitCode !== null, 30_000, 'the second driver');
+    expect(refusal).toContain('no tab on this dev loop shows that pairing code');
+  } finally {
+    await browser?.close();
+    await dev.stop(30_000);
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(dirname(dist), { recursive: true, force: true });
+  }
+}, 1_200_000);

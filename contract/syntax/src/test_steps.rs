@@ -1,6 +1,22 @@
 //! Authored tests: a `test` block and its steps (LLP 1017 P7).
 use crate::{Expr, Span, TapForm};
 
+/// A drag's `then dx dy [over ms] [hold ms] [during "op" …]`: a further leg
+/// of the same contact, from where the one before ended.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DragLeg {
+    /// Points across.
+    pub dx: f64,
+    /// Points down.
+    pub dy: f64,
+    /// Milliseconds the move takes.
+    pub over: Option<f64>,
+    /// Milliseconds held after the move.
+    pub hold: Option<f64>,
+    /// Quoted reads or `clock`, after the move and before the hold.
+    pub during: Vec<String>,
+}
+
 /// The comparison in an authored `expect state` step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateComparison {
@@ -92,13 +108,15 @@ pub enum Step {
         /// Where.
         span: Span,
     },
-    /// `tap "testId" drag dx dy [from x y] [mouse] [press ms] [over ms]
-    /// [hold ms] [into keyboard] [during "op" …]`: one whole drag from the node's middle, or
-    /// from `from` in its box, a finger's or the left button's; the driver's
-    /// `tap … drag` (kanban F18, files diary F10). `tap "A" drag to "B" [at x y] …`
-    /// ends at B's middle, or at `at` from its top left (LLP 1094 D12).
-    /// `during` is last: quoted reads or `clock` while the finger is down,
-    /// after the move and before the hold (drums R8).
+    /// `tap "testId" drag dx dy [from x y] [mouse] [modifiers "Shift"] [press ms]
+    /// [over ms] [hold ms] [into keyboard] [during "op" …] [then dx dy [over ms]
+    /// [hold ms] [during "op" …]]…`: one whole drag from the node's middle, or
+    /// from `from` in its box, a finger's or the left button's, read as the
+    /// driver's `tap … drag` reads it (`scripts/agent-drag.mjs` `parseDrag`;
+    /// kanban F18, files diary F10). `tap "A" drag to "B" [at x y] …` ends at
+    /// B's middle, or at `at` from its top left (LLP 1094 D12), and takes no
+    /// `then`. A leg's `during` is quoted reads or `clock` while the finger is
+    /// down, after its move and before its hold (drums R8).
     Drag {
         /// The node, by `testId`.
         target: String,
@@ -123,6 +141,11 @@ pub enum Step {
         /// Quoted ops run while the finger is down, after the move, before
         /// the hold. Empty when the step names none.
         during: Vec<String>,
+        /// `modifiers "Shift+Meta"`: the keys held from the press to the lift
+        /// (empty for none).
+        modifiers: String,
+        /// The legs after the first, each from where the one before ended.
+        path: Vec<DragLeg>,
         /// Where.
         span: Span,
     },

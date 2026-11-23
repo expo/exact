@@ -707,6 +707,9 @@ fn bar_colour(pictures: &Rc<RefCell<Vec<Pixmap>>>) -> [u8; 4] {
     [c.red(), c.green(), c.blue(), c.alpha()]
 }
 
+#[path = "bars_tests/scroll.rs"]
+mod scroll;
+
 #[test]
 fn the_top_bar_takes_its_on_scroll_colour_and_a_retapped_tab_scrolls_to_the_top() {
     let (mut p, pictures) = barred(APP);

@@ -99,6 +99,10 @@ final class SessionStoreRefresh {
     }
 }
 
+extension Batch {
+    var hasStoreEffects: Bool { stored || !announced.isEmpty || windowState != nil }
+}
+
 extension ExactSession {
     /// A store write of this session's has landed: the app's other sessions
     /// refresh their persisted slots and the resources that read the store,

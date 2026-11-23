@@ -17,8 +17,8 @@ public final class ExactWindow: UIWindow {
         // Read before UIKit delivers the event: which lifts lost the view their touch began on (`TouchLog.viewGone`),
         // and when the window had the event, on the mach clock of `UITouch.timestamp`
         #if EXACT_AGENT
-        let gone = ExactEnv.agentCarried && event.type == .touches ? TouchLog.viewGone(event) : []
-        let dispatched = ExactEnv.agentCarried ? CACurrentMediaTime() : 0
+        let gone = TouchLog.recording && event.type == .touches ? TouchLog.viewGone(event) : []
+        let dispatched = TouchLog.recording ? CACurrentMediaTime() : 0
         #endif
         // Inspect mode takes every touch and press (InspectIOS.swift), and
         // knows the touches down when it begins. (It reached this window,
@@ -27,7 +27,7 @@ public final class ExactWindow: UIWindow {
         InspectHost.see(event)
         if Inspect.on || InspectHost.owning, InspectHost.take(event, in: self) {
             #if EXACT_AGENT
-            if ExactEnv.agentCarried, event.type == .touches { TouchLog.record(event, in: self, gone: gone, dispatched: dispatched) }
+            if TouchLog.recording, event.type == .touches { TouchLog.record(event, in: self, gone: gone, dispatched: dispatched) }
             #endif
             return
         }
@@ -43,7 +43,7 @@ public final class ExactWindow: UIWindow {
         }
         super.sendEvent(event)
         #if EXACT_AGENT
-        if ExactEnv.agentCarried, event.type == .touches { TouchLog.record(event, in: self, gone: gone, dispatched: dispatched) }
+        if TouchLog.recording, event.type == .touches { TouchLog.record(event, in: self, gone: gone, dispatched: dispatched) }
         #endif
         // A navigation is timed from its input: a finger lifting or a press.
         if event.type == .presses || (event.allTouches ?? []).contains(where: { $0.phase == .ended }) {
@@ -81,6 +81,20 @@ enum TouchLog {
     /// read inside a held touch waits for that (`touches.mjs`).
     nonisolated(unsafe) static var reached: Set<Int> = []
     static let capacity = 256
+    /// Whether the window logs touches: under the agent or `--live`, and while an attached session holds the input
+    /// grant (LLP 1012.000 D3), whose touches the touch runner plays and the log checks.
+    nonisolated(unsafe) static var attached = false
+    /// The attached session, which no driver routes (`Agent.routes`): a touch in it is in it.
+    nonisolated(unsafe) static weak var attachedSession: ExactSession?
+    static var recording: Bool { ExactEnv.agentCarried || attached }
+    /// The touches down in the window's last touch event.
+    nonisolated(unsafe) static var down = 0
+    /// Whether a touch is down in the window now: a person's, while no runner gesture is in flight. A touch a system
+    /// gesture cancels never reaches the window as cancelled, so one can be counted down until the next touch: input
+    /// is then refused until the person touches the app again, never let through under a resting finger.
+    static var touching: Bool { down > 0 }
+    /// The entries go; their numbering goes on, so a reader's cursor still means what it did.
+    static func forget() { entries.removeAll() }
     /// The touches down that began on a view (`viewGone`), held weakly: a cancelled touch never lifts here
     nonisolated(unsafe) static let viewed = NSHashTable<UITouch>.weakObjects()
 
@@ -116,6 +130,7 @@ enum TouchLog {
     }
 
     static func record(_ event: UIEvent, in window: UIWindow, gone: Set<UITouch>, dispatched: TimeInterval) {
+        down = (event.allTouches ?? []).filter { $0.phase != .ended && $0.phase != .cancelled }.count
         for touch in event.allTouches ?? [] {
             let phase: String
             switch touch.phase {
@@ -160,6 +175,10 @@ enum TouchLog {
                 out["session"] = label
                 out["generation"] = session.generation
                 break
+            }
+            if out["session"] == nil, let session = attachedSession, Agent.shows(session, v) {
+                out["session"] = session.label
+                out["generation"] = session.generation
             }
         }
         return out

@@ -26,8 +26,10 @@ extension MouseSwipe: MouseRecognizer {
 }
 
 extension Presenter {
-    /// Only an open dialog or popover forwards a press to its authored parent.
+    /// Only an open dialog or popover, or a `portal` mover (LLP 1013.002 D1),
+    /// forwards a press to its authored parent.
     func presentationParent(of view: NSView) -> NSView? {
+        if let declared = declaredParent(of: view) { return declared }
         guard let node = view as? NodeView else { return nil }
         return dialogs.authoredParent(of: node) ?? menus.authoredParent(of: node) ?? dataTables.authoredRow(of: node)?.container
     }

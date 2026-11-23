@@ -25,6 +25,7 @@ fn a_test_answers_a_pending_presence_prompt() {
     }
 }
 
+mod drag;
 mod fetch;
 
 #[test]
@@ -341,9 +342,6 @@ fn a_test_pinches_holds_a_key_and_indexes_state() {
     );
     // `pinch` is not a leftover word on the line (stocks: syntax-expected-newline).
     let e = contract::tests("test \"t\"\n  tap \"chart\" pinch\n").unwrap_err();
-    assert_eq!(e.id, "syntax-expected-step");
-    let e = contract::tests("test \"t\"\n  tap \"a\" drag 1 0 during \"clock +1\" hold 10\n")
-        .unwrap_err();
     assert_eq!(e.id, "syntax-expected-step");
     let e = contract::tests("test \"t\"\n  tap \"a\" drag 1 0 during \"tap b\"\n").unwrap_err();
     assert_eq!(e.id, "syntax-expected-step");

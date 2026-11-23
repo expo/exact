@@ -60,6 +60,8 @@ final class DialogBar: BarItemStore {
     /// What was last projected, and that with each item's enabling left out.
     var source: BarSource?, faces: BarSource?
     var subtitle: String?
+    /// The tint last given the bar: the dialog's own accent.
+    var tint: UIColor?
     let titleInk = NavigationTitleInk()
     var navigationController: UINavigationController? { controller?.navigationController }
     init(_ controller: UIViewController) { self.controller = controller }
@@ -149,6 +151,11 @@ extension NavigationHost {
                 if item.subtitle == bar.subtitle { item.subtitle = subtitle }
                 bar.subtitle = subtitle
             }
+        }
+        // The dialog's accent is its bar's tint, as a route's is (`showBar`); nil, the sheet's.
+        if bar.tint !== dialog.ownAccent {
+            bar.tint = dialog.ownAccent
+            nav.navigationBar.tintColor = bar.tint
         }
         bar.titleInk.update(shape.heading?.ownUIColor("text_color"), fonts: NavigationTitleInk.fonts(of: shape.heading, level: shape.level, traits: controller.traitCollection),
                             item: item, bar: nav.navigationBar, transparent: false)

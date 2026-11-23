@@ -1,5 +1,5 @@
 import { symbolBox, symbolSize, symbolPlaceholder, syncSymbolPlaceholder, symbolFit, tintFit } from "../symbol-geometry.js";
-import { downForDrag, elementOf, observeDragInput, pressedAt } from "../drag-input.js";
+import { downForDrag, elementOf, lightDomDragPath, observeDragInput, pressedAt } from "../drag-input.js";
 import { picker, track, iframeLoading, localAssetURL, host, loadAfterPaint, moduleReady, views, writeIn, now, afterNativePaint, log, retiredViews, lists, root, encoder, readOut, imageProbes, inflight, IMAGE_ERROR, CORS_ERROR, heldValues, composing, loadDecorations, markupPending, scrollDocs, followScroll, pendingScrolls, DATA_LIMIT, authoredDisabled, holdWake, holdOrientation } from "../glue.js";
 import { pageGivenFiles, commitGuestOrigin, frameURL, refuseURL, valuedControl, renderMarkup, editMenu, inertAncestor, contextAt, liveById, navigates, navigableURL, dataURL, settleValue } from "../navigation.js";
 import { send } from "./commit.js";
@@ -378,10 +378,13 @@ export function loadDragOut() {
   });
 }
 
-/** Whether the nearest node the app made draggable at or above `el` waits: another script's draggable nearer to it
- * keeps its own drag. An SVG element's `draggable` is read as the listener reads it, not at all (drag-out.js). */
-function waits(el) {
-  for (let at = elementOf(el); at; at = at.parentElement) {
+function* ancestorElements(el) {
+  for (let at = elementOf(el); at; at = at.parentElement) yield at;
+}
+
+/** Whether the nearest draggable in `ancestors` waits. The listener also ignores SVG draggable marks. */
+function waits(ancestors) {
+  for (const at of ancestors) {
     if (waitingView(at)) return true;
     if (at.namespaceURI !== "http://www.w3.org/2000/svg" && at.matches('[draggable="true" i]')) return false;
   }
@@ -394,10 +397,17 @@ function waitingDrag(event) {
   if (event.isTrusted === false) return;
   const target = event.target;
   if (target.matches?.('[draggable="true" i]') && !waitingView(target)) return;
+  if (target.localName === "img") {
+    const path = lightDomDragPath(event);
+    if (path.length) {
+      if (waits(path)) event.preventDefault();
+      return;
+    }
+  }
   const element = elementOf(target);
   const down = downForDrag(waitingInput, event, element);
   const at = (element && pressedAt(down, event, element)) ?? document.elementFromPoint?.(event.clientX, event.clientY);
-  if (waits(target) || (at && target.contains?.(at) && waits(at))) event.preventDefault();
+  if (waits(ancestorElements(target)) || (at && target.contains?.(at) && waits(ancestorElements(at)))) event.preventDefault();
 }
 
 /** Writes `el`'s `draggable` through the drag-out glue, which keeps the app's value on the node (drag-out.js). Until

@@ -50,7 +50,7 @@ export const classifications = [
     ["painted:host/painted/src/canvas/jni.rs", "Java_dev_exact_canvas_Native_bar Java_dev_exact_canvas_Native_bars"],
     ["painted:host/painted/src/canvas/jni_extensions.rs", "Java_dev_exact_canvas_Native_orientationApplied"],
     ["painted:host/painted/src/canvas/jni_frames.rs", "Java_dev_exact_canvas_Native_framePeriod"],
-    ["painted:host/painted/src/canvas/jni_scroll.rs", "Java_dev_exact_canvas_Native_scrolled"],
+    ["painted:host/painted/src/canvas/jni_scroll.rs", "Java_dev_exact_canvas_Native_moved Java_dev_exact_canvas_Native_scrolled"],
     ["painted:host/painted/src/canvas/requests.rs", "CanvasHost::orientation_applied CanvasHost::page_hidden"],
     ["painted:host/painted/src/canvas/surface.rs", "CanvasHost::bar CanvasHost::bars"],
     ["painted:host/painted/src/content_region/presenter.rs", "Presenter::frame_with_canvas_tick"],
@@ -122,7 +122,7 @@ export const classifications = [
     ["painted:host/painted/src/canvas/jni_pad.rs", "Java_dev_exact_canvas_Native_pad"],
     ["painted:host/painted/src/canvas/jni_scroll.rs", "Java_dev_exact_canvas_Native_scrollDrag Java_dev_exact_canvas_Native_sheetDrag"],
     ["painted:host/painted/src/canvas/keys.rs", "CanvasHost::back CanvasHost::back_progress CanvasHost::key CanvasHost::named_key CanvasHost::open CanvasHost::pad"],
-    ["painted:host/painted/src/canvas/scroll.rs", "CanvasHost::drag_began CanvasHost::drag_ended CanvasHost::fling_ended CanvasHost::refresh CanvasHost::scrolled CanvasHost::scrollers CanvasHost::sheet_drag CanvasHost::snaps_around CanvasHost::under"],
+    ["painted:host/painted/src/canvas/scroll.rs", "CanvasHost::drag_began CanvasHost::drag_ended CanvasHost::fling_ended CanvasHost::moved CanvasHost::refresh CanvasHost::scrolled CanvasHost::scrollers CanvasHost::sheet_drag CanvasHost::snaps_around CanvasHost::under"],
     ["painted:host/painted/src/height_binding.rs", "Host::dispatch_height_held"],
     ["painted:host/painted/src/holds.rs", "Host::dispatch_held Host::dispatch_retained"],
     ["painted:host/painted/src/host.rs", "Host::boot_decoded Host::dispatch_at Host::dispatch_now"],
@@ -182,7 +182,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/unload.rs", "Presenter::before_unload"],
     ["painted:host/painted/src/presenter/wheel.rs", "Presenter::wheel_at"],
     ["painted:host/painted/src/surface_controls.rs",
-      "Presenter::blur Presenter::dispatch_press Presenter::focusable Presenter::forget_pads Presenter::handler_target Presenter::hardware_key " +
+      "Presenter::blur Presenter::dispatch_press Presenter::focusable Presenter::forget_pads Presenter::handler_target Presenter::hardware_key Presenter::in_hidden_mover Presenter::listener_parent " +
       "Presenter::hardware_key_typing Presenter::hardware_pad Presenter::has_gamepad_input Presenter::mouse_press_target Presenter::press_at Presenter::press_target"],
     ["painted:host/painted/src/surfaces.rs", "Surfaces::sync"],
     ["painted:host/painted/src/transform_binding.rs", "Host::dispatch_transform_held"],
@@ -856,9 +856,10 @@ export const classifications = [
     ["runner:runner/src/store/presence.rs", "Store::adopt_occupancy#revision:1 Store::set_locked#revision:1"],
   ]),
   group("replies", ["one-shot", "subscription", "durable operation"], "current presenter/reader session; a request may pump several completion families", "UI-owned",
-    "host/painted/src/agent.rs serve and agent/stdio.rs handle_request pump the current Presenter, then dispatch hold/picker answers and frame work. canvas/jni_agent.rs run calls agent_with_reader, which installs set_agent_turn only for the agent call and restores it afterward; pump.rs and commands.rs use that callback to hand out requests and admit queued reader answers.", [
+    "host/painted/src/agent.rs serve and agent/stdio.rs handle_request pump the current Presenter, then dispatch hold/picker answers and frame work; agent/attached.rs passive answers an attached session's reads with no pump. canvas/jni_agent.rs run calls agent_with_reader, which installs set_agent_turn only for the agent call and restores it afterward; pump.rs and commands.rs use that callback to hand out requests and admit queued reader answers.", [
     ["painted:host/painted/src/agent.rs", "serve"],
     ["painted:host/painted/src/agent/stdio.rs", "handle handle_for_window"],
+    ["painted:host/painted/src/agent/attached.rs", "passive"],
     ["painted:host/painted/src/canvas/agent.rs", "after_turn CanvasHost::agent_with_reader next_stream waiting"],
     ["painted:host/painted/src/canvas/jni_agent.rs", "run"],
     ["painted:host/painted/src/presenter/requests.rs", "Presenter::agent_reader_turn Presenter::set_agent_turn"],
@@ -1301,9 +1302,9 @@ export const classifications = [
     "The named painted adapter reads or updates the current Presenter through the runner or its Host forwarding API. host/painted/src/picker.rs configures app file roots and copies/selects paths for the current picker/share. Persistent copies are separate from the UI continuation receiving them.", [
     ["painted:host/painted/src/presenter/picker.rs",
       "Presenter::answer_document Presenter::answer_save Presenter::ask_portal Presenter::borrowed_files_chosen Presenter::deliver_picker Presenter::documents_chosen Presenter::finish_files " +
-      "Presenter::finish_portal_picks Presenter::finish_save Presenter::is_file_input Presenter::picked_targets Presenter::start_folder"],
+      "Presenter::document_picker Presenter::finish_portal_picks Presenter::finish_save Presenter::is_file_input Presenter::picked_targets Presenter::start_folder"],
     ["painted:host/painted/src/presenter/file_dialog.rs",
-      "FileDialog::start_folder Presenter::answer_file_dialog Presenter::drain_file_exports Presenter::finish_file_dialog Presenter::finish_file_exports Presenter::queue_file_dialog " +
+      "FileDialog::start_folder declared_types Presenter::answer_file_dialog Presenter::drain_file_exports Presenter::finish_file_dialog Presenter::finish_file_exports Presenter::queue_file_dialog " +
       "Presenter::serve_file_dialogs Presenter::take_file_dialogs"],
   ]),
   group("shared tokens", ["one-shot"], "share token in the live router; copying may outlive the initiating view", "UI-owned",

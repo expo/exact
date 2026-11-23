@@ -457,3 +457,6 @@ mod timer_tests {
 #[cfg(test)]
 #[path = "event_loop/activation_tests.rs"]
 mod activation_tests;
+#[cfg(all(test, feature = "attach"))]
+#[path = "event_loop/attach_tests.rs"]
+mod attach_tests;

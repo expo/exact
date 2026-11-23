@@ -6,6 +6,8 @@ import { dirname, join, normalize, relative, resolve } from 'node:path';
 import { agentRows, sections, tabs, type NavPage } from '../constants/navigation.ts';
 import { redirects } from '../constants/redirects.ts';
 import { site } from '../constants/site.ts';
+import { decode, descriptionOf, plain, sectionDescriptionProblems } from './descriptions.ts';
+import { promptOf } from './prompts.ts';
 
 const SITE = resolve(import.meta.dir, '..');
 const DOCS = resolve(SITE, '..');
@@ -80,14 +82,6 @@ function slugger() {
   };
 }
 
-function plain(tokens: Token[] | undefined): string {
-  return (tokens ?? []).map(t => ('tokens' in t && t.tokens ? plain(t.tokens) : 'text' in t ? decode(String(t.text)) : '')).join('');
-}
-
-function decode(s: string): string {
-  return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
-}
-
 function routeName(path: string): string {
   if (path === '/') return 'home';
   return path.split(/[/-]/).filter(Boolean).map((w, i) => (i ? w[0].toUpperCase() + w.slice(1) : w)).join('');
@@ -97,7 +91,7 @@ const GITHUB_DOCS = 'https://github.com/expo/exact/blob/main/docs/';
 const docsUrlOf = new Map(sections.flatMap(s => s.pages).map(p => [GITHUB_DOCS + p.source, ORIGIN ? `${ORIGIN}${p.path === '/' ? '/index' : p.path}.md` : GITHUB_DOCS + p.source]));
 
 const PROMPTS = join(SITE, 'prompts');
-const promptOf = (source: string) => existsSync(join(PROMPTS, source)) ? `${readFileSync(join(PROMPTS, source), 'utf8').trim()}\n\n` : '';
+const folderPrompted: string[] = [];
 
 function read(nav: NavPage): Doc {
   const text = readFileSync(join(DOCS, nav.source), 'utf8')
@@ -106,7 +100,9 @@ function read(nav: NavPage): Doc {
   const tokens = marked.lexer(text, { gfm: true });
   let afterIntro = tokens[0]?.type === 'heading' && tokens[0].depth === 1 ? 1 : 0;
   while (tokens[afterIntro]?.type === 'space' || tokens[afterIntro]?.type === 'paragraph') afterIntro++;
-  tokens.splice(afterIntro, 0, ...marked.lexer(promptOf(nav.source), { gfm: true }));
+  const prompt = promptOf(PROMPTS, nav.source);
+  if (prompt.fromFolder) folderPrompted.push(nav.source);
+  tokens.splice(afterIntro, 0, ...marked.lexer(prompt.text, { gfm: true }));
   const slug = slugger();
   const anchors = new Map<string, string>();
   const intro: Token[] = [];
@@ -124,10 +120,15 @@ function read(nav: NavPage): Doc {
     }
     (parts.at(-1)?.tokens ?? intro).push(t);
   }
-  return { nav, title, description: nav.description ?? lead(intro, title), intro, sections: parts.filter(s => !SKIPPED_SECTIONS.has(s.anchor)), anchors };
+  return { nav, title, description: nav.description ?? descriptionOf(intro, title), intro, sections: parts.filter(s => !SKIPPED_SECTIONS.has(s.anchor)), anchors };
 }
 
 const docs = sections.flatMap(s => s.pages).map(read);
+const descriptionProblems = sectionDescriptionProblems(docs);
+if (descriptionProblems.length) {
+  console.error(descriptionProblems.join('\n'));
+  process.exit(1);
+}
 const bySource = new Map(docs.map(d => [d.nav.source, d]));
 const links: { from: string; to: string; anchor: string; ok: boolean }[] = [];
 
@@ -339,27 +340,17 @@ function render(page: SitePage): { blocks: Block[]; toc: TocItem[] } {
   return { blocks: out, toc };
 }
 
-function lead(tokens: Token[], fallback: string): string {
-  const sentences = tokens
-    .filter((t): t is Tokens.Paragraph => t.type === 'paragraph')
-    .flatMap(p => plain(p.tokens).replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s+(?=[A-Z])/))
-    .map(x => x.trim());
-  const sentence = sentences.find(x => x.length >= 40 && !x.endsWith(':')) ?? fallback;
-  if (sentence.length <= 180) return sentence;
-  const boundary = Math.max(0, sentence.lastIndexOf(' ', 177));
-  return `${sentence.slice(0, boundary).trimEnd()}…`;
-}
-
 const pages: SitePage[] = docs.flatMap(doc => {
   const base: SitePage = { route: doc.nav.route, path: doc.nav.path, title: doc.title, description: doc.description, source: doc.nav.source, tokens: doc.intro, tocDepth: 2, skipHeading: '', hidden: !!doc.nav.hidden, landing: !!doc.nav.landing };
   if (!doc.nav.split) return [{ ...base, tokens: [...doc.intro, ...doc.sections.flatMap(s => s.tokens)] }];
+  const written = doc.nav.sectionDescriptions ?? {};
   return [
     base,
     ...doc.sections.map(s => ({
       route: routeName(`${doc.nav.path}/${s.anchor}`),
       path: `${doc.nav.path}/${s.anchor}`,
       title: s.title,
-      description: lead(s.tokens, doc.description),
+      description: Object.hasOwn(written, s.anchor) ? written[s.anchor] : descriptionOf(s.tokens, doc.description),
       source: doc.nav.source,
       tokens: s.tokens,
       tocDepth: 3,
@@ -517,4 +508,5 @@ writeFileSync(APP, `${app.slice(0, begin + ROUTES_BEGIN.length)}\n${routes}\n${a
 const broken = links.filter(l => !l.ok);
 for (const l of broken) console.error(`broken link: ${l.from} -> ${l.to}`);
 console.log(`${pages.length} pages from ${docs.length} docs at Exact ${SHA.slice(0, 10)}, ${links.length} internal links, ${broken.length} broken`);
+if (folderPrompted.length) console.log(`no prompt of its own, so its folder's is shown: ${folderPrompted.join(', ')}`);
 if (broken.length || badRedirects.length) process.exit(1);

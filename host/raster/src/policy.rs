@@ -88,6 +88,15 @@ impl Drop for RasterLease {
             self.image.unpin();
             if self.image.output.pins() == 0 {
                 if let Some(session) = state.sessions.get_mut(&self.image.session) {
+                    let key = self.image.key;
+                    let unkept = session.entries.get(&key).is_some_and(|e| {
+                        e.retain == Retain::Held
+                            && SessionState::is_cold(e)
+                            && matches!(&e.phase, Phase::Ready { image, .. } if Arc::ptr_eq(image, &self.image))
+                    });
+                    if unkept {
+                        remove_entry(session, key, &mut garbage);
+                    }
                     enforce_cold_limit(session, &mut garbage);
                 }
             }
@@ -121,6 +130,21 @@ struct Entry {
     requests: BTreeSet<RequestId>,
     phase: Phase,
     touched: u64,
+    /// What becomes of the picture once no request or lease holds it.
+    retain: Retain,
+}
+/// Whether a picture nothing holds stays cached, cold.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Retain {
+    /// A view's decode: kept for a later view of its source, which asks
+    /// for it by the same key (LLP 1010 §6.3).
+    Kept,
+    /// Pixels only their holders can reach ([`RasterSession::request_held`],
+    /// a taken [`RasterSession::publish`], [`RasterSession::forget_source`]):
+    /// they leave.
+    Held,
+    /// Published pixels no reader has taken: kept for the first, then held.
+    Lent,
 }
 impl Entry {
     /// What removing this entry's image returns to the budget.
@@ -514,14 +538,26 @@ impl RasterSession {
     /// Same-view replacement validates all candidate metadata/capacity first.
     /// Temporary budget pressure retains the queued request and wakes on free.
     pub fn request(&self, demand: Demand) -> Result<RequestId, Refusal> {
-        self.subscribe(demand, false)
+        self.subscribe(demand, false, true)
+    }
+    /// [`RasterSession::request`] for pixels that are their holders' alone
+    /// (a canvas's picture): once the last request and lease let go, they
+    /// leave the session instead of staying cold, unless a view's
+    /// [`RasterSession::request`] for the same key keeps them.
+    pub fn request_held(&self, demand: Demand) -> Result<RequestId, Refusal> {
+        self.subscribe(demand, false, false)
     }
     /// Subscribe to a published bitmap while it is cached. Eviction returns
     /// `Stale` so the caller can request its file at the size it needs.
     pub fn request_cached(&self, demand: Demand) -> Result<RequestId, Refusal> {
-        self.subscribe(demand, true)
+        self.subscribe(demand, true, false)
     }
-    fn subscribe(&self, demand: Demand, cached_only: bool) -> Result<RequestId, Refusal> {
+    fn subscribe(
+        &self,
+        demand: Demand,
+        cached_only: bool,
+        kept: bool,
+    ) -> Result<RequestId, Refusal> {
         validate(demand)?;
         let mut garbage = Vec::new();
         let mut state = self.owner.gate.inner.state.lock().unwrap();
@@ -555,6 +591,9 @@ impl RasterSession {
         if let Some(id) = previous {
             if session.requests[&id].demand.key == demand.key {
                 session.requests.get_mut(&id).unwrap().demand = demand;
+                if kept {
+                    session.entries.get_mut(&demand.key).unwrap().retain = Retain::Kept;
+                }
                 drop(state);
                 self.owner.gate.inner.wake.notify();
                 return Ok(id);
@@ -605,6 +644,9 @@ impl RasterSession {
             }
             entry.requests.insert(id);
             entry.touched = identity();
+            if kept {
+                entry.retain = Retain::Kept;
+            }
             session.dedup_hits += 1;
         } else {
             session.entries.insert(
@@ -615,6 +657,7 @@ impl RasterSession {
                     requests: BTreeSet::from([id]),
                     phase: Phase::Queued { budget: false },
                     touched: identity(),
+                    retain: if kept { Retain::Kept } else { Retain::Held },
                 },
             );
         }
@@ -716,6 +759,9 @@ impl RasterSession {
         // cold or admit another metadata owner between cloning and pinning.
         let lease = RasterLease::new(image.clone());
         entry.touched = identity();
+        if entry.retain == Retain::Lent {
+            entry.retain = Retain::Held;
+        }
         drop(state);
         if released {
             self.owner.gate.inner.wake.notify();
@@ -837,6 +883,31 @@ impl RasterSession {
     pub fn trim_generation(&self, generation: u64) {
         self.trim_cold(0, Some(generation));
     }
+    /// No ask can reach `source` in `generation` again (its file was
+    /// replaced or deleted): its cold pictures go now, and those still held
+    /// go when their last request and lease let go.
+    pub fn forget_source(&self, source: u64, generation: u64) {
+        let mut garbage = Vec::new();
+        let mut state = self.owner.gate.inner.state.lock().unwrap();
+        if let Some(s) = state.sessions.get_mut(&self.id()) {
+            let keys: Vec<_> = s
+                .entries
+                .keys()
+                .filter(|k| k.source == source && k.generation == generation)
+                .copied()
+                .collect();
+            for key in keys {
+                let entry = s.entries.get_mut(&key).unwrap();
+                entry.retain = Retain::Held;
+                if SessionState::is_cold(entry) {
+                    remove_entry(s, key, &mut garbage);
+                }
+            }
+        }
+        drop(state);
+        drop(garbage);
+        self.owner.gate.inner.wake.notify();
+    }
     fn trim_cold(&self, bytes: u64, generation: Option<u64>) {
         let mut garbage = Vec::new();
         let mut state = self.owner.gate.inner.state.lock().unwrap();
@@ -862,6 +933,9 @@ impl RasterSession {
     }
     /// Cache already decoded pixels under a fresh key, charging just their
     /// backing allocation. A later subscriber pins them like a decoder result.
+    /// They are lent to the readers of the file they were written to: cached
+    /// until the first takes them, and gone once the last lets go, since
+    /// whether the file still holds them is known only by asking.
     pub fn publish<T: Any + Send + Sync>(
         &self,
         demand: Demand,
@@ -922,6 +996,7 @@ impl RasterSession {
                     delivery: false,
                 },
                 touched: identity(),
+                retain: Retain::Lent,
             },
         );
         enforce_cold_limit(session, &mut garbage);
@@ -1196,14 +1271,18 @@ fn cancel_request(
         };
         if let (true, Phase::Ready { image, delivery }) = (ready, &mut e.phase) {
             // Decoded, delivered or not: kept cold, as a picture its view let
-            // go of is, for the next view that asks for it. An undelivered one
-            // gives its delivery cell back.
+            // go of is, for the next view that asks for it, unless no view
+            // keeps it and no lease holds it. An undelivered one gives its
+            // delivery cell back.
             if *delivery {
                 *delivery = false;
                 s.cells -= 1;
             }
             image.unpin();
             e.touched = identity();
+            if e.retain == Retain::Held && SessionState::is_cold(e) {
+                remove_entry(s, key, garbage);
+            }
         } else {
             // remove_entry normally unpins live ready interest; this last
             // subscriber was removed immediately above, so account it here.

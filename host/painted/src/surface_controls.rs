@@ -657,6 +657,31 @@ impl<D: DataSource> Presenter<D> {
 }
 
 impl<D: DataSource> Presenter<D> {
+    /// The next node an event bubbles to from `id`: a `portal` mover's
+    /// declaration parent (LLP 1013.002 D1), else its displayed parent.
+    pub(crate) fn listener_parent(
+        &self,
+        kernel: &exact_kernel::Kernel,
+        id: ViewId,
+    ) -> Option<ViewId> {
+        (self.host.runner().declared_parent(id))
+            .filter(|&p| kernel.node(p).is_some())
+            .or_else(|| self.display.parent(kernel, id))
+    }
+
+    /// Whether `id` is in a hidden `portal` mover's subtree: live, and
+    /// shown nowhere (LLP 1013.002 D5).
+    pub(crate) fn in_hidden_mover(&self, id: ViewId) -> bool {
+        let kernel = self.host.kernel();
+        let Some(mut at) = kernel.node(id).map(|n| n.id) else {
+            return false;
+        };
+        while let Some(up) = kernel.node(at).and_then(|n| n.parent) {
+            at = up;
+        }
+        self.host.runner().hidden_movers().contains(&at)
+    }
+
     /// The nearest node at or above `id` with a handler for `kind`.
     pub(crate) fn handler_target(&self, id: ViewId, kind: EventKind) -> Option<ViewId> {
         if kind != EventKind::Scroll && self.brush.region_blocks_action(id) {
@@ -688,7 +713,7 @@ impl<D: DataSource> Presenter<D> {
             } else if self.host.runner().handlers_of(n).contains(&kind) {
                 return Some(n);
             }
-            at = self.display.parent(kernel, n);
+            at = self.listener_parent(kernel, n);
         }
         None
     }
@@ -718,7 +743,7 @@ impl<D: DataSource> Presenter<D> {
             {
                 return Some(n);
             }
-            at = self.display.parent(kernel, n);
+            at = self.listener_parent(kernel, n);
         }
         None
     }
@@ -748,7 +773,7 @@ impl<D: DataSource> Presenter<D> {
             {
                 return Some(id);
             }
-            at = node.parent;
+            at = (self.host.runner().declared_parent(id)).or(node.parent);
         }
         None
     }
@@ -770,7 +795,7 @@ impl<D: DataSource> Presenter<D> {
         if self.group_grip(id).is_some() {
             return true;
         }
-        self.host.kernel().node(id).is_some_and(|n| {
+        !self.in_hidden_mover(id) && self.host.kernel().node(id).is_some_and(|n| {
             n.computed_row(exact_kernel::StyleId::Visibility, |s| s.visibility)
                 == exact_kernel::Visibility::Visible
                 && !disabled_control(&n)

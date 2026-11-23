@@ -147,7 +147,7 @@ struct TestWork;
 impl exact_runner::HostWork for TestWork {}
 mod shortcuts;
 mod status_bar;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 pub(crate) mod still;
 mod swipe;
 mod timeline_scroll;

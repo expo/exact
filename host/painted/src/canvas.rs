@@ -40,9 +40,10 @@
 //! - `42 BACKDROP n (kind amount)×n x y w h radii×8` — filter what this recording drew so far
 //!   inside that rounded rect, in order: kind 0 blur (local units), 1 saturation (multiplier)
 //!   (replaces the radius-only op 27; an older reader must refuse the new op)
-//! - `28 NATIVE view kind|direct<<8 x y w h radii×8 len utf8-json` — a platform element (`paint/native.rs`;
-//!   kind 0 video, 1 web view, 2 module) shown in that rounded rect: the reader draws the
-//!   platform view's own drawing there
+//! - `28 NATIVE view kind|direct<<8|held<<9 x y w h radii×8 len utf8-json` — a platform element
+//!   (`paint/native.rs`; kind 0 video, 1 web view, 2 module) shown in that rounded rect: the reader
+//!   draws the platform view's own drawing there. `held`: a video shown nowhere, in an empty rect;
+//!   the reader keeps it, its player and its size, out of view
 //! - `40 SHADOW color sigma x y w h radii×8 bx by bw bh bradii×8` — an outer
 //!   `box-shadow`: the rounded rect blurred by `sigma` (local units), drawn only
 //!   outside the border box `b…` (`canvas/shadow.rs`)
@@ -731,6 +732,14 @@ impl Backend for Recorder {
         self.record_native(id, crate::paint::NativeKind::Video, &empty, props);
     }
 
+    fn held_video(&mut self, id: ViewId, props: &str) {
+        self.transform(Transform::identity());
+        let at = self.ops.len();
+        let empty = Shape::rect((0., 0., 0., 0.));
+        self.record_native(id, crate::paint::NativeKind::Video, &empty, props);
+        self.ops[at + 2] |= 1 << 9;
+    }
+
     fn canvas(&mut self, pixels: &Arc<Pixmap>, dst: Rect4, clips: &[Shape], ts: Transform) {
         // A canvas is drawn by the presenter into pixels (Canvas 2D in Rust);
         // the reader shows them as a picture, sent again when they change.
@@ -1069,7 +1078,7 @@ pub struct CanvasHost<D: DataSource> {
     viewport: (f32, f32),
     /// The last paint: what it showed besides scroll offsets, the offsets,
     /// and its scrollers with the offsets their rows were drawn at.
-    painted: Option<Painted>,
+    painted: Option<scroll::Painted>,
     /// Frames since the last paint that moved it instead, and when the
     /// last of them was (ms).
     moved: u32,
@@ -1137,18 +1146,14 @@ pub struct CanvasHost<D: DataSource> {
     /// A touch came: until its frame is out, collection passes build only
     /// the rows that show (a slice of 0); the lead follows that frame.
     responding: bool,
+    /// The kernel's layout stamp when the reader was last told where its
+    /// scrollers are: `None` from a paint or a new reader until it is told.
+    told: Option<(u64, u64, u64)>,
     /// The reader's window and what it was last told to draw around the page.
     shell: device::Shell,
     /// Pictures the reader will report presented (LLP 1003.001 D9), by token.
     presents: present::Pictures,
     launch: crate::launch_marks::LaunchMarks,
-}
-
-#[cfg(target_os = "android")]
-struct Painted {
-    still: crate::presenter::still::Still,
-    scroll: std::collections::BTreeMap<ViewId, (f32, f32)>,
-    groups: Vec<(u32, (f32, f32))>,
 }
 
 /// At most this many frames move the last paint before one paints again:
@@ -1251,7 +1256,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
             }
         }
 
-        if let Some(mut shift) = self.shift(now) {
+        if let Some(mut shift) = self.shift(now, false) {
             // A play that changed since the last stream (a row that came
             // into view starts its animations): its layer's tracks go with
             // the move, where the reader takes them there.
@@ -1285,11 +1290,8 @@ impl<D: DataSource + Default> CanvasHost<D> {
         }
         p.update_launched();
         self.painted_once = true;
-        self.painted = p.still().map(|still| Painted {
-            still,
-            scroll: p.scroll_offsets().clone(),
-            groups: GROUPS.with(|g| g.borrow().clone()),
-        });
+        self.painted = scroll::Painted::capture(p);
+        self.told = None;
         self.moved = 0;
         self.paint_by = None;
         self.force = false;
@@ -1339,7 +1341,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.moved > 0 && self.moves < 1000 && now - self.moved_at >= 12.0
     }
 
-    fn shift(&mut self, at: f64) -> Option<Vec<u32>> {
+    fn shift(&mut self, at: f64, reader_only: bool) -> Option<Vec<u32>> {
         let p = &self.p;
         // Rows mounted out of view since the paint (a quiet epoch) show at the
         // next one, so it comes sooner: they may scroll in within a quarter
@@ -1356,22 +1358,10 @@ impl<D: DataSource + Default> CanvasHost<D> {
         if !p.dirty() || self.force || self.moved >= limit {
             return None;
         }
-        let painted = self.painted.as_ref()?;
-        let still = p.still()?;
-        let same = still == painted.still
-            || self
-                .quiet
-                .is_some_and(|epoch| painted.still.same_at(&still, epoch));
-        if !same {
-            return None;
-        }
-        let ops = scroll::shift_groups(
-            &painted.scroll,
-            p.scroll_offsets(),
-            &painted.groups,
-            self.scale,
-        )?;
-        self.p.moved_without_paint();
+        let ops = self
+            .painted
+            .as_ref()?
+            .shift(&mut self.p, self.quiet, self.scale, reader_only)?;
         self.moved += 1;
         self.moved_at = at;
         Some(ops)

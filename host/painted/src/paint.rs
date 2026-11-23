@@ -140,8 +140,7 @@ impl BoxPaint {
         let colors = s.border_colors(current);
         // A length may read the safe area where the box is (LLP 1123 D9)
         let env = kernel.env_of(node.id);
-        // The padding layout resolved, which input reads too: a percentage
-        // is of the containing block's width
+        // Layout resolves percentage padding against the containing block's width.
         let (left, top, right, bottom) = kernel.resolved_padding(node.key).unwrap_or_default();
         // @ref LLP 1053.000 D4 — a material wins over `backdrop-filter`; a
         // name the table lacks draws ultra-thin ([`material_note`]).
@@ -833,6 +832,7 @@ impl Painter {
             dialog: None,
         };
         let old_bars = std::mem::take(&mut self.scrollbars.bars);
+        self.held_media(scene.kernel);
         self.rows_begin(&walk);
         let kept = self.kept_places(&walk, None, scene.roots);
         let page = self.drawn_scroll(scene.page);

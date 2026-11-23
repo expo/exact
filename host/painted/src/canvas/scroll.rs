@@ -11,21 +11,22 @@
 //! whose rows the collection passes are timed for (`refine.rs`).
 
 #[cfg(target_os = "android")]
-use super::{CanvasHost, Section, GROUPS};
+use super::{CanvasHost, Section};
+use super::{GROUPS, SHIFT};
 #[cfg(target_os = "android")]
 use crate::presenter::PAGE;
-#[cfg(target_os = "android")]
+use crate::presenter::{still::Still, Presenter};
+use exact_kernel::ViewId;
 use exact_runner::DataSource;
-#[cfg(any(target_os = "android", test))]
 use std::collections::BTreeMap;
 
 /// A move-only frame can move just the offsets with a recorded group.
-#[cfg(any(target_os = "android", test))]
-pub(super) fn shift_groups(
+fn shift_groups(
     before: &BTreeMap<u32, (f32, f32)>,
     now: &BTreeMap<u32, (f32, f32)>,
     groups: &[(u32, (f32, f32))],
     scale: f32,
+    can_place: impl Fn(ViewId) -> bool,
 ) -> Option<Vec<u32>> {
     let others = |offsets: &BTreeMap<u32, (f32, f32)>| {
         offsets
@@ -37,10 +38,13 @@ pub(super) fn shift_groups(
     if others(now) != others(before) {
         return None;
     }
-    let mut ops = vec![super::SHIFT, groups.len() as u32];
+    let mut ops = vec![SHIFT, groups.len() as u32];
     for (id, at) in groups {
         let to = now.get(id).copied().unwrap_or_default();
         let shift = crate::paint::grid::pixel_delta(*at, to, scale);
+        if shift != (0., 0.) && !can_place(*id) {
+            return None;
+        }
         ops.extend([*id, shift.0.to_bits(), shift.1.to_bits()]);
     }
     Some(ops)
@@ -83,11 +87,57 @@ impl ScrollHold {
     pub(super) fn quick(&self) -> bool {
         self.scroll_turn
     }
+    fn can_skip(&self, lead: bool) -> bool {
+        lead && self.quick()
+    }
     pub(super) fn take_request_skip(&mut self) -> bool {
         std::mem::take(&mut self.scroll_turn)
     }
     pub(super) fn owed(&self) -> bool {
         self.scrolled
+    }
+}
+
+pub(super) struct Painted {
+    pub(super) still: Still,
+    scroll: BTreeMap<ViewId, (f32, f32)>,
+    pub(super) groups: Vec<(ViewId, (f32, f32))>,
+}
+
+impl Painted {
+    pub(super) fn capture<D: DataSource>(p: &Presenter<D>) -> Option<Self> {
+        Some(Self {
+            still: p.still()?,
+            scroll: p.scroll_offsets().clone(),
+            groups: GROUPS.with(|g| g.borrow().clone()),
+        })
+    }
+
+    pub(super) fn shift<D: DataSource>(
+        &self,
+        p: &mut Presenter<D>,
+        quiet: Option<u64>,
+        scale: f32,
+        reader_only: bool,
+    ) -> Option<Vec<u32>> {
+        if p.reader_selection_active() || (reader_only && !p.reader_moves_stand()) {
+            return None;
+        }
+        let still = p.still()?;
+        let same =
+            still == self.still || quiet.is_some_and(|epoch| self.still.same_at(&still, epoch));
+        if !same {
+            return None;
+        }
+        let ops = shift_groups(
+            &self.scroll,
+            p.scroll_offsets(),
+            &self.groups,
+            scale,
+            |id| !reader_only || p.reader_places_group(id, scale),
+        )?;
+        p.moved_without_paint();
+        Some(ops)
     }
 }
 
@@ -232,14 +282,34 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.p.wheel_zoom(x / s, y / s, dy);
     }
 
-    /// What the reader is told of the scrollers it knows, when that changes.
-    /// The recording's scale precedes the words from
-    /// [`crate::presenter::Presenter::reader_scrollers`].
+    /// The recording's scale followed by the scroller statement
+    /// ([`crate::presenter::Presenter::reader_scrollers`]).
     pub fn scrollers(&mut self) -> Option<Vec<i32>> {
         let scale = self.scale;
-        let mut words = GROUPS.with(|g| self.p.reader_scrollers(&g.borrow(), scale))?;
+        let words = GROUPS.with(|g| self.p.reader_scrollers(&g.borrow(), scale));
+        self.told = Some(self.p.host().kernel().layout_stamp());
+        let mut words = words?;
         words.insert(0, scale.to_bits() as i32);
         Some(words)
+    }
+
+    /// After the reader's scroll step: whether its frame would only move the
+    /// grouped rows the reader already moved. Skip only a quick scroll turn
+    /// when the reader's offsets and layout agree with the host and no other
+    /// work needs a frame. [`Self::shift`] takes the move as a frame would,
+    /// leaving no stream to send.
+    pub fn moved(&mut self) -> bool {
+        let now = self.now();
+        let quiet = self.scroll_hold.can_skip(self.lead)
+            && !self.responding
+            && !self.surfaces
+            && !self.owed_surfaces
+            && self.p.turn_due_ms(now).is_none_or(|due| due > 0.0)
+            && self.told == Some(self.p.host().kernel().layout_stamp())
+            && !self.p.bar_scroll_changed()
+            && (!self.move_tracks || self.p.host().lowered_epoch() == self.tracks.epoch)
+            && !super::agent::waiting();
+        quiet && self.shift(now, true).is_some()
     }
 
     /// Before a driver's scroll: a feed whose node is gone (its page was
@@ -257,7 +327,164 @@ impl<D: DataSource + Default> CanvasHost<D> {
 
 #[cfg(test)]
 mod tests {
+    use super::{Painted, ScrollHold};
     use crate::presenter::{PainterChoice, Presenter};
+    use exact_kernel::ViewId;
+
+    const LIST: &str = r#"component App
+  view
+    scroll testId="list" width=200 height=200
+      box height=80 flex-shrink=0
+      text "Selected word" testId="text" user-select="text" font-size=16
+      box height=400 flex-shrink=0
+"#;
+
+    fn boot(plan: &[u8]) -> Presenter<()> {
+        let (p, error) = Presenter::boot_with(
+            plan,
+            (),
+            (200., 200.),
+            1.,
+            Default::default(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p
+    }
+
+    fn named(p: &Presenter<()>, name: &str) -> ViewId {
+        let k = p.host().kernel();
+        k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id
+    }
+
+    fn paint(p: &mut Presenter<()>) -> Vec<u32> {
+        let frame = p.display_frame().unwrap();
+        assert!(p.display_complete(&frame));
+        super::super::FINISHED
+            .with(|f| f.borrow_mut().take())
+            .unwrap()
+    }
+
+    #[test]
+    fn a_grouped_scroll_keeps_its_turn_until_prefetching_begins() {
+        let mut p = boot(&crate::test_plan(LIST));
+        paint(&mut p);
+        let list = named(&p, "list");
+        let painted = Painted::capture(&p).unwrap();
+        assert!(painted.groups.iter().any(|(id, _)| *id == list));
+        p.reader_under(30., 50., 1.);
+        let mut hold = ScrollHold::default();
+        assert_eq!(p.reader_scrolled(list, (0., 40.), 0), Some((0., 40.)));
+        hold.note_scroll(false);
+        assert!(!hold.can_skip(true));
+        hold.note_scroll(true);
+        assert!(hold.can_skip(true));
+        assert!(painted.shift(&mut p, None, 1., false).is_some());
+    }
+
+    #[test]
+    fn selection_marks_and_handles_follow_a_grouped_scroll() {
+        let mut p = boot(&crate::test_plan(LIST));
+        paint(&mut p);
+        let list = named(&p, "list");
+        let text = named(&p, "text");
+        let painted = Painted::capture(&p).unwrap();
+        assert!(painted.groups.iter().any(|(id, _)| *id == list));
+        p.reader_under(30., 50., 1.);
+        let (x, y, _, _) = p.rect_of(text).unwrap();
+        let before = p.reader_select(0, x + 10., y + 8., 1.).unwrap();
+
+        assert_eq!(p.reader_scrolled(list, (0., 40.), 0), Some((0., 40.)));
+        if painted.shift(&mut p, None, 1., false).is_none() {
+            paint(&mut p);
+        }
+        let after = p.reader_select(4, 0., 0., 1.).unwrap();
+        for (old, new) in [
+            (&before["marks"][0], &after["marks"][0]),
+            (&before["start"], &after["start"]),
+            (&before["end"], &after["end"]),
+        ] {
+            for (i, delta) in [(0, 0.), (1, -40.), (2, 0.), (3, -40.)] {
+                assert_eq!(new[i].as_f64().unwrap(), old[i].as_f64().unwrap() + delta);
+            }
+        }
+        assert_eq!(after["clip"], before["clip"]);
+    }
+
+    #[test]
+    fn a_zoomed_pan_paints_the_ungrouped_child_at_its_new_offset() {
+        let mut p = boot(&crate::test_plan(
+            r#"component App
+  view
+    scroll testId="zoom" width=200 height=200 scrollZoom=2 -exact-max-zoom=4
+      box testId="image" width=160 height=160 background-color="red"
+"#,
+        ));
+        paint(&mut p);
+        let zoom = named(&p, "zoom");
+        let child = named(&p, "image");
+        let painted = Painted::capture(&p).unwrap();
+        let hit = p.reader_under(50., 50., 1.);
+        assert_eq!(hit[3] as ViewId, zoom);
+        assert_eq!(hit[4] & 4, 0, "no row node in the touch answer");
+        let words = p.reader_scrollers(&painted.groups, 1.).unwrap();
+        assert_eq!(words[1] & 4, 0, "no row node in the scroller statement");
+        let before = p.rect_of(child).unwrap();
+        assert_eq!(p.reader_scrolled(zoom, (20., 30.), 0), Some((20., 30.)));
+        assert!(painted.shift(&mut p, None, 1., false).is_none());
+        let ops = paint(&mut p);
+        assert_ne!(ops.first(), Some(&super::SHIFT));
+        let after = p.rect_of(child).unwrap();
+        assert_eq!(after, (before.0 - 20., before.1 - 30., before.2, before.3));
+    }
+
+    #[test]
+    fn an_adopted_reader_observes_the_epoch_after_animated_layers_leave() {
+        use super::super::{layer, Recorder};
+
+        let mut p = boot(&crate::test_plan(
+            r#"keyframes enter
+  from opacity=0
+  to opacity=1
+
+component App
+  state shown = false
+  action toggle
+    shown = !shown
+  view
+    column
+      button "Toggle" testId="toggle" press=toggle
+      if shown
+        box width=50 height=50 background-color="red" animation="enter 300ms linear both"
+"#,
+        ));
+        p.host_mut().lowering = true;
+        p.host_mut()
+            .engine
+            .set_lowered_properties(&[exact_motion::Property::Opacity]);
+        let toggle = named(&p, "toggle");
+        let mut tracks = super::super::tracks::Tracks::default();
+        p.tap(toggle).unwrap();
+        let mut ops = paint(&mut p);
+        assert!(!layer::ALIVE.with(|a| a.borrow().is_empty()));
+        tracks.send(&p, 0, &mut ops);
+        p.tap(toggle).unwrap();
+        let mut ops = paint(&mut p);
+        assert!(layer::ALIVE.with(|a| a.borrow().is_empty()));
+        tracks.send(&p, 0, &mut ops);
+        let epoch = p.host().lowered_epoch();
+        assert!(epoch > 0);
+
+        p.reader_replaced(Box::new(Recorder::new()));
+        let mut adopted = super::super::tracks::Tracks::default();
+        paint(&mut p);
+        assert!(layer::ALIVE.with(|a| a.borrow().is_empty()));
+        let mut tracks = Vec::new();
+        adopted.send(&p, 0, &mut tracks);
+        assert!(tracks.is_empty());
+        assert_eq!(adopted.epoch, epoch);
+    }
 
     fn props(p: &mut Presenter<()>) -> serde_json::Value {
         p.frame();
@@ -396,7 +623,7 @@ mod tests {
         assert_eq!(f32::from_bits(words[4] as u32), target);
         assert_eq!(f32::from_bits(words[6] as u32), 20.);
         let now = super::BTreeMap::from([(port, p.scroll_of(port))]);
-        let shift = super::shift_groups(&before, &now, &groups, scale).unwrap();
+        let shift = super::shift_groups(&before, &now, &groups, scale, |_| true).unwrap();
         assert_eq!(shift, [SHIFT, 1, port, 0, (-1_f32).to_bits()]);
         p.frame();
         assert_eq!(row_top() - top, -1.);
@@ -476,7 +703,7 @@ mod tests {
         }
     }
 
-    fn boot(source: &str) -> Presenter<()> {
+    fn boot_on_pixels(source: &str) -> Presenter<()> {
         boot_at(source, 2.625)
     }
 
@@ -502,7 +729,7 @@ mod tests {
 
     #[test]
     fn a_retained_sticky_header_stays_at_the_port() {
-        let mut p = boot(
+        let mut p = boot_on_pixels(
             r#"component App
   view
     scroll width=200 height=100 testId="port"
@@ -521,7 +748,7 @@ mod tests {
 
     #[test]
     fn a_sticky_scroller_is_not_offered_for_reader_translation() {
-        let mut p = boot(
+        let mut p = boot_on_pixels(
             r#"component App
   view
     scroll width=200 height=100 testId="port"
@@ -537,7 +764,7 @@ mod tests {
         p.scroll_to(port, (0., 20. / 2.625)).unwrap();
         let now = std::collections::BTreeMap::from([(port, p.scroll_of(port))]);
         assert!(
-            super::shift_groups(&before, &now, &groups, 2.625).is_none(),
+            super::shift_groups(&before, &now, &groups, 2.625, |_| true).is_none(),
             "a move-only frame would move the sticky box"
         );
         assert_eq!(
@@ -563,7 +790,7 @@ mod tests {
           box height=200
       button width=20 height=20 press=move testId="move"
 "#;
-        let mut p = boot(source);
+        let mut p = boot_on_pixels(source);
         let (row, child, button) = (id(&p, "row"), id(&p, "child"), id(&p, "move"));
         let row_at = p.rect_of(row).unwrap();
         assert_eq!(p.rect_of(child).unwrap().1, 0.);
@@ -585,7 +812,7 @@ mod tests {
 
     #[test]
     fn zoom_scales_the_layout_box_and_reaches_its_far_edge() {
-        let mut p = boot(
+        let mut p = boot_on_pixels(
             r#"component App
   view
     scroll width=100 height=100 -exact-max-zoom=10 scrollZoom=10 testId="port"
@@ -612,7 +839,7 @@ mod tests {
 
     #[test]
     fn a_zoom_port_and_its_child_share_layout_geometry() {
-        let mut p = boot(
+        let mut p = boot_on_pixels(
             r#"component App
   view
     row
@@ -635,7 +862,7 @@ mod tests {
     fn a_scaled_sticky_header_stays_on_its_stick_line() {
         use super::super::{stream, FINISHED, MATRIX, ROW_BEGIN, ROW_DRAW, RRECT};
 
-        let mut p = boot(
+        let mut p = boot_on_pixels(
             r#"component App
   view
     scroll width=400 height=100 testId="port"
@@ -698,7 +925,7 @@ mod tests {
     fn a_distant_row_replays_its_hits_at_the_drawn_edge() {
         use super::super::{stream, FINISHED, ROW_BEGIN, ROW_DRAW, ROW_PAD};
 
-        let mut p = boot(
+        let mut p = boot_on_pixels(
             r#"component App
   view
     scroll width=200 height=100 testId="port"
@@ -797,7 +1024,7 @@ mod tests {
             .map(|(i, w)| format!("      text testId=\"t{i}\" \"{w}\"\n"))
             .collect();
         for lead in [10.0, 10.07, 10.13, 10.19, 10.26, 10.31] {
-            let p = boot(&format!(
+            let p = boot_on_pixels(&format!(
                 "component App\n  view\n    row width=2000 flex-wrap=\"wrap\"\n      box width={lead} height=10\n{texts}"
             ));
             for (i, word) in words.iter().enumerate() {

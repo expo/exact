@@ -145,7 +145,7 @@ package final class NativeButtonIOS: UIButton {
     }
     package override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         #if EXACT_AGENT
-        if ExactEnv.agentCarried { TouchLog.reach(touches) }
+        if TouchLog.recording { TouchLog.reach(touches) }
         #endif
         super.touchesBegan(touches, with: event)
     }

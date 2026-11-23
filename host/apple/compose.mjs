@@ -7,6 +7,7 @@ import { spawnSync, swiftOptimization } from './toolchain.mjs';
 import { evictArms, probeDigest } from './arms.mjs';
 import { swiftPackagesProblems } from '../../scripts/app.mjs';
 import { appleImplementations, moduleInterfaces } from '../../js/bake/src/typescript.mjs';
+import { packageConfig, sourceString } from '../../js/bake/src/package-config.mjs';
 import { machOType } from './assets.mjs';
 import { capturePrivacyManifest } from './privacy.mjs';
 // The Swift that composes an app's module with its packages' implementations (LLP 1133.001 D5), which
@@ -102,8 +103,14 @@ public func exactPackageCreate(_ raw: UnsafeMutableRawPointer) -> UnsafeMutableR
 `;
 }
 
-/** The initial library contains metadata and factories, without importing a package's implementation. */
-export function composedModule(packages, ownModule) {
+/** Each used package's configuration for an Apple `target` (`ios`, `macos` or `tvos`), by extension, refused as
+ * package-config.mjs says; `release` is a production or distributed build. */
+export const appleConfig = (app, target, extensions, release) =>
+  packageConfig(app.dir, target, { extensions, release, warn: (m) => console.warn(`${app.name}: ${m}`) });
+
+/** The initial library contains metadata and factories, without importing a package's implementation, and each
+ * package's configuration (`config`, [appleConfig]'s) as JSON, which `ExactPackageContext.config` reads. */
+export function composedModule(packages, ownModule, config = new Map()) {
   const authenticator = packages.find(p => p.authenticator);
   const lines = ['// Written by host/apple/build.mjs; never edited.'];
   lines.push(`let exactAuthenticator: String? = ${authenticator ? JSON.stringify(authenticator.extension) : 'nil'}`);
@@ -112,6 +119,8 @@ export function composedModule(packages, ownModule) {
   lines.push(`let exactCredentialMembers: [String: String] = [${members.join(', ') || ':'}]`);
   lines.push(`let exactExtensions: [String: (ExactModule, String) -> ExactExtensionAdapter] = [${packages.map(p => `${JSON.stringify(p.extension)}: { ExactPackageLibrary.adapter($0, ${JSON.stringify(p.extension)}, module: ${JSON.stringify(p.module)}, session: $1) }`).join(', ') || ':'}]`);
   lines.push(`let exactPackageModules: [String: String] = [${packages.map(p => `${JSON.stringify(p.extension)}: ${JSON.stringify(p.module)}`).join(', ') || ':'}]`);
+  const configured = packages.filter(p => Object.keys(config.get(p.extension) ?? {}).length);
+  lines.push(`let exactPackageConfig: [String: String] = [${configured.map(p => `${JSON.stringify(p.extension)}: ${sourceString(JSON.stringify(config.get(p.extension)), 'swift')}`).join(', ') || ':'}]`);
   const views = packages.flatMap(p => (p.views ?? []).map(tag => `${JSON.stringify(tag)}: ExactNativeFactory(package: { try ExactExtensions.view($0, ${JSON.stringify(p.extension)}, ${JSON.stringify(tag)}, id: $1, props: $2, events: $3) })`));
   lines.push(`let exactPackageViews: [String: ExactNativeFactory] = [${views.join(', ') || ':'}]`);
   if (!ownModule) lines.push('final class ExactComposedModule: ExactModule {}', 'let exactModule: ExactModule.Type = ExactComposedModule.self');

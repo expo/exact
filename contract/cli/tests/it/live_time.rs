@@ -365,3 +365,33 @@ fn a_live_time_in_a_portal_keeps_ticking_after_its_destination_dies() {
     r.advance(61_000.).unwrap();
     assert_eq!(text(&r, "timer"), "01:01");
 }
+
+#[test]
+fn a_live_time_in_a_portal_ends_with_its_declaration_while_shown() {
+    // LLP 1013.002 D2: the destroy of the declaration takes the mover and
+    // the clock inside it, though the mover is shown elsewhere.
+    let source = r#"component App
+  state alive = true
+  action toggle
+    alive = not alive
+  view
+    column
+      box id="slot"
+      if alive
+        box portal="slot" testId="card"
+          time datetime=0 format="timer" testId="timer"
+"#;
+    let plan = contract::bake(contract::compile(source).unwrap(), boxed(NoData)).unwrap();
+    let mut r = Runner::boot(
+        plan,
+        boxed(NoData),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    assert_eq!(text(&r, "timer"), "00:00");
+    r.act("toggle", vec![]).unwrap();
+    assert!(r.kernel().find_first_by_test_id("timer").is_none());
+    r.advance(61_000.).unwrap();
+}

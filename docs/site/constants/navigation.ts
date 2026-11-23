@@ -7,6 +7,7 @@ export type NavPage = {
   source: string;
   description?: string;
   split?: boolean;
+  sectionDescriptions?: Record<string, string>;
   hidden?: boolean;
   landing?: boolean;
 };
@@ -90,6 +91,10 @@ export const sections: NavSection[] = [
         source: 'contract-for-agents.md',
         split: true,
         description: 'Contract for an agent building an app: lookup by section for what no recipe covers.',
+        sectionDescriptions: {
+          'values-expressions-and-functions': 'An expression Contract accepts means what the same TypeScript means, except as the section\'s table says, and a TypeScript form Contract refuses is refused with what to write.',
+          'repair-common-mistakes': 'The forms the compiler refuses or that mislead, each with what to write instead, and the rules for repairing a refusal.',
+        },
       },
     ],
   },
@@ -106,15 +111,17 @@ export const sections: NavSection[] = [
       'content-design': 'Chrome is the platform\'s; the content is yours: rows, grouping, where actions sit.',
       convex: '@exact/convex keeps Convex queries live over one socket, with nothing polled.',
       displays: '@exact/window-management (LLP 1178): the displays by the web\'s Window Management API, and where the pointer is, which the web cannot ask.',
+      'drag-out': 'A node a person will lift and drop into another app says so with HTML\'s draggable attribute and declares what the drag carries.',
       'edit-sheet': 'A row that opens its item\'s sheet is a link: a tap, a deep link and Back all arrive at follow.',
       'editable-rows': 'Rows added and removed while editing: each row\'s remove is a red minus-circle and a swipe; Add is the section\'s last row.',
       'fetch-loading-error': 'A fetched resource with loading, an error and Retry, whose rows belong to the owner that asked for them.',
-      'files-and-grants': 'Where an app keeps what it keeps, and the line of app.ts\'s grants that reaches it:',
+      'files-and-grants': 'Where an app keeps what it keeps, and the line of app.ts\'s grants that reaches it.',
       foldables: 'A foldable (the iPhone Duo) splits its inner display at the hinge when partially folded.',
       'gpu-module': 'A canvas that the app\'s GPU module draws in Rust: a gpu/ crate beside app.json.',
+      'gpu-module-android': 'On Android, a GPU surface whose crates call into Java needs the app\'s Java VM and Context before its first request.',
       'in-app-browser': '@exact/in-app-browser opens a web page over the app, such as a checkout or a help page.',
       'ios-driving': 'Check a screen against a reference with compare, not by eye: bun exact.mjs agent ios captures as a device does and says where they differ.',
-      'keyboard-and-focus': 'Keep typing or dismiss the keyboard.',
+      'keyboard-and-focus': 'Keep typing or dismiss the keyboard: the Return key, focus() and blur() from an action, and what a scroll does.',
       'local-network': 'A light, a printer or a NAS is found by DNS-SD with @exact/local-network and reached with fetch (LLP 1133.036).',
       'long-lists': 'A long list or grid that loads more: virtualized rows, each holding N cards.',
       'mobile-build': 'Release builds for a phone: the commands, signing, and where the artifact lands.',
@@ -128,15 +135,17 @@ export const sections: NavSection[] = [
       permissions: 'A native module that needs the person\'s permission (location here) is asked for in the app\'s own UI, read as a fact, and recovered from in the app\'s own UI.',
       'phone-manifest': 'A phone app\'s manifest: orientation, appearance, HTTP, and a public setting.',
       'porting-and-release': 'Name the port when you make it (exact new <path> --name and --bundle-id), then a release build and splitting the work.',
-      'ports-and-browsers': 'Ports.',
-      properties: 'In app.test.contract, state what should hold across the app\'s interactions:',
-      'random-and-shuffle': 'Rolls in the view: random-rolls.',
+      'ports-and-browsers': 'The port that web, test web and agent web serve on, the Bun and Chrome the launchers use, and the stores a drive keeps or resets.',
+      properties: 'In app.test.contract, state what should hold across the app\'s interactions.',
+      'random-and-shuffle': 'The data module refuses Math.random(): deal from exactTime()\'s seed, with a stream for each thing dealt.',
       'responsive-columns': 'Columns side by side when wide and stacked on a phone: flex items that wrap at a minimum width, as in CSS.',
-      'rest-backend': 'The REST starter creates a shared-list app and a Bun server:',
+      'rest-backend': 'The REST starter creates a shared-list app and a Bun server.',
+      'shipped-data': 'Data the app ships and only reads is a JSON file app.ts imports: it is bundled with the data module on every host, with no grant and no path to get wrong.',
       'snapback-auth': 'Use the complete mixed identity app for the schema, Contract, TypeScript and browser tests.',
       'snapback-tests': 'A Snapback app needs its backend running before test web.',
       snapback: 'For shared server data, exact new app --snapback writes a guestbook and wires its driver, generated operations and device.',
       'socket-ticket': 'A WebSocket whose server checks the signed-in person at connect opens with a single-use ticket bought over HTTPS with @exact/oauth.',
+      'store-update': '@exact/store-update says whether the App Store or Google Play has a newer binary and opens it, for a change Exact\'s own signed updates cannot carry.',
       'suspending-feed': 'A WebSocket feed that stays open while a desktop window is hidden and closes when the host freezes the page.',
       symbols: 'image "symbol:<role>" is an icon each host draws from its own set (SF Symbols on Apple, matching outlines elsewhere).',
       tabs: 'Use tabs for at least two top-level sections, each with its own route stack.',
@@ -144,6 +153,7 @@ export const sections: NavSection[] = [
       'timer-in-a-component': 'A bounded child owns its timer; an activity gate stops it while hidden.',
       timers: 'A task is the only timer: every(ms, action) repeats, after(ms, action) fires once, and when cond arms it while it holds.',
       website: 'A website in Exact: when a page is made, how to serve it, and a setting.',
+      'white-label': 'A brand with its own store app is its own app, not a variant: a directory per brand, in a Bun workspace whose packages hold the screens and the data code.',
     }),
   },
   {
@@ -169,6 +179,10 @@ export const sections: NavSection[] = [
         source: 'contract-grammar.md',
         split: true,
         description: 'The Contract grammar and vocabulary the compiler accepts: every declaration, element and attribute.',
+        sectionDescriptions: {
+          declarations: 'The grammar of a Contract file\'s declarations, such as shape, fn, source, style, keyframes, routes and component, and the limits the compiler checks on them.',
+          'host-commands': 'The host commands an action runs as statements, such as focus, navigate, share and haptic, and a working implementation to start from.',
+        },
       },
       {
         route: 'reference',
@@ -176,6 +190,12 @@ export const sections: NavSection[] = [
         source: 'reference.md',
         split: true,
         description: 'Toolchains, the Contract CLI, the native and web loops, data modules, delivery and the stress examples.',
+        sectionDescriptions: {
+          'run-a-terminal-app': 'Build the terminal harness and the LLP reader, and the command line they share with exact-terminal: a launch location, a single run with --print or --json, and headless drives.',
+          'access-hatches': 'An access hatch hands the app\'s native code the platform object Exact built for a node, at defined moments, so the app can do what only that object can.',
+          'the-six-checks': 'The six checks of a change: build, test, lint, caps, the boot graph and the workspace, with what each covers and what the async lane runs.',
+          'rust-live-replacement': 'Rust replacement is enabled by default in development and production; app.json\'s rust key disables it or sets a mode for an environment or a platform.',
+        },
       },
       {
         route: 'agentPitfalls',

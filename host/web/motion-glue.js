@@ -184,12 +184,17 @@ export function motionController({views,now,generation,request,applyBatch,inert,
   // A press handler or control between the contact and an ancestor's
   // recognizer keeps the contact (rule 3's boundary, as AppKit and Linux do).
   const pressable=(e,el)=>{const inner=e.target.closest('button,a[href],select,[data-exact-on~="press"]');return !!inner&&inner!==el&&el.contains(inner);};
-  // By a mouse the innermost draggable node that carries something drags, not a drag recognizer around it (LLP 1094.000 D8).
-  // A press between the contact and that node keeps the contact from the node, and the recognizer treats it as it treats
-  // any press inside it.
+  // By a mouse the innermost draggable node that drags, not a drag recognizer around it, takes the contact (LLP 1094.000
+  // D8): another script's draggable, whatever is inside it, or the app's node when it carries something. A press between
+  // the contact and the app's node keeps the contact from the node, and the recognizer treats it as it treats any press
+  // inside it.
   const lifts=(e,el)=>{
-    const source=e.pointerType==='mouse'&&e.target.closest('[draggable="true"]');
-    if(!source||source===el||!el.contains(source)||!['text','url','files'].some(k=>source.hasAttribute(`data-datatransfer${k}`)))return false;
+    // An SVG element's mark is skipped, as drag-out.js skips it, since an engine may ignore it (Firefox does).
+    let source=e.pointerType==='mouse'&&e.target.closest('[draggable="true" i]');
+    while(source?.namespaceURI==='http://www.w3.org/2000/svg')source=source.parentElement?.closest('[draggable="true" i]');
+    if(!source||source===el||!el.contains(source))return false;
+    if(source.exactDraggable!=='true')return true;
+    if(!['text','url','files'].some(k=>source.hasAttribute(`data-datatransfer${k}`)))return false;
     const kept=e.target.closest('button,a[href],[data-exact-on~="press"]');
     return !(kept&&kept!==source&&source.contains(kept));
   };
@@ -829,7 +834,8 @@ export function motionController({views,now,generation,request,applyBatch,inert,
     // changes; one release while both tokens are live.
     attachTransformDrag(el,id,on) {
       let drag=null,suppressClick=false;
-      const interactive=e=>e.target.closest('button,a,input,textarea,select,[contenteditable]');
+      // A control at or inside the handle keeps the contact; one around it, a draggable button's, does not.
+      const interactive=e=>{const c=e.target.closest('button,a,input,textarea,select,[contenteditable]');return !!c&&el.contains(c);};
       const pairLocal=d=>d.pair?.every(local)&&transformLocal(d.binding)&&d.binding.admitted&&d.sequence===d.binding.sequence;
       const finiteTerminal=v=>pixel(v[0])&&pixel(v[1])&&positiveScale(v[2])&&v.slice(3).every(Number.isFinite);
       function clearContact(d) {
@@ -1003,7 +1009,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
         d.factor=e.scale;d.gesture={x:e.clientX,y:e.clientY,spread:0};follow(d);
       });
       on('gestureend',e=>{const d=drag;if(!d?.gesture)return;e.preventDefault();release(d);});
-      on('dragstart',e=>{if(transformLocal(transformBindings.get(id))&&!interactive(e)&&!e.target.closest?.('[draggable="true"]'))e.preventDefault();});// a draggable node's own drag is the page's (LLP 1094.000 D6)
+      on('dragstart',e=>{if(e.isTrusted!==false&&transformLocal(transformBindings.get(id))&&!interactive(e)&&!e.target.closest?.('[draggable="true" i]'))e.preventDefault();});// a draggable node's own drag is the page's (LLP 1094.000 D6)
       on('click',e=>{if(suppressClick){suppressClick=false;e.preventDefault();e.stopPropagation();}});
     },
     attachHeightDrag(el,id,on) {
@@ -1021,7 +1027,8 @@ export function motionController({views,now,generation,request,applyBatch,inert,
       drags.set(id,stop);
       on('pointerdown',e=>{
         const binding=heightBindings.get(id);
-        if(!e.isPrimary||e.button!==0||!bindingLive(binding)||e.target.closest('button,a,input,textarea,select,[contenteditable]')||lifts(e,el)) return;
+        const control=e.target.closest('button,a,input,textarea,select,[contenteditable]');
+        if(!e.isPrimary||e.button!==0||!bindingLive(binding)||control&&el.contains(control)||lifts(e,el)) return;
         stop(); drag={pointer:e.pointerId,x:e.clientX,y:e.clientY,binding,id,el,deferred:contacts().get(e.pointerId)==='pending'}; active.set(id,stop);
         if(drag.deferred)drag.unwatch=watchEnd(el,finish);
         // A fast first move can already leave a narrow header. Retain delivery
@@ -1128,8 +1135,8 @@ export function motionController({views,now,generation,request,applyBatch,inert,
       // the pointer stream to the swipe. A finger lifts by resting, not by moving, so only a hold cancels its drag.
       // A drag that goes ends the swipe's contact.
       const dragstart=e=>{
-        // Only a drag on this contact's path: begun inside the row or at a node around it.
-        if(!drag||!(el.contains(e.target)||e.target.contains?.(el)))return;
+        // Only a drag on this contact's path: begun inside the row or at a node around it. A script's is none.
+        if(e.isTrusted===false||!drag||!(el.contains(e.target)||e.target.contains?.(el)))return;
         const [right,left]=ways(),shown=sample(el,'translate')?.[0]??0;
         const takes=dx=>dx>0?right||shown<0:left||shown>0;
         const dx=drag.lastX===undefined?null:drag.lastX-drag.x,dy=(drag.lastY??drag.y)-drag.y;

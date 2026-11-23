@@ -592,11 +592,13 @@ export async function main(argv, injected = {}) {
       // A system's call of a tool (LLP 1133.023 §10): `call <tool> <json> [--door <door>]`, run as the door would.
       case 'call': {
         const door = trimmed.match(/\s--door\s+(\S+)\s*$/);
+        // An attached app chooses the door itself (LLP 1012.000 D3): its agent door, under the person's input grant.
+        if (door && s.carrier.attached) throw new MalformedOperation('call --door: an attached app calls a tool through its own agent door; a drive names none');
         r = await s.op({
           op: 'call',
           tool: args[0],
           args: trimmed.replace(/\s--door\s+\S+\s*$/, '').replace(/^call\s+\S+\s*/, '') || '{}',
-          door: door?.[1] ?? 'agent',
+          ...(s.carrier.attached ? {} : { door: door?.[1] ?? 'agent' }),
         });
         break;
       }
