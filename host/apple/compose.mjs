@@ -380,9 +380,11 @@ function buildSwiftDependencies({ app, graph, declarations, compile, sdkName, di
       .flatMap(copy => copy.inputs.map(input => input.name)).flatMap(path => path.endsWith('.framework')
         ? [resolve(path, basename(path, '.framework'))] : path.endsWith('.a') ? [path] : [])
       .filter(path => machOType(path) !== 6);
-    // The empty shared target references no SDK symbols. Keep every archive member for its consumers.
+    // Force-load every member so consumers can link symbols the shared product leaves unreferenced.
+    // Pass -force_load to clang so it precedes SwiftPM's -framework of its copy.
+    // ld64.lld reports duplicate symbols when a later -force_load loads members already taken from the copy.
     if (staticLibraries.length) writeFileSync(resolve(dir, 'Package.swift'), swiftManifest(graph, name, declarations, compile,
-      [...link, ...[...new Set(staticLibraries)].flatMap(path => ['-Xlinker', '-force_load', '-Xlinker', path])]));
+      [...link, ...[...new Set(staticLibraries)].flatMap(path => ['-Xclang-linker', '-force_load', '-Xclang-linker', path])]));
     swiftRun([...args, ...swiftResourceOverlay(bin)], dir);
   }
   catch (error) { throw new Error(`${error.message}\n${lockAdvice(app)}`); }
