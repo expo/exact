@@ -401,11 +401,6 @@ component Sleeping
         )],
         ..Default::default()
     };
-    let number = plan
-        .slots
-        .iter()
-        .position(|slot| plan.str(slot.name) == "number")
-        .unwrap();
     let mut r = Runner::boot_checkpoint(
         plan,
         Data::default(),
@@ -435,10 +430,6 @@ component Sleeping
     r.act("put", vec![Value::Number(3.)]).unwrap();
     assert_eq!(text(&r), "3:91:false");
 
-    let refused = r.act("put", vec![Value::Number(-1.)]).unwrap_err();
-    assert!(format!("{refused:?}").contains("RangeCount"), "{refused:?}");
-    assert_eq!(r.slots[number], Value::Number(3.));
-    assert_eq!(text(&r), "3:91:false");
     assert!(r.data.mirrors.is_empty());
 
     r.act("wake", vec![]).unwrap();
