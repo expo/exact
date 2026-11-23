@@ -209,6 +209,16 @@ final class SplitIOSTests: XCTestCase {
         guard case .success(let (bar, frame))? = navigation.barItem(try node(session, "bar-photo-q")) else { return XCTFail("the photo's bar item") }
         XCTAssertTrue(bar === split.list.navigationBar, "N0's bar, which shows the photo's item")
         XCTAssertFalse(frame.isEmpty)
+        // The views that may draw N0's items: the bar, a view of controls beside it (a closed Duo's strip), and none that holds the detail's page
+        let pages = try XCTUnwrap(split.list.topViewController?.viewIfLoaded)
+        let beside = UIView()
+        beside.addSubview(UIControl())
+        split.list.view.addSubview(beside)
+        defer { beside.removeFromSuperview() }
+        let holders = Agent.itemHolders(of: split.list.navigationBar)
+        XCTAssertTrue(holders.contains { $0 === split.list.navigationBar })
+        XCTAssertTrue(holders.contains { $0 === beside }, "a view beside the bar")
+        XCTAssertFalse(holders.contains { pages.isDescendant(of: $0) }, "the pages are no item's")
     }
 
     /// LLP 1127 D8: beside the detail the list is live with it; while the
