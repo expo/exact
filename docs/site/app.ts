@@ -3,7 +3,7 @@ import { pages } from './content/index.ts';
 import nav from './content/nav.ts';
 import moved from './content/redirects.ts';
 import { search } from './constants/search.ts';
-import { proseLines } from './markdown-fences.ts';
+import type { markdownHeadings } from './tools/markdown-headings.ts';
 
 export const appId = 'dev.exact.docs';
 const SEARCH_HOST = 'https://SNB9MIQMWS-dsn.algolia.net';
@@ -144,38 +144,35 @@ function pageAt(given: string) {
 }
 
 const markdownAt = (route: string) => textAt(`/assets/markdown/${route}.md`);
+const toolMarkdown = '/assets/markdown/tools';
 
-function outline(markdown: string) {
-  const lines = markdown.split('\n');
-  const headings: { level: number; text: string; line: number }[] = [];
-  for (const line of proseLines(lines).indices) {
-    const heading = /^ {0,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*\r?$/.exec(lines[line]);
-    if (heading) headings.push({ level: heading[1].length, text: heading[2], line });
-  }
-  return { lines, headings };
-}
-
-const isoDate = (date: string) => {
-  const time = Date.parse(`${date} UTC`);
-  return Number.isNaN(time) ? date : new Date(time).toISOString().slice(0, 10);
+type PageInfo = {
+  path: string;
+  title: string;
+  description: string;
+  modificationDate: string;
+  headings: ReturnType<typeof markdownHeadings>;
+  markdownFile: string;
 };
+
+async function pageInfoAt(route: string): Promise<PageInfo> {
+  return JSON.parse(await textAt(`${toolMarkdown}/${route}.json`)) as PageInfo;
+}
 
 const plain = (heading: string) => heading.replaceAll('`', '').replace(/\s+/g, ' ').trim().toLowerCase();
 
-function sectionsOf(markdown: string, section: string, path: string) {
-  const { lines, headings } = outline(markdown);
+function sectionsOf(markdown: string, headings: PageInfo['headings'], section: string, path: string) {
   const found = headings.flatMap((heading, index) => {
     if (plain(heading.text) !== plain(section)) return [];
     const parents: string[] = [];
     let level = heading.level;
     for (const earlier of headings.slice(0, index).reverse()) {
       if (earlier.level < level) {
-        parents.unshift(lines[earlier.line]);
+        parents.unshift(markdown.slice(earlier.start, earlier.headingEnd).trimEnd());
         level = earlier.level;
       }
     }
-    const end = headings.slice(index + 1).find(next => next.level <= heading.level)?.line ?? lines.length;
-    return [[...parents, ...lines.slice(heading.line, end)].join('\n').trimEnd()];
+    return [[...parents, markdown.slice(heading.start, heading.end)].join('\n').trimEnd()];
   });
   if (!found.length) throw new Error(`No heading on ${path} is "${section}". get_page_info returns the headings of a page.`);
   return found.join('\n\n');
@@ -209,14 +206,15 @@ const tools: Record<string, (path: string, text: string, count: number) => Promi
   search_docs: async (_path, query, limit) => JSON.stringify(await searchResults(query, limit)),
   get_page_markdown: async (given, section) => {
     const { path, route } = pageAt(given);
-    const markdown = await markdownAt(route);
-    return section ? sectionsOf(markdown, section, path) : markdown;
+    if (!section) return markdownAt(route);
+    const { headings, markdownFile } = await pageInfoAt(route);
+    const markdown = await textAt(`${toolMarkdown}/${markdownFile}`);
+    return sectionsOf(markdown, headings, section, path);
   },
   get_page_info: async given => {
-    const { path, route } = pageAt(given);
-    const { title, description, updated } = (await pages[route]()).default as Page;
-    const { headings } = outline(await markdownAt(route));
-    return JSON.stringify({ path, title, description, modificationDate: isoDate(updated), headings: headings.map(({ level, text }) => ({ level, text })) });
+    const { route } = pageAt(given);
+    const { path, title, description, modificationDate, headings } = await pageInfoAt(route);
+    return JSON.stringify({ path, title, description, modificationDate, headings: headings.map(({ level, text }) => ({ level, text })) });
   },
   get_site_overview: () => textAt('/assets/llms.txt'),
   list_sections: async (area, section) => JSON.stringify(sectionsIn(area, section)),

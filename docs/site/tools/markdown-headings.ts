@@ -1,0 +1,14 @@
+import { marked } from 'marked';
+
+export function markdownHeadings(markdown: string) {
+  let offset = 0;
+  const headings = marked.lexer(markdown, { gfm: true }).flatMap(token => {
+    const start = offset;
+    offset += token.raw.length;
+    return token.type === 'heading' ? [{ level: token.depth, text: token.text.trim(), start, headingEnd: offset }] : [];
+  });
+  return headings.map((heading, i) => ({
+    ...heading,
+    end: headings.slice(i + 1).find(next => next.level <= heading.level)?.start ?? markdown.length,
+  }));
+}

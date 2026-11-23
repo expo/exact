@@ -312,17 +312,31 @@ test('WebMCP reads headings after an inline code span that starts with three bac
   expect(section).toMatchObject({ outcome: 'ok', value: expect.stringContaining('\n### Notifications\n') });
 }));
 
-test('WebMCP headings respect fence markers, lengths and indentation', () => withPage({}, async page => {
-  await page.route('**/assets/markdown/recipeWebsite.md', route => route.fulfill({ body: [
-    '# Recipe', '   ````ts', '## Inside', '```', '## After a short marker',
-    '~~~~', '## After a different marker', '```` trailing text', '## After trailing text',
-    '  `````', '   ## C#', '## Closing hashes ###',
-  ].join('\n') }));
+test('WebMCP page info uses metadata and headings from one build', () => withPage({}, async page => {
+  await page.route('**/assets/markdown/**/*.md', route => route.fulfill({ body: '# A newer recipe\n\n## A newer heading\n' }));
+  await page.addInitScript(() => {
+    const parse = Date.parse;
+    Date.parse = value => String(value).endsWith(' UTC') ? NaN : parse(value);
+  });
   const call = await visitWithTools(page);
+  const pages = JSON.parse(readFileSync(resolve(import.meta.dir, '../content/pages.json'), 'utf8'));
+  const { title, description, updated } = pages.find(page => page.route === 'recipeWebsite');
   const result = await call('get_page_info', { path: '/recipes/website' });
-  expect(JSON.parse(result.value).headings).toEqual([
-    { level: 1, text: 'Recipe' }, { level: 2, text: 'C#' }, { level: 2, text: 'Closing hashes' },
-  ]);
+  expect(result.outcome).toBe('ok');
+  expect(JSON.parse(result.value)).toMatchObject({
+    title, description, modificationDate: updated,
+    headings: expect.arrayContaining([{ level: 2, text: 'A deep link' }]),
+  });
+}));
+
+test('WebMCP section reads end at the next heading in the same Markdown snapshot', () => withPage({}, async page => {
+  await page.route('**/assets/markdown/recipeWebsite.md', route => route.fulfill({ body: '# A newer recipe\n\n## A setting\n\nNew text.\n' }));
+  const call = await visitWithTools(page);
+  const result = await call('get_page_markdown', { path: '/recipes/website', section: 'A setting' });
+  expect(result.outcome).toBe('ok');
+  expect(result.value).toStartWith('# Recipe: a website\n## A setting\n');
+  expect(result.value).toContain('API_BASE_URL');
+  expect(result.value).not.toContain('## A deep link');
 }));
 
 test('WebMCP navigation is a consequential write', () => withPage({}, async page => {
@@ -351,12 +365,42 @@ test('WebMCP navigation resolves paths against the published pages', () => withP
   await headingInView(page);
 }));
 
-test('WebMCP navigation reports a page module that fails to download', () => withPage({}, async page => {
-  await page.route(/\/recipeWebsite-[\w-]+\.js$/, route => route.abort('internetdisconnected'));
+const websiteChunk = /\/recipeWebsite-[\w-]+\.js$/;
+
+test('WebMCP navigation retries the current page after a failed download', () => withPage({}, async page => {
+  await page.route(websiteChunk, route => route.abort('internetdisconnected'));
   const call = await visitWithTools(page);
-  const result = await call('navigate_page', { path: '/recipes/website' });
+  const input = { path: '/recipes/website' };
+  const result = await call('navigate_page', input);
   await page.getByTestId('load-failed').waitFor();
   expect(result).toMatchObject({ outcome: 'failed', value: 'The page at /recipes/website did not load.' });
+  await page.unroute(websiteChunk);
+  expect(await call('navigate_page', input)).toMatchObject({ outcome: 'ok', value: 'Opened /recipes/website.' });
+  await page.getByTestId('h-a-deep-link').waitFor();
+}));
+
+test('WebMCP navigation reports a pending current-page download that fails', () => withPage({}, async page => {
+  const release = Promise.withResolvers();
+  await page.route(websiteChunk, async route => {
+    await release.promise;
+    await route.abort('internetdisconnected');
+  });
+  try {
+    await visitWithTools(page);
+    await page.getByTestId('nav-recipeWebsite').click();
+    await page.waitForURL('**/recipes/website');
+    const invocation = await page.evaluateHandle(() => ({
+      result: window.offered.find(tool => tool.name === 'navigate_page').execute({ path: '/recipes/website#a-deep-link' }),
+    }));
+    await page.waitForURL('**/recipes/website#a-deep-link');
+    release.resolve();
+    expect(await invocation.evaluate(({ result }) => result)).toMatchObject({
+      outcome: 'failed', value: 'The page at /recipes/website did not load.',
+    });
+    await page.getByTestId('load-failed').waitFor();
+  } finally {
+    release.resolve();
+  }
 }));
 
 test('WebMCP navigation is unavailable while the search dialog is modal', () => withPage({}, async page => {
@@ -373,6 +417,23 @@ test('WebMCP navigation is unavailable while the search dialog is modal', () => 
   await page.waitForFunction(() => window.offered.some(tool => tool.name === 'navigate_page'));
   expect(await call('navigate_page', { path: '/recipes/website' })).toMatchObject({ outcome: 'ok' });
   await page.getByTestId('h-a-deep-link').waitFor();
+}));
+
+test('WebMCP navigation stays unavailable when search closes and reopens in one turn', () => withPage({}, async page => {
+  await visitWithTools(page);
+  const open = page.getByTestId('search-open');
+  await open.click();
+  expect(await open.evaluate(async button => {
+    const first = document.querySelector('#search');
+    const closed = new Promise(resolve => first.addEventListener('close', resolve, { once: true }));
+    first.close();
+    button.click();
+    const reopened = document.querySelector('#search').matches(':modal');
+    await closed;
+    return { reopened, offered: window.offered.some(tool => tool.name === 'navigate_page') };
+  })).toEqual({ reopened: true, offered: false });
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => window.offered.some(tool => tool.name === 'navigate_page'));
 }));
 
 for (const mode of ['default', '--loopback', '--lan']) {

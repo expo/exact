@@ -1,12 +1,14 @@
 import { marked, type Token, type Tokens } from 'marked';
 import { createHighlighter } from 'shiki';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, normalize, relative, resolve } from 'node:path';
 import { agentRows, sections, tabs, type NavPage } from '../constants/navigation.ts';
 import { redirects } from '../constants/redirects.ts';
 import { site } from '../constants/site.ts';
 import { decode, descriptionOf, plain, sectionDescriptionProblems } from './descriptions.ts';
+import { markdownHeadings } from './markdown-headings.ts';
 import { promptOf } from './prompts.ts';
 
 const SITE = resolve(import.meta.dir, '..');
@@ -23,6 +25,7 @@ const ORIGIN = site.origin;
 const START_URL = 'https://github.com/expo/exact/blob/main/docs/start-here.md';
 const START_PROMPT = `Read ${START_URL} before building an app with Exact. It is the only required reading.`;
 const MARKDOWN = join(SITE, 'assets/markdown');
+const TOOL_MARKDOWN = join(MARKDOWN, 'tools');
 const EDIT = `https://github.com/expo/exact/edit/main/docs`;
 const IMAGES = join(SITE, 'assets/images');
 
@@ -386,7 +389,7 @@ function markdownOf(tokens: Token[], from: string): string {
 }
 
 mkdirSync(OUT, { recursive: true });
-mkdirSync(MARKDOWN, { recursive: true });
+mkdirSync(TOOL_MARKDOWN, { recursive: true });
 const updated = new Map<string, string>();
 const isoDateOf = (source: string) => {
   if (!updated.has(source)) updated.set(source, execFileSync('git', ['log', '-1', '--format=%cs', '--', join('docs', source)], { cwd: REPO, encoding: 'utf8' }).trim());
@@ -443,8 +446,19 @@ pages.forEach(page => {
   const { blocks, toc } = render(page);
   const markdownPath = page.path === '/' ? '/index.md' : `${page.path}.md`;
   const markdownUrl = ORIGIN ? ORIGIN + markdownPath : GITHUB_DOCS + page.source;
-  const markdown = markdownOf(page.tokens, page.source);
-  writeFileSync(join(MARKDOWN, `${page.route}.md`), `${page.tocDepth === 3 ? `# ${page.title}\n\n` : ''}${markdown.replace(/^## .*\n+/, '')}\n${page.route === 'home' ? homeMarkdown() : ''}`);
+  const split = page.tocDepth === 3;
+  const markdown = markdownOf(split ? page.tokens.slice(1) : page.tokens, page.source);
+  const body = `${split ? `# ${page.title}\n\n` : ''}${markdown}\n${page.route === 'home' ? homeMarkdown() : ''}`;
+  writeFileSync(join(MARKDOWN, `${page.route}.md`), body);
+  if (!page.hidden) {
+    const { route, path, title, description } = page;
+    // The digest ties the section offsets to this Markdown across deployments.
+    const digest = createHash('sha256').update(body).digest('hex').slice(0, 16);
+    const markdownFile = `${route}-${digest}.md`;
+    const info = { path, title, description, modificationDate: isoDateOf(page.source), headings: markdownHeadings(body), markdownFile };
+    writeFileSync(join(TOOL_MARKDOWN, `${route}.json`), JSON.stringify(info));
+    writeFileSync(join(TOOL_MARKDOWN, markdownFile), body);
+  }
   const data = {
     slug: page.route,
     path: page.path,
