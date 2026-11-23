@@ -115,10 +115,15 @@ fn call(
     } else {
         value_js(&Value::from_bytes(initial_args).map_err(|e| e.to_string())?)
     };
-    if owned.is_some() && initial_args != "void 0" {
-        let booting = uses.rt("booting");
-        initial = format!("({booting}()?{initial}:void 0)");
-        initial_args = format!("({booting}()?{initial_args}:void 0)");
+    // Give an instance the bake's answer only while the boot makes it (the
+    // runner's settlement.rs `launch`), whether or not its arguments are
+    // written, which a store reader's are not
+    if owned.is_some() {
+        for value in [&mut initial, &mut initial_args] {
+            if value != "void 0" {
+                *value = format!("({}()?{value}:void 0)", uses.rt("booting"));
+            }
+        }
     }
     let res = each::constructor(r, res);
     // An `else` row's compiled answer is the bake's for every launch,

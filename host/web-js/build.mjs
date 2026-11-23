@@ -39,7 +39,7 @@ import { namesStream } from './stream-names.mjs';
 import { bundleHostModule, localImports, stageHostGlue, writeFalse } from './glue.mjs';
 import { gateAgent } from './agent-gate.mjs';
 import { contentName, contentNames } from './content-names.mjs';
-import { buildEditor, buildFlow, buildMarkdown, buildModule, buildMotion, moduleSourceDirs, undeclaredRustData, fresh, frameAnswer, frameFixture, frameURL, leafTaken, moduleGrants, webCompiler, inspectHooked, withInspectHooks, withoutDev, withRuntimeStamp, sizeWarning, entrySizeReport } from './module.mjs';
+import { buildEditor, buildFlow, buildMarkdown, buildModule, buildMotion, moduleSourceDirs, moduleSources, undeclaredRustData, fresh, frameAnswer, frameFixture, frameURL, leafTaken, moduleGrants, webCompiler, inspectHooked, withInspectHooks, withoutDev, withRuntimeStamp, sizeWarning, entrySizeReport } from './module.mjs';
 import { appDigest, developmentStore } from '../../scripts/agent-launch.mjs';
 import { settingLines } from '../../js/bake/src/__exact_env.mjs';
 import { colorSchemeMeta, interfaceStyle, launchBackground, schemeHead, withInterfaceStyle, withLook } from '../web/look.mjs';
@@ -261,35 +261,40 @@ compilePlan(ts ? [] : unregistered);
 const appFiles = new Set(readdirSync(gen).filter(f => f.endsWith('.js') && !existsSync(resolve(here, f)) && !existsSync(resolve(root, 'host/web', f))));
 const leaves = [['markdown', buildMarkdown, 'markdown.wasm'], ['motion', buildMotion, 'motion.wasm'], ['editor', buildEditor, 'markup-editor.wasm'], ['flow', buildFlow, 'textflow.wasm']]
   .filter(([flag]) => existsSync(resolve(gen, `${flag}.flag`)));
-if (!checkOnly || prerequisitesOnly) {
-  // Not for a leaf built and fresh, or a tool set's (LLP 1174 D5).
+if (!checkOnly || prerequisitesOnly || mixed) {
+  // Not for a leaf built and fresh, or a tool set's (LLP 1174 D5). A check of a mixed app builds its Rust module.
   if (rust || leaves.some(([flag]) => !leafTaken(flag))) webToolchainEnv(process.env);
   if (prerequisitesOnly) process.exit(0);
 }
 // The checked capture of app.ts and what it imports (typecheck, below): the
 // page and its server render bundle it, never the app's own directory.
 const tsStage = resolve(realpathSync(gen), 'typescript'), pageAppTs = resolve(tsStage, fixture ? '__exact_frame.ts' : 'app.ts');
-// App generation may create files imported by app.ts. A mixed app's composer
-// also owns the Rust source roster, so take its declarations from that bake.
-// A generated workspace's web crate composes the two when app.json names rust.data (LLP 1153.003 D2).
-const composed = mixed && !!rustData;
-const generatedWeb = composed && resolveApp(appDir).generated;
-const webCrate = generatedWeb ? resolve(appDir, '.exact/shells/web') : resolve(appDir, 'web');
-if (ts && (composed || authoredWebBake(webCrate))) {
+// App generation may create files imported by app.ts: an authored web crate's build script runs first.
+const webCrate = resolve(appDir, 'web');
+if (ts && authoredWebBake(webCrate)) {
   // With what its bake watches named, as every baking build is (`bakeWatchEnv`): unset, a check reruns it every time.
   // The workspace's lock is checked first, as every build's is, and `--locked` keeps the check from rewriting it (LLP 1153 D2.1).
   resolveApp(appDir).rust();
-  const crate = resolve(webCrate, 'Cargo.toml');
-  const r = spawnSync('cargo', ['check', '-q', '--locked', '--manifest-path', crate, '--message-format=json-render-diagnostics'], { cwd: root, stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8', maxBuffer: 1 << 26, env: { ...process.env, ...bakeWatchEnv({ dir: appDir, manifest }), ...(generatedWeb ? { CARGO_TARGET_DIR: resolveApp(appDir).target } : {}) } });
-  const messages = (r.stdout ?? '').split('\n').filter(Boolean).map(line => JSON.parse(line));
-  for (const message of messages) if (message.reason === 'compiler-message' && message.message.rendered) process.stderr.write(message.message.rendered);
+  const r = spawnSync('cargo', ['check', '-q', '--locked', '--manifest-path', resolve(webCrate, 'Cargo.toml'), '--message-format=json-render-diagnostics'], { cwd: root, stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8', maxBuffer: 1 << 26, env: { ...process.env, ...bakeWatchEnv({ dir: appDir, manifest }) } });
+  for (const line of (r.stdout ?? '').split('\n').filter(Boolean)) { const m = JSON.parse(line); if (m.reason === 'compiler-message' && m.message.rendered) process.stderr.write(m.message.rendered); }
   if (r.status !== 0) { console.error(`${app}: its web build script failed`); process.exit(1); }
-  if (composed) {
-    const owner = messages.find(m => m.reason === 'compiler-artifact' && resolve(m.manifest_path) === crate)?.package_id;
-    const baked = messages.find(m => m.reason === 'build-script-executed' && m.package_id === owner)?.out_dir;
-    if (!baked) throw new Error(`${app}: Cargo did not report its mixed bake output`);
-    cpSync(resolve(baked, 'app.contract.d.ts'), resolve(gen, 'app.contract.d.ts'));
-  }
+}
+// The Rust module the page runs, built once (a synthetic plan takes its own's; a check, which ships none, a dev one).
+let rustModule; const builtModule = () => rustModule ??= (() => {
+  const from = opt('--data') ?? (opt('--plan') && dirname(resolve(opt('--plan'))));
+  return from && existsSync(resolve(from, 'rust/wasm/app.module.wasm')) ? resolve(from, 'rust/wasm/app.module.wasm')
+    : buildModule(app, resolve(gen, 'rust-module'), existsSync(resolve(gen, 'canvas2d.flag')), appDir, { dev: devReload || checkOnly });
+})();
+// Beside app.ts, the sources the module carries (its crate's RUST_SOURCES, logic/abi/src/sources.rs) are Rust's and
+// every other is app.ts's, as `exact_data::Mixed` routes them natively (LLP 1153.003 D2); app.ts is checked against
+// declarations without them. Read from the module, they need no host bake, so no JavaScript engine.
+let rustSources = null;
+if (mixed) {
+  resolveApp(appDir).rust(); // the workspace an app's own module crate may join, written and its lock checked
+  try { rustSources = await moduleSources(builtModule()); } catch (error) { console.error(`${app}: ${error.message}`); process.exit(1); }
+  if (!rustSources) { console.error(`${app}: its Rust module beside app.ts does not say which sources it answers: add \`exact_logic_abi::export_sources!(<data crate>::RUST_SOURCES);\` to the crate rust.module.package names`); process.exit(1); }
+  const r = spawnSync(compiler.cmd, [...compiler.pre, 'declarations', input.endsWith('.plan') ? input : resolve(gen, 'app.plan'), '-o', gen, '--app', appDir, '--rust-sources', JSON.stringify(rustSources), ...(appTypes ? ['--app-types'] : [])], { cwd: root, stdio: ['ignore', 'inherit', 'inherit'], env: compiler.env });
+  if (r.status !== 0) process.exit(r.status ?? 1);
 }
 // `app.ts` is captured and type-checked as the native bake does it: the
 // same configuration and check (js/bake/src/typescript.mjs) over the same
@@ -456,7 +461,7 @@ async function typecheck(checking) {
   if (fixture) writeFileSync(pageAppTs, frameAnswer(fixture, answerType));
   const provider = fixture ? './__exact_frame' : './app';
   writeFileSync(resolve(stage, '__exact_entry.ts'), `import * as app from '${provider}';\n${answerType}\nconst named = (app as unknown as { appId?: string }).appId;\nexport const appId: string = named === undefined || named === ${JSON.stringify(base)} ? ${JSON.stringify(id)} : named;\nexport const grants: string = app.grants;\nexport const answer: TypeScriptAnswer = app.answer;\n` + optional
-    + "export const draw: ((surface: string, args: any, ctx: any, frame: any) => unknown) | undefined = (app as { draw?: unknown }).draw as Optional<'draw'>;\nexport const surfaces = (app as { surfaces?: unknown }).surfaces as Optional<'surfaces'>;\n");
+    + "export const draw: ((...call: never) => unknown) | undefined = (app as { draw?: unknown }).draw as Optional<'draw'>;\nexport const surfaces = (app as { surfaces?: unknown }).surfaces as Optional<'surfaces'>;\n");
   writeFileSync(resolve(stage, '__exact_paths.json'), JSON.stringify({ app: realpathSync(appDir), mounts, target: 'web', privateInputs: !!appTypes }));
   writeFileSync(resolve(stage,'__exact_backend_source.json'), JSON.stringify(Object.fromEntries(capturedSettings)));
   const real = realpathSync(stage);
@@ -558,9 +563,7 @@ const tsGrantSet = normalizeGrants(ts ? 'app.ts' : 'TypeScript', grants, 'typesc
 let moduleStorage = false, rustGrants = '', rustGrantSet = normalizeGrants('Rust module', '', 'rust');
 if (rustLinked) {
   mkdirSync(resolve(out, 'rust/wasm'), { recursive: true });
-  const from = opt('--data') ?? (opt('--plan') && dirname(resolve(opt('--plan'))));
-  const built = from && existsSync(resolve(from, 'rust/wasm/app.module.wasm')) ? resolve(from, 'rust/wasm/app.module.wasm')
-    : buildModule(app, resolve(gen, 'rust-module'), canvas2d, appDir, { dev: devReload });
+  const built = builtModule();
   cpSync(built, resolve(out, 'rust/wasm/app.module.wasm'));
   if (devReload) devLogic.push(['rust', createHash('sha256').update(readFileSync(resolve(out, 'rust/wasm/app.module.wasm'))).digest('hex')]);
   // The module's crates outside the app's directory (a path dependency) are inputs the dev loop watches, as the
@@ -572,7 +575,7 @@ if (rustLinked) {
     sources.trees = [...new Set([...(sources.trees ?? []), ...outside])];
     writeFileSync(listed, JSON.stringify(sources));
   }
-  rustGrants = await moduleGrants(resolve(out, 'rust/wasm/app.module.wasm'));
+  rustGrants = await moduleGrants(resolve(out, 'rust/wasm/app.module.wasm'), { production });
   rustGrantSet = normalizeGrants(ts ? 'Rust module' : 'app', rustGrants, 'rust');
   moduleStorage = rustGrantSet.entries.some(([, , grant]) => ['fs-read', 'fs-write', 'sqlite-open'].includes(grant?.[0]));
 }
@@ -657,7 +660,7 @@ writeFileSync(resolve(gen, 'main.js'), [
   ...(ts ? ["import './ts-link.js';", ...(seamLazy ? [
     "import { seam } from './ts-load.js';",
     'const loadSeam = seam(data, inflight, journal, clock);',
-  ] : [`import { install as ts${production ? '' : ', watchState'} } from './ts-data.js';`, `ts(data, ${mixed}${pageModules ? ", () => import('./native.js')" : ''});`, "import { answering } from './ts-fetch.js';"])] : []),
+  ] : [`import { install as ts${production ? '' : ', watchState'} } from './ts-data.js';`, `ts(data, ${JSON.stringify(rustSources)}${pageModules ? ", () => import('./native.js')" : ''});`, "import { answering } from './ts-fetch.js';"])] : []),
   // File commands can run before the lazy Rust module has loaded.
   ...rustAdmissionImports, ...rustAdmission,
   ...(ts && !production ? ['globalThis.exact = Object.assign(globalThis.exact ?? {}, { watchState });'] : []),
@@ -719,18 +722,15 @@ writeFileSync(resolve(gen, 'main.js'), [
   // follows the agent's clock), as the wasm host holds each commit's at once.
   ...(production ? [] : ["if (agentMode()) { const early = (globalThis.exact ??= {}).early = new WeakMap(); After.push(globalThis.exact.holdEarly = () => { for (const a of document.getAnimations()) if (!early.has(a) && a.playState === 'running' && (!a.timeline || a.timeline instanceof DocumentTimeline)) { early.set(a, clock.now); a.pause(); a.currentTime = 0; } }); }"]),
   ...(rustLinked ? [
-    // Rust data: loaded after first pixel, asked synchronously once ready;
-    // a plan with a resource that has no compiled value waits for it.
-    // Counted in flight, so `clock settle` waits for the source to be ready.
+    // Rust data: loaded after first pixel, asked synchronously once ready; a plan with a resource that has no compiled
+    // value waits for it. Counted in flight, so `clock settle` waits for the source to be ready.
     // One that did not load (its chunk, its fetch, its binding) is said once in the journal, as LLP 1027.007 §5 has
     // a failed load reported once. Once the app has started, with what the module owns not ready (its compiled
     // value or placeholder shown), each such source fails when asked, as one whose call failed (LLP 1071 §7): the
-    // resource keeps what it shows and `failed` is true. A mixed app starts anyway, its TypeScript module answering;
-    // what that module throws may be a source the Rust module owns, so its error names the failed load too.
+    // resource keeps what it shows and `failed` is true. A mixed app starts anyway, app.ts answering the rest.
     "let unloaded = null;",
     "const load = () => import('./rust-data.js').then(m => m.install(data, sources)).catch(e => { unloaded = `the Rust module did not load: ${e?.message ?? e}`; journal.push(`t=${clock.now} ${unloaded}`); }).finally(() => inflight.n--);",
-    "const also = e => { if (!(e instanceof Error)) return new Error(`${e}; ${unloaded}`); if (!e.message.endsWith(unloaded)) e.message += `; ${unloaded}`; return e; };",
-    "const fail = () => { if (!unloaded) return; const ts = data.ts; data.answer = ts ? (...a) => { try { return ts(...a); } catch (e) { throw also(e); } } : () => { throw new Error(unloaded); }; for (const f of data.q.splice(0)) f(); };",
+    "const fail = () => { if (!unloaded) return; const ts = data.ts, owns = data.rustSources; data.answer = (source, ...a) => { if (!ts || owns.has(source)) throw new Error(unloaded); return ts(source, ...a); }; for (const f of data.q.splice(0)) f(); };",
     "inflight.n++;",
     `if (wait || ${mixed}) load().then(() => go(() => { start(); fail(); })); else go(() => { start(); requestAnimationFrame(() => setTimeout(() => load().then(fail))); });`,
   ] : [seamLazy ? "if (typeof document === 'object' && !document.querySelector('script[type=\"application/vnd.exact.checkpoint\"]')) loadSeam().then(() => go(start)); else go(start);" : 'go(start);']),
@@ -919,7 +919,7 @@ writeFileSync(resolve(gen, 'main-server.js'), [
   `globalThis.__exactRenderOrigin = ${JSON.stringify(renderOrigin)};`,
   'let t0, route, planResources;',
   'const prepare = async () => {',
-  ...(ts ? [`  ts(data, ${mixed});`] : []),
+  ...(ts ? [`  ts(data, ${JSON.stringify(rustSources)});`] : []),
   ...rustAdmission,
   ...(rustLinked ? ['  await install(data, sources, async p => __files(p));'] : []),
   ...(declared ? ['  prepareSources();'] : []),

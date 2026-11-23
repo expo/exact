@@ -11,6 +11,7 @@ pub enum Selected {
     Other(Native),
     Fake(Fake),
     Counted(Box<super::memory_tests::Counted>),
+    Recorded(Box<super::stream_tests::Recorder>),
 }
 impl From<Native> for Selected {
     fn from(device: Native) -> Self {
@@ -30,6 +31,7 @@ impl Selected {
             Self::Wgpu(d) | Self::Other(d) => d,
             Self::Fake(d) => d,
             Self::Counted(d) => d.as_ref(),
+            Self::Recorded(d) => d.as_ref(),
         }
     }
     fn device_mut(&mut self) -> &mut dyn Device<Buffer = Buffer> {
@@ -37,27 +39,28 @@ impl Selected {
             Self::Wgpu(d) | Self::Other(d) => d,
             Self::Fake(d) => d,
             Self::Counted(d) => d.as_mut(),
+            Self::Recorded(d) => d.as_mut(),
         }
     }
     #[cfg(target_os = "macos")]
     pub fn has_layer(&self) -> bool {
         match self {
             Self::Wgpu(d) | Self::Other(d) => d.has_layer(),
-            Self::Fake(_) | Self::Counted(_) => false,
+            Self::Fake(_) | Self::Counted(_) | Self::Recorded(_) => false,
         }
     }
     #[cfg(target_os = "macos")]
     pub fn attach_layer(&mut self, layer: exact_ink::device::apple::Layer) -> Result<()> {
         match self {
             Self::Wgpu(d) | Self::Other(d) => d.attach_layer(layer),
-            Self::Fake(_) | Self::Counted(_) => unreachable!(),
+            Self::Fake(_) | Self::Counted(_) | Self::Recorded(_) => unreachable!(),
         }
     }
     #[cfg(target_os = "macos")]
     pub fn present(&mut self, texture: TextureId) -> Result<f64> {
         match self {
             Self::Wgpu(d) | Self::Other(d) => d.present(texture),
-            Self::Fake(_) | Self::Counted(_) => unreachable!(),
+            Self::Fake(_) | Self::Counted(_) | Self::Recorded(_) => unreachable!(),
         }
     }
 }

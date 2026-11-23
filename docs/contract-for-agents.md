@@ -2523,7 +2523,7 @@ says `cancelled: true`, and the journal that the caller left.
   once the page has loaded. A declared `activate` is kept.
 - `document.modelContext` exists only in a secure context: on `https`, on
   `localhost` and on `127.0.0.1`, not on a LAN address over `http`
-  (Chrome 156 with `--enable-features=WebMCPTesting`: none at
+  (Chrome 157 with `--enable-features=WebMCP`: none at
   `http://10.0.0.4:<port>`). To try a LAN host, serve it over HTTPS or
   start Chrome with `--unsafely-treat-insecure-origin-as-secure=<origin>`.
 
@@ -2997,7 +2997,7 @@ lists any literal colour, font size or weight an app's `.contract` files still w
 | Write | iOS draws |
 | --- | --- |
 | `button` (`buttonStyle`, native by default) | `UIButton` |
-| `list appearance="auto" listStyle="inset-grouped"` of `section`s (`header`, rows, `footer`) | `UICollectionView` list, as Settings ([human guide](contract-for-humans.md#choosing-a-native-button)); a row of your own parts starts and ends at the cell's margin, as UIKit's own rows do, so write no padding at its ends |
+| `list appearance="auto" listStyle="inset-grouped"` of `section`s (`header`, rows, `footer`) | `UICollectionView` list, as Settings ([human guide](contract-for-humans.md#choosing-a-native-button)); a row of your own parts starts and ends at the cell's margin, as UIKit's own rows do, so write no padding at its ends. Android shows Material's list items, with no line between rows |
 | the same, `listStyle="plain"`, each `section`'s `header` one letter (Contacts) | the list with UIKit's A–Z section index at its trailing edge, when every section has a row; sections above the letters (Favorites) stay out of it; a name that starts with no letter A–Z goes under `#`, not nowhere. Its headers pin as the list scrolls, over UIKit's blur; a `grouped` list's scroll away |
 | a `section`'s `header` holding boxes of your own, not one `text`: `header` › `row gap=8 align-items="center"` › a sized `image` (or a box around one) and a `text` | UIKit's header holding your views (an avatar beside a name), laid out as you wrote them and starting at the cell's margin, so write no padding at its ends; a `padding-left` or `padding-right` you write is from the card's edge, as UIKit's header view spans the card (16 for a hand-built view pinned 16 inside it). Above and below them is UIKit's header inset, 10 points; `padding-top` and `padding-bottom` on the `header` replace it (12 for a hand-built header view's). Pinned in a plain list as a one-text header is, and one VoiceOver heading named by its texts (a header that holds a button keeps each part its own element). Several bare `text`s are refused: put them in a `row` or a `column`. A `footer` holds one `text` |
 | `list` with no `appearance`, its rows down the page (each child is a row) | a plain list's cells: UIKit's separators, the cell's grey ground while a row is pressed, the row selected under the screen it pushed. Draw none of it, and no inset either: a row's content stands at the cell's margin (16 at each end; UIKit's, 20 in an iPhone's landscape) where you write no padding, the row `border-box` (LLP 1138); write a padding to choose your own. The row is your box; a border you write on a row is yours and replaces the separator there (`border-bottom="none"`: none), and `appearance="none"` keeps rows of your own (a transcript, a feed of cards). The Mac shows a table, the web and the Linux desktop one line between rows, Android none (LLP 1115.000 D16) |
@@ -7845,10 +7845,10 @@ the platform has no role for is the one place for a literal.
 already (the root font size: Dynamic Type's body on iOS, 13 on the Mac, the
 browser's 16). A `text role="heading"` with no `font-size` or `font-weight` of
 its own is the platform's text style for its `aria-level` (LLP 1115 D3): 1
-`title1`, 2 (the default) `title2`, 3 `title3`, 4 and on `headline`, sized for
-the reader's Dynamic Type by Apple's own ramp (iOS at the default size:
-28/22/20/17 pt; the Mac: 22/17/15/13; the web reads the ramp at its
-16 px root: 27/21/19/16, in `rem`). iOS, macOS and Material keep each style's
+`title1`, 2 (the default) `title2`, 3 `title3`, 4 and on `headline`. Apple's ramp
+gives 28/22/20/17 pt at the iOS default, 22/17/15/13 pt on the Mac and
+27/21/19/16 px at a 16 px web root. Android's Material look uses 28/24/22/16 sp
+at a font scale of 1 (LLP 1115.001 D4). iOS, macOS and Material keep each style's
 weight and leading. The web, neutral and terminal looks use bold for levels 1
 and 2, semibold for 3. Omit heading sizes and weights unless customizing them.
 An authored `font`, `font-size` or `font-weight` wins; an inherited one does not.

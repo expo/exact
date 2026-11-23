@@ -374,15 +374,19 @@ test("a Rust source's store read reaches rt.js whether its call answers or fails
     [read, fails] = [false, true];
     expect(() => data.answer('reader', [], store)).toThrow('nothing kept');
     expect(data.threwRead()).toBe(false);
-    // A mixed app: the Rust module reads and names a source it lacks, and the TypeScript one, asked in its place,
-    // reads and throws. One failure: its read is told once, and nothing of it is left for the next.
+    // A mixed app: each source goes to the module the crate's RUST_SOURCES gives it (`exact_data::Mixed`). A
+    // TypeScript source reads and throws: one failure, its read told once and nothing of it left for the next.
     let tsRead = false, tsForced = false;
-    const mixed = { q: [], ts: (_source, _args, _store, _target, _mutation, forced) => { tsForced = forced; tsRead = true; throw new Error('the TypeScript source threw'); }, threwRead: () => [tsRead, tsRead = false][0] };
-    await module.install(mixed, { reader: '' }, async () => new ArrayBuffer(0));
-    [read, fails, unknown] = [true, false, true];
-    expect(() => mixed.answer('reader', [], store, 'resource', false, true)).toThrow('the TypeScript source threw');
+    const mixed = { q: [], rustSources: new Set(['reader']), overlay: (source) => `${source}: app.ts's overlay`, ts: (_source, _args, _store, _target, _mutation, forced) => { tsForced = forced; tsRead = true; throw new Error('the TypeScript source threw'); }, threwRead: () => [tsRead, tsRead = false][0] };
+    await module.install(mixed, { reader: '', note: '' }, async () => new ArrayBuffer(0));
+    expect(() => mixed.answer('note', [], store, 'resource', false, true)).toThrow('the TypeScript source threw');
     expect(tsForced).toBe(true);
     expect([mixed.threwRead(), mixed.threwRead()]).toEqual([true, false]);
+    expect(mixed.overlay('note', [], null, [])).toBe("note: app.ts's overlay");
+    // A Rust source Rust calls unknown fails as natively: the TypeScript module is not asked in its place.
+    [read, fails, unknown] = [true, false, true];
+    expect(() => mixed.answer('reader', [], store)).toThrow('reader');
+    expect([tsRead, mixed.threwRead(), mixed.threwRead()]).toEqual([false, true, false]);
     [read, fails, unknown] = [false, true, false];
     expect(() => mixed.answer('reader', [], store)).toThrow('nothing kept');
     expect(mixed.threwRead()).toBe(false);

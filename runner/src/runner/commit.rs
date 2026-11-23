@@ -775,7 +775,7 @@ impl<D: DataSource> Runner<D> {
         }
         // A world hears whose commit posted to it (`world_origin.rs`).
         super::world_origin::mark_world_posts(
-            self.call_origin(),
+            super::world_origin::mark_origin(self.cause()),
             &mut self.commands[first_command..],
         );
         let commands: Vec<String> = self.commands[first_command..]

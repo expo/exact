@@ -815,6 +815,7 @@ fn a_draw_crosses_the_seam_and_its_recorder_lives_for_its_generation() {
             surface,
             args: &args,
             names: &[],
+            args_json: "[1,\"a\"]",
             frame: Frame {
                 time: 0.0,
                 mounted: 0.0,

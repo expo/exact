@@ -109,6 +109,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
         // and makes the top layer's windows (D10) and the bars (D11).
         p.serve_requests();
         p.serve_share_sheet();
+        p.serve_frame_partitions(super::frame_partitions::kept);
         surface::serve(&mut p);
         if let Some(palette) = &palette {
             p.set_palette(palette);

@@ -45,8 +45,10 @@ internal class FrameClient(
     private val view: WebView,
     private val hasNavigationListener: Boolean,
     private val host: FrameHost,
+    partitioned: Boolean = false,
 ) : WebViewClient(), NavigationListener {
-    private val documents = if (!hasNavigationListener &&
+    // A page-world object: never in a partitioned frame's page (LLP 1020.002 D1).
+    private val documents = if (!partitioned && !hasNavigationListener &&
         WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
         FrameDocuments(view, ::reportLoad)
     } else null

@@ -1464,7 +1464,8 @@ impl<'a> Lowerer<'a> {
                         Expr::NamedArg(name, value, _) => (name.as_str(), value.as_ref()),
                         _ => ("", arg),
                     };
-                    codes.push((name, self.expr_code(value, scope, locals)?));
+                    let (code, ty) = self.typed_code(value, scope, locals)?;
+                    codes.push((name, code, self.ty_id(&ty).ok()));
                 }
                 *surface = Some(self.b.surface(name, &codes));
             }

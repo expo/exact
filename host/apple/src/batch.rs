@@ -424,7 +424,8 @@ impl Batch {
             s.push(':');
             quote(v, &mut s);
         }
-        s.push_str("}}");
+        // Work that fell due made it: the program's navigation, even in an input's batch.
+        s.push_str(if change.due { "},\"due\":true}" } else { "}}" });
         self.ops.push(s);
     }
 
@@ -1372,6 +1373,7 @@ mod finish_bytes_tests {
                                 mode: exact_plan::SurfaceArgsMode::Positional,
                                 names: vec![],
                                 values: vec![exact_plan::Value::str("日本語")],
+                                types: vec![None],
                             });
                             batch.command("focus", &[exact_plan::Value::Number(1.)], None);
                             batch.destroy(3);

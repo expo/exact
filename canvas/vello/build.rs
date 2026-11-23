@@ -63,8 +63,10 @@ fn main() {
     // The dylib without its local symbols, by the linker: the release
     // profile's strip runs Xcode 27's strip, which leaves an iOS dylib that
     // dyld refuses ("mis-aligned LINKEDIT string pool"), so host/apple/
-    // build.mjs builds this crate with strip off.
-    println!("cargo:rustc-cdylib-link-arg=-Wl,-x");
+    // build.mjs builds this crate with strip off. It reaches the tests' links
+    // too: Cargo warns at a cdylib link argument in a package whose manifest
+    // declares no cdylib, and build.mjs asks for this one by `--crate-type`.
+    println!("cargo:rustc-link-arg=-Wl,-x");
     let Some((sdk, min)) = metal::sdk(&target) else {
         println!(
             "cargo:warning=exact-canvas-vello: no Metal SDK for {target}; the module is a stub"

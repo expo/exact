@@ -1190,10 +1190,13 @@ fn a_canvas_argument_the_gpu_product_does_not_declare_refuses_the_bake() {
     gpu_product(&product, &mut declared).unwrap();
     let mut b = exact_plan::builder::PlanBuilder::new(0, 0);
     let one = b.constant(&exact_plan::Value::Number(1.));
-    b.surface("dice", &[("count", one)]);
-    b.surface("chart", &[("series", one)]);
+    b.surface("dice", &[("count", one, None)]);
+    b.surface("chart", &[("series", one, None)]);
     assert_eq!(surface_arguments(b.plan(), &declared), Ok(()));
-    b.surface("dice", &[("count", one), ("session_carry", one)]);
+    b.surface(
+        "dice",
+        &[("count", one, None), ("session_carry", one, None)],
+    );
     let refusal = surface_arguments(b.plan(), &declared).unwrap_err();
     assert!(refusal.starts_with("canvas surface `dice` passes `session_carry`, which the GPU product libdice_gpu.dylib does not declare (it declares count): a source changed after the GPU product compiled"), "{refusal}");
     assert!(refusal.ends_with("build again"), "{refusal}");
@@ -1202,9 +1205,9 @@ fn a_canvas_argument_the_gpu_product_does_not_declare_refuses_the_bake() {
     let mut positional = exact_plan::builder::PlanBuilder::new(0, 0);
     let one = positional.constant(&exact_plan::Value::Number(1.));
     let yes = positional.constant(&exact_plan::Value::Bool(true));
-    positional.surface("dice", &[("", one)]);
+    positional.surface("dice", &[("", one, None)]);
     assert_eq!(surface_arguments(positional.plan(), &declared), Ok(()));
-    positional.surface("dice", &[("", one), ("", yes)]);
+    positional.surface("dice", &[("", one, None), ("", yes, None)]);
     let refusal = surface_arguments(positional.plan(), &declared).unwrap_err();
     assert!(refusal.starts_with("canvas surface `dice` passes 2 values by position, and the GPU product libdice_gpu.dylib declares 1 argument (count): a source changed after the GPU product compiled"), "{refusal}");
     // The web's wasm product is read without a digest.

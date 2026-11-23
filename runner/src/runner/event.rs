@@ -1446,6 +1446,8 @@ mod projection;
 /// Whether `event` is the host's observation of the page rather than the
 /// person's act: a load, a resize, an intersection, a media element's
 /// progress, a frame's navigation, a geometry's report or a MIDI message.
+/// A drag handle's release (`heightrelease`, `transformrelease`) ends the
+/// person's gesture, so it is theirs.
 fn observed(event: &Event) -> bool {
     match event {
         // A media session's action is the person's, on the platform's controls.
@@ -1457,9 +1459,7 @@ fn observed(event: &Event) -> bool {
         | Event::MidiMessage(..)
         | Event::FrameNavigation(..)
         | Event::FrameRecord(..)
-        | Event::HeightRelease { .. }
-        | Event::TransformGeometry { .. }
-        | Event::TransformRelease { .. } => true,
+        | Event::TransformGeometry { .. } => true,
         _ => false,
     }
 }

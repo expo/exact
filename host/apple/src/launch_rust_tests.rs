@@ -50,12 +50,14 @@ fn a_named_rust_preload_answers_only_the_apps_own_reads() {
                 ctx.preload(LaunchRequest::new("rust-feed", Request::get(&url)))
                     .unwrap();
             });
-            let request = source
+            let mut request = source
                 .request
                 .clone()
                 .header("X-Trace", "new")
                 .preload("rust-feed")
                 .unwrap();
+            // The app's own read, as the runner stamps it.
+            request.reach.origin = CallOrigin::App;
             let launch = fixture();
             begin(&launch, &source, false);
             server.request();

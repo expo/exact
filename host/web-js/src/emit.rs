@@ -1246,6 +1246,7 @@ impl Em<'_> {
                     self.markdown(i, &e, &f, plan.code(b.expr))
                 }
                 BindingKind::Prop if b.id == PropId::Dataset as u16 => self.dataset(&e, &f),
+                BindingKind::Prop if self.canvas_setting(&b, &e, &f) => {}
                 BindingKind::Prop => {
                     let prop = PropId::from_wire(b.id).ok_or("unknown prop")?;
                     let name = style::prop_name(node_type, prop)?;

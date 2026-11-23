@@ -157,6 +157,9 @@ pub struct DrawRequest<'a> {
     pub args: &'a [Value],
     /// The authored argument names, empty for positional calls.
     pub names: &'a [String],
+    /// The arguments as a TypeScript `draw` receives them
+    /// ([`crate::json::surface_args`]).
+    pub args_json: &'a str,
     /// What the draw is told.
     pub frame: Frame,
     /// The canvas node's `color`, for `currentColor`.
@@ -169,8 +172,7 @@ pub struct DrawRequest<'a> {
 
 impl DrawRequest<'_> {
     /// The request as the TypeScript seam reads it (`canvas/recorder.js`):
-    /// `{canvas, generation, seq, surface, args, frame}`, the arguments as
-    /// a GPU surface's `bind` receives them.
+    /// `{canvas, generation, seq, surface, args, frame}`.
     pub fn json(&self) -> String {
         let mut s = format!(
             "{{\"canvas\":{},\"generation\":{},\"seq\":{},\"surface\":",
@@ -178,19 +180,7 @@ impl DrawRequest<'_> {
         );
         crate::json::quote(self.surface, &mut s);
         s.push_str(",\"args\":");
-        let named = !self.names.is_empty();
-        s.push(if named { '{' } else { '[' });
-        for (i, v) in self.args.iter().enumerate() {
-            if i > 0 {
-                s.push(',');
-            }
-            if named {
-                crate::json::quote(&self.names[i], &mut s);
-                s.push(':');
-            }
-            crate::instance::value_json(v, &mut s);
-        }
-        s.push(if named { '}' } else { ']' });
+        s.push_str(self.args_json);
         let f = &self.frame;
         let _ = write!(
             s,
@@ -313,6 +303,9 @@ struct Record {
     surface: String,
     names: Vec<String>,
     args: Vec<Value>,
+    /// Each argument's JSON for a TypeScript `draw`, and the whole.
+    pieces: Vec<Arc<str>>,
+    args_json: Arc<str>,
     mounted: f64,
     lifetime: u64,
     generation: u32,
@@ -375,6 +368,7 @@ pub trait CanvasEngine {
         &mut self,
         updates: Vec<crate::SurfaceUpdate>,
         roster: &dyn Fn() -> Vec<(String, usize)>,
+        args_json: crate::json::SurfaceArgs<'_>,
         now: f64,
     ) -> Vec<crate::SurfaceUpdate>;
     /// [`Runner::set_canvas_limits`].
@@ -383,6 +377,8 @@ pub trait CanvasEngine {
     fn views(&mut self, alive: &dyn Fn(ViewId) -> bool) -> Vec<ViewId>;
     /// [`Runner::set_canvas_geometry`].
     fn set_geometry(&mut self, view: ViewId, geometry: Geometry);
+    /// Each canvas's last geometry, for [`Runner::reread_canvas_bitmaps`].
+    fn geometries(&self) -> Vec<(ViewId, Geometry)>;
     /// [`Runner::canvas_frame`], at `now`.
     fn frame(&mut self, now: f64);
     /// [`Runner::canvas_wants_frame`].
@@ -501,6 +497,7 @@ impl CanvasEngine for Canvases {
         &mut self,
         updates: Vec<crate::SurfaceUpdate>,
         roster: &dyn Fn() -> Vec<(String, usize)>,
+        args_json: crate::json::SurfaceArgs<'_>,
         now: f64,
     ) -> Vec<crate::SurfaceUpdate> {
         if self.roster.is_none() {
@@ -513,8 +510,14 @@ impl CanvasEngine for Canvases {
                 rest.push(u);
                 continue;
             }
+            let kept = (self.records.get(&u.view))
+                .filter(|r| r.surface == u.name)
+                .map(|r| (&r.args[..], &r.pieces[..]));
+            let (pieces, json) = args_json(&u, kept);
             match self.records.get_mut(&u.view) {
                 Some(r) if r.surface == u.name => {
+                    r.pieces = pieces;
+                    r.args_json = json;
                     r.args = u.values;
                     r.names = u.names;
                     r.causes = r.causes.with(Causes::ARGS);
@@ -531,6 +534,8 @@ impl CanvasEngine for Canvases {
                             surface: u.name,
                             names: u.names,
                             args: u.values,
+                            pieces,
+                            args_json: json,
                             mounted: now,
                             lifetime: LIFETIMES.fetch_add(1, Ordering::Relaxed),
                             generation: 0,
@@ -769,10 +774,11 @@ impl CanvasEngine for Canvases {
                 scale: b.scale,
             };
             let (lifetime, generation) = (r.lifetime, r.generation);
-            let (surface, args, names, ctx) = (
+            let (surface, args, names, args_json, ctx) = (
                 r.surface.clone(),
                 r.args.clone(),
                 r.names.clone(),
+                r.args_json.clone(),
                 r.ctx.clone(),
             );
             let (current_color, rtl) = drawn_in;
@@ -792,6 +798,7 @@ impl CanvasEngine for Canvases {
                 surface: &surface,
                 args: &args,
                 names: &names,
+                args_json: &args_json,
                 frame,
                 current_color,
                 rtl,
@@ -926,6 +933,11 @@ impl CanvasEngine for Canvases {
 
     fn is_2d(&self, view: ViewId) -> bool {
         self.records.contains_key(&view)
+    }
+
+    fn geometries(&self) -> Vec<(ViewId, Geometry)> {
+        let at = |(v, r): (&ViewId, &Record)| r.geometry.map(|g| (*v, g));
+        self.records.iter().filter_map(at).collect()
     }
 
     fn mounted(&self, view: ViewId, lifetime: u64) -> bool {
@@ -1168,8 +1180,11 @@ impl<D: DataSource> Runner<D> {
         let now = self.now_ms;
         let rest = match self.canvases.as_mut() {
             Some(c) => {
-                let data = &self.data;
-                c.publish(updates, &|| data.canvas_surfaces(), now)
+                let (data, plan) = (&self.data, &self.plan);
+                let json = |u: &crate::SurfaceUpdate, kept: Option<(&[Value], &[Arc<str>])>| {
+                    crate::json::surface_args(plan, u, kept)
+                };
+                c.publish(updates, &|| data.canvas_surfaces(), &json, now)
             }
             None => updates,
         };
@@ -1236,6 +1251,26 @@ impl<D: DataSource> Runner<D> {
             p3: text(exact_kernel::PropId::ColorSpace).as_deref() == Some("display-p3")
                 && !exact_kernel::style::wide::limited(),
             float16: text(exact_kernel::PropId::ColorType).as_deref() == Some("float16"),
+        }
+    }
+
+    /// A host that reports a canvas's box only as it moves (the web's wasm
+    /// target): each 2D canvas's bitmap size and settings read again at its
+    /// last box, as [`Runner::layout_canvases`] reads them at each layout.
+    pub fn reread_canvas_bitmaps(&mut self) {
+        let Some(c) = self.canvases.as_ref() else {
+            return;
+        };
+        for (view, g) in c.geometries() {
+            let (bitmap, settings) = (self.canvas_bitmap(view), self.canvas_settings(view));
+            self.set_canvas_geometry(
+                view,
+                Geometry {
+                    bitmap,
+                    settings,
+                    ..g
+                },
+            );
         }
     }
 

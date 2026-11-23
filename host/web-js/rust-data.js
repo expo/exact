@@ -130,7 +130,7 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
     }
     if (tag === 0) return { v: r.value() };
     // A source's BadArguments or Unavailable ends its send unsent.
-    // UnknownSource (2) gives a mixed app's TypeScript module its turn.
+    // UnknownSource (2) too: a mixed app's TypeScript module is not asked in its place.
     // A call the seam could not carry (`call` above) is the resource's
     // failure instead (LLP 1071 §7).
     if (tag >= 2 && tag <= 4) throw Object.assign(new Error(r.str()), { unknown: tag === 2, refuse: true });
@@ -331,7 +331,10 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
   const ts = data.ts, tsThrewRead = data.threwRead, tsThrewWatches = data.threwWatches;
   data.threwRead = () => { const read = [threwRead, !!tsThrewRead?.()]; threwRead = false; return read[0] || read[1]; };
   data.threwWatches = () => { const w = threwWatches ?? tsThrewWatches?.() ?? null; threwWatches = null; return w; };
-  data.answer = ts ? (source, args, store, target, mutation, forced, owner) => { try { return rust(source, args, store, target, mutation, forced, owner); } catch (e) { if (e.unknown) return ts(source, args, store, target, mutation, forced); throw e; } } : rust;
+  // Beside app.ts, each source goes to the module its name gives (ts-data.js `install`): one the crate's RUST_SOURCES
+  // lists to Rust, even when Rust calls it unknown, as natively; every other to app.ts.
+  const owns = data.rustSources;
+  data.answer = ts ? (source, args, store, target, mutation, forced, owner) => owns.has(source) ? rust(source, args, store, target, mutation, forced, owner) : ts(source, args, store, target, mutation, forced) : rust;
   // A stream's messages that arrived together (request-send.js): each parsed in order (LLP 1016.000 D4), the last
   // one's answer theirs; one that answers with a request (the stream asked again) ends them there.
   // A two-way socket's `open` or frame is its own mapper's turn (LLP 1016.003 D4): it may send on that socket.
@@ -355,10 +358,10 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
     if (effects.length) out.effects = effects;
     return out;
   };
-  // An overlay (`overlay_request`): what a resource shows while writes affect it; none from the Rust module asks
-  // the TypeScript one's, beside it.
+  // An overlay (`overlay_request`): what a resource shows while writes affect it, from the module that answers it.
   const types = s => (sources[s] ?? '|').split('|'), tsOverlay = data.overlay;
   data.overlay = (source, args, answer, writes) => {
+    if (ts && !owns.has(source)) return tsOverlay?.(source, args, answer, writes);
     const [params, result] = types(source);
     const r = op(5, w => {
       w.str(source); w.u8(6); w.u32(args.length); let i = 0; for (const a of args) i = encode(w, a, params, i);
@@ -373,9 +376,7 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
     if (r.u8() !== 3) throw new Error('expected an overlay reply');
     const tag = r.u8();
     if (tag === 2) throw new Error(r.str());
-    // A source the Rust module does not answer: the TypeScript module's overlay, beside it.
-    if (tag === 3) return tsOverlay?.(source, args, answer, writes);
-    if (tag === 0) return undefined;
+    if (tag === 0 || tag === 3) return undefined;
     const value = r.value(), keep = []; for (let n = r.u32(); n--;) keep.push(r.u64());
     return { value, keep };
   };

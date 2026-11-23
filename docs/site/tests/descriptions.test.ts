@@ -1,9 +1,33 @@
 import { expect, test } from 'bun:test';
 import { marked } from 'marked';
 import { descriptionOf, sectionDescriptionProblems } from '../tools/descriptions.ts';
+import { markdownHeadings, pageMarkdown } from '../tools/markdown-headings.ts';
 
 const fallback = 'The guide describes the behavior of apps on each platform.';
 const derive = (markdown: string) => descriptionOf(marked.lexer(markdown), fallback);
+
+test('split-page Markdown keeps a first indented code block', () => {
+  const tokens = marked.lexer('## A section\n\n    first()\n    second()\n\nThe next paragraph.\n');
+  const markdown = pageMarkdown(tokens, raw => raw, 'A section');
+  expect(markdown).toBe('# A section\n\n    first()\n    second()\n\nThe next paragraph.');
+});
+
+test('Markdown section boundaries include setext headings and skip fenced code', () => {
+  const markdown = [
+    'Recipe', '======', '', '   ````ts', '## Inside', '```', '## After a short marker',
+    '~~~~', '## After a different marker', '```` trailing text', '## After trailing text',
+    '  `````', '', '   ## C#', '', 'First section.', '', 'Setext heading', '--------------', '',
+    'Second section.', '', '## Closing hashes ###', '',
+  ].join('\n');
+  expect(markdownHeadings(markdown).map(({ level, text, start, headingEnd, end }) => ({
+    level, text, heading: markdown.slice(start, headingEnd).trimEnd(), section: markdown.slice(start, end).trimEnd(),
+  }))).toEqual([
+    { level: 1, text: 'Recipe', heading: 'Recipe\n======', section: markdown.trimEnd() },
+    { level: 2, text: 'C#', heading: '   ## C#', section: '   ## C#\n\nFirst section.' },
+    { level: 2, text: 'Setext heading', heading: 'Setext heading\n--------------', section: 'Setext heading\n--------------\n\nSecond section.' },
+    { level: 2, text: 'Closing hashes', heading: '## Closing hashes ###', section: '## Closing hashes ###' },
+  ]);
+});
 
 test('Sound lists its opening sentences when the next sentence starts with code', () => {
   const sound = [

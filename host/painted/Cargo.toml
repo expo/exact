@@ -117,6 +117,8 @@ windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32
 test-budget = []
 
 [dev-dependencies]
+# A recorded device stream holds instances as their bytes (src/ink/stream_tests.rs).
+bytemuck = "1"
 exact-bake = { path = "../../bake" }
 exact-js = { path = "../../js" }
 messages-stress-data = { path = "../../apps/messages-stress/data" }

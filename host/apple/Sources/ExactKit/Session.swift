@@ -56,12 +56,18 @@ public enum ExactEnv {
     public static let agentFreezes = agentMode && agentTiming != "platform"
     static let postsLiveWork = !agentFreezes && environment["EXACT_FILL_SYNC"] != "1"
     public static let smoke = environment["EXACT_SMOKE"] == "1"
-    /// Milliseconds since the process's `main`: the wall clock for startup stamps.
+    /// Milliseconds since the process's `main`: the session's clock and the
+    /// startup stamps'. It starts at its first read, which an adapter makes
+    /// the first statement of its `main`.
     public static let t0 = CACurrentMediaTime()
     public static func wall() -> Double { (CACurrentMediaTime() - t0) * 1000 }
-    /// Startup stamps, milliseconds from `main`, in order (the smoke prints them).
+    /// Startup stamps, milliseconds from `main`, in order (the smoke prints
+    /// them). Without `EXACT_SMOKE` a stamp reads no clock and builds no label.
     nonisolated(unsafe) public static var stamps: [(String, Double)] = []
-    public static func stamp(_ label: String) { stamps.append((label, wall())) }
+    public static func stamp(_ label: @autoclosure () -> String) {
+        guard smoke else { return }
+        stamps.append((label(), wall()))
+    }
 }
 /// What a session tells its host: a capability an action called (LLP 1005
 /// §3), after the batch that carried it was applied; and its state.
@@ -1184,7 +1190,7 @@ public final class ExactSession {
         if let must = batch.mustFinish { finishHold.moved(must) }
         HostLog.capabilities(self, batch)
         let outputs = SessionBatchOps(batch.ops)
-        for op in outputs.routers { routerOp = op.payload; presenter.armFragment(op.payload["activation"]); NavigationMarks.shared.routerChanged(self, payload: op.payload) } // a scroll to its fragment, which the runner's `scrollToFragment` makes (LLP 1153 D5)
+        for op in outputs.routers { routerOp = op.payload; presenter.armFragment(op.payload["activation"]); NavigationMarks.shared.routerChanged(self, payload: op.payload, input: batch.input) } // a scroll to its fragment, which the runner's `scrollToFragment` makes (LLP 1153 D5)
         // @ref LLP 1048.003 D1 — the head's title, for the app that owns the chrome.
         for op in outputs.titles {
             presenter.headTitle(op.title)

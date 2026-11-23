@@ -59,6 +59,7 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("grouped-form"),
     recipe!("in-app-browser"),
     recipe!("ios-driving"),
+    recipe!("keep-a-playing-video"),
     recipe!("keyboard-and-focus"),
     recipe!("large-live-list"),
     recipe!("list-rows"),

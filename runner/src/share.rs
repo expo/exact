@@ -328,12 +328,14 @@ pub fn request<D: DataSource>(runner: &mut Runner<D>, json: &str) -> String {
 }
 
 /// The journal line an answered share hold leaves (D2, D6): `tap @t
-/// shared` is `share: shared`; `cancel` is `share: dismissed`.
-pub(crate) fn answered<D: DataSource>(runner: &mut Runner<D>, choice: &str) {
-    runner.log(if choice == "shared" {
-        "share: shared"
-    } else {
-        "share: dismissed"
+/// shared` is `share: shared`; `cancel` is `share: dismissed`, or `share:
+/// refused: <reason>` when the host that presents the hold failed to present
+/// or complete the share and says why (`refused`).
+pub(crate) fn answered<D: DataSource>(runner: &mut Runner<D>, choice: &str, refused: Option<&str>) {
+    runner.log(match (choice, refused) {
+        ("shared", _) => "share: shared".to_owned(),
+        (_, Some(reason)) => format!("share: refused: {reason}"),
+        _ => "share: dismissed".to_owned(),
     });
 }
 

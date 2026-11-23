@@ -115,6 +115,9 @@ impl<D: DataSource> Runner<D> {
                 }
             }
             let held = self.clock.held.pop_front().expect("a held input");
+            // The input's own action, even when a wake's expiry reached here
+            // from inside due work (`RouterChange::due`)
+            let due = std::mem::replace(&mut self.clock.due, false);
             let ran: Result<Option<CommitReceipt>, RunnerError> = match held.input {
                 Input::Event(view, event, committed) => {
                     let result = self.dispatch(view, event);
@@ -130,6 +133,7 @@ impl<D: DataSource> Runner<D> {
                         .transpose()
                 }
             };
+            self.clock.due = due;
             match ran {
                 Ok(receipt) => a.receipts.extend(receipt.map(|receipt| Timed {
                     at_ms: at.max(self.now_ms),

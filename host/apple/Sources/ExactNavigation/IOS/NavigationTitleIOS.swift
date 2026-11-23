@@ -411,7 +411,7 @@ final class HeaderTitleView: UIControl {
     }
 
     @objc private func pressed() {
-        if let tap { _ = host?.presenter.hatchAct(tap, 0) }
+        if let tap { _ = host?.presenter.hatchAct(tap, 0, NavigationMarks.shared.personNow()) }
     }
 }
 

@@ -8,13 +8,18 @@ struct Data {
     serial: u64,
     live: Vec<u64>,
     detector: Option<u64>,
+    mirrors: Vec<Value>,
 }
 
 impl DataSource for Data {
     fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
         unreachable!()
     }
-    fn answer(&mut self, _: &mut Store, source: &str, _: &[Value]) -> Result<Answer, DataError> {
+    fn answer(&mut self, _: &mut Store, source: &str, args: &[Value]) -> Result<Answer, DataError> {
+        if source == "mirror" {
+            self.mirrors.push(args[0].clone());
+            return Ok(Answer::Now(args[0].clone()));
+        }
         if source == "immediate" {
             return Ok(Answer::Now(Value::Number(1.)));
         }
@@ -77,14 +82,15 @@ component App
           text "A"
         button press=pick("b") role="tab" aria-controls="panel-b" aria-selected=(nav.tab == "b")
           text "B"
-      Unsent(replace=replace)
+      if !replacing
+        Unsent(replace=replace)
       text (replacing ? "attempted" : "committed")
 component Unsent
   props
     replace: action
-  mutation saved as shape number
+  mutation firstSaved as shape number
   action save
-    send saved = held()
+    send firstSaved = held()
     replace()
   view
     button press=save testId="first-send"
@@ -204,6 +210,14 @@ fn ownership(r: &Runner<Data>) -> Ownership {
 #[test]
 fn every_reconcile_refusal_restores_ownership() {
     let plan = contract::compile(SOURCE).unwrap();
+    let first_send_owner = plan
+        .mutations
+        .iter()
+        .find(|m| crate::agent::declared_name(plan.str(m.name)) == "firstSaved")
+        .unwrap()
+        .owner
+        .expect("first-send mutation has an owner");
+    let first_send_region = plan.arm(first_send_owner).region.0;
     for refusal in [
         "key",
         "key-trap",
@@ -266,7 +280,20 @@ fn every_reconcile_refusal_restores_ownership() {
             let panels = r.unopened_tabs().to_vec();
             let result = match entry {
                 "replace" => r.act("replace", vec![]),
-                "first-send" => press(&mut r, "first-send"),
+                "first-send" => {
+                    let kernel = r.kernel();
+                    let button = kernel.find_first_by_test_id("first-send").unwrap();
+                    let view = kernel.node_by_key(button).unwrap().id;
+                    let (_, frames) = r.find(view).unwrap();
+                    let storage = Frame::row_of(&frames, first_send_region).unwrap();
+                    assert!(storage.borrow().sends.is_empty());
+                    let result = r.dispatch(view, crate::Event::Press);
+                    assert!(
+                        storage.borrow().sends.is_empty(),
+                        "{refusal}: {entry}: instance sends"
+                    );
+                    result
+                }
                 "tab" => r.build_tabs(&panels),
                 _ => r.build_every_tab(),
             };
@@ -290,4 +317,213 @@ fn every_reconcile_refusal_restores_ownership() {
             );
         }
     }
+}
+
+#[test]
+fn a_sleeping_owned_resource_records_arguments_without_resettling() {
+    let plan = contract::compile(
+        r#"component App
+  state show = true
+  state number = 1
+  view
+    column
+      if show
+        Sleeping(number=number)
+component Sleeping
+  props
+    number: number
+  resource answer = mirror(number) when false as shape number
+  view
+    text `${answer}`
+"#,
+    )
+    .unwrap();
+    let number = plan
+        .slots
+        .iter()
+        .position(|slot| plan.str(slot.name) == "number")
+        .unwrap();
+    let mut r = Runner::boot(
+        plan,
+        Data::default(),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let owners = r.tree.as_ref().unwrap().owners();
+    let row = owners[0].storage.borrow().requests[0].row.unwrap();
+    assert!(r.resources[row].state.as_ref().unwrap().asleep);
+    assert_eq!(r.owned_row(row).unwrap().want.args, [Value::Number(1.)]);
+
+    r.slots[number] = Value::Number(2.);
+    assert!(!r.reconcile_owned(&owners).unwrap());
+    assert_eq!(r.owned_row(row).unwrap().want.args, [Value::Number(2.)]);
+}
+
+#[test]
+fn a_sleeping_owned_resource_uses_changed_arguments_only_after_wake() {
+    let plan = contract::compile(
+        r#"component App
+  state show = true
+  state awake = false
+  state number = 1
+  action put(n: number)
+    number = n
+  action wake
+    awake = true
+  view
+    column
+      if show
+        Sleeping(awake=awake, number=number)
+component Sleeping
+  props
+    awake: bool
+    number: number
+  resource answer = mirror(range(number).length) when awake as shape number
+  view
+    text `${number}:${answer}:${current(answer)}` testId="answer"
+"#,
+    )
+    .unwrap();
+    let source = plan
+        .resources
+        .iter()
+        .find(|resource| plan.str(resource.source) == "mirror")
+        .unwrap();
+    assert!(source.owner.is_some());
+    let seed = Checkpoint {
+        answers: vec![(
+            plan.str(source.name).into(),
+            "mirror".into(),
+            vec![Value::Number(1.)],
+            Value::Number(91.),
+        )],
+        ..Default::default()
+    };
+    let mut r = Runner::boot_checkpoint(
+        plan,
+        Data::default(),
+        Kernel::with_monospace(),
+        &seed,
+        vec![],
+        Default::default(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let text = |r: &Runner<Data>| {
+        let kernel = r.kernel();
+        let key = kernel.find_by_test_id("answer")[0];
+        kernel
+            .node_by_key(key)
+            .unwrap()
+            .props
+            .str(exact_kernel::PropId::Text)
+            .unwrap()
+            .to_owned()
+    };
+    assert_eq!(text(&r), "1:91:false");
+    r.act("put", vec![Value::Number(2.)]).unwrap();
+    assert_eq!(text(&r), "2:91:false");
+
+    r.act("put", vec![Value::Number(3.)]).unwrap();
+    assert_eq!(text(&r), "3:91:false");
+
+    assert!(r.data.mirrors.is_empty());
+
+    r.act("wake", vec![]).unwrap();
+    assert_eq!(r.data.mirrors, [Value::Number(3.)]);
+    assert_eq!(text(&r), "3:3:true");
+}
+
+#[test]
+fn a_refused_render_preserves_a_pinned_row_in_a_nested_collection() {
+    let plan = contract::compile(
+        r#"component App
+  state count = 0
+  action change(nextCount: number)
+    count = nextCount
+  view
+    column
+      list testId="outer" virtualized=true estimated-item-height=120 height=120
+        for groupKey in ["a"] key=groupKey
+          column height=120
+            list testId="inner" virtualized=true estimated-item-height=20 height=100
+              for item in range(count == 0 ? 80 : 81) key=item
+                row testId=`item-${item}` height=20
+                  text groupKey
+      if count != 0
+        Candidate(count=count)
+component Candidate
+  props
+    count: number
+  state ticks = 0
+  task tick when true key=(1 / (count - 1))
+    every(10, bump)
+  action bump
+    ticks = ticks + 1
+  view
+    text `${ticks}`
+"#,
+    )
+    .unwrap();
+    let mut r = Runner::boot(
+        plan,
+        Data::default(),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    assert!(r.transactional_render());
+    let view = |r: &Runner<Data>, name| {
+        let kernel = r.kernel();
+        kernel
+            .node_by_key(kernel.find_by_test_id(name)[0])
+            .unwrap()
+            .id
+    };
+    let report = |r: &mut Runner<Data>, list, offset, port, interaction_view| {
+        let previous = r.collection(list).unwrap();
+        r.collection_feedback(crate::CollectionFeedback {
+            view: list,
+            revision: previous.revision,
+            scroll_sequence: previous.scroll_sequence + 1,
+            offset,
+            port_main: port,
+            port_cross: 320.,
+            cross: 320.,
+            padding: [0.; 2],
+            measurements: Vec::new(),
+            focus_view: None,
+            interaction_view,
+        })
+        .unwrap();
+    };
+
+    let outer = view(&r, "outer");
+    report(&mut r, outer, 0., 120., None);
+    let inner = view(&r, "inner");
+    report(&mut r, inner, 0., 100., None);
+    let pinned = view(&r, "item-0");
+    report(&mut r, inner, 600., 100., Some(pinned));
+    let before = r.collection(inner).unwrap();
+    assert_eq!(before.count, 80);
+    assert!(before.rows.iter().any(|row| row.root == pinned));
+    assert!(before.rows.iter().any(|row| row.index > 20));
+
+    assert!(r.act("change", vec![Value::Number(1.)]).is_err());
+    assert!(!r.is_poisoned());
+    assert_eq!(r.collection(inner).as_ref(), Some(&before));
+    assert_eq!(view(&r, "item-0"), pinned);
+
+    r.act("change", vec![Value::Number(2.)]).unwrap();
+    assert_eq!(view(&r, "inner"), inner);
+    let after = r.collection(inner).unwrap();
+    assert_eq!(after.count, 81);
+    assert!(after.revision > before.revision);
+    assert_eq!(view(&r, "item-0"), pinned);
+    report(&mut r, inner, 640., 100., None);
+    assert!(r.kernel().node(pinned).is_none());
 }

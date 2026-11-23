@@ -13,7 +13,7 @@ fn open() -> Option<Ink> {
     }
 }
 
-fn compare(a: &Pixmap, b: &Pixmap) {
+pub(super) fn compare(a: &Pixmap, b: &Pixmap) {
     let mut sum = 0u64;
     let mut over = 0;
     for (a, b) in a
@@ -40,13 +40,19 @@ fn geometry_survives_nested_layers_transforms_and_resizes() {
     let Some(mut ink) = open() else {
         return;
     };
-    let mut cpu = Raster::new();
+    geometry(&mut Raster::new(), &mut ink, &mut |cpu, ink| {
+        compare(&cpu, &ink)
+    });
+}
+
+/// Draws each frame on both painters and hands `frame` the CPU's pixels, then Ink's.
+pub(super) fn geometry(cpu: &mut Raster, ink: &mut Ink, frame: &mut dyn FnMut(Pixmap, Pixmap)) {
     for scale in [1., 1.5, 2.] {
         for transform in [
             Transform::identity(),
             Transform::from_row(0.9, 0.2, -0.15, 0.85, 15., 2.),
         ] {
-            for backend in [&mut cpu as &mut dyn Backend, &mut ink] {
+            for backend in [&mut *cpu as &mut dyn Backend, &mut *ink] {
                 backend.page([19, 35, 62, 181]);
                 backend.begin(120., 100., scale);
                 let outer = Shape::new((3.25, 2.5, 109., 90.), [17., 8., 23., 11.]);
@@ -104,7 +110,7 @@ fn geometry_survives_nested_layers_transforms_and_resizes() {
                 );
                 backend.pop_clip();
             }
-            compare(&cpu.finish().unwrap(), &ink.finish().unwrap());
+            frame(cpu.finish().unwrap(), ink.finish().unwrap());
         }
     }
 }
@@ -114,7 +120,12 @@ fn image_revisions_and_mips_preserve_alpha_and_group_opacity() {
     let Some(mut ink) = open() else {
         return;
     };
-    let mut cpu = Raster::new();
+    images(&mut Raster::new(), &mut ink, &mut |cpu, ink| {
+        compare(&cpu, &ink)
+    });
+}
+
+pub(super) fn images(cpu: &mut Raster, ink: &mut Ink, frame: &mut dyn FnMut(Pixmap, Pixmap)) {
     let photo = Pixmap::decode_png(include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../scripts/fixtures/picker/photo.png"
@@ -128,7 +139,7 @@ fn image_revisions_and_mips_preserve_alpha_and_group_opacity() {
     let photo = Arc::new(Bitmap::new(photo, natural, reservation.charge()));
     reservation.commit(bytes).unwrap();
     for (width, height) in [(80., 53.), (43., 29.), (17., 11.)] {
-        for backend in [&mut cpu as &mut dyn Backend, &mut ink] {
+        for backend in [&mut *cpu as &mut dyn Backend, &mut *ink] {
             backend.begin(width, height, 1.);
             backend.image(
                 &photo,
@@ -139,7 +150,7 @@ fn image_revisions_and_mips_preserve_alpha_and_group_opacity() {
                 exact_kernel::ImageRendering::Auto,
             );
         }
-        compare(&cpu.finish().unwrap(), &ink.finish().unwrap());
+        frame(cpu.finish().unwrap(), ink.finish().unwrap());
     }
     for revision in 0..2 {
         let mut pixels = Pixmap::new(256, 128).unwrap();
@@ -155,7 +166,7 @@ fn image_revisions_and_mips_preserve_alpha_and_group_opacity() {
         }
         let pixels = Arc::new(pixels);
         for _ in 0..2 {
-            for backend in [&mut cpu as &mut dyn Backend, &mut ink] {
+            for backend in [&mut *cpu as &mut dyn Backend, &mut *ink] {
                 backend.begin(90., 70., 1.);
                 backend.push_opacity(0.7);
                 backend.canvas(
@@ -172,7 +183,7 @@ fn image_revisions_and_mips_preserve_alpha_and_group_opacity() {
                     0,
                 );
             }
-            compare(&cpu.finish().unwrap(), &ink.finish().unwrap());
+            frame(cpu.finish().unwrap(), ink.finish().unwrap());
         }
     }
 }
@@ -301,7 +312,12 @@ fn clipped_backdrops_keep_the_unclipped_filter_samples() {
 #[test]
 fn overlapping_blends_match_cpu_with_transforms_clips_and_opacity() {
     let Some(mut ink) = open() else { return };
-    let mut cpu = Raster::new();
+    blends(&mut Raster::new(), &mut ink, &mut |cpu, ink| {
+        compare(&cpu, &ink)
+    });
+}
+
+pub(super) fn blends(cpu: &mut Raster, ink: &mut Ink, frame: &mut dyn FnMut(Pixmap, Pixmap)) {
     let mut pixels = Pixmap::new(2, 2).unwrap();
     pixels.fill(tiny_skia::Color::from_rgba8(180, 90, 130, 170));
     let pixels = Arc::new(pixels);
@@ -311,7 +327,7 @@ fn overlapping_blends_match_cpu_with_transforms_clips_and_opacity() {
             Transform::from_row(0.9, 0.3, -0.2, 1.1, 8., -9.),
             Transform::from_row(-1., 0., 0., 1., 95., 0.),
         ] {
-            for b in [&mut cpu as &mut dyn Backend, &mut ink] {
+            for b in [&mut *cpu as &mut dyn Backend, &mut *ink] {
                 b.begin(100., 80., scale);
                 b.push_opacity(0.7);
                 b.fill(
@@ -334,7 +350,7 @@ fn overlapping_blends_match_cpu_with_transforms_clips_and_opacity() {
                 b.pop_clip();
                 b.pop_opacity();
             }
-            compare(&cpu.finish().unwrap(), &ink.finish().unwrap());
+            frame(cpu.finish().unwrap(), ink.finish().unwrap());
         }
     }
 }

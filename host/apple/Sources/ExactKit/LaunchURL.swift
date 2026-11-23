@@ -25,12 +25,17 @@ extension ExactSession {
         delegate?.exactSession(self, command: "openURL", args: [href])
         return true
     }
-    @discardableResult public func navigate(_ location: String) -> Bool {
+    /// `followed`: a person followed a link to it, so it applies as their input.
+    @discardableResult public func navigate(_ location: String, followed: Bool = false) -> Bool {
         guard state != .destroyed, booted else { return false }
-        let batch: Batch
-        if let node = navigationRoot { batch = runtime.navigate(node.id, location, now: now()) }
-        else if runtime.routeMatches(location) { batch = runtime.hostGo(location, now: now()) }
-        else { log("navigate refused: no navigation root handler or matching route"); return false }
+        let go = { [self] () -> Batch? in
+            if let node = navigationRoot { return runtime.navigate(node.id, location, now: now()) }
+            if runtime.routeMatches(location) { return runtime.hostGo(location, now: now()) }
+            log("navigate refused: no navigation root handler or matching route")
+            return nil
+        }
+        if followed { return applyInput(go).map { $0.error == nil } ?? false }
+        guard let batch = go() else { return false }
         apply(batch)
         return batch.error == nil
     }
@@ -131,13 +136,11 @@ extension ExactSession {
     }
 
     /// A link that targets this rooted window from elsewhere at another
-    /// location: that screen becomes its only visit (LLP 1030.004 D2). The
-    /// host has asked `beforeUnload` first.
+    /// location: that screen becomes its only visit (LLP 1030.004 D2), as
+    /// the person's input. The host has asked `beforeUnload` first.
     @discardableResult public func reroot(_ location: String) -> Bool {
         guard state != .destroyed, booted else { return false }
-        let batch = runtime.hostRoot(location, now: now())
-        apply(batch)
-        return batch.error == nil
+        return applyInput { runtime.hostRoot(location, now: now()) }?.error == nil
     }
 
     /// The selected visit's location, `nil` before the first route commit.
@@ -172,7 +175,7 @@ extension ExactSession {
     /// `target` names where the host opens windows (`openWindow`), else in
     /// place, as a browser without windows does.
     func navigate(_ location: String, target: String?) -> Bool {
-        guard let window = Self.window(of: target), let openWindow, booted, runtime.routeMatches(location) else { return navigate(location) }
+        guard let window = Self.window(of: target), let openWindow, booted, runtime.routeMatches(location) else { return navigate(location, followed: true) }
         openWindow(location, window, false)
         return true
     }
@@ -184,29 +187,30 @@ extension ExactSession {
 
     /// The platform's Back from a route with no authored Back control: the
     /// location beneath, to the root it came from (LLP 1115 D5), as a
-    /// popstate is to the web's.
+    /// popstate is to the web's. The platform's Back and Forward, here and
+    /// below, are a person's input, so each applies as one (`applyInput`).
     package func navigate(_ location: String, at root: NodeView) {
         guard state != .destroyed, booted, presenter.views[root.id] === root, root.handlers.contains("navigate") else { return }
-        apply(runtime.navigate(root.id, location, now: now()))
+        applyInput(runtime.navigate(root.id, location, now: now()))
     }
 
     /// The platform's Back from a route with no authored Back control under
     /// a root with no `navigate` handler: the runner's own `back` (LLP 1115 D5).
     package func hostBack(_ key: String) {
-        guard state != .destroyed, booted, let batch = runtime.hostBack(key, now: now()) else { return }
-        apply(batch)
+        guard state != .destroyed, booted else { return }
+        applyInput { runtime.hostBack(key, now: now()) }
     }
 
     /// The platform's Forward, keeping its direction through the commit.
     package func hostForward(at root: NodeView) {
         guard state != .destroyed, booted, presenter.views[root.id] === root else { return }
-        apply(runtime.hostForward(root.id, now: now()))
+        applyInput(runtime.hostForward(root.id, now: now()))
     }
 
     /// Complete a native history jump without intermediate route commits.
     package func hostBack(from source: String, to destination: String) {
-        guard state != .destroyed, booted, let batch = runtime.hostBack(from: source, to: destination, now: now()) else { return }
-        apply(batch)
+        guard state != .destroyed, booted else { return }
+        applyInput { runtime.hostBack(from: source, to: destination, now: now()) }
     }
 
     /// After the first frame: a launch location that matched no route and

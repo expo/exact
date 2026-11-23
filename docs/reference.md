@@ -2841,9 +2841,9 @@ export const answer: TypeScriptAnswer = (source, args, store, storage, native) =
 The app's `build_mixed_with` bake derives these types from its `rust_sources`
 argument; no ownership list goes in `app.json` or TypeScript. Every remaining
 provider is required. Run `bun exact.mjs contract build app.contract` to obtain
-the narrowed declaration beside `app.ts`: its TypeScript check runs the app's
-Cargo bake, which writes the declaration before checking `app.ts`, even if
-the check fails. Native bakes use it too, and a development producer keeps
+the narrowed declaration beside `app.ts`: its TypeScript check builds the app's
+Rust module, which carries `RUST_SOURCES`, and writes the declaration before
+checking `app.ts`, even if the check fails. Native bakes use it too, and a development producer keeps
 the roster from the previous bake's `rustSources` receipt. Rebuild after
 changing Rust ownership. `Sources`, `Source`, `Args` and `Result` still
 describe every app-owned source, including Rust's.
@@ -5099,6 +5099,54 @@ is taken or released. Under the agent the picker stays held. Image pixel readbac
 synchronous readback (`getImageData`, `toDataURL`, `toBlob`) remain deferred;
 a canvas's pixels go to a file (below).
 
+### Canvas 2D surfaces (`draw`)
+
+`canvas surface=board(nodes)` is drawn by the data module when no GPU module
+registers `board`: `app.ts` exports `surfaces`, each surface's name and its
+number of arguments, and `draw(surface, args, ctx, frame)`, which draws on `ctx`
+with `CanvasRenderingContext2D`'s names and returns `true` to be asked for
+another frame (LLP 1056).
+
+`args` holds the call's values in order, or an object by the argument names
+when the call names them (`surface=pin(at=spot, label=title)`). On every host
+each value is what `answer` receives for its type: a record is an object by
+field name, a list an array, an `option` `null` or its value, an enum its
+string. Type `draw` as `Draw` from `app.contract.d.ts`, with all four
+parameters, and checking `surface` narrows `args` to that surface's types:
+
+```contract
+shape Node
+  x: number
+  y: number
+
+component Board
+  state nodes = [Node(x=8, y=8)]
+  view
+    canvas surface=board(nodes) width=200 height=120
+```
+
+```ts
+import type { Draw } from './app.contract.d.ts';
+export const surfaces = { board: 1 };
+export const draw: Draw = (surface, args, ctx, frame) => {
+  ctx.clearRect(0, 0, frame.width, frame.height);
+  if (surface === 'board') for (const n of args[0]) ctx.fillRect(n.x, n.y, 8, 8);
+  return false;
+};
+```
+
+Treat `args` as read-only. The web freezes it and keeps it between draws until
+a value changes; elsewhere each draw gets a fresh copy.
+
+The context's space is the content box in CSS px, at the device's scale.
+`bitmap-width` and `bitmap-height` give the canvas a fixed bitmap instead, as
+HTML's `width` and `height` attributes do: `frame.width` × `frame.height`
+pixels, stretched to the box, with 300 or 150 for one left unset. Either may be
+computed, as may `color-space` and `color-type`. On every host a change clears
+the bitmap and draws again with `frame.cause` `"size"`, as assigning
+`canvas.width` does on the web. A size is a whole number of pixels: a negative
+one is 0, and a fraction leaves it unset.
+
 ### A 2D canvas's pixels as an image file (`captureCanvas`)
 
 `captureCanvas(surface, path, type, quality)` writes what the host has drawn and
@@ -6647,11 +6695,16 @@ An app outside this checkout names its data crate in app.json (LLP 1153.003 D2):
 `source`, optional, is what every host and the web's module run: the type itself, its `::default()` (the
 default) or its `::new(…)` with literal arguments (`"field_log_data::FieldLog::new(true)"`). A source
 built from anything else (a local, a path read at build time) is exported by a crate of the app's own,
-named in app.json's `rust.module.package` (Update Lab's `logic/`), which supplies the module instead.
+named in app.json's `rust.module.package` (Update Lab's `logic/`), which supplies the module instead. Beside
+`app.ts`, that crate also carries the data crate's `RUST_SOURCES`, which the web reads from the module:
+`exact_logic_abi::export_sources!(field_log_data::RUST_SOURCES);` beside its `export!`.
 
 The crate sits beside app.json and joins the workspace exact2 generates: its `Cargo.toml` sets
 `package.workspace = "../.exact/shells"` and takes exact2's crates as workspace dependencies
-(`exact-runner.workspace = true`; `contract.workspace = true` for a build script). The host crates are
+(`exact-runner.workspace = true`; `contract.workspace = true` for a build script). Any other crate of
+exact2's is taken the same way (`exact-canvas.workspace = true`), never by a path through
+`.exact/checkout`: the workspace names exact2 by its real path, and a second path to the same crate is a
+second package to Cargo, so a build refuses one and `bun exact.mjs update` rewrites it. The host crates are
 generated under `.exact/shells/` and link it; without `app.ts` they link no JavaScript engine. With
 `app.ts` beside it the two compose: Rust answers the sources the crate lists in `pub const RUST_SOURCES:
 &[&str]`, TypeScript the rest. `exact new <path> --rust` writes such an app: `data/`, whose type answers

@@ -2,7 +2,7 @@
 // tools/gen.ts turns ../*.md into content/<route>.ts and content/nav.ts from constants/navigation.ts;
 // app.ts imports one page's module per route, so a reader downloads only the page it reads.
 // Each route waits for the reader before its runtime loads.
-use Page, Nav, Moved, Markdown, Address, Viewport, SearchHit, SearchPart, Hit, Key from "./components/shapes.contract"
+use Page, Nav, Moved, Markdown, Address, Viewport, ToolAnswer, ToolDestination, SearchHit, SearchPart, Hit, Key from "./components/shapes.contract"
 use Sidebar, Tabs from "./components/sidebar.contract"
 use Article from "./components/article.contract"
 
@@ -232,6 +232,8 @@ component App
   resource moved = resolveMoved(top(nav).name == "notfound" ? top(nav).url : "") as shape Moved else empty()
   mutation markdown as shape Markdown then copyFetched
   mutation address as shape Address then copyAddress
+  mutation toolDestination as shape ToolDestination then openToolPage
+  state searchOpen = false
   state query = ""
   state term = ""
   state chosen = 0
@@ -252,16 +254,77 @@ component App
   derive from = page.movedFrom.includes(searchParam(top(nav), "from")) ? searchParam(top(nav), "from") : ""
   derive slashless = top(nav).name == "notfound" and top(nav).url.length > 1 and top(nav).url.endsWith("/") ? top(nav).url.slice(0, top(nav).url.length - 1) : ""
   derive destination = moved.go != "" ? moved.go : slashless
+  state askedTool = ""
+  state askedPath = ""
+  state askedText = ""
+  state askedCount = 0
+  state navigationError = ""
+  resource answered = answerTool(askedTool, askedPath, askedText, askedCount) as shape ToolAnswer else empty()
+  tool search_docs reads "Searches the Exact docs and returns the matching sections as JSON, each with a title and a path. Pass a path to get_page_markdown to read a result." = toolSearch
+    returns answered.text
+    fails when answered.failed
+  tool get_page_markdown reads "Returns a page of the Exact docs as Markdown. With a section, it returns only the parts under the headings that match, each with its parent headings." = toolMarkdown
+    returns answered.text
+    fails when answered.failed
+  tool get_page_info reads "Returns the path, the title, the description, the date of the last change and the headings of a page of the Exact docs as JSON, without the page's text. Use it to find a section before reading the page with get_page_markdown." = toolInfo
+    returns answered.text
+    fails when answered.failed
+  tool get_site_overview reads "Returns llms.txt: an index of every page of the Exact docs, each with its Markdown URL and a short description." = toolOverview
+    returns answered.text
+    fails when answered.failed
+  tool list_sections reads "With an empty area, returns each area of the sidebar with the names of its sections as JSON. With an area, returns the pages of that area, or of one of its sections, each with a title and a path." = toolSections
+    returns answered.text
+    fails when answered.failed
+  tool navigate_page writes closed "Opens a page of the Exact docs in this tab." = toolNavigate
+    returns navigationError != "" ? navigationError : failed(page) ? `The page at ${top(nav).url} did not load.` : `Opened ${top(nav).url}.`
+    fails when navigationError != "" or failed(page)
+    available when not searchOpen
+  action askTool(tool: string, path: string, text: string, count: number)
+    askedTool = tool
+    askedPath = path
+    askedText = text
+    askedCount = count
+    refresh answered
+  action toolSearch(query: string, limit: number)
+    askTool("search_docs", "", query, limit)
+  action toolMarkdown(path: string, section: string)
+    askTool("get_page_markdown", path == "" ? top(nav).url : path, section, 0)
+  action toolInfo(path: string)
+    askTool("get_page_info", path == "" ? top(nav).url : path, "", 0)
+  action toolOverview
+    askTool("get_site_overview", "", "", 0)
+  action toolSections(area: string, section: string)
+    askTool("list_sections", area, section, 0)
+  action toolNavigate(path: string)
+    let current = top(nav)
+    let hash = fragment(current)
+    let location = path == "" ? current.url + (hash == "" ? "" : `#${hash}`) : path
+    send toolDestination = resolveToolPage(location)
+  action openToolPage
+    match toolDestination
+      case some(target)
+        let error = searchOpen ? "Close the search dialog before opening a page." : target.error
+        navigationError = error
+        if error == ""
+          let sameRoute = top(go(nav, target.url)).name == top(nav).name
+          openPage(target.url)
+          if sameRoute and (failed(page) or pending(page))
+            refresh page
+      case none
+        navigationError = "The destination could not be resolved."
   action follow(url: string)
-    menu = false
-    copied = false
-    linked = false
-    copiedId = ""
-    voted = ""
-    visible = []
-    active = ""
     close("search")
+    openPage(url)
+  action openPage(url: string)
+    menu = false
     let next = go(nav, url)
+    if top(next).id != top(nav).id
+      copied = false
+      linked = false
+      copiedId = ""
+      voted = ""
+      visible = []
+      active = ""
     nav = next
     // sidebar scrolling must not cancel the router's pending fragment scroll.
     if fragment(top(next)) == "" and inSidebar(site, top(next).name)
@@ -330,8 +393,11 @@ component App
   action toggleNav(route: string)
     navToggled = navToggled.includes(route) ? navToggled.filter(x => x != route) : navToggled.concat([route])
   action openSearch
+    searchOpen = true
     showModal("search")
     focus("search-input")
+  action searchClosed
+    searchOpen = false
   action ask(v: string)
     query = v
     chosen = 0
@@ -421,7 +487,7 @@ component App
           row padding-top=10 border-bottom="0.5px solid var(--color-border-default)"
             Tabs(nav=site, tab=tab, prefix="menu-")
           Sidebar(nav=site, current=top(nav).name, tab=tab, toggled=navToggled, toggle=toggleNav, prefix="menu-")
-      dialog id="search" closedby="any" aria-label="Search the docs" padding=0 margin=0 left="50%" transform="translate(-50%, -50%)"
+      dialog id="search" close=searchClosed closedby="any" aria-label="Search the docs" padding=0 margin=0 left="50%" transform="translate(-50%, -50%)"
         top="calc(45vh + clamp(0px, (789px - 100vw) * 1000, 5vh))" height="calc(75vh + clamp(0px, (789px - 100vw) * 1000, 21vh))" width="calc(max(40vw, 680px) + clamp(0px, (789px - 100vw) * 1000, max(0px, 96vw - max(40vw, 680px))) - clamp(0px, (789px - 100vw) * 1000, max(0px, max(40vw, 680px) - 96vw)))" max-width="none" max-height="none" overflow="hidden"
         border="1px solid var(--color-border-default)" border-radius=40 background-color="var(--color-background-default)" color="var(--color-text-default)" font-family="var(--font-sans)"
         column height="100%"

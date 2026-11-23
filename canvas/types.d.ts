@@ -32,5 +32,3 @@ export interface Frame {
   readonly pixelHeight: number;
   readonly scale: number;
 }
-/** A module's `draw`: true asks for another frame. */
-export type Draw = (surface: string, args: any, ctx: Ctx2D, frame: Frame) => boolean;

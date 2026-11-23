@@ -17,101 +17,92 @@ pub struct OwnerInst {
 
 impl Tree {
     /// Every instance that owns a request or has sent, in tree order. A virtualized
-    /// list holds none (the compiler refuses one there), so its rows are
-    /// not walked.
+    /// list holds none (the compiler refuses one there), so its rows are not walked.
     pub fn owners(&self) -> Vec<OwnerInst> {
-        self.walk_owners(false)
+        let mut out = Vec::new();
+        visit_children(&self.children, &mut Vec::new(), &mut |storage, scopes| {
+            let owned = storage.borrow();
+            if owned.requests.is_empty() && owned.sends.is_empty() && owned.tasks.is_empty() {
+                return;
+            }
+            drop(owned);
+            let mut path = String::new();
+            let frames = scopes
+                .iter()
+                .map(|(region, scope)| match scope {
+                    OwnerScope::Arm(arm, frame) => {
+                        exact_num::push_text!(&mut path, "/{}:{}", region.0, arm);
+                        frame.scope()
+                    }
+                    OwnerScope::Row(row) => {
+                        exact_num::push_text!(&mut path, "/{}=", region.0);
+                        keys::key_text_into(&row.key, &mut path);
+                        if row.dup > 0 {
+                            exact_num::push_text!(&mut path, "#{}", row.dup);
+                        }
+                        row.frame.clone()
+                    }
+                })
+                .collect();
+            out.push(OwnerInst {
+                storage: storage.clone(),
+                frames,
+                path,
+            });
+        });
+        out
     }
 
     /// Include an instance that has not sent its first mutation yet.
     pub(crate) fn save_storage(&self) -> Vec<(RowSlots, vm::Owned)> {
-        self.walk_owners(true)
-            .into_iter()
-            .map(|o| {
-                let value = o.storage.borrow().clone();
-                (o.storage, value)
-            })
-            .collect()
-    }
-
-    fn walk_owners(&self, all: bool) -> Vec<OwnerInst> {
         let mut out = Vec::new();
-        walk_children(
-            &self.children,
-            &mut Vec::new(),
-            &mut String::new(),
-            &mut out,
-            all,
-        );
+        visit_children(&self.children, &mut Vec::new(), &mut |storage, _| {
+            out.push((storage.clone(), storage.borrow().clone()));
+        });
         out
     }
 }
 
-fn walk_children(
-    children: &[Child],
-    frames: &mut Vec<Frame>,
-    path: &mut String,
-    out: &mut Vec<OwnerInst>,
-    all: bool,
-) {
-    for c in children {
-        match c {
-            Child::Node(n) => walk_children(&n.children, frames, path, out, all),
-            Child::Region(r) => walk_region(r, frames, path, out, all),
-        }
-    }
+enum OwnerScope<'a> {
+    Arm(usize, &'a ArmFrame),
+    Row(&'a Row),
 }
 
-fn walk_region(
-    r: &RegionInst,
-    frames: &mut Vec<Frame>,
-    path: &mut String,
-    out: &mut Vec<OwnerInst>,
-    all: bool,
+fn visit_children<'a>(
+    children: &'a [Child],
+    scopes: &mut Vec<(RegionsId, OwnerScope<'a>)>,
+    visit: &mut impl FnMut(&RowSlots, &[(RegionsId, OwnerScope<'a>)]),
 ) {
-    let at = path.len();
-    match &r.active {
-        Active::Arm { arm, frame, roots } => {
-            let Some(arm) = arm else { return };
-            exact_num::push_text!(path, "/{}:{}", r.region.0, arm);
-            frames.push(frame.scope());
-            visit(frame.row.as_ref(), roots, frames, path, out, all);
-            frames.pop();
-        }
-        Active::Rows { rows } => {
-            for row in rows {
-                path.truncate(at);
-                exact_num::push_text!(path, "/{}=", r.region.0);
-                path.push_str(&key_text(&row.key).unwrap_or_default());
-                if row.dup > 0 {
-                    exact_num::push_text!(path, "#{}", row.dup);
+    for child in children {
+        let region = match child {
+            Child::Node(node) => {
+                if node.contains_regions {
+                    visit_children(&node.children, scopes, visit);
                 }
-                frames.push(row.frame.clone());
-                visit(row.slots.as_ref(), &row.roots, frames, path, out, all);
-                frames.pop();
+                continue;
+            }
+            Child::Region(region) => region,
+        };
+        match &region.active {
+            Active::Arm { arm, frame, roots } => {
+                let Some(arm) = arm else { continue };
+                scopes.push((region.region, OwnerScope::Arm(*arm, frame)));
+                if let Some(storage) = &frame.row {
+                    visit(storage, scopes);
+                }
+                visit_children(roots, scopes, visit);
+                scopes.pop();
+            }
+            Active::Rows { rows } => {
+                for row in rows {
+                    scopes.push((region.region, OwnerScope::Row(row)));
+                    if let Some(storage) = &row.slots {
+                        visit(storage, scopes);
+                    }
+                    visit_children(&row.roots, scopes, visit);
+                    scopes.pop();
+                }
             }
         }
     }
-    path.truncate(at);
-}
-
-fn visit(
-    storage: Option<&RowSlots>,
-    roots: &[Child],
-    frames: &mut Vec<Frame>,
-    path: &mut String,
-    out: &mut Vec<OwnerInst>,
-    all: bool,
-) {
-    if let Some(storage) = storage.filter(|s| {
-        let s = s.borrow();
-        all || !s.requests.is_empty() || !s.sends.is_empty() || !s.tasks.is_empty()
-    }) {
-        out.push(OwnerInst {
-            storage: storage.clone(),
-            frames: frames.clone(),
-            path: path.clone(),
-        });
-    }
-    walk_children(roots, frames, path, out, all);
 }
