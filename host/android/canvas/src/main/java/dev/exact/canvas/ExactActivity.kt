@@ -103,11 +103,13 @@ open class ExactActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 31 && intent.getStringExtra("splashfade") != "1") Splash.quick(this)
         val arrived = Shares.arrived(intent, state != null)
         if (!again) {
-            // Only with no HWUI shader cache, which HardwareRenderer keeps in the device-protected cache directory: an
-            // install's first launch, or after the app's cache was cleared. With one, the warm-up cost the moto's launch
-            // ~9 ms and saved nothing. warmlaunch=0: the first screen makes its own GPU pipelines, to compare.
-            val shaders = File(createDeviceProtectedStorageContext().cacheDir, "com.android.skia.shaders_cache")
-            if (intent.getStringExtra("warmlaunch") != "0" && !shaders.exists()) Warm.launch()
+            // Only with no HWUI shader cache: an install's first launch, or after the app's cache was cleared. HardwareRenderer
+            // keeps it in the device-protected cache directory, or on older Android versions (12 among them) its code cache
+            // directory. With one, the warm-up cost the moto's launch ~9 ms and saved nothing. warmlaunch=0: the first screen
+            // makes its own GPU pipelines, to compare.
+            val device = createDeviceProtectedStorageContext()
+            val cached = listOf(device.cacheDir, device.codeCacheDir).any { File(it, "com.android.skia.shaders_cache").exists() }
+            if (intent.getStringExtra("warmlaunch") != "0" && !cached) Warm.launch()
             environment(arrived)
             Setup.nativeEnvironment()
             try { FilePicker.start(applicationContext) }

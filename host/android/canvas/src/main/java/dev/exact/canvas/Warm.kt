@@ -74,55 +74,59 @@ internal class Warm {
          * saved Jetchat's first screen the most pipelines on the moto.
          */
         fun launch() = Thread({
-            try { frames() } catch (e: Exception) { android.util.Log.w("exact", "warm launch: $e") }
+            // Optional: any failure, an allocation's included, gives the warm-up up.
+            try { if (!stop) frames() } catch (e: Throwable) { android.util.Log.w("exact", "warm launch: $e") }
         }, "exact warm launch").start()
 
         private fun frames() {
             val size = 64
             val reader = ImageReader.newInstance(size, size, PixelFormat.RGBA_8888, 2,
                 HardwareBuffer.USAGE_GPU_COLOR_OUTPUT or HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE)
-            val node = RenderNode("exact warm launch").apply { setPosition(0, 0, size, size) }
-            val renderer = HardwareRenderer().apply { setSurface(reader.surface); setContentRoot(node) }
-            val soft = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888).apply { eraseColor(0x80ff8000.toInt()) }
-            val hard = soft.copy(Bitmap.Config.HARDWARE, false) ?: soft
-            val mask = soft.extractAlpha()
-            // [Player]'s paints. Every draw covers the frame: one outside it is culled, and makes nothing.
-            val all = RectF(0f, 0f, size.toFloat(), size.toFloat())
-            val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xff336699.toInt() }
-            val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 3f }
-            val image = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
-            val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 40f }
-            val gradient = LinearGradient(0f, 0f, 64f, 64f, -1, 0xff000000.toInt(), Shader.TileMode.CLAMP)
-            val circle = Path().apply { addCircle(32f, 32f, 32f, Path.Direction.CW) }
-            val bubble = Path().apply { addRoundRect(all, floatArrayOf(4f, 4f, 16f, 16f, 16f, 16f, 16f, 16f), Path.Direction.CW) }
-            val convex = Path().apply { moveTo(0f, 0f); lineTo(64f, 0f); lineTo(32f, 64f); close() }
-            val concave = Path().apply { moveTo(0f, 0f); lineTo(64f, 0f); lineTo(32f, 20f); lineTo(64f, 64f); lineTo(0f, 64f); close() }
-            val child = RenderNode("exact warm child").apply {
-                setPosition(0, 0, size, size)
-                val c = beginRecording(); c.drawRect(all, fill); endRecording()
-            }
-            val frames = listOf<(Canvas) -> Unit>(
-                { c -> c.drawPath(bubble, fill); c.drawPath(convex, fill); c.drawPath(concave, fill) },
-                { c -> c.drawLines(floatArrayOf(0f, 0f, 64f, 64f, 64f, 0f, 0f, 64f), stroke)
-                    c.drawPoints(floatArrayOf(32f, 32f), Paint(stroke).apply { strokeCap = Paint.Cap.ROUND; strokeWidth = 64f })
-                    c.drawText("\uD83D\uDE00", 0f, 40f, text); child.alpha = 0.5f; c.drawRenderNode(child) },
-                { c -> c.drawRect(1.5f, 1.5f, 62.5f, 62.5f, fill); c.drawRoundRect(all, 12f, 12f, fill); c.drawText("Ag", 0f, 40f, text) },
-                { c -> c.save(); c.clipPath(circle); c.drawBitmap(hard, null, all, image); c.restore(); c.drawOval(all, fill)
-                    c.save(); c.clipPath(bubble); c.drawBitmap(hard, null, all, image); c.restore() },
-                { c -> c.drawBitmap(hard, null, RectF(0.5f, 0.5f, 63.5f, 63.5f), image); c.drawBitmap(soft, 0f, 0f, null); c.drawBitmap(soft, null, all, null) },
-                { c -> c.drawOval(all, stroke); c.drawDoubleRoundRect(all, 12f, 12f, RectF(3f, 3f, 61f, 61f), 9f, 9f, fill); c.drawBitmap(mask, null, all, fill) },
-                { c -> fill.shader = gradient; c.drawRect(all, fill); c.drawRoundRect(all, 12f, 12f, fill); fill.shader = null
-                    c.saveLayerAlpha(all, 128); c.drawRect(all, fill); c.drawOval(all, stroke); c.restore() },
-            )
             try {
-                for (draw in frames) {
-                    if (stop) break
-                    val c = node.beginRecording(); c.drawColor(-1); draw(c); node.endRecording()
-                    renderer.createRenderRequest().setWaitForPresent(true).syncAndDraw()
-                    // Let go, or the next frame waits for a buffer, and the RenderThread with it.
-                    reader.acquireLatestImage()?.close()
-                }
-            } finally { renderer.destroy(); reader.close() }
+                val node = RenderNode("exact warm launch").apply { setPosition(0, 0, size, size) }
+                val renderer = HardwareRenderer()
+                try {
+                    renderer.setSurface(reader.surface); renderer.setContentRoot(node)
+                    val soft = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888).apply { eraseColor(0x80ff8000.toInt()) }
+                    val hard = soft.copy(Bitmap.Config.HARDWARE, false) ?: soft
+                    val mask = soft.extractAlpha()
+                    // [Player]'s paints. Every draw covers the frame: one outside it is culled, and makes nothing.
+                    val all = RectF(0f, 0f, size.toFloat(), size.toFloat())
+                    val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xff336699.toInt() }
+                    val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 3f }
+                    val image = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+                    val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 40f }
+                    val gradient = LinearGradient(0f, 0f, 64f, 64f, -1, 0xff000000.toInt(), Shader.TileMode.CLAMP)
+                    val circle = Path().apply { addCircle(32f, 32f, 32f, Path.Direction.CW) }
+                    val bubble = Path().apply { addRoundRect(all, floatArrayOf(4f, 4f, 16f, 16f, 16f, 16f, 16f, 16f), Path.Direction.CW) }
+                    val convex = Path().apply { moveTo(0f, 0f); lineTo(64f, 0f); lineTo(32f, 64f); close() }
+                    val concave = Path().apply { moveTo(0f, 0f); lineTo(64f, 0f); lineTo(32f, 20f); lineTo(64f, 64f); lineTo(0f, 64f); close() }
+                    val child = RenderNode("exact warm child").apply {
+                        setPosition(0, 0, size, size)
+                        val c = beginRecording(); c.drawRect(all, fill); endRecording()
+                    }
+                    val frames = listOf<(Canvas) -> Unit>(
+                        { c -> c.drawPath(bubble, fill); c.drawPath(convex, fill); c.drawPath(concave, fill) },
+                        { c -> c.drawLines(floatArrayOf(0f, 0f, 64f, 64f, 64f, 0f, 0f, 64f), stroke)
+                            c.drawPoints(floatArrayOf(32f, 32f), Paint(stroke).apply { strokeCap = Paint.Cap.ROUND; strokeWidth = 64f })
+                            c.drawText("\uD83D\uDE00", 0f, 40f, text); child.alpha = 0.5f; c.drawRenderNode(child) },
+                        { c -> c.drawRect(1.5f, 1.5f, 62.5f, 62.5f, fill); c.drawRoundRect(all, 12f, 12f, fill); c.drawText("Ag", 0f, 40f, text) },
+                        { c -> c.save(); c.clipPath(circle); c.drawBitmap(hard, null, all, image); c.restore(); c.drawOval(all, fill)
+                            c.save(); c.clipPath(bubble); c.drawBitmap(hard, null, all, image); c.restore() },
+                        { c -> c.drawBitmap(hard, null, RectF(0.5f, 0.5f, 63.5f, 63.5f), image); c.drawBitmap(soft, 0f, 0f, null); c.drawBitmap(soft, null, all, null) },
+                        { c -> c.drawOval(all, stroke); c.drawDoubleRoundRect(all, 12f, 12f, RectF(3f, 3f, 61f, 61f), 9f, 9f, fill); c.drawBitmap(mask, null, all, fill) },
+                        { c -> fill.shader = gradient; c.drawRect(all, fill); c.drawRoundRect(all, 12f, 12f, fill); fill.shader = null
+                            c.saveLayerAlpha(all, 128); c.drawRect(all, fill); c.drawOval(all, stroke); c.restore() },
+                    )
+                    for (draw in frames) {
+                        if (stop) break
+                        val c = node.beginRecording(); c.drawColor(-1); draw(c); node.endRecording()
+                        renderer.createRenderRequest().setWaitForPresent(true).syncAndDraw()
+                        // Let go, or the next frame waits for a buffer, and the RenderThread with it.
+                        reader.acquireLatestImage()?.close()
+                    }
+                } finally { renderer.destroy() }
+            } finally { reader.close() }
         }
     }
 }
