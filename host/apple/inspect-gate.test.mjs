@@ -38,7 +38,10 @@ test('Package.swift compiles agent attach only for a local development build (LL
     const out = dump(env);
     expect(out.status).toBe(0);
     const kit = JSON.parse(out.stdout).targets.find((t) => t.name === 'ExactKit');
-    return { defined: out.stdout.includes('"EXACT_ATTACH"'), compiled: !kit.exclude.includes('AgentAttach.swift') };
+    const files = ['AgentAttach.swift', 'Mac/AgentAttachMac.swift', 'IOS/AgentAttachIOS.swift'];
+    const compiled = files.filter((f) => !kit.exclude.includes(f));
+    expect([0, files.length]).toContain(compiled.length);
+    return { defined: out.stdout.includes('"EXACT_ATTACH"'), compiled: compiled.length > 0 };
   };
   expect(attach({ EXACT_UPDATE_TRUST: 'development', EXACT_ATTACH: '1' })).toEqual({ defined: true, compiled: true });
   expect(attach({ EXACT_UPDATE_TRUST: 'development', EXACT_ATTACH: '0' })).toEqual({ defined: false, compiled: false });
@@ -185,6 +188,33 @@ test.skipIf(productionBinaries().length === 0)('a production Mac bake has none o
     for (const attach of ['Enable Agent Attach', 'Agent Attached', 'exact-attach', 'live-clock']) expect(strings).not.toContain(attach);
     for (const word of ['CGEventSetWindowLocation', 'inputRadius', 'captureOnly', 'AppleInterfaceStyle', 'AppleInterfaceThemeChangedNotification', 'AppleICUForce24HourTime', 'AppleICUForce12HourTime', 'ApplePersistence']) expect(strings).not.toContain(word);
     const symbols = spawnSync('nm', [binary], { encoding: 'utf8', maxBuffer: 1 << 28 }).stdout;
-    expect(symbols.split('\n').filter((s) => /InspectHost|InspectOverlay|7Inspect|AgentAttach|AttachConnection/.test(s))).toEqual([]);
+    expect(symbols.split('\n').filter((s) => /InspectHost|InspectOverlay|7Inspect|AgentAttach|AttachConnection|AttachSurface/.test(s))).toEqual([]);
+  }
+});
+
+/** The main executable of each production iOS bake on disk, simulator or device, of any app
+ *  (`EXACT_UPDATE_TRUST=production bun host/apple/build.mjs <app> --ios --no-install`). */
+const productionIOSBinaries = () => {
+  const found = [];
+  const dirs = (path) => { try { return readdirSync(path); } catch { return []; } };
+  for (const hash of dirs(bake)) for (const app of dirs(join(bake, hash))) for (const platform of ['ios-simulator', 'ios']) {
+    for (const triple of dirs(join(bake, hash, app, platform))) for (const mode of dirs(join(bake, hash, app, platform, triple))) {
+      const standalone = join(bake, hash, app, platform, triple, mode, 'production/standalone');
+      for (const bundle of dirs(standalone).filter((d) => d.endsWith('.app'))) {
+        const executable = join(standalone, bundle, bundle.slice(0, -'.app'.length));
+        if (existsSync(executable)) found.push(executable);
+      }
+    }
+  }
+  return found;
+};
+
+// LLP 1012.000 D2: a production simulator or device bake carries no agent attach.
+test.skipIf(productionIOSBinaries().length === 0)('a production iOS bake has none of agent attach\'s strings or symbols', () => {
+  for (const binary of productionIOSBinaries()) {
+    const strings = spawnSync('strings', [binary], { encoding: 'utf8', maxBuffer: 1 << 28 }).stdout;
+    for (const attach of ['Enable Agent Attach', 'Agent Attached', 'exact-attach', 'live-clock']) expect(strings).not.toContain(attach);
+    const symbols = spawnSync('nm', [binary], { encoding: 'utf8', maxBuffer: 1 << 28 }).stdout;
+    expect(symbols.split('\n').filter((s) => /AgentAttach|AttachConnection|AttachSurface|AttachListener/.test(s))).toEqual([]);
   }
 });

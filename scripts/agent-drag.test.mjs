@@ -2,7 +2,7 @@
 // keeps every field of the carrier's reply. `bun test ./scripts/agent-drag.test.mjs`.
 import { test, expect } from 'bun:test';
 import { dragTap, dragArguments, parseDrag, heldDown, heldPhase, heldRead, heldTick, HELD_LEAD, HELD_READ, HELD_STEP, STROKES, TICK_STEP } from './agent-drag.mjs';
-import { DRAG_BOUNDS, realTap, reaches, REACH_MS, TICK_MARGIN } from '../host/apple/touches.mjs';
+import { DRAG_BOUNDS, realFingers, realTap, reaches, REACH_MS, TICK_MARGIN } from '../host/apple/touches.mjs';
 
 import assert from 'node:assert/strict';
 import { open } from './agent.mjs';
@@ -818,4 +818,29 @@ test('a layout-only box supports drag-to and a held contact without a native vie
   boxes[7].y = 50;
   await expect(heldPhase(d.s, d.carrier, 'up', {})).rejects.toThrow('moved off');
   expect(d.asked).toHaveLength(1);
+});
+
+// Four fingers go to the runner as four screen points about the aim, 50 points apart along the screen's x axis, and the
+// tap holds only when the window's log shows exactly four touches begin and end in the session.
+test('fingers tapped together are one runner request and four touches in the log', async () => {
+  const aim = { orientation: 'portrait', session: 'main', generation: 1, screen: { x: 0, y: 0, w: 400, h: 800 }, point: [200, 400], fixed: [200, 400], fixedAxes: [[1, 0], [0, 1]], display: [400, 800], viewport: [400, 800], at: [200, 400], seq: 4 };
+  const touch = (n, phase, session = 'main') => ({ seq: 4 + n + (phase === 'ended' ? 4 : 0), touch: n, phase, t: phase === 'ended' ? 2 : 1, at: [200, 400], node: 1, session, generation: 1 });
+  const run = (log, at = aim) => {
+    const sent = [];
+    const result = realFingers({ id: 1, fingers: 4,
+      ask: async (req) => (req.aim ? { aim: at } : { log, truncated: false }),
+      touches: { async ask(req) { if (req.op === 'foreground') return { state: 'runningForeground' }; sent.push(req); return { injected: {} }; } } });
+    return { sent, result };
+  };
+  const four = [1, 2, 3, 4].flatMap((n) => [touch(n, 'began'), touch(n, 'ended')]);
+  const ok = run(four);
+  expect(await ok.result).toEqual(expect.objectContaining({ fingers: 4, delivery: 'platform' }));
+  expect(ok.sent).toEqual([{ op: 'tap', point: [200, 400], display: [400, 800], screen: [[125, 400], [175, 400], [225, 400], [275, 400]] }]);
+  await expect(run(four.slice(0, 6)).result).rejects.toThrow('did not show 4 touches');
+  await expect(run([...four, touch(5, 'began')]).result).rejects.toThrow('5 touches');
+  await expect(run([touch(1, 'began', 'other'), touch(1, 'ended'), ...four.slice(2)]).result).rejects.toThrow('in session other');
+  // A finger off the viewport is refused before anything is sent.
+  const edge = run(four, { ...aim, at: [10, 400], point: [10, 400], fixed: [10, 400] });
+  await expect(edge.result).rejects.toThrow('outside the viewport');
+  expect(edge.sent).toEqual([]);
 });

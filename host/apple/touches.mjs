@@ -812,13 +812,13 @@ export async function realTap({ ask, touches, id, at, rel, drag, abandon }) {
 }
 
 /**
- * Two real touches on view `id` from one aim, the tap's, taken twice: a
- * two-finger pinch (`realPinch`) or a finger's double tap
- * (`realDoubleTap`). `request(aim)` is the runner's request; the window's
- * dispatch log must show exactly two new touches, both in the session, each
- * beginning and ending.
+ * `count` real touches on view `id` from one aim, the tap's, taken twice: a
+ * two-finger pinch (`realPinch`), a finger's double tap (`realDoubleTap`) or
+ * fingers tapped together (`realFingers`). `request(aim)` is the runner's
+ * request; the window's dispatch log must show exactly `count` new touches,
+ * all in the session, each beginning and ending.
  */
-async function twoTouches({ ask, touches, id, at, what, request, reply, ms, abandon }) {
+async function severalTouches({ ask, touches, id, at, what, request, reply, ms, abandon, count = 2 }) {
   const transport = (message) => Object.assign(new Error(message), { transport: true });
   const aimReq = { op: 'tap', id, aim: at ? { at } : true };
   await touches.cloak?.clear();
@@ -850,9 +850,9 @@ async function twoTouches({ ask, touches, id, at, what, request, reply, ms, aban
     if (page.log.length) cursor = page.log[page.log.length - 1].seq;
     if (page.truncated) continue;
     const ids = [...new Set(seen.map((e) => e.touch))];
-    if (ids.length > 2) throw new Error(`${what}: ${ids.length} touches after seq ${a.seq}, not two: ${JSON.stringify(seen.slice(0, 8))}`);
+    if (ids.length > count) throw new Error(`${what}: ${ids.length} touches after seq ${a.seq}, not ${count}: ${JSON.stringify(seen.slice(0, 8))}`);
     const fingers = ids.map((t) => ({ began: seen.find((e) => e.touch === t && e.phase === 'began'), ended: seen.find((e) => e.touch === t && e.phase === 'ended') }));
-    if (ids.length === 2 && fingers.every((f) => f.began && f.ended)) {
+    if (ids.length === count && fingers.every((f) => f.began && f.ended)) {
       for (const { began } of fingers) {
         if (began.session !== a.session || began.generation !== a.generation) throw new Error(`${what}: a touch landed ${began.session == null ? `on ${began.view}, outside every session` : `in session ${began.session}`}, not in ${a.session}`);
       }
@@ -862,7 +862,7 @@ async function twoTouches({ ask, touches, id, at, what, request, reply, ms, aban
         injected: injected.injected,
       };
     }
-    if (Date.now() >= deadline) throw new Error(`${what}: the dispatch log did not show two touches begin and end within 1 s (log: ${JSON.stringify(seen.slice(0, 8))}); ${SETTLE_FIRST}`);
+    if (Date.now() >= deadline) throw new Error(`${what}: the dispatch log did not show ${count} touches begin and end within 1 s (log: ${JSON.stringify(seen.slice(0, 8))}); ${SETTLE_FIRST}`);
     await new Promise((r) => setTimeout(r, 16));
   }
 }
@@ -875,7 +875,7 @@ async function twoTouches({ ask, touches, id, at, what, request, reply, ms, aban
  */
 export function realPinch({ ask, touches, id, at, scale, abandon }) {
   const what = `pinch #${id}`, from = 40, to = 40 * scale;
-  return twoTouches({ ask, touches, id, at, what, abandon, ms: 500, reply: { pinch: scale }, request: (a) => {
+  return severalTouches({ ask, touches, id, at, what, abandon, ms: 500, reply: { pinch: scale }, request: (a) => {
     for (const half of [from, to]) {
       for (const side of [-1, 1]) {
         const point = [a.at[0] + side * half, a.at[1]];
@@ -891,10 +891,24 @@ export function realPinch({ ask, touches, id, at, scale, abandon }) {
 /** A finger's double tap on view `id`, at its middle or `at` in it (LLP 1057.001.000 §6): two taps, the second
  *  down 150 ms after the first. */
 export function realDoubleTap({ ask, touches, id, at, abandon }) {
-  return twoTouches({ ask, touches, id, at, what: `dblclick touch #${id}`, abandon, ms: 300, reply: { dblclick: 'touch' },
+  return severalTouches({ ask, touches, id, at, what: `dblclick touch #${id}`, abandon, ms: 300, reply: { dblclick: 'touch' },
     request: (a) => ({ op: 'tap', double: true, point: a.point, screen: a.fixed, display: a.display }) });
 }
 
+
+/** `fingers` fingers tapped together on view `id`, level about its middle or `at` in it, 50 points apart: down
+ *  together, lifted together 50 ms later, as a window's recognizers read several fingers (four open the dev menu). */
+export function realFingers({ ask, touches, id, at, fingers, abandon }) {
+  const what = `tap #${id} fingers ${fingers}`, offsets = Array.from({ length: fingers }, (_, i) => (i - (fingers - 1) / 2) * 50);
+  return severalTouches({ ask, touches, id, at, what, abandon, count: fingers, ms: 300, reply: { fingers }, request: (a) => {
+    for (const dx of offsets) {
+      const point = [a.at[0] + dx, a.at[1]];
+      if (!reaches(a, point)) throw new Error(`${what}: a finger would be at (${point}), ${outside(a)}`);
+    }
+    const [[rx, ry]] = a.fixedAxes;
+    return { op: 'tap', point: a.point, display: a.display, screen: offsets.map((dx) => [a.fixed[0] + dx * rx, a.fixed[1] + dx * ry]) };
+  } });
+}
 
 /** Route a complete XCTest gesture on either iOS carrier. Other input stays with the app. */
 export function iosTouchInput({ ask, touches, touch, id, kind, opts, guest, abandon }) {
@@ -909,5 +923,6 @@ export function iosTouchInput({ ask, touches, touch, id, kind, opts, guest, aban
   }
   if (kind === 'dblclick' && opts.touch) return realDoubleTap({ ...target, at: opts.at });
   if (kind === 'pinch') return realPinch({ ...target, at: opts.at, scale: opts.pinch });
+  if (kind === 'fingers') return realFingers({ ...target, at: opts.at, fingers: opts.fingers });
   return null;
 }

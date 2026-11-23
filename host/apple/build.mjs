@@ -675,7 +675,7 @@ async function main(args, lockHeld = false) {
   const t0 = Date.now(); buildStep('cargo');
   const target = ios ? (tv ? tvTarget : device ? 'aarch64-apple-ios' : iosTarget) : bakeTarget('macos');
   const library = prepareLibrary(app.dir, target); // a package's prebuilt framework (LLP 1154 D3), fetched and checked before Cargo
-  const attach = !ios && !distribution && !ipa && !developmentArchive && !appleEmbedOnly(args) && !args.includes('--host') && (process.env.EXACT_UPDATE_TRUST ?? 'development') === 'development'; // agent attach (LLP 1012.000 D2): a Mac app built here to run, never one packaged or embedded, nor the embedding fixture
+  const attach = !tv && !device && !distribution && !ipa && !developmentArchive && !appleEmbedOnly(args) && !args.includes('--host') && (process.env.EXACT_UPDATE_TRUST ?? 'development') === 'development'; // agent attach (LLP 1012.000 D2): a Mac or iOS simulator app built here to run, never one packaged or embedded, the embedding fixture, a device's or an Apple TV's
   const stampSdk = { sdk: sdkName, sdkVersion: designCompatible(app, ios ? 'ios' : 'macos') ? COMPATIBLE_SDK[ios ? 'ios' : 'macos'] : null, purpose: attach ? 'local-development' : null }; // the SDK the link records
   const destination = ios ? (tv ? (device ? 'tvos' : 'tvos-simulator') : device ? 'ios' : 'ios-simulator') : 'macos';
   const sdk = read('xcrun', ['--sdk', sdkName, '--show-sdk-path']).stdout.trim();
