@@ -62,7 +62,7 @@ import { thinTextures } from '../../scripts/texture-families.mjs';
 import { bundleShaderLibraries } from './shader-libraries.mjs';
 import { appleBuildRefusal, guardFlags, reportBuilt } from '../../scripts/help.mjs';
 import { appleImplementations } from '../../js/bake/src/typescript.mjs';
-import { rebuildArgs } from './link.mjs';
+import { loadedDylibs, rebuildArgs } from './link.mjs';
 export { rebuildArgs };
 import { composedModule, moduleSeam, moduleLibraryLinkArgs, packageCompiler, rosterProbe, rosterProbeMain } from './compose.mjs';
 import { associatedDomains, clipEntitlements, entitlementValue, grantEntitlements, grantEntitlementValues, macSigning, merchantEntitlement, signInEntitlement, signsGrant } from './presence.mjs';
@@ -244,9 +244,9 @@ export function captureAppleProduct(build, source, destination) {
 /** Read the baked compatibility identity from executable bytes, before
  * codesign can add a different identifier. Plists/sidecars are not evidence. */
 export function assertAppleIdentity(app, executable, compatibilityId, shared = null) {
-  const linked = read('otool', ['-L', executable]).stdout ?? '';
+  const linked = loadedDylibs(executable).some(name => /@rpath\/ExactCore\.framework\/(?:Versions\/A\/)?ExactCore/.test(name));
   const runtime = shared ?? resolve(dirname(executable), existsSync(resolve(dirname(executable), 'Frameworks')) ? 'Frameworks/ExactCore.framework/ExactCore' : '../Frameworks/ExactCore.framework/ExactCore');
-  const bytes = readFileSync(/@rpath\/ExactCore\.framework\/(?:Versions\/A\/)?ExactCore/.test(linked) ? runtime : executable, 'utf8');
+  const bytes = readFileSync(linked ? runtime : executable, 'utf8');
   const identities = [];
   for (const match of bytes.matchAll(/\{"id":"[0-9a-f]{32}","inputs":/g)) {
     let depth = 0, quoted = false, escaped = false;
