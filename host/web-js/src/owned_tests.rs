@@ -114,6 +114,28 @@ fn a_launch_instance_takes_the_bakes_answer() {
     assert!(js.contains("(booting()?[\"sf\"]:void 0)"), "{js}");
 }
 
+/// A store reader's instance takes the bake's answer only while the boot
+/// makes it, though the emitter writes no arguments for it. The bake gives a
+/// store-reading instance no answer (`bake_launch_answers`), so the test marks
+/// a baked row a reader.
+#[test]
+fn a_store_readers_launch_instance_takes_the_bakes_answer_only_at_boot() {
+    let first = SCREENS.replace(
+        "home \"/\"\n  discover \"/discover\"",
+        "discover \"/\"\n  home \"/home\"",
+    );
+    let mut plan = contract::bake(contract::compile(&first).unwrap(), Built).unwrap();
+    let i = (plan.resources.iter())
+        .position(|r| plan.str(r.name).starts_with("works"))
+        .unwrap();
+    plan.resources[i].reader = true;
+    let js = crate::emit::emit(&plan, false, false).unwrap().js;
+    assert!(
+        js.contains("(booting()?[!0,[\"baked sf\"]]:void 0)"),
+        "{js}"
+    );
+}
+
 /// A plan with no child's resource emits no instance paths.
 #[test]
 fn a_plan_without_owners_names_no_instances() {
