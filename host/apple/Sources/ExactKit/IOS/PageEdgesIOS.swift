@@ -51,7 +51,7 @@ extension Presenter {
         #else
         if #unavailable(iOS 26.0) { judge = nil }
         #endif
-        var bars: [(bar: NodeView, scroller: NodeView, edge: UIRectEdge)] = []
+        var bars: [(bar: NodeView, scroller: NodeView, over: NodeView, edge: UIRectEdge)] = []
         var routes: [ObjectIdentifier: (top: UIScrollView?, bottom: UIScrollView?)] = [:]
         for id in scrollers {
             guard let v = views[id] else { continue }
@@ -79,7 +79,8 @@ extension Presenter {
                 } else { found = pageBands(of: v, sv, margins: m, area: area, edgeEffect ? judge : nil); own = found.band }
             }
             if v.pageBand != found.band || v.bandInset != own { v.setPageBand(found.band, inset: own) }
-            bars += found.top.map { ($0, v, .top) } + found.bottom.map { ($0, v, .bottom) }
+            let over = { (bar: NodeView) in found.over[ObjectIdentifier(bar)] ?? v }
+            bars += found.top.map { ($0, v, over($0), .top) } + found.bottom.map { ($0, v, over($0), .bottom) }
         }
         #if os(iOS)
         // The bar's and the bottom bar's own edge effects follow a banded scroller (D2).
@@ -91,9 +92,15 @@ extension Presenter {
         ControlBars.sync(bars, in: self)
     }
 
-    /// A scroller's bands, and the control bars it is drawn through on each edge.
+    /// A scroller's bands, the control bars it is drawn through on each edge,
+    /// and the sibling each bar is lifted over (`ControlBars.lifts`).
     package struct Bands { package var band = UIEdgeInsets.zero, top: [NodeView] = [], bottom: [NodeView] = []
+        package var over: [ObjectIdentifier: NodeView] = [:]
         package init(band: UIEdgeInsets = .zero, top: [NodeView] = [], bottom: [NodeView] = []) { (self.band, self.top, self.bottom) = (band, top, bottom) }
+        init(band: UIEdgeInsets, lifts top: [(bar: NodeView, over: NodeView)], _ bottom: [(bar: NodeView, over: NodeView)]) {
+            self.init(band: band, top: top.map(\.bar), bottom: bottom.map(\.bar))
+            for lift in top + bottom { over[ObjectIdentifier(lift.bar)] = lift.over }
+        }
     }
 
     /// A page's scroller, laid out in the document with nothing between them
@@ -117,13 +124,13 @@ extension Presenter {
         let atTop = r.minY <= 0.5, atFoot = r.maxY >= area.height - 0.5 && fits
         let margins = Bands(band: UIEdgeInsets(top: atTop ? m.top : 0, left: 0, bottom: atFoot ? m.bottom : 0, right: 0))
         guard let judge else { return margins }
-        guard let top = atTop ? [] : judge.bars(of: v, in: page, top: true), let bottom = atFoot ? [] : judge.bars(of: v, in: page, top: false),
+        guard let top = atTop ? [] : judge.lifts(of: v, in: page, top: true), let bottom = atFoot ? [] : judge.lifts(of: v, in: page, top: false),
               !top.isEmpty || !bottom.isEmpty, page.frame.minY <= 0.5, page.frame.maxY >= area.height - 0.5, fits,
               Self.over(top, v), Self.over(bottom, v) else { return margins }
         // Both edges reach the page's: an open one through the root's padding too (D2).
         let band = UIEdgeInsets(top: max(0, r.minY) + m.top, left: 0, bottom: max(0, area.height - r.maxY) + m.bottom, right: 0)
         guard Self.drawn(band, v, sv) else { return margins }
-        return Bands(band: band, top: top, bottom: bottom)
+        return Bands(band: band, lifts: top, bottom)
     }
 
     /// A route's scroller (LLP 1131 D2): with its top banded or open, an edge
@@ -156,7 +163,7 @@ extension Presenter {
     package func controlBands(of v: NodeView, in route: NodeView, _ judge: ControlBars, apart: Bool = false) -> Bands {
         guard let sv = v.scrollView else { return Bands() }
         let r = v.convert(v.bounds, to: route)
-        let top = judge.bars(of: v, in: route, top: true), bottom = judge.bars(of: v, in: route, top: false)
+        let top = judge.lifts(of: v, in: route, top: true), bottom = judge.lifts(of: v, in: route, top: false)
         // More than bars over the scroller keeps its top where it is; an open
         // foot over the route's bottom cover (a tab bar), apart from a title's
         // collapse, still reaches it, as a hand-built table under a fixed
@@ -173,12 +180,13 @@ extension Presenter {
         guard !top.isEmpty || bottom?.isEmpty == false || underBar || overCover,
               Self.over(top, v), Self.over(bottom ?? [], v) else { return Bands() }
         let band = UIEdgeInsets(top: max(0, r.minY), left: 0, bottom: bottom == nil ? 0 : max(0, route.bounds.height - r.maxY), right: 0)
-        return Self.drawn(band, v, sv) ? Bands(band: band, top: top, bottom: bottom ?? []) : Bands()
+        return Self.drawn(band, v, sv) ? Bands(band: band, lifts: top, bottom ?? []) : Bands()
     }
 
-    /// A bar the author ranks under the scroller (a `z-index`) cannot be over it (D3).
-    private static func over(_ bars: [NodeView], _ v: NodeView) -> Bool {
-        bars.allSatisfy { $0.paintRank >= v.paintRank || !$0.wrote("z_index") && !v.wrote("z_index") }
+    /// A bar ranked under the sibling it is lifted over, by a `z-index` written on
+    /// the bar, that sibling or the scroller, cannot be over it (D3).
+    private static func over(_ lifts: [(bar: NodeView, over: NodeView)], _ v: NodeView) -> Bool {
+        lifts.allSatisfy { $0.bar.paintRank >= $0.over.paintRank || !$0.bar.wrote("z_index") && !$0.over.wrote("z_index") && !v.wrote("z_index") }
     }
 
     /// A virtualized list draws rows a port past its own (D5): a longer band is not taken. Its port is its box, past it

@@ -104,8 +104,13 @@ package final class ControlBars {
     /// width and fills what they leave; a box with none is at its parent's
     /// edge. No parent transforms, scrolls or hides, and none below `c` clips. Empty
     /// when nothing is between them; nil when anything else is.
-    func bars(of s: NodeView, in c: NodeView, top: Bool) -> [NodeView]? {
-        var x = s, found: [NodeView] = []
+    func bars(of s: NodeView, in c: NodeView, top: Bool) -> [NodeView]? { lifts(of: s, in: c, top: top)?.map(\.bar) }
+
+    /// Those bars, each with the sibling it is lifted over (D3): `s`, or, for a
+    /// bar found a level up, the box at that level holding `s`. `s`'s own rank
+    /// means nothing in the bar's parent, so it cannot place the bar there.
+    func lifts(of s: NodeView, in c: NodeView, top: Bool) -> [(bar: NodeView, over: NodeView)]? {
+        var x = s, found: [(bar: NodeView, over: NodeView)] = []
         while x !== c {
             var up = x.superview
             // Between nodes, a host view that clips (a clip box) or scrolls cuts the band off.
@@ -131,7 +136,7 @@ package final class ControlBars {
                 // floating button, over a composer).
                 guard abs(x.frame.minX - room.minX) <= 0.5, abs(x.frame.maxX - room.maxX) <= 0.5, x.props["flexGrows"] == "true" else { return nil }
             }
-            found += side
+            found += side.map { ($0, x) }
             // A box between the scroller and the container has no padding or border at that edge: a gap.
             if p !== c {
                 let content = p.contentBox()
@@ -171,14 +176,15 @@ package final class ControlBars {
 
     /// Lift the bars above their scrollers' content and give each UIKit's edge
     /// effect over its scroller (D3, D4); a bar no longer one, removed from
-    /// the tree included, goes back.
-    static func sync(_ wanted: [(bar: NodeView, scroller: NodeView, edge: UIRectEdge)], in presenter: Presenter) {
+    /// the tree included, goes back. A bar is placed by the rank of the
+    /// sibling it is lifted over (`lifts`).
+    static func sync(_ wanted: [(bar: NodeView, scroller: NodeView, over: NodeView, edge: UIRectEdge)], in presenter: Presenter) {
         guard let viewport = presenter.viewport as? Viewport else { return }
         var kept = Set<ObjectIdentifier>()
         for w in wanted {
             kept.insert(ObjectIdentifier(w.bar))
             viewport.controlBars[ObjectIdentifier(w.bar)] = Weak(w.bar)
-            if w.bar.bandOver != w.scroller.paintRank { w.bar.bandOver = w.scroller.paintRank; if let p = w.bar.superview { PaintOrder.changed(p) } }
+            if w.bar.bandOver != w.over.paintRank { w.bar.bandOver = w.over.paintRank; if let p = w.bar.superview { PaintOrder.changed(p) } }
             #if os(iOS)
             if #available(iOS 26.0, *), let sv = w.scroller.scrollView {
                 let i = (w.bar.edgeInteraction as? UIScrollEdgeElementContainerInteraction) ?? {

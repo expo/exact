@@ -469,6 +469,34 @@ final class PageEdgesIOSTests: XCTestCase {
         XCTAssertEqual(ControlBars(p).bars(of: list, in: route.node, top: true)?.isEmpty, false)
     }
 
+    /// LLP 1131 D3: a row of buttons over a column holding the list is lifted over that column, whatever the
+    /// ranks inside it, so the row draws over the list and keeps its touches; the band beside it is the list's.
+    func testABarIsLiftedOverTheBoxHoldingItsScroller() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the bars and the safe area are a scene window's") }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("control bars are iOS 26's, where UIKit draws the edge effect over them") }
+        let (session, _) = try fixture("CONTROL_BARS")
+        let p = session.presenter
+        p.press(try node(session, "pick-nested").id)
+        let bar = try node(session, "nested-bar"), wrap = try node(session, "nested-wrap"), list = try node(session, "nested-list"),
+            all = try node(session, "nested-all")
+        until("the row is a bar over the list") { list.pageBand.top > 0 }
+        let window = try XCTUnwrap(bar.window)
+        // The list ranked above the rest of its column, which the row's parent has no rank for; then the
+        // column ranked above the row's other siblings, over the list's rank.
+        for (wrapRank, listRank) in [(Int64(0), Int64(1)), (Int64(1), Int64(0))] {
+            let ranks = "column \(wrapRank), list \(listRank)"
+            wrap.setRank(wrapRank)
+            list.setRank(listRank)
+            p.reachPageEdges()
+            XCTAssertGreaterThan(list.pageBand.top, 0, "\(ranks): the list still runs under the row")
+            XCTAssertGreaterThan(bar.layer.zPosition, wrap.layer.zPosition, "\(ranks): the row draws over the column")
+            let hit = try XCTUnwrap(window.hitTest(all.convert(CGPoint(x: all.bounds.midX, y: all.bounds.midY), to: nil), with: nil))
+            XCTAssertTrue(hit.isDescendant(of: all), "\(ranks): a tap on the row's button is the button's, not \(type(of: hit))")
+            let beside = try XCTUnwrap(window.hitTest(bar.convert(CGPoint(x: -8, y: bar.bounds.midY), to: nil), with: nil))
+            XCTAssertTrue(beside.isDescendant(of: list), "\(ranks): the band beside the row is the list's, not \(type(of: beside))")
+        }
+    }
+
     func testLargeTitleRidersRequireBothEdgesAndTheBarsPaintOrder() throws {
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the title belongs to a scene window") }
         guard #available(iOS 26.0, *) else { throw XCTSkip("control bars require iOS 26") }
