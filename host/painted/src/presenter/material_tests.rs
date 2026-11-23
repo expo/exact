@@ -6,6 +6,9 @@
 //! child process of their own.
 use super::*;
 
+#[path = "material_grouped_tests.rs"]
+mod grouped_tests;
+
 const APP: &str = r##"component App
   view
     column padding=10 align-items="flex-start"

@@ -4,10 +4,10 @@
 
 use super::inputs::column_row;
 use super::{accessory, hidden, symbol};
-use contract_syntax::{Expr, Node};
+use contract_syntax::{BinOp, Expr, Node, Span};
 
 /// A row's shown parts between a leading symbol and a trailing accessory.
-fn texts(children: &[Node]) -> Vec<Node> {
+pub(super) fn texts(children: &[Node]) -> Vec<Node> {
     // What the kernel reads at a row's ends, or a condition between it and
     // nothing (a checkmark shown by an `if`).
     fn either(node: &Node, part: &dyn Fn(&Node) -> bool) -> bool {
@@ -46,22 +46,70 @@ fn texts(children: &[Node]) -> Vec<Node> {
 
 /// Whether `nodes` show one text or two: a cell's title and its value or
 /// subtitle.
-pub(super) fn lines(nodes: &[Node]) -> bool {
+pub(super) fn standard_text_lines(nodes: &[Node]) -> bool {
     text_lines(nodes).is_some_and(|(low, high)| low >= 1 && high <= 2)
 }
 
-/// Whether a row's parts are one `column` of one or two texts between its
-/// ends: the subtitle cell. A `column` in any other row is the author's.
-pub(super) fn text_stack(children: &[Node]) -> bool {
-    matches!(texts(children).as_slice(), [Node::Element { tag, children, .. }]
-        if tag == "column" && lines(children))
-}
+/// Select the minimum from the number of visible text lines in a cell.
+pub(super) fn row_minimum(nodes: &[Node], one: &str, two: &str, span: Span) -> Expr {
+    match text_lines(nodes) {
+        Some((2, 2)) => return super::mv(two, span),
+        Some((1, 2)) => {}
+        _ => return super::mv(one, span),
+    }
 
-/// Whether a row's parts are the standard cell's, whose texts the
-/// platform's list draws: a title, a title and its value, or the subtitle
-/// cell.
-pub(super) fn standard(children: &[Node]) -> bool {
-    lines(&texts(children)) || text_stack(children)
+    let zero_count = || Expr::Number(0.0, span);
+    let is_text_choice = |node: &Node| matches!(node, Node::When { .. } | Node::Match { .. });
+    // Accumulate the line count of each arm so the minimum follows mounted text.
+    let mut counts = vec![[zero_count(), zero_count()]];
+    let events = Node::walk_events_with(nodes, 0, |node, _| {
+        if is_text_choice(node) {
+            [Some(0), Some(1)]
+        } else {
+            [None, None]
+        }
+    });
+    for (node, arm, entering) in events {
+        if entering {
+            if is_text_choice(node) {
+                counts.push([zero_count(), zero_count()]);
+            }
+            continue;
+        }
+        let count = match node {
+            Node::When { cond, .. } => {
+                let [yes, no] = counts.pop().unwrap();
+                Expr::Ternary(Box::new(cond.clone()), Box::new(yes), Box::new(no), span)
+            }
+            Node::Match { subject, some, .. } => {
+                let [yes, no] = counts.pop().unwrap();
+                Expr::Match {
+                    subject: Box::new(subject.clone()),
+                    var: some.0.clone(),
+                    some: Box::new(yes),
+                    none: Box::new(no),
+                    span,
+                }
+            }
+            _ => Expr::Number(if hidden(node) { 0.0 } else { 1.0 }, span),
+        };
+        let total = &mut counts.last_mut().unwrap()[arm];
+        let previous = std::mem::replace(total, zero_count());
+        *total = Expr::Binary(BinOp::Add, Box::new(previous), Box::new(count), span);
+    }
+    let [total, _] = counts.pop().unwrap();
+    let has_subtitle = Expr::Binary(
+        BinOp::Eq,
+        Box::new(total),
+        Box::new(Expr::Number(2.0, span)),
+        span,
+    );
+    Expr::Ternary(
+        Box::new(has_subtitle),
+        Box::new(super::mv(two, span)),
+        Box::new(super::mv(one, span)),
+        span,
+    )
 }
 
 /// How many texts `nodes` show, fewest and most, an `if` or a `match`
