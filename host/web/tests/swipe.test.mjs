@@ -25,7 +25,7 @@ const fixture = `<!doctype html>
   const row = document.getElementById('row'), pan = document.getElementById('pan');
   const handle = document.getElementById('handle'), target = document.getElementById('target'), clip = document.getElementById('clip');
   const views = new Map([[1, row], [2, pan], [3, handle], [4, target], [5, clip]]);
-  window.calls = []; window.deltas = []; window.ends = [];
+  window.calls = []; window.deltas = []; window.ends = []; window.releases = [];
   let serial = 0;
   const held = new Set();
   const token = () => { const t = String(++serial); held.add(t); return t; };
@@ -48,8 +48,9 @@ const fixture = `<!doctype html>
   motion.attachSwipe(row, 1, (type, fn) => row.addEventListener(type, fn));
   const input = createInputHandlers({ root: document.getElementById('root'), views,
     retiredViews: new Set(), ready: () => true, inertAncestor: () => false,
-    dispatch: (id, delta) => deltas.push(delta) });
-  pan.addEventListener('pointerdown', input.pan(pan, 2, (type, fn) => pan.addEventListener(type, fn)));
+    dispatch: (id, delta) => deltas.push(delta), release: (id, velocity) => releases.push(velocity) });
+  window.panStart = input.pan(pan, 2, (type, fn) => pan.addEventListener(type, fn));
+  pan.addEventListener('pointerdown', panStart);
   const ancestor = new URL(location.href).searchParams.get('ancestor');
   if (ancestor) {
     clip.style.display = 'block'; pan.style.display = 'none';
@@ -323,3 +324,119 @@ check('a draggable swipe row keeps a sideways mouse drag and lets an upright one
     expect(await operations(page)).not.toContain('begin');
   } finally { await page.context().close(); }
 });
+
+// A `dragstart` a script dispatches is no drag: the transform drag's guard and a claimed swipe's leave it uncancelled.
+check('a transform drag and a claimed swipe leave a script\'s dragstart alone', async () => {
+  const page = await open('transform');
+  const scripted = id => page.evaluate(id => document.getElementById(id)
+    .dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true })), id);
+  try {
+    expect(await scripted('handle')).toBe(true);
+    await page.mouse.move(150, 180);
+    await page.mouse.down();
+    await page.mouse.move(160, 180);
+    await page.mouse.move(250, 180);
+    expect(await contacts(page)).toEqual([[1, 'claimed']]);
+    expect(await scripted('row')).toBe(true);
+    await page.mouse.up();
+  } finally { await page.context().close(); }
+});
+
+// A pan that retires mid-contact lets it go at once and dispatches nothing, as its node is going: one watching a nested
+// press's contact on the window drops those listeners, since the contact may end where this window does not hear it,
+// and one that began releases its capture without a `panrelease`.
+check('a retired pan lets go of its contact and dispatches nothing', async () => {
+  const page = await open();
+  try {
+    await page.evaluate(() => {
+      const button = Object.assign(document.createElement('button'), { id: 'inside' });
+      button.style.cssText = 'width:60px;height:40px';
+      const pan = document.getElementById('pan');
+      pan.append(button);
+      pan.exactHandlers = ['pan', 'panrelease'];
+    });
+    const cdp = await page.context().newCDPSession(page);
+    const watched = async () => {
+      const { result } = await cdp.send('Runtime.evaluate', { expression: 'window' });
+      const { listeners } = await cdp.send('DOMDebugger.getEventListeners', { objectId: result.objectId });
+      return listeners.filter(l => l.useCapture && ['pointermove', 'pointerup', 'pointercancel'].includes(l.type)).length;
+    };
+    const box = await page.locator('#inside').boundingBox();
+    await page.mouse.move(box.x + 10, box.y + 10);
+    await page.mouse.down();
+    // The pan watches the contact's move, release and cancel; the rest are other listeners'.
+    const pressed = await watched();
+    await page.evaluate(() => panStart.retire());
+    expect(pressed - await watched()).toBe(3);
+    await page.mouse.up();
+    // A pan that began holds the pointer's capture.
+    await page.mouse.move(250, 280);
+    await page.mouse.down();
+    await page.mouse.move(250, 240, { steps: 5 });
+    await frame(page);
+    expect(await page.evaluate(() => [deltas.length > 0, document.getElementById('pan').hasPointerCapture(1)])).toEqual([true, true]);
+    await page.evaluate(() => panStart.retire());
+    expect(await page.evaluate(() => [releases, document.getElementById('pan').hasPointerCapture(1)])).toEqual([[], false]);
+    await page.mouse.up();
+    expect(await page.evaluate(() => releases)).toEqual([]);
+  } finally { await page.context().close(); }
+});
+
+// A drag the browser begins at a point where a later down than the pan's contact went is that down's, so a finger the
+// pan holds on a link does not cancel a mouse's drag of the same link from the same point.
+check('a pan holding a finger leaves a later mouse down\'s drag at the same point alone', async () => {
+  const page = await open();
+  try {
+    await page.evaluate(() => {
+      const link = Object.assign(document.createElement('a'), { id: 'inside', href: '#x', textContent: 'Link' });
+      link.style.cssText = 'display:inline-block;width:60px;height:40px';
+      document.getElementById('pan').append(link);
+      window.drags = [];
+      addEventListener('dragstart', e => drags.push(e.defaultPrevented));
+    });
+    const box = await page.locator('#inside').boundingBox(), [x, y] = [box.x + 10, box.y + 10];
+    // Chrome's drag is intercepted, so nothing leaves the page.
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Input.setInterceptDrags', { enabled: true });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y, id: 7 }] });
+    const mouse = (type, dy, buttons) => cdp.send('Input.dispatchMouseEvent', { type, x, y: y + dy, button: 'left', buttons, clickCount: 1 });
+    await mouse('mouseMoved', 0, 0);
+    await mouse('mousePressed', 0, 1);
+    for (let dy = 3; dy <= 30; dy += 3) await mouse('mouseMoved', dy, 1);
+    expect(await page.evaluate(() => drags)).toEqual([false]);
+    await cdp.send('Input.dispatchDragEvent', { type: 'dragCancel', x, y: y + 30, data: { items: [], dragOperationsMask: 1 } }).catch(() => {});
+    await mouse('mouseReleased', 30, 0);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  } finally { await page.context().close(); }
+});
+
+// A `pointerdown` a script dispatches is no down, before the mouse's or after it: the pan still takes the mouse's drag of
+// a link.
+for (const order of ['after', 'before']) {
+  check(`a pan keeps a mouse's link drag from a scripted down at the same point ${order} the mouse's`, async () => {
+    const page = await open();
+    try {
+      await page.evaluate(() => {
+        const link = Object.assign(document.createElement('a'), { id: 'inside', href: '#x', textContent: 'Link' });
+        link.style.cssText = 'display:inline-block;width:60px;height:40px';
+        document.getElementById('pan').append(link);
+        window.drags = [];
+        addEventListener('dragstart', e => drags.push(e.defaultPrevented));
+      });
+      const box = await page.locator('#inside').boundingBox(), [x, y] = [box.x + 10, box.y + 10];
+      // Chrome's drag is intercepted, so nothing leaves the page.
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send('Input.setInterceptDrags', { enabled: true });
+      const mouse = (type, dy, buttons) => cdp.send('Input.dispatchMouseEvent', { type, x, y: y + dy, button: 'left', buttons, clickCount: 1 });
+      const scripted = () => page.evaluate(([x, y]) => document.getElementById('inside').dispatchEvent(new PointerEvent('pointerdown',
+        { bubbles: true, isPrimary: true, pointerId: 9, pointerType: 'touch', clientX: x, clientY: y })), [x, y]);
+      await mouse('mouseMoved', 0, 0);
+      if (order === 'before') await scripted();
+      await mouse('mousePressed', 0, 1);
+      if (order === 'after') await scripted();
+      for (let dy = 3; dy <= 30; dy += 3) await mouse('mouseMoved', dy, 1);
+      expect(await page.evaluate(() => drags)).toEqual([true]);
+      await mouse('mouseReleased', 30, 0);
+    } finally { await page.context().close(); }
+  });
+}

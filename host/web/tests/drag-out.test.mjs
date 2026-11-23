@@ -21,12 +21,21 @@ ${rules}
 <main id="exact-root">
   <button id="card" draggable="true" data-datatransferfiles="assets/a.png" style="top:10px;display:flex;align-items:center"><span id="label" style="display:inline-block;width:150px;height:40px">Card</span><img id="picture"><svg id="glyph" draggable="TRUE" data-foreign width="20" height="20"><rect width="20" height="20"></rect></svg></button>
   <div id="box" draggable="true" data-datatransfertext="box" style="top:70px"><button id="press" data-exact-on="press" style="display:inline-block;width:60px;height:40px;background:#aaa">Press<img id="icon" style="width:20px;height:20px"></button><input id="field" data-native value="some words to select" style="display:inline-block;width:110px"><input id="range" data-native type="range" min="0" max="100" value="10" style="display:inline-block;width:110px"></div>
-  <div id="pan" style="top:130px;height:60px;touch-action:none"><div id="inner" draggable="true" data-datatransfertext="inner" style="width:120px;height:40px;background:#aaa">inner</div></div>
+  <div id="pan" style="top:130px;height:60px;touch-action:none"><div id="inner" draggable="true" data-datatransfertext="inner" style="width:120px;height:40px;background:#aaa;display:inline-block">inner</div><img id="panned"></div>
   <a id="link" href="/landmark/1016" style="top:200px"><img id="linked" draggable="true" data-datatransfertext="the picture"></a>
   <div id="card2" draggable="true" data-datatransfertext="card" style="top:260px;height:60px"><div id="row" style="width:300px;height:44px;touch-action:pan-y;background:#bbb"></div></div>
   <div id="swipe" draggable="true" data-datatransfertext="swipe row" style="position:absolute;left:20px;top:340px;width:300px;height:44px;touch-action:pan-y"></div>
   <div id="foreign" draggable="true" data-foreign style="top:400px;height:40px"></div>
   <button id="plain" style="top:460px;height:44px"><img id="upper" draggable="TRUE" data-foreign></button>
+  <div id="outer" draggable="true" data-datatransfertext="outer" style="left:340px;top:10px;height:200px">
+    <div id="pan2" style="display:flex;align-items:flex-start;height:70px;touch-action:none;background:#bbb"><button id="pan2press" data-exact-on="press" style="width:45px;height:40px">Press</button><div id="pan2tap" data-exact-on="press" style="width:45px;height:40px">Tap</div><a id="pan2link" href="/x" style="width:45px;height:40px">Link</a><div id="pan2card" draggable="true" data-datatransfertext="child" style="display:flex;width:130px;height:40px"><a id="pan2cardlink" href="/y" style="width:50px;height:40px">Link</a><svg id="pan2svg" draggable="TRUE" data-foreign width="30" height="30"><rect width="30" height="30"></rect></svg><div data-exact-on="press" style="width:40px;height:40px"><svg id="pan2presssvg" draggable="TRUE" data-foreign width="30" height="30"><rect width="30" height="30"></rect></svg></div></div><svg id="pan2bare" draggable="TRUE" data-foreign width="30" height="30"><rect width="30" height="30"></rect></svg></div>
+    <div id="height" style="height:50px;touch-action:none;background:#aaa"></div>
+    <div id="clip" style="height:60px;overflow:hidden"><div id="target" style="width:100%;height:100%;box-sizing:border-box"><div id="handle" style="height:100%;touch-action:none;background:#999"></div></div></div>
+  </div>
+  <button id="outerbutton" draggable="true" data-datatransfertext="button" style="left:340px;top:220px;height:120px;display:block">
+    <div id="height2" style="height:50px;touch-action:none;background:#aaa"></div>
+    <div id="clip2" style="height:60px;overflow:hidden"><div id="target2" style="width:100%;height:100%;box-sizing:border-box"><div id="handle2" style="height:100%;touch-action:none;background:#999"></div></div></div>
+  </button>
 </main>
 <script type="module">
   import { listen, writeDraggable } from './drag-out.js';
@@ -39,13 +48,18 @@ ${rules}
   const c = document.createElement('canvas'); c.width = c.height = 40; c.getContext('2d').fillRect(0, 0, 40, 40);
   await Promise.all([...document.querySelectorAll('img')].map((i) => new Promise((r) => { i.onload = r; i.src = c.toDataURL(); })));
   const byId = (id) => document.getElementById(id);
-  const views = new Map([[1, byId('row')], [2, byId('pan')], [3, byId('swipe')]]);
+  const views = new Map([[1, byId('row')], [2, byId('pan')], [3, byId('swipe')], [4, byId('pan2')], [5, byId('height')],
+    [6, byId('handle')], [7, byId('target')], [8, byId('clip')], [9, byId('height2')], [10, byId('handle2')],
+    [11, byId('target2')], [12, byId('clip2')]]);
   let serial = 0;
   const motion = motionController({ views, now: () => performance.now(), generation: () => 1, inert: () => false, applyBatch() {},
     request(r) {
       if (r.op === 'gesture') return { slop: 4, knee: 64, resistance: 0.2 };
       if (r.op === 'begin') { begins.push(r.view); return { token: String(++serial), value: [0, 0] }; }
-      return { accepted: true };
+      if (r.op === 'height-begin') { begins.push(r.op); return { token: String(++serial), target: r.view, value: [r.x, 0] }; }
+      if (r.op === 'transform-begin') { begins.push(r.op); return { accepted: true, runtime: r.runtime, geometrySequence: r.geometrySequence,
+        translateToken: String(++serial), scaleToken: String(++serial), value: r.values.slice(0, 3) }; }
+      return { accepted: true, committed: true };
     } });
   for (const id of [1, 3]) {
     const el = views.get(id);
@@ -54,8 +68,15 @@ ${rules}
   }
   const input = createInputHandlers({ root: byId('exact-root'), views, retiredViews: new Set(), ready: () => true,
     inertAncestor: () => false, dispatch: (id, delta) => deltas.push(delta) });
-  const pan = byId('pan');
-  pan.addEventListener('pointerdown', input.pan(pan, 2, (type, fn) => pan.addEventListener(type, fn)));
+  for (const [id, pan] of [[2, byId('pan')], [4, byId('pan2')]]) pan.addEventListener('pointerdown', input.pan(pan, id, (type, fn) => pan.addEventListener(type, fn)));
+  for (const [id, height] of [[5, byId('height')], [9, byId('height2')]]) {
+    motion.heightBinding({ id, target: id, handleKey: String(id), targetKey: String(id) });
+    motion.attachHeightDrag(height, id, (type, fn) => height.addEventListener(type, fn));
+  }
+  for (const [id, handle] of [[6, byId('handle')], [10, byId('handle2')]]) {
+    motion.transformBinding({ id, target: id + 1, clip: id + 2, runtime: '1', handleKey: String(id), targetKey: String(id + 1), clipKey: String(id + 2) });
+    motion.attachTransformDrag(handle, id, (type, fn) => handle.addEventListener(type, fn));
+  }
   for (const el of document.querySelectorAll('[data-foreign]')) el.addEventListener('dragstart', (e) => e.dataTransfer.setData('text/plain', el.id + "'s own"));
   listen(document);
   window.addEventListener('dragstart', (e) => drags.push({ target: e.target.id, prevented: e.defaultPrevented,
@@ -164,6 +185,39 @@ for (const [engine, missing] of [['chromium', chromium().unavailable], ['firefox
       expect([went(fast), fast.begins]).toEqual([[], [3]]);
       const upright = await drag(page, '#swipe', [0, 70], { steps: 3 });
       expect([went(upright).map((d) => d.text), upright.begins]).toEqual([engine === 'firefox' ? [] : ['swipe row'], []]);
+    } finally {
+      await browser.close();
+    }
+  }, 60_000);
+
+  // By a mouse the innermost takes the drag (LLP 1094.000 D8): a pan, a height drag or a transform drag inside a
+  // draggable node, whose drag the browser dispatches at that node, and a pan over a plain image.
+  // Firefox is not measured here (QUEUE.md).
+  if (engine !== 'firefox') need(engine, missing)(`${engine}: a drag recognizer takes a mouse's drag from a draggable node around it`, async () => {
+    const browser = await suiteBrowser(engine);
+    try {
+      const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+      await page.goto(`http://127.0.0.1:${server.port}/`);
+      await page.waitForFunction('window.ready');
+      // Each case's drags as the window heard them, cancelled or not, and what moved. A recognizer that cancels the
+      // mouse's `pointerdown` leaves the browser no drag to begin. A press inside a pan leaves it one: the draggable
+      // node's around the pan, which the listener cancels for the press, or a link's own in Chromium, which the pan
+      // cancels. Another script's draggable inside the pan keeps its own.
+      const link = (id) => (engine === 'webkit' ? [] : [`${id} cancelled`]);
+      const cases = [['#pan2', [0, 25], [], 'pan'], ['#pan2press', [0, 0], ['outer cancelled'], 'pan'],
+        ['#pan2tap', [0, 0], ['outer cancelled'], 'pan'],
+        ['#pan2link', [0, 0], link('pan2link'), 'pan'],
+        ['#pan2cardlink', [0, 0], link('pan2cardlink'), 'pan'], ['#pan2svg', [0, 0], ["pan2svg: pan2svg's own"], ''],
+        ['#pan2presssvg', [0, 0], ["pan2presssvg: pan2presssvg's own"], ''], ['#pan2bare', [0, 0], [], 'pan'],
+        ['#height', [0, 0], [], 'height-begin'], ['#handle', [0, 0], [], 'transform-begin'],
+        ['#height2', [0, 0], [], 'height-begin'], ['#handle2', [0, 0], [], 'transform-begin'], ['#panned', [0, 0], [], 'pan']];
+      const seen = [];
+      for (const [selector, from] of cases) {
+        const result = await drag(page, selector, [0, 30], { from });
+        seen.push([selector, from, result.drags.map((d) => d.target + (d.prevented ? ' cancelled' : `: ${d.text}`)),
+          result.deltas ? 'pan' : result.begins.join()]);
+      }
+      expect(seen).toEqual(cases);
     } finally {
       await browser.close();
     }
