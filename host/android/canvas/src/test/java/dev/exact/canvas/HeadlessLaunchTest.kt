@@ -62,8 +62,8 @@ class HeadlessLaunchTest {
             var paint: ByteBuffer? = null
             var chrome: IntArray? = null
 
-            fun rectangle(color: Int): ByteBuffer {
-                val words = intArrayOf(2, color, 8f.toBits(), 8f.toBits(), 16f.toBits(), 8f.toBits()) + IntArray(8)
+            fun rectangle(color: Int, top: Float = 8f): ByteBuffer {
+                val words = intArrayOf(2, color, 8f.toBits(), top.toBits(), 16f.toBits(), 8f.toBits()) + IntArray(8)
                 return ByteBuffer.allocate(words.size * 4).order(ByteOrder.LITTLE_ENDIAN)
                     .apply { asIntBuffer().put(words) }
             }
@@ -91,7 +91,8 @@ class HeadlessLaunchTest {
             @JvmStatic @Implementation fun share(request: String) { told += "share $request" }
             @JvmStatic @Implementation fun window(width: Int, height: Int, scale: Float, insets: IntArray) {
                 if (insets[0] == 16) {
-                    paint = rectangle(Color.BLUE)
+                    // The software canvas uses the stream's coordinates inside the root's clip.
+                    paint = rectangle(Color.BLUE, top = 24f)
                     chrome = intArrayOf(0, 16, width, height - 16, Color.TRANSPARENT, 0)
                 }
             }
@@ -244,9 +245,12 @@ class HeadlessLaunchTest {
 
     @Test fun aBootInsetCorrectionIsAppliedOnTheFirstDraw() = drawsAfterBoot(ok = true, insetCorrection = true)
 
+    @Test @Config(sdk = [29]) fun anInsetLearnedDuringLayoutIsAppliedBeforeTheFirstDraw() =
+        drawsAfterBoot(ok = true, insetCorrection = true, insetDuringLayout = true)
+
     @Test fun theWindowDrawsAfterAFailedBoot() = drawsAfterBoot(ok = false)
 
-    private fun drawsAfterBoot(ok: Boolean, insetCorrection: Boolean = false) {
+    private fun drawsAfterBoot(ok: Boolean, insetCorrection: Boolean = false, insetDuringLayout: Boolean = false) {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
         Host.bootEntered = entered
@@ -263,13 +267,21 @@ class HeadlessLaunchTest {
             activity.intent.putExtra("warm", "0")
             val owner = Owner(false, false, 0) { "0" }.also { Exact.owner = it }
             val view = ExactView(activity, false) {}.apply { this.owner = owner }
-            view.booting = owner.boot(64, 64, 1f, "", "", false, done = view::ownerStarted)
-            assertTrue("native startup entered", entered.await(5, TimeUnit.SECONDS))
-            val root = FrameLayout(activity)
+            fun tellInset() = owner.window(64, 64, 1f, IntArray(16).apply { this[0] = 16 })
+            var reportInset = false
+            val root = object : FrameLayout(activity) {
+                override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+                    super.onLayout(changed, left, top, right, bottom)
+                    if (reportInset) { reportInset = false; tellInset() }
+                }
+            }
             root.addView(view, FrameLayout.LayoutParams(64, 64))
             owner.chrome = { c ->
                 view.layoutParams = FrameLayout.LayoutParams(c[2], c[3]).apply { topMargin = c[1] }
             }
+            owner.window(64, 64, 1f, IntArray(16))
+            view.booting = owner.boot(64, 64, 1f, "", "", false, done = view::ownerStarted)
+            assertTrue("native startup entered", entered.await(5, TimeUnit.SECONDS))
             activity.setContentView(root)
             assertTrue(view.isAttachedToWindow)
             fun traverse(): Boolean {
@@ -277,21 +289,29 @@ class HeadlessLaunchTest {
                 root.measure(size, size)
                 root.layout(0, 0, 64, 64)
                 if (root.viewTreeObserver.dispatchOnPreDraw()) return false
-                view.draw(Canvas(bitmap))
+                root.draw(Canvas(bitmap))
                 return true
             }
             assertFalse("the window waits for the owner", traverse())
 
             withMainSyncBarrier {
-                if (insetCorrection) owner.window(64, 64, 1f, IntArray(16).apply { this[0] = 16 })
+                if (insetCorrection && !insetDuringLayout) tellInset()
                 release.countDown()
                 owner.ask { }
                 main.idle()
+                if (insetDuringLayout) {
+                    assertFalse("boot completed before layout", view.booting)
+                    reportInset = true
+                    assertFalse("layout learned a new inset, so the window waits for its chrome", traverse())
+                    assertFalse("layout told the owner about the inset", reportInset)
+                    owner.ask { }
+                    main.idle()
+                }
                 assertTrue("boot completion lets the window draw through the barrier", traverse())
                 assertEquals("the first frame uses the current page margin", if (insetCorrection) 16 else 0, view.top)
                 val color = if (insetCorrection) Color.BLUE else if (ok) Color.RED else Color.TRANSPARENT
-                assertEquals("the first frame replays the owner's paint", color, bitmap.getPixel(12, 12))
-                assertEquals(Color.TRANSPARENT, bitmap.getPixel(12, 20))
+                assertEquals("the first frame replays the owner's paint", color, bitmap.getPixel(12, view.top + 12))
+                assertEquals(Color.TRANSPARENT, bitmap.getPixel(12, view.top + 20))
             }
             assertEquals("the host draws content only after a successful boot", ok, "drew" in Host.turns)
         } finally {

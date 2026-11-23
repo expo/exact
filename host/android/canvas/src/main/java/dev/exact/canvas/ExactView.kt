@@ -144,7 +144,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     /** An ownerless async boot ([Native.startAsync]), or a cold owner boot that holds the first draw. */
     var booting = false
     // The first app frame dismisses the starting window even if the reader has nothing to draw yet.
-    private val bootDraw = ViewTreeObserver.OnPreDrawListener { !booting || owner == null }
+    private val bootDraw = ViewTreeObserver.OnPreDrawListener { !booting && owner?.waitingForColdWindow != true }
     /** The window's size in pixels, which a host that boots here boots in ([Native.start]). */
     var window = 0 to 0
     /** What the host says to draw around the page ([Native.chrome]), when exact2 runs here: told as it changes. */
@@ -432,6 +432,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         if (first) {
             first = false
             owner?.endColdDraw()
+            viewTreeObserver.removeOnPreDrawListener(bootDraw)
             android.os.Handler.createAsync(android.os.Looper.getMainLooper()).post(onFirst)
             if (warm) postDelayed({ warmer.prepare() }, 300)
         }
@@ -453,7 +454,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     /** The owner booted (or could not). */
     fun ownerStarted(ok: Boolean) {
         booting = false
-        viewTreeObserver.removeOnPreDrawListener(bootDraw)
+        if (!ok) viewTreeObserver.removeOnPreDrawListener(bootDraw)
         started = ok
         contacts.started()
         invalidate()
@@ -495,7 +496,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     }
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        if (booting && owner != null) viewTreeObserver.addOnPreDrawListener(bootDraw)
+        if (owner?.awaitingColdDraw == true) viewTreeObserver.addOnPreDrawListener(bootDraw)
         presents.attach()
     }
     internal fun stopMainWakes() {

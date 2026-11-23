@@ -91,7 +91,9 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     // The main thread chooses the boot path before attaching the reader.
     private var firstBoot = true
     private var readerRunning = true
-    @Volatile private var coldChrome = false
+    @Volatile private var coldChrome: ((IntArray) -> Unit)? = null
+    private var windowSent = 0
+    private var windowApplied = 0
     /** Every paint in order (each may define and free pictures and rows); moves are coalesced by the reader. */
     val queue = ConcurrentLinkedQueue<Pub>()
     private val notifying = AtomicBoolean(false)
@@ -103,6 +105,8 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     @Volatile var asked: ((IntArray) -> Unit)? = null
 
     // The exact thread's own state.
+    private var windowRead = 0
+    private var windowPosted = 0
     private val timerReports = TimerReports()
     private val reader get() = timerReports.reader
     private val readerKnown get() = timerReports.known
@@ -246,7 +250,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
         firstBoot = false
         // Only a cold foreground launch saves a frame by passing a traversal barrier. On adoption, chrome,
         // paint notifications and platform requests must stay in queue order with completion.
-        coldChrome = cold
+        coldChrome = if (cold) chrome else null
         handler.post {
             android.os.Trace.beginSection("exact boot")
             try { Native.hardwarePictures(hwbuf) } catch (e: UnsatisfiedLinkError) { }
@@ -268,14 +272,17 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
                 }
                 wakes?.sync()
                 produce()
-            } else coldChrome = false
+            } else coldChrome = null
             postMain(if (cold) mainNow else main) { done(ok) }
         }
         return cold
     }
 
     /** The cold reader drew, even if it received no chrome, or left without drawing. */
-    fun endColdDraw() { coldChrome = false }
+    fun endColdDraw() { coldChrome = null }
+
+    val awaitingColdDraw get() = coldChrome != null
+    val waitingForColdWindow get() = awaitingColdDraw && windowApplied != windowSent
 
     /** Whether a [boot] has given this thread a host. */
     @Volatile var booted = false
@@ -323,14 +330,19 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     /** What exact2 asks of the platform since it was last asked ([Native.requests]): handed to the main thread, which
      * acts on it. After every turn, and when exact2 wakes this thread for a request no frame follows (a haptic
      * changes no pixel); also while the activity is stopped, when no stream is made. */
-    private fun requests() {
-        Native.requests()?.let { r -> postMain { asked?.invoke(r) ?: Requests.detached(r) } }
+    private fun requests(to: Handler = if (awaitingColdDraw) mainNow else main) {
+        Native.requests()?.let { r -> postMain(to) { asked?.invoke(r) ?: Requests.detached(r) } }
     }
 
     /** The window ([Native.window]): told before [boot] so the host is laid out in it from its first frame, and
      * whenever its size, the display's density or an inset changes, when the host lays the page out again. */
     fun window(width: Int, height: Int, scale: Float, insets: IntArray) {
-        handler.post { Native.window(width, height, scale, insets); if (watching) produce() }
+        val number = ++windowSent
+        handler.post {
+            Native.window(width, height, scale, insets)
+            windowRead = number
+            if (watching) produce()
+        }
     }
 
     /** Called on the main thread with what the host says to draw around the page ([Native.chrome]) when that
@@ -594,8 +606,20 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
             Native.timerObservation(readerScrolling, readerSampling, true, false)
             if (!notifying.getAndSet(true)) postMain { notifying.set(false); published() }
         }
-        Native.chrome()?.let { c -> postMain(if (coldChrome) mainNow else main) { chrome(c) } }
-        requests()
+        val c = Native.chrome()
+        val cold = coldChrome
+        val number = windowRead
+        // A window change can leave chrome identical. It still counts once its turn has run.
+        if (cold != null && (c != null || number != windowPosted)) {
+            windowPosted = number
+            postMain(mainNow) {
+                if (chrome === cold) {
+                    if (c != null) cold(c)
+                    windowApplied = number
+                }
+            }
+        } else if (c != null) postMain { chrome(c) }
+        requests(if (cold != null) mainNow else main)
         schedule()
     }
 

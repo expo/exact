@@ -85,6 +85,39 @@ class OwnerBackgroundTest {
         Host.chromeStatement = intArrayOf(word)
     }
 
+    @Test fun aColdPlatformRequestPrecedesBootCompletionThroughTheBarrier() = withOwner { owner ->
+        val main = shadowOf(Looper.getMainLooper())
+        val calls = ArrayList<String>()
+        val landscape = intArrayOf(Requests.ORIENTATION, 0, 5, 1, 0b1100, 0, 0, 0)
+        owner.chrome = { calls += "chrome ${it[0]}" }
+        owner.asked = { assertArrayEquals(landscape, it); calls += "orientation" }
+        withMainSyncBarrier {
+            assertTrue(owner.boot(64, 64, 1f, "", "", false, started = {
+                turn(1)
+                Host.request = landscape
+            }) { calls += "done $it" })
+            owner.ask { }
+            main.idle()
+            assertEquals(listOf("chrome 1", "orientation", "done true"), calls)
+        }
+    }
+
+    @Test fun queuedColdChromeDoesNotReachTheAdoptingReader() = withOwner { owner ->
+        val main = shadowOf(Looper.getMainLooper())
+        val calls = ArrayList<String>()
+        owner.chrome = { calls += "cold chrome ${it[0]}" }
+        withMainSyncBarrier {
+            assertTrue(owner.boot(64, 64, 1f, "", "", false, started = { turn(1) }) { calls += "cold done $it" })
+            owner.ask { }
+            owner.chrome = { calls += "adopted chrome ${it[0]}" }
+            assertFalse(owner.boot(80, 64, 1f, "", "", false, started = { turn(2) }) { calls += "adopted done $it" })
+            owner.ask { }
+            main.idle()
+            assertEquals(listOf("cold done true"), calls)
+        }
+        assertEquals(listOf("cold done true", "adopted chrome 2", "adopted done true"), calls)
+    }
+
     @Test fun adoptionKeepsOlderChromeAndTheRestoredAlertAheadOfCompletion() = withOwner { owner ->
         val main = shadowOf(Looper.getMainLooper())
         val calls = ArrayList<String>()
