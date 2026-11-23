@@ -394,8 +394,8 @@ impl<D: DataSource> Host<D> {
 impl<D: exact_runner::DataSource> crate::Host<D> {
     /// Change only the control text part of the existing environment and relayout.
     pub fn set_control_text_styles(&mut self, styles: exact_kernel::ControlTextStyles) -> String {
-        let fonts = self.runner.kernel().env().button_fonts;
-        self.measuring_traits_changed(Some((styles, fonts)))
+        let env = self.runner.kernel().env();
+        self.measuring_traits_changed(Some((styles, env.button_fonts, env.bar_item_font)))
     }
     /// The text engine's line boxes round to another scale (LLP 1008 §3):
     /// every paragraph is measured again, and the auto heights running
@@ -418,12 +418,14 @@ impl<D: exact_runner::DataSource> crate::Host<D> {
         fonts: Option<(
             exact_kernel::ControlTextStyles,
             Option<exact_kernel::ButtonFonts>,
+            Option<exact_kernel::ControlFont>,
         )>,
     ) -> String {
         let mut env = self.runner.kernel().env().clone();
-        if let Some((styles, button_fonts)) = fonts {
+        if let Some((styles, button_fonts, bar_item_font)) = fonts {
             env.control_text_styles = Some(styles);
             env.button_fonts = button_fonts;
+            env.bar_item_font = bar_item_font;
         }
         self.presence.unauthored = true;
         self.height_targets_dirty = true;

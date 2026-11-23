@@ -221,6 +221,8 @@ package final class OwnerBlocks {
     /// How the routes were last told they show against their stacks' tops,
     /// where not in their stack (`NavigationHosting.routesShown`).
     private(set) var toldShown: [UInt32: BlockShown] = [:]
+    /// The given blocks told as a navigation bar's items (LLP 1141.004 D3).
+    private var toldBarItems: Set<UInt32> = []
     private var resetting = false, revealOwed = false
     private var viewChanges = 0
     /// Each block's rectangle in its root's coordinates (`BatchOp.blockRect`),
@@ -385,13 +387,18 @@ package final class OwnerBlocks {
         // in its stack in the kernel, so how it shows is told again (LLP 1127 D8)
         for id in Array(toldShown.keys) where now[id] == nil { toldShown[id] = nil }
         told = now
+        // A bar item's block is told as one; one taken back is none
+        let items = Set(presenter.navigation.barItemBlocks.keys)
+        let barItems = items.subtracting(toldBarItems).map { ($0, true) }
+            + toldBarItems.subtracting(items).filter { presenter.views[$0] != nil }.map { ($0, false) }
+        toldBarItems = items
         guard withShown else {
             if !shownChanges().isEmpty { publish() }
-            return Runtime.blockRecords(blocks, placements: placements)
+            return Runtime.blockRecords(blocks, placements: placements, barItems: barItems)
         }
         let shown = shownChanges()
         toldShown = presenter.navigation.routesShown.filter { told[$0.key] != nil }
-        return Runtime.blockRecords(blocks, placements: placements, shown: shown)
+        return Runtime.blockRecords(blocks, placements: placements, shown: shown, barItems: barItems)
     }
 
     /// How the routes with a block show against their stacks' tops, where
@@ -439,6 +446,7 @@ package final class OwnerBlocks {
         resetting = false
         told = [:]
         toldShown = [:]
+        toldBarItems = []
         blockRects = [:]
         revealOwed = false
     }

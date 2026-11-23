@@ -208,7 +208,27 @@ impl<D: DataSource> Host<D> {
     pub(super) fn layout(&mut self, batch: &mut Batch) -> Result<(), String> {
         let laid = self.layout_pass(batch);
         self.layout_owed = laid.is_err();
+        self.send_bar_text(batch);
         laid
+    }
+
+    /// The readouts that came to take a bar's type, or stopped, outside the
+    /// commit that styled them (LLP 1141.004 D3): their subtrees' rows and
+    /// paragraphs sent again.
+    fn send_bar_text(&mut self, batch: &mut Batch) {
+        let roots = self.runner.kernel_mut().take_bar_text_flips();
+        if roots.is_empty() {
+            return;
+        }
+        let mut stack = roots;
+        while let Some(id) = stack.pop() {
+            let Some(children) = self.runner.kernel().node(id).map(|n| n.children()) else {
+                continue;
+            };
+            stack.extend(children);
+            self.update(id, batch);
+        }
+        self.emit_paragraphs(batch);
     }
 
     fn layout_pass(&mut self, batch: &mut Batch) -> Result<(), String> {

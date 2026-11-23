@@ -32,6 +32,7 @@ final class FieldChromeCache: @unchecked Sendable {
     private var entries: [Key: ExactFieldChrome] = [:]
     private var traits = UITraitCollection.current
     private(set) var body = UIFont.preferredFont(forTextStyle: .body)
+    private(set) var barItem = barItemFont(UITraitCollection.current)
     private(set) var presentedProvisional = 0
     private(set) var misses = 0
     // UITextField exposes text/editing rects, but no public bezel radius or
@@ -48,10 +49,26 @@ final class FieldChromeCache: @unchecked Sendable {
     func configure(_ next: UITraitCollection) -> Bool {
         precondition(Thread.isMainThread)
         let font = UIFont.preferredFont(forTextStyle: .body, compatibleWith: next)
+        let bar = Self.barItemFont(next)
         lock.lock(); defer { lock.unlock() }
-        let changed = Traits(traits) != Traits(next) || body != font
-        traits = next; body = font
+        let changed = Traits(traits) != Traits(next) || body != font || barItem != bar
+        traits = next; body = font; barItem = bar
         return changed
+    }
+
+    /// A plain bar item title's font at `traits` (LLP 1141.004 D3), which a readout the bar hosts takes for
+    /// what it leaves unsaid. UIKit publishes none: the bar appearance's title attributes name the body style
+    /// at regular weight, but iOS 27 draws the title in the system font at medium weight, at the body style's
+    /// size held between the default text size's, 17 points, and the extra-extra-large's, 21
+    /// (`BarItemFontIOSTests` compares the two as drawn). Read at regular legibility: Exact applies Bold Text.
+    static func barItemFont(_ traits: UITraitCollection) -> UIFont {
+        let asked = traits.preferredContentSizeCategory == .unspecified ? .large : traits.preferredContentSizeCategory
+        let size = min(max(asked, .large), .extraExtraLarge)
+        let held = traits.modifyingTraits {
+            $0.legibilityWeight = .regular
+            $0.preferredContentSizeCategory = size
+        }
+        return .systemFont(ofSize: UIFont.preferredFont(forTextStyle: .body, compatibleWith: held).pointSize, weight: .medium)
     }
     func key(_ request: ExactFieldChromeRequest, font: UIFont) -> Key {
         lock.lock(); defer { lock.unlock() }
@@ -173,6 +190,7 @@ extension TextEngine {
         guard let cache = engine.fieldChrome else { return ExactControlFont() }
         let font = Owner.shared.callMain {
             if kind == 0 { return cache.body }
+            if kind == 5 { return cache.barItem }
             return engine.buttonMeasurements?.font(kind) ?? cache.body
         }
         let id = kind == 0 ? engine.registerControlFont(font) : engine.platformControlID ?? engine.registerControlFont(font)

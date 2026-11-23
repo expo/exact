@@ -12,6 +12,7 @@ use crate::shared_style::SharedStyles;
 use crate::sorted::SlotSet;
 use std::rc::Rc;
 pub(crate) mod alert;
+pub(crate) mod bar_text;
 pub(crate) mod button;
 pub(crate) mod control_text;
 pub(crate) mod defaults;
@@ -156,6 +157,11 @@ pub struct NodeArena {
     /// to. The host's, not the tree's — a reset keeps it.
     env: Env,
     control_styles: Option<Box<[StyleProps; 10]>>,
+    /// A hosted readout's start, from `Env::bar_item_font` (`bar_text`).
+    bar_start: Option<Box<StyleProps>>,
+    /// The readouts whose bar type changed since the host last asked
+    /// (`Kernel::take_bar_text_flips`).
+    pub(crate) bar_text_flips: Vec<ViewId>,
     pub(crate) field_content: IdMap<u32, Frame>,
     pub(crate) button_bases: IdMap<u32, Option<f32>>,
     /// Each node's host-known state looks (LLP 1121 D8, `Op::SetLooks`):
@@ -239,6 +245,8 @@ impl Clone for NodeArena {
             live_count: self.live_count,
             env: self.env.clone(),
             control_styles: self.control_styles.clone(),
+            bar_start: self.bar_start.clone(),
+            bar_text_flips: self.bar_text_flips.clone(),
             field_content: self.field_content.clone(),
             button_bases: self.button_bases.clone(),
             looks: self.looks.clone(),
@@ -284,6 +292,7 @@ impl NodeArena {
         self.readers.invalidate();
         self.observations.invalidate();
         self.refresh_control_styles();
+        self.refresh_bar_start();
     }
     /// Forget every allocation while retaining each slot's generation.
     ///
@@ -310,6 +319,7 @@ impl NodeArena {
         self.mark_sizes.clear();
         self.mark_reports.clear();
         self.bar_symbols.clear();
+        self.bar_text_flips.clear();
         self.table_column_widths.clear();
         self.sticky_slots.clear();
         self.top_layer_slots.clear();

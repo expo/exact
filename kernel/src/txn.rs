@@ -1309,7 +1309,7 @@ fn source_changed(arena: &mut NodeArena, slot: u32, prop: PropId, receipt: &mut 
 }
 
 /// A system symbol's font changed, its own or an inherited size or weight
-fn symbol_font_changed(
+pub(crate) fn symbol_font_changed(
     arena: &mut NodeArena,
     slot: u32,
     rows: StyleMask,

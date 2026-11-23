@@ -533,11 +533,13 @@ fn face(button: Visit<'_>) -> Option<&'static str> {
         match tag {
             "image" if symbol(*k) => {
                 symbols += 1;
-                if !attrs
+                let extra = attrs
                     .iter()
-                    .all(|a| sits(&a.name) || SYMBOL_ROWS.contains(&a.name.as_str()))
-                {
-                    return Some("writes on its symbol more than where it sits and its size");
+                    .find(|a| !sits(&a.name) && !SYMBOL_ROWS.contains(&a.name.as_str()));
+                match extra.map(|a| a.name.as_str()) {
+                    Some("color") => return Some("writes on its symbol more than where it sits, `font-size` and `font-weight` (write `color` on the button)"),
+                    Some(_) => return Some("writes on its symbol more than where it sits, `font-size` and `font-weight`"),
+                    None => {}
                 }
             }
             "text" => {

@@ -80,6 +80,22 @@ pub(crate) fn text_styles(f: ControlTextFn, ctx: *mut c_void) -> ControlTextStyl
         button: font,
     }
 }
+/// A plain bar item title's font (kind 5), which a readout the bar hosts takes
+/// for what it leaves unsaid (LLP 1141.004 D3); `None` where the host has none.
+pub(crate) fn bar_item_font(f: ControlTextFn, ctx: *mut c_void) -> Option<ControlFont> {
+    let f = f(ctx, 5);
+    (f.size.is_finite() && f.size > 0.0).then(|| ControlFont {
+        family: crate::app_module::text(f.family, f.family_len),
+        family_id: f.family_id,
+        size: f.size,
+        weight: f.weight,
+        style: if f.italic == 0 {
+            FontStyle::Normal
+        } else {
+            FontStyle::Italic
+        },
+    })
+}
 pub(crate) fn button_fonts(f: ControlTextFn, ctx: *mut c_void) -> exact_kernel::ButtonFonts {
     let font = |size| {
         let f = f(ctx, size);
