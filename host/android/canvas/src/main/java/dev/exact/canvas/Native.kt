@@ -156,6 +156,9 @@ object Native {
     /** A module event, checked against the session and allocation carried by its painted view. */
     @JvmStatic external fun moduleEvent(id: Int, slot: Int, generation: Int, session: Long, kind: String, payload: String)
     @JvmStatic external fun frameLoaded(id: Int, slot: Int, generation: Int, session: Long)
+    /** An iframe's `FrameNavigation` record (LLP 1020.002 D2): [event] by its name, [record] its JSON; checked as
+     * [frameLoaded] is. */
+    @JvmStatic external fun frameEvent(id: Int, slot: Int, generation: Int, session: Long, event: String, record: String)
     /** A media element's event ([event] by HTML's name, [payload] its value), or with an empty [event] its observed
      * [state] for `state.media` (LLP 1042.001 D7); checked as a module event is. */
     @JvmStatic external fun media(id: Int, slot: Int, generation: Int, session: Long, event: String, payload: String, state: String)

@@ -426,6 +426,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/clock.rs", "Presenter::background_due_ms"],
     ["painted:host/painted/src/presenter/collection/anchoring.rs", "Presenter::publish_scroll"],
     ["painted:host/painted/src/presenter/commands.rs", "Presenter::refuse_picture_in_picture"],
+    ["painted:host/painted/src/presenter/frames.rs", "Presenter::frame_by_id Presenter::frame_command Presenter::frame_event"],
     ["painted:host/painted/src/presenter/device.rs", "Presenter::device"],
     ["painted:host/painted/src/presenter/display_frame.rs", "Presenter::activation_refused Presenter::display_input_mapping"],
     ["painted:host/painted/src/presenter/feedback.rs", "Presenter::feedback_at"],
@@ -843,10 +844,10 @@ export const classifications = [
       "exact_web_set_sandbox exact_web_set_src exact_web_snapshot"],
   ]),
   group("web frames", ["subscription"], "live Android iframe allocation and native session", "UI-owned",
-    "Natives.kt consumes each document completion and drops it when the WebView binding is retired. The painted presenter checks the session and iframe allocation before dispatch.", [
-    ["painted:host/painted/src/canvas/jni.rs", "Java_dev_exact_canvas_Native_frameLoaded"],
-    ["painted:host/painted/src/canvas/requests.rs", "CanvasHost::frame_loaded"],
-    ["painted:host/painted/src/presenter/events.rs", "Presenter::reader_frame_loaded"],
+    "Natives.kt and FrameClient.kt consume each document completion and frame record and drop it when the WebView binding is retired. The painted presenter checks the session and iframe allocation before dispatch.", [
+    ["painted:host/painted/src/canvas/jni_frames.rs", "Java_dev_exact_canvas_Native_frameEvent Java_dev_exact_canvas_Native_frameLoaded"],
+    ["painted:host/painted/src/canvas/requests.rs", "CanvasHost::frame_event CanvasHost::frame_loaded"],
+    ["painted:host/painted/src/presenter/events.rs", "Presenter::reader_frame_event Presenter::reader_frame_loaded"],
   ]),
   group("storage", ["durable operation"], "committed app store/secret values and write queue", "durable",
     "host/painted/src/store_writer.rs drains already committed writes and reports write warnings; runner/src/store.rs and store/presence.rs revisions version durable store contents, not UI continuations. host/apple/webarm/WebArm.swift exactWebClearSiteData clears the named browser partition and calls its completion context.", [
