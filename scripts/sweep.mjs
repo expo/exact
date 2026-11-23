@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Units and whole incremental caches expire after a week (KEEP). Within a cache, rustc
-// reads completed sessions newest first by the timestamp in their names. On macOS,
-// debug maps name unpacked object paths, so keep a set until a replacement links.
+// reads completed sessions newest first by the timestamp in their names. Reclaim
+// loose objects only for rlib-only units. Their callers' debug maps name archive members.
 //
 // Cargo reads fingerprints even on a no-op build. Reset their access times to detect
 // the next read (macOS and Linux relatime). Preserve the nanoseconds of the mtime
@@ -10,7 +10,7 @@
 // Cargo can hold separate locks for target and build directories. Rename under both
 // locks, fingerprints first. Take rustc's session locks before moving its caches.
 // Delete after releasing the locks.
-import { constants, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { constants, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { takeLock } from '../host/web/build-lock.mjs';
 import { basename, dirname, relative, resolve } from 'node:path';
@@ -23,7 +23,7 @@ const LEDGER = '.exact-sweep.json', LOG = '.exact-sweep.log', ASIDE = '.exact-sw
 const HASH = /-([0-9a-f]{16})(?:\.|$)/;
 // Incremental objects only: `<unit>-<16 hex>.<25 base-36 CGU id>.<7 base-36 tag>.rcgu.o`.
 // Non-incremental objects (`-cgu.<N>.rcgu.o`) carry codegen unit indices, not rebuild tags.
-const RCGU = /^(.+-[0-9a-f]{16})\.([0-9a-z]{25})\.([0-9a-z]{7})\.rcgu\.o$/;
+const RCGU = /^(.+-[0-9a-f]{16})\.[0-9a-z]{25}\.([0-9a-z]{7})\.rcgu\.o$/;
 const SESSION_PREFIX = 's-([0-9a-z]{10})-[0-9a-z]+';
 const SESSION = new RegExp(`^(${SESSION_PREFIX})-([0-9a-z]+)$`);
 const SESSION_LOCK = new RegExp(`^${SESSION_PREFIX}\\.lock$`);
@@ -87,49 +87,78 @@ const profiles = target => [target, ...readdirSync(target, { withFileTypes: true
   .flatMap(dir => readdirSync(dir, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => resolve(dir, e.name)))
   .filter(dir => existsSync(resolve(dir, '.fingerprint')));
 
-function supersedes(candidate, previous) {
-  if (candidate.size < previous.size) return false;
-  let newer = false;
-  for (const [id, old] of previous) {
-    const next = candidate.get(id);
-    if (!next) return false;
-    if (next.ino === old.ino) continue;
-    if (next.mtimeNs < old.mtimeNs) return false;
-    if (next.mtimeNs > old.mtimeNs) newer = true;
-  }
-  return newer;
+const isDirectory = path => lstatSync(path, { throwIfNoEntry: false })?.isDirectory();
+
+/** Read archive metadata by offset. Object payloads can be hundreds of MB. */
+function archiveTags(path, unit) {
+  let fd;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const file = fstatSync(fd), header = Buffer.alloc(60);
+    const read = (buffer, length, offset) => readSync(fd, buffer, 0, length, offset) === length;
+    if (!file.isFile() || !read(header, 8, 0) || header.toString('ascii', 0, 8) !== '!<arch>\n') return;
+    const tags = new Set();
+    let names;
+    for (let offset = 8; offset < file.size;) {
+      if (!read(header, 60, offset) || header.toString('ascii', 58) !== '`\n') return;
+      let name = header.toString('utf8', 0, 16).trimEnd();
+      const size = header.toString('ascii', 48, 58).trimEnd();
+      if (!/^\d+$/.test(size)) return;
+      const length = Number(size), start = offset + header.length;
+      offset = start + length + length % 2;
+      if (offset > file.size) return;
+      if (name === '/' || name === '/SYM64/') continue;
+      if (name === '//') {
+        names = Buffer.alloc(length);
+        if (!read(names, length, start)) return;
+        continue;
+      }
+      if (name.startsWith('#1/')) {
+        const count = name.slice(3);
+        if (!/^\d+$/.test(count) || Number(count) > length) return;
+        const bytes = Buffer.alloc(Number(count));
+        if (!read(bytes, bytes.length, start)) return;
+        name = bytes.toString('utf8').replace(/\0+$/, '');
+      } else if (name.startsWith('/')) {
+        if (!names || !/^\/\d+$/.test(name)) return;
+        const index = Number(name.slice(1)), end = names.indexOf('/\n', index);
+        if (end <= index || index && names[index - 1] !== 10) return;
+        name = names.toString('utf8', index, end);
+      } else {
+        name = name.replace(/\/$/, '');
+      }
+      // The object pattern excludes symbol tables and Rust metadata.
+      const match = RCGU.exec(name);
+      if (match?.[1] === unit) tags.add(match[2]);
+    }
+    return tags;
+  } catch {
+    return undefined;
+  } finally { if (fd !== undefined) closeSync(fd); }
 }
 
-/** An interrupted rebuild may publish a partial set or stop before linking. */
-function* supersededRcguObjects(depsDir) {
-  const byUnit = new Map();
-  for (const name of readdirSync(depsDir)) {
-    const match = RCGU.exec(name);
-    if (!match) continue;
-    const [, unit, id, tag] = match;
-    let tags = byUnit.get(unit);
-    if (!tags) { tags = new Map(); byUnit.set(unit, tags); }
-    let objects = tags.get(tag);
-    if (!objects) { objects = new Map(); tags.set(tag, objects); }
-    const path = resolve(depsDir, name);
-    const { ino, mtimeNs } = lstatSync(path, { bigint: true });
-    objects.set(id, { path, ino, mtimeNs });
-  }
-  for (const [unit, tags] of byUnit) {
-    if (tags.size < 2) continue;
-    let linked;
-    for (const name of [unit, ...['rlib', 'dylib', 'so', 'a'].map(ext => `lib${unit}.${ext}`)]) {
-      const output = lstatSync(resolve(depsDir, name), { bigint: true, throwIfNoEntry: false });
-      if (output?.isFile() && (linked === undefined || output.mtimeNs > linked)) linked = output.mtimeNs;
-    }
-    if (linked === undefined) continue;
-    const sets = [...tags.values()];
-    const replacements = sets.filter(objects => [...objects.values()].every(object => object.mtimeNs <= linked));
-    for (const objects of sets) {
-      if (replacements.some(candidate => candidate !== objects && supersedes(candidate, objects))) {
-        for (const { path } of objects.values()) yield path;
+function* obsoleteRcguObjects(depsDir) {
+  const objects = new Map(), outputs = new Map();
+  for (const entry of readdirSync(depsDir, { withFileTypes: true })) {
+    const { name } = entry;
+    if (name.endsWith('.rcgu.o')) {
+      const match = RCGU.exec(name);
+      if (!match || !entry.isFile()) continue;
+      const [, unit, tag] = match;
+      if (!objects.has(unit)) objects.set(unit, []);
+      objects.get(unit).push({ name, tag });
+    } else if (!name.endsWith('.rmeta') && !name.endsWith('.d')) {
+      for (const [, hash] of name.matchAll(/-([0-9a-f]{16})(?=[.-]|$)/g)) {
+        outputs.set(hash, outputs.has(hash) || !entry.isFile() ? null : name);
       }
     }
+  }
+  for (const [unit, files] of objects) {
+    const archive = `lib${unit}.rlib`;
+    if (outputs.get(unit.slice(-16)) !== archive) continue;
+    const tags = archiveTags(resolve(depsDir, archive), unit);
+    if (!tags?.size) continue;
+    for (const { name, tag } of files) if (!tags.has(tag)) yield resolve(depsDir, name);
   }
 }
 
@@ -153,35 +182,42 @@ function withSessionLocks(cache, names, lock, move) {
   } finally { for (const fd of fds) closeSync(fd); }
 }
 
-function sweepIncremental(incrementalDir, now, move, lock) {
+function sweepIncremental(incrementalDir, now, move, lock, { prefix, oldCaches, caches, remember }) {
   let removed = 0;
   for (const entry of readdirSync(incrementalDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const cache = resolve(incrementalDir, entry.name);
+    const stat = lstatSync(cache, { throwIfNoEntry: false });
+    if (!stat?.isDirectory()) continue;
+    const key = prefix + entry.name, recorded = oldCaches[key];
+    if (recorded !== undefined) caches[key] = recorded;
+    const lockFiles = new Set();
     const children = readdirSync(cache, { withFileTypes: true }).map(c => {
       const path = resolve(cache, c.name);
       const [, prefix, timestamp, state] = (c.isDirectory() ? SESSION.exec(c.name) : null) ?? [];
       const lockName = prefix ? `${prefix}.lock` : !c.isDirectory() && SESSION_LOCK.test(c.name) ? c.name : null;
-      return { path, timestamp, state, lockName, fresh: now - lstatSync(path).mtimeMs <= KEEP };
+      if (lockName && c.isFile()) lockFiles.add(lockName);
+      return { path, timestamp, state, lockName, mtime: lstatSync(path).mtimeMs };
     });
-    const fresh = children.length ? children.some(c => c.fresh) : now - statSync(cache).mtimeMs <= KEEP;
-    if (!fresh) {
+    const activity = children.reduce((latest, c) => Math.max(latest, c.mtime), recorded ?? (children.length ? -Infinity : stat.mtimeMs));
+    if (now - activity > KEEP) {
       const locks = new Set(children.map(c => c.lockName).filter(Boolean));
-      if (withSessionLocks(cache, locks, lock, () => move(cache))) removed++;
+      if (withSessionLocks(cache, locks, lock, () => move(cache))) {
+        delete caches[key];
+        removed++;
+      }
       continue;
     }
     // rustc encodes the timestamp as ten base-36 digits, so string order is chronological.
     let newest = '';
-    for (const { timestamp, state } of children) {
-      if (timestamp && state !== 'working' && timestamp > newest) newest = timestamp;
-    }
     const keepLocks = new Set();
     for (const { lockName, timestamp, state } of children) {
-      if (state !== 'working' && timestamp === newest) keepLocks.add(lockName);
+      if (!timestamp || state === 'working' || !lockFiles.has(lockName) || timestamp < newest) continue;
+      if (timestamp > newest) keepLocks.clear();
+      newest = timestamp;
+      keepLocks.add(lockName);
     }
-    const kept = children.filter(c => !c.lockName || keepLocks.has(c.lockName));
-    // Keep the activity that protects the rest of this cache from expiration.
-    if (kept.length && !kept.some(c => c.fresh)) continue;
+    const hasSurvivors = children.some(c => !c.lockName || keepLocks.has(c.lockName));
     const discard = new Map();
     for (const child of children) {
       if (!child.lockName || keepLocks.has(child.lockName)) continue;
@@ -193,15 +229,25 @@ function sweepIncremental(incrementalDir, now, move, lock) {
       for (const child of group) if (child.timestamp) move(child.path);
       for (const child of group) if (!child.timestamp) move(child.path);
     };
-    if (children.length && !kept.length) {
+    if (children.length && !hasSurvivors) {
       const moved = withSessionLocks(cache, discard.keys(), lock, () => {
         for (const group of discard.values()) moveGroup(group);
         move(cache);
       });
-      if (moved) removed += children.length + 1;
+      if (moved) {
+        delete caches[key];
+        removed += children.length + 1;
+      }
     } else {
       for (const [name, group] of discard) {
-        if (withSessionLocks(cache, [name], lock, () => moveGroup(group))) removed += group.length;
+        if (withSessionLocks(cache, [name], lock, () => {
+          // A sweep can be interrupted after removing the child that dates this cache.
+          if (activity > (caches[key] ?? -Infinity)) {
+            remember(key, activity);
+            caches[key] = activity;
+          }
+          moveGroup(group);
+        })) removed += group.length;
       }
     }
   }
@@ -215,12 +261,21 @@ export async function sweep(target, now = Date.now()) {
   if (own === null) return {};
   try {
     assertAccessTimes(target, resetAccess);
-    const path = resolve(target, LEDGER), old = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')).units : {};
-    const units = {}, removed = {}, aside = resolve(target, ASIDE, String(now));
+    const path = resolve(target, LEDGER), old = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
+    const { units: oldUnits = {}, caches: oldCaches = {} } = old;
+    const units = {}, caches = {}, removed = {}, aside = resolve(target, ASIDE, String(now));
+    const save = ledger => {
+      writeFileSync(`${path}.tmp`, JSON.stringify(ledger));
+      renameSync(`${path}.tmp`, path);
+    };
+    const remember = (key, activity) => {
+      oldCaches[key] = activity;
+      save({ ...old, caches: oldCaches });
+    };
     let n = 0;
     const move = p => { mkdirSync(aside, { recursive: true }); renameSync(p, resolve(aside, String(n++))); };
     for (const dir of profiles(target)) {
-      const at = relative(target, dir), locks = [];
+      const at = relative(target, dir), prefix = `${at}#`, locks = [];
       try {
         for (const name of ['.cargo-lock', '.cargo-build-lock']) {
           const fd = lock(resolve(dir, name));
@@ -228,7 +283,8 @@ export async function sweep(target, now = Date.now()) {
           locks.push(fd);
         }
         if (locks.length < 2) {
-          for (const [key, t] of Object.entries(old)) if (key.startsWith(at + '#')) units[key] = t;
+          for (const [key, t] of Object.entries(oldUnits)) if (key.startsWith(prefix)) units[key] = t;
+          for (const [key, t] of Object.entries(oldCaches)) if (key.startsWith(prefix)) caches[key] = t;
           continue;
         }
         const stale = new Set(), fingerprints = resolve(dir, '.fingerprint');
@@ -236,25 +292,24 @@ export async function sweep(target, now = Date.now()) {
           const hash = HASH.exec(name)?.[1];
           if (!hash) continue;
           const unit = resolve(fingerprints, name), files = readdirSync(unit).map(f => resolve(unit, f));
-          const key = `${at}#${hash}`, read = files.some(f => statSync(f).atimeMs > RESET * 1000);
-          units[key] = read || !(key in old) ? now : old[key];
+          const key = prefix + hash, read = files.some(f => statSync(f).atimeMs > RESET * 1000);
+          units[key] = read || !(key in oldUnits) ? now : oldUnits[key];
           if (now - units[key] > KEEP) { stale.add(hash); delete units[key]; move(unit); continue; }
           for (const f of files) resetAccess(f);
         }
         let count = stale.size;
         for (const sub of ['deps', 'build', 'examples']) {
           const d = resolve(dir, sub);
-          if (existsSync(d)) for (const name of readdirSync(d)) if (stale.has(HASH.exec(name)?.[1])) move(resolve(d, name));
+          if (sub === 'deps' ? !isDirectory(d) : !existsSync(d)) continue;
+          if (stale.size) for (const name of readdirSync(d)) if (stale.has(HASH.exec(name)?.[1])) move(resolve(d, name));
+          if (sub === 'deps') for (const path of obsoleteRcguObjects(d)) { move(path); count++; }
         }
-        const deps = resolve(dir, 'deps');
-        if (existsSync(deps)) for (const path of supersededRcguObjects(deps)) { move(path); count++; }
         const incremental = resolve(dir, 'incremental');
-        if (existsSync(incremental)) count += sweepIncremental(incremental, now, move, lock);
+        if (isDirectory(incremental)) count += sweepIncremental(incremental, now, move, lock, { prefix, oldCaches, caches, remember });
         if (count) removed[at] = count;
       } finally { for (const fd of locks) closeSync(fd); }
     }
-    writeFileSync(`${path}.tmp`, JSON.stringify({ at: now, units }));
-    renameSync(`${path}.tmp`, path);
+    save({ at: now, units, caches });
     rmSync(resolve(target, ASIDE), { recursive: true, force: true });
     writeFileSync(resolve(target, LOG), '');
     return removed;
