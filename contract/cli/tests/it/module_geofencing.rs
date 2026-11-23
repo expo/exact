@@ -6,6 +6,7 @@
 //! invocation's outcome, keeping an undelivered transition; and a
 //! `--wake` entry delivered cold, or at a launch with a view.
 
+use crate::source::{boxed, Source};
 use exact_runner::{agent, Runner, Value};
 use serde_json::{json, Value as Json};
 use std::path::{Path, PathBuf};
@@ -139,10 +140,10 @@ const sources: Sources = { pull: async () => ({ n: 7 }) };
 export const answer: Answer = (source, args, store, storage, native) => sources[source](args, store, storage, native);
 "#;
 
-fn boot(plan: exact_plan::Plan, target: &str) -> Runner<Granted> {
+fn boot(plan: exact_plan::Plan, target: &str) -> Runner<Source> {
     let mut r = Runner::boot(
         plan,
-        Granted,
+        boxed(Granted),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -152,28 +153,28 @@ fn boot(plan: exact_plan::Plan, target: &str) -> Runner<Granted> {
     r
 }
 
-fn logs(r: &Runner<Granted>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     agent::handle(r, r#"{"op":"logs"}"#)
 }
 
-fn state(r: &Runner<Granted>) -> Json {
+fn state(r: &Runner<Source>) -> Json {
     serde_json::from_str(&agent::handle(r, r#"{"op":"state"}"#)).unwrap()
 }
 
-fn fences(r: &Runner<Granted>) -> Json {
+fn fences(r: &Runner<Source>) -> Json {
     state(r)["geofences"].clone()
 }
 
-fn slot(r: &Runner<Granted>, name: &str) -> String {
+fn slot(r: &Runner<Source>, name: &str) -> String {
     format!("{:?}", r.resource(name).or_else(|| r.slot(name)))
 }
 
-fn by(r: &mut Runner<Granted>, ms: f64) {
+fn by(r: &mut Runner<Source>, ms: f64) {
     let at = r.now_ms() + ms;
     r.advance(at).unwrap();
 }
 
-fn tap(r: &mut Runner<Granted>, ticket: u64, choice: Option<&str>) -> String {
+fn tap(r: &mut Runner<Source>, ticket: u64, choice: Option<&str>) -> String {
     let choice = choice
         .map(|c| format!(r#","choice":"{c}""#))
         .unwrap_or_default();
@@ -182,14 +183,14 @@ fn tap(r: &mut Runner<Granted>, ticket: u64, choice: Option<&str>) -> String {
         .0
 }
 
-fn prefer(r: &mut Runner<Granted>, name: &str, state: &str) {
+fn prefer(r: &mut Runner<Source>, name: &str, state: &str) {
     let request = json!({ "op": "prefer", "permission": { name: state } }).to_string();
     let (_, reply) = r.extension_agent(&request).expect("a prefer");
     reply.unwrap_or_else(|e| panic!("{e}"));
 }
 
 /// The permission state the runner reads for `name`.
-fn permission(r: &Runner<Granted>, name: &str) -> String {
+fn permission(r: &Runner<Source>, name: &str) -> String {
     let journal: Json = serde_json::from_str(&logs(r)).unwrap();
     let line = format!("permission {name}: ");
     (journal["lines"].as_array().into_iter().flatten().rev())
@@ -204,7 +205,7 @@ thread_local! {
 
 /// The host's part: held module work run, released work run when its
 /// ticket is answered, readers asked again.
-fn pump(r: &mut Runner<Granted>) {
+fn pump(r: &mut Runner<Source>) {
     for _ in 0..8 {
         let outs = r.take_requests();
         let released = r.release_work();
@@ -226,14 +227,14 @@ fn pump(r: &mut Runner<Granted>) {
     }
 }
 
-fn run(r: &mut Runner<Granted>, ticket: u64, dispatch: exact_runner::Dispatch) {
+fn run(r: &mut Runner<Source>, ticket: u64, dispatch: exact_runner::Dispatch) {
     if let exact_runner::Dispatch::Run(exact_runner::Work::Now(work)) = dispatch {
         r.fulfill(ticket, work()).unwrap();
     }
 }
 
 /// The permission tickets held now, oldest first, by what each asks.
-fn tickets(r: &Runner<Granted>) -> Vec<(u64, String)> {
+fn tickets(r: &Runner<Source>) -> Vec<(u64, String)> {
     (r.device_holds().iter())
         .filter(|h| h.capability == "permission")
         .map(|h| {

@@ -4,7 +4,8 @@
 //! preferred it answers its declared default, `[]`; on the web, which has
 //! no geocoder, the status reads `available` false and each send fails.
 
-use exact_runner::{agent, Runner, Value};
+use crate::source::{boxed, NoData, Source};
+use exact_runner::{agent, Runner};
 use std::path::{Path, PathBuf};
 
 struct App(PathBuf);
@@ -63,17 +64,10 @@ component App
           text testId="count" "none"
 "#;
 
-struct NoData;
-impl exact_runner::DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, exact_runner::DataError> {
-        Err(exact_runner::DataError::UnknownSource(source.into()))
-    }
-}
-
-fn boot(app: &App, target: &str) -> Runner<NoData> {
+fn boot(app: &App, target: &str) -> Runner<Source> {
     let mut r = Runner::boot(
         app.plan(),
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -83,15 +77,15 @@ fn boot(app: &App, target: &str) -> Runner<NoData> {
     r
 }
 
-fn logs(r: &Runner<NoData>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     agent::handle(r, r#"{"op":"logs"}"#)
 }
 
-fn slot(r: &Runner<NoData>, name: &str) -> String {
+fn slot(r: &Runner<Source>, name: &str) -> String {
     format!("{:?}", r.resource(name).or_else(|| r.slot(name)))
 }
 
-fn pump(r: &mut Runner<NoData>) {
+fn pump(r: &mut Runner<Source>) {
     for _ in 0..8 {
         let outs = r.take_requests();
         let (asked, error) = r.apply_announced();

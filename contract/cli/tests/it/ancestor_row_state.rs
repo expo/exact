@@ -5,6 +5,7 @@
 //! Incremental evaluation answers what full evaluation does. c39fc7ffc fixed
 //! the nested rows; these are the shapes the Brooks port found it in.
 
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, PropValue};
 use exact_plan::Value;
 use exact_runner::{DataError, DataSource, Event, Runner};
@@ -70,11 +71,11 @@ component Count
     text `${n}` testId=`child-${id}`
 "#;
 
-fn boot(full: bool) -> Runner<Items> {
+fn boot(full: bool) -> Runner<Source> {
     let plan = contract::compile(ROWS).unwrap_or_else(|e| panic!("{e}"));
     let mut r = Runner::boot(
         plan,
-        Items,
+        boxed(Items),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -84,7 +85,7 @@ fn boot(full: bool) -> Runner<Items> {
     r
 }
 
-fn text_of(r: &Runner<Items>, id: &str) -> String {
+fn text_of(r: &Runner<Source>, id: &str) -> String {
     let k = r.kernel();
     let key = k.find_by_test_id(id)[0];
     k.node_by_key(key)
@@ -98,14 +99,14 @@ fn text_of(r: &Runner<Items>, id: &str) -> String {
         .unwrap()
 }
 
-fn press(r: &mut Runner<Items>, id: &str) {
+fn press(r: &mut Runner<Source>, id: &str) {
     let k = r.kernel();
     let view = k.node_by_key(k.find_by_test_id(id)[0]).unwrap().id;
     r.dispatch(view, Event::Press).unwrap();
 }
 
 /// Every reader of each row's `n`, in order: direct, keyed, arm, child.
-fn readers(r: &Runner<Items>) -> Vec<String> {
+fn readers(r: &Runner<Source>) -> Vec<String> {
     ["a", "b"]
         .iter()
         .flat_map(|id| {

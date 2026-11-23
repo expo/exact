@@ -2,16 +2,9 @@
 //! kernel's `Control`, controlled like HTML, its `input`/`change` carrying a
 //! bool; a text field's `input` is per keystroke and `change` is commit.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, NodeType, PropId};
 use exact_runner::{ControlValue, DataError, DataSource, Event, Runner, RunnerError, Value};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _args: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.to_string()))
-    }
-}
 
 const SETTINGS: &str = r#"component App
   state muted = false
@@ -36,10 +29,10 @@ const SETTINGS: &str = r#"component App
       text sent testId="sent"
 "#;
 
-fn boot(src: &str) -> Runner<NoData> {
+fn boot(src: &str) -> Runner<Source> {
     Runner::boot(
         contract::compile(src).unwrap_or_else(|e| panic!("{e}")),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -47,12 +40,12 @@ fn boot(src: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn view_of(r: &Runner<NoData>, test_id: &str) -> u32 {
+fn view_of(r: &Runner<Source>, test_id: &str) -> u32 {
     let key = r.kernel().find_by_test_id(test_id)[0];
     r.kernel().node_by_key(key).unwrap().id
 }
 
-fn checked(r: &Runner<NoData>, test_id: &str) -> (Option<bool>, Option<bool>) {
+fn checked(r: &Runner<Source>, test_id: &str) -> (Option<bool>, Option<bool>) {
     let node = r.kernel().node(view_of(r, test_id)).unwrap();
     (
         node.props.bool(PropId::Checked),
@@ -118,7 +111,7 @@ fn view_binders_preserve_positional_words() {
     for (plan, prop, expected) in compiled {
         let r = Runner::boot(
             plan,
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -408,7 +401,7 @@ fn a_text_fields_type_is_a_choice_between_text_fields_types() {
         )
     };
     let mut r = boot(&field("shown ? \"text\" : \"password\""));
-    let kind = |r: &Runner<NoData>| {
+    let kind = |r: &Runner<Source>| {
         let node = r.kernel().node(view_of(r, "secret")).unwrap();
         assert_eq!(node.node_type, NodeType::TextInput);
         node.props.str(PropId::Type).map(str::to_string)
@@ -481,10 +474,10 @@ component App
       text `${moves}` testId="moves"
 "#;
 
-fn themed() -> Runner<Themes> {
+fn themed() -> Runner<Source> {
     Runner::boot(
         contract::compile(THEME).unwrap_or_else(|e| panic!("{e}")),
-        Themes,
+        boxed(Themes),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -781,7 +774,7 @@ fn a_date_carries_htmls_value_format_within_min_and_max() {
     assert_eq!(node.props.str(PropId::Type), Some("date"));
     assert_eq!(node.props.str(PropId::Min), Some("2026-01-01"));
     r.dispatch(due, Event::Change("2026-11-05".into())).unwrap();
-    let value = |r: &Runner<NoData>, id| {
+    let value = |r: &Runner<Source>, id| {
         r.kernel()
             .node(id)
             .unwrap()
@@ -920,7 +913,7 @@ fn spellcheck_and_autocorrect_take_a_bool_as_their_words() {
     let mut r = boot(
         "component App\n  state on = false\n  action flip\n    on = not on\n  view\n    column\n      input spellcheck=false autocorrect=false testId=\"off\"\n      input spellcheck=on autocorrect=on testId=\"bound\"\n      input spellcheck=\"true\" autocorrect=\"on\" testId=\"words\"\n      button press=flip testId=\"flip\"\n        text \"Flip\"\n",
     );
-    let words = |r: &Runner<NoData>, id: &str| {
+    let words = |r: &Runner<Source>, id: &str| {
         let node = r.kernel().node(view_of(r, id)).unwrap();
         (
             node.props.str(PropId::Spellcheck).map(str::to_string),
@@ -1103,7 +1096,7 @@ fn an_indeterminate_progress_is_a_busy_control_of_twenty_points() {
     r.kernel_mut()
         .compute_layout(root, exact_kernel::Offer::definite(320.0, 480.0))
         .unwrap();
-    let size = |r: &Runner<NoData>, t: &str| {
+    let size = |r: &Runner<Source>, t: &str| {
         let f = r.kernel().node(view_of(r, t)).unwrap().frame;
         (f.width, f.height)
     };
@@ -1149,7 +1142,7 @@ fn a_progress_with_a_value_is_the_determinate_bar() {
     r.kernel_mut()
         .compute_layout(root, exact_kernel::Offer::definite(320.0, 480.0))
         .unwrap();
-    let size = |r: &Runner<NoData>, t: &str| {
+    let size = |r: &Runner<Source>, t: &str| {
         let f = r.kernel().node(view_of(r, t)).unwrap().frame;
         (f.width, f.height)
     };
@@ -1185,7 +1178,7 @@ fn a_range_and_a_determinate_progress_are_full_width_by_an_implied_row() {
           input type="range" testId="fit-range"
 "#,
     );
-    let row = |r: &Runner<NoData>, id: &str| {
+    let row = |r: &Runner<Source>, id: &str| {
         let style = r.kernel().node(view_of(r, id)).unwrap().style;
         (
             style
@@ -1205,7 +1198,7 @@ fn a_range_and_a_determinate_progress_are_full_width_by_an_implied_row() {
     r.kernel_mut()
         .compute_layout(root, exact_kernel::Offer::definite(320.0, 480.0))
         .unwrap();
-    let width = |r: &Runner<NoData>, id: &str| r.kernel().node(view_of(r, id)).unwrap().frame.width;
+    let width = |r: &Runner<Source>, id: &str| r.kernel().node(view_of(r, id)).unwrap().frame.width;
     assert_eq!(width(&r, "range"), 300.0);
     assert_eq!(width(&r, "bar"), 300.0);
     assert_eq!(width(&r, "narrow"), 90.0);
@@ -1227,7 +1220,7 @@ fn a_select_is_no_wider_than_what_holds_it() {
     let mut r = boot(&format!(
         "component App\n  state v = \"all\"\n  action pick(s: string)\n    v = s\n  view\n    column width=30 testId=\"root\"\n      select value=v change=pick aria-label=\"Scope\" align-self=\"flex-start\" testId=\"held\"\n        {long}\n      select value=v change=pick aria-label=\"Scope\" align-self=\"flex-start\" max-width=\"none\" testId=\"free\"\n        {long}\n"
     ));
-    let row = |r: &Runner<NoData>, id: &str| {
+    let row = |r: &Runner<Source>, id: &str| {
         let style = r.kernel().node(view_of(r, id)).unwrap().style;
         (
             style
@@ -1243,7 +1236,7 @@ fn a_select_is_no_wider_than_what_holds_it() {
     r.kernel_mut()
         .compute_layout(root, exact_kernel::Offer::definite(320.0, 480.0))
         .unwrap();
-    let width = |r: &Runner<NoData>, id: &str| r.kernel().node(view_of(r, id)).unwrap().frame.width;
+    let width = |r: &Runner<Source>, id: &str| r.kernel().node(view_of(r, id)).unwrap().frame.width;
     // Its own width here is the 46 a select with no host to measure it has.
     assert_eq!(width(&r, "free"), 46.0);
     assert_eq!(width(&r, "held"), 30.0);

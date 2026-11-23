@@ -3,19 +3,10 @@
 //! the `viewportFit` prop and `Dimension::Env` rows, and the insets the host
 //! sets move the content (LLP 1001 §2, LLP 1006 §2).
 
+use crate::source::{boxed, NoData};
 use exact_kernel::{Dimension, Edge, Env, Kernel, Offer, PropId};
-use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Runner};
+use exact_runner::Runner;
 use std::path::Path;
-
-#[derive(Default)]
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
 
 fn corpus(name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -27,10 +18,10 @@ fn corpus(name: &str) -> String {
 #[test]
 fn viewport_fit_and_env_lengths_reach_the_kernel_and_follow_the_insets() {
     let plan = contract::compile(&corpus("insets.contract")).unwrap();
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -68,10 +59,10 @@ fn viewport_fit_and_env_lengths_reach_the_kernel_and_follow_the_insets() {
 #[test]
 fn resizes_content_reaches_the_kernel_and_a_bottom_bar_follows_the_viewport() {
     let plan = contract::compile(&corpus("keyboard-bar.contract")).unwrap();
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -105,10 +96,10 @@ fn resizes_content_reaches_the_kernel_and_a_bottom_bar_follows_the_viewport() {
 #[test]
 fn dismiss_reaches_the_host_as_a_blur_command() {
     let plan = contract::compile(&corpus("keyboard-bar.contract")).unwrap();
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -131,10 +122,10 @@ fn dismiss_reaches_the_host_as_a_blur_command() {
 #[test]
 fn comparison_lengths_compile_and_follow_the_insets() {
     let src = "component A\n  view\n    column testId=\"root\" height=\"100%\"\n      column testId=\"bar\" height=49 padding=\"0 0 clamp(15px, env(safe-area-inset-bottom), 60px)\"\n      column testId=\"fab\" position=\"absolute\" height=56 bottom=\"calc(clamp(15px, env(safe-area-inset-bottom), 60px) + 15px + 44px)\"\n";
-    let plan = contract::bake(contract::compile(src).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

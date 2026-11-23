@@ -4,6 +4,7 @@
 //! prop left with nothing and journaling each refusal as the prop is
 //! written (D2).
 
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, PropId};
 use exact_plan::Value;
 use exact_runner::page::Platform;
@@ -21,18 +22,18 @@ impl DataSource for Grants {
     }
 }
 
-fn boot(platform: Platform, grants: &'static str) -> Runner<Grants> {
+fn boot(platform: Platform, grants: &'static str) -> Runner<Source> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../corpus/drag-out.contract");
     boot_source(&std::fs::read_to_string(path).unwrap(), platform, grants)
 }
 
-fn boot_source(src: &str, platform: Platform, grants: &'static str) -> Runner<Grants> {
+fn boot_source(src: &str, platform: Platform, grants: &'static str) -> Runner<Source> {
     let plan = contract::compile(src).unwrap();
-    let plan = contract::bake(plan, Grants(grants)).unwrap();
+    let plan = contract::bake(plan, boxed(Grants(grants))).unwrap();
     platform.boot(|| {
         Runner::boot(
             plan,
-            Grants(grants),
+            boxed(Grants(grants)),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -41,13 +42,13 @@ fn boot_source(src: &str, platform: Platform, grants: &'static str) -> Runner<Gr
     })
 }
 
-fn view(r: &Runner<Grants>, test_id: &str) -> u32 {
+fn view(r: &Runner<Source>, test_id: &str) -> u32 {
     let key = r.kernel().find_by_test_id(test_id)[0];
     r.kernel().node_by_key(key).unwrap().id
 }
 
 /// `(draggable, text, url, files)` of a node, as the host reads them.
-fn drag(r: &Runner<Grants>, test_id: &str) -> (Option<bool>, String, String, String) {
+fn drag(r: &Runner<Source>, test_id: &str) -> (Option<bool>, String, String, String) {
     let key = r.kernel().find_by_test_id(test_id)[0];
     let props = r.kernel().node_by_key(key).unwrap().props;
     let text = |p| props.str(p).unwrap_or_default().to_string();
@@ -60,14 +61,14 @@ fn drag(r: &Runner<Grants>, test_id: &str) -> (Option<bool>, String, String, Str
 }
 
 /// The prop a node holds, or none where the runner cleared it.
-fn held(r: &Runner<Grants>, test_id: &str, prop: PropId) -> Option<String> {
+fn held(r: &Runner<Source>, test_id: &str, prop: PropId) -> Option<String> {
     let key = r.kernel().find_by_test_id(test_id)[0];
     let props = r.kernel().node_by_key(key).unwrap().props;
     props.str(prop).map(str::to_string)
 }
 
 /// The journal's drag refusals, without their clock stamps.
-fn refusals(r: &Runner<Grants>) -> Vec<String> {
+fn refusals(r: &Runner<Source>) -> Vec<String> {
     r.journal()
         .filter_map(|l| l.find("drag: refused").map(|at| l[at..].to_string()))
         .collect()

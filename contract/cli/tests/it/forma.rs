@@ -5,6 +5,7 @@
 //! what the view may name and every role override.
 
 use crate::scratch::Scratch;
+use crate::source::{boxed, Source};
 use exact_kernel::{ColorValue, Kernel, RowValue, StyleId};
 use exact_plan::{Plan, Value};
 use exact_runner::{DataError, DataSource, Runner};
@@ -27,10 +28,10 @@ pub(super) fn app(name: &str, files: &[(&str, &str)]) -> Scratch {
 }
 
 fn colour(plan: Plan, id: &str, row: StyleId) -> ColorValue {
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -440,11 +441,11 @@ fn a_pin_selects_its_slice_and_a_boundary_sets_inherited_text_again() {
     );
 }
 
-pub(super) fn booted(plan: Plan) -> Runner<NoData> {
-    let plan = contract::bake(plan, NoData).unwrap();
+pub(super) fn booted(plan: Plan) -> Runner<Source> {
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -452,7 +453,7 @@ pub(super) fn booted(plan: Plan) -> Runner<NoData> {
     .unwrap()
 }
 
-pub(super) fn row(r: &Runner<NoData>, id: &str, style: StyleId) -> ColorValue {
+pub(super) fn row(r: &Runner<Source>, id: &str, style: StyleId) -> ColorValue {
     let key = r.kernel().find_by_test_id(id)[0];
     match r.kernel().node_by_key(key).unwrap().computed(style) {
         RowValue::ColorValue(c) => c,
@@ -627,7 +628,7 @@ fn a_changed_inherited_colour_is_set_again_at_a_boundary_below() {
 
 const TWO_AXES: &str = "forma t\n\naxes\n  dark-style = black | dim\n  density = cozy | compact\n\ntheme\n  ink = #111111\n    when dark-style=dim: #222222\n    when density=compact: #333333\n    when dark-style=dim density=compact: #444444\n";
 
-pub(super) fn press(r: &mut Runner<NoData>, id: &str) {
+pub(super) fn press(r: &mut Runner<Source>, id: &str) {
     let view = {
         let k = r.kernel();
         k.node_by_key(k.find_by_test_id(id)[0]).unwrap().id
@@ -645,7 +646,7 @@ fn an_inner_pin_takes_the_axis_its_outer_pin_moves() {
         ],
     );
     let mut r = booted(contract::compile_path(&path).unwrap());
-    fn mode(r: &Runner<NoData>) -> String {
+    fn mode(r: &Runner<Source>) -> String {
         let key = r.kernel().find_by_test_id("inner")[0];
         format!(
             "{:?}",
@@ -703,7 +704,7 @@ fn a_token_edit_skips_retired_rows_sets_roles_and_stays_its_plans() {
     assert_eq!(row(&r, "kept", StyleId::TextColor), parsed("#ff0000"));
     // A role's edit sets the session's overrides (LLP 1121 stage 5).
     let canvas = exact_kernel::style::roles::role("Canvas").unwrap();
-    let overridden = |r: &Runner<NoData>| {
+    let overridden = |r: &Runner<Source>| {
         let _roles = r.bind_roles();
         exact_kernel::style::roles::overridden(canvas)
     };
@@ -911,13 +912,13 @@ fn a_reload_carries_the_windows_modes_the_new_design_has() {
     let mut r = booted(contract::compile_path(&path).unwrap());
     r.set_modes(&[("dark-style", "dim"), ("density", "compact")])
         .unwrap();
-    let reload = |r: &Runner<NoData>, forma: &str| {
+    let reload = |r: &Runner<Source>, forma: &str| {
         std::fs::write(path.with_file_name("app.forma"), forma).unwrap();
-        let plan = contract::bake(contract::compile_path(&path).unwrap(), NoData).unwrap();
+        let plan = contract::bake(contract::compile_path(&path).unwrap(), boxed(NoData)).unwrap();
         let carried = r.carry();
         Runner::boot_carrying(
             plan,
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             &carried,
             Default::default(),
@@ -1089,7 +1090,7 @@ fn wide_mark_cost() {
         &[("app.forma", &p3), ("app.contract", &view)],
     );
     let mut r = booted(contract::compile_path(&path).unwrap());
-    let id = |r: &Runner<NoData>, t: &str| {
+    let id = |r: &Runner<Source>, t: &str| {
         let k = r.kernel();
         k.node_by_key(k.find_by_test_id(t)[0]).unwrap().id
     };
@@ -1347,7 +1348,7 @@ fn a_batch_sets_a_role_override_without_a_plan() {
         exact_kernel::style::roles::role("Canvas").unwrap(),
         exact_kernel::style::roles::role("AccentColor").unwrap(),
     );
-    let overridden = |r: &Runner<NoData>, id| {
+    let overridden = |r: &Runner<Source>, id| {
         let _roles = r.bind_roles();
         exact_kernel::style::roles::overridden(id)
     };

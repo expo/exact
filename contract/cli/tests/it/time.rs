@@ -2,6 +2,7 @@
 //! boot, then one commit when the host says it; refused when implausible.
 //! And tasks that wait for state (LLP 1092 D7–D11), below.
 use crate::scratch::Scratch;
+use crate::source::{boxed, Source};
 use exact_kernel::Kernel;
 use exact_runner::{DataError, DataSource, Runner, RunnerError, Value};
 
@@ -14,7 +15,7 @@ impl DataSource for NoData {
 
 const APP: &str = "shape Time\n  epochAtZero: number\n  utcOffset: number\ncomponent App\n  resource time = exactTime() as shape Time\n  derive date = time.epochAtZero + performanceNow()\n  view\n    text `${date}/${time.utcOffset}` testId=\"date\"\n";
 
-fn text(r: &Runner<NoData>) -> String {
+fn text(r: &Runner<Source>) -> String {
     let key = r.kernel().find_by_test_id("date")[0];
     let node = r.kernel().node_by_key(key).unwrap();
     node.props
@@ -25,10 +26,10 @@ fn text(r: &Runner<NoData>) -> String {
 
 #[test]
 fn the_date_arrives_as_one_commit_and_bad_facts_are_refused() {
-    let plan = contract::bake(contract::compile(APP).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(APP).unwrap(), boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -63,10 +64,10 @@ component Clock
   view
     text `${time.epochAtZero}/${time.utcOffset}` testId="date"
 "#;
-    let plan = contract::bake(contract::compile(app).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(app).unwrap(), boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -82,12 +83,12 @@ component Clock
 /// fact boots on zero, as before.
 #[test]
 fn a_date_known_at_launch_is_read_from_the_first_frame() {
-    let plan = contract::bake(contract::compile(APP).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(APP).unwrap(), boxed(NoData)).unwrap();
     let boot = |time| {
         exact_runner::time::launching(time, || {
             Runner::boot(
                 plan.clone(),
-                NoData,
+                boxed(NoData),
                 Kernel::with_monospace(),
                 Default::default(),
                 "/",
@@ -111,7 +112,7 @@ fn a_date_known_at_launch_is_read_from_the_first_frame() {
     let outside = || {
         Runner::boot(
             plan.clone(),
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -133,7 +134,7 @@ fn a_date_known_at_launch_is_read_from_the_first_frame() {
 #[test]
 fn a_live_clock_known_at_launch_starts_a_fresh_runners_clock() {
     const TIMER_APP: &str = "component App\n  state ticks = 0\n  task tick mount\n    after(10000, step)\n  action step\n    ticks = ticks + 1\n  view\n    text `${ticks}/${performanceNow()}` testId=\"date\"\n";
-    let plan = contract::bake(contract::compile(TIMER_APP).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(TIMER_APP).unwrap(), boxed(NoData)).unwrap();
     let boot = |clock: Option<f64>| {
         let launch = exact_runner::time::Launch {
             clock,
@@ -142,7 +143,7 @@ fn a_live_clock_known_at_launch_starts_a_fresh_runners_clock() {
         exact_runner::time::launching_with(launch, || {
             Runner::boot(
                 plan.clone(),
-                NoData,
+                boxed(NoData),
                 Kernel::with_monospace(),
                 Default::default(),
                 "/",
@@ -172,7 +173,7 @@ fn a_live_clock_known_at_launch_starts_a_fresh_runners_clock() {
 #[test]
 fn a_place_known_at_launch_is_read_from_the_first_frame() {
     const PLACE_APP: &str = "shape Time\n  locale: string\n  timeZone: string\n  seed: number\ncomponent App\n  resource time = exactTime() as shape Time\n  view\n    text `${time.locale}/${time.timeZone}/${time.seed}` testId=\"date\"\n";
-    let plan = contract::bake(contract::compile(PLACE_APP).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(PLACE_APP).unwrap(), boxed(NoData)).unwrap();
     let boot = |place: Option<exact_runner::time::Place>| {
         let launch = exact_runner::time::Launch {
             place,
@@ -181,7 +182,7 @@ fn a_place_known_at_launch_is_read_from_the_first_frame() {
         exact_runner::time::launching_with(launch, || {
             Runner::boot(
                 plan.clone(),
-                NoData,
+                boxed(NoData),
                 Kernel::with_monospace(),
                 Default::default(),
                 "/",
@@ -211,7 +212,7 @@ fn a_place_known_at_launch_is_read_from_the_first_frame() {
 #[test]
 fn the_format_locale_answers_the_locale_until_a_host_tells_one() {
     const APP: &str = "shape Time\n  locale: string\n  formatLocale: string\ncomponent App\n  resource time = exactTime() as shape Time\n  view\n    text `${time.locale}/${time.formatLocale}` testId=\"date\"\n";
-    let plan = contract::bake(contract::compile(APP).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(APP).unwrap(), boxed(NoData)).unwrap();
     let boot = |place: Option<exact_runner::time::Place>| {
         let launch = exact_runner::time::Launch {
             place,
@@ -220,7 +221,7 @@ fn the_format_locale_answers_the_locale_until_a_host_tells_one() {
         exact_runner::time::launching_with(launch, || {
             Runner::boot(
                 plan.clone(),
-                NoData,
+                boxed(NoData),
                 Kernel::with_monospace(),
                 Default::default(),
                 "/",
@@ -274,7 +275,8 @@ fn the_bake_compiles_no_answer_asked_at_its_unknown_date() {
         }
     }
     let ready = || std::rc::Rc::new(std::cell::Cell::new(true));
-    let plan = contract::bake(contract::compile(LIBRARY).unwrap(), Library(ready())).unwrap();
+    let plan =
+        contract::bake(contract::compile(LIBRARY).unwrap(), boxed(Library(ready()))).unwrap();
     let compiled = |name: &str| {
         plan.resources
             .iter()
@@ -292,14 +294,14 @@ fn the_bake_compiles_no_answer_asked_at_its_unknown_date() {
     let mut r = exact_runner::time::launching(Some(at), || {
         Runner::boot(
             plan.clone(),
-            Library(loaded.clone()),
+            boxed(Library(loaded.clone())),
             Kernel::with_monospace(),
             Default::default(),
             "/",
         )
     })
     .unwrap();
-    let shown = |r: &Runner<Library>| {
+    let shown = |r: &Runner<Source>| {
         let key = r.kernel().find_by_test_id("date")[0];
         let node = r.kernel().node_by_key(key).unwrap();
         node.props
@@ -388,7 +390,7 @@ component App
             })
         }
     }
-    let plan = contract::bake(contract::compile(APP).unwrap(), Source).unwrap();
+    let plan = contract::bake(contract::compile(APP).unwrap(), boxed(Source)).unwrap();
     let compiled = |name: &str| {
         plan.resources
             .iter()
@@ -441,7 +443,7 @@ fn the_resources_reading_the_date_are_found_in_one_pass() {
     let plan = contract::compile(&src).unwrap();
     let r = Runner::boot(
         plan,
-        Source,
+        boxed(Source),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -458,10 +460,10 @@ const PLACED: &str = "shape Time\n  epochAtZero: number\n  locale: string\n  tim
 
 #[test]
 fn the_locale_and_zone_arrive_beside_the_date_and_bad_ones_are_refused() {
-    let plan = contract::bake(contract::compile(PLACED).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(PLACED).unwrap(), boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -501,10 +503,10 @@ fn the_locale_and_zone_arrive_beside_the_date_and_bad_ones_are_refused() {
 #[test]
 fn the_launch_seed_arrives_as_a_host_fact_and_nothing_else_is_one() {
     const SEEDED: &str = "shape Time\n  seed: number\n  locale: string\ncomponent App\n  resource time = exactTime() as shape Time\n  view\n    text `${time.seed}|${time.locale}` testId=\"date\"\n";
-    let plan = contract::bake(contract::compile(SEEDED).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(SEEDED).unwrap(), boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -595,11 +597,15 @@ impl DataSource for Gated {
     }
 }
 
-fn gated(src: &str, data: Gated) -> Runner<Gated> {
-    let plan = contract::bake(contract::compile(src).unwrap(), Gated { flag: data.flag }).unwrap();
+fn gated(src: &str, data: Gated) -> Runner<Source> {
+    let plan = contract::bake(
+        contract::compile(src).unwrap(),
+        boxed(Gated { flag: data.flag }),
+    )
+    .unwrap();
     Runner::boot(
         plan,
-        data,
+        boxed(data),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -607,7 +613,7 @@ fn gated(src: &str, data: Gated) -> Runner<Gated> {
     .unwrap()
 }
 
-fn num(r: &Runner<Gated>, slot: &str) -> f64 {
+fn num(r: &Runner<Source>, slot: &str) -> f64 {
     r.slot(slot).and_then(Value::as_number).unwrap()
 }
 
@@ -913,7 +919,7 @@ component App
   view
     text `${ticks}`
 ";
-    let jump = |r: &mut Runner<Gated>, to: f64| loop {
+    let jump = |r: &mut Runner<Source>, to: f64| loop {
         let a = r.advance_until_request(to);
         assert!(a.error.is_none());
         let requests = r.take_requests();
@@ -979,11 +985,11 @@ component Row
       text `${n}` testId=`n-${id}`
 ";
     let mut r = gated(src, Gated::default());
-    let row = |r: &Runner<Gated>| {
+    let row = |r: &Runner<Source>| {
         let key = r.kernel().find_by_test_id("row-a")[0];
         r.kernel().node_by_key(key).unwrap().id
     };
-    let label = |r: &Runner<Gated>| {
+    let label = |r: &Runner<Source>| {
         let k = r.kernel();
         let key = k.find_by_test_id("n-a")[0];
         let node = k.node_by_key(key).unwrap();

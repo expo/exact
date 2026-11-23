@@ -5,6 +5,7 @@
 //! holds the consumer there with nothing in between: the follower moves in
 //! the frame the scroller does (#114).
 
+use crate::source::{boxed, Source};
 use exact_kernel::timeline::{Found, TimelineScroller};
 use exact_kernel::{motion_node, Kernel, MotionSync, Offer};
 use exact_motion::{Engine, NamedTimeline, Property};
@@ -22,7 +23,7 @@ impl DataSource for NoData {
 /// that has heard every node and the placement, as a native host's boot
 /// gives it.
 pub(crate) struct Laid {
-    pub(crate) runner: Runner<NoData>,
+    pub(crate) runner: Runner<Source>,
     pub(crate) engine: Engine,
 }
 
@@ -31,7 +32,7 @@ impl Laid {
         let plan = contract::compile(app).unwrap_or_else(|e| panic!("{e}"));
         let mut runner = Runner::boot(
             Plan::decode(&plan.encode()).unwrap(),
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",

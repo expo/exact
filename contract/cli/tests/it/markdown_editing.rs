@@ -1,4 +1,5 @@
 //! A real editor compiles its toolbar commands and receives a typed selection record.
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, PropId};
 use exact_plan::{EventKind, Plan, Value};
 use exact_runner::{DataError, DataSource, Event, Runner};
@@ -41,13 +42,13 @@ fn toolbar_commands_and_select_record_roundtrip_and_run() {
     let plan = Plan::decode(&plan.encode()).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let id = |r: &Runner<NoData>, name| {
+    let id = |r: &Runner<Source>, name| {
         r.kernel()
             .node_by_key(r.kernel().find_by_test_id(name)[0])
             .unwrap()
@@ -167,13 +168,13 @@ fn the_editors_text_events_carry_the_source_selection() {
     let plan = Plan::decode(&contract::compile(source).unwrap().encode()).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let id = |r: &Runner<NoData>, name| {
+    let id = |r: &Runner<Source>, name| {
         r.kernel()
             .node_by_key(r.kernel().find_by_test_id(name)[0])
             .unwrap()
@@ -234,13 +235,13 @@ fn paragraph_dirs_reach_the_editor_and_are_refused_elsewhere() {
     let plan = Plan::decode(&contract::compile(source).unwrap().encode()).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let dirs = |r: &Runner<NoData>, name| {
+    let dirs = |r: &Runner<Source>, name| {
         let k = r.kernel();
         let node = k.node_by_key(k.find_by_test_id(name)[0]).unwrap();
         (

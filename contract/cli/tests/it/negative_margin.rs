@@ -2,23 +2,17 @@
 //! CSS, including when the item has a `min-height`: Taffy added the margin
 //! before clamping by the inner min size, and the margin disappeared (the
 //! Bluesky profile header measured 44 pt tall on iOS; vendor/taffy patch 14).
+use crate::source::{boxed, NoData};
 use exact_kernel::{Kernel, Offer};
-use exact_runner::{DataError, DataSource, Runner, Value};
-
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::Runner;
 
 /// The height of `col`, a content-sized column holding `body`.
 fn col_height(body: &str) -> f32 {
     let src = format!("component App\n  view\n    column testId=\"root\" width=390 height=844\n      column testId=\"col\"\n{body}");
-    let plan = contract::bake(contract::compile(&src).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(&src).unwrap(), boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

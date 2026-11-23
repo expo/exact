@@ -5,17 +5,10 @@
 //! a length and not for a number in a paint row.
 
 use crate::scratch::Scratch;
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, StyleId};
-use exact_plan::{Plan, Value};
-use exact_runner::{DataError, DataSource, Runner};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_plan::Plan;
+use exact_runner::Runner;
 
 fn app(name: &str, files: &[(&str, &str)]) -> Scratch {
     let dir = Scratch::new(format!("exact2-measures-{name}-{}", std::process::id()));
@@ -25,11 +18,11 @@ fn app(name: &str, files: &[(&str, &str)]) -> Scratch {
     dir.at("app.contract")
 }
 
-fn booted(plan: Plan) -> Runner<NoData> {
-    let plan = contract::bake(plan, NoData).unwrap();
+fn booted(plan: Plan) -> Runner<Source> {
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -38,7 +31,7 @@ fn booted(plan: Plan) -> Runner<NoData> {
 }
 
 /// A row's computed value, as the kernel prints it.
-fn row(r: &Runner<NoData>, id: &str, style: StyleId) -> String {
+fn row(r: &Runner<Source>, id: &str, style: StyleId) -> String {
     let key = r.kernel().find_by_test_id(id)[0];
     format!("{:?}", r.kernel().node_by_key(key).unwrap().computed(style))
 }

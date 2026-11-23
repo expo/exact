@@ -2,6 +2,7 @@
 //! `Shape(base, field=…)`, lowered to the plan's `Record` and proven on the
 //! runner over `contract/corpus/records.contract`.
 
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, PropId};
 use exact_plan::{Opcode, Plan, Value};
 use exact_runner::{DataError, DataSource, Event, Runner};
@@ -30,7 +31,7 @@ fn corpus(name: &str) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
-fn text(r: &Runner<Echo>, id: &str) -> String {
+fn text(r: &Runner<Source>, id: &str) -> String {
     let k = r.kernel();
     let key = k.find_by_test_id(id)[0];
     k.node_by_key(key)
@@ -41,7 +42,7 @@ fn text(r: &Runner<Echo>, id: &str) -> String {
         .to_string()
 }
 
-fn press(r: &mut Runner<Echo>, id: &str) {
+fn press(r: &mut Runner<Source>, id: &str) {
     let key = r.kernel().find_by_test_id(id)[0];
     let view = r.kernel().node_by_key(key).unwrap().id;
     r.dispatch(view, Event::Press).unwrap();
@@ -70,7 +71,7 @@ fn a_record_is_built_and_copied_wherever_an_expression_goes() {
     assert_eq!(ops(&plan, "retitle", Opcode::DropLocal), 1);
     let mut r = Runner::boot(
         plan,
-        Echo,
+        boxed(Echo),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -187,12 +188,12 @@ fn only_a_declared_shape_is_built_and_a_fn_may_not_take_its_name() {
     assert_eq!(e.id, "type-fn-shape-name", "{e}");
 }
 
-fn boot(src: &str) -> Runner<Echo> {
+fn boot(src: &str) -> Runner<Source> {
     let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e}\n{src}"));
     let plan = Plan::decode(&plan.encode()).unwrap();
     Runner::boot(
         plan,
-        Echo,
+        boxed(Echo),
         Kernel::with_monospace(),
         Default::default(),
         "/",

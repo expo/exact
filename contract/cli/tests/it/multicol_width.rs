@@ -2,18 +2,11 @@
 //! Layout 1 §3.1). At zero beside a zero gap the column count was u32::MAX and
 //! layout did not return.
 
+use crate::source::{boxed, NoData};
 use exact_kernel::{Kernel, Offer};
-use exact_runner::{DataError, DataSource, Runner, Value};
+use exact_runner::Runner;
 use std::sync::mpsc;
 use std::time::Duration;
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
 
 #[test]
 fn a_zero_column_width_lays_out_as_one_pixel_columns() {
@@ -23,7 +16,7 @@ fn a_zero_column_width_lays_out_as_one_pixel_columns() {
         let plan = contract::compile(src).unwrap();
         let mut r = Runner::boot(
             plan,
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",

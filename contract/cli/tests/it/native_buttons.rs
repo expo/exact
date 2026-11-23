@@ -3,21 +3,14 @@
 //! symbol `image` children its face, its style from `buttonStyles` — and
 //! everything Contract can see that the platform cannot draw is refused.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, NodeType, PressFace, PropId, PropValue};
-use exact_runner::{DataError, DataSource, Event, Runner, RunnerError, Value};
+use exact_runner::{Event, Runner, RunnerError, Value};
 
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _args: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.to_string()))
-    }
-}
-
-fn boot(src: &str) -> Runner<NoData> {
+fn boot(src: &str) -> Runner<Source> {
     Runner::boot(
         contract::compile(src).unwrap_or_else(|e| panic!("{e}")),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -25,7 +18,7 @@ fn boot(src: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn view_of(r: &Runner<NoData>, test_id: &str) -> u32 {
+fn view_of(r: &Runner<Source>, test_id: &str) -> u32 {
     let key = r.kernel().find_by_test_id(test_id)[0];
     r.kernel().node_by_key(key).unwrap().id
 }

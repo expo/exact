@@ -3,24 +3,17 @@
 //! literal shows an Apple host could not present it (`lower-alertdialog`),
 //! rather than at the tap.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{BorderStyle, Color, ColorValue, Dimension, Kernel, Offer, Overflow, PropId};
 use exact_kernel::{StyleId, StyleMask};
-use exact_runner::{DataError, DataSource, Runner, Value};
+use exact_runner::{Runner, Value};
 
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-
-fn boot(src: &str) -> Runner<NoData> {
+fn boot(src: &str) -> Runner<Source> {
     let src = src.replace("  resource items = items() as shape string[]\n", "");
     let plan = contract::compile(&src).unwrap_or_else(|e| panic!("{e}"));
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -28,7 +21,7 @@ fn boot(src: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn node<'a>(r: &'a Runner<NoData>, id: &str) -> exact_kernel::NodeRef<'a> {
+fn node<'a>(r: &'a Runner<Source>, id: &str) -> exact_kernel::NodeRef<'a> {
     let key = r.kernel().find_by_test_id(id)[0];
     r.kernel().node_by_key(key).unwrap()
 }
@@ -179,7 +172,7 @@ fn a_hairline_is_one_device_pixel_of_the_scale_the_host_reports() {
     let src = "component App\n  state on = true\n  action flip\n    on = not on\n  view\n    column width=200 testId=\"root\"\n      box testId=\"all\" height=20 border=\"-exact-hairline solid -exact-separator\"\n      box testId=\"bottom\" height=20 border-bottom-width=\"-exact-hairline\" border-bottom-style=\"solid\"\n      box testId=\"bound\" height=20 border-top-width=(on ? \"-exact-hairline\" : 0) border-top-style=\"solid\"\n      box testId=\"line\" height=\"-exact-hairline\"\n      row gap=\"-exact-HAIRLINE\" testId=\"gapped\"\n        box width=20 height=20\n        box width=20 height=20 testId=\"second\"\n      hr testId=\"rule\"\n      box testId=\"half\" height=20 border-bottom-width=0.5 border-bottom-style=\"solid\"\n      button press=flip testId=\"flip\"\n        text \"flip\"\n";
     let mut r = boot(src);
     let root = r.kernel().roots()[0];
-    let boxes = |r: &mut Runner<NoData>| {
+    let boxes = |r: &mut Runner<Source>| {
         r.kernel_mut()
             .compute_layout(root, Offer::definite(400.0, 400.0))
             .unwrap();

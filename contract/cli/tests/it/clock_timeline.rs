@@ -3,6 +3,7 @@
 //! declarations of one name meet as a refusal, never as one shared phase.
 
 use crate::scratch::Scratch;
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, StyleId};
 use exact_plan::{Plan, Value as PlanValue};
 use exact_runner::{DataError, DataSource, Runner};
@@ -33,7 +34,7 @@ component App
       text \"Alone\" testId=\"alone\" animation=\"pending 800ms infinite\"
 ";
 
-fn clock(r: &Runner<NoData>, test_id: &str) -> Option<String> {
+fn clock(r: &Runner<Source>, test_id: &str) -> Option<String> {
     let k = r.kernel();
     let node = k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap();
     assert!(node.style.mask.has(StyleId::Animation) || test_id == "alone");
@@ -49,7 +50,7 @@ fn a_named_clock_timeline_reaches_the_row_and_keeps_an_infinite_animation() {
     let plan = contract::compile(SOURCE).unwrap();
     let r = Runner::boot(
         Plan::decode(&plan.encode()).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -141,7 +142,7 @@ fn a_local_binding_of_the_name_shadows_the_timeline() {
     let plan = contract::compile(src).unwrap();
     let r = Runner::boot(
         Plan::decode(&plan.encode()).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

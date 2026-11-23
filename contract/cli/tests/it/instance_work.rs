@@ -1,4 +1,5 @@
 //! Unrelated input must not revisit immutable rows; every relevant input still invalidates.
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, PropValue};
 use exact_plan::Value;
 use exact_runner::{
@@ -45,17 +46,17 @@ component App
       for r in rows key=r.id
         text `${r.label} ${suffix}` testId=`row-${r.id}`
 "#;
-fn boot(source: &str) -> Runner<Rows> {
+fn boot(source: &str) -> Runner<Source> {
     Runner::boot(
         contract::compile(source).unwrap(),
-        Rows,
+        boxed(Rows),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap()
 }
-fn text(r: &Runner<Rows>, id: &str) -> String {
+fn text(r: &Runner<Source>, id: &str) -> String {
     r.kernel()
         .node_by_key(r.kernel().find_by_test_id(id)[0])
         .unwrap()
@@ -190,13 +191,13 @@ fn pending_mutation_flags_invalidate_rows_without_changing_their_data() {
         .replace("`${r.label} ${suffix}`", "`${pending(result)}`");
     let mut r = Runner::boot(
         contract::compile(&source).unwrap(),
-        PendingRows,
+        boxed(PendingRows),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let text = |r: &Runner<PendingRows>| {
+    let text = |r: &Runner<Source>| {
         r.kernel()
             .node_by_key(r.kernel().find_by_test_id("row-500")[0])
             .unwrap()
@@ -244,13 +245,13 @@ fn signed_zero_changes_are_observable_inside_an_unchanged_row_key() {
         .replace("`${r.label} ${suffix}`", "`${1 / r.n > 0}`");
     let mut r = Runner::boot(
         contract::compile(&source).unwrap(),
-        Zeros,
+        boxed(Zeros),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let text = |r: &Runner<Zeros>| {
+    let text = |r: &Runner<Source>| {
         r.kernel()
             .node_by_key(r.kernel().find_by_test_id("row-1")[0])
             .unwrap()
@@ -304,13 +305,13 @@ component App
 "##;
     let mut r = Runner::boot(
         contract::compile(PERF).unwrap(),
-        Three,
+        boxed(Three),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let ask = |r: &Runner<Three>, target: &str| -> serde_json::Value {
+    let ask = |r: &Runner<Source>, target: &str| -> serde_json::Value {
         serde_json::from_str(&exact_runner::agent::handle(
             r,
             &serde_json::json!({"op":"perf", "target":target}).to_string(),
@@ -323,7 +324,7 @@ component App
         .unwrap()
         .contains("production trust"));
     r.measure(true, false);
-    let site = |reply: &serde_json::Value, test_id: &str, r: &Runner<Three>| {
+    let site = |reply: &serde_json::Value, test_id: &str, r: &Runner<Source>| {
         let key = r.kernel().find_by_test_id(test_id)[0];
         let view = r.kernel().node_by_key(key).unwrap().id;
         let site = r.site_of(view).unwrap().0 .0 as u64;
@@ -422,7 +423,7 @@ component App
         r.act("step", vec![]).unwrap();
     }
     assert_eq!(r.seq_range(), None, "nothing is reported while unmeasured");
-    let perf = |r: &Runner<Rows>| exact_runner::agent::handle(r, r#"{"op":"perf"}"#);
+    let perf = |r: &Runner<Source>| exact_runner::agent::handle(r, r#"{"op":"perf"}"#);
     r.measure_later(None);
     assert!(
         perf(&r).contains("not measured until first asked"),
@@ -457,7 +458,7 @@ component App
 #[test]
 fn perf_streams_is_refused_under_production_trust() {
     let mut r = boot("component App\n  view\n    text \"x\"\n");
-    let streams = |r: &Runner<Rows>| {
+    let streams = |r: &Runner<Source>| {
         serde_json::from_str::<serde_json::Value>(&exact_runner::agent::handle(
             r,
             r#"{"op":"perf","streams":true,"start":true}"#,
@@ -539,7 +540,7 @@ component Detail
 fn a_child_components_refused_resource_is_counted_at_its_declaring_row_while_measuring() {
     let mut r = Runner::boot(
         contract::compile(OWNED_PERF_APP).unwrap(),
-        Refuses { immediate: false },
+        boxed(Refuses { immediate: false }),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -590,7 +591,7 @@ component App
     ] {
         let mut r = Runner::boot(
             contract::compile(source).unwrap(),
-            Refuses { immediate },
+            boxed(Refuses { immediate }),
             Kernel::with_monospace(),
             Default::default(),
             "/",

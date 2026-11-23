@@ -1,6 +1,7 @@
 //! LLP 1017 P8: `use Name from "./file.contract"`, resolved by path.
 
 use crate::scratch::Scratch;
+use crate::source::boxed;
 use exact_kernel::Kernel;
 use exact_plan::Value;
 use exact_runner::{DataError, DataSource, Runner};
@@ -34,10 +35,10 @@ fn corpus(name: &str) -> PathBuf {
 #[test]
 fn a_used_component_brings_its_shape_and_style_and_the_using_file_stays_the_root() {
     let plan = contract::compile_path(&corpus("use/app.contract")).unwrap();
-    let plan = contract::bake(plan, Stations).unwrap();
+    let plan = contract::bake(plan, boxed(Stations)).unwrap();
     let mut r = Runner::boot(
         plan,
-        Stations,
+        boxed(Stations),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -60,10 +61,10 @@ fn provided_root_bytes_keep_their_path_for_uses() {
     let path = corpus("use/app.contract");
     let src = std::fs::read_to_string(&path).unwrap();
     let plan = contract::compile_path_source(&path, &src).unwrap();
-    let plan = contract::bake(plan, Stations).unwrap();
+    let plan = contract::bake(plan, boxed(Stations)).unwrap();
     let r = Runner::boot(
         plan,
-        Stations,
+        boxed(Stations),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -268,10 +269,10 @@ fn two_files_of_the_same_names_load_together_and_each_reads_its_own() {
     let plan = contract::compile_path(&dir.join("app.contract")).unwrap();
     let text = format!("{plan:?}");
     assert!(text.contains("\"pulse__ui 1s\""), "{text}");
-    let plan = contract::bake(plan, Stations).unwrap();
+    let plan = contract::bake(plan, boxed(Stations)).unwrap();
     let r = Runner::boot(
         plan,
-        Stations,
+        boxed(Stations),
         Kernel::with_monospace(),
         Default::default(),
         "/",

@@ -1,6 +1,7 @@
 //! LLP 1116.018 D2: where a refusal's message claims the same behaviour, the
 //! edit it names is run, and shows what the refused form was for.
 
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, PropValue};
 use exact_plan::Value;
 use exact_runner::{DataError, DataSource, Runner};
@@ -12,10 +13,10 @@ impl DataSource for NoData {
     }
 }
 
-fn boot(source: &str) -> Runner<NoData> {
+fn boot(source: &str) -> Runner<Source> {
     Runner::boot(
         contract::compile(source).unwrap_or_else(|e| panic!("{e}\n{source}")),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -23,7 +24,7 @@ fn boot(source: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn text(r: &Runner<NoData>, id: &str) -> String {
+fn text(r: &Runner<Source>, id: &str) -> String {
     let node = r
         .kernel()
         .node_by_key(r.kernel().find_by_test_id(id)[0])

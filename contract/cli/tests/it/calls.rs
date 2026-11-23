@@ -5,6 +5,7 @@
 //! Signal Clone's photo viewer) is one case of it, and keeps its tests.
 
 use crate::scratch::Scratch;
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, PropValue};
 use exact_plan::Value;
 use exact_runner::{DataError, DataSource, Event, Runner};
@@ -44,18 +45,18 @@ fn relaunch_is_a_host_command_without_arguments() {
     assert!(error.contains("takes no arguments"), "{error}");
 }
 
-fn boot(src: &str) -> Runner<NoData> {
+fn boot(src: &str) -> Runner<Source> {
     let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e}"));
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap()
 }
-fn text_of(r: &Runner<NoData>, id: &str) -> String {
+fn text_of(r: &Runner<Source>, id: &str) -> String {
     let k = r.kernel();
     let key = k.find_by_test_id(id)[0];
     k.node_by_key(key)
@@ -68,7 +69,7 @@ fn text_of(r: &Runner<NoData>, id: &str) -> String {
         })
         .unwrap()
 }
-fn press(r: &mut Runner<NoData>, id: &str) {
+fn press(r: &mut Runner<Source>, id: &str) {
     let k = r.kernel();
     let view = k.node_by_key(k.find_by_test_id(id)[0]).unwrap().id;
     r.dispatch(view, Event::Press).unwrap();

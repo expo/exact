@@ -7,6 +7,7 @@
 //! `packages/health/fixture/health.json`, as the Apple and Android
 //! implementations answer under the agent.
 
+use crate::source::{boxed, Source};
 use exact_runner::{CallOrigin, Dispatch, Outcome, Reply, Response, Runner, Work};
 use serde_json::{json, Value as Json};
 #[cfg(unix)]
@@ -192,13 +193,13 @@ fn date(ms: f64) -> String {
 
 /// A runner over `source` on `target`, the implementation bound under the
 /// agent and played by the fixture.
-fn boot(name: &str, source: &str, target: &str) -> (App, Runner<Granted>, Arc<Fixture>) {
+fn boot(name: &str, source: &str, target: &str) -> (App, Runner<Source>, Arc<Fixture>) {
     let app = App::new(name, source);
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Granted,
+        boxed(Granted),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -222,7 +223,7 @@ fn boot(name: &str, source: &str, target: &str) -> (App, Runner<Granted>, Arc<Fi
     (app, r, fixture)
 }
 
-fn pump(r: &mut Runner<Granted>, parked: &mut Vec<(u64, u64)>) {
+fn pump(r: &mut Runner<Source>, parked: &mut Vec<(u64, u64)>) {
     for _ in 0..8 {
         let outs = r.take_requests();
         let released = r.release_work();
@@ -246,7 +247,7 @@ fn pump(r: &mut Runner<Granted>, parked: &mut Vec<(u64, u64)>) {
     }
 }
 
-fn run(r: &mut Runner<Granted>, ticket: u64, dispatch: Dispatch) {
+fn run(r: &mut Runner<Source>, ticket: u64, dispatch: Dispatch) {
     let outcome = match dispatch {
         Dispatch::Run(Work::Now(work)) => work(),
         Dispatch::Run(Work::Later(work)) => {
@@ -259,34 +260,34 @@ fn run(r: &mut Runner<Granted>, ticket: u64, dispatch: Dispatch) {
     let _ = r.fulfill(ticket, outcome);
 }
 
-fn logs(r: &Runner<Granted>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     exact_runner::agent::handle(r, r#"{"op":"logs"}"#)
 }
 
-fn answer(r: &Runner<Granted>, name: &str) -> Json {
+fn answer(r: &Runner<Source>, name: &str) -> Json {
     let state = exact_runner::agent::handle(r, r#"{"op":"state"}"#);
     let state: Json = serde_json::from_str(&state).unwrap();
     state["resources"][name].clone()
 }
 
-fn extensions(r: &Runner<Granted>) -> Json {
+fn extensions(r: &Runner<Source>) -> Json {
     serde_json::from_str(&r.extensions_json().unwrap()).unwrap()
 }
 
 /// The one ticket held: its number and the permissions it asks.
-fn held(r: &Runner<Granted>) -> (u64, Json) {
+fn held(r: &Runner<Source>) -> (u64, Json) {
     let holds = r.device_holds();
     assert_eq!(holds.len(), 1, "{holds:?}\n{}", logs(r));
     let args: Json = serde_json::from_str(&holds[0].args).unwrap();
     (holds[0].ticket, args["permissions"].clone())
 }
 
-fn answer_hold(r: &mut Runner<Granted>, op: Json) {
+fn answer_hold(r: &mut Runner<Source>, op: Json) {
     exact_runner::agent::answer(r, &op.to_string()).unwrap();
 }
 
 /// The value of `days`' bucket starting at `date`.
-fn day(r: &Runner<Granted>, date: f64) -> Option<f64> {
+fn day(r: &Runner<Source>, date: f64) -> Option<f64> {
     let days = answer(r, "days");
     let buckets = days["buckets"].as_array().cloned().unwrap_or_default();
     (buckets.iter())
