@@ -4,3 +4,5 @@
 mod manifest;
 #[path = "controls/presses.rs"]
 mod presses;
+#[path = "controls/recording.rs"]
+mod recording;

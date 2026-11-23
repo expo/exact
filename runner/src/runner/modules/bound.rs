@@ -241,7 +241,10 @@ impl<D: DataSource> Runner<D> {
             None => self.call_origin(),
         };
         if origin != super::CallOrigin::App {
-            body["origin"] = json!(origin.word());
+            // A capture a live recording press may start (LLP 1126.004 D4):
+            // the implementation opens the microphone for it as for the app.
+            let press = origin == super::CallOrigin::Action && self.press_starts_audio(row, &args);
+            body["origin"] = json!(if press { "press" } else { origin.word() });
             // A call not the app's that would ask (LLP 1133.002 D12): the
             // host reads the status first and refuses it while `prompt`,
             // since only the implementation knows the platform's state.

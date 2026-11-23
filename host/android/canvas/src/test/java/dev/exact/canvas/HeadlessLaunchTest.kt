@@ -162,7 +162,8 @@ class HeadlessLaunchTest {
     }
 
     private fun start(intent: Intent): org.robolectric.android.controller.ActivityController<Reader> {
-        val controller = Robolectric.buildActivity(Reader::class.java, intent.putExtra("splashfade", "1"))
+        // warmlaunch=0: the GPU warm-up draws through Robolectric's graphics, which run the test JVM out of heap.
+        val controller = Robolectric.buildActivity(Reader::class.java, intent.putExtra("splashfade", "1").putExtra("warmlaunch", "0"))
         made += controller
         return controller.create().start().resume()
     }
