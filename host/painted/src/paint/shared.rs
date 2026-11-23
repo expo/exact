@@ -122,24 +122,16 @@ impl Painter {
         clip: Option<Rect4>,
     ) {
         let hit_space = walk.hit_space;
-        let grid_suspended = self.grid_suspended;
-        if self.grid().is_some() {
-            let p = (walk.scene.presented)(id);
-            self.grid_suspended = ts.sx != 1.
-                || ts.sy != 1.
-                || ts.kx != 0.
-                || ts.ky != 0.
-                || (!p.rotate_axis.is_3d() && (p.rotate != 0. || p.scale * p.press != 1.))
-                || walk
-                    .scene
-                    .kernel
-                    .node(id)
-                    .is_some_and(|n| zoom::range(&n).is_some());
-        }
+        let offset = if self.flatten.is_some_and(|(root, _)| root == id) {
+            offset
+        } else {
+            sticky(walk.scene, id, offset, self.grid())
+        };
         self.record_sticky(walk, id, ts, |painter, walk| {
-            painter.node_at_inner(walk, id, ts, offset, clip);
+            painter.without_grid(grid::changes_axes(ts), |painter| {
+                painter.node_at_inner(walk, id, ts, offset, clip);
+            });
         });
-        self.grid_suspended = grid_suspended;
         walk.hit_space = hit_space;
     }
 
@@ -166,14 +158,15 @@ impl Painter {
             return;
         }
         let node = walk.scene.kernel.node(id).expect("named live node");
-        let rect = self.drawn_rect(&node, sticky(walk.scene, id, offset, self.grid()));
         let shown = (walk.scene.presented)(id);
+        let (layout, rect) = self.node_rects(&node, offset, shown.changes_axes());
         let paint = BoxPaint::capture(&node, walk.scene.kernel, self.dark);
         let geometry = paint.geometry(rect);
         let transform = if shown.lowered & crate::host::lower::LOWER_TRANSFORM == 0 {
-            ts.pre_concat(
-                shown.transform(rect, node.style.transform_origin.resolve(rect.2, rect.3)),
-            )
+            ts.pre_concat(shown.transform(
+                layout,
+                node.style.transform_origin.resolve(layout.2, layout.3),
+            ))
         } else {
             ts.pre_translate(shown.layout[0], shown.layout[1])
         };

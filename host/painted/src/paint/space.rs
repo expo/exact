@@ -304,7 +304,9 @@ impl Painter {
         clip: Option<Rect4>,
     ) -> bool {
         let s = node.style;
-        if self.flatten == Some(node.id) || !(p.rotate_axis.is_3d() || s.translate_z != 0.0) {
+        if self.flatten.is_some_and(|(root, _)| root == node.id)
+            || !(p.rotate_axis.is_3d() || s.translate_z != 0.0)
+        {
             return false;
         }
         let (x, y, w, h) = paint_rect(node.frame, offset);
@@ -312,6 +314,7 @@ impl Painter {
             self.boxless_audio(walk, node);
             return true;
         }
+        let outer = self.drawn_rect(node, offset);
         let parent = self.split_parent(walk.scene.kernel, node);
         let m = spatial_matrix(parent, node, p, (x, y, w, h), offset);
         let own = crate::placement::compose(plane(&m), ts, 0.0, 0.0);
@@ -331,9 +334,15 @@ impl Painter {
         let cap = (2.0 * w.max(h).max(64.0)).max(self.viewport.0.max(self.viewport.1));
         let ((left, top, right, bottom), clamped) =
             reach(self, walk, node, (x, y, w, h), ts, offset, cap);
-        let (iw, ih) = (w + left + right, h + top + bottom);
+        let island = (x - left, y - top, w + left + right, h + top + bottom);
+        let island = if outer == (x, y, w, h) {
+            island
+        } else {
+            rows::union(Some(island), outer)
+        };
+        let (ix, iy, iw, ih) = island;
         // The plane z = 0 of the box, from its island (-left..w+right, …).
-        let m = mul(&m, &translate(x - left, y - top, 0.0));
+        let m = mul(&m, &translate(ix, iy, 0.0));
         let plane = plane(&m);
         // Turned away from the viewer: `backface-visibility: hidden` paints
         // nothing (the plane's normal is its z column after the turn).
@@ -343,15 +352,13 @@ impl Painter {
             self.boxless_audio(walk, node);
             return true;
         }
-        let island = (x - left, y - top, iw, ih);
         if let Some(inv) = self.native_plane(walk, node.id, own, island, clamped) {
             if self.backend.plane_begin(own) {
                 // The software pixmap clips even glyph overhang and affine
                 // descendants whose combined transforms escape `reach`.
                 self.backend
                     .push_clip(&Shape::rect(island), Transform::identity());
-                let flatten = self.flatten.replace(node.id);
-                let grid_suspended = std::mem::replace(&mut self.grid_suspended, true);
+                let flatten = self.flatten.replace((node.id, outer));
                 let mut child_walk = Walk {
                     scene: walk.scene,
                     scrollbar_cover: walk.scrollbar_cover,
@@ -367,15 +374,16 @@ impl Painter {
                     alert: walk.alert,
                     dialog: walk.dialog,
                 };
-                self.node_at(
-                    &mut child_walk,
-                    node.id,
-                    Transform::identity(),
-                    offset,
-                    None,
-                );
+                self.without_grid(true, |painter| {
+                    painter.node_at(
+                        &mut child_walk,
+                        node.id,
+                        Transform::identity(),
+                        offset,
+                        None,
+                    );
+                });
                 self.flatten = flatten;
-                self.grid_suspended = grid_suspended;
                 self.backend.pop_clip();
                 self.backend.plane_end();
                 let hit_inv = crate::placement::inverse(hit_own).unwrap_or(inv);
@@ -398,7 +406,9 @@ impl Painter {
         painter.split = self.split.clone();
         painter.placements = self.placements.clone();
         painter.canvases = self.canvases.clone();
-        painter.flatten = Some(node.id);
+        painter.pixel_grid = self.pixel_grid;
+        painter.grid_suspended = true;
+        painter.flatten = Some((node.id, (outer.0 - ix, outer.1 - iy, outer.2, outer.3)));
         painter.capture_boxless_audio(walk.scene.kernel);
         // An offscreen subtree includes the same outgoing drawings as the
         // live walk, under this plane's current placement and compositing.
@@ -408,7 +418,8 @@ impl Painter {
         // The software island must cover the fractional edge of its layout box.
         let backing = |size: f32| {
             if self.pixel_grid {
-                (size * self.scale).ceil() / self.scale
+                let scale = f64::from(self.scale);
+                ((f64::from(size) * scale).ceil() / scale) as f32
             } else {
                 size
             }
@@ -429,12 +440,11 @@ impl Painter {
             alert: walk.alert,
             dialog: walk.dialog,
         };
-        let f = node.frame;
         painter.node_at(
             &mut child_walk,
             node.id,
             Transform::identity(),
-            (f64::from(f.x - left), f64::from(f.y - top)),
+            (offset.0 + f64::from(ix), offset.1 + f64::from(iy)),
             None,
         );
         self.stage = std::mem::take(&mut painter.stage);

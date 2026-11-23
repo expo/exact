@@ -95,6 +95,52 @@ fn plan(p: &mut Presenter<()>, port: ViewId, top: f32, origin: Origin) {
 }
 
 #[test]
+fn an_anchored_reader_keeps_pixel_travel_through_display_acknowledgement() {
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(
+            r#"component App
+  view
+    scroll testId="port" width=200 height=100 scrollTop=10
+      box height=200.125
+"#,
+        ),
+        (),
+        (200., 100.),
+        2.,
+        PathBuf::new(),
+        PainterChoice::Canvas,
+    )
+    .unwrap();
+    assert_eq!(error, None);
+    attach(&mut p);
+    let port = named(&p, "port");
+    let rev = p.reader_under(20., 20., 2.)[5] as u32;
+    let key = p.host.kernel().node(port).unwrap().key;
+    let cursor = p.collection.cursors.entry(port).or_default();
+    cursor.bind(key, cursor.sequence);
+    cursor.anchored = true;
+    p.reader_pixels_at(port, (0., 180.), 2., rev, 10.).unwrap();
+    assert_eq!(p.scroll_of(port).1, 100.125);
+    attach(&mut p);
+    assert_eq!(p.scroll_of(port).1, 100.125);
+
+    // An unapplied correction still moves with the reader.
+    plan_own(&mut p, port, 97.125);
+    let cursor = p.collection.cursors.get_mut(&port).unwrap();
+    cursor.anchored = true;
+    cursor.model_scroll.as_mut().unwrap().rebase = cursor.rebased - 3.;
+    p.reader_pixels_at(port, (0., -2.), 2., rev, 20.).unwrap();
+    attach(&mut p);
+    assert_eq!(p.scroll_of(port).1, 96.125);
+
+    for (at, expected) in [(21., 96.325), (22., 96.525)] {
+        p.reader_pixels_at(port, (0., 0.4), 2., rev, at).unwrap();
+        attach(&mut p);
+        assert_eq!(p.scroll_of(port).1, expected);
+    }
+}
+
+#[test]
 fn a_lists_own_position_acknowledged_during_a_fling_keeps_the_revision_and_the_fling() {
     // The trace's case: the reader has moved, then a list's own position (a measurement's 3 px) is planned
     // from there, painted and acknowledged while the reader still flings. Before, the acknowledgement moved

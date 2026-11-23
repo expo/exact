@@ -114,6 +114,18 @@ impl Fit {
 }
 
 impl Painter {
+    pub(super) fn child_scroll_offset(
+        &self,
+        node: &NodeRef<'_>,
+        scroll: (f32, f32),
+    ) -> PaintOffset {
+        if range(node).is_some() {
+            (f64::from(scroll.0), f64::from(scroll.1))
+        } else {
+            self.drawn_offset(scroll)
+        }
+    }
+
     /// The zoom `node`'s child is drawn at, when `node` is a zoomable
     /// container: what the presenter set, else the range's nearest to 1.
     pub(crate) fn zoom_of(&self, node: &NodeRef<'_>) -> Option<f32> {

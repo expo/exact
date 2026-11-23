@@ -949,7 +949,7 @@ component App
     fn turned_boxes_record_shapes_without_cpu_pictures() {
         use crate::presenter::{PainterChoice, Presenter};
         let (mut p, error) = Presenter::boot_with_fixture_fonts(
-            &crate::test_plan("component App\n  view\n    view perspective=600 width=200 height=100 margin=100\n      view rotate=\"y 40deg\" width=200 height=100 background-color=\"#ff0000\"\n        text \"Turned card\" font-size=18 color=\"white\" margin=12\n"),
+            &crate::test_plan("component App\n  view\n    view perspective=600 width=200 height=100 margin=100\n      view rotate=\"y 40deg\" width=200 height=100 background-color=\"#ff0000\"\n        box width=0.1 height=2 background-color=\"blue\"\n        text \"Turned card\" font-size=18 color=\"white\" margin=12\n"),
             (), (400., 400.), 3., std::path::PathBuf::new(), PainterChoice::Canvas,
         ).unwrap();
         assert!(error.is_none(), "{error:?}");
@@ -959,12 +959,16 @@ component App
         let mut shapes = 0;
         let mut glyphs = 0;
         let mut planes = 0;
+        let mut divider = None;
         while at < ops.len() {
             assert_ne!(
                 ops[at], IMAGE_DEF,
                 "a turned solid box must not rasterize a CPU picture"
             );
             shapes += usize::from(ops[at] == RRECT);
+            if ops[at] == RRECT && f32::from_bits(ops[at + 5]) == 2. {
+                divider = Some(f32::from_bits(ops[at + 4]));
+            }
             glyphs += usize::from(ops[at] == GLYPHS);
             planes += usize::from(ops[at] == MATRIX3);
             at = end(&ops, at).expect("valid stream");
@@ -972,21 +976,33 @@ component App
         assert!(shapes > 0, "the turned box records its fill");
         assert!(glyphs > 0, "the turned box records its text");
         assert!(planes > 0, "the draws use a projective matrix");
+        assert_eq!(divider, Some(0.1));
     }
 
     #[test]
     fn a_turned_software_island_preserves_the_layout_box() {
+        let alpha = software_island_edge("", 248);
+        assert!((50..100).contains(&alpha), "edge coverage: {alpha}");
+    }
+
+    #[test]
+    fn a_nested_software_island_keeps_its_fractional_edge_pixels() {
+        let alpha = software_island_edge("rotate=\"x 5deg\" overflow=\"hidden\"", 256);
+        assert!((50..100).contains(&alpha), "edge coverage: {alpha}");
+    }
+
+    fn software_island_edge(outer: &str, x: usize) -> u8 {
         use crate::presenter::{PainterChoice, Presenter};
-        let plan = crate::test_plan(
-            r#"component App
+        let source = r#"component App
   view
     box width=200 height=120 padding-left=0.195 perspective=600
-      box width=100.37 height=40 rotate="y 20deg" filter="brightness(1)" background-color="red" testId="turned"
-"#,
-        );
-        let paint = |choice| {
+      box width=160 height=100 OUTER
+        box width=100.37 height=40 rotate="y 20deg" filter="brightness(1)" testId="turned"
+          box width=100.37 height=40 background-color="red"
+"#;
+        let paint = |plan: &[u8], choice| {
             let (mut p, error) = Presenter::boot_with_fixture_fonts(
-                &plan,
+                plan,
                 (),
                 (200., 120.),
                 2.625,
@@ -1001,17 +1017,29 @@ component App
             assert_eq!((node.frame.x, node.frame.width), (0.195, 100.37));
             p.rect_of(node.id).unwrap()
         };
-        let software = paint(PainterChoice::Cpu);
-        let canvas = paint(PainterChoice::Canvas);
+        let plan = crate::test_plan(&source.replace("OUTER", outer));
+        assert_eq!(
+            paint(&plan, PainterChoice::Canvas),
+            paint(&plan, PainterChoice::Cpu)
+        );
         let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
         let mut at = 0;
-        let mut images = 0;
         while at < ops.len() {
-            images += usize::from(ops[at] == IMAGE_DEF);
+            if ops[at] == IMAGE_DEF {
+                let picture = with_pending(|p| p.remove(&ops[at + 1])).unwrap();
+                let width = picture.width() as usize;
+                let pixels = picture.as_ref().as_chunks::<4>().0;
+                let y = 52;
+                let pixel = pixels[y * width..][..width]
+                    .get(x)
+                    .copied()
+                    .unwrap_or([0; 4]);
+                assert_eq!(pixel, [pixel[3], 0, 0, pixel[3]]);
+                return pixel[3];
+            }
             at = end(&ops, at).unwrap();
         }
-        assert!(images > 0, "the filter takes the software path");
-        assert_eq!(canvas, software);
+        panic!("the filter takes the software path");
     }
 
     #[test]

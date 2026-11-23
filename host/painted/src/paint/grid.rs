@@ -56,8 +56,12 @@ fn on_pixels(frame: Frame, scale: f32) -> Frame {
 
 /// Quantize to 1/64 of a device pixel before rounding half up. This keeps
 /// float noise close to a half pixel from choosing a different edge.
-pub(super) fn device_pixel(v: f32, scale: f32) -> f64 {
-    ((f64::from(v) * f64::from(scale) * 64.0).round() / 64.0 + 0.5).floor()
+pub(crate) fn device_pixel(v: f32, scale: f32) -> f64 {
+    round_device_pixel(f64::from(v) * f64::from(scale))
+}
+
+pub(crate) fn round_device_pixel(pixels: f64) -> f64 {
+    ((pixels * 64.0).round() / 64.0 + 0.5).floor()
 }
 
 pub(crate) fn pixel(v: f32, scale: f32) -> f32 {
@@ -139,6 +143,18 @@ impl BoxPaint {
 }
 
 impl Painter {
+    pub(super) fn without_grid<T>(
+        &mut self,
+        suspend: bool,
+        draw: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let previous = self.grid_suspended;
+        self.grid_suspended |= suspend;
+        let result = draw(self);
+        self.grid_suspended = previous;
+        result
+    }
+
     /// The display's scale, when this painter draws on its pixels.
     pub(super) fn grid(&self) -> Option<f32> {
         (self.pixel_grid && !self.grid_suspended).then_some(self.scale)
@@ -167,6 +183,24 @@ impl Painter {
         )
     }
 
+    /// The transformed content uses layout geometry. The node's own surface
+    /// keeps the box it had in the enclosing space.
+    pub(super) fn node_rects(
+        &self,
+        node: &NodeRef<'_>,
+        offset: PaintOffset,
+        transformed: bool,
+    ) -> (Rect4, Rect4) {
+        let flat = self.flatten.filter(|(root, _)| *root == node.id);
+        let outer = flat.map_or_else(|| self.drawn_rect(node, offset), |(_, rect)| rect);
+        let content = if transformed || flat.is_some() {
+            paint_rect(node.frame, offset)
+        } else {
+            outer
+        };
+        (content, outer)
+    }
+
     pub(super) fn pixel_phase(&self, frame: Frame) -> Option<(f64, f64)> {
         let scale = self.grid()?;
         let phase = |v| f64::from(v) * f64::from(scale) - device_pixel(v, scale);
@@ -184,6 +218,10 @@ impl Painter {
             None => (f64::from(x), f64::from(y)),
         }
     }
+}
+
+pub(super) fn changes_axes(ts: Transform) -> bool {
+    ts.sx != 1. || ts.sy != 1. || ts.kx != 0. || ts.ky != 0.
 }
 
 #[cfg(test)]

@@ -71,6 +71,8 @@ impl Painter {
         // A scroller's rows are its children; a scroller holding one
         // container (a column of settings) keeps that container's children
         // apart instead, so one of them changing records only itself.
+        let grid_suspended = self.grid_suspended;
+        self.grid_suspended |= self.zoom_of(node).is_some();
         let ts = self.zoom_children(walk.scene.kernel, node, ts, child_offset);
         let r = self.drawn_rect(node, child_offset);
         let space = ts.pre_translate(r.0, r.1);
@@ -107,6 +109,7 @@ impl Painter {
             self.node(walk, child, ts, child_offset, child_rect);
         }
         self.kept.pop_space();
+        self.grid_suspended = grid_suspended;
     }
 
     /// The row a list carries within itself, painted after its siblings.
@@ -146,14 +149,19 @@ impl Painter {
             );
         }
         let boxes = walk.boxes.len();
-        let f = self.drawn(&node);
-        let (reveal, page) = (walk.reveal, (f.x - rect.0, f.y - rect.1));
+        let at = self.without_grid(super::grid::changes_axes(ts), |painter| {
+            painter.drawn_offset((node.frame.x, node.frame.y))
+        });
+        let (reveal, page) = (
+            walk.reveal,
+            (at.0 - f64::from(rect.0), at.1 - f64::from(rect.1)),
+        );
         walk.reveal = Some(node.id);
         // Painted after the walk, out of its ancestors: the row's own scheme
         // (LLP 1034 §8), else the app's.
         let previous = self.dark;
         self.dark = node.color_scheme_dark().unwrap_or(previous);
-        self.node(walk, node.id, ts, (page.0.into(), page.1.into()), None);
+        self.node(walk, node.id, ts, page, None);
         self.dark = previous;
         walk.reveal = reveal;
         walk.boxes.truncate(boxes);

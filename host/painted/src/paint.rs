@@ -439,8 +439,8 @@ pub struct Painter {
     notes: Vec<String>,
     svg_warned: std::collections::BTreeSet<exact_kernel::NodeKey>,
     decoration_warning: bool,
-    /// The node a 3D island paints flat, its own transform being the warp's (LLP 1077 D8).
-    pub(crate) flatten: Option<ViewId>,
+    /// A 3D island's root and its own surface in the island's space (LLP 1077 D8).
+    flatten: Option<(ViewId, Rect4)>,
     /// The current focus's visibility decision, separate from the last input's modality.
     pub(crate) ringless: Option<ViewId>,
     /// The focus visual follows WinUI's input tracking, not Chrome's `:focus-visible` (LLP
@@ -911,7 +911,6 @@ impl Painter {
         offset: PaintOffset,
         clip_rect: Option<Rect4>,
     ) {
-        let offset = sticky(walk.scene, id, offset, self.grid());
         if self.placed(walk, id, ts, offset, clip_rect) {
             self.row_refuse();
             return;
@@ -941,10 +940,8 @@ impl Painter {
             self.boxless_audio(walk, &node);
             return;
         }
-        // The roles drawn in the accent read the nearest authored
-        // `accent-color`, for this node and, until one authors its own, below.
+        // The roles drawn in the accent read the nearest authored accent color.
         let _accent = accent_scope(&node);
-        let (x, y, w, h) = self.drawn_rect(&node, offset);
         let p = (walk.scene.presented)(id);
         self.row_node(walk.scene, &node, &p);
         // @ref LLP 1077 D8 — turned or moved in space: painted apart, warped.
@@ -953,9 +950,12 @@ impl Painter {
             self.damage.unsupported = true;
             return;
         }
-        // @ref LLP 1043.000 §3 D7 — collect damage eligibility during the
-        // existing paint walk, not an extra whole-document walk per flow tick.
-        // A shadow paints outside the node's box, where damage never looks.
+        let flat = self.flatten.filter(|(root, _)| *root == id);
+        let transformed = flat.is_none() && p.changes_axes();
+        let (rect, outer) = self.node_rects(&node, offset, transformed);
+        let (x, y, w, h) = rect;
+        let surface = p.surface(outer);
+        // Damage ignores shadows outside the box (LLP 1043.000 §3 D7).
         self.damage.unsupported |= p.moves()
             || p.dark.is_some_and(|dark| dark != self.dark)
             || p.opacity != 1.0
@@ -969,7 +969,7 @@ impl Painter {
         let (hit_parent, hit_clip) = walk.hit_space.unwrap_or((ts, clip_rect));
         let mut hit_p = p;
         hit_p.press_translate = [0.; 4];
-        let layer = match self.flatten == Some(id) {
+        let layer = match flat.is_some() {
             true => layer::Opened { lowered: 0 },
             false => self.box_layer(node.key, &p, (x, y, w, h), origin, ts),
         };
@@ -977,13 +977,13 @@ impl Painter {
         let ts = if layer.transform() {
             // The layer turns it; a layout transition's offset is drawn.
             ts.pre_translate(p.layout[0], p.layout[1])
-        } else if p.moves() && self.flatten != Some(id) {
+        } else if p.moves() && flat.is_none() {
             // About `transform-origin`, the centre unless authored (LLP 1061 D6).
             ts.pre_concat(p.transform((x, y, w, h), origin))
         } else {
             ts
         };
-        let hit_ts = if self.flatten == Some(id) {
+        let hit_ts = if flat.is_some() {
             hit_parent
         } else if layer.transform() {
             hit_parent.pre_translate(p.layout[0], p.layout[1])
@@ -995,7 +995,6 @@ impl Painter {
             let (ox, oy) = effective_overflow(&node);
             ox != Overflow::Visible || oy != Overflow::Visible
         };
-        // A hidden box keeps its geometry. A visible descendant still paints and takes hits.
         // A ghost reveals the wrapper's inherited visibility (LLP 1094).
         let visible = paints(walk.scene.kernel, id, walk.reveal);
         let hit_start = walk.boxes.len();
@@ -1041,30 +1040,28 @@ impl Painter {
         } else {
             p.opacity.clamp(0.0, 1.0)
         };
-        // CSS opacity is paint only: a transparent subtree is still hit (the
-        // walk records its boxes) and draws through a backend that draws nothing.
-        // Visibility is not that: only this box's own paint is skipped.
+        // A transparent subtree still records hit geometry.
         let drawn = (opacity <= 0.0).then(|| {
             self.replace_picture_backend(walk.scene.kernel, Box::new(layer::Unpainted::<false>))
         });
         if drawn.is_none() && opacity < 1.0 {
             self.backend.push_opacity(opacity);
         }
-        // The node's own appearance (a `color-scheme` above it, LLP 1034 §8)
-        // for its mask and everything it paints below.
         let previous = self.dark;
         self.dark = p.dark.unwrap_or(previous);
         // @ref LLP 1077 D2 — the mask is the border box's gradient's alpha.
-        let mask = gradient::Captured::mask(node.style, self.dark).map(|m| m.place((x, y, w, h)));
+        let mask = gradient::Captured::mask(node.style, self.dark).map(|m| m.place(outer));
         if mask.is_some() {
-            self.backend.push_mask(&Shape::rect((x, y, w, h)), ts);
+            self.backend.push_mask(&Shape::rect(outer), ts);
         }
         // @ref LLP 1043.000 §3 D7 — polygon demo ink and exclusion share an outline.
-        let (sx, sy, sw, sh) = p.surface((x, y, w, h));
+        let (sx, sy, sw, sh) = surface;
         let css = node.style.rare.clip_path.resolved(sw, sh);
         let clip_ts = ts.pre_translate(sx, sy);
         let path_clip = css.has_path() && self.backend.push_css_clip(&css, clip_ts);
-        self.box_content(walk, &node, (x, y, w, h), ts, offset, clip_rect);
+        self.without_grid(transformed, |painter| {
+            painter.box_content(walk, &node, (rect, outer), ts, offset, clip_rect);
+        });
         shape::clip_hits(
             &mut walk.boxes[hit_start..],
             &css,
@@ -1076,7 +1073,7 @@ impl Painter {
             self.backend.pop_clip();
         }
         if let Some(mask) = &mask {
-            self.backend.pop_mask(&Shape::rect((x, y, w, h)), mask, ts);
+            self.backend.pop_mask(&Shape::rect(outer), mask, ts);
         }
         match drawn {
             Some(picture) => drop(self.restore_picture_backend(walk.scene.kernel, picture)),
@@ -1090,7 +1087,7 @@ impl Painter {
         &mut self,
         walk: &mut Walk<'_, '_>,
         node: &NodeRef<'_>,
-        rect: Rect4,
+        (rect, outer): (Rect4, Rect4),
         ts: Transform,
         offset: PaintOffset,
         clip_rect: Option<Rect4>,
@@ -1098,9 +1095,7 @@ impl Painter {
         let owner = walk.boxes.len() - 1;
         let paints_self = paints(walk.scene.kernel, node.id, walk.reveal);
         let shown = (walk.scene.presented)(node.id);
-        // Paint motion's values over the captured box (LLP 1055.000 D6,
-        // LLP 1062 D5): background, border sides and shadow; then its states,
-        // its looks and a press's background (LLP 1061 D7, LLP 1121 D8).
+        // States follow motion (LLP 1061 D7, LLP 1121 D8).
         let mut paint = BoxPaint::capture(node, walk.scene.kernel, self.dark)
             .presented(&shown.colors)
             .states(node, &shown, self.dark)
@@ -1112,11 +1107,10 @@ impl Painter {
         self.clipped = Some((node.id, paint.background));
         let mut geometry = paint.geometry(rect);
         // @ref LLP 1063 — a layout transition's size is the surface's alone.
-        let mut surface = paint.geometry(shown.surface(rect));
+        let mut surface = paint.geometry(shown.surface(outer));
         self.flight_geometry(node, &mut geometry);
         self.flight_geometry(node, &mut surface);
-        // A hidden box paints none of its own chrome. Children still do,
-        // and a text node still walks its runs so a visible inline paints.
+        // A text node still walks its runs so a visible inline paints.
         if paints_self {
             surface.bleed = self.bleed(walk.scene.kernel, node.id, &surface.outer, ts);
             self.row_box_reach(&paint.shadows, surface.outer.rect, geometry.outer.rect, ts);
@@ -1320,8 +1314,8 @@ impl Painter {
         let scrolls = !matches!(ox, Overflow::Visible | Overflow::Clip)
             || !matches!(oy, Overflow::Visible | Overflow::Clip);
         let child_offset = if scrolls {
-            let scroll = walk.scene.scroll.get(&node.id).copied();
-            let (sx, sy) = self.drawn_offset(scroll.unwrap_or((0.0, 0.0)));
+            let scroll = walk.scene.scroll.get(&node.id).copied().unwrap_or_default();
+            let (sx, sy) = self.child_scroll_offset(node, scroll);
             (offset.0 + sx, offset.1 + sy)
         } else {
             offset

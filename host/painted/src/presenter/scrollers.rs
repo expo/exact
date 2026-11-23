@@ -27,7 +27,7 @@
 //! ([`Presenter::pointer_cancel`]): no press fires for it.
 use super::contact::Candidate;
 use super::*;
-use crate::paint::grid::pixel;
+use crate::paint::grid::{device_pixel, pixel, round_device_pixel};
 use std::collections::BTreeSet;
 
 #[cfg(test)]
@@ -110,41 +110,66 @@ struct PixelTravel {
 #[derive(Clone, Copy, Default)]
 struct PixelAxis {
     start: f64,
+    device_start: f64,
     distance: f64,
 }
 
 impl PixelAxis {
-    fn at(start: f32) -> Self {
+    fn at(start: f32, scale: f32) -> Self {
         Self {
             start: f64::from(start),
+            device_start: device_pixel(start, scale),
             distance: 0.,
         }
     }
 
-    fn advance(&mut self, from: f32, by: f32, max: f32, scale: f32) -> f32 {
-        if by == 0. {
-            return from;
-        }
-        self.distance += f64::from(by);
-        let points = self.start + self.distance / f64::from(scale);
-        let next = Self::clamp(points, from, by, max, scale);
-        if next == 0. || next == max {
-            *self = Self::at(next);
-        }
-        next
+    fn rebase(&mut self, was: f32, now: f32, scale: f32) {
+        self.start += f64::from(now) - f64::from(was);
+        self.device_start += device_pixel(now, scale) - device_pixel(was, scale);
     }
 
-    fn clamp(points: f64, from: f32, by: f32, max: f32, scale: f32) -> f32 {
+    fn advance(&mut self, from: f32, by: f32, max: f32, scale: f32) -> (f32, f64) {
+        if by == 0. {
+            return (from, 0.);
+        }
+        self.distance += f64::from(by);
+        let density = f64::from(scale);
+        let points = self.start + self.distance / density;
         // The reader stops sending deltas at its rounded ends. A sample
         // that reaches one also takes the model to its logical end.
-        let device = pixel(from, scale) + by;
-        if by < 0. && device <= 0. {
+        let device = self.device_start + self.distance;
+        let next = if by < 0. && device <= 0. {
             0.
-        } else if by > 0. && device >= pixel(max, scale) {
+        } else if by > 0. && device >= device_pixel(max, scale) {
             max
         } else {
-            (points as f32).clamp(0., max)
+            let rounded = (points as f32).clamp(0., max);
+            let wanted = round_device_pixel(self.start * density + self.distance);
+            let got = device_pixel(rounded, scale);
+            let adjacent = if got < wanted {
+                rounded.next_up()
+            } else {
+                rounded.next_down()
+            };
+            if got != wanted
+                && (0. ..=max).contains(&adjacent)
+                && device_pixel(adjacent, scale) == wanted
+            {
+                adjacent
+            } else {
+                rounded
+            }
+        };
+        if next == 0. || next == max {
+            *self = Self::at(next, scale);
         }
+        // A pending rebase can still use travel beyond the acknowledged range.
+        let requested = if (0. ..=f64::from(max)).contains(&points) {
+            f64::from(next)
+        } else {
+            points
+        };
+        (next, requested - f64::from(from))
     }
 }
 
@@ -160,8 +185,8 @@ impl Reader {
             let at = position.accepted;
             position.accepted = (axis(at.0, was.0, now.0), axis(at.1, was.1, now.1));
             if let Some(travel) = &mut position.travel {
-                travel.x.start += f64::from(now.0) - f64::from(was.0);
-                travel.y.start += f64::from(now.1) - f64::from(was.1);
+                travel.x.rebase(was.0, now.0, travel.scale);
+                travel.y.rebase(was.1, now.1, travel.scale);
             }
         }
     }
@@ -447,7 +472,7 @@ impl<D: DataSource> Presenter<D> {
         id: ViewId,
         to: (f32, f32),
         completion: Completion,
-        relative: Option<(f32, f32)>,
+        relative_y: Option<f64>,
     ) -> Option<((f32, f32), (f32, f32))> {
         if !to.0.is_finite() || !to.1.is_finite() {
             return None;
@@ -466,8 +491,8 @@ impl<D: DataSource> Presenter<D> {
                 s.offset.1
             },
         );
-        let moved = relative
-            .and_then(|by| self.anchor_input(id, s.offset, if s.axes.1 { by.1 } else { 0. }, next));
+        let moved = relative_y
+            .and_then(|dy| self.anchor_input(id, s.offset, if s.axes.1 { dy } else { 0. }, next));
         if next == s.offset && moved.is_none_or(|dy| dy == 0.) {
             return Some((next, (0., 0.)));
         }
@@ -584,7 +609,7 @@ impl<D: DataSource> Presenter<D> {
         }
         let from = s.offset;
         let tracked = self.reader.tracked.get_mut(&id).expect("reader revision");
-        let (target, by) = if let Some(scale) = device_scale {
+        let (target, dy) = if let Some(scale) = device_scale {
             if tracked
                 .travel
                 .as_ref()
@@ -592,23 +617,24 @@ impl<D: DataSource> Presenter<D> {
             {
                 tracked.travel = Some(PixelTravel {
                     scale,
-                    x: PixelAxis::at(from.0),
-                    y: PixelAxis::at(from.1),
+                    x: PixelAxis::at(from.0, scale),
+                    y: PixelAxis::at(from.1, scale),
                 });
             }
             let travel = tracked.travel.as_mut().expect("pixel travel");
-            let x = travel
+            let (x, _) = travel
                 .x
                 .advance(from.0, if s.axes.0 { by.0 } else { 0. }, s.max.0, scale);
-            let y = travel
-                .y
-                .advance(from.1, if s.axes.1 { by.1 } else { 0. }, s.max.1, scale);
-            ((x, y), (by.0 / scale, by.1 / scale))
+            let (y, dy) =
+                travel
+                    .y
+                    .advance(from.1, if s.axes.1 { by.1 } else { 0. }, s.max.1, scale);
+            ((x, y), dy)
         } else {
             tracked.travel = None;
-            ((from.0 + by.0, from.1 + by.1), by)
+            ((from.0 + by.0, from.1 + by.1), f64::from(by.1))
         };
-        let (to, movement) = self.scroll_to_completion(id, target, Completion::Reader, Some(by))?;
+        let (to, movement) = self.scroll_to_completion(id, target, Completion::Reader, Some(dy))?;
         let moved = (to.0 - from.0, to.1 - from.1);
         // Only a sample that moves counts as the person's scroll: a dropped
         // one must not cancel a fragment scroll or a load's hold.

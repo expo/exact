@@ -847,9 +847,10 @@ impl<'a> Replay<'a> {
                     // Containing-block transforms were refused before prepare.
                     let parent = r.transform;
                     if r.live_hit {
+                        let (x, y, ..) = g.outer.rect;
                         walk.boxes.push(PaintedBox {
                             baseline: None,
-                            text_origin: None,
+                            text_origin: matches!(n.payload, Payload::Text(..)).then_some((x, y)),
                             rounded_border: if walk.scrollbar_cover {
                                 g.outer.rounded_outline()
                             } else {

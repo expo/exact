@@ -23,7 +23,7 @@ impl Painter {
         &mut self,
         walk: &mut Walk<'_, '_>,
         node: &NodeRef<'_>,
-        rect: Rect4,
+        rects: (Rect4, Rect4),
         ts: Transform,
         offset: PaintOffset,
         clip_rect: Option<Rect4>,
@@ -43,12 +43,17 @@ impl Painter {
         );
         let Some(chain) = chain.filter(|_| pw > 0 && ph > 0 && pw <= MAX_SIDE && ph <= MAX_SIDE)
         else {
-            self.content(walk, node, rect, ts, offset, clip_rect);
+            self.content(walk, node, rects, ts, offset, clip_rect);
             return;
         };
         // What the chain reads and writes: the box and what it paints past
         // itself, grown by how far the chain spreads (its region over a box
         // of no size), in the box's space.
+        let rect = if rects.0 == rects.1 {
+            rects.0
+        } else {
+            rows::union(Some(rects.0), rects.1)
+        };
         let (x, y, w, h) = rect;
         let cap = (2.0 * w.max(h).max(64.0)).max(width.max(height));
         let ((left, top, right, bottom), _) = space::reach(self, walk, node, rect, ts, offset, cap);
@@ -65,7 +70,7 @@ impl Painter {
         // A backend that filters on the GPU draws the box's ops through the
         // chain, so its row stays kept (LLP 1172.023.001 D1).
         if self.backend.push_filter(&chain.primitives, region, ts) {
-            self.content(walk, node, rect, ts, offset, clip_rect);
+            self.content(walk, node, rects, ts, offset, clip_rect);
             self.backend.pop_filter();
             return;
         }
@@ -73,7 +78,7 @@ impl Painter {
         self.row_refuse();
         if let Some((recorder, inverse)) = self.recording().zip(ts.invert()) {
             let drawing = self.record_layer(|painter| {
-                painter.content(walk, node, rect, ts, offset, clip_rect);
+                painter.content(walk, node, rects, ts, offset, clip_rect);
             });
             let normalized = tape::Recorder::default();
             normalized.nest(Rc::new(drawing), inverse);
@@ -126,7 +131,7 @@ impl Painter {
             Box::new(crate::raster::Raster::transparent_at((x0, y0)));
         picture.begin(cw / s, ch / s, s);
         let frame = self.replace_picture_backend(walk.scene.kernel, picture);
-        self.content(walk, node, rect, ts, offset, clip_rect);
+        self.content(walk, node, rects, ts, offset, clip_rect);
         let painted = self
             .restore_picture_backend(walk.scene.kernel, frame)
             .finish();
