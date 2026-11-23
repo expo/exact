@@ -856,9 +856,10 @@ export const classifications = [
     ["runner:runner/src/store/presence.rs", "Store::adopt_occupancy#revision:1 Store::set_locked#revision:1"],
   ]),
   group("replies", ["one-shot", "subscription", "durable operation"], "current presenter/reader session; a request may pump several completion families", "UI-owned",
-    "host/painted/src/agent.rs serve and agent/stdio.rs handle_request pump the current Presenter, then dispatch hold/picker answers and frame work. canvas/jni_agent.rs run calls agent_with_reader, which installs set_agent_turn only for the agent call and restores it afterward; pump.rs and commands.rs use that callback to hand out requests and admit queued reader answers.", [
+    "host/painted/src/agent.rs serve and agent/stdio.rs handle_request pump the current Presenter, then dispatch hold/picker answers and frame work; agent/attached.rs passive answers an attached session's reads with no pump. canvas/jni_agent.rs run calls agent_with_reader, which installs set_agent_turn only for the agent call and restores it afterward; pump.rs and commands.rs use that callback to hand out requests and admit queued reader answers.", [
     ["painted:host/painted/src/agent.rs", "serve"],
     ["painted:host/painted/src/agent/stdio.rs", "handle handle_for_window"],
+    ["painted:host/painted/src/agent/attached.rs", "passive"],
     ["painted:host/painted/src/canvas/agent.rs", "after_turn CanvasHost::agent_with_reader next_stream waiting"],
     ["painted:host/painted/src/canvas/jni_agent.rs", "run"],
     ["painted:host/painted/src/presenter/requests.rs", "Presenter::agent_reader_turn Presenter::set_agent_turn"],
