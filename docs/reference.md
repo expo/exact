@@ -2683,8 +2683,14 @@ Each new connection asks again. One driver attaches at a time, to one window: `-
 the window when several are open, and a PID chooses among several running copies.
 The connection only reads: `tree`, `state` (masked, as the tree shows a password field), `logs`,
 `layout`, `perf` and `screenshot` (the window server's picture of the window, which is not brought
-forward). The app refuses `clock` with `live-clock` and input with `input-not-granted`, and the
-driver refuses launch flags such as `--storage`, `--live` and `--url`.
+forward). The app's clock is never taken, seeked, settled or landed: `clock` is refused with
+`live-clock`, except the waits, which watch the app's own wall clock through masked `state` reads
+while its timers go on. `clock until state <path> == <literal> within <ms>` refuses a value a
+password field masks; `clock held [<target>…] [<n>s|<n>ms]` waits for one reply to each held request;
+`clock replies [<n>s|<n>ms]` reports `{clock, settled, pending, waitedMs}` at the first read with no
+data request in flight (held, timer and device entries aside), or after 20 s. A read still out at a
+wait's deadline ends the connection. Input is refused with `input-not-granted`, and the driver
+refuses launch flags such as `--storage`, `--live` and `--url`.
 
 `bun scripts/agent.mjs ios --app <app> --attach [--sim <udid|name>] tree state logs layout "screenshot now.png"`
 reads the development app open in an iOS simulator the same way. The simulator is the one `--sim`
