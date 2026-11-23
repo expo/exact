@@ -23,7 +23,7 @@ class ScrollingTest {
         val scrollers = Scrolling::class.java.getDeclaredField("scrollers").apply { isAccessible = true }
         val indicate = Scrolling::class.java.getDeclaredMethod("indicate", Scrolling.Scroller::class.java).apply { isAccessible = true }
         fun scroller() = (scrollers.get(scrolling) as Map<*, *>)[1] as Scrolling.Scroller
-        fun told(flags: Int) = scrolling.told(intArrayOf(1, flags, 0, 0, 0, 0, 0, 500f.toBits(), 500f.toBits()))
+        fun told(flags: Int) = scrolling.told(intArrayOf(1f.toBits(), 1, flags, 0, 0, 0, 0, 0, 500f.toBits(), 500f.toBits()))
         fun down() {
             val e = MotionEvent.obtain(0, 0, MotionEvent.ACTION_DOWN, 100f, 100f, 0)
             scrolling.touch(e); e.recycle()
@@ -64,7 +64,7 @@ class ScrollingTest {
         assertNotNull(bar.parent)
         assertEquals(200, bar.height)
         assertEquals(1, f.parent.childCount)
-        f.scrolling.told(intArrayOf())
+        f.scrolling.told(intArrayOf(1f.toBits()))
         assertNull(bar.parent)
         assertSame(f.view, f.parent.getChildAt(0))
     }
@@ -72,6 +72,16 @@ class ScrollingTest {
     @Test fun anOldAutoReplyCannotOverrideANewerNoneStatement() = oldReply(0, 8)
 
     @Test fun anOldNoneReplyCannotOverrideANewerAutoStatement() = oldReply(8, 0)
+
+    @Test fun anOldHitReplyCannotRestoreAGroupClearedByAStatement() {
+        val f = Fixture(2)
+        f.told(2 or 4)
+        f.down()
+        val old = f.reply(4)
+        f.told(2)
+        f.under(old)
+        assertFalse(f.scroller().node)
+    }
 
     private fun oldReply(oldPolicy: Int, newPolicy: Int) {
         for (axis in listOf(1, 2)) {
@@ -196,7 +206,7 @@ class ScrollingTest {
         val r = ListRelease(mandatory = true)
         assertTrue(r.snap(8000f))
         // The app scrolls the list (a new revision): the settle ends, and the late answer moves nothing.
-        r.f.scrolling.told(intArrayOf(1, 1, 1, 0, 0, 0, 0, 100000f.toBits(), 500f.toBits()))
+        r.f.scrolling.told(intArrayOf(1f.toBits(), 1, 1, 1, 0, 0, 0, 0, 100000f.toBits(), 500f.toBits()))
         assertEquals(0, r.mode)
         r.answer(r.asked!!.first)
         assertEquals("idle", 0, r.mode)

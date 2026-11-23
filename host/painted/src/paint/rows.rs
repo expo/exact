@@ -80,6 +80,13 @@ struct RowFrame {
     padding: (f32, f32, f32, f32),
 }
 
+struct RowSticky {
+    node: NodeKey,
+    grid: Option<f32>,
+    scroll_grid: Option<f32>,
+    shift: PaintOffset,
+}
+
 /// One kept row.
 struct Row {
     id: u32,
@@ -87,8 +94,12 @@ struct Row {
     drawing: Option<Rc<Tape>>,
     /// The row's top-left in viewport points when recorded.
     origin: (f32, f32),
+    /// Hits and labels for a locally recorded row stay in the recording's space.
+    local: bool,
     scale: (f32, f32),
     size: (f32, f32),
+    /// A whole-pixel move preserves the snapping of the row's children.
+    phase: Option<(f64, f64)>,
     boxes: Vec<PaintedBox>,
     text: Vec<(NodeKey, Rc<Paragraph>)>,
     inline: Vec<(ViewId, Rc<inline_frame::PaintedInline>)>,
@@ -103,6 +114,7 @@ struct Row {
     /// The scrollers inside it and their offsets when recorded: one moved
     /// (a swipe) records the row again.
     scrolls: Vec<(ViewId, (f32, f32))>,
+    sticky: Vec<RowSticky>,
     /// A fresh geometry walk can translate these hits without consulting descendants.
     can_translate_hits: bool,
     /// Whether a box in it may have hit slop.
@@ -136,7 +148,7 @@ impl Row {
         shown: Rect4,
     ) -> bool {
         let (dx, dy) = (origin.0 - self.origin.0, origin.1 - self.origin.1);
-        if dx.abs() <= MAX_TRANSLATION && dy.abs() <= MAX_TRANSLATION {
+        if self.local || (dx.abs() <= MAX_TRANSLATION && dy.abs() <= MAX_TRANSLATION) {
             return true;
         }
         // Further, a hit can round onto the old box's exclusive edge: walk a
@@ -202,6 +214,7 @@ struct Capture {
     field_texts: Vec<(ViewId, material::Part, material::FieldText)>,
     frames: Vec<RowFrame>,
     scrolls: Vec<(ViewId, (f32, f32))>,
+    sticky: Vec<RowSticky>,
 }
 
 #[derive(Default)]
@@ -212,6 +225,7 @@ pub(super) struct Rows {
     pub(super) frame: u64,
     /// [`sticky_parents`] and the walk it was found for.
     sections: Option<(u64, Rc<IdSet<ViewId>>)>,
+    sticky_scrollers: Option<IdSet<ViewId>>,
     /// The environment the kept rows resolved `env()` against.
     env: Option<exact_kernel::Env>,
     /// The controls' own states and choices the kept rows drew
@@ -528,6 +542,7 @@ impl Painter {
             .get_or_insert_with(|| std::env::var("EXACT_ROWS").is_ok_and(|v| v == "0"));
         self.rows.frame += 1;
         self.rows.groups.clear();
+        self.rows.sticky_scrollers = None;
         self.rows.active = !off
             && (self.backend.rows() || self.backend.geometry_rows())
             && walk.skip.is_none()
@@ -601,6 +616,22 @@ impl Painter {
         self.rows
             .groups
             .push((id, walk.boxes.len(), walk.boxes.len()));
+    }
+
+    /// A sticky box moves with its constraint, independently of the group.
+    pub(super) fn group_can_move(&mut self, kernel: &Kernel, id: ViewId) -> bool {
+        !self.pixel_grid
+            || !self
+                .rows
+                .sticky_scrollers
+                .get_or_insert_with(|| {
+                    kernel
+                        .sticky_nodes()
+                        .into_iter()
+                        .filter_map(|key| kernel.sticky_constraint(key).map(|c| c.scroller))
+                        .collect()
+                })
+                .contains(&id)
     }
 
     pub(super) fn group_end(&mut self, walk: &Walk<'_, '_>) {
@@ -720,7 +751,7 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip_rect: Option<Rect4>,
     ) {
         let key = walk.scene.kernel.node(id).map(|n| n.key);
@@ -730,19 +761,30 @@ impl Painter {
     }
 
     /// Note a node walked while a row records.
-    pub(super) fn row_node(&mut self, kernel: &Kernel, node: &NodeRef<'_>, shown: &Presented) {
+    pub(super) fn row_node(&mut self, walk: &Walk<'_, '_>, node: &NodeRef<'_>, shown: &Presented) {
+        let (scene, grid) = (walk.scene, self.grid());
         if let Some(c) = &mut self.rows.recording {
             c.frames.push(RowFrame {
                 node: node.key,
                 frame: node.frame,
-                padding: kernel.resolved_padding(node.key).unwrap_or_default(),
+                padding: scene.kernel.resolved_padding(node.key).unwrap_or_default(),
             });
             c.may_have_hit_slop |= c.split_sections && node.style.may_have_hit_slop();
             // The sticky offset can change independently of the row's origin.
-            c.refused |= (c.split_sections
-                && node.layout_position() == exact_kernel::PositionType::Sticky)
-                || shown.press != 1.0
-                || shown.press_translate != [0.; 4];
+            if node.layout_position() == exact_kernel::PositionType::Sticky {
+                c.refused |= c.split_sections;
+                if self.pixel_grid {
+                    let scroll_grid =
+                        space::sticky_owner_grid(scene, node, &walk.scroll_grids).flatten();
+                    c.sticky.push(RowSticky {
+                        node: node.key,
+                        grid,
+                        scroll_grid,
+                        shift: space::sticky_displacement(scene, node, grid, scroll_grid),
+                    });
+                }
+            }
+            c.refused |= shown.press != 1.0 || shown.press_translate != [0.; 4];
         }
     }
 
@@ -938,13 +980,23 @@ impl Painter {
         pictures: bool,
     ) -> bool {
         let kernel = walk.scene.kernel;
+        let drawn = self.drawn(node);
         !row.stale
             && row.scale == scale
-            && row.size == (node.frame.width, node.frame.height)
+            && row.size == (drawn.width, drawn.height)
+            && row.phase == self.pixel_phase(node.frame)
             && row
                 .scrolls
                 .iter()
                 .all(|(id, at)| walk.scene.scroll.get(id).copied().unwrap_or((0.0, 0.0)) == *at)
+            && row.sticky.iter().all(|s| {
+                walk.scene.kernel.node_by_key(s.node).is_some_and(|node| {
+                    let scroll_grid =
+                        space::sticky_owner_grid(walk.scene, &node, &walk.scroll_grids)
+                            .unwrap_or(s.scroll_grid);
+                    space::sticky_displacement(walk.scene, &node, s.grid, scroll_grid) == s.shift
+                })
+            })
             && (!pictures
                 || row
                     .images
@@ -954,8 +1006,15 @@ impl Painter {
                 || row.frames.iter().all(|saved| {
                     kernel.node_by_key(saved.node).is_some_and(|n| {
                         let (g, f) = (n.frame, saved.frame);
-                        (g.x - node.frame.x - f.x).abs() < 0.5
-                            && (g.y - node.frame.y - f.y).abs() < 0.5
+                        let same = |a: f32, b: f32| {
+                            if row.phase.is_some() {
+                                a == b
+                            } else {
+                                (a - b).abs() < 0.5
+                            }
+                        };
+                        same(g.x - node.frame.x, f.x)
+                            && same(g.y - node.frame.y, f.y)
                             && g.width == f.width
                             && g.height == f.height
                             && kernel.resolved_padding(saved.node).unwrap_or_default()
@@ -970,7 +1029,7 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip_rect: Option<Rect4>,
     ) {
         if self.rows.refer.is_some() {
@@ -1000,7 +1059,8 @@ impl Painter {
             }
             return;
         }
-        let r = paint_rect(node.frame, offset);
+        let drawn = self.drawn(&node);
+        let r = self.drawn_rect(&node, offset);
         let origin = (ts.sx * r.0 + ts.tx, ts.sy * r.1 + ts.ty);
         let scale = (ts.sx, ts.sy);
         let frame = self.rows.frame;
@@ -1034,24 +1094,25 @@ impl Painter {
             if geometry {
                 self.rows.geometry_replays += 1;
             }
-            let d = (origin.0 - row.origin.0, origin.1 - row.origin.1);
+            let (dx, dy) = if row.local {
+                origin
+            } else {
+                (origin.0 - row.origin.0, origin.1 - row.origin.1)
+            };
             for b in &row.boxes {
                 let mut b = b.clone();
-                b.translate_clips(d.0, d.1);
-                b.rect.0 += d.0;
-                b.rect.1 += d.1;
-                b.clip = within(b.clip.map(|c| (c.0 + d.0, c.1 + d.1, c.2, c.3)), clip_rect);
-                b.affine = b.affine.map(|(t, r)| (t.post_translate(d.0, d.1), r));
+                b.place_row(dx, dy);
+                b.clip = within(b.clip, clip_rect);
                 walk.boxes.push(b);
             }
             for (k, p) in &row.text {
                 walk.text.insert(*k, p.clone());
             }
             for (id, inline) in &row.inline {
-                walk.inline.insert(*id, inline.translated(d.0, d.1));
+                walk.inline.insert(*id, inline.translated(dx, dy));
             }
             for &(id, part, text) in &row.field_texts {
-                self.labels.put(id, part, text.translated(d.0, d.1));
+                self.labels.put(id, part, text.translated(dx, dy));
             }
             self.damage.unsupported |= row.unsupported;
             let bounds = row.bounds_at(origin);
@@ -1118,15 +1179,18 @@ impl Painter {
         self.rows.next += 1;
         let start = walk.boxes.len();
         let unsupported = std::mem::replace(&mut self.damage.unsupported, false);
-        // Without a transform, the row is walked in its own coordinates (its
-        // top-left at 0,0, from document positions alone): the same row records
-        // the same ops wherever it scrolled to, so one recorded again unchanged
-        // keeps its drawing. Its boxes move to the page after.
+        // Keep untransformed rows' hits in recording coordinates so replay
+        // preserves fractional edges. Transformed rows walk in viewport
+        // coordinates, where software warps clip.
         let local = self.backend.row_local() && ts == Transform::identity();
-        let (walk_offset, content) = if local {
-            ((node.frame.x, node.frame.y), (0.0, 0.0))
+        let (walk_offset, walk_ts, content) = if local {
+            (
+                self.drawn_offset((node.frame.x, node.frame.y)),
+                Transform::identity(),
+                (0.0, 0.0),
+            )
         } else {
-            (offset, origin)
+            (offset, ts, origin)
         };
         self.backend.row_begin(self.rows.next, content, previous);
         self.rows.recording = Some(Capture {
@@ -1138,61 +1202,32 @@ impl Painter {
         if local {
             self.kept.to_page = page.pre_translate(origin.0, origin.1);
         }
-        self.node(walk, id, ts, walk_offset, None);
+        self.node(walk, id, walk_ts, walk_offset, None);
         self.kept.to_page = page;
-        let mut capture = self.rows.recording.take().expect("recording");
+        let capture = self.rows.recording.take().expect("recording");
+        let boxes = walk.boxes[start..].to_vec();
         if local {
             for b in &mut walk.boxes[start..] {
-                b.translate_clips(origin.0, origin.1);
-                if let Some(hit) = b.hit.as_mut() {
-                    for clip in &mut hit.shape_clips {
-                        clip.translate(origin.0, origin.1);
-                    }
-                    hit.rect.0 += origin.0;
-                    hit.rect.1 += origin.1;
-                    hit.clip = hit.clip.map(|c| (c.0 + origin.0, c.1 + origin.1, c.2, c.3));
-                    if let Some((inv, ..)) = &mut hit.projective {
-                        *inv =
-                            space::mul3(inv, &[1., 0., -origin.0, 0., 1., -origin.1, 0., 0., 1.]);
-                    } else {
-                        hit.affine = hit
-                            .affine
-                            .map(|(t, r)| (t.post_translate(origin.0, origin.1), r));
-                    }
-                }
-                b.rect.0 += origin.0;
-                b.rect.1 += origin.1;
-                b.clip = b.clip.map(|c| (c.0 + origin.0, c.1 + origin.1, c.2, c.3));
-                if let Some((inv, ..)) = &mut b.projective {
-                    // Undo the row's translation before entering the plane;
-                    // its affine coordinates remain local to that plane.
-                    *inv = space::mul3(inv, &[1., 0., -origin.0, 0., 1., -origin.1, 0., 0., 1.]);
-                } else {
-                    b.affine = b
-                        .affine
-                        .map(|(t, r)| (t.post_translate(origin.0, origin.1), r));
-                    // Field geometry leaves the recording with its box so
-                    // the caret and pointer use the same viewport coordinates.
+                b.place_row(origin.0, origin.1);
+                if b.projective.is_none() {
                     if let Some(field) = walk.fields.get_mut(&b.id) {
                         let field = Rc::make_mut(field);
                         field.transform = field.transform.post_translate(origin.0, origin.1);
                     }
                 }
             }
-            for (id, inline) in &mut capture.inline {
-                *inline = inline.translated(origin.0, origin.1);
+            for (id, inline) in &capture.inline {
                 if let Some(published) = walk.inline.get_mut(id) {
-                    *published = inline.clone();
+                    *published = inline.translated(origin.0, origin.1);
                 }
             }
-            for (id, part, text) in &mut capture.field_texts {
-                *text = text.translated(origin.0, origin.1);
-                self.labels.put(*id, *part, *text);
+            for &(id, part, text) in &capture.field_texts {
+                self.labels
+                    .put(id, part, text.translated(origin.0, origin.1));
             }
         }
         let row_unsupported = std::mem::replace(&mut self.damage.unsupported, unsupported);
         self.damage.unsupported |= row_unsupported;
-        let boxes: Vec<PaintedBox> = walk.boxes[start..].to_vec();
         for b in &mut walk.boxes[start..] {
             b.clip = within(b.clip, clip_rect);
             if let Some(hit) = b.hit.as_mut() {
@@ -1209,25 +1244,36 @@ impl Painter {
                 Some(c) => Some(intersect(b.rect, c)).filter(|r| r.2 > 0.0 && r.3 > 0.0),
             })
             .fold(None, |u, r| Some(union(u, r)))
-            .unwrap_or((origin.0, origin.1, 0.0, 0.0));
-        let placed = sticky(walk.scene, id, offset);
-        let rect = paint_rect(node.frame, placed);
+            .unwrap_or((content.0, content.1, 0.0, 0.0));
+        let placed = sticky(
+            walk.scene,
+            id,
+            offset,
+            self.grid().filter(|_| !grid::changes_axes(ts)),
+            &walk.scroll_grids,
+        );
         let p = (walk.scene.presented)(id);
+        let rect = self.node_rect(&node, placed, &p);
         let space =
             ts.pre_concat(p.transform(rect, node.style.transform_origin.resolve(rect.2, rect.3)));
         let covered = self
             .kept_bounds(walk, &node, space, placed)
-            .map_or(covered, |bounds| union(Some(covered), bbox(space, bounds)));
+            .map_or(covered, |bounds| {
+                let (x, y, w, h) = bbox(space, bounds);
+                union(
+                    Some(covered),
+                    (x - (origin.0 - content.0), y - (origin.1 - content.1), w, h),
+                )
+            });
         let bounds = (
-            covered.0 - origin.0 - MARGIN,
-            covered.1 - origin.1 - MARGIN,
+            covered.0 - content.0 - MARGIN,
+            covered.1 - content.1 - MARGIN,
             covered.2 + 2.0 * MARGIN,
             covered.3 + 2.0 * MARGIN,
         );
         // And what it paints past its boxes, which can pass the margin.
-        let shift = if local { (0.0, 0.0) } else { origin };
         let bounds = match capture.reach {
-            Some(r) => union(Some(bounds), (r.0 - shift.0, r.1 - shift.1, r.2, r.3)),
+            Some(r) => union(Some(bounds), (r.0 - content.0, r.1 - content.1, r.2, r.3)),
             None => bounds,
         };
         // The backend keeps the previous recording when this one is the same.
@@ -1251,8 +1297,10 @@ impl Painter {
                 id: rid,
                 drawing: None,
                 origin,
+                local,
                 scale,
-                size: (node.frame.width, node.frame.height),
+                size: (drawn.width, drawn.height),
+                phase: self.pixel_phase(node.frame),
                 can_translate_hits: boxes.iter().all(|b| b.hit.is_none()),
                 may_have_hit_slop: capture.may_have_hit_slop,
                 paint_stale: false,
@@ -1272,6 +1320,7 @@ impl Painter {
                     })
                     .collect(),
                 scrolls: capture.scrolls,
+                sticky: capture.sticky,
                 unsupported: row_unsupported,
                 bounds,
                 seen: frame,
@@ -1291,7 +1340,7 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip_rect: Option<Rect4>,
     ) {
         let Some(node) = walk.scene.kernel.node(id) else {
@@ -1332,7 +1381,7 @@ impl Painter {
                 pin
             }
         };
-        let r = paint_rect(node.frame, offset);
+        let r = self.drawn_rect(&node, offset);
         let origin = (ts.sx * r.0 + ts.tx, ts.sy * r.1 + ts.ty);
         let drawing = match self
             .rows
@@ -1365,6 +1414,34 @@ impl Painter {
     #[cfg(test)]
     pub(crate) fn rows_referred(&self) -> (usize, usize) {
         self.rows.referred
+    }
+}
+
+impl PaintedBox {
+    fn place_row(&mut self, dx: f32, dy: f32) {
+        let translate = |(x, y, w, h): Rect4| (x + dx, y + dy, w, h);
+        let mapping = |(ts, rect): (Transform, Rect4)| (ts.post_translate(dx, dy), rect);
+        let unplace = [1., 0., -dx, 0., 1., -dy, 0., 0., 1.];
+        self.translate_clips(dx, dy);
+        self.rect = translate(self.rect);
+        self.clip = self.clip.map(translate);
+        if let Some((inv, ..)) = &mut self.projective {
+            *inv = space::mul3(inv, &unplace);
+        } else {
+            self.affine = self.affine.map(mapping);
+        }
+        if let Some(hit) = &mut self.hit {
+            for clip in &mut hit.shape_clips {
+                clip.translate(dx, dy);
+            }
+            hit.rect = translate(hit.rect);
+            hit.clip = hit.clip.map(translate);
+            if let Some((inv, ..)) = &mut hit.projective {
+                *inv = space::mul3(inv, &unplace);
+            } else {
+                hit.affine = hit.affine.map(mapping);
+            }
+        }
     }
 }
 

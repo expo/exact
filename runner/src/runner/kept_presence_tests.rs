@@ -214,7 +214,10 @@ fn unlock_answers_behind_the_agent_s_ticket_and_never_for_a_tool() {
         br#"{"presence":"unlock","name":"token","reason":"reason.unlock"}"#.to_vec(),
     );
     // A tool's call fails before anything is asked (D12).
-    let refused = r.as_origin(super::provenance::CallOrigin::Tool, |r| run(r, &unlock));
+    let refused = r.as_cause(
+        super::provenance::Cause::of(super::provenance::CallOrigin::Tool, 0, false),
+        |r| run(r, &unlock),
+    );
     assert!(
         body(&refused).contains("person-required"),
         "{}",
@@ -224,7 +227,9 @@ fn unlock_answers_behind_the_agent_s_ticket_and_never_for_a_tool() {
     // The app's: a `presence` ticket, whose `allow` answers the value on this
     // call's reply alone.
     let (slot, reply) = pending();
-    let Dispatch::Run(Work::Later(work)) = r.native_work(&unlock) else {
+    let Dispatch::Run(Work::Later(work)) = r.as_cause(super::provenance::Cause::person(), |r| {
+        r.native_work(&unlock)
+    }) else {
         panic!("a held call")
     };
     work(reply);
@@ -251,7 +256,12 @@ fn pending() -> (Arc<Mutex<Option<Outcome>>>, Reply) {
 }
 
 fn run(r: &mut Runner<Source>, request: &Request) -> Outcome {
-    match r.native_work(request) {
+    // The app's own data code, unless the caller installs another cause.
+    let person = r
+        .has_cause()
+        .then(|| r.cause())
+        .unwrap_or(super::provenance::Cause::person());
+    match r.as_cause(person, |r| r.native_work(request)) {
         Dispatch::Run(Work::Now(work)) => work(),
         Dispatch::Run(Work::Later(work)) => {
             let (slot, reply) = pending();
@@ -323,7 +333,11 @@ fn presence_retry_deadline_finishes_an_idle_unlock_without_another_request() {
         assert!(!r.has_timers(), "no authored timer can rescue this request");
         let unlock = Request::native(br#"{"presence":"unlock","name":"token"}"#.to_vec());
         let (slot, reply) = pending();
-        let Dispatch::Run(Work::Later(work)) = r.native_work(&unlock) else {
+        let Dispatch::Run(Work::Later(work)) = r
+            .as_cause(super::provenance::Cause::person(), |r| {
+                r.native_work(&unlock)
+            })
+        else {
             panic!("the unlock waits for reconciliation")
         };
         work(reply);
@@ -431,7 +445,9 @@ fn presence_retry_deadline_waits_for_an_authenticated_read_before_replacing_its_
     *failure.lock().unwrap() = None;
     let unlock = Request::native(br#"{"presence":"unlock","name":"token"}"#.to_vec());
     let (slot, reply) = pending();
-    let Dispatch::Run(Work::Later(work)) = r.native_work(&unlock) else {
+    let Dispatch::Run(Work::Later(work)) = r.as_cause(super::provenance::Cause::person(), |r| {
+        r.native_work(&unlock)
+    }) else {
         panic!("the check waits for the person")
     };
     work(reply);

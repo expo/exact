@@ -362,6 +362,47 @@ mod tests {
     }
 
     #[test]
+    fn a_scaled_shared_image_lands_at_its_live_width() {
+        let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+        let app = format!("component App\n  view\n    image \"{png}\" sharedElement=\"photo\" object-fit=\"fill\" width=100 height=20 scale=4 transform-origin=\"0 0\"\n");
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(&app),
+            (),
+            (450., 100.),
+            2.625,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert_eq!(error, None);
+        assert!(p.wait_images(std::time::Duration::from_secs(30)));
+        p.frame();
+        let ops = take();
+        let defs = sets(&ops);
+        let [def] = defs.as_slice() else {
+            panic!("one shared image");
+        };
+        assert_eq!(def[17], 1);
+        let parents = 31 + def[30] as usize;
+        let drawing = &def[parents + 1 + 2 * def[parents] as usize..];
+        let mut at = 0;
+        let mut scale = 0.;
+        let mut width = None;
+        while at < drawing.len() {
+            match drawing[at] {
+                MATRIX => scale = f32::from_bits(drawing[at + 1]),
+                IMAGE | IMAGE_RRECT => width = Some(scale * f32::from_bits(drawing[at + 4])),
+                _ => {}
+            }
+            at = stream::end(drawing, at).unwrap();
+        }
+        assert_eq!(width, Some(1050.));
+        for field in [9, 15, 26] {
+            assert_eq!(f32::from_bits(def[field]), 1050.);
+        }
+    }
+
+    #[test]
     fn a_lowered_rotation_keeps_the_live_subtree() {
         // A lowered transform animates on the reader, absent from the paint
         // walk's transform: a shared element whose ancestor turns stays live,

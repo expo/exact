@@ -69,7 +69,7 @@ const PAGE_OF_SCROLLERS: &str = r#"component App
 /// it is, where its rows were painted, and its farthest offset.
 fn told(words: &[i32], id: ViewId) -> (i32, i32, [f32; 6]) {
     let s = words
-        .chunks(9)
+        .chunks_exact(9)
         .find(|s| s[0] == id as i32)
         .unwrap_or_else(|| panic!("scroller {id} is not in {words:?}"));
     (
@@ -270,15 +270,12 @@ fn the_reader_moves_a_scroller_and_is_told_where_it_is() {
         .collect();
     assert_eq!(px, [0., 0., 0., 600., 0., 360., 800., 240.]);
     assert_eq!(words[14], page as i32);
+    let drawn = [(page, (0., 0.))];
     // The first statement is whole: both scrollers, where they are.
-    let all = p.reader_scrollers(&[(page, (0., 0.))], 2.).unwrap();
-    assert_eq!(told(&all, page), (2 | 4, 0, [0., 0., 0., 0., 0., 2040.]));
-    assert_eq!(told(&all, inner), (2, 0, [0., 0., 0., 0., 0., 600.]));
-    assert_eq!(
-        p.reader_scrollers(&[(page, (0., 0.))], 2.),
-        None,
-        "nothing new"
-    );
+    let all = p.reader_scrollers(&drawn, 2.).unwrap();
+    assert_eq!(told(&all, page), (2 | 4, 0, [0., 0., 0., 0., 0., 1020.]));
+    assert_eq!(told(&all, inner), (2, 0, [0., 0., 0., 0., 0., 300.]));
+    assert_eq!(p.reader_scrollers(&drawn, 2.), None, "nothing new");
     // The reader moves the nested one: clamped at its end, the rest is the page's.
     assert_eq!(p.reader_scrolled(inner, (0., 250.), 0), Some((0., 250.)));
     assert_eq!(p.reader_scrolled(inner, (0., 250.), 0), Some((0., 50.)));
@@ -290,9 +287,9 @@ fn the_reader_moves_a_scroller_and_is_told_where_it_is() {
     );
     // Told back with the same revisions: these were the reader's own moves.
     // The page's rows were painted at 0 and are 400 px from there now.
-    let all = p.reader_scrollers(&[(page, (0., 0.))], 2.).unwrap();
-    assert_eq!(told(&all, inner), (2, 0, [0., 600., 0., 600., 0., 600.]));
-    assert_eq!(told(&all, page), (2 | 4, 0, [0., 400., 0., 0., 0., 2040.]));
+    let all = p.reader_scrollers(&drawn, 2.).unwrap();
+    assert_eq!(told(&all, inner), (2, 0, [0., 300., 0., 600., 0., 300.]));
+    assert_eq!(told(&all, page), (2 | 4, 0, [0., 200., 0., 0., 0., 1020.]));
 }
 
 #[test]

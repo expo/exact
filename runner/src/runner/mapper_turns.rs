@@ -155,7 +155,9 @@ impl<D: DataSource> Runner<D> {
         self.send_turn(stream, request, false);
     }
 
-    fn send_turn(&mut self, stream: u64, request: Request, held: bool) {
+    fn send_turn(&mut self, stream: u64, mut request: Request, held: bool) {
+        // The turn is the stream's: its request carries the stream's origin.
+        request.reach = self.reach_of(self.ticket_origin(stream));
         let Some(p) = self.pending.iter().find(|p| p.ticket == stream) else {
             return;
         };
@@ -294,13 +296,12 @@ impl<D: DataSource> Runner<D> {
         p.fetch = fetch;
         let target = p.target;
         let what = super::lines::fulfilling(stream, &self.target_name(target), "mapper turn");
-        let (origin, id) = (self.ticket_origin(stream), self.ticket_id(stream));
-        let causes = self.ticket_causes(stream);
+        let cause = self.ticket_cause(stream);
         self.mapper_turns.landing = true;
-        let result = self.as_invocation_caused(origin, id, causes, |r| r.fulfill_inner(p, outcome));
+        let result = self.as_cause(cause, |r| r.fulfill_inner(p, outcome));
         self.mapper_turns.landing = false;
         self.conclude(checkpoint, &result, was_poisoned);
-        self.as_invocation_caused(origin, id, causes, |r| r.arm_then(result.is_ok()));
+        self.as_cause(cause, |r| r.arm_then(result.is_ok()));
         self.arm_next(result.is_ok());
         self.log_outcome(&what, &result, was_poisoned);
         if let (Err(e), true) = (&result, self.holds(stream)) {

@@ -108,6 +108,10 @@ impl Presented {
         )
     }
 
+    pub(super) fn changes_axes(&self) -> bool {
+        self.scale * self.press != 1.0 || self.rotate != 0.0
+    }
+
     pub(super) fn moves(&self) -> bool {
         self.translate != (0.0, 0.0)
             || self.translate_percent != (0.0, 0.0)

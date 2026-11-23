@@ -188,14 +188,13 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     val frameRates = FrameRates()
     private val prefetch = true
 
-    // Scrolls the main thread sent that the exact thread has not taken: summed, so a busy thread catches up at once.
+    // Driver travel and gesture samples the exact thread has not taken.
     private val lock = Any()
     private var owedDy = 0f
     private var owedSeq = 0
     private var stepPosted = false
-    /** A finger's moves the exact thread has not taken, summed by scroller: how far, and the revision known. */
-    private class Moved(var dx: Float, var dy: Float, var rev: Int)
-    private val owedMoves = LinkedHashMap<Int, Moved>()
+    private class Moved(val id: Int, val dx: Float, val dy: Float, val rev: Int)
+    private var owedMoves = ArrayList<Moved>()
     /** lead=1: the velocity the window leads by (px/s, positive toward the end; otherwise none, a viewport each side).
      * Fast travel ([LEAD_ON] dp/s and on, until it slows below [LEAD_OFF]) leads by all exact2 allows (two viewports
      * more): a lead that followed the measured speed moved the window's far edge with each frame's jitter, mounting and
@@ -395,13 +394,10 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     }
 
     /** The reader moved scroller [id] by ([dx], [dy]) px, knowing revision [rev] of it ([Scrolling]); the main
-     * thread's [seq]th scroll. Summed like a driver's, so a busy thread catches up at once. */
+     * thread's [seq]th scroll. exact2 applies each sample in order, as the reader did. */
     fun scrolled(id: Int, dx: Float, dy: Float, rev: Int, seq: Int) {
         synchronized(lock) {
-            val m = owedMoves.getOrPut(id) { Moved(0f, 0f, rev) }
-            // What was sent under an older revision is dropped by exact2 anyway.
-            if (m.rev != rev) { m.dx = 0f; m.dy = 0f; m.rev = rev }
-            m.dx += dx; m.dy += dy
+            owedMoves.add(Moved(id, dx, dy, rev))
             owedSeq = seq
             if (stepPosted) return
             stepPosted = true
@@ -423,20 +419,20 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
 
     private val step = Runnable {
         val dy: Float; val s: Int
-        var ids: IntArray? = null; var moves: Array<Moved>? = null
+        val moves: List<Moved>
         synchronized(lock) {
             dy = owedDy; s = owedSeq; owedDy = 0f; stepPosted = false
-            if (owedMoves.isNotEmpty()) { ids = owedMoves.keys.toIntArray(); moves = owedMoves.values.toTypedArray(); owedMoves.clear() }
+            moves = owedMoves
+            owedMoves = ArrayList()
         }
         android.os.Trace.beginSection("exact scroll")
-        val fingers = moves
-        if (fingers != null) for (k in fingers.indices) Native.scrolled(ids!![k], fingers[k].dx, fingers[k].dy, fingers[k].rev)
-        if (fingers == null || dy != 0f) Native.scroll(dy)
+        for (m in moves) Native.scrolled(m.id, m.dx, m.dy, m.rev)
+        if (moves.isEmpty() || dy != 0f) Native.scroll(dy)
         android.os.Trace.endSection()
         seq = s
         // A step of the reader's own moves whose frame would only move what it moved itself makes none, unless an
         // accessibility service is on (each frame tells it the scrollers' offsets). What follows a frame still runs.
-        if (running && !accessible && fingers != null && dy == 0f && Native.moved()) produced() else produce()
+        if (running && !accessible && moves.isNotEmpty() && dy == 0f && Native.moved()) produced() else produce()
         // Every third step: the window's lead mounts, off the main thread.
         if (prefetch && ++steps % 3 == 0) { handler.removeCallbacks(refiner); handler.post(refiner) }
         if (led) { handler.removeCallbacks(settle); handler.postDelayed(settle, SETTLE_MS) }

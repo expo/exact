@@ -843,6 +843,9 @@ impl Backend for Recorder {
     fn rows(&self) -> bool {
         self.planes.is_empty()
     }
+    fn pixel_grid(&self) -> bool {
+        true
+    }
     fn rows_through(&self) -> bool {
         self.rows()
     }
@@ -1022,8 +1025,17 @@ impl Backend for Recorder {
         self.row_shown(id, bounds);
         let s = self.scale;
         self.ops.extend([ROW_DRAW, id]);
-        self.f((origin.0 - ROW_PAD) * s);
-        self.f((origin.1 - ROW_PAD) * s);
+        // The row's origin on a whole pixel, where its frame and the scroll
+        // have it but for a float's last bits: the reader draws a kept row
+        // there, and its text again from Skia's cache only a whole number of
+        // pixels from where it was drawn. One a transform put between pixels
+        // (a centred dialog, a route in flight) stays there with its box.
+        let whole = |v: f32| match (v * s).round() {
+            r if (v * s - r).abs() < 1.0 / 64.0 => r,
+            _ => v * s,
+        };
+        self.f(whole(origin.0) - ROW_PAD * s);
+        self.f(whole(origin.1) - ROW_PAD * s);
     }
 
     fn row_draw_through(&mut self, id: u32, ts: Transform, bounds: Rect4) {
@@ -1244,7 +1256,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
             }
         }
 
-        if let Some(mut shift) = self.shift(now) {
+        if let Some(mut shift) = self.shift(now, false) {
             // A play that changed since the last stream (a row that came
             // into view starts its animations): its layer's tracks go with
             // the move, where the reader takes them there.
@@ -1329,7 +1341,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.moved > 0 && self.moves < 1000 && now - self.moved_at >= 12.0
     }
 
-    fn shift(&mut self, at: f64) -> Option<Vec<u32>> {
+    fn shift(&mut self, at: f64, reader_only: bool) -> Option<Vec<u32>> {
         let p = &self.p;
         // Rows mounted out of view since the paint (a quiet epoch) show at the
         // next one, so it comes sooner: they may scroll in within a quarter
@@ -1349,7 +1361,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
         let ops = self
             .painted
             .as_ref()?
-            .shift(&mut self.p, self.quiet, self.scale)?;
+            .shift(&mut self.p, self.quiet, self.scale, reader_only)?;
         self.moved += 1;
         self.moved_at = at;
         Some(ops)

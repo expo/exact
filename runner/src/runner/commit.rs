@@ -32,7 +32,7 @@ pub(super) struct Checkpoint {
     timers: Vec<super::Timer>,
     owned_sends: Vec<Option<super::owned_sends::OwnedSend>>,
     then_due: Vec<f64>,
-    landed: Vec<usize>,
+    landed: Vec<(usize, super::provenance::Cause)>,
     render: Option<super::owned_tasks::RenderCheckpoint>,
     published: Option<Box<Published>>,
     commands: usize,
@@ -272,8 +272,19 @@ impl<D: DataSource> Runner<D> {
         }
     }
 
-    /// Run an action by name with `args` — what a test or an agent does.
+    /// Run an action by name with `args` as the person's act — what a test
+    /// or an agent does.
     pub fn act(&mut self, name: &str, args: Vec<Value>) -> Result<CommitReceipt, RunnerError> {
+        let person = super::provenance::Cause::person();
+        self.as_cause(person, |r| r.act_named(name, args))
+    }
+
+    /// [`Self::act`] under the cause installed.
+    pub(super) fn act_named(
+        &mut self,
+        name: &str,
+        args: Vec<Value>,
+    ) -> Result<CommitReceipt, RunnerError> {
         let what = format!("act {name}");
         let was_poisoned = self.poisoned;
         let result = match self
@@ -318,10 +329,10 @@ impl<D: DataSource> Runner<D> {
     /// past (`timer_due_ms`): the answer's commit is never extended by
     /// what it causes, and a refused `then` leaves the answer standing.
     pub(super) fn arm_then(&mut self, stood: bool) {
-        for m in std::mem::take(&mut self.landed) {
+        for (m, cause) in std::mem::take(&mut self.landed) {
             if stood && self.mutation_row(m).then.is_some() {
                 self.then_due[m] = self.armed_at();
-                self.note_then(m);
+                self.note_then(m, cause);
             }
         }
     }
@@ -494,7 +505,7 @@ impl<D: DataSource> Runner<D> {
             match self.ask_send(target, source, sargs, write) {
                 Ok(super::queue::Asked::Now(slot, v)) => {
                     answered.push((m, slot, v));
-                    self.landed.push(m);
+                    self.landed.push((m, self.cause()));
                     landed_now.push(m);
                     // It replaces an earlier send of this action still to go
                     // out (newest wins): that request never goes.

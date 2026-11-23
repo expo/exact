@@ -9,7 +9,8 @@
 //! bytes no longer decode, or whose value no longer fits the declared shape
 //! is simply not used, and the compiled empty-store placeholder stands.
 
-use super::{CallOrigin, DataSource, ResourceState, Runner, RunnerError};
+use super::provenance::Cause;
+use super::{DataSource, ResourceState, Runner, RunnerError};
 use crate::store::Store;
 use exact_kernel::CommitReceipt;
 use exact_plan::Value;
@@ -840,11 +841,8 @@ impl<D: DataSource> Runner<D> {
                 .and_then(|_| self.gate_step())
             {
                 Ok(()) => {
-                    for ((origin, id), (target, source, args, request)) in by.into_iter().zip(later)
-                    {
-                        self.as_invocation(origin, id, |r| {
-                            r.enqueue(target, source, args, request, false)
-                        });
+                    for (cause, (target, source, args, request)) in by.into_iter().zip(later) {
+                        self.as_cause(cause, |r| r.enqueue(target, source, args, request, false));
                     }
                     self.update()
                 }
@@ -892,12 +890,12 @@ impl<D: DataSource> Runner<D> {
     /// long ago, so a source's refusal ends that one send, said in the
     /// journal, as a refused reply does — never this commit.
     #[allow(clippy::type_complexity)]
-    fn send_unsent(&mut self) -> (Vec<(CallOrigin, u64)>, Vec<super::Later>) {
+    fn send_unsent(&mut self) -> (Vec<Cause>, Vec<super::Later>) {
         let (mut by, mut later) = (Vec::new(), Vec::new());
-        for (target, source, args, (origin, id)) in std::mem::take(&mut self.unsent) {
+        for (target, source, args, cause) in std::mem::take(&mut self.unsent) {
             let sent = later.len();
-            self.as_invocation(origin, id, |r| r.send_one(target, source, args, &mut later));
-            by.extend(std::iter::repeat_n((origin, id), later.len() - sent));
+            self.as_cause(cause, |r| r.send_one(target, source, args, &mut later));
+            by.extend(std::iter::repeat_n(cause, later.len() - sent));
         }
         self.sync_pending_flags();
         // Pending until the request goes out with the commit, or is let go.
@@ -907,9 +905,9 @@ impl<D: DataSource> Runner<D> {
         (by, later)
     }
 
-    /// The origin and invocation a send made now keeps (`unsent`).
-    pub(super) fn sent_by(&self) -> (CallOrigin, u64) {
-        (self.call_origin(), self.invocation_id())
+    /// The cause a send made now keeps (`unsent`).
+    pub(super) fn sent_by(&self) -> Cause {
+        self.cause()
     }
 
     /// One of [`Self::send_unsent`]'s sends, under its commit's origin. It
@@ -940,7 +938,7 @@ impl<D: DataSource> Runner<D> {
                     self.failed_mut[m] = None;
                     self.land_send(m, slot, value);
                 }
-                self.landed.push(m);
+                self.landed.push((m, self.cause()));
                 for r in self.declared_refreshes(m) {
                     self.force_refresh(r);
                     self.note_reasked(r);

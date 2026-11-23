@@ -237,7 +237,7 @@ impl<D: DataSource> Runner<D> {
         p.effects = false;
         p.grant = None;
         let target = p.target;
-        self.pass_on(ticket, next);
+        self.restamp(ticket, next);
         let name = self.target_name(target);
         self.log(format!(
             "request {ticket} ({name}): its answer's timer came due first; it runs on as {}, and request {next} resumes the answer",

@@ -143,6 +143,7 @@ pub(crate) struct Tape {
 #[derive(Clone, Copy)]
 pub(super) struct Live<'a, 'scene> {
     pub(super) scene: &'a Scene<'scene>,
+    pub(super) scroll_grids: &'a [(ViewId, Option<f32>)],
     pub(super) viewport: (f32, f32),
     pub(super) scale: f32,
 }
@@ -152,30 +153,44 @@ pub(super) struct Sticky {
     constraint: exact_kernel::StickyConstraint,
     scroller: exact_kernel::NodeKey,
     recorded: (f32, f32),
+    /// The display's scale, where it is drawn on its pixels (`grid.rs`).
+    grid: Option<f32>,
 }
 
 impl Sticky {
-    pub(super) fn capture(scene: &Scene<'_>, id: ViewId) -> Option<Self> {
+    pub(super) fn capture(
+        walk: &super::Walk<'_, '_>,
+        id: ViewId,
+        grid: Option<f32>,
+    ) -> Option<Self> {
+        let scene = walk.scene;
         let node = scene.kernel.node(id)?;
         let constraint = scene.kernel.sticky_constraint(node.key)?;
         let scroller = scene.kernel.node(constraint.scroller)?;
+        let scroll_grid = space::sticky_owner_grid(scene, &node, &walk.scroll_grids).flatten();
+        let scroll = space::sticky_scroll(scene, &scroller, scroll_grid);
+        let grid = grid.filter(|_| !super::grid::leaves_grid(&node, &(scene.presented)(id)));
         Some(Self {
             constraint,
             scroller: scroller.key,
-            recorded: constraint.offset(space::sticky_scroll(scene, &scroller)),
+            recorded: super::grid::sticky_shift(constraint, &scroller, scroll, grid),
+            grid,
         })
     }
 
-    fn offset(&self, scene: Option<&Scene<'_>>) -> (f32, f32) {
-        scene
-            .and_then(|scene| {
-                let scroller = scene.kernel.node_by_key(self.scroller)?;
-                Some(
-                    self.constraint
-                        .offset(space::sticky_scroll(scene, &scroller)),
-                )
-            })
-            .unwrap_or(self.recorded)
+    fn offset(&self, live: Option<Live<'_, '_>>) -> (f32, f32) {
+        live.and_then(|live| {
+            let scroller = live.scene.kernel.node_by_key(self.scroller)?;
+            let grid = space::scroll_grid(&scroller, live.scroll_grids).flatten();
+            let scroll = space::sticky_scroll(live.scene, &scroller, grid);
+            Some(super::grid::sticky_shift(
+                self.constraint,
+                &scroller,
+                scroll,
+                self.grid,
+            ))
+        })
+        .unwrap_or(self.recorded)
     }
 
     pub(super) fn unplace(&self, inverse: Transform) -> Transform {
@@ -431,16 +446,11 @@ impl Backend for Recorder {
 impl Tape {
     /// Conservative paint bounds, including nested drawings and sticky
     /// constraints evaluated at the same live scroll as replay.
-    pub(super) fn bounds(&self, scene: &Scene<'_>, scale: f32, ts: Transform) -> Option<Rect4> {
-        self.bounds_in(scene, scale, mul(ts, &[1., 0., 0., 0., 1., 0., 0., 0., 1.]))
+    pub(super) fn bounds(&self, live: Live<'_, '_>, ts: Transform) -> Option<Rect4> {
+        self.bounds_in(live, mul(ts, &IDENTITY))
     }
 
-    pub(super) fn bounds_in(
-        &self,
-        scene: &Scene<'_>,
-        scale: f32,
-        matrix: [f32; 9],
-    ) -> Option<Rect4> {
+    pub(super) fn bounds_in(&self, live: Live<'_, '_>, matrix: [f32; 9]) -> Option<Rect4> {
         let mut area = None;
         let mut planes = vec![matrix];
         let mut blur = 0.0;
@@ -468,7 +478,7 @@ impl Tape {
                 | Op::Island(_, r, ts, _)
                 | Op::Canvas(_, _, r, _, ts) => mapped(*ts, *r),
                 Op::Text(p, _, at, ts) => p
-                    .paint_bounds(scale)
+                    .paint_bounds(live.scale)
                     .and_then(|r| mapped(*ts, grow((r.0 + at.0, r.1 + at.1, r.2, r.3), blur))),
                 Op::Svg(s, ts) => s.path.bounds().and_then(|r| {
                     let stroke = if s.stroke.is_some() {
@@ -484,21 +494,18 @@ impl Tape {
                     }
                     let ts =
                         Transform::from_translate(at.0, at.1).pre_scale(1.0 / size.0, 1.0 / size.1);
-                    drawing.bounds_in(scene, scale, mul3(&space, &mul(ts, &IDENTITY)))
+                    drawing.bounds_in(live, mul3(&space, &mul(ts, &IDENTITY)))
                 }
                 Op::Sticky(sticky, drawing, ts) => {
-                    let d = sticky.offset(Some(scene));
+                    let d = sticky.offset(Some(live));
                     drawing.bounds_in(
-                        scene,
-                        scale,
+                        live,
                         mul3(&space, &mul(ts.pre_translate(d.0, d.1), &IDENTITY)),
                     )
                 }
-                Op::Filter(filter, drawing, ts) => {
-                    mapped(*ts, filter.region(drawing, scene, scale))
-                }
+                Op::Filter(filter, drawing, ts) => mapped(*ts, filter.region(drawing, live)),
                 Op::Tape(drawing, ts) => {
-                    drawing.bounds_in(scene, scale, mul3(&space, &mul(*ts, &IDENTITY)))
+                    drawing.bounds_in(live, mul3(&space, &mul(*ts, &IDENTITY)))
                 }
                 Op::PlaneBegin(h) => {
                     planes.push(mul3(&space, h));
@@ -637,7 +644,7 @@ impl Tape {
                     }
                 }
                 Op::Sticky(sticky, tape, ts) => {
-                    let d = sticky.offset(live.map(|l| l.scene));
+                    let d = sticky.offset(live);
                     tape.replay_live(b, text, t(*ts).pre_translate(d.0, d.1), live);
                 }
                 Op::Filter(filter, drawing, ts) => filter.replay(b, text, drawing, t(*ts), live),

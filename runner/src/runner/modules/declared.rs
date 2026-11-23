@@ -33,6 +33,7 @@
 //! Outside the agent a bound implementation takes the call, and journals
 //! its own outcome; a data-code call settles from its reply.
 
+use super::super::provenance::Cause;
 use super::super::{DataSource, Runner};
 use super::{error_code, response, CallOrigin, Json, ModulesRow, Pending, Waits};
 use crate::request::{Dispatch, Outcome, Reply, Work};
@@ -152,12 +153,12 @@ impl<D: DataSource> Runner<D> {
 
     /// Run the effects a commit stated, in order, once it stands.
     pub(super) fn run_module_effects_linked(&mut self, effects: Vec<(ModulesRow, Vec<Value>)>) {
-        let origin = self.call_origin();
+        let cause = self.cause();
         for (row, args) in effects {
             let mut args = self.args_json(&row, &args);
             self.clamp_bounds(&row, &mut args);
             self.resolve_of(&row, &mut args);
-            let _ = self.module_effect(&row, args, None, origin);
+            let _ = self.module_effect(&row, args, None, cause);
         }
     }
 
@@ -168,8 +169,9 @@ impl<D: DataSource> Runner<D> {
         row: &ModulesRow,
         args: Json,
         reply: Option<Arc<Mutex<Pending>>>,
-        origin: CallOrigin,
+        cause: Cause,
     ) -> Effect {
+        let origin = cause.origin;
         let declared = self.plan.str(row.declared).to_owned();
         // The grants, origin and foreground every call is held to (LLP
         // 1133.002 D14), before anything else; a grant matched by value
@@ -181,7 +183,7 @@ impl<D: DataSource> Runner<D> {
         if let Some(refused) = self.undeclared(row, &args) {
             return Effect::Now(refused);
         }
-        if let Err(why) = self.admit(row, &args, origin) {
+        if let Err(why) = self.admit(row, &args, cause) {
             self.log(format!("{}: refused, {why}", self.key(row)));
             let message = why
                 .starts_with("person-required")
@@ -198,7 +200,7 @@ impl<D: DataSource> Runner<D> {
         // The implementation answers: bound as in production, or, for an
         // interface that is its own substitute, told it runs under the agent.
         if self.route(row) != super::Route::Substitute {
-            let request = self.as_origin(origin, |r| r.bound_request(row, args, None));
+            let request = self.as_cause(cause, |r| r.bound_request(row, args, None));
             let lines = self.extensions.declared.lines.clone();
             let slot = self.native_slot();
             let Some(handler) = slot.extension_handler() else {
@@ -207,7 +209,7 @@ impl<D: DataSource> Runner<D> {
             // A background action owns a native statement until its reply;
             // ordinary wakes keep fire-and-forget statements (LLP 1133.004 stage 2).
             let owner = if reply.is_none() && origin == CallOrigin::Action {
-                self.invocation_id()
+                cause.owner()
             } else {
                 0
             };
@@ -349,14 +351,9 @@ impl<D: DataSource> Runner<D> {
 
     /// A data-code call of a send that answers nothing, substituted: it
     /// settles once the effect is done or refused.
-    pub(super) fn effect_call(
-        &mut self,
-        row: &ModulesRow,
-        args: Json,
-        origin: CallOrigin,
-    ) -> Dispatch {
+    pub(super) fn effect_call(&mut self, row: &ModulesRow, args: Json, cause: Cause) -> Dispatch {
         let slot = Arc::new(Mutex::new(Pending::default()));
-        if let Effect::Now(answer) = self.module_effect(row, args, Some(slot.clone()), origin) {
+        if let Effect::Now(answer) = self.module_effect(row, args, Some(slot.clone()), cause) {
             return Dispatch::Run(Work::Now(Box::new(move || response(&answer))));
         }
         Dispatch::Run(Work::Later(Box::new(move |reply| {

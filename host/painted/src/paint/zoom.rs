@@ -146,7 +146,7 @@ impl Painter {
         kernel: &Kernel,
         node: &NodeRef<'_>,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
     ) -> Transform {
         let Some((z, fit)) = self.zoom_of(node).zip(Fit::of(kernel, node)) else {
             return ts;
@@ -154,7 +154,8 @@ impl Painter {
         let Some(child) = kernel.node(fit.child) else {
             return ts;
         };
-        let at = (child.frame.x - offset.0, child.frame.y - offset.1);
+        let c = child.frame;
+        let at = grid::paint_origin((c.x, c.y), offset);
         let shift = fit.shift(z);
         ts.pre_translate(at.0 + shift.0, at.1 + shift.1)
             .pre_scale(z, z)

@@ -91,7 +91,10 @@ pub struct Under {
 pub(super) struct Reader {
     tracked: BTreeMap<ViewId, (u32, (f32, f32))>,
     /// The last statement [`Presenter::reader_scrollers`] returned.
+    #[cfg(any(target_os = "android", test))]
     last: Vec<i32>,
+    #[cfg(any(target_os = "android", test))]
+    last_scale: f32,
     /// A move since the last statement did not land as the reader sent it
     /// (dropped, or stopped at an end): the reader draws it as sent until
     /// a stream acknowledges it.
@@ -129,6 +132,8 @@ const REFRESHING: i32 = 32;
 /// there zooms it (D5).
 const ZOOM: i32 = 256;
 const DOUBLE_TAP: i32 = 512;
+#[cfg(any(target_os = "android", test))]
+const STATEMENT_WORDS: usize = 9;
 
 fn scrolls(o: Overflow) -> bool {
     matches!(o, Overflow::Scroll | Overflow::Auto)
@@ -549,6 +554,19 @@ impl<D: DataSource> Presenter<D> {
             })
     }
 
+    /// The reader has the exact starting offset and recording scale its
+    /// pending samples need to place these rows on the painter's pixels.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn reader_places_group(&self, id: ViewId, scale: f32) -> bool {
+        self.reader.last_scale == scale
+            && self.reader_knows(id)
+            && self
+                .reader
+                .last
+                .chunks_exact(STATEMENT_WORDS)
+                .any(|s| s[0] as ViewId == id && s[1] & NODE != 0)
+    }
+
     /// The scrollers the clamp leaves alone: each a list kept while its route is hidden (a
     /// full-screen route over it), or shown again but not yet painted where it shows. The
     /// picture holds no travel for such a list, so the clamp would put it at its top and it
@@ -646,13 +664,11 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// The scrollers the reader knows, sent when they change or a rejected
-    /// move needs acknowledging. Nine words a scroller:
-    /// id, flags (as [`Presenter::reader_under`]'s, for any drag), revision,
-    /// then as float bits where it is (x, y), the offset its rows were last
-    /// painted at (x, y; `drawn` names them for a scroller that has rows)
-    /// and its farthest offset (x, y), in the reader's pixels. A scroller the
-    /// reader knew that is not in a statement is gone (its node went, or a
-    /// driver took it over): the reader forgets it.
+    /// move needs acknowledging. Nine words per scroller.
+    /// Id, flags, revision, then pairs of float bits for the current logical
+    /// offset in points, recorded offset in pixels, and logical maximum in
+    /// points. An omitted scroller is gone: the reader forgets it.
+    #[cfg(any(target_os = "android", test))]
     pub fn reader_scrollers(
         &mut self,
         drawn: &[(ViewId, (f32, f32))],
@@ -665,24 +681,27 @@ impl<D: DataSource> Presenter<D> {
         }
         let limits = self.collection_scroll_limits();
         let ids: Vec<ViewId> = self.reader.tracked.keys().copied().collect();
-        let mut out = Vec::with_capacity(ids.len() * 9);
+        let mut out = Vec::with_capacity(ids.len() * STATEMENT_WORDS);
         for id in ids {
             let Some(mut s) = self.scroller(id, &limits) else {
                 self.reader.tracked.remove(&id);
                 continue;
             };
             let rev = self.reader_revision(&s);
-            let painted = drawn.iter().find(|g| g.0 == id).map(|g| g.1);
+            let painted = drawn.iter().find(|(owner, _)| *owner == id);
             s.node = painted.is_some();
-            let at = painted.unwrap_or(s.offset);
+            let at = painted.map_or((s.offset.0 * scale, s.offset.1 * scale), |(_, at)| {
+                let pixel = |v| crate::paint::grid::device_pixel(v, scale) as f32;
+                (pixel(at.0), pixel(at.1))
+            });
             out.extend([id as i32, self.reader_flags(&s), rev as i32]);
-            let px = [s.offset.0, s.offset.1, at.0, at.1, s.max.0, s.max.1];
-            out.extend(px.iter().map(|v| bits(v * scale)));
+            out.extend([s.offset.0, s.offset.1, at.0, at.1, s.max.0, s.max.1].map(bits));
         }
-        if !missed && out == self.reader.last {
+        if !missed && out == self.reader.last && scale == self.reader.last_scale {
             return None;
         }
         self.reader.last.clone_from(&out);
+        self.reader.last_scale = scale;
         Some(out)
     }
 

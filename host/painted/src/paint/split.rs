@@ -30,7 +30,7 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip: Option<Rect4>,
     ) {
         if self.staged(id) {
@@ -51,11 +51,16 @@ impl Painter {
         let s = s.clone();
         self.row_refuse();
         let pane = s.pane();
-        let pane = (pane.0 - offset.0, pane.1 - offset.1, pane.2, pane.3);
+        let pane = (
+            (f64::from(pane.0) - offset.0) as f32,
+            (f64::from(pane.1) - offset.1) as f32,
+            pane.2,
+            pane.3,
+        );
         if id == s.root {
             let list = (
-                s.rect.0 - offset.0,
-                s.rect.1 - offset.1,
+                (f64::from(s.rect.0) - offset.0) as f32,
+                (f64::from(s.rect.1) - offset.1) as f32,
                 s.list_width,
                 s.rect.3,
             );
@@ -74,7 +79,13 @@ impl Painter {
             self.backend
                 .fill(&Shape::rect(pane), page_color(self.dark), ts);
             if let Some(placeholder) = s.placeholder {
-                self.node_at(walk, placeholder, ts, (-pane.0, -pane.1), clipped);
+                self.node_at(
+                    walk,
+                    placeholder,
+                    ts,
+                    (-f64::from(pane.0), -f64::from(pane.1)),
+                    clipped,
+                );
             } else if s.detail.is_none() {
                 self.split_empty(walk, &s, pane, ts);
             }
@@ -85,7 +96,7 @@ impl Painter {
                 ts,
                 ground: Some(page_color(self.dark)),
             };
-            let offset = (-pane.rect.0, -pane.rect.1);
+            let offset = (-f64::from(pane.rect.0), -f64::from(pane.rect.1));
             self.route_node(walk, id, ts, offset, clip, Some(pane));
         }
     }

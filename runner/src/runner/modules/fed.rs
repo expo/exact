@@ -115,7 +115,7 @@ impl<D: DataSource> Runner<D> {
         }
         let kernel = &self.kernel;
         (self.extensions.fed.canvases).retain(|v, _| kernel.node(*v).is_some());
-        let origin = self.extensions.views.last;
+        let origin = (self.extensions.views.last).unwrap_or(CallOrigin::Device);
         let names: Vec<String> = self.extensions.fed.surfaces.keys().cloned().collect();
         for name in names {
             let shown = self.surface_shown(&name);
