@@ -344,16 +344,18 @@ function render(page: SitePage): { blocks: Block[]; toc: TocItem[] } {
 }
 
 function sectionsFromLevelTwo(tokens: Token[], title?: Token): Token[] {
-  const sections = new Set(tokens.filter(t => t.type === 'heading' && t.depth > 1 && t !== title));
-  const lift = Math.min(...[...sections].map(t => t.depth)) - 2;
-  if (!sections.size || lift <= 0) return tokens;
+  const headings = tokens.filter((t): t is Tokens.Heading => t.type === 'heading' && t.depth > 1 && t !== title);
+  const lift = Math.min(...headings.map(t => t.depth)) - 2;
+  if (!headings.length || lift <= 0) return tokens;
+  const lifted = new Set<Token>(headings);
   const marks = new RegExp(`^( {0,3})#{${lift}}`);
-  return tokens.map(t => (sections.has(t) ? { ...t, depth: t.depth - lift, raw: t.raw.replace(marks, '$1') } : t));
+  return tokens.map(t => (t.type === 'heading' && lifted.has(t) ? { ...t, depth: t.depth - lift, raw: t.raw.replace(marks, '$1') } : t));
 }
 
 const pages: SitePage[] = docs.flatMap(doc => {
   const base: SitePage = { route: doc.nav.route, path: doc.nav.path, title: doc.title, description: doc.description, source: doc.nav.source, tokens: sectionsFromLevelTwo(doc.intro), part: false, skipHeading: '', hidden: !!doc.nav.hidden, landing: !!doc.nav.landing };
-  if (!doc.nav.split) return [{ ...base, tokens: sectionsFromLevelTwo([...doc.intro, ...doc.sections.flatMap(s => s.tokens)]) }];
+  // An unsplit page has no sections: its intro is the whole page.
+  if (!doc.nav.split) return [base];
   const written = doc.nav.sectionDescriptions ?? {};
   return [
     base,

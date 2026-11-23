@@ -59,7 +59,7 @@ for (const p of pages) {
   let above = 0;
   for (const line of lines) {
     if (line === '<AgentInstructions>' || line === '</AgentInstructions>') { instructions = line === '<AgentInstructions>'; continue; }
-    const level = instructions ? 0 : (line.match(/^(#{1,6}) \S/)?.[1].length ?? 0);
+    const level = instructions ? 0 : (line.match(/^ {0,3}(#{1,6})[ \t]+\S/)?.[1].length ?? 0);
     if (!level) continue;
     if (level > above + 1) fail(where, `a level ${level} heading below a level ${above} heading: ${line.slice(0, 80)}`);
     above = level;
