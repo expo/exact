@@ -17,6 +17,11 @@
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 
+#[cfg(all(
+    feature = "attach",
+    any(target_os = "linux", all(test, unix, not(target_os = "android")))
+))]
+mod attach;
 #[cfg(target_os = "linux")]
 pub mod display;
 #[cfg(all(test, unix, not(any(target_os = "linux", target_os = "android"))))]
