@@ -68,8 +68,8 @@ internal class Warm {
         /**
          * At a launch, while the host boots and the RenderThread has nothing to draw: offscreen frames of the drawing
          * [Player] does most, so the GPU pipelines a first screen needs are made then, not inside its frame. HWUI
-         * keeps them in its cache on disk, saved seconds after a launch; with none (the first launch after an install
-         * or update, or a process ended before the save) a moto g57 power's first screen made 16 in ~190 ms. Small
+         * keeps them in its cache on disk, saved seconds after a launch; with none (an install's first launch, or after
+         * the app's cache was cleared) a moto g57 power's first screen made 15 in ~160 ms. Small
          * frames, most common first, until [stop]: one in flight delays the first picture by its own few pipelines.
          */
         fun launch() = Thread({
