@@ -1,7 +1,9 @@
 //! The abstract syntax tree.
 pub use crate::colours::{ColorProfileDecl, DesignSource, ThemeDecl};
 pub use crate::tap::TapForm;
-pub use crate::test_steps::{LayoutOperand, StateComparison, StateOperand, Step, TestDecl};
+pub use crate::test_steps::{
+    DragLeg, LayoutOperand, StateComparison, StateOperand, Step, TestDecl,
+};
 use crate::Span;
 use std::collections::BTreeMap;
 /// Identifier ranges that are distinct from their AST construct's diagnostic span.

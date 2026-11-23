@@ -6744,8 +6744,10 @@ input does not wait for a request its action sends; `clock data` lands it.
 `tap <target> drag <dx> <dy> … during "<op>" …` runs the quoted reads after the
 move, with the finger still down, before the hold. Under `--touch platform` the
 lift is scripted, so the reads run inside the hold and `during` needs one
-(`hold 300 during "state"`); the hold then moves the clock by its length on real time,
-as a `clock +<ms> real` would, so the app's `every` and `after` run while it is held. `tap <target> drag to <other> [at <x> <y>]`
+(`hold 300 during "state"`). Under the agent's clock the gesture moves the clock by its
+`press`, `over` and `hold` as the finger makes them (under `--touch platform` on real
+time, as a `clock +<ms> real` would), so the app's `every` and `after` run while it is
+held and `performanceNow()` in its pointer actions reads how long it was pressed. `tap <target> drag to <other> [at <x> <y>]`
 ends the drag on another node (refused by name when it is not mounted or off
 screen); a drag that should autoscroll a list or a board is `drag dx dy hold ms`. On iOS
 without `--touch platform` a drag scrolls the scroll or list it starts on with the
@@ -6762,12 +6764,13 @@ press. The start stays in the viewport. For a held dismissal, write
 `tap transcript drag 0 200 hold 1000 into keyboard during "state"` and compare
 `keyboard.top` with the finger's endpoint.
 
-On an iOS simulator, append `then dx dy [over ms] [hold ms] [during "op" …]`
-to script another leg with the same finger. For example:
+Append `then dx dy [over ms] [hold ms] [during "op" …]` to script another leg
+with the same finger, in a drive or a test file. For example:
 `tap handle drag 0 120 over 300 hold 500 during "layout" then 0 -120 over 300 hold 500 during "state"`.
-Each delta starts at the previous endpoint. All legs play in one XCTest
-synthesizer record, with one down and one up. Reads run inside their leg's hold;
-if they outlast it, the drive fails. The complete path must stay inside the
+Each delta starts at the previous endpoint. Under `--touch platform` all legs play
+in one XCTest synthesizer record, with one down and one up, and reads run inside
+their leg's hold; if they outlast it, the drive fails. Elsewhere the carrier's
+contact plays them; on iOS without `--touch platform` only a test's drag can. The complete path must stay inside the
 viewport (or the extended end bounds with `into keyboard`), last at most
 10 seconds, and spend at most 2 seconds moving, across at most eight legs.
 Library calls use `drag.path: [{dx, dy, over, hold, during}]`

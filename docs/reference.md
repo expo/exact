@@ -2689,8 +2689,22 @@ while its timers go on. `clock until state <path> == <literal> within <ms>` refu
 password field masks; `clock held [<target>…] [<n>s|<n>ms]` waits for one reply to each held request;
 `clock replies [<n>s|<n>ms]` reports `{clock, settled, pending, waitedMs}` at the first read with no
 data request in flight (held, timer and device entries aside), or after 20 s. A read still out at a
-wait's deadline ends the connection. Input is refused with `input-not-granted`, and the driver
-refuses launch flags such as `--storage`, `--live` and `--url`.
+wait's deadline ends the connection. The driver refuses launch flags such as `--storage`, `--live`
+and `--url`.
+
+Input needs a second grant: **Develop ▸ Allow Agent Input** on the Mac, or the developer menu's
+**Allow Agent Input** in the simulator, which the person chooses while the agent is attached (the
+indicator then reads **Agent Attached · Input Allowed**); choosing it again revokes input and leaves
+the reads. Until then `tap`, `type` and `call` are refused `input-not-granted`, and the driver says
+it is waiting for the grant, for up to 60 s. Granted, `tap <target>` is a plain tap at a test ID or
+`#<id>`, `type <target> <text>` a whole text entry, and `call <tool> <json>` a declared tool's call
+through the app's own agent door (`--door` is refused). On the Mac the app clicks and sets the text
+itself, only in its key window while it is the active app; in the simulator the touch runner plays a
+real touch the app aims and checks, and the text is typed where the tap left the caret. Input is
+refused `background` when the app is not in front, `person-input` while a person's finger, mouse
+button or modifier key is down, and `unsupported` for anything else: a point, a held contact, a key,
+a gesture, `prefer`, `pick`, a toolbar or sidebar item, or a web view's content. A request whose
+reply is lost is reported as of unknown outcome and never sent again.
 
 `bun scripts/agent.mjs ios --app <app> --attach [--sim <udid|name>] tree state logs layout "screenshot now.png"`
 reads the development app open in an iOS simulator the same way. The simulator is the one `--sim`

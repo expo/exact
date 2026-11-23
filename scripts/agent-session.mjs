@@ -892,8 +892,9 @@ export async function open({
   // before it sends anything, as the app would.
   if (attach !== undefined) {
     const refuse = (op, why) => async () => { throw new Error(`${op}: ${why}`); };
-    const ungranted = (op) => refuse(op, 'input-not-granted: an attached session reads; input needs Allow Agent Input, which this build does not offer yet');
-    for (const [method, op] of [['tap', 'tap'], ['type', 'type'], ['pointer', 'tap'], ['prefer', 'prefer'], ['resize', 'resize'], ['closeWindow', 'close'], ['back', 'back'], ['background', 'background']]) s[method] = ungranted(op);
+    const withheld = (op) => refuse(op, 'unsupported: an attached session\'s input is a plain tap, a text entry and a declared tool\'s call, once the person allows it');
+    for (const [method, op] of [['pointer', 'tap'], ['prefer', 'prefer'], ['resize', 'resize'], ['closeWindow', 'close'], ['back', 'back'], ['background', 'background']]) s[method] = withheld(op);
+    Object.assign(s, carrier.input);
     s.clock = (spec = 'settle') => attachedClock(s, spec);
     s.film = refuse('screenshot', 'film of an attached app is not built yet: it would sample the wall clock (LLP 1012.000 D3)');
   }
