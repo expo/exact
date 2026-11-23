@@ -1141,7 +1141,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
                     // A hosted text field (kind 4) is not the stream's to make: exact2 says its fields apart ([Fields]),
                     // and the stream says only that it draws one.
                     if (kind == 4) fields?.drawn(id) else natives?.ensure(id, kind, w, h, String(bytes), ingestRow,
-                        b.get(i + 2) and 256 != 0, if (slotOwner < 0) -1 - slotOwner else null)
+                        b.get(i + 2) and 256 != 0, if (slotOwner < 0) -1 - slotOwner else null, b.get(i + 2) and 512 != 0)
                     i += 16 + (len + 3) / 4
                 }
                 26 -> {

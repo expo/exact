@@ -673,9 +673,10 @@ writeFileSync(resolve(gen, 'main.js'), [
   ...(launchWeb.length ? ["  marks.mounted();"] : []),
   ...(devReload ? ["  finishDev();"] : []),
   `  globalThis.exact = Object.assign(globalThis.exact ?? {}, { ready: true, journal, clock, views: Views, viewId, After${production ? '' : ', advance, commit, data, state, inflight, heldAsks, heldReplies, resources: Resources, mutations: Mutations, writes: writeRecords'} });`,
-  // A development page counts its work and samples its frames (LLP 1079); the agent adapter, only when the agent drives it.
+  // A development page counts its work and samples its frames (LLP 1079); the agent adapter, only when the agent drives it,
+  // else its passive reads, which the dev loop's attach bridge loads once a person allows an agent (LLP 1012.000 D2).
   // The served plan's digest, which a development page's `perf` names (LLP 1079 D2).
-  ...(production ? [] : [`  globalThis.exact.plan = ${JSON.stringify(createHash('sha256').update(readFileSync(opt('--plan') ? resolve(opt('--plan')) : resolve(gen, 'app.plan'))).digest('hex'))};`, "  globalThis.exact.goTo = goTo;", "  develop(globalThis.exact).catch(console.error);", "  if (clock.agent) globalThis.exact.ready = import('./agent.js').then(m => m.install(globalThis.exact));"]),
+  ...(production ? [] : [`  globalThis.exact.plan = ${JSON.stringify(createHash('sha256').update(readFileSync(opt('--plan') ? resolve(opt('--plan')) : resolve(gen, 'app.plan'))).digest('hex'))};`, "  globalThis.exact.goTo = goTo;", "  develop(globalThis.exact).catch(console.error);", "  if (clock.agent) globalThis.exact.ready = import('./agent.js').then(m => m.install(globalThis.exact));", "  else globalThis.exact.attachReads = () => import('./agent.js').then(m => m.install(globalThis.exact, { passive: true }));"]),
   "  booted?.();",
   "};",
   // The declared fonts are the stylesheet's `font-display: optional` faces (src/faces.rs): a face first needed while it
