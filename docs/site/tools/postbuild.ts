@@ -161,7 +161,12 @@ function prerequisites(p: Page): string {
   if (!start || ['Home', 'Get started', 'For AI agents'].includes(p.section)) return 'None';
   return `[${start.title}](${mdUrl(start)})`;
 }
-const depth = (p: Page): number => (parentOf(p) ? depth(parentOf(p)) + 1 : 0);
+// A page nests only below a guide in its own section; the first line under a heading never starts indented,
+// which Markdown would read as code.
+const depth = (p: Page): number => {
+  const parent = parentOf(p);
+  return parent && parent.section === p.section ? depth(parent) + 1 : 0;
+};
 const bySection = (fields: (p: Page) => string) =>
   [...new Set(pages.map(p => p.section))]
     .map(section => [`## ${section}`, '', ...pages.filter(p => p.section === section).map(p => `${'    '.repeat(depth(p))}- [${p.title}](${mdUrl(p)})${fields(p)}`)].join('\n'))
