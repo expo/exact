@@ -1,4 +1,7 @@
 import XCTest
+#if os(macOS)
+import AppKit
+#endif
 @testable import ExactKit
 @testable import ExactNativeViews
 
@@ -52,6 +55,68 @@ final class QuitHoldTests: XCTestCase {
         XCTAssertEqual(probe.ended, 1)
         XCTAssertFalse(hold.holding)
     }
+
+    #if os(macOS)
+    func testClosingOnAFrozenClockDrainsSendsArmedByLaterReplies() throws {
+        _ = NSApplication.shared
+        let plan = try TableFixture.plan("""
+        shape Ack
+          n: number
+        source save(n: number) as shape Ack
+          url "https://desk.test/save/{n}"
+          method "POST"
+          body json
+        component App
+          mutation saved as shape Ack queue
+          derive answer = match saved { case some(a) => a.n, case none => 0 }
+          action saveAll
+            send saved = save(1)
+            send saved = save(2)
+            send saved = save(3)
+          view
+            button press=saveAll testId="save"
+              text `${answer}`
+
+        """)
+        let session = ExactApp.shared.makeSession(label: "close-queue")
+        defer { session.destroy() }
+        session.clock = 0
+        XCTAssertNil(session.boot(plan: plan, size: CGSize(width: 400, height: 500)).error)
+        for n in 1...3 {
+            let fixtures = session.agent("""
+            {"op":"prefer","faults":{"answer":"https://desk.test/save/\(n)","method":"POST","response":{"status":200,"headers":{},"body":"{\\"n\\":\(n)}"}}}
+            """)
+            guard !fixtures.contains("\"error\"") else { return XCTFail(fixtures) }
+        }
+        let button = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == "save" })
+        session.apply(session.runtime.press(button.id, now: 0))
+        func answered(_ n: Int) -> Bool {
+            let state = try? JSONSerialization.jsonObject(with: Data(session.agent(#"{"op":"state"}"#).utf8)) as? [String: Any]
+            return (state?["derives"] as? [String: Any])?["answer"] as? Int == n
+        }
+        waitFor("the first save's reply") { answered(1) }
+        guard answered(1) else { return }
+        func startedNext(waiting: Int) -> Bool {
+            session.agent(#"{"op":"logs"}"#).contains("saved next (\(waiting) waiting)")
+        }
+        XCTAssertFalse(startedNext(waiting: 1))
+
+        var ended = false
+        let hold = QuitHold(every: 60, pending: session.drainQueuedMutationsOnClose) { ended = true }
+        defer { hold.release() }
+        XCTAssertTrue(hold.hold())
+        guard startedNext(waiting: 1) else { return XCTFail("the second save was due on close") }
+        waitFor("the second save's reply") { answered(2) }
+        guard answered(2) else { return }
+        XCTAssertFalse(startedNext(waiting: 0))
+        hold.check()
+        guard startedNext(waiting: 0) else { return XCTFail("the second reply made the third save due") }
+        waitFor("the third save's reply") { answered(3) }
+        hold.check()
+        XCTAssertTrue(ended)
+        XCTAssertEqual(session.clock, 0)
+    }
+    #endif
 }
 
 /// LLP 1069.010 Q4: a native module's quit work joins the quit's one hold.

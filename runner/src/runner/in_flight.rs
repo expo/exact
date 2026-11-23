@@ -167,8 +167,10 @@ impl<D: DataSource> Runner<D> {
             || self.background_operations() > 0
     }
 
-    /// Runnable queued mutation work or an active queued storage operation or
-    /// continuation. macOS checks this on demand when a window or app closes.
+    /// Queued mutations that can drain on close. A send stays active across
+    /// request rounds (LLP 1092 D3). Future answer timers and agent holds
+    /// need a clock advance or an answer from the agent (LLP 1027.000 D1,
+    /// LLP 1012's held device requests).
     pub fn queued_must_finish(&self) -> bool {
         self.queues.next_due.iter().any(|due| due.is_finite())
             || self
@@ -176,10 +178,14 @@ impl<D: DataSource> Runner<D> {
                 .iter()
                 .enumerate()
                 .any(|(m, due)| due.is_finite() && self.queues.waits(m))
-            || self
-                .pending
-                .iter()
-                .any(|p| p.queued_storage && p.waited() && p.refusal.is_none() && !p.refused)
+            || self.pending.iter().any(|p| {
+                matches!(p.target, Target::Mutation(m) if self.mutation_row(m).mode == MutationMode::Queue)
+                    && p.waited()
+                    && p.refusal.is_none()
+                    && !p.refused
+                    && !self.held_for_agent(p)
+                    && !self.data_timer_held(p.ticket)
+            })
     }
 
     /// Whether a request with effects the host has not refused is in flight

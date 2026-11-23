@@ -165,7 +165,8 @@ impl<D: DataSource> Runner<D> {
         let (origin, id) = (self.call_origin(), self.invocation_id());
         let causes = self.commit_causes();
         // Only the application data source can opt in, and an unasked
-        // tail must belong to the same foreground cause.
+        // tail must belong to the same foreground cause. A queue with
+        // `then` owes one action per reply (LLP 1092 D4).
         let replacement = if id == 0
             && origin == CallOrigin::App
             && self.mutation_row(m).then.is_none()
@@ -189,7 +190,10 @@ impl<D: DataSource> Runner<D> {
                 })
         } else {
             None
-        };
+        }
+        // An argument the executor cannot carry cannot displace an accepted
+        // send or its optimistic write (LLP 1027 D2, LLP 1092 D4).
+        .filter(|args| self.check_send_arguments(m, args).is_ok());
         if replacement.is_none() && self.queues.waiting[m].len() >= QUEUE_BOUND {
             return Err(RunnerError::QueueFull {
                 mutation: self.mutation_name(m).to_string(),

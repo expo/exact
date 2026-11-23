@@ -167,9 +167,7 @@ impl DataSource for Board {
                 Ok(Answer::Now(Value::record(vec![Value::str(&t)])))
             }
             "streamAdd" => Ok(Answer::stream(Request::get("https://board.test/stream"))),
-            "add" if args[0].as_str() == Some("no") => {
-                Err(DataError::Unavailable("refused at once".into()))
-            }
+            "add" if args[0].as_str() == Some("no") => Err(DataError::UnknownSource(source.into())),
             "add" => Ok(Answer::Later(Request::post_json(
                 "https://board.test/add",
                 &format!("{:?}", args[0].as_str()),

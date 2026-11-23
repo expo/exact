@@ -4,9 +4,12 @@
 
 use exact_kernel::Kernel;
 use exact_runner::{
-    Answer, DataError, DataSource, FailureKind, Outcome, Request, Response, Runner, RunnerError,
-    Value,
+    Answer, DataError, DataSource, FailureKind, InFlight, Outcome, Overlaid, Request, Response,
+    Runner, RunnerError, Store, Value, Write,
 };
+
+struct TimerTurn;
+impl exact_runner::HostWork for TimerTurn {}
 
 const APP: &str = r#"
 shape Ack
@@ -94,9 +97,38 @@ impl DataSource for Desk {
                 Some(text) if text.starts_with("thread:") => Some("thread"),
                 _ => None,
             };
-            (source == "save" && scope(previous).is_some() && scope(previous) == scope(next))
-                .then(|| next.to_vec())
+            if source != "save" || scope(previous).is_none() || scope(previous) != scope(next) {
+                return None;
+            }
+            match next[0].as_str() {
+                Some("room:invalid-merge") => Some(vec![Value::Number(f64::NAN)]),
+                Some("room:append") => Some(vec![Value::str(&format!(
+                    "{}+room:append",
+                    previous[0].as_str().unwrap()
+                ))]),
+                _ => Some(next.to_vec()),
+            }
         })
+    }
+
+    fn overlay(
+        &mut self,
+        source: &str,
+        _: &[Value],
+        _: &Value,
+        writes: &[Write<'_>],
+    ) -> Result<Option<Overlaid>, DataError> {
+        Ok((source == "preview").then(|| Overlaid {
+            value: Value::str(
+                &writes
+                    .iter()
+                    .filter(|w| !w.answered)
+                    .map(|w| w.args[0].as_str().unwrap_or("<invalid>"))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ),
+            keep: vec![],
+        }))
     }
 
     fn query(&mut self, source: &str, args: &[Value]) -> Result<Value, DataError> {
@@ -108,6 +140,7 @@ impl DataSource for Desk {
                 }
                 Ok(Value::Number(self.checks as f64))
             }
+            "preview" => Ok(Value::str("")),
             "big" if args[0].as_number() == Some(0.0) => Ok(Value::list(vec![])),
             // Doubled by a row key, past the runner's longest string: a trap
             // in a key poisons the runner (LLP 1017.003 D3).
@@ -137,6 +170,11 @@ impl DataSource for Desk {
             // is an accepted domain failure, so it does not exercise queue rollback.
             "broken" => Err(DataError::UnknownSource(source.into())),
             "storage" => Ok(Answer::Later(Request::storage(b"load".to_vec()))),
+            "read" => Ok(Answer::Later(Request::get("https://desk.test/read"))),
+            "race" => Ok(Answer::Later(
+                Request::get("https://desk.test/race").wake(20),
+            )),
+            "sleep" => Ok(Answer::Later(Request::continuation::<TimerTurn>(1).due(20))),
             "two" => Ok(Answer::Later(Request::post_json(
                 "https://desk.test/step1",
                 &op,
@@ -184,6 +222,15 @@ impl DataSource for Desk {
             Outcome::Failed { message, .. } => Ok(Answer::Now(ack(&message, 0))),
             _ => Err(DataError::Unavailable("unexpected".into())),
         }
+    }
+
+    fn timer_before_reply(
+        &mut self,
+        _: &Store,
+        flight: InFlight<'_>,
+        _: Option<u64>,
+    ) -> Option<(u64, Request)> {
+        (flight.source == "race").then(|| (1, Request::continuation::<TimerTurn>(2)))
     }
 }
 
@@ -238,6 +285,15 @@ fn tickets(r: &mut Runner<Desk>) -> Vec<u64> {
     r.take_requests().iter().map(|q| q.ticket).collect()
 }
 
+fn previewing_queue() -> String {
+    APP.replace("refreshes probe then afterWrote", "refreshes probe")
+        .replace("check() as shape number", "preview() as shape string")
+}
+
+fn preview(r: &Runner<Desk>) -> Option<&str> {
+    r.shown_resource("probe").and_then(Value::as_str)
+}
+
 #[test]
 fn two_sends_in_one_action_answered_now_run_in_order_each_with_its_then() {
     let mut r = boot(false);
@@ -289,7 +345,7 @@ fn two_sends_answered_later_ask_one_at_a_time_with_send_time_arguments() {
 
 #[test]
 fn replaceable_queue_tail_preserves_first_write_and_barriers() {
-    let src = APP.replace("refreshes probe then afterWrote", "refreshes probe");
+    let src = previewing_queue();
     let mut r = boot_with(
         &src,
         Desk {
@@ -313,15 +369,20 @@ fn replaceable_queue_tail_preserves_first_write_and_barriers() {
     send(&mut r, "thread:other");
     r.act("post", vec![Value::str("room:send-post")]).unwrap();
     send(&mut r, "room:new");
-    send(&mut r, "room:latest");
+    send(&mut r, "room:append");
     assert_eq!(r.queued(), [("wrote".to_string(), 4)]);
+    assert_eq!(r.writes().len(), 5);
+    assert_eq!(
+        preview(&r),
+        Some("room:first room:https://example.org/159 thread:other room:send-post room:new+room:append")
+    );
 
     let mut ticket = first[0];
     for expected in [
         "save:room:https://example.org/159",
         "save:thread:other",
         "post:room:send-post",
-        "save:room:latest",
+        "save:room:new+room:append",
     ] {
         r.fulfill(ticket, reply("ok")).unwrap();
         r.advance(0.0).unwrap();
@@ -337,7 +398,7 @@ fn replaceable_queue_tail_preserves_first_write_and_barriers() {
             "save:room:https://example.org/159",
             "save:thread:other",
             "post:room:send-post",
-            "save:room:latest"
+            "save:room:new+room:append"
         ]
     );
     assert!(r.queued().is_empty());
@@ -387,20 +448,18 @@ fn failure_from_the_replacement_surfaces_and_a_later_save_recovers() {
 
 #[test]
 fn replacement_leaves_the_previous_tail_if_the_action_refuses() {
-    let src = APP
-        .replace("refreshes probe then afterWrote", "refreshes probe")
-        .replace(
+    let src = previewing_queue().replace(
+        "  view\n",
+        concat!(
+            "  state refuseNow = false\n",
+            "  task watch key=refuseNow ? 0 / 0 : 1\n",
+            "    after(100000, bump)\n",
+            "  action replaceAndRefuse\n",
+            "    send wrote = save(\"room:rejected\")\n",
+            "    refuseNow = true\n",
             "  view\n",
-            concat!(
-                "  state refuseNow = false\n",
-                "  task watch key=refuseNow ? 0 / 0 : 1\n",
-                "    after(100000, bump)\n",
-                "  action replaceAndRefuse\n",
-                "    send wrote = save(\"room:rejected\")\n",
-                "    refuseNow = true\n",
-                "  view\n",
-            ),
-        );
+        ),
+    );
     let mut r = boot_with(
         &src,
         Desk {
@@ -412,14 +471,77 @@ fn replacement_leaves_the_previous_tail_if_the_action_refuses() {
     r.act("one", vec![Value::str("room:first")]).unwrap();
     let first = tickets(&mut r)[0];
     r.act("one", vec![Value::str("room:previous")]).unwrap();
+    let writes = r.writes().iter().map(|w| w.0).collect::<Vec<_>>();
     assert!(matches!(
         r.act("replaceAndRefuse", vec![]),
         Err(RunnerError::TaskKey { task }) if task == "watch"
     ));
     assert_eq!(r.queued(), [("wrote".to_string(), 1)]);
+    assert_eq!(r.writes().iter().map(|w| w.0).collect::<Vec<_>>(), writes);
+    assert_eq!(preview(&r), Some("room:first room:previous"));
     r.fulfill(first, reply("ok")).unwrap();
     r.advance(0.0).unwrap();
     assert_eq!(r.data().asks.last().unwrap(), "save:room:previous");
+}
+
+#[test]
+fn invalid_replacement_preserves_both_sends_and_their_optimistic_writes() {
+    let mut r = boot_with(
+        &previewing_queue(),
+        Desk {
+            later: true,
+            replace_queue_tail: true,
+            ..Desk::default()
+        },
+    );
+    for body in ["room:first", "room:previous", "room:invalid-merge"] {
+        r.act("one", vec![Value::str(body)]).unwrap();
+    }
+    assert_eq!(r.queued(), [("wrote".to_string(), 2)]);
+    assert_eq!(r.writes().len(), 3);
+    assert_eq!(
+        preview(&r),
+        Some("room:first room:previous room:invalid-merge")
+    );
+    for _ in 0..3 {
+        let ticket = tickets(&mut r)[0];
+        r.fulfill(ticket, reply("ok")).unwrap();
+        r.advance(0.0).unwrap();
+    }
+    assert_eq!(
+        r.data().asks,
+        [
+            "save:room:first",
+            "save:room:previous",
+            "save:room:invalid-merge"
+        ]
+    );
+    assert!(r.writes().is_empty());
+}
+
+#[test]
+fn a_source_without_a_merger_keeps_waiting_sends_in_fifo_order() {
+    let mut r = boot_with(
+        &previewing_queue(),
+        Desk {
+            later: true,
+            ..Desk::default()
+        },
+    );
+    for body in ["room:first", "room:older", "room:newer"] {
+        r.act("one", vec![Value::str(body)]).unwrap();
+    }
+    assert_eq!(r.queued(), [("wrote".to_string(), 2)]);
+    assert_eq!(preview(&r), Some("room:first room:older room:newer"));
+    for _ in 0..3 {
+        let ticket = tickets(&mut r)[0];
+        r.fulfill(ticket, reply("ok")).unwrap();
+        r.advance(0.0).unwrap();
+    }
+    assert_eq!(
+        r.data().asks,
+        ["save:room:first", "save:room:older", "save:room:newer"]
+    );
 }
 
 #[test]
@@ -459,6 +581,92 @@ fn a_pending_storage_read_does_not_hold_quit() {
     assert_eq!(tickets(&mut r).len(), 1);
     assert!(!r.queued_must_finish());
     assert!(!r.must_finish());
+}
+
+#[test]
+fn a_queue_holds_close_while_http_steps_precede_a_storage_save() {
+    let src = APP.replace(
+        "  view\n",
+        concat!(
+            "  action saveAfterHttp\n",
+            "    send rec = read(\"read\")\n",
+            "    send rec = post(\"post\")\n",
+            "    send rec = storage(\"save\")\n",
+            "  view\n",
+        ),
+    );
+    let mut r = boot_with(
+        &src,
+        Desk {
+            later: true,
+            ..Desk::default()
+        },
+    );
+    r.act("saveAfterHttp", vec![]).unwrap();
+    let get = tickets(&mut r)[0];
+    assert!(!r.must_finish());
+    assert!(
+        r.queued_must_finish(),
+        "the GET is active ahead of the saves"
+    );
+    r.fulfill(get, reply("ok")).unwrap();
+    assert!(r.pending().is_empty());
+    assert!(r.queued_must_finish(), "a then-less queue has a send due");
+    r.advance(0.0).unwrap();
+    let post = tickets(&mut r)[0];
+    assert!(
+        r.queued_must_finish(),
+        "the POST is active ahead of the storage save"
+    );
+    r.fulfill(post, reply("ok")).unwrap();
+    r.advance(0.0).unwrap();
+    let load = tickets(&mut r)[0];
+    r.fulfill(load, reply("load")).unwrap();
+    let write = tickets(&mut r)[0];
+    assert!(r.queued_must_finish(), "the last send is still active");
+    r.fulfill(write, reply("done")).unwrap();
+    assert!(!r.queued_must_finish());
+}
+
+#[test]
+fn a_queue_holds_close_after_a_timer_replaces_an_http_request() {
+    let src = APP.replace(
+        "  view\n",
+        "  action race\n    send rec = race(\"body\")\n  view\n",
+    );
+    let mut r = boot_with(&src, Desk::default());
+    r.act("race", vec![]).unwrap();
+    let get = tickets(&mut r)[0];
+    r.advance(20.0).unwrap();
+    let next = r.take_requests().pop().unwrap();
+    assert_ne!(next.ticket, get);
+    assert_eq!(next.request.continuation, Some(2));
+    assert!(
+        r.queued_must_finish(),
+        "the timer's continuation can still write"
+    );
+    r.fulfill(next.ticket, reply("ok")).unwrap();
+    assert!(!r.queued_must_finish());
+}
+
+#[test]
+fn a_queue_waits_for_close_only_after_its_continuation_is_released() {
+    let src = APP.replace(
+        "  view\n",
+        "  action sleep\n    send rec = sleep(\"body\")\n    send rec = storage(\"save\")\n  view\n",
+    );
+    let mut r = boot_with(&src, Desk::default());
+    r.act("sleep", vec![]).unwrap();
+    assert!(tickets(&mut r).is_empty());
+    assert!(
+        !r.queued_must_finish(),
+        "only a future answer timer can resume the queue"
+    );
+    r.advance(20.0).unwrap();
+    let continuation = tickets(&mut r)[0];
+    assert!(r.queued_must_finish(), "the timer's continuation is out");
+    r.hold_request(continuation, "test", "rec", "{}");
+    assert!(!r.queued_must_finish(), "the agent must answer the request");
 }
 
 #[test]

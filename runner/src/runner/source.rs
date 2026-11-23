@@ -477,8 +477,8 @@ macro_rules! data_source {
 
         /// A composing or forwarding source handles every data-source method.
         /// Implementations forward, translate, or explicitly refuse each call.
-        /// The request-set methods default to the single-request seam (LLP 1162 D2);
-        /// other defaults are available only to leaves.
+        /// The request-set methods default to the single-request seam (LLP 1162 D2).
+        /// Queue merging is opt-in. The remaining defaults are for leaves.
         ///
         /// ```compile_fail,E0046
         /// use exact_runner::{DataError, DataSourceWrapper, Value};
@@ -1096,7 +1096,7 @@ data_source! {
     defaults {
         /// The embedded source's optional queue-tail replacement rule.
         /// A leaf's rule stays with the runner when it moves to a worker.
-        /// `None` asks for that rule before placement, without a source name.
+        /// `None` asks for a default rule without a source name.
         fn queued_send_replacer(&mut self, source: Option<&str>) -> Option<QueuedSendReplacer> {
             let _ = source;
             None

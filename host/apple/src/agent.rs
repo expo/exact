@@ -59,6 +59,7 @@ impl<D: DataSource> Host<D> {
             });
         }
         match exact_runner::json::field_str(request, "op").as_deref() {
+            Some("background") => self.background_reply(),
             Some("saveWindow") => exact_data::storage::save_test_window(
                 &self.runner,
                 crate::picker::agent_secret_root(self.runner.data_ref().app_id()),
@@ -68,6 +69,21 @@ impl<D: DataSource> Host<D> {
             Some("state") => self.state_reply(request),
             _ => exact_runner::agent::handle(&self.runner, request),
         }
+    }
+
+    /// What a quit waits for (LLP 1097 D10). macOS also reports the queue
+    /// work that keeps a closing window's session alive (LLP 1092 D3).
+    pub(crate) fn background_reply(&self) -> String {
+        let must = self.runner.must_finish();
+        #[cfg(target_os = "macos")]
+        let reply = {
+            let queued = self.runner.queued_must_finish();
+            let must = must || queued;
+            format!("{{\"mustFinish\":{must},\"queuedMutationWork\":{queued}}}")
+        };
+        #[cfg(not(target_os = "macos"))]
+        let reply = format!("{{\"mustFinish\":{must}}}");
+        exact_runner::agent::tagged(&self.runner, reply)
     }
 
     /// The runner's `node` for `{"id":V}` (`"plan":true` adds the plan's

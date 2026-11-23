@@ -7,6 +7,47 @@ use std::time::Duration;
 struct TestWork;
 impl exact_runner::HostWork for TestWork {}
 
+#[test]
+fn placed_mergers_follow_the_bound_source_on_main_and_worker() {
+    #[derive(Default)]
+    struct Saves {
+        active: bool,
+    }
+    impl DataSource for Saves {
+        fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::UnknownSource(source.into()))
+        }
+        fn activate(&mut self) -> Result<(), DataError> {
+            self.active = true;
+            Ok(())
+        }
+        fn queued_send_replacer(
+            &mut self,
+            source: Option<&str>,
+        ) -> Option<exact_runner::QueuedSendReplacer> {
+            (self.active && source == Some("save")).then_some(|_, _, next| Some(next.to_vec()))
+        }
+    }
+
+    let mut plan = exact_plan::builder::PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let ty = plan.primitive(exact_plan::TypeKind::Number);
+    plan.source("save", &[ty], ty);
+    plan.source("publish", &[ty], ty);
+    let plan = plan.finish().unwrap();
+    for placement in [Placement::Main, Placement::Worker] {
+        let mut placed = Placed::new(Saves::default(), placement);
+        placed.bind(&plan);
+        placed.activate().unwrap();
+        let replace = placed.queued_send_replacer(Some("save")).unwrap();
+        let next = [Value::Number(2.0)];
+        assert_eq!(
+            replace("save", &[Value::Number(1.0)], &next),
+            Some(next.to_vec())
+        );
+        assert!(placed.queued_send_replacer(Some("publish")).is_none());
+    }
+}
+
 struct Slow {
     started: Sender<()>,
     release: std::sync::mpsc::Receiver<()>,

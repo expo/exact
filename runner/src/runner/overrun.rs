@@ -129,7 +129,6 @@ impl<D: DataSource> Runner<D> {
             reasks,
             module_again: None,
             effects: false,
-            queued_storage: false,
             replay_unsafe: false,
         });
         self.said_reask(i, why, after, reasks);

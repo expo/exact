@@ -259,6 +259,7 @@ pub struct Placed<D> {
     /// once moved to its owner (`Worker`, moved there).
     inner: Option<D>,
     queued_send_replacer: Option<exact_runner::QueuedSendReplacer>,
+    queued_send_replacers: BTreeMap<String, Option<exact_runner::QueuedSendReplacer>>,
     identity: Option<exact_runner::ModuleIdentity>,
     generation: Option<exact_runner::ModuleInstance>,
     placement: Placement,
@@ -336,9 +337,10 @@ impl<D: DataSource + 'static> Placed<D> {
         Self::with_spawn(template, placement, Spawn::Build(build))
     }
 
-    fn with_spawn(mut source: D, placement: Placement, spawn: Spawn<D>) -> Self {
+    fn with_spawn(source: D, placement: Placement, spawn: Spawn<D>) -> Self {
         Self {
-            queued_send_replacer: source.queued_send_replacer(None),
+            queued_send_replacer: None,
+            queued_send_replacers: BTreeMap::new(),
             storage_changed: Default::default(),
             app_id: source.app_id().to_string(),
             grants: source.grants().to_string(),
@@ -422,9 +424,14 @@ impl<D: DataSource + 'static> Placed<D> {
 impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
     fn queued_send_replacer(
         &mut self,
-        _: Option<&str>,
+        source: Option<&str>,
     ) -> Option<exact_runner::QueuedSendReplacer> {
-        self.queued_send_replacer
+        if let Some(inner) = self.inner.as_mut() {
+            return inner.queued_send_replacer(source);
+        }
+        source
+            .and_then(|name| self.queued_send_replacers.get(name).copied())
+            .unwrap_or(self.queued_send_replacer)
     }
 
     fn prepare_snapshot(
@@ -625,6 +632,13 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
     fn bind(&mut self, plan: &Plan) {
         if let Some(inner) = self.inner.as_mut() {
             inner.bind(plan);
+            if self.placement == Placement::Worker && matches!(self.spawn, Spawn::Move(_)) {
+                self.queued_send_replacers = plan
+                    .sources
+                    .iter()
+                    .map(|row| (plan.str(row.name).to_owned(), None))
+                    .collect();
+            }
         }
     }
 
@@ -678,6 +692,12 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
                 if let Err(e) = source.activate() {
                     self.inner = Some(source);
                     return Err(e);
+                }
+                // The pure mergers stay on the runner's owner when the
+                // data source moves to its own (LLP 1027.002 D2).
+                self.queued_send_replacer = source.queued_send_replacer(None);
+                for (name, replacer) in &mut self.queued_send_replacers {
+                    *replacer = source.queued_send_replacer(Some(name));
                 }
                 moved(source)
             }

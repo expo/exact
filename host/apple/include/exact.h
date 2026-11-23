@@ -1129,7 +1129,8 @@ uint32_t exact_agent(ExactRuntime rt, size_t len);
  * export (LLP 1047.001 D11). Each answers as exact_agent answers its
  * operation, reading only the request fields named here, and returns the
  * JSON reply's length in the output buffer: the runner's outstanding work;
- * whether a quit waits ({"mustFinish":B}); the view tree ({"target"},
+ * whether a quit waits ({"mustFinish":B}, with "queuedMutationWork" on
+ * macOS); the view tree ({"target"},
  * {"shallow"}); the state; one view's rows ({"id":V}, {"plan":true}); the
  * session's identity; the app's file roots; and the answer to a held
  * device request ({"op":"tap"|"type","ticket":T,"choice"|"text"}). A

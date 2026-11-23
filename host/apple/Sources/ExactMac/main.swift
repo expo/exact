@@ -589,7 +589,7 @@ final class DocumentWindow: NSObject, NSWindowDelegate, NSWindowRestoration {
                 closedForQuit.append(self)
                 return
             }
-            let hold = QuitHold(bound: 5, pending: { [session] in session.queuedMutationWork }) { [weak self] in
+            let hold = QuitHold(bound: 5, pending: session.drainQueuedMutationsOnClose) { [weak self] in
                 guard let self else { return }
                 closeHold = nil
                 // A quit that started while this window was draining owns
@@ -850,9 +850,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
     /// the last window closing ends the app. Nothing is held while the app
     /// asks (LLP 1069.010 D7). Once the quit is decided, each native module
     /// starts its quit work (`ExactModule.willQuit`), and the quit is held
-    /// while that work runs, storage an answer started is still landing or
-    /// a request with effects is in flight: one hold, five seconds at most
-    /// for all of it (LLP 1097 D10, LLP 1146 D2, LLP 1069.010 Q4). AppKit's
+    /// for that work, storage an answer started, requests with effects,
+    /// and queued mutations. They share a five-second hold (LLP 1097 D10,
+    /// LLP 1146 D2, LLP 1069.010 Q4). AppKit's
     /// modal loop keeps the main thread running, so a reply lands meanwhile.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // A repeated quit joins the existing hold: it neither asks the app
@@ -866,8 +866,10 @@ final class Delegate: NSObject, NSApplicationDelegate {
         // The open windows' sessions, and the last window's if its closing started the quit.
         let sessions = (windows + closedForQuit).map(\.session)
         for session in sessions { session.willQuit() }
-        let hold = QuitHold(bound: 5, pending: { sessions.contains { $0.quitWorkPending || $0.mustFinish } },
-                            end: { NSApp.reply(toApplicationShouldTerminate: true) })
+        let hold = QuitHold(bound: 5, pending: {
+            for session in sessions { _ = session.drainQueuedMutationsOnClose() }
+            return sessions.contains { $0.quitWorkPending || $0.mustFinish }
+        }) { NSApp.reply(toApplicationShouldTerminate: true) }
         guard hold.hold() else { return .terminateNow }
         quitting = hold
         return .terminateLater

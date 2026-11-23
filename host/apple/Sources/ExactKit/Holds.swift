@@ -23,6 +23,15 @@ public extension ExactSession {
     #if os(macOS)
     /// Queued mutation work that keeps a closed window's session alive.
     package var queuedMutationWork: Bool { finishPending("queuedMutationWork") }
+
+    /// Queue turns due at the current clock may still land after a reply
+    /// while the agent's clock is frozen (LLP 1092 D3, LLP 1012 §2).
+    package func drainQueuedMutationsOnClose() -> Bool {
+        guard queuedMutationWork else { return false }
+        guard clock != nil || ExactEnv.agentFreezes else { return true }
+        applyUnlessEmpty(runtime.landThen())
+        return queuedMutationWork
+    }
     #endif
 
     private func finishPending(_ field: String) -> Bool {

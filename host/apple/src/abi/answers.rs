@@ -37,19 +37,7 @@ impl<D: DataSource> Bridge<D> {
     /// Whether a quit waits. On macOS, also report queued mutation work
     /// separately for a non-last window's close hold.
     pub fn must_finish(&mut self, len: usize) -> u32 {
-        self.answer(len, |h, _| {
-            let runner = h.runner();
-            let must = runner.must_finish();
-            #[cfg(target_os = "macos")]
-            let reply = {
-                let queued = runner.queued_must_finish();
-                let must = must || queued;
-                format!("{{\"mustFinish\":{must},\"queuedMutationWork\":{queued}}}")
-            };
-            #[cfg(not(target_os = "macos"))]
-            let reply = format!("{{\"mustFinish\":{must}}}");
-            agent::tagged(runner, reply)
-        })
+        self.answer(len, |h, _| h.background_reply())
     }
 
     /// The background actions that ended since the last call, delivered.
