@@ -1097,8 +1097,9 @@ data_source! {
     }
 
     defaults {
-        /// The embedded source's optional queue-tail replacement rule.
-        /// A leaf's rule stays with the runner when it moves to a worker.
+        /// Optional queue-tail replacement for sources hosted by the embedded
+        /// runner. The browser's queue keeps sends in FIFO order.
+        /// A rule is fixed for the bound source instance on either placement.
         /// `None` asks for a default rule without a source name.
         fn queued_send_replacer(&mut self, source: Option<&str>) -> Option<QueuedSendReplacer> {
             let _ = source;

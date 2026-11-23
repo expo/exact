@@ -28,6 +28,8 @@ pub(super) struct Waiting {
     args: Vec<Value>,
     /// The optimistic write made when this send was accepted, if any.
     write: Option<u64>,
+    /// A refused `next` restored this head. It stays first for its retry (D3).
+    attempted: bool,
     /// The origin of the commit that sent it, which its `next` runs under.
     origin: CallOrigin,
     /// The invocation that commit was part of (LLP 1133.023 D7); 0 for none.
@@ -175,9 +177,9 @@ impl<D: DataSource> Runner<D> {
             && !Self::activity_send(source)
             && self.plan.module_named(source).is_none()
             && self.plan.fetch_named(source).is_none()
-            && (self.queues.stalled[m].is_none() || self.queues.waiting[m].len() > 1)
             && self.queues.waiting[m].back().is_some_and(|tail| {
-                tail.id == id
+                !tail.attempted
+                    && tail.id == id
                     && tail.origin == origin
                     && tail.causes == causes
                     && tail.source == source
@@ -186,22 +188,29 @@ impl<D: DataSource> Runner<D> {
                 .queued_send_replacer(Some(source))
                 .and_then(|merge| {
                     let tail = self.queues.waiting[m].back().expect("checked tail");
+                    if self.has_intervening_write(m, tail.write)
+                        || self.check_send_arguments(m, &tail.args).is_err()
+                        || self.check_send_arguments(m, args).is_err()
+                    {
+                        return None;
+                    }
                     merge(source, &tail.args, args)
                 })
         } else {
             None
         }
-        // A replacement must fit the source's signature before it can
-        // displace an accepted send or its optimistic write (LLP 1027 D2,
-        // LLP 1092 D4).
+        // A replacement must fit both the value codec and the source's
+        // signature before it can displace an accepted send (LLP 1027 D2,
+        // LLP 1027.002 D4, LLP 1092 D4).
         .filter(|args| {
-            self.plan.sources.iter().any(|row| {
-                self.plan.str(row.name) == source
-                    && row.params.len as usize == args.len()
-                    && row.params.iter().zip(args).all(|(p, arg)| {
-                        arg.conforms(&self.plan, self.plan.source_params[p.0 as usize].ty)
-                    })
-            })
+            args.iter().all(Value::fits_codec)
+                && self.plan.sources.iter().any(|row| {
+                    self.plan.str(row.name) == source
+                        && row.params.len as usize == args.len()
+                        && row.params.iter().zip(args).all(|(p, arg)| {
+                            arg.conforms(&self.plan, self.plan.source_params[p.0 as usize].ty)
+                        })
+                })
         });
         if replacement.is_none() && self.queues.waiting[m].len() >= QUEUE_BOUND {
             return Err(RunnerError::QueueFull {
@@ -223,6 +232,7 @@ impl<D: DataSource> Runner<D> {
             source: source.to_string(),
             args: replacement.unwrap_or_else(|| args.to_vec()),
             write,
+            attempted: false,
             origin,
             id,
             causes,
@@ -341,6 +351,10 @@ impl<D: DataSource> Runner<D> {
                     }));
                 }
             } else {
+                self.queues.waiting[m]
+                    .front_mut()
+                    .expect("restored head")
+                    .attempted = true;
                 self.queues.stalled[m] = Some(Rc::new(Basis {
                     slots: self.slots.clone(),
                     derives: self.derives.clone(),

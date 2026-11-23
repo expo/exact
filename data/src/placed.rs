@@ -433,6 +433,13 @@ impl<D: DataSource + 'static> Placed<D> {
         self.owner.is_none()
     }
 
+    fn read_main_send_replacers(&mut self) {
+        if let Some(source) = self.inner.as_mut() {
+            self.queued_send_replacers
+                .get_or_init(|| SendReplacers::read(source, self.queued_send_names.clone()));
+        }
+    }
+
     fn token(&mut self) -> Result<u64, DataError> {
         self.next = self
             .next
@@ -447,8 +454,11 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
         &mut self,
         source: Option<&str>,
     ) -> Option<exact_runner::QueuedSendReplacer> {
-        if self.placement == Placement::Main || self.validation {
+        if self.validation {
             return self.inner.as_mut()?.queued_send_replacer(source);
+        }
+        if self.placement == Placement::Main {
+            self.read_main_send_replacers();
         }
         let replacers = self.queued_send_replacers.get()?;
         source
@@ -655,14 +665,17 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
         if let Some(inner) = self.inner.as_mut() {
             inner.bind(plan);
         }
+        self.queued_send_names = plan
+            .sources
+            .iter()
+            .map(|row| plan.str(row.name).to_owned())
+            .collect();
+        let registered = self.queued_send_replacers.get().is_some();
+        self.queued_send_replacers = Arc::default();
         if self.placement == Placement::Worker {
-            self.queued_send_names = plan
-                .sources
-                .iter()
-                .map(|row| plan.str(row.name).to_owned())
-                .collect();
-            self.queued_send_replacers = Arc::default();
             self.request_send_replacers();
+        } else if registered {
+            self.read_main_send_replacers();
         }
     }
 
@@ -693,7 +706,9 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
     fn activate(&mut self) -> Result<(), DataError> {
         self.validation = false;
         if self.placement != Placement::Worker {
-            return self.here()?.activate();
+            self.here()?.activate()?;
+            self.read_main_send_replacers();
+            return Ok(());
         }
         if self.owner.is_some() {
             return Ok(());

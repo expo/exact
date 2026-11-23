@@ -630,6 +630,15 @@ fn values_round_trip_and_conform_to_shapes() {
     deep.resize(100, 5);
     deep.push(3);
     assert_eq!(Value::from_bytes(&deep), Err(PlanError::ValueTooDeep));
+    let deepest = (0..64).fold(Value::Unit, |v, _| Value::some(v));
+    assert!(deepest.fits_codec());
+    assert!(Value::from_bytes(&deepest.to_bytes()).is_ok());
+    let too_deep = Value::some(deepest);
+    assert!(!too_deep.fits_codec());
+    assert_eq!(
+        Value::from_bytes(&too_deep.to_bytes()),
+        Err(PlanError::ValueTooDeep)
+    );
     let mut r = Reader::new(&[6, 0xff, 0xff, 0xff, 0x7f]);
     assert!(
         matches!(Value::decode(&mut r), Err(PlanError::BadCount(_))),

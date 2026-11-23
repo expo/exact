@@ -14,8 +14,9 @@ fn placed_mergers_follow_the_bound_source_on_main_and_worker() {
         active: bool,
     }
     impl DataSource for Saves {
-        fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-            Err(DataError::UnknownSource(source.into()))
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            self.active = false;
+            Ok(Value::Number(0.0))
         }
         fn activate(&mut self) -> Result<(), DataError> {
             self.active = true;
@@ -45,6 +46,16 @@ fn placed_mergers_follow_the_bound_source_on_main_and_worker() {
             Some(next.to_vec())
         );
         assert!(placed.queued_send_replacer(Some("publish")).is_none());
+        let mut store = Store::new("", []);
+        if let Answer::Later(request) = placed.answer(&mut store, "save", &next).unwrap() {
+            send(placed.dispatch(request.continuation.unwrap(), &store))
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap();
+        }
+        assert!(
+            placed.queued_send_replacer(Some("save")).is_some(),
+            "{placement:?}"
+        );
     }
 }
 

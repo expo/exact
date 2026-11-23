@@ -7,9 +7,11 @@
 //! list, record. Records carry fields by position; the plan's `types` table
 //! names them. Absence is `Option` and nothing else.
 
-use crate::bytes::{Reader, Writer};
+use crate::bytes::{Reader, Writer, MAX_COUNT};
 use crate::{FieldsRange, HeapStr, InlineStr, Items, Plan, PlanError, Str, TypeKind, TypesId};
 use std::rc::Rc;
+
+const MAX_VALUE_DEPTH: u32 = 64;
 
 /// The pattern for text, whichever variant holds it: match text as
 /// `v @ str_value!()` and read it with [`Value::text`] or
@@ -349,6 +351,25 @@ impl Value {
         w.into_vec()
     }
 
+    /// Whether the canonical bytes would be accepted by [`Self::from_bytes`].
+    pub fn fits_codec(&self) -> bool {
+        fn fits(value: &Value, depth: u32) -> bool {
+            if depth > MAX_VALUE_DEPTH {
+                return false;
+            }
+            match value {
+                Value::Number(n) => n.is_finite(),
+                Value::HeapStr(_) | Value::InlineStr(_) => value.text().len() <= MAX_COUNT,
+                Value::Option(Some(inner)) => fits(inner, depth + 1),
+                Value::List(items) | Value::Record(items) => {
+                    items.len() <= MAX_COUNT && items.iter().all(|v| fits(v, depth + 1))
+                }
+                Value::Bool(_) | Value::Unit | Value::Option(None) => true,
+            }
+        }
+        fits(self, 0)
+    }
+
     /// Decode one value from `r`, bounded in depth so a hostile payload cannot
     /// exhaust the stack.
     pub fn decode(r: &mut Reader<'_>) -> Result<Value, PlanError> {
@@ -366,7 +387,7 @@ impl Value {
     }
 
     fn decode_depth(r: &mut Reader<'_>, depth: u32, pool: &mut Pool) -> Result<Value, PlanError> {
-        if depth > 64 {
+        if depth > MAX_VALUE_DEPTH {
             return Err(PlanError::ValueTooDeep);
         }
         let value = match r.u8()? {
@@ -404,7 +425,7 @@ impl Value {
                 for _ in 0..n {
                     // A number item (a series' points) decodes here: what
                     // `decode_depth` does for one, without the call.
-                    if r.peek() == Some(0) && depth < 64 {
+                    if r.peek() == Some(0) && depth < MAX_VALUE_DEPTH {
                         r.u8()?;
                         let n = r.f64()?;
                         if !n.is_finite() {
