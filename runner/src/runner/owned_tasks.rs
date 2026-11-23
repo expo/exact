@@ -77,8 +77,13 @@ impl<D: DataSource> Runner<D> {
         let (mut ops, mut surfaces, _) = self.update_ops(settled, update)?;
         let mut settled = settled;
         for _ in 0..super::owned::RENDERS {
-            if !self.reconcile_owned()? {
-                self.reconcile_tasks(&self.tree.as_ref().expect("booted").owners())?;
+            let owners = self.tree.as_ref().expect("booted").owners();
+            let changed = self.reconcile_owned(&owners)?;
+            if !changed {
+                self.reconcile_tasks(&owners)?;
+            }
+            drop(owners);
+            if !changed {
                 return self.publish_render(ops, surfaces, settled);
             }
             let (next, next_surfaces, _) = self.update_ops(true, |tree, u| tree.update(u))?;

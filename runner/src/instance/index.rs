@@ -17,6 +17,7 @@ pub struct SiteIndex {
 pub(crate) struct SiteData {
     groups: Vec<(SiteParent, std::ops::Range<usize>)>,
     sites: Vec<(u32, Site)>,
+    pub(super) contains_regions: Vec<bool>,
     pub(super) deps: Deps,
     pub(super) projections: Vec<vm::Prepared>,
 }
@@ -59,10 +60,25 @@ impl SiteIndex {
             sites.push((order, site));
         }
         groups.shrink_to_fit();
+        // Only a region can hold instance storage. Mark the plain nodes whose
+        // children the owner walk may need, including nodes not realized yet.
+        let mut contains_regions = vec![false; plan.nodes.len()];
+        for region in &plan.regions {
+            let mut parent = region.parent;
+            while let Some(node) = parent {
+                let marked = &mut contains_regions[node.0 as usize];
+                if *marked {
+                    break;
+                }
+                *marked = true;
+                parent = plan.node(node).parent;
+            }
+        }
         let mut index = Self {
             data: std::sync::Arc::new(SiteData {
                 groups,
                 sites,
+                contains_regions,
                 deps: Deps::default(),
                 projections: plan
                     .bindings

@@ -150,6 +150,8 @@ pub struct NodeInst {
     /// One of its inherited colour rows was set since its children last
     /// took the text they inherit (D7): they are visited again.
     colour_moved: bool,
+    /// Whether a region can appear under this node.
+    contains_regions: bool,
     /// The tuple around it when its rows were last set.
     around: u32,
 }
@@ -864,6 +866,7 @@ impl NodeInst {
             tuple: u.theme.tuple,
             themed: theme::Themed::default(),
             colour_moved: false,
+            contains_regions: u.sites.data.contains_regions[node.0 as usize],
             around: u.theme.tuple,
         };
         inst.emit_bindings(u, frames, true)
