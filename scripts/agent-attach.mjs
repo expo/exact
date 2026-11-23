@@ -151,7 +151,7 @@ export async function openAttached({ host, app, pid = null, session, device = fa
       : ATTACHED_INPUT.has(req?.op) ? Promise.reject(new Error(`${req.op}: input-not-granted: an attached session reads; input needs Allow Agent Input, which this build does not offer yet`))
       : wire.ask(req)),
     async screenshot(path, area, film, opts = {}) {
-      if (film) throw new Error('screenshot: film of an attached app is not built yet (LLP 1012.000 piece 4)');
+      if (film) throw new Error('screenshot: film of an attached app is not built yet: it would sample the wall clock (LLP 1012.000 D3)');
       if (area !== false && area !== true || opts.status || opts.own) throw new Error('screenshot: an attached app gives its window\'s picture alone');
       const r = await wire.ask({ op: 'screenshot' });
       if (r.error) throw Object.assign(new Error(`screenshot: ${r.error}`), { reply: r });
@@ -162,5 +162,8 @@ export async function openAttached({ host, app, pid = null, session, device = fa
       return { ...rest, screenshot: path };
     },
     close: async () => wire.close(),
+    // A wait's read still out at its deadline: the connection ends, so the late reply answers nothing.
+    abandon: (why) => wire.abandon(why),
+    get failure() { return wire.failure; },
   };
 }
