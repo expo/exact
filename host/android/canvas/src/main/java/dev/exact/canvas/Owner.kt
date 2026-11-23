@@ -87,9 +87,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     private val thread = HandlerThread("exact", priority).apply { start() }
     private val handler = Handler(thread.looper)
     private val main = Handler(Looper.getMainLooper())
-    /** Past a pending traversal's barrier, for what that traversal is to draw: at a launch the system's hand-off of the
-     * starting window's view has one pending, and behind it the boot's first picture and chrome would be drawn a frame
-     * late. Messages it posts keep their order with the others when no barrier is pending. */
+    /** Boot completion and the reader's first chrome pass a traversal barrier so they can take effect before drawing. */
     private val mainNow = Handler.createAsync(Looper.getMainLooper())
     /** Every paint in order (each may define and free pictures and rows); moves are coalesced by the reader. */
     val queue = ConcurrentLinkedQueue<Pub>()
@@ -108,6 +106,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     private val readerScrolling get() = timerReports.scrolling
     private val readerSampling get() = timerReports.sampling
     private var idlePosted = false
+    private var firstChrome = false
 
     private fun postMain(work: () -> Unit) = postMain(main, work)
     private fun postMain(to: Handler, work: () -> Unit) {
@@ -248,6 +247,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
             android.os.Trace.endSection()
             if (ok) {
                 booted = true
+                firstChrome = true
                 started()
                 // What was published or scrolled for the reader before this one is not this one's.
                 queue.clear(); made.clear(); seq = 0
@@ -582,8 +582,11 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
             Native.timerObservation(readerScrolling, readerSampling, true, false)
             if (!notifying.getAndSet(true)) postMain { notifying.set(false); published() }
         }
-        // Ahead of the first picture: its frame shows the page's background and place.
-        Native.chrome()?.let { c -> postMain(mainNow) { chrome(c) } }
+        Native.chrome()?.let { c ->
+            // Later chrome must reach the reader in order with its paint notification.
+            postMain(if (firstChrome) mainNow else main) { chrome(c) }
+            firstChrome = false
+        }
         requests()
         schedule()
     }
@@ -868,16 +871,17 @@ internal object Exact {
     /** A turn on exact2's thread, which asks for a display frame while a canvas input's samples wait. */
     fun wake() { owner?.call {} }
     fun presence(answer: String) { val o = owner; if (o != null) o.call { Native.presence(answer) } else Native.presence(answer) }
-    private var pageHidden = false
+    // Until the activity or Headless says otherwise, the host boots with a visible page.
+    private var pageHidden: Boolean? = null
     /** Execution sources: a started Activity, or a successfully promoted microphone, call or screen-capture
      * foreground service with a live claim, or an active media playback service. Agent claims grant no device execution. */
-    internal fun executionEligible(): Boolean = !pageHidden || Claims.keepsExecution
+    internal fun executionEligible(): Boolean = pageHidden != true || Claims.keepsExecution
     /** The page freeze drops gated streams before returning; socket close handshakes finish asynchronously. */
     fun hidden(hidden: Boolean) {
-        // Telling the host waits for its thread. A cold launch's start says what the host boots with, and the wait
-        // would hold the main thread for the whole boot, with the window's own setup behind it.
-        if (pageHidden == hidden) return
+        val first = pageHidden == null
         pageHidden = hidden
+        // The first visible notification would wait for the boot. Later, the agent may have changed the page.
+        if (first && !hidden) return
         publishExecution()
     }
     /** The page of a host [Headless] boots is hidden from the start. What tells the host so, for its thread to run as
@@ -888,9 +892,9 @@ internal object Exact {
         val eligible = executionEligible()
         return { Native.hidden(true, eligible) }
     }
-    internal fun executionChanged() { if (pageHidden) publishExecution() }
+    internal fun executionChanged() { if (pageHidden == true) publishExecution() }
     private fun publishExecution() {
-        val hidden = pageHidden
+        val hidden = pageHidden == true
         val eligible = executionEligible()
         val o = owner
         if (o != null) o.sync { Native.hidden(hidden, eligible) } else { Native.hidden(hidden, eligible); mainThreadTurned() }

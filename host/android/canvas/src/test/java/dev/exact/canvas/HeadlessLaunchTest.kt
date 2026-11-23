@@ -1,6 +1,10 @@
 package dev.exact.canvas
 
+import android.app.Activity
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.os.HandlerThread
@@ -22,10 +26,13 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
+import org.robolectric.shadows.ShadowChoreographer
+import org.robolectric.util.ReflectionHelpers
 import java.nio.ByteBuffer
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
-/** The first activity made over a host [Headless] booted (LLP 1133.017 D7): its URL or share is the launch location. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], manifest = Config.NONE, shadows = [HeadlessLaunchTest.Host::class, HeadlessLaunchTest.Environment::class])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -45,18 +52,33 @@ class HeadlessLaunchTest {
             /** The host's boot, what it was told of the page, its turns with no reader and its data module's
              * activation, in the order its thread made them. */
             val turns = CopyOnWriteArrayList<String>()
+            var pageHidden = false
+            var bootResult = true
+            var bootEntered: CountDownLatch? = null
+            var releaseBoot: CountDownLatch? = null
             @JvmStatic @Implementation fun __staticInitializer__() {}
             @JvmStatic @Implementation fun start(width: Int, height: Int, scale: Float, dir: String, store: String, live: Boolean): Boolean {
                 told += "start"
                 turns += "start"
-                return true
+                bootEntered?.countDown()
+                releaseBoot?.let { check(it.await(5, TimeUnit.SECONDS)) { "boot was not released" } }
+                return bootResult
             }
-            @JvmStatic @Implementation fun hidden(hidden: Boolean, eligible: Boolean) { turns += "hidden $hidden $eligible" }
+            @JvmStatic @Implementation fun hidden(hidden: Boolean, eligible: Boolean) {
+                pageHidden = hidden
+                turns += "hidden $hidden $eligible"
+            }
+            @JvmStatic @Implementation fun agent(line: ByteArray): ByteArray {
+                val prefer = JSONObject(String(line, Charsets.UTF_8))
+                pageHidden = prefer.getJSONObject("page").getString("visibility-state") == "hidden"
+                return "{}".toByteArray()
+            }
             @JvmStatic @Implementation fun launch(href: String) { told += "launch $href" }
             @JvmStatic @Implementation fun launchShare(request: String) { told += "launchShare $request" }
             @JvmStatic @Implementation fun open(href: String) { told += "open $href" }
             @JvmStatic @Implementation fun share(request: String) { told += "share $request" }
             @JvmStatic @Implementation fun frame(vsync: Boolean): ByteBuffer? { told += "frame"; return null }
+            @JvmStatic @Implementation fun drew(): Boolean { turns += "drew"; return false }
             @JvmStatic @Implementation fun dataActive(unshown: Boolean): Int { turns += "dataActive $unshown"; return 1 }
             @JvmStatic @Implementation fun fds() = IntArray(0)
             @JvmStatic @Implementation fun background(applying: Boolean): Double { turns += "background"; return -1.0 }
@@ -86,7 +108,9 @@ class HeadlessLaunchTest {
 
     @Before fun setup() {
         Host.told.clear(); Host.turns.clear(); Host.environment.clear(); Environment.values.clear()
+        Host.pageHidden = false; Host.bootResult = true; Host.bootEntered = null; Host.releaseBoot = null
         Exact.owner = null; Exact.reader = null; Exact.live = false; Exact.unshown = false
+        ReflectionHelpers.setStaticField(Exact::class.java, "pageHidden", null)
     }
 
     @After fun finish() {
@@ -96,7 +120,7 @@ class HeadlessLaunchTest {
             thread.quitSafely(); thread.join(5000)
         }
         Exact.owner = null; Exact.reader = null; Exact.live = false; Exact.unshown = false
-        Exact.hidden(false)
+        ReflectionHelpers.setStaticField(Exact::class.java, "pageHidden", null)
     }
 
     /** The host's thread has done what it was asked so far, and the main thread what that posted. */
@@ -112,12 +136,85 @@ class HeadlessLaunchTest {
         assertNull(Environment.values["EXACT_LAUNCH_URL"])
     }
 
-    private fun activity(intent: Intent): Reader {
+    private fun start(intent: Intent): org.robolectric.android.controller.ActivityController<Reader> {
         val controller = Robolectric.buildActivity(Reader::class.java, intent.putExtra("splashfade", "1"))
         made += controller
-        controller.create().start().resume()
+        return controller.create().start().resume()
+    }
+
+    private fun activity(intent: Intent) {
+        start(intent)
         settle()
-        return controller.get()
+    }
+
+    private fun visibilityReports() = Host.turns.filter { it.startsWith("hidden ") }
+
+    @Test fun aColdActivitySendsNoVisibilityNotification() {
+        activity(Intent(Intent.ACTION_MAIN))
+        assertEquals(emptyList<String>(), visibilityReports())
+    }
+
+    @Test fun anActivityMakesAHeadlessHostVisible() {
+        headless()
+        activity(Intent(Intent.ACTION_MAIN))
+        assertEquals(listOf("hidden true false", "hidden false true"), visibilityReports())
+    }
+
+    @Test fun aReplacementActivityMakesThePageVisibleAfterAnAgentHidIt() {
+        activity(Intent(Intent.ACTION_MAIN))
+        val owner = checkNotNull(Exact.owner)
+        owner.sync { Native.agent("""{"op":"prefer","page":{"visibility-state":"hidden"}}""".toByteArray()) }
+        assertTrue(owner.ask { Host.pageHidden })
+
+        activity(Intent(Intent.ACTION_MAIN))
+
+        assertEquals(listOf("hidden false true"), visibilityReports())
+        assertFalse(owner.ask { Host.pageHidden })
+    }
+
+    @Test fun theWindowWaitsForASuccessfulBoot() = drawsAfterBoot(ok = true)
+
+    @Test fun theWindowDrawsAfterAFailedBoot() = drawsAfterBoot(ok = false)
+
+    private fun drawsAfterBoot(ok: Boolean) {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        Host.bootEntered = entered
+        Host.releaseBoot = release
+        Host.bootResult = ok
+        val controller = Robolectric.buildActivity(Activity::class.java).setup()
+        val bitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+        val wasPaused = ShadowChoreographer.isPaused()
+        ShadowChoreographer.setPaused(true)
+        try {
+            val activity = controller.get()
+            activity.intent.putExtra("warm", "0")
+            val owner = Owner(false, false, 0) { "0" }.also { Exact.owner = it }
+            val view = ExactView(activity, false) {}.apply { booting = true; this.owner = owner }
+            owner.boot(64, 64, 1f, "", "", false, done = view::ownerStarted)
+            assertTrue("native startup entered", entered.await(5, TimeUnit.SECONDS))
+            activity.setContentView(view)
+            assertTrue(view.isAttachedToWindow)
+            view.layout(0, 0, 64, 64)
+            view.setBackgroundColor(Color.RED)
+            fun traverse() {
+                if (!view.viewTreeObserver.dispatchOnPreDraw()) view.draw(Canvas(bitmap))
+            }
+            traverse()
+            assertEquals("the window must not draw while the owner boots", Color.TRANSPARENT, bitmap.getPixel(32, 32))
+
+            release.countDown()
+            settle()
+            traverse()
+            main.idle()
+            assertEquals("the window draws once boot completes", Color.RED, bitmap.getPixel(32, 32))
+            assertEquals("the host draws content only after a successful boot", ok, "drew" in Host.turns)
+        } finally {
+            release.countDown()
+            controller.pause().stop().destroy()
+            ShadowChoreographer.setPaused(wasPaused)
+            bitmap.recycle()
+        }
     }
 
     /** What the host was told once the activity's reader adopted it ([Native.start] again), up to its first frame. */
