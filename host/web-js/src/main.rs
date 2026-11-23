@@ -305,7 +305,27 @@ fn write_declarations(
     std::fs::write(dir.join("app.contract.d.ts"), declarations).map_err(|e| e.to_string())
 }
 
+/// Makes stdout and stderr block again. A Bun parent that has written to a
+/// pipe it shares with this process can leave `O_NONBLOCK` on the pipe's file
+/// description; on Linux a burst of warnings then fails with `EAGAIN`, and
+/// `eprintln!` panics with nowhere left to say so (exit 101, a cut log).
+#[cfg(unix)]
+fn blocking_output() {
+    for fd in [libc::STDOUT_FILENO, libc::STDERR_FILENO] {
+        // SAFETY: F_GETFL and F_SETFL read and set flags of a descriptor this
+        // process owns; a closed one returns -1, which is skipped.
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFL);
+            if flags >= 0 && flags & libc::O_NONBLOCK != 0 {
+                libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK);
+            }
+        }
+    }
+}
+
 fn main() -> ExitCode {
+    #[cfg(unix)]
+    blocking_output();
     if let Err(e) = contract::root::find_for_executable() {
         eprintln!("exact-web-js: {e}");
         return ExitCode::from(2);

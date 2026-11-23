@@ -59,6 +59,28 @@ off: on return the strip is gone and the denied line shows.
 5. Turn photo access off in Settings > Photo Editor: on return the strip is
    gone and the editor says it can't see your photos, with Open Settings.
 
+## Changes since a token, by a person (LLP 1133.019.000 piece 4)
+
+`apple.mjs ios` walks PhotoKit's history on a simulator with full access
+(`photokit-changes.mjs`). What it cannot do:
+
+1. Limited access, iPhone: in the fixture, tap Watch, keep the token, then
+   choose "Limit Access…" in Settings > Privacy & Security > Photos and
+   return. Pasting the token into Since answers `expired` with a token whose
+   access is `limited` and which has no `at`; any token pasted after that
+   answers `expired` again (rescan-only). Add a photo to the selection with
+   Manage: the same.
+2. A Mac, with Photos consent given to the fixture's `.app`: tap Watch, add
+   a photo in Photos, paste the first token: the photo is in the added list.
+3. A screenshot, iPhone: tap Watch, then Screenshots, keep the token,
+   take a screenshot with the side and volume-up buttons and paste the
+   token: the screenshot is in the added list. A simulator cannot make a
+   photo PhotoKit marks `photoScreenshot`.
+4. An iPhone signed in to iCloud: favourite a photo on another device and
+   wait for sync, then paste a token kept from before: the photo is in the
+   updated list. A token kept for months may answer `expired`, which is
+   PhotoKit's to decide.
+
 ## Android, in the fixture app (stage 3)
 
 `apps/photos-fixture` is the library's consumer on Android (the photo editor
