@@ -1,7 +1,7 @@
 import { MalformedOperation, inputJSON } from './agent-keys.mjs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { renderAx } from './agent-ax.mjs';
@@ -902,45 +902,6 @@ export async function pidTrace(pid, dest, run = spawnSync, timeout = 10000) {
   const file = resolve(target, `trace-${t.identity?.app ?? 'app'}-${pid}-${new Date(asked).toISOString().replace(/[:.]/g, '-')}.json`);
   copyFileSync(saved, file);
   return file;
-}
-
-/** The running development Mac app `--attach` joins (LLP 1012.000 D1): a marker Develop ▸ Enable Agent Attach wrote
- * beside `trace --pid`'s, this user's own, naming a live process started when it says with the executable it names, and
- * a socket only this user can reach. Several match: a PID chooses. None: why, as far as the running processes say. */
-export function attachTarget({ id, name, app, pid = null, run = spawnSync, dir = run('getconf', ['DARWIN_USER_TEMP_DIR'], { encoding: 'utf8' }).stdout?.trim() }) {
-  const me = process.getuid(), ps = (p, field) => run('ps', ['-o', `${field}=`, '-p', String(p)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }).stdout?.trim() ?? ''; // `lstart` in English, which Date.parse reads
-  const owned = (path, kind) => { try { const st = lstatSync(path); return st[kind]() && st.uid === me && (st.mode & 0o077) === 0; } catch { return false; } };
-  const live = [];
-  for (const file of dir ? readdirSync(dir).filter((f) => /^exact-attach-\d+\.json$/.test(f)) : []) {
-    const path = resolve(dir, file);
-    if (!owned(path, 'isFile')) continue;
-    let m;
-    try { m = JSON.parse(readFileSync(path, 'utf8')); } catch { continue; }
-    if (m.v !== 1 || `exact-attach-${m.pid}.json` !== file || m.bundle !== id) continue;
-    // `ps` gives the start in whole seconds; a recycled PID starts later, or runs another executable. The bundle the
-    // executable is in says its own id.
-    const started = Date.parse(ps(m.pid, 'lstart')) / 1000, bundle = String(m.executable).match(/^(.*\.app)\/Contents\/MacOS\/[^/]+$/)?.[1];
-    if (ps(m.pid, 'comm') === m.executable && Math.abs(started - Math.floor(m.started)) <= 1 && bundle
-      && run('plutil', ['-extract', 'CFBundleIdentifier', 'raw', resolve(bundle, 'Contents/Info.plist')], { encoding: 'utf8' }).stdout?.trim() === id) live.push(m);
-  }
-  const chosen = (pid == null ? live : live.filter((m) => m.pid === pid)).sort((a, b) => a.pid - b.pid);
-  if (chosen.length > 1) throw new Error(`attach: ${chosen.length} running ${name} processes have Agent Attach on (PIDs ${chosen.map((m) => m.pid).join(', ')}): name one, --attach <pid>`);
-  const [m] = chosen;
-  if (m) {
-    if (!owned(m.socket, 'isSocket') || !owned(dirname(m.socket), 'isDirectory')) throw new Error(`attach: ${m.socket} is not a socket in a directory only you can reach; not connecting`);
-    return m;
-  }
-  // What runs under this bundle id, and what its build says it carries.
-  const running = (run('ps', ['-axo', 'pid=,comm='], { encoding: 'utf8' }).stdout ?? '').split('\n').flatMap((line) => {
-    const [, p, exe] = line.trim().match(/^(\d+) (.*\.app)\/Contents\/MacOS\/[^/]+$/) ?? [];
-    const plist = (key) => p && run('plutil', ['-extract', key, 'raw', resolve(exe, 'Contents/Info.plist')], { encoding: 'utf8' }).stdout?.trim();
-    return p && plist('CFBundleIdentifier') === id && (pid == null || Number(p) === pid) ? [{ pid: Number(p), purpose: plist('ExactBuildPurpose'), kind: plist('ExactBuildKind') || 'unstamped' }] : [];
-  });
-  const open = `open a development build (\`bun exact.mjs mac --run\` in the app, or \`bun host/apple/build.mjs ${app} --run\` in exact2, or the .app either made), then choose Develop ▸ Enable Agent Attach in its window`;
-  if (!running.length) throw new Error(pid != null ? `attach: pid ${pid} is not a running ${name} (${id}) on this Mac` : `attach: no ${name} (${id}) is running on this Mac: ${open}`);
-  throw new Error('attach: ' + running.map((r) => r.purpose === 'local-development'
-    ? `${name} pid ${r.pid} has not turned Agent Attach on: choose Develop ▸ Enable Agent Attach in its window`
-    : `${name} pid ${r.pid} is a ${r.kind} build, which carries no agent attach: ${open}`).join('; '));
 }
 
 /** The trace a phone's dev menu saved last (`ExactSession.latestTrace`,
