@@ -1462,3 +1462,23 @@ fn a_drags_constant_data_is_bound_for_drag_js_to_admit() {
         );
     }
 }
+
+#[test]
+fn a_portal_is_placed_by_portal_js_not_written_as_an_attribute() {
+    for value in ["\"slot\"", "(on ? \"slot\" : \"\")"] {
+        let plan = contract::compile(&format!(
+            "component App\n  state on = true\n  view\n    column\n      box id=\"slot\"\n      box portal={value}\n        text \"Playing\"\n"
+        ))
+        .unwrap();
+        let js = crate::emit::emit(&plan, false, false).unwrap().js;
+        assert!(js.contains("from\"./portal.js\""), "{js}");
+        assert!(js.contains("$portal("), "{js}");
+        assert!(!js.contains("data-portal"), "{js}");
+    }
+    let plain =
+        contract::compile("component App\n  view\n    column\n      box id=\"slot\"\n").unwrap();
+    assert!(!crate::emit::emit(&plain, false, false)
+        .unwrap()
+        .js
+        .contains("portal.js"));
+}

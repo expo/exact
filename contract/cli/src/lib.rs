@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 mod build_advice;
+pub mod controls;
 pub use build_advice::{
     compile_path_advised, information, resource_clock_warnings, surface_findings, warning_rank,
     web_only, web_only_line, web_only_said, Advised,
@@ -91,6 +92,7 @@ pub use logic::{
     rust_entry_naming, web_linked, web_rust_mode,
 };
 pub use manifest::{Activity, Choices, Configuration, Manifest, Parameter, RustData, Widget};
+pub use manifest::{Control, ControlAction};
 pub use map::{plan_digest, SourceMap};
 pub use module_rust::{build_module_rust, module_rust, module_rust_path};
 pub use preload::preload_expression;

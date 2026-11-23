@@ -236,6 +236,18 @@ macro_rules! canvas_jni_extensions {
             with(|h| h.presence_reply(&answer));
         }
 
+        /// The reader's live activity report (`Activities.kt`,
+        /// LLP 1126 D13): JSON, on the host's thread.
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_activities(
+            env: *mut JNIEnv,
+            _class: jclass,
+            report: jstring,
+        ) {
+            let report = $crate::canvas::field::text(env, report);
+            with(|h| h.activities(&report));
+        }
+
         /// What the activity asked for the orientation lock (`Orientation.kt`,
         /// LLP 1133.029 D6): JSON, a conflict, and a line to journal or null.
         #[no_mangle]

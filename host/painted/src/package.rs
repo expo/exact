@@ -19,6 +19,7 @@
 //! not `Send`; a [`Reply`] and a [`Notifier`] are, so work on another thread
 //! answers and announces through them.
 
+pub use crate::image::PublishedImage;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -118,6 +119,7 @@ impl Reply {
 /// one of its interface's events happened.
 #[derive(Clone)]
 pub struct Notifier {
+    pub(crate) publisher: std::sync::Weak<crate::image::Publisher>,
     native: Slot,
     extension: &'static str,
     seq: std::sync::Arc<std::sync::atomic::AtomicU64>,
@@ -134,6 +136,14 @@ impl Notifier {
     /// reload its image and canvas handles.
     pub fn picture_changed(&self, source: &str) {
         (self.picture)(source);
+    }
+
+    /// Announce a written file and offer its decoded pixels to images and canvases.
+    pub fn publish_image(&self, source: &str, image: PublishedImage) {
+        if let Some(publisher) = self.publisher.upgrade() {
+            publisher.offer(source, image);
+        }
+        self.picture_changed(source);
     }
 
     /// The readers of `topic` (`extension.name`) are asked again (LLP 1016.002).
@@ -168,7 +178,7 @@ pub(crate) struct Shared {
     pub(crate) foreground: Cell<bool>,
     pub(crate) now: Rc<Cell<f64>>,
     pub(crate) lines: Rc<RefCell<Vec<String>>>,
-    pub(crate) notifier: Notifier,
+    pub(crate) notifier: RefCell<Notifier>,
     pads: Cell<Option<crate::pads::Pads>>,
 }
 
@@ -182,6 +192,7 @@ impl Context {
         picture: std::sync::Arc<dyn Fn(&str) + Send + Sync>,
     ) -> Context {
         let notifier = Notifier {
+            publisher: Default::default(),
             native,
             extension,
             seq: Default::default(),
@@ -196,7 +207,7 @@ impl Context {
             foreground: Cell::new(true),
             now,
             lines,
-            notifier,
+            notifier: RefCell::new(notifier),
             pads: Cell::new(None),
         }))
     }
@@ -279,19 +290,25 @@ impl Context {
         self.0.lines.borrow_mut().push(line);
     }
 
+    /// Publish a written image for this session. A package writing on a worker
+    /// can call the same method on its [`Notifier`].
+    pub fn publish_image(&self, source: &str, image: PublishedImage) {
+        self.0.notifier.borrow().publish_image(source, image);
+    }
+
     /// What answers and announces from any thread.
     pub fn notifier(&self) -> Notifier {
-        self.0.notifier.clone()
+        self.0.notifier.borrow().clone()
     }
 
     /// The readers of `topic` are asked again.
     pub fn changed(&self, topic: &str) {
-        self.0.notifier.changed(topic);
+        self.0.notifier.borrow().changed(topic);
     }
 
     /// Raise the interface's event `name` with `args`, a JSON array.
     pub fn emit(&self, name: &str, args: Json) {
-        self.0.notifier.emit(name, args);
+        self.0.notifier.borrow().emit(name, args);
     }
 
     /// The host's services for the desktop's modules (LLP 1133.025 D11

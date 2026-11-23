@@ -238,7 +238,8 @@ pub fn run(plan: Plan, oracle: Oracle, events: &[Event]) -> (Vec<String>, Option
     (out, Some(driver.oracle))
 }
 
-/// A booted runner. Each delivery returns exactly one block of [`run`]'s observation.
+/// A booted runner. Each delivery returns its block of [`run`]'s observation,
+/// after a `due` block when the input's arrival ran due work.
 pub struct Driver {
     plan: Plan,
     runner: Option<Runner<Oracle>>,
@@ -315,6 +316,9 @@ impl Driver {
     }
 
     /// Deliver one event; a refused boot or poisoned runner returns no further blocks.
+    /// The work due at an input's arrival, when it attempted any commit and
+    /// did not poison the runner, is a `due` block before the input's, which
+    /// then holds the handlers alone (LLP 1151 D1).
     pub fn step(&mut self, event: &Event) -> Vec<String> {
         if !self.live() {
             return Vec::new();
@@ -322,9 +326,38 @@ impl Driver {
         let r = self.runner.as_mut().expect("live runner");
         let mut before = Vec::new();
         state(r, &self.plan, &mut before);
-        let mut out = vec![format!("== {}", event.label())];
-        let journaled = r.journal_start() + r.journal().count();
-        let ((result, receipts), mut ran) = r.trace_commits(|r| apply(r, event));
+        let mut out = Vec::new();
+        let mut due = None;
+        let mut journaled = r.journal_start() + r.journal().count();
+        if let Some(arrival) = arrival(r, event) {
+            let ((result, receipts), ran) = r.trace_commits(before_input);
+            if ran.iter().any(|l| l.starts_with("ran ")) && !r.is_poisoned() {
+                let (block, after) = self.block("due", journaled, &result, receipts, ran, &before);
+                // The due work's commands are printed with it, not carried
+                // as part of the configuration the handler starts from.
+                before = after
+                    .into_iter()
+                    .filter(|l| !l.starts_with("command "))
+                    .collect();
+                out.extend(block);
+                let r = self.runner.as_mut().expect("live runner");
+                journaled = r.journal_start() + r.journal().count();
+                due = Some((arrival, result, Vec::new(), 0));
+            } else {
+                // Nothing traced ran, or it poisoned the runner (the
+                // semantics' `dispatchAt` ends there): it stays the input's.
+                due = Some((arrival, result, ran, receipts));
+            }
+        }
+        let r = self.runner.as_mut().expect("live runner");
+        let ((result, receipts), mut ran) = match due {
+            None => r.trace_commits(|r| apply(r, event)),
+            Some((arrival, due, mut carried, carried_receipts)) => {
+                let ((result, receipts), ran) = r.trace_commits(|r| input(r, arrival, due));
+                carried.extend(ran);
+                ((result, receipts + carried_receipts), carried)
+            }
+        };
         if let Event::Answer(source, _) = event {
             if receipts > 0 || result.is_err() {
                 let outcome = if r.is_poisoned() {
@@ -337,6 +370,27 @@ impl Driver {
                 ran.push(format!("ran source {source} {outcome}"));
             }
         }
+        let label = event.label();
+        out.extend(
+            self.block(&label, journaled, &result, receipts, ran, &before)
+                .0,
+        );
+        out
+    }
+
+    /// A block's lines (label, outcome, commit lines, configuration after it)
+    /// and that configuration, for the next block's `before`.
+    fn block(
+        &mut self,
+        label: &str,
+        journaled: usize,
+        result: &Result<(), exact_runner::RunnerError>,
+        receipts: usize,
+        ran: Vec<String>,
+        before: &[String],
+    ) -> (Vec<String>, Vec<String>) {
+        let r = self.runner.as_mut().expect("live runner");
+        let mut out = vec![format!("== {label}")];
         let traced = ran
             .iter()
             .filter(|l| l.starts_with("ran ") && l.ends_with(" ok"))
@@ -372,8 +426,8 @@ impl Driver {
         if !r.is_poisoned() {
             out.extend(module_moved(r, &self.plan));
         }
-        out.extend(after);
-        out
+        out.extend(after.iter().cloned());
+        (out, after)
     }
 
     pub(crate) fn mutation_requests(&self) -> u64 {
@@ -478,32 +532,65 @@ pub fn site(plan: Plan, oracle: Oracle, events: &[Event], test_id: &str) -> Opti
     r.site_of(view).map(|(node, _)| node.0 as usize)
 }
 
-/// One event at the runner's current time, as a host delivers it: a host
-/// attaches a listener only where the view handles the event
-/// (`Runner::handlers_of`), so an event the view has no handler for reaches
-/// nothing and fires nothing due; one it handles fires what is due first
-/// (`Runner::dispatch_at`), and the event's refusal, else the due work's, is
-/// the outcome (`Contract.Observe.dispatchAt`).
-fn deliver(
-    r: &mut Runner<Oracle>,
-    view: ViewId,
-    event: HostEvent,
-) -> (Result<(), exact_runner::RunnerError>, usize) {
-    let kind = match &event {
-        HostEvent::Press => Some(exact_plan::EventKind::Press),
-        HostEvent::Change(_) => Some(exact_plan::EventKind::Change),
-        HostEvent::Input(_) => Some(exact_plan::EventKind::Input),
-        _ => None,
-    };
-    if !kind.is_some_and(|k| r.handlers_of(view).contains(&k)) {
-        let result = r.dispatch(view, event);
-        let receipts = usize::from(result.is_ok());
-        return (result.map(drop), receipts);
+/// The host event a tap or typing delivers to `view`: typing reaches an
+/// `input` handler where the element has one, else its `change` handler.
+fn host_event(r: &Runner<Oracle>, view: ViewId, e: &Event) -> HostEvent {
+    match e {
+        Event::Type(_, s) if r.handlers_of(view).contains(&exact_plan::EventKind::Input) => {
+            HostEvent::Input(ControlValue::Text(s.clone()))
+        }
+        Event::Type(_, s) => HostEvent::Change(ControlValue::Text(s.clone())),
+        _ => HostEvent::Press,
     }
-    let (due, receipts) = before_input(r);
-    let delivered = r.dispatch(view, event);
-    let receipts = receipts + usize::from(delivered.is_ok());
-    (delivered.map(drop).and(due), receipts)
+}
+
+/// An input that runs the work due at its arrival before its handlers, with
+/// its target and event chosen as it arrives.
+enum Arrival {
+    Dispatch(ViewId, HostEvent),
+    Key(ViewId, String),
+}
+
+/// Whether delivering `e` first runs the work due at its arrival
+/// (`Contract.Observe.dispatchAt`, `keyPress`): a host attaches a listener
+/// only where the view handles the event (`Runner::handlers_of`), so a tap or
+/// typing reaches the due work only through a handler; a key reaches it
+/// whenever its target exists.
+fn arrival(r: &Runner<Oracle>, e: &Event) -> Option<Arrival> {
+    match e {
+        Event::Tap(t) | Event::Type(t, _) => {
+            let view = find(r, t)?;
+            let event = host_event(r, view, e);
+            let kind = match &event {
+                HostEvent::Input(_) => exact_plan::EventKind::Input,
+                HostEvent::Change(_) => exact_plan::EventKind::Change,
+                _ => exact_plan::EventKind::Press,
+            };
+            r.handlers_of(view)
+                .contains(&kind)
+                .then_some(Arrival::Dispatch(view, event))
+        }
+        Event::Key(t, k) => Some(Arrival::Key(find(r, t)?, k.clone())),
+        _ => None,
+    }
+}
+
+/// An [`Arrival`] after [`before_input`] ran the work due: its handlers'
+/// outcome where one failed, else the due work's (`due`), as
+/// `Contract.Observe.dispatchAt` and `keyPress` combine them.
+fn input(
+    r: &mut Runner<Oracle>,
+    arrival: Arrival,
+    due: Result<(), exact_runner::RunnerError>,
+) -> (Result<(), exact_runner::RunnerError>, usize) {
+    match arrival {
+        Arrival::Dispatch(view, event) => {
+            let delivered = r.dispatch(view, event);
+            let receipts = usize::from(delivered.is_ok());
+            (delivered.map(drop).and(due), receipts)
+        }
+        Arrival::Key(view, chord) => key(r, view, &chord, due),
+    }
 }
 
 /// Apply work due at the input's arrival. The handler can arm more change
@@ -581,10 +668,11 @@ fn key(
     r: &mut Runner<Oracle>,
     view: ViewId,
     chord: &str,
+    due: Result<(), exact_runner::RunnerError>,
 ) -> (Result<(), exact_runner::RunnerError>, usize) {
-    // The work due fires before the keydown, so the route is the tree the
+    // The work due fired before the keydown, so the route is the tree the
     // key meets.
-    let (mut result, mut receipts) = before_input(r);
+    let (mut result, mut receipts) = (due, 0);
     let due_commands = r.take_commands();
     r.data().commands.extend(due_commands);
     for (release, key) in [false, true]
@@ -736,27 +824,24 @@ pub(crate) fn apply(
     r: &mut Runner<Oracle>,
     e: &Event,
 ) -> (Result<(), exact_runner::RunnerError>, usize) {
+    if let Some(arrival) = arrival(r, e) {
+        let (due, receipts) = before_input(r);
+        let (result, more) = input(r, arrival, due);
+        return (result, receipts + more);
+    }
     match e {
+        // An event the view has no handler for reaches nothing and fires
+        // nothing due.
         Event::Tap(t) | Event::Type(t, _) => match find(r, t) {
-            Some(view) => deliver(
-                r,
-                view,
-                match e {
-                    Event::Type(_, s)
-                        if r.handlers_of(view).contains(&exact_plan::EventKind::Input) =>
-                    {
-                        HostEvent::Input(ControlValue::Text(s.clone()))
-                    }
-                    Event::Type(_, s) => HostEvent::Change(ControlValue::Text(s.clone())),
-                    _ => HostEvent::Press,
-                },
-            ),
+            Some(view) => {
+                let event = host_event(r, view, e);
+                let result = r.dispatch(view, event);
+                let receipts = usize::from(result.is_ok());
+                (result.map(drop), receipts)
+            }
             None => (Err(exact_runner::RunnerError::UnknownView(0)), 0),
         },
-        Event::Key(t, k) => match find(r, t) {
-            Some(view) => key(r, view, k),
-            None => (Err(exact_runner::RunnerError::UnknownView(0)), 0),
-        },
+        Event::Key(..) => (Err(exact_runner::RunnerError::UnknownView(0)), 0),
         Event::Clock(ms) | Event::TestClock(ms) => {
             let a = r.advance_timed(r.now_ms() + ms);
             (a.error.map_or(Ok(()), Err), a.receipts.len())

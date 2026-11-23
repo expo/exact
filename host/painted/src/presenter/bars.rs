@@ -649,6 +649,10 @@ impl<D: DataSource> Presenter<D> {
                 self.system_back(now_ms);
             }
             What::Item(node) => {
+                if self.top_invoker(node) == Some(node) {
+                    self.invoke(node, now_ms, true);
+                    return;
+                }
                 // A link follows its `href` after its press, and at once where
                 // nothing hears the press, as a tap on it in the page does
                 // (LLP 1038 §7, LLP 1141.004 D1); an inert one follows nothing.

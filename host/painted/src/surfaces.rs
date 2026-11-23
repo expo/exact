@@ -515,6 +515,9 @@ pub(crate) struct Surfaces {
     pub(crate) direct_window: Option<window::DirectWindow>,
     #[cfg(windows)]
     pub(crate) startup_device: Option<window::Startup>,
+    /// A hidden window's hardware device, reopened by its next show.
+    #[cfg(windows)]
+    pub(crate) hidden_device: Option<exact_ink::device::d3d11::Hidden>,
     #[cfg(windows)]
     pub(crate) preparing_device: Option<Result<exact_ink::device::d3d11::Startup, String>>,
     /// Each opened artifact by name, "" the primary; each is tried once.

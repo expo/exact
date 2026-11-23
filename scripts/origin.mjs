@@ -6,7 +6,7 @@
 // record of each publish). A client resolves the head's relative `url`s to
 // the immutable blob tree; no mutable payload copy lives under a stream.
 //
-// Three adapters. An **AppDrop** origin (`https://appdrop.app/u/<key id>`,
+// Four adapters. An **AppDrop** origin (`https://appdrop.app/u/<key id>`,
 // which app.json spells `"appdrop"`) is the one that needs no account and no
 // server: every PUT is signed with the app's update key, and AppDrop keeps
 // blobs content-addressed, release records write-once and each head's seq
@@ -18,9 +18,11 @@
 // elapsed time or a host's interpretation of another host's pid), and the current head's digest compared with the one the publisher
 // read before the new head is renamed into place. An **https** origin is
 // read-only here — enough for the classifier to read live heads and root
-// files; an object-store adapter (`If-Match` on the ETag, which S3, GCS, R2,
-// and Azure all have) is owed, and `--yes` against https refuses by name.
-import { createHash } from 'node:crypto';
+// files; `--yes` against https refuses by name. An **object store**
+// (`s3+https://<endpoint>/<bucket>`, S3's API signed with SigV4) is where
+// `tools.mjs publish` writes tool sets (LLP 1174 D4.2); its readers fetch the
+// bucket's public https URL as an https origin. Deploy does not take it yet.
+import { createHash, createHmac } from 'node:crypto';
 import { extname, resolve } from 'node:path';
 import { within } from './paths.mjs';
 import { canonical, matchPattern } from '../host/web-js/route-pattern.js';
@@ -36,9 +38,9 @@ export class OriginUnavailable extends Error {}
 
 /** A publisher never replays a signed write through a redirect. The timeout covers
  * headers and the streamed body; every chunk is checked before retaining it. */
-async function publisherFetch(url, init = {}, cap = 64 << 10) {
+async function publisherFetch(url, init = {}, cap = 64 << 10, timeout = 30_000) {
   let response;
-  try { response = await fetch(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(30_000) }); }
+  try { response = await fetch(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(timeout) }); }
   catch (error) { throw new OriginUnavailable(`${url}: ${error.cause?.code ?? error.message}`); }
   const reader = response.body?.getReader();
   const chunks = [];
@@ -177,6 +179,7 @@ export function safeRelative(rel) {
 
 /** The origin `spec` names: an AppDrop origin, a directory (created on first write) or an https URL (read-only). */
 export function openOrigin(spec) {
+  if (OBJECT_STORE.test(spec)) throw new Error('an s3+ origin is an object store, which holds tool sets (scripts/tools.mjs); deploy publishes to AppDrop or a directory');
   if (APPDROP_PATH.test(spec)) return new AppDropOrigin(spec);
   if (/^https?:\/\//.test(spec)) return new HttpsOrigin(spec);
   return new DirectoryOrigin(spec);
@@ -287,6 +290,32 @@ export class DirectoryOrigin {
     if (!this.locked) return this.withLock(stream, () => this.putHead(stream, bytes, { previousDigest }));
     return this.operation({ op: 'head', path: safeRelative(`${streamPath(stream)}/exact.json`),
       bytes: Buffer.from(bytes).toString('base64'), previousDigest });
+  }
+
+  /** The file and a version that `replace` compares: its digest. */
+  async getVersion(rel) {
+    const bytes = await this.get(rel);
+    return { bytes, version: bytes && sha256(bytes) };
+  }
+
+  /** Write `rel` only if it is still at `version` (absent, when null). The
+   * stream lock held through `withLock` is what makes the read and write one step. */
+  async replace(rel, bytes, version) {
+    if (!this.locked) throw new Error(`replacing ${rel} requires the held stream lock`);
+    if ((await this.getVersion(rel)).version !== version) return false;
+    await this.put(rel, bytes);
+    return true;
+  }
+
+  /** Every regular file under `rel`, with its modification time; a symbolic link refuses the listing. */
+  async files(rel) {
+    const value = await this.operation({ op: 'files', path: safeRelative(rel) });
+    return Object.entries(value ?? {}).map(([path, modified]) => ({ path, modified, version: null }));
+  }
+
+  /** Remove the regular file at `rel`; an absent one is already removed. Stream heads and locks are refused. */
+  async delete(rel) {
+    await this.operation({ op: 'remove', path: safeRelative(rel) });
   }
 }
 
@@ -399,4 +428,156 @@ export class AppDropOrigin extends HttpsOrigin {
     if (sha256(received) !== previousDigest) throw new Error(`${url}: the head changed since it was read`);
     return this.send(rel, bytes, { 'if-match': etag });
   }
+}
+
+// `s3+https://<endpoint>/<bucket>[/<prefix>]`: S3's API at the endpoint, the
+// bucket in the path. For Cloudflare R2 the endpoint is
+// `<account id>.r2.cloudflarestorage.com`. The spelling names no secret.
+const OBJECT_STORE = /^s3\+https?:\/\//;
+
+/** RFC 3986 percent-encoding, as SigV4 requires: only unreserved characters stay. */
+const uriEncode = (text) => encodeURIComponent(text).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+const hmac = (key, text) => createHmac('sha256', key).update(text).digest();
+
+/** The headers that sign a request with AWS Signature Version 4, in its
+ * Authorization header, over every header given and the payload's SHA-256.
+ * `path` is the URI-encoded path and `query` the unencoded parameters; S3
+ * encodes the path once. https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html */
+export function signS3({ method, host, path, query = {}, headers = {}, body = Buffer.alloc(0), accessKeyId, secretAccessKey, region, date = new Date() }) {
+  const stamp = date.toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+  const day = stamp.slice(0, 8), scope = `${day}/${region}/s3/aws4_request`;
+  const signed = { ...Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), String(v)])),
+    host, 'x-amz-content-sha256': sha256(body), 'x-amz-date': stamp };
+  const names = Object.keys(signed).sort();
+  const canonicalQuery = Object.entries(query).map(([k, v]) => [uriEncode(k), uriEncode(String(v))])
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([k, v]) => `${k}=${v}`).join('&');
+  const canonical = [method, path, canonicalQuery, ...names.map((n) => `${n}:${signed[n].trim().replace(/\s+/g, ' ')}`), '',
+    names.join(';'), signed['x-amz-content-sha256']].join('\n');
+  const toSign = ['AWS4-HMAC-SHA256', stamp, scope, sha256(canonical)].join('\n');
+  const key = hmac(hmac(hmac(hmac(`AWS4${secretAccessKey}`, day), region), 's3'), 'aws4_request');
+  const signature = createHmac('sha256', key).update(toSign).digest('hex');
+  return { ...signed, authorization: `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${names.join(';')}, Signature=${signature}` };
+}
+
+const xmlText = (text) => text.replace(/&(lt|gt|quot|apos|amp|#\d+|#x[0-9a-f]+);/gi, (_, e) => ({ lt: '<', gt: '>', quot: '"', apos: "'", amp: '&' })[e.toLowerCase()]
+  ?? String.fromCodePoint(e[1].toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : Number(e.slice(1))));
+const xmlAll = (xml, tag) => [...xml.matchAll(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, 'g'))].map((m) => m[1]);
+const xmlOne = (xml, tag) => { const value = xmlAll(xml, tag)[0]; return value === undefined ? undefined : xmlText(value); };
+
+/** A bucket written through S3's API: the tools publisher's origin (LLP 1174
+ * D4.2). Credentials come from the environment of the publisher only:
+ * `EXACT_S3_ACCESS_KEY_ID`, `EXACT_S3_SECRET_ACCESS_KEY` and, for a store
+ * other than R2, `EXACT_S3_REGION` (R2's region is `auto`). There is no lock
+ * to hold: a file that must not lose a concurrent writer's change is written
+ * with `replace`, a PUT conditional on the ETag read, which R2 honours
+ * (`If-Match`, `If-None-Match`: https://developers.cloudflare.com/r2/api/s3/api/) and refuses with 412 when another
+ * writer came first. */
+export class ObjectStoreOrigin {
+  constructor(spec, env = process.env) {
+    // Diagnostics never repeat the spelling given: it might carry a secret.
+    if (!OBJECT_STORE.test(spec)) throw new Error('an object-store origin is spelled s3+https://<endpoint>/<bucket>');
+    const url = new URL(spec.slice('s3+'.length));
+    if (url.username || url.password || url.search || url.hash) throw new Error('an object-store origin names its endpoint and bucket only; credentials come from EXACT_S3_ACCESS_KEY_ID and EXACT_S3_SECRET_ACCESS_KEY');
+    // Over plain HTTP nothing authenticates the store's answers, among them the listing a pruning pass deletes by.
+    if (url.protocol === 'http:' && !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) throw new Error('an object-store origin is reached over https, unless it is on this machine');
+    const [bucket, ...prefix] = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
+    if (!bucket) throw new Error('name the bucket: s3+https://<endpoint>/<bucket>');
+    this.endpoint = url.origin;
+    this.host = url.host;
+    this.bucket = bucket;
+    this.prefix = prefix.length ? `${prefix.map(safeRelative).join('/')}/` : '';
+    // One spelling for one bucket and prefix, which names the publishers' lock (`withPublication`).
+    this.spec = `s3+${this.endpoint}/${[bucket, ...prefix].join('/')}`;
+    this.env = env;
+    this.kind = 'object-store';
+    this.writable = true;
+    this.servesWeb = false;
+  }
+
+  describe() { return this.spec; }
+
+  credentials() {
+    const { EXACT_S3_ACCESS_KEY_ID: accessKeyId, EXACT_S3_SECRET_ACCESS_KEY: secretAccessKey, EXACT_S3_REGION: region = 'auto' } = this.env;
+    if (!accessKeyId || !secretAccessKey) throw new Error(`${this.spec}: set EXACT_S3_ACCESS_KEY_ID and EXACT_S3_SECRET_ACCESS_KEY to the bucket's write token`);
+    return { accessKeyId, secretAccessKey, region };
+  }
+
+  /** A signed request for `key` (the bucket itself when null). */
+  async request(method, key, { body, headers = {}, query = {}, cap = 64 << 10 } = {}) {
+    const path = `/${[this.bucket, ...(key === null ? [] : key.split('/'))].map(uriEncode).join('/')}`;
+    const payload = body === undefined ? Buffer.alloc(0) : Buffer.from(body);
+    const signed = signS3({ method, host: this.host, path, query, headers, body: payload, ...this.credentials() });
+    const search = Object.entries(query).map(([k, v]) => `${uriEncode(k)}=${uriEncode(String(v))}`).join('&');
+    const url = `${this.endpoint}${path}${search ? `?${search}` : ''}`;
+    // An upload is given at least 100 KB/s beyond the 30 s every request has. R2 answers 429 to more than one write a
+    // second to one key, so a 429 is asked again a second later, twice (https://developers.cloudflare.com/r2/api/error-codes/).
+    for (let attempt = 1; ; attempt++) {
+      const answer = await publisherFetch(url, { method, headers: signed, body: body === undefined ? undefined : payload }, cap, 30_000 + payload.length / 100);
+      if (answer.response.status !== 429 || attempt === 3) return answer;
+      await Bun.sleep(1000);
+    }
+  }
+
+  fail(method, rel, response, bytes) {
+    const reason = `${method} ${this.spec}/${rel}: HTTP ${response.status}${bytes.length ? ` ${xmlOne(bytes.toString('utf8'), 'Code') ?? ''}` : ''}`.trim();
+    return response.status >= 500 || response.status === 429 ? new OriginUnavailable(reason) : new Error(reason);
+  }
+
+  async getVersion(rel) {
+    const { response, bytes } = await this.request('GET', this.prefix + safeRelative(rel), { cap: MAX_FILE_BYTES });
+    if (response.status === 404) return { bytes: null, version: null };
+    if (!response.ok) throw this.fail('GET', rel, response, bytes);
+    return { bytes, version: response.headers.get('etag') };
+  }
+
+  async get(rel) { return (await this.getVersion(rel)).bytes; }
+
+  /** An immutable file (a content-addressed blob or manifest) is put only where
+   * absent, `present` otherwise, and may be cached for a year; any other is revalidated on each read. */
+  async put(rel, bytes, { immutable = false } = {}) {
+    const headers = { 'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache' };
+    if (immutable) headers['if-none-match'] = '*';
+    const { response, bytes: reply } = await this.request('PUT', this.prefix + safeRelative(rel), { body: bytes, headers });
+    if (immutable && response.status === 412) return 'present';
+    if (!response.ok) throw this.fail('PUT', rel, response, reply);
+    return 'written';
+  }
+
+  /** Write `rel` only if its ETag is still `version` (absent, when null): false when another writer came first. */
+  async replace(rel, bytes, version) {
+    const headers = { 'cache-control': 'no-cache', ...(version === null ? { 'if-none-match': '*' } : { 'if-match': version }) };
+    const { response, bytes: reply } = await this.request('PUT', this.prefix + safeRelative(rel), { body: bytes, headers });
+    if (response.status === 412) return false;
+    if (!response.ok) throw this.fail('PUT', rel, response, reply);
+    return true;
+  }
+
+  /** S3 answers 204 whether or not the key existed. */
+  async delete(rel) {
+    const { response, bytes } = await this.request('DELETE', this.prefix + safeRelative(rel));
+    if (!response.ok && response.status !== 404) throw this.fail('DELETE', rel, response, bytes);
+  }
+
+  /** Every object under `rel`, with its modification time and ETag: ListObjectsV2, page by page. */
+  async files(rel) {
+    const prefix = `${this.prefix}${safeRelative(rel)}/`, found = [];
+    for (let token; ;) {
+      const query = { 'list-type': '2', prefix, ...(token ? { 'continuation-token': token } : {}) };
+      const { response, bytes } = await this.request('GET', null, { query, cap: 16 << 20 });
+      if (!response.ok) throw this.fail('LIST', rel, response, bytes);
+      const xml = bytes.toString('utf8'), truncated = xmlOne(xml, 'IsTruncated');
+      // What a pruning pass does not list it may take for unnamed: a page that is not whole stops the walk.
+      if (!/<ListBucketResult[\s>]/.test(xml) || !['true', 'false'].includes(truncated)) throw new Error(`LIST ${this.spec}/${rel}: not a ListObjectsV2 page`);
+      for (const item of xmlAll(xml, 'Contents')) {
+        const key = xmlOne(item, 'Key'), modified = Date.parse(xmlOne(item, 'LastModified') ?? '');
+        if (!key?.startsWith(prefix) || !Number.isFinite(modified)) throw new Error(`LIST ${this.spec}/${rel}: an entry without its key or time`);
+        found.push({ path: key.slice(this.prefix.length), modified, version: xmlOne(item, 'ETag') ?? null });
+      }
+      if (truncated === 'false') return found;
+      token = xmlOne(xml, 'NextContinuationToken');
+      if (!token) throw new Error(`LIST ${this.spec}/${rel}: a truncated page without a continuation token`);
+    }
+  }
+
+  async withLock(stream, fn) { return fn(); }
 }

@@ -7,8 +7,8 @@
 // - The web: the build takes the package's web implementation, which
 //   answers absence: `available` false, and a read fails.
 // - macOS, under the agent: the read is granted by its ticket, the agent's
-//   library (the packed package's own fixture photos) is listed, and each
-//   picture is admitted and drawn.
+//   library (the packed package's own fixture photos) is listed, each
+//   picture is admitted and drawn, and `photoChanges` answers a checkpoint.
 //
 // usage: bun packages/photos/test/packed.mjs [web] [macos]
 import { existsSync, readFileSync, rmSync } from 'node:fs';
@@ -37,6 +37,9 @@ for (const host of hosts) {
       await s.tap('read');
       await s.clock('settle');
       check('web', 'and lists nothing', (await texts(s)).count === '0', (await texts(s)).count);
+      await s.tap('watch');
+      await s.clock('settle');
+      check('web', 'photoChanges is NotSupportedError', (await texts(s))['changes-error'] === 'NotSupportedError', (await texts(s))['changes-error']);
     } finally {
       await s.close();
     }
@@ -58,6 +61,9 @@ for (const host of hosts) {
     check(host, 'each picture is drawn, none fails', pictures === '6 0 ', pictures);
     const counted = (await s.state()).extensions?.photos?.pictures;
     check(host, 'each admitted by the runner', counted?.admitted >= 6, JSON.stringify(counted));
+    await s.tap('watch');
+    const changes = await until(s, 'changes', (t) => !!t);
+    check(host, 'photoChanges answers a checkpoint with nothing since', changes === '|||false false' && !!(await texts(s)).token, changes);
     await s.screenshot(join(dir, 'packed.png'));
   } finally {
     await s.close();

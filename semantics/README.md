@@ -107,10 +107,26 @@ outcome or commit is followed by `# <reason>`. Reasons are the runner's
 Debug text and Lean's `why`, and are not compared; `ran` lines are compared.
 Boot and an event with no handler have no `ran` line. Curried arguments that
 refuse print `ran handler <action> refused` and a `#` reason saying the arguments
-refused. A due refusal and a successful handler print separate commit outcomes
-even when the step's outcome is `refused`.
+refused.
 
-`Observe.runScript` runs `advance` and `dispatch` beside their traced variants.
+A tap or typing that reaches a handler, and a key whose target exists, first
+runs the work due at its arrival: change actions, timers due by then, armed
+`then`s and queued sends (`advance` to the current time with its change receipts
+applied). When that work attempted any commit, it is printed as its own step,
+`== due`, before the input's, which then shows the handlers alone. A host
+applies each change action's receipt before the next one or the input runs
+(`runner/src/runner/advance.rs`, `inputs.rs`), so the handler never shares a
+batch with one. The input step's outcome is still the handler's when it failed,
+else the due work's, so a due refusal and a successful handler can print
+`outcome refused` over `ran handler <action> ok`. Due work that poisons the
+configuration ends the observation in the input's step, as before. Expectations
+and the step an event names skip `due` steps; the property checks and the census
+count them. The JS target and the component semantics print one step per input,
+so their comparisons fold each `due` step into its input's, its commands first.
+
+`Observe.runScript` runs `advance` and `dispatch` beside their traced variants;
+a `due` step's original is `advance` to the current time, and the input after it
+is checked against the composite `dispatchAt`.
 The original supplies the configuration and outcome; the variant supplies only
 `ran` lines. A difference in either result replaces the configuration with
 `trace disagrees`, which always fails comparison. The guard compares derived
@@ -140,11 +156,11 @@ a timer, even one due exactly now. It is `Runner::land_then` on the runner and
 `type`, and each explore tap, emits its input followed by `land`. Expectations
 read the observation after that pair and its automatic clock advances. `after
 "a"` reads the landing with `old` from before the input and commands from both
-steps. A refused input, another commit beside its handler, or an untraced commit
-makes the pair counted only. Its landing is not an `after clock` step. A timer
-due exactly now stands after `land` and fires at the next dispatch; that dispatch
-is counted only for `after` when it also runs a handler. A primitive `clock +0`
-still fires due timers as well as continuations.
+steps; `old` is the configuration the handler met, after any `due` step. A refused
+handler, another commit beside it, or an untraced commit makes the pair counted
+only. Its landing is not an `after clock` step. A timer due exactly now
+stands after `land` and fires at the next dispatch, in that dispatch's `due` step.
+A primitive `clock +0` still fires due timers as well as continuations.
 
 The device runner (`scripts/agent-test.mjs`, `testMutationClock`) advances one
 millisecond per mutation request, reading the runner's cumulative counter after
@@ -360,7 +376,8 @@ fails; it does not include a device's reloads, late replies or host inputs.
 
 `contract verify --js apps/<app>/app.contract` replays every search script, including
 stored variants, and the shrunk findings on the web JS target. It checks `always`
-on the JS observation and compares configurations with the runner. The receipt's
+on the JS observation and compares configurations with the runner, the runner's
+`due` steps folded into their inputs'. The receipt's
 `js:` entry gives agreements, outside cases, errors and property line checks;
 without the flag it says `not run`. JS and device runs count `after`, its frames
 and commands, and `never refuses` as unchecked because they expose no commit trace.
@@ -400,7 +417,7 @@ configurations; `stays` also reads the previous step. `after "a"` checks a succe
 handler-only input and its following `land`, from before the input through the
 landing. Extra commits on the input, commits other than `then` or `queue` on the
 landing, or an omitted-commit marker make the pair counted only. `after clock`
-checks `clock +N` and standalone `land` steps over all commits. Every changed root
+checks `clock +N`, `due` and standalone `land` steps over all commits. Every changed root
 slot counts in a frame, including a queued mutation's slot. `never refuses` reads
 commit attribution, not the aggregate outcome. A poisoned step has no configuration
 and is counted only. Every line reports checks, counted-only steps and violations;

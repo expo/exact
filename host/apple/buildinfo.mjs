@@ -62,8 +62,10 @@ const sdkOf = (sdk) => once(`sdk ${sdk}`, () => tool('xcrun', ['--sdk', sdk, '--
  * `ExactDevMenu` (`0` off, anything else on), so an app launched with no
  * environment, an installed iOS one, keeps what its build said. */
 /** `sdk` is the platform the link targets and `sdkVersion` the version it
- * records when that is not the selected Xcode's (a design-compatible build). */
-export function buildInfo(app, { root, archive = false, production = false, sdk = null, sdkVersion = null, now = new Date(), env = process.env }) {
+ * records when that is not the selected Xcode's (a design-compatible build).
+ * `purpose` is `local-development` for the build `build.mjs` compiles agent
+ * attach into (LLP 1012.000 D2), stamped `ExactBuildPurpose`; nothing else. */
+export function buildInfo(app, { root, archive = false, production = false, sdk = null, sdkVersion = null, purpose = null, now = new Date(), env = process.env }) {
   const exact = commitOf(root);
   const top = (dir) => git(dir, ['rev-parse', '--show-toplevel']);
   const own = app.dir && top(app.dir) && top(app.dir) !== top(root) ? commitOf(app.dir) : null;
@@ -74,6 +76,7 @@ export function buildInfo(app, { root, archive = false, production = false, sdk 
   return {
     ExactBuildTime: now.toISOString(),
     ExactBuildKind: archive ? 'archive' : production ? 'release' : 'debug',
+    ...(purpose === 'local-development' && !archive && !production ? { ExactBuildPurpose: purpose } : {}),
     ExactFrameHealthMode: app.manifest?.frame_health?.mode ?? (production || env.EXACT_UPDATE_TRUST === 'production' ? 'demand' : 'core'),
     ExactBuildHost: hostname(),
     ...(tools ? { ExactBuildXcode: tools } : {}),

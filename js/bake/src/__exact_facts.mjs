@@ -63,9 +63,13 @@ function moduleFacts(file, code, parse, source = code) {
 function constantBindings(code, parse, { load, source = code } = {}) {
   const root = moduleFacts('app.ts', code, parse, source), modules = new Map([['app.ts', root]]);
   const refuse = (m, node, name, why = syntax) => { throw new Error(`${m.file}:${m.at((m.original.get(node) ?? node)?.start ?? 0)}: ${name} ${why}`); };
-  const imported = (m, source, node, name) => {
+  // `own`: app.ts's star export, looked through for the export `name` itself.
+  const imported = (m, source, node, name, own = false) => {
     if (!load || !['grants', 'turnBudgets'].includes(name)) refuse(m, node, name);
-    const next = load(source, m.file, message => refuse(m, node, name, message));
+    // A star over a package is where an app.ts that re-exports shared code would find them: say where they belong.
+    const next = load(source, m.file, message => refuse(m, node, name, own && message.startsWith('cannot use package binding')
+      ? `cannot come from ${JSON.stringify(source)} through \`export *\`, as a package's bindings are never read for them: declare ${name} in app.ts, where it wins over the star`
+      : message));
     if (!modules.has(next.file)) modules.set(next.file, moduleFacts(next.file, next.code, parse, next.source ?? next.code));
     const result = modules.get(next.file);
     if (result.parsed.errors?.length) refuse(m, node, name, `cannot read ${next.file}: the module does not parse`);
@@ -109,7 +113,7 @@ function constantBindings(code, parse, { load, source = code } = {}) {
     if (key === 'default') return undefined;
     let found;
     for (const s of m.stars) {
-      const next = resolveExport(imported(m, s.source.value, s, name), key, name, resolveSet);
+      const next = resolveExport(imported(m, s.source.value, s, name, m === root && key === name), key, name, resolveSet);
       if (next === ambiguous) return ambiguous;
       if (!next) continue;
       if (found && (found.m !== next.m || (found.local ? found.local !== next.local : found.node !== next.node)))

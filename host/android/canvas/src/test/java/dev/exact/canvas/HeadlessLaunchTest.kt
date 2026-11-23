@@ -1,10 +1,16 @@
 package dev.exact.canvas
 
+import android.app.Activity
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.os.HandlerThread
 import android.os.Looper
+import android.view.View
+import android.widget.FrameLayout
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -22,10 +28,14 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
+import org.robolectric.shadows.ShadowChoreographer
+import org.robolectric.util.ReflectionHelpers
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
-/** The first activity made over a host [Headless] booted (LLP 1133.017 D7): its URL or share is the launch location. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], manifest = Config.NONE, shadows = [HeadlessLaunchTest.Host::class, HeadlessLaunchTest.Environment::class])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -45,18 +55,54 @@ class HeadlessLaunchTest {
             /** The host's boot, what it was told of the page, its turns with no reader and its data module's
              * activation, in the order its thread made them. */
             val turns = CopyOnWriteArrayList<String>()
+            var pageHidden = false
+            var bootResult = true
+            var bootEntered: CountDownLatch? = null
+            var releaseBoot: CountDownLatch? = null
+            var paint: ByteBuffer? = null
+            var chrome: IntArray? = null
+
+            fun rectangle(color: Int, top: Float = 8f): ByteBuffer {
+                val words = intArrayOf(2, color, 8f.toBits(), top.toBits(), 16f.toBits(), 8f.toBits()) + IntArray(8)
+                return ByteBuffer.allocate(words.size * 4).order(ByteOrder.LITTLE_ENDIAN)
+                    .apply { asIntBuffer().put(words) }
+            }
+
             @JvmStatic @Implementation fun __staticInitializer__() {}
             @JvmStatic @Implementation fun start(width: Int, height: Int, scale: Float, dir: String, store: String, live: Boolean): Boolean {
                 told += "start"
                 turns += "start"
-                return true
+                bootEntered?.countDown()
+                releaseBoot?.let { check(it.await(5, TimeUnit.SECONDS)) { "boot was not released" } }
+                return bootResult
             }
-            @JvmStatic @Implementation fun hidden(hidden: Boolean, eligible: Boolean) { turns += "hidden $hidden $eligible" }
+            @JvmStatic @Implementation fun hidden(hidden: Boolean, eligible: Boolean) {
+                pageHidden = hidden
+                turns += "hidden $hidden $eligible"
+            }
+            @JvmStatic @Implementation fun agent(line: ByteArray): ByteArray {
+                val prefer = JSONObject(String(line, Charsets.UTF_8))
+                pageHidden = prefer.getJSONObject("page").getString("visibility-state") == "hidden"
+                return "{}".toByteArray()
+            }
             @JvmStatic @Implementation fun launch(href: String) { told += "launch $href" }
             @JvmStatic @Implementation fun launchShare(request: String) { told += "launchShare $request" }
             @JvmStatic @Implementation fun open(href: String) { told += "open $href" }
             @JvmStatic @Implementation fun share(request: String) { told += "share $request" }
-            @JvmStatic @Implementation fun frame(vsync: Boolean): ByteBuffer? { told += "frame"; return null }
+            @JvmStatic @Implementation fun window(width: Int, height: Int, scale: Float, insets: IntArray) {
+                if (insets[0] == 16) {
+                    // The software canvas uses the stream's coordinates inside the root's clip.
+                    paint = rectangle(Color.BLUE, top = 24f)
+                    chrome = intArrayOf(0, 16, width, height - 16, Color.TRANSPARENT, 0)
+                }
+            }
+            @JvmStatic @Implementation fun frame(vsync: Boolean): ByteBuffer? {
+                told += "frame"
+                return paint.also { paint = null }
+            }
+            @JvmStatic @Implementation fun pendingPictures() = IntArray(0)
+            @JvmStatic @Implementation fun chrome(): IntArray? = chrome.also { chrome = null }
+            @JvmStatic @Implementation fun drew(): Boolean { turns += "drew"; return false }
             @JvmStatic @Implementation fun dataActive(unshown: Boolean): Int { turns += "dataActive $unshown"; return 1 }
             @JvmStatic @Implementation fun fds() = IntArray(0)
             @JvmStatic @Implementation fun background(applying: Boolean): Double { turns += "background"; return -1.0 }
@@ -86,7 +132,10 @@ class HeadlessLaunchTest {
 
     @Before fun setup() {
         Host.told.clear(); Host.turns.clear(); Host.environment.clear(); Environment.values.clear()
+        Host.pageHidden = false; Host.bootResult = true; Host.bootEntered = null; Host.releaseBoot = null
+        Host.paint = null; Host.chrome = null
         Exact.owner = null; Exact.reader = null; Exact.live = false; Exact.unshown = false
+        ReflectionHelpers.setStaticField(Exact::class.java, "pageHidden", null)
     }
 
     @After fun finish() {
@@ -96,7 +145,7 @@ class HeadlessLaunchTest {
             thread.quitSafely(); thread.join(5000)
         }
         Exact.owner = null; Exact.reader = null; Exact.live = false; Exact.unshown = false
-        Exact.hidden(false)
+        ReflectionHelpers.setStaticField(Exact::class.java, "pageHidden", null)
     }
 
     /** The host's thread has done what it was asked so far, and the main thread what that posted. */
@@ -112,12 +161,166 @@ class HeadlessLaunchTest {
         assertNull(Environment.values["EXACT_LAUNCH_URL"])
     }
 
-    private fun activity(intent: Intent): Reader {
+    private fun start(intent: Intent): org.robolectric.android.controller.ActivityController<Reader> {
         val controller = Robolectric.buildActivity(Reader::class.java, intent.putExtra("splashfade", "1"))
         made += controller
-        controller.create().start().resume()
+        return controller.create().start().resume()
+    }
+
+    private fun activity(intent: Intent) {
+        start(intent)
         settle()
-        return controller.get()
+    }
+
+    private fun visibilityReports() = Host.turns.filter { it.startsWith("hidden ") }
+
+    @Test fun aColdActivitySendsNoVisibilityNotification() {
+        activity(Intent(Intent.ACTION_MAIN))
+        assertEquals(emptyList<String>(), visibilityReports())
+    }
+
+    @Test fun anActivityMakesAHeadlessHostVisible() {
+        headless()
+        activity(Intent(Intent.ACTION_MAIN))
+        assertEquals(listOf("hidden true false", "hidden false true"), visibilityReports())
+    }
+
+    @Test fun aReplacementActivityMakesThePageVisibleAfterAnAgentHidIt() {
+        activity(Intent(Intent.ACTION_MAIN))
+        val owner = checkNotNull(Exact.owner)
+        owner.sync { Native.agent("""{"op":"prefer","page":{"visibility-state":"hidden"}}""".toByteArray()) }
+        assertTrue(owner.ask { Host.pageHidden })
+
+        activity(Intent(Intent.ACTION_MAIN))
+
+        assertEquals(listOf("hidden false true"), visibilityReports())
+        assertFalse(owner.ask { Host.pageHidden })
+    }
+
+    @Test fun aColdCompletionStillBelongsToItsReaderAfterRestart() {
+        val controller = start(Intent(Intent.ACTION_MAIN))
+        val owner = checkNotNull(Exact.owner)
+        fun reader() = ReflectionHelpers.getField<ExactView>(controller.get(), "view")
+        fun started(view: ExactView) = ReflectionHelpers.getField<Boolean>(view, "started")
+        val cold = reader()
+        assertTrue(cold.booting)
+        withMainSyncBarrier {
+            controller.pause().stop().restart().resume()
+            val resumed = reader()
+            assertTrue(cold !== resumed)
+            assertFalse("restart does not hold drawing", resumed.booting)
+            owner.ask { }
+            main.idle()
+            assertTrue("the asynchronous completion reaches the cold reader", started(cold))
+            assertFalse("the restarted reader waits for its own completion", started(resumed))
+        }
+        assertTrue(started(reader()))
+    }
+
+    @Test fun chromeAfterTheFirstDrawStaysInOrderEvenWhenBootSentNone() {
+        val controller = start(Intent(Intent.ACTION_MAIN).putExtra("warm", "0"))
+        settle()
+        val view = ReflectionHelpers.getField<ExactView>(controller.get(), "view")
+        val bitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+        try {
+            view.layout(0, 0, 64, 64)
+            view.draw(Canvas(bitmap))
+            main.idle()
+            assertTrue("the reader drew", "drew" in Host.turns)
+            val owner = checkNotNull(Exact.owner)
+            withMainSyncBarrier {
+                owner.sync { Host.chrome = intArrayOf(0, 4, 64, 60, Color.TRANSPARENT, 0) }
+                main.idle()
+                assertEquals("later chrome waits for the traversal", 0,
+                    (view.layoutParams as FrameLayout.LayoutParams).topMargin)
+            }
+            assertEquals(4, (view.layoutParams as FrameLayout.LayoutParams).topMargin)
+        } finally {
+            Exact.owner?.ask { Host.chrome = null }
+            bitmap.recycle()
+        }
+    }
+
+    @Test fun theWindowWaitsForASuccessfulBoot() = drawsAfterBoot(ok = true)
+
+    @Test fun aBootInsetCorrectionIsAppliedOnTheFirstDraw() = drawsAfterBoot(ok = true, insetCorrection = true)
+
+    @Test @Config(sdk = [29]) fun anInsetLearnedDuringLayoutIsAppliedBeforeTheFirstDraw() =
+        drawsAfterBoot(ok = true, insetCorrection = true, insetDuringLayout = true)
+
+    @Test fun theWindowDrawsAfterAFailedBoot() = drawsAfterBoot(ok = false)
+
+    private fun drawsAfterBoot(ok: Boolean, insetCorrection: Boolean = false, insetDuringLayout: Boolean = false) {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        Host.bootEntered = entered
+        Host.releaseBoot = release
+        Host.bootResult = ok
+        if (ok) Host.paint = Host.rectangle(Color.RED)
+        if (insetCorrection) Host.chrome = intArrayOf(0, 0, 64, 64, Color.TRANSPARENT, 0)
+        val controller = Robolectric.buildActivity(Activity::class.java).setup()
+        val bitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+        val wasPaused = ShadowChoreographer.isPaused()
+        ShadowChoreographer.setPaused(true)
+        try {
+            val activity = controller.get()
+            activity.intent.putExtra("warm", "0")
+            val owner = Owner(false, false, 0) { "0" }.also { Exact.owner = it }
+            val view = ExactView(activity, false) {}.apply { this.owner = owner }
+            fun tellInset() = owner.window(64, 64, 1f, IntArray(16).apply { this[0] = 16 })
+            var reportInset = false
+            val root = object : FrameLayout(activity) {
+                override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+                    super.onLayout(changed, left, top, right, bottom)
+                    if (reportInset) { reportInset = false; tellInset() }
+                }
+            }
+            root.addView(view, FrameLayout.LayoutParams(64, 64))
+            owner.chrome = { c ->
+                view.layoutParams = FrameLayout.LayoutParams(c[2], c[3]).apply { topMargin = c[1] }
+            }
+            owner.window(64, 64, 1f, IntArray(16))
+            view.booting = owner.boot(64, 64, 1f, "", "", false, done = view::ownerStarted)
+            assertTrue("native startup entered", entered.await(5, TimeUnit.SECONDS))
+            activity.setContentView(root)
+            assertTrue(view.isAttachedToWindow)
+            fun traverse(): Boolean {
+                val size = View.MeasureSpec.makeMeasureSpec(64, View.MeasureSpec.EXACTLY)
+                root.measure(size, size)
+                root.layout(0, 0, 64, 64)
+                if (root.viewTreeObserver.dispatchOnPreDraw()) return false
+                root.draw(Canvas(bitmap))
+                return true
+            }
+            assertFalse("the window waits for the owner", traverse())
+
+            withMainSyncBarrier {
+                if (insetCorrection && !insetDuringLayout) tellInset()
+                release.countDown()
+                owner.ask { }
+                main.idle()
+                if (insetDuringLayout) {
+                    assertFalse("boot completed before layout", view.booting)
+                    reportInset = true
+                    assertFalse("layout learned a new inset, so the window waits for its chrome", traverse())
+                    assertFalse("layout told the owner about the inset", reportInset)
+                    owner.ask { }
+                    main.idle()
+                }
+                assertTrue("boot completion lets the window draw through the barrier", traverse())
+                assertEquals("the first frame uses the current page margin", if (insetCorrection) 16 else 0, view.top)
+                val color = if (insetCorrection) Color.BLUE else if (ok) Color.RED else Color.TRANSPARENT
+                assertEquals("the first frame replays the owner's paint", color, bitmap.getPixel(12, view.top + 12))
+                assertEquals(Color.TRANSPARENT, bitmap.getPixel(12, view.top + 20))
+            }
+            assertEquals("the host draws content only after a successful boot", ok, "drew" in Host.turns)
+        } finally {
+            release.countDown()
+            Exact.owner?.ask { Host.paint = null; Host.chrome = null }
+            controller.pause().stop().destroy()
+            ShadowChoreographer.setPaused(wasPaused)
+            bitmap.recycle()
+        }
     }
 
     /** What the host was told once the activity's reader adopted it ([Native.start] again), up to its first frame. */

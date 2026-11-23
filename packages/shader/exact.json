@@ -7,6 +7,6 @@
   "gpu": {
     "crate": "rust",
     "exactGpu": "0.4",
-    "surfaces": { "shader": { "arity": 3, "factory": "exact_shader::surface", "wgsl": "src" } }
+    "surfaces": { "shader": { "arity": 4, "factory": "exact_shader::surface", "wgsl": "src" } }
   }
 }

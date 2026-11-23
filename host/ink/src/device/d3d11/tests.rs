@@ -348,3 +348,53 @@ fn windowless_field_edit_and_scale() {
         );
     }
 }
+
+#[test]
+fn a_kept_hardware_device_draws_again_after_its_painter_is_dropped() {
+    let Ok(mut device) = D3d11::open(false) else {
+        eprintln!("no hardware D3D11 device");
+        return;
+    };
+    let target = device.create_target(64, 64).unwrap();
+    device
+        .render(&Frame::default(), target, Some([0., 0., 1., 1.]))
+        .unwrap();
+    let kept = device.keep_hidden().expect("hardware is kept");
+    drop(device);
+    kept.trim();
+    let raw = kept.0.device.clone();
+    let mut device = kept.reopen().unwrap();
+    assert_eq!(device.device, raw, "no new device");
+    assert_eq!(device.info().device_ms, 0.);
+    let target = device.create_target(1, 1).unwrap();
+    device
+        .render(&Frame::default(), target, Some([1., 0., 0., 1.]))
+        .unwrap();
+    assert_eq!(device.readback(target).unwrap(), [255, 0, 0, 255]);
+    assert!(
+        D3d11::open(true).unwrap().keep_hidden().is_none(),
+        "WARP reopens"
+    );
+}
+
+#[test]
+fn a_large_upload_reaches_its_region() {
+    let mut device = D3d11::open(true).unwrap();
+    let target = device.create_target(1024, 400).unwrap();
+    device
+        .render(&Frame::default(), target, Some([0., 0., 0., 1.]))
+        .unwrap();
+    let (w, h) = (1000u32, 300u32);
+    let data: Vec<u8> = (0..w * h)
+        .flat_map(|i| [(i % w) as u8, (i / w) as u8, 7, 255])
+        .collect();
+    assert!(data.len() >= STAGED_UPLOAD_BYTES);
+    device
+        .upload_texture(target, [10, 20], [w, h], &data)
+        .unwrap();
+    let pixels = device.readback(target).unwrap();
+    let at = |x: u32, y: u32| &pixels[((y * 1024 + x) * 4) as usize..][..4];
+    assert_eq!(at(9, 20), [0, 0, 0, 255]);
+    assert_eq!(at(10, 20), [0, 0, 7, 255]);
+    assert_eq!(at(10 + 300, 20 + 299), [44, 43, 7, 255]);
+}

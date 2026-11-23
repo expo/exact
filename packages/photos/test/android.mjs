@@ -111,6 +111,13 @@ if (process.argv.includes('--emulator')) {
     check(where, '3: limited shows three and Manage', grid(r[3]) === 3 && tree(r[3]).includes('"manage"'), tree(r[3]).slice(0, 400));
     check(where, '3: a smaller selection shows one, the others revoked', grid(r[6]) === 1 && r.lines.some(l => /photos: revoked photos:agent-1/.test(l)), r.lines.filter(l => /photos:/.test(l)).join(' | '));
   }
+  // 3b: the screenshot filter (LLP 1133.019.000 D4) over the agent's library, whose one screenshot is agent-2.
+  {
+    const r = drive({ photos: 'granted' }, ['clock settle', 'tap screenshots', 'clock settle', 'tree', 'tap screenshots', 'clock settle', 'tree']);
+    const sources = t => (t?.nodes ?? []).map(n => n.props?.imageSource).filter(v => /^photos:/.test(v ?? ''));
+    check(where, '3b: Screenshots lists agent-2 alone', JSON.stringify(sources(r[3])) === '["photos:agent-2"]', JSON.stringify(sources(r[3])));
+    check(where, '3b: off again, all six', grid(r[6]) === 6, tree(r[6]).slice(0, 400));
+  }
   // 4: the codec (D16), §11's image conformance and checklist step 9, in one launch: each call's record, then its
   // file, read from the app's directory (an emulator's adb runs as root) and decoded here by `sips`.
   {
@@ -254,6 +261,68 @@ if (process.argv.includes('--emulator')) {
     // Gone again, so drive 5's list stays under one page.
     adb('shell', `content delete --uri ${images} --where "_display_name LIKE 'photos-page-%'"`);
     adb('shell', 'rm -f /sdcard/Pictures/photos-page-*');
+  }
+  // 7: MediaStore filtered to screenshots (LLP 1133.019.000 D4): files in `Pictures/Screenshots/` and
+  // `DCIM/screenshots/` (another case), and one the system takes, are listed newest first, 12 a page through Older;
+  // files in `Pictures/MyScreenshots/`, `Pictures/Screenshots/old/` and `Pictures/` are not. The emulator may be
+  // shared, so the drive removes only what it made: its files, which carry this run's pid, the directories that were
+  // not there before, and the system's screenshot when it was the one SystemUI wrote after the key.
+  {
+    const id = 'com.exact.photosfixture', images = 'content://media/external/images/media', tag = `photos-shot-${process.pid}-`;
+    const dirs = { 'Pictures/Screenshots/': 10, 'DCIM/screenshots/': 3, 'Pictures/MyScreenshots/': 2, 'Pictures/Screenshots/old/': 1, 'Pictures/': 1 };
+    const exists = dir => adb('shell', `ls -d '/sdcard/${dir}'`).status === 0;
+    const made = Object.keys(dirs).filter(d => !exists(d)).reverse();
+    const out = resolve(tmpdir(), `photos-android-shots-${process.pid}`);
+    mkdirSync(out, { recursive: true });
+    const seeded = [];
+    let system = [];
+    const rowsOf = () => [...adb('shell', `content query --uri ${images} --projection _id:_display_name:relative_path:owner_package_name:datetaken:date_added`).stdout.toString()
+      .matchAll(/_id=(\d+), _display_name=(.*), relative_path=(.*), owner_package_name=(.*), datetaken=(.*), date_added=(.*)$/gm)]
+      .map(m => ({ id: m[1], name: m[2], path: m[3].trim(), owner: m[4].trim(), taken: m[5] === 'NULL' ? null : Number(m[5]), added: Number(m[6]) }));
+    const poll = (done) => { let rows = rowsOf(); for (let t = 0; t < 20 && !done(rows); t++) { spawnSync('sleep', ['0.5']); rows = rowsOf(); } return rows; };
+    try {
+      for (const [dir, count] of Object.entries(dirs))
+        for (let i = 0; i < count; i++) {
+          const name = `${tag}${seeded.length}.jpg`, file = resolve(out, name);
+          writeFileSync(file, Buffer.concat([readFileSync(resolve(here, `../fixture/agent-${1 + seeded.length % 6}.jpg`)), Buffer.from(name)]));
+          adb('shell', `mkdir -p '/sdcard/${dir}'`);
+          adb('push', file, `/sdcard/${dir}`);
+          seeded.push({ name, dir });
+        }
+      adb('shell', api >= 30 ? 'content call --method scan_volume --uri content://media --arg external_primary'
+        : seeded.map(f => `am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/${f.dir}${f.name}`).join(' && '));
+      const at = (rows, f) => rows.some(r => r.name === f.name && r.path.toLowerCase() === f.dir.toLowerCase());
+      const indexed = poll(rows => seeded.every(f => at(rows, f)));
+      check(where, `7: the ${seeded.length} files are indexed where they were pushed`, seeded.every(f => at(indexed, f)), JSON.stringify(seeded.filter(f => !at(indexed, f))));
+      // The system's own screenshot: SystemUI writes it under Pictures/Screenshots/ a moment after the key.
+      const before = new Set(indexed.map(r => r.id)), taken = r => !before.has(r.id) && r.owner === 'com.android.systemui' && /^Screenshot_/.test(r.name);
+      adb('shell', 'input keyevent KEYCODE_SYSRQ');
+      const rows = poll(rows => rows.some(taken));
+      system = rows.filter(taken);
+      const screenshot = p => /(^|\/)screenshots\/*$/i.test(p);
+      // The list's order: the date taken, else the date added, then the row, each newest first (D1).
+      const newest = (a, b) => (b.taken ?? -Infinity) - (a.taken ?? -Infinity) || b.added - a.added || Number(b.id) - Number(a.id);
+      const want = rows.filter(r => screenshot(r.path)).sort(newest).map(r => `photos:${images}/${r.id}`);
+      const decoys = rows.filter(r => r.name.startsWith(tag) && !screenshot(r.path)).map(r => `photos:${images}/${r.id}`);
+      adb('shell', 'pm', 'grant', id, `android.permission.${api >= 33 ? 'READ_MEDIA_IMAGES' : 'READ_EXTERNAL_STORAGE'}`);
+      const pages = Math.ceil(want.length / 12), ops = ['clock +100', 'tap @recent allow', 'clock settle', 'tree', 'tap screenshots', 'clock settle', 'tree'];
+      for (let p = 1; p < pages; p++) ops.push('tap older', 'clock settle', 'tree');
+      const r = drive({}, ops, ['--bind', 'photos']);
+      const trees = r.filter(x => Array.isArray(x?.nodes)).slice(1);
+      const shown = trees.map(t => t.nodes.filter(n => /^photos:/.test(n.props?.imageSource ?? '')).map(n => n.props.imageSource));
+      const all = shown.flat(), last = new Set(trees.at(-1)?.nodes.map(n => n.props?.testId));
+      check(where, '7: the system took one screenshot, in Pictures/Screenshots/', system.length === 1 && system[0].path === 'Pictures/Screenshots/', JSON.stringify(system));
+      check(where, `7: Screenshots lists the ${want.length} rows in a Screenshots directory newest first, ${pages} pages of 12, each once, the last the oldest`,
+        want.length >= 14 && JSON.stringify(all) === JSON.stringify(want) && shown.slice(0, -1).every(p => p.length === 12) && last.has('oldest'),
+        `${JSON.stringify(shown.map(p => p.length))} of ${want.length}`);
+      check(where, '7: none of MyScreenshots/, Screenshots/old/ or Pictures/', decoys.length === 4 && !decoys.some(d => all.includes(d)), JSON.stringify(decoys));
+    } finally {
+      // The shell may not delete another app's row by its URI, so each file goes and the volume is scanned.
+      for (const f of [...seeded.map(f => ({ path: f.dir, name: f.name })), ...(system.length === 1 ? system : [])]) adb('shell', `rm -f '/sdcard/${f.path}${f.name}'`);
+      for (const dir of made) adb('shell', `rmdir '/sdcard/${dir}'`);
+      adb('shell', api >= 30 ? 'content call --method scan_volume --uri content://media --arg external_primary'
+        : [...seeded.map(f => `${f.dir}${f.name}`), ...system.map(s => `${s.path}${s.name}`)].map(p => `am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/${p}`).join(' && '));
+    }
   }
 }
 console.log(failed() ? `${failed()} failed` : 'all passed');

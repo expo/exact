@@ -2287,3 +2287,18 @@ component A
   view
     column dragstart=go
       text "a"
+---
+== lower-portal-mover
+component A
+  view
+    list
+      for x in [1, 2] key=x
+        text `${x}` portal="slot"
+---
+== lower-portal-target
+component A
+  view
+    column
+      button id="slot"
+        text "Not a place"
+      box portal="slot"

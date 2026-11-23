@@ -1060,6 +1060,52 @@ false. Kinds are unique across both entry lists, ignoring case. Unknown keys fai
 the bake with an edit. Capability flags and labels require a new binary; state
 shapes, previews and views ride the bundle.
 
+On Android an activity is an ongoing notification that asks to be promoted to a
+[Live Update](https://developer.android.com/develop/ui/views/notifications/live-update):
+at the top of the shade and on the lock screen, with a chip in the status bar.
+Android allows no custom view there, so the placements are not drawn; a row's
+`android` object names the state fields the system's template shows, and only a
+row with one is shown (Android refuses the sends of the others):
+
+```json
+"android":{"channel":"patrol","title":"headline","text":"detail","chip":"short","when":"at","progress":"done"}
+```
+
+`title` (required) names a `string` field. `text` and `chip` name `string` or
+`option<string>` fields; `chip` is the chip's text (`setShortCriticalText`),
+which Android shows whole only under seven characters, and which takes the chip
+from the time. `when` names a `number` (or `option<number>`) field of Unix
+milliseconds, the notification's time: one at least two minutes ahead when it is
+posted, the chip counts down to ("5min"); one already past, the notification
+counts up from as a chronometer, in the chip too. `progress` names a `number` (or
+`option<number>`) field from 0 to 1, as HTML's `progress` without `max`: Android
+16's `ProgressStyle`, a plain progress bar before it. An option that is none
+shows nothing. Each send's state must have the mapped fields with those types,
+or it is refused; the rest of it stays in the app's private storage, not in the
+notification, which other apps with notification access can read. `channel` is a channel
+`host.android.notificationChannels` declares, not of importance `min`, or
+`default` when absent. The bake refuses a field the shape lacks or of another
+type, an undeclared or `min` channel, and a mapping in an app that does not grant
+`device.notifications`. A mapping adds `POST_PROMOTED_NOTIFICATIONS` (a normal
+permission) to the manifest.
+
+Starting one needs the notification permission, which the app asks for first
+(`requestNotificationPermission()`, [Notifications](#notifications)); without it, or on a
+channel the person turned off, `startActivity` is refused. The system promotes
+the notification where it supports Live Updates and the person allows them for
+the app; otherwise it stays an ordinary ongoing notification. Each activity in
+`exactActivities()` says which with `promoted: bool`, the system's
+`FLAG_PROMOTED_ONGOING` (false on iOS); `openURL("app-settings:")` opens the app's
+Settings page, where the person allows them. The activity's id is its notification's
+tag, so a relaunched process lists it again. If the person dismisses it (Android
+14 and later let them swipe away an ongoing notification the system has not
+promoted), it leaves the list when the app is next in front, and a later send to
+it is refused. A send is answered once the system shows its notification.
+An `updateActivity` with an alert alerts again, with its text as the
+accessibility ticker; a stale date is listed as `stale` once past.
+`endActivity` with `"immediate"` removes the notification; `"default"` leaves an
+ordinary, dismissable one for four hours, and Unix milliseconds until then.
+
 Declare the placements in that one component's view with `view slot="lockScreen"`,
 `view slot="compactLeading"`, `view slot="compactTrailing"`, `view slot="minimal"`
 and `view slot="expanded"`. Under `expanded`, declare four `view` children with
@@ -1778,6 +1824,13 @@ the JavaScript dependencies and browser. `--check` uses the local cache. Setup c
 from a tools origin when the checkout pins its producer key. Native builds, games, Rust data or
 GPU crates, custom web build scripts and Rust page renderers require Rust.
 
+The tools origin is a public bucket that `bun scripts/tools.mjs publish --watch` keeps from
+the producer's Mac, which holds the signing key. A checkout reads it at the public https URL
+that `scripts/tools.mjs` pins with the producer's public key; `EXACT_TOOLS_ORIGIN` names a
+mirror of it. Until both are pinned, nothing is downloaded, and a machine without Rust uses a
+set `bun scripts/tools.mjs keep` built. The origin keeps each commit's lookup for 90 days; an
+older checkout finds a set only among the newest, and only if its inputs are that set's.
+
 For a source build, the scoped setup installs the pinned stable and nightly Rust, the nightly's `rust-src`,
 `llvm-tools`, clippy and `wasm32-unknown-unknown` target, its standard-library dependencies,
 wasm-bindgen, Binaryen, Exact's `node_modules`, Playwright's Chromium and headless shell,
@@ -2243,6 +2296,102 @@ deploy policy, never the web root or the association files, which list the app a
 `uninstall`, `release` and `appstore`, `share`, and the Windows build take no variant. URL schemes, the
 sign-in callback and the app's own document types are shared by both installs.
 
+A brand that ships as its own store app is another app, not a variant: one directory and manifest per brand,
+sharing its screens and data code through workspace packages ([one app under several brands](recipes/white-label.md)).
+
+## Controls (Control Center, the Lock Screen, the Action button)
+
+A control is a button the system draws outside the app; a press runs one of
+the app's tools or opens one of its locations (LLP 1126.004). iOS and iPadOS
+18 and later draw them: the build puts each offered control in the app's
+WidgetKit extension, where the person adds it to Control Center, the Lock
+Screen or the Action button. Android, the Mac and the watch do not yet.
+
+Declare each in `app.json`:
+
+```json
+"controls": [
+  { "kind": "refresh", "title": "Refresh", "symbol": "arrow.clockwise", "tool": "refresh" },
+  { "kind": "inbox", "title": "Inbox", "symbol": "tray", "url": "/inbox" }
+]
+```
+
+- `kind` matches `[A-Za-z][A-Za-z0-9_-]*` and is unique among the app's
+  controls regardless of case. It is the control's identity: a placed
+  control is found again by it.
+- `title` and `symbol` (an SF Symbol name) are required; `description` is
+  optional.
+- Exactly one of `tool` and `url`. A `tool` names a `tool` line
+  (`control-tool`) and needs no `intents.tools` face. It may not `destroys`
+  (`control-destroys`) or take a required parameter (`control-arguments`);
+  a press passes `none` for each optional one. A `url` is one app path
+  (`/inbox`, not `//inbox`), and needs the navigation root and a declared
+  route that matches it; a `notfound` route does not count (`control-url`).
+- `authentication`, on a tool control only: `required` (the default) runs
+  it only for the authenticated person, `local` only on an unlocked device,
+  `always` on a locked one too (LLP 1133.023 D10).
+
+The compiler walks the tool's action, the actions it calls, both arms of
+every branch, the `then` of every mutation it sends, the resources it
+refreshes, and the actions of the tasks and sequences whose gate or key reads
+a slot it assigns, and records what it can reach: Live Activity starts,
+updates and ends, microphone, camera and screen capture, speech recognition
+on the microphone, a recorder, and a capture restart. A tool that can reach any
+capture may not have an `intents.tools` face (`intents-capture-face`).
+
+Each native binary's bake decides every control's placement, in this order,
+and puts it in `compat.inputs.controls` and the compatibility id, so any
+change to a row, its tool's signature or its effects is a new binary. The
+web has no binary and its id does not move.
+
+1. A host other than iOS and iPadOS (the Mac, Android, the watch, tvOS,
+   visionOS, Linux, Windows): omitted, `control-host`.
+2. A build that packages no control extension: omitted, `control-metadata`.
+   The Apple build on Linux is one, since only Xcode extracts a control's App
+   Intents metadata; so is `--extensions` without `controls`.
+3. A `url`: offered from iOS 18.
+4. A tool that is known to start camera, screen or speech capture: omitted,
+   `control-capture`.
+5. A tool that may record audio (the microphone, or a recorder): its tool
+   must start a Live Activity that `live_activities` declares
+   (`control-recording-activity`) and the app must grant
+   `device.microphone-background` (`grant-needs`), or the bake fails; then
+   omitted, `control-recording-unqualified`, until a locked iPhone has
+   recorded through it.
+6. A tool whose reach starts, updates or ends a Live Activity: offered from
+   iOS 18, as a `LiveActivityIntent`.
+7. Any other tool: omitted, `control-process`.
+
+An offered control is a `ControlWidgetButton` in the widget extension, which
+an app with controls and no widgets or Live Activities also gets, linking no
+Exact runtime. Its WidgetKit kind is `<app id>.control.<kind>`. Its intent is
+compiled into both the app and the extension and is not discoverable, so
+Shortcuts and Siri do not list it. A URL control's intent opens the app and
+navigates there; on a cold launch the location is the launch location. A tool
+control's intent runs in the app's process, which iOS launches in the
+background if it is not running, and presses the control there; the
+extension's copy refuses without running anything.
+
+A press enters only through a host's native entry, `Runner::press_control`,
+with the compiled control's kind and digest; on Apple, the tool door's
+`exact_tool` export takes it as op `press`, and the app's generated intent
+calls `ExactTools.press`. It is for tool controls (a host opens a URL control
+itself). The runner runs the tool as the person's action
+(origin `action`), refused `unavailable` when the installed control's
+digest is not the plan's, and `busy` while the same control's press waits or
+runs. Its authority ends when its caller cancels it, when it ends, or 10
+seconds after it starts running; work it started runs on without it. The
+agent's `call` cannot press: it enters as `tool` whatever `--door` names.
+
+`state.controls` lists each control with its `tool` or `url`, its `digest`
+and this binary's `placement`, as its bake recorded it: `{"offered": [{"from":
+"18.0", "intent": "tool"}]}` or `{"omitted": "control-host", "why": …}`. The
+web, which compiles no control, says `absent`:
+
+```
+bun scripts/agent.mjs ios --app <app> "state controls"
+```
+
 ## Apple bundle metadata
 
 Exact writes Info.plist keys and entitlements from grants, named manifest fields,
@@ -2508,6 +2657,21 @@ runner directly, without guest DOM inspection or the carrier's drain; layout rea
 mounted host geometry. Each read is labelled passive. The frame ring ends before
 these observations, and their wall-clock bounds, clock mode, scheduling and substitutions
 are recorded. This path never seeks or settles the app.
+
+`bun scripts/agent.mjs macos --app <app> --attach [pid] tree state logs layout "screenshot now.png"`
+reads the development Mac app a person already has open, with its own window, store and wall
+clock (LLP 1012.000). Nothing is built or launched. The person chooses **Develop ▸ Enable Agent
+Attach** in the app, then **Allow** in the sheet the driver's first connection raises; the window
+shows **Agent Attached** while the driver is connected. **Detach Agent** ends the connection and
+closes the listener until it is enabled again; quitting the app or closing the window ends it too.
+Each new connection asks again. One driver attaches at a time, to one window: `--session <label>` names
+the window when several are open, and a PID chooses among several running copies.
+The connection only reads: `tree`, `state` (masked, as the tree shows a password field), `logs`,
+`layout`, `perf` and `screenshot` (the window server's picture of the window, which is not brought
+forward). The app refuses `clock` with `live-clock` and input with `input-not-granted`, and the
+driver refuses launch flags such as `--storage`, `--live` and `--url`. Only a Mac app that
+`host/apple/build.mjs` builds to run carries the listener; a release, archive or embedded build has
+none of it.
 
 ### Inspect work and native presentation
 
@@ -5837,7 +6001,9 @@ A namespace import reads the same constant: `import * as session` and
 The imported bindings follow the same literal grammar. Calls other than the
 array's `.join`, computed arrays, package bindings (including re-exports
 from packages), and dependencies on launch-marked settings are refused with a
-source location. Imports resolve through Rolldown, to the file the bundle runs.
+source location. An `app.ts` that is `export * from` a package exports its
+own `grants`, which the star does not override. Imports resolve through
+Rolldown, to the file the bundle runs.
 Re-exports follow ECMAScript export resolution: a loop through star exports
 keeps searching, ambiguous bindings are refused, and a star never exports
 `default`. A cycle through constant initializers is refused. `app.ts` declares

@@ -186,10 +186,34 @@ for (const statement of ["export { grants, observed } from './session';", "expor
   });
 }
 
-for (const statement of ["export { grants } from 'a-package';", "export * from 'a-package';"]) test(`grants refuse ${statement}`, async () => {
+for (const [statement, message] of [
+  ["export { grants } from 'a-package';", 'cannot use package binding "a-package"'],
+  // Shared code re-exported whole: the refusal says where grants belong.
+  ["export * from 'a-package';", 'app.ts:1:1: grants cannot come from "a-package" through `export *`, as a package\'s bindings are never read for them: declare grants in app.ts, where it wins over the star'],
+]) test(`grants refuse ${statement}`, async () => {
   const f = fixture({ 'app.ts': statement });
-  try { await expect(configure(f.stage, false, parseSync)).rejects.toThrow('cannot use package binding "a-package"'); }
+  try { await expect(configure(f.stage, false, parseSync)).rejects.toThrow(message); }
   finally { f.close(); }
+});
+
+test('grants read through a barrel\'s star over a package keep the package-binding refusal', async () => {
+  const f = fixture({ 'app.ts': "import { LINE } from './barrel';\nexport const grants = LINE;\n", 'barrel.ts': "export * from 'a-package';\n" });
+  try {
+    const refused = configure(f.stage, false, parseSync);
+    await expect(refused).rejects.toThrow('cannot use package binding "a-package"');
+  } finally { f.close(); }
+});
+
+test('an app.ts that re-exports shared code whole and declares its own grants bakes', async () => {
+  const f = fixture({
+    'app.ts': "export * from 'a-package';\nexport const grants = 'net.fetch https://api.example.com';\n",
+    'node_modules/a-package/package.json': '{"name":"a-package","version":"1.0.0","main":"index.js"}',
+    'node_modules/a-package/index.js': "export const grants = 'secret.keep package';\n",
+  });
+  try {
+    await configure(f.stage, false, parseSync);
+    expect(JSON.parse(readFileSync(resolve(f.stage, '__exact_grants.json'), 'utf8')).map(line => line.grant)).toEqual(['net.fetch https://api.example.com']);
+  } finally { f.close(); }
 });
 
 for (const statement of ["export { grants } from './session';", "export * from './session';"]) test(`re-exported grants must be joined: ${statement}`, async () => {

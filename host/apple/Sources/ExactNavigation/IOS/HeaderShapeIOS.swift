@@ -22,6 +22,10 @@ struct HeaderShape: Equatable {
         /// badge: a shape holding a text or a symbol), when the button has
         /// one: the item's image, in the box's own colours and corners.
         let badge: BadgeFace?
+        #if os(tvOS)
+        let dot: BarDotFace?
+        #endif
+        let hasPaintedFace: Bool
         /// Whether the button opens a menu-shaped popover or a confirmation
         /// (`MenuHost.pullsDown`): the item's menu, its rows read when it
         /// opens, as LLP 1021 D3's pull-down. Any other popover opens as
@@ -54,7 +58,7 @@ struct HeaderShape: Equatable {
         let font: UIFont?
         let active: NativeButtonState
         let activeTitleColor: BatchValue?
-        var supportsActiveColor: Bool { symbol == nil && badge == nil && !hosted }
+        var supportsActiveColor: Bool { symbol == nil && !hasPaintedFace && !hosted }
         /// A readout (LLP 1141.004 D1): an item nothing presses, whose
         /// custom view holds the element's own views (BarHostedIOS.swift).
         let hosted: Bool
@@ -72,9 +76,11 @@ struct HeaderShape: Equatable {
             var symbol: String?, text = "", ink: (NodeView, String)?
             func walk(_ node: NodeView) {
                 for child in Self.shown(node) {
-                    if child.kind == "image", let name = child.faceSymbol {
+                    if child.kind == "image", !child.cssVisibilityHidden, let name = child.faceSymbol {
                         if symbol == nil { symbol = name; ink = (child, "text_color") }
-                    } else if child.isParagraph, text.isEmpty { text = child.accessibleText; ink = ink ?? (child, "text_color") }
+                    } else if child.isParagraph, child.accessibilityExposed, text.isEmpty {
+                        text = child.accessibleText; ink = ink ?? (child, "text_color")
+                    }
                     else { walk(child) }
                 }
             }
@@ -99,6 +105,12 @@ struct HeaderShape: Equatable {
             testId = button.props["testId"]
             self.hosted = hosted
             badge = button.isNativeButton || hosted ? nil : BadgeFace(button)
+            #if os(tvOS)
+            dot = badge == nil && symbol == nil && text.isEmpty ? BarDotFace(button) : nil
+            hasPaintedFace = badge != nil || dot != nil
+            #else
+            hasPaintedFace = badge != nil
+            #endif
             let invocation = button.presenter?.invocation(of: button)
             menu = invocation.map { $0.opensPopover && button.presenter?.menus.pullsDown($0.target) == true } == true
             menuTitle = menu ? invocation?.target.props["accessibilityLabel"] ?? "" : ""
@@ -127,13 +139,24 @@ struct HeaderShape: Equatable {
             // One the button only inherits, or a sheet wrote, is unsaid.
             // Read from the node it is written on, the tint in it as a value (`carriedTint`)
             active = NativeButtonState(button)
-            let ownsTitle = face.map { NativeButtonState.colorOwnership($0.rows).title } ?? (ink?.0.wrote("text_color") == true)
-            activeTitleColor = symbol == nil && badge == nil && !hosted && !ownsTitle
+            let ownership = face.map { NativeButtonState.colorOwnership($0.rows) }
+            let ownsTitle = ownership?.title ?? (ink?.0.wrote("text_color") == true)
+            activeTitleColor = symbol == nil && !hasPaintedFace && !hosted && !ownsTitle
                 && active.style.keys.allSatisfy { $0 == "press_color" } ? active.style["press_color"] : nil
             let source = ink.flatMap { $0.0.ownColor("text_color") != nil ? $0.0 : nil } ?? (button.ownColor("text_color") != nil ? button : nil)
-            followsTint = source?.style["text_color"]?.tintAlpha == 1
+            let faceInk: BatchValue? = face.flatMap { face in
+                if face.symbol != nil, ownership?.image == true,
+                   let ink = face.rows.symbol["tint_color"] ?? face.rows.symbol["text_color"] { return ink }
+                return ownsTitle ? face.rows.title["text_color"] : nil
+            }
+            followsTint = (faceInk ?? source?.style["text_color"])?.tintAlpha == 1
             if followsTint {
                 tint = nil
+            } else if let faceInk {
+                let pair = [false, true].compactMap { dark in
+                    faceInk.channels(dark: dark, contrast: button.drawsHighContrast, elevated: button.drawsElevated, tint: faceInk.namesTint ? button.carriedTint : nil)
+                }
+                tint = pair.count == 2 ? pair : nil
             } else if let source, let light = source.carriedChannels("text_color", dark: false), let dark = source.carriedChannels("text_color", dark: true) {
                 tint = [light, dark]
             } else {
@@ -153,7 +176,24 @@ struct HeaderShape: Equatable {
         /// `source` but for whether the item is enabled.
         var face: String {
             if hosted { return source }
-            return "\(toolbarGroup.map(String.init) ?? ""):\(id):\(title):\(symbol ?? ""):\(label ?? ""):\(prominent):\(ownGlass):\(badge?.source ?? ""):\(menu):\(menuTitle):\(menuOrder):\(tint ?? []):\(followsTint):\(font.map { "\($0.fontName) \($0.pointSize) \(TextEngine.controlWeight($0))" } ?? ""):\(testId ?? ""):\(activeSignature)"
+            #if os(tvOS)
+            let paintedFace = badge?.source ?? dot?.source ?? ""
+            #else
+            let paintedFace = badge?.source ?? ""
+            #endif
+            return "\(toolbarGroup.map(String.init) ?? ""):\(id):\(title):\(symbol ?? ""):\(label ?? ""):\(prominent):\(ownGlass):\(paintedFace):\(menu):\(menuTitle):\(menuOrder):\(tint ?? []):\(followsTint):\(font.map { "\($0.fontName) \($0.pointSize) \(TextEngine.controlWeight($0))" } ?? ""):\(testId ?? ""):\(activeSignature)"
+        }
+        func hasSameImage(as other: Item) -> Bool {
+            #if os(tvOS)
+            guard dot == other.dot else { return false }
+            #endif
+            return symbol == other.symbol && badge == other.badge
+        }
+        func image(dimmed: Bool) -> UIImage? {
+            #if os(tvOS)
+            if let dot { return dot.image(dimmed: dimmed) }
+            #endif
+            return badge?.image(dimmed: dimmed) ?? symbol.flatMap { FaceSymbol.image($0, points: FaceSymbol.barItemPoints) }
         }
         private var activeSignature: String {
             let values = active.style.mapValues(\.any)

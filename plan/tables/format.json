@@ -1110,6 +1110,32 @@
       ]
     },
     {
+      "name": "controls",
+      "_comment": "@ref LLP 1126.004 D1: each `controls` row app.json declares, a button the system draws outside the app. `tool` is the tool a press calls, or none for a control that opens `url`, a location at the navigation root (empty for a tool control). `effects` is the derived reach of the tool's action as a JSON object (D3; `{}` for a URL control), and `digest` the hex SHA-256 of the row, the tool's signature and those effects, which the installed control carries and a press is checked against (`contract/cli/src/controls.rs`).",
+      "fields": [
+        {
+          "name": "kind",
+          "codec": "str"
+        },
+        {
+          "name": "tool",
+          "codec": "opt:tools"
+        },
+        {
+          "name": "url",
+          "codec": "str"
+        },
+        {
+          "name": "effects",
+          "codec": "str"
+        },
+        {
+          "name": "digest",
+          "codec": "str"
+        }
+      ]
+    },
+    {
       "name": "views",
       "_comment": "@ref LLP 1133.001 D1, LLP 1133.008 D8 items 1 and 2: each custom-element tag the app's views place that a package serves rather than the app's own module, with the extension whose implementation makes it in each session. `displayed`: the runner reports each instance's displayed state to that implementation, with the origin of the commit that changed it; `binds`: the props, by name separated by spaces, whose changes it reports the same way.",
       "fields": [

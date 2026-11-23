@@ -1209,3 +1209,26 @@ test('a variant selection names the one app the verb resolved; another app reads
     assert.equal(selectedVariant(one, {}), undefined);
   } finally { for (const dir of [one, other]) rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('controls name a tool or a url, with a title and a symbol (LLP 1126.004 D1)', async () => {
+  const {validate} = await import('./app.mjs');
+  const schema = await Bun.file(new URL('./app.schema.json', import.meta.url)).json();
+  const controls = schema.properties.controls;
+  const check = (rows) => validate(rows, controls, 'controls', schema);
+  assert.deepEqual(check([
+    { kind: 'record', title: 'Record an idea', symbol: 'mic.fill', tool: 'startRecording', authentication: 'always' },
+    { kind: 'open-inbox', title: 'Inbox', symbol: 'tray', url: '/inbox' },
+  ]), []);
+  for (const bad of [
+    { title: 'Record', symbol: 'mic.fill', tool: 't' },
+    { kind: 'a b', title: 'Record', symbol: 'mic.fill', tool: 't' },
+    { kind: 'r', symbol: 'mic.fill', tool: 't' },
+    { kind: 'r', title: ' ', symbol: 'mic.fill', tool: 't' },
+    { kind: 'r', title: 'R', symbol: 'mic.fill', url: '//elsewhere' },
+    { kind: 'r', title: 'R', symbol: 'mic.fill', tool: 't', authentication: 'never' },
+    { kind: 'r', title: 'R', symbol: 'mic.fill', tool: 't', arguments: {} },
+    { kind: 'r', title: 'R', symbol: 'mic.fill' },
+    { kind: 'r', title: 'R', symbol: 'mic.fill', tool: 't', url: '/' },
+    { kind: 'r', title: 'R', symbol: 'mic.fill', url: '/', authentication: 'always' },
+  ]) assert.ok(check([bad]).length, JSON.stringify(bad));
+});

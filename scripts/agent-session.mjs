@@ -13,13 +13,14 @@ import {
   worldTells,
   WORLD_LIMIT,
   scaledScreenshot,
+  attachTarget,
 } from './agent-inspect.mjs';
 import { preferGroups, preferOp } from './agent-prefer.mjs';
 import { axTree } from './agent-ax.mjs';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { encodePng } from './png.mjs';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import {
   peekLogs,
   takeWorldLogs,
@@ -30,7 +31,8 @@ import {
   unopenedHint,
 } from './agent-test.mjs';
 import { MalformedOperation, operationReply } from './agent-keys.mjs';
-import { AWAY } from './agent-wire.mjs';
+import { AWAY, attachWire } from './agent-wire.mjs';
+import { connect } from 'node:net';
 import { openStdio } from './agent-stdio.mjs';
 import { appShareTarget, driverShare, webShareLocation } from './share-target.mjs';
 import { heldClock, inFlightNote, untilClock } from './agent-held.mjs';
@@ -87,6 +89,7 @@ export async function open({
   scale,
   port,
   ax = false,
+  attach,
 } = {}, { openDevice = openStdio } = {}) {
   browser ??= 'chrome';
   if (!['chrome', 'firefox', 'webkit'].includes(browser))
@@ -182,7 +185,9 @@ export async function open({
       env = developmentLaunchEnvironment(['--run', '--url', url], env ?? {});
     } else env = { ...(env ?? {}), EXACT_LAUNCH_URL: url };
   }
-  const carrier = device
+  const carrier = attach !== undefined
+    ? await openAttached({ host, app, pid: attach === true ? null : attach, session })
+    : device
     ? await openDevice({ host: 'ios', plan, world, size, env, app, device, phone: pick, touch, onProcess })
     : // `documents` are the Mac's command line, a terminal's route in (LLP
       // 1033 D3); each window's session then routes by its label (LLP 1069.010).
@@ -818,7 +823,7 @@ export async function open({
         if (shrunk) writeFileSync(r.screenshot, encodePng(image));
         r = { ...r, scale };
       }
-      if (r.captureSpace === 'screen' && r.front !== true) return r;
+      if ((r.captureSpace === 'screen' && r.front !== true) || carrier.attached) return carrier.attached ? s.tagged(r) : r;
       return worldTells(s, await s.tagged(r)); // a drawing world's tells (LLP 1127.000 D1)
     },
     scaled(r) {
@@ -884,6 +889,15 @@ export async function open({
     springboard: carrier.springboard,
   };
   Object.assign(s, sessionInput(s, { carrier, host, timing, touch, app }));
+  // An attached session reads, on the app's own wall clock (LLP 1012.000 D3): the driver refuses input and the clock
+  // before it sends anything, as the app would.
+  if (attach !== undefined) {
+    const refuse = (op, why) => async () => { throw new Error(`${op}: ${why}`); };
+    const ungranted = (op) => refuse(op, 'input-not-granted: an attached session reads; input needs Allow Agent Input, which this build does not offer yet');
+    for (const [method, op] of [['tap', 'tap'], ['type', 'type'], ['pointer', 'tap'], ['prefer', 'prefer'], ['resize', 'resize'], ['closeWindow', 'close'], ['back', 'back'], ['background', 'background']]) s[method] = ungranted(op);
+    s.clock = refuse('clock', 'live-clock: an attached app keeps its own wall clock: it is never taken, seeked, settled or landed (its waits come with LLP 1012.000 piece 4)');
+    s.film = refuse('screenshot', 'film of an attached app is not built yet (LLP 1012.000 piece 4)');
+  }
   // Platform timing and Android's reader start on a live host clock; seed the driver's relative seeks where the host
   // handed time over (LLP 1080.000 §12; LLP 1107 D1). Headless Android starts at zero, so the same read keeps its seek
   // clock unchanged.
@@ -893,3 +907,40 @@ export async function open({
   }
   return s;
 }
+
+/** What an attached session refuses as input before it reaches the app. */
+const ATTACHED_INPUT = new Set(['tap', 'type', 'pick', 'prefer', 'call', 'post', 'share', 'midi', 'resize', 'back', 'close', 'background']);
+
+/** The attached carrier (LLP 1012.000 D1): the development Mac app a person has open, read over its own socket once
+ * the person allows it in the window. It reads; it launches nothing and holds no clock. */
+export async function openAttached({ host, app, pid = null, session, find = attachTarget, dial = connect, say = (line) => console.error(line) }) {
+  if (!['macos', 'mac'].includes(host)) throw new Error(attachUnsupported(host));
+  const a = resolveApp(app), name = a.manifest?.name ?? a.name;
+  const m = find({ id: a.id, name, app: basename(a.dir), pid });
+  const wire = await attachWire(dial({ path: m.socket }), { nonce: m.nonce, session, onWaiting: () => say(`attach: waiting for Allow in ${name}'s window (pid ${m.pid})`) });
+  const { attached } = wire, build = attached.build ?? {};
+  if (attached.pid !== m.pid) { wire.close(); throw new Error(`attach: the socket of pid ${m.pid} answered as pid ${attached.pid}; not reading it`); }
+  say(`attach: reading ${name} pid ${attached.pid}, window “${attached.window}” (session ${attached.session}); built from ${build.commit ? `${build.commit.slice(0, 9)}${build.dirty ? ' (dirty)' : ''}` : 'an unstamped commit'}; reads only, on its wall clock`);
+  return {
+    host: 'macos', attached, hostLines: [], plan: null, sessions: null, state: null,
+    // What the app would refuse as input or clock control is refused here, before it is sent.
+    ask: (req) => (req?.op === 'clock' ? Promise.reject(new Error('clock: live-clock: an attached app keeps its own wall clock'))
+      : ATTACHED_INPUT.has(req?.op) ? Promise.reject(new Error(`${req.op}: input-not-granted: an attached session reads; input needs Allow Agent Input, which this build does not offer yet`))
+      : wire.ask(req)),
+    async screenshot(path, area, film, opts = {}) {
+      if (film) throw new Error('screenshot: film of an attached app is not built yet (LLP 1012.000 piece 4)');
+      if (area !== false && area !== true || opts.status || opts.own) throw new Error('screenshot: an attached app gives its window\'s picture alone');
+      const r = await wire.ask({ op: 'screenshot' });
+      if (r.error) throw Object.assign(new Error(`screenshot: ${r.error}`), { reply: r });
+      const bytes = Buffer.from(r.data, 'base64');
+      if (bytes.length !== r.bytes) throw new Error('screenshot: the picture arrived short');
+      writeFileSync(path, bytes);
+      const { data, ...rest } = r;
+      return { ...rest, screenshot: path };
+    },
+    close: async () => wire.close(),
+  };
+}
+
+/** Why `--attach` refuses a host before it looks for an app (LLP 1012.000 D2). */
+export const attachUnsupported = (host) => `--attach: unsupported on ${host}: an agent attaches to a development macOS app${['ios', 'host-ios'].includes(host) ? '; the iOS simulator is not built yet (LLP 1012.000 piece 3)' : ''}; Windows, Android, tvOS, watchOS, a physical iPhone, Linux and the web are not supported yet (LLP 1012.000 D2)`;

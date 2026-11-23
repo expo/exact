@@ -1,0 +1,15 @@
+// # expect property false "clock work writes nothing"
+// The change action due at the press is clock work, printed as its own step.
+component App
+  state pressed = false
+  state synced = 0
+  action sync
+    synced = synced + 1
+  action press
+    pressed = true
+  task watch when not pressed key=pressed
+    change(sync)
+  view
+    column
+      if not pressed
+        button "Go" press=press testId="go"

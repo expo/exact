@@ -333,6 +333,8 @@ fn hiding_a_resident_window_releases_its_painter_and_preserves_its_canvas_and_ed
             flags & DWM_CLOAKED_APP != 0
         };
         for cancel_first in [true, false] {
+            let hardware =
+                app.presenter.as_ref().unwrap().painter.api.as_deref() == Some("direct D3D11");
             app.hide_by_app();
             assert_eq!(app.presenter.as_ref().unwrap().painter.name, "cpu");
             app.bring_forward();
@@ -365,6 +367,13 @@ fn hiding_a_resident_window_releases_its_painter_and_preserves_its_canvas_and_ed
             assert_eq!(app.window.as_ref().unwrap().is_visible(), Some(true));
             let p = app.presenter.as_mut().unwrap();
             assert_eq!(p.painter.name, name);
+            if hardware {
+                assert_eq!(p.painter.api.as_deref(), Some("direct D3D11"));
+                assert_eq!(
+                    p.painter.device_ms, 0.,
+                    "the hidden window's device reopened"
+                );
+            }
             verify(p);
         }
     }

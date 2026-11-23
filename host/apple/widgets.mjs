@@ -11,6 +11,7 @@ import { linkedPlanArgs } from '../../scripts/linked-plan.mjs';
 import { fitLinkedSections, reserveLinkedPlan } from './sections.mjs';
 import { appleLinkArgs } from '../../scripts/package-libraries.mjs';
 import { constValueArgs, intentsMetadata } from './intents.mjs';
+import { controlWidgetsSource } from './controls.mjs';
 import { appexArgs, keepMain, extensionModuleCache, shareId } from './extensions.mjs';
 import { coveringProfiles, missingDevelopmentProfile, installedProfiles, decodeProfile, profilesFor, profileMisfit, byExpiry, METHODS, iosProfile, allowsEntitlement, macHardwareID } from './devices.mjs';
 import { fileURLToPath } from 'node:url';
@@ -365,7 +366,7 @@ export function widgetReload({ directory, triple, sdk, device, platform = 'ios',
  * optional `AppEntity` of the row's content-index kind, one type per kind, whose query reads the list the app published.
  * `entities` is the manifest's `intents.entities`, for each kind's title. Labels and values are Swift string literals:
  * the manifest admits no control characters in them, and JSON's escapes are Swift's for the rest. */
-export function widgetBundleSource(entries, { platform = 'ios', activities = false, alarmMember = '', entities = {} } = {}) {
+export function widgetBundleSource(entries, { platform = 'ios', activities = false, alarmMember = '', entities = {}, controls = null } = {}) {
   const mac = platform === 'macos', literal = JSON.stringify;
   const names = entries.map((_, i) => `Entry${i}`);
   const human = kind => kind.replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -452,18 +453,20 @@ struct ${name}: WidgetConfigurationIntent, ExactConfigurationIntent {
 }`;
   }).join('\n');
   if (activities) names.push('ExactActivities');
-  return `import AppIntents\nimport SwiftUI\nimport WidgetKit\n${platform === 'ios' ? 'import UIKit\n' : mac ? 'import AppKit\n' : ''}${entityTypes}${generated}\n@main struct ExactWidgets: WidgetBundle { var body: some Widget { ${names.map(n => `${n}()`).join('; ')}${alarmMember} } }\n`;
+  const members = [...names.map(n => `${n}()`), ...(controls?.members ?? [])].join('; ');
+  return `import AppIntents\nimport SwiftUI\nimport WidgetKit\n${platform === 'ios' ? 'import UIKit\n' : mac ? 'import AppKit\n' : ''}${entityTypes}${generated}${controls?.source ?? ''}\n@main struct ExactWidgets: WidgetBundle { var body: some Widget { ${members}${alarmMember} } }\n`;
 }
 
 /** The SDK's Swift a widget extension compiles beside its generated WidgetBundle.swift (and an alarm's). */
 export const widgetSwiftSources = (activities) => [resolve(pkg, 'widget/Timeline.swift'), resolve(pkg, 'widget/Configuration.swift'),
   resolve(pkg, 'widget/WidgetTimelineWaiters.swift'), ...(activities ? [resolve(pkg, 'widget/Activity.swift')] : [])];
 
-/** One module name for compilation and metadata, including AlarmKit's shared attributes. */
-export function widgetCompilation({ entries, platform, activities, alarm, source, values, directory }) {
-  const configured = hasIntents(entries, platform);
+/** One module name for compilation and metadata, including AlarmKit's shared attributes. An extension of
+ * controls alone (`core` false) compiles its generated source alone. */
+export function widgetCompilation({ entries, platform, activities, alarm, source, values, directory, controls = false, core = true }) {
+  const configured = hasIntents(entries, platform) || controls;
   const moduleName = platform === 'ios' && alarm ? alarm : 'ExactWidgets';
-  const sources = [...widgetSwiftSources(activities), ...(platform === 'ios' && alarm ? alarmSources : []), source];
+  const sources = [...(core ? widgetSwiftSources(activities) : []), ...(platform === 'ios' && alarm ? alarmSources : []), source];
   const args = ['-module-name', moduleName, ...(configured ? ['-wmo', ...constValueArgs(values, directory)] : []),
     ...(platform === 'ios' && alarm ? ['-Xlinker', '-weak_framework', '-Xlinker', 'AlarmKit'] : [])];
   return { moduleName, sources, args };
@@ -478,11 +481,13 @@ export function widgetExtensionInfo(app, appInfo, platform = 'ios') {
   // The extension resolves the app's strings for the language the app's bundle localizations choose (SessionFacts.viewerLocale).
   const localizations = Object.fromEntries(['CFBundleDevelopmentRegion', 'CFBundleLocalizations'].filter(key => appInfo[key]).map(key => [key, appInfo[key]]));
   return plistFile({ CFBundleIdentifier: widgetId(app), CFBundleName: 'ExactWidgets', CFBundleDisplayName: app.displayName, CFBundleExecutable: 'ExactWidgets', CFBundlePackageType: 'XPC!', ...versions, ...localizations, ...(!mac ? { UIDeviceFamily: appInfo.UIDeviceFamily } : {}), ...capabilities,
-    CFBundleSupportedPlatforms: mac ? ['MacOSX'] : appInfo.CFBundleSupportedPlatforms, ...(appInfo.DTPlatformName ? { DTPlatformName: appInfo.DTPlatformName } : {}), ...(appInfo.NSAppTransportSecurity ? { NSAppTransportSecurity: appInfo.NSAppTransportSecurity } : {}), ExactAppGroup: appInfo.ExactAppGroup ?? widgetGroup(app), ExactAppIdentifier: appInfo.ExactAppIdentifier ?? app.id, ExactWidgetTypeScript: platform !== 'watchos' && existsSync(resolve(app.dir, 'app.ts')), ...(appInfo.ExactKeychainAccessGroup ? { ExactKeychainAccessGroup: appInfo.ExactKeychainAccessGroup } : {}), ...(mac || platform === 'watchos' ? widgetExtensionKeys(appInfo, platform) : {}), ExactWidgetGeneration: appInfo.ExactWidgetGeneration, ...(typeof app.origin === 'string' ? { ExactLinkBase: app.origin } : {}),
+    CFBundleSupportedPlatforms: mac ? ['MacOSX'] : appInfo.CFBundleSupportedPlatforms, ...(appInfo.DTPlatformName ? { DTPlatformName: appInfo.DTPlatformName } : {}), ...(appInfo.NSAppTransportSecurity ? { NSAppTransportSecurity: appInfo.NSAppTransportSecurity } : {}), ExactAppGroup: appInfo.ExactAppGroup ?? widgetGroup(app), ExactAppIdentifier: appInfo.ExactAppIdentifier ?? app.id, ExactWidgetTypeScript: platform !== 'watchos' && existsSync(resolve(app.dir, 'app.ts')), ...(appInfo.ExactKeychainAccessGroup ? { ExactKeychainAccessGroup: appInfo.ExactKeychainAccessGroup } : {}), ...(mac || platform === 'watchos' ? widgetExtensionKeys(appInfo, platform) : {}), ...(appInfo.ExactWidgetGeneration ? { ExactWidgetGeneration: appInfo.ExactWidgetGeneration } : {}), ...(typeof app.origin === 'string' ? { ExactLinkBase: app.origin } : {}),
     NSExtension: { NSExtensionPointIdentifier: 'com.apple.widgetkit-extension' } });
 }
 
-export function packageWidgets({ app, bundle, shared, directory, sdk, triple, device, entitlements, sign, runApple, production, symbols = directory, profile = null, platform = 'ios', entries = platformWidgetEntries(app, platform), alarm = null }) {
+/** The widget extension: the app's widgets, its Live Activities' configuration and its offered `controls`
+ * (controls.mjs). An app with controls alone has no `shared` ExactCore, and its extension links none. */
+export function packageWidgets({ app, bundle, shared, directory, sdk, triple, device, entitlements, sign, runApple, production, symbols = directory, profile = null, platform = 'ios', entries = platformWidgetEntries(app, platform), alarm = null, controls = [] }) {
   const mac = platform === 'macos', contents = mac ? resolve(bundle, 'Contents') : bundle;
   const resources = mac ? resolve(contents, 'Resources') : contents;
   const extension = resolve(contents, 'PlugIns/ExactWidgets.appex');
@@ -495,7 +500,7 @@ export function packageWidgets({ app, bundle, shared, directory, sdk, triple, de
   if (profile) copyFileSync(profile.path, resolve(extensionContents, mac ? 'embedded.provisionprofile' : 'embedded.mobileprovision'));
   // The widgets' plans and a TypeScript app's module pair, which the bake wrote or the build fails; an app with
   // activities alone has no `plans` tree until its entries bake (LLP 1126.001 WP8).
-  for (const [tree, expected] of [['plans', entries.length > 0], ['typescript', platform !== 'watchos' && existsSync(resolve(app.dir, 'app.ts'))]]) {
+  for (const [tree, expected] of shared ? [['plans', entries.length > 0], ['typescript', platform !== 'watchos' && existsSync(resolve(app.dir, 'app.ts'))]] : []) {
     if (existsSync(resolve(resources, tree))) cpSync(resolve(resources, tree), resolve(extensionResources, tree), { recursive: true });
     else if (expected) throw new Error(`host/apple: the bake wrote no ${tree} tree for the widget extension (${resolve(resources, tree)})`);
   }
@@ -503,10 +508,12 @@ export function packageWidgets({ app, bundle, shared, directory, sdk, triple, de
   const capabilities = appInfo.UIRequiredDeviceCapabilities ? { UIRequiredDeviceCapabilities: appInfo.UIRequiredDeviceCapabilities } : {};
   const versions = Object.fromEntries(['CFBundleVersion', 'CFBundleShortVersionString', mac ? 'LSMinimumSystemVersion' : 'MinimumOSVersion'].map(key => [key, appInfo[key]]));
   const runtimeInfo = resolve(contents, 'Frameworks/ExactCore.framework', mac ? 'Resources/Info.plist' : 'Info.plist');
-  const runtime = JSON.parse(runApple('plutil', ['-convert', 'json', '-o', '-', runtimeInfo], { read: true }).stdout);
-  writeFileSync(runtimeInfo, plistFile({ ...runtime, ...versions, ...capabilities }));
+  if (shared) {
+    const runtime = JSON.parse(runApple('plutil', ['-convert', 'json', '-o', '-', runtimeInfo], { read: true }).stdout);
+    writeFileSync(runtimeInfo, plistFile({ ...runtime, ...versions, ...capabilities }));
+  }
   const frameworks = resolve(contents, 'Frameworks'), reload = 'libexact_widget_reload.dylib';
-  if (platform !== 'watchos') {
+  if (shared && platform !== 'watchos') {
     copyFileSync(widgetReload({ directory: shared.base ?? directory, triple, sdk, device, platform, production, runApple }), resolve(frameworks, reload));
     wrapFramework(frameworks, reload, 'ExactWidgetReload', app, mac ? 'MacOSX' : device ? 'iPhoneOS' : 'iPhoneSimulator');
   }
@@ -518,23 +525,23 @@ export function packageWidgets({ app, bundle, shared, directory, sdk, triple, de
   const source = resolve(directory, 'WidgetBundle.swift');
   // An alarm's countdown beside them, from iOS 26 (LLP 1133.030 D8 item 2).
   const alarmMember = alarm && platform === 'ios' ? '; if #available(iOS 26.0, *) { ExactAlarmCountdown() }' : '';
-  writeFileSync(source, widgetBundleSource(entries, { platform, activities, alarmMember, entities: app.manifest.intents?.entities }));
+  writeFileSync(source, widgetBundleSource(entries, { platform, activities, alarmMember, entities: app.manifest.intents?.entities, controls: controls.length ? controlWidgetsSource(app.id, controls) : null }));
   const entitlementPath = resolve(directory, 'widget-entitlements.plist');
   writeFileSync(entitlementPath, entitlements);
   writeFileSync(resolve(extensionContents, 'Info.plist'), widgetExtensionInfo(app, appInfo, platform));
   // A configured entry's intent reaches the Edit Widget sheet through the extension's App Intents metadata, which
   // Xcode's pass extracts from the module's constant values (`intents.mjs`).
-  const configured = hasIntents(entries, platform);
+  const configured = hasIntents(entries, platform) || controls.length > 0;
   const intents = resolve(directory, 'widget-intents'), values = resolve(intents, 'ExactWidgets.swiftconstvalues');
   if (configured) { rmSync(intents, { recursive: true, force: true }); mkdirSync(intents, { recursive: true }); }
-  const compilation = widgetCompilation({ entries, platform, activities, alarm: alarmMember ? alarm : null, source, values, directory: intents });
+  const compilation = widgetCompilation({ entries, platform, activities, alarm: alarmMember ? alarm : null, source, values, directory: intents, controls: controls.length > 0, core: !!shared });
   const { moduleName, sources: swiftSources } = compilation;
   runApple('xcrun', ['--sdk', mac ? 'macosx' : platform === 'watchos' ? (device ? 'watchos' : 'watchsimulator') : device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', swiftOptimization(), ...(production ? ['-g'] : []), ...appexArgs, ...keepMain, ...(!production ? ['-D', 'EXACT_INSPECT'] : []), '-target', triple, '-sdk', sdk,
     ...compilation.args,
-    '-module-cache-path', extensionModuleCache, '-I', resolve(root, 'host/apple/Sources/CExact'), '-I', resolve(shared.framework, 'Modules'), '-F', resolve(shared.framework, '..'), '-framework', 'ExactCore',
-    '-Xlinker', '-rpath', '-Xlinker', mac ? '@executable_path/../../../../Frameworks' : '@executable_path/../../Frameworks',
+    '-module-cache-path', extensionModuleCache, ...(shared ? ['-I', resolve(root, 'host/apple/Sources/CExact'), '-I', resolve(shared.framework, 'Modules'), '-F', resolve(shared.framework, '..'), '-framework', 'ExactCore',
+      '-Xlinker', '-rpath', '-Xlinker', mac ? '@executable_path/../../../../Frameworks' : '@executable_path/../../Frameworks'] : []),
     ...(!device && !mac ? ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__entitlements', '-Xlinker', entitlementPath] : []),
-    shared.snapshotArchive, ...swiftSources, '-o', extensionBinary]);
+    ...(shared ? [shared.snapshotArchive] : []), ...swiftSources, '-o', extensionBinary]);
   if (configured) {
     const metadata = intentsMetadata({ moduleName, dir: intents, sdk, triple, platform, deployment: versions[mac ? 'LSMinimumSystemVersion' : 'MinimumOSVersion'] ?? (mac ? '14.0' : platform === 'watchos' ? WATCH_MINIMUM_OS : '17.0'),
       binary: extensionBinary, sources: swiftSources, values, runApple });

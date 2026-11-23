@@ -61,26 +61,38 @@ extension NodeView {
 
     /// Its words: the text it shows, its descendants' joined.
     package var accessibleText: String { contentText(naming: false) }
+    package var exposedText: String { contentText(naming: false, exposedOnly: true) }
+    package var exposedContentName: String { contentText(naming: true, exposedOnly: true) }
     /// `naming`: accname's name from content (step 2F), in which a
     /// descendant's own label stands for its content, so a labelled image
     /// inside a link counts in the link's name, as on the web.
     /// `unshown`: the words of a subtree CSS or `aria-hidden` hides are read
     /// too, which only an explicit reference to it asks for (`labelledBy`).
-    private func contentText(naming: Bool, unshown: Bool = false) -> String {
-        // A Markdown text reads as the words it draws, its syntax hidden (LLP 1045,
-        // "Accessibility"), each inline atom its accessible name (LLP 1045.000 D8).
-        if let text = props["text"], props["markup"] == "markdown", let plain = MarkdownLink.installed?.plain(text, range: nil, atoms: props["atoms"] ?? "", faces: props["atomFaces"] ?? "", spoken: true) { return plain }
-        if let text = props["text"] { return text }
-        // A native button's children are its face, not views (LLP 1069.011 D5),
-        // read from the kernel, current on its first batch (LLP 1069.011.000 D1).
-        if isNativeButton { return face?.title ?? "" }
-        if isParagraph { return visibleParagraphText }
+    private func contentText(naming: Bool, unshown: Bool = false, exposedOnly: Bool = false) -> String {
+        if !exposedOnly || accessibilityExposed {
+            // A Markdown text reads as the words it draws, its syntax hidden (LLP 1045,
+            // "Accessibility"), each inline atom its accessible name (LLP 1045.000 D8).
+            if let text = props["text"], props["markup"] == "markdown", let plain = MarkdownLink.installed?.plain(text, range: nil, atoms: props["atoms"] ?? "", faces: props["atomFaces"] ?? "", spoken: true) { return plain }
+            if let text = props["text"] { return text }
+            // A native button's children are its face, not views (LLP 1069.011 D5),
+            // read from the kernel, current on its first batch (LLP 1069.011.000 D1).
+            if isNativeButton { return face?.title ?? "" }
+            if isParagraph { return visibleParagraphText }
+        }
         // accname step 2A: a child that is not rendered, or is `aria-hidden`, names
         // nothing (habits F16: a tab's icon glyph). One the host hides still
         // names: a native control draws its words (a grouped list's sections,
         // a segmented control's tabs).
         let children = childNodes.filter { unshown || !$0.leftOut }
-        return children.map { naming ? $0.authoredLabel ?? $0.contentText(naming: true) : $0.contentText(naming: false, unshown: unshown) }.filter { !$0.isEmpty }.joined(separator: " ")
+        return children.compactMap { child in
+            let words: String
+            if naming, !exposedOnly || child.accessibilityExposed, let label = child.authoredLabel {
+                words = label
+            } else {
+                words = child.contentText(naming: naming, unshown: unshown, exposedOnly: exposedOnly)
+            }
+            return words.isEmpty ? nil : words
+        }.joined(separator: " ")
     }
     /// Not rendered (`display: none`) or left out of the accessibility tree (`aria-hidden`).
     private var leftOut: Bool { style["display"]?.string == "none" || props["accessibilityElementsHidden"] == "true" }

@@ -1172,6 +1172,26 @@ impl Plan {
         self.tools[i].face = id;
     }
 
+    /// Add a `controls` row after lowering (LLP 1126.004 D1): the app pass
+    /// reads it from `app.json` with its derived effects and digest.
+    pub fn add_control(
+        &mut self,
+        kind: &str,
+        tool: Option<ToolsId>,
+        url: &str,
+        effects: &str,
+        digest: &str,
+    ) {
+        let row = ControlsRow {
+            kind: self.intern(kind),
+            tool,
+            url: self.intern(url),
+            effects: self.intern(effects),
+            digest: self.intern(digest),
+        };
+        self.controls.push(row);
+    }
+
     /// The package view row of `tag`, if a package serves it.
     pub fn view_named(&self, tag: &str) -> Option<&ViewsRow> {
         self.views.iter().find(|v| self.str(v.tag) == tag)

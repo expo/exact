@@ -1,6 +1,27 @@
 use super::*;
 
 impl<D: DataSource> Runner<D> {
+    /// Rewrite a batch to publish the final placement by `portal`
+    /// (LLP 1013.002 D2); every kernel commit with structure passes here.
+    pub(super) fn place_portals(&mut self, ops: &mut Vec<exact_kernel::Op>) {
+        if let (Some(tree), false) = (self.tree.as_mut(), self.kernel.is_detached()) {
+            tree.place(&self.plan, &self.sites, ops, &mut self.notes);
+        }
+    }
+
+    /// The views a destroy in the batch just placed leaves alive: each
+    /// extracted mover's subtree, which the kernel still shows inside the
+    /// destroyed node until the batch applies.
+    pub(super) fn kept_by_portals(&self) -> std::collections::HashSet<ViewId> {
+        let arena = self.kernel.arena();
+        (self.tree.iter())
+            .flat_map(|t| t.extracted())
+            .filter_map(|v| self.kernel.node(*v))
+            .flat_map(|n| arena.subtree(n.key.index))
+            .map(|slot| arena.local_id(slot))
+            .collect()
+    }
+
     pub(super) fn apply(
         &mut self,
         mut ops: Vec<exact_kernel::Op>,
@@ -12,6 +33,7 @@ impl<D: DataSource> Runner<D> {
             prefix.append(&mut ops);
             ops = prefix;
         }
+        self.place_portals(&mut ops);
         self.admit_drag_files(&mut ops);
         let change = self.router_change()?;
         let live_undo = self.prepare_live_times(&mut ops);
@@ -48,7 +70,8 @@ impl<D: DataSource> Runner<D> {
             let kernel = &self.kernel;
             self.ids.retain(|view| kernel.node(view).is_some());
         }
-        let cleanup = self.reconcile_reorder()?;
+        let mut cleanup = self.reconcile_reorder()?;
+        self.place_portals(&mut cleanup);
         if !cleanup.is_empty() {
             self.batch += 1;
             let tail = self.kernel.apply(0, self.batch, &cleanup)?;

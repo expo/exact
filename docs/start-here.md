@@ -233,6 +233,7 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |a shared server (Snapback): wiring, tests, sign-in|`snapback`, `snapback-tests`, `snapback-auth`|
 |sign in with Google, Microsoft, Auth0, Okta or another OAuth provider|`oauth`|
 |a Convex backend: live queries, mutations, actions|`convex`|
+|a Supabase backend: anonymous and Apple sign-in, tables, Storage, Edge Functions|`supabase`|
 |a website: serving it (`serve`, which renders a `render=request` page per request), a setting, a deep link|`website`|
 |ports, Bun, Chrome and its stores|`ports-and-browsers`|
 |porting an app, a release build, helpers sharing a port|`porting-and-release`|

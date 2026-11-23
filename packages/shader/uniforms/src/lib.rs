@@ -4,8 +4,60 @@
 mod reader;
 pub use reader::parse;
 
-/// Surface arguments that cannot name uniform members (LLP 1181 D1, D4).
-pub const ARGUMENTS: [&str; 3] = ["src", "maxFps", "animationPlayState"];
+/// The surface's own arguments in positional order, which cannot name
+/// uniform members (LLP 1181 D1, D4).
+pub const ARGUMENTS: [&str; 4] = ["src", "maxFps", "animationPlayState", "alphaMode"];
+
+/// How the page composes the fragment's output: WebGPU's `GPUCanvasAlphaMode`
+/// (LLP 1181 D8).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum AlphaMode {
+    /// Every pixel's alpha is one, whatever the fragment returns.
+    #[default]
+    Opaque,
+    /// The fragment returns colour already multiplied by its alpha.
+    Premultiplied,
+}
+
+/// `maxFps`: frames a second at most, 0 for the display's rate.
+pub fn max_fps(value: Value<'_>) -> Result<u32, String> {
+    match value {
+        Value::Number(n) if n.fract() == 0.0 && (0.0..=f64::from(u32::MAX)).contains(&n) => {
+            Ok(n as u32)
+        }
+        _ => Err("maxFps: expected a whole number from 0 to 4294967295".into()),
+    }
+}
+
+/// `animationPlayState`: `Some(true)` running, `Some(false)` paused, `None` unsaid.
+pub fn animation_play_state(value: Value<'_>) -> Result<Option<bool>, String> {
+    match value {
+        Value::Null => Ok(None),
+        Value::String("running") => Ok(Some(true)),
+        Value::String("paused") => Ok(Some(false)),
+        _ => Err("animationPlayState: expected running or paused".into()),
+    }
+}
+
+/// `alphaMode`, opaque when unsaid.
+pub fn alpha_mode(value: Value<'_>) -> Result<AlphaMode, String> {
+    match value {
+        Value::Null | Value::String("opaque") => Ok(AlphaMode::Opaque),
+        Value::String("premultiplied") => Ok(AlphaMode::Premultiplied),
+        _ => Err("alphaMode: expected opaque or premultiplied".into()),
+    }
+}
+
+/// Checks a value of `maxFps`, `animationPlayState` or `alphaMode` as the
+/// surface reads it when bound: the build holds a literal to the same rule.
+pub fn check_argument(name: &str, value: Value<'_>) -> Result<(), String> {
+    match name {
+        "maxFps" => max_fps(value).map(drop),
+        "animationPlayState" => animation_play_state(value).map(drop),
+        "alphaMode" => alpha_mode(value).map(drop),
+        _ => Ok(()),
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UniformType {

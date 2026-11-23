@@ -27,6 +27,7 @@ exact-kernel = { path = "../../kernel" }
 # `contract forma`: the design's own check, eval and IR (LLP 1121 D2).
 exact-forma = { path = "../../forma" }
 exact-plan = { path = "../../plan" }
+exact-route = { path = "../../route" }
 exact-runner = { path = "../../runner" }
 # Literal package shaders use the same WGSL validator as GPU builds (LLP 1181 D9).
 exact-gpu-reflect = { path = "../../gpu/reflect" }

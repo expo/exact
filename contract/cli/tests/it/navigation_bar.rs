@@ -440,6 +440,294 @@ fn a_header_element_a_targets_bar_has_no_place_for_is_named() {
     ));
 }
 
+fn compile_header(name: &str, targets: &str, header: &str) -> (Vec<String>, Vec<(String, String)>) {
+    let dir = crate::scratch::Scratch::new(format!("exact2-header-{name}-{}", std::process::id()));
+    std::fs::write(
+        dir.join("app.json"),
+        format!(
+            "{{\"app\": {{\"id\": \"dev.test.bar\", \"name\": \"Bar\"}}, \"host\": {{{targets}}}}}"
+        ),
+    )
+    .unwrap();
+    let source = format!(
+        "style AvatarBox\n  width=32\n  height=32\n  border-radius=16\n  background-color=\"-exact-fill\"\nroutes nav\n  home \"/\"\ncomponent App\n  state on = true\n  state more = false\n  action go\n    more = !more\n  view\n    main navigationKey=`${{top(nav).id}}`\n      for e in stack(nav) key=e.id\n        column navigationKey=`${{e.id}}`\n          header\n{header}          text \"Body\"\n"
+    );
+    std::fs::write(dir.join("app.contract"), source).unwrap();
+    let (plan, warnings) = contract::compile_path_all_warned(&dir.at("app.contract"), false);
+    let errors = plan
+        .err()
+        .into_iter()
+        .flatten()
+        .map(|e| {
+            assert_eq!(e.id, "lower-header-item", "{name}: {e:?}");
+            e.message
+        })
+        .collect();
+    let warnings = warnings
+        .into_iter()
+        .filter(|w| w.id.starts_with("lower-header") || w.id == "header-item-left-out")
+        .map(|w| (w.id.to_string(), w.message))
+        .collect();
+    (errors, warnings)
+}
+
+#[test]
+fn a_header_counts_headings_per_rendering() {
+    let ios = "\"ios\": {}";
+    let chosen = "            if on\n              text \"Car\" role=\"heading\"\n            else\n              text \"Van\" role=\"heading\"\n";
+    let second = chosen.replace("if on", "if more");
+    let row = "            progress\n";
+    for (name, header, count) in [
+        ("two-choices", format!("{chosen}{second}{row}"), 0),
+        ("two-or-more", format!("{chosen}{second}            if on\n              text \"Bike\" role=\"heading\"\n{row}"), 0),
+        ("one-choice", format!("{chosen}{row}"), 1),
+        ("unrelated-choice", format!("{chosen}            if more\n              column\n{row}"), 1),
+        ("nested-choice", format!("            if more\n              text \"Bike\" role=\"heading\"\n            else\n{}{row}", chosen.lines().map(|line| format!("  {line}\n")).collect::<String>()), 1),
+        ("untitled-choice", "            if on\n              button press=go\n                progress\n".to_string(), 1),
+    ] {
+        let (errors, warnings) = compile_header(name, ios, &header);
+        assert_eq!(errors.len(), count, "{name}: {errors:?}");
+        if let Some(message) = match name {
+            "two-choices" => Some("holds 2 headings"),
+            "two-or-more" => Some("holds at least 2 headings"),
+            _ => None,
+        } {
+            assert_eq!(warnings.len(), 1, "{warnings:?}");
+            assert_eq!(warnings[0].0, "lower-header-no-bar");
+            assert!(warnings[0].1.contains(message), "{warnings:?}");
+        }
+    }
+}
+
+#[test]
+fn a_choice_inside_a_pressable_title_can_leave_the_header_in_the_page() {
+    let header = "            row press=go\n              if on\n                row press=go\n                  text \"Car\" role=\"heading\"\n              else\n                row press=go\n                  text \"Van\" role=\"heading\"\n            progress\n";
+    let (errors, _) = compile_header("nested-title-press", "\"ios\": {}", header);
+    assert!(errors.is_empty(), "{errors:?}");
+
+    let header = "            if on\n              row press=go\n                row press=go\n                  text \"Car\" role=\"heading\"\n            row press=go\n              text \"Van\" role=\"heading\"\n            progress\n";
+    let (errors, warnings) = compile_header("conditional-title-press", "\"ios\": {}", header);
+    assert!(
+        errors.is_empty() && warnings.is_empty(),
+        "{errors:?} {warnings:?}"
+    );
+}
+
+#[test]
+fn a_header_arm_with_a_second_heading_can_show_a_spinner() {
+    let header = "            text \"Car\" role=\"heading\"\n            if more\n              text \"Bike\" role=\"heading\"\n              progress\n";
+    let (errors, _) = compile_header("sometimes-two", "\"ios\": {}", header);
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
+#[test]
+fn only_a_filled_box_with_a_face_inside_the_title_can_be_its_avatar() {
+    let ios = "\"ios\": {}";
+    let heading = "            text \"Ada\" role=\"heading\"\n";
+    let avatar = "            column background-color=\"blue\"\n              text \"AL\"\n";
+    let (errors, _) = compile_header("avatar-sibling", ios, &format!("{avatar}{heading}"));
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].starts_with("this box"), "{errors:?}");
+
+    let wrapped = |kids: &str| {
+        format!(
+            "            row\n{}",
+            kids.lines()
+                .map(|line| format!("  {line}\n"))
+                .collect::<String>()
+        )
+    };
+    let choice = format!("            if on\n  {heading}            else\n  {heading}");
+    for (name, title) in [
+        ("avatar-inside", heading),
+        ("avatar-choice", choice.as_str()),
+    ] {
+        let (errors, warnings) = compile_header(name, ios, &wrapped(&format!("{avatar}{title}")));
+        assert!(
+            errors.is_empty() && warnings.is_empty(),
+            "{name}: {errors:?} {warnings:?}"
+        );
+    }
+    let spinner = avatar.replace("text \"AL\"", "progress");
+    let (_, warnings) = compile_header(
+        "avatar-spinner",
+        ios,
+        &wrapped(&format!("{spinner}{heading}")),
+    );
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert_eq!(warnings[0].0, "lower-header-unplaced");
+    let button = avatar.replace("text \"AL\"", "button press=go\n                progress");
+    let (errors, _) = compile_header("avatar-button", ios, &format!("{button}{heading}"));
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].starts_with("this button"), "{errors:?}");
+    let photo_or_initials = avatar.replace("text \"AL\"", "if on\n                image \"https://example.com/photo.png\"\n              else\n                text \"AL\"");
+    let computed = photo_or_initials.replace(
+        "text \"AL\"",
+        "text \"AL\" display=(more ? \"block\" : \"none\")",
+    );
+    for (name, face) in [
+        ("avatar-photo-or-initials", photo_or_initials),
+        ("avatar-computed", computed),
+    ] {
+        let (errors, warnings) = compile_header(name, ios, &wrapped(&format!("{face}{heading}")));
+        assert!(
+            errors.is_empty() && warnings.is_empty(),
+            "{name}: {errors:?} {warnings:?}"
+        );
+    }
+    let conditional_button = avatar.replace(
+        "text \"AL\"",
+        "if on\n                button press=go\n                  progress",
+    );
+    let (errors, _) = compile_header(
+        "avatar-conditional-button",
+        ios,
+        &wrapped(&format!("{conditional_button}{heading}")),
+    );
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].starts_with("this button"), "{errors:?}");
+    let (_, warnings) = compile_header("filled-spacer", ios, "            column background-color=\"blue\"\n            button press=go\n              text \"Save\"\n");
+    assert!(warnings.is_empty(), "{warnings:?}");
+}
+
+#[test]
+fn the_mac_warns_when_a_header_button_has_no_toolbar_face() {
+    let mac = "\"macos\": {}";
+    let header = "            text \"Car\" role=\"heading\"\n            button press=go aria-label=\"Edit\"\n              image \"symbol:add\"\n              image \"symbol:info\"\n";
+    let (_, warnings) = compile_header("two-symbols", mac, header);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert_eq!(warnings[0].0, "header-item-left-out");
+    assert!(
+        warnings[0].1.contains("without a supported toolbar face"),
+        "{warnings:?}"
+    );
+
+    let painted = format!("{header}              text \"Edit\" font-size=13\n");
+    let (_, warnings) = compile_header("two-symbols-painted", mac, &painted);
+    assert!(warnings.is_empty(), "{warnings:?}");
+
+    let runs = format!("{header}              text font-size=13\n                text \"Edit\"\n");
+    let (errors, warnings) = compile_header("two-symbols-inline-runs", mac, &runs);
+    assert!(
+        errors.is_empty() && warnings.is_empty(),
+        "{errors:?} {warnings:?}"
+    );
+}
+
+#[test]
+fn the_mac_accepts_a_header_button_labelled_with_prose() {
+    for (name, label) in [
+        (
+            "strong-run",
+            "              text\n                strong \"Save\"\n",
+        ),
+        ("strong", "              strong \"Save\"\n"),
+        ("p", "              p\n                strong \"Save\"\n"),
+    ] {
+        let header = format!(
+            "            text \"Car\" role=\"heading\"\n            button press=go\n{label}"
+        );
+        let (errors, warnings) = compile_header(name, "\"macos\": {}", &header);
+        assert!(
+            errors.is_empty() && warnings.is_empty(),
+            "{name}: {errors:?} {warnings:?}"
+        );
+    }
+}
+
+#[test]
+fn the_mac_accepts_classed_badges_and_sized_dots() {
+    let mac = "\"macos\": {}";
+    let refusals: Vec<_> = [
+        ("classed-picture", "column class=AvatarBox\n                image \"https://example.com/photo.png\""),
+        ("classed-symbol", "column class=AvatarBox\n                image \"symbol:add\""),
+        ("dot-px", "column width=\"16px\" height=\"16px\" background-color=\"blue\""),
+        ("dot-rem", "column width=\"1rem\" height=\"1rem\" background-color=\"blue\""),
+    ].into_iter().filter_map(|(name, face)| {
+        let header = format!("            text \"Car\" role=\"heading\"\n            button press=go aria-label=\"Profile\"\n              {face}\n");
+        let (errors, warnings) = compile_header(name, mac, &header);
+        (!(errors.is_empty() && warnings.is_empty())).then_some((name, errors, warnings))
+    }).collect();
+    assert!(refusals.is_empty(), "{refusals:?}");
+}
+
+#[test]
+fn the_mac_warns_when_a_visible_top_layer_node_keeps_the_header_in_the_page() {
+    let mac = "\"macos\": {}";
+    for (name, layer) in [
+        ("dialog", "dialog aria-label=\"Details\""),
+        ("popover", "column popover=\"manual\""),
+    ] {
+        let header = format!("            text \"Car\" role=\"heading\"\n            column\n              {layer}\n");
+        let (_, warnings) = compile_header(name, mac, &header);
+        assert_eq!(warnings.len(), 1, "{name}: {warnings:?}");
+        assert_eq!(warnings[0].0, "header-item-left-out");
+        assert!(
+            warnings[0].1.contains(&format!("holds a {name}")),
+            "{warnings:?}"
+        );
+        let (_, warnings) = compile_header(
+            &format!("{name}-hidden"),
+            mac,
+            &header.replace(layer, &format!("{layer} display=\"none\"")),
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+}
+
+#[test]
+fn an_ios_badge_refuses_styles_its_face_does_not_draw() {
+    let ios = "\"ios\": {}";
+    for (name, box_style, part, refused) in [
+        ("monogram", "", "text \"AB\" color=\"blue\"", false),
+        (
+            "photo",
+            "",
+            "image \"https://example.com/photo.png\" object-fit=\"cover\"",
+            false,
+        ),
+        ("family", "", "text \"AB\" font-family=\"serif\"", true),
+        ("style", "", "text \"AB\" font-style=\"italic\"", true),
+        (
+            "digits",
+            "",
+            "text \"12\" font-variant-numeric=\"tabular-nums\"",
+            true,
+        ),
+        ("size", "", "text \"AB\" font-size=13", false),
+        ("weight", "", "text \"AB\" font-weight=700", false),
+        (
+            "position",
+            "",
+            "image \"https://example.com/photo.png\" object-position=\"50% 10%\"",
+            true,
+        ),
+        (
+            "part-radius",
+            "",
+            "image \"https://example.com/photo.png\" border-radius=4",
+            true,
+        ),
+        ("corner", " corner-shape=\"squircle\"", "text \"AB\"", true),
+        (
+            "tint",
+            "",
+            "image \"symbol:add\" -exact-tint-color=\"red\"",
+            true,
+        ),
+    ] {
+        let header = format!("            text \"Car\" role=\"heading\"\n            button press=go aria-label=\"Profile\"\n              column width=32 height=32 border-radius=16 background-color=\"gray\"{box_style}\n                {part}\n");
+        let (errors, _) = compile_header(name, ios, &header);
+        assert_eq!(errors.len(), usize::from(refused), "{name}: {errors:?}");
+        assert!(
+            errors
+                .iter()
+                .all(|e| e.starts_with("this button, whose face is a badge")),
+            "{name}: {errors:?}"
+        );
+    }
+}
+
 /// LLP 1141.004 D1: in an app that ships iOS, a route's header that is the
 /// navigation bar holds the bar's closed set, and the compiler refuses the
 /// rest (`lower-header-item`), naming the repair. An app that does not ship

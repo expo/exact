@@ -32,9 +32,10 @@ export const appexArgs = ['-application-extension', '-Xlinker', '-e', '-Xlinker'
 export const keepMain = ['-Xlinker', '-u', '-Xlinker', '_main'];
 
 /** The kinds of app extension `--extensions` chooses among: what an iOS build packages from app.json beside the app,
- * the watch app included (a device build's, and `--watchos`'s). Widgets and Live Activities share one appex; an
- * alarm's countdown is drawn by it too. */
-export const EXTENSION_KINDS = ['widgets', 'activities', 'intents', 'alarms', 'notifications', 'watch', 'share'];
+ * the watch app included (a device build's, and `--watchos`'s). Widgets, Live Activities and controls share one appex;
+ * an alarm's countdown is drawn by it too. The bake reads the choice (`EXACT_APPLE_EXTENSIONS`): a build without
+ * `controls` omits every control (`bake/src/controls.rs`). */
+export const EXTENSION_KINDS = ['widgets', 'activities', 'controls', 'intents', 'alarms', 'notifications', 'watch', 'share'];
 /** The kinds `--extensions <all|none|kind,…>` keeps; every kind without the flag. An unknown kind is refused, so a
  * typo never builds more (or less) than was asked. */
 export function extensionKinds(args) {
@@ -46,6 +47,8 @@ export function extensionKinds(args) {
   if (value === 'none') return new Set();
   const kinds = value.split(',').map(kind => kind.trim()).filter(Boolean), unknown = kinds.filter(kind => !EXTENSION_KINDS.includes(kind));
   if (unknown.length || !kinds.length) throw new Error(`--extensions: unknown kind ${unknown.join(', ') || '(empty)'}; it takes all, none or a comma-separated list of ${EXTENSION_KINDS.join(', ')}`);
+  // A control's press runs the app's copy of its intent, which the app's intents module holds.
+  if (kinds.includes('controls') && !kinds.includes('intents')) throw new Error('--extensions: controls need intents, which compiles the app\'s copy of each control\'s intent');
   return new Set(kinds);
 }
 /** The manifest an `--extensions` build packages from: the entries of a kind it leaves out are dropped, so nothing gated

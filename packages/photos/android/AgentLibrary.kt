@@ -2,11 +2,13 @@
 // reads and adds to under the agent, where it asks MediaStore for nothing. Its photos are `fixture/agent-1.jpg` to
 // `agent-6.jpg`, which an APK carries as the app's assets under `photos-fixture/` (the fixture app's `assets/`; the
 // reader puts an app's assets at `app/assets/` in the APK), with fixed creation dates, agent-1 the newest; agent-3
-// is stored turned (EXIF orientation 6) and agent-5 is in Display P3. An add joins it, its file kept under the
+// is stored turned (EXIF orientation 6), agent-5 is in Display P3, and agent-2 is marked a screenshot (LLP
+// 1133.019.000 D4), listed under `Pictures/Screenshots/`. An add joins it, its file kept under the
 // session's `app:/tmp/photos-library/`.
 // What the app may see of it is the access the runner's status gives (`full`, `limited`, `none`) and, under
 // `limited`, the selection (the agent's `selection`, else `agent-1` to `agent-3`), with the app's own adds, which
-// Android lets an app read whatever its read permission (D6).
+// Android lets an app read whatever its read permission (D6), less the fixtures the agent's `deleted` names. Its journal
+// is what `photoChanges` walks (LLP 1133.019.000 D5).
 package exact.photos
 
 import android.content.res.AssetManager
@@ -36,6 +38,7 @@ internal class AgentLibrary(assets: AssetManager) {
         val own: Boolean,
         val type: String,
         val name: String,
+        val screenshot: Boolean = false,
     )
 
     companion object {
@@ -62,7 +65,26 @@ internal class AgentLibrary(assets: AssetManager) {
 
     val assets = ArrayList<Asset>()
     var access = "none"
+    /** A new selection names a new store, so a token from before it expires. */
     var selection = defaultSelection
+        set(value) {
+            if (value.toSet() != field.toSet()) epoch = java.util.UUID.randomUUID().toString()
+            field = value
+        }
+    /** The photos deleted, each journalled as it goes and as it comes back; an id the library never had is no photo to
+     * delete. */
+    var deleted: Set<String> = emptySet()
+        set(given) {
+            val value = given.intersect(assets.map { it.id }.toSet())
+            journal += (value - field).sorted().map { it to false }
+            journal += (field - value).sorted().map { it to true }
+            field = value
+        }
+    /** Each change in order, and whether it inserted the photo; a token's position counts them. */
+    val journal = ArrayList<Pair<String, Boolean>>()
+    /** This store's name: each launch makes a new library, so a token from another launch expires. */
+    var epoch: String = java.util.UUID.randomUUID().toString()
+        private set
     /** Why the fixtures are missing, when they are. */
     var missing: String? = null
 
@@ -75,7 +97,7 @@ internal class AgentLibrary(assets: AssetManager) {
             }
             val created = ZonedDateTime.of(2026, 7 - n, 10 + n, 10, 7 * n, 0, 0, ZoneOffset.UTC).toInstant().toEpochMilli().toDouble()
             val (w, h, type) = size(bytes) ?: continue
-            this.assets += Asset("agent-$n", bytes, w, h, created, false, type, "agent-$n.jpg")
+            this.assets += Asset("agent-$n", bytes, w, h, created, false, type, "agent-$n.jpg", screenshot = n == 2)
         }
     }
 
@@ -85,16 +107,16 @@ internal class AgentLibrary(assets: AssetManager) {
             "full" -> assets.map { it.id }.toSet()
             "limited" -> selection.toSet() + assets.filter { it.own }.map { it.id }
             else -> assets.filter { it.own }.map { it.id }.toSet()
-        }
+        } - deleted
 
     fun asset(id: String): Asset? = if (id in visible) assets.firstOrNull { it.id == id } else null
 
-    /** Of what the app may read, newest first with the id ordering one date, at most [limit] that sort after the key
-     * [after] (a creation date and an id), and whether more do. */
-    fun page(limit: Int, after: Pair<Double, String>?): Pair<List<Asset>, Boolean> {
+    /** Of what the app may read, the screenshots alone when [screenshots], newest first with the id ordering one date,
+     * at most [limit] that sort after the key [after] (a creation date and an id), and whether more do. */
+    fun page(limit: Int, after: Pair<Double, String>?, screenshots: Boolean = false): Pair<List<Asset>, Boolean> {
         val seen = visible
         val order = compareByDescending<Asset> { it.created }.thenByDescending { it.id }
-        var rest = assets.filter { it.id in seen }.sortedWith(order)
+        var rest = assets.filter { it.id in seen && (!screenshots || it.screenshot) }.sortedWith(order)
         if (after != null) rest = rest.filter { it.created < after.first || (it.created == after.first && it.id < after.second) }
         return rest.take(limit) to (rest.size > limit)
     }
@@ -115,7 +137,30 @@ internal class AgentLibrary(assets: AssetManager) {
         val newest = assets.filter { !it.own }.maxOfOrNull { it.created } ?: 0.0
         val asset = Asset(id, bytes, w, h, newest + 86_400_000 + now, true, type, name)
         assets += asset
+        journal += id to true
         return asset
+    }
+
+    class Changes(val upserts: List<Pair<Asset, Boolean>>, val removed: List<String>, val last: String?, val more: Boolean)
+
+    /** One page of the journal's changes from [from] up to [end] (LLP 1133.019.000 D2's fold): each photo changed once,
+     * by id after [after], at most [limit]. A photo the app may read in the view is an upsert, paired with whether its
+     * first change inserted it; any other is a removal. Null when [after] is no photo the window changed, or its last,
+     * which no page of it ended on. */
+    fun changes(from: Int, end: Int, after: String?, limit: Int, screenshots: Boolean): Changes? {
+        val first = LinkedHashMap<String, Boolean>()
+        for ((id, insert) in journal.subList(from, end)) first.putIfAbsent(id, insert)
+        if (after != null && (after !in first || first.keys.none { it > after })) return null
+        val ids = first.keys.filter { after == null || it > after }.sorted()
+        val page = ids.take(limit)
+        val seen = visible
+        val upserts = ArrayList<Pair<Asset, Boolean>>()
+        val removed = ArrayList<String>()
+        for (id in page) {
+            val a = assets.firstOrNull { it.id == id }
+            if (id in seen && a != null && (!screenshots || a.screenshot)) upserts += a to first.getValue(id) else removed += id
+        }
+        return Changes(upserts, removed, page.lastOrNull(), ids.size > page.size)
     }
 
     /** [asset] drawn upright for a box of [width] by [height] device pixels at [fit]: no larger than it is. */

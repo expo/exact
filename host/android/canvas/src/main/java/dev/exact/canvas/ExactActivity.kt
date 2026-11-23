@@ -338,6 +338,7 @@ open class ExactActivity : Activity() {
         // also loads the library: exact2 loads, boots and paints its first frame while Android sets the activity up,
         // and the view takes it when it is laid out.
         var booting = false
+        lateinit var reader: ExactView
         val live = intent.getStringExtra("live").let { it == "1" || it == "true" }
         if (owner != null) {
             owner.chrome = { c -> chrome(c) }
@@ -348,8 +349,7 @@ open class ExactActivity : Activity() {
             owner.configure(device)
             owner.colors(colors)
             owner.window(size.first, size.second, density, edges)
-            owner.boot(size.first, size.second, density, storage.absolutePath, noBackupFilesDir.absolutePath, live) { ok -> view.ownerStarted(ok) }
-            booting = true
+            booting = owner.boot(size.first, size.second, density, storage.absolutePath, noBackupFilesDir.absolutePath, live) { ok -> reader.ownerStarted(ok) }
         } else if (intent.getStringExtra("asyncboot") != "0") {
             try { Native.hardwarePictures(intent.getStringExtra("hwbuf") != "0") } catch (e: UnsatisfiedLinkError) { }
             Thread({
@@ -359,7 +359,7 @@ open class ExactActivity : Activity() {
             booting = true
         } else { device.tell(); Native.colors(colors); Native.window(size.first, size.second, density, edges) }
         if (!driven) { driven = true; driver = drive { dy -> view.scrollBy(dy) } }
-        view = ExactView(this, live) {
+        reader = ExactView(this, live) {
             if (!ready) {
                 ready = true
                 // `start=N` for an app whose rows have one pitch: scrolled there before the driver starts.
@@ -372,6 +372,7 @@ open class ExactActivity : Activity() {
                 Channels.made(this)
             }
         }
+        view = reader
         view.booting = booting
         view.window = size
         view.chrome = { c -> chrome(c) }
@@ -610,6 +611,7 @@ open class ExactActivity : Activity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (!hasFocus && reads()) pads.background()
+        if (hasFocus) Activities.resumed()
     }
 
     override fun onStop() {
@@ -658,6 +660,7 @@ open class ExactActivity : Activity() {
         Auth.resumed()
         requests.resumed()
         Extensions.resumed()
+        Activities.resumed()
     }
 
     override fun onPause() {

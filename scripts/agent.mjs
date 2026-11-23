@@ -87,7 +87,7 @@ import { parseDrag, heldRead } from './agent-drag.mjs';
 import { driveNotes, runTests, reloadWeb, fetchOrigins, loopbackOrigins, faultRequest } from './agent-test.mjs';
 import { phone } from '../host/apple/devices.mjs';
 import { resolveApp, webDist as defaultWebDist } from './app.mjs';
-import { open } from './agent-session.mjs';
+import { open, attachUnsupported } from './agent-session.mjs';
 export {
   sourceMapReader,
   identifyInspectedNode,
@@ -151,6 +151,18 @@ export async function main(argv, injected = {}) {
   if (host && host !== 'trace' && !DRIVEN_HOSTS.includes(host)) {
     console.error(`agent: no host \`${host}\`; name one of ${DRIVEN_HOSTS.join(', ')}`);
     return 2;
+  }
+  // `--attach` (LLP 1012.000 D1) joins a running app before any build, install, launch, server or store: what only a
+  // launch the driver owns takes is refused, and so is a host with no attach.
+  const attached = flags.attach !== undefined;
+  if (attached) {
+    const launchOnly = [...Object.keys(flags).filter((k) => !['json', 'app', 'session', 'attach'].includes(k) && flags[k] !== undefined)
+      .map((k) => (k === 'launchEntries' ? '--notification, --wake, --call and --login' : k === 'reader' ? (flags.reader ? '--reader' : '--headless') : `--${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`)),
+      ...['EXACT_AGENT_PROCESS', 'EXACT_AGENT_LOGIN_ENV', 'EXACT_AGENT_HOME'].filter((k) => process.env[k]).map((k) => ({ EXACT_AGENT_PROCESS: '--process', EXACT_AGENT_LOGIN_ENV: '--login-env', EXACT_AGENT_HOME: '--home' })[k]),
+      ...(argv.includes('--backend') ? ['--backend'] : [])];
+    if (launchOnly.length) throw new Error(`--attach reads an app that is already running: ${launchOnly.join(', ')} ${launchOnly.length > 1 ? 'are' : 'is'} for a launch the driver owns`);
+    if (host === 'trace') throw new Error('--attach drives a running app; trace reads a saved trace (trace --pid asks a running one)');
+    if (host && !['macos', 'mac'].includes(host)) throw new Error(attachUnsupported(host));
   }
   if (flags.live) {
     if (!['macos', 'mac', 'ios', 'android'].includes(host) || flags.test)
@@ -350,8 +362,10 @@ export async function main(argv, injected = {}) {
     return 2;
   }
   const named = flags.storage !== undefined;
-  flags.storage = defaultStore(host, flags);
-  referenceNote(ops, resolveApp(flags.app).dir);
+  if (!attached) {
+    flags.storage = defaultStore(host, flags);
+    referenceNote(ops, resolveApp(flags.app).dir);
+  }
   // A named store is kept between drives on a native host unless the drive asks it emptied (`--reset-storage`); on the
   // web, Chrome's profile for it starts empty unless the drive keeps it (`--keep-storage`, LLP 1086 EX4). A native host
   // empties the whole scratch tree at its first boot (picker.rs
@@ -428,7 +442,7 @@ export async function main(argv, injected = {}) {
           { host: host === 'mac' ? 'macos' : host, device, appId, storage: flags.storage },
           launch,
         )
-      : await launch(),
+      : await (attached ? (injected.open ?? open)({ host, app: flags.app, session: flags.session, attach: flags.attach }) : launch()),
     locking && !fresh ? { keptStore: flags.storage } : {},
   );
   let at = 0;
@@ -612,7 +626,7 @@ export async function main(argv, injected = {}) {
   };
   // The drive, against the build it used (LLP 1146 D2: `bun scripts/evidence.mjs`).
   const recordDrive = async result =>
-    (await import('./evidence.mjs')).recordRun(flags.app, {
+    !attached && (await import('./evidence.mjs')).recordRun(flags.app, {
       host,
       what: `drive ${ops.join(' · ').slice(0, 300)}`,
       result,
@@ -626,7 +640,7 @@ export async function main(argv, injected = {}) {
   const notes = driveNotes(s, {
     host,
     storage: flags.storage,
-    origins: flags.url ? [] : loopbackOrigins(resolve(flags.webDist ?? defaultWebDist(resolveApp(flags.app)))),
+    origins: flags.url || attached ? [] : loopbackOrigins(resolve(flags.webDist ?? defaultWebDist(resolveApp(flags.app)))),
   });
   try {
     if (flags.permission) await s.prefer(flags.permission); // `--permission name=state` (agent-launch.mjs)

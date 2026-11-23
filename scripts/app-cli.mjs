@@ -378,6 +378,9 @@ async function verbRun({ dir, name, game = false, exact2, args }, reply) {
     for (const line of feedback.nudge(dir, { verb, host, exit, ms: Date.now() - started, args: rest, interrupted })) console.error(line);
   } catch {}
   return exit; };
+  // `agent --attach` reads an app already running (LLP 1012.000 D1): the driver takes it as given, before anything here
+  // builds, prepares or adds a launch default.
+  if (verb === 'agent' && rest.includes('--attach')) return log(spawnSync(process.execPath, [resolve(exact2, verbs.agent[0]), ...verbs.agent.slice(1), ...rest], { stdio: 'inherit' }).status ?? 1);
   // A verb that builds the app bundles app.ts with rolldown from this checkout's node_modules (the web's build and
   // every native bake); without it Bun's auto-install spins silently instead of failing. A web drive of a site
   // already built (`--web-dist`, or a `--url` that is not a path: a path is the app's own, built first, as

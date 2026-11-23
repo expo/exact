@@ -683,11 +683,27 @@ capability has a call of its own.
 | 20 | a signed update activated with its own assets (LLP 1030.006 D1, D5) | the generation's asset directory as a string, empty for the APK's | opens every video and page again, and the next sound batch its files, under `Native.assetRoot()` (`AssetRoot`); calls `Native.drew()` after its next drawing, which makes the new generation's boot good | none |
 | 22 | the active `head` title (LLP 1048.003 D1) | a string, including an empty string, or no words when no active `head` sets a title | sets the activity's window title, restoring the activity's original label when no title is set | none |
 | 23 | a node's drag out of the app (LLP 1094.000 D7) | the node; its box (x, y, width, height) and the finger (x, y) in the view's pixels; 1 when an assistive service started it, else 0; two strings, text and URL; the files' count, then each file as the node names it (a shipped `assets/` name or an `app:/` path) | `DragOut`: each file as a content URI of `Files`, then the URL and the text as `text/plain` items, in `View.startDragAndDrop` with `DRAG_FLAG_GLOBAL`, `DRAG_FLAG_GLOBAL_URI_READ` and, for a service's drag, `DRAG_FLAG_ACCESSIBILITY_ACTION`; the shadow is the window's picture of the box | none; a file it cannot read and a drag the platform refuses are journaled |
+| 24 | a live activity's send or the source's first read (LLP 1126 D13) | a string: `{"ticket", "command", "args"}` as the runner wrote its `exact-activity:` body, or `{"enumerate": true}` | `Activities`: posts, replaces or cancels the activity's ongoing notification (its tag the activity id), which asks to be promoted to a Live Update | `Native.activities` with `{"ticket", "status", "body": {"id"}}` or `{"ticket", "status": 400, "error"}`, then the list `{"activities", "frequentPushesEnabled"}`, never by the request's id |
 
 Kinds 5, 6, 7, 8, 13, 14 and 22 are statements of the app's state, told when it changes and anew to a reader made
 again. `Presenter::tell_shell` reads them as the queue is taken. Back, the wake lock, the orientation lock and the
 window title are read after a commit. Opening or closing a surface also updates Back. None of these statements are
 read during a scroll's own frames.
+
+**Live activities** (LLP 1126 D13). A `live_activities` row with an `android` mapping is an ongoing notification
+(`Activities.kt`; the mapping is docs/reference.md's "Live Activities"). The build writes the bake's
+`reach.androidActivities` as `res/raw/exact_activities.json` and adds `POST_PROMOTED_NOTIFICATIONS`; the presenter
+links the sends only then. Each post asks for promotion by `Notification.EXTRA_REQUEST_PROMOTED_ONGOING`, the extra
+the framework's 36.1 builder method and AndroidX's set, so no version check guards the request; the chip's text
+(`setShortCriticalText`) and `ProgressStyle` need API 36, and below it the progress is `setProgress`. An activity
+is `promoted` when its posted notification carries `FLAG_PROMOTED_ONGOING`. The list is read from
+`getActiveNotifications()` at the source's first read, after each send once the system shows its post (`notify` takes
+effect a few main-thread turns later), at `onResume` and when the window regains focus, so a cold start relists the
+activities and one the person dismissed leaves the list.
+`adb shell dumpsys notification --noredact` shows each post: its `flags` (`ONGOING_EVENT`, `PROMOTED_ONGOING`) and
+extras (`android.requestPromotedOngoing`, `android.shortCriticalText`, `android.progress`). The agent's drives
+force-stop the app, and Android cancels a force-stopped app's notifications, so a drive that reads them back is a
+`--live` one, read while it runs.
 
 For sound diagnostics in a debuggable APK, capture `adb logcat -v monotonic -s exact:D AAudio:D AudioTrack:D`
 alongside emulator PCM and `dumpsys audio` / `dumpsys media.audio_flinger`. The `sound` lines give foreground

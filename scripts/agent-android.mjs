@@ -1295,7 +1295,10 @@ function extensionArgs(app, out, config, bound, firebase, development) {
   // And what the module names the app calls derive beside their lines (`android_entry`'s `permissions.txt`, LLP 1133.018 D11).
   try { permissions = [...new Set([...permissions, ...readFileSync(resolve(out, 'permissions.txt'), 'utf8').split('\n').filter(Boolean)])].sort(); } catch { /* none */ }
   // And the normal permissions the packages' manifest fragments declare (LLP 1133.031 D12 item 1).
-  permissions = [...new Set([...permissions, ...fragmentPermissions(bound)])].sort();
+  // A live activity's notification asks to be promoted (Android 16's Live Updates, LLP 1126 D13): a normal
+  // permission, which the person can still turn off in Settings.
+  const promoted = reach?.androidActivities?.length ? ['android.permission.POST_PROMOTED_NOTIFICATIONS'] : [];
+  permissions = [...new Set([...permissions, ...fragmentPermissions(bound), ...promoted])].sort();
   if (bound.length) {
     mkdirSync(resolve(generated, 'exact/app'), { recursive: true });
     writeFileSync(resolve(generated, 'exact/app/ExactExtensions.kt'), ['// Written by scripts/agent-android.mjs (LLP 1133.001 D5); never edited.', 'package exact.app', '',
@@ -1318,7 +1321,7 @@ function extensionArgs(app, out, config, bound, firebase, development) {
   // The notification channels, strings, sounds and small icon (LLP 1133.004.000 D1, D3), and Firebase's options for
   // an app that pushes (D6), for an app that grants notifications, with the receiver that makes the channels again
   // when the app is updated.
-  const notify = androidNotificationResources(app.manifest, app.dir, resolve(apkDirs(app).app, 'notify/res'), { channels: reach?.androidChannels, locales: reach?.locales, base: reach?.base, firebase });
+  const notify = androidNotificationResources(app.manifest, app.dir, resolve(apkDirs(app).app, 'notify/res'), { channels: reach?.androidChannels, locales: reach?.locales, base: reach?.base, firebase, activities: reach?.androidActivities });
   if (notify && !notify.icon) console.warn(`${app.name}: app.json's icons have no "monochrome" one, so its notifications show the platform's generic glyph in the status bar; add a white glyph on a transparent background with "purpose": "monochrome"`);
   // The share target's and the protocol handlers' filters on the app's activity (LLP 1133.024 D5, LLP 1038 D8), inside
   // the same `<application>`. A production build is Android's distribution: it registers `distribution_only` handlers.

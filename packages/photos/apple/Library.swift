@@ -100,6 +100,7 @@ final class PhotoKitLibrary: NSObject, PHPhotoLibraryChangeObserver {
         say("status changed: \(self.said!["authorizationStatus"]!), add \(self.said!["addOnlyAuthorizationStatus"]!)")
         context.changed("photos.photoLibraryStatus")
         context.changed("photos.photoAssets")
+        context.changed("photos.photoChanges")
         if !readable { revoke(drawn) }
         observe()
     }
@@ -120,6 +121,8 @@ final class PhotoKitLibrary: NSObject, PHPhotoLibraryChangeObserver {
     /// `then` while the app may read the library; asked first while
     /// undetermined, by the app's own code or a person only (D7).
     private func whenReadable(origin: String, _ reply: @escaping ([String: Any]) -> Void, _ then: @escaping () -> Void) {
+        // A reader of the list or its changes alone learns of a change made in Settings too.
+        if said == nil { said = facts() }
         switch level(.readWrite) {
         case .authorized, .limited: then()
         case .notDetermined where origin != "app": reply(["error": "NotAllowedError", "message": "person-required"])
@@ -146,6 +149,7 @@ final class PhotoKitLibrary: NSObject, PHPhotoLibraryChangeObserver {
         DispatchQueue.main.async { [self] in
             recheck()
             context.changed("photos.photoAssets")
+            context.changed("photos.photoChanges")
             guard readable, !drawn.isEmpty else { return }
             let found = PHAsset.fetchAssets(withLocalIdentifiers: Array(drawn), options: nil)
             var still = Set<String>()
@@ -189,6 +193,7 @@ final class PhotoKitLibrary: NSObject, PHPhotoLibraryChangeObserver {
             options.fetchLimit = limit + 1
             options.predicate = images
             var predicates = [images]
+            if let only = Self.subtypePredicate(args) { predicates.append(only) }
             // The app adds predicates (D9); the module keeps its own.
             if let hatch = PhotosModule.fetchOptions {
                 hatch(options)
@@ -214,6 +219,28 @@ final class PhotoKitLibrary: NSObject, PHPhotoLibraryChangeObserver {
                 } : nil
                 DispatchQueue.main.async { reply(["assets": out, "cursor": cursor ?? NSNull()]) }
             }
+        }
+    }
+
+    /// `subtypes`' predicate (LLP 1133.019.000 D4), nil for every image:
+    /// `screenshot` is the `photoScreenshot` bit.
+    static func subtypePredicate(_ args: [String: Any]) -> NSPredicate? {
+        guard (args["subtypes"] as? [String])?.contains("screenshot") == true else { return nil }
+        return NSPredicate(format: "(mediaSubtypes & %ld) != 0", Int(PHAssetMediaSubtype.photoScreenshot.rawValue))
+    }
+
+    /// What changed since `since` (LLP 1133.019.000 D1): every view is
+    /// rescan-only here, so a token answers `expired` with a fresh one, and
+    /// the app replaces its index from `photoAssets`.
+    func changes(_ args: [String: Any], origin: String, reply: @escaping ([String: Any]) -> Void) {
+        whenReadable(origin: origin, reply) { [self] in
+            observe()
+            let here = ChangeToken(backend: "photokit", access: facts()["access"]!, subtypes: ChangeToken.subtypes(args))
+            let since: ChangeToken?
+            do { since = try ChangeToken.parse(args["since"], backend: "photokit") } catch { return reply(ChangeToken.refused) }
+            // Every token this answers is a rescan-only one.
+            guard let since else { return reply(here.answer()) }
+            reply(since.rescan && since.epoch == nil ? here.answer(expired: true) : ChangeToken.refused)
         }
     }
 

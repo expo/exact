@@ -104,7 +104,9 @@ pub(crate) fn check(case: &Case, observation: &[String], announce: bool) -> Resu
                 .expect("expected failure was found");
             println!(
                 "PROPERTY {name:?} is false at step {}: {} (expected; {})",
-                f.step, f.observed, case.name
+                crate::event_of(observation, f.step),
+                f.observed,
+                case.name
             );
         }
     }
@@ -113,7 +115,9 @@ pub(crate) fn check(case: &Case, observation: &[String], announce: bool) -> Resu
         if !expected.contains(&p.name) {
             return Err(format!(
                 "PROPERTY {:?} is false at step {}: {}",
-                p.name, f.step, f.observed
+                p.name,
+                crate::event_of(observation, f.step),
+                f.observed
             ));
         }
     }

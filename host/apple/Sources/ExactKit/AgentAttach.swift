@@ -1,0 +1,750 @@
+// Attached agent sessions (LLP 1012.000): a driver joins the development app a
+// person already has open and reads the one window that person approved, on the
+// app's own wall clock. Only a local development build compiles this file
+// (`EXACT_ATTACH`, which `build.mjs` sets with the `ExactBuildPurpose` stamp),
+// and its listener opens only when the person chooses Develop ▸ Enable Agent
+// Attach. The wire is JSON lines over a Unix socket: a handshake, then
+// `{"request":n,"op":…}` requests, each answered `{"request":n,…}`.
+#if EXACT_ATTACH && os(macOS)
+import AppKit
+import Darwin
+import Security
+
+public enum AgentAttach {
+    static let version = 1
+    static let requestLimit = 1 << 20, replyLimit = 32 << 20, queueLimit = 64 << 20, pendingLimit = 4
+    /// Seconds: a handshake to arrive, the person to approve it, one request to
+    /// be answered, one write to drain.
+    static let handshakeTimeout = 10.0, approvalTimeout = 60.0, requestTimeout = 30.0, writeTimeout = 10
+
+    /// Whether this binary may listen: a build stamped for local development
+    /// with development trust baked in, said affirmatively. A missing stamp or
+    /// trust leaves it off, and so does a launch the driver owns.
+    public static let admitted = ExactEnv.appMetadata["ExactBuildPurpose"] as? String == "local-development"
+        && (BakedCompatibility.json["embedded"] as? [String: Any])?["trust"] as? String == "development"
+        && !ExactEnv.agentCarried
+
+    nonisolated(unsafe) static var listener: AttachListener?
+    /// The one connection: asking, or attached. Main thread.
+    nonisolated(unsafe) static var current: AttachConnection?
+    static var listening: Bool { listener != nil }
+
+    static let menuTarget = AttachMenuTarget()
+
+    /// Develop's two items (LLP 1012.000 D1), after the app's first paint.
+    public static func addMenuItems(to menu: NSMenu) {
+        guard admitted else { return }
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Enable Agent Attach", action: #selector(AttachMenuTarget.toggle(_:)), keyEquivalent: "").target = menuTarget
+        menu.addItem(withTitle: "Detach Agent", action: #selector(AttachMenuTarget.detach(_:)), keyEquivalent: "").target = menuTarget
+    }
+
+    /// Open the listener and publish its marker, or say why not.
+    static func enable() {
+        guard listener == nil else { return }
+        do { listener = try AttachListener.open() }
+        catch {
+            let alert = NSAlert()
+            alert.messageText = "Agent Attach could not start"
+            alert.informativeText = "\(error)"
+            alert.runModal()
+        }
+    }
+
+    /// Revoke every grant, close the connection and unpublish the listener
+    /// until the person enables it again.
+    static func detach(_ reason: String) {
+        current?.retire(reason)
+        listener?.close()
+        listener = nil
+    }
+
+    /// A connection ended: its indicator, sheet and grants go with it. Main thread.
+    static func ended(_ connection: AttachConnection) {
+        connection.reads = false
+        connection.indicator?.removeFromParent()
+        connection.indicator = nil
+        if let alert = connection.alert, let window = connection.window { window.endSheet(alert.window, returnCode: .abort) }
+        connection.alert = nil
+        if let observer = connection.closeObserver { NotificationCenter.default.removeObserver(observer) }
+        connection.shownObserver?.invalidate()
+        connection.shownObserver = nil
+        if current === connection { current = nil }
+    }
+
+    /// A new client of `origin`, after the peer check. One driver at a time. Main thread.
+    static func accepted(_ connection: AttachConnection, from origin: AttachListener) {
+        guard listener === origin else {
+            connection.refuseAndClose(["error": "attach: Agent Attach was turned off in the app", "refused": "off"])
+            return
+        }
+        if let current, !current.isRetired {
+            connection.refuseAndClose(["error": "busy: another agent is attached to this app (Develop ▸ Detach Agent ends it)", "refused": "busy"])
+            return
+        }
+        current = connection
+        connection.start()
+    }
+
+    /// The windows a driver can attach to: each visible window that shows one session.
+    static func eligible() -> [(NSWindow, ExactSession)] {
+        func sessions(in view: NSView) -> [ExactSession] {
+            if let exact = view as? ExactView { return [exact.session] }
+            return view.subviews.flatMap { sessions(in: $0) }
+        }
+        return NSApp.windows.compactMap { window in
+            guard window.isVisible, window.sheetParent == nil, let root = window.contentView else { return nil }
+            let found = sessions(in: root)
+            return found.count == 1 ? (window, found[0]) : nil
+        }
+    }
+
+    /// Unlink the socket and marker as the process ends.
+    static func unpublish() { listener?.unlinkPaths() }
+}
+
+final class AttachMenuTarget: NSObject, NSMenuItemValidation {
+    @objc func toggle(_ sender: Any?) {
+        if AgentAttach.listening { AgentAttach.detach("Agent Attach was turned off in the app") } else { AgentAttach.enable() }
+    }
+    @objc func detach(_ sender: Any?) { AgentAttach.detach("detached in the app") }
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(toggle(_:)) {
+            item.state = AgentAttach.listening ? .on : .off
+            return AgentAttach.listening || DevMenu.session?.firstDrawMs != nil
+        }
+        return AgentAttach.current.map { !$0.isRetired } ?? false
+    }
+}
+
+/// The socket and the marker that names it, for one launch.
+final class AttachListener {
+    let fd: Int32
+    let socketPath: String, markerPath: String
+    let nonce: String
+    private let source: DispatchSourceRead
+    /// Accepted connections not yet seen by the main thread, at most `AgentAttach.pendingLimit`.
+    private let lock = NSLock()
+    private var pending = 0
+
+    enum Failure: Error, CustomStringConvertible {
+        case sandboxed, directory(String, String), path(String), system(String, Int32)
+        var description: String {
+            switch self {
+            case .sandboxed: return "A sandboxed app cannot be attached to yet (LLP 1012.000 piece 9)."
+            case let .directory(path, why): return "\(path) \(why), so the socket was not opened there."
+            case let .path(path): return "\(path) is longer than a Unix socket path can be (103 bytes)."
+            case let .system(call, code): return "\(call): \(String(cString: strerror(code)))"
+            }
+        }
+    }
+
+    static func open() throws -> AttachListener {
+        if sandboxed() { throw Failure.sandboxed }
+        let temp = userTemp(), pid = getpid(), uid = getuid()
+        var socketPath = (try privateDirectory((temp as NSString).appendingPathComponent("exact-attach"), uid: uid) as NSString).appendingPathComponent("\(pid)")
+        // LLP 1111.000 D4's fallback for a long per-user path.
+        if socketPath.utf8.count > 103 { socketPath = try privateDirectory("/tmp/exact-\(uid)", uid: uid) + "/a\(pid)" }
+        if socketPath.utf8.count > 103 { throw Failure.path(socketPath) }
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw Failure.system("socket", errno) }
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        withUnsafeMutableBytes(of: &addr.sun_path) { raw in
+            for (i, b) in socketPath.utf8.enumerated() { raw[i] = b }
+            raw[socketPath.utf8.count] = 0
+        }
+        unlink(socketPath)
+        let bound = withUnsafePointer(to: &addr) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
+        guard bound == 0, chmod(socketPath, 0o600) == 0, listen(fd, 4) == 0 else {
+            let code = errno
+            Darwin.close(fd); unlink(socketPath)
+            throw Failure.system("bind \(socketPath)", code)
+        }
+        var bytes = [UInt8](repeating: 0, count: 16)
+        arc4random_buf(&bytes, bytes.count)
+        let nonce = bytes.map { String(format: "%02x", $0) }.joined()
+        let markerPath = (temp as NSString).appendingPathComponent("exact-attach-\(pid).json")
+        let info = ExactEnv.appMetadata
+        let marker: [String: Any] = [
+            "v": AgentAttach.version, "pid": Int(pid), "started": processStart(), "bundle": Bundle.main.bundleIdentifier ?? "",
+            "executable": Bundle.main.executablePath ?? "", "socket": socketPath, "nonce": nonce,
+            "commit": info["ExactCommit"] ?? NSNull(), "dirty": info["ExactCommitDirty"] ?? NSNull(),
+        ]
+        do { try publish(marker, at: markerPath) }
+        catch { Darwin.close(fd); unlink(socketPath); throw error }
+        let listener = AttachListener(fd: fd, socketPath: socketPath, markerPath: markerPath, nonce: nonce)
+        installExitCleanup()
+        return listener
+    }
+
+    private init(fd: Int32, socketPath: String, markerPath: String, nonce: String) {
+        self.fd = fd; self.socketPath = socketPath; self.markerPath = markerPath; self.nonce = nonce
+        source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: DispatchQueue(label: "exact.attach.accept"))
+        source.setEventHandler { [weak self, fd, nonce] in
+            let client = accept(fd, nil, nil)
+            guard client >= 0 else { return }
+            var uid: uid_t = 0, gid: gid_t = 0
+            // Only a process running as this user; the nonce then names this listener.
+            guard let self, getpeereid(client, &uid, &gid) == 0, uid == getuid(),
+                  lock.withLock({ () -> Bool in
+                      guard self.pending < AgentAttach.pendingLimit else { return false }
+                      self.pending += 1
+                      return true
+                  }) else { Darwin.close(client); return }
+            // The slot is held until the connection starts, or, refused, until its descriptor closes.
+            let connection = AttachConnection(fd: client, nonce: nonce) { [weak self] in self?.lock.withLock { self?.pending -= 1 } }
+            DispatchQueue.main.async { AgentAttach.accepted(connection, from: self) }
+        }
+        source.setCancelHandler { [fd] in Darwin.close(fd) }
+        source.resume()
+    }
+
+    func close() {
+        source.cancel()
+        unlinkPaths()
+    }
+
+    func unlinkPaths() {
+        unlink(markerPath)
+        unlink(socketPath)
+    }
+
+    static func userTemp() -> String {
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
+        let n = confstr(_CS_DARWIN_USER_TEMP_DIR, &buffer, buffer.count)
+        return n > 0 ? String(cString: buffer) : NSTemporaryDirectory()
+    }
+
+    /// `path` as a `0700` directory this user owns and no link leads to, made if missing.
+    static func privateDirectory(_ path: String, uid: uid_t) throws -> String {
+        if mkdir(path, 0o700) != 0, errno != EEXIST { throw Failure.system("mkdir \(path)", errno) }
+        var st = stat()
+        guard lstat(path, &st) == 0 else { throw Failure.system("lstat \(path)", errno) }
+        if (st.st_mode & S_IFMT) != S_IFDIR { throw Failure.directory(path, "is not a directory") }
+        if st.st_uid != uid { throw Failure.directory(path, "is owned by another user") }
+        if st.st_mode & 0o077 != 0 { throw Failure.directory(path, "is open to other users") }
+        return path
+    }
+
+    /// The marker, written whole beside its final name and renamed into place.
+    static func publish(_ marker: [String: Any], at path: String) throws {
+        let data = try JSONSerialization.data(withJSONObject: marker, options: [.sortedKeys])
+        let staging = path + ".part"
+        unlink(staging)
+        let fd = Darwin.open(staging, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+        guard fd >= 0 else { throw Failure.system("open \(staging)", errno) }
+        let written = data.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+        Darwin.close(fd)
+        guard written == data.count, rename(staging, path) == 0 else { unlink(staging); throw Failure.system("write \(path)", errno) }
+    }
+
+    /// Whether this process is signed into the App Sandbox, by its own entitlement; a
+    /// process that cannot read its entitlements is taken to be.
+    static func sandboxed() -> Bool {
+        guard let task = SecTaskCreateFromSelf(nil) else { return true }
+        let value = SecTaskCopyValueForEntitlement(task, "com.apple.security.app-sandbox" as CFString, nil)
+        return (value as? Bool) ?? (value != nil)
+    }
+
+    /// The process's start, seconds since 1970, which the driver checks against `ps`.
+    static func processStart() -> Double {
+        var info = kinfo_proc(), size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0 else { return 0 }
+        let start = info.kp_proc.p_starttime
+        return Double(start.tv_sec) + Double(start.tv_usec) / 1_000_000
+    }
+
+    nonisolated(unsafe) private static var cleanupInstalled = false
+    private static func installExitCleanup() {
+        guard !cleanupInstalled else { return }
+        cleanupInstalled = true
+        atexit { AgentAttach.unpublish() }
+    }
+}
+
+/// One driver's connection: its grants, its pinned window and its replies.
+/// The grants and target are the main thread's; the reader and writer run
+/// beside it, so a stalled request never hides a hangup.
+final class AttachConnection {
+    let fd: Int32
+    private let nonce: String
+    private let lock = NSLock()
+    private var retired = false, queued = 0
+    /// Times are `systemUptime` seconds, which no clock change moves.
+    private var outstanding: (id: Int, since: TimeInterval)?
+    private var handshaken = false, approved = false, started = false, flushing = false
+    /// Gives back the listener's slot, once: at start, or at the close of one never started.
+    private var release: (() -> Void)?
+    private let accepted = ProcessInfo.processInfo.systemUptime
+    /// Writes, the shutdowns and the close, in order. `open` is its own.
+    private let writer = DispatchQueue(label: "exact.attach.writer")
+    private var open = true
+    private var watchdog: DispatchSourceTimer?
+
+    // Main thread.
+    weak var window: NSWindow?
+    weak var session: ExactSession?
+    var reads = false
+    var alert: NSAlert?
+    var indicator: NSTitlebarAccessoryViewController?
+    var closeObserver: NSObjectProtocol?
+    var shownObserver: NSKeyValueObservation?
+
+    init(fd: Int32, nonce: String, release: @escaping () -> Void) {
+        self.fd = fd
+        self.nonce = nonce
+        self.release = release
+        var on: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        // A blocked write wakes each second to check its reply's deadline (`enqueue`).
+        var deadline = timeval(tv_sec: 1, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &deadline, socklen_t(MemoryLayout<timeval>.size))
+    }
+
+    var isRetired: Bool { lock.withLock { retired } }
+
+    func start() {
+        lock.withLock { started = true }
+        releaseSlot()
+        let timer = DispatchSource.makeTimerSource(queue: .global())
+        timer.schedule(deadline: .now() + 1, repeating: 1)
+        timer.setEventHandler { [weak self] in self?.check() }
+        timer.resume()
+        watchdog = timer
+        Thread { [self] in readLoop() }.start()
+    }
+
+    /// A handshake or approval that never came, or a request past its bound.
+    private func check() {
+        let now = ProcessInfo.processInfo.systemUptime
+        let (shook, ok, request) = lock.withLock { (handshaken, approved, outstanding) }
+        if !shook, now - accepted > AgentAttach.handshakeTimeout { retire("no handshake within \(Int(AgentAttach.handshakeTimeout)) s") }
+        else if !ok, now - accepted > AgentAttach.approvalTimeout { retire("not approved in the app within \(Int(AgentAttach.approvalTimeout)) s") }
+        else if let request, now - request.since > AgentAttach.requestTimeout {
+            retire("request \(request.id) was not answered within \(Int(AgentAttach.requestTimeout)) s")
+        }
+    }
+
+    private func readLoop() {
+        var pending = Data(), buffer = [UInt8](repeating: 0, count: 65536)
+        reading: while true {
+            let n = read(fd, &buffer, buffer.count)
+            if n < 0, errno == EINTR { continue }
+            if n <= 0 { retire(n == 0 ? "the agent hung up" : "read: \(String(cString: strerror(errno)))"); break }
+            pending.append(buffer, count: n)
+            while let end = pending.firstIndex(of: 0x0a) {
+                let line = pending.subdata(in: pending.startIndex..<end)
+                pending.removeSubrange(pending.startIndex...end)
+                if line.count > AgentAttach.requestLimit { retire("a request over 1 MiB"); break reading }
+                if !receive(line) { break reading }
+            }
+            if pending.count > AgentAttach.requestLimit { retire("a request over 1 MiB"); break }
+        }
+        // After a refusal the driver is given the grace `retire` gives it before the close.
+        writer.asyncAfter(deadline: .now() + (lock.withLock { flushing } ? 2 : 0)) { [self] in closeDescriptor() }
+    }
+
+    /// Writer queue.
+    private func stopReading() {
+        guard open else { return }
+        shutdown(fd, SHUT_RDWR)
+        if !lock.withLock({ started }) { closeDescriptor() }
+    }
+
+    /// Writer queue.
+    private func closeDescriptor() {
+        guard open else { return }
+        open = false
+        Darwin.close(fd)
+        releaseSlot()
+    }
+
+    private func releaseSlot() {
+        let give = lock.withLock { () -> (() -> Void)? in defer { release = nil }; return release }
+        give?()
+    }
+
+    /// One line from the driver. False once the connection is spent.
+    private func receive(_ line: Data) -> Bool {
+        if isRetired { return false }
+        guard lock.withLock({ handshaken }) else { return handshake(line) }
+        guard lock.withLock({ approved }) else { retire("a request before the person approved reads"); return false }
+        switch AttachRequest.admit(line) {
+        case let .failure(refusal):
+            send(refusal.reply)
+            return true
+        case let .success((id, request)):
+            let busy = lock.withLock { () -> Bool in
+                if outstanding != nil { return true }
+                outstanding = (id, ProcessInfo.processInfo.systemUptime)
+                return false
+            }
+            if busy { send(["request": id, "error": "busy: one request at a time", "refused": "busy"]); return true }
+            DispatchQueue.main.async { [self] in
+                let reply = dispatch(id, request)
+                // A reply past its deadline is never sent, though the watchdog has not yet looked. The request stays
+                // outstanding, under the watchdog, until its reply is written.
+                let late = lock.withLock { outstanding.map { ProcessInfo.processInfo.systemUptime - $0.since > AgentAttach.requestTimeout } ?? true }
+                if late { retire("request \(id) was not answered within \(Int(AgentAttach.requestTimeout)) s") } else { enqueue(Data(reply.utf8), answering: id) }
+            }
+            return true
+        }
+    }
+
+    private func handshake(_ line: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+              Set(object.keys).isSubset(of: ["attach", "nonce", "session"]), AttachRequest.distinctKeys(line),
+              AttachRequest.count(object["attach"]) == AgentAttach.version, let offered = object["nonce"] as? String else {
+            refuseAndClose(["error": "handshake: expected {\"attach\":\(AgentAttach.version),\"nonce\":…,\"session\"?:…} as the first line", "refused": "handshake"])
+            return false
+        }
+        guard offered.utf8.count == nonce.utf8.count, zip(offered.utf8, nonce.utf8).reduce(0, { $0 | ($1.0 ^ $1.1) }) == 0 else {
+            refuseAndClose(["error": "handshake: the nonce names another listener", "refused": "handshake"])
+            return false
+        }
+        if let wanted = object["session"], !(wanted is String) {
+            refuseAndClose(["error": "handshake: session is a window's session label", "refused": "handshake"])
+            return false
+        }
+        lock.withLock { handshaken = true }
+        let wanted = object["session"] as? String
+        DispatchQueue.main.async { [self] in pin(wanted) }
+        return true
+    }
+
+    /// Pin the one window, then ask its person. Main thread.
+    private func pin(_ wanted: String?) {
+        guard !isRetired else { return }
+        let windows = AgentAttach.eligible()
+        let chosen = wanted.map { label in windows.filter { $0.1.label == label } } ?? windows
+        // Before the person allows it, the driver learns only the labels it chooses a window by (`main`, `window-2`, a
+        // link's target), and only when it named none of several; never a window's title.
+        guard chosen.count == 1, let (window, session) = chosen.first else {
+            let why = windows.isEmpty ? "no window of this app shows a session"
+                : wanted.map { "no window shows session \($0)" } ?? "the app has \(windows.count) windows: name one with --session <label>"
+            refuseAndClose(["error": "attach: \(why)", "refused": "window", "sessions": windows.map(\.1.label)])
+            return
+        }
+        // The indicator is a title bar accessory, so a window without one cannot say it is attached.
+        guard window.styleMask.contains(.titled) else {
+            refuseAndClose(["error": "attach: the window has no title bar to show Agent Attached in", "refused": "window"])
+            return
+        }
+        self.window = window
+        self.session = session
+        closeObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
+            self?.retire("the attached window closed")
+        }
+        // A kept window's close orders it out (`ExactDocuments.hidesOnClose`): that ends the attachment too.
+        // Minimizing it or hiding the app does not.
+        shownObserver = window.observe(\.isVisible) { [weak self] window, _ in
+            if !window.isVisible, PageFacts.hiddenForClose(window) { self?.retire("the attached window closed"); return }
+            DispatchQueue.main.async {
+                if !window.isVisible, !window.isMiniaturized, !NSApp.isHidden { self?.retire("the attached window closed") }
+            }
+        }
+        send(["attach": AgentAttach.version, "waiting": "approval", "pid": Int(getpid())])
+        let alert = NSAlert()
+        alert.messageText = "Allow an agent to read this window?"
+        alert.informativeText = "A program running as you asks to read “\(window.title.isEmpty ? ExactEnv.appName : window.title)”: its views, state, logs and pictures. These can show private information. Password fields are masked; logs and pictures are not. It cannot tap, type or change the app’s clock."
+        // Allow is a deliberate click: Return, typed into the document as the sheet appears, answers nothing.
+        alert.addButton(withTitle: "Allow").keyEquivalent = ""
+        alert.addButton(withTitle: "Don’t Allow").keyEquivalent = "\u{1b}"
+        self.alert = alert
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            self.alert = nil
+            guard response == .alertFirstButtonReturn, !self.isRetired else {
+                if response == .alertSecondButtonReturn { self.refuseAndClose(["error": "attach: the person did not allow it", "refused": "declined"]) }
+                return
+            }
+            self.approve()
+        }
+    }
+
+    /// Reads are granted: say so in the window, then to the driver. Main thread.
+    private func approve() {
+        guard let window, let session, !isRetired else { retire("the attached window closed"); return }
+        // The grant and its deadline are one decision, which the watchdog's expiry cannot fall between.
+        let inTime = lock.withLock { () -> Bool in
+            guard !retired, ProcessInfo.processInfo.systemUptime - accepted <= AgentAttach.approvalTimeout else { return false }
+            approved = true
+            return true
+        }
+        guard inTime else { retire("not approved in the app within \(Int(AgentAttach.approvalTimeout)) s"); return }
+        reads = true
+        let label = NSTextField(labelWithString: "Agent Attached")
+        label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        label.textColor = .secondaryLabelColor
+        label.sizeToFit()
+        let holder = NSView(frame: NSRect(x: 0, y: 0, width: label.frame.width + 16, height: label.frame.height))
+        label.frame.origin = NSPoint(x: 8, y: 0)
+        holder.addSubview(label)
+        let accessory = NSTitlebarAccessoryViewController()
+        accessory.view = holder
+        accessory.layoutAttribute = .trailing
+        window.addTitlebarAccessoryViewController(accessory)
+        indicator = accessory
+        let info = ExactEnv.appMetadata
+        send(["attached": true, "pid": Int(getpid()), "session": session.label, "window": window.title, "windowNumber": window.windowNumber,
+              "grants": ["read": true, "input": false],
+              "build": ["commit": info["ExactCommit"] ?? NSNull(), "dirty": info["ExactCommitDirty"] ?? NSNull(),
+                        "appCommit": info["ExactAppCommit"] ?? NSNull(), "builtAt": info["ExactBuildTime"] ?? NSNull()],
+              "planDigest": session.runtime.planDigest() ?? NSNull()])
+    }
+
+    /// Answer one admitted request against the pinned target. Main thread.
+    private func dispatch(_ id: Int, _ request: AttachRequest) -> String {
+        guard !isRetired, reads else { return AttachRequest.raw(id, ["error": "not attached"]) }
+        guard let window, let session, session.state != .destroyed else {
+            retire("the attached window closed")
+            return AttachRequest.raw(id, ["error": "the attached window closed"])
+        }
+        return AttachRead.answer(id, request, session: session, window: window)
+    }
+
+    // Replies. Any thread.
+
+    func send(_ object: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: object) else { return }
+        enqueue(data)
+    }
+
+    /// Queue one reply line. Once the connection is retired only a `final`
+    /// one, the refusal that ends it, is still written.
+    private func enqueue(_ body: Data, final: Bool = false, answering request: Int? = nil) {
+        var line = body
+        if line.count > AgentAttach.replyLimit {
+            let id = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["request"] ?? NSNull()
+            line = (try? JSONSerialization.data(withJSONObject: ["request": id, "error": "the reply is over 32 MiB", "refused": "reply-size"])) ?? Data()
+        }
+        line.append(0x0a)
+        let over = lock.withLock { () -> Bool in
+            if retired { return false }
+            if queued + line.count > AgentAttach.queueLimit { return true }
+            queued += line.count
+            writer.async { [self] in
+                defer { lock.withLock { queued -= line.count } }
+                guard open, final || !isRetired else { return }
+                let deadline = ProcessInfo.processInfo.systemUptime + Double(AgentAttach.writeTimeout)
+                let written = line.withUnsafeBytes { raw -> Bool in
+                    var offset = 0
+                    while offset < raw.count {
+                        let n = write(fd, raw.baseAddress! + offset, raw.count - offset)
+                        if n > 0 { offset += n } else if n == 0 || ![EINTR, EAGAIN].contains(errno) { return false }
+                        if offset < raw.count, ProcessInfo.processInfo.systemUptime >= deadline { return false }
+                    }
+                    return true
+                }
+                if !written { retire("the agent did not read its replies within \(AgentAttach.writeTimeout) s") }
+                if let request { lock.withLock { if outstanding?.id == request { outstanding = nil } } }
+            }
+            return false
+        }
+        if over { retire("the agent's unread replies passed 64 MiB") }
+    }
+
+    /// One refusal, then the end of the connection: the refusal is written
+    /// before the close, and nothing queued before it is.
+    func refuseAndClose(_ object: [String: Any]) {
+        if let data = try? JSONSerialization.data(withJSONObject: object) { enqueue(data, final: true) }
+        retire(object["error"] as? String ?? "refused", flush: true)
+    }
+
+    /// End the connection and revoke its grants: a write in progress fails and
+    /// queued replies are dropped. What the kernel already took of a reply is
+    /// still the driver's to read. A
+    /// `flush` lets the final refusal out first, then half-closes: a socket
+    /// closed at once can reach a client still connecting as a reset, with
+    /// the refusal unread. Either way reading stops, which ends the reader;
+    /// a connection that never started one is closed. Any thread.
+    func retire(_ reason: String, flush: Bool = false) {
+        let first = lock.withLock { () -> Bool in
+            if retired { return false }
+            retired = true
+            // The descriptor is still open: only the reader's end, or the close
+            // below, both after this, close it.
+            flushing = flush
+            if flush {
+                writer.async { [self] in if open { shutdown(fd, SHUT_WR) } }
+                writer.asyncAfter(deadline: .now() + 2) { [self] in stopReading() }
+            } else {
+                shutdown(fd, SHUT_RDWR)
+                writer.async { [self] in stopReading() }
+            }
+            return true
+        }
+        guard first else { return }
+        watchdog?.cancel()
+        FileHandle.standardError.write(Data("exact: agent attach ended: \(reason)\n".utf8))
+        DispatchQueue.main.async { AgentAttach.ended(self) }
+    }
+}
+/// A request the attached carrier admits, built from checked fields: the host
+/// forwards none of the driver's own JSON (LLP 1012.000 D3).
+enum AttachRequest {
+    case runner([String: Any])
+    case state([String: Any])
+    case layout(id: Int?, plan: Bool)
+    case frames(late: Int)
+    case screenshot
+
+    struct Refusal: Error { let reply: [String: Any] }
+
+    enum Field { case flag, count, text, target }
+    /// Each read and the fields it takes.
+    static let forms: [String: [String: Field]] = [
+        "tree": ["target": .target, "shallow": .flag, "plan": .flag],
+        "state": ["id": .count, "under": .text],
+        "logs": ["since": .count, "all": .flag],
+        "layout": ["id": .count, "plan": .flag],
+        "perf": ["target": .count, "frames": .flag, "late": .count],
+        "screenshot": [:],
+        "tags": [:],
+    ]
+    static let mutations: Set<String> = ["tap", "type", "prefer", "call", "post", "pick", "share", "midi", "back", "close", "resize", "background"]
+
+    static func admit(_ line: Data) -> Result<(Int, AttachRequest), Refusal> {
+        func refuse(_ id: Int?, _ code: String, _ why: String) -> Result<(Int, AttachRequest), Refusal> {
+            .failure(Refusal(reply: ["request": id.map { $0 as Any } ?? NSNull(), "error": "\(code): \(why)", "refused": code]))
+        }
+        guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { return refuse(nil, "malformed", "a request is one JSON object") }
+        guard distinctKeys(line) else { return refuse(count(object["request"]), "malformed", "a field is named twice") }
+        guard let id = count(object["request"]), id > 0 else { return refuse(nil, "malformed", "a request needs a positive integer request number") }
+        guard let op = object["op"] as? String else { return refuse(id, "malformed", "a request names its op") }
+        if object["session"] != nil { return refuse(id, "pinned", "this connection reads the window the person approved; a request names no session") }
+        if op == "clock" { return refuse(id, "live-clock", "an attached app keeps its own wall clock: it is never taken, seeked, settled or landed") }
+        if op == "call", object["door"] != nil || object["cold"] != nil { return refuse(id, "door", "the host chooses a call's door; a request names none") }
+        if op == "prefer", let substitute = ["faults", "extension", "permission", "midi"].first(where: { object[$0] != nil }) {
+            return refuse(id, "unsupported", "prefer \(substitute) substitutes for the app's world, which an attached session never does")
+        }
+        if mutations.contains(op) { return refuse(id, "input-not-granted", "this connection may read; input needs Allow Agent Input, which this build does not offer yet") }
+        guard let fields = forms[op] else { return refuse(id, "unsupported", "\(op) is not offered to an attached session") }
+        if op == "state", object["reveal"] != nil { return refuse(id, "masked", "an attached session reads state masked") }
+        if op == "perf", let control = ["capture", "hold", "track", "report", "health", "live", "source"].first(where: { object[$0] != nil }) {
+            return refuse(id, "unsupported", "perf \(control) is not offered to an attached session")
+        }
+        var request: [String: Any] = ["op": op]
+        for (key, value) in object where key != "request" && key != "op" {
+            guard let field = fields[key] else { return refuse(id, "malformed", "\(op) takes no field \(key)") }
+            switch field {
+            case .flag: guard let b = flag(value) else { return refuse(id, "malformed", "\(key) is true or false") }; request[key] = b
+            case .count: guard let n = count(value) else { return refuse(id, "malformed", "\(key) is a whole number") }; request[key] = n
+            case .text: guard let t = value as? String, t.utf8.count <= 256 else { return refuse(id, "malformed", "\(key) is a short string") }; request[key] = t
+            case .target:
+                if let n = count(value) { request[key] = n }
+                else if let t = value as? String, !t.isEmpty, t.utf8.count <= 256 { request[key] = t }
+                else { return refuse(id, "malformed", "\(key) is a view id or a short string") }
+            }
+        }
+        switch op {
+        case "state": return .success((id, .state(request)))
+        case "layout": return .success((id, .layout(id: request["id"] as? Int, plan: request["plan"] as? Bool == true)))
+        case "screenshot": return .success((id, .screenshot))
+        case "perf" where request["frames"] != nil:
+            guard request["frames"] as? Bool == true, request["target"] == nil else { return refuse(id, "malformed", "perf frames takes late alone") }
+            return .success((id, .frames(late: min(request["late"] as? Int ?? 20, 200))))
+        case "perf" where request["late"] != nil: return refuse(id, "malformed", "late is perf frames'")
+        default: return .success((id, .runner(request)))
+        }
+    }
+
+    /// A whole number, not a Boolean, which JSONSerialization also makes an NSNumber.
+    static func count(_ value: Any?) -> Int? {
+        guard let n = value as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), CFNumberIsFloatType(n) == false, n.intValue >= 0 else { return nil }
+        return n.intValue
+    }
+    static func flag(_ value: Any?) -> Bool? {
+        guard let n = value as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() else { return nil }
+        return n.boolValue
+    }
+
+    /// Whether the object's top-level keys are distinct, compared as decoded (`"a"` and `"\u0061"` are one key):
+    /// JSONSerialization keeps one of a repeated key silently. `line` is already known to be one JSON object.
+    static func distinctKeys(_ line: Data) -> Bool {
+        let bytes = [UInt8](line)
+        var keys = Set<String>(), depth = 0, keyNext = false, i = 0
+        while i < bytes.count {
+            switch bytes[i] {
+            case 0x22: // a string, read to its closing quote; at depth 1 after `{` or `,`, a key
+                var j = i + 1
+                while j < bytes.count, bytes[j] != 0x22 { j += bytes[j] == 0x5c ? 2 : 1 }
+                if depth == 1, keyNext {
+                    let quoted = Data(bytes[i..<min(j + 1, bytes.count)])
+                    guard let key = try? JSONSerialization.jsonObject(with: quoted, options: .fragmentsAllowed) as? String,
+                          keys.insert(key).inserted else { return false }
+                }
+                keyNext = false
+                i = j
+            case 0x7b, 0x5b: depth += 1; keyNext = depth == 1
+            case 0x7d, 0x5d: depth -= 1
+            case 0x2c where depth == 1: keyNext = true
+            default: break
+            }
+            i += 1
+        }
+        return true
+    }
+
+    static func raw(_ id: Int, _ object: [String: Any]) -> String {
+        var with = object
+        with["request"] = id
+        return (try? JSONSerialization.data(withJSONObject: with)).map { String(decoding: $0, as: UTF8.self) } ?? "{\"request\":\(id),\"error\":\"unwritable reply\"}"
+    }
+
+    /// The runner's own reply with the request's number first.
+    static func splice(_ id: Int, _ reply: String) -> String {
+        guard reply.hasPrefix("{"), reply.hasSuffix("}") else { return raw(id, ["error": "an unreadable reply"]) }
+        let rest = reply.dropFirst()
+        return "{\"request\":\(id)" + (rest.hasPrefix("}") ? "" : ",") + rest
+    }
+}
+
+/// The passive reads (LLP 1012.000 D3): the runner's memory and the host's
+/// committed views and pixels, with no draining, settling, guest script or
+/// change to the window. Main thread.
+enum AttachRead {
+    static func answer(_ id: Int, _ request: AttachRequest, session: ExactSession, window: NSWindow) -> String {
+        func ask(_ object: [String: Any]) -> String {
+            let json = (try? JSONSerialization.data(withJSONObject: object)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+            return session.agent(json)
+        }
+        switch request {
+        case let .runner(object): return AttachRequest.splice(id, ask(object))
+        case let .state(object):
+            // The runner masks every value a live password field holds (`reveal` is never sent).
+            var reply = ask(object)
+            let observation = session.executionObservation().merging(["attached": true, "wall": ExactEnv.wall()]) { _, mine in mine }
+            if reply.hasSuffix("}"), !reply.hasPrefix("{\"error\""), let tail = try? JSONSerialization.data(withJSONObject: ["observation": observation]) {
+                reply.removeLast()
+                reply += "," + String(decoding: tail, as: UTF8.self).dropFirst()
+            }
+            return AttachRequest.splice(id, reply)
+        case let .layout(node, plan):
+            // Not `session.agentInstance`, which keeps its session alive past the window's close.
+            let agent = Agent(session: session)
+            return AttachRequest.raw(id, node.map { agent.layout(["op": "layout", "id": $0, "plan": plan]) } ?? agent.layout())
+        case let .frames(late):
+            var frames = session.sampler?.reply(late: late, all: false) ?? ["unavailable": true]
+            frames["health"] = session.frameHealth.reply(virtual: false)
+            return AttachRequest.raw(id, frames)
+        case .screenshot: return AttachRequest.raw(id, picture(of: window))
+        }
+    }
+
+    /// The window server's picture of the whole window as it is, its title
+    /// bar and every pane included: no draw, no reorder, no activation.
+    static func picture(of window: NSWindow) -> [String: Any] {
+        guard let image = WindowServerPicture.ownWindow(window.windowNumber),
+              let rep = NSBitmapImageRep(cgImage: image).converting(to: .sRGB, renderingIntent: .default),
+              let png = rep.representation(using: .png, properties: [:]) else {
+            return ["error": "the window server gave no picture of the window: it is minimized, the screen is locked or the display is asleep"]
+        }
+        return ["data": png.base64EncodedString(), "bytes": png.count, "width": image.width, "height": image.height,
+                "scale": Double(image.width) / window.frame.width, "captureSpace": "window", "capture": "window-server",
+                "key": window.isKeyWindow, "occlusion": window.occlusionState.contains(.visible) ? "visible" : "occluded"]
+    }
+}
+#endif

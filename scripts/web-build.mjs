@@ -22,10 +22,11 @@ export function privateNativeBuild(app, kind) {
   mkdirSync(root, { recursive: true });
   const directory = mkdtempSync(resolve(root, `${kind}-`));
   const env = { EXACT_APPLE_OUTPUT: resolve(directory, 'apple'), EXACT_WINDOWS_OUTPUT: resolve(directory, 'windows'), EXACT_BAKE_OUTPUT: resolve(directory, 'bake'), EXACT_WEB_TYPES: 'private' };
-  let keep = () => {};
+  let keep = () => {}, stale = false;
   return { env, async seed(host) {
     host = host === 'mac' ? 'macos' : host;
     const { nativeBuild, planSource, receiptPath, windowsBuild } = await import('./agent-build.mjs');
+    const { refuseBackendOrigin } = await import('./agent-launch.mjs');
     const { appleArtifacts } = await import('../host/apple/build.mjs');
     const identity = createHash('sha256').update(resolve(app.dir)).digest('hex').slice(0, 16);
     const cache = resolve(app.target, 'native-reuse', identity, host, process.env.EXACT_UPDATE_TRUST ?? 'development');
@@ -37,12 +38,17 @@ export function privateNativeBuild(app, kind) {
       Object.assign(process.env, env);
       try { return use(); } finally { for (const [key, value] of Object.entries(before)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
     };
-    const reusable = () => {
-      if (host === 'windows') { const state = windowsBuild(app); return state.changed?.length === 0; }
+    // An Apple build is reusable when its receipt names its binary's inputs and only its plan's sources changed
+    // since. One stale in more is kept when the drive's check would rebuild it rather than refuse it for its backend.
+    const apple = () => {
       const state = nativeBuild(host, app);
-      return !state.missing && !!state.receipt && Array.isArray(JSON.parse(readFileSync(state.receipt, 'utf8')).build?.binary?.inputs)
-        && (!state.changed.length || state.changed.every(path => planSource(path, app)));
+      const checkable = !state.missing && !!state.receipt && Array.isArray(JSON.parse(readFileSync(state.receipt, 'utf8')).build?.binary?.inputs);
+      const reusable = checkable && state.changed.every(path => planSource(path, app));
+      let rebuildable = checkable && !reusable;
+      if (rebuildable) try { refuseBackendOrigin(state, app); } catch { rebuildable = false; }
+      return { reusable, kept: reusable || rebuildable };
     };
+    const reusable = () => host === 'windows' ? windowsBuild(app).changed?.length === 0 : apple().reusable;
     const locked = use => {
       let release;
       try { release = takeLock(resolve(cache, '.lock'), { waitMs: 0 }); }
@@ -69,7 +75,9 @@ export function privateNativeBuild(app, kind) {
             writeFileSync(override, JSON.stringify(record) + '\n');
           }
         }
-        if (!reusable()) throw new Error('native artifact inputs changed');
+        // A kept stale build lets the drive's check name what changed (a linked package's file, say) and build over it.
+        if (host === 'windows' ? !reusable() : !apple().kept) throw new Error('native artifact inputs changed');
+        stale = host !== 'windows' && !apple().reusable;
         seeded = JSON.stringify(nativeFiles(directory));
       } catch (error) {
         rmSync(directory, { recursive: true, force: true }); mkdirSync(directory);
@@ -86,7 +94,9 @@ export function privateNativeBuild(app, kind) {
         rmSync(current, { recursive: true, force: true }); renameSync(stage, current);
       } finally { rmSync(stage, { recursive: true, force: true }); }
     }));
-  }, close() { if (!existsSync(directory)) return; try { keep(); } finally { rmSync(directory, { recursive: true, force: true }); } } };
+  // A build over a kept stale one that failed (in signing, say) can leave a receipt that matches its sources: only a
+  // command that succeeded publishes it. `code` is the process's exit code (app-cli.mjs closes on 'exit').
+  }, close(code = 0) { if (!existsSync(directory)) return; try { if (!(stale && code)) keep(); } finally { rmSync(directory, { recursive: true, force: true }); } } };
 }
 
 function nativeFiles(directory, prefix = '') {

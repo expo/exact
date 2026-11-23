@@ -206,6 +206,20 @@ pub(crate) fn check(app: &Path, nodes: &[Node]) -> Result<(), Vec<crate::Compile
                     errors.push(e);
                 }
                 if let Some(argument) = &surface.wgsl {
+                    for (name, value) in args.iter().enumerate().filter_map(|(i, a)| match a {
+                        Expr::NamedArg(name, value, _) if name != argument => {
+                            Some((name.as_str(), &**value))
+                        }
+                        Expr::NamedArg(..) => None,
+                        _ if named => None,
+                        _ => uniforms::ARGUMENTS.get(i).map(|name| (*name, a)),
+                    }) {
+                        if let Some(Err(message)) =
+                            literal(value).map(|v| uniforms::check_argument(name, reading(&v)))
+                        {
+                            errors.push(shader_error(None, *span, message));
+                        }
+                    }
                     let src = if named {
                         args.iter().find_map(|a| match a {
                             Expr::NamedArg(n, value, _) if n == argument => Some(&**value),
@@ -523,6 +537,17 @@ fn literal(expr: &Expr) -> Option<exact_plan::Value> {
         Expr::Number(n, _) => Value::Number(*n),
         Expr::Bool(b, _) => Value::Bool(*b),
         Expr::Str(s, _) => Value::str(s),
+        Expr::Template(parts, _) => Value::str(
+            &parts
+                .iter()
+                .map(|p| match p {
+                    contract_syntax::TemplatePart::Text(text) => Some(text.as_str()),
+                    contract_syntax::TemplatePart::Expr(_) => None,
+                })
+                .collect::<Option<String>>()?,
+        ),
+        // A surface's argument receives the value inside `some`.
+        Expr::Some(value, _) => literal(value)?,
         Expr::None(_) => Value::Unit,
         Expr::List(items, _) => Value::List(items.iter().map(literal).collect::<Option<_>>()?),
         Expr::Unary(contract_syntax::UnOp::Neg, value, _) => match literal(value)? {
@@ -531,6 +556,20 @@ fn literal(expr: &Expr) -> Option<exact_plan::Value> {
         },
         _ => return None,
     })
+}
+
+/// A literal as the surface reads one of its own arguments. A list is
+/// passed empty: none of those arguments takes one.
+fn reading(value: &exact_plan::Value) -> uniforms::Value<'_> {
+    use exact_plan::Value;
+    match value {
+        Value::Number(n) => uniforms::Value::Number(*n),
+        Value::Bool(b) => uniforms::Value::Bool(*b),
+        Value::Unit => uniforms::Value::Null,
+        _ => value
+            .as_str()
+            .map_or(uniforms::Value::List(&[]), uniforms::Value::String),
+    }
 }
 
 fn check_value(layout: &Layout, name: &str, value: &exact_plan::Value) -> Result<(), String> {

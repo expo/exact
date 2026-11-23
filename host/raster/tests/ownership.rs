@@ -1193,3 +1193,34 @@ fn a_wake_while_the_worker_looked_ends_its_wait_at_once() {
     let waited = started.elapsed();
     assert!(waited < std::time::Duration::from_secs(5), "{waited:?}");
 }
+
+#[test]
+fn published_images_share_the_budget_and_eviction_falls_back_to_the_file() {
+    let gate = Gate::new();
+    let session = gate.session();
+    let first = demand(1, 1, 16, 0);
+    let second = demand(2, 2, 16, 0);
+    let third = demand(3, 3, 16, 0);
+    for d in [first, second] {
+        session.publish(d, |charge| (d.key.source, charge)).unwrap();
+    }
+    let sub = session.request_cached(first).unwrap();
+    let lease = session.take_ready(sub).unwrap();
+    session.cancel(sub);
+    assert_eq!(session.stats().pinned_bytes, 16 * MIB);
+    session.publish(third, |charge| (3u64, charge)).unwrap();
+    assert_eq!(session.request_cached(second), Err(Refusal::Stale));
+    assert_eq!(session.stats().resident_bytes, 32 * MIB);
+    assert_eq!(session.stats().pending_jobs, 0);
+    // An offer that cannot fit even after evicting every cold picture evicts none.
+    let fourth = demand(4, 4, 24, 0);
+    assert_eq!(
+        session.publish(fourth, |charge| (4u64, charge)),
+        Err(Refusal::Budget)
+    );
+    assert_eq!(session.stats().cold_bytes, 16 * MIB);
+    assert_eq!(lease.payload::<(u64, AllocationCharge)>().unwrap().0, 1);
+    drop(lease);
+    session.retire_generation(first.key.generation);
+    assert_eq!(session.stats().resident_bytes, 0);
+}

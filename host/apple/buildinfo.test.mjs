@@ -69,6 +69,11 @@ test('an app inside exact2 carries exact2\'s commit alone, and the kind', () => 
   expect(buildInfo({ dir: root }, { root, production: true, now }).ExactBuildKind).toBe('release');
   expect(buildInfo({ dir: root }, { root, archive: true, production: true, now }).ExactBuildKind).toBe('archive');
   expect(buildInfo({ dir: root }, { root, now, env: {} }).ExactDevMenu).toBeUndefined();
+  // Agent attach's purpose (LLP 1012.000 D2): a development build that build.mjs selects, never a release or archive.
+  expect(buildInfo({ dir: root }, { root, now, purpose: 'local-development' }).ExactBuildPurpose).toBe('local-development');
+  expect(buildInfo({ dir: root }, { root, now }).ExactBuildPurpose).toBeUndefined();
+  expect(buildInfo({ dir: root }, { root, now, production: true, purpose: 'local-development' }).ExactBuildPurpose).toBeUndefined();
+  expect(buildInfo({ dir: root }, { root, now, archive: true, purpose: 'local-development' }).ExactBuildPurpose).toBeUndefined();
   expect(buildInfo({ dir: root }, { root, now, env: { EXACT_DEV_MENU: '0' } }).ExactDevMenu).toBe(false);
   expect(buildInfo({ dir: root }, { root, production: true, now, env: { EXACT_DEV_MENU: '1' } }).ExactDevMenu).toBe(true);
 });

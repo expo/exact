@@ -41,6 +41,8 @@ pub(in crate::instance) trait ListState: std::fmt::Debug {
     fn reading(&self) -> Option<super::collection::ListReading>;
     /// The mounted rows with the loop that owns their keys.
     fn visit_rows(&self, visit: &mut dyn FnMut(exact_plan::RegionsId, &super::Row));
+    /// How many of its children are the fixed ones before its rows.
+    fn fixed_split(&self) -> Option<usize>;
     /// Its view's children as a document written without a kernel holds them.
     fn document_children<'a>(&'a self, plan: &Plan) -> Result<Vec<ListChild<'a>>, InstanceError>;
     /// Retire its mounted rows with the rest of the subtree.

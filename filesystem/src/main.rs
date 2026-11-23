@@ -350,7 +350,7 @@ fn operate(root: &Directory, input: &Value, locked: Option<&Lock>) -> io::Result
     }
     let path = field(input, "path")?;
     let parts: Vec<_> = path.split('/').collect();
-    if op == "put"
+    if (op == "put" || op == "remove")
         && parts.len() == 4
         && parts[0].eq_ignore_ascii_case(".exact")
         && (parts[3].eq_ignore_ascii_case("exact.json") || parts[3].eq_ignore_ascii_case(".lock"))
@@ -363,6 +363,32 @@ fn operate(root: &Directory, input: &Value, locked: Option<&Lock>) -> io::Result
     match op {
         "get" => Ok(Value::String(STANDARD.encode(dir.read(&leaf)?))),
         "list" => Ok(json!(dir.child(&leaf, false)?.names()?)),
+        // Every regular file under the path, with its modification time in milliseconds.
+        "files" => {
+            let mut entries = serde_json::Map::new();
+            dir.child(&leaf, false)?.visit_files(
+                &format!("{path}/"),
+                &mut |path, parent, leaf| {
+                    let modified = parent.file(leaf, libc::O_RDONLY)?.metadata()?.modified()?;
+                    let millis = modified
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_err(|_| refuse("file modified before 1970"))?
+                        .as_millis();
+                    entries.insert(path.to_owned(), json!(millis as u64));
+                    Ok(())
+                },
+            )?;
+            Ok(Value::Object(entries))
+        }
+        "remove" => {
+            if !dir.kind(&leaf)?.regular || names_stream_file(root, &dir, &leaf, &parts) {
+                return Err(refuse(
+                    "only a regular file other than a stream head or lock is removed",
+                ));
+            }
+            dir.unlink(&leaf)?;
+            Ok(Value::Bool(true))
+        }
         "put" | "head" => {
             let commit = || {
                 if let Some(lock) = locked {
@@ -514,7 +540,10 @@ fn main() -> io::Result<()> {
             emit(response(
                 Err(error),
                 first["optionalRoot"] == true
-                    || matches!(first["op"].as_str(), Some("get" | "list")),
+                    || matches!(
+                        first["op"].as_str(),
+                        Some("get" | "list" | "files" | "remove")
+                    ),
             ))?;
             return Ok(());
         }
@@ -522,7 +551,10 @@ fn main() -> io::Result<()> {
     if !session {
         emit(response(
             operate(&root, &first, None),
-            matches!(first["op"].as_str(), Some("get" | "list")),
+            matches!(
+                first["op"].as_str(),
+                Some("get" | "list" | "files" | "remove")
+            ),
         ))?;
         return Ok(());
     }
@@ -538,7 +570,10 @@ fn main() -> io::Result<()> {
         let input: Value = serde_json::from_str(&line?)?;
         emit(response(
             operate(&root, &input, Some(&lock)),
-            matches!(input["op"].as_str(), Some("get" | "list")),
+            matches!(
+                input["op"].as_str(),
+                Some("get" | "list" | "files" | "remove")
+            ),
         ))?;
     }
     Ok(())

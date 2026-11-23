@@ -1353,13 +1353,13 @@ extension NavigationHost {
             return made.bar
         }
         let dimmed = c.navigationController?.navigationBar.tintAdjustmentMode == .dimmed
-        let image = i.badge?.image(dimmed: dimmed) ?? i.symbol.flatMap { FaceSymbol.image($0, points: FaceSymbol.barItemPoints) }
+        let image = i.image(dimmed: dimmed)
         // The same control as last time, still a menu or not and still a
         // picture or words: its item is kept and changed, as a hand-built
         // bar's is, so the glass animates what changed (a heart filling).
         if let made = c.barItemsMade[i.id], made.item.menu == i.menu, (made.bar.image != nil) == (image != nil) {
             c.barPresses.append(made.press)
-            if let image, made.item.symbol != i.symbol || made.item.badge != i.badge {
+            if let image, !made.item.hasSameImage(as: i) {
                 if #available(iOS 17.0, tvOS 17.0, *), image.isSymbolImage {
                     made.bar.setSymbolImage(image, contentTransition: .replace)
                 } else { made.bar.image = image }
@@ -1402,7 +1402,7 @@ extension NavigationHost {
         else { item.accessibilityTraits.remove(.notEnabled) }
         // The authored `color` of a plain item's face; a prominent item's
         // tint is its fill, which `color` is not.
-        let plain = !i.prominent && i.badge == nil
+        let plain = !i.prominent && !i.hasPaintedFace
         item.tintColor = !plain ? nil : i.followsTint ? presenter.views[i.id]?.ownAccent ?? SystemColor.tint(1) : i.tint.map { tint in UIColor { TextEngine.color(tint[$0.userInterfaceStyle == .dark ? 1 : 0]) } }
         // UIKit's font where none is written, also once a kept item's author removes theirs.
         let font = image == nil ? i.font : nil

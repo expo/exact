@@ -174,6 +174,8 @@ fn verdict(lines: &[String]) -> (Verdict, Option<String>) {
             comp.push(l.clone());
         }
     }
+    // The component semantics prints one step per input.
+    let flat = crate::fold_due(&flat);
     let (flat, comp) = (comparable(&flat, true), comparable(&comp, false));
     let at = flat
         .iter()

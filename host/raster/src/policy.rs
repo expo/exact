@@ -514,6 +514,14 @@ impl RasterSession {
     /// Same-view replacement validates all candidate metadata/capacity first.
     /// Temporary budget pressure retains the queued request and wakes on free.
     pub fn request(&self, demand: Demand) -> Result<RequestId, Refusal> {
+        self.subscribe(demand, false)
+    }
+    /// Subscribe to a published bitmap while it is cached. Eviction returns
+    /// `Stale` so the caller can request its file at the size it needs.
+    pub fn request_cached(&self, demand: Demand) -> Result<RequestId, Refusal> {
+        self.subscribe(demand, true)
+    }
+    fn subscribe(&self, demand: Demand, cached_only: bool) -> Result<RequestId, Refusal> {
         validate(demand)?;
         let mut garbage = Vec::new();
         let mut state = self.owner.gate.inner.state.lock().unwrap();
@@ -526,6 +534,14 @@ impl RasterSession {
         }
         if session.paused {
             return Err(Refusal::Paused);
+        }
+        if cached_only
+            && !session
+                .entries
+                .get(&demand.key)
+                .is_some_and(|entry| matches!(entry.phase, Phase::Ready { .. }))
+        {
+            return Err(Refusal::Stale);
         }
         if demand.cost.peak()? > session.account.budget() {
             return Err(Refusal::TooLarge);
@@ -843,6 +859,85 @@ impl RasterSession {
         drop(state);
         drop(garbage);
         self.owner.gate.inner.wake.notify();
+    }
+    /// Cache already decoded pixels under a fresh key, charging just their
+    /// backing allocation. A later subscriber pins them like a decoder result.
+    pub fn publish<T: Any + Send + Sync>(
+        &self,
+        demand: Demand,
+        make: impl FnOnce(AllocationCharge) -> T,
+    ) -> Result<(), Refusal> {
+        validate(demand)?;
+        let bytes = demand.cost.output_bytes;
+        if demand.cost.copy_bytes != 0 || demand.cost.scratch_bytes != 0 {
+            return Err(Refusal::ConflictingMetadata);
+        }
+        let reservation = match self.reserve_allocation(bytes) {
+            Err(Refusal::Budget) => {
+                let short = bytes.saturating_sub(self.available_bytes());
+                let cold = self.stats().cold_bytes;
+                // Evict nothing for an offer that would not fit after all.
+                if short > cold {
+                    return Err(Refusal::Budget);
+                }
+                self.trim_to(cold - short);
+                self.reserve_allocation(bytes)?
+            }
+            other => other?,
+        };
+        let charge = reservation.commit(bytes)?;
+        let image = Arc::new(Image {
+            payload: Box::new(make(charge.clone())),
+            output: charge,
+            copy: None,
+            key: demand.key,
+            metadata: demand.metadata,
+            gate: Arc::downgrade(&self.owner.gate.inner),
+            session: self.id(),
+        });
+        let mut garbage = Vec::new();
+        let mut state = self.owner.gate.inner.state.lock().unwrap();
+        let session = state
+            .sessions
+            .get_mut(&self.id())
+            .ok_or(Refusal::Shutdown)?;
+        if session.closed {
+            return Err(Refusal::Shutdown);
+        }
+        if session.paused {
+            return Err(Refusal::Paused);
+        }
+        if session.entries.contains_key(&demand.key) {
+            return Err(Refusal::ConflictingMetadata);
+        }
+        image.cached(true);
+        session.entries.insert(
+            demand.key,
+            Entry {
+                id: identity(),
+                demand,
+                requests: BTreeSet::new(),
+                phase: Phase::Ready {
+                    image,
+                    delivery: false,
+                },
+                touched: identity(),
+            },
+        );
+        enforce_cold_limit(session, &mut garbage);
+        drop(state);
+        drop(garbage);
+        // A budget shrunk while the pixels were made found nothing to trim.
+        let over = {
+            let usage = self.owner.account.usage.lock().unwrap();
+            (usage.resident_bytes + usage.reserved_bytes).saturating_sub(self.budget())
+        };
+        if over > 0 {
+            self.trim_to(self.stats().cold_bytes.saturating_sub(over));
+        }
+        // The bytes are evictable now: a decode waiting for budget may proceed.
+        self.owner.gate.inner.wake.notify();
+        Ok(())
     }
     /// Capacity shared by resident images and in-flight decodes.
     pub fn budget(&self) -> u64 {

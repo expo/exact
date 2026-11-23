@@ -32,6 +32,9 @@ impl ListState for Collection {
             visit(self.region, row);
         }
     }
+    fn fixed_split(&self) -> Option<usize> {
+        self.fixed.as_ref().map(|f| f.split)
+    }
     fn document_children<'a>(&'a self, plan: &Plan) -> Result<Vec<ListChild<'a>>, InstanceError> {
         Collection::document_children(self, plan)
     }

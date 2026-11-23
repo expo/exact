@@ -16,6 +16,10 @@
 // - Tasks: a task moves between two lists.
 // - Zoom: a route presented fullscreen zooms from its photo (iOS 18's zoom
 //   transition, `navigationSource`; LLP 1035.001).
+// - Player: a playing video and a counter, written once, are shown in a
+//   card and in the detail route that expands from it (`portal`, LLP
+//   1013.002): the same video keeps playing and the count stays.
+// - Flight: the same, where the destination flies and both routes cut.
 // - Routes: a route's own entrance and exit (LLP 1013.001), CSS's
 //   `::view-transition-new` and `::view-transition-old`: a camera presented
 //   fullscreen fades in and out, a detail slides 10 % with a fade, a scanner
@@ -27,6 +31,8 @@ routes nav
   detail "/detail"
   scanner "/scanner"
   plain "/plain"
+  watch "/watch"
+  flight "/flight"
 
 keyframes fade-in
   from opacity=0
@@ -100,6 +106,10 @@ component App
   state openRow = 0
   state card = ""
   state done = 0
+  state player = true
+  state flier = true
+  state loads = 0
+  state position = 0
   resource photos = photos() as shape Photo[]
   resource rows = rows() as shape Photo[]
   resource cards = cards() as shape Card[]
@@ -136,6 +146,14 @@ component App
     nav = push(nav, to)
   action back
     nav = back(nav)
+  action removePlayer
+    player = not player
+  action removeFlier
+    flier = not flier
+  action loaded
+    loads = loads + 1
+  action timed(seconds)
+    position = seconds
 
   view
     main testId="app" navigationKey=`${current.id}` navigationBack="back" width="100%" height="100%" font-family="system-ui" color="-exact-label" accent-color="light-dark(#15181c, #e7e4dc)"
@@ -152,6 +170,17 @@ component App
         else if e.name == "scanner"
           column navigationKey=`${e.id}` class=Cuts testId="scanner" position="absolute" top=0 bottom=0 left=0 right=0 display="flex" flex-direction="column" background-color="light-dark(#f8e2c8, #3a2a18)"
             RouteBody(title="Scanner", note="Comes and goes with a cut: both parts are `none`.", back=back, go=go)
+        else if e.name == "watch"
+          column navigationKey=`${e.id}` navigationPresentation="fullscreen" navigationSource="card-player" testId="watch" position="absolute" top=0 bottom=0 left=0 right=0 display="flex" flex-direction="column" gap=12 padding=12 padding-top="env(safe-area-inset-top)" background-color="-exact-grouped-background"
+            button press=back testId="watch-back" aria-label="Back" class=Bar align-self="flex-start"
+              text "Back"
+            column id="detail-player" testId="detail-player" width="100%" height=320
+        else if e.name == "flight"
+          column navigationKey=`${e.id}` class=Cuts testId="flight" position="absolute" top=0 bottom=0 left=0 right=0 display="flex" flex-direction="column" gap=12 padding=12 padding-top="env(safe-area-inset-top)" background-color="-exact-grouped-background"
+            button press=back testId="flight-back" aria-label="Back" class=Bar align-self="flex-start"
+              text "Back"
+            if current.name == "flight"
+              column id="flight-detail" testId="flight-detail" sharedElement="flight" class=Fly width="100%" height=320
         else if e.name == "plain"
           column navigationKey=`${e.id}` testId="plain" position="absolute" top=0 bottom=0 left=0 right=0 display="flex" flex-direction="column" background-color="light-dark(#dcefd8, #1e3320)"
             RouteBody(title="Plain", note="No parts: the platform's own push and pop.", back=back, go=go)
@@ -168,6 +197,8 @@ component App
                   TabButton(name="tasks", label="Tasks", tab=tab, choose=choose)
                   TabButton(name="zoom", label="Zoom", tab=tab, choose=choose)
                   TabButton(name="routes", label="Routes", tab=tab, choose=choose)
+                  TabButton(name="player", label="Player", tab=tab, choose=choose)
+                  TabButton(name="flight", label="Flight", tab=tab, choose=choose)
                 if tab == "grid"
                   match first(photos.filter(p => p.n == open))
                     case some(p)
@@ -221,6 +252,25 @@ component App
                   column padding=12 gap=10
                     text "Each route chooses its own entrance and exit; the route beneath stands still." font-size=13 color="-exact-secondary-label"
                     RouteLinks(go=go)
+                if tab == "player"
+                  column padding=12 gap=10
+                    text "Press the count, then Open: the detail shows the same playing video and the same count. Remove it and make a new one to start fresh." font-size=13 color="-exact-secondary-label"
+                    row gap=10
+                      button press=go(path("watch")) testId="player-open" class=Bar
+                        text "Open"
+                      button press=removePlayer testId="player-remove" class=Bar
+                        text (player ? "Remove player" : "New player")
+                    column id="card-player" testId="card-player" width=168 height=148
+                if tab == "flight"
+                  column padding=12 gap=10
+                    text "The destination flies into the detail and back, and the video inside it keeps playing; both routes cut." font-size=13 color="-exact-secondary-label"
+                    row gap=10
+                      button press=go(path("flight")) testId="flight-open" class=Bar
+                        text "Open"
+                      button press=removeFlier testId="flight-remove" class=Bar
+                        text (flier ? "Remove player" : "New player")
+                    if current.name == "home"
+                      column id="flight-card" testId="flight-card" sharedElement="flight" class=Fly width=168 height=148
                 if tab == "zoom"
                   scroll flex=1 min-height=0 overflow-x="hidden"
                     column padding=12 gap=10
@@ -229,6 +279,16 @@ component App
                         for p in photos.filter(p => p.n <= 6) key=p.id
                           button press=zoom(p.id) testId=`zoom-open-${p.id}` aria-label=`Zoom into ${p.title}` padding=0 border-width=0 background-color="transparent" flex-basis="30%" flex-grow=1 min-width=0
                             image p.asset id=`zoom-${p.id}` width="100%" height=110 object-fit="cover" border-radius=10 background-color=p.tone
+      // Written once, outside the routes: shown in whichever box `portal` names,
+      // hidden and alive while that box is on another tab.
+      if player
+        column portal=(current.name == "watch" ? "detail-player" : "card-player") testId="player" width="100%" height="100%" display="flex" flex-direction="column" gap=6
+          video "assets/motion.mp4" testId="player-video" loadedmetadata=loaded timeupdate=timed autoplay=true muted=true playsinline=true loop=true width="100%" flex=1 min-height=0 border-radius=12 background-color="black"
+          Counter(name="player")
+      if flier
+        column portal=(current.name == "flight" ? "flight-detail" : "flight-card") testId="flier" width="100%" height="100%" display="flex" flex-direction="column" gap=6
+          video "assets/motion.mp4" testId="flier-video" autoplay=true muted=true playsinline=true loop=true width="100%" flex=1 min-height=0 border-radius=12 background-color="black"
+          Counter(name="flier")
 
 // Apple keeps AccentColorText white; the pale dark-scheme accent needs dark ink.
 component TabButton
@@ -320,3 +380,14 @@ component RouteBody
       column padding=12 gap=12
         text note font-size=15
         RouteLinks(go=go)
+
+// A count that a fresh instance starts at 0 (LLP 1013.002 §2).
+component Counter
+  props
+    name: string
+  state count = 0
+  action increment
+    count = count + 1
+  view
+    button press=increment testId=`${name}-count` class=Bar align-self="flex-start"
+      text `Count ${count}`

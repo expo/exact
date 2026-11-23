@@ -87,6 +87,13 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     private val thread = HandlerThread("exact", priority).apply { start() }
     private val handler = Handler(thread.looper)
     private val main = Handler(Looper.getMainLooper())
+    private val mainNow = Handler.createAsync(Looper.getMainLooper())
+    // The main thread chooses the boot path before attaching the reader.
+    private var firstBoot = true
+    private var readerRunning = true
+    @Volatile private var coldChrome: ((IntArray) -> Unit)? = null
+    private var windowSent = 0
+    private var windowApplied = 0
     /** Every paint in order (each may define and free pictures and rows); moves are coalesced by the reader. */
     val queue = ConcurrentLinkedQueue<Pub>()
     private val notifying = AtomicBoolean(false)
@@ -98,6 +105,8 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     @Volatile var asked: ((IntArray) -> Unit)? = null
 
     // The exact thread's own state.
+    private var windowRead = 0
+    private var windowPosted = 0
     private val timerReports = TimerReports()
     private val reader get() = timerReports.reader
     private val readerKnown get() = timerReports.known
@@ -105,9 +114,10 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     private val readerSampling get() = timerReports.sampling
     private var idlePosted = false
 
-    private fun postMain(work: () -> Unit) {
+    private fun postMain(work: () -> Unit) = postMain(main, work)
+    private fun postMain(to: Handler, work: () -> Unit) {
         timerReports.mainWork++
-        main.post {
+        to.post {
             try { work() } finally {
                 handler.post {
                     timerReports.mainWork--
@@ -233,9 +243,14 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
      * made again in this process (LLP 1115.001 D15.1) calls this for its own view: [Native.start] then adopts the host
      * that runs on this thread, which paints everything again for the new reader, and starts no second one.
      * [started] runs on this thread once the host has booted, before its first turn and before its data module can
-     * activate ([active]). */
+     * activate ([active]). Returns whether the new reader should hold its first draw. */
     fun boot(width: Int, height: Int, scale: Float, dir: String, store: String, live: Boolean, started: () -> Unit = {},
-             done: (Boolean) -> Unit) {
+             done: (Boolean) -> Unit): Boolean {
+        val cold = firstBoot && readerRunning
+        firstBoot = false
+        // Only a cold foreground launch saves a frame by passing a traversal barrier. On adoption, chrome,
+        // paint notifications and platform requests must stay in queue order with completion.
+        coldChrome = if (cold) chrome else null
         handler.post {
             android.os.Trace.beginSection("exact boot")
             try { Native.hardwarePictures(hwbuf) } catch (e: UnsatisfiedLinkError) { }
@@ -257,10 +272,17 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
                 }
                 wakes?.sync()
                 produce()
-            }
-            postMain { done(ok) }
+            } else coldChrome = null
+            postMain(if (cold) mainNow else main) { done(ok) }
         }
+        return cold
     }
+
+    /** The cold reader drew, even if it received no chrome, or left without drawing. */
+    fun endColdDraw() { coldChrome = null }
+
+    val awaitingColdDraw get() = coldChrome != null
+    val waitingForColdWindow get() = awaitingColdDraw && windowApplied != windowSent
 
     /** Whether a [boot] has given this thread a host. */
     @Volatile var booted = false
@@ -308,14 +330,19 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     /** What exact2 asks of the platform since it was last asked ([Native.requests]): handed to the main thread, which
      * acts on it. After every turn, and when exact2 wakes this thread for a request no frame follows (a haptic
      * changes no pixel); also while the activity is stopped, when no stream is made. */
-    private fun requests() {
-        Native.requests()?.let { r -> postMain { asked?.invoke(r) ?: Requests.detached(r) } }
+    private fun requests(to: Handler = if (awaitingColdDraw) mainNow else main) {
+        Native.requests()?.let { r -> postMain(to) { asked?.invoke(r) ?: Requests.detached(r) } }
     }
 
     /** The window ([Native.window]): told before [boot] so the host is laid out in it from its first frame, and
      * whenever its size, the display's density or an inset changes, when the host lays the page out again. */
     fun window(width: Int, height: Int, scale: Float, insets: IntArray) {
-        handler.post { Native.window(width, height, scale, insets); if (watching) produce() }
+        val number = ++windowSent
+        handler.post {
+            Native.window(width, height, scale, insets)
+            windowRead = number
+            if (watching) produce()
+        }
     }
 
     /** Called on the main thread with what the host says to draw around the page ([Native.chrome]) when that
@@ -328,6 +355,8 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
 
     /** The activity stopped ([on] false) or started again. */
     fun running(on: Boolean) {
+        readerRunning = on
+        if (!on) endColdDraw()
         handler.post {
             if (on == running) return@post
             running = on
@@ -577,8 +606,20 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
             Native.timerObservation(readerScrolling, readerSampling, true, false)
             if (!notifying.getAndSet(true)) postMain { notifying.set(false); published() }
         }
-        Native.chrome()?.let { c -> postMain { chrome(c) } }
-        requests()
+        val c = Native.chrome()
+        val cold = coldChrome
+        val number = windowRead
+        // A window change can leave chrome identical. It still counts once its turn has run.
+        if (cold != null && (c != null || number != windowPosted)) {
+            windowPosted = number
+            postMain(mainNow) {
+                if (chrome === cold) {
+                    if (c != null) cold(c)
+                    windowApplied = number
+                }
+            }
+        } else if (c != null) postMain { chrome(c) }
+        requests(if (cold != null) mainNow else main)
         schedule()
     }
 
@@ -862,12 +903,21 @@ internal object Exact {
     /** A turn on exact2's thread, which asks for a display frame while a canvas input's samples wait. */
     fun wake() { owner?.call {} }
     fun presence(answer: String) { val o = owner; if (o != null) o.call { Native.presence(answer) } else Native.presence(answer) }
-    private var pageHidden = false
+    /** A live activity's answer or list ([Activities]), on exact2's thread. */
+    fun activities(report: String) { val o = owner; if (o != null) o.call { Native.activities(report) } else Native.activities(report) }
+    // Until the activity or Headless says otherwise, the host boots with a visible page.
+    private var pageHidden: Boolean? = null
     /** Execution sources: a started Activity, or a successfully promoted microphone, call or screen-capture
      * foreground service with a live claim, or an active media playback service. Agent claims grant no device execution. */
-    internal fun executionEligible(): Boolean = !pageHidden || Claims.keepsExecution
+    internal fun executionEligible(): Boolean = pageHidden != true || Claims.keepsExecution
     /** The page freeze drops gated streams before returning; socket close handshakes finish asynchronously. */
-    fun hidden(hidden: Boolean) { pageHidden = hidden; publishExecution() }
+    fun hidden(hidden: Boolean) {
+        val first = pageHidden == null
+        pageHidden = hidden
+        // The first visible notification would wait for the boot. Later, the agent may have changed the page.
+        if (first && !hidden) return
+        publishExecution()
+    }
     /** The page of a host [Headless] boots is hidden from the start. What tells the host so, for its thread to run as
      * the host boots ([Owner.boot]): told later, the first turn and the data module's activation would run in a
      * visible page. What an activity or a claim says afterwards reaches that thread behind the boot. */
@@ -876,9 +926,9 @@ internal object Exact {
         val eligible = executionEligible()
         return { Native.hidden(true, eligible) }
     }
-    internal fun executionChanged() { if (pageHidden) publishExecution() }
+    internal fun executionChanged() { if (pageHidden == true) publishExecution() }
     private fun publishExecution() {
-        val hidden = pageHidden
+        val hidden = pageHidden == true
         val eligible = executionEligible()
         val o = owner
         if (o != null) o.sync { Native.hidden(hidden, eligible) } else { Native.hidden(hidden, eligible); mainThreadTurned() }

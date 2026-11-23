@@ -483,8 +483,10 @@ commit of its own after each change, as an answer's `then` runs.
 ### Live Activities: `startActivity`, `updateActivity`, `endActivity`
 
 The three reserved mutation sources (LLP 1126.001 WP9) compile on every host.
-They run on iOS through an ActivityKit arm loaded at first use; other hosts
-refuse the send with `… is not linked into this artifact`.
+They run on iOS through an ActivityKit arm loaded at first use, and on Android,
+for an entry with an `android` mapping, as an ongoing notification (LLP 1126
+D13; reference.md "Live Activities"); other hosts refuse the send with `… is
+not linked into this artifact`.
 Declare the entry in `app.json`'s `live_activities`, its state shape and slots
 as in `apps/caltrain/activities.contract`. Each send answers a record whose only field is
 `id: string`; the compiler refuses other result shapes:
@@ -524,10 +526,14 @@ whose fields are `activities: Activity[]`, `frequentPushesEnabled: bool`,
 `linked: bool` (the host packaged its arm), `pushToStartToken:
 option<string>` and `pushToStartActivities: PushStartActivity[]`.
 An activity has `id`, `kind`, `state` (a JSON string), `activityState`
-(`pending`, `active`, `stale`, `ended`, `dismissed`) and `token: option<string>`.
+(`pending`, `active`, `stale`, `ended`, `dismissed`), `token: option<string>`
+and `promoted: bool`, true when Android posted its notification as a promoted
+Live Update (`FLAG_PROMOTED_ONGOING`; false elsewhere).
 A push-start activity has `kind`, `generation` and `shape`, all strings.
-Readers may name only the fields they need. Off iOS the lists are empty, the
-push-to-start token is absent and frequent pushes are false. A first demand
+Readers may name only the fields they need. Off iOS and Android the lists are
+empty; off iOS the push-to-start token is absent and frequent pushes are false.
+Android lists the activities its `app.json` row maps (`android`, reference.md
+"Live Activities"). A first demand
 enumerates existing activities, including after a relaunch without a send;
 later token, state and content updates re-answer the source. A token is absent
 until ActivityKit supplies it, and exists only for an entry declaring
@@ -987,12 +993,15 @@ Lean print the same oracle answer; an `after` pair could see a resource change o
 step that commits nothing. A mutation's result slot is a state and may be named.
 
 `always` checks every printed configuration, including boot. `stays v` means that a
-previous observation equal to `v` must remain `v`. `after "action"` reads the value
-before an input and after its following `land`; the input must have only that
-successful handler commit, and its landing only `then` and `queue` commits. Other
-commits, including a commit omitted from the trace, make the pair counted only.
-`after clock` checks clock advances and landings not paired with inputs, over all
-their commits. `only writes` compares every root slot, including queue results.
+previous observation equal to `v` must remain `v`. The work due when an input
+arrives (a change action, a timer due exactly then, an armed `then` or queued send)
+runs before its handler; when it runs any commit, it is observed as a `due` step of
+its own, before the input. `after "action"` reads the value before an input and after
+its following `land`, so `old` is the configuration the handler met; the input must
+have only that successful handler commit, and its landing only `then` and `queue`
+commits. Other commits, including a commit omitted from the trace, make the pair
+counted only. `after clock` checks clock advances, `due` steps and landings not
+paired with inputs, over all their commits. `only writes` compares every root slot, including queue results.
 `never refuses` reads the action on each commit line; an action never run is
 reported as not exercised. Poisoned configurations are counted, not checked.
 Numbers use binary64 arithmetic and IEEE comparisons; other values compare by

@@ -597,6 +597,7 @@ impl<D: DataSource> Presenter<D> {
         images.enable_decode();
         images.fit(self.viewport, self.brush.scale);
         self.images = images;
+        self.packages_publish_to_images();
         self.restore_focus(kept);
         self.pointer = None;
         // The reader opens sounds, videos and pages by path: it resolves

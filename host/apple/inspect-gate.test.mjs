@@ -32,6 +32,19 @@ test('Package.swift defines EXACT_INSPECT for development and not for production
   expect(defines('production')).toBe(false);
 });
 
+test('Package.swift compiles agent attach only for a local development build (LLP 1012.000 D2)', () => {
+  const dump = (env) => appleSpawnSync('swift', ['package', 'dump-package'], { cwd: resolve(root, 'host/apple'), env: { ...process.env, ...env }, encoding: 'utf8' });
+  const attach = (env) => {
+    const out = dump(env);
+    expect(out.status).toBe(0);
+    const kit = JSON.parse(out.stdout).targets.find((t) => t.name === 'ExactKit');
+    return { defined: out.stdout.includes('"EXACT_ATTACH"'), compiled: !kit.exclude.includes('AgentAttach.swift') };
+  };
+  expect(attach({ EXACT_UPDATE_TRUST: 'development', EXACT_ATTACH: '1' })).toEqual({ defined: true, compiled: true });
+  expect(attach({ EXACT_UPDATE_TRUST: 'development', EXACT_ATTACH: '0' })).toEqual({ defined: false, compiled: false });
+  expect(attach({ EXACT_UPDATE_TRUST: 'production', EXACT_ATTACH: '1' })).toEqual({ defined: false, compiled: false });
+});
+
 /** Whether an `#if` or `#elseif` condition holds only where one of `flags`
  * is defined: a conjunction with one of them as a bare term. A condition with
  * `||`, a negated group or a block comment is taken to hold in production too. */
@@ -169,8 +182,9 @@ test.skipIf(productionBinaries().length === 0)('a production Mac bake has none o
     const strings = spawnSync('strings', [binary], { encoding: 'utf8', maxBuffer: 1 << 28 }).stdout;
     expect(strings).not.toContain('not a view of the app');
     expect(strings).not.toContain('identity alone is larger than a report');
+    for (const attach of ['Enable Agent Attach', 'Agent Attached', 'exact-attach', 'live-clock']) expect(strings).not.toContain(attach);
     for (const word of ['CGEventSetWindowLocation', 'inputRadius', 'captureOnly', 'AppleInterfaceStyle', 'AppleInterfaceThemeChangedNotification', 'AppleICUForce24HourTime', 'AppleICUForce12HourTime', 'ApplePersistence']) expect(strings).not.toContain(word);
     const symbols = spawnSync('nm', [binary], { encoding: 'utf8', maxBuffer: 1 << 28 }).stdout;
-    expect(symbols.split('\n').filter((s) => /InspectHost|InspectOverlay|7Inspect/.test(s))).toEqual([]);
+    expect(symbols.split('\n').filter((s) => /InspectHost|InspectOverlay|7Inspect|AgentAttach|AttachConnection/.test(s))).toEqual([]);
   }
 });

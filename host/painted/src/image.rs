@@ -61,6 +61,10 @@ mod windows_bitmap;
 pub use package::Ask as PackageAsk;
 #[path = "image/png.rs"]
 mod png_decode;
+#[path = "image/published.rs"]
+mod published;
+pub use published::PublishedImage;
+pub(crate) use published::Publisher;
 #[path = "image/remote.rs"]
 mod remote;
 #[path = "image/svg.rs"]
@@ -236,6 +240,7 @@ pub struct Images {
     assets: Arc<Assets>,
     backend: Arc<Backend>,
     generation: u64,
+    pub(crate) publisher: Arc<Publisher>,
     canvas_generation: u64,
     canvas_reads: BTreeMap<String, canvas::Read>,
     pub(crate) canvas_answers: Vec<(String, Result<RasterLease, String>)>,
@@ -300,8 +305,10 @@ impl Images {
         Self::make(assets, Backend::local())
     }
     fn make(assets: Assets, backend: Arc<Backend>) -> Self {
+        let generation = backend.generation();
         Self {
-            generation: backend.generation(),
+            publisher: Publisher::new(&backend, generation),
+            generation,
             canvas_generation: backend.generation(),
             canvas_reads: Default::default(),
             canvas_answers: Vec::new(),
@@ -946,7 +953,7 @@ impl Images {
                 if header.is_svg() {
                     self.backend.note_scale(source, decode.pixels, scale);
                 }
-                match self.backend.request(demand) {
+                match self.backend.request(demand, false) {
                     Ok(request) => {
                         #[cfg(target_os = "macos")]
                         exact_ink::device::apple::trace_mark(c"image request", || source as f64);
@@ -1171,6 +1178,7 @@ impl Images {
         self.loaded.clear();
         self.load_events.clear();
         self.generation = self.backend.generation();
+        self.publisher = Publisher::new(&self.backend, self.generation);
         self.settled = None;
     }
     #[cfg(unix)]

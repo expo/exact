@@ -72,7 +72,7 @@ import { compileFixtures, iosTestRuns, macTests, onlyClasses } from './xctest.mj
 import { APPLE_STATIC_TREES, appIcon, appleRefusals, buildInfo, iosAssets, appleAssets, appleAssetCatalogInventory, copyNativeResources, signingOrder, helperEntitlements, plistFile, wrapFramework, signedGpuProduct, assertArchiveFrameworks } from './assets.mjs';
 import { auditLaunchParts, launchModules, launchPartsObjects, launchServices, serviceArgs, writeLaunchParts } from './launch-parts.mjs';
 import { keptModules } from './modules.mjs';
-import { nativeIntentModule, launchIntentModule } from './intents.mjs';
+import { nativeIntentModule, launchIntentModule, pressesTools, swiftPMImports } from './intents.mjs';
 import { appleLinkArgs, embedLibrary, prepareLibrary } from '../../scripts/package-libraries.mjs';
 import { quiet, quietFor } from './quiet.mjs';
 import { keptCrates } from './crates.mjs';
@@ -608,6 +608,8 @@ async function main(args, lockHeld = false) {
   // --extensions: which app extensions this build packages (a build service's quick development build leaves some out).
   buildStep('prepare');
   if (packaged.size < EXTENSION_KINDS.length) { app.manifest = withoutExtensions(app.manifest, packaged); console.log(`host/apple: extensions ${[...packaged].join(',') || 'none'} (--extensions)`); }
+  // LLP 1126.004 D5: the portable emitter (intents-metadata.mjs) cannot write a control's metadata.
+  if (process.platform === 'linux' && packaged.delete('controls') && app.manifest.controls?.length) console.log('host/apple: controls omitted (control-metadata): only Xcode extracts their App Intents metadata');
   if (args.includes('--watchos') && stdMissing) { console.error(stdMissing); process.exitCode = 1; return; }
   if (args.includes('--watchos')) return buildWatch(app, args, { runApple, appleArtifacts, appleBuildLock, receipt, buildParent: args => main(args, true) });
   const { optimize, profile: productionProfile } = appleProduction(app, ios ? 'ios' : 'macos', args);
@@ -665,8 +667,7 @@ async function main(args, lockHeld = false) {
     framework: `ExactGpu_${name.replace(/-/g, '_')}`, built: `lib${app.crate(`gpu-${name}`).replace(/-/g, '_')}.dylib`, load: `libexact_gpu_${name.replace(/-/g, '_')}.dylib` }));
   const gpuArtifacts = [...(hasGpu ? [{ built: dylib, load: loadName, framework: 'ExactGpu' }] : []), ...moduleDylibs];
   const preparedGpu = new Map();
-  const webLoadName = 'libexact_web.dylib';
-  const videoLoadName = 'libexact_video.dylib';
+  const webLoadName = 'libexact_web.dylib', videoLoadName = 'libexact_video.dylib';
   const soundLoadName = 'libexact_sound.dylib', svgLoadName = 'libexact_svg.dylib';
   const webBuildDir = mkdtempSync(resolve(tmpdir(), 'exact-webarm-'));
   cleanup.push(webBuildDir);
@@ -674,7 +675,8 @@ async function main(args, lockHeld = false) {
   const t0 = Date.now(); buildStep('cargo');
   const target = ios ? (tv ? tvTarget : device ? 'aarch64-apple-ios' : iosTarget) : bakeTarget('macos');
   const library = prepareLibrary(app.dir, target); // a package's prebuilt framework (LLP 1154 D3), fetched and checked before Cargo
-  const stampSdk = { sdk: sdkName, sdkVersion: designCompatible(app, ios ? 'ios' : 'macos') ? COMPATIBLE_SDK[ios ? 'ios' : 'macos'] : null }; // stampSdk: the SDK the link records
+  const attach = !ios && !distribution && !ipa && !developmentArchive && !appleEmbedOnly(args) && !args.includes('--host') && (process.env.EXACT_UPDATE_TRUST ?? 'development') === 'development'; // agent attach (LLP 1012.000 D2): a Mac app built here to run, never one packaged or embedded, nor the embedding fixture
+  const stampSdk = { sdk: sdkName, sdkVersion: designCompatible(app, ios ? 'ios' : 'macos') ? COMPATIBLE_SDK[ios ? 'ios' : 'macos'] : null, purpose: attach ? 'local-development' : null }; // the SDK the link records
   const destination = ios ? (tv ? (device ? 'tvos' : 'tvos-simulator') : device ? 'ios' : 'ios-simulator') : 'macos';
   const sdk = read('xcrun', ['--sdk', sdkName, '--show-sdk-path']).stdout.trim();
   const targets = deploymentTargets(app), compiled = compiledTargets(app);
@@ -778,7 +780,7 @@ async function main(args, lockHeld = false) {
     ...process.env, ...(launchPartsDir ? { EXACT_LAUNCH_PARTS: launchPartsDir.slice(pkg.length + 1) } : {}),
     EXACT_APPLE_INTENT_FILES: !tv && Object.values(app.manifest.intents?.tools ?? {}).some(f => (!f.doors || f.doors.includes('apple')) && Object.values(f.parameters ?? {}).some(p => p.type === 'file')) ? '1' : '0',
     EXACT_WATCH_SYNC: ios && !tv && watchSyncSelected(app) ? '1' : '0',
-    EXACT_WIDGET_GALLERY: gallery ? '1' : '0',
+    EXACT_WIDGET_GALLERY: gallery ? '1' : '0', EXACT_ATTACH: attach ? '1' : '0',
     EXACT_APPLE_LINK: link, EXACT_UPDATE_TRUST: cargoEnv.EXACT_UPDATE_TRUST ?? 'development', // LLP 1047.001 D4 (link.mjs); a production build compiles no inspect mode (Package.swift)
     ...(tv ? { TVOS_DEPLOYMENT_TARGET: compiled.ios } : ios ? { IPHONEOS_DEPLOYMENT_TARGET: compiled.ios } : { MACOSX_DEPLOYMENT_TARGET: targets.macos }),
     // Package.swift's `platforms` entry, which is what SwiftPM compiles each target for (not --triple's OS version).
@@ -1209,10 +1211,11 @@ async function main(args, lockHeld = false) {
       writeFileSync(answer, swiftBinDir);
     }
     if (widgetCore) dropLeftoverCore(swiftBinDir);
-    if (!tv && packaged.has('intents') && launchPartsDir) {
-      runApple('swift', [...swiftArgs, '--target', 'ExactLaunchParts'], { cwd: pkg, env });
-      nativeIntents.push(launchIntentModule({ pkg, conditions: ['SWIFT_PACKAGE', ...(!swiftWhole ? ['DEBUG'] : [])], binDir: swiftBinDir, sourceDirectory: launchPartsDir, framework: shared?.framework, sdkName, sdk, triple: moduleTripleFor(app, ios, device, tv), directory: resolve(linkRoot, 'native-intents'), swiftc, runApple }));
-      if (nativeIntents.some(Boolean)) intents = buildIntents({ ...intentOptions, nativeModules: nativeIntents });
+    // A tool control's intent compiles against ExactToolDoor's module (controls.mjs), which a launch part may also import.
+    if (!tv && packaged.has('intents') && (launchPartsDir || pressesTools(bakedCompat, intentOptions.platform))) {
+      runApple('swift', [...swiftArgs, '--target', launchPartsDir ? 'ExactLaunchParts' : 'ExactToolDoor'], { cwd: pkg, env });
+      if (launchPartsDir) nativeIntents.push(launchIntentModule({ pkg, conditions: ['SWIFT_PACKAGE', ...(!swiftWhole ? ['DEBUG'] : [])], binDir: swiftBinDir, sourceDirectory: launchPartsDir, framework: shared?.framework, sdkName, sdk, triple: moduleTripleFor(app, ios, device, tv), directory: resolve(linkRoot, 'native-intents'), swiftc, runApple }));
+      intents = buildIntents({ ...intentOptions, nativeModules: nativeIntents, imports: swiftPMImports({ pkg, binDir: swiftBinDir, sdkName, framework: shared?.framework }) }) ?? intents;
     }
     const archive = buildReceipt.products.find(made => made.path === resolve(cargoLibDir, `lib${crate.replace(/-/g, '_')}.a`))?.sha256;
     // The linked plan, compat.json and bytecode, as the bake verified them, where this app alone links from (and its next early build).

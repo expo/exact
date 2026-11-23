@@ -51,7 +51,8 @@
     }
   ],
   "agent": {
-    "selection": "string[]"
+    "selection": "string[]",
+    "deleted": "string[]"
   },
   "shapes": {
     "PhotoAsset": {
@@ -89,6 +90,14 @@
     },
     "PhotoAdded": {
       "asset": "option<string>"
+    },
+    "PhotoChanges": {
+      "added": "PhotoAsset[]",
+      "updated": "PhotoAsset[]",
+      "deleted": "string[]",
+      "token": "string",
+      "more": "bool",
+      "expired": "bool"
     }
   },
   "names": [
@@ -129,9 +138,34 @@
           "max": 500,
           "default": 60
         },
-        "cursor": "option<string>"
+        "cursor": "option<string>",
+        "subtypes": "option<enum<screenshot>[]>"
       },
       "answers": "PhotoAssetList",
+      "substitute": {
+        "unsupported": [
+          "web"
+        ]
+      }
+    },
+    {
+      "source": "photoChanges",
+      "live": true,
+      "request": "when-prompt",
+      "grants": [
+        "device.photos"
+      ],
+      "options": {
+        "since": "option<string>",
+        "limit": {
+          "type": "option<number>",
+          "min": 1,
+          "max": 500,
+          "default": 500
+        },
+        "subtypes": "option<enum<screenshot>[]>"
+      },
+      "answers": "PhotoChanges",
       "substitute": {
         "unsupported": [
           "web"

@@ -128,7 +128,7 @@ impl Read {
             backend.cancel(request);
             self.request = None;
         }
-        let request = backend.request(Demand {
+        let demand = Demand {
             view: ViewKey {
                 view: source,
                 generation: canvas_generation,
@@ -143,7 +143,8 @@ impl Read {
             metadata: header.metadata,
             cost: decode.cost,
             priority: Priority::Visible,
-        })?;
+        };
+        let request = backend.request(demand, true)?;
         self.request = Some((request, decode.pixels));
         Ok(backend.session.take_ready(request))
     }
