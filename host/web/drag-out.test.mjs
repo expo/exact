@@ -9,7 +9,7 @@ import { deferred, source } from './glue-fixture.mjs';
 import { glueDeclarations } from './tests/glue-fixture.mjs';
 import { EXTENSION_TYPES } from '../../scripts/share-target.mjs';
 import { carried, listen, start, typeOf, writeDraggable } from './drag-out.js';
-import { downForDrag, elementOf, observeDragInput, pressedAt } from './drag-input.js';
+import { downForDrag, elementOf, lightDomDragPath, observeDragInput, pressedAt } from './drag-input.js';
 
 const BASE = 'https://example.com/app/';
 const node = (attrs) => ({
@@ -705,6 +705,24 @@ test.each([['before', false], ['after', true]])('a touch’s compatibility mouse
   expect([drag.defaultPrevented, drag.dataTransfer.data.get('text/plain')]).toEqual([false, 'card']);
 });
 
+test('a touch ended by blur leaves a standalone mousedown to the mouse and still pairs after pointerup', () => {
+  const root = page(), card = declared('div', { 'data-datatransfertext': 'card' });
+  const point = { target: new El('button', {}, card), clientX: 50, clientY: 70 };
+  const touch = { ...point, pointerType: 'touch', pointerId: 1 };
+  const input = { held: new Map() };
+  listenOn(root, input);
+  root.fire('pointerdown', { ...touch, timeStamp: 10 });
+  root.defaultView.fire('blur', { isTrusted: true });
+  root.fire('mousedown', { ...point, timeStamp: 20 });
+  const mouseDrag = dragstart(card, point.target);
+  root.fire('dragstart', mouseDrag);
+  expect(mouseDrag.defaultPrevented).toBe(true);
+  root.fire('mouseup', { ...point, timeStamp: 30 });
+  root.fire('pointerup', { ...touch, timeStamp: 40 });
+  root.fire('mousedown', { ...point, timeStamp: 50 });
+  expect(input.held.has('mouse')).toBe(false);
+});
+
 test('a pen releases after blur and an unrelated down without ending a standalone mouse press', () => {
   const root = page(), card = declared('div'), field = new El('input', {}, card);
   const mouse = { target: field, clientX: 50, clientY: 70 };
@@ -1171,7 +1189,7 @@ test('navigation spares a marked HTML drag in a press and ignores an SVG draggab
 });
 
 const DECLARATIONS = glueDeclarations(source, ['liveView', 'dragOutWait', 'waitingInput', 'waitingView',
-  'loadDragOut', 'waits', 'waitingDrag', 'writeDraggable']);
+  'loadDragOut', 'ancestorElements', 'waits', 'waitingDrag', 'writeDraggable']);
 /** The wasm glue's drag-out declarations in a context of their own, with its page's doubles. */
 function wasmGlue(loadAfterPaint) {
   const logs = [], timers = [], views = new Map(), retiredViews = new Set();
@@ -1181,7 +1199,8 @@ function wasmGlue(loadAfterPaint) {
     constructor() { super(); cleanups.push(() => this.abort()); }
   }
   const context = vm.createContext({ host: {}, document, views, retiredViews, log: (line) => logs.push(line), loadAfterPaint, exact,
-    downForDrag, elementOf, observeDragInput, pressedAt, AbortController: Controller, setTimeout: (fn, ms) => timers.push([fn, ms]) });
+    downForDrag, elementOf, lightDomDragPath, observeDragInput, pressedAt, AbortController: Controller,
+    setTimeout: (fn, ms) => timers.push([fn, ms]) });
   vm.runInContext(DECLARATIONS, context);
   const element = (id, view, parent = null, localName = 'div', attrs = {}) => {
     const el = Object.assign(new El(localName, attrs, parent), { id, dataset: view == null ? {} : { view: String(view) } });

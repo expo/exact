@@ -7,6 +7,18 @@ export const DRAG_FIELDS = 'input,select,textarea,[contenteditable]:not([content
 const atPoint = (down, event) => Math.abs(down?.x - event.clientX) <= 1 && Math.abs(down?.y - event.clientY) <= 1;
 /** The element an event's `target` is, or the one holding it when it is text. */
 export const elementOf = (target) => target?.nodeType === 1 ? target : target?.parentElement;
+/** The light-DOM elements on the target's original dispatch path. */
+export function lightDomDragPath(event) {
+  const path = event.composedPath?.() ?? [];
+  const start = path.indexOf(event.target);
+  if (start < 0) return [];
+  const getRootNode = globalThis.Node?.prototype.getRootNode;
+  return path.slice(start).filter((el) => {
+    if (el.nodeType !== 1) return false;
+    const root = (getRootNode ?? el.getRootNode).call(el);
+    return root.nodeType !== 11 || !root.host;
+  });
+}
 /** What `down` went down on, when `event` is at its point and `target`, where the browser began the drag, holds it. */
 export const pressedAt = (down, event, target) => atPoint(down, event) && target.contains(down.target) ? down.target : null;
 
@@ -35,7 +47,7 @@ export function observeDragInput(root, signal, input = { held: new Map() }, chan
   // A pen's or a finger's compatibility mouse events name no pointer, so pairing them with a press is a heuristic: by
   // point, or else by target, the earliest pending press first. A pair the browser delays or suppresses, or that
   // another script stops before the document, can shift the pairing of those after it. A finger's `mousedown` can
-  // come before release (Pointer Events 3 §11.3). An unreleased finger is a fallback so a pen gets its own pair.
+  // come before release (Pointer Events 3 §11.3). A finger still held is a fallback so a pen gets its own pair.
   // A compatibility `mouseup` follows release. Preventing `pointerdown` suppresses both mouse events (§11).
   const compatFor = (event, target) => {
     const up = event.type === 'mouseup';
@@ -43,8 +55,9 @@ export function observeDragInput(root, signal, input = { held: new Map() }, chan
       && !press.down.defaultPrevented && !expired(press, event.timeStamp));
     const match = (candidates) => candidates.find((press) => atPoint(press, event) || atPoint(press.release, event))
       ?? candidates.find((press) => target != null && (press.target === target || press.release?.target === target));
-    const heldTouch = (press) => press.type === 'touch' && !press.release;
-    return match(pending.filter((press) => !heldTouch(press))) ?? match(pending.filter(heldTouch));
+    const unreleasedTouch = (press) => press.type === 'touch' && !press.release;
+    return match(pending.filter((press) => !unreleasedTouch(press)))
+      ?? match(pending.filter((press) => unreleasedTouch(press) && held.get('touch') === press));
   };
   const down = (event) => {
     if (event.isTrusted === false) return;

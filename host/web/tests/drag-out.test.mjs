@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { browserMissing } from '../../../scripts/agent-playwright.mjs';
 import { chromium, suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { need } from '../../../scripts/coverage.mjs';
+import { glueDeclarations, wasmSource } from './glue-fixture.mjs';
 
 // The page's own stylesheet, which decides what drags: the reset that `all: unset`s a button, the restored
 // `-webkit-user-drag`, a pressable's image's, and the native fields'.
@@ -78,18 +79,32 @@ ${rules}
     motion.attachTransformDrag(handle, id, (type, fn) => handle.addEventListener(type, fn));
   }
   for (const el of document.querySelectorAll('[data-foreign]')) el.addEventListener('dragstart', (e) => e.dataTransfer.setData('text/plain', el.id + "'s own"));
-  listen(document);
+  if (!new URL(location.href).searchParams.has('waiting')) listen(document);
   window.addEventListener('dragstart', (e) => drags.push({ target: e.target.id, prevented: e.defaultPrevented,
     kinds: [...e.dataTransfer.items].map((i) => i.kind), text: e.dataTransfer.getData('text/plain'),
     uris: e.dataTransfer.getData('text/uri-list') }));
   window.ready = true;
 </script>`;
 
+const waitingDragFixture = `
+  import { downForDrag, elementOf, lightDomDragPath, observeDragInput, pressedAt } from './drag-input.js';
+  const host = {}, views = new Map(), retiredViews = new WeakSet();
+  const loadAfterPaint = () => new Promise(() => {});
+  ${glueDeclarations(wasmSource, ['liveView', 'dragOutWait', 'waitingInput', 'waitingView',
+    'loadDragOut', 'ancestorElements', 'waits', 'waitingDrag', 'writeDraggable'])}
+  export function waitForDrag(card) {
+    card.dataset.view = '1';
+    views.set(1, card);
+    writeDraggable(card, 'true');
+  }
+`;
+
 let server;
 beforeAll(() => {
   server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(req) {
     const path = new URL(req.url).pathname;
     if (path === '/') return new Response(fixture, { headers: { 'content-type': 'text/html' } });
+    if (path === '/waiting-drag.js') return new Response(waitingDragFixture, { headers: { 'content-type': 'text/javascript' } });
     if (path.startsWith('/assets/') || path === '/favicon.ico') return new Response('', { status: 404 });
     return new Response(Bun.file(new URL('..' + path, import.meta.url)));
   } });
@@ -268,27 +283,45 @@ need('chromium', chromium().unavailable).each([
   }
 });
 
-need('chromium', chromium().unavailable)('chromium: capture cancels a card’s drag after only its image moves into a frame', async () => {
+need('chromium', chromium().unavailable).each([
+  ['only its image moves into a frame', false, false],
+  ['the entire card with a slotted image moves into a frame', true, false],
+  ['only its image moves into a frame while the wasm listener loads', false, true],
+])('chromium: capture cancels a card’s drag after %s', async (_, moveCard, waiting) => {
   const browser = await suiteBrowser('chromium');
   try {
     const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
-    await page.goto(`http://127.0.0.1:${server.port}/`);
+    await page.goto(`http://127.0.0.1:${server.port}/${waiting ? '?waiting' : ''}`);
     await page.waitForFunction('window.ready');
-    await page.evaluate(() => {
+    const draggable = await page.evaluate(async ({ moveCard, waiting }) => {
       const card = document.getElementById('card2'), image = document.getElementById('picture');
       card.replaceChildren(image);
+      if (waiting) {
+        const { waitForDrag } = await import('./waiting-drag.js');
+        waitForDrag(card);
+      }
+      let wrapper = null;
+      if (moveCard) {
+        wrapper = document.createElement('div');
+        wrapper.draggable = true;
+        wrapper.append(document.createElement('slot'));
+        card.attachShadow({ mode: 'open' }).append(wrapper);
+      }
       const frame = document.createElement('iframe');
       frame.hidden = true;
       document.body.append(frame);
-      window.addEventListener('dragstart', () => frame.contentDocument.body.append(image), { capture: true, once: true });
+      window.addEventListener('dragstart', () => frame.contentDocument.body.append(moveCard ? card : image), { capture: true, once: true });
       image.addEventListener('dragstart', (event) => {
-        window.imageDrag = [event.target === image, image.ownerDocument === frame.contentDocument,
-          card.ownerDocument === document, event.defaultPrevented, event.dataTransfer.getData('text/plain')];
+        window.imageDrag = [event.target === image, !wrapper || event.composedPath().includes(wrapper),
+          image.ownerDocument === frame.contentDocument, card.ownerDocument === document,
+          event.defaultPrevented, event.dataTransfer.getData('text/plain')];
         event.stopPropagation();
       });
-    });
+      return card.draggable;
+    }, { moveCard, waiting });
+    expect(draggable).toBe(!waiting);
     await drag(page, '#picture', [0, 20]);
-    expect(await page.evaluate(() => window.imageDrag)).toEqual([true, true, true, true, '']);
+    expect(await page.evaluate(() => window.imageDrag)).toEqual([true, true, true, !moveCard, true, '']);
   } finally {
     await browser.close();
   }
