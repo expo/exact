@@ -213,6 +213,13 @@ virtual clock retains its virtual time.
   fixture with the debug `contract` binary the lane's build step has built, run
   directly; not `cargo run --release`, and not a `cargo run` per fixture. The
   compiler's output does not depend on its build profile.
+- **A test binary's runners share one source type.** Rust compiles the
+  whole runner again for each data-source type a binary boots: 1.75 MB of
+  code at `opt-level = 0` and 5 to 8 MB of symbol names, and Xcode 27.2's
+  linker cannot write a symbol string table past 2 GiB. The compiler's
+  integration tests pass `boxed(source)` to `Runner::boot` and
+  `contract::bake` and read it back with `r.source::<T>()`
+  (`contract/cli/tests/it/source.rs`), so their crate instantiates one runner.
 - **An app's Rust tests are its data crate's.** An app's logic and its Rust tests
   live in `apps/<app>/data`; its `web`, `linux`, `apple` and `android` crates are
   host shells, tested mainly by driving the app (conformance, the smokes,

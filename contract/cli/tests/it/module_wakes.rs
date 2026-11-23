@@ -6,6 +6,7 @@
 //! request its handler makes, stops the session's timers while unseen, and
 //! refuses the host commands D6 names.
 
+use crate::source::{boxed, Read, Source};
 use exact_runner::{agent, CallOrigin, Runner, Value, WakeHow};
 use std::path::{Path, PathBuf};
 
@@ -95,10 +96,10 @@ impl exact_runner::DataSource for Later {
     }
 }
 
-fn boot(app: &App) -> Runner<Later> {
+fn boot(app: &App) -> Runner<Source> {
     Runner::boot(
         app.compile().unwrap_or_else(|e| panic!("{e:?}")),
-        Later,
+        boxed(Later),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -107,24 +108,24 @@ fn boot(app: &App) -> Runner<Later> {
 }
 
 /// Move the session's clock on by `ms` (`advance` takes the time itself).
-fn by(r: &mut Runner<Later>, ms: f64) {
+fn by(r: &mut Runner<Source>, ms: f64) {
     let at = r.now_ms() + ms;
     r.advance(at).unwrap();
 }
 
-fn logs(r: &Runner<Later>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     agent::handle(r, r#"{"op":"logs"}"#)
 }
 
-fn state(r: &Runner<Later>) -> serde_json::Value {
+fn state(r: &Runner<Source>) -> serde_json::Value {
     serde_json::from_str(&agent::handle(r, r#"{"op":"state"}"#)).unwrap()
 }
 
-fn slot(r: &Runner<Later>, name: &str) -> String {
+fn slot(r: &Runner<Source>, name: &str) -> String {
     format!("{:?}", r.slot(name))
 }
 
-fn tap(r: &mut Runner<Later>, reference: u64) -> Result<String, String> {
+fn tap(r: &mut Runner<Source>, reference: u64) -> Result<String, String> {
     let request = format!(r#"{{"op":"tap","ticket":{reference}}}"#);
     let reply = agent::answer(r, &request).expect("an agent op").0;
     let parsed: serde_json::Value = serde_json::from_str(&reply).unwrap_or_default();
@@ -135,7 +136,7 @@ fn tap(r: &mut Runner<Later>, reference: u64) -> Result<String, String> {
 }
 
 /// The one entry of `state.tides` of `kind`.
-fn entry(r: &Runner<Later>, kind: &str) -> serde_json::Value {
+fn entry(r: &Runner<Source>, kind: &str) -> serde_json::Value {
     let tides = state(r)["tides"].clone();
     (tides.as_array().into_iter().flatten())
         .find(|e| e["kind"] == kind)
@@ -144,7 +145,7 @@ fn entry(r: &Runner<Later>, kind: &str) -> serde_json::Value {
 }
 
 /// The pull in flight, answered.
-fn answer_pull(r: &mut Runner<Later>) {
+fn answer_pull(r: &mut Runner<Source>) {
     let out = r.take_requests();
     assert_eq!(out.len(), 1, "one pull in flight: {}", logs(r));
     let ok = exact_runner::Outcome::Response(exact_runner::Response {
@@ -474,7 +475,7 @@ impl exact_runner::DataSource for Rows {
     }
 }
 
-fn queued_wake(refreshes: bool, pair: bool) -> Runner<Rows> {
+fn queued_wake(refreshes: bool, pair: bool) -> Runner<Source> {
     let app = App::new("queued-wake");
     let source = r#"
 use tide from "@fixture/tide"
@@ -510,7 +511,7 @@ component App
     app.write("app.contract", &source);
     Runner::boot(
         app.compile().unwrap_or_else(|e| panic!("{e:?}")),
-        Rows::default(),
+        boxed(Rows::default()),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -518,7 +519,7 @@ component App
     .unwrap()
 }
 
-fn raise_queued_wake(r: &mut Runner<Rows>) {
+fn raise_queued_wake(r: &mut Runner<Source>) {
     r.raise_wake(
         "tide",
         "tide",
@@ -533,7 +534,7 @@ fn raise_queued_wake(r: &mut Runner<Rows>) {
     r.advance(r.now_ms()).unwrap();
 }
 
-fn row_text(r: &Runner<Rows>, id: &str) -> String {
+fn row_text(r: &Runner<Source>, id: &str) -> String {
     let k = r.kernel();
     k.node_by_key(k.find_by_test_id(id)[0])
         .unwrap()
@@ -543,7 +544,7 @@ fn row_text(r: &Runner<Rows>, id: &str) -> String {
         .to_owned()
 }
 
-fn answer_rows(r: &mut Runner<Rows>) {
+fn answer_rows(r: &mut Runner<Source>) {
     let out = r.take_requests();
     assert_eq!(out.len(), 1);
     r.fulfill(
@@ -577,7 +578,7 @@ fn an_expired_wake_removes_only_its_queued_writes_and_publishes_the_overlay() {
     answer_rows(&mut r);
     r.advance(r.now_ms()).unwrap();
     answer_rows(&mut r);
-    assert_eq!(r.data().server, 2);
+    assert_eq!(r.source::<Rows>().server, 2);
     assert_eq!(row_text(&r, "rows"), "2");
     assert!(r.writes().is_empty());
     r.act("person", vec![Value::str("third")]).unwrap();
@@ -712,12 +713,12 @@ fn an_expired_wake_clears_only_the_stall_of_a_head_it_drops() {
         }
         raise_queued_wake(&mut r);
         answer_rows(&mut r);
-        r.data().synchronous = true;
-        r.data().refuse = true;
+        r.source::<Rows>().synchronous = true;
+        r.source::<Rows>().refuse = true;
         assert!(r.advance(r.now_ms()).is_err());
         assert!(r.journal().any(|l| l.contains("waits for a change")));
-        r.data().synchronous = false;
-        r.data().refuse = false;
+        r.source::<Rows>().synchronous = false;
+        r.source::<Rows>().refuse = false;
         r.advance(5_001.0).unwrap();
         assert!(r.take_requests().is_empty());
         let pending_after_expiry = row_text(&r, "pending");
@@ -856,7 +857,7 @@ fn an_implementation_raises_a_wake_and_is_told_its_end() {
     let app = App::new("told");
     let mut r = boot(&app);
     r.listen(Arc::new(|| {}));
-    let told = |r: &Runner<Later>, id: &str| {
+    let told = |r: &Runner<Source>, id: &str| {
         let body =
             serde_json::json!({ "extension": "tide", "event": "tide", "args": [id], "id": id });
         r.native_slot().changed(&format!("exact-wake:{body}"));
@@ -952,7 +953,7 @@ fn an_implementation_expires_the_wake_it_raised() {
         },
     )));
     r.bind_extensions(&["tide"], &[]);
-    let say = |r: &Runner<Later>, topic: &str, id: &str| {
+    let say = |r: &Runner<Source>, topic: &str, id: &str| {
         let body =
             serde_json::json!({ "extension": "tide", "event": "tide", "args": [id], "id": id });
         r.native_slot().changed(&format!("{topic}:{body}"));
@@ -1078,7 +1079,7 @@ fn a_foreground_service_claim_is_listed_while_held() {
     let app = App::new("claim");
     let mut r = boot(&app);
     r.listen(std::sync::Arc::new(|| {}));
-    let told = |r: &Runner<Later>, claimed: bool, refused: Option<&str>| {
+    let told = |r: &Runner<Source>, claimed: bool, refused: Option<&str>| {
         let mut body = serde_json::json!({ "extension": "tide", "kind": "capture", "types": ["microphone"], "claimed": claimed, "text": "Recording" });
         if let Some(why) = refused {
             body["refused"] = why.into();
@@ -1086,7 +1087,7 @@ fn a_foreground_service_claim_is_listed_while_held() {
         r.native_slot()
             .changed(&format!("exact-foreground-service:{body}"));
     };
-    let claims = |r: &Runner<Later>| state(r)["extensions"]["tide"]["foregroundService"].clone();
+    let claims = |r: &Runner<Source>| state(r)["extensions"]["tide"]["foregroundService"].clone();
     told(&r, true, None);
     r.apply_announced();
     let held = claims(&r);

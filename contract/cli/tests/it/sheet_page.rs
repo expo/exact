@@ -6,17 +6,10 @@
 //! on the route or in its class, wins; a sheet that scrolls a grouped list is
 //! on that grey (LLP 1116.007 D5); a route that is no sheet is left alone.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::style::roles::role;
 use exact_kernel::{ColorValue, Kernel};
-use exact_runner::{DataError, DataSource, Runner, Value};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::Runner;
 
 /// A navigation root with one route, the form of round 11's habit-tracker: a
 /// header and a plain `scroll`. `STYLES` precede the app; `ROUTE` is the route's
@@ -40,11 +33,11 @@ fn screen(styles: &str, route: &str, scroll: &str) -> String {
         .replace("SCROLL", scroll)
 }
 
-fn boot(source: &str) -> Runner<NoData> {
+fn boot(source: &str) -> Runner<Source> {
     let plan = contract::compile(source).unwrap_or_else(|e| panic!("{e}"));
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -53,7 +46,7 @@ fn boot(source: &str) -> Runner<NoData> {
 }
 
 /// A box's own `background-color`, by test id: `None` where it paints nothing.
-fn fill(r: &Runner<NoData>, id: &str) -> Option<ColorValue> {
+fn fill(r: &Runner<Source>, id: &str) -> Option<ColorValue> {
     let _roles = r.bind_roles(); // Its own: the test's other runners live too.
     let key = r.kernel().find_by_test_id(id)[0];
     let fill = r.kernel().node_by_key(key).unwrap().style.background_color;

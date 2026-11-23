@@ -1,6 +1,7 @@
 //! `first(list)` (LLP 1054.000 C4): `some` of a list's first item, `none`
 //! for an empty list, and a type error for anything but a list.
 
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, PropId};
 use exact_runner::{DataError, DataSource, Runner, Value};
 
@@ -35,16 +36,16 @@ component App
 
 #[test]
 fn first_is_some_of_the_first_item_or_none() {
-    let plan = contract::bake(contract::compile(SRC).unwrap(), Names).unwrap();
+    let plan = contract::bake(contract::compile(SRC).unwrap(), boxed(Names)).unwrap();
     let mut r = Runner::boot(
         plan,
-        Names,
+        boxed(Names),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let text = |r: &Runner<Names>| {
+    let text = |r: &Runner<Source>| {
         let k = r.kernel();
         let key = k.find_by_test_id("first")[0];
         k.node_by_key(key)

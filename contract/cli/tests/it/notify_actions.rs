@@ -6,6 +6,7 @@
 //! `action`, which owns its work until that work ends or the platform's
 //! time does.
 
+use crate::source::{boxed, Source};
 use exact_runner::{agent, Runner, Value, WakeHow};
 use std::path::PathBuf;
 
@@ -120,11 +121,11 @@ impl exact_runner::DataSource for Later {
     }
 }
 
-fn boot(app: &App) -> Runner<Later> {
+fn boot(app: &App) -> Runner<Source> {
     let plan = app.compile(&app_text()).unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Later,
+        boxed(Later),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -136,20 +137,20 @@ fn boot(app: &App) -> Runner<Later> {
     r
 }
 
-fn by(r: &mut Runner<Later>, ms: f64) {
+fn by(r: &mut Runner<Source>, ms: f64) {
     let at = r.now_ms() + ms;
     r.advance(at).unwrap();
 }
 
-fn state(r: &Runner<Later>) -> serde_json::Value {
+fn state(r: &Runner<Source>) -> serde_json::Value {
     serde_json::from_str(&agent::handle(r, r#"{"op":"state"}"#)).unwrap()
 }
 
-fn logs(r: &Runner<Later>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     agent::handle(r, r#"{"op":"logs"}"#)
 }
 
-fn tap(r: &mut Runner<Later>, ticket: u64, choice: Option<&str>) -> String {
+fn tap(r: &mut Runner<Source>, ticket: u64, choice: Option<&str>) -> String {
     let mut request = serde_json::json!({ "op": "tap", "ticket": ticket });
     if let Some(c) = choice {
         request["choice"] = c.into();
@@ -158,7 +159,7 @@ fn tap(r: &mut Runner<Later>, ticket: u64, choice: Option<&str>) -> String {
 }
 
 /// A post, allowed at the permission's ticket, and its listed entry.
-fn posted(r: &mut Runner<Later>) -> serde_json::Value {
+fn posted(r: &mut Runner<Source>) -> serde_json::Value {
     r.act("review", Vec::new()).unwrap();
     let ticket = (r.device_holds().iter())
         .find(|h| h.capability == "permission")
@@ -168,7 +169,7 @@ fn posted(r: &mut Runner<Later>) -> serde_json::Value {
     state(r)["notifications"][0].clone()
 }
 
-fn acted(r: &Runner<Later>) -> String {
+fn acted(r: &Runner<Source>) -> String {
     format!("{:?}", r.slot("acted"))
 }
 
@@ -323,7 +324,7 @@ fn the_host_raises_a_background_action_and_reads_its_end() {
         .unwrap();
     by(&mut r, 0.0);
     assert_eq!(r.take_requests().len(), 1, "{}", logs(&r));
-    let ended = |r: &Runner<Later>| -> serde_json::Value {
+    let ended = |r: &Runner<Source>| -> serde_json::Value {
         serde_json::from_str(&agent::handle(r, r#"{"op":"actions"}"#)).unwrap()
     };
     assert_eq!(ended(&r)["ended"], serde_json::json!([]));
@@ -643,15 +644,15 @@ impl exact_runner::DataSource for ActionWork {
     }
 }
 
-fn action_work(app: &App, callback: Option<&'static str>, hidden: bool) -> Runner<ActionWork> {
+fn action_work(app: &App, callback: Option<&'static str>, hidden: bool) -> Runner<Source> {
     let plan = app.compile(&app_text()).unwrap();
     let mut r = Runner::boot(
         plan,
-        ActionWork {
+        boxed(ActionWork {
             callback,
             storage: false,
             storage_sent: false,
-        },
+        }),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",

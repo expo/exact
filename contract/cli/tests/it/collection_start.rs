@@ -1,5 +1,6 @@
 //! LLP 1010 §6.5: `scroll-start="end"` opens a virtualized list at its end —
 //! a transcript — on measured sizes, not the estimate's guess.
+use crate::source::{boxed, Source};
 use exact_kernel::Kernel;
 use exact_plan::Value;
 use exact_runner::{
@@ -26,17 +27,17 @@ impl DataSource for Data {
         ))
     }
 }
-fn boot(source: &str) -> Runner<Data> {
+fn boot(source: &str) -> Runner<Source> {
     Runner::boot(
         contract::compile(source).unwrap(),
-        Data,
+        boxed(Data),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap()
 }
-fn list(r: &Runner<Data>) -> CollectionSnapshot {
+fn list(r: &Runner<Source>) -> CollectionSnapshot {
     r.collections().into_iter().next().unwrap()
 }
 /// A row's real size: tens are 160, the rest 40, against an estimate of 100.
@@ -52,7 +53,7 @@ fn size(i: usize) -> f64 {
 /// reports every mounted row at its real size, until the list asks for
 /// nothing more. `apply` false: its first report comes before it applies
 /// the opening correction. The offset it ends at.
-fn host(r: &mut Runner<Data>, mut at: f64, mut apply: bool) -> f64 {
+fn host(r: &mut Runner<Source>, mut at: f64, mut apply: bool) -> f64 {
     let mut sequence = 0;
     for _ in 0..12 {
         let c = list(r);
@@ -90,7 +91,7 @@ fn host(r: &mut Runner<Data>, mut at: f64, mut apply: bool) -> f64 {
     }
     at
 }
-fn at_end(r: &Runner<Data>, offset: f64) {
+fn at_end(r: &Runner<Source>, offset: f64) {
     let c = list(r);
     assert!(
         (c.total_extent - 600.0 - offset).abs() <= 0.5,
@@ -206,10 +207,10 @@ fn a_replacement_without_a_surviving_successor_uses_the_predecessor_then_the_sta
     assert_eq!(host(&mut unrelated, offset, false), 0.0);
 }
 
-fn replace(old: &Runner<Data>, source: &str) -> Runner<Data> {
+fn replace(old: &Runner<Source>, source: &str) -> Runner<Source> {
     Runner::boot_carrying(
         contract::compile(source).unwrap(),
-        Data,
+        boxed(Data),
         Kernel::with_monospace(),
         &old.carry(),
         Default::default(),
@@ -351,7 +352,7 @@ fn a_host_that_lays_out_rows_before_it_reports_them_opens_at_the_end() {
     }
     at_end(&r, at);
 }
-fn host_once(r: &mut Runner<Data>, offset: f64, velocity: f64) {
+fn host_once(r: &mut Runner<Source>, offset: f64, velocity: f64) {
     let c = list(r);
     r.collection_feedback_filled(
         CollectionFeedback {

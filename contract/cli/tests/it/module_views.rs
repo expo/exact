@@ -4,6 +4,7 @@
 //! an installed one, whose implementation the test plays as the host's
 //! native slot.
 
+use crate::source::{boxed, NoData, Source};
 use exact_runner::{CallOrigin, Reply, Runner};
 use serde_json::{json, Value as Json};
 use std::path::PathBuf;
@@ -218,7 +219,7 @@ fn a_package_with_no_module_names_accepts_its_views_agent_words() {
     let (mut r, told) = boot(&app);
     assert!(r.plan().modules.is_empty());
     assert_eq!(r.plan().views.len(), 1);
-    let prefer = |r: &mut Runner<NoData>, values: Json| {
+    let prefer = |r: &mut Runner<Source>, values: Json| {
         let request = json!({ "op": "prefer", "extension": values });
         r.extension_agent(&request.to_string()).unwrap().1
     };
@@ -293,7 +294,7 @@ fn a_view_only_map_accepts_its_declared_tile_preference() {
     let (mut r, told) = boot(&app);
     assert!(r.plan().modules.is_empty());
     r.bind_extensions(&[], &["maps"]);
-    let prefer = |r: &mut Runner<NoData>, value: Json| {
+    let prefer = |r: &mut Runner<Source>, value: Json| {
         let request = json!({ "op": "prefer", "extension": { "maps.tiles": value } });
         r.extension_agent(&request.to_string()).unwrap().1
     };
@@ -379,27 +380,16 @@ fn a_view_only_package_keeps_agent_word_types_and_source_precedence() {
     );
 }
 
-struct NoData;
-impl exact_runner::DataSource for NoData {
-    fn query(
-        &mut self,
-        source: &str,
-        _: &[exact_runner::Value],
-    ) -> Result<exact_runner::Value, exact_runner::DataError> {
-        Err(exact_runner::DataError::UnknownSource(source.into()))
-    }
-}
-
 type Told = Arc<Mutex<Vec<Json>>>;
 
 /// A runner over the app, every body its native slot is given kept.
-fn boot(app: &App) -> (Runner<NoData>, Told) {
+fn boot(app: &App) -> (Runner<Source>, Told) {
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let plan = exact_plan::Plan::decode(&plan.encode()).unwrap();
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -437,7 +427,7 @@ fn reports(told: &Told) -> Vec<String> {
         .collect()
 }
 
-fn view_id(r: &Runner<NoData>) -> u32 {
+fn view_id(r: &Runner<Source>) -> u32 {
     let state = r.extensions_json().unwrap();
     let state: Json = serde_json::from_str(&state).unwrap();
     state["swatch"]["views"][0]["view"].as_u64().unwrap() as u32

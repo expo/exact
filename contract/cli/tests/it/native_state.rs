@@ -1,12 +1,6 @@
+use crate::source::{boxed, NoData};
 use exact_kernel::{Kernel, NodeType, PropId, StyleId};
-use exact_runner::{DataError, DataSource, Event, Runner, Value};
-
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::{Event, Runner};
 
 #[test]
 fn retired_press_paints_name_the_active_property() {
@@ -55,7 +49,7 @@ fn active_properties_keep_native_buttons_and_leave_their_base_face_native() {
             };
             let mut r = Runner::boot(
                 plan,
-                NoData,
+                boxed(NoData),
                 Kernel::with_monospace(),
                 Default::default(),
                 "/",

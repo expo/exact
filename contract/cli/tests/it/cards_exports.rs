@@ -13,6 +13,7 @@
 #![cfg(unix)]
 
 use crate::scratch::Scratch;
+use crate::source::{boxed, NoData};
 use std::path::{Path, PathBuf};
 
 fn repo() -> PathBuf {
@@ -162,7 +163,7 @@ fn a_consumer_uses_person_row_from_the_package_with_its_trailing_slot() {
     assert!(libs.contains(&identity), "no {identity} in {libs:?}");
     let mut r = exact_runner::Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -242,16 +243,4 @@ fn a_consumer_uses_person_row_from_the_package_with_its_trailing_slot() {
     r.dispatch(link, exact_runner::Event::Press).unwrap();
     assert_eq!(r.slot("opened"), Some(&exact_runner::Value::Number(1.0)));
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-struct NoData;
-
-impl exact_runner::DataSource for NoData {
-    fn query(
-        &mut self,
-        source: &str,
-        _: &[exact_runner::Value],
-    ) -> Result<exact_runner::Value, exact_runner::DataError> {
-        Err(exact_runner::DataError::UnknownSource(source.into()))
-    }
 }

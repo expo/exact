@@ -5,7 +5,7 @@ Four apps draw the same chat-style feed of 10,000 rich messages from the same da
 hand-tuned `UICollectionView`) and Expo (`expo/`, `@expo/ui`). `SPEC.md` is the screen, the
 row and the parity rules. A probe injected into each app (`probe/`) scrolls its list from
 inside the process on a real device and records every frame, so the four are measured the
-same way.
+same way. The Android versions (Exact, Views, Compose) are in `android/README.md`.
 
 ```sh
 bench/heavy-list/prepare.sh                  # the data, once (gen.py, about a minute)

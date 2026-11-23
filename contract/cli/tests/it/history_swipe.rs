@@ -3,6 +3,7 @@
 //! no other element's; and the ways through history the root offers,
 //! its `navigationHistory`.
 
+use crate::source::boxed;
 use exact_kernel::{Kernel, PropId};
 use exact_runner::{Event, Runner};
 
@@ -23,7 +24,14 @@ component App
 #[test]
 fn the_navigation_root_hears_each_phase_with_its_way_and_amount() {
     let plan = contract::compile(APP).unwrap_or_else(|e| panic!("{e}"));
-    let mut r = Runner::boot(plan, (), Kernel::with_monospace(), Default::default(), "/").unwrap();
+    let mut r = Runner::boot(
+        plan,
+        boxed(()),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
     let root = r.kernel().roots()[0];
     for payload in [
         "began,back,0.1,5,40",

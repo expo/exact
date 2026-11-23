@@ -3,17 +3,9 @@
 //! chevron (`Runner::stack_split`). The Mac's split view reads it; the web's
 //! projection reads the same plan facts and retained visit URLs.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, Op, PropId, PropValue, ViewId};
-use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Event, Runner, StackSplit};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::{Event, Runner, StackSplit};
 
 /// A stack whose root route holds `rows` (written under a `list` with the
 /// attributes `list`) and a header button, and whose pushed routes are an
@@ -71,11 +63,11 @@ const LINKS: &str = r#"              for id in ["a", "b", "c"] key=id
                   button press=pick(id) testId=`star-${id}`
                     text "Star""#;
 
-fn boot(source: &str) -> Runner<NoData> {
-    let plan = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
+fn boot(source: &str) -> Runner<Source> {
+    let plan = contract::bake(contract::compile(source).unwrap(), boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -83,14 +75,14 @@ fn boot(source: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn view(r: &Runner<NoData>, test_id: &str) -> ViewId {
+fn view(r: &Runner<Source>, test_id: &str) -> ViewId {
     let k = r.kernel();
     let found = k.find_by_test_id(test_id);
     assert_eq!(found.len(), 1, "{test_id}");
     k.node_by_key(found[0]).unwrap().id
 }
 
-fn split(r: &Runner<NoData>) -> Option<StackSplit> {
+fn split(r: &Runner<Source>) -> Option<StackSplit> {
     r.stack_split(view(r, "home"), None)
 }
 
@@ -517,7 +509,7 @@ fn a_shown_placeholder_fills_its_block_and_hides_again() {
     );
     let mut r = boot(&source);
     let own = view(&r, "own");
-    let display = |r: &Runner<NoData>| r.kernel().node(own).unwrap().style.display;
+    let display = |r: &Runner<Source>| r.kernel().node(own).unwrap().style.display;
     assert_eq!(display(&r), Display::None, "hidden as lowered");
     assert!(
         r.show_split_placeholder(view(&r, "home"), true)
@@ -546,7 +538,7 @@ fn a_shown_placeholder_fills_its_block_and_hides_again() {
     r.kernel_mut()
         .compute_layout(root, Offer::definite(900.0, 400.0))
         .unwrap();
-    let frame = |r: &Runner<NoData>, id: &str| {
+    let frame = |r: &Runner<Source>, id: &str| {
         let key = r.kernel().find_by_test_id(id)[0];
         r.kernel().laid_out_frame(key).unwrap().0
     };

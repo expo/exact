@@ -1,4 +1,5 @@
 //! Both geometric edges: an async start must settle before end can read its answer.
+use crate::source::{boxed, Read, Source};
 use exact_kernel::Kernel;
 use exact_plan::Value;
 
@@ -57,7 +58,7 @@ impl DataSource for AsyncRows {
         }
     }
 }
-fn boot_source(source: &str) -> Runner<AsyncRows> {
+fn boot_source(source: &str) -> Runner<Source> {
     let value = Value::record(vec![
         Value::list(vec![Value::Number(1.), Value::Number(2.)]),
         Value::Number(0.),
@@ -65,23 +66,23 @@ fn boot_source(source: &str) -> Runner<AsyncRows> {
     ]);
     let mut r = Runner::boot(
         contract::compile(source).unwrap(),
-        AsyncRows {
+        boxed(AsyncRows {
             value,
             later: false,
             continuation: false,
-        },
+        }),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    r.data().later = true;
+    r.source::<AsyncRows>().later = true;
     r
 }
-fn boot() -> Runner<AsyncRows> {
+fn boot() -> Runner<Source> {
     boot_source(SOURCE)
 }
-fn feedback(r: &mut Runner<AsyncRows>) {
+fn feedback(r: &mut Runner<Source>) {
     let c = r.collections().remove(0);
     let result = r
         .collection_feedback(CollectionFeedback {
@@ -137,14 +138,14 @@ fn deferred_end_waits_through_continuations_and_skips_a_settled_edge_outside_geo
     let mut r = boot();
     feedback(&mut r);
     let first = r.take_requests().remove(0);
-    r.data().continuation = true;
+    r.source::<AsyncRows>().continuation = true;
     r.fulfill(first.ticket, Outcome::Storage(vec![])).unwrap();
     let continuation = r.take_requests().remove(0);
     assert_ne!(continuation.ticket, first.ticket);
     feedback(&mut r);
     assert_eq!(r.slot("cursor"), Some(&Value::Number(0.)));
     assert!(r.take_requests().is_empty());
-    r.data().value = Value::record(vec![
+    r.source::<AsyncRows>().value = Value::record(vec![
         Value::list((0..200).map(|i| Value::Number(i as f64)).collect()),
         Value::Number(0.),
         Value::Number(199.),

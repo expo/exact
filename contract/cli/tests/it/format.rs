@@ -2,16 +2,9 @@
 //! post's date line and its like count, formatted in the view from numbers
 //! the view holds, so an optimistic `+1` is a view change.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, PropId};
-use exact_runner::{DataError, DataSource, Runner, Value};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::{Runner, Value};
 
 const SRC: &str = r#"component App
   state createdAt = 1790000000000
@@ -28,7 +21,7 @@ const SRC: &str = r#"component App
       text (likes > 0 ? formatNumber(likes, "compact") : "") testId="likes"
 "#;
 
-fn text(r: &Runner<NoData>, id: &str) -> String {
+fn text(r: &Runner<Source>, id: &str) -> String {
     let k = r.kernel();
     let key = k.find_by_test_id(id)[0];
     let node = k.node_by_key(key).unwrap();
@@ -51,7 +44,7 @@ component App
     let plan = contract::compile(src).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -81,7 +74,7 @@ fn a_post_s_date_and_count_are_formatted_in_the_view() {
     assert_eq!(exact_runner::uses(&plan).to_string(), "format");
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -169,7 +162,7 @@ fn the_roster_names_are_the_roster_s() {
         assert_eq!(exact_runner::uses(&plan).to_string(), "", "{src}");
         let r = Runner::boot(
             plan,
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -211,7 +204,7 @@ fn a_field_s_number_an_age_and_an_iso_day() {
     assert_eq!(exact_runner::uses(&plan).to_string(), "");
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -227,7 +220,7 @@ fn a_field_s_number_an_age_and_an_iso_day() {
     assert_eq!(exact_runner::uses(&plan).to_string(), "format");
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -263,7 +256,7 @@ fn money_is_format_decimal_and_a_measure_is_to_fixed() {
     assert_eq!(exact_runner::uses(&plan).to_string(), "format");
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -321,7 +314,7 @@ fn a_total_its_currency_and_a_share() {
     assert_eq!(exact_runner::uses(&plan).to_string(), "format");
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

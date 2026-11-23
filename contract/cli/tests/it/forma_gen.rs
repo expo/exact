@@ -2,9 +2,9 @@
 //! generated names over the one table, from the design's IR.
 
 use crate::scratch::Scratch;
+use crate::source::{boxed, NoData};
 use exact_kernel::{ColorValue, Kernel};
-use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Place, Runner};
+use exact_runner::{Place, Runner};
 use std::path::Path;
 use std::process::Command;
 
@@ -15,14 +15,6 @@ use std::process::Command;
 mod golden;
 
 const DESIGN: &str = "forma shelf\n\naxes\n  dark-style = black | dim  under scheme=dark\n\ntheme\n  brand = #c8102e\n  surface.card = light-dark(#ffffff, #000000)\n    when dark-style=dim: light-dark(#ffffff, #161e27)\n  CanvasText = #101010\n";
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
 
 fn app(name: &str, design: &str, view: &str) -> Scratch {
     let dir = Scratch::new(format!("exact2-gen-{name}-{}", std::process::id()));
@@ -84,8 +76,8 @@ fn the_rust_constants_resolve_through_the_binding_core() {
     let plan = contract::compile_path(&dir.join("app.contract")).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
     let mut r = Runner::boot(
-        contract::bake(plan, NoData).unwrap(),
-        NoData,
+        contract::bake(plan, boxed(NoData)).unwrap(),
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -183,8 +175,8 @@ fn roles_are_generated_as_they_resolve_and_read_outside_exact() {
     assert!(css.contains("--canvasText:#101010ff;"), "{css}");
     let plan = contract::compile_path(&dir.join("app.contract")).unwrap();
     let mut r = Runner::boot(
-        contract::bake(plan, NoData).unwrap(),
-        NoData,
+        contract::bake(plan, boxed(NoData)).unwrap(),
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -226,8 +218,8 @@ fn the_tints_override_resolves_to_the_role() {
     let plan = contract::compile_path(&dir.join("app.contract")).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
     let mut r = Runner::boot(
-        contract::bake(plan, NoData).unwrap(),
-        NoData,
+        contract::bake(plan, boxed(NoData)).unwrap(),
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

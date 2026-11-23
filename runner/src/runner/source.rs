@@ -1172,6 +1172,8 @@ impl std::fmt::Display for DataError {
     }
 }
 
+mod boxed;
+
 #[cfg(test)]
 mod native_tests {
     #[test]

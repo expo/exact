@@ -3,17 +3,9 @@
 //! any other word is refused, and so is the attribute anywhere but on a
 //! route, where no host would read it.
 
+use crate::source::{boxed, NoData};
 use exact_kernel::{Kernel, PropId};
-use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Runner};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::Runner;
 
 /// A stack of two routes; `root`, `route` and `inner` are attributes of the
 /// navigation root, of each route and of a box inside each.
@@ -30,10 +22,10 @@ fn a_route_says_it_has_no_bar_and_the_word_reaches_the_host() {
         "navigationBar=(e.name == \"viewer\" ? \"none\" : \"auto\")",
         "",
     );
-    let plan = contract::bake(contract::compile(&src).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(&src).unwrap(), boxed(NoData)).unwrap();
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/viewer",

@@ -5,16 +5,9 @@
 //! long message while the rest stays in view. A shape it cannot prove stays
 //! as written.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, PropId, ViewId};
-use exact_runner::{DataError, DataSource, Runner, Value};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::Runner;
 
 /// A component whose view is `dialog`, indented under one `column`.
 fn app(dialog: &str) -> String {
@@ -29,7 +22,7 @@ fn parts(dialog: &str) -> String {
     let plan = contract::compile(&app(dialog)).unwrap_or_else(|e| panic!("{e}"));
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -245,13 +238,13 @@ fn rows_in_a_part_keep_their_keys_bindings_and_actions() {
     let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e}"));
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let rows = |r: &Runner<NoData>| {
+    let rows = |r: &Runner<Source>| {
         let k = r.kernel();
         let dialog = k.node_by_key(k.find_by_test_id("c")[0]).unwrap();
         let message = k.node(dialog.children()[0]).unwrap();
@@ -294,7 +287,7 @@ fn the_message_box_is_a_group_named_by_the_title() {
         let plan = contract::compile(&app(dialog)).unwrap_or_else(|e| panic!("{e}"));
         let r = Runner::boot(
             plan,
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",

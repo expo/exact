@@ -3,6 +3,7 @@
 //! own implementation, what a Windows app reads with it bound, and what the
 //! declared substitute answers on each target.
 
+use crate::source::{boxed, Source};
 use exact_runner::{agent, Dispatch, Outcome, Reply, Response, Runner, Work};
 use serde_json::{json, Value as Json};
 use std::path::{Path, PathBuf};
@@ -69,12 +70,12 @@ impl exact_runner::DataSource for Grants {
     }
 }
 
-fn boot(app: &App, target: &str) -> Runner<Grants> {
+fn boot(app: &App, target: &str) -> Runner<Source> {
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Grants,
+        boxed(Grants),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -95,7 +96,7 @@ fn settle<D: exact_runner::DataSource>(r: &mut Runner<D>) {
     }
 }
 
-fn show(r: &Runner<Grants>, name: &str) -> String {
+fn show(r: &Runner<Source>, name: &str) -> String {
     format!("{:?}", r.resource(name).or(r.slot(name)))
 }
 
@@ -353,7 +354,7 @@ component App
     ] {
         let mut runner = Runner::boot(
             plan.clone(),
-            CaptureGrants(grants),
+            boxed(CaptureGrants(grants)),
             exact_kernel::Kernel::with_monospace(),
             Default::default(),
             "/",

@@ -3,6 +3,7 @@
 //! until an answer asked after it landed includes it, and no answer is
 //! asked at the send.
 
+use crate::source::{boxed, Read, Source};
 use exact_kernel::{Kernel, PropId};
 use exact_runner::{
     Answer, DataError, DataSource, Message, Outcome, Overlaid, Request, Response, Runner, Store,
@@ -251,16 +252,16 @@ impl DataSource for Board {
     }
 }
 
-fn boot(board: Board) -> Runner<Board> {
+fn boot(board: Board) -> Runner<Source> {
     // The bake answers the server's list as it starts.
     let seed = Board {
         server: board.server.clone(),
         ..Board::default()
     };
-    let baked = contract::bake(contract::compile(SRC).unwrap(), seed).unwrap();
+    let baked = contract::bake(contract::compile(SRC).unwrap(), boxed(seed)).unwrap();
     let mut r = Runner::boot(
         baked,
-        board,
+        boxed(board),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -275,7 +276,7 @@ fn boot(board: Board) -> Runner<Board> {
     r
 }
 
-fn live() -> Runner<Board> {
+fn live() -> Runner<Source> {
     boot(Board {
         live: true,
         server: vec!["a".into()],
@@ -283,7 +284,7 @@ fn live() -> Runner<Board> {
     })
 }
 
-fn shown(r: &Runner<Board>) -> String {
+fn shown(r: &Runner<Source>) -> String {
     let k = r.kernel();
     let key = k.find_by_test_id("items")[0];
     k.node_by_key(key)
@@ -294,7 +295,7 @@ fn shown(r: &Runner<Board>) -> String {
         .to_string()
 }
 
-fn requests(r: &mut Runner<Board>) -> Vec<(String, u64)> {
+fn requests(r: &mut Runner<Source>) -> Vec<(String, u64)> {
     r.take_requests()
         .into_iter()
         .map(|q| (q.target, q.ticket))
@@ -309,10 +310,14 @@ fn ticket(reqs: &[(String, u64)], target: &str) -> u64 {
 fn a_send_shows_its_write_and_asks_nothing_until_it_lands() {
     let mut r = live();
     assert_eq!(shown(&r), "a");
-    let asks = r.data().items_asks;
+    let asks = r.source::<Board>().items_asks;
     r.act("add", vec![Value::str("b")]).unwrap();
     assert_eq!(shown(&r), "a,b", "the write shows in the sending commit");
-    assert_eq!(r.data().items_asks, asks, "no answer is asked at the send");
+    assert_eq!(
+        r.source::<Board>().items_asks,
+        asks,
+        "no answer is asked at the send"
+    );
     let reqs = requests(&mut r);
     assert_eq!(reqs.len(), 1, "{reqs:?}");
     assert!(r.journal().any(|l| l.contains("overlay items (1 writes)")));
@@ -321,7 +326,7 @@ fn a_send_shows_its_write_and_asks_nothing_until_it_lands() {
     r.fulfill(ticket(&reqs, "added"), ok()).unwrap();
     assert_eq!(shown(&r), "a,b");
     let reqs = requests(&mut r);
-    assert_eq!(r.data().items_asks, asks + 1);
+    assert_eq!(r.source::<Board>().items_asks, asks + 1);
     r.fulfill(ticket(&reqs, "items"), ok()).unwrap();
     assert_eq!(shown(&r), "a,b", "the answer has it now");
     assert!(r.writes().is_empty(), "the answer retired the write");
@@ -333,7 +338,7 @@ fn a_read_that_lands_while_a_write_is_pending_shows_the_write() {
     r.act("add", vec![Value::str("b")]).unwrap();
     let write = ticket(&requests(&mut r), "added");
     // Something else changes on the server and the list is read again.
-    r.data().server.push("z".into());
+    r.source::<Board>().server.push("z".into());
     r.act("reload", vec![]).unwrap();
     let read = ticket(&requests(&mut r), "items");
     r.fulfill(read, ok()).unwrap();
@@ -348,7 +353,7 @@ fn a_failed_write_disappears_in_the_commit_it_ends_and_the_list_is_read_again() 
     r.act("add", vec![Value::str("b")]).unwrap();
     assert_eq!(shown(&r), "a,b");
     let write = ticket(&requests(&mut r), "added");
-    r.data().fail_add = true;
+    r.source::<Board>().fail_add = true;
     r.fulfill(write, ok()).unwrap();
     assert_eq!(shown(&r), "a", "rolled back at once");
     assert!(r.writes().is_empty());
@@ -372,8 +377,8 @@ fn a_failed_write_disappears_even_when_the_reconciling_read_is_refused() {
     r.act("add", vec![Value::str("b")]).unwrap();
     assert_eq!(shown(&r), "a,b");
     let write = ticket(&requests(&mut r), "added");
-    r.data().fail_add = true;
-    r.data().refuse_items = true;
+    r.source::<Board>().fail_add = true;
+    r.source::<Board>().refuse_items = true;
     r.fulfill(write, ok()).unwrap();
     assert_eq!(
         shown(&r),
@@ -388,12 +393,16 @@ fn a_superseded_or_assigned_write_disappears() {
     let mut r = live();
     r.act("add", vec![Value::str("b")]).unwrap();
     requests(&mut r);
-    let asks = r.data().items_asks;
+    let asks = r.source::<Board>().items_asks;
     r.act("add", vec![Value::str("c")]).unwrap();
     assert_eq!(shown(&r), "a,c", "the newer send wins");
     assert_eq!(r.writes().len(), 1);
     // The newer send still shows in the list: superseding asks nothing.
-    assert_eq!(r.data().items_asks, asks, "no answer is asked at the send");
+    assert_eq!(
+        r.source::<Board>().items_asks,
+        asks,
+        "no answer is asked at the send"
+    );
     assert!(requests(&mut r).iter().all(|(t, _)| t != "items"));
     r.act("clear", vec![]).unwrap();
     assert_eq!(shown(&r), "a", "an assignment to its slot ends it");
@@ -408,7 +417,7 @@ fn a_read_asked_before_the_landing_does_not_retire_the_write() {
     // A read starts before the write lands, and answers without it.
     r.act("reload", vec![]).unwrap();
     let early = ticket(&requests(&mut r), "items");
-    r.data().stale = Some(vec!["a".into()]);
+    r.source::<Board>().stale = Some(vec!["a".into()]);
     r.fulfill(write, ok()).unwrap();
     // The landing asks again, replacing the early read: answer it stale.
     let late = ticket(&requests(&mut r), "items");
@@ -418,7 +427,7 @@ fn a_read_asked_before_the_landing_does_not_retire_the_write() {
     // Asked after the landing but without the write: the overlay keeps it.
     assert_eq!(shown(&r), "a,b");
     assert_eq!(r.writes().len(), 1, "kept until an answer includes it");
-    let answered = r.data().overlays.last().unwrap()[0].2;
+    let answered = r.source::<Board>().overlays.last().unwrap()[0].2;
     assert!(answered);
     // A later read that includes it retires it.
     r.act("reload", vec![]).unwrap();
@@ -459,7 +468,7 @@ fn no_overlay_is_called_for_a_resource_with_no_writes() {
     let read = ticket(&requests(&mut r), "items");
     r.fulfill(read, ok()).unwrap();
     r.act("tap", vec![]).unwrap();
-    assert!(r.data().overlays.is_empty());
+    assert!(r.source::<Board>().overlays.is_empty());
 }
 
 #[test]
@@ -480,7 +489,7 @@ fn without_an_overlay_the_answer_shows_and_answered_writes_retire() {
 #[test]
 fn an_overlay_outside_the_shape_shows_the_answer_and_never_refuses() {
     let mut r = live();
-    r.data().bad_overlay = true;
+    r.source::<Board>().bad_overlay = true;
     r.act("add", vec![Value::str("b")]).unwrap();
     assert_eq!(shown(&r), "a");
     assert!(r
@@ -567,23 +576,23 @@ fn a_replacement_runner_asks_a_resource_a_write_showed_in() {
     let mut r = live();
     r.act("add", vec![Value::str("b")]).unwrap();
     let carried = r.carry();
-    let asks = r.data().items_asks;
+    let asks = r.source::<Board>().items_asks;
     let plan = contract::bake(
         contract::compile(SRC).unwrap(),
-        Board {
+        boxed(Board {
             server: vec!["a".into()],
             ..Board::default()
-        },
+        }),
     )
     .unwrap();
     let mut next = Runner::boot_carrying(
         plan,
-        Board {
+        boxed(Board {
             live: true,
             server: vec!["a".into(), "b".into()],
             items_asks: asks,
             ..Board::default()
-        },
+        }),
         Kernel::with_monospace(),
         &carried,
         Default::default(),
@@ -640,8 +649,8 @@ fn a_reconciling_answer_outside_its_shape_fails_the_list_and_publishes() {
     });
     r.act("add", vec![Value::str("b")]).unwrap();
     let write = ticket(&requests(&mut r), "added");
-    r.data().fail_add = true;
-    r.data().bad_items = true;
+    r.source::<Board>().fail_add = true;
+    r.source::<Board>().bad_items = true;
     r.fulfill(write, ok()).unwrap();
     assert_eq!(shown(&r), "a");
     assert_eq!(r.derive("itemsFailed"), Some(&Value::Bool(true)));
@@ -651,11 +660,11 @@ fn a_reconciling_answer_outside_its_shape_fails_the_list_and_publishes() {
 #[test]
 fn a_send_made_before_the_source_is_ready_shows_and_is_sent_when_it_is() {
     let mut r = live();
-    r.data().loading = true;
+    r.source::<Board>().loading = true;
     r.act("add", vec![Value::str("b")]).unwrap();
     assert!(requests(&mut r).is_empty(), "it waits for the source");
     assert_eq!(r.writes().len(), 1);
-    r.data().loading = false;
+    r.source::<Board>().loading = false;
     r.data_ready().unwrap();
     let write = ticket(&requests(&mut r), "added");
     assert_eq!(shown(&r), "a,b");
@@ -691,12 +700,12 @@ fn a_landed_write_shown_in_no_resource_of_the_source_s_retires() {
 #[test]
 fn a_refused_data_ready_publishes_the_writes_it_ended() {
     let mut r = live();
-    r.data().loading = true;
+    r.source::<Board>().loading = true;
     r.act("add", vec![Value::str("no")]).unwrap();
     r.act("flagNow", vec![Value::str("boom")]).unwrap();
     assert_eq!(shown(&r), "a,no");
-    r.data().loading = false;
-    r.data().refuse_items = true;
+    r.source::<Board>().loading = false;
+    r.source::<Board>().refuse_items = true;
     // Its source refuses the write, and the flag it lands makes the
     // task's key no key: the commit is refused, said in the journal. The
     // refused write stays ended, and the list it showed in is read again in
@@ -717,9 +726,9 @@ fn a_refused_data_ready_publishes_the_writes_it_ended() {
 #[test]
 fn a_send_made_once_the_source_is_ready_replaces_one_still_waiting_for_it() {
     let mut r = live();
-    r.data().loading = true;
+    r.source::<Board>().loading = true;
     r.act("add", vec![Value::str("b")]).unwrap();
-    r.data().loading = false;
+    r.source::<Board>().loading = false;
     // Ready, before the host says so: this send goes now.
     r.act("add", vec![Value::str("c")]).unwrap();
     let write = ticket(&requests(&mut r), "added");
@@ -738,13 +747,13 @@ fn a_send_made_once_the_source_is_ready_replaces_one_still_waiting_for_it() {
 
 #[test]
 fn an_overlay_over_the_bake_s_answer_is_given_the_bake_s_arguments() {
-    let plan = contract::bake(contract::compile(SRC).unwrap(), Board::default()).unwrap();
+    let plan = contract::bake(contract::compile(SRC).unwrap(), boxed(Board::default())).unwrap();
     let mut r = Runner::boot(
         plan,
-        Board {
+        boxed(Board {
             loading: true,
             ..Board::default()
-        },
+        }),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -754,10 +763,10 @@ fn an_overlay_over_the_bake_s_answer_is_given_the_bake_s_arguments() {
     // the bake's answer for the inbox shows until it can.
     r.act("open", vec![Value::str("sent")]).unwrap();
     r.act("file", vec![Value::str("x")]).unwrap();
-    r.data().loading = false;
-    r.data().live = true;
+    r.source::<Board>().loading = false;
+    r.source::<Board>().live = true;
     r.data_ready().unwrap();
-    let overlaid = &r.data().files_overlaid;
+    let overlaid = &r.source::<Board>().files_overlaid;
     assert!(!overlaid.is_empty());
     assert!(
         overlaid.iter().all(|a| a == &vec![Value::str("inbox")]),
@@ -766,23 +775,23 @@ fn an_overlay_over_the_bake_s_answer_is_given_the_bake_s_arguments() {
 }
 
 /// The bake's answer stands in for `items` until the source can answer.
-fn loading() -> Runner<Board> {
+fn loading() -> Runner<Source> {
     let plan = contract::bake(
         contract::compile(SRC).unwrap(),
-        Board {
+        boxed(Board {
             server: vec!["a".into()],
             ..Board::default()
-        },
+        }),
     )
     .unwrap();
     Runner::boot(
         plan,
-        Board {
+        boxed(Board {
             loading: true,
             live: true,
             server: vec!["a".into(), "fresh".into()],
             ..Board::default()
-        },
+        }),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -794,7 +803,7 @@ fn loading() -> Runner<Board> {
 fn a_refused_data_ready_still_asks_what_stood_in_for_an_answer() {
     let mut r = loading();
     r.act("flagNow", vec![Value::str("boom")]).unwrap();
-    r.data().loading = false;
+    r.source::<Board>().loading = false;
     // The flag makes the task's key no key: the commit is refused, and the
     // one that drops the flag asks the list the bake stood in for.
     assert!(r.data_ready().unwrap().is_some());
@@ -808,9 +817,9 @@ fn a_refused_data_ready_still_asks_what_stood_in_for_an_answer() {
 #[test]
 fn a_refused_read_at_data_ready_fails_its_resource_and_refuses_nothing() {
     let mut r = loading();
-    r.data().loading = false;
-    r.data().live = false;
-    r.data().refuse_items = true;
+    r.source::<Board>().loading = false;
+    r.source::<Board>().live = false;
+    r.source::<Board>().refuse_items = true;
     assert!(r.data_ready().is_ok());
     assert_eq!(shown(&r), "a");
     assert_eq!(r.derive("itemsFailed"), Some(&Value::Bool(true)));
@@ -820,7 +829,7 @@ fn a_refused_read_at_data_ready_fails_its_resource_and_refuses_nothing() {
         "nothing was refused"
     );
     // `refresh` asks it again.
-    r.data().refuse_items = false;
+    r.source::<Board>().refuse_items = false;
     r.act("reload", vec![]).unwrap();
     assert_eq!(shown(&r), "a,fresh");
     assert_eq!(r.derive("itemsFailed"), Some(&Value::Bool(false)));
@@ -831,18 +840,18 @@ fn a_placeholder_whose_read_is_refused_at_data_ready_fails_and_is_not_pending() 
     // Unbaked: a placeholder stands in until the source can answer.
     let mut r = Runner::boot(
         contract::compile(SRC).unwrap(),
-        Board {
+        boxed(Board {
             loading: true,
             ..Board::default()
-        },
+        }),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
     assert_eq!(r.derive("itemsPending"), Some(&Value::Bool(true)));
-    r.data().loading = false;
-    r.data().refuse_items = true;
+    r.source::<Board>().loading = false;
+    r.source::<Board>().refuse_items = true;
     assert!(r.data_ready().is_ok());
     assert_eq!(r.derive("itemsFailed"), Some(&Value::Bool(true)));
     assert_eq!(r.derive("itemsPending"), Some(&Value::Bool(false)));
@@ -851,9 +860,9 @@ fn a_placeholder_whose_read_is_refused_at_data_ready_fails_and_is_not_pending() 
 #[test]
 fn a_data_ready_its_own_gate_refuses_fails_what_stood_in() {
     let mut r = loading();
-    r.data().loading = false;
-    r.data().live = false;
-    r.data().server = vec!["a".into(), "bad".into()];
+    r.source::<Board>().loading = false;
+    r.source::<Board>().live = false;
+    r.source::<Board>().server = vec!["a".into(), "bad".into()];
     // The answer makes a task's key no key: activation is refused, and what
     // stood in fails, saying so, in a commit the host applies.
     assert!(r.data_ready().unwrap().is_some());
@@ -865,7 +874,7 @@ fn a_data_ready_its_own_gate_refuses_fails_what_stood_in() {
     assert_eq!(r.derive("itemsPending"), Some(&Value::Bool(false)));
     // Later actions are not refused, and `refresh` asks again.
     r.act("bump", vec![]).unwrap();
-    r.data().server = vec!["a".into(), "good".into()];
+    r.source::<Board>().server = vec!["a".into(), "good".into()];
     r.act("reload", vec![]).unwrap();
     assert_eq!(shown(&r), "a,good");
 }
@@ -878,8 +887,8 @@ fn a_reconciling_answer_its_gate_refuses_fails_the_list_and_actions_stand() {
     });
     r.act("add", vec![Value::str("x")]).unwrap();
     let write = ticket(&requests(&mut r), "added");
-    r.data().fail_add = true;
-    r.data().server = vec!["a".into(), "bad".into()];
+    r.source::<Board>().fail_add = true;
+    r.source::<Board>().server = vec!["a".into(), "bad".into()];
     // The write fails, and the list read again makes a task's key no key:
     // that commit is refused, and the next fails the list, keeping its
     // answer without the write, for the host to apply.
@@ -892,7 +901,7 @@ fn a_reconciling_answer_its_gate_refuses_fails_the_list_and_actions_stand() {
     assert!(r.writes().is_empty());
     // Later actions stand, and `refresh` asks again.
     r.act("bump", vec![]).unwrap();
-    r.data().server = vec!["a".into(), "good".into()];
+    r.source::<Board>().server = vec!["a".into(), "good".into()];
     r.act("reload", vec![]).unwrap();
     assert_eq!(shown(&r), "a,good");
 }
@@ -906,9 +915,9 @@ fn a_read_failed_after_its_gate_refused_lets_go_of_an_older_read_in_flight() {
     let write = ticket(&requests(&mut r), "added");
     // The write fails, the list answers now, and that answer makes a task's
     // key no key: the list fails, and the read before it is let go.
-    r.data().live = false;
-    r.data().fail_add = true;
-    r.data().server = vec!["a".into(), "bad".into()];
+    r.source::<Board>().live = false;
+    r.source::<Board>().fail_add = true;
+    r.source::<Board>().server = vec!["a".into(), "bad".into()];
     assert!(r.fulfill(write, ok()).is_ok());
     assert_eq!(r.derive("itemsFailed"), Some(&Value::Bool(true)));
     assert_eq!(r.derive("itemsPending"), Some(&Value::Bool(false)));
@@ -925,8 +934,8 @@ fn an_overlay_outside_the_shape_keeps_nothing() {
     let read = ticket(&requests(&mut r), "items");
     // The answer lags the write, and the overlay answers outside the shape:
     // it counts as none, so the answered write retires.
-    r.data().stale = Some(vec!["a".into()]);
-    r.data().bad_overlay = true;
+    r.source::<Board>().stale = Some(vec!["a".into()]);
+    r.source::<Board>().bad_overlay = true;
     r.fulfill(read, ok()).unwrap();
     assert_eq!(shown(&r), "a");
     assert!(r.writes().is_empty());

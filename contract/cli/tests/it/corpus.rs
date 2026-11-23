@@ -1,6 +1,7 @@
 //! The corpus (LLP 1004 D6): every accept fixture compiles byte-identically,
 //! round-trips, and runs; every reject fixture is refused with exactly its id.
 
+use crate::source::{boxed, Source};
 use exact_kernel::{Dimension, Kernel, NodeType, PropId};
 use exact_plan::{EventKind, Plan, Value};
 use exact_runner::{DataError, DataSource, Event, Runner};
@@ -98,7 +99,7 @@ fn dynamic_auto_keeps_the_meaning_of_its_style_row() {
     .unwrap();
     let mut r = Runner::boot(
         Plan::decode(&plan.encode()).unwrap(),
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -133,14 +134,14 @@ fn the_scroll_fixture_writes_a_smooth_scroll_top_from_a_press() {
     let plan = contract::compile(&corpus("scroll.contract")).unwrap();
     let mut r = Runner::boot(
         Plan::decode(&plan.encode()).unwrap(),
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
     let key = r.kernel().find_by_test_id("rows")[0];
-    let top = |r: &Runner<Schedule>| {
+    let top = |r: &Runner<Source>| {
         r.kernel()
             .node_by_key(key)
             .unwrap()
@@ -163,14 +164,14 @@ fn a_style_attributes_branches_may_mix_a_length_and_a_keyword() {
     let plan = contract::compile(&corpus("style-branches.contract")).unwrap();
     let mut r = Runner::boot(
         Plan::decode(&plan.encode()).unwrap(),
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
     let key = r.kernel().find_by_test_id("sheet")[0];
-    let style = |r: &Runner<Schedule>| r.kernel().node_by_key(key).unwrap().style.clone();
+    let style = |r: &Runner<Source>| r.kernel().node_by_key(key).unwrap().style.clone();
     let closed = style(&r);
     assert_eq!(closed.margin_top, Dimension::Auto);
     assert_eq!(closed.width, Dimension::Percent(50.0));
@@ -221,7 +222,7 @@ fn reject_fixtures_are_refused_by_exactly_their_id() {
         match contract::compile(&src) {
             Err(e) => assert_eq!(e.id, id, "fixture `{id}` was refused as `{}`: {e}", e.id),
             Ok(plan) if id.starts_with("bake-") => {
-                let error = contract::bake(plan, Schedule).unwrap_err();
+                let error = contract::bake(plan, boxed(Schedule)).unwrap_err();
                 assert!(error.to_string().starts_with(&format!("[{id}]")), "{error}");
             }
             Ok(_) => panic!("fixture `{id}` compiled"),
@@ -246,7 +247,7 @@ fn a_template_with_an_inline_match_runs_through_the_compiler() {
     let plan = contract::compile(src).unwrap();
     let r = Runner::boot(
         plan,
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -261,7 +262,7 @@ fn template_escapes_run_as_the_text_they_spell() {
     let plan = contract::compile(src).unwrap();
     let r = Runner::boot(
         plan,
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -284,7 +285,7 @@ fn state_initializers_keep_earlier_bindings_after_local_shadowing() {
 "#;
     let r = Runner::boot(
         contract::compile(src).unwrap(),
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -339,7 +340,7 @@ fn button_primary_text_is_a_real_accessible_text_child() {
     let plan = contract::compile(src).unwrap();
     let r = Runner::boot(
         plan,
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -367,7 +368,7 @@ fn a_button_is_chromes_button_whose_rows_an_author_overrides() {
     let plan = contract::compile(src).unwrap();
     let mut r = Runner::boot(
         plan,
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -408,7 +409,7 @@ fn bubbling_focus_handlers_accept_a_focus_event_without_making_a_wrapper_focusab
     let plan = contract::compile(src).unwrap();
     let r = Runner::boot(
         plan,
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -438,7 +439,7 @@ fn dynamic_invalid_integer_props_are_unset_and_journaled_at_boot() {
         // CSS's invalid value at computed-value time: the row is unset.
         let r = Runner::boot(
             plan,
-            Schedule,
+            boxed(Schedule),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -495,7 +496,7 @@ impl DataSource for Schedule {
     }
 }
 
-fn text_of(r: &Runner<Schedule>, test_id: &str) -> Option<String> {
+fn text_of(r: &Runner<Source>, test_id: &str) -> Option<String> {
     let k = r.kernel();
     let key = k.find_by_test_id(test_id).into_iter().next()?;
     k.node_by_key(key)?
@@ -504,7 +505,7 @@ fn text_of(r: &Runner<Schedule>, test_id: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn ids(r: &Runner<Schedule>, prefix: &str) -> Vec<(String, u32)> {
+fn ids(r: &Runner<Source>, prefix: &str) -> Vec<(String, u32)> {
     let k = r.kernel();
     let mut out = Vec::new();
     for root in k.roots() {
@@ -534,12 +535,12 @@ fn the_now_screen_fixture_compiles_and_behaves_like_the_hand_built_plan() {
         "byte-identical"
     );
     let plan = Plan::decode(&plan.encode()).unwrap();
-    let baked = contract::bake(plan, Schedule).unwrap();
+    let baked = contract::bake(plan, boxed(Schedule)).unwrap();
     assert!(baked.resources.iter().all(|r| r.initial.len > 0));
 
     let mut r = Runner::boot(
         baked,
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -616,7 +617,7 @@ fn a_module_tag_keeps_svg_names_and_names_the_fix_for_known_ones() {
     let src = "component A\n  view\n    step-strip testId=\"strip\" width=320 fx=\"bloom\" offset=\"2\"\n";
     let r = Runner::boot(
         contract::compile(src).unwrap_or_else(|e| panic!("{e}")),
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -701,7 +702,7 @@ fn a_module_tag_keeps_its_props_and_refuses_a_rows_name() {
     let plan = contract::compile(&src).unwrap_or_else(|e| panic!("{e}"));
     let r = Runner::boot(
         plan,
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -724,7 +725,7 @@ fn a_module_tag_keeps_its_props_and_refuses_a_rows_name() {
     let src = "component A\n  view\n    ghostty-terminal testId=\"term\" mode=\"x\" disabled=true inert=true\n";
     let r = Runner::boot(
         contract::compile(src).unwrap_or_else(|e| panic!("{e}")),
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -757,7 +758,7 @@ fn the_iframe_fixture_lowers_and_records_its_events() {
     let plan = Plan::decode(&plan.encode()).unwrap();
     let mut r = Runner::boot(
         plan,
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -802,7 +803,7 @@ fn an_image_hears_its_load_and_its_error() {
 "#;
     let mut r = Runner::boot(
         contract::compile(src).unwrap(),
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -844,7 +845,7 @@ fn contextmenu_and_double_click_keep_their_authored_arguments_and_do_not_take_a_
     let plan = Plan::decode(&plan.encode()).unwrap();
     let mut r = Runner::boot(
         plan,
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -866,7 +867,7 @@ fn contextmenu_and_double_click_keep_their_authored_arguments_and_do_not_take_a_
     assert!(r.dispatch(node, Event::Press).is_err());
     assert_eq!(r.slot("selected"), Some(&Value::str("")));
     let preview = r.kernel().find_by_test_id("preview")[0];
-    let magnifies = |r: &Runner<Schedule>| {
+    let magnifies = |r: &Runner<Source>| {
         r.kernel()
             .node_by_key(preview)
             .unwrap()
@@ -897,7 +898,7 @@ fn content_sized_composer_grows_wraps_and_stops_at_its_maximum() {
 "#;
     let mut r = Runner::boot(
         contract::compile(source).unwrap(),
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -913,7 +914,7 @@ fn content_sized_composer_grows_wraps_and_stops_at_its_maximum() {
         .node_by_key(r.kernel().find_by_test_id("composer")[0])
         .unwrap()
         .id;
-    let height = |r: &mut Runner<Schedule>| {
+    let height = |r: &mut Runner<Source>| {
         r.kernel_mut()
             .compute_layout(root, exact_kernel::Offer::definite(200.0, 400.0))
             .unwrap();
@@ -963,7 +964,7 @@ fn scroll_events_append_two_numeric_offsets_after_authored_arguments() {
     let plan = contract::compile(src).unwrap();
     let mut r = Runner::boot(
         Plan::decode(&plan.encode()).unwrap(),
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -1033,7 +1034,7 @@ fn a_scroll_action_taking_one_more_parameter_hears_the_scroll_event() {
 "#;
     let mut r = Runner::boot(
         Plan::decode(&contract::compile(src).unwrap().encode()).unwrap(),
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -1071,7 +1072,7 @@ fn native_swipe_bindings_keep_authored_ids_through_plan_roundtrip_and_updates() 
     let plan = Plan::decode(&plan.encode()).unwrap();
     let mut r = Runner::boot(
         plan,
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -1221,7 +1222,7 @@ component Label
 "#;
     let mut runner = Runner::boot(
         contract::compile(source).unwrap(),
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -1250,7 +1251,7 @@ fn the_motion_fixtures_after_task_fires_once_and_its_timer_is_then_spent() {
     let plan = Plan::decode(&plan.encode()).unwrap();
     let mut r = Runner::boot(
         plan,
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -1280,7 +1281,7 @@ fn every_frame_lowers_to_a_frame_timer_the_frame_source_drives() {
     let plan = Plan::decode(&plan.encode()).unwrap();
     let mut r = Runner::boot(
         plan,
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -1304,7 +1305,7 @@ fn a_child_binder_never_captures_a_name_its_parent_passes_in() {
         let plan = Plan::decode(&plan.encode()).unwrap();
         Runner::boot(
             plan,
-            Schedule,
+            boxed(Schedule),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -1365,7 +1366,7 @@ fn roster_calls_the_runner_cannot_answer_are_refused_while_checking() {
     ] {
         let r = Runner::boot(
             contract::compile(&app(expr)).unwrap(),
-            Schedule,
+            boxed(Schedule),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -1413,7 +1414,7 @@ fn chains_of_derives_and_functions_compile_in_linear_size() {
         );
         let r = Runner::boot(
             plan,
-            Schedule,
+            boxed(Schedule),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -1472,7 +1473,7 @@ fn a_shared_child_value_is_computed_only_where_its_readers_computed_it() {
     let plan = contract::compile(&corpus("lazy-derive.contract")).unwrap();
     let mut r = Runner::boot(
         plan,
-        Schedule,
+        boxed(Schedule),
         Kernel::with_monospace(),
         Default::default(),
         "/",

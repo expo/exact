@@ -1,6 +1,7 @@
 //! LLP 1029.000.002 D3. A replacement batch must reproduce the candidate's
 //! tree even when the two independently booted plans chose overlapping ids.
 
+use crate::source::boxed;
 use exact_kernel::Kernel;
 use exact_plan::Value;
 use exact_runner::{Answer, DataError, DataSource, Request, Runner, Store};
@@ -61,7 +62,7 @@ fn applying_the_difference_reproduces_every_ordered_pair_of_corpus_trees() {
                 .unwrap_or_else(|e| panic!("{}: {e}", entry.display()));
             let runner = Runner::boot(
                 plan,
-                Pending,
+                boxed(Pending),
                 Kernel::with_monospace(),
                 Default::default(),
                 "/",

@@ -1,6 +1,7 @@
 //! `at(list, i)` (LLP 1006 §3): JavaScript's `Array.prototype.at`, `some` of
 //! the item or `none`, and a type error for anything but a list and a number.
 
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, PropId};
 use exact_runner::{DataError, DataSource, Runner, Value};
 
@@ -33,16 +34,16 @@ component App
 
 #[test]
 fn at_is_some_of_the_item_or_none() {
-    let plan = contract::bake(contract::compile(SRC).unwrap(), Names).unwrap();
+    let plan = contract::bake(contract::compile(SRC).unwrap(), boxed(Names)).unwrap();
     let mut r = Runner::boot(
         plan,
-        Names,
+        boxed(Names),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let text = |r: &Runner<Names>| {
+    let text = |r: &Runner<Source>| {
         let k = r.kernel();
         let key = k.find_by_test_id("at")[0];
         k.node_by_key(key)
@@ -89,10 +90,10 @@ component App
             ]))
         }
     }
-    let plan = contract::bake(contract::compile(source).unwrap(), Msgs).unwrap();
+    let plan = contract::bake(contract::compile(source).unwrap(), boxed(Msgs)).unwrap();
     let r = Runner::boot(
         plan,
-        Msgs,
+        boxed(Msgs),
         Kernel::with_monospace(),
         Default::default(),
         "/",

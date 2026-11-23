@@ -6,16 +6,10 @@
 //! for each return, never at launch, and not for a page only hidden (a
 //! minimized or covered window).
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::Kernel;
 use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Page, Runner};
-
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::{Page, Runner};
 
 const DRAFTS: &str = r#"shape Page
   visibilityState: string
@@ -38,11 +32,11 @@ component App
     text `${page.visibilityState} ${page.persisted} ${page.restores}` testId="facts"
 "#;
 
-fn boot(src: &str) -> Runner<NoData> {
+fn boot(src: &str) -> Runner<Source> {
     let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e}"));
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -71,7 +65,7 @@ component App
             ..Page::default()
         })
         .unwrap();
-    let answer = |r: &Runner<NoData>| r.resource("page").cloned().unwrap();
+    let answer = |r: &Runner<Source>| r.resource("page").cloned().unwrap();
     assert_eq!(
         answer(&browser),
         Value::record(vec![Value::str("web"), Value::Bool(false)])
@@ -87,12 +81,12 @@ component App
 }
 
 /// Moves the runner's clock `ms` on (`advance` takes the time itself).
-fn wait(r: &mut Runner<NoData>, clock: &mut f64, ms: f64) {
+fn wait(r: &mut Runner<Source>, clock: &mut f64, ms: f64) {
     *clock += ms;
     r.advance(*clock).unwrap();
 }
 
-fn count(r: &Runner<NoData>, slot: &str) -> Value {
+fn count(r: &Runner<Source>, slot: &str) -> Value {
     r.slot(slot).cloned().unwrap()
 }
 
@@ -197,14 +191,14 @@ fn a_return_from_being_put_away_runs_its_task_once_and_a_minimize_none() {
 #[test]
 fn frozen_bakes_false_and_unknown_page_fields_refuse() {
     let source = "shape Page\n  frozen: bool\ncomponent App\n  resource page = exactPage() as shape Page\n  view\n    text `${page.frozen}`\n";
-    let plan = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(source).unwrap(), boxed(NoData)).unwrap();
     assert_eq!(
         Value::from_bytes(plan.bytes(plan.resources[0].initial)).unwrap(),
         Value::record(vec![Value::Bool(false)])
     );
     let error = contract::bake(
         contract::compile(&source.replace("frozen", "freezing")).unwrap(),
-        NoData,
+        boxed(NoData),
     )
     .unwrap_err();
     assert!(error.to_string().contains("bake-page-field"), "{error}");
@@ -217,7 +211,7 @@ fn a_geometry_fact_bakes_and_refuses_a_shape_an_answer_cannot_fill() {
     // `option` are refused, each named
     let bake = |shapes: &str, hero: &str| {
         let source = format!("{shapes}shape Hero\n{hero}component App\n  resource g = exactGeometry(\"hero\") as shape Hero\n  view\n    column id=\"hero\"\n");
-        contract::bake(contract::compile(&source).unwrap(), NoData)
+        contract::bake(contract::compile(&source).unwrap(), boxed(NoData))
     };
     let rect = "shape Rect\n  x: number\n  y: number\n  width: number\n  height: number\n";
     let insets = "shape Insets\n  top: number\n  right: number\n  bottom: number\n  left: number\n";

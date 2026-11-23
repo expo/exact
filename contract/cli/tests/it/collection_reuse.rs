@@ -1,6 +1,7 @@
 //! LLP 1078: a retiring list row rebound to the item the window needs shows
 //! exactly what a row built for that item shows, under its new key, epoch and
 //! place, and every view of it is renewed for motion and the host.
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, NodeKey, PropId, ViewId};
 use exact_plan::Value;
 use exact_runner::{CollectionFeedback, DataError, DataSource, Runner};
@@ -60,10 +61,10 @@ component Row
           text "wide"
 "##;
 
-fn boot(source: &str, reuse: bool) -> Runner<Rows> {
+fn boot(source: &str, reuse: bool) -> Runner<Source> {
     let mut r = Runner::boot(
         contract::compile(source).unwrap(),
-        Rows(400),
+        boxed(Rows(400)),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -73,7 +74,7 @@ fn boot(source: &str, reuse: bool) -> Runner<Rows> {
     r
 }
 
-fn facts(r: &Runner<Rows>, top: f64) -> CollectionFeedback {
+fn facts(r: &Runner<Source>, top: f64) -> CollectionFeedback {
     let c = &r.collections()[0];
     CollectionFeedback {
         view: c.view,
@@ -102,7 +103,7 @@ fn dump(k: &Kernel, id: ViewId, out: &mut String) {
 }
 
 /// One report at `top`: its receipt and how many rows it rebound.
-fn report(r: &mut Runner<Rows>, top: f64) -> (Vec<exact_kernel::CommitReceipt>, usize) {
+fn report(r: &mut Runner<Source>, top: f64) -> (Vec<exact_kernel::CommitReceipt>, usize) {
     let result = r.collection_feedback(facts(r, top)).unwrap();
     assert!(result.error.is_none(), "{:?}", result.error);
     let rebound = r.last_instance_work().rows_rebound;
@@ -345,7 +346,7 @@ fn what_a_rebind_cannot_make_fresh_refuses_it() {
 }
 
 /// Each mounted row's subtree, by item position.
-fn rows(r: &Runner<Rows>) -> std::collections::BTreeMap<usize, String> {
+fn rows(r: &Runner<Source>) -> std::collections::BTreeMap<usize, String> {
     r.collections()[0]
         .rows
         .iter()
@@ -384,7 +385,7 @@ fn a_limited_report_rebinds_the_rows_it_would_keep() {
                 assert_eq!(built, row, "row {index} at {top}");
             }
         }
-        let shown = |r: &Runner<Rows>| {
+        let shown = |r: &Runner<Source>| {
             r.collections()[0]
                 .rows
                 .iter()
@@ -406,7 +407,7 @@ fn a_limited_report_rebinds_the_rows_it_would_keep() {
 #[test]
 fn a_slice_holds_the_rows_its_window_still_needs() {
     let (mut fresh, mut reused) = (boot(SOURCE, false), boot(SOURCE, true));
-    let views = |r: &Runner<Rows>| -> std::collections::BTreeSet<ViewId> {
+    let views = |r: &Runner<Source>| -> std::collections::BTreeSet<ViewId> {
         r.collections()[0].rows.iter().map(|row| row.view).collect()
     };
     let (mut built, mut rebound, mut most) = (0, 0, 0);
@@ -438,7 +439,7 @@ fn a_slice_holds_the_rows_its_window_still_needs() {
                     assert_eq!(row_built, row, "row {index} at {top}, slice {slice}");
                 }
             }
-            let shown = |r: &Runner<Rows>| {
+            let shown = |r: &Runner<Source>| {
                 r.collections()[0]
                     .rows
                     .iter()

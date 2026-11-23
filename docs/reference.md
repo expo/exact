@@ -2684,9 +2684,21 @@ the window when several are open, and a PID chooses among several running copies
 The connection only reads: `tree`, `state` (masked, as the tree shows a password field), `logs`,
 `layout`, `perf` and `screenshot` (the window server's picture of the window, which is not brought
 forward). The app refuses `clock` with `live-clock` and input with `input-not-granted`, and the
-driver refuses launch flags such as `--storage`, `--live` and `--url`. Only a Mac app that
-`host/apple/build.mjs` builds to run carries the listener; a release, archive or embedded build has
-none of it.
+driver refuses launch flags such as `--storage`, `--live` and `--url`.
+
+`bun scripts/agent.mjs ios --app <app> --attach [--sim <udid|name>] tree state logs layout "screenshot now.png"`
+reads the development app open in an iOS simulator the same way. The simulator is the one `--sim`
+or `EXACT_SIM` names, else the one a drive would choose; nothing is booted. The person opens the
+developer menu (four fingers, or ⌘D) and chooses **Enable Agent Attach**, then **Allow** in the
+alert the driver's connection raises; **Agent Attached** shows at the top of the screen while the
+driver is connected. **Detach Agent** in the same menu ends it, and so does sending the app to the
+background. The picture is UIKit's snapshot of the app's window, without the indicator. The
+driver names a simulator that runs the app when the selected one does not.
+
+Only a Mac app or an iOS simulator app that `host/apple/build.mjs` builds to run carries the
+listener; a release, archive, embedded, physical-device or Apple TV build has none of it, and the
+driver refuses Android, Windows, Linux, the web, tvOS, watchOS and a physical iPhone before it
+runs any platform tool.
 
 ### Inspect work and native presentation
 

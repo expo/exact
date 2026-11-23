@@ -5,17 +5,9 @@
 //! for.
 
 use crate::scratch::Scratch;
+use crate::source::{boxed, NoData};
 use exact_kernel::{Kernel, PropId};
-use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Runner};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::Runner;
 
 #[test]
 fn it_lowers_on_any_element() {
@@ -23,7 +15,7 @@ fn it_lowers_on_any_element() {
     let plan = contract::compile(src).unwrap();
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

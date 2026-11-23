@@ -3,6 +3,7 @@
 //! compiler refuses or warns of.
 
 use crate::scratch::Scratch;
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, Offer};
 use exact_plan::Plan;
 use exact_runner::Runner;
@@ -22,15 +23,21 @@ component App
         column height=`calc(var(--gap) + ${2 + 1}px)` testId="computed"
 "#;
 
-fn boot(source: &str) -> Runner<()> {
+fn boot(source: &str) -> Runner<Source> {
     let plan = contract::compile(source).unwrap_or_else(|e| panic!("{e}"));
     boot_plan(&plan)
 }
 
-fn boot_plan(plan: &Plan) -> Runner<()> {
+fn boot_plan(plan: &Plan) -> Runner<Source> {
     let plan = Plan::decode(&plan.encode()).unwrap();
-    let mut runner =
-        Runner::boot(plan, (), Kernel::with_monospace(), Default::default(), "/").unwrap();
+    let mut runner = Runner::boot(
+        plan,
+        boxed(()),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
     runner
         .kernel_mut()
         .compute_layout(1, Offer::definite(390.0, 844.0))
@@ -38,7 +45,7 @@ fn boot_plan(plan: &Plan) -> Runner<()> {
     runner
 }
 
-fn frame(runner: &Runner<()>, test_id: &str) -> exact_kernel::Frame {
+fn frame(runner: &Runner<Source>, test_id: &str) -> exact_kernel::Frame {
     let kernel = runner.kernel();
     kernel
         .node_by_key(kernel.find_by_test_id(test_id)[0])
@@ -150,7 +157,7 @@ fn a_class_choice_or_an_absent_option_drops_one_declaration_and_keeps_the_rest()
     // an option a button clears
     let app = "style Spaced\n  --gap=\"8px\"\n\nstyle Plain\n  color=\"#000000\"\n\ncomponent App\n  state on = true\n  state pad = some(\"6px\")\n  action flip\n    on = !on\n  action clear\n    pad = none\n  view\n    column class=(on ? Spaced : Plain) --keep-2=\"2px\" --pad=pad height=844\n      button \"Flip\" press=flip testId=\"flip\"\n      button \"Clear\" press=clear testId=\"clear\"\n      column height=\"var(--gap, 5px)\" testId=\"gap\"\n      column height=\"var(--keep-2)\" testId=\"keep\"\n      column height=\"var(--pad, 3px)\" testId=\"pad\"\n";
     let mut runner = boot(app);
-    let press = |runner: &mut Runner<()>, test_id: &str| {
+    let press = |runner: &mut Runner<Source>, test_id: &str| {
         let kernel = runner.kernel();
         let view = kernel
             .node_by_key(kernel.find_by_test_id(test_id)[0])
@@ -163,7 +170,7 @@ fn a_class_choice_or_an_absent_option_drops_one_declaration_and_keeps_the_rest()
             .compute_layout(1, Offer::definite(390.0, 844.0))
             .unwrap();
     };
-    let heights = |runner: &Runner<()>| ["gap", "keep", "pad"].map(|t| frame(runner, t).height);
+    let heights = |runner: &Runner<Source>| ["gap", "keep", "pad"].map(|t| frame(runner, t).height);
     assert_eq!(heights(&runner), [8.0, 2.0, 6.0]);
     press(&mut runner, "flip");
     assert_eq!(heights(&runner), [5.0, 2.0, 6.0]);

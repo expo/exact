@@ -222,6 +222,16 @@ test('tap <image> pictureinpicture <control> names one control of Exact\'s pictu
   expect(() => tapWords(['page', 'pictureinpicture', 'back', 'close'])).toThrow('pictureinpicture <control>');
 });
 
+test('fingers taps two to five fingers together, on iOS alone', () => {
+  expect(tapWords(['root', 'fingers', '4'])).toEqual(['root', { fingers: 4 }]);
+  expect(tapWords(['root', 'fingers', '4', 'at', '10', '20'])).toEqual(['root', { fingers: 4, at: [10, 20] }]);
+  for (const n of [1, 6, 2.5]) expect(() => tapArguments({ fingers: n })).toThrow('2 to 5 fingers');
+  expect(() => tapArguments({ fingers: 4, mouse: true })).toThrow(MalformedOperation);
+  expect(() => tapArguments({ fingers: 4, modifiers: 'Shift' })).toThrow(MalformedOperation);
+  for (const host of ['ios', 'host-ios']) expect(pointerGap(host, undefined, { fingers: 4 })).toBeNull();
+  for (const host of ['macos', 'linux', 'android', 'windows', 'web']) expect(pointerGap(host, undefined, { fingers: 4 })).toContain('tap of 4 fingers');
+});
+
 test('dblclick touch is a finger\'s double tap, carried on iOS, Chrome, Android and Windows (LLP 1057.001.000 §6)', () => {
   expect(tapWords(['port', 'dblclick', 'touch'])).toEqual(['port', { dblclick: true, touch: true }]);
   expect(tapWords(['port', 'dblclick', 'touch', 'at', '4', '5'])).toEqual(['port', { dblclick: true, touch: true, at: [4, 5] }]);

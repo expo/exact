@@ -1,4 +1,5 @@
 //! Compiled Contract edge handlers through the real collection feedback seam.
+use crate::source::{boxed, Read, Source};
 use exact_kernel::Kernel;
 use exact_plan::Value;
 use exact_runner::{Advanced, CollectionFeedback, DataError, DataSource, Runner};
@@ -112,17 +113,17 @@ const SOURCE: &str = r#"component App
       for x in rows key=x
         text `${x}` testId=`row-${x}` height=32
 "#;
-fn boot(source: &str) -> Runner<Rows> {
+fn boot(source: &str) -> Runner<Source> {
     Runner::boot(
         contract::compile(source).unwrap(),
-        Rows::default(),
+        boxed(Rows::default()),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap()
 }
-fn facts(r: &Runner<Rows>, top: f64) -> CollectionFeedback {
+fn facts(r: &Runner<Source>, top: f64) -> CollectionFeedback {
     let c = &r.collections()[0];
     CollectionFeedback {
         view: c.view,
@@ -138,12 +139,12 @@ fn facts(r: &Runner<Rows>, top: f64) -> CollectionFeedback {
         interaction_view: None,
     }
 }
-fn send(r: &mut Runner<Rows>, top: f64) -> Advanced {
+fn send(r: &mut Runner<Source>, top: f64) -> Advanced {
     let result = r.collection_feedback(facts(r, top)).unwrap();
     assert!(result.error.is_none(), "{:?}", result.error);
     result
 }
-fn measurements(r: &Runner<Rows>, height: f64) -> Vec<exact_runner::RowMeasurement> {
+fn measurements(r: &Runner<Source>, height: f64) -> Vec<exact_runner::RowMeasurement> {
     r.collections()[0]
         .rows
         .iter()
@@ -154,12 +155,12 @@ fn measurements(r: &Runner<Rows>, height: f64) -> Vec<exact_runner::RowMeasureme
         })
         .collect()
 }
-fn measure(r: &mut Runner<Rows>, top: f64, height: f64) {
+fn measure(r: &mut Runner<Source>, top: f64, height: f64) {
     let mut feedback = facts(r, top);
     feedback.measurements = measurements(r, height);
     assert!(r.collection_feedback(feedback).unwrap().error.is_none());
 }
-fn hits(r: &Runner<Rows>) -> (f64, f64) {
+fn hits(r: &Runner<Source>) -> (f64, f64) {
     (
         r.slot("starts").unwrap().as_number().unwrap(),
         r.slot("ends").unwrap().as_number().unwrap(),
@@ -179,10 +180,10 @@ fn bootstrap_then_edges_rearm_only_after_leaving_the_geometric_window() {
     send(&mut r, 0.);
     assert_eq!(hits(&r), (1., 0.), "same keys must stay disarmed");
     send(&mut r, 1000.);
-    let queries = r.data_ref().queries;
+    let queries = r.source_ref::<Rows>().queries;
     send(&mut r, 1100.);
     measure(&mut r, 1100., 32.); // Confirm the edge exit after mounting this window.
-    assert_eq!(r.data_ref().queries, queries);
+    assert_eq!(r.source_ref::<Rows>().queries, queries);
     assert_eq!(r.last_instance_work().rows_keyed, 0);
     send(&mut r, 0.);
     assert_eq!(hits(&r), (2., 0.));
@@ -266,9 +267,9 @@ fn same_keys_after_start_refresh_defer_end_until_another_report() {
     let mut r = boot(&source);
     r.act("change", vec![Value::Number(0.), Value::Number(2.)])
         .unwrap();
-    let queries = r.data_ref().queries;
+    let queries = r.source_ref::<Rows>().queries;
     send(&mut r, 0.);
-    assert_eq!(r.data_ref().queries, queries + 1);
+    assert_eq!(r.source_ref::<Rows>().queries, queries + 1);
     assert_eq!(hits(&r), (1., 0.));
     send(&mut r, 0.);
     assert_eq!(hits(&r), (1., 1.));
@@ -312,7 +313,7 @@ fn tiny_rows_shift_at_most_once_per_report_then_stay_disarmed() {
             )
             .replace("ends = ends + 1", "ends = ends + 1\n    start = start + 8");
         let mut r = boot(&source);
-        let initial_queries = r.data_ref().queries;
+        let initial_queries = r.source_ref::<Rows>().queries;
         for n in 1..=20 {
             let mut f = facts(&r, 0.);
             f.measurements = r.collections()[0]
@@ -333,7 +334,7 @@ fn tiny_rows_shift_at_most_once_per_report_then_stay_disarmed() {
                 usize::from(n >= 2)
             };
             assert_eq!(r.slot("start"), Some(&Value::Number((shifts * 8) as f64)));
-            assert_eq!(r.data_ref().queries, initial_queries + shifts);
+            assert_eq!(r.source_ref::<Rows>().queries, initial_queries + shifts);
             assert_eq!(hits(&r), (1., if n >= 2 { 1. } else { 0. }));
         }
     }
@@ -394,11 +395,11 @@ fn stale_revision_sequence_and_measurement_epoch_do_not_dispatch() {
 #[test]
 fn absent_handlers_never_dispatch_and_end_does_not_wait_for_absent_start() {
     let mut r = boot(&SOURCE.replace(" reachstart=onStart reachend=onEnd", ""));
-    let queries = r.data_ref().queries;
+    let queries = r.source_ref::<Rows>().queries;
     send(&mut r, 0.);
     send(&mut r, 6080.);
     assert_eq!(hits(&r), (0., 0.));
-    assert_eq!(r.data_ref().queries, queries);
+    assert_eq!(r.source_ref::<Rows>().queries, queries);
     let mut r = boot(&SOURCE.replace(" reachstart=onStart", ""));
     r.act("change", vec![Value::Number(0.), Value::Number(2.)])
         .unwrap();
@@ -424,10 +425,10 @@ fn refused_edge_action_returns_committed_feedback_and_rolls_back_action_only() {
     assert!(!r.is_poisoned());
     // Each later host report retries once; a refusal never loops in one call.
     for _ in 0..3 {
-        let queries = r.data_ref().queries;
+        let queries = r.source_ref::<Rows>().queries;
         let result = r.collection_feedback(facts(&r, 0.)).unwrap();
         assert!(result.error.is_some());
-        assert_eq!(r.data_ref().queries, queries + 1);
+        assert_eq!(r.source_ref::<Rows>().queries, queries + 1);
     }
     assert_eq!(hits(&r), (0., 0.));
 }
@@ -444,10 +445,10 @@ fn refused_second_edge_retries_once_without_repeating_the_successful_start() {
     r.act("armFailure", vec![]).unwrap();
     send(&mut r, 0.); // The successful stateful start defers end.
     for _ in 0..3 {
-        let queries = r.data_ref().queries;
+        let queries = r.source_ref::<Rows>().queries;
         let result = r.collection_feedback(facts(&r, 0.)).unwrap();
         assert!(result.error.is_some());
-        assert_eq!(r.data_ref().queries, queries + 1);
+        assert_eq!(r.source_ref::<Rows>().queries, queries + 1);
         assert_eq!(hits(&r), (1., 0.));
     }
     r.act("armFailure", vec![]).unwrap();
@@ -463,30 +464,30 @@ fn an_edge_before_activation_commits_and_activation_asks_its_arguments_once() {
             "starts = starts + 1",
             "starts = starts + 1\n    revision = revision + 1",
         );
-    let plan = contract::bake(contract::compile(&source).unwrap(), Rows::default()).unwrap();
+    let plan = contract::bake(contract::compile(&source).unwrap(), boxed(Rows::default())).unwrap();
     let mut r = Runner::boot(
         plan,
-        Rows {
+        boxed(Rows {
             deferred: true,
             ..Default::default()
-        },
+        }),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
     let initial = r.collections()[0].count;
-    let queries = r.data_ref().queries;
+    let queries = r.source_ref::<Rows>().queries;
     // The compiled placeholder stands until activation (LLP 1038 D5, LLP
     // 1027 D4): the edge's action commits and the source is not asked.
     let result = r.collection_feedback(facts(&r, 0.)).unwrap();
     assert!(result.error.is_none(), "{:?}", result.error);
     assert_eq!(hits(&r), (1., 0.));
-    assert_eq!(r.data_ref().queries, queries);
-    r.data().deferred = false;
+    assert_eq!(r.source_ref::<Rows>().queries, queries);
+    r.source::<Rows>().deferred = false;
     r.data_ready().unwrap();
     assert_eq!(
-        r.data_ref().queries,
+        r.source_ref::<Rows>().queries,
         queries + 1,
         "asked once, at activation"
     );
@@ -665,7 +666,11 @@ fn tiny_bidirectional(first: u32, step: u32) -> ((f64, f64), Option<Value>, usiz
         }
     }
     assert_eq!(r.collections()[0].total_extent, 200.);
-    (hits(&r), r.slot("start").cloned(), r.data_ref().queries)
+    (
+        hits(&r),
+        r.slot("start").cloned(),
+        r.source_ref::<Rows>().queries,
+    )
 }
 
 #[test]
@@ -806,7 +811,7 @@ fn a_list_on_a_covered_route_waits_for_it_to_show() {
         );
     let mut r = Runner::boot(
         contract::compile(&source).unwrap(),
-        Rows::default(),
+        boxed(Rows::default()),
         Kernel::with_monospace(),
         Default::default(),
         "/post/1",
@@ -817,7 +822,7 @@ fn a_list_on_a_covered_route_waits_for_it_to_show() {
     measure(&mut r, 0., 32.);
     send(&mut r, 0.);
     assert_eq!(hits(&r), (0., 0.), "a covered list asks for nothing");
-    let waits = |r: &Runner<Rows>| {
+    let waits = |r: &Runner<Source>| {
         r.journal()
             .filter(|l| l.contains("waits: its list is on a covered route"))
             .count()
