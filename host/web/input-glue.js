@@ -136,6 +136,14 @@ function typeAhead(root, event) {
   next.focus();
   return true;
 }
+/** The draggable element around `target` whose mark decides a drag, an SVG element's mark skipped as drag-out.js skips
+ * it, since an engine may ignore it (Firefox does) */
+function draggableAround(target) {
+  let source = target?.closest?.('[draggable="true" i]');
+  while (source?.namespaceURI === "http://www.w3.org/2000/svg") source = source.parentElement?.closest('[draggable="true" i]');
+  return source ?? null;
+}
+
 export function createInputHandlers({ root, views, retiredViews, ready, inertAncestor, editMenu, dispatch, release: dispatchRelease = () => {}, velocity = {}, agentMode = false, log = () => {}, documents = null, pick = null }) {
   // A press stops bubbling at its nearest handler; otherwise the click reaches the root.
   // Append the default there so the handler's updates and showPicker run first.
@@ -1377,19 +1385,40 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
       // A child's implicit touch capture, lost when a deferred pan takes it, bubbles here.
       on("lostpointercapture", e => { if (e.target === el) cancel(); });
       el.addEventListener("click", e => { if (suppressClick) { suppressClick = false; e.preventDefault(); e.stopImmediatePropagation(); } }, true);
-      el.addEventListener("dragstart", e => { if (contact?.nested && !e.target.closest?.('[draggable="true"]')) e.preventDefault(); }); // a link's own drag is not the pan's; a draggable node's is the page's (LLP 1094.000 D6)
-      return e => {
+      // A drag the browser begins at the down's point of the pan's contact is the contact's, unless the most recent
+      // trusted primary down the pan heard is another pointer's at that point, as each engine gives `dragstart` the point
+      // of the down it began from. By a mouse it is
+      // cancelled, since the innermost takes a mouse's drag (LLP 1094.000 D8) and the pan took the contact from any
+      // draggable node inside it that drags; a mark on the pan's own element loses to the pan, as on one node. By a pen
+      // or a finger it is cancelled only under a nested press with no draggable node around the drag's element. Another
+      // script's draggable inside the pan keeps its own drag.
+      const at = (point, e) => Math.max(Math.abs(e.clientX - point[0]), Math.abs(e.clientY - point[1])) <= 1;
+      // The last trusted primary down the pan heard, its contact's or one it declined
+      let latest = null;
+      el.addEventListener("dragstart", e => {
+        if (e.isTrusted === false || !contact || !at(contact.down, e) || (latest.pointer !== contact.pointer && at(latest.down, e))) return;
+        // The mark of the element the browser began the drag at, an SVG element's too, where the engine honored it
+        const source = e.target.closest?.('[draggable="true" i]');
+        if (source && source !== el && source.exactDraggable !== "true" && el.contains(source)) return;
+        if (contact.mouse || (contact.nested && !source)) e.preventDefault();
+      });
+      const start = e => {
+        // A down a script dispatches is no contact: it changes nothing, as the guest frame's scripted tap pans nothing.
+        if (e.isTrusted === false) return;
+        if (e.isPrimary && e.button === 0) latest = { pointer: e.pointerId, down: [e.clientX, e.clientY] };
         // Only the click right after a pan is suppressed; a drag makes none.
         suppressClick = false;
         if (!live() || !e.isPrimary || e.button !== 0 || contact || e.exactPan || el.matches("input,textarea,[contenteditable]")) return;
         // A control or editor between the contact and this node keeps it (rule 3).
         const inner = e.target.closest("input,textarea,select,[contenteditable]");
         if (inner && inner !== el && el.contains(inner)) return;
-        // By a mouse the innermost draggable node that carries something drags (LLP 1094.000 D8).
-        const source = e.pointerType === "mouse" && e.target.closest('[draggable="true"]');
-        const carries = source && ["text", "url", "files"].some(k => source.hasAttribute(`data-datatransfer${k}`));
+        // By a mouse the innermost draggable node that drags takes the contact (LLP 1094.000 D8): another script's
+        // draggable, whatever is inside it, or the app's node when it carries something and no press inside it keeps it.
+        const source = e.pointerType === "mouse" && draggableAround(e.target);
+        const theirs = source && source.exactDraggable !== "true";
+        const carries = source && !theirs && ["text", "url", "files"].some(k => source.hasAttribute(`data-datatransfer${k}`));
         const kept = carries && e.target.closest("button,a[href],[data-exact-on~='press']");
-        if (carries && source !== el && el.contains(source) && !(kept && kept !== source && source.contains(kept))) return;
+        if ((theirs || carries) && source !== el && el.contains(source) && !(kept && kept !== source && source.contains(kept))) return;
         // A press handler between keeps it only within the slop, as a draggable
         // element hears a drag that starts on a button inside it (kanban F6):
         // nothing is captured or prevented until the pan begins, so a tap stays the button's.
@@ -1397,11 +1426,19 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
         const deferred = contacts().get(e.pointerId) === "pending";
         e.exactPan = true; // the innermost pan takes the contact (rule 3)
         if (!nested) { e.preventDefault(); e.stopPropagation(); if (!deferred) el.setPointerCapture(e.pointerId); }
-        contact = {pointer:e.pointerId,from:[e.clientX,e.clientY],to:[e.clientX,e.clientY],active:false,deferred,nested,watching:nested};
+        contact = {pointer:e.pointerId,down:[e.clientX,e.clientY],from:[e.clientX,e.clientY],to:[e.clientX,e.clientY],active:false,deferred,nested,watching:nested,mouse:e.pointerType === "mouse"};
         if (deferred) watchEnd(true);
         if (nested) watch(true);
         velocity.sample?.(id, e.clientX, e.clientY, e.timeStamp, true);
       };
+      // A pan that retires mid-contact lets it go at once, its window and document listeners with it, since the contact
+      // may end where this window does not hear it. It dispatches nothing: its node is going.
+      start.retire = () => {
+        cancelAnimationFrame(frame); frame = 0;
+        if (contact && el.hasPointerCapture?.(contact.pointer)) el.releasePointerCapture(contact.pointer);
+        drop();
+      };
+      return start;
     },
   };
 }

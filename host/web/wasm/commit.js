@@ -48,6 +48,7 @@ function apply(batch) {
         el.exactAppFrame?.dispose();
         el.exactIntersect?.();
         el.exactResize?.();
+        el.exactPanRetire?.();
       }
     }
   }
@@ -808,6 +809,7 @@ function apply(batch) {
             el.exactAppFrame?.dispose();
             el.exactIntersect?.();
             el.exactResize?.();
+            el.exactPanRetire?.();
             el.exactMarkup?.destroy();
             el.exactDecorations?.destroy();
             el.exactLiveTime?.destroy();
