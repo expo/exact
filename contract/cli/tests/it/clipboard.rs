@@ -3,16 +3,10 @@
 //! `ClipboardEvent` whose `text` is what a paste carries (empty on copy and
 //! cut, whose action writes the clipboard with `copyText`).
 
+use crate::source::{boxed, NoData};
 use exact_kernel::Kernel;
 use exact_plan::{EventKind, Value};
-use exact_runner::{DataError, DataSource, Event, Runner};
-
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::{Event, Runner};
 
 const GRID: &str = r#"component App
   state pasted = ""
@@ -37,7 +31,7 @@ fn clipboard_events_run_with_their_record() {
     let plan = contract::compile(GRID).unwrap_or_else(|e| panic!("{e}"));
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -93,7 +87,7 @@ fn a_paste_hears_its_files() {
     let plan = contract::compile(COMPOSER).unwrap_or_else(|e| panic!("{e}"));
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

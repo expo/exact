@@ -5,6 +5,7 @@
 //! origin, which each module call it makes carries; a send let go is
 //! cancelled at the implementation; a poll ends with its answer.
 
+use crate::source::{boxed, Source};
 use exact_runner::{
     Answer, CallOrigin, DataError, Dispatch, Outcome, Reply, Request, Response, Runner, Store,
     Value, Work,
@@ -145,13 +146,13 @@ type Held = Arc<Mutex<Vec<Reply>>>;
 /// create answers `s1` unless a tool made it (the download rule's
 /// refusal); a prompt is held until the test answers it; a response reads
 /// `generating` until `r1` has ended.
-fn boot(name: &str) -> (App, Runner<Tools>, Calls, Held) {
+fn boot(name: &str) -> (App, Runner<Source>, Calls, Held) {
     let app = App::new(name);
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Tools,
+        boxed(Tools),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -192,7 +193,7 @@ fn response(answer: &Json) -> Outcome {
 
 /// The host's part: each request run, each outcome fulfilled, until
 /// nothing is left to do; a held one's reply waits in `waiting`.
-fn pump(r: &mut Runner<Tools>, waiting: &mut Vec<(u64, Receiver<Outcome>)>) {
+fn pump(r: &mut Runner<Source>, waiting: &mut Vec<(u64, Receiver<Outcome>)>) {
     for _ in 0..16 {
         let outs = r.take_requests();
         let announced = r.apply_announced().0;
@@ -234,7 +235,7 @@ fn pump(r: &mut Runner<Tools>, waiting: &mut Vec<(u64, Receiver<Outcome>)>) {
 }
 
 /// The implementation's call back, its answer.
-fn invoke(r: &mut Runner<Tools>, waiting: &mut Vec<(u64, Receiver<Outcome>)>, body: Json) -> Json {
+fn invoke(r: &mut Runner<Source>, waiting: &mut Vec<(u64, Receiver<Outcome>)>, body: Json) -> Json {
     let (tx, rx) = channel();
     r.invoke_module(
         &body.to_string(),
@@ -244,7 +245,7 @@ fn invoke(r: &mut Runner<Tools>, waiting: &mut Vec<(u64, Receiver<Outcome>)>, bo
     serde_json::from_str(&rx.try_recv().expect("answered")).unwrap()
 }
 
-fn logs(r: &Runner<Tools>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     exact_runner::agent::handle(r, r#"{"op":"logs"}"#)
 }
 
@@ -456,7 +457,7 @@ fn a_handler_in_flight_is_not_a_tool_calls_work() {
     assert!(rx.try_recv().is_ok(), "the handler answers: {}", logs(&r));
 }
 
-fn calls_with_cancel(r: &Runner<Tools>) -> usize {
+fn calls_with_cancel(r: &Runner<Source>) -> usize {
     logs(r).matches("its call was let go").count()
 }
 

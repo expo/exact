@@ -5,6 +5,7 @@
 //! declares beyond the nine runs its handler with the typed record the
 //! implementation sent.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Dimension, ObjectFit, PropId, StyleId};
 use exact_runner::{Event, Runner, Value};
 use serde_json::json;
@@ -72,17 +73,10 @@ impl Drop for App {
     }
 }
 
-struct NoData;
-impl exact_runner::DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, exact_runner::DataError> {
-        Err(exact_runner::DataError::UnknownSource(source.into()))
-    }
-}
-
-fn boot(app: &App) -> Runner<NoData> {
+fn boot(app: &App) -> Runner<Source> {
     Runner::boot(
         app.compile().unwrap_or_else(|e| panic!("{e:?}")),
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -90,7 +84,7 @@ fn boot(app: &App) -> Runner<NoData> {
     .unwrap()
 }
 
-fn props(r: &Runner<NoData>) -> serde_json::Value {
+fn props(r: &Runner<Source>) -> serde_json::Value {
     let key = r.kernel().find_by_test_id("board")[0];
     let node = r.kernel().node_by_key(key).unwrap();
     serde_json::from_str(node.props.str(PropId::NativeViewProps).unwrap()).unwrap()

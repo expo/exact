@@ -1,30 +1,23 @@
 //! A textarea's paint-only decorations: declarations, the record, and what
 //! the narrowing removed (LLP 1114.007).
+use crate::scratch;
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, PropId, StyleId};
-use exact_runner::{DataError, DataSource, Event, Runner, Value};
-use serde_json::Value as Json;
-#[path = "it/scratch.rs"]
-#[allow(dead_code)]
-mod scratch;
+use exact_runner::{Event, Runner, Value};
 use scratch::Scratch;
+use serde_json::Value as Json;
 
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-fn boot(source: &str) -> Runner<NoData> {
+fn boot(source: &str) -> Runner<Source> {
     Runner::boot(
         contract::compile(source).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap()
 }
-fn prop(runner: &Runner<NoData>, test: &str, prop: PropId) -> Json {
+fn prop(runner: &Runner<Source>, test: &str, prop: PropId) -> Json {
     let key = runner.kernel().find_by_test_id(test)[0];
     serde_json::from_str(
         runner
@@ -201,7 +194,7 @@ component App
     let plan = contract::compile_path(&dir.join("app.contract")).unwrap();
     let runner = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

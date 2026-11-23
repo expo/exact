@@ -6,6 +6,7 @@
 //! a region's status rules out, the origin rule, and the targets tracking
 //! consent does not exist on.
 
+use crate::source::{boxed, Source};
 use exact_runner::{CallOrigin, Dispatch, Outcome, Reply, Response, Runner, Work};
 use serde_json::{json, Value as Json};
 #[cfg(unix)]
@@ -76,13 +77,13 @@ type Calls = Arc<Mutex<Vec<Json>>>;
 
 /// A runner over the app on `target`, `bound` implementations bound under
 /// the agent and played by the native slot.
-fn boot(name: &str, target: &str, bound: &[&str]) -> (App, Runner<Grants>, Calls) {
+fn boot(name: &str, target: &str, bound: &[&str]) -> (App, Runner<Source>, Calls) {
     let app = App::new(name);
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Grants,
+        boxed(Grants),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -110,7 +111,7 @@ fn boot(name: &str, target: &str, bound: &[&str]) -> (App, Runner<Grants>, Calls
     (app, r, calls)
 }
 
-fn pump(r: &mut Runner<Grants>, parked: &mut Vec<(u64, u64)>) {
+fn pump(r: &mut Runner<Source>, parked: &mut Vec<(u64, u64)>) {
     for _ in 0..8 {
         let outs = r.take_requests();
         let released = r.release_work();
@@ -134,7 +135,7 @@ fn pump(r: &mut Runner<Grants>, parked: &mut Vec<(u64, u64)>) {
     }
 }
 
-fn run(r: &mut Runner<Grants>, ticket: u64, dispatch: Dispatch) {
+fn run(r: &mut Runner<Source>, ticket: u64, dispatch: Dispatch) {
     let outcome = match dispatch {
         Dispatch::Run(Work::Now(work)) => work(),
         Dispatch::Run(Work::Later(work)) => {
@@ -154,12 +155,12 @@ fn sent(calls: &Calls, name: &str) -> Vec<Json> {
         .collect()
 }
 
-fn logs(r: &Runner<Grants>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     exact_runner::agent::handle(r, r#"{"op":"logs"}"#)
 }
 
 /// The one ticket held: its capability, choices and arguments.
-fn held(r: &Runner<Grants>) -> (u64, String, Vec<String>, Json) {
+fn held(r: &Runner<Source>) -> (u64, String, Vec<String>, Json) {
     let holds = r.device_holds();
     assert_eq!(holds.len(), 1, "{}", logs(r));
     let hold = holds[0].clone();
@@ -168,7 +169,7 @@ fn held(r: &Runner<Grants>) -> (u64, String, Vec<String>, Json) {
 }
 
 fn answer(
-    r: &mut Runner<Grants>,
+    r: &mut Runner<Source>,
     parked: &mut Vec<(u64, u64)>,
     ticket: u64,
     op: &str,

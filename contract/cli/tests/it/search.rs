@@ -2,6 +2,7 @@
 //! under the web's names, proven on the runner and refused as the web's
 //! method spellings are.
 
+use crate::source::{boxed, Source};
 use exact_kernel::{Color, Kernel, PropId};
 use exact_runner::{DataError, DataSource, Runner, Value};
 use std::path::Path;
@@ -36,7 +37,7 @@ impl DataSource for Sessions {
     }
 }
 
-fn text(r: &Runner<Sessions>, id: &str) -> String {
+fn text(r: &Runner<Source>, id: &str) -> String {
     let k = r.kernel();
     k.node_by_key(k.find_by_test_id(id)[0])
         .unwrap()
@@ -46,7 +47,7 @@ fn text(r: &Runner<Sessions>, id: &str) -> String {
         .to_string()
 }
 
-fn background(r: &Runner<Sessions>, id: &str) -> Option<exact_kernel::ColorValue> {
+fn background(r: &Runner<Source>, id: &str) -> Option<exact_kernel::ColorValue> {
     let k = r.kernel();
     k.node_by_key(k.find_by_test_id(id)[0])
         .unwrap()
@@ -57,10 +58,10 @@ fn background(r: &Runner<Sessions>, id: &str) -> Option<exact_kernel::ColorValue
 #[test]
 fn a_launcher_highlights_the_rows_whose_code_starts_with_the_digit_typed() {
     let plan = contract::compile(&corpus("search.contract")).unwrap();
-    let plan = contract::bake(plan, Sessions).unwrap();
+    let plan = contract::bake(plan, boxed(Sessions)).unwrap();
     let mut r = Runner::boot(
         plan,
-        Sessions,
+        boxed(Sessions),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -163,7 +164,7 @@ fn strings_compare_and_cut_as_the_web_does() {
     let plan = contract::compile(&corpus("strings.contract")).unwrap();
     let mut r = Runner::boot(
         plan,
-        Sessions,
+        boxed(Sessions),
         Kernel::with_monospace(),
         Default::default(),
         "/",

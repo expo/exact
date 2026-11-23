@@ -116,14 +116,16 @@ pub fn steps() -> Vec<String> {
         .collect()
 }
 
-/// The agent's operations: `agent --help`'s `Ops` block, from its source.
+/// The agent's operations: the lines under `agent --help`'s gallery line,
+/// from its source.
 pub fn operations() -> String {
     let start = HELP
-        .find("Ops      ")
+        .find("Gallery: ")
+        .and_then(|at| HELP[at..].find('\n').map(|end| at + end + 1))
         .expect("scripts/help.mjs has the agent's operations");
     let block = &HELP[start..];
     let end = block.find("`,").expect("the operations end the text");
-    block[..end].replacen("Ops      ", "ops: ", 1)
+    format!("ops:\n{}", &block[..end])
 }
 
 /// The `exact:content` parts, each as its call.

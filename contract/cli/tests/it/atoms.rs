@@ -1,39 +1,32 @@
 //! Inline atoms in Contract (LLP 1045.000 D3, D7): the `atom` declaration,
 //! a Markdown node's `atoms` and `atomFaces`, and the `atompress` event.
+use crate::scratch;
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, PropId, StyleId};
-use exact_runner::{DataError, DataSource, Event, Runner, Value};
-use serde_json::{json, Value as Json};
-#[path = "it/scratch.rs"]
-#[allow(dead_code)]
-mod scratch;
+use exact_runner::{Event, Runner};
 use scratch::Scratch;
+use serde_json::{json, Value as Json};
 
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-fn boot(source: &str) -> Runner<NoData> {
+fn boot(source: &str) -> Runner<Source> {
     Runner::boot(
         contract::compile(source).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap()
 }
-fn id(runner: &Runner<NoData>, test: &str) -> u32 {
+fn id(runner: &Runner<Source>, test: &str) -> u32 {
     let key = runner.kernel().find_by_test_id(test)[0];
     runner.kernel().node_by_key(key).unwrap().id
 }
-fn prop(runner: &Runner<NoData>, test: &str, prop: PropId) -> Option<String> {
+fn prop(runner: &Runner<Source>, test: &str, prop: PropId) -> Option<String> {
     let key = runner.kernel().find_by_test_id(test)[0];
     let node = runner.kernel().node_by_key(key).unwrap();
     node.props.str(prop).map(str::to_string)
 }
-fn json_prop(runner: &Runner<NoData>, test: &str, p: PropId) -> Json {
+fn json_prop(runner: &Runner<Source>, test: &str, p: PropId) -> Json {
     serde_json::from_str(&prop(runner, test, p).unwrap()).unwrap()
 }
 fn refused(source: &str) -> String {
@@ -144,19 +137,19 @@ component App
 const MODES: &str = "forma t\n\naxes\n  dark-style = black | dim  under scheme=dark\n\ntheme\n  ink = light-dark(#111111, #eeeeee)\n    when dark-style=dim: light-dark(#111111, #cccccc)\n  brand = #c8102e\n";
 
 /// An app beside its design, booted from its baked plan.
-fn designed(name: &str, contract: &str) -> Runner<NoData> {
+fn designed(name: &str, contract: &str) -> Runner<Source> {
     let dir = Scratch::new(format!("exact2-atoms-{name}-{}", std::process::id()));
     std::fs::write(dir.join("app.forma"), MODES).unwrap();
     std::fs::write(dir.join("app.contract"), contract).unwrap();
     let plan = contract::bake(
         contract::compile_path(&dir.join("app.contract")).unwrap(),
-        NoData,
+        boxed(NoData),
     )
     .unwrap();
     let _ = std::fs::remove_dir_all(&dir);
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -173,7 +166,7 @@ fn a_faces_token_colour_follows_set_mode_and_set_token() {
         "modes",
         "atom mention prefix=\"@\"\ncomponent App\n  state c = \"ink\"\n  derive faces = [AtomFace(source=\"@a\", label=\"\", icon=\"\", title=\"\", color=c, backgroundColor=\"brand\", direction=\"\", ariaLabel=\"\")]\n  action dim\n    setMode(\"dark-style\", \"dim\")\n  view\n    column\n      button press=dim testId=\"dim\"\n        text \"dim\"\n      textarea value=\"@a \" markup=\"markdown\" atoms=\"mention\" atomFaces=faces testId=\"editor\"\n",
     );
-    let paint = |r: &Runner<NoData>, key: &str| {
+    let paint = |r: &Runner<Source>, key: &str| {
         json_prop(r, "editor", PropId::AtomFaces)[0][key]
             .as_str()
             .unwrap()

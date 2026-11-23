@@ -1,6 +1,7 @@
 //! LLP 1017 P4c: per-instance state, proven on the runner — a row's state
 //! follows its key, a use's own state is its own, and neither leaks.
 
+use crate::source::{boxed, Read, Source};
 use exact_kernel::{Kernel, PropValue};
 use exact_plan::builder::PlanBuilder;
 use exact_plan::{SlotsId, TypeKind, Value};
@@ -70,13 +71,13 @@ fn derived_row_state_in_action_props_uses_resolved_types_and_child_spans() {
         let plan = contract::compile(&source).unwrap();
         let mut r = Runner::boot(
             exact_plan::Plan::decode(&plan.encode()).unwrap(),
-            Profile::default(),
+            boxed(Profile::default()),
             Kernel::with_monospace(),
             Default::default(),
             "/",
         )
         .unwrap();
-        let view = |r: &Runner<Profile>, id: &str| {
+        let view = |r: &Runner<Source>, id: &str| {
             r.kernel()
                 .node_by_key(r.kernel().find_by_test_id(id)[0])
                 .unwrap()
@@ -90,7 +91,7 @@ fn derived_row_state_in_action_props_uses_resolved_types_and_child_spans() {
         .unwrap();
         r.dispatch(view(&r, "save-profile"), Event::Press).unwrap();
         assert_eq!(
-            r.data_ref().saved,
+            r.source_ref::<Profile>().saved,
             [Value::str("Alice"), Value::str("Edited Alice")]
         );
     }
@@ -125,7 +126,7 @@ fn derived_row_state_in_action_props_uses_resolved_types_and_child_spans() {
     );
 }
 
-fn text_of(r: &Runner<Stations>, id: &str) -> String {
+fn text_of(r: &Runner<Source>, id: &str) -> String {
     let k = r.kernel();
     let key = k.find_by_test_id(id)[0];
     k.node_by_key(key)
@@ -139,7 +140,7 @@ fn text_of(r: &Runner<Stations>, id: &str) -> String {
         .unwrap()
 }
 
-fn view_of(r: &Runner<Stations>, id: &str) -> u32 {
+fn view_of(r: &Runner<Source>, id: &str) -> u32 {
     let k = r.kernel();
     let key = k.find_by_test_id(id)[0];
     k.node_by_key(key).unwrap().id
@@ -166,7 +167,7 @@ component Other
 "#;
     let mut runner = Runner::boot(
         contract::compile(source).unwrap(),
-        Stations,
+        boxed(Stations),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -178,7 +179,7 @@ component Other
     let after = source.replace("      Editor()", "      Other()\n      Editor()");
     let runner = Runner::boot_carrying(
         contract::compile(&after).unwrap(),
-        Stations,
+        boxed(Stations),
         Kernel::with_monospace(),
         &runner.carry(),
         Default::default(),
@@ -194,7 +195,7 @@ component Other
 #[test]
 fn a_use_owns_its_state_and_a_row_owns_its_own_which_follows_its_key() {
     let plan = contract::compile(&corpus("instance.contract")).unwrap();
-    let plan = contract::bake(plan, Stations).unwrap();
+    let plan = contract::bake(plan, boxed(Stations)).unwrap();
     let slot = |base: &str| {
         plan.slots
             .iter()
@@ -214,7 +215,7 @@ fn a_use_owns_its_state_and_a_row_owns_its_own_which_follows_its_key() {
         .to_owned();
     let mut r = Runner::boot(
         plan,
-        Stations,
+        boxed(Stations),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -364,7 +365,7 @@ fn child_derives_resolve_in_either_order_without_capturing_the_parent() {
     let plan = contract::compile(src).unwrap();
     let r = Runner::boot(
         plan,
-        Stations,
+        boxed(Stations),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -408,7 +409,7 @@ fn view_binders_do_not_capture_child_derives() {
     for prefix in ["", "component App\n  view\n    Child()\n"] {
         let mut r = Runner::boot(
             contract::compile(&format!("{prefix}{component}")).unwrap(),
-            Stations,
+            boxed(Stations),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -454,7 +455,7 @@ fn a_row_initializer_must_conform_before_the_row_is_published() {
 
     let error = Runner::boot(
         malformed,
-        Stations,
+        boxed(Stations),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -470,7 +471,7 @@ fn an_action_parameter_shadows_a_same_named_child_prop() {
     let plan = contract::compile(src).unwrap();
     let mut r = Runner::boot(
         plan,
-        Stations,
+        boxed(Stations),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -485,10 +486,10 @@ fn an_action_parameter_shadows_a_same_named_child_prop() {
 fn nested_row_actions_use_lexical_items_even_when_a_root_name_collides() {
     let src = "shape Station\n  id: string\n  name: string\ncomponent App\n  state item = \"root collision\"\n  state visible = true\n  resource stations = stations(\"asc\") as shape Station[]\n  view\n    column\n      for outer in stations key=outer.id\n        for item in stations key=item.id\n          if visible\n            ScopedRow(outer=outer, item=item)\ncomponent ScopedRow\n  props\n    outer: Station\n    item: Station\n  state selected = item.name\n  state result = \"\"\n  action choose\n    result = `${outer.name}/${item.name}`\n  view\n    column\n      text selected testId=`selected-${outer.id}-${item.id}`\n      button \"choose\" press=choose testId=`choose-${outer.id}-${item.id}`\n      text result testId=`result-${outer.id}-${item.id}`\n";
     let plan = contract::compile(src).unwrap();
-    let plan = contract::bake(plan, Stations).unwrap();
+    let plan = contract::bake(plan, boxed(Stations)).unwrap();
     let mut r = Runner::boot(
         plan,
-        Stations,
+        boxed(Stations),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -548,7 +549,7 @@ fn numeric_keys_keep_identity_and_listener_catalog_follows_topology() {
     let plan = contract::compile(source).unwrap();
     let mut runner = Runner::boot(
         plan,
-        Keys,
+        boxed(Keys),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -603,13 +604,13 @@ fn targeted_tree_is_the_same_live_subtree_and_keeps_first_preorder_matching() {
 "#;
     let mut runner = Runner::boot(
         contract::compile(source).unwrap(),
-        Stations,
+        boxed(Stations),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let ask = |runner: &Runner<Stations>, target: serde_json::Value| -> serde_json::Value {
+    let ask = |runner: &Runner<Source>, target: serde_json::Value| -> serde_json::Value {
         serde_json::from_str(&exact_runner::agent::handle(
             runner,
             &serde_json::json!({"op":"tree", "target":target}).to_string(),
@@ -721,12 +722,12 @@ fn targeted_tree_uses_current_attachment_and_root_order() {
     use exact_kernel::{NodeType, Op, PropId};
     let mut runner = Runner::boot(
         contract::compile("component App\n  view\n    column testId=\"root\"\n      column testId=\"branch\"\n        text \"leaf\" testId=\"leaf\"\n").unwrap(),
-        Stations,
+        boxed(Stations),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     ).unwrap();
-    let ask = |runner: &Runner<Stations>, target: serde_json::Value| -> serde_json::Value {
+    let ask = |runner: &Runner<Source>, target: serde_json::Value| -> serde_json::Value {
         let response: serde_json::Value = serde_json::from_str(&exact_runner::agent::handle(
             runner,
             &serde_json::json!({"op":"tree", "target":target}).to_string(),
@@ -772,7 +773,7 @@ fn targeted_tree_uses_current_attachment_and_root_order() {
         ask(&runner, "leaf".into())["roots"],
         serde_json::json!([leaf])
     );
-    let matches = |runner: &Runner<Stations>| {
+    let matches = |runner: &Runner<Source>| {
         assert_eq!(
             runner.kernel().find_first_by_test_id("leaf"),
             runner.kernel().find_by_test_id("leaf").first().copied()
@@ -869,7 +870,7 @@ component Child
 "#;
     let mut r = Runner::boot(
         contract::compile(src).unwrap(),
-        Stations,
+        boxed(Stations),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -902,7 +903,7 @@ fn a_row_owned_state_reaches_the_rows_of_the_uses_own_each() {
         let src = format!("shape Station\n  id: string\n  name: string\ncomponent App\n  resource stations = stations(\"asc\") as shape Station[]\n  view\n    column\n      for outer in stations key=outer.id\n        Rows(outer=outer, items=stations)\ncomponent Rows\n  props\n    outer: Station\n    items: Station[]\n  state on = false\n  action flip\n    on = not on\n  view\n    column\n      button \"flip\" press=flip testId=`flip-${{outer.id}}`\n      {list}\n        for item in items key=item.id\n          text (on ? \"on\" : \"off\") height=40 testId=`row-${{outer.id}}-${{item.id}}`\n");
         let mut r = Runner::boot(
             contract::compile(&src).unwrap(),
-            Stations,
+            boxed(Stations),
             Kernel::with_monospace(),
             Default::default(),
             "/",
