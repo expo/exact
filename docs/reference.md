@@ -3078,7 +3078,8 @@ answers; `doc:/` handles do not need that store.
 Generated declarations export Ibex2's `Storage` and related types; Rust sources
 can use the same implementations through `ibex2::host`.
 
-Native hosts, including Apple, bundle the pinned SQLite (3.54.1). Apple's
+Native hosts, including Apple, bundle the pinned SQLite (3.54.1); the web's
+storage worker runs the same release's official WebAssembly build. Apple's
 minimum supported OS versions have older SQLite libraries than rusqlite
 requires (3.45.3), so linking the OS library can prevent the app from launching.
 Rust and TypeScript storage share the bundled provider. Swift code in the same

@@ -53,7 +53,7 @@
         "@exact/translation": "workspace:*",
       },
       "devDependencies": {
-        "@sqlite.org/sqlite-wasm": "3.53.4-build1",
+        "@sqlite.org/sqlite-wasm": "3.54.1-build1",
         "fflate": "0.8.3",
         "playwright-core": "1.65.1",
         "rolldown": "1.2.9",
@@ -514,7 +514,7 @@
 
     "@rolldown/pluginutils": ["@rolldown/pluginutils@1.0.1", "", {}, "sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw=="],
 
-    "@sqlite.org/sqlite-wasm": ["@sqlite.org/sqlite-wasm@3.53.4-build1", "", {}, "sha512-U8pvL0patYHMgieD8JxxYJTlh9m1LUX8+BDYb7MiKQzBI89f2qbdmdcG/PvnPaLm9wsBbv4VlVG453ixnxBOnA=="],
+    "@sqlite.org/sqlite-wasm": ["@sqlite.org/sqlite-wasm@3.54.1-build1", "", {}, "sha512-foW427VBLJ3G87bsnvQTZCc9zYe0Fq1wH0pz1I6BlKLKXcArIAyTkHtq0iT2llmhcMQt9T/p6l5PpQQh+6O8uQ=="],
 
     "@typescript/typescript-aix-ppc64": ["@typescript/typescript-aix-ppc64@7.0.2", "", { "os": "aix", "cpu": "ppc64" }, "sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ=="],
 
