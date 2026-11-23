@@ -269,6 +269,10 @@ impl Recorder {
 mod bleed_tests;
 
 #[cfg(test)]
+#[path = "scroll_stream_tests.rs"]
+mod scroll_stream_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -454,98 +458,6 @@ mod tests {
             new, state,
             "STATE must remain first before reader mutations"
         );
-    }
-
-    #[test]
-    fn a_scrolls_direct_child_background_keeps_the_device_scale() {
-        use crate::presenter::{PainterChoice, Presenter};
-
-        let source = r##"component App
-  view
-    main width="100%" height="100%" box-sizing="border-box" display="flex" flex-direction="column" gap=16 padding=16 color="#f5f4ef"
-      column testId="outside" background-color="#2a2a2a" border-radius=16 padding=16
-        text "Outside scroll"
-        text "Second line"
-      scroll flex-shrink=0 height=120
-        column testId="direct" background-color="#123456" border-radius=16 padding=16
-          text "Scroll's direct child"
-          text "Second line"
-      scroll flex=1 min-height=0
-        column gap=16
-          column testId="nested" background-color="#2a2a2a" border-radius=16 padding=16
-            text "Nested inside scroll"
-            text "Second line"
-"##;
-        for scale in [1., 2.625] {
-            let (mut p, error) = Presenter::boot_with_fixture_fonts(
-                &crate::test_plan(source),
-                (),
-                (411., 500.),
-                scale,
-                std::path::PathBuf::new(),
-                PainterChoice::Canvas,
-            )
-            .unwrap();
-            assert!(error.is_none(), "{error:?}");
-            p.frame();
-            let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
-            let mut at = 0;
-            let mut matrix = [1., 0., 0., 1., 0., 0.];
-            let mut found = false;
-            while at < ops.len() {
-                match ops[at] {
-                    GROUP_BEGIN => matrix = [1., 0., 0., 1., 0., 0.],
-                    MATRIX => matrix = std::array::from_fn(|i| f32::from_bits(ops[at + 1 + i])),
-                    RRECT if ops[at + 1] == 0xff123456 => {
-                        assert_eq!(
-                            (matrix[0], matrix[3]),
-                            (scale, scale),
-                            "direct child's background"
-                        );
-                        found = true;
-                    }
-                    _ => (),
-                }
-                at = end(&ops, at).expect("valid Canvas stream");
-            }
-            assert!(
-                found,
-                "the direct child's background is in its scroll group"
-            );
-        }
-    }
-
-    #[test]
-    fn scroll_groups_establish_their_own_matrix_and_leave_the_outer_drawing_independent() {
-        for scale in [1., 2.625] {
-            let mut r = Recorder::new();
-            r.begin(411., 500., scale);
-            let outer = Transform::from_translate(16., 102.);
-            let inner = Transform::from_translate(16., 118.);
-            let shape = Shape::new((0., 0., 379., 70.), [16.; 4]);
-            r.push_clip(&Shape::rect((0., 0., 379., 120.)), outer);
-            r.group_begin(7, (0., 0.));
-            let start = r.ops.len();
-            r.fill(&shape, [42, 42, 42, 255], outer);
-            assert_eq!(
-                r.ops[start], MATRIX,
-                "scale {scale}: group's first background"
-            );
-            let matrix: Vec<_> = r.ops[start + 1..start + 7]
-                .iter()
-                .map(|v| f32::from_bits(*v))
-                .collect();
-            assert_eq!(matrix, [scale, 0., 0., scale, 16. * scale, 102. * scale]);
-            r.fill(&shape, [20, 30, 40, 255], inner);
-            r.group_end();
-            let after = r.ops.len();
-            r.fill(&shape, [20, 30, 40, 255], inner);
-            assert_eq!(
-                r.ops[after], MATRIX,
-                "scale {scale}: drawing after the group"
-            );
-            r.pop_clip();
-        }
     }
 
     fn media_records(ops: &[u32]) -> Vec<(f32, f32, serde_json::Value)> {
@@ -1011,7 +923,9 @@ component App
                 at = end(&ops, at).unwrap();
             }
             let (id, x, y, width, height) = native.expect("the module's op 28");
-            assert_eq!((width, height), (200., 200.));
+            // Its border box ends on a whole pixel, so at 2.75 its content is half a pixel wider.
+            let grown = if scale == 2.75 { 0.5 / 2.75 } else { 0. };
+            assert_eq!((width, height), (200. + grown, 200. + grown));
             let words = p.reader_module(x + 5. * scale, y + 5. * scale, scale);
             assert_eq!(words[0], id as i32);
             let origin = [words[10], words[11]].map(|v| f32::from_bits(v as u32));
@@ -1026,7 +940,7 @@ component App
     fn turned_boxes_record_shapes_without_cpu_pictures() {
         use crate::presenter::{PainterChoice, Presenter};
         let (mut p, error) = Presenter::boot_with_fixture_fonts(
-            &crate::test_plan("component App\n  view\n    view perspective=600 width=200 height=100 margin=100\n      view rotate=\"y 40deg\" width=200 height=100 background-color=\"#ff0000\"\n        text \"Turned card\" font-size=18 color=\"white\" margin=12\n"),
+            &crate::test_plan("component App\n  view\n    view perspective=600 width=200 height=100 margin=100\n      view rotate=\"y 40deg\" width=200 height=100 background-color=\"#ff0000\"\n        box width=0.1 height=2 background-color=\"blue\"\n        text \"Turned card\" font-size=18 color=\"white\" margin=12\n"),
             (), (400., 400.), 3., std::path::PathBuf::new(), PainterChoice::Canvas,
         ).unwrap();
         assert!(error.is_none(), "{error:?}");
@@ -1036,12 +950,16 @@ component App
         let mut shapes = 0;
         let mut glyphs = 0;
         let mut planes = 0;
+        let mut divider = None;
         while at < ops.len() {
             assert_ne!(
                 ops[at], IMAGE_DEF,
                 "a turned solid box must not rasterize a CPU picture"
             );
             shapes += usize::from(ops[at] == RRECT);
+            if ops[at] == RRECT && f32::from_bits(ops[at + 5]) == 2. {
+                divider = Some(f32::from_bits(ops[at + 4]));
+            }
             glyphs += usize::from(ops[at] == GLYPHS);
             planes += usize::from(ops[at] == MATRIX3);
             at = end(&ops, at).expect("valid stream");
@@ -1049,6 +967,227 @@ component App
         assert!(shapes > 0, "the turned box records its fill");
         assert!(glyphs > 0, "the turned box records its text");
         assert!(planes > 0, "the draws use a projective matrix");
+        assert_eq!(divider, Some(0.1));
+    }
+
+    #[test]
+    fn a_turned_software_island_preserves_the_layout_box() {
+        let alpha = software_island_edge("", 248);
+        assert!((50..100).contains(&alpha), "edge coverage: {alpha}");
+    }
+
+    #[test]
+    fn a_nested_software_island_keeps_its_fractional_edge_pixels() {
+        let alpha = software_island_edge("rotate=\"x 5deg\" overflow=\"hidden\"", 256);
+        assert!((50..100).contains(&alpha), "edge coverage: {alpha}");
+    }
+
+    #[test]
+    fn a_translated_row_paints_a_software_child_scrolled_into_view() {
+        let mut p = canvas_fixture(
+            r#"component App
+  view
+    scroll width=200 height=80 scrollTop=200 translate="1px 0px"
+      column
+        box height=400 width=200 position="relative"
+          box position="absolute" top=250 width=10 height=10 background-color="red" filter="brightness(1)" translate="0px 0px 1px"
+"#,
+            1.,
+        );
+        p.frame();
+        let image = software_picture();
+        assert_eq!(image.pixel(5, 5).unwrap().red(), 255);
+    }
+
+    #[test]
+    fn a_nested_warp_paints_the_last_column_of_its_backing() {
+        let mut p = canvas_fixture(
+            r#"component App
+  view
+    box scale=2 transform-origin="0 0"
+      box width=100.375 height=20 position="relative" overflow="hidden" scale=0.5 transform-origin="0 0" translate="0px 0px 1px"
+        box position="absolute" left=100 top=4 width=0.375 height=8 translate="0px 0px 1px" background-color="red"
+"#,
+            2.,
+        );
+        p.frame();
+        let image = software_picture();
+        let y = 12;
+        assert_eq!(image.width(), 201);
+        assert!((0..200).all(|x| image.pixel(x, y).unwrap().alpha() == 0));
+        assert!(image.pixel(200, y).unwrap().red() > 0);
+    }
+
+    #[test]
+    fn a_software_island_hits_the_child_at_its_painted_left_edge() {
+        let mut p = canvas_fixture(
+            r#"component App
+  view
+    box width=40 height=20 margin-left=4.75 translate="0px 0px 1px" filter="brightness(1)"
+      box width=10 height=20 background-color="red" testId="child"
+"#,
+            2.625,
+        );
+        p.frame();
+        let image = software_picture();
+        assert_eq!(image.pixel(2, 10).unwrap().red(), 255);
+        let k = p.host().kernel();
+        let child = k.node_by_key(k.find_by_test_id("child")[0]).unwrap().id;
+        assert_eq!(p.hit(4.76, 5.), Some(child));
+        assert_ne!(p.hit(4.74, 5.), Some(child));
+    }
+
+    fn canvas_fixture(source: &str, scale: f32) -> crate::presenter::Presenter<()> {
+        use crate::presenter::{PainterChoice, Presenter};
+        let (p, error) = Presenter::boot_with_fixture_fonts(
+            &crate::test_plan(source),
+            (),
+            (220., 80.),
+            scale,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert_eq!(error, None);
+        p
+    }
+
+    fn software_picture() -> Arc<Pixmap> {
+        let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let mut at = 0;
+        while at < ops.len() {
+            match ops[at] {
+                ROW_BEGIN => at += 6,
+                IMAGE_DEF => match with_pending(|p| p.remove(&ops[at + 1])) {
+                    Some(Picture::Canvas(pixels)) => return pixels,
+                    _ => panic!("software pixels"),
+                },
+                _ => at = end(&ops, at).unwrap(),
+            }
+        }
+        panic!("the software island must emit a picture");
+    }
+
+    #[test]
+    fn a_scaled_background_and_its_hit_target_share_the_layout_width() {
+        let mut p = canvas_fixture(
+            r#"component App
+  state count = 0
+  action go
+    count = count + 1
+  view
+    box width=0.1 height=2 scale=8 transform-origin="0 0" background-color="red" press=go testId="slab"
+"#,
+            2.625,
+        );
+        p.frame();
+        let k = p.host().kernel();
+        let slab = k.node_by_key(k.find_by_test_id("slab")[0]).unwrap().id;
+        let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let mut at = 0;
+        let mut scale = 0.;
+        let mut width = None;
+        while at < ops.len() {
+            match ops[at] {
+                MATRIX => scale = f32::from_bits(ops[at + 1]),
+                RRECT if ops[at + 1] == 0xffff0000 => {
+                    width = Some(scale * f32::from_bits(ops[at + 4]));
+                }
+                _ => {}
+            }
+            at = end(&ops, at).unwrap();
+        }
+        assert!((width.unwrap() - 2.1).abs() < 0.0001);
+        assert_eq!(p.hit(2.05 / 2.625, 1.), Some(slab));
+        assert_ne!(p.hit(2.15 / 2.625, 1.), Some(slab));
+    }
+
+    #[test]
+    fn a_scaled_surface_mask_and_clips_follow_its_contents() {
+        let mut p = canvas_fixture(
+            r#"component App
+  view
+    box width=40 height=20 margin-left=4 scale=4 transform-origin="0 0" overflow="hidden" background-color="red" mask-image="linear-gradient(black, transparent)" clip-path="inset(0px)"
+      box width=44 height=10 background-color="blue" testId="child"
+"#,
+            2.625,
+        );
+        p.frame();
+        let k = p.host().kernel();
+        let child = k.node_by_key(k.find_by_test_id("child")[0]).unwrap().id;
+        let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let mut at = 0;
+        let mut matrix = (0., 0.);
+        let mut lefts = Vec::new();
+        let mut masking = false;
+        while at < ops.len() {
+            let float = |i| f32::from_bits(ops[at + i]);
+            match ops[at] {
+                MATRIX => matrix = (float(1), float(5)),
+                RRECT if masking || matches!(ops[at + 1], 0xffff0000 | 0xff0000ff) => {
+                    lefts.push(matrix.0 * float(2) + matrix.1);
+                }
+                CLIP_RRECT => lefts.push(matrix.0 * float(1) + matrix.1),
+                CLIP_PATH => lefts.push(matrix.0 * float(4) + matrix.1),
+                clip::MASK_LAYER => masking = true,
+                _ => {}
+            }
+            at = end(&ops, at).unwrap();
+        }
+        assert_eq!(lefts, [10.5; 5]);
+        assert_eq!(p.hit(4.1, 5.), Some(child));
+        assert_ne!(p.hit(164.1, 5.), Some(child));
+    }
+
+    fn software_island_edge(outer: &str, x: usize) -> u8 {
+        use crate::presenter::{PainterChoice, Presenter};
+        let source = r#"component App
+  view
+    box width=200 height=120 padding-left=0.195 perspective=600
+      box width=160 height=100 OUTER
+        box width=100.37 height=40 rotate="y 20deg" filter="brightness(1)" testId="turned"
+          box width=100.37 height=40 background-color="red"
+"#;
+        let paint = |plan: &[u8], choice| {
+            let (mut p, error) = Presenter::boot_with_fixture_fonts(
+                plan,
+                (),
+                (200., 120.),
+                2.625,
+                std::path::PathBuf::new(),
+                choice,
+            )
+            .unwrap();
+            assert!(error.is_none(), "{error:?}");
+            p.frame();
+            let k = p.host().kernel();
+            let node = k.node_by_key(k.find_by_test_id("turned")[0]).unwrap();
+            assert_eq!((node.frame.x, node.frame.width), (0.195, 100.37));
+            p.rect_of(node.id).unwrap()
+        };
+        let plan = crate::test_plan(&source.replace("OUTER", outer));
+        assert_eq!(
+            paint(&plan, PainterChoice::Canvas),
+            paint(&plan, PainterChoice::Cpu)
+        );
+        let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let mut at = 0;
+        while at < ops.len() {
+            if ops[at] == IMAGE_DEF {
+                let picture = with_pending(|p| p.remove(&ops[at + 1])).unwrap();
+                let width = picture.width() as usize;
+                let pixels = picture.as_ref().as_chunks::<4>().0;
+                let y = 52;
+                let pixel = pixels[y * width..][..width]
+                    .get(x)
+                    .copied()
+                    .unwrap_or([0; 4]);
+                assert_eq!(pixel, [pixel[3], 0, 0, pixel[3]]);
+                return pixel[3];
+            }
+            at = end(&ops, at).unwrap();
+        }
+        panic!("the filter takes the software path");
     }
 
     #[test]

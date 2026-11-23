@@ -66,18 +66,24 @@ impl<D: DataSource> Presenter<D> {
         let paragraph = self.paragraph(id)?;
         let b = self.boxes.iter().find(|b| b.id == id)?.for_hit();
         let content = exact_kernel::svg::scene::content_box(kernel, &node);
-        let down = kernel.text_line_offset(&node);
-        let (mut px, mut py) = (x - b.rect.0, y - b.rect.1);
+        let inverse = crate::placement::inverse(b.scroll_mapping()?)?;
+        let (x, y) = crate::placement::map(&inverse, x, y);
+        let (tx, ty) = b.text_origin?;
+        let (mut px, mut py) = (x - tx, y - ty);
         let lines = if let Some(fragments) = kernel.fragments(node.key) {
-            let fragment = fragments.iter().find(|g| g.contains(px, py))?;
+            let rect = b.scroll_rect();
+            let fragment = fragments
+                .iter()
+                .find(|g| g.contains(x - rect.0, y - rect.1))?;
             px -= fragment.dx;
             py -= fragment.dy;
             fragment.lines.0 as usize..fragment.lines.1 as usize
         } else {
+            py -= kernel.text_line_offset(&node);
             0..usize::MAX
         };
         let left = kernel.text_item_box(&node).map_or(0.0, |item| item.x);
-        let (px, py) = (px - content.0 - left, py - content.1 - down);
+        let (px, py) = (px - content.0 - left, py - content.1);
         // The line whose box the point is in: from a little over the glyphs'
         // ascent above its baseline to their descent below it.
         Some(
@@ -361,6 +367,46 @@ component App
             "{:?}",
             p.host.runner().journal().collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn adjacent_inline_links_are_hit_at_their_painted_boundary() {
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
+            &crate::test_plan(
+                r#"component App
+  view
+    column padding-left=4
+      text font-size=16 testId="line"
+        text "A" href="/first" testId="first"
+        text "B" href="/second" testId="second"
+"#,
+            ),
+            (),
+            (200., 100.),
+            2.625,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.frame();
+        let k = p.host.kernel();
+        let node = k.node_by_key(k.find_by_test_id("line")[0]).unwrap();
+        assert_eq!(node.frame.x, 4.);
+        let ids =
+            ["first", "second"].map(|name| k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id);
+        let paragraph = p.paragraph(node.id).unwrap();
+        let line = paragraph.layout_runs().next().unwrap();
+        let second = line
+            .glyphs
+            .iter()
+            .find(|g| g.run(line.run_base) == 1)
+            .unwrap();
+        let x = node.frame.x + second.x;
+        let y = paragraph.baselines()[0] - 4.;
+        for (dx, id) in [-0.25, 0.25].into_iter().zip(ids) {
+            assert_eq!(p.hit(x + dx / 2.625, y), Some(id));
+        }
     }
 
     #[test]

@@ -1332,7 +1332,17 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// One commit of the runner's own that writes the router `next`.
+    /// The platform's own navigation is the person's act (LLP 1133.023 D7a).
     fn host_commit(
+        &mut self,
+        slot: usize,
+        next: Value,
+        what: &str,
+    ) -> Result<Option<CommitReceipt>, RunnerError> {
+        self.as_person(|r| r.host_commit_as(slot, next, what))
+    }
+
+    fn host_commit_as(
         &mut self,
         slot: usize,
         next: Value,

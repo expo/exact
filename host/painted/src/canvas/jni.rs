@@ -702,9 +702,8 @@ macro_rules! canvas_jni {
 
             $crate::canvas_jni_scroll!();
 
-            /// What the reader is told of the scrollers it knows, nine
-            /// words each (`Presenter::reader_scrollers`), when that is not
-            /// what this last returned (else null).
+            /// The producer's scale and its scroller statement
+            /// (`CanvasHost::scrollers`), or null when unchanged.
             #[no_mangle]
             pub unsafe extern "system" fn Java_dev_exact_canvas_Native_scrollers(
                 env: *mut JNIEnv,

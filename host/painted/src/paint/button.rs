@@ -1025,11 +1025,14 @@ impl Painter {
             }
             self.ripple(node, &shape, ink, ts);
         }
+        // The title has the room layout gave it: a box drawn on whole pixels
+        // can be a fraction of one narrower, and would wrap or cut the title.
+        let room = rect.2 + (node.frame.width - self.drawn(node).width);
         let layout = face_layout(
             &mut self.text.borrow_mut(),
             face,
             rows,
-            AxisOffer::Definite(rect.2),
+            AxisOffer::Definite(room),
             material,
             name == "bordered",
             icon.is_some(),

@@ -7,7 +7,7 @@
 //! checkpoint, inside `fulfill`, so what the turn writes to the store stands,
 //! and the commit after it reaches the host as any reply's does, presented
 //! and persisted.
-use super::provenance::{CallOrigin, Causes};
+use super::provenance::Cause;
 use super::{
     CommitReceipt, DataSource, InFlight, PendingReq, Reporter, Runner, RunnerError, Target,
 };
@@ -22,9 +22,8 @@ pub(super) const NAME: &str = "module work";
 struct Authority {
     completion: Option<super::CompletionReply>,
     module: Option<super::ModuleInstance>,
-    origin: CallOrigin,
-    invocation: u64,
-    causes: Causes,
+    /// The cause its continuations run under (LLP 1133.023 D7a).
+    cause: Cause,
 }
 
 #[derive(Default)]
@@ -143,9 +142,7 @@ impl<D: DataSource> Runner<D> {
                 .iter()
                 .find(|p| p.ticket == ticket)
                 .and_then(|p| p.module.clone()),
-            origin: self.ticket_origin(ticket),
-            invocation: self.ticket_id(ticket),
-            causes: self.ticket_causes(ticket),
+            cause: self.ticket_cause(ticket),
         };
         self.module_work.tickets.insert(ticket, (token, authority));
         if let Some(fetch) = fetch {
@@ -165,18 +162,16 @@ impl<D: DataSource> Runner<D> {
             return;
         }
         for report in reports {
-            let (origin, invocation, causes) = self.report_authority(report.by);
+            let cause = self.report_cause(report.by);
             let mut request = report.request;
             let ticket = self.next_ticket;
             self.next_ticket += 1;
-            request.reach = self.reach_of(origin);
+            request.reach = self.reach_of(cause.origin);
             self.log(super::lines::enqueued(ticket, NAME, &request));
             let authority = Authority {
                 completion: None,
                 module: request.module.clone(),
-                origin,
-                invocation,
-                causes,
+                cause,
             };
             self.module_work
                 .tickets
@@ -200,43 +195,27 @@ impl<D: DataSource> Runner<D> {
         }
     }
 
-    /// A report's origin, invocation and causes, from the runner's records,
-    /// never the module's word. An answer's are those of its requests in
-    /// flight and, when none is, of the commit asking it now; where the two
-    /// differ the least privileged origin wins and the causes join. A tool's
-    /// handler's are its invocation's. With no answer running, a report gets
-    /// what any data-code call in the commit being made gets
-    /// ([`Self::data_origin`]), a fresh invocation and no causes.
-    fn report_authority(&mut self, by: Reporter) -> (CallOrigin, u64, Causes) {
+    /// A report's cause, from the runner's records, never the module's
+    /// word. An answer's is the least privileged of its requests in flight
+    /// and the commit asking it now, with all their causes. A tool's
+    /// handler's is its own or the commit's, whichever may do less. With no
+    /// answer running, a report gets what any data-code call gets
+    /// ([`Self::data_cause`]), as a fresh invocation's.
+    fn report_cause(&mut self, by: Reporter) -> Cause {
         match by {
-            Reporter::Answer(target) => {
-                let mut origin = self.origin_for(Some(target));
-                let mut invocation = self.invocation_id();
-                let mut causes = self.causes_for(target);
-                let tickets: Vec<u64> = (self.pending.iter())
-                    .filter(|p| p.target == target && p.reask_at.is_none())
-                    .map(|p| p.ticket)
-                    .collect();
-                for ticket in tickets {
-                    let theirs = self.ticket_origin(ticket);
-                    if theirs <= origin {
-                        origin = theirs;
-                        invocation = self.ticket_id(ticket);
-                    }
-                    causes = causes.union(self.ticket_causes(ticket));
-                }
-                (origin, invocation, causes)
-            }
+            Reporter::Answer(target) => (self.pending.iter())
+                .filter(|p| p.target == target && p.reask_at.is_none())
+                .map(|p| self.ticket_cause(p.ticket))
+                .fold(self.cause_for(target), |a, b| self.least(a, b)),
             Reporter::Tool => {
-                let now = self.call_origin();
-                let origin = self.tool_origin().map_or(now, |tool| tool.min(now));
-                (origin, self.invocation_id(), self.commit_causes())
+                let now = self.cause();
+                self.tool_cause().map_or(now, |tool| self.least(now, tool))
             }
-            Reporter::None => (
-                self.data_origin(),
-                self.next_invocation(),
-                Causes::default(),
-            ),
+            Reporter::None => Cause {
+                id: self.next_invocation(),
+                owned: true,
+                ..self.data_cause()
+            },
         }
     }
 
@@ -258,9 +237,7 @@ impl<D: DataSource> Runner<D> {
             let authority = Authority {
                 completion: p.completion.clone(),
                 module: p.module.clone(),
-                origin: self.ticket_origin(p.ticket),
-                invocation: self.ticket_id(p.ticket),
-                causes: self.ticket_causes(p.ticket),
+                cause: self.ticket_cause(p.ticket),
             };
             self.module_work.letting.push((p, authority));
         }
@@ -363,47 +340,42 @@ impl<D: DataSource> Runner<D> {
             return Ok(None);
         };
         self.module_work.fetches.retain(|_, t| *t != ticket);
-        self.as_invocation_caused(
-            authority.origin,
-            authority.invocation,
-            authority.causes,
-            |r| {
-                let (revision, writes) = (r.store.revision(), r.store.writes().len());
-                r.log(format!("{NAME} {ticket}: {}", outcome.summary()));
-                match r.data.module_delivery(&mut r.store, token, outcome) {
-                    Ok(Some(mut request))
-                        if request.continuation.is_some()
-                            && request.storage.is_none()
-                            && request.surface.is_none()
-                            && request.url.is_empty() =>
-                    {
-                        let next = r.next_ticket;
-                        r.next_ticket += 1;
-                        request.reach = r.reach_of(authority.origin);
-                        let mut next_authority = authority.clone();
-                        next_authority.completion = None;
-                        r.module_work.tickets.insert(next, (token, next_authority));
-                        r.requests.push(RequestOut {
-                            completion: None,
-                            class: crate::RequestClass::Ordered,
-                            ticket: next,
-                            target: NAME.into(),
-                            request,
-                            forced: false,
-                        });
-                    }
-                    Ok(Some(_)) => r.log(format!(
-                        "{NAME} failed: delivery must yield a local continuation"
-                    )),
-                    Ok(None) => {}
-                    Err(e) => r.log(format!("{NAME} failed: {e}")),
+        self.as_cause(authority.cause, |r| {
+            let (revision, writes) = (r.store.revision(), r.store.writes().len());
+            r.log(format!("{NAME} {ticket}: {}", outcome.summary()));
+            match r.data.module_delivery(&mut r.store, token, outcome) {
+                Ok(Some(mut request))
+                    if request.continuation.is_some()
+                        && request.storage.is_none()
+                        && request.surface.is_none()
+                        && request.url.is_empty() =>
+                {
+                    let next = r.next_ticket;
+                    r.next_ticket += 1;
+                    request.reach = r.reach_of(authority.cause.origin);
+                    let mut next_authority = authority.clone();
+                    next_authority.completion = None;
+                    r.module_work.tickets.insert(next, (token, next_authority));
+                    r.requests.push(RequestOut {
+                        completion: None,
+                        class: crate::RequestClass::Ordered,
+                        ticket: next,
+                        target: NAME.into(),
+                        request,
+                        forced: false,
+                    });
                 }
-                r.take_data_logs();
-                // Its writes are in the store before the commit's checkpoint, which journals only those after
-                r.log_store_writes(writes);
-                r.module_commit(r.store.revision() != revision).map(Some)
-            },
-        )
+                Ok(Some(_)) => r.log(format!(
+                    "{NAME} failed: delivery must yield a local continuation"
+                )),
+                Ok(None) => {}
+                Err(e) => r.log(format!("{NAME} failed: {e}")),
+            }
+            r.take_data_logs();
+            // Its writes are in the store before the commit's checkpoint, which journals only those after
+            r.log_store_writes(writes);
+            r.module_commit(r.store.revision() != revision).map(Some)
+        })
     }
 
     /// Whether resource `i` is a store reader in flight that module work

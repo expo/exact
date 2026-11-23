@@ -1002,13 +1002,15 @@ impl<D: DataSource> Runner<D> {
                             self.inspect_request(i);
                             // An upload's arguments answer as it ended (D10).
                             let ledger = self.ledger_answer(i, mark.as_ref());
-                            let asked = match ledger.unwrap_or_else(|| self.query(i, &args)) {
+                            let asked = match ledger.unwrap_or_else(|| self.query_caused(i, &args))
+                            {
                                 Ok(Answer::Now(v)) => {
                                     checked = true;
                                     self.shaped_answer(i, v)
                                 }
                                 other => other,
                             };
+                            self.note_ask(i);
                             let answer = match asked {
                                 // A Rust module's seam that could not carry
                                 // the call (an answer over its bound, a trap)

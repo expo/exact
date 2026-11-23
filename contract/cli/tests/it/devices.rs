@@ -181,7 +181,8 @@ fn settle(dispatch: Dispatch) -> Option<Outcome> {
 /// Data code's call of a module name: its answer, or `null` while held.
 fn call(r: &mut Runner<Source>, extension: &str, verb: &str, name: &str, args: Json) -> Json {
     let body = json!({ "extension": extension, verb: name, "args": args }).to_string();
-    let dispatch = r.native_work(&Request::native(body.into_bytes()));
+    let request = Request::native(body.into_bytes());
+    let dispatch = r.as_person(|r| r.native_work(&request));
     match settle(dispatch) {
         Some(Outcome::Response(reply)) => serde_json::from_slice(&reply.body).unwrap(),
         _ => Json::Null,

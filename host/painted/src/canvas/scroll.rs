@@ -20,6 +20,36 @@ use exact_kernel::ViewId;
 use exact_runner::DataSource;
 use std::collections::BTreeMap;
 
+/// A move-only frame can move just the offsets with a recorded group.
+fn shift_groups(
+    before: &BTreeMap<u32, (f32, f32)>,
+    now: &BTreeMap<u32, (f32, f32)>,
+    groups: &[(u32, (f32, f32))],
+    scale: f32,
+    can_place: impl Fn(ViewId) -> bool,
+) -> Option<Vec<u32>> {
+    let others = |offsets: &BTreeMap<u32, (f32, f32)>| {
+        offsets
+            .iter()
+            .filter(|(id, _)| !groups.iter().any(|(g, _)| g == *id))
+            .map(|(id, o)| (*id, o.0.to_bits(), o.1.to_bits()))
+            .collect::<Vec<_>>()
+    };
+    if others(now) != others(before) {
+        return None;
+    }
+    let mut ops = vec![SHIFT, groups.len() as u32];
+    for (id, at) in groups {
+        let to = now.get(id).copied().unwrap_or_default();
+        let shift = crate::paint::grid::pixel_delta(*at, to, scale);
+        if shift != (0., 0.) && !can_place(*id) {
+            return None;
+        }
+        ops.extend([*id, shift.0.to_bits(), shift.1.to_bits()]);
+    }
+    Some(ops)
+}
+
 /// Scroll deferral state shared by the Android canvas loop's `frame`,
 /// `requests`, `refine`, and input handlers: `scrolled` stays true until
 /// `refine` runs or non-scroll input ends the scroll, while `scroll_turn` is
@@ -88,33 +118,24 @@ impl Painted {
         p: &mut Presenter<D>,
         quiet: Option<u64>,
         scale: f32,
+        reader_only: bool,
     ) -> Option<Vec<u32>> {
-        if p.reader_selection_active() {
+        if p.reader_selection_active() || (reader_only && !p.reader_moves_stand()) {
             return None;
         }
-        let now = p.scroll_offsets();
-        let grouped = |id: &ViewId| self.groups.iter().any(|(g, _)| g == id);
-        let others = |m: &BTreeMap<ViewId, (f32, f32)>| {
-            m.iter()
-                .filter(|(id, _)| !grouped(id))
-                .map(|(id, o)| (*id, o.0.to_bits(), o.1.to_bits()))
-                .collect::<Vec<_>>()
-        };
         let still = p.still()?;
         let same =
             still == self.still || quiet.is_some_and(|epoch| self.still.same_at(&still, epoch));
-        if others(now) != others(&self.scroll) || !same {
+        if !same {
             return None;
         }
-        let mut ops = vec![SHIFT, self.groups.len() as u32];
-        for (id, at) in &self.groups {
-            let to = now.get(id).copied().unwrap_or((0.0, 0.0));
-            ops.extend([
-                *id,
-                ((at.0 - to.0) * scale).to_bits(),
-                ((at.1 - to.1) * scale).to_bits(),
-            ]);
-        }
+        let ops = shift_groups(
+            &self.scroll,
+            p.scroll_offsets(),
+            &self.groups,
+            scale,
+            |id| !reader_only || p.reader_places_group(id, scale),
+        )?;
         p.moved_without_paint();
         Some(ops)
     }
@@ -261,13 +282,15 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.p.wheel_zoom(x / s, y / s, dy);
     }
 
-    /// What the reader is told of the scrollers it knows
-    /// ([`crate::presenter::Presenter::reader_scrollers`] has the words).
+    /// The recording's scale followed by the scroller statement
+    /// ([`crate::presenter::Presenter::reader_scrollers`]).
     pub fn scrollers(&mut self) -> Option<Vec<i32>> {
         let scale = self.scale;
         let words = GROUPS.with(|g| self.p.reader_scrollers(&g.borrow(), scale));
         self.told = Some(self.p.host().kernel().layout_stamp());
-        words
+        let mut words = words?;
+        words.insert(0, scale.to_bits() as i32);
+        Some(words)
     }
 
     /// After the reader's scroll step: whether its frame would only move the
@@ -283,11 +306,10 @@ impl<D: DataSource + Default> CanvasHost<D> {
             && !self.owed_surfaces
             && self.p.turn_due_ms(now).is_none_or(|due| due > 0.0)
             && self.told == Some(self.p.host().kernel().layout_stamp())
-            && self.p.reader_moves_stand()
             && !self.p.bar_scroll_changed()
             && (!self.move_tracks || self.p.host().lowered_epoch() == self.tracks.epoch)
             && !super::agent::waiting();
-        quiet && self.shift(now).is_some()
+        quiet && self.shift(now, true).is_some()
     }
 
     /// Before a driver's scroll: a feed whose node is gone (its page was
@@ -358,7 +380,7 @@ mod tests {
         assert!(!hold.can_skip(true));
         hold.note_scroll(true);
         assert!(hold.can_skip(true));
-        assert!(painted.shift(&mut p, None, 1.).is_some());
+        assert!(painted.shift(&mut p, None, 1., false).is_some());
     }
 
     #[test]
@@ -374,7 +396,7 @@ mod tests {
         let before = p.reader_select(0, x + 10., y + 8., 1.).unwrap();
 
         assert_eq!(p.reader_scrolled(list, (0., 40.), 0), Some((0., 40.)));
-        if painted.shift(&mut p, None, 1.).is_none() {
+        if painted.shift(&mut p, None, 1., false).is_none() {
             paint(&mut p);
         }
         let after = p.reader_select(4, 0., 0., 1.).unwrap();
@@ -410,7 +432,7 @@ mod tests {
         assert_eq!(words[1] & 4, 0, "no row node in the scroller statement");
         let before = p.rect_of(child).unwrap();
         assert_eq!(p.reader_scrolled(zoom, (20., 30.), 0), Some((20., 30.)));
-        assert!(painted.shift(&mut p, None, 1.).is_none());
+        assert!(painted.shift(&mut p, None, 1., false).is_none());
         let ops = paint(&mut p);
         assert_ne!(ops.first(), Some(&super::SHIFT));
         let after = p.rect_of(child).unwrap();
@@ -559,5 +581,544 @@ component App
         hold.note_scroll(true);
         hold.poll();
         assert!(!hold.quick() && !hold.take_request_skip() && hold.owed());
+    }
+
+    #[cfg(not(windows))]
+    fn recorded_row_top() -> f32 {
+        use super::super::{stream, FINISHED, ROW_DRAW};
+        let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let mut at = 0;
+        while ops[at] != ROW_DRAW {
+            at = stream::end(&ops, at).unwrap();
+        }
+        f32::from_bits(ops[at + 3])
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn kept_rows_and_shift_cross_the_readers_fractional_pixel_boundary_together() {
+        use super::super::{GROUPS, SHIFT};
+
+        let scale = 2.75;
+        let mut p = boot_at(
+            r#"component App
+  view
+    scroll width=200 height=100 scrollTop=7.444 testId="port"
+      column
+        box width=200 height=30 background-color="red"
+        box width=200 height=200 background-color="blue"
+"#,
+            scale,
+        );
+        let port = id(&p, "port");
+        let before = super::BTreeMap::from([(port, p.scroll_of(port))]);
+        let groups = GROUPS.with(|g| g.borrow().clone());
+        assert_eq!(groups.len(), 1);
+        let top = recorded_row_top();
+        let words = p.reader_under(10., 10., scale);
+        let start = before[&port].1;
+        assert_eq!(f32::from_bits(words[7] as u32), start * scale);
+        let rev = words[5] as u32;
+        let target = 7.451_704_5_f32;
+        p.reader_sample_at(port, (0., target - start), rev, 1.)
+            .unwrap();
+        let words = p.reader_scrollers(&groups, scale).unwrap();
+        assert_eq!(f32::from_bits(words[4] as u32), target);
+        assert_eq!(f32::from_bits(words[6] as u32), 20.);
+        let now = super::BTreeMap::from([(port, p.scroll_of(port))]);
+        let shift = super::shift_groups(&before, &now, &groups, scale, |_| true).unwrap();
+        assert_eq!(shift, [SHIFT, 1, port, 0, (-1_f32).to_bits()]);
+        p.frame();
+        assert_eq!(recorded_row_top() - top, -1.);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn skipping_a_reader_frame_places_grouped_rows_on_the_repaint_pixel() {
+        use super::super::{Recorder, SHIFT};
+
+        let scale = 2.625;
+        let start = 0.1875;
+        let mut p = boot_at(
+            r#"component App
+  view
+    scroll width=200 height=100 scrollTop=0.1875 testId="port"
+      box height=30 background-color="red"
+      box height=200 background-color="blue"
+"#,
+            scale,
+        );
+        let port = id(&p, "port");
+        let top = recorded_row_top();
+        let painted = Painted::capture(&p).unwrap();
+
+        p.scroll_to(port, (0., 1.)).unwrap();
+        assert!(painted.shift(&mut p, None, scale, true).is_none());
+        p.scroll_to(port, (0., start)).unwrap();
+
+        let hit = p.reader_under(10., 10., scale);
+        assert_eq!(hit[3] as ViewId, port);
+        let rev = hit[5] as u32;
+        let statement = p.reader_scrollers(&painted.groups, scale).unwrap();
+        assert_eq!(f32::from_bits(statement[6] as u32), 1.);
+        for at in [1., 2.] {
+            p.reader_sample_at(port, (0., 5. / scale), rev, at).unwrap();
+        }
+        // The two samples land just below the boundary a single 10 px sample reaches.
+        let shift = painted.shift(&mut p, None, scale, true).unwrap();
+        assert_eq!(shift, [SHIFT, 1, port, 0, (-9_f32).to_bits()]);
+        assert!(!p.dirty());
+
+        p.reader_replaced(Box::new(Recorder::new()));
+        p.frame();
+        assert_eq!(recorded_row_top() - top, -9.);
+    }
+
+    #[test]
+    fn equal_layout_edge_and_scroll_offset_cancel() {
+        let mut p = boot_at(
+            r#"component App
+  view
+    scroll width=200 height=100 scrollTop=7.4517045
+      box height=7.4517045
+      box width=200 height=150 background-color="red" testId="row"
+"#,
+            2.75,
+        );
+        assert_eq!(p.rect_of(id(&p, "row")).unwrap().1, 0.);
+    }
+
+    #[test]
+    fn sticky_under_a_projected_wrapper_uses_the_ports_drawn_scroll() {
+        let mut p = boot_at(
+            r#"component App
+  view
+    scroll width=200 height=100 scrollTop=0.75
+      box width=200 height=200 translate="0px 0px 1px"
+        box width=200 height=20 position="sticky" top=0 background-color="red" testId="heading"
+"#,
+            1.,
+        );
+        assert_eq!(p.rect_of(id(&p, "heading")).unwrap().1, 0.);
+    }
+
+    #[test]
+    fn rows_touch_at_a_scroll_offset_between_pixels() {
+        use super::super::{stream, FINISHED, ROW_BEGIN, ROW_DRAW, RRECT};
+        // An offset the app set: 100 px is 262.5 pixels at 2.625 a px. Each
+        // row rounded where it fell, a float's last bits put neighbours a
+        // pixel apart or over each other.
+        let row = "        box height=20.3 width=200 background-color=\"#2468ac\"\n".repeat(40);
+        let source = format!(
+            "component App\n  view\n    scroll width=200 height=200 scrollTop=100\n      column\n{row}"
+        );
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(&source),
+            (),
+            (200., 200.),
+            2.625,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.frame();
+        let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let (mut tops, mut heights, mut at) = (Vec::new(), Vec::new(), 0);
+        while at < ops.len() {
+            at = match ops[at] {
+                ROW_BEGIN => at + 6,
+                RRECT => {
+                    heights.push((f32::from_bits(ops[at + 5]) * 2.625).round());
+                    stream::end(&ops, at).unwrap()
+                }
+                ROW_DRAW => {
+                    tops.push(f32::from_bits(ops[at + 3]));
+                    at + 4
+                }
+                _ => stream::end(&ops, at).unwrap(),
+            };
+        }
+        assert!(
+            tops.len() > 4 && tops.len() == heights.len(),
+            "{tops:?} {heights:?}"
+        );
+        for i in 1..tops.len() {
+            assert_eq!(tops[i] - tops[i - 1], heights[i - 1], "row {i}: {tops:?}");
+        }
+    }
+
+    fn boot_on_pixels(source: &str) -> Presenter<()> {
+        boot_at(source, 2.625)
+    }
+
+    fn boot_at(source: &str, scale: f32) -> Presenter<()> {
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
+            &crate::test_plan(source),
+            (),
+            (2000., 400.),
+            scale,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.frame();
+        p
+    }
+
+    fn id(p: &Presenter<()>, name: &str) -> exact_kernel::ViewId {
+        let k = p.host().kernel();
+        k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id
+    }
+
+    #[test]
+    fn a_retained_sticky_header_stays_at_the_port() {
+        let mut p = boot_on_pixels(
+            r#"component App
+  view
+    scroll width=200 height=100 testId="port"
+      box width=200 height=200
+        box position="sticky" top=0 width=200 height=20 background-color="red" testId="heading"
+        box width=200 height=150 background-color="blue"
+      box width=200 height=200
+"#,
+        );
+        let (port, heading) = (id(&p, "port"), id(&p, "heading"));
+        assert_eq!(p.rect_of(heading).unwrap().1, 0.);
+        p.scroll_to(port, (0., 20. / 2.625)).unwrap();
+        p.frame();
+        assert_eq!(p.rect_of(heading).unwrap().1, 0.);
+    }
+
+    #[test]
+    fn a_sticky_scroller_is_not_offered_for_reader_translation() {
+        let mut p = boot_on_pixels(
+            r#"component App
+  view
+    scroll width=200 height=100 testId="port"
+      box position="sticky" top=0 width=200 height=20 background-color="red"
+      box width=200 height=200 background-color="blue"
+"#,
+        );
+        let port = id(&p, "port");
+        let words = p.reader_under(10., 10., 2.625);
+        assert_eq!(words[3], port as i32);
+        let groups = super::super::GROUPS.with(|groups| groups.borrow().clone());
+        let before = std::collections::BTreeMap::from([(port, p.scroll_of(port))]);
+        p.scroll_to(port, (0., 20. / 2.625)).unwrap();
+        let now = std::collections::BTreeMap::from([(port, p.scroll_of(port))]);
+        assert!(
+            super::shift_groups(&before, &now, &groups, 2.625, |_| true).is_none(),
+            "a move-only frame would move the sticky box"
+        );
+        assert_eq!(
+            words[4] & 4,
+            0,
+            "a reader translation would move the sticky box"
+        );
+    }
+
+    #[test]
+    fn moving_a_row_a_fraction_of_a_pixel_repositions_its_child() {
+        let source = r#"component App
+  state lead = 0
+  action move
+    lead = 0.125
+  view
+    column
+      scroll width=200 height=100
+        column
+          box height=lead
+          column width=200 height=8 padding-top=0.125 box-sizing="border-box" testId="row"
+            box width=200 height=4 background-color="red" testId="child"
+          box height=200
+      button width=20 height=20 press=move testId="move"
+"#;
+        let mut p = boot_on_pixels(source);
+        let (row, child, button) = (id(&p, "row"), id(&p, "child"), id(&p, "move"));
+        let row_at = p.rect_of(row).unwrap();
+        assert_eq!(p.rect_of(child).unwrap().1, 0.);
+        assert_eq!(
+            p.host_mut()
+                .dispatch_at(button, exact_runner::Event::Press, 0.),
+            None
+        );
+        assert_eq!(p.after_commit(), None);
+        p.frame();
+        assert_eq!(p.rect_of(row).unwrap(), row_at);
+        let replay = p.rect_of(child).unwrap();
+        p.reader_replaced(Box::new(super::super::Recorder::new()));
+        p.frame();
+        let fresh = p.rect_of(child).unwrap();
+        assert_eq!(fresh.1 * 2.625, 1.);
+        assert_eq!(replay, fresh);
+    }
+
+    #[test]
+    fn zoom_scales_the_layout_box_and_reaches_its_far_edge() {
+        let mut p = boot_on_pixels(
+            r#"component App
+  view
+    scroll width=100 height=100 -exact-max-zoom=10 scrollZoom=10 testId="port"
+      box width=100.1 height=30 position="relative"
+        box position="absolute" left=0 top=0 width=0.1 height=2 background-color="red" testId="divider"
+        box position="absolute" right=0 bottom=0 width=2 height=2 background-color="blue" testId="edge"
+"#,
+        );
+        let port = id(&p, "port");
+        let divider = id(&p, "divider");
+        let edge = id(&p, "edge");
+        let pixels = p.rect_of(divider).unwrap().2 * 2.625;
+        assert!((pixels - 2.625).abs() < 0.001, "{pixels} px");
+        let end = p.scroll_to(port, (10000., 10000.)).unwrap();
+        assert_eq!(end, (901., 200.));
+        p.frame();
+        let (x, y, w, h) = p.rect_of(edge).unwrap();
+        assert!(
+            (x + w - 100.).abs() < 0.001 && (y + h - 100.).abs() < 0.001,
+            "{:?}",
+            (x, y, w, h)
+        );
+    }
+
+    #[test]
+    fn a_zoom_port_and_its_child_share_layout_geometry() {
+        let mut p = boot_on_pixels(
+            r#"component App
+  view
+    row
+      box width=4 height=20 background-color="red" testId="before"
+      scroll width=100 height=20 -exact-max-zoom=10 background-color="blue" testId="port"
+        box width=120 height=40 testId="child"
+"#,
+        );
+        let before = p.rect_of(id(&p, "before")).unwrap();
+        let port = p.rect_of(id(&p, "port")).unwrap();
+        let child = id(&p, "child");
+        let child = p.boxes().iter().find(|b| b.id == child).unwrap();
+        assert_eq!(before.0 + before.2, 11. / 2.625);
+        assert_eq!(port.0, 4.);
+        assert_eq!(child.clip.unwrap().0, port.0);
+        assert_eq!(child.rect.0, 4.);
+    }
+
+    #[test]
+    fn a_scaled_sticky_header_stays_on_its_stick_line() {
+        use super::super::{stream, FINISHED, MATRIX, ROW_BEGIN, ROW_DRAW, RRECT};
+
+        let mut p = boot_on_pixels(
+            r#"component App
+  view
+    scroll width=400 height=100 testId="port"
+      column
+        box height=4
+        box position="sticky" top=0 width=100 height=20 scale=3 transform-origin="0 0" background-color="red" overflow="hidden" testId="heading"
+          box width=0.1 height=2 background-color="blue" testId="divider"
+        box height=200
+"#,
+        );
+        let (port, header, divider) = (id(&p, "port"), id(&p, "heading"), id(&p, "divider"));
+        p.scroll_to(port, (0., 5.)).unwrap();
+        p.frame();
+        fn red_top(ops: &[u32]) -> Option<f32> {
+            let mut at = 0;
+            let mut matrix = (0., 0.);
+            let mut rows = std::collections::HashMap::new();
+            while at < ops.len() {
+                let end = stream::end(ops, at).unwrap();
+                let float = |i| f32::from_bits(ops[at + i]);
+                match ops[at] {
+                    MATRIX => matrix = (float(4), float(6)),
+                    RRECT if ops[at + 1] == 0xffff0000 => {
+                        return Some(matrix.0 * float(3) + matrix.1);
+                    }
+                    ROW_BEGIN => {
+                        if let Some(top) = red_top(&ops[at + 6..end - 1]) {
+                            rows.insert(ops[at + 1], top);
+                        }
+                    }
+                    ROW_DRAW => {
+                        if let Some(top) = rows.get(&ops[at + 1]) {
+                            return Some(top + float(3));
+                        }
+                    }
+                    _ => {}
+                }
+                at = end;
+            }
+            None
+        }
+
+        let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let top = red_top(&ops).expect("painted header");
+        assert!(top.abs() < 0.001, "painted top: {top} px");
+        let offset = p.rect_of(header).unwrap().1 - p.rect_of(port).unwrap().1;
+        assert!(offset.abs() < 0.0001, "hit top relative to port: {offset}");
+        assert!((p.rect_of(divider).unwrap().2 - 0.3).abs() < 0.0001);
+        let clip = p
+            .boxes()
+            .iter()
+            .find(|b| b.id == divider)
+            .unwrap()
+            .clip
+            .unwrap();
+        assert!((clip.2 * 2.625 - 787.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn a_distant_row_replays_its_hits_at_the_drawn_edge() {
+        use super::super::{stream, FINISHED, ROW_BEGIN, ROW_DRAW, ROW_PAD};
+
+        let mut p = boot_on_pixels(
+            r#"component App
+  view
+    scroll width=200 height=100 testId="port"
+      column
+        box height=400001
+        box width=200 height=20 background-color="red" testId="row"
+        box height=200
+"#,
+        );
+        let first = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let (port, row) = (id(&p, "port"), id(&p, "row"));
+        let mut at = 0;
+        let mut recorded = Vec::new();
+        while at < first.len() {
+            if first[at] == ROW_BEGIN {
+                recorded.push(first[at + 1]);
+                at += 6;
+            } else {
+                at = stream::end(&first, at).unwrap();
+            }
+        }
+        assert!(p.rect_of(row).unwrap().1 > 400000.);
+        p.scroll_to(port, (0., 400000.)).unwrap();
+        p.frame();
+        let second = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let mut at = 0;
+        let mut replayed = false;
+        while at < second.len() {
+            if second[at] == ROW_DRAW && second[at + 1] == recorded[1] {
+                assert_eq!(f32::from_bits(second[at + 3]) + ROW_PAD * 2.625, 3.);
+                replayed = true;
+            }
+            at = stream::end(&second, at).unwrap();
+        }
+        assert!(replayed);
+        assert_eq!(p.hit(10., 3.01 / 2.625), Some(row));
+    }
+
+    #[test]
+    fn kept_row_origins_and_child_boxes_at_large_scroll_offsets() {
+        use super::super::{stream, FINISHED, ROW_DRAW, ROW_PAD};
+
+        let mut positions = Vec::new();
+        for (scale, row, offset, expected, expected_child) in [
+            (2.625, 400001., 400000., 3., 5.),
+            (2.625, 65544.76, 65543.24, 4., 7.),
+            (3., 65536.664, 65536.336, 1., 4.),
+        ] {
+            let mut p = boot_at(
+                &format!(
+                    r#"component App
+  view
+    scroll width=200 height=100 scrollTop={offset}
+      column
+        box height={row}
+        column width=200 height=20 background-color="blue" testId="row"
+          box width=100 height=2 margin-top=1 background-color="red" testId="child"
+        box height=200
+"#
+                ),
+                scale,
+            );
+            let (row, child) = (id(&p, "row"), id(&p, "child"));
+            let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+            let mut at = 0;
+            let mut tops = Vec::new();
+            while at < ops.len() {
+                if ops[at] == ROW_DRAW {
+                    tops.push(f32::from_bits(ops[at + 3]) + ROW_PAD * scale);
+                }
+                at = stream::end(&ops, at).unwrap();
+            }
+            positions.push((tops[1], expected));
+            let row_top = p.rect_of(row).unwrap().1 * scale;
+            let child_top = p.rect_of(child).unwrap().1 * scale;
+            positions.push((row_top, expected));
+            positions.push((child_top, expected_child));
+        }
+        assert!(
+            positions
+                .iter()
+                .all(|(found, expected)| (found - expected).abs() < 0.0001),
+            "{positions:?}"
+        );
+    }
+
+    #[test]
+    fn a_label_as_wide_as_its_text_keeps_its_one_line_on_whole_pixels() {
+        // A label's box is its text's width, rounded up to a point. Drawn on
+        // whole pixels the box can be a fraction of one narrower, and lines
+        // broken at that width would put a label's last word on a second line.
+        let words: Vec<String> = (2..40)
+            .map(|n| format!("{} ab", "m".repeat(n % 9 + 1)))
+            .collect();
+        let texts: String = (words.iter().enumerate())
+            .map(|(i, w)| format!("      text testId=\"t{i}\" \"{w}\"\n"))
+            .collect();
+        for lead in [10.0, 10.07, 10.13, 10.19, 10.26, 10.31] {
+            let p = boot_on_pixels(&format!(
+                "component App\n  view\n    row width=2000 flex-wrap=\"wrap\"\n      box width={lead} height=10\n{texts}"
+            ));
+            for (i, word) in words.iter().enumerate() {
+                let lines = p
+                    .paragraph(id(&p, &format!("t{i}")))
+                    .unwrap()
+                    .line_bottoms()
+                    .len();
+                assert_eq!(lines, 1, "{word:?} after {lead} px");
+            }
+        }
+    }
+
+    #[test]
+    fn kept_rows_are_drawn_on_whole_pixels_and_touch() {
+        use super::super::{stream, FINISHED, ROW_BEGIN, ROW_DRAW, ROW_PAD, RRECT};
+        // Rows 20.3 px tall, 53.29 pixels at 2.625 a px.
+        let row = "        box height=20.3 width=200 background-color=\"#2468ac\"\n".repeat(4);
+        let source =
+            format!("component App\n  view\n    scroll width=200 height=200\n      column\n{row}");
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(&source),
+            (),
+            (200., 200.),
+            2.625,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.frame();
+        let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let (mut tops, mut heights, mut at) = (Vec::new(), Vec::new(), 0);
+        while at < ops.len() {
+            at = match ops[at] {
+                // Into the row, for its background.
+                ROW_BEGIN => at + 6,
+                RRECT => {
+                    heights.push((f32::from_bits(ops[at + 5]) * 2.625).round());
+                    stream::end(&ops, at).unwrap()
+                }
+                ROW_DRAW => {
+                    tops.push(f32::from_bits(ops[at + 3]) + ROW_PAD * 2.625);
+                    at + 4
+                }
+                _ => stream::end(&ops, at).unwrap(),
+            };
+        }
+        assert_eq!(tops, [0., 53., 107., 160.]);
+        assert_eq!(heights, [53., 54., 53., 53.]);
     }
 }

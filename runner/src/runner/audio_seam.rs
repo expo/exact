@@ -9,6 +9,7 @@
 //! MIDI command and reads neither `exactTransport` nor `exactMIDI`: nothing
 //! sounds, nothing is due, and a host's MIDI is refused.
 
+use super::provenance::Cause;
 use super::*;
 use crate::midi::{Midi, MidiOp};
 use crate::sound::{SoundOp, Sounds};
@@ -20,6 +21,11 @@ pub(in crate::runner) struct AudioParts {
     pub(in crate::runner) sounds: Sounds,
     pub(in crate::runner) transport: Transport,
     pub(in crate::runner) midi: Midi,
+    /// The cause of the commit that started the sequence playing, which its
+    /// `ended=` runs under (LLP 1133.023 D7a), and of the commit whose gate
+    /// reading waits to stand.
+    pub(in crate::runner) started: Cause,
+    pub(in crate::runner) staged: Cause,
 }
 
 /// [`AudioParts`] as the runner keeps it: made by the linked seam
@@ -84,7 +90,7 @@ pub trait Audio<D: DataSource> {
         false
     }
     /// [`Runner::transport_end`].
-    fn transport_end(&self, r: &mut Runner<D>) -> Option<ActionsId> {
+    fn transport_end(&self, r: &mut Runner<D>) -> Option<(ActionsId, Cause)> {
         None
     }
     /// [`Runner::transport_wake`].
@@ -150,6 +156,8 @@ impl<D: DataSource> Audio<D> for LinkedAudio {
             sounds: Sounds::default(),
             transport: Transport::new(plan),
             midi: super::midi::queue(plan, data),
+            started: Cause::none(),
+            staged: Cause::none(),
         })
     }
     fn sequence_step(&self, r: &mut Runner<D>) -> Result<(), RunnerError> {
@@ -187,7 +195,7 @@ impl<D: DataSource> Audio<D> for LinkedAudio {
     fn ends_with_action(&self, r: &Runner<D>) -> bool {
         r.audio.transport.ended_action(&r.plan).is_some()
     }
-    fn transport_end(&self, r: &mut Runner<D>) -> Option<ActionsId> {
+    fn transport_end(&self, r: &mut Runner<D>) -> Option<(ActionsId, Cause)> {
         r.transport_end()
     }
     fn transport_wake(&self, r: &mut Runner<D>, at: f64) {
