@@ -217,8 +217,8 @@ impl DataSource for Profile {
 
 /// A store reader asleep behind a closed gate asks nothing, so a store write,
 /// the app's own or a peer's, settles without it and is not remembered:
-/// waking asks as with no write before, reads the store as it is then, and an
-/// answer outside its shape refuses the action that opens the gate.
+/// waking asks as with no write before and reads the store as it is then: an
+/// answer outside its shape fails the reader, which keeps its last answer.
 #[test]
 fn a_store_write_settles_while_a_store_reader_sleeps() {
     let src = "component App
@@ -251,5 +251,14 @@ fn a_store_write_settles_while_a_store_reader_sleeps() {
     assert_eq!(r.resource("me"), Some(&Value::str("bob")));
     r.act("hide", vec![]).unwrap();
     r.store_changed(peer("bad")).unwrap();
-    assert!(r.act("show", vec![]).is_err());
+    assert!(r.failed_resources().is_empty(), "asleep, it read nothing");
+    r.act("show", vec![]).unwrap();
+    assert_eq!(
+        r.failed_resources(),
+        [(
+            "me",
+            "`me` answered outside its shape: string: a String was declared, and 1 answered"
+        )]
+    );
+    assert_eq!(r.resource("me"), Some(&Value::str("bob")));
 }

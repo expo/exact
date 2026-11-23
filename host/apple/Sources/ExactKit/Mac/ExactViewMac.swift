@@ -393,14 +393,17 @@ public final class ExactView: NSView {
                     if self.session.presenter.pressEditorFirst(event) { return nil }
                     return event
                 }
-                if event.type == .keyDown { self.session.presenter.flushKeyViewLoop() }
+                let presenter = self.session.presenter
+                let deferredEditor = presenter.prepareKeyViewLoop(for: event, in: event.window)
                 let focused = self.ownsShortcutFocus(in: event.window)
                 let code=KeyCodes.mac[Int(event.keyCode)] ?? "Unidentified"
                 if focused, event.modifierFlags.intersection([.command,.control]).isEmpty,
                    self.session.canvases.pressedControlKey(code,down:event.type == .keyDown,timestamp:event.timestamp) {return nil}
                 // Shortcuts, then the `key` handlers (before a field editor can
                 // take the key), then the menus' and dialogs' defaults.
-                return self.session.presenter.routeKey(event, focused: focused) ? nil : self.session.presenter.dialogs.appKitEvent(event)
+                guard !presenter.routeKey(event, focused: focused) else { return nil }
+                if let deferredEditor, event.window?.firstResponder !== deferredEditor { presenter.flushKeyViewLoop() }
+                return presenter.dialogs.appKitEvent(event)
             }
         }
         // Mounted and visible participate in frame demand (D3): an unmounted

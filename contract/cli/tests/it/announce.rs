@@ -205,8 +205,11 @@ fn a_refused_answer_restores_the_standing_answers_topics() {
                 if self.later {
                     return Ok(Answer::Later(Request::get("https://meter.test/")));
                 }
+                // Read `B`, then a refusal: an unknown source refuses the
+                // commit, where an answer outside the shape would fail the
+                // resource and let the commit stand.
                 store.observe_topic("B");
-                return Ok(Answer::Now(Value::Bool(false)));
+                return Err(DataError::UnknownSource("meter".into()));
             }
             store.observe_topic("A");
             Ok(Answer::Now(Value::record(vec![Value::str("standing")])))
@@ -259,6 +262,11 @@ fn a_refused_answer_restores_the_standing_answers_topics() {
         } else {
             assert!(r.act("change", vec![]).is_err());
             assert_eq!(r.slot("changed"), Some(&Value::Bool(false)));
+            assert_eq!(
+                r.watched_topics(),
+                ["A"],
+                "the refused answer's `B` is gone"
+            );
             let asks = r.source::<Watching>().asks;
             native.changed("A");
             let (receipts, error) = r.apply_announced();
