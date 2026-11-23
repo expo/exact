@@ -230,6 +230,13 @@ final class StagedApplyMacTests: XCTestCase {
         return session
     }
 
+    private func publishReply(_ reply: Batch, to session: ExactSession) {
+        session.repliesInFlight += 1
+        session.replySubmissions.append(0)
+        session.publish(.reply, RuntimeCompletion(lease: session.runtime.completionLease, batch: reply))
+        session.landPublished()
+    }
+
     func testABatchMadeAfterAPublishedOneThatStagesWaitsForItsReveal() throws {
         let session = try session("staged-order")
         defer { session.destroy() }
@@ -243,11 +250,22 @@ final class StagedApplyMacTests: XCTestCase {
         XCTAssertEqual(session.presenter.views[9004]?.props["title"], "later", "and lands after the earlier one's")
     }
 
-    func testAnEmptyReplyPublishesWindowStateAfterAnEarlierStage() throws {
+    func testWindowStateCallbackCanDrainAfterAnEmptyReplyBesideAStage() throws {
         let session = try session("staged-window-state")
         defer { session.destroy() }
         var archives: [String] = []
-        session.windowStateDidChange = { [unowned session] in archives.append(session.windowState["tab"] ?? "") }
+        var drained = false
+        session.windowStateDidChange = { [unowned session] in
+            let tab = session.windowState["tab"] ?? ""
+            archives.append(tab)
+            guard tab == "A" else { return }
+            guard session.pending.isEmpty else {
+                XCTFail("A nested drain would wait for its own reveal")
+                return
+            }
+            session.drainFill()
+            drained = true
+        }
         var first = replacement(rows: 400)
         first.windowState = ["tab": "A"]
         session.apply(first)
@@ -255,17 +273,83 @@ final class StagedApplyMacTests: XCTestCase {
 
         var reply = wireBatch([])
         reply.windowState = ["tab": "B"]
-        session.repliesInFlight += 1
-        session.replySubmissions.append(0)
-        session.publish(.reply, RuntimeCompletion(lease: session.runtime.completionLease, batch: reply))
-        session.landPublished()
-        XCTAssertEqual(archives, [], "the reply waits for the reveal")
+        publishReply(reply, to: session)
+        reply.windowState = ["tab": "C"]
+        reply.landing = true
+        publishReply(reply, to: session)
+        XCTAssertEqual(archives, [])
         session.finishStage()
-        XCTAssertEqual(archives, ["A", "B"])
-        XCTAssertEqual(session.windowState, ["tab": "B"])
+        XCTAssertTrue(drained)
+        XCTAssertEqual(archives, ["A"], "the earlier stage keeps the original intake checks")
+        XCTAssertEqual(session.windowState, ["tab": "A"])
     }
 
-    func testAnEmptyInputPublishesWindowStateAfterAnEarlierPendingBatch() throws {
+    func testAStoreReplyThatChangesTheWakeReachesAPeerBeforeTheWriterCloses() throws {
+        let writer = try session("staged-store-writer")
+        let reader = ExactApp.shared.makeSession(label: "staged-store-reader")
+        defer { writer.destroy(); reader.destroy() }
+        let plan = try fixturePlan("NOTIFICATION_ACTIONS")
+        XCTAssertNil(reader.boot(plan: plan, size: CGSize(width: 300, height: 200)).error)
+        reader.apply(reader.runtime.dataReady())
+        writer.apply(replacement(rows: 400))
+        XCTAssertNotNil(writer.stage)
+
+        var reply = wireBatch([])
+        reply.timerDueMs = writer.now() + 60_000
+        reply.announced = [#"exact-event:{"extension":"notifications","event":"notificationclick","args":["writer",{"tag":"writer","data":null,"title":"","body":"","action":null,"reply":null}],"seq":1}"#]
+        publishReply(reply, to: writer)
+        XCTAssertNotNil(writer.stage)
+        writer.destroy()
+
+        reader.apply(reader.runtime.pump(now: reader.now()))
+        let acted = try XCTUnwrap(reader.presenter.views.values.first { $0.props["testId"] == "acted" })
+        XCTAssertEqual(acted.props["text"], "writer")
+        let journal = reader.agent(#"{"op":"logs"}"#)
+        XCTAssertEqual(journal.components(separatedBy: "notifications.notificationclick: heard by clicked").count - 1, 1, journal)
+    }
+
+    func testAFrameTaskCanResumeAfterWindowStateDisablesItBesideAStage() throws {
+        let session = try session("staged-frame-task")
+        defer { session.destroy() }
+        var first = replacement(rows: 400)
+        first.frames = true
+        session.apply(first)
+        XCTAssertNotNil(session.stage)
+        XCTAssertTrue(session.frames.tasks)
+
+        var stopped = wireBatch([])
+        stopped.windowState = ["tab": "A"]
+        session.apply(stopped)
+        var reply = wireBatch([])
+        reply.frames = true
+        publishReply(reply, to: session)
+        session.finishStage()
+        XCTAssertEqual(session.windowState, ["tab": "A"])
+        XCTAssertTrue(session.frames.tasks)
+        XCTAssertNotNil(session.frames.link)
+    }
+
+    func testASkippedAdvanceBesideAStageKeepsItsCallbackTiming() throws {
+        let session = try session("staged-advance-callback")
+        defer { session.destroy() }
+        session.apply(replacement(rows: 400))
+        XCTAssertNotNil(session.stage)
+
+        var called = false
+        session.windowStateDidChange = { [unowned session] in
+            called = true
+            XCTAssertNil(session.newestApplied?.windowState)
+        }
+        let applied = session.appliedBatches
+        var advance = wireBatch([])
+        advance.windowState = ["tab": "A"]
+        session.applyUnlessEmpty(advance.made(by: .advance))
+        XCTAssertTrue(called)
+        XCTAssertEqual(session.appliedBatches, applied)
+        XCTAssertEqual(session.newestApplied?.windowState, ["tab": "A"])
+    }
+
+    func testAnEmptyInputBesidePendingWorkUsesFullApplyAndItsCallbacks() throws {
         let session = try session("pending-window-state")
         defer { session.destroy() }
         var archives: [String] = []
@@ -281,7 +365,7 @@ final class StagedApplyMacTests: XCTestCase {
         session.applyAppKitEvent(later)
         XCTAssertEqual(archives, ["A", "B"])
         XCTAssertEqual(session.windowState, ["tab": "B"])
-        XCTAssertEqual(presented, ["A"], "B was eligible to skip once A applied")
+        XCTAssertEqual(presented, ["B", "A"], "the disjoint input can start presenting before the pending batch")
     }
 
     func testEmptyInputUsesFullApplyWhenAnEarlierBatchIsWaiting() throws {

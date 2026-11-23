@@ -736,6 +736,11 @@ public final class ExactSession {
             if case .fill(let view) = next.kind { landedFill(view) }
         }
         takeEventResults(&batch)
+        if batch.unchanged {
+            logSkipped(batch)
+            if !hasEarlierBatch(than: batch.sequence) { relayStore(batch) }
+            return landed()
+        }
         guard let presentation = presentation(for: batch, published: next.kind) else { logSkipped(batch); return landed() }
         wait(PendingBatch(batch: batch, presentation: presentation, landed: landed, dropped: { finished(); stale() }))
     }
@@ -1083,6 +1088,7 @@ public final class ExactSession {
         if presentation == .appKitEvent, !canSkipAppKitPresentation(batch) { return applyNow(batch, beside: plan) }
         // Its transactions are reported once (LLP 1079 D3): account for them, at no presentation cost.
         sampler?.batch(batch.seq, ms: 0); logSkipped(batch)
+        if presentation == .unlessEmpty { relayStore(batch) }
         defer { if presentation == .appKitEvent { app.replacements.changed() } }
         followRunner(batch)
         // Fixed roots can emit no operations while their viewport changes.
@@ -1097,7 +1103,7 @@ public final class ExactSession {
         runWaitingWork()
         drainReports()
         workEnded()
-        relayStore(batch)
+        if presentation == .appKitEvent { relayStore(batch) }
         advanceIfDue()
     }
 

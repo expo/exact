@@ -228,7 +228,6 @@ extension StagePlan {
     /// The navigation roots' tabs a batch carries replace those shown, so
     /// two that carry them keep their order.
     func disjoint(_ other: Batch) -> Bool {
-        if other.hasStoreEffects { return false }
         if other.rootTabs != nil, batch.rootTabs != nil { return false }
         if other.routeInspectors != nil, batch.routeInspectors != nil { return false }
         if let theirs = other.controlReads, theirs.contains(where: { structural.contains($0.key) || reads[$0.key]?.isDisjoint(with: $0.value.parts) == false }) { return false }
@@ -376,7 +375,7 @@ extension ExactSession {
     func presentation(for batch: Batch, published: Published) -> PendingBatch.Presentation? {
         if case .advance = published { return .unlessEmpty }
         #if os(macOS)
-        if batch.hasStoreEffects || batch.layoutProvisional || batch.replacesTree {
+        if !hasEarlierBatch(than: batch.sequence), batch.hasStoreEffects || batch.layoutProvisional || batch.replacesTree {
             if case .reply = published { return .appKitEvent }
             return .full
         }
@@ -384,8 +383,12 @@ extension ExactSession {
         return changesNothing(batch) && clockUnchanged(batch) ? nil : .full
     }
 
+    func hasEarlierBatch(than sequence: UInt64) -> Bool {
+        stage != nil || pending.contains { $0.batch.sequence < sequence }
+    }
+
     func canSkipAppKitPresentation(_ batch: Batch) -> Bool {
-        stage == nil && !pending.contains { $0.batch.sequence < batch.sequence }
+        !hasEarlierBatch(than: batch.sequence)
             && clock == nil && !ExactEnv.agentFreezes && clockUnchanged(batch)
             && !batch.layoutProvisional && !batch.replacesTree && rasters?.hasRefusedPictures != true
     }
@@ -406,7 +409,11 @@ extension ExactSession {
         takeEventResults(&entry.batch)
         if entry.batch.sequence == 0 { entry.batch.sequence = runtime.sequence.next() }
         let made = entry.batch.sequence
-        if !landing, !insideApply, published.earliest.map({ $0 > made }) ?? true {
+        let publicationsClear = published.earliest.map { $0 > made } ?? true
+        if entry.presentation == .appKitEvent, !publicationsClear || hasEarlierBatch(than: made) {
+            entry.presentation = .full
+        }
+        if !landing, !insideApply, publicationsClear {
             let mine = footprint(entry.batch)
             if passes(entry.batch), pending.allSatisfy({ $0.batch.sequence > made || $0.footprint.admits(mine) }) { supersede(mine, before: made); return land(entry) }
         }
@@ -639,8 +646,6 @@ struct BatchFootprint {
     /// `holds`: whether a live node is a child of another, as `StagePlan.restructured` asks.
     init(_ batch: Batch, holds: (UInt32, UInt32) -> Bool) {
         restructured = StagePlan.restructured(batch.ops, holds: holds)
-        // Store callbacks and window archives follow all earlier presentations.
-        movable = !batch.hasStoreEffects
         let sampling = batch.clockWork == .tick && batch.seq == nil
         // A native control's state, as the runtime made it with the batch, and the roots' tabs, which replace all.
         for (id, read) in batch.controlReads ?? [:] { written[id, default: []].formUnion(read.parts) }

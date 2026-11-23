@@ -240,7 +240,6 @@ final class StoreRefreshTests: XCTestCase {
 
     }
 
-    #if os(macOS)
     private func publishReply(_ reply: Batch, to session: ExactSession) {
         session.repliesInFlight += 1
         session.replySubmissions.append(0)
@@ -248,6 +247,34 @@ final class StoreRefreshTests: XCTestCase {
         session.landPublished()
     }
 
+    #if os(iOS)
+    func testAnUnchangedStoreReplyPreservesAnArmedScrollEndWake() throws {
+        let app = ExactApp.shared
+        let session = app.makeSession(label: "unchanged-store-timer")
+        defer { session.destroy() }
+        let plan = try fixturePlan("PULL_REFRESH")
+        XCTAssertNil(session.boot(plan: plan, size: CGSize(width: 300, height: 200)).error)
+        settleViewlessSession(session)
+        let button = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == "wait-for-rest" })
+        session.apply(session.runtime.press(button.id, now: session.now()))
+        let waits = session.timerAdmissions.waits
+        XCTAssertTrue(waits.contains { $0 >= 0 }, "the scroll-end wake is armed")
+
+        let originalReplication = app.replicateStore
+        var replications = 0
+        app.replicateStore = { replications += 1 }
+        defer { app.replicateStore = originalReplication }
+        let receipt = Batch.decode(Data(#"{"ops":[],"unchanged":true,"stored":true,"storeReadPending":false,"storeActivationPending":false}"#.utf8))
+        publishReply(receipt, to: session)
+        XCTAssertEqual(replications, 1)
+        XCTAssertEqual(session.timerAdmissions.waits, waits)
+        waitFor("the unchanged receipt leaves the wake armed", cap: 5) {
+            session.presenter.views.values.contains { $0.props["testId"] == "rests" && $0.props["text"] == "1" }
+        }
+    }
+    #endif
+
+    #if os(macOS)
     func testAnEmptyReplyRefreshesTheOtherWindow() throws {
         _ = NSApplication.shared
         let fixture = try isolatedStore()
