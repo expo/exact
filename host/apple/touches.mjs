@@ -530,10 +530,11 @@ export const DRAG_BOUNDS = { press: 10000, hold: 10000, over: 2000, total: 10000
  * asked delta) — else an error that says what the log saw. `drag` is
  * `{dx, dy, press, over, hold, into, during, tick}`, points and ms; `during` are thunks
  * run while the finger is down after the move, each bracketed by the log:
- * begun before the first, not lifted after the last; `tick(until, down)`
- * moves the app's clock after them, given the local time to stop moving on
- * real time and whether the finger is still down. `ask` is the app's carrier; `touches`
- * the runner's.
+ * begun before the first, not lifted after the last; `tick(ms)` is the step
+ * of the app's clock toward `ms` into the gesture, `(until, down)`, given the
+ * local time to stop moving on real time and whether the finger is still down,
+ * taken at the end of each press, move and hold. `ask` is the app's carrier;
+ * `touches` the runner's.
  */
 /** A drag's endpoint in viewport coordinates. `into keyboard` extends its bottom to the screen's safe edge;
  * the page origin (`screen.y`) must be subtracted before comparing points. */
@@ -549,7 +550,7 @@ const SETTLE_FIRST = 'a real touch played while native work still moves (a push,
 export async function realTap({ ask, touches, id, at, rel, drag, abandon }) {
   // A failure of the runner or of the app's carrier: no diagnostic read follows it (`tapRefusal`).
   const transport = (message) => Object.assign(new Error(message), { transport: true });
-  const legs = drag?.path ? [drag, ...drag.path].map(({ dx, dy, press = 0, over = 250, hold = 0, during = [], tick }) => ({ dx, dy, press, over, hold, during, tick })) : null;
+  const legs = drag?.path ? [drag, ...drag.path].map(({ dx, dy, press = 0, over = 250, hold = 0, during = [] }) => ({ dx, dy, press, over, hold, during })) : null;
   let net = drag ? [drag.dx, drag.dy] : [0, 0];
   const what = drag ? `drag #${id}` : `tap #${id}`;
   // A plain tap aims at the target's own press (LLP 1012 §1: never a control inside it its middle reaches);
@@ -596,16 +597,20 @@ export async function realTap({ ask, touches, id, at, rel, drag, abandon }) {
     const [[rx, ry], [ux, uy]] = a.fixedAxes;
     let x = 0, y = 0, offset = 0;
     request.path = legs.map((leg) => {
-      offset += leg.press + (leg.dx || leg.dy ? leg.over : 0);
+      const pressed = offset + leg.press;
+      offset = pressed + (leg.dx || leg.dy ? leg.over : 0);
       x += leg.dx; y += leg.dy;
       const point = [a.at[0] + x, a.at[1] + y];
       if (!reaches(a, point, drag.into)) throw new Error(`${what}: path waypoint (${point}) is ${outside(a, drag.into)}`);
-      checkpoints.push({ offset, end: offset + leg.hold, ops: leg.during, tick: leg.tick });
+      checkpoints.push({ pressed, offset, end: offset + leg.hold, ops: leg.during });
       offset += leg.hold;
       return { to: [a.fixed[0] + x * rx + y * ux, a.fixed[1] + x * ry + y * uy], over: (leg.dx || leg.dy ? leg.over : 0) / 1000, hold: leg.hold / 1000 };
     });
     net = [x, y]; ms = offset;
     moves = legs.some(l => l.dx || l.dy);
+  } else if (drag) {
+    const offset = drag.press + (moves ? drag.over : 0);
+    checkpoints.push({ pressed: drag.press, offset, end: offset + drag.hold, ops: drag.during ?? [] });
   }
   const injecting = touches.ask(request, RUNNER_MS + ms);
   let finished = false;
@@ -621,10 +626,10 @@ export async function realTap({ ask, touches, id, at, rel, drag, abandon }) {
   // Whatever fails, the gesture is let finish first, and the runner's error
   // wins. Requests and touch dispatch share the main run loop, so a read
   // that finds no `ended` came before the window dispatched the lift.
-  // A hold's clock (`drag.tick`) is moved the same way, after the ops, only while the touch is known to be down: a
+  // The app's clock (`drag.tick`) follows the gesture the same way, only while the touch is known to be down: a
   // gesture with no ops whose touch the log does not show down is left to the barrier below, its clock unmoved.
-  const ops = legs ? checkpoints.flatMap(c => c.ops) : drag?.during ?? [];
-  if (ops.length || drag?.tick || legs?.some(l => l.tick)) {
+  const ops = checkpoints.flatMap(c => c.ops);
+  if (ops.length || drag?.tick) {
     const over = Symbol('over');
     const gestureEnd = injecting.then(() => new Promise((r) => setTimeout(r, 1000))).then(() => over);
     const raced = async (promise, label, hint = '') => {
@@ -693,12 +698,35 @@ export async function realTap({ ask, touches, id, at, rel, drag, abandon }) {
         if (touch.lifted) throw new Error(`${early} began; lengthen hold`);
         if (initialReads && initialStill && touch.reports) reachedIn = touch.reached ? Date.now() - seen : false;
         if ((drag.reach || legs && initialReads && initialStill) && reachedIn === false) throw new Error(`${what}: the touch did not reach the view it landed on within ${legs ? Math.min(REACH_MS, checkpoints[0].end) : REACH_MS} ms (a recognizer kept it), so nothing inside it ran`);
+        const down = async () => {
+          if (finished) return false;
+          const touch = ours(await entries());
+          return !finished && touch != null && !touch.lifted;
+        };
+        // The clock's step toward `ms` into the gesture: from when the touch reaches its phase's start (`from`, local
+        // time), on real time until a margin before it reaches `ms` (`at`), or until half way through a phase shorter
+        // than the margin, then the rest at once. So a phase's events read no less than its start's time, as a move's
+        // first reads the press's end, and the lift the whole gesture's (#1333).
+        const step = async (ms, from, at, held = down) => {
+          if (!drag.tick) return;
+          await new Promise((r) => setTimeout(r, Math.max(0, from - Date.now())));
+          await ticked(drag.tick(ms), Math.max(at - TICK_MARGIN, (from + at) / 2), held);
+        };
+        // Where `ms` into the gesture falls in local time, from the touch's `began` on the host's clock where the
+        // log gives it, else from when a read first saw the touch.
+        const began = (await entries()).find(e => e.phase === 'began');
+        const local = async (ms) => {
+          if (!Number.isFinite(hostNow) || !began) return seen + ms;
+          await entries();
+          return Date.now() + (began.t + ms / 1000 - hostNow) * 1000;
+        };
         if (legs) {
-          const began = (await entries()).find(e => e.phase === 'began');
           if (!Number.isFinite(hostNow)) throw new Error(`${what}: rebuild the iOS app for checkpoint timestamps`);
-          for (let i = 0; i < checkpoints.length; i++) {
+          for (let i = 0, from = 0; i < checkpoints.length; from = checkpoints[i++].end) {
             const checkpoint = checkpoints[i];
-            if (!checkpoint.ops.length && !checkpoint.tick) continue;
+            if (checkpoint.pressed > from) await step(checkpoint.pressed, await local(from), await local(checkpoint.pressed));
+            if (checkpoint.offset > checkpoint.pressed) await step(checkpoint.offset, await local(checkpoint.pressed), await local(checkpoint.offset));
+            if (!checkpoint.ops.length && !(drag.tick && checkpoint.end > checkpoint.offset)) continue;
             const start = began.t + checkpoint.offset / 1000, end = began.t + checkpoint.end / 1000;
             const held = async () => {
               const touch = ours(await entries());
@@ -713,29 +741,28 @@ export async function realTap({ ask, touches, id, at, rel, drag, abandon }) {
               during.push(await raced(op(), 'an operation during the hold', '; lengthen hold'));
               await held();
             }
-            if (checkpoint.tick) await ticked(checkpoint.tick, Date.now() + (end - hostNow) * 1000 - TICK_MARGIN, async () => {
+            if (checkpoint.end > checkpoint.offset) await step(checkpoint.end, await local(checkpoint.offset), await local(checkpoint.end), async () => {
               if (finished) return false;
               const touch = ours(await entries());
               return !!touch && !touch.lifted && !finished && hostNow < end;
             });
           }
         } else {
+          const { pressed, offset, end } = checkpoints[0];
+          if (pressed > 0) await step(pressed, await local(0), await local(pressed));
+          if (offset > pressed) await step(offset, await local(pressed), await local(offset));
           // Reads follow the move, inside its hold.
-          await new Promise((r) => setTimeout(r, Math.max(0, drag.press + (moves ? drag.over : 0) - (Date.now() - seen))));
+          const moved = await local(offset);
+          await new Promise((r) => setTimeout(r, Math.max(0, moved - Date.now())));
           for (const op of ops) {
             const lifted = ours(await entries()).lifted;
             if (lifted || finished) throw new Error(`${early} finished; lengthen hold`);
             during.push(await raced(op(), 'an operation during the hold', '; lengthen hold'));
           }
           if (ops.length && ours(await entries()).lifted) throw new Error(`${early} finished; lengthen hold`);
+          // Until shortly before the lift, asking before each step that the finger is still down (`heldTick`).
+          await step(end, await local(offset), await local(end));
         }
-        const down = async () => {
-          if (finished) return false;
-          const touch = ours(await entries());
-          return !finished && touch != null && !touch.lifted;
-        };
-        // Until shortly before the lift, asking before each step that the finger is still down (`heldTick`).
-        if (drag.tick && !legs) await ticked(drag.tick, seen + drag.press + (moves ? drag.over : 0) + drag.hold - TICK_MARGIN, down);
       })();
     } catch (error) {
       const done = await injecting;

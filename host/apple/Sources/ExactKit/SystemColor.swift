@@ -387,6 +387,17 @@ extension NodeView {
     /// above it in the authored tree, unless that is the roots', which their window takes
     /// (`AppAccent`); nil where the node's tint is theirs, which such a view inherits.
     package var ownAccent: UIColor? { ownAccentAuthor?.authoredAccentTint }
+    /// The tint of the bar item made for this node, a header's button: the nearest `accent-color`
+    /// written at or above it below `header`. Nil where there is none, and the item takes the
+    /// bar's tint, its route's or dialog's accent. A control carries its inherited rows, so the
+    /// row counts only where it was written.
+    package func accent(below header: NodeView) -> UIColor? {
+        for node in authoredLine {
+            if node === header { break }
+            if node.wrote("accent_color"), let tint = node.authoredAccentTint { return tint }
+        }
+        return nil
+    }
     /// The node whose accent `ownAccent` is
     private var ownAccentAuthor: NodeView? {
         accentAuthor.flatMap { $0.style["accent_color"]?.key == presenter?.accent.said ? nil : $0 }

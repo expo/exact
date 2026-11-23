@@ -6,3 +6,7 @@ export const redirects: Record<string, string> = {
   '/reference/developer/what-exists': '/reference/developer/runtime-font-families-and-aria-disabled',
   '/start-here': '/start',
 };
+
+export const nonPageRules: { from: string; to: string; status: number }[] = [
+  { from: '/llms-full.txt', to: '/llms.txt', status: 301 },
+];

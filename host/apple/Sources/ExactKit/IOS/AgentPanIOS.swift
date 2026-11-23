@@ -122,8 +122,9 @@ extension Agent {
         while let v = current {
             if let n = v as? NodeView, !n.disabled,
                !n.handlers.isDisjoint(with: ["pointerdown", "pointermove", "pointerup"]) { return n }
-            // Through a sheet's or a lifted popover's authored parents, as `MountRelay`
-            current = (v as? NodeView)?.presenter?.listenerParent(of: v) ?? v.superview
+            // Through a `portal` mover's declaration, and a sheet's or a lifted popover's authored parents, as `MountRelay`
+            let presenter = (v as? NodeView)?.presenter
+            current = presenter?.declaredParent(of: v) ?? presenter?.listenerParent(of: v) ?? v.superview
         }
         return nil
     }
@@ -335,7 +336,7 @@ extension Agent {
         if flat == nil, v.scrollDormant { v.needScroll() }
         let list = presenter.groupedLists?.scroller(for: v.id).flatMap { $0.superview === v ? $0 : nil }
         guard flat == nil, let sv = list ?? v.scroll, sv.isScrollEnabled else {
-            return ["error": "drag #\(flat?.id ?? v.id) starts on nothing the agent scrolls, so it is a gesture only a real touch makes (a row's swipe actions, a slider, a pan): drive with --touch platform (LLP 1080.000 §11). Without it a drag scrolls only a scroll or list it starts on (`tap <scroll or list> drag 0 -300`), and `tap <action>` performs a row's swipe action"]
+            return ["error": "drag #\(flat?.id ?? v.id) starts on nothing the agent scrolls, so it is a gesture only a real touch makes (a row's swipe actions, a slider, a pan): drive with --touch platform (LLP 1080.000 §11), which a test's `tap … drag` already is. Without it a drag scrolls only a scroll or list it starts on (`tap <scroll or list> drag 0 -300`), and `tap <action>` performs a row's swipe action"]
         }
         // Where the finger goes down: the request's point in the viewport, else the middle.
         let b = box(v), vp = presenter.viewport

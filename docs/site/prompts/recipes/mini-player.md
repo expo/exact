@@ -1,0 +1,14 @@
+```prompt Add a mini player above the tab bar
+Add a mini player to the Exact app in this folder: one element above the tab bar, on every tab. Use https://github.com/expo/exact/blob/main/docs/recipes/mini-player.md as the source for each step. The Exact checkout has the same page at docs/recipes/mini-player.md.
+
+1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
+2. The mini player needs a root `tablist`. If the app has none, stop and tell me: docs/recipes/tabs.md adds one. If I did not say what the mini player shows and when it shows, propose it from the app and ask me before you write code.
+3. In app.contract, write the element as a box with an `id`, after every tab panel the tablist links and before the tablist. Keep it outside the tablist, the panels and their routes, the sidebar's `footer`, a popover, a `dialog` and a `list`.
+4. Name the element on the root tablist: `navigationTabAccessory="<id>"`. Show and hide the element with `if` or `display`, and name none (`""`) while it is absent.
+5. Lay the content out to fit. On iOS 26 and later, UIKit places and sizes the element whatever `height` it says (48 points high on an iPhone 18 Pro with iOS 27), and makes it narrower inline. Leave its background unsaid unless the web needs one: a background you write paints over UIKit's glass. The web, the Mac and Android show the element where it is written, at the size it says.
+6. Fix each `lower-tab-accessory` error as its message says. If the app runs on iOS, read `bun exact.mjs agent ios logs` too: a development build writes there the reason the compiler could not prove.
+7. Add a test in app.test.contract that taps the mini player's button and expects its change, then taps another tab and expects the mini player there (`expect tree has`).
+8. Follow the platform checks in docs/start-here.md (`bun exact.mjs docs platform checks`) for the targets in the app's AGENTS.md and app.json until they pass. Read the reports, including counted findings; a zero exit code alone does not mean clean. Fix the app, not the test. If a finding stays after three rounds of fixes, or the app had it before you changed anything, record it (step 9) and report it; do not keep trying.
+9. When a doc was wrong or missing, or a step needed a workaround, read `bun exact.mjs feedback status`. Under `never`, keep no note. Otherwise record it: `bun exact.mjs feedback note "<what happened>"`, which goes to Expo only as that status says. Do not change the policy; tell me how many notes you kept.
+10. Tell me what the mini player shows and when, what the tests and checks reported, and the launch command for each target platform. iOS 17 to 25 have no accessory: there the element stays hidden under the shown tab bar, a known gap. Do not work around it.
+```

@@ -315,15 +315,35 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Ask again every resource watching a topic announced since the last
-    /// call: one commit per topic that anything watches. Announcements
-    /// between two calls coalesce, so a fast producer costs one re-ask.
+    /// call, in one commit for the topics between two of a module's events,
+    /// wakes or choices. Announcements between two calls coalesce, so a fast
+    /// producer costs one re-ask, and so does one change a module announces
+    /// under several names its reader watches.
     pub fn apply_announced(&mut self) -> (Vec<CommitReceipt>, Option<RunnerError>) {
         // A module's reply that carried handles may have left its
         // implementation for a request no longer in flight (LLP 1133.009 D6).
         self.dispose_dropped();
         let topics = std::mem::take(&mut *self.announced.lock().unwrap_or_else(|e| e.into_inner()));
         let mut receipts = Vec::new();
+        let mut changed = Vec::new();
+        let said = [
+            super::modules::EMITTED,
+            super::wakes::EXPIRED,
+            super::wakes::TOLD,
+            super::modules::CHOSEN,
+            super::modules::STATED,
+            super::modules::CLAIMED,
+        ];
         for topic in self.declaration_topics(topics) {
+            if !said.iter().any(|p| topic.starts_with(p)) {
+                changed.push(topic);
+                continue;
+            }
+            // What a module said is handled in order, after the topics
+            // announced before it.
+            if let Err(error) = self.changed_together(&mut changed, &mut receipts) {
+                return (receipts, Some(error));
+            }
             // An event a bound implementation emitted, said through its
             // module's `changed` (LLP 1133.004 D6): raised, not a topic.
             if let Some(event) = topic.strip_prefix(super::modules::EMITTED) {
@@ -358,18 +378,31 @@ impl<D: DataSource> Runner<D> {
             // A foreground-service claim under the agent (LLP 1133.033 D21).
             if let Some(claim) = topic.strip_prefix(super::modules::CLAIMED) {
                 self.foreground_service_told(claim);
-                continue;
             }
-            match self.changed(&topic) {
-                Ok(Some(receipt)) => receipts.push(receipt),
-                Ok(None) => {}
-                Err(error) => return (receipts, Some(error)),
-            }
+        }
+        if let Err(error) = self.changed_together(&mut changed, &mut receipts) {
+            return (receipts, Some(error));
         }
         // Then the module events raised meanwhile (LLP 1133.004 D6).
         let (events, error) = self.deliver_module_events();
         receipts.extend(events);
         (receipts, error)
+    }
+
+    /// Refresh the watchers of `topics`, announced together, in one commit,
+    /// and empty them.
+    fn changed_together(
+        &mut self,
+        topics: &mut Vec<String>,
+        receipts: &mut Vec<CommitReceipt>,
+    ) -> Result<(), RunnerError> {
+        if topics.is_empty() {
+            return Ok(());
+        }
+        let changed = self.changed(ResourceChange::Topics(topics));
+        topics.clear();
+        receipts.extend(changed?);
+        Ok(())
     }
 
     /// Refresh a topic's watchers or a source's readers in one commit.
@@ -388,9 +421,14 @@ impl<D: DataSource> Runner<D> {
         let change = change.into();
         let mut which = Vec::new();
         for i in 0..self.resources.len() {
+            let watching = &self.resources[i].watching;
             let (name, reads) = match change {
-                ResourceChange::Topic(topic) => {
-                    (topic, self.resources[i].watching.iter().any(|t| t == topic))
+                ResourceChange::Topic(topic) => (topic, watching.iter().any(|t| t == topic)),
+                ResourceChange::Topics(topics) => {
+                    match watching.iter().find(|t| topics.contains(t)) {
+                        Some(topic) => (topic.as_str(), true),
+                        None => ("", false),
+                    }
                 }
                 ResourceChange::Source(source) => {
                     (source, self.plan.str(self.resource_row(i).source) == source)
@@ -417,8 +455,9 @@ impl<D: DataSource> Runner<D> {
                 }
             }
             if let Some(ticket) = log {
+                let name = name.to_owned();
                 let resource = self.target_name(crate::Target::Resource(i));
-                self.log(super::lines::waits_for(name, ticket, &resource));
+                self.log(super::lines::waits_for(&name, ticket, &resource));
             }
             if !in_flight {
                 which.push(i);

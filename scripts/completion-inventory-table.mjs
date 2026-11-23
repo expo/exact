@@ -464,6 +464,7 @@ export const classifications = [
     ["painted:host/painted/src/window_title.rs", "WindowTitle::caption WindowTitle::update"],
     ["runner:runner/src/head.rs", "Runner::head Runner::inactive"],
     ["runner:runner/src/runner.rs", "Runner::data_ref Runner::derive Runner::failed_resources Runner::grants Runner::handlers Runner::handlers_of Runner::is_poisoned Runner::kernel Runner::last_instance_work Runner::log Runner::now_ms Runner::resource Runner::roots Runner::site_of Runner::slot"],
+    ["runner:runner/src/runner/apply.rs", "Runner::declared_parent Runner::declared_parents Runner::hidden_movers"],
     ["runner:runner/src/runner/resources.rs", "Runner::resource_draws_entropy"],
     ["runner:runner/src/runner/checkpoint.rs", "Runner::document_checkpoint"],
     ["runner:runner/src/runner/document.rs", "Runner::document_tree"],
@@ -855,9 +856,10 @@ export const classifications = [
     ["runner:runner/src/store/presence.rs", "Store::adopt_occupancy#revision:1 Store::set_locked#revision:1"],
   ]),
   group("replies", ["one-shot", "subscription", "durable operation"], "current presenter/reader session; a request may pump several completion families", "UI-owned",
-    "host/painted/src/agent.rs serve and agent/stdio.rs handle_request pump the current Presenter, then dispatch hold/picker answers and frame work. canvas/jni_agent.rs run calls agent_with_reader, which installs set_agent_turn only for the agent call and restores it afterward; pump.rs and commands.rs use that callback to hand out requests and admit queued reader answers.", [
+    "host/painted/src/agent.rs serve and agent/stdio.rs handle_request pump the current Presenter, then dispatch hold/picker answers and frame work; agent/attached.rs passive answers an attached session's reads with no pump. canvas/jni_agent.rs run calls agent_with_reader, which installs set_agent_turn only for the agent call and restores it afterward; pump.rs and commands.rs use that callback to hand out requests and admit queued reader answers.", [
     ["painted:host/painted/src/agent.rs", "serve"],
     ["painted:host/painted/src/agent/stdio.rs", "handle handle_for_window"],
+    ["painted:host/painted/src/agent/attached.rs", "passive"],
     ["painted:host/painted/src/canvas/agent.rs", "after_turn CanvasHost::agent_with_reader next_stream waiting"],
     ["painted:host/painted/src/canvas/jni_agent.rs", "run"],
     ["painted:host/painted/src/presenter/requests.rs", "Presenter::agent_reader_turn Presenter::set_agent_turn"],
@@ -1300,9 +1302,9 @@ export const classifications = [
     "The named painted adapter reads or updates the current Presenter through the runner or its Host forwarding API. host/painted/src/picker.rs configures app file roots and copies/selects paths for the current picker/share. Persistent copies are separate from the UI continuation receiving them.", [
     ["painted:host/painted/src/presenter/picker.rs",
       "Presenter::answer_document Presenter::answer_save Presenter::ask_portal Presenter::borrowed_files_chosen Presenter::deliver_picker Presenter::documents_chosen Presenter::finish_files " +
-      "Presenter::finish_portal_picks Presenter::finish_save Presenter::is_file_input Presenter::picked_targets Presenter::start_folder"],
+      "Presenter::document_picker Presenter::finish_portal_picks Presenter::finish_save Presenter::is_file_input Presenter::picked_targets Presenter::start_folder"],
     ["painted:host/painted/src/presenter/file_dialog.rs",
-      "FileDialog::start_folder Presenter::answer_file_dialog Presenter::drain_file_exports Presenter::finish_file_dialog Presenter::finish_file_exports Presenter::queue_file_dialog " +
+      "FileDialog::start_folder declared_types Presenter::answer_file_dialog Presenter::drain_file_exports Presenter::finish_file_dialog Presenter::finish_file_exports Presenter::queue_file_dialog " +
       "Presenter::serve_file_dialogs Presenter::take_file_dialogs"],
   ]),
   group("shared tokens", ["one-shot"], "share token in the live router; copying may outlive the initiating view", "UI-owned",

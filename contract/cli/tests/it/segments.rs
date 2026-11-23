@@ -10,19 +10,10 @@
 //! the fold's counts outrun (a host mid-switch, or an index past the grid)
 //! resolves to the rows' initial values.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, Offer, PropId, Rect};
-use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Fold, Posture, Runner};
+use exact_runner::{Fold, Posture, Runner};
 use std::path::Path;
-
-#[derive(Default)]
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
 
 fn corpus(name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -31,12 +22,12 @@ fn corpus(name: &str) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
-fn boot() -> Runner<NoData> {
+fn boot() -> Runner<Source> {
     let plan = contract::compile(&corpus("segments.contract")).unwrap();
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

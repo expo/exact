@@ -85,6 +85,7 @@ test('install owns only marked drags and restores the card’s draggable attribu
   field.closest = () => field;
   for (const element of [card, foreign]) {
     element.ownerDocument = document;
+    element.getRootNode = () => document;
     element.matches = (selector) => selector === '[draggable="true" i]' && element.getAttribute('draggable') === 'true';
     element.closest = () => null;
     element.setAttribute('data-datatransfertext', 'card');

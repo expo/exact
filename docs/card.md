@@ -4,19 +4,17 @@ functions: call -> result
   xs.at(i) -> option<T>  (-1 is last)
   back(router) -> Router
   calendarDiff(from, to, "years"|"months") -> option<number>  (whole; YYYY-MM-DD)
-  ceil(n) -> number
+  ceil|floor(n) -> number
   xs.concat(ys) -> T[]
-  cos(rad) -> number
+  cos|sin(rad) -> number
   depth(router) -> number
   elementFromPoint(x, y) -> option<string>
   elementsFromPoint(x, y) -> string[]
-  encodeRouteSegment(text) -> string
-  encodeURIComponent(text) -> string
+  encodeRouteSegment|encodeURIComponent(text) -> string
   text.endsWith(suffix) -> bool
   xs.filter(x => bool) -> T[]
   first(xs) -> option<T>
   xs.flat() -> T[]
-  floor(n) -> number
   formatDate(msOrDayKey, offset, "medium"|"month-year"|"month-day"|"iso") -> string
   formatDay(then, now, offset, "day"|"day-time"|"list"|"section") -> string  (Today)
   formatDecimal(units, digits) -> string  (cents to "12.34"; literal digits)
@@ -24,31 +22,27 @@ functions: call -> result
   formatTime(ms, offset, "short"|"2-digit") -> string  ("2:13 PM"; offset: min east of UTC)
   fragment(entry) -> string
   frame(id) -> Geometry  (action)
-  go(router, location) -> Router
+  go|open|push|replace(router, location) -> Router
   s.includes(x) -> bool  (text or list)
   s.indexOf(x) -> number  (-1 for none)
   s.isEmpty() -> bool
   xs.join(sep) -> string
   s.length -> number  (text or list)
   xs.map(x => U) -> U[]
-  max(a, b) -> number
+  max|min(a, b) -> number
   measure("id") -> Geometry  (action)
-  min(a, b) -> number
-  open(router, location) -> Router
   params(router, parameterName) -> string[]
   parseNumber(text) -> option<number>  (none for "12px")
   performanceNow() -> number  (ms since launch)
-  push(router, location) -> Router
   querySelectorAll(selector) -> string[]
   range(n) -> number[]
   rangeFrame(id, start, end) -> Geometry  (action)
-  replace(router, location) -> Router
   text.replaceAll(find, with) -> string
   round(n) -> number  (half up)
+  scrollMetrics(id) -> option<ScrollMetrics>
   searchParam(entry, name) -> string
   select(router, tabName) -> Router
   sharedFiles(entry, name) -> SharedFiles
-  sin(rad) -> number
   s.slice(start, end?) -> text|list
   sortBy(xs, x => key, "desc"?) -> T[]  (stable)
   text.split(separator) -> string[]
@@ -99,20 +93,18 @@ test steps (app.test.contract, docs/contract-grammar.md)
   clock data · clock settle · clock +5000 · reload
   back
   presence allow (cancel, fail, lockout, invalidated)
-  fail fetch "<prefix>", pass fetch …
-  drop stream "<prefix>"
+  fail fetch, pass fetch, drop stream "<prefix>"
   answer fetch "<prefix>" with 200 {…}, answer source s with {…}
   request POST "/items" {…} as grace expect 409
   size 390x844, at "/item/7#moves", epoch, time-zone, locale, seed, before data
 
-ops: a target is a testId, else a view's exact text or label
+ops:
   tree [<target>|--ax] · logs · layout|perf [<target>] · resize <w>x<h> · close · back
   state [<name>] [--full]  a state, resource or field, dotted: groceries.0.done; >8 KB: sizes
-  tap <target> [contextmenu|hover|drag <dx> <dy>|down|…] · tap up
+  tap <target> [contextmenu|hover|drag <dx> <dy>|down|…] · tap up (testId, exact text or label)
   type <target> <text>|key <Name>   (a select, date or checkbox: its value)
   clock data|settle|held|+<ms> [real]    replies · transitions · push
-  check [dark|both]  what is wrong · screenshot <png> [over <ms> every <ms>] [window]  window: bars
-  Android reader drives refuse film and play layers only under --live. Record a live or normal run with adb shell screenrecord.
+  check [dark|both]  what is wrong · screenshot <png> [over <ms> every <ms>] [window]  window: bars · --device captures display
   screenshot <png> compare <ref> · prefer <feature> <value> · fail|pass fetch <prefix>
 
 how (snippets compile)
@@ -142,7 +134,7 @@ a second screen, a sheet: Use a route for a screen. A sheet has `navigationPrese
             text "New" role="heading"
             button press=save buttonStyle="bordered-prominent" aria-label="Save"
               image "symbol:checkmark"
-a confirmation: Confirm irreversible actions: `aria-label` asks; `press` acts; `command="close"` closes. Cancel has no `press`. Open: `command="show-modal"` or `showModal(id)`.
+a confirmation: Confirm irreversible actions: `aria-label` asks; `press` acts; `command="close"` closes. Cancel has no `press`. `showModal(id)` opens it too.
   state n = 1
   action remove
     n = 0
@@ -153,7 +145,7 @@ a confirmation: Confirm irreversible actions: `aria-label` asks; `press` acts; `
       text "Delete"
     button commandfor="remove" command="close"
       text "Cancel"
-a timer: `every(ms, action)` repeats; `after(ms, action)` runs once. Options: `wait=frame|update|scrollend|idle`, `max=ms`, `tolerance=ms`. More: `vocab timers`.
+a timer: `every(ms, action)` repeats; `after(ms, action)` runs once. Options: `wait=frame|update|scrollend|idle`, `max=ms`, `tolerance=ms`.
   state now = 0
   task tick mount
     every(1000, step)

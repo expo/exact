@@ -1232,3 +1232,13 @@ test('controls name a tool or a url, with a title and a symbol (LLP 1126.004 D1)
     { kind: 'r', title: 'R', symbol: 'mic.fill', url: '/', authentication: 'always' },
   ]) assert.ok(check([bad]).length, JSON.stringify(bad));
 });
+
+test('the web manifest keeps a file handler’s file types and drops only its folder type', async () => {
+  const { webAppManifest } = await import('./app.mjs');
+  const file_handlers = [
+    { action: '/', name: 'Documents', accept: { 'application/pdf': ['.pdf'], 'inode/directory': [] } },
+    { action: '/', name: 'Folders', accept: { 'inode/directory': [] } },
+  ];
+  assert.deepEqual(webAppManifest({ file_handlers }, 'Docs').file_handlers,
+    [{ action: '/', name: 'Documents', accept: { 'application/pdf': ['.pdf'] } }]);
+});

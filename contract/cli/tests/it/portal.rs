@@ -1,9 +1,10 @@
 //! LLP 1013.002 D1, D3: `portal` is a string prop on the element it moves, and
 //! the compiler refuses what it can prove no placement could do.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, PropId, ViewId};
 use exact_plan::{BindingKind, Plan, Value};
-use exact_runner::{DataError, DataSource, Event, Runner};
+use exact_runner::{Event, Runner};
 use std::path::Path;
 
 fn corpus(name: &str) -> String {
@@ -101,19 +102,12 @@ fn what_placement_decides_compiles() {
 // its `portal` says, hides it where nothing can receive it, and keeps its
 // declaration for state, handlers and teardown.
 
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-
-fn boot(source: &str) -> Runner<NoData> {
+fn boot(source: &str) -> Runner<Source> {
     let plan = contract::compile(source).unwrap();
     let plan = Plan::decode(&plan.encode()).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -121,23 +115,23 @@ fn boot(source: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn view(r: &Runner<NoData>, test_id: &str) -> Option<ViewId> {
+fn view(r: &Runner<Source>, test_id: &str) -> Option<ViewId> {
     let key = r.kernel().find_first_by_test_id(test_id)?;
     Some(r.kernel().node_by_key(key)?.id)
 }
 
-fn parent(r: &Runner<NoData>, v: ViewId) -> Option<ViewId> {
+fn parent(r: &Runner<Source>, v: ViewId) -> Option<ViewId> {
     r.kernel().node(v).unwrap().parent
 }
 
-fn label(r: &Runner<NoData>, test_id: &str) -> String {
+fn label(r: &Runner<Source>, test_id: &str) -> String {
     let k = r.kernel();
     let button = k.node(view(r, test_id).unwrap()).unwrap();
     let text = k.node(button.children()[0]).unwrap();
     text.props.str(PropId::Text).unwrap().to_owned()
 }
 
-fn press(r: &mut Runner<NoData>, test_id: &str) {
+fn press(r: &mut Runner<Source>, test_id: &str) {
     let v = view(r, test_id).unwrap();
     r.dispatch(v, Event::Press).unwrap();
 }
@@ -480,7 +474,7 @@ fn a_reload_keeps_a_mover_declared_before_its_destination() {
     let plan = Plan::decode(&contract::compile(source).unwrap().encode()).unwrap();
     let again = Runner::boot_carrying(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         &r.carry(),
         Default::default(),
@@ -489,4 +483,79 @@ fn a_reload_keeps_a_mover_declared_before_its_destination() {
     .unwrap();
     assert_eq!(view(&again, "v"), Some(v));
     assert_eq!(parent(&again, v), view(&again, "d"));
+}
+
+#[test]
+fn hidden_movers_are_journaled_in_declaration_order() {
+    let movers: String = (0..8)
+        .map(|i| format!("      box portal=gone testId=\"m{i}\"\n"))
+        .collect();
+    let r = boot(&format!(
+        "component App\n  state gone = \"nowhere\"\n  view\n    column\n{movers}"
+    ));
+    let said: Vec<&str> = r.journal().filter(|l| l.contains("hides it")).collect();
+    let expected: Vec<String> = (0..8)
+        .map(|i| {
+            let v = view(&r, &format!("m{i}")).unwrap();
+            format!("view {v}: `portal=\"nowhere\"` hides it")
+        })
+        .collect();
+    assert_eq!(said.len(), expected.len(), "{said:#?}");
+    for (line, want) in said.iter().zip(&expected) {
+        assert!(line.contains(want.as_str()), "{said:#?}");
+    }
+}
+
+#[test]
+fn removing_movers_shown_apart_emits_their_ops_in_declaration_order() {
+    // Eight movers, each in its own destination, declared under one `if`.
+    let places: String = (0..8)
+        .map(|i| format!("      box id=\"d{i}\" testId=\"d{i}\"\n"))
+        .collect();
+    let movers: String = (0..8)
+        .map(|i| format!("        box portal=\"d{i}\" testId=\"m{i}\"\n"))
+        .collect();
+    let mut r = boot(&format!(
+        "component App\n  state alive = true\n  action kill\n    alive = false\n  view\n    column\n      button press=kill testId=\"kill\"\n        text \"Kill\"\n{places}      if alive\n       column\n{movers}"
+    ));
+    let movers: Vec<ViewId> = (0..8)
+        .map(|i| view(&r, &format!("m{i}")).unwrap())
+        .collect();
+    let places: Vec<ViewId> = (0..8)
+        .map(|i| view(&r, &format!("d{i}")).unwrap())
+        .collect();
+    for (m, d) in movers.iter().zip(&places) {
+        assert_eq!(parent(&r, *m), Some(*d));
+    }
+    let k = |r: &Runner<Source>, v: ViewId| r.kernel().node(v).unwrap().key;
+    let mover_keys: Vec<_> = movers.iter().map(|&m| k(&r, m)).collect();
+    let place_keys: Vec<_> = places.iter().map(|&d| k(&r, d)).collect();
+    let kill = view(&r, "kill").unwrap();
+    let receipt = r.dispatch(kill, Event::Press).unwrap();
+    let destroyed: Vec<_> = (receipt.destroyed.iter())
+        .filter(|key| mover_keys.contains(key))
+        .copied()
+        .collect();
+    assert_eq!(
+        destroyed, mover_keys,
+        "the movers' destroys in declaration order"
+    );
+    let mut touched: Vec<_> = (receipt.touched.iter())
+        .filter(|key| place_keys.contains(key))
+        .copied()
+        .collect();
+    touched.dedup();
+    assert_eq!(
+        touched, place_keys,
+        "the destinations' lists in declaration order"
+    );
+}
+
+#[test]
+fn a_mover_shown_in_its_own_declaration_parent_names_no_declaration() {
+    let r = boot("component App\n  view\n    column id=\"p\" testId=\"p\"\n      box portal=\"p\" testId=\"m\"\n");
+    let m = view(&r, "m").unwrap();
+    assert_eq!(parent(&r, m), view(&r, "p"));
+    assert_eq!(r.declared_parent(m), None, "it bubbles as any node does");
+    assert!(r.declared_parents().is_empty());
 }

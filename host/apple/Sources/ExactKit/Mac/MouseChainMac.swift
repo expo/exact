@@ -26,8 +26,10 @@ extension MouseSwipe: MouseRecognizer {
 }
 
 extension Presenter {
-    /// Only an open dialog or popover forwards a press to its authored parent.
+    /// Only an open dialog or popover, or a `portal` mover (LLP 1013.002 D1),
+    /// forwards a press to its authored parent.
     func presentationParent(of view: NSView) -> NSView? {
+        if let declared = declaredParent(of: view) { return declared }
         guard let node = view as? NodeView else { return nil }
         return dialogs.authoredParent(of: node) ?? menus.authoredParent(of: node) ?? dataTables.authoredRow(of: node)?.container
     }
@@ -312,7 +314,7 @@ final class MouseChain {
 
 extension NodeView {
     /// The innermost enabled `dblclick` from here up the authored tree
-    /// (`eventParent`); dispatched after this click's own `press`, the web's
+    /// (`pointerParent`); dispatched after this click's own `press`, the web's
     /// order (LLP 1057.001 §1 rule 5). Once an event, however many of the
     /// views on the way pass its up along.
     func dblclickTarget(_ event: NSEvent) -> NodeView? {
@@ -326,7 +328,7 @@ extension NodeView {
         var next: NSView? = self
         while let view = next {
             if let node = view as? NodeView, !node.disabled, node.handlers.contains("dblclick") { return node }
-            next = presenter.eventParent(of: view)
+            next = presenter.pointerParent(of: view)
         }
         return nil
     }
@@ -336,7 +338,7 @@ extension NodeView {
     /// or `pointerup` is held until the button comes up, wherever that is;
     /// the innermost hearing any of the three, `pointermove` included, also
     /// holds its drags as its moves (LLP 1056 §3 stage 3). Up the authored
-    /// tree (`eventParent`): a press in an open popover or a modal dialog
+    /// tree (`pointerParent`): a press in an open popover or a modal dialog
     /// reaches its ancestors, though its view is in the top layer.
     func pointerPressed(_ event: NSEvent?) {
         presenter?.focusByPointer = true
@@ -354,7 +356,7 @@ extension NodeView {
                 }
                 if node.handlers.contains("pointerdown") || node.handlers.contains("pointerup") { path.append(node) }
             }
-            next = presenter.eventParent(of: view)
+            next = presenter.pointerParent(of: view)
         }
         presenter.pointerPath = path.map(\.id)
         // A handler may remove or disable a node further up before its turn,
@@ -453,7 +455,7 @@ extension NodeView {
         presenter.pointer(held, .move, node.pointerSample(event))
     }
     /// A free pointer moving over this node: its `pointermove`, when no
-    /// node under it nearer in the authored tree (`eventParent`) hears one,
+    /// node under it nearer in the authored tree (`pointerParent`) hears one,
     /// at most one a display frame, the latest, as the web host sends it
     /// (`input-glue.js`; LLP 1056 §3). A mouse can report several a frame.
     /// The hit is in the event's window: a popover's or a sheet's own.
@@ -464,7 +466,7 @@ extension NodeView {
         var view: NSView? = hit
         while let v = view, v !== self {
             if let n = v as? NodeView, n.handlers.contains("pointermove"), !n.disabled, !n.inert { return }
-            view = presenter.eventParent(of: v)
+            view = presenter.pointerParent(of: v)
         }
         guard view === self else { return }
         presenter.hoverMoved(id, pointerSample(event))
@@ -546,6 +548,12 @@ extension NodeView {
     }
 }
 extension Presenter {
+    /// What a pointer's events, `dblclick`, `wheel` and `contextmenu` bubble
+    /// to from `view`: a `portal` mover's declaration parent
+    /// (`declaredParent`), else its authored parent (`eventParent`).
+    func pointerParent(of view: NSView) -> NSView? {
+        declaredParent(of: view) ?? eventParent(of: view)
+    }
     /// A press in a text area or an input reports its `pointerdown` here,
     /// from the window's monitor, before NSWindow gives the editor the focus
     /// (the old field's `change` and `blur`, the new one's `focus`), as
@@ -763,7 +771,7 @@ extension Presenter {
             if let node = current as? NodeView, !node.disabled, node.handlers.contains("pointermove") {
                 node.pointerHovered(event); break
             }
-            view = eventParent(of: current)
+            view = pointerParent(of: current)
         }
         view = leaf
         while let current = view {

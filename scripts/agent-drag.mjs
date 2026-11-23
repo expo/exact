@@ -192,12 +192,11 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
     try { dragArguments({ ...opts, to: undefined }); }
     catch (error) { throw new Error(error.message); }
   }
-  const { dx, dy, from, into, mouse = false, modifiers, press = 0, over = 250, hold = 0, during = [] } = opts, drag = { dx, dy, press, over, hold, during, ...(into ? { into } : {}) }, said = { dx, dy, press, over, hold, ...(mouse ? { mouse } : {}), ...(modifiers ? { modifiers } : {}), ...(opts.to !== undefined ? { to: opts.to } : {}) };
+  const legs = dragLegs(opts);
+  const { dx, dy, from, into, mouse = false, modifiers, press = 0, over = 250, hold = 0, during = [] } = opts, drag = { dx, dy, press, over, hold, during, ...(into ? { into } : {}) }, said = { dx, dy, press, over, hold, ...(mouse ? { mouse } : {}), ...(modifiers ? { modifiers } : {}), ...(opts.to !== undefined ? { to: opts.to } : {}), ...(opts.path ? { path: legs.slice(1).map(({ during: _, press: __, ...leg }) => leg) } : {}) };
   // `mouse` (files diary F10): the left button, where the carrier's contact
   // is otherwise a finger (the web's); a desktop host's contact is the mouse.
   if (mouse && (carrier.touches || ['ios', 'host-ios'].includes(host))) throw new Error('drag: mouse is a desktop pointer\'s; an iOS contact is a finger');
-  const legs = dragLegs(opts);
-  if (opts.path && !carrier.touches) throw new Error('drag: a scripted path needs the iOS touch runner (--touch platform)');
   const moves = legs.some(l => l.dx !== 0 || l.dy !== 0);
   // The touch runner lifts at the end of its scripted hold, and its ops start after the press and the move: without a hold they would find the finger lifted.
   if (carrier.touches && legs.some(l => l.during.length && !(l.hold > 0))) throw new Error('drag: under --touch platform, during runs after the press and the move, inside the scripted hold: give hold <ms>, the time the ops run in');
@@ -254,17 +253,23 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
   if (carrier.touches) {
     let r;
     // A still drag's ops first wait up to `REACH_MS` for the touch to reach its view, inside the finger's time: the
-    // runner holds that much longer, and the reply says the hold asked. The hold also moves the agent's clock by its
-    // length, so the app's `every` and `after` run while the finger is held (euxy FRICTION 10), as `tap down`,
-    // `clock +<ms> real`, `tap up` does; the finger is held only as long as asked (`heldTick`). Under platform timing
-    // the clock is the wall's already.
+    // runner holds that much longer, and the reply says the hold asked. The gesture also moves the agent's clock by its
+    // press, travel and holds as the finger makes them, so the app's `every` and `after` run while it is down (euxy
+    // FRICTION 10) and its own `performanceNow()` reads a hold's length (#1333), as `tap down`, `clock +<ms> real`,
+    // `tap up` does; the finger is held only as long as asked (`heldTick`). Under platform timing the clock is the
+    // wall's already.
     const reach = !moves && during.length ? REACH_MS : 0;
-    const tick = hold > 0 && timing !== 'platform' ? heldTick(s, s.now + hold, target) : undefined;
-    let heldTime = hold;
-    const path = opts.path?.map(l => {
-      heldTime += l.hold ?? 0;
-      return { ...l, during: (l.during ?? []).map(held), ...(timing !== 'platform' && l.hold > 0 ? { tick: heldTick(s, s.now + heldTime, target) } : {}) };
-    });
+    // The runner's offsets count the reach inside the first leg's hold; the clock counts only the time asked.
+    const base = s.now, first = press + (dx || dy ? over : 0) + hold;
+    const asked = (ms) => ms <= first + reach ? Math.min(ms, first) : ms - reach;
+    // A `during` clock counts toward its leg's hold, and what it moves past that moves the rest of the gesture later,
+    // as on the carriers' phases below: the steps never pass their target, so a clock already past one was moved so.
+    let carry = 0;
+    const tick = timing !== 'platform' ? (ms) => {
+      carry = Math.max(carry, s.now - base - asked(ms));
+      return heldTick(s, base + asked(ms) + carry, target);
+    } : undefined;
+    const path = opts.path?.map(l => ({ ...l, during: (l.during ?? []).map(held) }));
     try { r = await carrier.input(node.id, 'drag', { at: from ? start : undefined, drag: { ...drag, hold: hold + reach, during: during.map(held), ...(tick ? { tick } : {}), ...(path ? { path } : {}) } }); }
     catch (error) { throw await tapRefusal(s, target, error); }
     return noted(await s.landed({ ...r, ...(r.drag ? { drag: { ...r.drag, hold } } : {}), target, ...(scrolled ? { scrolled } : {}), carrier: host, mode: timing }), await reorderNotes(s, mark));
@@ -296,7 +301,7 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
     if (down.delivery === 'unsupported' && ['ios', 'host-ios'].includes(host)) {
       // iOS holds no contact across requests: one request moves the scroller with the finger (LLP 1116.003).
       // Any other drag is refused, never answered `unsupported` as a success.
-      if (during.length) throw new Error('drag: during needs the finger held down, which only --touch platform does on iOS (LLP 1080.000 §11)');
+      if (during.length || opts.path) throw new Error(`drag: ${opts.path ? 'then' : 'during'} needs the finger held down, which only --touch platform does on iOS (LLP 1080.000 §11)`);
       const r = await carrier.ask({ op: 'tap', id: node.id, scrollDrag: [dx, dy], ms: over, ...(from ? { from: start } : {}) });
       if (r.error) throw new Error(r.error);
       return noted(await s.tagged({ ...r, target, ...(scrolled ? { scrolled } : {}), drag: said, carrier: host, mode: timing }), [...(moves ? still(r, target) : []), ...await reorderNotes(s, mark)]);
@@ -309,16 +314,22 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
     // web and macOS to skip the wall sleep; Linux already seeks and reports `clock`.
     const seek = timing !== 'platform' ? { virtual: true } : {};
     if (press) await phase('hold', { ms: press, ...seek });
-    if (moves) await phase('move', { dx, dy, ms: over });
-    // The ops run where the finger has moved to, each bounded by the gesture's own bound.
-    for (const op of during) {
-      let timer;
-      const late = new Promise((_, no) => { timer = setTimeout(() => no(new Error(`drag: an op during it outlasted ${DRAG_BOUNDS.total} ms`)), DRAG_BOUNDS.total); });
-      const running = held(op)();
-      running.catch(() => {});
-      try { done.push(await Promise.race([running, late])); } finally { clearTimeout(timer); }
+    // Each leg (`then`) moves on from where the one before ended, runs its ops there, and holds.
+    for (const leg of legs) {
+      if (leg.dx || leg.dy) await phase('move', { dx: leg.dx, dy: leg.dy, ms: leg.over });
+      // The ops run where the finger has moved to, each bounded by the gesture's own bound. A clock they move counts
+      // toward the leg's hold under the agent's clock.
+      const before = s.now;
+      for (const op of leg.during) {
+        let timer;
+        const late = new Promise((_, no) => { timer = setTimeout(() => no(new Error(`drag: an op during it outlasted ${DRAG_BOUNDS.total} ms`)), DRAG_BOUNDS.total); });
+        const running = held(op)();
+        running.catch(() => {});
+        try { done.push(await Promise.race([running, late])); } finally { clearTimeout(timer); }
+      }
+      const moved = timing !== 'platform' && s.now > before ? s.now - before : 0, hold = Math.max(0, leg.hold - moved);
+      if (hold) await phase('hold', { ms: hold, ...seek });
     }
-    if (hold) await phase('hold', { ms: hold, ...seek });
     up = await phase('up');
   } catch (error) {
     // Never leave the finger down: cancel, else lift (AppKit has no cancel). If neither is confirmed the contact stays recorded, and says so.

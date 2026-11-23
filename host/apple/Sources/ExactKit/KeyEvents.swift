@@ -150,6 +150,19 @@ extension Presenter {
         #endif
         return view.superview
     }
+    /// A `portal` mover's declaration parent (LLP 1013.002 D1): where an
+    /// event Exact delivers bubbles from it. Layout, hit-testing, inertness,
+    /// focus order and accessibility keep the parent it is shown in
+    /// (`eventParent`).
+    package func declaredParent(of view: KeyPlatformView) -> KeyPlatformView? {
+        guard let node = view as? NodeView, let raw = node.props["declaredParent"], let id = UInt32(raw) else { return nil }
+        #if os(iOS) || os(tvOS)
+        // A box left empty may be a layer (a flat leaf, which hears nothing): its host.
+        return views[id] ?? flats.host(of: id)
+        #else
+        return views[id]
+        #endif
+    }
     /// Whether `view` is `ancestor` or under it through authored parents
     /// (`eventParent`), a presented route's content under its route's logical
     /// ancestors included.
@@ -170,18 +183,19 @@ extension Presenter {
         }
         var next: KeyPlatformView? = target
         while let view = next {
+            let node = view as? NodeView
             // An event out of a presentation still reaches the document's
             // ancestors, which only an authored `inert` silences.
-            let silenced = (view as? NodeView)?.authoredInert == true
-            if let node = view as? NodeView, views[node.id] === node, !node.formDisabled, !silenced {
+            if let node, views[node.id] === node, !node.formDisabled, !node.authoredInert {
                 path.append((node.id, node.handlers))
             }
             #if os(iOS) || os(tvOS)
             // Keys leave the sheet; eventParent's inertness walks stay inside it.
-            if let node = view as? NodeView, let parent = dialogs.authoredParent(of: node) { next = parent }
+            if let parent = declaredParent(of: view) { next = parent }
+            else if let node, let parent = dialogs.authoredParent(of: node) { next = parent }
             else { next = menus.logicalParent(of: view) ?? eventParent(of: view) }
             #else
-            next = eventParent(of: view)
+            next = declaredParent(of: view) ?? eventParent(of: view)
             #endif
         }
         var prevented = false

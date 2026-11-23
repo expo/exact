@@ -4,6 +4,7 @@
 //! a press whose caller cancelled it is admitted no further name held to
 //! the person.
 
+use crate::source::{boxed, Source};
 use exact_runner::{agent, CallHow, Runner, Value};
 #[cfg(unix)]
 use std::os::unix::fs::symlink as symlink_dir;
@@ -100,12 +101,12 @@ impl exact_runner::DataSource for Later {
     }
 }
 
-fn boot(app: &App) -> Runner<Later> {
+fn boot(app: &App) -> Runner<Source> {
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     Runner::boot(
         plan,
-        Later,
+        boxed(Later),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -113,32 +114,32 @@ fn boot(app: &App) -> Runner<Later> {
     .unwrap()
 }
 
-fn digest(r: &Runner<Later>, kind: &str) -> String {
+fn digest(r: &Runner<Source>, kind: &str) -> String {
     let state = state(r);
     let rows = state["controls"].as_array().unwrap();
     let row = rows.iter().find(|c| c["kind"] == kind).unwrap();
     row["digest"].as_str().unwrap().to_owned()
 }
 
-fn state(r: &Runner<Later>) -> serde_json::Value {
+fn state(r: &Runner<Source>) -> serde_json::Value {
     serde_json::from_str(&agent::handle(r, r#"{"op":"state"}"#)).unwrap()
 }
 
-fn logs(r: &Runner<Later>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     agent::handle(r, r#"{"op":"logs"}"#)
 }
 
-fn calls(r: &Runner<Later>) -> Vec<serde_json::Value> {
+fn calls(r: &Runner<Source>) -> Vec<serde_json::Value> {
     state(r)["intents"]["calls"].as_array().unwrap().clone()
 }
 
-fn settle(r: &mut Runner<Later>) {
+fn settle(r: &mut Runner<Source>) {
     let at = r.now_ms();
     r.advance(at).unwrap();
 }
 
 /// Answer the one `add` in flight.
-fn answer_add(r: &mut Runner<Later>) {
+fn answer_add(r: &mut Runner<Source>) {
     let out = r.take_requests();
     let add = out
         .iter()
@@ -153,7 +154,7 @@ fn answer_add(r: &mut Runner<Later>) {
     settle(r);
 }
 
-fn press(r: &mut Runner<Later>, kind: &str, digest: &str) -> u64 {
+fn press(r: &mut Runner<Source>, kind: &str, digest: &str) -> u64 {
     let id = r.press_control(kind, digest, CallHow::default()).unwrap();
     settle(r);
     id

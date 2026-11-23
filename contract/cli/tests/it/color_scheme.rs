@@ -1,22 +1,15 @@
 //! LLP 1034 §8: `color-scheme` on a subtree.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::Kernel;
 use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Runner};
+use exact_runner::Runner;
 
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-
-fn boot(src: &str) -> Runner<NoData> {
-    let plan = contract::bake(contract::compile(src).unwrap(), NoData).unwrap();
+fn boot(src: &str) -> Runner<Source> {
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -118,8 +111,8 @@ fn a_chosen_scheme_is_kept_and_asked_in_the_next_launchs_boot() {
     .unwrap();
     let launch = |snapshot: Vec<(String, Vec<u8>)>| {
         Runner::boot_stored(
-            contract::bake(plan.clone(), NoData).unwrap(),
-            NoData,
+            contract::bake(plan.clone(), boxed(NoData)).unwrap(),
+            boxed(NoData),
             Kernel::with_monospace(),
             snapshot,
             Default::default(),
@@ -127,7 +120,7 @@ fn a_chosen_scheme_is_kept_and_asked_in_the_next_launchs_boot() {
         )
         .unwrap()
     };
-    let schemes = |r: &mut Runner<NoData>| -> Vec<Value> {
+    let schemes = |r: &mut Runner<Source>| -> Vec<Value> {
         (r.take_commands().into_iter())
             .filter(|c| c.name == "setScheme")
             .flat_map(|c| c.args)
@@ -159,8 +152,8 @@ fn a_chosen_scheme_is_kept_and_asked_in_the_next_launchs_boot() {
     let plain = contract::compile("component App\n  view\n    text \"page\"\n").unwrap();
     let kept = vec![("exact.state.#scheme".to_string(), b"\"dark\"".to_vec())];
     let mut r = Runner::boot_stored(
-        contract::bake(plain.clone(), NoData).unwrap(),
-        NoData,
+        contract::bake(plain.clone(), boxed(NoData)).unwrap(),
+        boxed(NoData),
         Kernel::with_monospace(),
         kept,
         Default::default(),

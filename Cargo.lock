@@ -4946,7 +4946,22 @@ dependencies = [
  "contract",
  "exact-bake",
  "exact-data-host",
+ "exact-logic",
  "exact-painted",
+ "ibex2-sqlite",
+ "photos-fixture-data",
+]
+
+[[package]]
+name = "photos-fixture-apple"
+version = "0.1.0"
+dependencies = [
+ "contract",
+ "exact-apple",
+ "exact-bake",
+ "exact-data-host",
+ "exact-logic",
+ "ibex2-sqlite",
  "photos-fixture-data",
 ]
 
@@ -4954,9 +4969,12 @@ dependencies = [
 name = "photos-fixture-data"
 version = "0.1.0"
 dependencies = [
+ "contract",
  "exact-data",
+ "exact-data-host",
  "exact-plan",
  "exact-runner",
+ "ibex2-sqlite",
  "serde_json",
 ]
 

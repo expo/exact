@@ -1,6 +1,7 @@
 //! @ref LLP 1133.024 D2, D3 — a received share is one location, and its
 //! files arrive by token after its text.
 use crate::scratch::Scratch;
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, PropValue};
 use exact_runner::share_in::{self, Claims, Pending, PendingFile, ShareTarget, SharedFiles};
 use exact_runner::time::{launching_with, Launch};
@@ -32,7 +33,7 @@ component App
         text `${f.name} ${f.type} ${f.size} ${f.path}` testId="file"
 "#;
 
-fn text_of(r: &Runner<NoData>, id: &str) -> Vec<String> {
+fn text_of(r: &Runner<Source>, id: &str) -> Vec<String> {
     let k = r.kernel();
     k.find_by_test_id(id)
         .into_iter()
@@ -50,12 +51,12 @@ fn text_of(r: &Runner<NoData>, id: &str) -> Vec<String> {
         .collect()
 }
 
-fn boot(launch: Launch, location: &str) -> Runner<NoData> {
+fn boot(launch: Launch, location: &str) -> Runner<Source> {
     let plan = contract::compile(SOURCE).unwrap();
     launching_with(launch, || {
         Runner::boot(
             plan,
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             location,
@@ -64,7 +65,7 @@ fn boot(launch: Launch, location: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn navigate(r: &mut Runner<NoData>, location: &str) {
+fn navigate(r: &mut Runner<Source>, location: &str) {
     let root = r.kernel().roots()[0];
     r.dispatch(root, exact_runner::Event::Navigate(location.into()))
         .unwrap();

@@ -136,10 +136,12 @@ extension Presenter {
     }
 
     /// A button's click reaches a handler above it even when the button owns
-    /// its invocation. Invocation ownership stays with the originating button.
+    /// its invocation, through a `portal` mover's declaration (LLP 1013.002
+    /// D1). Invocation ownership stays with the originating button.
     func buttonPressListener(above source: NodeView, at point: CGPoint? = nil) -> NodeView? {
-        var child: KeyPlatformView = source, crossed = false
+        var child: KeyPlatformView = source, crossed = false, declared = false
         func parent(of view: KeyPlatformView) -> KeyPlatformView? {
+            if let parent = declaredParent(of: view) { declared = true; return parent }
             #if os(macOS)
             return eventParent(of: view)
             #else
@@ -150,7 +152,8 @@ extension Presenter {
             crossed = crossed || view !== child.superview
             child = view
             guard let node = view as? NodeView else { continue }
-            guard !node.disabled, !node.authoredInert else { return nil }
+            // Past a declaration, inertness is the shown tree's, which the hit read (LLP 1013.002 D1).
+            guard !node.disabled, declared || !node.authoredInert else { return nil }
             if node.handlers.contains("press") {
                 if let point, !crossed, !node.bounds.contains(node.local(point)) { return nil }
                 return node

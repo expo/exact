@@ -23,6 +23,12 @@ import {
   postInto,
 } from './agent-keys.mjs';
 import { appShareTarget, driverShare, webShareLocation } from './share-target.mjs';
+
+/** A timed move's sample spacing under the agent's clock: a 60 Hz frame, as each carrier spaces one. */
+const FRAME_MS = 16;
+/** The longest timed move the driver steps; past it the carrier's own bound answers, as a drag's `over` is bounded. */
+const MOVE_MS = 2000;
+
 /** The input methods of session `s` over `carrier`, which `open` adds to `s`. */
 export function sessionInput(s, { carrier, host, timing, touch, app }) {
   return {
@@ -383,11 +389,35 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
       return r.scrolled ? { from: r.from, to: r.to } : null;
     },
     /** The held contact's next phase (LLP 1035.003 D1): `move` to `{x, y}` in the viewport or `by` `{dx, dy}`,
-     * over `ms` of real time on platform carriers or event timestamps on Linux, without seeking its runner; `hold` for
-     * `ms`; `up`; `cancel`.
+     * over `ms`; `hold` for `ms`; `up`; `cancel`. Under platform timing a move's samples are spaced on real time (event
+     * timestamps on Linux); under the agent's they are one a frame, the clock moved to each sample's time before it, so
+     * the app reads the move as lasting `ms` (#1333).
      * The platform owns hit-testing, recognition, scrolling and animation: the app receives whatever it delivers,
      * and a carrier that cannot hold a contact answers `delivery: "unsupported"` rather than faking one. */
     async pointer(phase, opts = {}) {
+      // One sample at most each `FRAME_MS`, as the carriers space a timed move; a sample refused partway, or a contact
+      // the carrier ended, answers as the move. A clock the display holds (live frame capture, `--live`) refuses the
+      // first step, and the move is then the carrier's own, on real time.
+      const clockedMove = async (opts) => {
+        const { x, y, dx = 0, dy = 0, ms, ...rest } = opts;
+        const from = s.contact, to = [x ?? from.x + dx, y ?? from.y + dy], steps = Math.ceil(ms / FRAME_MS);
+        let r, at, delivered = 0;
+        for (let i = 1, done = 0; i <= steps; i++) {
+          // Whole milliseconds until the last, so the clock's sum is exact; each sample at most `FRAME_MS` on.
+          const t = i === steps ? ms : Math.floor((ms * i) / steps), f = i / steps;
+          try { await s.clock(`+${t - done}`); } catch (error) {
+            if (i === 1 && /display's clock|--live/.test(error.message)) return carrier.input(null, 'move', opts);
+            throw error;
+          }
+          r = await carrier.input(null, 'move', { ...(i === 1 ? rest : {}), x: from.x + (to[0] - from.x) * f, y: from.y + (to[1] - from.y) * f, ms: t - done });
+          done = t;
+          if (r.error || r.delivery === 'unsupported' || r.contact === false) break;
+          delivered++;
+          at = Array.isArray(r.at) ? r.at : [from.x + (to[0] - from.x) * f, from.y + (to[1] - from.y) * f];
+        }
+        // Where the delivered samples left the contact, when a later one was refused without saying.
+        return r.error && !Array.isArray(r.at) && delivered ? { ...r, at } : r;
+      };
       pointerArguments(phase, opts);
       if (s.held) throw new Error(`a drag's finger is down (${s.held}): only reads and the clock until it lifts`);
       // the clock's, as a drag's; real time under --timing platform, for UIKit's recognizers
@@ -429,7 +459,7 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
           mode: timing,
         }); // one real touch, played at the lift (agent-drag.mjs)
       const before = s.now,
-        r = await carrier.input(null, phase, opts);
+        r = phase === 'move' && timing !== 'platform' && opts.ms > 0 && opts.ms <= MOVE_MS ? await clockedMove(opts) : await carrier.input(null, phase, opts);
       if (r.delivery !== 'unsupported') {
         if (Number.isFinite(r.clock)) s.now = r.clock;
         if (r.contact === false || phase === 'up' || phase === 'cancel') s.contact = null;

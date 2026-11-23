@@ -1,0 +1,14 @@
+```prompt Read my camera's calibration
+Make the Exact app in this folder read the calibration of its open camera track: the intrinsic matrix, and what the platform reports with it. Use https://github.com/expo/exact/blob/main/docs/recipes/camera-calibration.md as the source for each step. The Exact checkout has the same page at docs/recipes/camera-calibration.md.
+
+1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me. Find the Exact checkout (the folder with scripts/exact.mjs); if you cannot find it, ask me where it is.
+2. The package reads an open `@exact/media-capture` video track and opens no camera. If the app has no viewfinder that shows such a track, stop and tell me. If I did not say which fields the app needs and what it does with them, ask me before you write code. The recipe has code for Android and iOS only.
+3. Add the fixture by path, with the absolute path of the Exact checkout: `bun add @fixture/camera-calibration@file:/absolute/path/to/exact/packages/fixtures/camera-calibration`.
+4. In app.contract, place a component beside the viewfinder that reads `getCameraCalibration(track=track)` as a resource of shape `CameraCalibration`. Pass the track ID, not its stream ID. Keep a consumer such as `exact-camera` showing the track while the app reads it.
+5. Refresh the resource (`refresh calibration`) after the viewfinder starts, and after the camera, format, zoom or focus changes.
+6. Keep `deviceId`, `referenceFrame` and `referenceDimensions` with `intrinsicMatrix` (nine row-major numbers). An empty array is a field the platform did not report: never read it as zero, and never guess a value. While `reason` is not empty, the intrinsics are absent: show or keep the reason.
+7. Add a test in app.test.contract for what the app shows without intrinsics: the agent substitute returns `reason="agent"`.
+8. Follow the platform checks in docs/start-here.md (`bun exact.mjs docs platform checks`) for the targets in the app's AGENTS.md and app.json until they pass. Read the reports, including counted findings; a zero exit code alone does not mean clean. Fix the app, not the test. If a finding stays after three rounds of fixes, or the app had it before you changed anything, record it (step 9) and report it; do not keep trying.
+9. When a doc was wrong or missing, or a step needed a workaround, read `bun exact.mjs feedback status`. Under `never`, keep no note. Otherwise record it: `bun exact.mjs feedback note "<what happened>"`, which goes to Expo only as that status says. Do not change the policy; tell me how many notes you kept.
+10. Tell me which fields the app reads and where it keeps them, what the tests and checks reported, and what I must check on a phone: what its camera delivers. Many Android devices report no intrinsics, and the iOS video matrix comes without distortion tables or physical sensor dimensions.
+```

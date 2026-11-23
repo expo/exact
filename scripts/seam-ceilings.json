@@ -19,7 +19,7 @@
   },
   "counts": {
     "nodeViewCasts": {
-      "ceiling": 604,
+      "ceiling": 603,
       "sites": [
         "host/apple/Sources/ExactAnimations/CssAnimationPlay.swift: (layer.delegate as? NodeView",
         "host/apple/Sources/ExactCollections/Collection.swift: current as? NodeView",
@@ -389,7 +389,6 @@
         "host/apple/Sources/ExactKit/IOS/TouchIOS.swift: v as? NodeView",
         "host/apple/Sources/ExactKit/IOS/VibrancyIOS.swift: (s as? NodeView",
         "host/apple/Sources/ExactKit/IOS/VibrancyIOS.swift: $0 as? NodeView",
-        "host/apple/Sources/ExactKit/KeyEvents.swift: (view as? NodeView",
         "host/apple/Sources/ExactKit/KeyEvents.swift: field.delegate as? NodeView",
         "host/apple/Sources/ExactKit/KeyEvents.swift: root.subviews.first as? NodeView",
         "host/apple/Sources/ExactKit/KeyEvents.swift: v as? NodeView",
@@ -816,7 +815,7 @@
         "host/apple/Sources/ExactKit/IOS/AgentNativeIOS.swift: if d + 1 > depth { if !v.subviews.isEmpty { cut(\"depth\") }; return }",
         "host/apple/Sources/ExactKit/IOS/AgentNativeIOS.swift: if let w = vp.window, let container = vp.superview {",
         "host/apple/Sources/ExactKit/IOS/AgentPanIOS.swift: at = current.superview",
-        "host/apple/Sources/ExactKit/IOS/AgentPanIOS.swift: current = (v as? NodeView)?.presenter?.listenerParent(of: v) ?? v.superview",
+        "host/apple/Sources/ExactKit/IOS/AgentPanIOS.swift: current = presenter?.declaredParent(of: v) ?? presenter?.listenerParent(of: v) ?? v.superview",
         "host/apple/Sources/ExactKit/IOS/AgentPanIOS.swift: f = cur.superview",
         "host/apple/Sources/ExactKit/IOS/AgentPanIOS.swift: if let owner = sv.superview as? NodeView, presenter.collections.animating.contains(owner.id) { presenter.collections.animationEnded(owner.id, dragging: true) }",
         "host/apple/Sources/ExactKit/IOS/AgentPanIOS.swift: let list = presenter.groupedLists?.scroller(for: v.id).flatMap { $0.superview === v ? $0 : nil }",
@@ -1063,7 +1062,7 @@
         "host/apple/Sources/ExactKit/Mac/MouseChainMac.swift: view = pane != nil && current.superview === pane ? authoredSuperview(of: current) : current.superview",
         "host/apple/Sources/ExactKit/Mac/MouseEventsMac.swift: ancestor = view.superview",
         "host/apple/Sources/ExactKit/Mac/MouseEventsMac.swift: crossed = crossed || parent !== at.superview",
-        "host/apple/Sources/ExactKit/Mac/MouseEventsMac.swift: guard let presenter, let parent = presenter.eventParent(of: self), parent !== superview else { return false }",
+        "host/apple/Sources/ExactKit/Mac/MouseEventsMac.swift: guard let presenter, let parent = presenter.pointerParent(of: self), parent !== superview else { return false }",
         "host/apple/Sources/ExactKit/Mac/MouseEventsMac.swift: let rect = (clip.superview?.superview as? NodeView).map {",
         "host/apple/Sources/ExactKit/Mac/MouseEventsMac.swift: let rect = (clip.superview?.superview as? NodeView).map {",
         "host/apple/Sources/ExactKit/Mac/MouseEventsMac.swift: next = view.superview",

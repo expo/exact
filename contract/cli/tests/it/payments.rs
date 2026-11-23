@@ -7,6 +7,7 @@
 //! final handler; budgets run on the session's clock; and D6's phases
 //! differ by target as each wallet's do.
 
+use crate::source::{boxed, Source};
 use exact_runner::{
     Answer, CallOrigin, DataError, DataSource, Dispatch, HoldAnswer, Outcome, Reply, Request,
     Response, Runner, Store, Value, Work,
@@ -140,7 +141,7 @@ impl DataSource for Tools {
 
 /// The host: the runner, and the print lab's requests, which it never answers itself.
 struct Host {
-    r: Runner<Tools>,
+    r: Runner<Source>,
     tools: Tools,
     lab: Vec<u64>,
     /// Held sends' executor tokens, and their requests' tickets.
@@ -160,7 +161,7 @@ impl Host {
         };
         let mut r = Runner::boot(
             plan,
-            tools.clone(),
+            boxed(tools.clone()),
             exact_kernel::Kernel::with_monospace(),
             Default::default(),
             "/",

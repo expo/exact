@@ -4,15 +4,9 @@
 //! that runs the action, disabled where the row is, the row styled as its
 //! grouped list's row with its inset inside it.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, Offer, PropId};
-use exact_runner::{DataError, DataSource, Event, Runner, Value};
-
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::{Event, Runner, Value};
 
 /// Notes `1` and the locked `2`, and `list` as the view under a 402 × 874 column.
 fn app(list: &str) -> String {
@@ -25,15 +19,15 @@ fn app(list: &str) -> String {
     )
 }
 
-fn boot(list: &str) -> Runner<NoData> {
+fn boot(list: &str) -> Runner<Source> {
     let plan = contract::bake(
         contract::compile(&app(list)).unwrap_or_else(|e| panic!("{e}")),
-        NoData,
+        boxed(NoData),
     )
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -46,7 +40,7 @@ fn boot(list: &str) -> Runner<NoData> {
     r
 }
 
-fn id(r: &Runner<NoData>, test_id: &str) -> Option<u32> {
+fn id(r: &Runner<Source>, test_id: &str) -> Option<u32> {
     let k = r.kernel();
     k.find_by_test_id(test_id)
         .first()

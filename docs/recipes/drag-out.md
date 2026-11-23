@@ -5,9 +5,9 @@ Files, the other pane of a split screen) says so with HTML's `draggable`
 attribute and declares what the drag carries (LLP 1094.000). A press held on
 the node lifts it on iOS and Android, and a mouse drags it on the Mac; the
 drop gets the file itself. On the web the browser drags it, with the file's
-URL. `tree` and `expect drag` work on every host.
+URL. `tree` and `expect drag` work on all hosts.
 
-```contract
+```text
 fn thumb(l: Landmark): string = `assets/apple/${l.id}-thumb.jpg`
 
 link href=path("landmark", l.id) press=open(path("landmark", l.id)) aria-label=l.name draggable=true dataTransfer=DataTransfer(files=[thumb(l)]) testId=`card-${l.id}`
@@ -51,7 +51,7 @@ refused and journaled as `drag: refused: …`, and `tree` shows the node's
 `draggable` and `dataTransfer…` props as admitted. An authored test asserts
 them, the same on every host:
 
-```contract
+```contract-test
 test "a card carries its landmark's thumbnail for a drag"
   clock settle
   expect drag "card-1016" has "image/jpeg" name "1016-thumb.jpg"

@@ -572,6 +572,9 @@ extension NodeView {
         // `glassGroupAuto` with it: a row recycled onto a numeric group must
         // not report the old one's `auto` (LLP 1053.000.000.000).
         if glassGroupView != nil { props["glassGroup"] = nil; props["glassGroupAuto"] = nil; syncGlassGroup() }
+        #if os(iOS)
+        if portalRelay != nil { props["declaredParent"] = nil; syncPortalRelay() }
+        #endif
     }
     /// An inner list parked with its row (LLP 1068 §4.2.1): back to a new
     /// list's scroll, with its delegate detached while it resets.

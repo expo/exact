@@ -1,0 +1,14 @@
+```prompt Capture a still of every display
+Make the Exact app in this folder capture a still of every display to files, before it shows its window. Use https://github.com/expo/exact/blob/main/docs/recipes/screen-capture.md as the source for each step. The Exact checkout has the same page at docs/recipes/screen-capture.md.
+
+1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
+2. Real capture is on macOS and Windows only: the web, Linux and mobile hosts have none. If I did not say what starts a capture, what the app does with the stills, and the usage sentence macOS shows, propose them and ask me before you write code.
+3. Install the package: `bun exact.mjs add @exact/screen-capture`. Declare the grants `device.screen-recording shot.purpose` and `fs.write app:/tmp`, and `fs.read app:/tmp` to read or draw the files. `shot.purpose` is a localized usage string.
+4. In app.ts, ask for permission once, from the foreground setup UI: when `screenRecordingStatus()` reads `prompt`, call `requestScreenRecording()`. Never ask from the shortcut handler: capture checks permission without prompting.
+5. Call `captureScreens` in the shortcut handler, before the app shows the overlay. Set the hidden window's frame first: with no window, `clientRect` is null. Draw each returned `path` at its display's `clientRect` with an image. A canvas on macOS or the web cannot draw an app file.
+6. Every call creates new files: remove them when the app releases that capture.
+7. Under the agent, capture writes a colored card for each display: drive it. The drive needs a scratch store (`--storage <name>`). On macOS, `prefer permission.screen-recording granted` bypasses the substitute's permission ticket. `prefer extension screen-capture.screens=[…]` supplies viewport rectangles, in a drive only: do not write it in app.test.contract. There, add a test that ends on the setup screen.
+8. Follow the platform checks in docs/start-here.md (`bun exact.mjs docs platform checks`) for the targets in the app's AGENTS.md and app.json until they pass. Read the reports, including counted findings; a zero exit code alone does not mean clean. Fix the app, not the test. If a finding stays after three rounds of fixes, or the app had it before you changed anything, record it (step 9) and report it; do not keep trying.
+9. When a doc was wrong or missing, or a step needed a workaround, read `bun exact.mjs feedback status`. Under `never`, keep no note. Otherwise record it: `bun exact.mjs feedback note "<what happened>"`, which goes to Expo only as that status says. Do not change the policy; tell me how many notes you kept.
+10. Tell me the grants you declared, what the drive, the tests and the checks reported, and what I must still do by hand: allow Screen Recording on macOS and look at a real capture. `--bind screen-capture` uses the OS and requires a person present for a macOS drive.
+```

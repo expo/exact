@@ -4,18 +4,12 @@
 //! host reports them (`Kernel::set_grouped_margins`), and the sheet's
 //! stand-ins give way to them where the author wrote nothing.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Frame, GroupedMargins, Kernel, Offer, Op};
-use exact_runner::{DataError, DataSource, Event, Runner, Value};
-
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::{Event, Runner};
 
 /// `list` (indented under the view) in a 402-point column.
-fn boot(list: &str) -> Runner<NoData> {
+fn boot(list: &str) -> Runner<Source> {
     let list = list
         .lines()
         .map(|l| format!("      {l}\n"))
@@ -25,12 +19,12 @@ fn boot(list: &str) -> Runner<NoData> {
     );
     let plan = contract::bake(
         contract::compile(&source).unwrap_or_else(|e| panic!("{e}")),
-        NoData,
+        boxed(NoData),
     )
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -40,37 +34,37 @@ fn boot(list: &str) -> Runner<NoData> {
     r
 }
 
-fn lay_out(r: &mut Runner<NoData>) {
+fn lay_out(r: &mut Runner<Source>) {
     let k = r.kernel_mut();
     let root = k.node_by_key(k.find_by_test_id("root")[0]).unwrap().id;
     k.compute_layout(root, Offer::definite(402.0, 874.0))
         .unwrap();
 }
 
-fn id(r: &Runner<NoData>, test_id: &str) -> u32 {
+fn id(r: &Runner<Source>, test_id: &str) -> u32 {
     let k = r.kernel();
     k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap().id
 }
 
-fn frame(r: &Runner<NoData>, test_id: &str) -> Frame {
+fn frame(r: &Runner<Source>, test_id: &str) -> Frame {
     r.kernel().node(id(r, test_id)).unwrap().frame
 }
 
-fn report(r: &mut Runner<NoData>, margins: Option<GroupedMargins>) {
+fn report(r: &mut Runner<Source>, margins: Option<GroupedMargins>) {
     let list = id(r, "list");
     r.kernel_mut().set_grouped_margins(list, margins).unwrap();
     lay_out(r);
 }
 
 /// Where each row's content starts and ends: its first and last parts.
-fn content(r: &Runner<NoData>, first: &str, last: &str) -> (f32, f32) {
+fn content(r: &Runner<Source>, first: &str, last: &str) -> (f32, f32) {
     let (a, b) = (frame(r, first), frame(r, last));
     (a.x, b.x + b.width)
 }
 
 /// The left and right edges of the box `test_id` or, with `up`, of the box
 /// that holds it.
-fn edges(r: &Runner<NoData>, test_id: &str, up: bool) -> (f32, f32) {
+fn edges(r: &Runner<Source>, test_id: &str, up: bool) -> (f32, f32) {
     let k = r.kernel();
     let node = k.node(id(r, test_id)).unwrap();
     let node = if up {

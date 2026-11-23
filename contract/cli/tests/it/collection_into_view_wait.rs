@@ -3,11 +3,11 @@
 //! to end. Meanwhile the reader's window follows the port, nothing is
 //! corrected or counted, and a gesture begun since cancels it; when the
 //! scroll ends it lands from the layout as it is then.
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::Kernel;
 use exact_plan::Value;
 use exact_runner::{
-    CollectionFeedback, CollectionFill, CollectionSnapshot, DataError, DataSource, RowMeasurement,
-    Runner,
+    CollectionFeedback, CollectionFill, CollectionSnapshot, RowMeasurement, Runner,
 };
 
 /// Eleven rows 100 tall in a port 100 tall: row `n` starts at `100 n`.
@@ -27,19 +27,13 @@ const APP: &str = r#"component App
         text `${i}` height=100
 "#;
 
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-fn boot() -> (Runner<NoData>, u32) {
+fn boot() -> (Runner<Source>, u32) {
     boot_app(APP)
 }
-fn boot_app(app: &str) -> (Runner<NoData>, u32) {
+fn boot_app(app: &str) -> (Runner<Source>, u32) {
     let mut r = Runner::boot(
         contract::compile(app).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -52,19 +46,19 @@ fn boot_app(app: &str) -> (Runner<NoData>, u32) {
     }
     (r, feed)
 }
-fn snapshot(r: &Runner<NoData>, view: u32) -> CollectionSnapshot {
+fn snapshot(r: &Runner<Source>, view: u32) -> CollectionSnapshot {
     r.collections()
         .into_iter()
         .find(|c| c.view == view)
         .unwrap()
 }
 /// One report from the port at `offset`, every mounted row 100 tall.
-fn report(r: &mut Runner<NoData>, view: u32, offset: f64, fill: CollectionFill) {
+fn report(r: &mut Runner<Source>, view: u32, offset: f64, fill: CollectionFill) {
     report_sized(r, view, offset, (100.0, 100.0), fill);
 }
 /// One report from a port `port` tall at `offset`, every mounted row `size` tall.
 fn report_sized(
-    r: &mut Runner<NoData>,
+    r: &mut Runner<Source>,
     view: u32,
     offset: f64,
     (port, size): (f64, f64),
@@ -74,7 +68,7 @@ fn report_sized(
 }
 /// One report from a port `port` tall at `offset`, mounted row `n` `size(n)` tall.
 fn report_rows(
-    r: &mut Runner<NoData>,
+    r: &mut Runner<Source>,
     view: u32,
     offset: f64,
     port: f64,
@@ -125,7 +119,7 @@ fn scrolling(velocity: f64) -> CollectionFill {
 }
 /// The host at rest: it takes each correction, then reports where it put
 /// the port, until the list asks for nothing more. Where it ends.
-fn rest(r: &mut Runner<NoData>, view: u32, mut offset: f64) -> f64 {
+fn rest(r: &mut Runner<Source>, view: u32, mut offset: f64) -> f64 {
     for _ in 0..8 {
         let c = snapshot(r, view);
         if let Some(correction) = c.correction {
@@ -139,12 +133,12 @@ fn rest(r: &mut Runner<NoData>, view: u32, mut offset: f64) -> f64 {
     }
     offset
 }
-fn status(r: &Runner<NoData>) -> String {
+fn status(r: &Runner<Source>) -> String {
     exact_runner::agent::state(r)
 }
 /// The list's latest request ended, or stands, `want` (`"done"`, `"pending"`, …).
 #[track_caller]
-fn assert_status(r: &Runner<NoData>, want: &str) {
+fn assert_status(r: &Runner<Source>, want: &str) {
     let s = status(r);
     assert!(s.contains(&format!("\"status\":\"{want}\"")), "{s}");
 }
@@ -312,8 +306,8 @@ const LONG: &str = r#"component App
 /// A host that takes each correction (relative or absolute) and reports the
 /// port `step` further each time with `fill`, `n` times: where it leaves the
 /// port. At rest at row 150 first.
-fn fling(r: &mut Runner<NoData>, feed: u32, step: f64, n: usize, fill: CollectionFill) -> f64 {
-    let follow = |r: &Runner<NoData>, at: f64| match snapshot(r, feed).correction {
+fn fling(r: &mut Runner<Source>, feed: u32, step: f64, n: usize, fill: CollectionFill) -> f64 {
+    let follow = |r: &Runner<Source>, at: f64| match snapshot(r, feed).correction {
         Some(c) => c.from.map_or(c.offset, |from| at + c.offset - from),
         None => at,
     };
@@ -694,7 +688,7 @@ fn a_request_whose_wait_ends_where_the_port_satisfies_it_is_done_there() {
         text `${i}` height=50
 "#;
     let (mut r, feed) = boot_app(LIST);
-    let sized = |r: &mut Runner<NoData>, at: f64, fill: CollectionFill| {
+    let sized = |r: &mut Runner<Source>, at: f64, fill: CollectionFill| {
         report_sized(r, feed, at, (300.0, 50.0), fill)
     };
     for at in [0.0, 200.0, 400.0] {
@@ -758,7 +752,7 @@ fn a_request_admitted_where_its_wait_ends_is_ended_by_the_readers_scroll_after()
         text `${i}` height=50
 "#;
     let (mut r, feed) = boot_app(LIST);
-    let sized = |r: &mut Runner<NoData>, at: f64, fill: CollectionFill| {
+    let sized = |r: &mut Runner<Source>, at: f64, fill: CollectionFill| {
         report_sized(r, feed, at, (300.0, 50.0), fill)
     };
     // The reader's scroll under way, its window not led

@@ -1103,6 +1103,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         if set["listMarker"] != nil || clear.contains("listMarker") { layoutProseMarker() }
         if isParagraph, set.keys.contains(where: Self.paragraphProps.contains) || clear.contains(where: Self.paragraphProps.contains) { invalidateText() }
         #if os(iOS)
+        if set["declaredParent"] != nil || clear.contains("declaredParent") { syncPortalRelay() }
         let nativeList = kind == "list" && next["listStyle"] != nil
         if groupedOwner != nativeList { groupedOwner = nativeList; syncScroll() }
         #endif

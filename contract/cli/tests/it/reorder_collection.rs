@@ -1,4 +1,5 @@
 //! Real Runner collection ownership/preview, with no host or secondary item graph.
+use crate::source::{boxed, Read, Source};
 use exact_kernel::{Kernel, NodeKey};
 use exact_plan::{Items, Value};
 use exact_runner::{
@@ -39,10 +40,10 @@ component App
           column reorderFor="arrange" disabled=disabled testId=`grip-${x}` height=20
             text x
 "#;
-fn boot(n: usize) -> Runner<Rows> {
+fn boot(n: usize) -> Runner<Source> {
     Runner::boot(
         contract::compile(SOURCE).unwrap(),
-        Rows { n, queries: 0 },
+        boxed(Rows { n, queries: 0 }),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -93,7 +94,7 @@ fn preview_is_absolute_bounded_and_metadata_typing_keeps_capability() {
     let g = r.reorder_geometry(binding.list).unwrap();
     let extent = r.collections()[0].total_extent;
     let start = r.begin_reorder(binding, g.clone()).unwrap().unwrap();
-    let queries = r.data_ref().queries;
+    let queries = r.source_ref::<Rows>().queries;
     for y in [80., 35., 80.] {
         let g = r.reorder_geometry(binding.list).unwrap();
         assert!(matches!(
@@ -102,7 +103,7 @@ fn preview_is_absolute_bounded_and_metadata_typing_keeps_capability() {
         ));
         assert_eq!(r.collections()[0].total_extent, extent);
         assert!(r.collections()[0].rows.len() < 40);
-        assert_eq!(r.data_ref().queries, queries);
+        assert_eq!(r.source_ref::<Rows>().queries, queries);
     }
     let shifted: Vec<_> = r.collections()[0]
         .rows
@@ -192,13 +193,13 @@ impl DataSource for EditingRows {
         Ok(Value::List(self.order.clone()))
     }
 }
-fn editing(mode: &'static str) -> Runner<EditingRows> {
+fn editing(mode: &'static str) -> Runner<Source> {
     let source = SOURCE.replace("resource rows = rows() as shape string[]",
         "resource initial = rows() as shape string[]\n  mutation changed as shape string[]\n  derive rows = match changed { case some(value) => value, case none => initial }")
         .replace("    dropped = item", "    send changed = move(item, before)\n    dropped = item");
     Runner::boot(
         contract::compile(&source).unwrap(),
-        EditingRows {
+        boxed(EditingRows {
             order: Items::from(
                 (0..25_000)
                     .map(|i| Value::str(&i.to_string()))
@@ -206,14 +207,14 @@ fn editing(mode: &'static str) -> Runner<EditingRows> {
             ),
             calls: 0,
             mode,
-        },
+        }),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap()
 }
-fn edit_feedback(r: &mut Runner<EditingRows>, handle: NodeKey, top: f64) {
+fn edit_feedback(r: &mut Runner<Source>, handle: NodeKey, top: f64) {
     let c = r.collections().remove(0);
     r.collection_feedback(CollectionFeedback {
         view: c.view,
@@ -248,12 +249,12 @@ fn own_structural_drop_pins_source_until_explicit_finish_and_dispatches_once() {
     let b = r.reorder_binding(h).unwrap();
     let g = r.reorder_geometry(b.list).unwrap();
     let token = r.begin_reorder(b, g).unwrap().unwrap().token;
-    let old = r.data_ref().order.clone();
-    let calls = r.data_ref().calls;
+    let old = r.source_ref::<EditingRows>().order.clone();
+    let calls = r.source_ref::<EditingRows>().calls;
     let g = r.reorder_geometry(b.list).unwrap();
     r.preview_reorder(token, g, 90.).unwrap();
-    assert!(Items::ptr_eq(&old, &r.data_ref().order));
-    assert_eq!(r.data_ref().calls, calls);
+    assert!(Items::ptr_eq(&old, &r.source_ref::<EditingRows>().order));
+    assert_eq!(r.source_ref::<EditingRows>().calls, calls);
     let before = r.reorder_frame(token).unwrap();
     assert!(!before.terminal);
     let g = r.reorder_geometry(b.list).unwrap();
@@ -300,14 +301,14 @@ fn deletion_and_normal_model_refusal_both_have_bounded_terminal_cleanup() {
         let b = r.reorder_binding(h).unwrap();
         let g = r.reorder_geometry(b.list).unwrap();
         let token = r.begin_reorder(b, g).unwrap().unwrap().token;
-        let old = r.data_ref().order.clone();
+        let old = r.source_ref::<EditingRows>().order.clone();
         let g = r.reorder_geometry(b.list).unwrap();
         r.preview_reorder(token, g, 90.).unwrap();
         let g = r.reorder_geometry(b.list).unwrap();
         r.drop_reorder(token, g).unwrap().unwrap();
         assert_eq!(r.slot("count"), Some(&Value::Number(1.)));
         if mode == "refuse" {
-            assert!(Items::ptr_eq(&old, &r.data_ref().order));
+            assert!(Items::ptr_eq(&old, &r.source_ref::<EditingRows>().order));
         } else {
             assert!(r.kernel().node_by_key(h).is_none());
         }
@@ -470,7 +471,7 @@ fn admission_requires_real_ancestor_handler_string_keys_and_unambiguous_enabled_
     for source in cases {
         let mut r = Runner::boot(
             contract::compile(&source).unwrap(),
-            Rows { n: 8, queries: 0 },
+            boxed(Rows { n: 8, queries: 0 }),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -512,7 +513,7 @@ fn numeric_keys_remain_valid_collections_but_cannot_admit_physical_reorder() {
         .replace("text x", "text `${x}`");
     let mut r = Runner::boot(
         contract::compile(&source).unwrap(),
-        Numbers,
+        boxed(Numbers),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -547,7 +548,7 @@ fn physical_terminal_preserves_empty_unicode_destination_and_true_end() {
     for (y, before) in [(20., Some("")), (40., Some("🦀,\n")), (60., None)] {
         let mut r = Runner::boot(
             contract::compile(&source).unwrap(),
-            ExactKeys,
+            boxed(ExactKeys),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -643,7 +644,7 @@ fn source_exclusion_right_biases_and_certifies_zero_ties_after_normalization() {
             );
         let mut r = Runner::boot(
             contract::compile(&event_source).unwrap(),
-            Rows { n: 4, queries: 0 },
+            boxed(Rows { n: 4, queries: 0 }),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -679,10 +680,10 @@ fn terminal_source_key_survives_grip_replacement_and_a_second_reconciliation() {
             "column height=20\n            if grip\n              view reorderFor=\"arrange\" testId=`grip-${x}`\n            text `${x} ${disabled}`");
     let mut r = Runner::boot(
         contract::compile(&source).unwrap(),
-        Rows {
+        boxed(Rows {
             n: 25_000,
             queries: 0,
-        },
+        }),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -746,10 +747,10 @@ fn beneath_empty_when_arms() -> String {
         .collect::<String>();
     format!("{head}      if shown\n        if windowed\n{list}")
 }
-fn boot_source(source: &str) -> Runner<Rows> {
+fn boot_source(source: &str) -> Runner<Source> {
     Runner::boot(
         contract::compile(source).unwrap(),
-        Rows { n: 100, queries: 0 },
+        boxed(Rows { n: 100, queries: 0 }),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -774,7 +775,7 @@ fn empty_when_frames_keep_preview_and_measured_rows_on_unrelated_typing() {
         .iter()
         .map(|row| (row.view, row.epoch))
         .collect::<Vec<_>>();
-    let queries = r.data_ref().queries;
+    let queries = r.source_ref::<Rows>().queries;
     r.act("edit", vec![Value::str("unrelated draft")]).unwrap();
     assert!(
         r.has_reorder(t),
@@ -790,7 +791,7 @@ fn empty_when_frames_keep_preview_and_measured_rows_on_unrelated_typing() {
             .collect::<Vec<_>>(),
         rows
     );
-    assert_eq!(r.data_ref().queries, queries);
+    assert_eq!(r.source_ref::<Rows>().queries, queries);
     assert_eq!(r.last_instance_work().rows_keyed, 0);
     assert!(!r.reorder_frame(t).unwrap().terminal);
     assert!(r.drop_reorder(t, geometry.clone()).unwrap().is_some());
@@ -851,7 +852,7 @@ fn reorder_wrappers_contain_absolute_descendants_before_and_after_preview() {
     let source = SOURCE.replace("            text x", "            text x\n            box testId=`absolute-${x}` position=\"absolute\" right=0 bottom=0 width=5 height=5");
     let mut r = Runner::boot(
         contract::compile(&source).unwrap(),
-        Rows { n: 20, queries: 0 },
+        boxed(Rows { n: 20, queries: 0 }),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -859,7 +860,7 @@ fn reorder_wrappers_contain_absolute_descendants_before_and_after_preview() {
     .unwrap();
     let handle = ready(&mut r);
     let binding = r.reorder_binding(handle).unwrap();
-    let check = |r: &mut Runner<Rows>| {
+    let check = |r: &mut Runner<Source>| {
         let root = r.roots()[0];
         r.kernel_mut()
             .compute_layout(root, exact_kernel::Offer::definite(320., 400.))
@@ -883,7 +884,7 @@ fn reorder_wrappers_contain_absolute_descendants_before_and_after_preview() {
     let plain = source.replace(" reorderdrop=receive", "");
     let r = Runner::boot(
         contract::compile(&plain).unwrap(),
-        Rows { n: 2, queries: 0 },
+        boxed(Rows { n: 2, queries: 0 }),
         Kernel::with_monospace(),
         Default::default(),
         "/",

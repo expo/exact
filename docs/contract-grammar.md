@@ -830,9 +830,10 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
                   | "modifiers" STRING | "mediasession" STRING [ NUMBER ] ] NL
               | "tap" STRING "drag" ( "to" STRING [ "at" NUMBER NUMBER ]
                   | [ "-" ] NUMBER [ "-" ] NUMBER )
-                  { ( "press" | "over" | "hold" ) NUMBER
-                  | "from" NUMBER NUMBER | "mouse" | "into" "keyboard" }
-                  [ "during" { STRING } ] NL
+                  { ( "press" | "over" | "hold" ) NUMBER | "modifiers" STRING
+                  | "from" NUMBER NUMBER | "mouse" | "into" "keyboard" | "during" STRING { STRING } }
+                  { "then" [ "-" ] NUMBER [ "-" ] NUMBER
+                    { ( "over" | "hold" ) NUMBER | "during" STRING { STRING } } } NL
               | "type" STRING ( STRING [ "append" ]
                   | "key" STRING [ "down" | "up" | "for" NUMBER ]
                   | "copy" | "cut" | "paste" STRING ) NL
@@ -1190,18 +1191,29 @@ beside `commands` to omit `DB` and skip scratch database creation and removal.
 `tap "id" drag to "other" [at x y]` ends on the other
 node (LLP 1094 D12). `tap "id" drag dx dy` is the driver's `tap … drag` (from the
 node's middle, or `from x y` in its box, in points; `press`, `over`, `hold` in
-milliseconds; each once). It is a finger where the carrier has one (the web,
+milliseconds; each once; `modifiers "Shift"` held throughout). `then dx dy`, up to
+seven times, moves on from where the drag before it ended, with its own `over`,
+`hold` and `during`: `tap "stage" drag 100 0 from 50 50 press 500 over 200 then 0 80
+over 200 hold 100` presses for half a second, drags right, then down, holds and
+lifts (not after `drag to`). It is a finger where the carrier has one (the web,
 iOS: on a simulator the touch runner's real gesture, LLP 1080.000 §11, which a
 test with a drag starts for its session; a phone has none yet and fails the
 step); `mouse` makes it the left button on the web, with the page's pointer
 `fine`, so a desktop path is what runs (iOS refuses it; macOS and Linux drag
 with the mouse anyway). A finger's drag the browser takes to scroll an
 ancestor ends in `panrelease` and a `pan cancelled` journal line naming the
-`touch-action` that keeps it. `during "op" …` is last: each quoted op is a read
+`touch-action` that keeps it. `during "op" …`: each quoted op is a read
 (`tree`, `layout`, `state`, `logs`, `screenshot`) or `clock`, run while the finger
-is down, after the move and before the hold. `press` and `hold` advance the
-virtual clock by those milliseconds (a game's ticks), except under
-`--timing platform`, where the platform's own clock owns the gesture.
+is down, after its leg's move and before its hold. The gesture takes its `press`,
+`over` and `hold` on the test's clock, so `performanceNow()` in the app's pointer
+actions reads them: a move's samples are a frame apart on the clock, the first
+one frame after the press (500 ms of press reads 515 on the web before a 200 ms
+move, its first sample's), and the lift reads the whole gesture. iOS's touch is
+real, so there the clock follows it on real time, at each phase's start no
+earlier than that phase's time (the same press reads 500 to about 501), and the
+lift reads the whole gesture exactly; assert a hold as a range, `expect state
+heldMs >= 500` and `<= 520`. Under `--timing platform` the platform's own clock
+owns the gesture.
 `tap "id" pinch <scale> [at x y]` is the driver's pinch: `scale` greater than 0,
 about the node's middle or about `at` in its box. A canvas that takes raw input
 receives it as a real pinch arrives there: two touch contacts on the web and iOS,

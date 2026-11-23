@@ -2,6 +2,7 @@
 //! list mounted out of its port waits, held at its start, until a report
 //! puts the row in the port (the default); `none` starts it when the row is
 //! inserted.
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, NodeKey};
 use exact_motion::Engine;
 use exact_plan::Value;
@@ -29,11 +30,11 @@ impl DataSource for Data {
     }
 }
 
-fn boot(trigger: &str) -> Runner<Data> {
+fn boot(trigger: &str) -> Runner<Source> {
     let plan = contract::compile(&app(trigger)).unwrap();
     Runner::boot(
         plan,
-        Data,
+        boxed(Data),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -41,19 +42,19 @@ fn boot(trigger: &str) -> Runner<Data> {
     .unwrap()
 }
 
-fn key(r: &Runner<Data>, test_id: &str) -> Option<NodeKey> {
+fn key(r: &Runner<Source>, test_id: &str) -> Option<NodeKey> {
     r.kernel().find_by_test_id(test_id).first().copied()
 }
 
 /// Whether the node's animation is held, as its executors hear the row.
-fn held(r: &Runner<Data>, test_id: &str) -> bool {
+fn held(r: &Runner<Source>, test_id: &str) -> bool {
     let k = r.kernel();
     let node = k.node_by_key(key(r, test_id).unwrap()).unwrap();
     k.animation_row(&node).0.iter().all(|a| a.paused)
 }
 
 /// The feed's port at `offset`, every mounted row measured at 100.
-fn report(r: &mut Runner<Data>, offset: f64) -> Advanced {
+fn report(r: &mut Runner<Source>, offset: f64) -> Advanced {
     let k = r.kernel();
     let feed = k.node_by_key(key(r, "feed").unwrap()).unwrap().id;
     let c = r
@@ -95,7 +96,7 @@ fn an_animation_in_a_row_mounted_ahead_waits_for_the_row_to_show() {
     }
 }
 
-fn waits(mut r: Runner<Data>) {
+fn waits(mut r: Runner<Source>) {
     // Twice: the first report measures, the second settles the window.
     report(&mut r, 0.0);
     report(&mut r, 0.0);

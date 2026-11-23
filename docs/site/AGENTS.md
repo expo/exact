@@ -47,8 +47,25 @@ that holds the Cloudflare token uploads a build's files without running them.
 `bun run build:pages` makes what is uploaded: `dist.pages`, which is `dist` with each page at
 `<path>.html` (Pages redirects `/start` to `/start/` for a `start/index.html`), a `_headers` within
 Pages' 100 rules, and the worker. The worker (`worker/index.ts`) answers a request that prefers
-`text/markdown` as `bun start` does, and marks every host but the site's origin `noindex`. `bun
+`text/markdown` as `bun start` does, sends the Markdown to `ChatGPT-User`, `Claude-User` and
+`Perplexity-User` when they do not ask for it, and marks every host but the site's origin `noindex`. `bun
 run test:worker` tests the worker, and `bun run test:pages` the tree under `wrangler pages dev`.
+
+`constants/redirects.ts` holds the redirects. A moved page goes in `redirects`. A redirect or a
+rewrite for any other path goes in `nonPageRules`, as the fields of a rule in [Pages'
+syntax](https://developers.cloudflare.com/pages/configuration/redirects/): status 200 makes a
+rewrite, and `from` can have a splat. The build writes both lists to `dist/_redirects`. Pages
+applies those rules. `bun start` does not: it answers a moved page's old path with a fallback
+page, and the path of any other rule with a 404.
+
+## Prompts
+
+A page shows the prompt in `prompts/<its source>`, after its introduction: `prompts/recipes/tabs.md`
+is the prompt on `docs/recipes/tabs.md`'s page. A recipe with no file of its own shows
+`prompts/recipes.md`, with `{{SOURCE}}` replaced by the recipe's path, and `bun run build` names
+each recipe that does. To give a new recipe its own prompt, add `prompts/recipes/<name>.md` in the
+form of the others: the task, the questions only the person can answer, the recipe's steps, a
+test, the platform checks, the feedback step and what to report.
 
 ## Search
 

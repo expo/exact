@@ -201,6 +201,10 @@ package final class Presenter {
     /// what a canvas painted through its surface captures every frame for
     /// (LLP 1014 D4 d), and what the keyboard reveals.
     weak package var editing: NodeView?
+    #if os(iOS)
+    /// The focus a batch carries across a move (CarriedFocusIOS.swift).
+    var carriedFocus: CarriedFocus?
+    #endif
     /// The first root's `viewportFit` prop (`"cover"` or nothing), as of the
     /// last batch; `onViewportFit` fires when it changes.
     private(set) package var viewportFit: String?
@@ -723,6 +727,9 @@ package final class Presenter {
         }
     }
     package func commitEdit(_ id: UInt32, _ value: String, change: Bool) {
+        #if os(iOS)
+        if carriesFocus(id) { carriedFocus?.commit = (value, change); return }
+        #endif
         guard edited == id, !menus.preservesFocus(id) else { return }
         edited = nil
         var value = value
@@ -905,6 +912,9 @@ package final class Presenter {
         }
         svg?.seek(clock: session?.clock); boxAnimations.seek(clock: session?.clock)
         let outermost = !applying
+        #if os(iOS)
+        if outermost { carryFocus(batch) }
+        #endif
         applying = true
         // Hatched nodes this batch destroys end first, so a reusable hatch has
         // undone its additions before the pool looks at their rows; inside
@@ -941,6 +951,9 @@ package final class Presenter {
                 textSelection.batchEnded()
                 #endif
                 if moved { session?.natives.refreshWorldGeometry() }
+                #if os(iOS)
+                landFocus()
+                #endif
                 flushPendingFocus(); elementScrolls.flush()
                 #if os(iOS)
                 session?.view?.syncKeyboardFocus()

@@ -17,7 +17,7 @@ struct PressPath {
             if let node = view as? NodeView { nodes.append((HeldNode(node), crossed, node.pressEpoch, node.pressCancellationEpoch, node.window != nil)) }
             if view === target { break }
             if trackOpenings, let open = presenter.menus.pressLifetime(of: view) { openings.append(open) }
-            let parent = presenter.listenerParent(of: view)
+            let parent = presenter.pressParent(of: view)
             crossed = crossed || parent !== view.superview
             at = parent
         }
@@ -85,18 +85,24 @@ extension Presenter {
         return navigation.lifted?.parent(of: view) ?? view.superview
     }
 
+    /// The next view a press bubbles to (`listenerParent`), through a
+    /// `portal` mover's declaration (LLP 1013.002 D1).
+    package func pressParent(of view: UIView) -> UIView? {
+        declaredParent(of: view) ?? listenerParent(of: view)
+    }
+
     package func authored(_ view: UIView, inside ancestor: UIView) -> Bool {
         sequence(first: view, next: listenerParent).contains { $0 === ancestor }
     }
 
-    /// The view a press on `target`, reached from `start` (`listenerParent`),
+    /// The view a press on `target`, reached from `start` (`pressParent`),
     /// must land in: the target, or, when the walk left a presentation for a
     /// logical ancestor in another mount, whose own box is not under the
     /// finger (LLP 1123 D2), the content where the press began.
     func pressBox(of target: UIView, from start: UIView) -> UIView {
         var at: UIView? = start, box: UIView?
         while let cur = at, cur !== target {
-            let up = listenerParent(of: cur)
+            let up = pressParent(of: cur)
             // Panel siblings stay within their parent's box. Bar items and the
             // tab accessory are held apart from it.
             if box == nil, up !== cur.superview {
@@ -115,6 +121,7 @@ extension Presenter {
         var lifetimes: [() -> Bool] = [], at: UIView? = start
         while let view = at, view !== target {
             if let open = menus.pressLifetime(of: view) { lifetimes.append(open) }
+            // The openings around where the press is shown, not its declaration's.
             at = listenerParent(of: view)
         }
         return lifetimes

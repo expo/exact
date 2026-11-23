@@ -5,6 +5,7 @@
 //! under the agent, and each item's `app:/` path admitted against the
 //! app's `fs.read` lines.
 
+use crate::source::{boxed, Source};
 use exact_runner::{Dispatch, Outcome, Reply, Response, Runner, Work};
 use serde_json::{json, Value as Json};
 use std::path::{Path, PathBuf};
@@ -63,13 +64,13 @@ type Calls = Arc<Mutex<Vec<Json>>>;
 
 /// A runner whose native slot answers each write as the implementation
 /// does: with nothing.
-fn boot(name: &str) -> (App, Runner<Granted>, Calls) {
+fn boot(name: &str) -> (App, Runner<Source>, Calls) {
     let app = App::new(name);
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Granted,
+        boxed(Granted),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -101,7 +102,7 @@ fn boot(name: &str) -> (App, Runner<Granted>, Calls) {
 }
 
 /// A data-code call of `body`, and its answer.
-fn data_call(r: &mut Runner<Granted>, body: Json) -> Json {
+fn data_call(r: &mut Runner<Source>, body: Json) -> Json {
     let request = exact_runner::Request::native(body.to_string().into_bytes());
     let Dispatch::Run(work) = r.native_work(&request) else {
         panic!("a module call is work");

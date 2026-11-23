@@ -1,6 +1,7 @@
 //! LLP 1019 D1–D3/§5: declared fonts lower to plan identity, and every
 //! portable refusal happens before a host can substitute a font.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{FontStyle, Kernel};
 use exact_plan::Value;
 use exact_runner::{DataError, DataSource, Runner};
@@ -8,14 +9,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Default)]
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-
 struct SelectedFont;
 impl DataSource for SelectedFont {
     fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
@@ -81,7 +74,7 @@ fn declared_faces_and_stack_identity_reach_the_kernel_row() {
 
     let runner = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -133,7 +126,7 @@ fn a_variable_face_declares_its_file_range_or_the_written_one() {
 
     let runner = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -189,7 +182,7 @@ fn font_optical_sizing_reaches_the_run_style() {
     );
     let runner = Runner::boot(
         app.compile().unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -222,7 +215,7 @@ fn font_variation_settings_reach_the_row_and_bad_ones_are_refused() {
     let plan = app.compile().unwrap();
     let runner = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -251,7 +244,7 @@ fn font_feature_settings_reach_the_row_and_bad_ones_are_refused() {
     let plan = app.compile().unwrap();
     let runner = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -413,7 +406,7 @@ fn a_choice_of_literal_families_resolves_each_arm_to_its_stack() {
     let plan = app.compile().unwrap();
     let runner = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -436,10 +429,9 @@ fn a_choice_of_literal_families_resolves_each_arm_to_its_stack() {
 
 #[test]
 fn shared_font_choices_preserve_baseline_plan_bytes() {
-    // Captured with the pre-admission compiler at 7f4abbc2b (LLP 1172.013 step
-    // 4), which the admission compiler matched byte for byte; recaptured at
-    // f3c8c622dc, after eee9b7fe4c, e8631a11ea and it changed what this plan
-    // carries (longer member names, pooled again, and source-place rows).
+    // Both spellings of the font choice encode these plan rows exactly (LLP
+    // 1172.013 step 4). The fixture is this test's own output: recapture it
+    // when the plan's format changes, as when it gained the `controls` table.
     let baseline = include_bytes!("../fixtures/shared-font-choice.plan");
     for face in ["\"serif\"", "`serif`"] {
         let plan = contract::compile(&format!(
@@ -472,7 +464,7 @@ component Child
     );
     let runner = Runner::boot(
         app.compile().unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -490,7 +482,7 @@ fn shared_and_ascribed_literal_families_use_declared_stacks() {
     ));
     let runner = Runner::boot(
         app.compile().unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -538,13 +530,13 @@ fn runner_interns_a_runtime_family_above_plan_stacks() {
     let count = plan.stacks.len();
     let mut runner = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let family = |runner: &Runner<NoData>| {
+    let family = |runner: &Runner<Source>| {
         let kernel = runner.kernel();
         kernel
             .node_by_key(kernel.find_by_test_id("sample")[0])
@@ -574,13 +566,13 @@ fn invalid_runtime_family_values_leave_the_inherited_family() {
     ).unwrap();
     let mut runner = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let family = |runner: &Runner<NoData>| {
+    let family = |runner: &Runner<Source>| {
         let kernel = runner.kernel();
         let node = kernel
             .node_by_key(kernel.find_by_test_id("sample")[0])
@@ -621,7 +613,7 @@ fn an_optional_runtime_family_uses_its_inner_string() {
     let count = plan.stacks.len();
     let runner = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -643,7 +635,7 @@ fn a_data_source_family_is_interned_even_when_its_name_is_absent_from_source() {
     let count = plan.stacks.len();
     let runner = Runner::boot(
         plan,
-        SelectedFont,
+        boxed(SelectedFont),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -798,7 +790,7 @@ fn literal_family_quotes_preserve_the_name_and_fallback() {
         );
         let r = Runner::boot(
             plan,
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -851,7 +843,7 @@ fn font_variant_ligatures_reaches_text_and_fields_and_refuses_a_pair() {
     let plan = contract::compile(source).unwrap();
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

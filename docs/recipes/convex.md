@@ -1,10 +1,9 @@
 # Recipe: a Convex backend (live queries, mutations)
 
-`@exact/convex` keeps queries live over one socket: a write updates every query
-it changes, in one commit. Install:
+`@exact/convex` updates live queries in one commit over one socket. Install
 `EXACT_APP_DIR=$PWD bun <exact2>/scripts/exact.mjs add convex`, `bun add convex`,
-then `npx convex dev`, Convex's own. The rest (errors, tokens, tests, the HTTP
-client): `bun exact.mjs docs convex live queries`. A whole app: `apps/mosaic`.
+then `npx convex dev`. See `bun exact.mjs docs convex live queries` for errors,
+tokens, tests and the HTTP client.
 
 ```ts
 import { convex, ConvexFailure } from '@exact/convex';
@@ -12,7 +11,7 @@ import { getFunctionName } from 'convex/server';
 import { convexToJson, jsonToConvex } from 'convex/values';
 import { api } from './convex/_generated/api';
 
-// The deployment's socket origin: the grant and the client both take it.
+// The grant and client share the socket origin.
 const CONVEX = 'wss://happy-otter-123.convex.cloud';
 export const grants = `net.websocket ${CONVEX}`;
 
@@ -64,6 +63,9 @@ component Chat
   a source that does both before its first `await` is refused.
 - **A drive against a real deployment** takes a new `--seed` each
   launch, or Convex answers the second launch's writes without running them.
+
+Use `apps/mosaic/server.ts` as a model for tests. The stand-in handles
+`POST /api/query`, `/api/mutation` and `/api/action` before its `http` callback.
 
 ## Convex Auth v2
 

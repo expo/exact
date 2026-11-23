@@ -5,6 +5,7 @@
 //! the implementation (played by the test as the host's native slot) hears
 //! of it, in production and under the agent alike.
 
+use crate::source::{boxed, Source};
 use exact_runner::{Dispatch, Outcome, Reply, Response, Runner, Work};
 use serde_json::{json, Value as Json};
 #[cfg(unix)]
@@ -76,13 +77,13 @@ type Calls = Arc<Mutex<Vec<Json>>>;
 
 /// A runner with the app's `grants`, the package bound as in production
 /// (`real`) or under the agent, its implementation answering every call.
-fn boot(name: &str, grants: &'static str, real: bool) -> (App, Runner<Grants>, Calls) {
+fn boot(name: &str, grants: &'static str, real: bool) -> (App, Runner<Source>, Calls) {
     let app = App::new(name, grants);
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Grants(grants),
+        boxed(Grants(grants)),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -111,7 +112,7 @@ fn boot(name: &str, grants: &'static str, real: bool) -> (App, Runner<Grants>, C
 }
 
 /// A data-code call of `body`, its answer.
-fn data_call(r: &mut Runner<Grants>, body: Json) -> Json {
+fn data_call(r: &mut Runner<Source>, body: Json) -> Json {
     let request = exact_runner::Request::native(body.to_string().into_bytes());
     let Dispatch::Run(work) = r.native_work(&request) else {
         panic!("a module call is work");

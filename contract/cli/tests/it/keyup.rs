@@ -4,16 +4,10 @@
 //! The events come over the hosts' wire (`Event::of_host_kind`, kinds 6 and
 //! 43), as every host writes them.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::Kernel;
 use exact_plan::{EventKind, Value};
-use exact_runner::{DataError, DataSource, Event, Runner};
-
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::{Event, Runner};
 
 /// ⌘-held hints and a ⌘W that closes once per press, by the physical key.
 const HINTS: &str = r#"component App
@@ -37,11 +31,11 @@ const HINTS: &str = r#"component App
       text "row" keyup=bare tabindex=0 testId="row"
 "#;
 
-fn boot(src: &str) -> Runner<NoData> {
+fn boot(src: &str) -> Runner<Source> {
     let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e}"));
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -49,7 +43,7 @@ fn boot(src: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn id(r: &Runner<NoData>, test_id: &str) -> u32 {
+fn id(r: &Runner<Source>, test_id: &str) -> u32 {
     let k = r.kernel();
     k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap().id
 }
@@ -211,7 +205,7 @@ component App
 fn a_held_modifier_is_forgotten_when_the_window_loses_focus() {
     let mut r = boot(HELD);
     let list = id(&r, "list");
-    let hint = |r: &Runner<NoData>| !r.kernel().find_by_test_id("hint").is_empty();
+    let hint = |r: &Runner<Source>| !r.kernel().find_by_test_id("hint").is_empty();
     r.dispatch(list, wire(6, "Meta+Meta\nMetaLeft\nfalse"))
         .unwrap();
     assert!(hint(&r));

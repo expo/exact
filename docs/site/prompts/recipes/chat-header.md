@@ -1,0 +1,14 @@
+```prompt Add a chat header with an avatar and day pills
+Give a chat screen in the Exact app in this folder its own header row with an avatar, and a pill that opens each day in its transcript. Use https://github.com/expo/exact/blob/main/docs/recipes/chat-header.md as the source for each step. The Exact checkout has the same page at docs/recipes/chat-header.md.
+
+1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
+2. If I did not say which screen is the chat, what its header shows (the name, a status line, a button) and whether the avatar is a symbol or a photo, propose it from the app and ask me before you write code.
+3. In app.contract, give the chat route's element `navigationBar="none"` and `navigationScroll` with the transcript's `id`. Draw the header as the route's first row: the avatar, a column with the name as `role="heading" aria-level=1`, and each button with an `aria-label`. No bar draws Back, so a pushed route needs a `button press=back` first in the row.
+4. Draw the avatar as a symbol with `aria-hidden="true"`, or as a photo: `image "assets/<file>"` with a fixed `width` and `height`, and a `border-radius` of half of that.
+5. In app.ts, give each message its time (`at`) and a `newDay` flag that is true for the first message of a day. In app.contract, read `exactTime()` as a resource and draw the pill with `formatDay(m.at, time.epochAtZero, time.utcOffset, "section")`. Write the pill as the first child of the message's row root, never as a sibling of the row.
+6. Add a time on a bubble's last line only if I asked for it; then follow the recipe's hidden run, and its `direction="rtl"` form.
+7. Add a test in app.test.contract like the recipe's: after `clock data`, expect the header's name and the text of two day pills (`"Yesterday"`, `"Today"`). The test's date is 2026-01-01 UTC unless `epoch` and `time-zone` pin it.
+8. Follow the platform checks in docs/start-here.md (`bun exact.mjs docs platform checks`) for the targets in the app's AGENTS.md and app.json until they pass. Read the reports, including counted findings; a zero exit code alone does not mean clean. Fix the app, not the test. If a finding stays after three rounds of fixes, or the app had it before you changed anything, record it (step 9) and report it; do not keep trying.
+9. When a doc was wrong or missing, or a step needed a workaround, read `bun exact.mjs feedback status`. Under `never`, keep no note. Otherwise record it: `bun exact.mjs feedback note "<what happened>"`, which goes to Expo only as that status says. Do not change the policy; tell me how many notes you kept.
+10. Tell me what the header shows, where the day pills come from, what the tests and checks reported, and the launch command for each target platform. A pill does not pass midnight by itself: docs/recipes/dates-and-days.md shows how to tick `now`.
+```

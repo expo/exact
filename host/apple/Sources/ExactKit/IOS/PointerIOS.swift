@@ -194,6 +194,8 @@ final class PointerRecognizer: UIGestureRecognizer {
         var view = touched
         while let v = view, v !== node {
             if let n = v as? NodeView, n.wantsPointer, !n.disabled { return true }
+            // A `portal` mover's own relay takes it (`syncPortalRelay`).
+            if node?.presenter?.declaredParent(of: v) != nil { return true }
             // A node lifted over the tab container is nearer through its parent (LLP 1083.000 D4)
             view = node?.presenter?.navigation.lifted?.parent(of: v) ?? v.superview
         }
@@ -255,6 +257,7 @@ extension Presenter {
     /// superview. `eventParent` stays inside a dialog's sheet: the walks on
     /// it also read inertness and visibility, which a modal dialog escapes.
     func pointerParent(of view: UIView) -> UIView? {
+        if let parent = declaredParent(of: view) { return parent }
         if let node = view as? NodeView, let parent = dialogs.authoredParent(of: node) { return parent }
         return menus.logicalParent(of: view) ?? eventParent(of: view)
     }
@@ -355,7 +358,7 @@ extension NodeView {
         // A lifted root leaves UIKit's presentation for its authored parent,
         // which may be a scroller's `ScrollView` or one of Exact's containers.
         var responder = next
-        if let presenter, let parent = presenter.listenerParent(of: self), parent !== superview { responder = parent }
+        if let presenter, let parent = presenter.pressParent(of: self), parent !== superview { responder = parent }
         // Exact's own containers (a clip box, a material or glass effect
         // and its content view) are no step: a container swap keeps the route.
         while let view = responder as? UIView, view is PlainView || view is UIVisualEffectView
@@ -430,7 +433,7 @@ extension NodeView {
     // scroll always wins.
     package override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         #if EXACT_AGENT
-        if ExactEnv.agentCarried { TouchLog.reach(touches) }
+        if TouchLog.recording { TouchLog.reach(touches) }
         #endif
         let layoutHit = touches.first.flatMap { touch in
             touch.view.flatMap { LayoutHits.touched($0, at: touch.location(in: nil)) }
@@ -608,9 +611,16 @@ extension NodeView {
         if isButton, let presenter, presenter.invocation(of: self) != nil || presenter.menus.invoker(from: self) === self {
             guard !inert else { return false }
             // Keyboard activation has no hit test; menu overlays own only touches.
-            let target = sequence(first: self as UIView, next: { presenter.listenerParent(of: $0) })
-                .compactMap { $0 as? NodeView }.prefix { !$0.disabled && !$0.authoredInert }
-                .first { $0.takesPress(bubbled: presenter.pressBox(of: $0, from: self) !== $0) }
+            var target: NodeView?, at: UIView? = self, declared = false
+            while let view = at {
+                if let n = view as? NodeView {
+                    // Past a declaration, inertness is the shown tree's (LLP 1013.002 D1).
+                    if n.disabled || !declared && n.authoredInert { break }
+                    if n.takesPress(bubbled: presenter.pressBox(of: n, from: self) !== n) { target = n; break }
+                }
+                declared = declared || presenter.declaredParent(of: view) != nil
+                at = presenter.pressParent(of: view)
+            }
             let pressHandoff = handoff ? presenter.beginPress(control: self) : nil
             defer { pressHandoff?.dispatched() }
             presenter.menus.activating(from: self, pressing: target) {
@@ -638,9 +648,10 @@ extension NodeView {
     func activationTarget(at windowPoint: CGPoint) -> NodeView? {
         guard !inert else { return nil }
         if !takesPress, controlTakesTouch(at: windowPoint) { return nil }
-        var v: UIView? = self
+        var v: UIView? = self, declared = false
         while let cur = v {
-            if let n = cur as? NodeView, n.disabled || n.authoredInert { return nil }
+            // Past a declaration, inertness is the shown tree's, which the hit read (LLP 1013.002 D1).
+            if let n = cur as? NodeView, n.disabled || !declared && n.authoredInert { return nil }
             if let n = cur as? NodeView {
                 let box = presenter?.pressBox(of: n, from: self) ?? n
                 if n.takesPress(bubbled: box !== n) {
@@ -648,7 +659,8 @@ extension NodeView {
                     return n
                 }
             }
-            v = presenter?.listenerParent(of: cur) ?? cur.superview
+            declared = declared || presenter?.declaredParent(of: cur) != nil
+            v = presenter?.pressParent(of: cur) ?? cur.superview
         }
         return nil
     }
@@ -740,8 +752,8 @@ extension NodeView {
     }
     /// A finger's touch bubbling from this node reaches a node it pressed
     private var pressesAnAncestor: Bool {
-        var at = presenter?.listenerParent(of: self) ?? superview
-        while let view = at { if (view as? NodeView)?.pressed == true { return true }; at = presenter?.listenerParent(of: view) ?? view.superview }
+        var at = presenter?.pressParent(of: self) ?? superview
+        while let view = at { if (view as? NodeView)?.pressed == true { return true }; at = presenter?.pressParent(of: view) ?? view.superview }
         return false
     }
     /// The node a touch landed in: its view, or that view's nearest node
