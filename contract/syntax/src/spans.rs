@@ -97,6 +97,7 @@ leaves!(
     TaskKind,
     MutationMode,
     TapForm,
+    crate::DragLeg,
     PropertyKind,
     PropertyForm,
     ParamValue,
@@ -183,7 +184,7 @@ macro_rules! record_variants {
 }
 record_variants! {
     Step {
-        Scroll { target, span }, Tap { target, form, modifiers, span }, Drag { target, dx, dy, to, from, mouse, into, press, over, hold, during, span },
+        Scroll { target, span }, Tap { target, form, modifiers, span }, Drag { target, dx, dy, to, from, mouse, into, press, over, hold, during, modifiers, path, span },
         Size { width, height, span }, At { location, span }, Epoch { value, span }, TimeZone { zone, span },
         Locale { tag, span }, Prefer { name, value, span }, Seed { seed, span }, SignedIn { key, account, span }, Stored { name, value, window, span }, Fresh { seed, span }, BeforeData { span }, FailFetch { prefix, times, span }, AnswerFetch { prefix, method, response, span }, AnswerSource { source, value, span }, PassFetch { prefix, span }, Request { method, path, body, persona, status, span }, Type { target, text, append, span }, Key { target, key, phase, duration, span },
         DropStream { prefix, span }, Pick { target, paths, span }, Authorize { cancel, span }, Presence { answer, span }, Clipboard { target, edit, text, span },

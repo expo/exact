@@ -693,9 +693,12 @@ override func destroy() {
 
 An app says what it opens with `file_handlers` in `app.json` — the W3C Web App
 Manifest's own key — and the macOS bake derives `CFBundleDocumentTypes` from
-it. A Linux binary carries the same declarations into the desktop portal's
-Open and Save filters; a directory pick remains a directory pick rather than a
-file-type filter. Each MIME type it accepts must be one the Apple hosts map to
+it. Linux and Windows binaries carry the same declarations into their Open and
+Save dialogs; a directory pick remains a directory pick rather than a file-type
+filter. Each handler is one file type in the document pickers, labelled with its
+`name`, so an app that wants a "Documents" choice showing only PDFs declares
+`{ "action": "/", "name": "Documents", "accept": { "application/pdf": [".pdf"] } }`
+(below, "Documents the person chose"). Each MIME type it accepts must be one the Apple hosts map to
 a system type (`DOCUMENT_UTIS` in `scripts/app.mjs`; `application/octet-stream`
 is `public.data`), which the app views (`Viewer`, rank `Alternate`), or the
 app's own format: a vendor or unregistered type (`application/vnd.studio.board+json`,
@@ -2689,8 +2692,22 @@ while its timers go on. `clock until state <path> == <literal> within <ms>` refu
 password field masks; `clock held [<target>…] [<n>s|<n>ms]` waits for one reply to each held request;
 `clock replies [<n>s|<n>ms]` reports `{clock, settled, pending, waitedMs}` at the first read with no
 data request in flight (held, timer and device entries aside), or after 20 s. A read still out at a
-wait's deadline ends the connection. Input is refused with `input-not-granted`, and the driver
-refuses launch flags such as `--storage`, `--live` and `--url`.
+wait's deadline ends the connection. The driver refuses launch flags such as `--storage`, `--live`
+and `--url`.
+
+Input needs a second grant: **Develop ▸ Allow Agent Input** on the Mac, or the developer menu's
+**Allow Agent Input** in the simulator, which the person chooses while the agent is attached (the
+indicator then reads **Agent Attached · Input Allowed**); choosing it again revokes input and leaves
+the reads. Until then `tap`, `type` and `call` are refused `input-not-granted`, and the driver says
+it is waiting for the grant, for up to 60 s. Granted, `tap <target>` is a plain tap at a test ID or
+`#<id>`, `type <target> <text>` a whole text entry, and `call <tool> <json>` a declared tool's call
+through the app's own agent door (`--door` is refused). On the Mac the app clicks and sets the text
+itself, only in its key window while it is the active app; in the simulator the touch runner plays a
+real touch the app aims and checks, and the text is typed where the tap left the caret. Input is
+refused `background` when the app is not in front, `person-input` while a person's finger, mouse
+button or modifier key is down, and `unsupported` for anything else: a point, a held contact, a key,
+a gesture, `prefer`, `pick`, a toolbar or sidebar item, or a web view's content. A request whose
+reply is lost is reported as of unknown outcome and never sent again.
 
 `bun scripts/agent.mjs ios --app <app> --attach [--sim <udid|name>] tree state logs layout "screenshot now.png"`
 reads the development app open in an iOS simulator the same way. The simulator is the one `--sim`
@@ -5688,6 +5705,26 @@ remains a compound suffix. Their Bun and Rust tests read the same cases from
 `scripts/fixtures/document-suffixes.json`. An invalid suffix or an empty or
 control-bearing handler name makes the build fail.
 
+The open picker, and the save picker where the platform's save dialog lists
+types, offer the declared types and nothing else: each handler's `name` labels
+its type where the platform lists types by name (Windows, Linux and the web),
+and macOS and iOS offer their union, as their panels do. The pickers take their
+types from the manifest, never from the call.
+
+| Host | `showOpenFilePicker`, `showSaveFilePicker` |
+| --- | --- |
+| Web (Chromium) | `types`, one `{ description: name, accept }` per handler, and `excludeAcceptAllOption: true` |
+| Windows | one `SetFileTypes` entry per handler, `Documents (*.pdf)`, the first selected; Save starts on the type with the longest suffix ending `suggestedName` and adds that type's extension to a name typed without one |
+| Linux | one portal filter per handler, the first as `current_filter` |
+| macOS | `NSOpenPanel`'s `allowedContentTypes`, the union, with no type menu; the save panel takes no types |
+| iOS | Open: the document picker's content types, the union; Save exports with no types |
+
+On Windows a handler with MIME types and no extension matches the extension the
+system registers for each MIME type. Where there is none, the dialog cannot
+offer that type and the journal names the MIME type; where it can offer none
+of the declared types, the pick is refused. Give such a handler its
+extensions. With no handlers a picker offers every file.
+
 The web passes those suffixes to its picker and matches a drop by the whole
 filename suffix. Apple registers each without its leading dot; its picker offers
 the handler's content types and the complete extension tokens the system resolves,
@@ -5711,8 +5748,8 @@ the app keeps what the person chose (below).
 
 On Windows, the three document pickers, file inputs and `saveFile` use the
 shell's common item dialogs, owned by the app's window. A headless host refuses
-them; under the agent they remain held pickers. Document pickers offer every
-file until the Windows build carries `file_handlers`. File inputs copy the
+them; under the agent they remain held pickers. Open and Save offer the
+`file_handlers` types, as the table above says. File inputs copy the
 chosen files into `app:/tmp/picked/` and leave the originals in place.
 
 **Where a picker opens** (LLP 1173 D2). The three pickers and `saveFile`

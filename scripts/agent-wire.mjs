@@ -195,8 +195,9 @@ export async function attachWire(socket, { nonce, session, onWaiting, handshakeM
     if (failure) throw failure;
     const mine = ++id;
     socket.write(JSON.stringify({ ...req, request: mine }) + '\n');
-    const { request: answered, ...reply } = await next(requestMs, `the app did not answer ${req.op} (request ${mine})`);
-    if (answered !== mine) { fail(`the app answered request ${answered} where ${mine} was asked`); throw failure; }
+    // Failing from here, the request was sent: what it did is unknown to the caller.
+    const { request: answered, ...reply } = await next(requestMs, `the app did not answer ${req.op} (request ${mine})`).catch((e) => { throw Object.assign(new Error(e.message, { cause: e }), { sent: true }); });
+    if (answered !== mine) { fail(`the app answered request ${answered} where ${mine} was asked`); throw Object.assign(new Error(failure.message, { cause: failure }), { sent: true }); }
     return reply;
   }));
   return { attached: first, ask, close: () => { socket.end(); }, abandon: (why) => fail(why), get failure() { return failure; } };

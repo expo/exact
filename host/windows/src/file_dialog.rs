@@ -6,7 +6,7 @@ mod os;
 #[cfg(windows)]
 pub(super) use os::Dialogs;
 
-use exact_painted::presenter::file_dialog::{FileDialog, Outcome, StartFolder};
+use exact_painted::presenter::file_dialog::{FileDialog, FileType, Outcome, StartFolder};
 use std::{
     cell::{Cell, RefCell},
     collections::VecDeque,
@@ -71,6 +71,71 @@ fn start_folder(
     }
 }
 
+/// One entry of the dialog's file-type list (`COMDLG_FILTERSPEC`).
+#[derive(Debug, PartialEq)]
+struct Filter {
+    /// What the list shows: the handler's name and, as Windows' own apps show
+    /// it, its patterns: `Documents (*.pdf)`.
+    label: String,
+    /// The patterns, which Windows matches without regard to case.
+    patterns: Vec<String>,
+}
+
+impl Filter {
+    fn spec(&self) -> String {
+        self.patterns.join(";")
+    }
+}
+
+/// The dialog's file types: one per declared type, in the manifest's order
+/// and nothing beside them, as the other hosts' pickers offer only the
+/// declared types. A type declared by MIME alone matches the extension
+/// Windows registers for that MIME type (`extension`); a type with neither is
+/// left out, and its MIME types are added to `unmatched`.
+fn filters(
+    types: &[FileType],
+    extension: impl Fn(&str) -> Option<String>,
+    unmatched: &mut Vec<String>,
+) -> Vec<Filter> {
+    types
+        .iter()
+        .filter_map(|t| {
+            let suffixes = if t.suffixes.is_empty() {
+                t.mimes.iter().filter_map(|mime| extension(mime)).collect()
+            } else {
+                t.suffixes.clone()
+            };
+            let patterns: Vec<String> = suffixes.iter().map(|s| format!("*{s}")).collect();
+            if patterns.is_empty() {
+                unmatched.extend(t.mimes.iter().cloned());
+                return None;
+            }
+            let spec = patterns.join(";");
+            let label = match &t.name {
+                Some(name) => format!("{name} ({spec})"),
+                None => spec,
+            };
+            Some(Filter { label, patterns })
+        })
+        .collect()
+}
+
+/// The save dialog's starting type, 1-based as `SetFileTypeIndex` takes it,
+/// and the extension Windows adds to a name typed without one: the type with
+/// the longest pattern that ends the suggested name (`.tar.gz` over `.gz`),
+/// else the first.
+fn save_type(filters: &[Filter], suggested: &str) -> (u32, String) {
+    let name = suggested.to_lowercase();
+    let (index, pattern) = filters
+        .iter()
+        .enumerate()
+        .flat_map(|(i, f)| f.patterns.iter().map(move |p| (i, p)))
+        .filter(|(_, p)| name.ends_with(&p[1..]))
+        .max_by_key(|(i, p)| (p.len(), std::cmp::Reverse(*i)))
+        .unwrap_or((0, &filters[0].patterns[0]));
+    (index as u32 + 1, pattern[2..].to_owned())
+}
+
 // FILEOPENDIALOGOPTIONS values, kept portable so the mapping runs on every host.
 // https://learn.microsoft.com/windows/win32/api/shobjidl_core/ne-shobjidl_core-_fileopendialogoptions
 fn options(kind: Kind, multiple: bool, defaults: u32) -> u32 {
@@ -106,6 +171,7 @@ mod tests {
                 suggested_name: String::new(),
                 start_in: start.map(str::to_owned),
             },
+            types: Vec::new(),
         };
         let mut lines = Vec::new();
         for name in exact_runner::file_pickers::WELL_KNOWN {
@@ -159,6 +225,7 @@ mod tests {
                 suggested_name: String::new(),
                 start_in: None,
             },
+            types: Vec::new(),
         };
         state.queued.borrow_mut().extend([
             (1, dialog.clone(), retired),
@@ -197,6 +264,58 @@ mod tests {
             (Kind::Save, true, 0x8802, base | 0x8802),
         ] {
             assert_eq!(options(kind, multiple, defaults), expected, "{kind:?}");
+        }
+    }
+
+    fn declared(name: Option<&str>, suffixes: &[&str], mimes: &[&str]) -> FileType {
+        FileType {
+            name: name.map(str::to_owned),
+            suffixes: suffixes.iter().map(|s| s.to_string()).collect(),
+            mimes: mimes.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn each_declared_type_is_one_labelled_filter_and_nothing_else() {
+        let types = [
+            declared(Some("Documents"), &[".pdf"], &["application/pdf"]),
+            declared(Some("Notes"), &[".md", ".markdown"], &["text/markdown"]),
+            declared(Some("Gzip"), &[".gz"], &["application/gzip"]),
+            declared(None, &[".tar.gz"], &["application/gzip"]),
+            declared(Some("Pictures"), &[], &["image/png", "image/x-unknown"]),
+            declared(Some("Nothing here"), &[], &["application/x-unregistered"]),
+        ];
+        let extension = |mime: &str| (mime == "image/png").then(|| ".png".to_owned());
+        let mut unmatched = Vec::new();
+        let filters = filters(&types, extension, &mut unmatched);
+        assert_eq!(unmatched, ["application/x-unregistered"]);
+        let shown: Vec<_> = filters
+            .iter()
+            .map(|f| (f.label.as_str(), f.spec()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("Documents (*.pdf)", "*.pdf".to_owned()),
+                ("Notes (*.md;*.markdown)", "*.md;*.markdown".to_owned()),
+                ("Gzip (*.gz)", "*.gz".to_owned()),
+                ("*.tar.gz", "*.tar.gz".to_owned()),
+                ("Pictures (*.png)", "*.png".to_owned()),
+            ]
+        );
+        assert!(super::filters(&[], extension, &mut unmatched).is_empty());
+        for (suggested, expected) in [
+            ("Receipt.PDF", (1, "pdf")),
+            ("notes.markdown", (2, "markdown")),
+            ("Backup.tar.gz", (4, "tar.gz")),
+            ("log.gz", (3, "gz")),
+            ("Untitled", (1, "pdf")),
+            ("", (1, "pdf")),
+            (".md", (2, "md")),
+            ("md", (1, "pdf")),
+        ] {
+            let (index, extension) = save_type(&filters, suggested);
+            assert_eq!((index, extension.as_str()), expected, "{suggested:?}");
         }
     }
 }

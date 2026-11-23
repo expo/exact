@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 pub(crate) struct Portals {
     /// Each mover not shown at its declaration: where it is shown, or `None`
     /// while it is hidden, and its declaration parent.
-    moved: HashMap<ViewId, (Option<ViewId>, ViewId)>,
+    moved: HashMap<ViewId, Moved>,
     /// The published child list of each parent a mover is shown in or
     /// declared in.
     lists: HashMap<ViewId, Vec<ViewId>>,
@@ -35,6 +35,21 @@ pub(crate) struct Portals {
     /// shown: a destroy in that batch takes none of their subtree.
     extracted: Vec<ViewId>,
 }
+
+/// A mover not shown at its declaration.
+#[derive(Debug, Clone, Copy)]
+struct Moved {
+    /// Where it is shown; `None` while it is hidden.
+    at: Option<ViewId>,
+    /// Its declaration parent.
+    parent: ViewId,
+    /// Its place in the declaration tree's preorder at the last placement:
+    /// the order its ops come in once its declaration is gone.
+    rank: usize,
+}
+
+/// Each placed entry's destination entry, or why it is hidden.
+type Edges = HashMap<usize, Result<usize, Hidden>>;
 
 /// One realized node of the final declaration tree, in preorder.
 struct Entry {
@@ -237,34 +252,34 @@ impl Tree {
             return Vec::new();
         };
         let mut hidden: Vec<ViewId> = (portals.moved.iter())
-            .filter(|(_, (at, _))| at.is_none())
+            .filter(|(_, m)| m.at.is_none())
             .map(|(&m, _)| m)
             .collect();
         hidden.sort_unstable();
         hidden
     }
 
-    /// Each mover shown away from its declaration or hidden, with its
-    /// declaration parent, in id order.
+    /// Each mover shown away from its declaration parent or hidden, with
+    /// that parent, in id order.
     pub(crate) fn declared_parents(&self) -> Vec<(ViewId, ViewId)> {
         let Some(portals) = self.portals.as_ref() else {
             return Vec::new();
         };
         let mut moved: Vec<_> = (portals.moved.iter())
-            .map(|(&m, &(_, parent))| (m, parent))
+            .filter(|(_, moved)| moved.at != Some(moved.parent))
+            .map(|(&m, moved)| (m, moved.parent))
             .collect();
         moved.sort_unstable();
         moved
     }
 
     /// The declaration parent of a moved or hidden view; `None` for one shown
-    /// where it is declared, whose kernel parent is its declaration parent.
+    /// where it is declared, whose kernel parent is its declaration parent,
+    /// even where its `portal` names that parent.
     pub(crate) fn declared_parent(&self, view: ViewId) -> Option<ViewId> {
-        self.portals
-            .as_ref()?
-            .moved
-            .get(&view)
-            .map(|(_, parent)| *parent)
+        (self.portals.as_ref()?.moved.get(&view))
+            .filter(|moved| moved.at != Some(moved.parent))
+            .map(|moved| moved.parent)
     }
 
     /// Rewrite `ops`, a batch the instance tree made, to publish the final
@@ -344,7 +359,7 @@ impl Portals {
             false
         };
         // D2.2: each mover's edge, or the reason it is hidden.
-        let mut edge: HashMap<usize, Result<usize, Hidden>> = HashMap::new();
+        let mut edge: Edges = HashMap::new();
         for (i, e) in entries.iter().enumerate() {
             let Some(value) = &e.portal else { continue };
             if !e.movable {
@@ -365,14 +380,13 @@ impl Portals {
             );
         }
         // The shown parent of each entry under the edges kept so far.
-        let up =
-            |i: usize, edge: &HashMap<usize, Result<usize, Hidden>>| -> Option<Option<usize>> {
-                match edge.get(&i) {
-                    Some(Ok(d)) => Some(Some(*d)),
-                    Some(Err(_)) => None,
-                    None => Some(entries[i].parent),
-                }
-            };
+        let up = |i: usize, edge: &Edges| -> Option<Option<usize>> {
+            match edge.get(&i) {
+                Some(Ok(d)) => Some(Some(*d)),
+                Some(Err(_)) => None,
+                None => Some(entries[i].parent),
+            }
+        };
         // Drop every portal edge on a cycle, then the deepest edge on each
         // path past the depth limit, then each edge into hidden content,
         // until none changes.
@@ -468,14 +482,22 @@ impl Portals {
         &mut self,
         entries: &[Entry],
         index: &HashMap<ViewId, usize>,
-        edge: &HashMap<usize, Result<usize, Hidden>>,
+        edge: &Edges,
         ops: &mut Vec<Op>,
     ) {
         let view = |i: usize| entries[i].view;
-        let moved: HashMap<ViewId, (Option<ViewId>, ViewId)> = (edge.iter())
+        let moved: HashMap<ViewId, Moved> = (edge.iter())
             .filter_map(|(&m, kept)| {
                 let parent = view(entries[m].parent?);
-                Some((view(m), (kept.as_ref().ok().map(|d| view(*d)), parent)))
+                let at = kept.as_ref().ok().map(|d| view(*d));
+                Some((
+                    view(m),
+                    Moved {
+                        at,
+                        parent,
+                        rank: m,
+                    },
+                ))
             })
             .collect();
         // The final list of each parent placement touches: its declared
@@ -542,7 +564,7 @@ impl Portals {
                 return None;
             }
             match self.moved.get(&m) {
-                Some((at, _)) => Some(*at),
+                Some(moved) => Some(moved.at),
                 None => index
                     .get(&m)
                     .and_then(|&i| entries[i].parent)
@@ -552,28 +574,39 @@ impl Portals {
         // 1. Detach each surviving mover that moves, and each moved mover
         // whose declaration died, from where it is shown.
         let mut leaving: HashMap<ViewId, Vec<ViewId>> = HashMap::new();
+        // The surviving movers detached, in preorder: a destroy in this
+        // batch takes none of their subtrees (`extracted`).
+        let mut surviving = Vec::new();
         for e in entries.iter().filter(|e| placeable(e)) {
             let now = match moved.get(&e.view) {
-                Some((at, _)) => *at,
+                Some(m) => m.at,
                 None => e.parent.map(view),
             };
             if let Some(Some(was)) = shown_before(e.view) {
                 if Some(was) != now {
                     leaving.entry(was).or_default().push(e.view);
+                    surviving.push(e.view);
                 }
             }
         }
-        self.extracted = leaving.values().flatten().copied().collect();
-        let mut dying = Vec::new();
-        for (&m, (at, _)) in &self.moved {
-            if index.contains_key(&m) {
-                continue;
-            }
-            dying.push(m);
+        self.extracted = surviving;
+        // A mover whose declaration died, in the order it was declared.
+        let mut dying: Vec<(usize, ViewId, Option<ViewId>)> = (self.moved.iter())
+            .filter(|(m, _)| !index.contains_key(m))
+            .map(|(&m, moved)| (moved.rank, m, moved.at))
+            .collect();
+        dying.sort_unstable();
+        for &(_, m, at) in &dying {
             if let Some(was) = at {
-                leaving.entry(*was).or_default().push(m);
+                leaving.entry(was).or_default().push(m);
             }
         }
+        let dying: Vec<ViewId> = dying.into_iter().map(|(_, m, _)| m).collect();
+        // Each list a mover leaves, in the plan's order: a parent still
+        // declared by its place in the tree, then any other by id.
+        let mut leaving: Vec<(ViewId, Vec<ViewId>)> = leaving.into_iter().collect();
+        leaving
+            .sort_unstable_by_key(|(was, _)| (index.get(was).copied().unwrap_or(usize::MAX), *was));
         let mut detach = Vec::new();
         let mut state: HashMap<ViewId, Vec<ViewId>> = HashMap::new();
         for (was, gone) in leaving {
@@ -602,7 +635,7 @@ impl Portals {
         // 3. Every list that differs from the final placement.
         let mut attach = Vec::new();
         let mut touched: Vec<&ViewId> = finals.keys().collect();
-        touched.sort_unstable();
+        touched.sort_unstable_by_key(|x| index[*x]);
         for x in touched {
             let list = &finals[x];
             // A list placement never set, and the batch left, is the declared one.
@@ -641,9 +674,9 @@ impl Portals {
 /// one that is hidden. Iterative: a chain of placements may be long.
 fn depth_of(
     i: usize,
-    edge: &HashMap<usize, Result<usize, Hidden>>,
+    edge: &Edges,
     entries: &[Entry],
-    up: &dyn Fn(usize, &HashMap<usize, Result<usize, Hidden>>) -> Option<Option<usize>>,
+    up: &dyn Fn(usize, &Edges) -> Option<Option<usize>>,
     memo: &mut HashMap<usize, Option<u32>>,
 ) -> Option<u32> {
     let mut path = Vec::new();

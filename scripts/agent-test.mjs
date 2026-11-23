@@ -885,7 +885,8 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     }
     const heads = await Promise.all(shared.map((o) => backendHead(o)));
     // An authored drag uses XCTest on iOS. Other taps opt in with `--touch platform` (LLP 1080.000 §11).
-    const drags = ['ios', 'host-ios'].includes(host) && t.steps.some((st) => st.op === 'drag');
+    const dragged = (steps) => steps.some((st) => st.op === 'drag' || (st.steps && dragged(st.steps)));
+    const drags = ['ios', 'host-ios'].includes(host) && dragged(t.steps);
     const fingers = touch !== 'agent' ? touch : drags ? 'drag' : 'agent';
     // The date a relaunch starts at: this launch's date at the clock's zero plus the virtual time the test has reached
     // (every `clock +N`, settle and timer), as the runner reports it; whole milliseconds, which every host takes.
@@ -1090,7 +1091,10 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
           case 'drag': {
             const drag = { ...(st.to != null ? { to: st.to, ...(st.at ? { at: st.at } : {}) } : { dx: st.dx, dy: st.dy }), ...(st.from ? { from: st.from } : {}), ...(st.mouse ? { mouse: true } : {}), ...(st.press != null ? { press: st.press } : {}), ...(st.over != null ? { over: st.over } : {}), ...(st.hold != null ? { hold: st.hold } : {}) };
             if (st.into != null) drag.into = st.into;
-            if (st.during?.length) drag.during = st.during.map((op) => () => duringOp(s, op));
+            if (st.modifiers) drag.modifiers = st.modifiers;
+            const reads = (ops) => ops.map((op) => () => duringOp(s, op));
+            if (st.during?.length) drag.during = reads(st.during);
+            if (st.path) drag.path = st.path.map(({ during, ...leg }) => ({ ...leg, ...(during ? { during: reads(during) } : {}) }));
             delivered(await s.tap(st.target, { drag })); input = st.line; break;
           }
           case 'type': {

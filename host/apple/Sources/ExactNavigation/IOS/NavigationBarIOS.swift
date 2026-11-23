@@ -1411,10 +1411,13 @@ extension NavigationHost {
         if i.menu { item.preferredMenuElementOrder = MenuHost.order(i.menuOrder) }
         if i.disabled || i.accessibilityDisabled { item.accessibilityTraits.insert(.notEnabled) }
         else { item.accessibilityTraits.remove(.notEnabled) }
-        // The authored `color` of a plain item's face; a prominent item's
-        // tint is its fill, which `color` is not.
-        let plain = !i.prominent && !i.hasPaintedFace
-        item.tintColor = !plain ? nil : i.followsTint ? presenter.views[i.id]?.ownAccent ?? SystemColor.tint(1) : i.tint.map { tint in UIColor { TextEngine.color(tint[$0.userInterfaceStyle == .dark ? 1 : 0]) } }
+        // A plain item's face in its authored `color`, else in its own accent; a prominent item's
+        // tint is its fill, which `color` is not and its accent is. A painted face keeps the bar's.
+        var prominent = false
+        if #available(iOS 26.0, tvOS 26.0, *) { prominent = i.prominent }
+        let color = prominent || i.hasPaintedFace ? nil : i.followsTint ? i.accent ?? presenter.views[i.id]?.ownAccent ?? SystemColor.tint(1)
+            : i.tint.map { tint in UIColor { TextEngine.color(tint[$0.userInterfaceStyle == .dark ? 1 : 0]) } }
+        item.tintColor = i.hasPaintedFace ? nil : color ?? i.accent
         // UIKit's font where none is written, also once a kept item's author removes theirs.
         let font = image == nil ? i.font : nil
         if item.titleTextAttributes(for: .normal)?[.font] as? UIFont != font {
@@ -1437,7 +1440,7 @@ extension NavigationHost {
             press.activeForeground = nil
         }
         if #available(iOS 26.0, tvOS 26.0, *) {
-            item.style = i.prominent ? .prominent : .plain
+            item.style = prominent ? .prominent : .plain
             // A drawn face is its own shape: no glass capsule around it, unless its button asks for glass.
             #if !os(tvOS)
             item.hidesSharedBackground = i.badge != nil && !i.ownGlass
