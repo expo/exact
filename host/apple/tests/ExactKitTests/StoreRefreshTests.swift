@@ -385,6 +385,49 @@ final class StoreRefreshTests: XCTestCase {
     }
 
     #if os(macOS)
+    func testAnEmptyTextInputRelaysItsStoreWriteAfterLanding() throws {
+        _ = NSApplication.shared
+        let fixture = try isolatedStore()
+        defer { fixture.restore() }
+        let plan = try TableFixture.plan("""
+        component StoreEdit
+          state saved = "" persist
+          action edited(value: string)
+            saved = value
+          view
+            textarea testId="editor" value="" input=edited
+        """)
+        let writer = fixture.app.makeSession(label: "store-edit-writer")
+        let rect = NSRect(x: 0, y: 0, width: 300, height: 200)
+        let window = NSWindow(contentRect: rect, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { writer.destroy(); window.close() }
+        XCTAssertNil(writer.boot(plan: plan, size: rect.size).error)
+        writer.apply(writer.runtime.dataReady())
+        settleViewlessSession(writer)
+        writer.presenter.viewport.frame = rect
+        window.contentView = writer.presenter.viewport
+        let node = try XCTUnwrap(writer.presenter.views.values.first { $0.props["testId"] == "editor" })
+        let editor = try XCTUnwrap(node.textArea)
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        writer.followOffset()
+
+        let originalReplication = fixture.app.replicateStore
+        var receipts: [Batch] = []
+        fixture.app.replicateStore = { [unowned writer] in
+            if let batch = writer.newestApplied { receipts.append(batch) }
+        }
+        defer { fixture.app.replicateStore = originalReplication }
+        let applied = writer.appliedBatches
+        editor.insertText("a", replacementRange: editor.selectedRange())
+        XCTAssertEqual(editor.string, "a")
+        XCTAssertEqual(writer.appliedBatches, applied, "the native edit skips presentation")
+        XCTAssertEqual(receipts.count, 1)
+        let receipt = try XCTUnwrap(receipts.first)
+        XCTAssertTrue(receipt.stored, "replication sees the landed store receipt")
+        XCTAssertTrue(receipt.ops.isEmpty)
+    }
+
     func testAnEmptyReplyRefreshesTheOtherWindow() throws {
         _ = NSApplication.shared
         let fixture = try isolatedStore()
