@@ -705,7 +705,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     }
 
     /** Tell [natives] which rows are near the view as it is drawn now. */
-    internal fun nearNatives() {
+    private fun nearNatives() {
         val n = natives ?: return
         if (feedCount < 0 || !n.nearing) return
         val y = feedY()

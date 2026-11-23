@@ -242,9 +242,13 @@ impl State {
     pub(super) fn pending(&self) -> bool {
         !self.queue.is_empty()
     }
-    /// `view` reports again in this pass or the next.
+    /// Collection `view` reports again in this pass or the next.
     fn requeue(&mut self, view: ViewId) {
-        if let Some(cursor) = self.cursors.get_mut(&view).filter(|c| !c.queued) {
+        if let Some(cursor) = self
+            .cursors
+            .get_mut(&view)
+            .filter(|c| !c.ordinary && !c.queued)
+        {
             cursor.queued = true;
             self.queue.push_back(view);
         }

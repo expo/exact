@@ -708,20 +708,6 @@ fn bar_colour(pictures: &Rc<RefCell<Vec<Pixmap>>>) -> [u8; 4] {
 }
 
 #[test]
-fn crossing_the_top_bars_scroll_threshold_needs_publication() {
-    let (mut p, _) = barred(APP);
-    let list = id(&p, "list");
-    p.reader_bars(1.0).unwrap();
-    for (offset, changed) in [(0.5, false), (0.75, true), (1.0, false), (0.5, true)] {
-        assert_eq!(p.scroll_to(list, (0.0, offset)), Some((0.0, offset)));
-        assert_eq!(top(&mut p).scrolled, offset > 0.5);
-        assert_eq!(p.bar_scroll_changed(), changed, "offset {offset}");
-        assert_eq!(p.reader_bars(1.0).is_some(), changed);
-        assert!(!p.bar_scroll_changed());
-    }
-}
-
-#[test]
 fn the_top_bar_takes_its_on_scroll_colour_and_a_retapped_tab_scrolls_to_the_top() {
     let (mut p, pictures) = barred(APP);
     // The dark scheme: with no device palette told, the table's light pair

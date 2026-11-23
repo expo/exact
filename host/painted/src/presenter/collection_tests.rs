@@ -356,6 +356,16 @@ fn ordinary_authored_scroll_requests_apply_once_and_preserve_reader_offsets() {
     p.tap(named(&p, "other")).unwrap();
     settle(&mut p);
     assert_eq!(p.scroll_of(port), (250., 400.));
+
+    let rect = p.box_of(port).unwrap().rect;
+    let rev = p.reader_under(rect.0 + 10., rect.1 + 10., 1.)[5] as u32;
+    assert_eq!(p.reader_scrolled(port, (0., 150.), rev), Some((0., 150.)));
+    p.slice_collections(Some(port), None, 4000.);
+    settle(&mut p);
+    p.tap(named(&p, "other")).unwrap();
+    settle(&mut p);
+    assert_eq!(p.scroll_of(port), (250., 550.));
+
     p.tap(named(&p, "jump")).unwrap();
     settle(&mut p);
     assert_eq!(p.scroll_of(port), (75., 400.));

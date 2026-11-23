@@ -94,9 +94,9 @@ pub(super) struct State {
     focused: Option<(i32, usize)>,
     /// Moved on whenever a bar's picture or frame changes.
     revision: u32,
-    /// The revision the shell was last told, whether the bars were the
-    /// stage's (`stage.rs`), and whether the content had scrolled.
-    told: Option<(u32, bool, bool)>,
+    /// The revision the shell was last told, and whether the bars were then
+    /// the stage's (`stage.rs`).
+    told: Option<(u32, bool)>,
 }
 
 impl State {
@@ -262,12 +262,6 @@ impl<D: DataSource> Presenter<D> {
             Some(id) => self.scroll.get(&id).is_some_and(|at| at.1 > 0.5),
             None => self.page.1 > 0.5,
         }
-    }
-
-    #[cfg(any(target_os = "android", test))]
-    pub(crate) fn bar_scroll_changed(&self) -> bool {
-        self.bars.painter.is_some()
-            && self.bars.told.map(|(_, _, scrolled)| scrolled) != Some(self.bar_scrolled())
     }
 
     /// The nearest node at or above a bar item's node that hears `press`, as
@@ -545,11 +539,10 @@ impl<D: DataSource> Presenter<D> {
         self.ripple_bars();
         // While the stage draws them in the page, the shell shows none.
         let staged = self.stage_draws_bars();
-        let told = (self.bars.revision, staged, self.bar_scrolled());
-        if self.bars.told == Some(told) {
+        if self.bars.told == Some((self.bars.revision, staged)) {
             return None;
         }
-        self.bars.told = Some(told);
+        self.bars.told = Some((self.bars.revision, staged));
         if staged {
             return Some(vec![0]);
         }

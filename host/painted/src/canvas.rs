@@ -1125,9 +1125,6 @@ pub struct CanvasHost<D: DataSource> {
     /// A touch came: until its frame is out, collection passes build only
     /// the rows that show (a slice of 0); the lead follows that frame.
     responding: bool,
-    /// The kernel's layout stamp when the reader was last told where its
-    /// scrollers are: `None` from a paint or a new reader until it is told.
-    told: Option<(u64, u64, u64)>,
     /// The reader's window and what it was last told to draw around the page.
     shell: device::Shell,
     /// Pictures the reader will report presented (LLP 1003.001 D9), by token.
@@ -1281,7 +1278,6 @@ impl<D: DataSource + Default> CanvasHost<D> {
             scroll: p.scroll_offsets().clone(),
             groups: GROUPS.with(|g| g.borrow().clone()),
         });
-        self.told = None;
         self.moved = 0;
         self.paint_by = None;
         self.force = false;

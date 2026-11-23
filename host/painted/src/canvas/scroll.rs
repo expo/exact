@@ -208,33 +208,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// ([`crate::presenter::Presenter::reader_scrollers`] has the words).
     pub fn scrollers(&mut self) -> Option<Vec<i32>> {
         let scale = self.scale;
-        let words = GROUPS.with(|g| self.p.reader_scrollers(&g.borrow(), scale));
-        self.told = Some(self.p.host().kernel().layout_stamp());
-        words
-    }
-
-    /// After the reader's scroll step: whether its frame would only move the
-    /// rows the reader already moved. It would while the windows lead and no
-    /// touch waits for its frame; the kernel's layout is as it was when the
-    /// reader was last told where its scrollers are, and each is where the
-    /// reader's own moves left it; no GPU canvas draws, no layer has new
-    /// tracks, no top bar needs a new scroll colour and no agent's drive
-    /// waits; and a move frame would come out
-    /// ([`Self::shift`]). The move is then taken as that frame would take it,
-    /// and no frame goes out: the reader's timer runs what comes due. A move
-    /// frame's turn, statements and publication cost ~0.2 ms of the exact
-    /// thread, at a step every 8 ms of a fling.
-    pub fn moved(&mut self) -> bool {
-        let quiet = self.lead
-            && !self.responding
-            && !self.surfaces
-            && !self.owed_surfaces
-            && self.told == Some(self.p.host().kernel().layout_stamp())
-            && self.p.reader_moves_stand()
-            && !self.p.bar_scroll_changed()
-            && (!self.move_tracks || self.p.host().lowered_epoch() == self.tracks.epoch)
-            && !super::agent::waiting();
-        quiet && self.shift(self.now()).is_some()
+        GROUPS.with(|g| self.p.reader_scrollers(&g.borrow(), scale))
     }
 
     /// Before a driver's scroll: a feed whose node is gone (its page was

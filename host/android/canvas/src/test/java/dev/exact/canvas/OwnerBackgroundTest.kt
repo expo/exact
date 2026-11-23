@@ -67,40 +67,6 @@ class OwnerBackgroundTest {
             @JvmStatic @Implementation fun displayFrame() {}
             @JvmStatic @Implementation fun owed() = false
             @JvmStatic @Implementation fun nextDue() = (due - SystemClock.uptimeMillis()).toDouble()
-            var moves = false
-            @JvmStatic @Implementation fun moved() = moves
-        }
-    }
-
-    @Test fun aStepThatOnlyMovesMakesNoFrameAndTimesThePaintItOwes() {
-        Host.due = SystemClock.uptimeMillis() + 30000
-        val owner = Owner(false, false, 0) { "0" }
-        val thread = Owner::class.java.getDeclaredField("thread").apply { isAccessible = true }.get(owner) as HandlerThread
-        val handler = Owner::class.java.getDeclaredField("handler").apply { isAccessible = true }.get(owner) as Handler
-        val timer = Owner::class.java.getDeclaredField("timer").apply { isAccessible = true }.get(owner) as Runnable
-        try {
-            owner.ask { handler.removeCallbacks(timer) }
-            val frames = Host.frames
-            Host.moves = true
-            owner.scrolled(1, 0f, 10f, 0, 1)
-            owner.ask { }
-            assertEquals("no frame", frames, Host.frames)
-            assertTrue("the paint the move owes is timed", handler.hasCallbacks(timer))
-            Host.moves = false
-            Host.due = SystemClock.uptimeMillis() + 5
-            owner.scrolled(1, 0f, 10f, 0, 2)
-            owner.ask { }
-            assertEquals("a step that does more makes its frame", frames + 1, Host.frames)
-            Host.moves = true
-            owner.scrolled(1, 0f, 10f, 0, 3)
-            owner.ask { }
-            assertTrue("a timer due sooner keeps its time",
-                shadowOf(thread.looper).nextScheduledTaskTime.toMillis() <= SystemClock.uptimeMillis() + 5)
-        } finally {
-            Host.moves = false
-            handler.removeCallbacksAndMessages(null)
-            thread.quitSafely(); thread.join(5000)
-            assertFalse(thread.isAlive)
         }
     }
 

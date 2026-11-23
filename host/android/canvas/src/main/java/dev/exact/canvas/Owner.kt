@@ -433,17 +433,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
         if (fingers == null || dy != 0f) Native.scroll(dy)
         android.os.Trace.endSection()
         seq = s
-        // A step of the reader's own moves whose frame would only move what it moved itself makes none, unless an
-        // accessibility service is on (each frame tells it the scrollers' offsets): the paint the move owes waits for
-        // the timer, as after a move's frame, or less when a timer is due sooner. What the app asked of the platform
-        // still goes.
-        if (running && !accessible && fingers != null && dy == 0f && Native.moved()) {
-            val due = Native.nextDue()
-            handler.removeCallbacks(timer)
-            handler.postDelayed(timer, if (due < 0) OWED_MS else kotlin.math.ceil(due).toLong().coerceIn(0, OWED_MS))
-            requests()
-        }
-        else produce()
+        produce()
         // Every third step: the window's lead mounts, off the main thread.
         if (prefetch && ++steps % 3 == 0) { handler.removeCallbacks(refiner); handler.post(refiner) }
         if (led) { handler.removeCallbacks(settle); handler.postDelayed(settle, SETTLE_MS) }
@@ -708,11 +698,9 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
         }
         var due = Native.nextDue()
         // A moved paint is owed a paint once scrolling pauses: each step pushes this back.
-        if (Native.owed() && (due < 0 || due > OWED_MS)) due = OWED_MS.toDouble()
+        if (Native.owed() && (due < 0 || due > 16)) due = 16.0
         handler.removeCallbacks(timer)
-        // In whole milliseconds rounded up: rounded down, the timer came before it was due and was posted again at once
-        // until it was (the heavy list's ticks during a fling: up to 17 turns each).
-        if (due >= 0) handler.postDelayed(timer, kotlin.math.ceil(due).toLong().coerceAtLeast(0))
+        if (due >= 0) handler.postDelayed(timer, kotlin.math.ceil(due).toLong())
     }
 }
 
@@ -723,8 +711,6 @@ private const val LEAD_OFF = 4000f
 private const val LEAD_PX = 1e6f
 /** ms without a scroll step after which a leading window stops leading. */
 private const val SETTLE_MS = 100L
-/** ms after a move until the paint it owes, unless steps push it back. */
-private const val OWED_MS = 16L
 /** A slice of laying a press's screen out ahead: the microseconds it may shape for. */
 private const val AHEAD_US = 1500
 
