@@ -2,6 +2,7 @@ import { spyOn, test } from 'bun:test';
 import * as childProcess from 'node:child_process';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import * as fs from 'node:fs';
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, relative, resolve } from 'node:path';
@@ -72,7 +73,7 @@ test.skipIf(process.platform === 'win32')('a unit no build has read for a week g
 });
 
 const UNIT = 'exact_plan-7855ad78591661c6';
-const CGU = '8ebodo4awrbx3jxe4yjnnvcga', REUSED = '93nxtgfjgrbildjtag3kno7jr';
+const CGU = '8ebodo4awrbx3jxe4yjnnvcga', REUSED = '93nxtgfjgrbildjtag3kno7jr', OTHER = 'a3nxtgfjgrbildjtag3kno7jr';
 const OLD = '0h3oitd', NEW = '1ccoadi';
 const SECONDS = 1_700_000_000;
 const objectPath = (t, cgu, tag) => resolve(t, 'debug/deps', `${UNIT}.${cgu}.${tag}.rcgu.o`);
@@ -88,6 +89,7 @@ test.skipIf(process.platform === 'win32')('a newer partial rebuild leaves both o
     const old = writeAt(objectPath(t, CGU, OLD), SECONDS);
     const reused = writeAt(objectPath(t, REUSED, OLD), SECONDS);
     const partial = writeAt(objectPath(t, CGU, NEW), SECONDS + 1);
+    writeAt(resolve(t, 'debug/deps', `lib${UNIT}.rlib`), SECONDS + 2);
     await sweep(t);
     for (const file of [old, reused, partial]) assert.ok(existsSync(file), file);
   } finally { rmSync(t, { recursive: true, force: true }); }
@@ -100,8 +102,50 @@ test.skipIf(process.platform === 'win32')('a dropped codegen unit leaves both ob
     const reused = writeAt(objectPath(t, REUSED, OLD), SECONDS);
     const current = objectPath(t, REUSED, NEW);
     linkSync(reused, current);
+    writeAt(resolve(t, 'debug/deps', `lib${UNIT}.rlib`), SECONDS + 2);
     await sweep(t);
     for (const file of [current, dropped, reused]) assert.ok(existsSync(file), file);
+  } finally { rmSync(t, { recursive: true, force: true }); }
+});
+
+for (const [name, objects] of [
+  ['newer codegen units on each side', [[CGU, OLD, 1], [REUSED, OLD, 0], [CGU, NEW, 0], [REUSED, NEW, 1]]],
+  ['different codegen unit ids', [[CGU, OLD, 0], [REUSED, OLD, 0], [CGU, NEW, 1], [OTHER, NEW, 1]]],
+]) {
+  test.skipIf(process.platform === 'win32')(`equal-size object sets with ${name} both stay`, async () => {
+    const t = target();
+    try {
+      const files = objects.map(([cgu, tag, offset]) => writeAt(objectPath(t, cgu, tag), SECONDS + offset));
+      writeAt(resolve(t, 'debug/deps', `lib${UNIT}.rlib`), SECONDS + 2);
+      assert.deepEqual(await sweep(t), {});
+      for (const file of files) assert.ok(existsSync(file), file);
+    } finally { rmSync(t, { recursive: true, force: true }); }
+  });
+}
+
+test.skipIf(process.platform === 'win32')('a complete rebuild keeps the old object set until its replacement links', async () => {
+  const t = target(), deps = resolve(t, 'debug/deps');
+  try {
+    const old = writeAt(objectPath(t, CGU, OLD), SECONDS);
+    const reused = writeAt(objectPath(t, REUSED, OLD), SECONDS);
+    const current = writeAt(objectPath(t, CGU, NEW), SECONDS + 2);
+    const currentReused = objectPath(t, REUSED, NEW);
+    linkSync(reused, currentReused);
+    const executable = writeAt(resolve(deps, UNIT), SECONDS + 1);
+    fs.chmodSync(executable, 0o755);
+
+    assert.deepEqual(await sweep(t), {});
+    for (const file of [old, reused, current, currentReused]) assert.ok(existsSync(file), file);
+    const held = resolve(deps, 'previous-executable');
+    fs.renameSync(executable, held);
+    assert.deepEqual(await sweep(t), {});
+    for (const file of [old, reused, current, currentReused]) assert.ok(existsSync(file), file);
+
+    fs.renameSync(held, executable);
+    utimesSync(executable, SECONDS + 2, SECONDS + 2);
+    assert.deepEqual(await sweep(t), { debug: 2 });
+    assert.ok(!existsSync(old) && !existsSync(reused));
+    assert.ok(existsSync(current) && existsSync(currentReused));
   } finally { rmSync(t, { recursive: true, force: true }); }
 });
 
@@ -120,6 +164,8 @@ test.skipIf(process.platform === 'win32')('a complete rebuild supersedes objects
     linkSync(reused, objectPath(t, REUSED, tie));
     const plain = (n) => writeAt(resolve(deps, `cc-fb420d4abaebbebd.cc.8f24f1ac075cbf0f-cgu.0${n}.rcgu.o`), SECONDS + n);
     const plainObjects = [plain(0), plain(1), plain(2)];
+    writeAt(resolve(deps, `lib${UNIT}.rlib`), SECONDS + 0.0001);
+    writeAt(resolve(deps, `lib${UNIT}.dylib`), SECONDS + 0.0002);
 
     assert.deepEqual(await sweep(t), { debug: 2 });
     assert.ok(!existsSync(old) && !existsSync(reused));
@@ -127,6 +173,10 @@ test.skipIf(process.platform === 'win32')('a complete rebuild supersedes objects
       assert.ok(existsSync(file), file);
     }
   } finally { rmSync(t, { recursive: true, force: true }); }
+});
+
+test('the object classifier is private to the sweep', () => {
+  assert.equal(Object.hasOwn(sweepModule, 'supersededRcguObjects'), false);
 });
 
 function session(cache, prefix, state, time) {
@@ -169,6 +219,52 @@ test.skipIf(process.platform === 'win32')('trimming a session does not restart i
   } finally { rmSync(t, { recursive: true, force: true }); }
 });
 
+test.skipIf(process.platform === 'win32')('trimming keeps recent activity that protects an old completed session', async () => {
+  const t = target(), now = Date.now(), cache = resolve(t, 'debug/incremental/exact_kernel-2ajo1mk2vrgcf');
+  try {
+    const completed = session(cache, 's-hoensmxwyy-0jdnav7', '202u7uhbq2x49og73537n6x11', (now - 8 * DAY) / 1000);
+    const working = session(cache, 's-hoeq3b8k0z-1xawk5k', 'working', (now - 60_000) / 1000);
+    await sweep(t, now);
+    await sweep(t, now + 3_600_000);
+    for (const file of [...completed, ...working]) assert.ok(existsSync(file), file);
+    await sweep(t, now + 8 * DAY);
+    assert.ok(!existsSync(cache));
+  } finally { rmSync(t, { recursive: true, force: true }); }
+});
+
+test.skipIf(process.platform === 'win32')('session lock cleanup keeps unrecognized names', async () => {
+  const t = target(), now = Date.now(), cache = resolve(t, 'debug/incremental/exact_kernel-2ajo1mk2vrgcf');
+  try {
+    const time = (now - 60_000) / 1000;
+    const unknown = session(cache, 's-hoeq3b8k0-1xawk5k', 'working', time);
+    const orphan = writeAt(resolve(cache, 's-hoeq3b8k0z-1xawk5k.lock'), time);
+    assert.deepEqual(await sweep(t, now), { debug: 1 });
+    for (const file of unknown) assert.ok(existsSync(file), file);
+    assert.ok(!existsSync(orphan));
+  } finally { rmSync(t, { recursive: true, force: true }); }
+});
+
+for (const [kind, mode] of [['flock', 'LOCK_EX'], ['fcntl', 'F_SETLK']]) {
+  test.skipIf(process.platform === 'win32' || kind === 'fcntl' && process.platform !== 'darwin')(`a held rustc session lock via ${kind} protects its session during trimming and cache expiry`, async () => {
+    const t = target(), now = Date.now(), cache = resolve(t, 'debug/incremental/exact_kernel-2ajo1mk2vrgcf');
+    try {
+      const time = (now - 60_000) / 1000;
+      const completed = session(cache, 's-hoensmxwyy-0jdnav7', '202u7uhbq2x49og73537n6x11', time);
+      const [working, lock] = session(cache, 's-hoeq3b8k0z-1xawk5k', 'working', time);
+      const holder = await hold(lock, mode);
+      const exited = new Promise(ok => holder.once('close', ok));
+      try {
+        assert.deepEqual(await sweep(t, now), {});
+        for (const file of [working, lock]) assert.ok(existsSync(file), file);
+        await sweep(t, now + 8 * DAY);
+        for (const file of [...completed, working, lock]) assert.ok(existsSync(file), file);
+      } finally { holder.kill(); await exited; }
+      await sweep(t, now + 8 * DAY);
+      assert.ok(!existsSync(cache));
+    } finally { rmSync(t, { recursive: true, force: true }); }
+  });
+}
+
 test.skipIf(process.platform === 'win32')('trimming an abandoned session removes the cache it empties', async () => {
   const t = target(), now = Date.now(), cache = resolve(t, 'debug/incremental/exact_kernel-2ajo1mk2vrgcf');
   try {
@@ -183,10 +279,10 @@ for (const lockName of ['.cargo-lock', '.cargo-build-lock']) {
   test.skipIf(process.platform === 'win32')(`a profile held by ${lockName} keeps its fingerprints and working session`, async () => {
     const t = target(), now = Date.now();
     await sweep(t, now);
-    const working = resolve(t, 'debug/incremental/a-2ajo1mk2vrgcf/s-hoeq3b8k0z-1xawk5k-working');
-    mkdirSync(working);
+    const cache = resolve(t, 'debug/incremental/a-2ajo1mk2vrgcf');
     const started = new Date(now + 8 * DAY);
-    utimesSync(working, started, started);
+    utimesSync(resolve(cache, 's-old'), started, started);
+    const [working, workingLock] = session(cache, 's-hoeq3b8k0z-1xawk5k', 'working', started);
     const holder = spawn('perl', ['-MFcntl=:flock', '-e', 'open my $f, ">>", $ARGV[0] or die; flock($f, LOCK_EX) or die; print "held\\n"; $| = 1; sleep 30', resolve(t, 'debug', lockName)], { stdio: ['ignore', 'pipe', 'inherit'] });
     const exited = new Promise(ok => holder.once('close', ok));
     try {
@@ -195,14 +291,15 @@ for (const lockName of ['.cargo-lock', '.cargo-build-lock']) {
         exited.then(code => { throw new Error(`lock holder exited ${code}`); }),
       ]);
       const removed = await sweep(t, now + 8 * DAY);
-      assert.ok(existsSync(working));
+      assert.ok(existsSync(working) && existsSync(workingLock));
       assert.ok(has(t, '.fingerprint', `a-${A}`));
       assert.deepEqual(removed, {});
       const units = JSON.parse(readFileSync(resolve(t, '.exact-sweep.json'), 'utf8')).units;
       assert.equal(units[`debug#${A}`], now);
       holder.kill();
       await exited;
-      assert.deepEqual(await sweep(t, now + 9 * DAY), { debug: 3 });
+      assert.deepEqual(await sweep(t, now + 9 * DAY), { debug: 4 });
+      assert.ok(!existsSync(working) && !existsSync(workingLock));
       assert.deepEqual(readdirSync(resolve(t, 'debug/.fingerprint')), []);
     } finally { holder.kill(); await exited; rmSync(t, { recursive: true, force: true }); }
   });
@@ -227,12 +324,27 @@ for (const [name, args, status, expected, options = {}] of [
   ['Cargo exit 101', ['vocab', 'button'], 101, ['run', '--version']],
   ['signaled Cargo run', ['vocab', 'button'], null, ['run']],
   ['redirected Cargo target', ['vocab', 'button'], 0, ['run', 'metadata'], { redirected: true }],
+  ['split Cargo build directory', ['vocab', 'button'], 0, ['run', 'metadata'], { split: true }],
+  ['Cargo target reported through an alias', ['vocab', 'button'], 0, ['run', 'metadata', 'sweep'], { alias: true }],
+  ['checkout target linked into another checkout', ['vocab', 'button'], 0, ['run'], { linked: true }],
   ['malformed sweep ledger', ['vocab', 'button'], 0, ['run', 'metadata', 'sweep'], { brokenLedger: true }],
 ]) {
   test.skipIf(process.platform === 'win32')(`exact contract handles the target sweep after ${name}`, async () => {
     const { contract } = await import('./exact.mjs');
-    const t = target(), checkoutTarget = resolve(import.meta.dir, '../target'), calls = [], warnings = [];
+    const t = target(), realpath = fs.realpathSync;
+    const root = realpath(mkdtempSync(resolve(tmpdir(), 'exact-sweep-workspace-')));
+    const workspace = resolve(root, 'checkout');
+    const checkoutTarget = resolve(workspace, 'target'), alias = resolve(workspace, 'alias');
+    const calls = [], warnings = [];
+    mkdirSync(workspace);
+    if (options.linked) {
+      const otherTarget = resolve(root, 'other-checkout/target');
+      mkdirSync(otherTarget, { recursive: true });
+      symlinkSync(otherTarget, checkoutTarget);
+    } else mkdirSync(checkoutTarget);
+    if (options.alias) symlinkSync(checkoutTarget, alias);
     if (options.brokenLedger) writeFileSync(resolve(t, '.exact-sweep.json'), '{');
+    const physical = spyOn(fs, 'realpathSync').mockImplementation(path => path === tools.ROOT ? workspace : realpath(path));
     const start = sweepModule.startSweep;
     const compiler = spyOn(tools, 'contractTool').mockImplementation(({ env }) => tools.compilerCargo('run', env));
     const cargo = spyOn(childProcess, 'spawnSync').mockImplementation((cmd, [, verb], { env }) => {
@@ -240,12 +352,13 @@ for (const [name, args, status, expected, options = {}] of [
       assert.equal(env.CARGO_TARGET_DIR, undefined);
       calls.push(verb);
       if (verb === 'run') return { status, signal: status === null ? 'SIGTERM' : null, stdout: '' };
-      const target_directory = options.redirected ? t : checkoutTarget;
-      return { status: 0, stdout: JSON.stringify({ target_directory }) };
+      const target_directory = options.redirected ? t : options.alias ? alias : checkoutTarget;
+      const build_directory = options.split ? t : options.alias ? checkoutTarget : undefined;
+      return { status: 0, stdout: JSON.stringify({ target_directory, build_directory }) };
     });
     const hook = spyOn(sweepModule, 'startSweep').mockImplementation(path => {
       calls.push('sweep');
-      assert.equal(path, checkoutTarget);
+      assert.equal(path, realpath(checkoutTarget));
       if (options.brokenLedger) start(t);
     });
     const warning = spyOn(console, 'error').mockImplementation(message => warnings.push(message));
@@ -259,6 +372,8 @@ for (const [name, args, status, expected, options = {}] of [
       hook.mockRestore();
       cargo.mockRestore();
       compiler.mockRestore();
+      physical.mockRestore();
+      rmSync(root, { recursive: true, force: true });
       rmSync(t, { recursive: true, force: true });
     }
   });
@@ -296,10 +411,16 @@ const KEPT = [
   ['native-receipts', 'record'], ['screenshot.png', 'unlisted'], ['traces', 'record'], ['web-dist.lock', 'lock'],
   ['web-js-dev-compiler-app', 'unlisted'], ['web-receipts', 'record'],
 ];
-/** Another process holding `path` the way Cargo does (flock), until released. */
+/** Another process holding `path` until released. */
 async function hold(path, mode = 'LOCK_EX') {
-  const holder = spawn('perl', ['-MFcntl=:flock', '-e', `open my $f, ">>", $ARGV[0] or die; flock($f, ${mode}) or die; $| = 1; print "held\\n"; sleep 30`, path], { stdio: ['ignore', 'pipe', 'inherit'] });
-  await new Promise(ok => holder.stdout.once('data', ok));
+  // Darwin's struct flock has two off_t fields, then a pid and two shorts.
+  const acquire = mode === 'F_SETLK' ? 'my $record = pack("qqiss", 0, 0, 0, F_WRLCK, SEEK_SET); fcntl($f, F_SETLK, $record) or die $!;' : `flock($f, ${mode}) or die $!;`;
+  const holder = spawn('perl', ['-MFcntl=:flock,F_SETLK,F_WRLCK,SEEK_SET', '-e', `open my $f, ">>", $ARGV[0] or die $!; ${acquire} $| = 1; print "held\\n"; sleep 30`, path], { stdio: ['ignore', 'pipe', 'inherit'] });
+  await new Promise((ok, fail) => {
+    holder.stdout.once('data', ok);
+    holder.once('error', fail);
+    holder.once('close', code => fail(new Error(`lock holder exited ${code}`)));
+  });
   return holder;
 }
 const relativeTo = (t, { remove, kept }) => ({ remove: remove.map(p => relative(t, p)).sort(), kept: kept.map(k => [relative(t, k.path), k.why]).sort() });

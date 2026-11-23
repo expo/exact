@@ -1,14 +1,15 @@
 #!/usr/bin/env bun
 // Units and whole incremental caches expire after a week (KEEP). Within a cache, rustc
 // reads completed sessions newest first by the timestamp in their names. On macOS,
-// debug maps name unpacked object paths, so keep sets a rebuild has not superseded.
+// debug maps name unpacked object paths, so keep a set until a replacement links.
 //
 // Cargo reads fingerprints even on a no-op build. Reset their access times to detect
 // the next read (macOS and Linux relatime). Preserve the nanoseconds of the mtime
 // because Cargo compares inputs against the dep-info file at that precision.
 //
 // Cargo can hold separate locks for target and build directories. Rename under both
-// locks, fingerprints first, and delete after releasing them.
+// locks, fingerprints first. Take rustc's session locks before moving its caches.
+// Delete after releasing the locks.
 import { constants, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { takeLock } from '../host/web/build-lock.mjs';
@@ -23,7 +24,9 @@ const HASH = /-([0-9a-f]{16})(?:\.|$)/;
 // Incremental objects only: `<unit>-<16 hex>.<25 base-36 CGU id>.<7 base-36 tag>.rcgu.o`.
 // Non-incremental objects (`-cgu.<N>.rcgu.o`) carry codegen unit indices, not rebuild tags.
 const RCGU = /^(.+-[0-9a-f]{16})\.([0-9a-z]{25})\.([0-9a-z]{7})\.rcgu\.o$/;
-const SESSION = /^(s-([0-9a-z]{10})-[0-9a-z]+)-([0-9a-z]+)$/;
+const SESSION_PREFIX = 's-([0-9a-z]{10})-[0-9a-z]+';
+const SESSION = new RegExp(`^(${SESSION_PREFIX})-([0-9a-z]+)$`);
+const SESSION_LOCK = new RegExp(`^${SESSION_PREFIX}\\.lock$`);
 
 /** Start a sweep of `target` in the background if the last one finished over an hour ago. A
  * sweep that failed leaves its error in the log, reported on every build until one succeeds. */
@@ -97,8 +100,8 @@ function supersedes(candidate, previous) {
   return newer;
 }
 
-/** An interrupted rebuild may publish only part of a set. Reused objects share inodes. */
-export function* supersededRcguObjects(depsDir) {
+/** An interrupted rebuild may publish a partial set or stop before linking. */
+function* supersededRcguObjects(depsDir) {
   const byUnit = new Map();
   for (const name of readdirSync(depsDir)) {
     const match = RCGU.exec(name);
@@ -112,45 +115,95 @@ export function* supersededRcguObjects(depsDir) {
     const { ino, mtimeNs } = lstatSync(path, { bigint: true });
     objects.set(id, { path, ino, mtimeNs });
   }
-  for (const tags of byUnit.values()) {
+  for (const [unit, tags] of byUnit) {
+    if (tags.size < 2) continue;
+    let linked;
+    for (const name of [unit, ...['rlib', 'dylib', 'so', 'a'].map(ext => `lib${unit}.${ext}`)]) {
+      const output = lstatSync(resolve(depsDir, name), { bigint: true, throwIfNoEntry: false });
+      if (output?.isFile() && (linked === undefined || output.mtimeNs > linked)) linked = output.mtimeNs;
+    }
+    if (linked === undefined) continue;
     const sets = [...tags.values()];
+    const replacements = sets.filter(objects => [...objects.values()].every(object => object.mtimeNs <= linked));
     for (const objects of sets) {
-      if (sets.some(candidate => candidate !== objects && supersedes(candidate, objects))) {
+      if (replacements.some(candidate => candidate !== objects && supersedes(candidate, objects))) {
         for (const { path } of objects.values()) yield path;
       }
     }
   }
 }
 
-function sweepIncremental(incrementalDir, now, move) {
+function withSessionLocks(cache, names, lock, move) {
+  // On macOS flock also excludes the fcntl record locks rustc takes (lockf(3)).
+  const fds = [];
+  try {
+    for (const name of names) {
+      let fd;
+      try { fd = lock(resolve(cache, name), false); }
+      catch (error) {
+        // rustc takes the lock before creating the session directory.
+        if (error.code === 'ENOENT') continue;
+        return false;
+      }
+      if (fd === null) return false;
+      fds.push(fd);
+    }
+    move();
+    return true;
+  } finally { for (const fd of fds) closeSync(fd); }
+}
+
+function sweepIncremental(incrementalDir, now, move, lock) {
   let removed = 0;
   for (const entry of readdirSync(incrementalDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const cache = resolve(incrementalDir, entry.name);
-    const children = readdirSync(cache, { withFileTypes: true });
-    const last = children.length ? Math.max(...children.map(c => statSync(resolve(cache, c.name)).mtimeMs)) : statSync(cache).mtimeMs;
-    if (now - last > KEEP) { move(cache); removed++; continue; }
+    const children = readdirSync(cache, { withFileTypes: true }).map(c => {
+      const path = resolve(cache, c.name);
+      const [, prefix, timestamp, state] = (c.isDirectory() ? SESSION.exec(c.name) : null) ?? [];
+      const lockName = prefix ? `${prefix}.lock` : !c.isDirectory() && SESSION_LOCK.test(c.name) ? c.name : null;
+      return { path, timestamp, state, lockName, fresh: now - lstatSync(path).mtimeMs <= KEEP };
+    });
+    const fresh = children.length ? children.some(c => c.fresh) : now - statSync(cache).mtimeMs <= KEEP;
+    if (!fresh) {
+      const locks = new Set(children.map(c => c.lockName).filter(Boolean));
+      if (withSessionLocks(cache, locks, lock, () => move(cache))) removed++;
+      continue;
+    }
     // rustc encodes the timestamp as ten base-36 digits, so string order is chronological.
-    const sessions = [];
-    let newest = '', remaining = children.length;
-    for (const c of children) {
-      const session = c.isDirectory() && SESSION.exec(c.name);
-      if (!session) continue;
-      const [, prefix, timestamp, state] = session;
-      if (state !== 'working' && timestamp > newest) newest = timestamp;
-      sessions.push({ name: c.name, prefix, timestamp, state });
+    let newest = '';
+    for (const { timestamp, state } of children) {
+      if (timestamp && state !== 'working' && timestamp > newest) newest = timestamp;
     }
     const keepLocks = new Set();
-    for (const { name, prefix, timestamp, state } of sessions) {
-      if (state !== 'working' && timestamp === newest) keepLocks.add(`${prefix}.lock`);
-      else { move(resolve(cache, name)); removed++; remaining--; }
+    for (const { lockName, timestamp, state } of children) {
+      if (state !== 'working' && timestamp === newest) keepLocks.add(lockName);
     }
-    for (const c of children) {
-      if (!c.isDirectory() && c.name.startsWith('s-') && c.name.endsWith('.lock') && !keepLocks.has(c.name)) {
-        move(resolve(cache, c.name)); removed++; remaining--;
+    const kept = children.filter(c => !c.lockName || keepLocks.has(c.lockName));
+    // Keep the activity that protects the rest of this cache from expiration.
+    if (kept.length && !kept.some(c => c.fresh)) continue;
+    const discard = new Map();
+    for (const child of children) {
+      if (!child.lockName || keepLocks.has(child.lockName)) continue;
+      if (!discard.has(child.lockName)) discard.set(child.lockName, []);
+      discard.get(child.lockName).push(child);
+    }
+    // Move the session before its lock so a failed move leaves the lock in place.
+    const moveGroup = group => {
+      for (const child of group) if (child.timestamp) move(child.path);
+      for (const child of group) if (!child.timestamp) move(child.path);
+    };
+    if (children.length && !kept.length) {
+      const moved = withSessionLocks(cache, discard.keys(), lock, () => {
+        for (const group of discard.values()) moveGroup(group);
+        move(cache);
+      });
+      if (moved) removed += children.length + 1;
+    } else {
+      for (const [name, group] of discard) {
+        if (withSessionLocks(cache, [name], lock, () => moveGroup(group))) removed += group.length;
       }
     }
-    if (children.length && remaining === 0) { move(cache); removed++; }
   }
   return removed;
 }
@@ -196,7 +249,7 @@ export async function sweep(target, now = Date.now()) {
         const deps = resolve(dir, 'deps');
         if (existsSync(deps)) for (const path of supersededRcguObjects(deps)) { move(path); count++; }
         const incremental = resolve(dir, 'incremental');
-        if (existsSync(incremental)) count += sweepIncremental(incremental, now, move);
+        if (existsSync(incremental)) count += sweepIncremental(incremental, now, move, lock);
         if (count) removed[at] = count;
       } finally { for (const fd of locks) closeSync(fd); }
     }

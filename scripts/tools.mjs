@@ -202,14 +202,19 @@ export function compilerCargo(verb, env = process.env) {
   return { ...launch('cargo', args, undefined, clean), pin: channel };
 }
 
-/** Cargo resolves target-dir from the caller's environment and configuration. */
+/** Cargo resolves its output directories from the caller's environment and configuration. */
 export function sweepCompilerTarget({ pin, env }) {
   if (process.platform === 'win32') return;
-  const target = resolve(ROOT, 'target');
   try {
+    const target = resolve(realpathSync(ROOT), 'target');
+    if (!existsSync(target)) return;
+    const realTarget = realpathSync(target);
+    if (realTarget !== target) return;
     const metadata = spawnSync('cargo', [`+${pin}`, 'metadata', '--format-version', '1', '--no-deps', '--offline', '--locked',
       '--manifest-path', resolve(ROOT, 'Cargo.toml')], { env, encoding: 'utf8', maxBuffer: 1 << 26 });
-    if (metadata.status === 0 && JSON.parse(metadata.stdout).target_directory === target) startSweep(target);
+    if (metadata.status !== 0) return;
+    const { target_directory: output, build_directory: build = output } = JSON.parse(metadata.stdout);
+    if (realpathSync(output) === realTarget && (build === output || realpathSync(build) === realTarget)) startSweep(realTarget);
   } catch (error) { console.error(`warning: could not start the target sweep (${error.message})`); }
 }
 
