@@ -40,7 +40,7 @@ Contract, assets and `app.ts`. A new grant or native code needs a new binary
 
 4. **Start the stream.** After a genesis build, run
    `bun exact.mjs push --origin ../origin`. `--origin` names the directory
-   the channel serves. Omit it for `"appdrop"`.
+   the channel serves. Omit it for `"appdrop"` on `push` and `deploy`.
 5. **Publish later edits.** Run `push` again (`--watch` pushes on save) or
    deploy a snapshot:
 
