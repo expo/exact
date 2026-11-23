@@ -239,9 +239,12 @@ component App
     copied = false
     linked = false
     copiedId = ""
+  // One control shows its tick at a time: a copy clears the others' and restarts the clearing.
   action copyBlock(id: string, text: string)
     copyText(text)
     copiedId = id
+    copied = false
+    linked = false
     copies = copies + 1
   action vote(answer: string)
     voted = answer
@@ -260,6 +263,8 @@ component App
       case some(a)
         copyText(a.url)
         linked = true
+        copied = false
+        copiedId = ""
         copies = copies + 1
       case none
         linked = false
@@ -276,6 +281,8 @@ component App
       case some(m)
         copyText(m.text)
         copied = true
+        linked = false
+        copiedId = ""
         copies = copies + 1
       case none
         copied = false
