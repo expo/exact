@@ -8,13 +8,18 @@ struct Data {
     serial: u64,
     live: Vec<u64>,
     detector: Option<u64>,
+    mirrors: Vec<Value>,
 }
 
 impl DataSource for Data {
     fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
         unreachable!()
     }
-    fn answer(&mut self, _: &mut Store, source: &str, _: &[Value]) -> Result<Answer, DataError> {
+    fn answer(&mut self, _: &mut Store, source: &str, args: &[Value]) -> Result<Answer, DataError> {
+        if source == "mirror" {
+            self.mirrors.push(args[0].clone());
+            return Ok(Answer::Now(args[0].clone()));
+        }
         if source == "immediate" {
             return Ok(Answer::Now(Value::Number(1.)));
         }
@@ -290,6 +295,91 @@ fn every_reconcile_refusal_restores_ownership() {
             );
         }
     }
+}
+
+#[test]
+fn a_sleeping_owned_resource_uses_changed_arguments_only_after_wake() {
+    let plan = contract::compile(
+        r#"component App
+  state show = true
+  state awake = false
+  state number = 1
+  action put(n: number)
+    number = n
+  action wake
+    awake = true
+  view
+    column
+      if show
+        Sleeping(awake=awake, number=number)
+component Sleeping
+  props
+    awake: bool
+    number: number
+  resource answer = mirror(range(number).length) when awake as shape number
+  view
+    text `${number}:${answer}:${current(answer)}` testId="answer"
+"#,
+    )
+    .unwrap();
+    let source = plan
+        .resources
+        .iter()
+        .find(|resource| plan.str(resource.source) == "mirror")
+        .unwrap();
+    assert!(source.owner.is_some());
+    let seed = Checkpoint {
+        answers: vec![(
+            plan.str(source.name).into(),
+            "mirror".into(),
+            vec![Value::Number(1.)],
+            Value::Number(91.),
+        )],
+        ..Default::default()
+    };
+    let number = plan
+        .slots
+        .iter()
+        .position(|slot| plan.str(slot.name) == "number")
+        .unwrap();
+    let mut r = Runner::boot_checkpoint(
+        plan,
+        Data::default(),
+        Kernel::with_monospace(),
+        &seed,
+        vec![],
+        Default::default(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let text = |r: &Runner<Data>| {
+        let kernel = r.kernel();
+        let key = kernel.find_by_test_id("answer")[0];
+        kernel
+            .node_by_key(key)
+            .unwrap()
+            .props
+            .str(exact_kernel::PropId::Text)
+            .unwrap()
+            .to_owned()
+    };
+    assert_eq!(text(&r), "1:91:false");
+    r.act("put", vec![Value::Number(2.)]).unwrap();
+    assert_eq!(text(&r), "2:91:false");
+
+    r.act("put", vec![Value::Number(3.)]).unwrap();
+    assert_eq!(text(&r), "3:91:false");
+
+    let refused = r.act("put", vec![Value::Number(-1.)]).unwrap_err();
+    assert!(format!("{refused:?}").contains("RangeCount"), "{refused:?}");
+    assert_eq!(r.slots[number], Value::Number(3.));
+    assert_eq!(text(&r), "3:91:false");
+    assert!(r.data.mirrors.is_empty());
+
+    r.act("wake", vec![]).unwrap();
+    assert_eq!(r.data.mirrors, [Value::Number(3.)]);
+    assert_eq!(text(&r), "3:3:true");
 }
 
 #[test]

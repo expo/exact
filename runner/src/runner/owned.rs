@@ -163,7 +163,8 @@ impl<D: DataSource> Runner<D> {
                 });
                 let r = match mine {
                     Some(r) => {
-                        let o = self.resources[r].owned.as_mut().expect("owned");
+                        let resource = &mut self.resources[r];
+                        let o = resource.owned.as_mut().expect("owned");
                         if o.path != owner.path {
                             o.path.clone_from(&owner.path);
                         }
@@ -171,8 +172,11 @@ impl<D: DataSource> Runner<D> {
                         let same = o.want.open == want.open
                             && crate::compare::unchanged_arguments(&o.want.args, &want.args);
                         if !same {
+                            let asleep = !resource.pending
+                                && resource.state.as_ref().is_some_and(|state| state.asleep);
+                            // A settled sleeping row only uses its arguments on wake.
+                            changed |= !asleep || o.want.open || want.open;
                             o.want = want;
-                            changed = true;
                         }
                         r
                     }
