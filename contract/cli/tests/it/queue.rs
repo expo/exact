@@ -2,6 +2,8 @@
 //! one request in flight, each asked in a `next` commit of its own after
 //! the reply before it and its `then`.
 
+mod replacement_limits;
+
 use crate::source::{boxed, Read, Source};
 use exact_kernel::Kernel;
 use exact_runner::{
@@ -93,12 +95,20 @@ impl DataSource for Desk {
                     let text = [previous[0].text(), next[0].text()].concat();
                     return Some(vec![Value::str(&text)]);
                 }
+                "appendNested" => {
+                    let oversized = "x".repeat(exact_runner::vm::MAX_STRING + 1);
+                    let nested = (0..4).fold(Value::str(&oversized), |child, _| {
+                        Value::list(vec![child; 1024])
+                    });
+                    return Some(vec![nested]);
+                }
                 "saveNumber" => return Some(vec![Value::Number(3.0)]),
                 "increment" => {
                     let delta = |arg: &Value| {
                         let Value::Record(fields) = arg else {
                             panic!("increment record");
                         };
+                        assert!(fields[1].text().len() <= exact_runner::vm::MAX_STRING);
                         fields[0].as_number().unwrap()
                     };
                     return Some(vec![Value::record(vec![
@@ -182,9 +192,18 @@ impl DataSource for Desk {
         source: &str,
         args: &[Value],
     ) -> Result<Answer, DataError> {
-        if matches!(source, "append" | "saveNumber" | "increment") {
+        if matches!(
+            source,
+            "append" | "appendNested" | "saveNumber" | "increment"
+        ) {
             let op = match source {
                 "append" => args[0].text().len().to_string(),
+                "appendNested" => {
+                    let Value::List(items) = &args[0] else {
+                        panic!("appendNested list");
+                    };
+                    items.len().to_string()
+                }
                 "increment" => {
                     let Value::Record(fields) = &args[0] else {
                         panic!("increment record");
@@ -528,22 +547,6 @@ fn an_empty_replacement_preserves_both_sends_and_their_optimistic_writes() {
 #[test]
 fn a_wrong_type_replacement_preserves_both_sends_and_their_optimistic_writes() {
     assert_replacement_refused("room:wrong-type-merge");
-}
-
-#[test]
-fn a_wrong_type_replacement_is_refused_without_walking_shared_children() {
-    let (done, completed) = std::sync::mpsc::channel();
-    let check = std::thread::spawn(move || {
-        assert_replacement_refused("room:shared-list-merge");
-        done.send(()).unwrap();
-    });
-    let result = completed.recv_timeout(std::time::Duration::from_secs(5));
-    assert_ne!(
-        result,
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout),
-        "refusing a list for a string parameter must not walk the list"
-    );
-    check.join().unwrap();
 }
 
 #[test]

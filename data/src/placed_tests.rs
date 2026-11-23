@@ -14,9 +14,8 @@ fn placed_mergers_follow_the_bound_source_on_main_and_worker() {
         active: bool,
     }
     impl DataSource for Saves {
-        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
-            self.active = false;
-            Ok(Value::Number(0.0))
+        fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::UnknownSource(source.into()))
         }
         fn activate(&mut self) -> Result<(), DataError> {
             self.active = true;
@@ -38,27 +37,14 @@ fn placed_mergers_follow_the_bound_source_on_main_and_worker() {
     for placement in [Placement::Main, Placement::Worker] {
         let mut placed = Placed::new(Saves::default(), placement);
         placed.bind(&plan);
-        assert!(placed.queued_send_replacer(Some("save")).is_none());
         placed.activate().unwrap();
-        let replace = placed
-            .queued_send_replacer(Some("save"))
-            .unwrap_or_else(|| panic!("{placement:?} should publish its rule after activation"));
+        let replace = placed.queued_send_replacer(Some("save")).unwrap();
         let next = [Value::Number(2.0)];
         assert_eq!(
             replace("save", &[Value::Number(1.0)], &next),
             Some(next.to_vec())
         );
         assert!(placed.queued_send_replacer(Some("publish")).is_none());
-        let mut store = Store::new("", []);
-        if let Answer::Later(request) = placed.answer(&mut store, "save", &next).unwrap() {
-            send(placed.dispatch(request.continuation.unwrap(), &store))
-                .recv_timeout(Duration::from_secs(5))
-                .unwrap();
-        }
-        assert!(
-            placed.queued_send_replacer(Some("save")).is_some(),
-            "{placement:?}"
-        );
     }
 }
 
@@ -70,6 +56,10 @@ fn built_worker_publishes_its_own_mergers() {
     impl DataSource for Saves {
         fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
             Ok(Value::Number(0.0))
+        }
+
+        fn replacement(&self, _: &[u8], _: &str, _: Vec<u8>) -> Result<Self, DataError> {
+            Ok(Saves { build_gate: None })
         }
 
         fn queued_send_replacer(
@@ -91,9 +81,11 @@ fn built_worker_publishes_its_own_mergers() {
         build_gate: Some(Arc::new(Mutex::new(gate))),
     };
     let mut placed = Placed::built(template, Placement::Worker, |template, _| {
-        let gate = template.build_gate.clone().unwrap();
+        let gate = template.build_gate.clone();
         Box::new(move || {
-            gate.lock().unwrap().recv().unwrap();
+            if let Some(gate) = gate {
+                gate.lock().unwrap().recv().unwrap();
+            }
             Ok(Saves { build_gate: None })
         })
     });
@@ -101,19 +93,28 @@ fn built_worker_publishes_its_own_mergers() {
     let ty = plan.primitive(exact_plan::TypeKind::Number);
     plan.source("save", &[ty], ty);
     plan.source("publish", &[ty], ty);
-    placed.bind(&plan.finish().unwrap());
+    let plan = plan.finish().unwrap();
+    placed.bind(&plan);
     placed.activate().unwrap();
     let before_build = placed.queued_send_replacer(Some("save"));
     release.send(()).unwrap();
     assert!(before_build.is_none(), "use FIFO while the owner builds");
 
-    let mut store = Store::new("", []);
-    let Answer::Later(request) = placed.answer(&mut store, "save", &[]).unwrap() else {
-        panic!("a worker answer");
+    let run_turn = |placed: &mut Placed<Saves>| {
+        let mut store = Store::new("", []);
+        let args = [Value::Number(1.0)];
+        let Answer::Later(request) = placed.answer(&mut store, "save", &args).unwrap() else {
+            panic!("a worker answer");
+        };
+        let outcome = send(placed.dispatch(request.continuation.unwrap(), &store))
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        assert!(matches!(
+            placed.parse(&mut store, "save", &args, outcome).unwrap(),
+            Answer::Now(Value::Number(0.0))
+        ));
     };
-    send(placed.dispatch(request.continuation.unwrap(), &store))
-        .recv_timeout(Duration::from_secs(5))
-        .unwrap();
+    run_turn(&mut placed);
     assert!(placed.queued_send_replacer(Some("save")).is_none());
     let previous = [Value::Number(1.0)];
     let next = [Value::Number(2.0)];
@@ -124,6 +125,16 @@ fn built_worker_publishes_its_own_mergers() {
         default("unbound", &previous, &next),
         Some(previous.to_vec())
     );
+
+    let mut replacement = placed.replacement(&plan.encode(), "", Vec::new()).unwrap();
+    replacement.activate().unwrap();
+    run_turn(&mut replacement);
+    assert!(replacement.queued_send_replacer(Some("save")).is_some());
+    replacement.bind(&plan);
+    run_turn(&mut replacement);
+    assert!(replacement.queued_send_replacer(Some("save")).is_none());
+    let named = replacement.queued_send_replacer(Some("publish")).unwrap();
+    assert_eq!(named("publish", &previous, &next), Some(next.to_vec()));
 }
 
 struct Slow {

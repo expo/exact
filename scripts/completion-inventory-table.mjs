@@ -1415,7 +1415,6 @@ export const classifications = [
     "The named public runner-crate source is the request lifecycle API or its value/admission helper. runner/src/runner/admission.rs and in_flight.rs tie admission, aborts and retirement to pending tickets. Retained effectful work is separately represented by module_work.rs.", [
     ["runner:runner/src/commands.rs", "request"],
     ["runner:runner/src/page.rs", "Platform::name"],
-    ["runner:runner/src/runner/source.rs", "SendReplacers::get SendReplacers::read"],
     ["runner:runner/src/process.rs", "declared_name ProcessOp::declared ProcessOp::name ProcessOp::size Request::is_process Request::process summary"],
     ["runner:runner/src/request_http.rs", "CacheMode::name CacheMode::parse Redirect::name Redirect::parse Request::prefetch Request::prefetch_refusal Request::preload Request::preload_refusal"],
     ["runner:runner/src/request_preload.rs", "Launch::new LaunchRequest::new Preload::fill"],

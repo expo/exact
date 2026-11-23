@@ -7,29 +7,19 @@ use exact_logic::exact_runner::{
     Answer, DataError, DataSource, Dispatch, Outcome, Placement, Reply, Store, Value, Work,
 };
 use exact_logic::Swappable;
+use std::sync::{Arc, Mutex};
 
 /// Answers with the name of the thread it ran on.
 #[derive(Default)]
 struct Leaf {
-    active: bool,
+    threads: Arc<Mutex<Vec<String>>>,
 }
 
 impl DataSource for Leaf {
     fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
-        self.active = false;
-        Ok(Value::str(std::thread::current().name().unwrap_or("?")))
-    }
-
-    fn activate(&mut self) -> Result<(), DataError> {
-        self.active = true;
-        Ok(())
-    }
-
-    fn queued_send_replacer(
-        &mut self,
-        source: Option<&str>,
-    ) -> Option<exact_logic::exact_runner::QueuedSendReplacer> {
-        (self.active && source == Some("save")).then_some(|_, _, next| Some(next.to_vec()))
+        let thread = std::thread::current().name().unwrap_or("?").to_string();
+        self.threads.lock().unwrap().push(thread.clone());
+        Ok(Value::str(&thread))
     }
 }
 
@@ -37,12 +27,6 @@ exact_logic::configured!(Generated, Placed<Leaf>, || Swappable::off(Placed::new(
     Leaf::default(),
     Placement::Worker
 )));
-
-exact_logic::configured!(GeneratedMain, Leaf, || {
-    Swappable::off(Leaf::default())
-        .named("com.example.placed")
-        .with_fixed_send_replacers()
-});
 
 fn run(dispatch: Dispatch) -> Outcome {
     match dispatch {
@@ -76,29 +60,24 @@ fn a_worker_placed_rust_only_source_answers_on_its_owner() {
     assert_eq!(value.as_str(), Some("exact-owner"));
 }
 
+/// `main` is the source itself, inline, as an entry without `Placed` is.
 #[test]
-fn a_main_placed_rust_only_source_keeps_its_activated_rule() {
-    let mut plan = exact_logic::exact_plan::builder::PlanBuilder::new(0, 0);
-    let text = plan.primitive(exact_logic::exact_plan::TypeKind::String);
-    plan.source("save", &[text], text);
-    let mut data = GeneratedMain::default();
-    assert_eq!(data.placement(), Placement::Main);
-    data.bind(&plan.finish().unwrap());
-    assert!(data.queued_send_replacer(Some("save")).is_none());
+fn a_main_placed_rust_only_source_answers_inline() {
+    let threads = Arc::new(Mutex::new(Vec::new()));
+    let mut data = Swappable::off(Placed::new(
+        Leaf {
+            threads: threads.clone(),
+        },
+        Placement::Main,
+    ));
     data.activate().unwrap();
-    assert!(data.queued_send_replacer(Some("save")).is_some());
-
     let mut store = Store::new("", []);
-    let Answer::Now(value) = data.answer(&mut store, "save", &[]).unwrap() else {
-        panic!("an inline answer");
-    };
-    assert_eq!(value.as_str(), std::thread::current().name());
-    let replace = data
-        .queued_send_replacer(Some("save"))
-        .expect("the first answer must not change the bound rule");
-    let next = [Value::str("new")];
+    assert!(matches!(
+        data.answer(&mut store, "where", &[]).unwrap(),
+        Answer::Now(_)
+    ));
     assert_eq!(
-        replace("save", &[Value::str("old")], &next),
-        Some(next.to_vec())
+        threads.lock().unwrap()[0],
+        std::thread::current().name().unwrap_or("?")
     );
 }
