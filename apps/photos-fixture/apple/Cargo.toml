@@ -1,0 +1,29 @@
+# @exact/photos's fixture on iOS (LLP 1133.019.000 piece 6): the host's C
+# exports over the app's data source, with app storage for its photo index,
+# and its baked plan.
+[package]
+name = "photos-fixture-apple"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "@exact/photos's fixture on Apple platforms: the host's C exports over its data source and baked plan"
+publish = false
+build = "build.rs"
+
+[lib]
+name = "photos_fixture_apple"
+crate-type = ["rlib"]
+test = false
+bench = false
+
+[dependencies]
+exact-data-host = { path = "../../../data/host" }
+ibex2-sqlite = { path = "../../../vendor/ibex/crates/ibex2-sqlite" }
+exact-logic = { path = "../../../logic" }
+exact-apple = { path = "../../../host/apple" }
+photos-fixture-data = { path = "../data" }
+
+[build-dependencies]
+contract = { path = "../../../contract/cli" }
+exact-bake = { path = "../../../bake" }
+photos-fixture-data = { path = "../data" }

@@ -8,6 +8,9 @@ use exact_plan::{Plan, Value};
 pub enum ResourceChange<'a> {
     /// Readers watching this topic in their last answer.
     Topic(&'a str),
+    /// Readers watching any of these topics, announced together: each is
+    /// asked once, however many of them it watches.
+    Topics(&'a [String]),
     /// Readers of this source, for every argument list.
     Source(&'a str),
 }

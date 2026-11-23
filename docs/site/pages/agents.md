@@ -18,6 +18,8 @@ Add `.md` to a page's URL to get the page as Markdown: `/recipes/money` is `/rec
 
 `bun exact.mjs serve dist` (the site's `bun start`) also answers a page's own URL with its Markdown when the request's `Accept` header prefers `text/markdown`: `/recipes/money` then returns the content of `/recipes/money.md`, with `Vary: Accept`. Only `bun run build` writes the `.md` files. When a page is asked for after a source changed, `serve` builds the site again without them. Until `bun run build` runs again, `/recipes/money.md` is not found and `/recipes/money` returns HTML. A static host does not read the header, so add `.md` there.
 
+The deployed site reads `Accept` the same way. At a page's canonical URL, `ChatGPT-User`, `Claude-User` and `Perplexity-User` get the Markdown even if the request does not prefer it. Each of these agents fetches one page for a person in a chat. A crawler such as `GPTBot` or `ClaudeBot` gets the HTML by default. Both versions of the page carry `Vary: Accept, User-Agent`.
+
 Each Markdown page starts with frontmatter (`title`, `description` and `modificationDate`) and a pointer to `/llms.txt`. Its links go to other Markdown pages, or to the file on GitHub.
 
 ## llms.txt
