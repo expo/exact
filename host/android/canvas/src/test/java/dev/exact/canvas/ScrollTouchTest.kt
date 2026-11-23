@@ -36,6 +36,7 @@ class ScrollTouchTest {
         val touches = ArrayList<Int>()
         /** How far the reader moved each scroller, by id. */
         val moved = HashMap<Int, Float>()
+        var moveSeq = 0
         val answers = ArrayDeque<(IntArray) -> Unit>()
         @Implementation fun __constructor__(hwbuf: Boolean, fast: Boolean, priority: Int, intent: (String) -> String?) {}
         @Implementation fun under(x: Float, y: Float, done: (IntArray) -> Unit) { answers.addLast(done) }
@@ -46,6 +47,7 @@ class ScrollTouchTest {
         @Implementation fun touching(on: Boolean) { touching.add(on) }
         @Implementation fun scrolled(id: Int, dx: Float, dy: Float, rev: Int, seq: Int) {
             moved[id] = (moved[id] ?: 0f) + dx + dy
+            moveSeq = seq
             Host.told.add("move $id")
         }
         @Implementation fun answer(waitMs: Long, f: () -> Unit) = false
@@ -55,6 +57,12 @@ class ScrollTouchTest {
         @Implementation fun running(on: Boolean) {}
         @Implementation fun timerReader(view: Any) {}
         @Implementation fun timerReport(view: Any, scrolling: Boolean, sampling: Boolean, applied: Long, began: Long, ended: Long) {}
+    }
+
+    @Implements(Formas::class, isInAndroidSdk = false)
+    class Placement {
+        companion object { var calls = 0 }
+        @Implementation fun placed() { calls++ }
     }
 
     @Implements(Native::class, isInAndroidSdk = false)
@@ -123,6 +131,64 @@ class ScrollTouchTest {
     private fun down(y: Float) = touch(MotionEvent.ACTION_DOWN, 100f to y)
     private fun move(y: Float) = touch(MotionEvent.ACTION_MOVE, 100f to y)
     private fun up(y: Float) = touch(MotionEvent.ACTION_UP, 100f to y)
+
+    @Config(shadows = [Placement::class])
+    @Test fun aReaderMoveBringsAParkedNativeRowIntoViewWithoutAStream() {
+        val module = object : NativeModule {
+            override fun create(context: android.content.Context, props: org.json.JSONObject) = View(context)
+            override fun update(view: View, props: org.json.JSONObject) {}
+        }
+        val natives = Natives(activity, { java.io.File(".") }, mapOf("test" to module))
+        fun field(name: String) = ExactView::class.java.getDeclaredField(name).apply { isAccessible = true }
+        try {
+            view.layout(0, 0, 400, 800)
+            view.natives = natives
+            field("feed").setInt(view, 7)
+            field("feedCount").setInt(view, 1)
+            (field("feedIds").get(view) as IntArray)[0] = 21
+            (field("feedTops").get(view) as FloatArray)[0] = 1220f
+            val scrolling = field("scrolling").get(view) as Scrolling
+            scrolling.told(intArrayOf(7, 14, 0, 0, 0, 0, 0, 0, 800f.toBits()))
+            natives.lazy = true
+            natives.ensure(1, 2, 100, 100, """{"module":"test"}""", 21)
+            natives.near(emptySet(), emptySet(), setOf(21))
+            assertEquals(0, natives.childCount)
+
+            down(720f)
+            answer(reply(scroller(7, 0f, 800f).also { it[1] = 14 }))
+            Placement.calls = 0
+            move(100f)
+            assertTrue(thread.moved.getValue(7) > 420f)
+            assertEquals("the entering row got its native view", 1, natives.childCount)
+            assertEquals("each binding's place is checked once", 1, Placement.calls)
+        } finally {
+            (view.parent as FrameLayout).removeView(view)
+            natives.destroyAll()
+        }
+    }
+
+    @Test fun aStatementWithoutPaintClearsARejectedMove() {
+        fun field(name: String) = ExactView::class.java.getDeclaredField(name).apply { isAccessible = true }
+        val scrolling = field("scrolling").get(view) as Scrolling
+        val queue = java.util.concurrent.ConcurrentLinkedQueue<Owner.Pub>()
+        Owner::class.java.getDeclaredField("queue").apply { isAccessible = true }.set(view.owner, queue)
+        fun statement(max: Float) = intArrayOf(7, 6, 0, 0, 400f.toBits(), 0, 400f.toBits(), 0, max.toBits())
+        fun publish(seq: Int) {
+            queue.add(Owner.Pub((seq + 1).toLong(), null, true, seq, 0, statement(400f), null, null, null))
+            assertTrue(view.publish())
+        }
+        scrolling.told(statement(500f))
+        down(400f)
+        answer(reply(scroller(7, 400f).also { it[1] = 6 }))
+        move(300f)
+        val delta = thread.moved.getValue(7)
+        assertTrue(delta > 0f)
+        assertEquals(-delta, scrolling.shift(7)!!, 0f)
+        publish(0)
+        assertEquals("the earlier statement still leaves the move pending", -delta, scrolling.shift(7)!!, 0f)
+        publish(thread.moveSeq)
+        assertEquals("the repeated statement clears the pending delta", 0f, scrolling.shift(7)!!, 0f)
+    }
 
     /** [gesture] from a down at y 400, its answer [words] given at once and then given after it: what each scrolled,
      * by scroller, and what exact2 heard. */

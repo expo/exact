@@ -156,7 +156,12 @@ interface ExtensionRoster {
 }
 
 /** What an extension may use of the host. */
-class ExtensionContext internal constructor(val application: Context, private val name: String) {
+class ExtensionContext internal constructor(
+    val application: Context,
+    private val name: String,
+    /** A test's configuration in place of the generated roster's. */
+    private val configured: JSONObject? = null,
+) {
     /** The activity that shows the app now, if one does: a permission's rationale is read from it. */
     val activity: Activity? get() = Extensions.front()
 
@@ -171,7 +176,7 @@ class ExtensionContext internal constructor(val application: Context, private va
      * `config.android` that the app's `app.json` gives under `packages.<interface>.android`, a key typed `env` as the
      * variable's value when the APK was built. A key given no value is absent. Read at build: changing one is a new APK.
      */
-    val config: JSONObject by lazy { Extensions.config(name) }
+    val config: JSONObject by lazy { configured ?: Extensions.config(name) }
 
     /** The session this instance belongs to. Android runs one session a process. */
     val session: String = "1"

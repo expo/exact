@@ -24,6 +24,8 @@ impl Tracks {
         origin_ns: i64,
         ops: &mut Vec<u32>,
     ) {
+        let epoch = p.host().lowered_epoch();
+        let since = std::mem::replace(&mut self.epoch, epoch);
         let alive = layer::ALIVE.with(|a| a.borrow().clone());
         if alive.is_empty() && self.sent.is_empty() {
             return;
@@ -36,9 +38,6 @@ impl Tracks {
         self.sent.retain(|id, _| ids.contains(id));
         // Plays change only in a sync: until one, only new layers' tracks;
         // after one, the layers of the nodes it changed.
-        let epoch = p.host().lowered_epoch();
-        let since = self.epoch;
-        self.epoch = epoch;
         for (id, key, basis) in alive {
             let words = if let Some(words) = p.own_tracks(key) {
                 words

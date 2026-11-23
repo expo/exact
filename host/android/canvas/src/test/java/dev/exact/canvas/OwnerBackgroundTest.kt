@@ -44,6 +44,7 @@ class OwnerBackgroundTest {
             var delivered = 0
             var applying = false
             var paint: ByteBuffer? = null
+            var onFrame: (() -> Unit)? = null
             var chromeStatement: IntArray? = null
             var request: IntArray? = null
             @JvmStatic @Implementation fun __staticInitializer__() {}
@@ -55,7 +56,7 @@ class OwnerBackgroundTest {
                 if (pending) { pending = false; delivered++ }
                 return (due - SystemClock.uptimeMillis()).toDouble()
             }
-            @JvmStatic @Implementation fun frame(vsync: Boolean): ByteBuffer? { frames++; return paint.also { paint = null } }
+            @JvmStatic @Implementation fun frame(vsync: Boolean): ByteBuffer? { frames++; onFrame?.invoke(); return paint.also { paint = null } }
             @JvmStatic @Implementation fun pendingPictures() = IntArray(0)
             @JvmStatic @Implementation fun requests(): IntArray? = request.also { request = null }
             @JvmStatic @Implementation fun scrollers(): IntArray? = null
@@ -65,8 +66,77 @@ class OwnerBackgroundTest {
             @JvmStatic @Implementation fun timerHeld() = 0
             @JvmStatic @Implementation fun animating(vsyncOnly: Boolean) = frameDemand
             @JvmStatic @Implementation fun displayFrame() {}
-            @JvmStatic @Implementation fun owed() = false
+            var owing = false
+            @JvmStatic @Implementation fun owed() = owing
             @JvmStatic @Implementation fun nextDue() = (due - SystemClock.uptimeMillis()).toDouble()
+            var moves = false
+            @JvmStatic @Implementation fun moved() = moves
+        }
+    }
+
+    @Test fun aStepThatOnlyMovesMakesNoFrameAndStillDoesWhatFollowsOne() {
+        Host.due = SystemClock.uptimeMillis() + 30000
+        val owner = Owner(false, false, 0) { "0" }
+        val thread = Owner::class.java.getDeclaredField("thread").apply { isAccessible = true }.get(owner) as HandlerThread
+        val handler = Owner::class.java.getDeclaredField("handler").apply { isAccessible = true }.get(owner) as Handler
+        val timer = Owner::class.java.getDeclaredField("timer").apply { isAccessible = true }.get(owner) as Runnable
+        val turnPosted = Owner::class.java.getDeclaredField("turnPosted").apply { isAccessible = true }
+        val looper = shadowOf(thread.looper)
+        val chrome = ArrayList<Int>()
+        val requests = ArrayList<Int>()
+        owner.chrome = { chrome += it[0] }
+        owner.asked = { requests += it[0] }
+        try {
+            val frames = Host.frames
+            owner.ask {
+                handler.removeCallbacks(timer)
+                Host.moves = true
+                Host.owing = true
+                Host.frameDemand = true
+                Host.chromeStatement = intArrayOf(7)
+                Host.request = intArrayOf(Requests.ORIENTATION)
+            }
+            owner.scrolled(1, 0f, 10f, 0, 1)
+            owner.ask { }
+            assertEquals("no frame", frames, Host.frames)
+            assertTrue("a display turn is posted", turnPosted.getBoolean(owner))
+            assertTrue("the paint the move owes is timed", handler.hasCallbacks(timer))
+            Host.frameDemand = false
+            shadowOf(Looper.getMainLooper()).idle()
+            assertEquals("the chrome still goes", listOf(7), chrome)
+            assertEquals("platform requests still go", listOf(Requests.ORIENTATION), requests)
+
+            val due = SystemClock.uptimeMillis() + 5
+            val timerFrames = ArrayList<Long>()
+            owner.ask {
+                handler.removeCallbacks(timer)
+                Host.due = due
+                Host.onFrame = {
+                    timerFrames += SystemClock.uptimeMillis()
+                    Host.due += 30000
+                    Host.owing = false
+                }
+            }
+            owner.scrolled(1, 0f, 10f, 0, 2)
+            owner.ask { }
+            assertTrue(handler.hasCallbacks(timer))
+            looper.idleFor(Duration.ofMillis(4))
+            assertTrue(timerFrames.isEmpty())
+            looper.idleFor(Duration.ofMillis(1))
+            assertEquals(listOf(due), timerFrames)
+
+            val afterTimer = owner.ask { Host.moves = false; Host.onFrame = null; Host.frames }
+            owner.scrolled(1, 0f, 10f, 0, 3)
+            owner.ask { }
+            assertTrue("a step that does more makes its frame", Host.frames > afterTimer)
+        } finally {
+            owner.ask {
+                Host.moves = false; Host.owing = false; Host.frameDemand = false
+                Host.chromeStatement = null; Host.request = null; Host.onFrame = null
+            }
+            handler.removeCallbacksAndMessages(null)
+            thread.quitSafely(); thread.join(5000)
+            assertFalse(thread.isAlive)
         }
     }
 

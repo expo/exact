@@ -68,8 +68,8 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
 
     /** A published stream: [ops] (a copy, the reader's), whether it only moves the last paint, the last scroll it
      * includes, and the feed's group (0 before the first scroll). [scrollers]: what exact2 tells the reader of its
-     * scrollers as of this stream ([Native.scrollers]), null when that is what it last told; with no [ops], that
-     * statement alone. [fields]: what exact2 tells of the text fields the reader hosts as of this stream
+     * scrollers as of this stream ([Native.scrollers]). A statement can acknowledge a rejected move without [ops].
+     * [fields]: what exact2 tells of the text fields the reader hosts as of this stream
      * ([Native.fields], LLP 1115.001 D8), null when that is what it last told. [bars]: what it tells of its bars as
      * of this stream ([Native.bars], D11), null likewise. [access]: what it tells of the accessibility tree
      * ([Native.access], D13), null likewise, and always while no accessibility service is on. */
@@ -434,7 +434,9 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
         if (fingers == null || dy != 0f) Native.scroll(dy)
         android.os.Trace.endSection()
         seq = s
-        produce()
+        // A step of the reader's own moves whose frame would only move what it moved itself makes none, unless an
+        // accessibility service is on (each frame tells it the scrollers' offsets). What follows a frame still runs.
+        if (running && !accessible && fingers != null && dy == 0f && Native.moved()) produced() else produce()
         // Every third step: the window's lead mounts, off the main thread.
         if (prefetch && ++steps % 3 == 0) { handler.removeCallbacks(refiner); handler.post(refiner) }
         if (led) { handler.removeCallbacks(settle); handler.postDelayed(settle, SETTLE_MS) }
@@ -607,6 +609,11 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
             Native.timerObservation(readerScrolling, readerSampling, true, false)
             if (!notifying.getAndSet(true)) postMain { notifying.set(false); published() }
         }
+        produced()
+    }
+
+    /** After a turn, with or without a stream: the chrome, the requests, and the next turn and timer. */
+    private fun produced() {
         val c = Native.chrome()
         val cold = coldChrome
         val number = windowRead

@@ -561,11 +561,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
             applyMove(moveOps)
             groups[feed]?.let { feedBaseX = it.translationX; feedBaseY = it.translationY }
         }
-        // The feed where a driver's scrolls put it, then every scroller a finger moved where the reader has it, and
-        // the hosted fields with their scrollers' rows.
-        if (any) { placeFeed(); scrolling.place(); fields?.place() }
-        // A view lent to another element by these streams (a paint, or a move's `placeFeed`) is asked at its new place.
-        if (any) { Formas.placed(); textSelection.refresh() }
+        if (any) { placeScrolled(); textSelection.refresh() }
         if (coverTrace && painted) traceNewRows()
         moved = !painted
         quiet = painted && allQuiet && move == null
@@ -598,6 +594,10 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         groupSigs.clear(); groupSigs.putAll(structure.groupSigs)
         return same
     }
+
+    /** After a stream, and each move of the reader's own, which may make none ([Owner]): the feed, the scrollers' rows,
+     * the hosted fields and a view lent to another element. */
+    internal fun placeScrolled() { placeFeed(); scrolling.place(); fields?.place(); Formas.placed() }
 
     private fun placeFeed() {
         nearNatives()
@@ -725,8 +725,6 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
             }
         }
         n.near(nearShow, nearKeep, nearKnown, nearSeen)
-        // A pooled view lent to another row as the feed scrolls is asked at its new place.
-        Formas.placed()
     }
 
     /** Where the feed's group is drawn: the last stream's place, less the scrolls the owner has yet to apply; where a
@@ -789,7 +787,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         val s = ++mainSeq
         sent.addLast(s to dy)
         o.scroll(dy, s)
-        if (groups[feed] != null) { placeFeed(); fields?.place(); ticker?.invalidate() }
+        if (groups[feed] != null) { placeFeed(); fields?.place(); Formas.placed(); ticker?.invalidate() }
     }
 
     /** How far the feed's drawn rows reach from the view, down ([reachDown]) and up ([reachUp]), in the group's own

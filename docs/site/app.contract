@@ -90,6 +90,7 @@ routes nav
   recipeGroupedForm "/recipes/grouped-form" render=build activate=idle
   recipeInAppBrowser "/recipes/in-app-browser" render=build activate=idle
   recipeIosDriving "/recipes/ios-driving" render=build activate=idle
+  recipeKeepAPlayingVideo "/recipes/keep-a-playing-video" render=build activate=idle
   recipeKeyboardAndFocus "/recipes/keyboard-and-focus" render=build activate=idle
   recipeLargeLiveList "/recipes/large-live-list" render=build activate=idle
   recipeListRows "/recipes/list-rows" render=build activate=idle
@@ -169,6 +170,7 @@ routes nav
   reference "/reference/developer" render=build activate=idle
   referenceDeveloperRuntimeFontFamiliesAndAriaDisabled "/reference/developer/runtime-font-families-and-aria-disabled" render=build activate=idle
   referenceDeveloperGroupedSectionShadows "/reference/developer/grouped-section-shadows" render=build activate=idle
+  referenceDeveloperAPortalElementOnEachHost "/reference/developer/a-portal-element-on-each-host" render=build activate=idle
   referenceDeveloperServeRealworld "/reference/developer/serve-realworld" render=build activate=idle
   referenceDeveloperInspectAndFormatContract "/reference/developer/inspect-and-format-contract" render=build activate=idle
   referenceDeveloperContractEvaluationLimits "/reference/developer/contract-evaluation-limits" render=build activate=idle

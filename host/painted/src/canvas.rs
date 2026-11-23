@@ -140,7 +140,7 @@ const SLOT_SET: u32 = 24;
 /// id and the move (device pixels) of its rows from where they were drawn.
 /// With `EXACT_MOVE_TRACKS=1`, `CLOCK` and `TRACKS` ops may follow: layers of
 /// the last stream whose plays changed since.
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 const SHIFT: u32 = 22;
 
 /// Room (points) left of and above a row's origin in its recording, so what
@@ -1066,7 +1066,7 @@ pub struct CanvasHost<D: DataSource> {
     viewport: (f32, f32),
     /// The last paint: what it showed besides scroll offsets, the offsets,
     /// and its scrollers with the offsets their rows were drawn at.
-    painted: Option<Painted>,
+    painted: Option<scroll::Painted>,
     /// Frames since the last paint that moved it instead, and when the
     /// last of them was (ms).
     moved: u32,
@@ -1134,18 +1134,14 @@ pub struct CanvasHost<D: DataSource> {
     /// A touch came: until its frame is out, collection passes build only
     /// the rows that show (a slice of 0); the lead follows that frame.
     responding: bool,
+    /// The kernel's layout stamp when the reader was last told where its
+    /// scrollers are: `None` from a paint or a new reader until it is told.
+    told: Option<(u64, u64, u64)>,
     /// The reader's window and what it was last told to draw around the page.
     shell: device::Shell,
     /// Pictures the reader will report presented (LLP 1003.001 D9), by token.
     presents: present::Pictures,
     launch: crate::launch_marks::LaunchMarks,
-}
-
-#[cfg(target_os = "android")]
-struct Painted {
-    still: crate::presenter::still::Still,
-    scroll: std::collections::BTreeMap<ViewId, (f32, f32)>,
-    groups: Vec<(u32, (f32, f32))>,
 }
 
 /// At most this many frames move the last paint before one paints again:
@@ -1282,11 +1278,8 @@ impl<D: DataSource + Default> CanvasHost<D> {
         }
         p.update_launched();
         self.painted_once = true;
-        self.painted = p.still().map(|still| Painted {
-            still,
-            scroll: p.scroll_offsets().clone(),
-            groups: GROUPS.with(|g| g.borrow().clone()),
-        });
+        self.painted = scroll::Painted::capture(p);
+        self.told = None;
         self.moved = 0;
         self.paint_by = None;
         self.force = false;
@@ -1353,34 +1346,10 @@ impl<D: DataSource + Default> CanvasHost<D> {
         if !p.dirty() || self.force || self.moved >= limit {
             return None;
         }
-        let painted = self.painted.as_ref()?;
-        let now = p.scroll_offsets();
-        let grouped = |id: &ViewId| painted.groups.iter().any(|(g, _)| g == id);
-        let others = |m: &std::collections::BTreeMap<ViewId, (f32, f32)>| {
-            m.iter()
-                .filter(|(id, _)| !grouped(id))
-                .map(|(id, o)| (*id, o.0.to_bits(), o.1.to_bits()))
-                .collect::<Vec<_>>()
-        };
-        let still = p.still()?;
-        let same = still == painted.still
-            || self
-                .quiet
-                .is_some_and(|epoch| painted.still.same_at(&still, epoch));
-        if others(now) != others(&painted.scroll) || !same {
-            return None;
-        }
-        let s = self.scale;
-        let mut ops = vec![SHIFT, painted.groups.len() as u32];
-        for (id, at) in &painted.groups {
-            let to = now.get(id).copied().unwrap_or((0.0, 0.0));
-            ops.extend([
-                *id,
-                ((at.0 - to.0) * s).to_bits(),
-                ((at.1 - to.1) * s).to_bits(),
-            ]);
-        }
-        self.p.moved_without_paint();
+        let ops = self
+            .painted
+            .as_ref()?
+            .shift(&mut self.p, self.quiet, self.scale)?;
         self.moved += 1;
         self.moved_at = at;
         Some(ops)

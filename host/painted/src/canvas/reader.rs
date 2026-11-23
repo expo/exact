@@ -45,6 +45,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
         stream::reader_replaced();
         layer::ALIVE.with(|a| a.borrow_mut().clear());
         self.tracks = Default::default();
+        self.told = None;
         // The last paint is the last reader's: nothing moves it, and the
         // next frame is a paint.
         self.painted = None;

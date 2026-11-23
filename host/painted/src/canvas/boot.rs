@@ -152,6 +152,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
             origin_ns,
             tracks: Default::default(),
             feed: None,
+            told: None,
             presents: Default::default(),
             launch,
             lead: false,

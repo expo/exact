@@ -916,7 +916,7 @@ component App
 ```
 
 - The destination is the first element with that `id` in declaration order in
-  the app root. It must be a plain box (`box`, `column`, `row`, `main`,
+  the app root. It must be a plain box (`box`, `view`, `column`, `row`, `main`,
   `section`, `article`, `aside`, `nav` or `footer` with no `role`,
   `navigationKey` or `popover`) that its parent lays out. A list's row, a
   table's part, a route's header item, a button's face, a dialog or a route
@@ -925,19 +925,20 @@ component App
   leaves it where it is written.
 - With no destination (a missing id, its own descendant, a cycle, a box inside
   hidden content) it is alive but not shown: no space, no input, not in
-  `tree`, journaled once. A video there keeps its position; Chrome pauses it
-  and resumes it on return, Firefox keeps it playing.
-- Events from it bubble through where it is written, not where it is shown.
+  `tree`, journaled once. A muted autoplay video there pauses at its position
+  and plays on from it when shown (Firefox keeps it playing).
+- Its press, pointer-button and key events bubble through where it is written,
+  not where it is shown; hover, focus on the web and the painted hosts' pan,
+  swipe and long press still follow where it is shown.
   Colours, `color-scheme` and modes come from where it is shown (on the web;
   native hosts still resolve design-token modes at the declaration).
 - Removing the declaration removes it; a new one starts fresh.
-- Hosts: the web moves the same DOM element with `moveBefore()`, or
-  `insertBefore` where the browser lacks it (WebKit), which keeps a playing
-  video playing but reloads an iframe; a page rendered ahead leaves it out
-  and builds afresh. The runner places it for the native hosts, whose
-  presentation is not finished: macOS does not yet draw an element that was
-  hidden at launch. `apps/shared-elements`' Player and Flight screens show
-  both forms.
+- Hosts: the web, macOS, iOS and Android move the same element, and a playing
+  video plays on through the move; Linux and Windows move it with no video
+  decoder. A page rendered ahead leaves it out and builds afresh. The
+  reference's "A `portal` element on each host" has each host's table.
+  `docs/recipes/keep-a-playing-video.md` is a card that opens into a detail;
+  `apps/shared-elements`' Player and Flight screens show both forms.
 
 Imports resolve local `.contract` declarations, with cycle and app-boundary
 checks. Paths begin with `./` and cannot contain `..` segments. They do not load app logic or expand the available built-in function
