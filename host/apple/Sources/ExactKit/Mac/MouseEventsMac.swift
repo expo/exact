@@ -3,7 +3,7 @@
 // (NodeViewMac's `rightMouseDown`).
 //
 // A wheel's turn or a trackpad's scroll over a node is heard by every
-// node from it up the authored tree (`eventParent`) that declares `wheel`
+// node from it up the authored tree (`pointerParent`) that declares `wheel`
 // (a disabled box included, as a `<div disabled>` in Chrome; not a
 // disabled form control or a node an `inert` makes inert; a modal dialog's
 // ancestors, inert behind it, hear it), innermost first, as the DOM's
@@ -138,14 +138,14 @@ extension Presenter {
         var next = view
         while let view = next {
             if let node = view as? NodeView, node.field != nil || node.textArea != nil { return false }
-            next = eventParent(of: view)
+            next = pointerParent(of: view)
         }
         return true
     }
 
     /// The node a request from the keyboard at `view` reaches (the
     /// ContextMenu key, VoiceOver's show menu): the first from it up the
-    /// authored tree (`eventParent`), whose `contextmenu` or `contextPopover`
+    /// authored tree (`pointerParent`), whose `contextmenu` or `contextPopover`
     /// answers, as Chrome's `contextmenu` at the element bubbles to its
     /// first handler; nil at a field, which keeps its own menu.
     func contextTarget(_ view: NSView?) -> NodeView? {
@@ -155,7 +155,7 @@ extension Presenter {
                 if node.field != nil || node.textArea != nil { return nil }
                 if views[node.id] === node, node.answersContextMenu { return node }
             }
-            next = eventParent(of: view)
+            next = pointerParent(of: view)
         }
         return nil
     }
@@ -369,17 +369,19 @@ extension NodeView {
     }
 
     /// AppKit keeps the ordinary responder chain; only a lifted view's
-    /// step into the top layer goes through its authored ancestors instead.
+    /// step into the top layer, or a `portal` mover's to its declaration,
+    /// goes through its authored ancestors instead. A mover's ends there:
+    /// its shown ancestors never hear it.
     func bubbleContextMenu(_ event: NSEvent) -> Bool {
-        guard let presenter, let parent = presenter.eventParent(of: self), parent !== superview else { return false }
+        guard let presenter, let parent = presenter.pointerParent(of: self), parent !== superview else { return false }
         var next: NSView? = parent
         while let view = next {
             if let node = view as? NodeView,
                node.dispatchContextMenu(at: node.convert(Self.point(event, in: node.window), from: nil),
                                         sample: node.pointerSample(event), bubbled: true, click: event) { return true }
-            next = presenter.eventParent(of: view)
+            next = presenter.pointerParent(of: view)
         }
-        return false
+        return presenter.declaredParent(of: self) != nil
     }
 
     /// A Control-click is the Mac's secondary click (X85): Chrome sends it as
@@ -517,7 +519,7 @@ extension NodeView {
             if let node = view as? NodeView, presenter.views[node.id] === node, node.handlers.contains("wheel"), !node.formDisabled, !node.authoredInert {
                 path.append(node)
             }
-            next = presenter.eventParent(of: view)
+            next = presenter.pointerParent(of: view)
         }
         var prevented = false
         presenter.propagating {

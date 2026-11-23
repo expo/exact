@@ -56,6 +56,8 @@ package final class MountRelay: NSObject, UIGestureRecognizerDelegate {
             if let n = v as? NodeView, listens(n), !(contextMenu ? n.formDisabled : n.disabled) {
                 return n.isDescendant(of: mount) || !holders && mount.isDescendant(of: n) ? nil : n
             }
+            // A `portal` mover inside the mount relays its own touches (`syncPortalRelay`).
+            if v !== mount, presenter?.declaredParent(of: v) != nil, v.isDescendant(of: mount) { return nil }
             view = presenter?.pointerParent(of: v) ?? v.superview
         }
         return nil
@@ -93,5 +95,20 @@ package final class MountRelay: NSObject, UIGestureRecognizerDelegate {
     }
     @objc private func longPressed(_ g: UILongPressGestureRecognizer) { pressed?.openContext(g) }
     @objc private func doubleTapped(_ g: UITapGestureRecognizer) { doubled?.doubleClicked(g) }
+    func remove() { for g in [pointer, press, double] as [UIGestureRecognizer] { mount.removeGestureRecognizer(g) } }
+}
+
+extension NodeView {
+    /// A `portal` mover is a mount of its own (LLP 1013.002 D1): its touches
+    /// reach its declaration's listeners, which its shown ancestors'
+    /// recognizers leave alone (`PointerRecognizer.nearer`).
+    func syncPortalRelay() {
+        if props["declaredParent"] == nil {
+            portalRelay?.remove()
+            portalRelay = nil
+        } else if portalRelay == nil, let presenter {
+            portalRelay = MountRelay(presenter, mount: self)
+        }
+    }
 }
 #endif

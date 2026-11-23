@@ -9,6 +9,29 @@ impl<D: DataSource> Runner<D> {
         }
     }
 
+    /// The `portal` movers alive and shown nowhere (LLP 1013.002 D5): each
+    /// heads a subtree a host keeps, unattached, beside the roots' trees.
+    pub fn hidden_movers(&self) -> Vec<ViewId> {
+        self.tree
+            .as_ref()
+            .map(|t| t.hidden_movers())
+            .unwrap_or_default()
+    }
+
+    /// Each `portal` mover shown away from its declaration or hidden, with
+    /// its declaration parent, in id order.
+    pub fn declared_parents(&self) -> Vec<(ViewId, ViewId)> {
+        (self.tree.as_ref())
+            .map(|t| t.declared_parents())
+            .unwrap_or_default()
+    }
+
+    /// A mover's declaration parent: the next step of an event's path up
+    /// from it (LLP 1013.002 D1), where a host walks that path itself.
+    pub fn declared_parent(&self, view: ViewId) -> Option<ViewId> {
+        self.tree.as_ref().and_then(|t| t.declared_parent(view))
+    }
+
     /// The views a destroy in the batch just placed leaves alive: each
     /// extracted mover's subtree, which the kernel still shows inside the
     /// destroyed node until the batch applies.

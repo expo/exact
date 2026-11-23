@@ -367,6 +367,8 @@ pub struct Host<D: DataSource> {
     holds_told: colors::Told,
     /// The top-layer boxes covered while closed (`closed.rs`).
     closed: layout::closed::Closed,
+    /// The `portal` movers and the `declaredParent` a batch last gave each (`Host::tell_declared_parents`).
+    declared_told: Vec<(ViewId, ViewId)>,
 }
 
 pub(crate) use crate::plan_bytes::PlanBytes;
@@ -754,6 +756,7 @@ impl<D: DataSource> Host<D> {
             route_inspectors_told: Vec::new(),
             holds_told: Default::default(),
             closed: Default::default(),
+            declared_told: Vec::new(),
         };
         let mut batch = Batch::new();
         host.native_prepare_candidate().map_err(HostError::Layout)?;
@@ -762,6 +765,7 @@ impl<D: DataSource> Host<D> {
         host.cover_root_tablist();
         host.prepare_flat(&mut batch);
         host.present_first_tree(previous, &order, &mut batch);
+        host.declared_told = host.runner.declared_parents();
         host.emit_title(&mut batch);
         host.emit_language(&mut batch);
         colors::emit_roles(&mut batch);
