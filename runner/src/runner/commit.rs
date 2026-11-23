@@ -468,9 +468,16 @@ impl<D: DataSource> Runner<D> {
                 }
             }
             let target = self.send_target(m);
-            let write = self.accept_write(target, source, sargs);
             let early = !self.source_ready(source) && !exact_plan::runner_owned_source(source);
-            if early && !queue {
+            if queue && (early || asked.contains(&m) || !self.asks_now(m)) {
+                if let Err(e) = self.wait_turn(m, source, sargs) {
+                    self.discard_later(&later);
+                    return Err(e);
+                }
+                continue;
+            }
+            let write = self.accept_write(target, source, sargs);
+            if early {
                 if let Err(e) = self.check_send_arguments(m, sargs) {
                     self.discard_later(&later);
                     return Err(e);
@@ -481,13 +488,6 @@ impl<D: DataSource> Runner<D> {
                     replaced.push(m);
                 }
                 unsent.push((target, source.clone(), sargs.clone(), self.sent_by()));
-                continue;
-            }
-            if queue && (early || asked.contains(&m) || !self.asks_now(m)) {
-                if let Err(e) = self.wait_turn(m, source, sargs, write) {
-                    self.discard_later(&later);
-                    return Err(e);
-                }
                 continue;
             }
             asked.push(m);
