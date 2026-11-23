@@ -211,10 +211,12 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
         guard let t = tracks[id] else { throw ExactTrackError("NotFoundError") }
         if t.readyState == "ended" { consumer.ended(); return ExactSubscription {} }
         t.consumers[ObjectIdentifier(consumer)] = consumer
-        if t.active, !(start && origin == "app" && !context.agent && !t.leased) {
+        // The app's own call starts the capture, and so does a live recording press the runner admitted (`press`).
+        let person = origin == "app" || origin == "press"
+        if t.active, !(start && person && !context.agent && !t.leased) {
             consumer.live(t.audio)
             if t.muted { consumer.muted(t.muteReason ?? "idle") }
-        } else if origin == "app", t.enabled, !t.used || start {
+        } else if person, t.enabled, !t.used || start {
             activate(t)
             // A retry can fail with the same mute reason; this new subscription must hear it too.
             if t.muted { consumer.muted(t.muteReason ?? "idle") }

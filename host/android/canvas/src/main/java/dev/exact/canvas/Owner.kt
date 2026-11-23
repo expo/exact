@@ -271,6 +271,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
                     }
                 }
                 wakes?.sync()
+                Warm.stop = true
                 produce()
             } else coldChrome = null
             postMain(if (cold) mainNow else main) { done(ok) }

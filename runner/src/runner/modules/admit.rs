@@ -632,10 +632,29 @@ impl<D: DataSource> Runner<D> {
         if applies
             && sub["foreground"] == true
             && (origin == CallOrigin::Action || (self.page.in_background() && !calling()))
+            && !(origin == CallOrigin::Action && self.press_starts_audio(row, args))
         {
             return Err("not in the foreground".into());
         }
         Ok(())
+    }
+
+    /// Whether `row` called with `args` is one of the two names a live press
+    /// of a recording control starts while hidden (LLP 1126.004 D4, §6d):
+    /// `getUserMedia` for audio and no video, and `startMediaRecorder`.
+    /// Which tracks the recorder's stream holds, and the press's own Live
+    /// Activity, are piece 4's checks.
+    pub(super) fn press_starts_audio(&self, row: &ModulesRow, args: &Json) -> bool {
+        let audio_only = match (self.plan.str(row.package), self.plan.str(row.declared)) {
+            ("@exact/media-capture", "getUserMedia") => {
+                (args["audio"] == true || args["audioConstraints"].is_object())
+                    && args["video"] != true
+                    && args["videoConstraints"].is_null()
+            }
+            ("@exact/recording", "startMediaRecorder") => true,
+            _ => false,
+        };
+        audio_only && self.press_records(self.invocation_id())
     }
 
     /// The implementation's answer for `row` under the agent, the agent's

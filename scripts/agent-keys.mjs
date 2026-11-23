@@ -3,7 +3,7 @@
 // `type` and `tap` forms. Split from agent.mjs, which re-exports each.
 import { randomBytes } from 'node:crypto';
 import { resolve } from 'node:path';
-import { dragArguments } from './agent-drag.mjs';
+import { dragArguments, dragWords } from './agent-drag.mjs';
 
 export function refusalMessage(reply) {
   const r = reply?.refused;
@@ -454,6 +454,25 @@ export function tapWords(args, held = false) {
   if (form === undefined) return [first, {}];
   // A held contact's phases name no target: the contact is the one `tap <target> down` began.
   if (['up', 'cancel', 'hold', 'move'].includes(form)) refuse(held ? `a held contact's phases take no target: \`tap ${[form, ...rest].join(' ')}\`` : `${form} is a phase of a held contact, which none is: \`tap <target> down\`, then \`tap ${form}${form === 'move' ? ' <x> <y>' : form === 'hold' ? ' <ms>' : ''}\``);
+  // A press point before `drag` (#1332): the drag's start point is its own `from`, and a held contact moves by phases.
+  if ((form === 'at' || form === 'down') && rest.includes('drag')) {
+    const words = args.slice(1), split = words.indexOf('drag'), press = words.slice(0, split);
+    // The drag's words as parseDrag reads them. Its head is `to <target>` or a distance `<dx> <dy>`; the first leg's
+    // own options follow it, up to `then`.
+    const after = dragWords(words.slice(split + 1).join(' '));
+    const head = after[0] === 'to' ? ['to', after[1] ?? '<target>'] : [after[0] ?? '<dx>', after[1] ?? '<dy>'], tail = after.slice(2);
+    const own = tail.includes('then') ? tail.slice(0, tail.indexOf('then')) : tail;
+    const point = (list, name) => list.includes(name) ? list.slice(list.indexOf(name) + 1, list.indexOf(name) + 3) : null;
+    const [x = '<x>', y = '<y>'] = point(press, 'at') ?? point(own, 'from') ?? [];
+    const held = press.indexOf('modifiers'), modifiers = held < 0 || press[held + 1] === undefined ? [] : press.slice(held, held + 2);
+    // The drag's own modifiers win; a bare one ending its leg takes the press's.
+    const mine = own.indexOf('modifiers'), fill = mine >= 0 && mine === own.length - 1 && modifiers.length;
+    const rest = fill ? [...tail.slice(0, mine + 1), modifiers[1], ...tail.slice(mine + 1)] : tail;
+    const drag = [...head, ...(own.includes('from') ? [] : ['from', x, y]), ...(mine < 0 ? modifiers : []), ...rest];
+    // A target of several words, or none, goes back in quotes, as the op reads it.
+    const target = first === '' || /[\s"\\]/.test(first) ? JSON.stringify(first) : first;
+    refuse(`a drag starts at a point with from: \`tap ${[target, 'drag', ...drag].join(' ')}\`; a held contact is \`tap ${[target, 'down', 'at', x, y, ...modifiers].join(' ')}\`, then \`tap hold <ms>\`, \`tap move [by] <x> <y> [over <ms>]\`, \`tap up\``);
+  }
   if (form.startsWith('{')) { try { return [first, JSON.parse(args.slice(1).join(' '))]; } catch (e) { refuse(e.message); } }
   switch (form) {
     // A click with modifiers held (gallery F20): `tap <target> modifiers Shift+Meta`.

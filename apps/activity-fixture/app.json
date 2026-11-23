@@ -54,9 +54,16 @@
     },
     {
       "kind": "open",
-      "title": "Activity fixture",
-      "symbol": "app",
-      "url": "/"
+      "title": "Activity fixture details",
+      "symbol": "info.circle",
+      "url": "/detail"
+    },
+    {
+      "kind": "tally",
+      "title": "Count a press",
+      "symbol": "plus.circle",
+      "tool": "tally",
+      "authentication": "always"
     }
   ],
   "host": {
