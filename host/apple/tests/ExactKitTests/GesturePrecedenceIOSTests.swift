@@ -258,6 +258,28 @@ final class GesturePrecedenceIOSTests: XCTestCase {
         return (p, p.views[3]!)
     }
 
+    /// UIKit's translation for a touch starts where it recognized the pan, so
+    /// the handle keeps where the pan's finger touched down while no other
+    /// finger has joined it, whether the two landed together or not (LLP
+    /// 1002, 2026-11-23).
+    func testThePhotoKeepsWhereItsPansOnlyFingerTouchedDown() throws {
+        let (p, handle) = photo(handle: "none")
+        let pan = try XCTUnwrap(handle.transformRecognizer), contact = try XCTUnwrap(handle.contact)
+        let first = LiftedTouch(), second = LiftedTouch(), next = LiftedTouch()
+        XCTAssertNil(contact.panDown, "no touch received")
+        first.at = CGPoint(x: 201, y: 100)
+        XCTAssertTrue(handle.gestureRecognizer(pan, shouldReceive: first))
+        XCTAssertEqual(contact.panDown, CGPoint(x: 201, y: 100), "one finger")
+        second.at = CGPoint(x: 201, y: 300)
+        XCTAssertTrue(handle.gestureRecognizer(pan, shouldReceive: second))
+        XCTAssertNil(contact.panDown, "a second finger while the first is down")
+        (first.lifted, second.lifted) = (true, true)
+        next.at = CGPoint(x: 180, y: 120)
+        XCTAssertTrue(handle.gestureRecognizer(pan, shouldReceive: next))
+        XCTAssertEqual(contact.panDown, CGPoint(x: 180, y: 120), "the next contact")
+        withExtendedLifetime(p) {}
+    }
+
     /// LLP 1057.001 §4: the binding's pan takes two fingers and a pinch rides
     /// with it — the one simultaneity, and only that pair's.
     func testThePhotoHandleHasATwoFingerPanAndASimultaneousPinch() throws {
@@ -528,8 +550,9 @@ final class GesturePrecedenceIOSTests: XCTestCase {
 }
 /// A touch whose phase a test ends: UIKit's end of it never reached the recognizer.
 private final class LiftedTouch: UITouch {
-    var lifted = false
+    var lifted = false, at = CGPoint.zero
     override var phase: UITouch.Phase { lifted ? .ended : .began }
+    override func location(in view: UIView?) -> CGPoint { at }
 }
 /// The states `setState:` was given, in order, while a test swaps it in.
 private var statesSet: [(recognizer: UIGestureRecognizer, state: UIGestureRecognizer.State)] = []

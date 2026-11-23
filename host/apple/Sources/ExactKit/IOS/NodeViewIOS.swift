@@ -229,6 +229,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
             if (gestureRecognizer === heightRecognizer || gestureRecognizer === transformRecognizer || gestureRecognizer === transformContact?.pinchRecognizer), current is UIScrollView { return false }
             hit = current.superview
         }
+        if gestureRecognizer === transformRecognizer { transformContact?.panReceived(touch, at: touch.location(in: window)) }
         return true
     }
     /// A nested editor owns its selection gestures, including read-only

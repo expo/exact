@@ -10,9 +10,12 @@ package enum NavigationPaintRole {
 }
 
 /// A transform handle's contact, which the Drag module keeps: the core asks
-/// only for its pinch, which gesture precedence orders.
+/// for its pinch, which gesture precedence orders, and tells it each touch its
+/// pan receives.
 package protocol TransformPinchContact: AnyObject {
     var pinchRecognizer: UIGestureRecognizer { get }
+    /// A touch the pan receives, at `point` (window points).
+    func panReceived(_ touch: UITouch, at point: CGPoint)
 }
 
 /// What most nodes never set — gestures and their holds, editors and

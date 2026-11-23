@@ -27,19 +27,22 @@ final class TransformDragHold {
     private var pendingMove: ([Double], Double)?
     private var pendingEnd: ([Double], Double, Bool)?
 
-    init?(_ handle: NodeView, time: Double) {
+    /// `travel` (window points) is how far the contact has moved since it
+    /// touched down, which the hold begins already holding.
+    init?(_ handle: NodeView, time: Double, travel: CGPoint = .zero) {
         guard time.isFinite, let session = handle.presenter?.session, !session.isApplyingPresentation,
               let binding = session.presenter.transformBindings[handle.id],
               let targetID = binding.target, let targetKey = binding.targetKey, let clipKey = binding.clipKey,
               let target = session.presenter.views[targetID], SwipeInput.allows(handle), SwipeInput.allows(target),
               let geometry = session.presenter.handles?.geometry.current(binding),
-              let presentation = target.transformDragPresentation() else { return nil }
+              let presentation = target.transformDragPresentation(),
+              let start = presentation.moved(dx: Double(travel.x), dy: Double(travel.y)) else { return nil }
         self.session = session; self.handle = handle; self.target = target; self.binding = binding
         window = target.window
         generation = session.generation; sequence = geometry.sequence
         let packet = TransformDragPacket(op: 11, runtime: binding.runtime, handleKey: binding.handleKey,
             targetKey: targetKey, clipKey: clipKey, sequence: geometry.sequence,
-            values: presentation.values + [0, 0, 0], now: session.now())
+            values: start + [0, 0, 0], now: session.now())
         guard let reply = session.runtime.transformMotion(packet) else { return nil }
         guard reply.accepted, reply.runtime == binding.runtime, reply.sequence == geometry.sequence,
               let translate = reply.translate, let scale = reply.scale, let origin = reply.value else {
