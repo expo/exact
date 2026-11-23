@@ -158,10 +158,11 @@ const TYPES: Record<string, string> = { Home: 'Overview', 'Get started': 'Tutori
 const mdUrl = (p: Page) => `${ORIGIN}${p.path === '/' ? '/index' : p.path}.md`;
 const parentOf = (p: Page) => pages.filter(q => q.path !== '/' && p.path.startsWith(`${q.path}/`)).sort((a, b) => b.path.length - a.path.length)[0];
 const start = pages.find(p => p.path === '/start');
+const startSite = pages.find(p => p.path === '/start-site');
 function prerequisites(p: Page): string {
   const parent = parentOf(p);
   if (parent) return `[${parent.title}](${mdUrl(parent)})`;
-  if (p.path === '/recipes/website') return 'start-here-site.md in the Exact checkout (a website reads it in place of Start here)';
+  if (startSite && (p.path === '/recipes/website' || p.path === '/recipes/website-hosting')) return `[${startSite.title}](${mdUrl(startSite)})`;
   if (!start || ['Home', 'Get started', 'For AI agents'].includes(p.section)) return 'None';
   return `[${start.title}](${mdUrl(start)})`;
 }

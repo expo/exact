@@ -23,13 +23,20 @@ export type NavSection = {
 const DOCS = join(import.meta.dir, '../..');
 
 function pagesFromFolder(folder: string, routePrefix: string, descriptionOverrides: Record<string, string> = {}): NavPage[] {
-  return readdirSync(join(DOCS, folder))
-    .filter(file => file.endsWith('.md'))
-    .map(file => file.slice(0, -3))
+  const sources = new Map<string, string>();
+  return readdirSync(join(DOCS, folder), { withFileTypes: true })
+    .filter(file => file.isFile() && file.name.endsWith('.md'))
+    .map(file => file.name.slice(0, -3))
     .sort()
     .map(name => {
-      const words = name.split('-').map(word => word[0].toUpperCase() + word.slice(1));
-      return { route: routePrefix + words.join(''), path: `/${folder}/${name}`, source: `${folder}/${name}.md`, description: descriptionOverrides[name] };
+      const words = name.split('-').filter(Boolean).map(word => word[0].toUpperCase() + word.slice(1));
+      const route = routePrefix + words.join('');
+      const source = `${folder}/${name}.md`;
+      const previous = sources.get(route);
+      if (previous) throw new Error(`${previous} and ${source} both use route ${route}`);
+      sources.set(route, source);
+      const description = Object.hasOwn(descriptionOverrides, name) ? descriptionOverrides[name] : undefined;
+      return { route, path: `/${folder}/${name}`, source, description };
     });
 }
 
@@ -98,6 +105,7 @@ export const sections: NavSection[] = [
       combobox: 'Filter options while a field keeps focus and names its active option.',
       'content-design': 'Chrome is the platform\'s; the content is yours: rows, grouping, where actions sit.',
       convex: '@exact/convex keeps Convex queries live over one socket, with nothing polled.',
+      displays: '@exact/window-management (LLP 1178): the displays by the web\'s Window Management API, and where the pointer is, which the web cannot ask.',
       'edit-sheet': 'A row that opens its item\'s sheet is a link: a tap, a deep link and Back all arrive at follow.',
       'editable-rows': 'Rows added and removed while editing: each row\'s remove is a red minus-circle and a swipe; Add is the section\'s last row.',
       'fetch-loading-error': 'A fetched resource with loading, an error and Retry, whose rows belong to the owner that asked for them.',

@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { resolve } from 'node:path';
+import pages from '../content/pages.json';
 
 // Pages' own rules meet the tree tools/pages.ts makes here: `wrangler pages dev` serves dist.pages as Cloudflare
 // does, with its _redirects, _headers, _routes.json and _worker.js.
@@ -51,6 +52,14 @@ test('a page answers at its path, and every other spelling of it redirects there
 test('a path that is not a page redirects by its rule in constants/redirects.ts', async () => {
   expect(await get('/llms-full.txt')).toMatchObject({ status: 301, location: '/llms.txt' });
   expect(await get('/llms.txt')).toEqual({ status: 200, type: 'text/plain', location: null });
+});
+
+test('Recipes lists every Markdown recipe in name order', () => {
+  const expected = readdirSync(resolve(site, '../recipes'), { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name.endsWith('.md'))
+    .map(entry => `/recipes/${entry.name.slice(0, -3)}`)
+    .sort();
+  expect(pages.filter(page => page.section === 'Recipes').map(page => page.path)).toEqual(expected);
 });
 
 test('Markdown, the worker and the files it does not see', async () => {
