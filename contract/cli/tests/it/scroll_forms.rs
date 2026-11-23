@@ -2,25 +2,16 @@
 //! lowered to their rows: each form's words and lengths as the kernel holds them, and the values
 //! each refuses.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Dimension, Kernel, SafeAreaEdges, SafeAreaExtend};
-use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Runner};
+use exact_runner::Runner;
 
-#[derive(Default)]
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-
-fn boot(source: &str) -> Runner<NoData> {
+fn boot(source: &str) -> Runner<Source> {
     let plan = contract::compile(source).unwrap();
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -28,7 +19,7 @@ fn boot(source: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn style(r: &mut Runner<NoData>, test_id: &str) -> exact_kernel::StyleProps {
+fn style(r: &mut Runner<Source>, test_id: &str) -> exact_kernel::StyleProps {
     let k = r.kernel_mut();
     let id = k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap().id;
     k.node(id).unwrap().style.clone()
@@ -293,7 +284,7 @@ fn a_scrollers_node_reply_carries_its_terms() {
     k.set_session_band([47.0, 0.0, 34.0, 0.0]).unwrap();
     k.compute_layout(root, exact_kernel::Offer::definite(390.0, 844.0))
         .unwrap();
-    let id = |r: &Runner<NoData>, t: &str| {
+    let id = |r: &Runner<Source>, t: &str| {
         r.kernel()
             .node_by_key(r.kernel().find_by_test_id(t)[0])
             .unwrap()
@@ -318,7 +309,7 @@ fn an_extending_boxs_node_reply_carries_its_extension() {
     k.set_session_band([47.0, 0.0, 34.0, 0.0]).unwrap();
     k.compute_layout(root, exact_kernel::Offer::definite(390.0, 844.0))
         .unwrap();
-    let id = |r: &Runner<NoData>, t: &str| {
+    let id = |r: &Runner<Source>, t: &str| {
         r.kernel()
             .node_by_key(r.kernel().find_by_test_id(t)[0])
             .unwrap()

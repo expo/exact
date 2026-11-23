@@ -1,17 +1,9 @@
 //! Glass materials and groups carried by classes, and a material's tint
 //! (`-exact-glass-tint`) and interactivity (`glassInteractive`).
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Color, ColorValue, Kernel, PropId, PropValue, StyleId};
-use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Runner};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::Runner;
 
 #[test]
 fn material_classes_produce_the_same_props_as_direct_attributes() {
@@ -52,16 +44,16 @@ component App
 "#,
     )
     .unwrap_or_else(|e| panic!("{e}"));
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let prop = |r: &Runner<NoData>, id: &str, prop: PropId| {
+    let prop = |r: &Runner<Source>, id: &str, prop: PropId| {
         let k = r.kernel();
         k.node_by_key(k.find_by_test_id(id)[0])
             .unwrap()
@@ -204,7 +196,7 @@ fn a_glass_tint_is_a_colour_row_and_interactive_a_prop() {
     .unwrap_or_else(|e| panic!("{e}"));
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

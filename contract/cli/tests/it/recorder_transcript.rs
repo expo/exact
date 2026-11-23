@@ -4,6 +4,7 @@
 //! played by the native slot under the agent; `stopSpeechRecognition`'s
 //! answers are held until the test releases them.
 
+use crate::source::{boxed, Source};
 use exact_runner::{Dispatch, Outcome, Reply, Response, Runner, Work};
 use serde_json::{json, Value as Json};
 use std::path::Path;
@@ -46,12 +47,12 @@ fn respond(reply: Reply, answer: Json) {
     }));
 }
 
-fn boot() -> (Runner<Granted>, Held) {
+fn boot() -> (Runner<Source>, Held) {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/recorder/app.contract");
     let (plan, _) = contract::compile_path_all(&path, false).unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Granted,
+        boxed(Granted),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -107,7 +108,7 @@ fn boot() -> (Runner<Granted>, Held) {
 
 /// Each request run and each outcome fulfilled, until nothing is left to do;
 /// one not answered yet stays pending until a later pump finds its answer.
-fn pump(r: &mut Runner<Granted>, waiting: &mut Vec<(u64, std::sync::mpsc::Receiver<Outcome>)>) {
+fn pump(r: &mut Runner<Source>, waiting: &mut Vec<(u64, std::sync::mpsc::Receiver<Outcome>)>) {
     for _ in 0..16 {
         let ran = !r.advance(0.0).unwrap().is_empty();
         let mut landed = false;
@@ -141,11 +142,11 @@ fn pump(r: &mut Runner<Granted>, waiting: &mut Vec<(u64, std::sync::mpsc::Receiv
     }
 }
 
-fn slot(r: &Runner<Granted>, name: &str) -> String {
+fn slot(r: &Runner<Source>, name: &str) -> String {
     format!("{:?}", r.slot(name))
 }
 
-fn toggle_disabled(r: &Runner<Granted>) -> bool {
+fn toggle_disabled(r: &Runner<Source>) -> bool {
     let tree: Json =
         serde_json::from_str(&exact_runner::agent::handle(r, r#"{"op":"tree"}"#)).unwrap();
     let nodes = tree["nodes"].as_array().cloned().unwrap_or_default();

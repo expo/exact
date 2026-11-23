@@ -1,15 +1,9 @@
 //! LLP 1017 P6: named styles, proven on the kernel's rows after boot.
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Color, Dimension, Kernel, WhiteSpace};
 use exact_plan::Value;
 use exact_runner::{DataError, DataSource, Runner};
 use std::path::Path;
-#[derive(Default)]
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
 fn corpus(name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../corpus")
@@ -19,10 +13,10 @@ fn corpus(name: &str) -> String {
 #[test]
 fn a_class_applies_its_style_and_the_nodes_own_attribute_wins() {
     let plan = contract::compile(&corpus("styles.contract")).unwrap();
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -64,16 +58,16 @@ fn a_class_applies_its_style_and_the_nodes_own_attribute_wins() {
 #[test]
 fn a_class_chooses_between_two_styles_by_state() {
     let plan = contract::compile(&corpus("styles.contract")).unwrap();
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let chip = |r: &Runner<NoData>| {
+    let chip = |r: &Runner<Source>| {
         let k = r.kernel();
         let node = k.node_by_key(k.find_by_test_id("chip")[0]).unwrap();
         (node.id, node.style.clone())
@@ -223,7 +217,7 @@ fn enum_refusals_list_accepted_values_and_each_suggestion_compiles() {
                     contract::compile(&corrected).unwrap_or_else(|e| panic!("{corrected}: {e}"));
                 let r = Runner::boot(
                     plan,
-                    NoData,
+                    boxed(NoData),
                     Kernel::with_monospace(),
                     Default::default(),
                     "/",
@@ -255,7 +249,7 @@ fn nowrap_and_tabular_nums_reach_the_kernel_and_other_numeric_keywords_are_refus
     let plan = contract::compile(source).unwrap();
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -309,7 +303,7 @@ fn auto_enum_literals_in_branches_keep_dimension_refusals_separate() {
     let plan = contract::compile(source).unwrap();
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -328,11 +322,11 @@ fn auto_enum_literals_in_branches_keep_dimension_refusals_separate() {
     );
 }
 
-fn boot(src: &str) -> Runner<NoData> {
-    let plan = contract::bake(contract::compile(src).unwrap(), NoData).unwrap();
+fn boot(src: &str) -> Runner<Source> {
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -340,7 +334,7 @@ fn boot(src: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn style_of(r: &Runner<NoData>, id: &str) -> exact_kernel::StyleProps {
+fn style_of(r: &Runner<Source>, id: &str) -> exact_kernel::StyleProps {
     let k = r.kernel();
     k.node_by_key(k.find_by_test_id(id)[0])
         .unwrap()
@@ -435,17 +429,17 @@ fn direction_is_css_direction() {
 fn transparent_is_a_colour() {
     let src = "component A\n  state on = false\n  action flip\n    on = not on\n  view\n    column\n      button testId=\"flip\" press=flip width=10 height=10\n      box testId=\"box\" background-color=\"transparent\" color=(on ? \"#ff0000\" : \"TRANSPARENT\") border-color=\"transparent currentcolor\"\n      text \"a\" testId=\"text\" background-color=\"light-dark(transparent, #000000)\"\n";
     let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e}"));
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
     let clear = Color::rgba(0, 0, 0, 0);
-    fn style(r: &Runner<NoData>, id: &str) -> exact_kernel::StyleProps {
+    fn style(r: &Runner<Source>, id: &str) -> exact_kernel::StyleProps {
         let k = r.kernel();
         k.node_by_key(k.find_by_test_id(id)[0])
             .unwrap()
@@ -569,7 +563,7 @@ fn pre_and_backdrop_filter_reach_the_kernel_and_the_rest_of_css_filters_is_refus
     let plan = contract::compile(source).unwrap();
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -639,16 +633,16 @@ component Group
 "#,
     )
     .unwrap();
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let spacing = |r: &Runner<NoData>, id: &str| {
+    let spacing = |r: &Runner<Source>, id: &str| {
         let k = r.kernel();
         k.node_by_key(k.find_by_test_id(id)[0])
             .unwrap()
@@ -663,7 +657,7 @@ component Group
     assert_eq!(spacing(&r, "shared"), Some(PropValue::Float(-1.0)));
     // A component's string prop forwarding "auto" (astra's review).
     assert_eq!(spacing(&r, "forwarded"), Some(PropValue::Float(-1.0)));
-    let id = |r: &Runner<NoData>, t: &str| {
+    let id = |r: &Runner<Source>, t: &str| {
         let k = r.kernel();
         k.node_by_key(k.find_by_test_id(t)[0]).unwrap().id
     };
@@ -714,10 +708,10 @@ fn a_glass_group_is_a_spacing_and_refused_where_it_cannot_group() {
 "#,
     )
     .unwrap();
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -807,10 +801,10 @@ component Pin
 "#,
     )
     .unwrap();
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -992,7 +986,7 @@ component App
 "#;
     let mut r = Runner::boot(
         contract::compile(source).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -1050,7 +1044,7 @@ fn repeated_context_branches_contain_descendants_in_every_instance() {
         );
         let mut r = Runner::boot(
             contract::compile(&source).unwrap(),
-            Items,
+            boxed(Items),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -1081,7 +1075,7 @@ fn repeated_context_branches_contain_descendants_in_every_instance() {
 fn check_context_root(source: &str) {
     let mut r = Runner::boot(
         contract::compile(source).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -1146,13 +1140,13 @@ component Corners
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let style = |r: &Runner<NoData>, name: &str| {
+    let style = |r: &Runner<Source>, name: &str| {
         let k = r.kernel();
         let n = k.node_by_key(k.find_by_test_id(name)[0]).unwrap();
         (n.id, n.style.border_radius_top_left.clone())
@@ -1364,10 +1358,10 @@ component App
       button "Finish" press=finish testId="finish"
       text "Card" class=Card border-top="thick #abcdef" border-bottom="solid" text-decoration=(done ? "underline line-through" : "none") testId="card"
 "##;
-    let plan = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(source).unwrap(), boxed(NoData)).unwrap();
     let mut runner = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -1475,7 +1469,7 @@ fn the_background_shorthand_names_background_color() {
 #[test]
 fn a_computed_decoration_and_a_class_take_the_css_pair_in_either_order_and_case() {
     let mut r = boot("style Both\n  text-decoration-line=\"Line-Through Underline\"\nstyle Plain\n  opacity=1\n\ncomponent App\n  state n = 0\n  state deco = \"line-through underline\"\n  action next\n    n = n + 1\n    deco = n == 0 ? \"underline\" : \"overline\"\n  view\n    column\n      button \"Next\" press=next testId=\"next\"\n      text \"a\" text-decoration-line=deco testId=\"a\"\n      text \"b\" class=(n == 0 ? Both : Plain) testId=\"b\"\n");
-    let line = |r: &Runner<NoData>, id| style_of(r, id).text_decoration_line;
+    let line = |r: &Runner<Source>, id| style_of(r, id).text_decoration_line;
     use exact_kernel::TextDecorationLine as L;
     assert_eq!(line(&r, "a"), L::UnderlineLineThrough);
     assert_eq!(line(&r, "b"), L::UnderlineLineThrough);

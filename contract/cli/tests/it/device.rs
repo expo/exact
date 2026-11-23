@@ -12,6 +12,7 @@
 //! - an answer carries no platform's words the substitute did not give;
 //! - a rendered document's checkpoint holds none of the three.
 
+use crate::source::{boxed, Source};
 use exact_kernel::PropValue;
 use exact_runner::{Dispatch, Outcome, Reply, Runner, Work};
 use std::path::PathBuf;
@@ -71,13 +72,13 @@ impl exact_runner::DataSource for Data {
     }
 }
 
-fn boot(name: &str, target: &str) -> (App, Runner<Data>) {
+fn boot(name: &str, target: &str) -> (App, Runner<Source>) {
     let app = App::new(name);
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Data,
+        boxed(Data),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -89,7 +90,7 @@ fn boot(name: &str, target: &str) -> (App, Runner<Data>) {
 }
 
 /// The host's part: each request dispatched and answered, until nothing is left.
-fn pump(r: &mut Runner<Data>) {
+fn pump(r: &mut Runner<Source>) {
     for _ in 0..8 {
         let outs = r.take_requests();
         if outs.is_empty() && r.apply_announced().0.is_empty() {
@@ -113,14 +114,14 @@ fn pump(r: &mut Runner<Data>) {
     }
 }
 
-fn prefer(r: &mut Runner<Data>, source: &str, value: &str) {
+fn prefer(r: &mut Runner<Source>, source: &str, value: &str) {
     let request = format!(r#"{{"op":"prefer","extension":{{"device.{source}":{value}}}}}"#);
     let (_, reply) = r.extension_agent(&request).expect("a prefer");
     reply.unwrap();
     pump(r);
 }
 
-fn text(r: &Runner<Data>, id: &str) -> String {
+fn text(r: &Runner<Source>, id: &str) -> String {
     let key = r.kernel().find_by_test_id(id)[0];
     let node = r.kernel().node_by_key(key).unwrap();
     (node.props.iter())
@@ -131,7 +132,7 @@ fn text(r: &Runner<Data>, id: &str) -> String {
         .unwrap_or_default()
 }
 
-fn texts(r: &Runner<Data>) -> [String; 3] {
+fn texts(r: &Runner<Source>) -> [String; 3] {
     ["battery", "network", "power"].map(|id| text(r, id))
 }
 

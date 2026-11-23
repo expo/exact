@@ -1,16 +1,9 @@
 //! `trim(text)` (LLP 1054.000.005): a send button disabled on an empty
 //! draft stays disabled on a draft of spaces.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, PropId};
-use exact_runner::{DataError, DataSource, Runner, Value};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::{Runner, Value};
 
 const SRC: &str = r#"component App
   state draft = ""
@@ -27,13 +20,13 @@ fn a_draft_of_spaces_leaves_send_disabled() {
     let plan = contract::compile(SRC).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let disabled = |r: &Runner<NoData>| {
+    let disabled = |r: &Runner<Source>| {
         let k = r.kernel();
         let key = k.find_by_test_id("send")[0];
         k.node_by_key(key).unwrap().props.bool(PropId::Disabled) == Some(true)

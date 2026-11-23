@@ -4,16 +4,9 @@
 //! follows Dynamic Type as Apple's own ramp does. Native hosts keep the
 //! text style's weight; web, neutral and terminal looks emphasize titles.
 //! An authored `font`, `font-size` or `font-weight` wins over its defaults.
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, RowValue, StyleId};
-use exact_runner::{DataError, DataSource, Runner, Value};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::Runner;
 
 const SOURCE: &str = r#"component App
   view
@@ -30,7 +23,7 @@ const SOURCE: &str = r#"component App
       text testId="footnote" font="-apple-system-footnote" font-weight=500 "Footnote"
 "#;
 
-fn number(r: &Runner<NoData>, id: &str, row: StyleId) -> f64 {
+fn number(r: &Runner<Source>, id: &str, row: StyleId) -> f64 {
     let key = r.kernel().find_by_test_id(id)[0];
     match r.kernel().node_by_key(key).unwrap().computed(row) {
         RowValue::Number(n) => n,
@@ -43,14 +36,14 @@ fn a_heading_is_its_levels_text_style_at_the_root_size_unless_written() {
     let plan = contract::compile(SOURCE).unwrap_or_else(|e| panic!("{e}"));
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let size = |r: &Runner<NoData>, id| number(r, id, StyleId::FontSize);
-    let weight = |r: &Runner<NoData>, id| number(r, id, StyleId::FontWeight);
+    let size = |r: &Runner<Source>, id| number(r, id, StyleId::FontSize);
+    let weight = |r: &Runner<Source>, id| number(r, id, StyleId::FontWeight);
     // iOS at the default Dynamic Type: body 17.
     assert!(r.set_root_font_size(17.0).unwrap().is_some());
     assert_eq!(size(&r, "h1"), 28.0);
@@ -126,7 +119,7 @@ fn a_text_styles_number_may_follow_a_hyphen() {
     let plan = contract::compile(&src).unwrap_or_else(|e| panic!("{e}"));
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -172,7 +165,7 @@ fn font_inherit_clears_every_font_longhand() {
     let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e}"));
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -202,7 +195,7 @@ fn font_inherit_clears_every_font_longhand() {
     let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e}"));
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -228,7 +221,7 @@ fn each_heading_level_has_its_emphasized_weight() {
     let plan = contract::compile(&src).unwrap_or_else(|e| panic!("{e}"));
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

@@ -1,9 +1,10 @@
 //! LLP 1013.002 D1, D3: `portal` is a string prop on the element it moves, and
 //! the compiler refuses what it can prove no placement could do.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, PropId, ViewId};
 use exact_plan::{BindingKind, Plan, Value};
-use exact_runner::{DataError, DataSource, Event, Runner};
+use exact_runner::{Event, Runner};
 use std::path::Path;
 
 fn corpus(name: &str) -> String {
@@ -101,19 +102,12 @@ fn what_placement_decides_compiles() {
 // its `portal` says, hides it where nothing can receive it, and keeps its
 // declaration for state, handlers and teardown.
 
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-
-fn boot(source: &str) -> Runner<NoData> {
+fn boot(source: &str) -> Runner<Source> {
     let plan = contract::compile(source).unwrap();
     let plan = Plan::decode(&plan.encode()).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -121,23 +115,23 @@ fn boot(source: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn view(r: &Runner<NoData>, test_id: &str) -> Option<ViewId> {
+fn view(r: &Runner<Source>, test_id: &str) -> Option<ViewId> {
     let key = r.kernel().find_first_by_test_id(test_id)?;
     Some(r.kernel().node_by_key(key)?.id)
 }
 
-fn parent(r: &Runner<NoData>, v: ViewId) -> Option<ViewId> {
+fn parent(r: &Runner<Source>, v: ViewId) -> Option<ViewId> {
     r.kernel().node(v).unwrap().parent
 }
 
-fn label(r: &Runner<NoData>, test_id: &str) -> String {
+fn label(r: &Runner<Source>, test_id: &str) -> String {
     let k = r.kernel();
     let button = k.node(view(r, test_id).unwrap()).unwrap();
     let text = k.node(button.children()[0]).unwrap();
     text.props.str(PropId::Text).unwrap().to_owned()
 }
 
-fn press(r: &mut Runner<NoData>, test_id: &str) {
+fn press(r: &mut Runner<Source>, test_id: &str) {
     let v = view(r, test_id).unwrap();
     r.dispatch(v, Event::Press).unwrap();
 }
@@ -480,7 +474,7 @@ fn a_reload_keeps_a_mover_declared_before_its_destination() {
     let plan = Plan::decode(&contract::compile(source).unwrap().encode()).unwrap();
     let again = Runner::boot_carrying(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         &r.carry(),
         Default::default(),

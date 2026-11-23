@@ -5,18 +5,11 @@
 //! family).
 
 use crate::scratch::Scratch;
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::Kernel;
-use exact_plan::{Plan, Value};
+use exact_plan::Plan;
 use exact_runner::forma::{Length, Number, Token, Type};
-use exact_runner::{DataError, DataSource, Place, Runner};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::{Place, Runner};
 
 const DESIGN: &str = "forma t\n\naxes\n  density = regular | compact\n\ntheme\n  space.row = 12px\n    when density=compact: 8px\n  space.rem = 1.5rem\n  opacity.faded: number = 0.5\n    when density=compact: 0.25\n  type.body = -exact-body/1.35 \"Inter\"\n    when density=compact: -exact-footnote/1.2 \"Inter\"\n  type.sys = 600 -exact-body system-ui\n  type.em = 20px/2em system-ui\n";
 const VIEW: &str = "component App\n  view\n    column padding=\"space.row\" opacity=\"opacity.faded\" margin=\"space.rem\"\n      text \"a\" testId=\"outer\" font=\"type.body\"\n      text \"s\" font=\"type.sys\"\n      text \"e\" font=\"type.em\"\n      column testId=\"card\" -exact-mode=\"density=compact\" padding=\"space.row\"\n        text \"b\" testId=\"inner\" font=\"type.body\"\n";
@@ -31,7 +24,7 @@ fn plan() -> Plan {
     plan
 }
 
-fn node(r: &Runner<NoData>, id: &str) -> Place {
+fn node(r: &Runner<Source>, id: &str) -> Place {
     let k = r.kernel();
     Place::Node(k.node_by_key(k.find_by_test_id(id)[0]).unwrap().id)
 }
@@ -45,8 +38,8 @@ const SYS: Token<Type> = Token::new("type.sys");
 #[test]
 fn each_kind_resolves_for_its_place() {
     let mut r = Runner::boot(
-        contract::bake(plan(), NoData).unwrap(),
-        NoData,
+        contract::bake(plan(), boxed(NoData)).unwrap(),
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

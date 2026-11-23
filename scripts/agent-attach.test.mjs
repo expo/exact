@@ -226,5 +226,6 @@ test('the attached carrier refuses a physical device before it looks for an app'
   expect(looked).toEqual([]);
   // A simulator's lookup is given the app's directory, whose remembered simulator a drive also chooses.
   await expect(openAttached({ host: 'ios', app: 'caltrain', find })).rejects.toThrow('looked');
-  expect(looked[0]).toMatchObject({ id: 'com.exact.caltrain', app: 'caltrain', dir: expect.stringMatching(/apps\/caltrain$/) });
+  expect(looked[0]).toMatchObject({ id: 'com.exact.caltrain', app: 'caltrain', appDir: expect.stringMatching(/apps\/caltrain$/) });
+  expect(looked[0].dir).toBeUndefined(); // the Mac lookup's `dir` is its temporary directory
 });

@@ -3,19 +3,12 @@
 //! to the layout: it names a wrapper exactly when the scroller comes out as
 //! tall as its 30 rows (1,500 points) inside a 400-point column.
 
+use crate::source::{boxed, NoData};
 use crate::warnings::warned;
 use exact_kernel::{Kernel, Offer};
-use exact_runner::{DataError, DataSource, Runner, Value};
+use exact_runner::Runner;
 
 const ID: &str = "lower-scroll-grows";
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
 
 /// An app whose view is `body` (indented under a 400-point column) and whose
 /// scroller, `id="s"`, holds 30 rows of 50 points.
@@ -35,7 +28,7 @@ fn scroller_height(src: &str) -> f32 {
     let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e}\n{src}"));
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

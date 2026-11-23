@@ -6,6 +6,7 @@
 //! sessions (LLP 1133.005 D9) wait side by side, one per address, and take
 //! only a callback with exactly one `code` or `error`.
 
+use crate::source::{boxed, Source};
 use exact_kernel::Kernel;
 use exact_plan::Value;
 use exact_runner::auth::{self, Arm, Browser};
@@ -57,10 +58,10 @@ impl DataSource for Signer {
 
 const APP: &str = "shape R\n  text: string\ncomponent App\n  state cb = \"app.test:/cb\"\n  mutation signed as shape R\n  mutation other as shape R\n  mutation third as shape R\n  action go\n    send signed = signIn(cb)\n  action bad\n    send signed = signIn(\"app.test:/elsewhere\")\n  action two\n    send other = other(cb)\n  action loopA\n    send signed = signIn(\"http://127.0.0.1:4401/cb\")\n  action loopB\n    send other = other(\"http://127.0.0.1:4402/cb\")\n  action loopSame\n    send other = other(\"http://127.0.0.1:4401/cb\")\n  action loopSix\n    send third = signIn(\"http://[::1]:4401/cb\")\n  view\n    column\n      button press=go testId=\"go\"\n        text \"go\"\n      button press=bad testId=\"bad\"\n        text \"bad\"\n      button press=two testId=\"two\"\n        text \"two\"\n      button press=loopA testId=\"loop-a\"\n        text \"loop a\"\n      button press=loopB testId=\"loop-b\"\n        text \"loop b\"\n      button press=loopSame testId=\"loop-same\"\n        text \"loop same\"\n      button press=loopSix testId=\"loop-six\"\n        text \"loop six\"\n      match signed\n        case some(s)\n          text s.text testId=\"out\"\n        case none\n          text \"\" testId=\"out\"\n";
 
-fn boot() -> Runner<Signer> {
+fn boot() -> Runner<Source> {
     Runner::boot(
         contract::compile(APP).unwrap(),
-        Signer,
+        boxed(Signer),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -68,7 +69,7 @@ fn boot() -> Runner<Signer> {
     .unwrap()
 }
 
-fn press(r: &mut Runner<Signer>, id: &str) -> exact_runner::RequestOut {
+fn press(r: &mut Runner<Source>, id: &str) -> exact_runner::RequestOut {
     let key = r.kernel().find_by_test_id(id)[0];
     let node = r.kernel().node_by_key(key).unwrap().id;
     r.dispatch(node, Event::Press).unwrap();
@@ -78,7 +79,7 @@ fn press(r: &mut Runner<Signer>, id: &str) -> exact_runner::RequestOut {
         .expect("an auth request")
 }
 
-fn deliver(r: &mut Runner<Signer>) -> String {
+fn deliver(r: &mut Runner<Source>) -> String {
     let (ticket, outcome) = r.take_request_refusal(true).expect("a settled answer");
     r.fulfill(ticket, outcome).unwrap();
     let key = r.kernel().find_by_test_id("out")[0];
@@ -194,7 +195,7 @@ fn one_sheet_per_window_and_supersession_forgets_the_old_one() {
 }
 
 /// The settled answer's ticket and status, taken without the view.
-fn settled(r: &mut Runner<Signer>) -> (u64, u16) {
+fn settled(r: &mut Runner<Source>) -> (u64, u16) {
     let (ticket, outcome) = r.take_request_refusal(true).expect("a settled answer");
     let status = exact_data::auth::reply(&outcome).map_or_else(|(s, _)| s, |_| 200);
     r.fulfill(ticket, outcome).unwrap();
@@ -218,7 +219,7 @@ fn loopback_sessions_wait_side_by_side_and_take_only_a_code_or_an_error() {
         auth::arm(&mut r, &b, true, Browser::Native, None),
         Arm::Held
     );
-    let typed = |r: &mut Runner<Signer>, t: u64, url: &str| {
+    let typed = |r: &mut Runner<Source>, t: u64, url: &str| {
         let json = format!(r#"{{"op":"type","ticket":{t},"text":"{url}"}}"#);
         agent::answer(r, &json).unwrap().0
     };
@@ -286,13 +287,13 @@ const LIST: &str = "shape R\n  text: string\ncomponent App\n  state ports = [441
 fn a_resource_over_a_list_holds_a_loopback_sign_in_for_each_element() {
     let mut r = Runner::boot(
         contract::compile(LIST).unwrap(),
-        Signer,
+        boxed(Signer),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let present = |r: &mut Runner<Signer>, out: &exact_runner::RequestOut| {
+    let present = |r: &mut Runner<Source>, out: &exact_runner::RequestOut| {
         assert!(matches!(
             auth::arm(r, out, false, Browser::Native, None),
             Arm::Present(_)
@@ -303,7 +304,7 @@ fn a_resource_over_a_list_holds_a_loopback_sign_in_for_each_element() {
     for out in &open {
         present(&mut r, out);
     }
-    let press = |r: &mut Runner<Signer>, id: &str| {
+    let press = |r: &mut Runner<Source>, id: &str| {
         let key = r.kernel().find_by_test_id(id)[0];
         let node = r.kernel().node_by_key(key).unwrap().id;
         r.dispatch(node, Event::Press).unwrap();
@@ -595,7 +596,7 @@ fn android_keeps_the_substitute_refuses_loopback_and_drops_forgotten_requests() 
 fn android_same_target_sessions_deliver_by_state() {
     let mut r = Runner::boot(
         contract::compile("shape R\n  text: string\ncomponent App\n  resource signed = signIn(\"app.test:/cb\", s) for s in [\"s1\", \"s2\"] as shape R\n  view\n    text signed.map(s => s.text).join(\",\")\n").unwrap(),
-        Signer, Kernel::with_monospace(), Default::default(), "/",
+        boxed(Signer), Kernel::with_monospace(), Default::default(), "/",
     ).unwrap();
     let requests = r.take_requests();
     assert_eq!(requests.len(), 2);
@@ -620,7 +621,7 @@ fn android_same_target_sessions_deliver_by_state() {
 fn android_routes_responses_by_state_and_state_less_returns_to_the_oldest_logout() {
     let mut r = Runner::boot(
         contract::compile("shape R\n  text: string\ncomponent App\n  resource signed = signIn(\"app.test:/cb\", s) for s in [\"sign-in\", \"logout-one\", \"logout-two\"] as shape R\n  view\n    text signed.map(s => s.text).join(\",\")\n").unwrap(),
-        Signer, Kernel::with_monospace(), Default::default(), "/",
+        boxed(Signer), Kernel::with_monospace(), Default::default(), "/",
     ).unwrap();
     let mut requests = r.take_requests();
     assert_eq!(requests.len(), 3);
@@ -712,7 +713,7 @@ fn an_addressed_logout_sign_in_answer_settles_with_502_on_every_host() {
 fn a_sign_in_takes_its_response_when_a_logout_shares_its_state() {
     let mut r = Runner::boot(
         contract::compile("shape R\n  text: string\ncomponent App\n  resource signed = signIn(\"app.test:/cb\", s) for s in [\"logout\", \"sign-in\"] as shape R\n  view\n    text signed.map(s => s.text).join(\",\")\n").unwrap(),
-        Signer, Kernel::with_monospace(), Default::default(), "/",
+        boxed(Signer), Kernel::with_monospace(), Default::default(), "/",
     ).unwrap();
     let mut requests = r.take_requests();
     assert_eq!(requests.len(), 2);

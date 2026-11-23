@@ -2,18 +2,9 @@
 //! keywords and `currentcolor`, and `position-area`, proven on the kernel's
 //! rows after boot. Split from styles.rs.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Color, Kernel};
-use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Runner};
-
-#[derive(Default)]
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::Runner;
 
 #[test]
 fn scroll_padding_and_svg_radii_refuse_negative_literals() {
@@ -77,10 +68,10 @@ component App
         text "aaa bbb ccc ddd"
 "#
     );
-    let plan = contract::bake(contract::compile(&src).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(&src).unwrap(), boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -165,16 +156,16 @@ component App
       text "same" color="#123456" testId="same"
 "##
             );
-            let plan = contract::bake(contract::compile(&src).unwrap(), NoData).unwrap();
+            let plan = contract::bake(contract::compile(&src).unwrap(), boxed(NoData)).unwrap();
             let mut r = Runner::boot(
                 plan,
-                NoData,
+                boxed(NoData),
                 Kernel::with_monospace(),
                 Default::default(),
                 "/",
             )
             .unwrap();
-            let style = |r: &Runner<NoData>, id: &str| {
+            let style = |r: &Runner<Source>, id: &str| {
                 let k = r.kernel();
                 let n = k.node_by_key(k.find_by_test_id(id)[0]).unwrap();
                 (
@@ -221,16 +212,16 @@ component App
 #[test]
 fn order_moves_a_flex_item_and_a_bound_order_moves_it_again() {
     let src = "component A\n  state rail = true\n  action flip\n    rail = not rail\n  view\n    row testId=\"row\" width=300\n      view testId=\"main\" width=200 height=10\n      view testId=\"rail\" width=100 height=10 order=(rail ? -1 : 0)\n      view testId=\"last\" width=0 height=10 order=1\n";
-    let plan = contract::bake(contract::compile(src).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let x = |r: &mut Runner<NoData>, id: &str| {
+    let x = |r: &mut Runner<Source>, id: &str| {
         let root = r.roots()[0];
         r.kernel_mut()
             .compute_layout(root, exact_kernel::Offer::definite(400.0, 400.0))
@@ -251,16 +242,16 @@ fn order_moves_a_flex_item_and_a_bound_order_moves_it_again() {
 #[test]
 fn inherit_unset_and_currentcolor_are_csss() {
     let src = "style Loud\n  color=\"#ff0000\"\ncomponent A\n  state on = false\n  action flip\n    on = not on\n  view\n    column color=\"#0000ff\"\n      text \"a\" testId=\"inherit\" class=Loud color=\"inherit\"\n      text \"b\" testId=\"bound\" color=(on ? \"unset\" : \"#00ff00\")\n      view testId=\"swatch\" background-color=\"currentcolor\"\n      image \"symbol:add\" testId=\"icon\" -exact-tint-color=\"currentColor\" alt=\"Add\"\n      input testId=\"field\" value=\"\" enterkeyhint=\"send\"\n";
-    let plan = contract::bake(contract::compile(src).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let node = |r: &Runner<NoData>, id: &str| {
+    let node = |r: &Runner<Source>, id: &str| {
         let k = r.kernel();
         let key = k.find_by_test_id(id)[0];
         let n = k.node_by_key(key).unwrap();
@@ -351,10 +342,10 @@ fn position_area_places_a_popover_in_the_admitted_subset_only() {
 #[test]
 fn popover_flip_fallbacks_compile_in_authored_order() {
     let source = "component App\n  view\n    column popover=\"auto\" position-area=\"bottom span-right\" position-try-fallbacks=\"flip-block, flip-inline, flip-start flip-block\"\n";
-    let plan = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(source).unwrap(), boxed(NoData)).unwrap();
     let runner = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -443,17 +434,17 @@ component A
             image "symbol:sf/star" -exact-tint-color="AccentColor" testId="tinted"
             text "Tinted"
 "##;
-    let plan = contract::bake(contract::compile(src).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
     // (set, written) for a row of the node `id`.
-    let row = |r: &Runner<NoData>, id: &str, row: exact_kernel::StyleId| {
+    let row = |r: &Runner<Source>, id: &str, row: exact_kernel::StyleId| {
         let k = r.kernel();
         let style = k.node_by_key(k.find_by_test_id(id)[0]).unwrap().style;
         (style.mask.has(row), style.written.has(row))
@@ -517,10 +508,10 @@ component A
 #[test]
 fn user_select_text_and_all_compile_and_contain_is_refused_by_name() {
     let source = "component App\n  view\n    column\n      column user-select=\"text\" testId=\"prose\"\n        text \"x\" testId=\"said\"\n      text \"y\" testId=\"unsaid\"\n      text testId=\"para\"\n        text \"Folder: \"\n        text \"/tmp\" user-select=\"all\" testId=\"whole\"\n";
-    let plan = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(source).unwrap(), boxed(NoData)).unwrap();
     let runner = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -691,10 +682,10 @@ fn a_class_choice_is_the_class_it_chooses() {
             node("ab", "(on ? A : B)"),
             node("ba", "(on ? B : A)"),
         );
-        let plan = contract::bake(contract::compile(&src).unwrap(), NoData).unwrap();
+        let plan = contract::bake(contract::compile(&src).unwrap(), boxed(NoData)).unwrap();
         let mut r = Runner::boot(
             plan,
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -762,22 +753,22 @@ component App
 "#,
     )
     .unwrap();
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let mode = |r: &Runner<NoData>, id| {
+    let mode = |r: &Runner<Source>, id| {
         let k = r.kernel();
         k.node_by_key(k.find_by_test_id(id)[0])
             .unwrap()
             .computed_row(StyleId::ImageRendering, |s| s.image_rendering)
     };
-    let fits = |r: &Runner<NoData>| {
+    let fits = |r: &Runner<Source>| {
         let k = r.kernel();
         let id = k.node_by_key(k.find_by_test_id("face")[0]).unwrap().id;
         k.press_face(id).unwrap().fits

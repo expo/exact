@@ -4,17 +4,11 @@
 //! timeline drives paint rows only (Q1): a bound animation whose keyframes
 //! animate layout or geometry is refused when the app compiles.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::timeline::{AnimationTimeline, Axis, DragTimeline, TimelineScope};
 use exact_kernel::Kernel;
-use exact_plan::{Plan, Value};
-use exact_runner::{agent, DataError, DataSource, Event, Runner};
-
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_plan::Plan;
+use exact_runner::{agent, Event, Runner};
 
 const APP: &str = "keyframes fade\n  from opacity=1\n  to opacity=0 background-color=\"#000\"\ncomponent App\n  state zoom = 1\n  action zoomIn\n    zoom = 2\n  view\n    column testId=\"clip\" timeline-scope=\"--dismiss\"\n      box testId=\"backdrop\" animation=(zoom == 1 ? \"fade 1s linear both\" : \"none\") animation-timeline=\"--dismiss\" animation-range=\"0 300px\"\n      box testId=\"photo\" -exact-drag-timeline=\"--dismiss\" translate=\"0px 0px\"\n      button testId=\"zoom\" press=zoomIn\n        text \"2×\"\n";
 
@@ -23,13 +17,13 @@ fn the_rows_reach_the_kernel_and_a_computed_animation_keeps_its_binding() {
     let plan = contract::compile(APP).unwrap();
     let mut r = Runner::boot(
         Plan::decode(&plan.encode()).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let style = |r: &Runner<NoData>, id: &str| {
+    let style = |r: &Runner<Source>, id: &str| {
         let k = r.kernel();
         k.node_by_key(k.find_by_test_id(id)[0])
             .unwrap()

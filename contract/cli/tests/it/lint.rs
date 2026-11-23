@@ -2,18 +2,9 @@
 //! bake's layout lint refuses that the compiler cannot see.
 
 use crate::scratch::Scratch;
+use crate::source::{boxed, NoData, Source};
 use contract::BakeError;
 use exact_plan::Value;
-use exact_runner::{DataError, DataSource};
-
-#[derive(Default)]
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
 
 #[test]
 fn an_old_spelling_is_refused_with_the_css_name() {
@@ -412,7 +403,7 @@ fn bake_refuses_a_scroll_that_only_a_row_could_have_bounded_and_did_not() {
     // so the scroll is exactly as tall as its children.
     let src = "component A\n  view\n    row testId=\"root\"\n      scroll testId=\"rows\"\n        column\n          text \"one\"\n          text \"two\"\n          text \"three\"\n";
     let plan = contract::compile(src).unwrap();
-    let e = contract::bake(plan, NoData).unwrap_err();
+    let e = contract::bake(plan, boxed(NoData)).unwrap_err();
     match e {
         BakeError::Lint { id, message, .. } => {
             assert_eq!(id, "bake-scroll-unbounded");
@@ -423,13 +414,13 @@ fn bake_refuses_a_scroll_that_only_a_row_could_have_bounded_and_did_not() {
     // Bounded by the row: fine.
     let src = "component A\n  view\n    row height=40 testId=\"root\"\n      scroll testId=\"rows\"\n        column\n          text \"one\"\n          text \"two\"\n          text \"three\"\n";
     let plan = contract::compile(src).unwrap();
-    contract::bake(plan, NoData).unwrap();
+    contract::bake(plan, boxed(NoData)).unwrap();
 }
 
 #[test]
 fn a_horizontal_scroll_can_grow_vertically_with_its_contents() {
     let src = "component A\n  view\n    column width=200\n      scroll width=200 overflow-x=\"scroll\" overflow-y=\"hidden\" scroll-snap-type=\"x mandatory\"\n        row width=400\n          box width=200 height=80 scroll-snap-align=\"start\"\n          box width=200 height=80\n";
-    contract::bake(contract::compile(src).unwrap(), NoData).unwrap();
+    contract::bake(contract::compile(src).unwrap(), boxed(NoData)).unwrap();
 }
 
 #[test]
@@ -437,7 +428,7 @@ fn bake_refuses_a_pressable_with_zero_area() {
     for attrs in ["width=0 height=0", "flex-grow=0", "flex-basis=0"] {
         let src = format!("component A\n  state n = 0\n  action go\n    n = 1\n  view\n    row height=44\n      button press=go {attrs} testId=\"go\"\n");
         let plan = contract::compile(&src).unwrap();
-        let e = contract::bake(plan, NoData).unwrap_err();
+        let e = contract::bake(plan, boxed(NoData)).unwrap_err();
         match e {
             BakeError::Lint { id, message, .. } => {
                 assert_eq!(id, "bake-zero-size", "{attrs}: {message}");
@@ -456,10 +447,10 @@ fn empty_controls_sized_by_flex(attrs: &str, width: f32) {
             );
             let plan = contract::compile(&src).unwrap_or_else(|e| panic!("{src}\n{e}"));
             contract::check(&plan).unwrap();
-            let plan = contract::bake(plan, NoData).unwrap();
+            let plan = contract::bake(plan, boxed(NoData)).unwrap();
             let mut runner = exact_runner::Runner::boot(
                 plan,
-                NoData,
+                boxed(NoData),
                 exact_kernel::Kernel::with_monospace(),
                 Default::default(),
                 "/",
@@ -520,7 +511,7 @@ fn check_refuses_without_data_what_no_answer_could_change() {
     for src in [hidden, nested.as_str()] {
         let plan = contract::compile(src).unwrap();
         contract::check(&plan).unwrap();
-        contract::bake(plan, NoData).unwrap();
+        contract::bake(plan, boxed(NoData)).unwrap();
     }
     for dimension in ["width", "height"] {
         let src = hidden.replace(
@@ -530,7 +521,7 @@ fn check_refuses_without_data_what_no_answer_could_change() {
         let plan = contract::compile(&src).unwrap();
         for result in [
             contract::check(&plan),
-            contract::bake(plan, NoData).map(|_| ()),
+            contract::bake(plan, boxed(NoData)).map(|_| ()),
         ] {
             match result.unwrap_err() {
                 BakeError::Lint { id, message, .. } => {
@@ -611,13 +602,13 @@ fn conditional_style_checks_preserve_computation_and_match_bindings() {
     let plan = contract::compile(source).unwrap();
     let mut runner = exact_runner::Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let top = |runner: &exact_runner::Runner<NoData>| {
+    let top = |runner: &exact_runner::Runner<Source>| {
         let kernel = runner.kernel();
         let key = kernel.find_by_test_id("branch")[0];
         kernel.node_by_key(key).unwrap().style.top.clone()
@@ -646,13 +637,13 @@ fn a_platform_colour_is_a_plan_literal_never_data() {
 "##;
     let mut runner = exact_runner::Runner::boot(
         contract::compile(source).unwrap(),
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let color = |runner: &exact_runner::Runner<NoData>, id: &str| {
+    let color = |runner: &exact_runner::Runner<Source>, id: &str| {
         let kernel = runner.kernel();
         let key = kernel.find_by_test_id(id)[0];
         kernel.node_by_key(key).unwrap().style.text_color
@@ -709,7 +700,7 @@ fn conditional_pixel_lengths_compile_and_update() {
         );
         let mut runner = exact_runner::Runner::boot(
             contract::compile(&source).unwrap(),
-            NoData,
+            boxed(NoData),
             exact_kernel::Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -753,7 +744,7 @@ fn a_bound_string_on_a_number_row_is_refused_as_its_literal_is() {
             "text \"a\" testId=\"t\" font-size=`${size}px` letter-spacing=`${size / 16}px`",
         ))
         .unwrap(),
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",

@@ -1,4 +1,5 @@
 //! @ref LLP 1043.000 §3 D8 — pan is an ordinary typed action, not motion ownership.
+use crate::source::boxed;
 use exact_plan::Value;
 use exact_runner::{DataError, DataSource, Event, Runner};
 struct Empty;
@@ -23,7 +24,7 @@ fn pan_commits_curried_deltas_and_refuses_nonfinite_before_state_changes() {
     .unwrap();
     let mut runner = Runner::boot(
         plan,
-        Empty,
+        boxed(Empty),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -79,7 +80,7 @@ fn drive(src: &str, event: Event) -> String {
     let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e}\n{src}"));
     let mut runner = Runner::boot(
         plan,
-        Rows,
+        boxed(Rows),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",

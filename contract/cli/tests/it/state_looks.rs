@@ -3,17 +3,10 @@
 //! edit resolves them again; `:active` is the node's press paint.
 
 use crate::scratch::Scratch;
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, LOOK_HOVER};
-use exact_plan::{Plan, Value};
-use exact_runner::{DataError, DataSource, Runner};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_plan::Plan;
+use exact_runner::Runner;
 
 fn app(name: &str, files: &[(&str, &str)]) -> Scratch {
     let dir = Scratch::new(format!("exact2-looks-{name}-{}", std::process::id()));
@@ -23,11 +16,11 @@ fn app(name: &str, files: &[(&str, &str)]) -> Scratch {
     dir.at("app.contract")
 }
 
-fn booted(plan: Plan) -> Runner<NoData> {
-    let plan = contract::bake(plan, NoData).unwrap();
+fn booted(plan: Plan) -> Runner<Source> {
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -40,7 +33,7 @@ const DESIGN: &str =
 
 const VIEW: &str = "component App\n  state n = 0\n  action go\n    n = n + 1\n  view\n    column testId=\"card\" press=go background-color=\"page\"\n      :active\n        background-color = \"accent.soft\"\n        opacity = 0.9\n      :hover\n        border-color = \"ink\"\n      text \"c\"\n";
 
-fn looks(r: &Runner<NoData>) -> String {
+fn looks(r: &Runner<Source>) -> String {
     let k = r.kernel();
     let node = k.node_by_key(k.find_by_test_id("card")[0]).unwrap();
     format!(
@@ -65,7 +58,7 @@ fn a_nodes_looks_reach_the_kernel_resolved_and_follow_a_live_token() {
         "a :hover look; :active is the press paint"
     );
     // `:active` is the node's own press rows (LLP 1121 D8 as amended).
-    let pressed = |r: &Runner<NoData>| {
+    let pressed = |r: &Runner<Source>| {
         let k = r.kernel();
         let node = k.node_by_key(k.find_by_test_id("card")[0]).unwrap();
         (
@@ -277,7 +270,7 @@ fn a_look_follows_a_base_its_shadows_new_value_reads() {
         &[("app.forma", design), ("app.contract", view)],
     );
     let mut r = booted(contract::compile_path(&path).unwrap_or_else(|e| panic!("{e:?}")));
-    let shadow = |r: &Runner<NoData>| {
+    let shadow = |r: &Runner<Source>| {
         let k = r.kernel();
         let node = k.node_by_key(k.find_by_test_id("card")[0]).unwrap();
         format!(
