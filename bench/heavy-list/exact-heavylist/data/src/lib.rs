@@ -201,11 +201,14 @@ const ID: usize = 0;
 const MINUTES_AGO: usize = 3;
 const REACTIONS: usize = 8;
 
-/// The feed: live messages (newest first) above the 10,000, each with its row value.
+/// The feed: live messages (newest first) above the 10,000. `rows` are their
+/// row values as the feed shows them, so an answer copies one slice into its
+/// list (`Items::from`) with no vector of its own.
 struct Feed {
     messages: Vec<Message>,
     rows: Vec<Value>,
-    live: Vec<(Message, Value)>,
+    /// In the order they came: the `j`th is `rows[live.len() - 1 - j]`.
+    live: Vec<Message>,
     ticks: usize,
 }
 
@@ -217,10 +220,7 @@ impl Feed {
     }
 
     fn value(&self) -> Value {
-        let mut rows = Vec::with_capacity(self.live.len() + self.rows.len());
-        rows.extend(self.live.iter().rev().map(|(_, v)| v.clone()));
-        rows.extend(self.rows.iter().cloned());
-        Value::record(vec![Value::list(rows)])
+        Value::record(vec![Value::List(exact_plan::Items::from(self.rows.as_slice()))])
     }
 
     fn react(&mut self, id: &str, emoji: &str) -> bool {
@@ -233,14 +233,16 @@ impl Feed {
         };
         if let Some(i) = id.strip_prefix('m').and_then(|n| n.parse::<usize>().ok()).filter(|&i| i < self.messages.len()) {
             if self.messages[i].id == id && bump(&mut self.messages[i]) {
-                self.rows[i] = with(&self.rows[i], &[(REACTIONS, self.messages[i].reactions_value())]);
+                let at = self.live.len() + i;
+                self.rows[at] = with(&self.rows[at], &[(REACTIONS, self.messages[i].reactions_value())]);
                 return true;
             }
             return false;
         }
-        if let Some((m, v)) = self.live.iter_mut().find(|(m, _)| m.id == id) {
-            if bump(m) {
-                *v = with(v, &[(REACTIONS, m.reactions_value())]);
+        if let Some(j) = self.live.iter().position(|m| m.id == id) {
+            if bump(&mut self.live[j]) {
+                let at = self.live.len() - 1 - j;
+                self.rows[at] = with(&self.rows[at], &[(REACTIONS, self.live[j].reactions_value())]);
                 return true;
             }
         }
@@ -265,22 +267,27 @@ impl Feed {
             reactions: from.reactions.clone(),
         };
         // The copy shares its source row's fields but the id and the time.
-        let v = with(&self.rows[from_at], &[(ID, Value::str(&copy.id)), (MINUTES_AGO, Value::Number(0.0))]);
-        self.live.push((copy, v));
+        let source = &self.rows[self.live.len() + from_at];
+        let v = with(source, &[(ID, Value::str(&copy.id)), (MINUTES_AGO, Value::Number(0.0))]);
+        self.live.push(copy);
+        self.rows.insert(0, v);
         let start = (k * 101) % n;
         if let Some(i) = (0..n).map(|d| (start + d) % n).find(|&i| !self.messages[i].reactions.is_empty()) {
             let m = &mut self.messages[i];
-            let at = k % m.reactions.len();
-            m.reactions[at].1 += 1.0;
-            self.rows[i] = with(&self.rows[i], &[(REACTIONS, m.reactions_value())]);
+            let r = k % m.reactions.len();
+            m.reactions[r].1 += 1.0;
+            let at = self.live.len() + i;
+            self.rows[at] = with(&self.rows[at], &[(REACTIONS, m.reactions_value())]);
         }
     }
 }
 
 /// The source. On a device the feed the list first shows is the plan's
 /// baked value; the source's own copy (what a reaction or a live tick edits)
-/// is parsed on a background thread started at launch and turned into row
-/// values on first use.
+/// is parsed and turned into row values on first use. Only live mode, whose
+/// first tick uses it, parses at launch, on a background thread. Otherwise
+/// the first reaction parses it (~40 ms on a phone), since one parsed at
+/// launch is a second copy of the feed (18 MB on Android) while the app rests.
 pub struct Heavy {
     parsed: Option<std::thread::JoinHandle<Doc>>,
     feed: Option<Feed>,
@@ -292,9 +299,14 @@ impl Default for Heavy {
         #[cfg(target_arch = "wasm32")]
         let parsed = None;
         #[cfg(not(target_arch = "wasm32"))]
-        let parsed = Some(std::thread::spawn(|| serde_json::from_slice::<Doc>(JSON).expect("messages.json")));
+        let parsed = live().then(|| std::thread::spawn(|| serde_json::from_slice::<Doc>(JSON).expect("messages.json")));
         Heavy { parsed, feed: None }
     }
+}
+
+/// Live mode: `BENCH_LIVE=1` in the launch environment.
+fn live() -> bool {
+    std::env::var("BENCH_LIVE").is_ok_and(|v| v == "1")
 }
 
 impl Heavy {
@@ -333,7 +345,7 @@ impl DataSource for Heavy {
                 Ok(feed.value())
             }
             ("config", []) => {
-                let live = std::env::var("BENCH_LIVE").is_ok_and(|v| v == "1");
+                let live = live();
                 let motion = std::env::var("BENCH_MOTION").unwrap_or_default();
                 if !matches!(motion.as_str(), "" | "bar" | "caret") {
                     return Err(DataError::BadArguments("BENCH_MOTION must be bar or caret".into()));
@@ -373,7 +385,7 @@ mod tests {
     #[test]
     fn feed_live_and_reactions() {
         let mut h = Heavy::default();
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(h.parsed.is_some(), live(), "only live mode parses before the first use");
         let t = std::time::Instant::now();
         let v = h.query("messages", &[]).unwrap();
         eprintln!("load: {:?}", t.elapsed());
@@ -383,8 +395,8 @@ mod tests {
         eprintln!("tick: {:?}", t.elapsed());
         assert_eq!(rows(&v), 10_001);
         let f = h.feed.as_ref().unwrap();
-        assert_eq!(f.live[0].0.id, "live-1");
-        assert_eq!(f.live[0].0.author, f.messages[37].author);
+        assert_eq!(f.live[0].id, "live-1");
+        assert_eq!(f.live[0].author, f.messages[37].author);
         // Every row but the bumped one is the previous answer's allocation.
         let before = match &v {
             Value::Record(f) => f[0].clone(),
