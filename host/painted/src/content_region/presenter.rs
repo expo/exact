@@ -188,6 +188,7 @@ impl<D: DataSource> Presenter<D> {
         self.sync_stage();
         let stage = self.stage_paint();
         self.brush.set_stage(self.host.kernel(), stage);
+        self.unpose_flights();
         let shows = self.stage_shows();
         let roots = self.host.roots();
         let collection_limits = if self.host.content_region().is_some() {

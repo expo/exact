@@ -777,3 +777,145 @@ fn a_fit_content_sheet_taller_than_the_keyboard_leaves_goes_to_its_tallest() {
     let (_, frame) = p.top_sheet().unwrap();
     assert!(near(frame.1, STATUS), "{frame:?}");
 }
+
+/// A thumbnail on the page and a hero on the route pushed over it share a
+/// name; the hero's authored `none` keeps it from easing in place.
+const PAIRED: &str = r##"routes nav
+  home "/"
+    detail "/detail"
+component App
+  action open
+    nav = push(nav, "/detail")
+  action back
+    nav = back(nav)
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" viewport-fit="cover" width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        if e.name == "home"
+          column navigationKey=`${e.id}` testId="route-home" position="absolute" inset=0 background-color="#ffffff"
+            button press=open testId="open" height=40
+              text "Open"
+            box sharedElement="photo" testId="thumb" width=80 height=60 background-color="#ff0000"
+        if e.name == "detail"
+          column navigationKey=`${e.id}` testId="route-detail" position="absolute" inset=0 background-color="#ffffff"
+            box sharedElement="photo" testId="hero" width=400 height=300 background-color="#ff0000" -exact-layout-transition="none"
+"##;
+
+fn paired() -> Presenter<()> {
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &crate::test_plan(PAIRED),
+        (),
+        (412., 916.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Canvas,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.host_mut().flights.enabled = true;
+    p.serve_windows(Box::new(Pixels));
+    assert_eq!(p.serve_bars(Box::new(Pixels)), None);
+    assert_eq!(p.set_window(WINDOW), None);
+    p.frame();
+    p
+}
+
+fn key(p: &Presenter<()>, name: &str) -> NodeKey {
+    p.host().kernel().find_by_test_id(name)[0]
+}
+
+/// The one flight, from and to, and its progress.
+fn flight(p: &Presenter<()>) -> (NodeKey, NodeKey, f32) {
+    let frames = p.host().flight_frames();
+    assert_eq!(frames.len(), 1, "{frames:?}");
+    (frames[0].from, frames[0].to, frames[0].progress)
+}
+
+#[test]
+fn a_push_and_a_pop_fly_the_names_both_routes_hold_on_composes_spring() {
+    let mut p = paired();
+    let thumb = key(&p, "thumb");
+    tap(&mut p, "open");
+    after(&mut p, 0.0);
+    let hero = key(&p, "hero");
+    assert_eq!(
+        flight(&p),
+        (thumb, hero, 0.0),
+        "the authored none is not asked"
+    );
+    after(&mut p, 100.0);
+    // A critically damped spring of stiffness 400: 1 - (1 + 20t)e^(-20t).
+    let progress = flight(&p).2;
+    assert!(
+        (progress - (1.0 - 3.0 * (-2.0f32).exp())).abs() < 0.01,
+        "{progress}"
+    );
+    after(&mut p, 1000.0);
+    assert!(p.host().flight_frames().is_empty());
+    // The pop removes the route that held the hero, which still flies.
+    assert!(p.system_back(p.host().now()));
+    p.run_commands(|| ());
+    after(&mut p, 0.0);
+    assert_eq!(flight(&p), (hero, thumb, 0.0));
+}
+
+#[test]
+fn predictive_back_seeks_the_pops_flights_and_springs_on_or_back() {
+    for commit in [false, true] {
+        let mut p = paired();
+        tap(&mut p, "open");
+        after(&mut p, 1000.0);
+        let (hero, thumb) = (key(&p, "hero"), key(&p, "thumb"));
+        let now = p.host().now();
+        assert!(p.back_progress(0, 0.0, 0, now));
+        assert!(p.back_progress(1, 0.4, 0, now + 50.));
+        after(&mut p, 500.0);
+        assert_eq!(flight(&p), (hero, thumb, 0.4), "held by the gesture");
+        let now = p.host().now();
+        if commit {
+            assert!(p.system_back(now));
+            p.run_commands(|| ());
+        } else {
+            p.back_progress(2, 0.0, 0, now);
+        }
+        after(&mut p, 50.0);
+        let progress = flight(&p).2;
+        match commit {
+            true => assert!(progress > 0.4 && progress < 1.0, "{progress}"),
+            false => assert!(progress < 0.4 && progress > 0.0, "{progress}"),
+        }
+        after(&mut p, 1000.0);
+        assert!(p.host().flight_frames().is_empty());
+        assert_eq!(has(&p, "route-detail"), !commit);
+    }
+}
+
+#[test]
+fn a_flight_aims_at_its_destinations_rest_not_its_crossing_pose() {
+    let mut p = paired();
+    tap(&mut p, "open");
+    after(&mut p, 50.0);
+    // The route comes in from the right; the reader takes that off the hero.
+    let posed = rect(&mut p, "route-detail").0;
+    assert!(posed > 1.0, "{posed}");
+    let [scale, x, y] = p.brush.shared.frames[0].unpose;
+    assert_eq!((scale, y), (1.0, 0.0));
+    assert!(near(x, -posed), "{x}");
+}
+
+#[test]
+fn a_pop_leaves_its_flying_source_out_of_the_routes_kept_drawing() {
+    let mut p = paired();
+    tap(&mut p, "open");
+    after(&mut p, 1000.0);
+    assert!(p.system_back(p.host().now()));
+    p.run_commands(|| ());
+    after(&mut p, 0.0);
+    assert_eq!(p.host().flight_frames().len(), 1);
+    // The hero's 400 × 300 fill would come from the removed route's kept drawing.
+    let ops = crate::canvas::FINISHED
+        .with(|f| f.borrow().clone())
+        .unwrap();
+    let hero = [400f32.to_bits(), 300f32.to_bits()];
+    assert!(!ops.windows(2).any(|w| w == hero));
+}

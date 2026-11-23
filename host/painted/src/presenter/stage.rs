@@ -42,7 +42,9 @@ use crate::navigation::{sheet_of, Presented};
 use crate::paint::stage::{destination_path, Cross, Item, Stage};
 use crate::paint::tape::Tape;
 use crate::paint::{Rect4, Shape};
+use exact_kernel::handoff::pair_routes;
 use exact_kernel::{BlockAxis, HostBlock, Kernel, NodeKey};
+use exact_motion::Transition;
 use std::rc::Rc;
 use tiny_skia::Transform;
 
@@ -291,6 +293,21 @@ impl Pose {
     }
 }
 
+/// Compose's default `boundsTransform` for a shared element, `spring()`
+/// with damping ratio 1 and stiffness 400 (LLP 1013.004 D4).
+fn bounds_spring() -> Transition {
+    Transition {
+        property: exact_motion::TransitionProperty::All,
+        duration: 0.0,
+        delay: 0.0,
+        timing: exact_motion::TimingFunction::Spring(exact_motion::SpringConfig {
+            stiffness: 400.0,
+            damping: 40.0,
+            mass: 1.0,
+        }),
+    }
+}
+
 /// What the presenter keeps of its stage.
 #[derive(Default)]
 pub(super) struct State {
@@ -310,6 +327,10 @@ pub(super) struct State {
     /// The routes given a block of the stage's.
     blocks: Vec<ViewId>,
     zooms: Vec<zoom::Source>,
+    /// The pairs a pop of the top route would fly (LLP 1013.004 D1), with
+    /// the kernel epoch and the top route they were found at: a pop has
+    /// removed the route by the time its crossing starts.
+    pops: (u64, Option<NodeKey>, Vec<(NodeKey, NodeKey)>),
 }
 
 /// What a sheet's heights are computed from: its `navigationDetent`, the
@@ -439,6 +460,16 @@ impl<D: DataSource> Presenter<D> {
         self.stage.seen = keys.clone();
         let top_was = self.stage.top.take();
         self.sync_shift(&before, &stack, &keys, &kinds, top_was, now);
+        let epoch = self.host.kernel().epoch();
+        if (self.stage.pops.0, self.stage.pops.1) != (epoch, keys.last().copied()) {
+            let pairs = match keys.len() {
+                n if n > 1 && kinds[n - 1] != Presented::Sheet => {
+                    pair_routes(self.host.kernel(), keys[n - 1], keys[n - 2])
+                }
+                _ => Vec::new(),
+            };
+            self.stage.pops = (epoch, keys.last().copied(), pairs);
+        }
         self.sync_sources();
         self.stage.top = self.top_of(&stack, &kinds);
         // Sheets that went slide out from where they were.
@@ -470,9 +501,17 @@ impl<D: DataSource> Presenter<D> {
                 self.stage.gesture = None;
             }
         }
+        // A cancelled preview shows the route beneath until the flights it
+        // sent back have landed.
+        let landed = self.host.flight_frames().is_empty();
         self.stage
             .preview
-            .take_if(|p| !p.live(&keys) || p.returned(now));
+            .take_if(|p| !p.live(&keys) || p.returned(now) && landed);
+        // A route change no crossing flies (a cut, an authored part) ends a
+        // preview's flights where Back went.
+        if self.stage.preview.is_none() {
+            self.host.release_flights(&bounds_spring(), true);
+        }
         let tallest = (h - status).max(1.0);
         // What of the page the keyboard covers, where it did not end the
         // page above it (`interactive-widget: overlays-content`).
@@ -787,6 +826,22 @@ impl<D: DataSource> Presenter<D> {
             through,
             left,
         });
+        // The names both routes hold fly on the crossing's own timing,
+        // whatever their authored curve (LLP 1013.004 D2, D4).
+        if !through {
+            let pairs = match forward {
+                true => pair_routes(self.host.kernel(), *old, *new),
+                false if self.stage.pops.1 == Some(*old) => self.stage.pops.2.clone(),
+                false => Vec::new(),
+            };
+            let curve = match container {
+                Some(_) => zoom::clock(forward),
+                None => bounds_spring(),
+            };
+            for (from, to) in pairs {
+                self.host.fly(from, to, &curve);
+            }
+        }
     }
 
     /// Whether anything on the stage moves on its own: frames are owed.
@@ -1298,6 +1353,47 @@ impl<D: DataSource> Presenter<D> {
                 None => (p.page_pose(now, width, self.viewport.1), Pose::REST),
             },
             None => (Pose::REST, Pose::REST),
+        }
+    }
+
+    /// Take the crossing's pose off each flight's destination, so the
+    /// reader aims at its rest, as Compose aims at the lookahead bounds
+    /// (LLP 1013.004 D4).
+    pub(crate) fn unpose_flights(&mut self) {
+        let Some(shift) = self.stage.shift.as_ref().filter(|s| !s.through) else {
+            return;
+        };
+        let poses = self.shift_poses(self.host.now(), shift.sheet);
+        let kernel = self.host.kernel();
+        for f in &mut self.brush.shared.frames {
+            let mut route = kernel.node_by_key(f.to);
+            while let Some(node) = route
+                .as_ref()
+                .filter(|n| ![shift.incoming, shift.outgoing].contains(&n.key))
+            {
+                route = node.parent.and_then(|id| kernel.node(id));
+            }
+            let Some(route) = route else {
+                continue;
+            };
+            let pose = if route.key == shift.incoming {
+                poses.1
+            } else {
+                poses.0
+            };
+            let mut at = (0.0, 0.0);
+            let mut next = Some(route);
+            while let Some(node) = next {
+                at = (at.0 + node.frame.x, at.1 + node.frame.y);
+                next = node.parent.and_then(|id| kernel.node(id));
+            }
+            // posed = at + d + o + s(p - o) for p in the route; rest = at + p.
+            let (o, d, s) = (pose.origin, (pose.dx, pose.dy), pose.scale);
+            f.unpose = [
+                1.0 / s,
+                at.0 + o.0 - (at.0 + d.0 + o.0) / s,
+                at.1 + o.1 - (at.1 + d.1 + o.1) / s,
+            ];
         }
     }
 

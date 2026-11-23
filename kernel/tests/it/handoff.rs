@@ -257,3 +257,34 @@ fn continuation_does_not_hand_off_an_intermediate_creation() {
     assert_eq!(r.destroyed, vec![intermediate]);
     assert!(r.handoffs.is_empty());
 }
+
+#[test]
+fn routes_pair_names_each_holds_once_and_renders() {
+    // root 1 → [leaving 2 → [3 photo, 4 title, 5 dup, 6 dup],
+    //           arriving 7 → [8 photo, 9 title (display: none), 10 dup]]
+    let mut k = Kernel::with_monospace();
+    let mut ops: Vec<Op> = (1..=10).map(view).collect();
+    for (id, n) in [(3, "photo"), (4, "title"), (5, "dup"), (6, "dup")] {
+        ops.push(name(id, n));
+    }
+    for (id, n) in [(8, "photo"), (9, "title"), (10, "dup")] {
+        ops.push(name(id, n));
+    }
+    let mut hidden = StyleProps::default();
+    hidden.display = exact_kernel::Display::None;
+    hidden.mask.set(StyleId::Display);
+    ops.push(Op::SetStyle {
+        id: 9,
+        patch: Box::new(hidden),
+    });
+    for (id, children) in [(1, vec![2, 7]), (2, vec![3, 4, 5, 6]), (7, vec![8, 9, 10])] {
+        ops.push(Op::SetChildren { id, children });
+    }
+    ops.push(Op::AttachRoot { id: 1 });
+    k.apply(0, 1, &ops).unwrap();
+    let key = |id| k.node(id).unwrap().key;
+    assert_eq!(
+        exact_kernel::handoff::pair_routes(&k, key(2), key(7)),
+        vec![(key(3), key(8))]
+    );
+}

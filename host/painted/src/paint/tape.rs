@@ -22,6 +22,7 @@ use super::rows::RowPin;
 use super::space::mul3;
 use super::svg::Ink;
 use super::*;
+use exact_kernel::NodeKey;
 use std::cell::RefCell;
 
 enum OwnedInk {
@@ -128,8 +129,9 @@ enum Op {
     Row(Rc<RowPin>, (f32, f32), Rect4, (f32, f32), Rc<Tape>),
     Sticky(Sticky, Rc<Tape>, Transform),
     Filter(Box<box_filter::Filter>, Rc<Tape>, Transform),
-    /// Another tape, through a transform.
-    Tape(Rc<Tape>, Transform),
+    /// Another tape, through a transform; a named subtree's, by its node
+    /// (LLP 1013.004 D4: a flight's source is not drawn).
+    Tape(Rc<Tape>, Transform, Option<NodeKey>),
 }
 
 /// A drawing, in the space it was recorded in.
@@ -145,6 +147,7 @@ pub(super) struct Live<'a, 'scene> {
     pub(super) scene: &'a Scene<'scene>,
     pub(super) viewport: (f32, f32),
     pub(super) scale: f32,
+    pub(super) flights: &'a [crate::host::flights::FlightFrame],
 }
 
 /// Removed sticky geometry, evaluated against its surviving scroller.
@@ -239,7 +242,13 @@ impl Recorder {
 
     /// Another tape, drawn through `ts`.
     pub(super) fn nest(&self, tape: Rc<Tape>, ts: Transform) {
-        self.push(Op::Tape(tape, ts));
+        self.push(Op::Tape(tape, ts, None));
+    }
+
+    /// A shared element's subtree, which a replay leaves out while it
+    /// is a flight's source.
+    pub(super) fn named(&self, key: NodeKey, tape: Rc<Tape>) {
+        self.push(Op::Tape(tape, Transform::identity(), Some(key)));
     }
 
     /// What was recorded, as a tape; the recorder starts again empty.
@@ -247,12 +256,12 @@ impl Recorder {
         let ops = std::mem::take(&mut *self.ops.borrow_mut());
         let rows = ops.iter().any(|op| match op {
             Op::Row(..) => true,
-            Op::Tape(tape, _) | Op::Sticky(_, tape, _) | Op::Filter(_, tape, _) => tape.rows,
+            Op::Tape(tape, ..) | Op::Sticky(_, tape, _) | Op::Filter(_, tape, _) => tape.rows,
             _ => false,
         });
         let dynamic = ops.iter().any(|op| match op {
             Op::Sticky(..) => true,
-            Op::Tape(tape, _) | Op::Row(_, _, _, _, tape) | Op::Filter(_, tape, _) => tape.dynamic,
+            Op::Tape(tape, ..) | Op::Row(_, _, _, _, tape) | Op::Filter(_, tape, _) => tape.dynamic,
             _ => false,
         });
         Tape { ops, rows, dynamic }
@@ -497,7 +506,7 @@ impl Tape {
                 Op::Filter(filter, drawing, ts) => {
                     mapped(*ts, filter.region(drawing, scene, scale))
                 }
-                Op::Tape(drawing, ts) => {
+                Op::Tape(drawing, ts, _) => {
                     drawing.bounds_in(scene, scale, mul3(&space, &mul(*ts, &IDENTITY)))
                 }
                 Op::PlaneBegin(h) => {
@@ -641,7 +650,12 @@ impl Tape {
                     tape.replay_live(b, text, t(*ts).pre_translate(d.0, d.1), live);
                 }
                 Op::Filter(filter, drawing, ts) => filter.replay(b, text, drawing, t(*ts), live),
-                Op::Tape(tape, ts) => tape.replay_live(b, text, t(*ts), live),
+                Op::Tape(tape, ts, name) => {
+                    let flies = |l: Live<'_, '_>| l.flights.iter().any(|f| Some(f.from) == *name);
+                    if !live.is_some_and(flies) {
+                        tape.replay_live(b, text, t(*ts), live);
+                    }
+                }
             }
         }
     }

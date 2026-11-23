@@ -146,6 +146,19 @@ impl Painter {
                     && n.style.display != Display::None
                     && !(walk.scene.hidden)(id)
             });
+        // A kept drawing keeps a shared element apart, so a crossing that
+        // flies it from a removed route leaves it out (LLP 1013.004 D4).
+        let kept = walk
+            .scene
+            .kernel
+            .node(id)
+            .filter(|n| (n.props.str(PropId::SharedElement)).is_some_and(|s| !s.is_empty()));
+        if let Some((parent, key)) = self.recording().zip(kept.map(|n| n.key)) {
+            let drawing =
+                self.record_layer(|painter| painter.node_content(walk, id, ts, offset, clip));
+            parent.named(key, Rc::new(drawing));
+            return;
+        }
         if !named {
             self.node_content(walk, id, ts, offset, clip);
             return;

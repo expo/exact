@@ -36,6 +36,24 @@ pub(super) fn progress(forward: bool, now: f64) -> Glide {
     )
 }
 
+/// The container's clock as a flight's curve: its emphasized path sampled
+/// into `linear()`, so the elements in the box move as the box does
+/// (LLP 1013.004 D4).
+pub(super) fn clock(forward: bool) -> exact_motion::Transition {
+    use exact_motion::easing::{Easing, LinearStop, MAX_LINEAR_STOPS};
+    let last = (MAX_LINEAR_STOPS - 1) as f32;
+    let stops = (0..MAX_LINEAR_STOPS).map(|i| LinearStop {
+        input: f64::from(i as f32 / last),
+        output: f64::from(emphasized(i as f32 / last)),
+    });
+    exact_motion::Transition {
+        property: exact_motion::TransitionProperty::All,
+        duration: if forward { ENTER } else { RETURN } / 1000.0,
+        delay: 0.0,
+        timing: exact_motion::TimingFunction::Easing(Easing::PiecewiseLinear(stops.collect())),
+    }
+}
+
 /// Material's emphasized path has two cubic segments, not one Bézier.
 pub(super) fn emphasized(t: f32) -> f32 {
     let cubic = |a: f32, b: f32, c: f32, d: f32, s: f32| {

@@ -557,6 +557,7 @@ impl Painter {
                         scene,
                         viewport: painter.viewport,
                         scale: painter.scale,
+                        flights: &painter.shared.frames,
                     }),
                 )
             });
@@ -727,6 +728,7 @@ impl Painter {
                                 scene: walk.scene,
                                 viewport: self.viewport,
                                 scale: self.scale,
+                                flights: &self.shared.frames,
                             }),
                         );
                     }

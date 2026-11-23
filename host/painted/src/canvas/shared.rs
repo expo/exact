@@ -54,7 +54,7 @@ impl Recorder {
         self.shared.active = active;
         let mut words = vec![
             STATE,
-            3 + state.frames.len() as u32 * 6 + state.alive.len() as u32 * 2,
+            3 + state.frames.len() as u32 * 9 + state.alive.len() as u32 * 2,
             u32::from(state.reduced),
             state.frames.len() as u32,
         ];
@@ -64,6 +64,8 @@ impl Recorder {
                 words.extend([key as u32, (key >> 32) as u32]);
             }
             words.extend([f.progress.to_bits(), f.ancestor_opacity.to_bits()]);
+            let [s, x, y] = f.unpose;
+            words.extend([s, x * self.scale, y * self.scale].map(f32::to_bits));
         }
         words.push(state.alive.len() as u32);
         for key in &state.alive {
@@ -697,7 +699,7 @@ component App
             p.frame();
             let ops = take();
             if ops[0] == STATE {
-                let names = 5 + ops[3] as usize * 6;
+                let names = 5 + ops[3] as usize * 9;
                 state = (
                     ops[3],
                     ops[names..names + ops[names - 1] as usize * 2]
@@ -1091,7 +1093,7 @@ component App
             "capture source before any frees or node mutations"
         );
         assert_eq!(after[3], 2, "parent and child have their own flights");
-        assert_eq!(after[16], 2, "only the arriving names remain alive");
+        assert_eq!(after[22], 2, "only the arriving names remain alive");
         let mut arrived = Vec::new();
         definitions(&after, &mut arrived);
         assert_eq!(arrived.len(), 2);

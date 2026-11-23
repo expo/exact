@@ -630,6 +630,17 @@ impl<D: DataSource> Presenter<D> {
         {
             self.stage.preview = None;
         }
+        // The names the pop would fly follow the gesture (LLP 1013.004 D4).
+        let seeks = (self.stage.preview.as_ref())
+            .filter(|p| p.release.is_none())
+            .and_then(Preview::pair);
+        match seeks {
+            Some((outgoing, _)) if self.stage.pops.1 == Some(outgoing) => {
+                let pairs = self.stage.pops.2.clone();
+                self.host.seek_flights(&pairs, progress);
+            }
+            _ => self.host.release_flights(&bounds_spring(), false),
+        }
         self.stage.preview.is_some()
     }
 
@@ -642,6 +653,7 @@ impl<D: DataSource> Presenter<D> {
             p.release = Some(Glide::new(p.progress, 0.0, now, ms, Curve::Decelerate));
             p.progress = 0.0;
             self.dirty = true;
+            self.host.release_flights(&bounds_spring(), false);
         }
     }
 

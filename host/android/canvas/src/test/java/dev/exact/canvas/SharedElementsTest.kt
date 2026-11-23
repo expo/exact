@@ -24,7 +24,7 @@ class SharedElementsTest {
     private fun state(alive: List<Long>, pairs: List<Triple<Long, Long, Float>> = emptyList(), reduced: Boolean = false,
         ancestorOpacity: Float = 1f): IntBuffer {
         val body = arrayListOf(if (reduced) 1 else 0, pairs.size)
-        for ((a, b, p) in pairs) body.addAll((key(a) + key(b) + f(p) + f(ancestorOpacity)).toList())
+        for ((a, b, p) in pairs) body.addAll((key(a) + key(b) + f(p) + f(ancestorOpacity) + f(1f) + f(0f) + f(0f)).toList())
         body.add(alive.size)
         for (k in alive) body.addAll(key(k).toList())
         return IntBuffer.wrap(intArrayOf(50, body.size) + body.toIntArray())

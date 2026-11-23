@@ -103,3 +103,51 @@ pub(crate) fn pair(arena: &NodeArena, created: &[NodeKey], leavers: Vec<Leaver>)
     }
     out
 }
+
+/// The names a route change pairs (LLP 1013.004 D1): each held by exactly
+/// one rendered node in the leaving route's subtree and one in the
+/// arriving route's, as `(from, to)` in the leaving route's tree order.
+/// A subtree under `display: none` holds none.
+pub fn pair_routes(
+    kernel: &crate::Kernel,
+    leaving: NodeKey,
+    arriving: NodeKey,
+) -> Vec<(NodeKey, NodeKey)> {
+    if !kernel.has_prop(PropId::SharedElement) {
+        return Vec::new();
+    }
+    let names = |route: NodeKey| {
+        let mut found: Vec<(String, usize, NodeKey)> = Vec::new();
+        let mut stack: Vec<_> = kernel
+            .node_by_key(route)
+            .map(|n| n.id)
+            .into_iter()
+            .collect();
+        while let Some(node) = stack.pop().and_then(|id| kernel.node(id)) {
+            if node.style.display == crate::Display::None {
+                continue;
+            }
+            if let Some(name) = node
+                .props
+                .str(PropId::SharedElement)
+                .filter(|s| !s.is_empty())
+            {
+                match found.iter_mut().find(|f| f.0 == name) {
+                    Some(f) => f.1 += 1,
+                    None => found.push((name.to_owned(), 1, node.key)),
+                }
+            }
+            stack.extend(node.children().into_iter().rev());
+        }
+        found
+    };
+    let arrived = names(arriving);
+    names(leaving)
+        .into_iter()
+        .filter(|f| f.1 == 1)
+        .filter_map(|(name, _, from)| {
+            let to = arrived.iter().find(|a| a.0 == name && a.1 == 1)?;
+            Some((from, to.2))
+        })
+        .collect()
+}

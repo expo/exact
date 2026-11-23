@@ -1289,7 +1289,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/history.rs", "Presenter::history_action"],
     ["painted:host/painted/src/presenter/stage.rs",
       "Presenter::desktop_stage Presenter::place_sheets Presenter::stage_page_route Presenter::stage_paint Presenter::stage_sheets Presenter::stage_shows " +
-      "Presenter::sync_stage Presenter::top_sheet"],
+      "Presenter::sync_shift Presenter::sync_stage Presenter::top_sheet Presenter::unpose_flights"],
   ]),
   group("picture results", ["one-shot"], "pending image/picture source, decode generation and current presentation consumers", "UI-owned",
     "The named painted adapter reads or updates the current Presenter through the runner or its Host forwarding API. host/painted/src/image.rs and image/{workers,remote,package}.rs own pending image/decode work and current consumers; canvas picture/stream adapters target the reader. Cache bytes surviving a view do not make its presentation continuation durable.", [

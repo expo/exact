@@ -48,7 +48,11 @@ internal class SharedElements(
         var layers = IntArray(0)
         var parents = LongArray(0)
     }
-    private class Flight(val from: Pose, var progress: Float, var ancestorOpacity: Float) { var shown: Pose = from }
+    private class Flight(val source: Long, val from: Pose, var progress: Float, var ancestorOpacity: Float) {
+        var shown: Pose = from
+        /** Takes a route crossing's pose off the destination: rest = posed × [0] + ([1], [2]). */
+        var unpose = floatArrayOf(1f, 0f, 0f)
+    }
     private val elements = LinkedHashMap<Long, Element>()
     private val flights = LinkedHashMap<Long, Flight>()
     private val alive = HashSet<Long>()
@@ -68,22 +72,28 @@ internal class SharedElements(
         reduced = b.get(2) != 0
         val next = LinkedHashMap<Long, Flight>()
         repeat(b.get(3)) { n ->
-            val at = 4 + n * 6
+            val at = 4 + n * 9
             val from = key(b, at); val to = key(b, at + 2); val progress = f(b, at + 4)
             val opacity = f(b, at + 5)
-            val flight = flights[to] ?: capture(from)?.let { Flight(it, progress, opacity) }
-            if (flight != null) { flight.progress = progress; flight.ancestorOpacity = opacity; next[to] = flight }
+            val flight = flights[to] ?: capture(from)?.let { Flight(from, it, progress, opacity) }
+            if (flight != null) {
+                flight.progress = progress; flight.ancestorOpacity = opacity; next[to] = flight
+                flight.unpose = floatArrayOf(f(b, at + 6), f(b, at + 7), f(b, at + 8))
+            }
         }
         flights.clear(); flights.putAll(next)
-        val live = 4 + b.get(3) * 6
+        val live = 4 + b.get(3) * 9
         alive.clear()
         repeat(b.get(live)) { order ->
             val key = key(b, live + 1 + order * 2)
             alive.add(key)
             elements[key]?.order = order
         }
-        for ((key, element) in elements) element.slot.alpha = if (!reduced && key in flights) 0f else 1f
+        for ((key, element) in elements) element.slot.alpha = if (flying(key)) 0f else 1f
     }
+
+    /** Both ends of a flight hide: a source a route change leaves mounted too (LLP 1013.004 D4). */
+    private fun flying(key: Long) = !reduced && (key in flights || flights.values.any { it.source == key })
 
     private fun capture(key: Long): Pose? {
         flights[key]?.let {
@@ -137,7 +147,7 @@ internal class SharedElements(
         slot.translate(e.box.left, e.box.top)
         slot.drawRenderNode(e.content)
         e.slot.endRecording()
-        e.slot.alpha = if (!reduced && id in flights) 0f else 1f
+        e.slot.alpha = if (flying(id)) 0f else 1f
     }
 
     fun finish() {
@@ -186,6 +196,11 @@ internal class SharedElements(
             naturalH = from.naturalH, unit = from.unit)
     }
 
+    private fun unposed(pose: Pose, u: FloatArray): Pose {
+        fun map(r: RectF) = RectF(r.left * u[0] + u[1], r.top * u[0] + u[2], r.right * u[0] + u[1], r.bottom * u[0] + u[2])
+        return pose.copy(box = map(pose.box), radius = pose.radius * u[0], crop = map(pose.crop), contentBox = map(pose.contentBox))
+    }
+
     private fun ancestorOpacity(e: Element, flight: Flight): Float {
         var opacity = flight.ancestorOpacity
         for (id in e.layers) opacity *= layerOpacity(id)
@@ -197,7 +212,7 @@ internal class SharedElements(
         val ordered = flights.entries.sortedBy { elements[it.key]?.order ?: 0 }
         for ((key, flight) in ordered) {
             val element = elements[key] ?: continue
-            val to = target(element, flight.from)
+            val to = unposed(target(element, flight.from), flight.unpose)
             val pose = interpolate(flight.from, to, flight.progress)
             flight.shown = pose
             if (pose.box.width() <= 0f || pose.box.height() <= 0f) continue
