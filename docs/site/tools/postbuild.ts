@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import { sections } from '../constants/navigation.ts';
 import { nonPageRules, redirects } from '../constants/redirects.ts';
 import { site } from '../constants/site.ts';
+import { bySection } from './page-lists.ts';
 
 const SITE = resolve(import.meta.dir, '..');
 const DIST = resolve(SITE, process.argv[2] ?? 'dist');
@@ -161,19 +162,13 @@ function prerequisites(p: Page): string {
   if (!start || ['Home', 'Get started', 'For AI agents'].includes(p.section)) return 'None';
   return `[${start.title}](${mdUrl(start)})`;
 }
-// As in the sidebar, a guide split into pages lists them one level below itself: they share its source and follow it.
-const splitFrom = (p: Page) => pages.findIndex(q => q.source === p.source) < pages.indexOf(p);
-const bySection = (fields: (p: Page) => string) =>
-  [...new Set(pages.map(p => p.section))]
-    .map(section => [`## ${section}`, '', ...pages.filter(p => p.section === section).map(p => `${splitFrom(p) ? '    ' : ''}- [${p.title}](${mdUrl(p)})${fields(p)}`)].join('\n'))
-    .join('\n\n');
 writeFileSync(
   join(DIST, 'llms.txt'),
-  `# ${site.name}\n\n> ${site.description}\n\n[sitemap.md](${ORIGIN}/sitemap.md) lists the same pages with each one's type, last change and prerequisites.\n\n${bySection(p => `: ${p.description}`)}\n`
+  `# ${site.name}\n\n> ${site.description}\n\n[sitemap.md](${ORIGIN}/sitemap.md) lists the same pages with each one's type, last change and prerequisites.\n\n${bySection(pages, mdUrl, p => `: ${p.description}`)}\n`
 );
 writeFileSync(
   join(DIST, 'sitemap.md'),
-  `# ${site.name} sitemap\n\nA page index for agents: each page's Markdown URL, its type, the date it last changed, a summary, and what to read before it. [llms.txt](${ORIGIN}/llms.txt) lists the same pages without the extra fields.\n\n${bySection(p => ` | Type: ${TYPES[p.section] ?? 'Reference'} | Lastmod: ${p.updated || 'unknown'} | Summary: ${p.description} | Prerequisites: ${prerequisites(p)}`)}\n`
+  `# ${site.name} sitemap\n\nA page index for agents: each page's Markdown URL, its type, the date it last changed, a summary, and what to read before it. [llms.txt](${ORIGIN}/llms.txt) lists the same pages without the extra fields.\n\n${bySection(pages, mdUrl, p => ` | Type: ${TYPES[p.section] ?? 'Reference'} | Lastmod: ${p.updated || 'unknown'} | Summary: ${p.description} | Prerequisites: ${prerequisites(p)}`)}\n`
 );
 
 writeFileSync(

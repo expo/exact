@@ -3,6 +3,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 import pages from '../content/pages.json';
+import { bySection } from '../tools/page-lists.ts';
 
 // Pages' own rules meet the tree tools/pages.ts makes here: `wrangler pages dev` serves dist.pages as Cloudflare
 // does, with its _redirects, _headers, _routes.json and _worker.js.
@@ -72,6 +73,12 @@ test("llms.txt lists the pages in the sidebar's order, under its sections, with 
       `${pages.find(guide => guide.source === page.source) === page ? '' : '    '}${page.path === '/' ? '/index' : page.path}`),
   ]);
   expect(listed).toEqual(expected);
+});
+
+test('a page nests below a guide only when it is one of the pages the guide was split into', () => {
+  const page = (path: string, source: string) => ({ path, title: path, source, section: 'Learn' });
+  const pages = [page('/guide', 'guide.md'), page('/guide/install', 'guide.md'), page('/guide/faq', 'faq.md')];
+  expect(bySection(pages, p => p.path, () => '')).toBe('## Learn\n\n- [/guide](/guide)\n    - [/guide/install](/guide/install)\n- [/guide/faq](/guide/faq)');
 });
 
 test('a chat fetcher gets Markdown at a published page path', async () => {
