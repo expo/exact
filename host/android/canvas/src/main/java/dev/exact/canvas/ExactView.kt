@@ -705,7 +705,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     }
 
     /** Tell [natives] which rows are near the view as it is drawn now. */
-    private fun nearNatives() {
+    internal fun nearNatives() {
         val n = natives ?: return
         if (feedCount < 0 || !n.nearing) return
         val y = feedY()
@@ -1095,7 +1095,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         // A moved paint is owed a paint once scrolling pauses: each step pushes this back.
         if (Native.owed() && (due < 0 || due > 16)) due = 16.0
         removeCallbacks(timer)
-        if (due >= 0) postDelayed(timer, due.toLong().coerceAtLeast(0))
+        if (due >= 0) postDelayed(timer, kotlin.math.ceil(due).toLong())
     }
     private fun f(b: IntBuffer, i: Int) = java.lang.Float.intBitsToFloat(b.get(i))
     /** Faces, pictures and rows announced in a new stream, made once. */

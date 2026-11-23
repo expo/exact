@@ -1402,19 +1402,25 @@ fn the_list_a_finger_scrolls_leads_its_window() {
     p.slice_collections(Some(feed), None, 4000.);
     assert_eq!(p.reader_scrolled(feed, (0., 50.), rev), Some((0., 50.)));
     settle(&mut p);
-    let last = p
-        .host
-        .collection(feed)
-        .unwrap()
-        .rows
-        .iter()
-        .map(|r| r.index)
-        .max();
+    let last = |p: &Presenter<Rows>| {
+        p.host
+            .collection(feed)
+            .unwrap()
+            .rows
+            .iter()
+            .map(|r| r.index)
+            .max()
+    };
     assert_eq!(
-        last,
+        last(&p),
         Some(4),
         "a viewport past the view, and the lead's two"
     );
+    assert!(!p.collection.pending());
+    p.slice_collections(Some(feed), None, 0.);
+    settle(&mut p);
+    assert_eq!(p.scroll_of(feed).1, 50.);
+    assert_eq!(last(&p), Some(2), "the lead retires when travel stops");
 }
 
 /// LLP 1070.000 §2.5: once a request has moved the port, the reader's own

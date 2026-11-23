@@ -218,7 +218,8 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// touch waits for its frame; the kernel's layout is as it was when the
     /// reader was last told where its scrollers are, and each is where the
     /// reader's own moves left it; no GPU canvas draws, no layer has new
-    /// tracks and no agent's drive waits; and a move frame would come out
+    /// tracks, no top bar needs a new scroll colour and no agent's drive
+    /// waits; and a move frame would come out
     /// ([`Self::shift`]). The move is then taken as that frame would take it,
     /// and no frame goes out: the reader's timer runs what comes due. A move
     /// frame's turn, statements and publication cost ~0.2 ms of the exact
@@ -230,6 +231,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
             && !self.owed_surfaces
             && self.told == Some(self.p.host().kernel().layout_stamp())
             && self.p.reader_moves_stand()
+            && !self.p.bar_scroll_changed()
             && (!self.move_tracks || self.p.host().lowered_epoch() == self.tracks.epoch)
             && !super::agent::waiting();
         quiet && self.shift(self.now()).is_some()

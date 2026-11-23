@@ -124,6 +124,38 @@ class ScrollTouchTest {
     private fun move(y: Float) = touch(MotionEvent.ACTION_MOVE, 100f to y)
     private fun up(y: Float) = touch(MotionEvent.ACTION_UP, 100f to y)
 
+    @Test fun aReaderMoveBringsAParkedNativeRowIntoViewWithoutAStream() {
+        val module = object : NativeModule {
+            override fun create(context: android.content.Context, props: org.json.JSONObject) = View(context)
+            override fun update(view: View, props: org.json.JSONObject) {}
+        }
+        val natives = Natives(activity, { java.io.File(".") }, mapOf("test" to module))
+        fun field(name: String) = ExactView::class.java.getDeclaredField(name).apply { isAccessible = true }
+        try {
+            view.layout(0, 0, 400, 800)
+            view.natives = natives
+            field("feed").setInt(view, 7)
+            field("feedCount").setInt(view, 1)
+            (field("feedIds").get(view) as IntArray)[0] = 21
+            (field("feedTops").get(view) as FloatArray)[0] = 1220f
+            val scrolling = field("scrolling").get(view) as Scrolling
+            scrolling.told(intArrayOf(7, 14, 0, 0, 0, 0, 0, 0, 800f.toBits()))
+            natives.lazy = true
+            natives.ensure(1, 2, 100, 100, """{"module":"test"}""", 21)
+            natives.near(emptySet(), emptySet(), setOf(21))
+            assertEquals(0, natives.childCount)
+
+            down(720f)
+            answer(reply(scroller(7, 0f, 800f).also { it[1] = 14 }))
+            move(100f)
+            assertTrue(thread.moved.getValue(7) > 420f)
+            assertEquals("the entering row got its native view", 1, natives.childCount)
+        } finally {
+            (view.parent as FrameLayout).removeView(view)
+            natives.destroyAll()
+        }
+    }
+
     /** [gesture] from a down at y 400, its answer [words] given at once and then given after it: what each scrolled,
      * by scroller, and what exact2 heard. */
     private fun both(words: IntArray, gesture: () -> Unit): List<Pair<Map<Int, Float>, List<Int>>> = listOf(true, false).map { soon ->

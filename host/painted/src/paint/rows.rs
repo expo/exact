@@ -27,6 +27,7 @@ use exact_kernel::NodeKey;
 #[derive(Default)]
 pub struct Dirty {
     hard: Vec<NodeKey>,
+    touched: Vec<NodeKey>,
     destroyed: bool,
     moved: Vec<NodeKey>,
     /// Nodes a commit bound to another item (LLP 1078).
@@ -38,7 +39,7 @@ pub struct Dirty {
 impl Dirty {
     #[cfg(test)]
     pub(crate) fn pending_nodes(&self) -> usize {
-        self.hard.len() + self.moved.len() + self.renewed.len()
+        self.hard.len() + self.touched.len() + self.moved.len() + self.renewed.len()
     }
 
     /// Take node changes while keeping the commit time for the next paint's numeric roll.
@@ -51,7 +52,7 @@ impl Dirty {
     /// A commit's nodes, and when it landed (ms).
     pub fn commit(&mut self, r: &exact_kernel::CommitReceipt, at: f64) {
         self.committed = Some(at);
-        self.hard.extend(&r.touched);
+        self.touched.extend(&r.touched);
         self.hard.extend(&r.created);
         self.hard.extend(&r.destroyed);
         self.destroyed |= !r.destroyed.is_empty();
@@ -123,18 +124,16 @@ struct Row {
     wrapper: Option<Wrapper>,
 }
 
-/// What a list row's wrapper (`listItemKey`) draws by: its style, children
-/// and props, but for its place in the list (`aria-posinset`,
-/// `aria-setsize`), which it does not draw. A row inserted or removed above
-/// moves that place for every row below it: an insert at the top, for every
-/// row shown. The wrapper has no presentation of its own (a press, motion or
-/// overlay marks the author's row inside it), so a wrapper equal in these
-/// draws as recorded.
-type Wrapper = (
-    StyleProps,
-    Vec<ViewId>,
-    Vec<(PropId, exact_kernel::PropValue)>,
-);
+/// An insert can change every wrapper's ARIA position without changing its drawing.
+#[derive(PartialEq)]
+struct Wrapper {
+    position: [Option<exact_kernel::PropValue>; 2],
+    style: StyleProps,
+    looks: Vec<(u8, StyleProps)>,
+    parent: Option<ViewId>,
+    children: Vec<ViewId>,
+    props: Vec<(PropId, exact_kernel::PropValue)>,
+}
 
 fn wrapper(node: &NodeRef<'_>) -> Option<Wrapper> {
     node.props.str(PropId::ListItemKey)?;
@@ -144,11 +143,15 @@ fn wrapper(node: &NodeRef<'_>) -> Option<Wrapper> {
             PropId::AccessibilityPosInSet | PropId::AccessibilitySetSize
         )
     });
-    Some((
-        node.style.clone(),
-        node.children(),
-        props.map(|(id, v)| (id, v.clone())).collect(),
-    ))
+    Some(Wrapper {
+        position: [PropId::AccessibilityPosInSet, PropId::AccessibilitySetSize]
+            .map(|id| node.props.get(id).cloned()),
+        style: node.style.clone(),
+        looks: node.looks().to_vec(),
+        parent: node.parent,
+        children: node.children(),
+        props: props.map(|(id, v)| (id, v.clone())).collect(),
+    })
 }
 
 impl Row {
@@ -411,6 +414,7 @@ impl Painter {
         let changed: IdSet<_> = dirty
             .hard
             .iter()
+            .chain(&dirty.touched)
             .filter_map(|k| kernel.node_by_key(*k))
             .filter(|n| n.node_type.is_svg_element())
             .map(|n| n.id)
@@ -455,13 +459,33 @@ impl Painter {
             found
         };
         let split = self.backend.independent_section_rows();
-        for key in dirty.hard {
+        let mut positions = IdSet::default();
+        for (key, touched) in dirty
+            .hard
+            .into_iter()
+            .map(|key| (key, false))
+            .chain(dirty.touched.into_iter().map(|key| (key, true)))
+        {
             if let Some(row) = row_of(&self.rows, key) {
                 let kept = self.rows.kept.get_mut(&row).expect("found");
-                let unchanged = key == row
-                    && kept.wrapper.is_some()
-                    && kept.wrapper == kernel.node_by_key(key).and_then(|n| wrapper(&n));
-                kept.stale |= !unchanged;
+                if kept.stale || (touched && positions.contains(&key)) {
+                    continue;
+                }
+                let mut position_only = false;
+                if touched && key == row {
+                    if let (Some(saved), Some(current)) = (
+                        kept.wrapper.as_mut(),
+                        kernel.node_by_key(key).and_then(|n| wrapper(&n)),
+                    ) {
+                        let position_changed = saved.position != current.position;
+                        saved.position.clone_from(&current.position);
+                        position_only = position_changed && *saved == current;
+                    }
+                }
+                kept.stale = !position_only;
+                if position_only {
+                    positions.insert(key);
+                }
             } else if let Some(section) = kernel
                 .node_by_key(key)
                 .filter(|n| split && holds_split_rows(n))

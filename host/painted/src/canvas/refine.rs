@@ -85,8 +85,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
         // frame's own, the reader's next ask for what a slice left): one
         // without it found the rows mounted ahead past its window, and
         // retired the farthest of them for the next pass to build again.
-        self.p
-            .slice_collections(self.feed, None, lead.unwrap_or(0.0));
+        self.p.slice_collections(self.feed, None, velocity);
         // The pass that ends a lead retires up to two viewports of rows, and
         // the reader frees their nodes: once nothing of it is left, the
         // system allocator gives the freed pages back (crypto: 2 MB).

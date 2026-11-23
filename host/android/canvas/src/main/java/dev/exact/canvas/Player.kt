@@ -990,10 +990,11 @@ internal class Player(private val fonts: Map<Int, Font>) {
                     val font = fonts[b.get(i + 1)]
                     // The runs that follow in the same font, size, colour and slant (a paragraph's lines) are drawn
                     // with this one: HWUI makes a text blob of each call, and the RenderThread looks each one up
-                    // again every frame. One with a shadow is drawn alone, as the shadow is its own.
+                    // again every frame. A blurred run is drawn alone. Legacy draws each run as a filled path.
+                    val drawGlyphs = android.os.Build.VERSION.SDK_INT >= 31
                     var count = 0
                     var j = i
-                    while (j < n && b.get(j) == 9 && (j == i || glyphBlur == 0f && b.get(j + 1) == b.get(i + 1) &&
+                    while (j < n && b.get(j) == 9 && (j == i || drawGlyphs && glyphBlur == 0f && b.get(j + 1) == b.get(i + 1) &&
                             b.get(j + 2) == b.get(i + 2) && b.get(j + 3) == b.get(i + 3) && b.get(j + 4) == b.get(i + 4))) {
                         val k = b.get(j + 5)
                         if (glyphIds.size < count + k) { glyphIds = glyphIds.copyOf((count + k) * 2); positions = positions.copyOf((count + k) * 4) }
@@ -1009,7 +1010,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
                         glyphPaint.color = b.get(i + 3)
                         glyphPaint.textSkewX = f(b, i + 4)
                         glyphPaint.maskFilter = blurFilter(glyphBlur); glyphBlur = 0f
-                        if (android.os.Build.VERSION.SDK_INT >= 31) c.drawGlyphs(glyphIds, 0, positions, 0, count, font, glyphPaint)
+                        if (drawGlyphs) c.drawGlyphs(glyphIds, 0, positions, 0, count, font, glyphPaint)
                         else LegacyGlyphs.draw(c, glyphIds, positions, count, font, glyphPaint)
                     }
                     i = j

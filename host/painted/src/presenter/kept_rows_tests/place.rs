@@ -53,4 +53,13 @@ fn a_rows_place_in_the_list_keeps_its_recording() {
         set(PropId::AccessibilityLabel, PropValue::Str("r".into())),
         1
     );
+    heard.borrow_mut().begun.clear();
+    let key = p.host.kernel().node(wrapper).unwrap().key;
+    p.host.row_dirty.node(key);
+    let _ = p.frame();
+    assert_eq!(
+        heard.borrow().begun.len(),
+        1,
+        "the wrapper's presentation changed"
+    );
 }

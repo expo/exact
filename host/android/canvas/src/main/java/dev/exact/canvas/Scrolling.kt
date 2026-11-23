@@ -600,6 +600,7 @@ internal class Scrolling(private val view: ExactView) {
             if (abs(rest) < 0.01f) { rest = 0f; break }
         }
         place()
+        view.nearNatives()
         view.fields?.place()
         view.tick()
         if (waits) view.awaitScrolled()

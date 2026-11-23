@@ -83,8 +83,8 @@ struct Cursor {
     sequence: u64,
     corrected: Option<u64>,
     dimensions: Option<(f64, f64, f64, [f64; 2])>,
-    /// The last report.
-    sent: Option<CollectionFeedback>,
+    /// The last report and the velocity it led by.
+    sent: Option<(CollectionFeedback, f64)>,
     queued: bool,
     requested_top: Option<f64>,
     model_scroll: Option<ModelScroll>,
@@ -1044,7 +1044,13 @@ impl<D: DataSource> Presenter<D> {
         velocity: f64,
     ) {
         self.collection.limit = limit;
-        self.collection.velocity = view.map(|v| (v, velocity));
+        let lead = view.filter(|_| velocity != 0.0).map(|v| (v, velocity));
+        let previous = std::mem::replace(&mut self.collection.velocity, lead);
+        if lead != previous {
+            for (view, _) in previous.into_iter().chain(lead) {
+                self.collection.requeue(view);
+            }
+        }
     }
 
     /// Whether any list owes another report (a slice left rows unbuilt).
@@ -1352,17 +1358,24 @@ impl<D: DataSource> Presenter<D> {
                         == Some(view)
                 }),
             };
-            // Unchanged facts, the padding among them (LLP 1010 §6.9), are
-            // news only to a list a slice left pending.
-            let unchanged = cursor.sent.as_ref() == Some(&feedback)
+            // A `scrollIntoView` owns the port until the reader moves it.
+            // The report then carries the reader's travel and ends the request
+            // (LLP 1070.000 §2.5).
+            let reader_moved = cursor.reader_moved;
+            let velocity = (self.collection.velocity)
+                .filter(|(v, _)| *v == view && (!snapshot.seeking || reader_moved))
+                .map_or(0.0, |(_, v)| v);
+            let unchanged = cursor
+                .sent
+                .as_ref()
+                .is_some_and(|(last, lead)| *last == feedback && *lead == velocity)
                 && !snapshot.pending
                 && cursor.animating == gliding.is_some();
             let landing = cursor.animating && gliding.is_none();
             if !unchanged {
-                cursor.sent = Some(feedback.clone());
+                cursor.sent = Some((feedback.clone(), velocity));
                 cursor.animating = gliding.is_some();
             }
-            let reader_moved = cursor.reader_moved;
             if let Some(completion) = requested_scroll {
                 self.scroll_end_requested(view, before.unwrap_or_default(), completion);
             } else if tracks_end {
@@ -1371,14 +1384,6 @@ impl<D: DataSource> Presenter<D> {
             if unchanged {
                 continue;
             }
-            // A `scrollIntoView`'s moves are its own until the reader moves
-            // the port: no travel is reported meanwhile, the lead sampled
-            // before its jump included. The reader's move then makes it the
-            // reader's, and the report says so, which ends it (LLP 1070.000
-            // §2.5), as on Apple and the web.
-            let velocity = (self.collection.velocity)
-                .filter(|(v, _)| *v == view && (!snapshot.seeking || reader_moved))
-                .map_or(0.0, |(_, v)| v);
             let fill = CollectionFill {
                 velocity,
                 gesture: snapshot.seeking && reader_moved,
