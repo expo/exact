@@ -344,9 +344,10 @@ impl<D: DataSource> Host<D> {
         if exact_runner::uses::zooms(host.runner.plan()) {
             host.runner.log("this host has no zoomable scroller: each draws at zoom 1, reports 1 and drops a `scrollZoom` write (LLP 1057.001.000 §5)");
         }
-        // Everything live is new to the page.
-        let roots = host.runner.roots();
-        let mut stack: Vec<ViewId> = roots.iter().rev().copied().collect();
+        // Everything live is new to the page, a hidden `portal` mover's
+        // subtree included: live, unattached, shown later (LLP 1013.002 D5).
+        let tops = (host.runner.roots().into_iter()).chain(host.runner.hidden_movers());
+        let mut stack: Vec<ViewId> = tops.rev().collect();
         let mut order = Vec::new();
         while let Some(id) = stack.pop() {
             order.push(id);
