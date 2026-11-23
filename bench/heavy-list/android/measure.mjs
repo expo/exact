@@ -30,10 +30,11 @@ const sleep = ms => Bun.sleepSync(ms);
 const pkg = app => APPS[app].split('/')[0];
 
 const defaultDisplay = text => text.split(/^[ \t]*Display: mDisplayId=/m).find(part => /^0\b/.test(part)) ?? '';
+const displayRotation = display => display.match(/\bmRotation=([0-3])\b/)?.[1];
 
 export function displaySize(wmSize, display) {
   const size = [...wmSize.matchAll(/^(?:Physical|Override) size: (\d+)x(\d+)\s*$/gm)].at(-1);
-  const rotation = display.match(/\bmRotation=([0-3])\b/)?.[1];
+  const rotation = displayRotation(display);
   if (!size || rotation == null) throw new Error('Cannot read the Android display size or rotation');
   const dimensions = size.slice(1).map(Number);
   return Number(rotation) % 2 ? dimensions.reverse() : dimensions;
@@ -45,42 +46,80 @@ export function displayDensity(wmDensity) {
   return Number(dpi[1]) / 160;
 }
 
-export function readyDisplay(app, power, policy, windows) {
+export function readyDisplay(app, power, policy, windows, user = '0') {
   const { wakefulness, showing } = androidScreenState(power, policy);
   const screen = policy.match(/\bscreenState=SCREEN_STATE_(\w+)/)?.[1];
-  if (wakefulness !== 'Awake' || showing !== false || (screen && screen !== 'ON')) {
+  if (wakefulness !== 'Awake' || showing !== false || screen !== 'ON') {
     const keyguard = showing == null ? 'unknown' : showing ? 'showing' : 'hidden';
     throw new Error(`${app}: wake and unlock the device before measuring (${wakefulness}, screen ${screen ?? 'unknown'}, keyguard ${keyguard})`);
   }
   const display = defaultDisplay(windows);
-  const focus = display.match(/\bmCurrentFocus=Window\{[^}\n]*\s([\w.]+\/[\w.]+)(?=[\s}])/)?.[1];
-  const activity = APPS[app];
-  if (focus !== activity && focus !== activity.replace('/.', `/${pkg(app)}.`)) {
-    throw new Error(`${app}: expected ${activity} to have focus, found ${focus ?? 'no focused activity'}`);
-  }
+  focusedWindow(app, user, display);
   return display;
 }
-const ready = app => readyDisplay(app, sh('dumpsys power'), sh('dumpsys window policy'), sh('dumpsys window displays'));
+
+function focusedWindow(app, user, display) {
+  const focus = display.match(/\bmCurrentFocus=(Window\{\S+ u(\d+) ([\w.]+\/[\w.]+)\})/);
+  const activity = APPS[app];
+  if (focus?.[2] !== user || (focus[3] !== activity && focus[3] !== activity.replace('/.', `/${pkg(app)}.`))) {
+    throw new Error(`${app}: expected ${activity} for user ${user} to have focus, found ${focus?.[1] ?? 'no focused activity'}`);
+  }
+  return focus[1];
+}
+
+function readyWindow(app, user, wmSize) {
+  const power = sh('dumpsys power'), windows = sh('dumpsys window -a');
+  const display = readyDisplay(app, power, windows, windows, user);
+  if (!/\bmStayOn=true\b/.test(power)) throw new Error('Android stay-on is inactive. Connect the device to power and check its screen timeout policy.');
+  const wake = power.match(/\bmLastWakeTime=(\d+)/)?.[1], sleep = power.match(/\bmLastSleepTime=(\d+)/)?.[1];
+  const focus = focusedWindow(app, user, display);
+  const window = windows.split(/^\s*Window #\d+ /m).find(w => w.startsWith(`${focus}:`)) ?? '';
+  const session = window.match(/\bmSession=Session\{\S+ (\d+):u(\d+)a\d+\}/);
+  const pid = Number(session?.[1]);
+  if (!pid || session[2] !== user || wake == null || sleep == null) {
+    throw new Error(`${app}: cannot identify the focused process or its power state`);
+  }
+  const size = displaySize(wmSize, display);
+  const config = window.match(/^[ \t]*mFullConfiguration=(.*)$/m)?.[1] ?? '';
+  const frame = window.match(/\bFrames: [^\n]*\bframe=(\S+)/)?.[1];
+  if (!config.includes('mWindowingMode=fullscreen') || frame !== `[0,0][${size.join(',')}]`) {
+    throw new Error(`${app}: expected a full-screen window at ${size.join('×')}, found frame ${frame ?? 'unknown'}`);
+  }
+  const orientation = config.match(/ (port|land) /)?.[1];
+  if (orientation !== (size[0] < size[1] ? 'port' : 'land')) throw new Error(`${app}: cannot confirm the full-screen window orientation`);
+  const rotation = displayRotation(display);
+  return { focus, pid, size, orientation: orientation === 'port' ? 'portrait' : 'landscape', rotation, wake, sleep };
+}
 
 /** Swipes up the middle of the screen: [px/s] × count. `input swipe` moves at constant speed and lifts, so each app
  * flings at that velocity (capped at the platform's maximum) with its own physics. */
 const SPEEDS = [[3000, 6], [6000, 6], [12000, 6], [24000, 6]];
-function flings([W, H], speeds = SPEEDS, wait = 1500) {
-  const x = Math.round(W / 2), y0 = Math.round(H * 0.8), y1 = Math.round(H * 0.25), d = y0 - y1;
+function swipeEndpoints([W, H], [left, top, right, bottom]) {
+  const x = Math.round(W / 2), y0 = Math.round(H * 0.8), y1 = Math.round(H * 0.25);
+  if (x < left || x >= right || y1 < top || y0 >= bottom) {
+    throw new Error(`Swipe endpoints (${x},${y0}) and (${x},${y1}) fall outside list bounds [${left},${top}][${right},${bottom}]`);
+  }
+  return [x, y0, y1];
+}
+
+function flings([x, y0, y1], checkFocus, speeds = SPEEDS, wait = 1500) {
+  const d = y0 - y1;
   for (const [v, n] of speeds) for (let i = 0; i < n; i++) {
+    checkFocus();
     sh(`input swipe ${x} ${y0} ${x} ${y1} ${Math.max(10, Math.round(d / v * 1000))}`);
     sleep(wait);
   }
 }
 
-function launch(app, extras = '') {
-  sh(`am force-stop ${pkg(app)}`);
+const asCurrent = (user, cmd) => sh(`if [ "$(am get-current-user)" != ${user} ]; then echo 'Android current user changed' >&2; exit 1; fi; ${cmd}`);
+const forceStop = (app, user) => asCurrent(user, `am force-stop --user current ${pkg(app)}`);
+
+function launch(app, user, extras = '') {
+  forceStop(app, user);
   sleep(500);
-  const r = sh(`am start -W -n ${APPS[app]} ${extras}`);
-  const total = Number(r.match(/TotalTime: (\d+)/)?.[1]);
-  return { total, pid: pid(app) };
+  const r = asCurrent(user, `am start --user current -W -n ${APPS[app]} ${extras}`);
+  return Number(r.match(/TotalTime: (\d+)/)?.[1]);
 }
-const pid = app => Number(sh(`pidof ${pkg(app)}`).trim().split(/\s+/)[0]);
 
 /** utime + stime in ms of the process and of its main thread (whose tid is its pid). */
 function cpu(p) {
@@ -95,47 +134,102 @@ export function gfxCounters(text) {
     return Number.isFinite(value) ? value : null;
   };
   const count = name => n(new RegExp(`^[ \\t]*${name}: (\\d+)(?=\\s|$)`, 'm'));
+  const bins = (text.match(/^[ \t]*GPU HISTOGRAM:([^\r\n]*)/m)?.[1] ?? '').matchAll(/\b(\d+)ms=(\d+)(?=\s|$)/g);
+  const recorded = new Set([...bins].filter(([, , count]) => Number(count) > 0).map(([, label]) => Number(label)));
+  const gpu = percentile => {
+    const value = n(new RegExp(`^${percentile}th gpu percentile: (\\d+)ms\\s*$`, 'm'));
+    if (!recorded.has(value)) return null;
+    // HWUI labels its bucket for durations of 25 ms and up as 4950 ms.
+    return value === 4950 ? { atLeast: 25 } : value;
+  };
   return {
     frames: count('Total frames rendered'), janky: count('Janky frames'), jankyLegacy: count('Janky frames \\(legacy\\)'),
     p50: n(/^50th percentile: (\d+)ms\s*$/m), p90: n(/^90th percentile: (\d+)ms\s*$/m), p95: n(/^95th percentile: (\d+)ms\s*$/m), p99: n(/^99th percentile: (\d+)ms\s*$/m),
     missedVsync: count('Number Missed Vsync'), slowUi: count('Number Slow UI thread'), slowBitmap: count('Number Slow bitmap uploads'),
     slowDraw: count('Number Slow issue draw commands'), deadlineMissed: count('Number Frame deadline missed'),
-    gpuP50: n(/50th gpu percentile: (\d+)ms\s*$/m), gpuP90: n(/90th gpu percentile: (\d+)ms\s*$/m), gpuP99: n(/99th gpu percentile: (\d+)ms\s*$/m),
+    gpuP50: gpu(50), gpuP90: gpu(90), gpuP99: gpu(99),
   };
 }
-const pss = app => {
-  const t = sh(`dumpsys meminfo ${pkg(app)}`);
+const pss = pid => {
+  const t = sh(`dumpsys meminfo ${pid}`);
   return Number((t.match(/TOTAL PSS:\s+(\d+)/) ?? t.match(/TOTAL\s+(\d+)/))?.[1]) / 1024;
 };
 
 /** One measured stretch: what [drive] costs the app at [p]. */
-function measure(app, p, drive) {
-  sh(`dumpsys gfxinfo ${pkg(app)} reset`);
+function measure(app, p, drive, checkReady) {
+  const gfx = (option = '') => {
+    const text = sh(`dumpsys gfxinfo ${p}${option}`);
+    if (!text.includes(`** Graphics info for pid ${p} [${pkg(app)}] **`)) {
+      throw new Error(`${app}: gfxinfo did not find the launched process ${p}`);
+    }
+    return text;
+  };
+  gfx(' reset');
   const c0 = cpu(p), t0 = Date.now();
   drive();
-  const secs = (Date.now() - t0) / 1000, c1 = cpu(p), frames = gfxCounters(sh(`dumpsys gfxinfo ${pkg(app)}`));
-  return { secs, cpuMsPerS: (c1.proc - c0.proc) / secs, mainMsPerS: (c1.main - c0.main) / secs, pssMB: pss(app), ...frames };
+  const secs = (Date.now() - t0) / 1000, c1 = cpu(p), frames = gfxCounters(gfx());
+  checkReady();
+  return { secs, cpuMsPerS: (c1.proc - c0.proc) / secs, mainMsPerS: (c1.main - c0.main) / secs, pssMB: pss(p), ...frames };
 }
 
-async function scenario(app, name, round, device, wmSize) {
+function checkSeriesGeometry(app, device, { size, orientation }) {
+  if (device.orientation && (device.orientation !== orientation || device.size.join() !== size.join())) {
+    throw new Error(`${app}: refusing mixed window geometry in this series (${orientation} ${size.join('×')}, expected ${device.orientation} ${device.size.join('×')})`);
+  }
+  device.size = size;
+  device.orientation = orientation;
+}
+
+async function scenario(app, name, round, device, wmSize, user) {
+  const ready = () => readyWindow(app, user, wmSize);
   if (name === 'cold') {
     const runs = [];
     for (let i = 0; i < 5; i++) {
-      const { total } = launch(app);
-      const display = ready(app);
-      device.size ??= displaySize(wmSize, display);
+      const total = launch(app, user);
+      checkSeriesGeometry(app, device, ready());
       runs.push(total);
       sleep(1500);
     }
-    return { runs };
+    return { runs, orientation: device.orientation };
   }
-  const { pid: p } = launch(app, name === 'live' ? '--es live 1' : '');
+  launch(app, user, name === 'live' ? '--es live 1' : '');
   sleep(5000);
-  const size = displaySize(wmSize, ready(app));
-  device.size ??= size;
-  if (name === 'rest') return measure(app, p, () => sleep(10_000));
-  if (name === 'blank') return blank(app, round, size, device.density);
-  return measure(app, p, () => flings(size));
+  const before = ready();
+  checkSeriesGeometry(app, device, before);
+  const { pid, size, orientation } = before;
+  const checkFocus = () => {
+    const display = defaultDisplay(sh('dumpsys window displays'));
+    if (focusedWindow(app, user, display) !== before.focus || displayRotation(display) !== before.rotation) {
+      throw new Error('The focused window changed during the drive');
+    }
+  };
+  try {
+    const since = sh('date +%s.%N').trim();
+    if (!/^\d+\.\d{9}$/.test(since)) throw new Error('Cannot read the device clock for focus checks');
+    const checkReady = () => {
+      const after = ready();
+      if (after.wake !== before.wake || after.sleep !== before.sleep) throw new Error('Device power changed during the drive');
+      if (after.focus !== before.focus || after.pid !== pid || after.rotation !== before.rotation || after.size.join() !== size.join()) {
+        throw new Error('The window changed during the drive');
+      }
+      // InputDispatcher records focus loss even when the same window regains focus.
+      const events = sh(`logcat -b events -v brief -t ${since} -s input_focus:I`);
+      if (/\binput_focus\s*\(/.test(events)) throw new Error('Input focus changed during the drive');
+    };
+    if (name === 'rest') return { ...measure(app, pid, () => sleep(10_000), checkReady), orientation };
+    const remote = `/data/local/tmp/heavy-list-${crypto.randomUUID()}`;
+    const xml = `${remote}.xml`;
+    const bounds = listBounds(sh(`uiautomator dump ${xml} >/dev/null && cat ${xml} && rm ${xml}`), pkg(app));
+    const endpoints = swipeEndpoints(size, bounds);
+    const sample = name === 'blank'
+      ? await blank(app, round, size, device.density, bounds, `${remote}.mp4`, file =>
+        recordBlank(file, () => flings(endpoints, checkFocus, [[24000, 8]], 1200), checkReady))
+      : measure(app, pid, () => flings(endpoints, checkFocus), checkReady);
+    return { ...sample, orientation };
+  } catch (error) {
+    console.warn(`${app} ${name} round ${round}: discarded sample (${error.message})`);
+    return { orientation, error: error.message };
+  }
 }
 
 export function listBounds(xml, packageName) {
@@ -147,13 +241,15 @@ export function listBounds(xml, packageName) {
   throw new Error(`${packageName}: UI Automator did not report the list's bounds`);
 }
 
-async function recordBlank(file, size) {
-  const rec = Bun.spawn(['adb', 'shell', '-T', `echo $$ > ${file}.pid && exec screenrecord --bit-rate 40000000 --time-limit 30 ${file}`],
-    { stdout: 'ignore', stderr: 'inherit' });
+async function recordBlank(file, drive, checkReady) {
+  const rec = Bun.spawn(['adb', 'shell', '-T', `echo $$ > ${file}.pid && exec screenrecord --verbose --bit-rate 40000000 --time-limit 30 ${file}`],
+    { stdout: 'pipe', stderr: 'inherit' });
+  const output = new Response(rec.stdout).text();
   try {
     sleep(1500);
-    flings(size, [[24000, 8]], 1200);
+    drive();
     sleep(1000);
+    checkReady();
   } finally {
     try {
       // The file argument distinguishes this recorder if Android has reused its PID.
@@ -163,30 +259,45 @@ async function recordBlank(file, size) {
     }
     await rec.exited;
   }
-  return rec.exitCode;
+  if (rec.exitCode !== 0) throw new Error(`screenrecord exited with status ${rec.exitCode}`);
+  return output;
+}
+
+export function recordingCrop(encoded, recorder, [W, H]) {
+  const size = encoded.trim().match(/^(\d+)x(\d+)$/);
+  const areas = [...recorder.matchAll(/^Content area is (\d+)x(\d+) at offset x=(\d+) y=(\d+)\s*$/gm)];
+  if (!size || areas.length !== 1) throw new Error('Cannot verify the encoded size and a single screenrecord content rectangle');
+  const [width, height] = size.slice(1).map(Number);
+  const [w, h, x, y] = areas[0].slice(1).map(Number);
+  if (!w || !h || x + w > width || y + h > height) {
+    throw new Error(`Recorded content ${w}×${h} at (${x},${y}) falls outside the encoded ${width}×${height} video`);
+  }
+  // The recorder truncates one side of the aspect-preserving projection to an integer pixel.
+  if (Math.abs(w * H - h * W) >= Math.max(W, H)) {
+    throw new Error(`Recorded content ${w}×${h} does not match the display aspect ratio ${W}×${H}`);
+  }
+  return `crop=${w}:${h}:${x}:${y}:exact=1`;
 }
 
 /** Films 8 flings at 24k px/s and counts the frames whose list area has a band of background at least a quarter
  * of the screen tall: rows the app had not drawn yet (no row of the feed is that empty). */
-async function blank(app, round, size, density) {
+async function blank(app, round, size, density, bounds, file, record) {
   const video = `blank-${app}-r${round}.mp4`, local = resolve(out, video);
-  const remote = `/data/local/tmp/heavy-list-${crypto.randomUUID()}`;
-  const xml = `${remote}.xml`, file = `${remote}.mp4`;
-  const bounds = listBounds(sh(`uiautomator dump ${xml} >/dev/null && cat ${xml} && rm ${xml}`), pkg(app));
+  let recorder;
   try {
-    const status = await recordBlank(file, size);
-    if (status !== 0) throw new Error(`screenrecord exited with status ${status}`);
+    recorder = await record(file);
     adb('pull', file, local);
-  } catch (error) {
-    console.warn(`${video}: ${error.message}`);
-    return { error: error.message };
   } finally {
     try { sh(`rm -f ${file} ${file}.pid`); } catch (error) { console.warn(error.message); }
   }
+  const probe = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height',
+    '-of', 'csv=p=0:s=x', local], { encoding: 'utf8' });
+  if (probe.status !== 0) throw new Error(`Cannot read the encoded size of ${video}: ${probe.error ?? probe.stderr}`);
+  const crop = recordingCrop(probe.stdout, recorder, size);
   const w = 90, h = Math.round(w * size[1] / size[0]);
-  const ff = spawnSync('ffmpeg', ['-v', 'error', '-i', local, '-fps_mode', 'passthrough', '-vf', `scale=${w}:${h},format=gray`, '-f', 'rawvideo', '-'], { maxBuffer: 1 << 30 });
+  const ff = spawnSync('ffmpeg', ['-v', 'error', '-i', local, '-fps_mode', 'passthrough', '-vf', `${crop},scale=${w}:${h},format=gray`, '-f', 'rawvideo', '-'], { maxBuffer: 1 << 30 });
   const raw = ff.stdout;
-  if (ff.status !== 0 || !raw.length || raw.length % (w * h)) throw new Error(`${local}: ffmpeg (${ff.status}) gave ${raw.length} bytes, not whole ${w}x${h} frames: ${ff.stderr}`);
+  if (ff.status !== 0 || !raw?.length || raw.length % (w * h)) throw new Error(`${local}: ffmpeg (${ff.status}) gave ${raw?.length ?? 0} bytes, not whole ${w}x${h} frames: ${ff.error ?? ff.stderr}`);
   const result = blankFrames(raw, [w, h], size, density, bounds);
   if (result.blanks) return { ...result, video };
   rmSync(local);
@@ -223,18 +334,32 @@ if (import.meta.main) {
   };
   const SCENARIOS = (process.env.SCENARIOS ?? 'cold,fling,live,rest,blank').split(',');
   const results = {};
-  for (let round = 0; round < Number(roundsArg); round++) {
-    const order = apps.map((_, i) => apps[(i + round) % apps.length]);
-    for (const app of order) for (const s of SCENARIOS) {
-      const r = await scenario(app, s, round, device, wmSize);
-      if (!Object.keys(results).length) {
-        writeFileSync(resolve(out, 'device.json'), JSON.stringify(device, null, 1));
-        console.log(device);
+  const user = sh('am get-current-user').trim();
+  if (!/^\d+$/.test(user)) throw new Error('Cannot identify the current Android user');
+  const setting = 'global stay_on_while_plugged_in';
+  const previous = sh(`settings get ${setting}`).trim();
+  if (previous !== 'null' && !/^\d+$/.test(previous)) throw new Error('Cannot read the previous Android stay-on setting');
+  const restore = () => sh(previous === 'null' ? `settings delete ${setting}` : `settings put ${setting} ${previous}`);
+  for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
+    process.once(signal, () => { restore(); process.exit(code); });
+  }
+  try {
+    sh('svc power stayon true');
+    for (let round = 0; round < Number(roundsArg); round++) {
+      const order = apps.map((_, i) => apps[(i + round) % apps.length]);
+      for (const app of order) for (const s of SCENARIOS) {
+        const r = await scenario(app, s, round, device, wmSize, user);
+        if (!Object.keys(results).length) {
+          writeFileSync(resolve(out, 'device.json'), JSON.stringify(device, null, 1));
+          console.log(device);
+        }
+        console.log(round, app, s, JSON.stringify(r));
+        ((results[app] ??= {})[s] ??= []).push(r);
+        writeFileSync(resolve(out, 'results.json'), JSON.stringify({ device, results }, null, 1));
       }
-      console.log(round, app, s, JSON.stringify(r));
-      ((results[app] ??= {})[s] ??= []).push(r);
-      writeFileSync(resolve(out, 'results.json'), JSON.stringify({ device, results }, null, 1));
+      apps.forEach(a => forceStop(a, user));
     }
-    apps.forEach(a => sh(`am force-stop ${pkg(a)}`));
+  } finally {
+    restore();
   }
 }

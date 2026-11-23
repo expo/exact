@@ -15,13 +15,20 @@ function fmt(v) {
   if (Number.isNaN(v)) return 'unavailable';
   return Number.isInteger(v) ? String(v) : v.toFixed(v < 1 ? 2 : 1);
 }
+function gpuP90(app) {
+  const values = (results[app].fling ?? []).map(r => r.gpuP90).filter(v =>
+    (Number.isFinite(v) && v !== 4950) || Number.isFinite(v?.atLeast));
+  const lower = median(values.map(v => v.atLeast ?? v));
+  const exact = values.filter(Number.isFinite).length;
+  return values.length && exact <= values.length / 2 ? `≥ ${fmt(lower)}` : lower;
+}
 const rows = [
   ['cold ms (am start -W)', a => median((results[a].cold ?? []).flatMap(r => r.runs))],
   ['fling frames', a => pick(a, 'fling', r => r.frames)],
   ['fling janky %', a => pick(a, 'fling', jank)],
   ['fling deadline missed', a => pick(a, 'fling', r => r.deadlineMissed)],
   ['fling p50 / p90 / p99 ms', a => ['p50', 'p90', 'p99'].map(k => fmt(pick(a, 'fling', r => r[k]))).join(' / ')],
-  ['fling gpu p90 ms', a => pick(a, 'fling', r => r.gpuP90)],
+  ['fling gpu p90 ms', gpuP90],
   ['fling cpu ms/s', a => pick(a, 'fling', r => r.cpuMsPerS)],
   ['fling main ms/s', a => pick(a, 'fling', r => r.mainMsPerS)],
   ['fling PSS MB', a => pick(a, 'fling', r => r.pssMB)],
