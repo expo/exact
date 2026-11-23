@@ -36,15 +36,16 @@
 //! none for each optional parameter, are the plan's row. A digest not the
 //! plan's is refused `unavailable`, and a second press of a control while
 //! one waits or runs is refused `busy`. Its authority ends when its caller
-//! cancels it or it ends: work it started runs on, but is admitted no
-//! further name held to the person (`press_revoked`).
+//! cancels it or it ends: work it started runs on as origin `action`, but
+//! is admitted no further name held to the person (LLP 1133.023 D7a,
+//! [`Runner::invocation_live`]).
 
-use super::provenance::CallOrigin;
+use super::provenance::{CallOrigin, Cause};
 use super::seams::Tools;
 use super::{CommitReceipt, DataSource, Runner, RunnerError};
 use serde_json::json;
 use serde_json::Value as Json;
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 
 /// How long a call waits for the invocation before it (D7).
 pub(in crate::runner) const WAIT: f64 = 5_000.0;
@@ -117,21 +118,23 @@ pub(in crate::runner) struct Calls {
     current: Option<Call>,
     /// The calls that ended, for `state.intents` and the door's `called`.
     ended: VecDeque<Json>,
-    /// The invocation ids of the presses queued, running, or ended with work
-    /// still stamped with their id: such work is not the person's.
-    presses: HashSet<u64>,
     /// What the host's build offers of each control, by kind; none: it
     /// offers none.
     placements: Option<Json>,
 }
 
 impl<D: DataSource> Runner<D> {
-    /// The control of press `id` while it runs uncancelled within its bound.
-    fn live_press(&self, id: u64) -> Option<usize> {
+    /// The call `id` while it runs uncancelled within its bound.
+    fn live_call(&self, id: u64) -> Option<&Call> {
         let c = self.calls.current.as_ref()?;
         let live =
             c.id == id && !c.cancelled && c.dispatched.is_some_and(|at| self.now_ms < at + BOUND);
-        live.then_some(c.control).flatten()
+        live.then_some(c)
+    }
+
+    /// The control of press `id` while it runs uncancelled within its bound.
+    fn live_press(&self, id: u64) -> Option<usize> {
+        self.live_call(id)?.control
     }
 
     /// Refuse `busy` each waiting call whose [`WAIT`] has run out, whether
@@ -203,7 +206,8 @@ impl<D: DataSource> Runner<D> {
             None => format!("tool:system:{door}"),
         };
         self.log(format!("{by} {name} dispatched"));
-        let result = self.as_invocation(origin, id, |r| r.run_action(tool.action, args, &[]));
+        let cause = Cause::of(origin, id, true);
+        let result = self.as_cause(cause, |r| r.run_action(tool.action, args, &[]));
         match result {
             Ok(receipt) => Ok(Some(receipt)),
             Err(e) => {
@@ -446,7 +450,6 @@ impl<D: DataSource> Tools<D> for LinkedTools {
             r.finish_call(call, "refused", "none", "busy", message);
             return Ok(id);
         }
-        r.calls.presses.insert(id);
         r.calls.waiting.push_back(call);
         r.native_slot().changed("");
         Ok(id)
@@ -483,10 +486,8 @@ impl<D: DataSource> Tools<D> for LinkedTools {
         Some(json!(rows))
     }
 
-    /// Whether invocation `id` is a press that is not running uncancelled
-    /// within its bound: its caller left, it ended, or its time is up.
-    fn press_revoked(&self, r: &Runner<D>, id: u64) -> bool {
-        r.calls.presses.contains(&id) && r.live_press(id).is_none()
+    fn call_live(&self, r: &Runner<D>, id: u64) -> bool {
+        r.live_call(id).is_some()
     }
 
     fn press_records(&self, r: &Runner<D>, id: u64) -> bool {
@@ -505,16 +506,6 @@ impl<D: DataSource> Tools<D> for LinkedTools {
     /// the end of the one running once it owns nothing or its time is up.
     fn step_calls(&self, r: &mut Runner<D>) -> (Vec<CommitReceipt>, Option<RunnerError>) {
         let mut receipts = Vec::new();
-        let running = |r: &Runner<D>, id: u64| {
-            r.invocation_owns(id)
-                || (r.calls.waiting.iter().chain(&r.calls.current)).any(|c| c.id == id)
-        };
-        let ended: Vec<u64> = (r.calls.presses.iter().copied())
-            .filter(|&id| !running(r, id))
-            .collect();
-        for id in ended {
-            r.calls.presses.remove(&id);
-        }
         loop {
             r.expire_waiting_calls();
             if let Some(call) = r.calls.current.as_ref() {
@@ -560,10 +551,11 @@ impl<D: DataSource> Tools<D> for LinkedTools {
     }
 
     /// Take off this commit's commands from `first` that a call does not
-    /// run, when the commit is the running call's (LLP 1111 D4a).
+    /// run, when the commit is a call's work (LLP 1111 D4a), after the call
+    /// too (LLP 1133.023 D7a).
     fn skip_in_call(&self, r: &mut Runner<D>, first: usize) {
-        let id = r.invocation_id();
-        if id == 0 || !(r.calls.current.as_ref()).is_some_and(|c| c.id == id) {
+        let cause = r.cause();
+        if !cause.call {
             return;
         }
         let mut i = first;
@@ -575,8 +567,10 @@ impl<D: DataSource> Tools<D> for LinkedTools {
             }
             r.commands.remove(i);
             if SKIPPED.contains(&name.as_str()) {
-                let call = r.calls.current.as_mut().expect("a call");
-                call.skipped.push(name.clone());
+                // The running call's record says what it skipped.
+                if let Some(call) = (r.calls.current.as_mut()).filter(|c| c.id == cause.id) {
+                    call.skipped.push(name.clone());
+                }
                 r.log(format!("{name}: skipped in a tool call"));
             } else {
                 r.log(format!("{name}: refused: in a tool call"));

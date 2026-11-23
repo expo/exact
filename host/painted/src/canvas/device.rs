@@ -137,6 +137,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.shell.told = true;
         if told.scale != self.scale {
             self.scale = told.scale;
+            self.force = true;
             crate::fields::rescale(told.scale);
             let (w, h) = self.viewport;
             if let Some(e) = self.p.resize_scaled(w, h, told.scale) {

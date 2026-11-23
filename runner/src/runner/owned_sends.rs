@@ -274,7 +274,7 @@ impl<D: DataSource> Runner<D> {
         self.unsent.retain(|u| u.0.mutation() != Some(m));
         self.drop_waiting(m);
         self.then_due[m] = f64::INFINITY;
-        self.landed.retain(|l| *l != m);
+        self.landed.retain(|(l, _)| *l != m);
         self.writes.records.retain(|w| w.mutation != m);
         self.failed_mut[m] = None;
         if let Some(o) = self.owned_sends[m].as_mut() {

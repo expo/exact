@@ -296,13 +296,17 @@ android {
             val glyph = glyphs.firstOrNull { it[0] == role }
             val path = (glyph?.get(2) ?: row[2]) as String
             val filled = (glyph?.get(3) as Boolean?) ?: role.endsWith("-fill")
-            val paint = if (filled) "android:fillColor=\"#FF000000\" android:fillType=\"evenOdd\"" else
-                "android:fillColor=\"#00000000\" android:strokeColor=\"#FF000000\" android:strokeWidth=\"2\" " +
+            // A role's path is in a 24-unit box; Material's glyphs are in Material Symbols' `0 -960 960 960`.
+            val material = glyph?.get(2) != null
+            val (size, open, close) = if (!material) Triple(24, "", "") else Triple(960, "    <group android:translateY=\"960\">\n", "    </group>\n")
+            // A role's own silhouette fills even-odd; Material's glyphs, nonzero.
+            val paint = if (filled) "android:fillColor=\"#FF000000\"" + (if (!material) " android:fillType=\"evenOdd\"" else "") else
+                "android:fillColor=\"#00000000\" android:strokeColor=\"#FF000000\" android:strokeWidth=\"${size / 12}\" " +
                     "android:strokeLineCap=\"round\" android:strokeLineJoin=\"round\""
             res.resolve("drawable/${iconName(role)}.xml").writeText(
                 "<vector xmlns:android=\"http://schemas.android.com/apk/res/android\" android:width=\"24dp\" android:height=\"24dp\" " +
-                    "android:viewportWidth=\"24\" android:viewportHeight=\"24\">\n" +
-                    path.split(';').joinToString("") { "    <path android:pathData=\"${attr(it)}\" $paint />\n" } + "</vector>\n")
+                    "android:viewportWidth=\"$size\" android:viewportHeight=\"$size\">\n" + open +
+                    path.split(';').joinToString("") { "    <path android:pathData=\"${attr(it)}\" $paint />\n" } + close + "</vector>\n")
         }
         val strings = StringBuilder()
         val shortcuts = StringBuilder()

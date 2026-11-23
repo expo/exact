@@ -730,8 +730,8 @@ pub trait Modules<D: DataSource> {
     /// A handler's request came back: its turn resumes.
     fn tool_landed(&self, r: &mut Runner<D>, ticket: u64, outcome: Outcome) {}
 
-    /// The least privileged origin of a handler running now, if one is.
-    fn tool_origin(&self, r: &Runner<D>) -> Option<CallOrigin> {
+    /// The cause of the least privileged handler running now, if one is.
+    fn tool_cause(&self, r: &Runner<D>) -> Option<super::provenance::Cause> {
         None
     }
 

@@ -7,7 +7,7 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path
 import { fileURLToPath } from 'node:url';
 import { pathWithin } from '../../scripts/paths.mjs';
 import { parseManifest, shaderFiles } from '../../scripts/app.mjs';
-import { lockBlocks, lockChanges, memberRefusal, mergeLockBlocks, outsideSdkLock, series, seriesId, staleLock } from '../../scripts/app-shells.mjs';
+import { lockBlocks, lockChanges, memberRefusal, mergeLockBlocks, outsideSdkLock, series, seriesId, staleLock, takenFromExact2 } from '../../scripts/app-shells.mjs';
 
 // Resolve authored keys in memory before writing the resolved manifest.
 const merge = (base, overrides) => {
@@ -204,6 +204,10 @@ export function gameShells(dir, game, workspace, {env = process.env, updateLock 
   const authoredLogic = existsSync(resolve(dir, 'logic/Cargo.toml'));
   cargo.workspace.members = ['bake','gpu','web','apple','linux','windows','android', authoredLogic ? '../logic' : 'logic', ...(data ? ['../data'] : []), ...(render ? ['../render'] : [])];
   delete cargo.workspace.exclude;
+  // Its members take exact2's crates from it, which names the checkout by its real path (scripts/paths.mjs `cargoCheckout`).
+  const taken = takenFromExact2([...(authoredLogic ? ['logic'] : []), ...(data ? ['data'] : []), ...(render ? ['render'] : [])]
+    .map(member => resolve(dir, member, 'Cargo.toml')).filter(existsSync), Object.keys(cargo.workspace.dependencies));
+  for (const { name, dir: crate, defaults } of taken.entries()) cargo.workspace.dependencies[name] = { path: crate, ...(defaults ? {} : { 'default-features': false }) };
   // Engine crates are dependencies here: the wildcard already optimizes them.
   // Retain member overrides and any settings distinct from that wildcard.
   const members = shellMembers(app.game, name);

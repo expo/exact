@@ -19,6 +19,27 @@ macro_rules! canvas_jni_scroll {
             with(|h| h.scrolled(id as u32, dx, dy, rev as u32));
         }
 
+        /// After the reader's scroll step: whether its frame would only
+        /// move what the reader moved itself (`CanvasHost::moved`). The
+        /// move is then taken, and there is no stream.
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_moved(
+            _env: *mut $crate::canvas::jni_sys::JNIEnv,
+            _class: $crate::canvas::jni_sys::jclass,
+        ) -> $crate::canvas::jni_sys::jboolean {
+            if PRIMED.with(|p| p.borrow().is_some()) {
+                return $crate::canvas::jni_sys::JNI_FALSE;
+            }
+            let moved = with(|h| h.moved()).unwrap_or(false);
+            if moved {
+                // As after a move's stream: the next paint is drawn,
+                // however like the last.
+                DRAWN.with(|d| *d.borrow_mut() = None);
+                $crate::presenter::preferences::scrub_frame_drawn();
+            }
+            flag(moved)
+        }
+
         /// List `id`'s snap areas around a release's projection
         /// (`CanvasHost::snaps_around`; px).
         #[no_mangle]

@@ -451,7 +451,8 @@ extension ExactExtensions {
 
     /// The context of extension `name`'s implementation in `m`'s session
     /// (ExactPackage.swift): the session's clock, journal, track table,
-    /// files, the host's audio session, its canvases' inputs and the window's angle.
+    /// files, the host's audio session, its canvases' inputs, the window's angle and
+    /// the package's configuration.
     static func context(_ m: ExactModule, _ name: String, session: String) -> ExactPackageContext {
         let module = m.context, tracks = tables[ObjectIdentifier(m)] as? ExactTracks ?? ExactTracks()
         tables[ObjectIdentifier(m)] = tracks
@@ -541,7 +542,8 @@ extension ExactExtensions {
                     return module.diagnostics.log("\(name): its state is not JSON")
                 }
                 module.changed("exact-state:" + String(decoding: json, as: UTF8.self))
-            })
+            },
+            config: exactPackageConfig[name].flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] } ?? [:])
     }
 
     /// `EXACT_AGENT_PADS`: a drive's test pads (ExactPads), a JSON list.

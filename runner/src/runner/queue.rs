@@ -9,7 +9,7 @@
 //! refusal does not retry it. Reconciliation can cancel other instances'
 //! deadlines, which the checkpoint restores when that commit refuses.
 
-use super::provenance::{CallOrigin, Causes};
+use super::provenance::Cause;
 use super::*;
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -28,12 +28,11 @@ pub(super) struct Waiting {
     args: Vec<Value>,
     /// The optimistic write made when this send was accepted, if any.
     write: Option<u64>,
-    /// The origin of the commit that sent it, which its `next` runs under.
-    origin: CallOrigin,
-    /// The invocation that commit was part of (LLP 1133.023 D7); 0 for none.
-    id: u64,
-    /// That commit's causes (LLP 1133.035 D16 item 6).
-    causes: Causes,
+    /// A refused `next` restored this head. It stays first for its retry (D3).
+    attempted: bool,
+    /// The cause of the commit that sent it, which its `next` runs under
+    /// (LLP 1133.023 D7a).
+    cause: Cause,
 }
 
 /// The state a refused `next` saw. A standing commit that changes a slot,
@@ -161,22 +160,73 @@ impl<D: DataSource> Runner<D> {
         m: usize,
         source: &str,
         args: &[Value],
-        write: Option<u64>,
     ) -> Result<(), RunnerError> {
-        if self.queues.waiting[m].len() >= QUEUE_BOUND {
+        let cause = self.cause();
+        // Only the application data source can opt in, and an unasked
+        // tail must belong to the same foreground cause. A queue with
+        // `then` owes one action per reply (LLP 1092 D4).
+        let replacement = if cause == Cause::person()
+            && self.mutation_row(m).then.is_none()
+            && self.source_ready(source)
+            && self.seams.source_answer.is_none()
+            && !Self::activity_send(source)
+            && self.plan.module_named(source).is_none()
+            && self.plan.fetch_named(source).is_none()
+            && self.queues.waiting[m]
+                .back()
+                .is_some_and(|tail| !tail.attempted && tail.cause == cause && tail.source == source)
+        {
+            self.data
+                .queued_send_replacer(Some(source))
+                .and_then(|merge| {
+                    let tail = self.queues.waiting[m].back().expect("checked tail");
+                    if self.has_intervening_write(m, tail.write)
+                        || !tail.args.iter().chain(args).all(Value::fits_codec)
+                    {
+                        return None;
+                    }
+                    merge(source, &tail.args, args)
+                })
+        } else {
+            None
+        }
+        // A replacement must fit both the value codec and the source's
+        // signature before it can displace an accepted send (LLP 1027 D2,
+        // LLP 1027.002 D4, LLP 1092 D4).
+        .filter(|args| {
+            self.plan.sources.iter().any(|row| {
+                self.plan.str(row.name) == source
+                    && row.params.len as usize == args.len()
+                    && row.params.iter().zip(args).all(|(p, arg)| {
+                        arg.conforms_and_fits_codec(
+                            &self.plan,
+                            self.plan.source_params[p.0 as usize].ty,
+                        )
+                    })
+            })
+        });
+        if replacement.is_none() && self.queues.waiting[m].len() >= QUEUE_BOUND {
             return Err(RunnerError::QueueFull {
                 mutation: self.mutation_name(m).to_string(),
             });
         }
-        let (origin, id) = (self.call_origin(), self.invocation_id());
-        let causes = self.commit_causes();
+        let write = self.accept_write(
+            Target::Mutation(m),
+            source,
+            replacement.as_deref().unwrap_or(args),
+        );
+        if replacement.is_some() {
+            let tail = self.queues.waiting[m]
+                .pop_back()
+                .expect("replacement has a tail");
+            self.end_waiting(m, tail);
+        }
         self.queues.waiting[m].push_back(Waiting {
             source: source.to_string(),
-            args: args.to_vec(),
+            args: replacement.unwrap_or_else(|| args.to_vec()),
             write,
-            origin,
-            id,
-            causes,
+            attempted: false,
+            cause,
         });
         self.pending_mut[m] = true;
         Ok(())
@@ -256,20 +306,16 @@ impl<D: DataSource> Runner<D> {
         let name = self.mutation_name(m).to_string();
         let was_poisoned = self.poisoned;
         let checkpoint = self.checkpoint();
-        let (origin, id, causes) = self.queues.waiting[m]
-            .front()
-            .map_or((CallOrigin::App, 0, Causes::default()), |w| {
-                (w.origin, w.id, w.causes)
-            });
-        let next = self.as_invocation_caused(origin, id, causes, |r| r.next_inner(m, &name));
+        let cause = (self.queues.waiting[m].front()).map_or(Cause::none(), |w| w.cause);
+        let next = self.as_cause(cause, |r| r.next_inner(m, &name));
         let (result, refusal) = match next {
             Ok(receipt) => (Ok(receipt), None),
             Err((e, why)) => (Err(e), Some(why)),
         };
         self.conclude(checkpoint, &result, was_poisoned);
         // Its `then`, and the commit a refused ask makes, are the queued
-        // send's: armed and made under its origin, invocation and causes.
-        self.as_invocation_caused(origin, id, causes, |r| r.arm_then(result.is_ok()));
+        // send's: armed and made under its cause.
+        self.as_cause(cause, |r| r.arm_then(result.is_ok()));
         // The commit that tells the view `pending` ended is the host's to
         // apply, its refusal the host's to hear, as a failed reply's is (b6
         // review A4).
@@ -287,11 +333,15 @@ impl<D: DataSource> Runner<D> {
                 // view hears `pending` end, as after a failed reply; and
                 // the resources its write showed in drop it.
                 if (was && !self.pending_mut[m]) || shown {
-                    ended = Some(self.as_invocation_caused(origin, id, causes, |r| {
+                    ended = Some(self.as_cause(cause, |r| {
                         r.commit_again(Vec::new(), "a refused queued send")
                     }));
                 }
             } else {
+                self.queues.waiting[m]
+                    .front_mut()
+                    .expect("restored head")
+                    .attempted = true;
                 self.queues.stalled[m] = Some(Rc::new(Basis {
                     slots: self.slots.clone(),
                     derives: self.derives.clone(),
@@ -323,7 +373,7 @@ impl<D: DataSource> Runner<D> {
         let later = match self.ask_send(Target::Mutation(m), &head.source, &head.args, head.write) {
             Ok(Asked::Now(slot, value)) => {
                 self.land_send(m, slot, value);
-                self.landed.push(m);
+                self.landed.push((m, self.cause()));
                 None
             }
             Ok(Asked::Later(request)) => Some(request),
@@ -337,7 +387,7 @@ impl<D: DataSource> Runner<D> {
         // Answered at once, it has landed: what it changes is asked, as an
         // action's or a reply's landing asks it. In flight, its write shows
         // through the overlay.
-        if self.landed.contains(&m) {
+        if self.landed.iter().any(|(l, _)| *l == m) {
             for r in self.declared_refreshes(m) {
                 self.force_refresh(r);
             }
@@ -370,7 +420,7 @@ impl<D: DataSource> Runner<D> {
 
     /// Whether a send of invocation `id` waits its turn.
     pub(super) fn queued_of(&self, id: u64) -> bool {
-        id != 0 && (self.queues.waiting.iter()).any(|w| w.iter().any(|s| s.id == id))
+        id != 0 && (self.queues.waiting.iter()).any(|w| w.iter().any(|s| s.cause.owner() == id))
     }
 
     /// Drop invocation `id`'s waiting sends and their writes. A dropped
@@ -381,14 +431,17 @@ impl<D: DataSource> Runner<D> {
         }
         let mut dropped = false;
         for m in 0..self.queues.waiting.len() {
-            if self.queues.waiting[m].front().is_some_and(|s| s.id == id) {
+            if self.queues.waiting[m]
+                .front()
+                .is_some_and(|s| s.cause.owner() == id)
+            {
                 self.queues.stalled[m] = None;
                 self.queues.next_due[m] = f64::INFINITY;
             }
             let mut kept = VecDeque::new();
             let mut n = 0;
             while let Some(send) = self.queues.waiting[m].pop_front() {
-                if send.id == id {
+                if send.cause.owner() == id {
                     self.end_waiting(m, send);
                     n += 1;
                 } else {

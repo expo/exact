@@ -6,7 +6,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { attachTarget, attachTargetIOS, attachedInput, openAttached } from './agent-attach.mjs';
+import { attachTarget, attachTargetIOS, attachedInput, devLoopOf, openAttached } from './agent-attach.mjs';
 import { attachWire } from './agent-wire.mjs';
 import { main } from './agent.mjs';
 
@@ -152,7 +152,7 @@ test('--attach refuses what only a launch takes, and a host with no attach, befo
   await expect(main(['macos', '--attach', '--live', 'tree'], fail)).rejects.toThrow('--live is for a launch');
   await expect(main(['macos', '--attach', '--headless', 'tree'], fail)).rejects.toThrow('--headless is for a launch');
   await expect(main(['macos', '--attach', '--call', 'x {}', 'tree'], fail)).rejects.toThrow('--notification, --wake, --call and --login is for a launch');
-  for (const host of ['android', 'windows', 'linux', 'web']) await expect(main([host, '--attach', 'tree'], fail)).rejects.toThrow(`--attach: unsupported on ${host}: attach on ${host} is not built yet`);
+  for (const host of ['android', 'windows', 'linux']) await expect(main([host, '--attach', 'tree'], fail)).rejects.toThrow(`--attach: unsupported on ${host}: attach on ${host} is not built yet`);
   await expect(main(['tvos', '--attach', 'tree'], fail)).rejects.toThrow('--attach: unsupported on tvos: an Apple TV build carries no attach');
   await expect(main(['watchos', '--attach', 'tree'], fail)).rejects.toThrow('a watch app carries no attach');
   await expect(main(['host-ios', '--attach', 'tree'], fail)).rejects.toThrow('the embedding fixture carries no attach');
@@ -162,7 +162,9 @@ test('--attach refuses what only a launch takes, and a host with no attach, befo
   expect(opened).toEqual([]);
   await expect(main(['macos', '--app', 'caltrain', '--attach', '41', '--session', 'b', 'tree'], fail)).rejects.toThrow('opened');
   await expect(main(['ios', '--app', 'caltrain', '--attach', '--sim', 'X', 'tree'], fail)).rejects.toThrow('opened');
-  expect(opened).toEqual([{ host: 'macos', app: 'caltrain', session: 'b', attach: 41 }, { host: 'ios', app: 'caltrain', session: undefined, attach: true }]);
+  await expect(main(['web', '--app', 'caltrain', '--attach', '--url', 'http://127.0.0.1:1/', 'tree'], fail)).rejects.toThrow('--url is for a launch');
+  await expect(main(['web', '--app', 'caltrain', '--attach', 'tree'], fail)).rejects.toThrow('opened');
+  expect(opened).toEqual([{ host: 'macos', app: 'caltrain', session: 'b', attach: 41 }, { host: 'ios', app: 'caltrain', session: undefined, attach: true }, { host: 'web', app: 'caltrain', session: undefined, attach: true }]);
 });
 
 /** A simulator `udid`'s app container holding markers, and the private socket directory, as `simctl` and `ps` answer. */
@@ -297,4 +299,24 @@ test('in the simulator a target that resolves elsewhere plays nothing, and a tex
   await expect(attachedInput(notText.carrier).type('goal-up', 'x')).rejects.toThrow('not an editable text input');
   expect(notText.sent).toEqual([{ op: 'type', target: 'goal-up', editable: true }]);
   await expect(attachedInput(notText.carrier).type('notes', 'x'.repeat(501))).rejects.toThrow('at most 500 characters');
+});
+
+test('a web tab is found by its app\'s running JS-target loop and chosen by its code, never a PID or a session', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-attach-loop-'));
+  try {
+    expect(() => devLoopOf(dir, 'notes')).toThrow('no web dev loop of notes runs on this machine');
+    mkdirSync(join(dir, '.exact'));
+    writeFileSync(join(dir, '.exact/web-wasm-loop.json'), '{}');
+    expect(() => devLoopOf(dir, 'notes')).toThrow('runs the wasm target');
+    writeFileSync(join(dir, '.exact/web-js-loop.json'), JSON.stringify({ pid: process.pid, url: null }));
+    expect(() => devLoopOf(dir, 'notes')).toThrow('is still starting');
+    writeFileSync(join(dir, '.exact/web-js-loop.json'), JSON.stringify({ pid: 2 ** 22 + 7, url: 'http://127.0.0.1:8765' }));
+    expect(() => devLoopOf(dir, 'notes')).toThrow('is not running');
+    writeFileSync(join(dir, '.exact/web-js-loop.json'), JSON.stringify({ pid: process.pid, url: 'http://10.0.0.2:8765' }));
+    expect(() => devLoopOf(dir, 'notes')).toThrow('not this machine\'s loopback');
+    writeFileSync(join(dir, '.exact/web-js-loop.json'), JSON.stringify({ pid: process.pid, url: 'http://127.0.0.1:8765' }));
+    expect(devLoopOf(dir, 'notes')).toEqual({ pid: process.pid, port: 8765 });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+  await expect(openAttached({ host: 'web', app: 'caltrain', pid: 41 })).rejects.toThrow('a web tab is chosen by the pairing code it shows, not a PID');
+  await expect(openAttached({ host: 'web', app: 'caltrain', session: 'b' })).rejects.toThrow('an attached tab has one session');
 });

@@ -106,6 +106,7 @@ impl<D: DataSource> Runner<D> {
     pub(super) fn arm_task(&mut self, i: usize, on: bool, key: Option<String>) {
         let row = self.timer_row(i);
         let (frame, interval) = (row.frame, row.interval_ms);
+        let cause = self.cause();
         let t = &mut self.timers[i];
         if !on {
             t.armed = false;
@@ -114,6 +115,7 @@ impl<D: DataSource> Runner<D> {
             t.completion = Default::default();
         } else if !t.armed || t.key != key {
             t.armed = true;
+            t.cause = cause;
             t.generation = t.generation.wrapping_add(1);
             t.completion = Default::default();
             t.key = key;
@@ -226,7 +228,10 @@ impl<D: DataSource> Runner<D> {
             .iter()
             .map(|a| self.eval(self.plan.arg(a).expr, &[], &frames))
             .collect::<Result<Vec<_>, _>>()?;
-        self.traced_action("task", row.action, args, &frames)
+        let action = row.action;
+        self.as_cause(self.timers[i].cause, |r| {
+            r.traced_action("task", action, args, &frames)
+        })
     }
 }
 

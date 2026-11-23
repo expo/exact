@@ -20,6 +20,7 @@
 //! requests it awaits go out under tickets of their own, no target's: no
 //! commit, no `then`.
 
+use super::super::provenance::Cause;
 use super::super::{DataError, DataSource, Runner};
 use super::handles::{collect, ids_in};
 use super::{CallOrigin, Json, ModulesRow};
@@ -272,7 +273,8 @@ impl<D: DataSource> Runner<D> {
             final_of,
             effects: false,
         };
-        let answer = self.as_origin(origin, |r| {
+        // A handler is no invocation's and never more than a tool (module doc).
+        let answer = self.as_cause(Cause::of(origin, 0, false), |r| {
             r.store.set_clock_ms(r.now_ms);
             (r.data).answer(&mut r.store, &run.source, std::slice::from_ref(&run.args))
         });
@@ -482,11 +484,12 @@ impl<D: DataSource> Runner<D> {
             .any(|(t, r)| r.effects && !invocations.refused.iter().any(|(x, ..)| x == t))
     }
 
-    /// The least privileged origin of a handler running now, if one is.
-    pub(super) fn tool_origin_linked(&self) -> Option<CallOrigin> {
+    /// The cause of the least privileged handler running now, with every
+    /// running handler's causes, if one is.
+    pub(super) fn tool_cause_linked(&self) -> Option<Cause> {
         (self.extensions.invocations.running.values())
-            .map(|r| r.origin)
-            .min()
+            .map(|r| Cause::of(r.origin, 0, false))
+            .reduce(|a, b| self.least(a, b))
     }
 
     /// A handler's request came back: its turn resumes.
@@ -494,7 +497,7 @@ impl<D: DataSource> Runner<D> {
         let Some(run) = self.extensions.invocations.running.remove(&ticket) else {
             return;
         };
-        let answer = self.as_invocation(run.origin, 0, |r| {
+        let answer = self.as_cause(Cause::of(run.origin, 0, false), |r| {
             let args = std::slice::from_ref(&run.args);
             r.store.set_clock_ms(r.now_ms);
             (r.data).parse_tool(

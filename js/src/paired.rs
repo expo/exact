@@ -96,7 +96,23 @@ impl Paired {
                 return Err("snapshot entry does not match its module receipt".into());
             }
         }
-        Ok(Module::new(bytecode, expected_app, expected_grants))
+        // The Canvas 2D roster the bake read from this bytecode (LLP 1056 D1).
+        // Without it the runner gives every `canvas surface=` of the
+        // candidate's plan to the GPU module, and its 2D canvases never draw.
+        // A receipt of a module that does not draw has none.
+        let surfaces = match &meta["surfaces"] {
+            Value::Null => None,
+            Value::Object(surfaces) => Some(surfaces),
+            _ => return Err("module candidate's surfaces are not a roster".into()),
+        };
+        let mut roster = Vec::new();
+        for (name, arity) in surfaces.into_iter().flatten() {
+            let arity = arity
+                .as_u64()
+                .ok_or_else(|| format!("module candidate surface `{name}` has no arity"))?;
+            roster.push((name.as_str(), arity as usize));
+        }
+        Ok(Module::new(bytecode, expected_app, expected_grants).with_canvas_surfaces(roster))
     }
 }
 

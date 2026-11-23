@@ -179,9 +179,8 @@ pub trait Tools<D: DataSource> {
     ) -> Result<u64, String> {
         Err(format!("no control `{kind}`: this app declares none"))
     }
-    /// Whether invocation `id` is a control's press that no longer runs
-    /// uncancelled within its bound.
-    fn press_revoked(&self, _: &Runner<D>, _: u64) -> bool {
+    /// Whether invocation `id` is a call running uncancelled within its bound.
+    fn call_live(&self, _: &Runner<D>, _: u64) -> bool {
         false
     }
     /// Whether invocation `id` is a live press of a control the binary
@@ -517,12 +516,10 @@ impl<D: DataSource> Runner<D> {
         }
     }
 
-    /// Whether invocation `id` is a control's press that no longer runs
-    /// uncancelled within its bound: its caller cancelled it, or it ended or
-    /// ran out of time. Its work keeps what it started and is admitted no
-    /// further name held to the person (LLP 1126.004 D2).
-    pub(in crate::runner) fn press_revoked(&self, id: u64) -> bool {
-        self.links_tools().press_revoked(self, id)
+    /// Whether invocation `id` is a call running uncancelled within its
+    /// bound: its grants hold only while it is (LLP 1133.023 D7a).
+    pub(in crate::runner) fn call_live(&self, id: u64) -> bool {
+        self.links_tools().call_live(self, id)
     }
 
     /// Whether invocation `id` is a press running uncancelled within its

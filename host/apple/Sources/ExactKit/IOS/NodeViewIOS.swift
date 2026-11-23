@@ -1263,7 +1263,8 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     }
 
     /// Scrolling and clipping come from the effective overflow the host
-    /// wrote in (never from the node's kind): `scroll` on an axis makes a
+    /// wrote in, not from the node's kind, except that a text control's
+    /// editor scrolls itself (`isTextControl`): `scroll` on an axis makes a
     /// scroll container that scrolls that axis; `hidden` clips.
     /// Whether the style clips the children (`overflow: hidden` or `clip`); a waiting
     /// scroll clips as its scroll view would. Without a clip box, it is the
@@ -1275,7 +1276,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
 
     func syncScroll() {
         let ox = style["overflow_x"]?.string ?? "visible", oy = style["overflow_y"]?.string ?? "visible"
-        let scrolls = (ox == "scroll" || ox == "auto") || (oy == "scroll" || oy == "auto")
+        let scrolls = !isTextControl && ((ox == "scroll" || ox == "auto") || (oy == "scroll" || oy == "auto"))
         if scrolls { syncClipBox(false) }
         if scrolls && scroll == nil && !scrollWaits && !groupedOwner {
             if pageBand != .zero, extras?.nativeScrollView != nil { setPageBand(.zero) } // the list leaving keeps its scrollTop
@@ -1335,7 +1336,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     var scrollWaits: Bool { swipeOwner && !scrollNeeded && !handlers.contains("scroll") && !handlers.contains("scrollend") }
     /// The node's overflow scrolls, and its scroll view is still waiting.
     package var scrollDormant: Bool {
-        !groupedOwner && scrollView == nil && (["scroll", "auto"].contains(style["overflow_x"]?.string ?? "") || ["scroll", "auto"].contains(style["overflow_y"]?.string ?? ""))
+        !groupedOwner && !isTextControl && scrollView == nil && (["scroll", "auto"].contains(style["overflow_x"]?.string ?? "") || ["scroll", "auto"].contains(style["overflow_y"]?.string ?? ""))
     }
 
     package func needScroll() {

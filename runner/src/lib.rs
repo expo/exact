@@ -84,6 +84,7 @@ pub mod host_work;
 pub mod request;
 pub use host_work::HostWork;
 pub mod runner;
+pub use runner::QueuedSendReplacer;
 pub mod sandbox;
 pub mod save_file;
 /// The picker's helpers a host shares (LLP 1069.002): types by name,

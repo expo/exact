@@ -81,7 +81,7 @@ class MapsLifecycleTest {
         var current: MapSurface? = null
         init {
             activity.applicationInfo.metaData = Bundle().apply { putString("com.google.android.geo.API_KEY", "test-not-a-key") }
-            module = MapsModule(ExtensionContext(activity, "maps"))
+            module = MapsModule(ExtensionContext(activity, "maps", JSONObject().put("apiKey", "test-not-a-key")))
         }
         val adapter = object : NativeModule {
             override fun create(context: Context, props: JSONObject): View =

@@ -140,8 +140,9 @@ export async function waitAtMost(operation, ms, onTimeout) {
 
 /** An attached session's wire (LLP 1012.000 D1): the handshake, then one request at a time, each reply matched by its
  * `request` number (`id` names a view on this wire). A request past its deadline, a reply over 32 MiB or a reply for
- * another number ends the connection, so a late reply never answers a later request. `onWaiting` hears that the app is asking its person. */
-export async function attachWire(socket, { nonce, session, onWaiting, handshakeMs = 15000, approvalMs = 65000, requestMs = 35000, lineLimit = 32 << 20 }) {
+ * another number ends the connection, so a late reply never answers a later request. `onWaiting` hears that the app is
+ * asking its person. A native app's handshake names its listener's `nonce`; a web tab's, the `pairing` code it shows. */
+export async function attachWire(socket, { nonce, pairing, session, onWaiting, closed = 'the app closed the attach connection (Detach Agent, the window closed, or the app quit)', handshakeMs = 15000, approvalMs = 65000, requestMs = 35000, lineLimit = 32 << 20 }) {
   const lines = [], waiters = [];
   let failure = null, parts = [], size = 0, attached = false;
   const fail = (why) => {
@@ -169,7 +170,7 @@ export async function attachWire(socket, { nonce, session, onWaiting, handshakeM
     if (d.length) { parts.push(d); size += d.length; if (size > lineLimit) fail('the app sent a reply over 32 MiB'); }
   });
   socket.on('error', (e) => fail(`the attach connection failed: ${e.message}`));
-  socket.on('close', () => fail('the app closed the attach connection (Detach Agent, the window closed, or the app quit)'));
+  socket.on('close', () => fail(closed));
   const next = (ms, what) => {
     if (lines.length) return Promise.resolve(lines.shift());
     if (failure) return Promise.reject(failure);
@@ -178,7 +179,7 @@ export async function attachWire(socket, { nonce, session, onWaiting, handshakeM
       waiters.push({ resolve: (v) => { clearTimeout(timer); resolve(v); }, reject: (e) => { clearTimeout(timer); reject(e); } });
     });
   };
-  socket.write(JSON.stringify({ attach: 1, nonce, ...(session ? { session } : {}) }) + '\n');
+  socket.write(JSON.stringify({ attach: 1, ...(pairing !== undefined ? { pairing } : { nonce }), ...(session ? { session } : {}) }) + '\n');
   let first = await next(handshakeMs, 'the app did not answer the handshake');
   if (first.waiting) {
     onWaiting?.(first);

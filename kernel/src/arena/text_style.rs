@@ -19,7 +19,7 @@ const GENERIC_STACKS: u16 = 8;
 
 /// Each text style's rows in each column, as a start: its weight and its
 /// leading (a ratio, or `normal`).
-static STARTS: LazyLock<Vec<[StyleProps; 4]>> = LazyLock::new(|| {
+static STARTS: LazyLock<Vec<[StyleProps; 5]>> = LazyLock::new(|| {
     crate::TEXT_STYLES
         .iter()
         .map(|style| {

@@ -260,17 +260,15 @@ extension NodeView {
     /// changed, and an `alert` as it appears, as a browser's alert event has
     /// it (Core-AAM); one there at launch is read with the screen.
     func liveSpeaks(_ text: String, launching: Bool) -> Bool {
+        guard !text.isEmpty, liveText.map({ $0 != text }) ?? (liveRole == "alert" && !launching) else { return false }
         #if os(macOS)
-        guard liveAnnouncementView != nil, !text.isEmpty else { return false }
+        return liveAnnouncementView != nil
         #else
-        guard accessibilityVisible, !text.isEmpty else { return false }
         // `aria-hidden` in the authored tree, which a node UIKit holds in
         // another container (a bar's hosted item, LLP 1141.004 D3; a painted
         // popover) still has above it.
-        if authoredLine.contains(where: { $0.props["accessibilityElementsHidden"] == "true" }) { return false }
+        return accessibilityVisible && !authoredLine.contains { $0.props["accessibilityElementsHidden"] == "true" }
         #endif
-        if let previous = liveText { return previous != text }
-        return liveRole == "alert" && !launching
     }
     #if os(macOS)
     var liveAnnouncementView: NSView? {
@@ -890,7 +888,8 @@ extension Presenter {
             // A native button's control is its accessibility element (LLP 1069.011 D4).
             if (node.actsAsButton || node.props["accessibilityRole"] == "button") && !node.isNativeButton {
                 #if os(macOS)
-                node.setAccessibilityLabel(node.accessibleName)
+                let name = node.accessibleName
+                if node.accessibilityLabel() != name { node.setAccessibilityLabel(name) }
                 #else
                 node.accessibilityLabel = node.accessibleName
                 #endif

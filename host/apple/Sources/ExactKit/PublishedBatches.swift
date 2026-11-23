@@ -102,11 +102,12 @@ extension ExactSession {
     }
     /// Wait for the slice in flight and land it: what shows, the agent and
     /// every read that must see it (T5, T7, T9).
-    /// It returns at a fixed point: no stage open, nothing published or queued (T13).
+    /// The outer drain reaches a fixed point with nothing left to land (T13).
+    /// A callback inside a landing leaves queued batches to that landing.
     public func drainFill() {
         while true {
             while stage != nil { finishStage() }
-            guard ownerInFlight || hasPublished() || !pending.isEmpty else { return }
+            guard !landing, ownerInFlight || hasPublished() || !pending.isEmpty else { return }
             Owner.shared.sync {}
             landFill()
             if stage == nil, !hasPublished(), pending.isEmpty { return }

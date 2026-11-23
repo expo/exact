@@ -74,6 +74,8 @@ pub(crate) struct Media {
     /// The media nodes whose player has shown their source's first frame
     /// (`frameReady`): their poster is gone.
     pub(crate) framed: std::collections::BTreeSet<exact_kernel::NodeKey>,
+    /// The `portal` movers alive and shown nowhere (LLP 1013.002 D5).
+    pub(crate) held: Vec<ViewId>,
 }
 
 impl Default for Media {
@@ -86,6 +88,7 @@ impl Default for Media {
             commands: Default::default(),
             asked: Vec::new(),
             framed: Default::default(),
+            held: Vec::new(),
         }
     }
 }
@@ -200,6 +203,28 @@ impl Painter {
         }
     }
 
+    /// @ref LLP 1013.002 D5 — the media of a hidden mover live on: each
+    /// video is named held, so the reader keeps its player out of view, where
+    /// the off-screen rule pauses a muted autoplay until it shows again, and
+    /// each audio as a boxless one. Named first in the stream, so no layer the
+    /// reader takes in before them lets the element go.
+    pub(super) fn held_media(&mut self, kernel: &Kernel) {
+        if self.media.held.is_empty() || !kernel.has_type(NodeType::Video) {
+            return;
+        }
+        for id in kernel.preorder_where(&self.media.held, |t, _| t == NodeType::Video) {
+            let Some(node) = kernel.node(id) else {
+                continue;
+            };
+            if is_audio(&node) {
+                self.record_boxless_audio(&node);
+            } else {
+                let props = self.media_props(&node);
+                self.backend.held_video(node.id, &props.to_string());
+            }
+        }
+    }
+
     pub(super) fn record_boxless_audio(&mut self, node: &NodeRef<'_>) {
         if let Some(audio) = &mut self.boxless_audio {
             audio.push(node.id);
@@ -286,6 +311,7 @@ impl Painter {
                 serde_json::json!({
                     "src": p.str(PropId::Src),
                     "sandbox": p.str(PropId::Sandbox),
+                    "partition": p.str(PropId::Partition),
                     "generation": node.key.generation,
                     "slot": node.key.index,
                     "session": self.native_session,

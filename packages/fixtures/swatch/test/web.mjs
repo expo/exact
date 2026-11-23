@@ -3,19 +3,23 @@
 // in each engine. The package's view is made by the session's instance of
 // its implementation, which hears the view's displayed state and its `tint`
 // binding change, each with the origin `app` (the web has no tool or wake
-// door), and answers what it heard as `swatchReports`.
+// door), and answers what it heard, with what it read of its configuration,
+// as `swatchReports`. A production build without the key is refused.
 //
 // usage: bun packages/fixtures/swatch/test/web.mjs [chromium] [firefox] [webkit]
 //   (every engine by default; `bunx playwright@1.65.1 install firefox webkit` first)
 import { rmSync } from 'node:fs';
 import { dirname, extname, join, resolve } from 'node:path';
-import { checker, makeFixture, root, run } from './fixture.mjs';
+import { LEAK, checker, makeFixture, reportedConfig, root, run } from './fixture.mjs';
+import { spawnSync } from 'node:child_process';
 
 const engines = process.argv.slice(2).length ? process.argv.slice(2) : ['chromium', 'firefox', 'webkit'];
 const { chromium, firefox, webkit } = await import(resolve(root, 'node_modules/playwright-core/index.mjs'));
 
 const { app } = makeFixture();
 run('bun', ['exact.mjs', 'web-build', '--render', 'none'], app);
+// A site to host (`--out`, a release) without the variable is refused.
+const refused = spawnSync('bun', ['exact.mjs', 'web-build', '--render', 'none', '--out', 'dist'], { cwd: app, env: { ...process.env, SWATCH_KEY: '' }, encoding: 'utf8' });
 
 const dist = join(app, 'target/web-dist');
 const types = { '.js': 'text/javascript', '.html': 'text/html', '.wasm': 'application/wasm', '.json': 'application/json', '.css': 'text/css' };
@@ -28,6 +32,7 @@ const server = Bun.serve({ port: 0, async fetch(req) {
 } });
 const origin = `http://127.0.0.1:${server.port}`;
 const { check, failed } = checker();
+check('web', 'without the variable a production build is refused swatch-key-missing', refused.status !== 0 && refused.stderr.includes('swatch-key-missing'), (refused.stdout + refused.stderr).slice(-1500));
 
 for (const engine of engines) {
   const browser = await { chromium, firefox, webkit }[engine].launch();
@@ -42,6 +47,8 @@ for (const engine of engines) {
   try {
     const page = await (await browser.newContext()).newPage();
     await page.goto(origin);
+    const config = await until(page, 'config', t => t.startsWith('label='));
+    check(engine, "the package's JavaScript reads its configuration", config === reportedConfig('web'), config);
     const none = await until(page, 'heard', t => !t.startsWith('('));
     check(engine, 'nothing is reported before the view is placed', none === '', none);
 

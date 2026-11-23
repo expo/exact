@@ -916,7 +916,7 @@ component App
 ```
 
 - The destination is the first element with that `id` in declaration order in
-  the app root. It must be a plain box (`box`, `column`, `row`, `main`,
+  the app root. It must be a plain box (`box`, `view`, `column`, `row`, `main`,
   `section`, `article`, `aside`, `nav` or `footer` with no `role`,
   `navigationKey` or `popover`) that its parent lays out. A list's row, a
   table's part, a route's header item, a button's face, a dialog or a route
@@ -925,19 +925,20 @@ component App
   leaves it where it is written.
 - With no destination (a missing id, its own descendant, a cycle, a box inside
   hidden content) it is alive but not shown: no space, no input, not in
-  `tree`, journaled once. A video there keeps its position; Chrome pauses it
-  and resumes it on return, Firefox keeps it playing.
-- Events from it bubble through where it is written, not where it is shown.
+  `tree`, journaled once. A muted autoplay video there pauses at its position
+  and plays on from it when shown (Firefox keeps it playing).
+- Its press, pointer-button and key events bubble through where it is written,
+  not where it is shown; hover, focus on the web and the painted hosts' pan,
+  swipe and long press still follow where it is shown.
   Colours, `color-scheme` and modes come from where it is shown (on the web;
   native hosts still resolve design-token modes at the declaration).
 - Removing the declaration removes it; a new one starts fresh.
-- Hosts: the web moves the same DOM element with `moveBefore()`, or
-  `insertBefore` where the browser lacks it (WebKit), which keeps a playing
-  video playing but reloads an iframe; a page rendered ahead leaves it out
-  and builds afresh. The runner places it for the native hosts, whose
-  presentation is not finished: macOS does not yet draw an element that was
-  hidden at launch. `apps/shared-elements`' Player and Flight screens show
-  both forms.
+- Hosts: the web, macOS, iOS and Android move the same element, and a playing
+  video plays on through the move; Linux and Windows move it with no video
+  decoder. A page rendered ahead leaves it out and builds afresh. The
+  reference's "A `portal` element on each host" has each host's table.
+  `docs/recipes/keep-a-playing-video.md` is a card that opens into a detail;
+  `apps/shared-elements`' Player and Flight screens show both forms.
 
 Imports resolve local `.contract` declarations, with cycle and app-boundary
 checks. Paths begin with `./` and cannot contain `..` segments. They do not load app logic or expand the available built-in function
@@ -4097,6 +4098,94 @@ Android implementations declare pinned `group:artifact:version` coordinates
 in `android/exact.json`'s `maven` array; an app's own Kotlin uses
 `host.android.maven`. See [Maven libraries](../host/android/README.md#maven-libraries-one-locked-verified-gradle-graph-llp-1133008-d8-item-5)
 for the shared Gradle graph, lock and verification files.
+
+### A package's configuration
+
+A package that needs a value from the app, such as a vendor SDK's API key or a
+tile server, declares it per target in its interface's `exact.json` (LLP
+1133.021 §9 item 7):
+
+```json
+"config": {
+  "android": { "apiKey": { "type": "env", "required": "release", "missing": "yandex-mapkit-key-missing" } },
+  "ios": { "apiKey": { "type": "env", "required": "release", "missing": "yandex-mapkit-key-missing" } },
+  "web": { "tiles": { "type": "string", "required": true }, "maxZoom": "number" }
+}
+```
+
+A target is `web`, `android`, `ios`, `macos` or `tvos`; each is declared on its
+own, since a package binds per target. `type` is `string`, `number`, `boolean`
+or `env`, and `"maxZoom": "number"` is short for `{"type": "number"}`.
+`required` is `true` or `"release"`, and `missing` is the error code a build
+without the key reports (else `bake-config-missing`).
+
+The app gives the values in `app.json`, under the interface's name and the
+target. A key typed `env` names the environment variable that holds its value:
+
+```json
+"packages": {
+  "exact-yandex-mapkit": {
+    "android": { "apiKey": { "env": "YANDEX_MAPKIT_API_KEY" } },
+    "ios": { "apiKey": { "env": "YANDEX_MAPKIT_API_KEY" } }
+  }
+}
+```
+
+The build reads the values, with each variable's value as the build runs, and
+writes them into the code it generates for the app. The package's code reads
+the declared keys for its target from its context. A key given no value is
+absent.
+
+| Target | What the package reads |
+| --- | --- |
+| Android | `context.config`, a `JSONObject` on `ExtensionContext` |
+| iOS, macOS, tvOS | `context.config`, a `[String: Any]` on `ExactPackageContext` |
+| Web | `config`, an object passed to `implementation({ config })` |
+
+```kotlin
+val key = context.config.optString("apiKey")   // "" when absent
+```
+
+```swift
+let key = context.config["apiKey"] as? String
+```
+
+Every build refuses these, naming the key and never its value:
+
+- `bake-config-type`: a value of another type than declared, such as a key
+  written into `app.json` where `{"env": "…"}` is declared.
+- `bake-config-unknown`: a key the interface does not declare for that target.
+  The error suggests the nearest declared name.
+- The declared `missing` code: a required key with no value. A key that is
+  `"required": "release"` is required only in a release build. On Android, that
+  is `--release` or production trust. On Apple, it is production trust
+  (`--release`, or `EXACT_UPDATE_TRUST=production`) or a distributed build
+  (`--distribution`, or an archive that is not `--development`). On the web,
+  it is a site to host (`--out`).
+  A development build without the key warns and builds.
+
+An `app.json` entry for a package that is not installed is a warning.
+
+**`env` keeps a value out of the repository, not out of the app.** Anything in
+`config` ships inside the APK, the IPA or the page, and anyone with the app
+can read it, as with a setting an app reads through `import.meta.env` (LLP
+1153 D4). A value that must stay secret belongs on a server. Restrict a vendor key to the
+app instead: by package name and signing certificate for Google's keys, or by
+bundle id where the vendor offers it.
+
+A native app's configuration is part of its binary. Changing a value, or the
+value of a variable it names, needs a new binary, and `exact deploy` and
+`exact push` classify the change that way. The binary's receipt records an
+`env` value only as its SHA-256. Publishing an update therefore needs the same
+variables set as the build had.
+
+**A vendor SDK that reads its key from the Android manifest.** An `android` key
+may also fill a `<meta-data>` the SDK reads by its own name:
+`"metadata": "com.google.android.geo.API_KEY"`. The name must be on Exact's
+list (`CONFIG_METADATA` in `scripts/android-manifest.mjs`), which today holds
+only the Google Maps SDK's key. Two bound packages may not fill one name. A
+package that needs another name asks for a row. An SDK that takes its key in
+code, such as Yandex MapKit's `MapKitFactory.setApiKey`, needs no row.
 
 ### A package's storage and session
 
@@ -7756,10 +7845,10 @@ the platform has no role for is the one place for a literal.
 already (the root font size: Dynamic Type's body on iOS, 13 on the Mac, the
 browser's 16). A `text role="heading"` with no `font-size` or `font-weight` of
 its own is the platform's text style for its `aria-level` (LLP 1115 D3): 1
-`title1`, 2 (the default) `title2`, 3 `title3`, 4 and on `headline`, sized for
-the reader's Dynamic Type by Apple's own ramp (iOS at the default size:
-28/22/20/17 pt; the Mac: 22/17/15/13; the web reads the ramp at its
-16 px root: 27/21/19/16, in `rem`). iOS, macOS and Material keep each style's
+`title1`, 2 (the default) `title2`, 3 `title3`, 4 and on `headline`. Apple's ramp
+gives 28/22/20/17 pt at the iOS default, 22/17/15/13 pt on the Mac and
+27/21/19/16 px at a 16 px web root. Android's Material look uses 28/24/22/16 sp
+at a font scale of 1 (LLP 1115.001 D4). iOS, macOS and Material keep each style's
 weight and leading. The web, neutral and terminal looks use bold for levels 1
 and 2, semibold for 3. Omit heading sizes and weights unless customizing them.
 An authored `font`, `font-size` or `font-weight` wins; an inherited one does not.

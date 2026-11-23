@@ -892,7 +892,7 @@ export async function open({
   // before it sends anything, as the app would.
   if (attach !== undefined) {
     const refuse = (op, why) => async () => { throw new Error(`${op}: ${why}`); };
-    const withheld = (op) => refuse(op, 'unsupported: an attached session\'s input is a plain tap, a text entry and a declared tool\'s call, once the person allows it');
+    const withheld = (op) => refuse(op, carrier.host === 'web' ? 'unsupported: an attached tab is read, not driven' : 'unsupported: an attached session\'s input is a plain tap, a text entry and a declared tool\'s call, once the person allows it');
     for (const [method, op] of [['pointer', 'tap'], ['prefer', 'prefer'], ['resize', 'resize'], ['closeWindow', 'close'], ['back', 'back'], ['background', 'background']]) s[method] = withheld(op);
     Object.assign(s, carrier.input);
     s.clock = (spec = 'settle') => attachedClock(s, spec);
