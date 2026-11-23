@@ -77,12 +77,13 @@ async function answer(request: Request, env: Env, url: URL, canonical: boolean):
   const page = await env.ASSETS.fetch(request);
   if (page.status === 404) {
     if (wantsJson) {
-      const headers = new Headers({ 'Content-Type': 'application/json; charset=utf-8', ...vary });
-      for (const name of ['Link', 'X-Llms-Txt']) {
-        const value = page.headers.get(name);
-        if (value !== null) headers.set(name, value);
-      }
-      await page.body?.cancel();
+      // Keep what Pages and _headers add to every answer (CORS, caching, discovery); only the body is new.
+      const headers = new Headers(page.headers);
+      for (const name of ['Content-Length', 'Content-Encoding', 'ETag', 'Last-Modified']) headers.delete(name);
+      headers.set('Content-Type', 'application/json; charset=utf-8');
+      headers.append('Vary', vary.Vary);
+      // A body that already failed has nothing left to release.
+      await page.body?.cancel().catch(() => {});
       const body = {
         error: { status: 404, code: 'not_found', message: 'No documentation page exists at this path. Find a valid path in the documentation index or the sitemap.' },
         links: { index: `${url.origin}/llms.txt`, sitemap: `${url.origin}/sitemap.md`, home: `${url.origin}/` },

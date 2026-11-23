@@ -74,6 +74,7 @@ test('a JSON HEAD 404 carries the Pages discovery headers', async () => {
   expect([response.status, response.headers.get('Content-Type'), response.headers.get('Vary'), response.headers.get('X-Llms-Txt')])
     .toEqual([404, 'application/json; charset=utf-8', 'Accept', '/llms.txt']);
   expect(response.headers.get('Link')).toContain('</llms.txt>; rel="llms-txt"');
+  expect([response.headers.get('Access-Control-Allow-Origin'), response.headers.get('Cache-Control')]).toEqual(['*', 'no-store']);
   expect(await response.text()).toBe('');
 });
 

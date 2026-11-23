@@ -125,6 +125,16 @@ test('a JSON 404 replaces the asset fallback regardless of its content type and 
   expect([response.status, response.headers.get('Content-Type'), response.headers.get('Vary'), cancelled]).toEqual([404, JSON_TYPE, 'Accept, User-Agent', true]);
 });
 
+test('a JSON 404 keeps the asset 404\'s other headers and answers when its body has failed', async () => {
+  const body = new ReadableStream({ start(controller) { controller.error(new Error('broken')); } });
+  const pagesHeaders = { ...HTML, ...discovery, 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store', ETag: '"404"' };
+  const assets = { ASSETS: { async fetch() { return new Response(body, { status: 404, headers: pagesHeaders }); } } };
+  const response = await worker.fetch(new Request('https://docs.example.com/nope', { headers: asksJson }), assets);
+  expect([response.status, response.headers.get('Content-Type'), response.headers.get('Access-Control-Allow-Origin'), response.headers.get('Cache-Control'), response.headers.get('ETag')])
+    .toEqual([404, JSON_TYPE, '*', 'no-store', null]);
+  expect((await response.json()).error.code).toBe('not_found');
+});
+
 test('Accept delimiters inside quoted parameters stay in the parameter', async () => {
   expect(await get('/nope', { Accept: 'text/html, text/plain;note="a,application/json,b"' })).toMatchObject({ status: 404, type: HTML['Content-Type'] });
   expect(await get('/nope', { Accept: 'text/markdown;note="a;q=0;b", text/html;q=0.8' })).toMatchObject({ status: 404, type: MARKDOWN['Content-Type'] });
