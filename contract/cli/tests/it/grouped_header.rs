@@ -3,6 +3,7 @@
 //! draws the platform's list carries into the header (`header_view`).
 
 use super::grouped_list::{boot_source, id};
+use crate::source::Source;
 use exact_kernel::{GroupedMargins, Offer, TextLook};
 
 const FAVORITES: &str = r##"component App
@@ -84,7 +85,7 @@ fn a_header_of_an_image_beside_a_text_is_custom_and_one_text_is_not() {
 #[test]
 fn a_custom_header_starts_at_the_platform_lists_margins() {
     let mut r = boot_source(FAVORITES);
-    let content = |r: &exact_runner::Runner<super::grouped_list::NoData>, t: &str| {
+    let content = |r: &exact_runner::Runner<Source>, t: &str| {
         let k = r.kernel();
         let node = k.node(id(r, t)).unwrap();
         let (left, right) = {

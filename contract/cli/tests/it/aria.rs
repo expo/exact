@@ -1,20 +1,13 @@
 //! ARIA states the Contract carries by their web names.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, PropId};
-use exact_runner::{DataError, DataSource, Event, Runner, Value};
+use exact_runner::{Event, Runner, Value};
 
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _args: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.to_string()))
-    }
-}
-
-fn boot(src: &str) -> Runner<NoData> {
+fn boot(src: &str) -> Runner<Source> {
     Runner::boot(
         contract::compile(src).unwrap_or_else(|e| panic!("{e}")),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -22,12 +15,12 @@ fn boot(src: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn view_of(r: &Runner<NoData>, test_id: &str) -> u32 {
+fn view_of(r: &Runner<Source>, test_id: &str) -> u32 {
     let key = r.kernel().find_by_test_id(test_id)[0];
     r.kernel().node_by_key(key).unwrap().id
 }
 
-fn prop(r: &Runner<NoData>, test_id: &str, id: PropId) -> Option<String> {
+fn prop(r: &Runner<Source>, test_id: &str, id: PropId) -> Option<String> {
     let node = r.kernel().node(view_of(r, test_id)).unwrap();
     node.props.str(id).map(str::to_string)
 }
@@ -85,7 +78,7 @@ fn aria_disabled_is_accepted_on_a_button_and_focusable_role() {
     let mut r = boot(
         "component App\n  state unavailable = false\n  action block\n    unavailable = true\n  view\n    column\n      button aria-disabled=\"true\" press=block testId=\"button\"\n        text \"Check for updates\"\n      box role=\"button\" tabindex=0 aria-disabled=unavailable press=block testId=\"role\"\n        text \"Other\"\n",
     );
-    let disabled = |r: &Runner<NoData>, id: &str| {
+    let disabled = |r: &Runner<Source>, id: &str| {
         r.kernel()
             .node(view_of(r, id))
             .unwrap()
@@ -133,7 +126,7 @@ fn aria_modal_lowers_and_follows_state() {
     let mut r = boot(
         "component App\n  state open = true\n  action close\n    open = false\n  view\n    column\n      column role=\"dialog\" aria-modal=open testId=\"sheet\"\n        button press=close testId=\"close\"\n          text \"Close\"\n      column testId=\"plain\"\n",
     );
-    let modal = |r: &Runner<NoData>, id: &str| {
+    let modal = |r: &Runner<Source>, id: &str| {
         let node = r.kernel().node(view_of(r, id)).unwrap();
         node.props.bool(PropId::AccessibilityModal)
     };
@@ -308,7 +301,7 @@ fn tabindex_and_labelledby_bind_by_their_html_names() {
     let mut r = boot(
         "component App\n  state open = false\n  action reveal\n    open = true\n  view\n    column\n      text \"Currency\" id=\"currency-heading\"\n      row role=\"radiogroup\" aria-labelledby=\"currency-heading\" testId=\"group\"\n        box tabindex=0 testId=\"stop\" width=10 height=10\n        button press=reveal tabindex=(open ? 0 : -1) testId=\"delete\"\n          text \"Delete\"\n        box testId=\"plain\" width=10 height=10\n      map-view tabindex=-1 testId=\"module\" width=10 height=10\n",
     );
-    let index = |r: &Runner<NoData>, id: &str| {
+    let index = |r: &Runner<Source>, id: &str| {
         r.kernel()
             .node(view_of(r, id))
             .unwrap()
@@ -345,7 +338,7 @@ fn aria_range_values_are_carried_as_htmls_numbers() {
     let mut r = boot(
         "component App\n  state done = 30\n  action more\n    done = done + 12.5\n  view\n    column\n      box role=\"progressbar\" aria-valuenow=done aria-valuemin=0 aria-valuemax=100 aria-valuetext=`${done} of 100` aria-label=\"Download\" testId=\"bar\" width=200 height=8\n      box role=\"slider\" aria-valuenow=\"7\" testId=\"knob\"\n      button press=more testId=\"more\"\n        text \"More\"\n",
     );
-    let values = |r: &Runner<NoData>, t: &str| {
+    let values = |r: &Runner<Source>, t: &str| {
         [
             PropId::AccessibilityValueNow,
             PropId::AccessibilityValueMin,

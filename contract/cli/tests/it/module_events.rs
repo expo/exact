@@ -6,6 +6,7 @@
 //! fails; and the declared list, value and admission forms answer under
 //! the agent, the value app-wide.
 
+use crate::source::{boxed, Source};
 use exact_runner::{agent, CallOrigin, Runner, Value};
 use std::path::{Path, PathBuf};
 
@@ -61,10 +62,10 @@ impl exact_runner::DataSource for NoData {
     }
 }
 
-fn boot(plan: exact_plan::Plan) -> Runner<NoData> {
+fn boot(plan: exact_plan::Plan) -> Runner<Source> {
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -72,19 +73,19 @@ fn boot(plan: exact_plan::Plan) -> Runner<NoData> {
     .unwrap()
 }
 
-fn logs(r: &Runner<NoData>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     agent::handle(r, r#"{"op":"logs"}"#)
 }
 
-fn state(r: &Runner<NoData>) -> serde_json::Value {
+fn state(r: &Runner<Source>) -> serde_json::Value {
     serde_json::from_str(&agent::handle(r, r#"{"op":"state"}"#)).unwrap()
 }
 
-fn slot(r: &Runner<NoData>, name: &str) -> String {
+fn slot(r: &Runner<Source>, name: &str) -> String {
     format!("{:?}", r.slot(name))
 }
 
-fn tap(r: &mut Runner<NoData>, ticket: u64, choice: Option<&str>) -> String {
+fn tap(r: &mut Runner<Source>, ticket: u64, choice: Option<&str>) -> String {
     let choice = choice
         .map(|c| format!(r#","choice":"{c}""#))
         .unwrap_or_default();
@@ -94,7 +95,7 @@ fn tap(r: &mut Runner<NoData>, ticket: u64, choice: Option<&str>) -> String {
 }
 
 /// The host's part: held module work run, events delivered.
-fn pump(r: &mut Runner<NoData>) {
+fn pump(r: &mut Runner<Source>) {
     for out in r.take_requests() {
         let token = out.request.continuation.expect("held work");
         if let exact_runner::Dispatch::Run(exact_runner::Work::Now(work)) = r.dispatch_work(token) {
@@ -109,7 +110,7 @@ fn pump(r: &mut Runner<NoData>) {
 }
 
 /// Run the nested component's action named `suffix`, by its lifted name.
-fn act_nested(r: &mut Runner<NoData>, suffix: &str) {
+fn act_nested(r: &mut Runner<Source>, suffix: &str) {
     let plan = r.plan();
     let names: Vec<String> = (plan.actions.iter())
         .map(|a| plan.str(a.name).to_owned())
@@ -121,7 +122,7 @@ fn act_nested(r: &mut Runner<NoData>, suffix: &str) {
     r.act(&name, Vec::new()).unwrap();
 }
 
-fn permission_ticket(r: &Runner<NoData>) -> u64 {
+fn permission_ticket(r: &Runner<Source>) -> u64 {
     (r.device_holds().iter())
         .find(|h| h.capability == "permission")
         .unwrap_or_else(|| panic!("no permission ticket: {}", logs(r)))
@@ -608,7 +609,7 @@ fn the_device_s_origin_follows_its_requests_answers_and_thens() {
     app.write("app.contract", LATER);
     let mut r = Runner::boot(
         app.compile().unwrap_or_else(|e| panic!("{e:?}")),
-        Later,
+        boxed(Later),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -737,7 +738,7 @@ fn an_app_wide_value_is_one_app_s() {
     let boot_as = |id: &'static str| {
         let mut r = Runner::boot(
             app.compile().unwrap(),
-            Named(id),
+            boxed(Named(id)),
             exact_kernel::Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -749,7 +750,7 @@ fn an_app_wide_value_is_one_app_s() {
     let mut one = boot_as("com.example.one");
     let two = boot_as("com.example.two");
     one.act("badge", Vec::new()).unwrap();
-    let read = |r: &Runner<Named>| -> serde_json::Value {
+    let read = |r: &Runner<Source>| -> serde_json::Value {
         serde_json::from_str::<serde_json::Value>(&agent::handle(r, r#"{"op":"state"}"#)).unwrap()
             ["count"]
             .clone()

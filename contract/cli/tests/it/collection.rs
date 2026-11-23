@@ -23,7 +23,9 @@ fn index_keys(list: &str) {
     let src = format!("component App\n  state step = 0\n  resource rows = rows(step) as shape string[]\n  action next\n    step = step + 1\n  view\n    {list} testId=\"list\"\n      for item, i in rows key=i\n        text `${{i}}:${{item}}` testId=`row-${{i}}`\n");
     let mut r = Runner::boot(
         contract::compile(&src).unwrap(),
-        SharedRows(["a", "b", "c", "x", "d"].map(Value::str).to_vec()),
+        boxed(SharedRows(
+            ["a", "b", "c", "x", "d"].map(Value::str).to_vec(),
+        )),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -193,6 +195,7 @@ fn invalid_opt_in_shape_and_layout_are_rejected_with_stable_ids() {
     }
 }
 
+use crate::source::{boxed, Read, Source};
 use exact_kernel::{Kernel, PropId};
 use exact_plan::Value;
 use exact_runner::{CollectionFeedback, DataError, DataSource, Event, Runner};
@@ -233,7 +236,7 @@ component Counter
     button press=increment testId=`row-${id}`
       text `${n} ${suffix}` testId=`label-${id}`
 "#;
-fn feedback(r: &Runner<Rows>, top: f64) -> CollectionFeedback {
+fn feedback(r: &Runner<Source>, top: f64) -> CollectionFeedback {
     let c = r.collections().pop().unwrap();
     CollectionFeedback {
         view: c.view,
@@ -253,7 +256,7 @@ fn feedback(r: &Runner<Rows>, top: f64) -> CollectionFeedback {
 fn runner_scroll_has_no_resource_queries_and_row_handlers_use_owned_slots() {
     let mut r = Runner::boot(
         contract::compile(INTERACTIVE).unwrap(),
-        Rows { queries: 0 },
+        boxed(Rows { queries: 0 }),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -261,11 +264,11 @@ fn runner_scroll_has_no_resource_queries_and_row_handlers_use_owned_slots() {
     .unwrap();
     assert_eq!(r.last_instance_work().rows_keyed, 25_000);
     assert_eq!(r.collections()[0].rows.len(), 16);
-    let queries = r.data_ref().queries;
+    let queries = r.source_ref::<Rows>().queries;
     let facts = feedback(&r, 32_000.0);
     r.collection_feedback_bytes(&facts.encode().unwrap())
         .unwrap();
-    assert_eq!(r.data_ref().queries, queries);
+    assert_eq!(r.source_ref::<Rows>().queries, queries);
     assert_eq!(r.last_instance_work().rows_keyed, 0);
     assert!(r.kernel().find_by_test_id("row-0").is_empty());
     let key = r.kernel().find_by_test_id("row-1000")[0];
@@ -309,7 +312,7 @@ fn runner_scroll_has_no_resource_queries_and_row_handlers_use_owned_slots() {
             .str(PropId::Text),
         Some("0 1")
     );
-    assert_eq!(r.data_ref().queries, queries);
+    assert_eq!(r.source_ref::<Rows>().queries, queries);
     let invalid = r.collection_feedback_bytes(&[0]);
     assert!(invalid.is_err());
     assert!(!r.is_poisoned());
@@ -319,7 +322,7 @@ fn false_keeps_eager_semantics_and_no_collection_metadata() {
     let source = INTERACTIVE.replace("virtualized=true", "virtualized=false");
     let r = Runner::boot(
         contract::compile(&source).unwrap(),
-        Rows { queries: 0 },
+        boxed(Rows { queries: 0 }),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -344,7 +347,7 @@ fn inherited_typography_changes_measurement_epochs_without_rekeying() {
 "#;
     let mut r = Runner::boot(
         contract::compile(source).unwrap(),
-        Rows { queries: 0 },
+        boxed(Rows { queries: 0 }),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -381,7 +384,7 @@ fn tall_estimate_bounds_bootstrap_and_actual_measurements_replace_it() {
     );
     let mut r = Runner::boot(
         contract::compile(&source).unwrap(),
-        Rows { queries: 0 },
+        boxed(Rows { queries: 0 }),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -389,7 +392,7 @@ fn tall_estimate_bounds_bootstrap_and_actual_measurements_replace_it() {
     .unwrap();
     assert_eq!(r.collections()[0].rows.len(), 2);
     assert_eq!(r.collections()[0].total_extent, 10_000_000.0);
-    let queries = r.data_ref().queries;
+    let queries = r.source_ref::<Rows>().queries;
     let initial = feedback(&r, 0.0);
     r.collection_feedback_bytes(&initial.encode().unwrap())
         .unwrap();
@@ -412,7 +415,7 @@ fn tall_estimate_bounds_bootstrap_and_actual_measurements_replace_it() {
     r.collection_feedback_bytes(&top.encode().unwrap()).unwrap();
     assert_eq!(r.collections()[0].rows[0].index, 0);
     assert_eq!(r.collections()[0].rows[0].size, 800.0);
-    assert_eq!(r.data_ref().queries, queries);
+    assert_eq!(r.source_ref::<Rows>().queries, queries);
     assert_eq!(r.last_instance_work().rows_keyed, 0);
 }
 
@@ -436,7 +439,7 @@ fn duplicate_keys_index_and_copy_on_a_virtualized_list() {
     let boot = |source: &str| {
         Runner::boot(
             contract::compile(source).unwrap(),
-            Data,
+            boxed(Data),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -481,7 +484,7 @@ fn a_row_lifted_by_translate_and_z_index_keeps_its_place_in_the_index() {
 "#;
     let mut r = Runner::boot(
         contract::compile(src).unwrap(),
-        Rows { queries: 0 },
+        boxed(Rows { queries: 0 }),
         Kernel::with_monospace(),
         Default::default(),
         "/",

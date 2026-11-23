@@ -3,6 +3,7 @@
 //! arguments read it; and a prop's declared type, as the `none` passed to
 //! it (LLP 1004 D3).
 
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, PropId};
 use exact_runner::{DataError, DataSource, Runner, Value};
 
@@ -20,12 +21,12 @@ impl DataSource for Items {
     }
 }
 
-fn boot(src: &str) -> Runner<Items> {
+fn boot(src: &str) -> Runner<Source> {
     let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e:?}"));
-    let plan = contract::bake(plan, Items).unwrap();
+    let plan = contract::bake(plan, boxed(Items)).unwrap();
     Runner::boot(
         plan,
-        Items,
+        boxed(Items),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -33,7 +34,7 @@ fn boot(src: &str) -> Runner<Items> {
     .unwrap()
 }
 
-fn text(r: &Runner<Items>, id: &str) -> String {
+fn text(r: &Runner<Source>, id: &str) -> String {
     let k = r.kernel();
     let key = k.find_by_test_id(id)[0];
     k.node_by_key(key)

@@ -2,16 +2,9 @@
 //! props, and a tip with no `id`, a part with no `tip` and an image that is
 //! no symbol are refused where they are written.
 
+use crate::source::{boxed, NoData};
 use exact_kernel::{Kernel, PropId};
-use exact_runner::{DataError, DataSource, Event, Runner, Value};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _args: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.to_string()))
-    }
-}
+use exact_runner::{Event, Runner};
 
 fn app(attrs: &str) -> String {
     format!(
@@ -32,7 +25,7 @@ fn a_tips_parts_are_props_and_done_follows_state() {
     .unwrap_or_else(|e| panic!("{e}"));
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

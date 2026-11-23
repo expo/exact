@@ -6,6 +6,7 @@
 //! next changes; a live id is refused; a tool may end a call and may not
 //! place one.
 
+use crate::source::{boxed, Source};
 use exact_runner::{agent, CallOrigin, Runner};
 #[cfg(unix)]
 use std::os::unix::fs::symlink as symlink_dir;
@@ -79,12 +80,12 @@ impl exact_runner::DataSource for Granted {
     }
 }
 
-fn boot(app: &App) -> Runner<Granted> {
+fn boot(app: &App) -> Runner<Source> {
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Granted,
+        boxed(Granted),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -94,22 +95,22 @@ fn boot(app: &App) -> Runner<Granted> {
     r
 }
 
-fn state(r: &Runner<Granted>) -> serde_json::Value {
+fn state(r: &Runner<Source>) -> serde_json::Value {
     serde_json::from_str(&agent::handle(r, r#"{"op":"state"}"#)).unwrap()
 }
 
-fn logs(r: &Runner<Granted>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     agent::handle(r, r#"{"op":"logs"}"#)
 }
 
-fn settle(r: &mut Runner<Granted>) {
+fn settle(r: &mut Runner<Source>) {
     r.apply_announced();
     let at = r.now_ms();
     r.advance(at).unwrap();
 }
 
 /// `tap @ref <choice>`, as the agent sends it.
-fn tap(r: &mut Runner<Granted>, reference: u64, choice: &str) -> Result<String, String> {
+fn tap(r: &mut Runner<Source>, reference: u64, choice: &str) -> Result<String, String> {
     let request = format!(r#"{{"op":"tap","ticket":{reference},"choice":"{choice}"}}"#);
     let reply = agent::answer(r, &request).expect("an agent op").0;
     let parsed: serde_json::Value = serde_json::from_str(&reply).unwrap_or_default();
@@ -119,7 +120,7 @@ fn tap(r: &mut Runner<Granted>, reference: u64, choice: &str) -> Result<String, 
     }
 }
 
-fn slot(r: &Runner<Granted>, name: &str) -> String {
+fn slot(r: &Runner<Source>, name: &str) -> String {
     format!("{:?}", r.slot(name))
 }
 

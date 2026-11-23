@@ -1,6 +1,7 @@
 //! @ref LLP 1039 D9 — `exactViewport().keyboardHeight`, CSS's
 //! `env(keyboard-inset-height)`: the host's overlap, answered with the
 //! viewport it shrinks in one commit.
+use crate::source::{boxed, Source};
 use exact_kernel::Kernel;
 use exact_runner::{agent, DataError, DataSource, Runner, Value};
 
@@ -12,15 +13,15 @@ impl DataSource for NoData {
     }
 }
 
-fn state(r: &Runner<NoData>) -> serde_json::Value {
+fn state(r: &Runner<Source>) -> serde_json::Value {
     serde_json::from_str(&agent::state(r)).unwrap()
 }
 
-fn asked_again(r: &Runner<NoData>, since: usize) -> usize {
+fn asked_again(r: &Runner<Source>, since: usize) -> usize {
     agent::logs(r, since).matches("asked again)").count()
 }
 
-fn journal_end(r: &Runner<NoData>) -> usize {
+fn journal_end(r: &Runner<Source>) -> usize {
     let logs: serde_json::Value = serde_json::from_str(&agent::logs(r, 0)).unwrap();
     logs["next"].as_u64().unwrap() as usize
 }
@@ -41,16 +42,16 @@ component App
       if keys.keyboardHeight >= 120
         row role="toolbar" toolbarPlacement="keyboard" testId="row"
 "#;
-    let plan = contract::bake(contract::compile(src).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let row = |r: &Runner<NoData>| !r.kernel().find_by_test_id("row").is_empty();
+    let row = |r: &Runner<Source>| !r.kernel().find_by_test_id("row").is_empty();
     assert_eq!(state(&r)["resources"]["keys"]["keyboardHeight"], 0);
     assert!(!row(&r));
     assert!(r.set_keyboard_height(336.0).unwrap().is_some());
@@ -79,5 +80,5 @@ component App
 #[test]
 fn keyboard_height_is_a_number() {
     let wrong = "shape S\n  keyboardHeight: bool\ncomponent A\n  resource s = exactViewport() as shape S\n  view\n    text `${s.keyboardHeight}`\n";
-    assert!(contract::bake(contract::compile(wrong).unwrap(), NoData).is_err());
+    assert!(contract::bake(contract::compile(wrong).unwrap(), boxed(NoData)).is_err());
 }

@@ -1,6 +1,7 @@
 //! LLP 1161.001: `current(x)`, whether a resource shows an answer to its
 //! current call arguments, through each row of D1's table.
 
+use crate::source::{boxed, Read, Source};
 use exact_kernel::{Kernel, PropId};
 use exact_runner::{
     Answer, DataError, DataSource, FailureKind, Outcome, Request, Response, Runner, Store, Value,
@@ -55,10 +56,10 @@ const SRC: &str = "component App
     text (current(results) ? results : \"loading\") testId=\"out\"
 ";
 
-fn boot() -> Runner<Search> {
+fn boot() -> Runner<Source> {
     Runner::boot(
         contract::compile(SRC).unwrap(),
-        Search::default(),
+        boxed(Search::default()),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -97,7 +98,7 @@ fn text<D: DataSource>(r: &Runner<D>) -> String {
 }
 
 /// Lands the one request out.
-fn land(r: &mut Runner<Search>, outcome: Outcome) {
+fn land(r: &mut Runner<Source>, outcome: Outcome) {
     let requests = r.take_requests();
     assert_eq!(requests.len(), 1, "one request out");
     r.fulfill(requests[0].ticket, outcome).unwrap();
@@ -144,7 +145,7 @@ fn a_refresh_and_a_with_value_leave_it_current() {
 fn a_failure_for_new_arguments_is_not_current_and_a_failed_refresh_is() {
     let mut r = boot();
     land(&mut r, ok());
-    r.data().fail = true;
+    r.source::<Search>().fail = true;
     r.act("again", vec![]).unwrap();
     land(&mut r, offline());
     assert!(current(&r), "a's answer still answers a");
@@ -152,7 +153,7 @@ fn a_failure_for_new_arguments_is_not_current_and_a_failed_refresh_is() {
     land(&mut r, offline());
     assert!(!current(&r), "a's answer kept, b failed");
     assert_eq!(text(&r), "loading");
-    r.data().fail = false;
+    r.source::<Search>().fail = false;
     r.act("search", vec![Value::str("a")]).unwrap();
     assert!(current(&r), "back to the arguments the kept answer answers");
 }

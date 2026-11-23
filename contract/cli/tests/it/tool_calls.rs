@@ -4,6 +4,7 @@
 //! not a re-ask the device or the person makes, and not one a refused
 //! commit let go of.
 
+use crate::source::{boxed, Source};
 use exact_runner::{agent, CallHow, Runner, Value, BACKGROUND};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -94,12 +95,12 @@ impl exact_runner::DataSource for Later {
     }
 }
 
-fn boot() -> (Runner<Later>, Arc<AtomicU64>) {
+fn boot() -> (Runner<Source>, Arc<AtomicU64>) {
     let background = Arc::new(AtomicU64::new(0));
     let plan = contract::compile(APP).unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Later(background.clone()),
+        boxed(Later(background.clone())),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -109,16 +110,16 @@ fn boot() -> (Runner<Later>, Arc<AtomicU64>) {
     (r, background)
 }
 
-fn by(r: &mut Runner<Later>, ms: f64) {
+fn by(r: &mut Runner<Source>, ms: f64) {
     let at = r.now_ms() + ms;
     r.advance(at).unwrap();
 }
 
-fn logs(r: &Runner<Later>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     agent::handle(r, r#"{"op":"logs"}"#)
 }
 
-fn calls(r: &Runner<Later>) -> serde_json::Value {
+fn calls(r: &Runner<Source>) -> serde_json::Value {
     let state: serde_json::Value =
         serde_json::from_str(&agent::handle(r, r#"{"op":"state"}"#)).unwrap();
     state["intents"]["calls"].clone()
@@ -131,7 +132,7 @@ thread_local! {
 
 /// The one request in flight for `target` (a resource or mutation),
 /// answered with `body`.
-fn answer(r: &mut Runner<Later>, target: &str, body: &str) {
+fn answer(r: &mut Runner<Source>, target: &str, body: &str) {
     let ticket = OUT.with_borrow_mut(|out| {
         out.extend(r.take_requests());
         let mine: Vec<usize> = (0..out.len())
@@ -157,7 +158,7 @@ fn agent() -> CallHow {
     }
 }
 
-fn call(r: &mut Runner<Later>, tool: &str, args: &str) {
+fn call(r: &mut Runner<Source>, tool: &str, args: &str) {
     r.call_tool(tool, args, agent()).unwrap();
     by(r, 0.0);
 }
@@ -231,7 +232,7 @@ fn a_call_owns_its_send_and_the_refresh_it_makes() {
     assert_eq!(calls(&r)[0]["state"], "running", "{}", logs(&r));
     // The door polls its call by id (ExactTools.swift).
     let id = calls(&r)[0]["id"].clone();
-    let polled = |r: &mut Runner<Later>| -> serde_json::Value {
+    let polled = |r: &mut Runner<Source>| -> serde_json::Value {
         let reply = r.call_agent("called", &format!(r#"{{"op":"called","id":{id}}}"#));
         serde_json::from_str(&reply.unwrap().unwrap()).unwrap()
     };
@@ -371,7 +372,7 @@ fn arguments_that_are_not_the_actions_are_refused() {
 #[test]
 fn a_cancelled_call_is_dropped_while_it_waits_and_finished_once_it_runs() {
     let (mut r, _) = boot();
-    let cancel = |r: &mut Runner<Later>, id: u64| -> serde_json::Value {
+    let cancel = |r: &mut Runner<Source>, id: u64| -> serde_json::Value {
         let reply = r.call_agent("cancel", &format!(r#"{{"op":"cancel","id":{id}}}"#));
         serde_json::from_str(&reply.unwrap().unwrap()).unwrap()
     };

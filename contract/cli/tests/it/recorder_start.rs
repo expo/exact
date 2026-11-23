@@ -4,6 +4,7 @@
 //! `@exact/media-capture` and `@exact/recording` are played by the native
 //! slot under the agent; `startMediaRecorder` refuses as many times as asked.
 
+use crate::source::{boxed, Source};
 use exact_runner::{Dispatch, Outcome, Reply, Response, Runner, Work};
 use serde_json::{json, Value as Json};
 use std::path::Path;
@@ -44,12 +45,12 @@ fn track(id: &str, state: &str) -> Json {
 }
 
 /// Recorder over the native slot; `refusals` starts are refused `NotSupportedError`.
-fn boot(refusals: usize) -> (Runner<Granted>, Calls) {
+fn boot(refusals: usize) -> (Runner<Source>, Calls) {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/recorder/app.contract");
     let (plan, _) = contract::compile_path_all(&path, false).unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Granted,
+        boxed(Granted),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -100,7 +101,7 @@ fn boot(refusals: usize) -> (Runner<Granted>, Calls) {
 
 /// The host's part: each request run and each outcome fulfilled, until
 /// nothing is left to do; one not answered yet stays pending.
-fn pump(r: &mut Runner<Granted>) {
+fn pump(r: &mut Runner<Source>) {
     for _ in 0..16 {
         // A landing's `then` and a change task run as the clock is advanced, which need not move.
         let ran = !r.advance(0.0).unwrap().is_empty();
@@ -129,7 +130,7 @@ fn pump(r: &mut Runner<Granted>) {
 }
 
 /// What a failed assertion shows: the journal and the mutations' slots.
-fn why(r: &Runner<Granted>, calls: &Calls) -> String {
+fn why(r: &Runner<Source>, calls: &Calls) -> String {
     let slots: Vec<_> = ["opened", "started", "trackId", "recorderId", "takeName"]
         .iter()
         .map(|n| format!("{n}={:?}", r.slot(n)))
@@ -150,11 +151,11 @@ fn stopped(calls: &Calls) -> Vec<String> {
         .collect()
 }
 
-fn slot(r: &Runner<Granted>, name: &str) -> String {
+fn slot(r: &Runner<Source>, name: &str) -> String {
     format!("{:?}", r.slot(name))
 }
 
-fn shown(r: &Runner<Granted>, test_id: &str) -> bool {
+fn shown(r: &Runner<Source>, test_id: &str) -> bool {
     let tree = exact_runner::agent::handle(r, r#"{"op":"tree"}"#);
     tree.contains(&format!("\"testId\":\"{test_id}\""))
 }

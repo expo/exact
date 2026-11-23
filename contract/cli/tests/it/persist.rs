@@ -2,6 +2,7 @@
 //! launches — restored before the first frame where it still fits its type,
 //! written when changed by a commit that stands.
 
+use crate::source::{boxed, Source};
 use exact_kernel::Kernel;
 use exact_plan::Value;
 use exact_runner::{Runner, StoreWrite};
@@ -28,7 +29,7 @@ component App
       text "{tipPercent}% {units}" testId="t"
 "#;
 
-fn boot(snapshot: Vec<(&str, &str)>) -> Runner<()> {
+fn boot(snapshot: Vec<(&str, &str)>) -> Runner<Source> {
     let plan = contract::compile(SRC).unwrap();
     let snapshot = snapshot
         .into_iter()
@@ -36,7 +37,7 @@ fn boot(snapshot: Vec<(&str, &str)>) -> Runner<()> {
         .collect();
     Runner::boot_stored(
         plan,
-        (),
+        boxed(()),
         Kernel::with_monospace(),
         snapshot,
         Default::default(),
@@ -106,7 +107,7 @@ fn the_next_launch_reads_back_what_the_last_kept() {
     let plan = contract::compile(SRC).unwrap();
     let second = Runner::boot_stored(
         plan,
-        (),
+        boxed(()),
         Kernel::with_monospace(),
         snapshot,
         Default::default(),
@@ -129,7 +130,7 @@ fn window_state_is_restored_only_from_its_window_and_survives_a_peer_refresh() {
     let new_window = |snapshot| {
         Runner::boot_stored(
             contract::compile(&source).unwrap().redecode().unwrap(),
-            (),
+            boxed(()),
             Kernel::with_monospace(),
             snapshot,
             Default::default(),
@@ -222,7 +223,7 @@ component App
     let boot = |src: &str, snapshot| {
         Runner::boot_stored(
             contract::compile(src).unwrap(),
-            (),
+            boxed(()),
             Kernel::with_monospace(),
             snapshot,
             Default::default(),
@@ -287,10 +288,17 @@ component App
     text `${n}`
 "#;
     let plan = contract::compile(src).unwrap();
-    let mut r = Runner::boot(plan, (), Kernel::with_monospace(), Default::default(), "/").unwrap();
+    let mut r = Runner::boot(
+        plan,
+        boxed(()),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
     r.take_store_writes();
     let oversized = Value::str(&"x".repeat(17_000));
-    let reports = |r: &Runner<()>| {
+    let reports = |r: &Runner<Source>| {
         r.journal()
             .filter(|l| l.contains("persisted state note:"))
             .count()
@@ -363,7 +371,14 @@ component App
 "#
     );
     let plan = contract::compile(&src).unwrap();
-    let mut r = Runner::boot(plan, (), Kernel::with_monospace(), Default::default(), "/").unwrap();
+    let mut r = Runner::boot(
+        plan,
+        boxed(()),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
     for _ in 0..3 {
         r.act("bump", vec![]).unwrap();
     }

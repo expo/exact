@@ -1,3 +1,4 @@
+use crate::source::{boxed, NoData, Source};
 use crate::warnings::warned;
 
 const ID: &str = "lower-border-unstyled";
@@ -179,7 +180,7 @@ fn the_warning_keeps_css_border_widths_and_the_repair_draws_only_its_side() {
         let plan = plan.unwrap();
         let r = Runner::boot(
             plan,
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -367,31 +368,25 @@ fn colour_shorthands_reset_width_to_medium() {
 }
 
 use exact_kernel::Kernel;
-use exact_runner::{DataError, DataSource, Event, Runner, Value};
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-fn boot(src: &str) -> Runner<NoData> {
+use exact_runner::{Event, Runner};
+fn boot(src: &str) -> Runner<Source> {
     Runner::boot(
         contract::compile(src).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap()
 }
-fn border_widths(r: &Runner<NoData>) -> [f32; 4] {
+fn border_widths(r: &Runner<Source>) -> [f32; 4] {
     let k = r.kernel();
     k.node_by_key(k.find_by_test_id("border")[0])
         .unwrap()
         .style
         .border_widths()
 }
-fn flip(r: &mut Runner<NoData>) {
+fn flip(r: &mut Runner<Source>) {
     let k = r.kernel();
     let id = k.node_by_key(k.find_by_test_id("flip")[0]).unwrap().id;
     r.dispatch(id, Event::Press).unwrap();

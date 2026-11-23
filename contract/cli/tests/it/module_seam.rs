@@ -3,6 +3,7 @@
 //! implementation the test plays as the host's native slot (LLP 1133.002
 //! D14; LLP 1133.008 D8; LLP 1133.009 D10).
 
+use crate::source::{boxed, Source};
 use exact_runner::{CallOrigin, Dispatch, Outcome, Reply, Response, Runner, Work};
 use serde_json::{json, Value as Json};
 use std::path::PathBuf;
@@ -208,7 +209,7 @@ impl exact_runner::DataSource for Wrapped {
     }
 }
 
-fn owned_runner(wrapper: bool) -> (App, Runner<Wrapped>, Calls) {
+fn owned_runner(wrapper: bool) -> (App, Runner<Source>, Calls) {
     let app = App::new(
         "owned",
         &Fixture {
@@ -253,7 +254,7 @@ component App
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false).unwrap();
     let mut r = Runner::boot(
         plan,
-        Wrapped,
+        boxed(Wrapped),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -368,20 +369,20 @@ fn an_owned_request_keeps_its_argument_group_until_its_reply_lands() {
         .any(|c| c["release"] == "reading" && c["args"]["track"] == "a"));
 }
 
-fn boot(name: &str) -> (App, Runner<Granted>, Calls) {
+fn boot(name: &str) -> (App, Runner<Source>, Calls) {
     boot_with(name, &SENSOR, SENSOR.grants)
 }
 
 /// A runner over the fixture, its native slot answered as an implementation
 /// would: `open` a reading of a fresh track, `level` its track's reading,
 /// `listen` and `peek` a recognition's id.
-fn boot_with(name: &str, fixture: &Fixture, grants: &'static str) -> (App, Runner<Granted>, Calls) {
+fn boot_with(name: &str, fixture: &Fixture, grants: &'static str) -> (App, Runner<Source>, Calls) {
     let app = App::new(name, fixture);
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let r = Runner::boot(
         plan,
-        Granted(grants),
+        boxed(Granted(grants)),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -461,16 +462,16 @@ fn sent(calls: &Calls, name: &str) -> usize {
         .count()
 }
 
-fn logs(r: &Runner<Granted>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     exact_runner::agent::handle(r, r#"{"op":"logs"}"#)
 }
 
-fn show(r: &Runner<Granted>, name: &str) -> String {
+fn show(r: &Runner<Source>, name: &str) -> String {
     format!("{:?}", r.resource(name).or(r.slot(name)))
 }
 
 /// A data-code call of `body`, its answer.
-fn data_call(r: &mut Runner<Granted>, body: Json) -> Json {
+fn data_call(r: &mut Runner<Source>, body: Json) -> Json {
     let request = exact_runner::Request::native(body.to_string().into_bytes());
     let Dispatch::Run(work) = r.native_work(&request) else {
         panic!("a module call is work");
@@ -575,7 +576,7 @@ fn a_path_to_write_is_admitted_against_the_app_s_fs_write_lines() {
     r.bind_extensions(&["sensor"], &[]);
     let mut parked = Vec::new();
     pump(&mut r, &mut parked);
-    let keep = |r: &mut Runner<Granted>, parked: &mut Vec<(u64, u64)>, to: &str| {
+    let keep = |r: &mut Runner<Source>, parked: &mut Vec<(u64, u64)>, to: &str| {
         r.act("keep", vec![exact_runner::Value::str(to)]).unwrap();
         pump(r, parked);
     };
@@ -767,7 +768,7 @@ fn a_polled_source_is_asked_once_after_an_advance_that_crossed_its_period() {
     assert!(r.polls_asking());
     assert_eq!(
         exact_runner::agent::handle(&r, r#"{"op":"polls"}"#),
-        r#"{"asking":true}"#
+        r#"{"asking":true,"generation":1,"epoch":3,"incarnation":1,"clock":3000}"#
     );
     // A second advance while the ask is in flight asks nothing more.
     r.advance(3100.0).unwrap();
@@ -804,7 +805,7 @@ fn a_polled_source_is_asked_once_after_an_advance_that_crossed_its_period() {
     assert_eq!(levels(&calls), asked + 3, "{}", logs(&r));
 }
 
-fn prefer(r: &mut Runner<Granted>, request: &str) -> Result<String, String> {
+fn prefer(r: &mut Runner<Source>, request: &str) -> Result<String, String> {
     r.extension_agent(request).expect("a prefer").1
 }
 

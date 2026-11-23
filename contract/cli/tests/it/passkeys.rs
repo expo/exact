@@ -4,6 +4,7 @@
 //! authenticator signs over, one sheet at a time, its PRF output withheld,
 //! and a registration dropped before data code had it disposed of (D11).
 
+use crate::source::{boxed, Source};
 use exact_runner::{
     Answer, CallOrigin, DataError, DataSource, Dispatch, HoldAnswer, Outcome, Reply, Request,
     Response, Runner, Store, Value, Work,
@@ -132,14 +133,14 @@ impl DataSource for Data {
     }
 }
 
-fn boot(name: &str) -> (App, Runner<Data>, Data) {
+fn boot(name: &str) -> (App, Runner<Source>, Data) {
     let app = App::new(name, APP);
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let data = Data::default();
     let r = Runner::boot(
         plan,
-        data.clone(),
+        boxed(data.clone()),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -149,7 +150,7 @@ fn boot(name: &str) -> (App, Runner<Data>, Data) {
 }
 
 /// This target with a credential manager, as a Mac with a profile would be.
-fn available(r: &mut Runner<Data>) {
+fn available(r: &mut Runner<Source>) {
     let (_, out) = r
         .extension_agent(r#"{"op":"prefer","extension":{"passkeys.getClientCapabilities":{"available":true,"conditionalGet":true}}}"#)
         .unwrap();
@@ -158,7 +159,7 @@ fn available(r: &mut Runner<Data>) {
 
 /// The host: the runner, and the requests whose replies a ticket's answer sends.
 struct Host {
-    r: Runner<Data>,
+    r: Runner<Source>,
     waiting: Vec<(u64, mpsc::Receiver<Outcome>)>,
 }
 
@@ -209,7 +210,7 @@ impl Host {
 
 /// A data-code call of `body`: the receiver of its reply, now or once a
 /// ticket's answer sends it.
-fn call(r: &mut Runner<Data>, body: &Json) -> mpsc::Receiver<Outcome> {
+fn call(r: &mut Runner<Source>, body: &Json) -> mpsc::Receiver<Outcome> {
     let (tx, rx) = mpsc::channel();
     match r.native_work(&Request::native(body.to_string().into_bytes())) {
         Dispatch::Run(Work::Now(work)) => tx.send(work()).unwrap(),

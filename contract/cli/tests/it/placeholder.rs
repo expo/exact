@@ -2,6 +2,7 @@
 //! nothing kept for its arguments, shows its placeholder — declared, or a
 //! list's empty value — with `pending(x)` true, where boot used to refuse.
 
+use crate::source::{boxed, Read, Source};
 use exact_kernel::{Kernel, PropId};
 use exact_runner::{
     Answer, DataError, DataSource, FailureKind, Outcome, Request, Response, Runner, RunnerError,
@@ -110,10 +111,10 @@ fn text_of<D: DataSource>(r: &Runner<D>, test_id: &str) -> String {
         .to_string()
 }
 
-fn boot(plan: &exact_plan::Plan, data: Blog, launch: &str) -> Result<Runner<Blog>, RunnerError> {
+fn boot(plan: &exact_plan::Plan, data: Blog, launch: &str) -> Result<Runner<Source>, RunnerError> {
     Runner::boot(
         plan.clone(),
-        data,
+        boxed(data),
         Kernel::with_monospace(),
         Default::default(),
         launch,
@@ -122,7 +123,11 @@ fn boot(plan: &exact_plan::Plan, data: Blog, launch: &str) -> Result<Runner<Blog
 
 #[test]
 fn a_deep_link_shows_placeholders_until_its_answers_arrive() {
-    let plan = contract::bake(contract::compile(&corpus()).unwrap(), Blog::default()).unwrap();
+    let plan = contract::bake(
+        contract::compile(&corpus()).unwrap(),
+        boxed(Blog::default()),
+    )
+    .unwrap();
     // The build answered the home page's post, its comments and the
     // placeholder, whose arguments never change.
     let named = |name: &str| {
@@ -176,7 +181,7 @@ fn a_source_that_answers_later_at_build_is_asked_at_launch() {
         later_at_build: true,
         ..Blog::default()
     };
-    let plan = contract::bake(contract::compile(&corpus()).unwrap(), data).unwrap();
+    let plan = contract::bake(contract::compile(&corpus()).unwrap(), boxed(data)).unwrap();
     for (name, compiled) in [("post", false), ("comments", false), ("post#else", true)] {
         let row = plan
             .resources
@@ -198,7 +203,7 @@ fn a_source_that_answers_later_at_build_is_asked_at_launch() {
 fn without_a_placeholder_a_record_that_answers_later_shows_its_zero_pending() {
     // @ref LLP 1054.000.002 D1 — where boot used to refuse.
     let src = corpus().replace(" else emptyPost()", "");
-    let plan = contract::bake(contract::compile(&src).unwrap(), Blog::default()).unwrap();
+    let plan = contract::bake(contract::compile(&src).unwrap(), boxed(Blog::default())).unwrap();
     let mut r = boot(&plan, Blog::default(), "/post/7").unwrap();
     assert_eq!(text_of(&r, "title"), "");
     assert_eq!(text_of(&r, "state"), "loading");
@@ -261,7 +266,7 @@ fn a_module_not_loaded_at_boot_shows_placeholders_until_data_ready() {
         later_at_build: true,
         ..Blog::default()
     };
-    let plan = contract::bake(contract::compile(&corpus()).unwrap(), built).unwrap();
+    let plan = contract::bake(contract::compile(&corpus()).unwrap(), boxed(built)).unwrap();
     let data = Blog::default();
     data.not_loaded.set(true);
     let loaded = data.not_loaded.clone();
@@ -309,7 +314,7 @@ fn a_send_before_the_module_loads_waits_for_it() {
         later_at_build: true,
         ..Blog::default()
     };
-    let plan = contract::bake(contract::compile(&src).unwrap(), built).unwrap();
+    let plan = contract::bake(contract::compile(&src).unwrap(), boxed(built)).unwrap();
     let data = Blog::default();
     data.not_loaded.set(true);
     let loaded = data.not_loaded.clone();
@@ -354,10 +359,10 @@ fn a_send_before_the_module_loads_waits_for_it() {
     );
     let plan = contract::bake(
         contract::compile(&src).unwrap(),
-        Blog {
+        boxed(Blog {
             later_at_build: true,
             ..Blog::default()
-        },
+        }),
     )
     .unwrap();
     let data = Blog::default();
@@ -377,7 +382,11 @@ fn a_build_time_answer_is_the_first_frame_and_asked_again_when_the_module_loads(
     // Feed F24: a no-argument resource kept its bake's answer forever on
     // macOS while the web, which asks its module at launch, showed a live
     // one. The bake's answer is the first frame; data_ready asks again.
-    let plan = contract::bake(contract::compile(&corpus()).unwrap(), Blog::default()).unwrap();
+    let plan = contract::bake(
+        contract::compile(&corpus()).unwrap(),
+        boxed(Blog::default()),
+    )
+    .unwrap();
     let data = Blog {
         live: true,
         ..Blog::default()
@@ -420,7 +429,11 @@ fn a_build_time_answer_is_the_first_frame_and_asked_again_when_the_module_loads(
 
 #[test]
 fn asks_refused_admission_fail_without_restarting_their_sources() {
-    let plan = contract::bake(contract::compile(&corpus()).unwrap(), Blog::default()).unwrap();
+    let plan = contract::bake(
+        contract::compile(&corpus()).unwrap(),
+        boxed(Blog::default()),
+    )
+    .unwrap();
     let data = Blog {
         refuse_failures: true,
         ..Blog::default()
@@ -459,7 +472,7 @@ fn asks_refused_admission_fail_without_restarting_their_sources() {
 fn empty_gives_the_zero_with_named_fields_replaced() {
     // @ref LLP 1054.000.002 D2/D3 — no source, and nothing at the bake.
     let src = corpus().replace("else emptyPost()", "else empty(title=\"Untitled\")");
-    let plan = contract::bake(contract::compile(&src).unwrap(), Blog::default()).unwrap();
+    let plan = contract::bake(contract::compile(&src).unwrap(), boxed(Blog::default())).unwrap();
     assert!(!plan.sources.iter().any(|s| plan.str(s.name) == "empty"));
     assert!(!plan
         .resources
@@ -496,7 +509,7 @@ fn a_placeholder_shown_before_the_source_is_ready_is_never_compiled_as_its_answe
         ..Blog::default()
     };
     let src = corpus().replace(" else emptyPost()", "");
-    let plan = contract::bake(contract::compile(&src).unwrap(), data).unwrap();
+    let plan = contract::bake(contract::compile(&src).unwrap(), boxed(data)).unwrap();
     let row = plan
         .resources
         .iter()
@@ -595,14 +608,14 @@ impl DataSource for FailedSearch {
     }
 }
 
-fn failed_search(stored: bool) -> Runner<FailedSearch> {
+fn failed_search(stored: bool) -> Runner<Source> {
     let src = "component App\n  state query = \"Menl\"\n  resource results = search(query) as shape string\n  mutation changed as shape bool\n  action search(q: string)\n    query = q\n  action touch(v: string)\n    send changed = touch(v)\n  action retry\n    refresh results\n  view\n    text `${results}/${pending(results)}`\n";
     Runner::boot(
         contract::compile(src).unwrap(),
-        FailedSearch {
+        boxed(FailedSearch {
             stored,
             ..Default::default()
-        },
+        }),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -632,12 +645,12 @@ fn a_failed_store_reader_waits_for_changed_arguments_or_refresh() {
     // A refused argument change must restore the failure marker too.
     assert!(r.act("search", vec![Value::str("broken")]).is_err());
     assert_eq!(r.slot("query"), Some(&Value::str("Menlo Park")));
-    let asks = r.data().asks;
+    let asks = r.source::<FailedSearch>().asks;
     for revision in ["one", "two"] {
         r.set_full_evaluation(revision == "two");
         r.act("touch", vec![Value::str(revision)]).unwrap();
         assert_eq!(
-            r.data().asks,
+            r.source::<FailedSearch>().asks,
             asks,
             "store changes must not retry a failed query"
         );
@@ -651,7 +664,7 @@ fn a_failed_store_reader_waits_for_changed_arguments_or_refresh() {
     r.fulfill(ticket, ok()).unwrap();
     r.act("retry", vec![]).unwrap();
     let ticket = r.take_requests()[0].ticket;
-    r.data().succeed = true;
+    r.source::<FailedSearch>().succeed = true;
     r.fulfill(ticket, ok()).unwrap();
     assert_eq!(r.resource("results"), Some(&Value::str("new answer")));
     assert_eq!(
@@ -749,17 +762,17 @@ fn failed_search_is_readable_and_clears_on_changed_arguments_refresh_and_success
     for full in [false, true] {
         let mut r = Runner::boot(
             contract::compile(src).unwrap(),
-            FailedSearch {
+            boxed(FailedSearch {
                 stored: true,
                 ..Default::default()
-            },
+            }),
             Kernel::with_monospace(),
             Default::default(),
             "/",
         )
         .unwrap();
         r.set_full_evaluation(full);
-        let check = |r: &Runner<FailedSearch>, value: &str, pending: bool, failed: bool| {
+        let check = |r: &Runner<Source>, value: &str, pending: bool, failed: bool| {
             assert_eq!(text_of(r, "state"), format!("{value}/{pending}/{failed}"));
             assert_eq!(text_of(r, "derived"), format!("{failed}/{failed}"));
             for row in ["row-1", "row-2"] {
@@ -779,10 +792,10 @@ fn failed_search_is_readable_and_clears_on_changed_arguments_refresh_and_success
             .any(|(name, ..)| name == "results"));
         assert!(r.act("search", vec![Value::str("broken")]).is_err());
         check(&r, "", false, true);
-        let asks = r.data().asks;
+        let asks = r.source::<FailedSearch>().asks;
         r.act("touch", vec![Value::str("one")]).unwrap();
         check(&r, "", false, true);
-        assert_eq!(r.data().asks, asks);
+        assert_eq!(r.source::<FailedSearch>().asks, asks);
         assert!(r.take_requests().is_empty());
 
         r.act("search", vec![Value::str("Menlo")]).unwrap();
@@ -793,7 +806,7 @@ fn failed_search_is_readable_and_clears_on_changed_arguments_refresh_and_success
         r.act("retry", vec![]).unwrap();
         check(&r, "", true, false);
         let ticket = r.take_requests()[0].ticket;
-        r.data().succeed = true;
+        r.source::<FailedSearch>().succeed = true;
         r.fulfill(ticket, ok()).unwrap();
         check(&r, "new answer", false, false);
         assert!(!r.resource_is_placeholder("results"));
@@ -802,7 +815,7 @@ fn failed_search_is_readable_and_clears_on_changed_arguments_refresh_and_success
             [Value::str("Menlo")]
         );
 
-        r.data().succeed = false;
+        r.source::<FailedSearch>().succeed = false;
         r.act("search", vec![Value::str("Menlo Park")]).unwrap();
         check(&r, "new answer", true, false);
         let ticket = r.take_requests()[0].ticket;

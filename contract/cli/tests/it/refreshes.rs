@@ -2,6 +2,7 @@
 //! keeps the identical request already in flight. A send asks nothing; its
 //! write shows through the source's overlay (`overlay.rs`).
 
+use crate::source::{boxed, Read, Source};
 use exact_kernel::{Kernel, PropId};
 use exact_runner::{
     Answer, DataError, DataSource, Outcome, Overlaid, Request, Response, Runner, Value, Write,
@@ -151,15 +152,15 @@ fn ok() -> Outcome {
     })
 }
 
-fn boot() -> Runner<Chat> {
-    let baked = contract::bake(contract::compile(SRC).unwrap(), Chat::default()).unwrap();
+fn boot() -> Runner<Source> {
+    let baked = contract::bake(contract::compile(SRC).unwrap(), boxed(Chat::default())).unwrap();
     let data = Chat {
         live: true,
         ..Chat::default()
     };
     Runner::boot(
         baked,
-        data,
+        boxed(data),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -167,7 +168,7 @@ fn boot() -> Runner<Chat> {
     .unwrap()
 }
 
-fn text(r: &Runner<Chat>, id: &str) -> String {
+fn text(r: &Runner<Source>, id: &str) -> String {
     let k = r.kernel();
     let key = k.find_by_test_id(id)[0];
     k.node_by_key(key)
@@ -178,28 +179,28 @@ fn text(r: &Runner<Chat>, id: &str) -> String {
         .to_string()
 }
 
-fn journal_has(r: &Runner<Chat>, needle: &str) -> bool {
+fn journal_has(r: &Runner<Source>, needle: &str) -> bool {
     r.journal().any(|l| l.contains(needle))
 }
 
 #[test]
 fn a_send_shows_through_the_overlay_and_refreshes_what_it_declares_when_answered() {
     let mut r = boot();
-    let asks = r.data().chat_asks;
+    let asks = r.source::<Chat>().chat_asks;
     r.act("say", vec![Value::str("hi")]).unwrap();
     // Nothing is asked at the send: the source's overlay shows the write.
-    assert_eq!(r.data().chat_asks, asks);
+    assert_eq!(r.source::<Chat>().chat_asks, asks);
     assert_eq!(text(&r, "chats"), "1");
     let ticket = r.take_requests()[0].ticket;
     r.fulfill(ticket, ok()).unwrap();
     // Asked again when the reply landed, in that commit.
-    assert_eq!(r.data().chat_asks, asks + 1);
+    assert_eq!(r.source::<Chat>().chat_asks, asks + 1);
     assert_eq!(text(&r, "chats"), "1");
     // A mutation that declares nothing refreshes nothing.
     r.act("tap", vec![]).unwrap();
     let ticket = r.take_requests()[0].ticket;
     r.fulfill(ticket, ok()).unwrap();
-    assert_eq!(r.data().chat_asks, asks + 1);
+    assert_eq!(r.source::<Chat>().chat_asks, asks + 1);
 }
 
 #[test]
@@ -219,7 +220,7 @@ fn an_argument_change_keeps_the_identical_request_in_flight() {
     // The reply is parsed with the newest arguments, and taken.
     r.fulfill(first[0].ticket, ok()).unwrap();
     assert_eq!(
-        r.data().feed_parsed_with,
+        r.source::<Chat>().feed_parsed_with,
         vec![vec![Value::Number(2.0), Value::str("a")]]
     );
     assert_eq!(text(&r, "feed"), "1");
@@ -335,14 +336,14 @@ component App
   view
     text (pending(fav) ? "pending" : "idle") testId="fav"
 "#;
-    let baked = contract::bake(contract::compile(src).unwrap(), Chat::default()).unwrap();
+    let baked = contract::bake(contract::compile(src).unwrap(), boxed(Chat::default())).unwrap();
     let data = Chat {
         live: true,
         ..Chat::default()
     };
     let mut r = Runner::boot(
         baked,
-        data,
+        boxed(data),
         Kernel::with_monospace(),
         Default::default(),
         "/",

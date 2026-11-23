@@ -12,6 +12,7 @@
 //! - a tool's effect fails `person-required`, and so does one a world's
 //!   message carries a tool's origin back into (D6).
 
+use crate::source::{boxed, Source};
 use exact_kernel::PropValue;
 use exact_runner::{CallOrigin, Dispatch, Event, Outcome, Reply, Runner, Work};
 use std::path::PathBuf;
@@ -133,12 +134,12 @@ impl exact_runner::DataSource for Data {
     }
 }
 
-fn boot(name: &str) -> (App, Runner<Data>) {
+fn boot(name: &str) -> (App, Runner<Source>) {
     let app = App::new(name, APP);
     let plan = app.compile().unwrap_or_else(|e| panic!("{e:?}"));
     let r = Runner::boot(
         plan,
-        Data,
+        boxed(Data),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -149,7 +150,7 @@ fn boot(name: &str) -> (App, Runner<Data>) {
 
 /// The host's part: each request dispatched, released work run, each
 /// outcome fulfilled and each event delivered, until nothing is left.
-fn pump(r: &mut Runner<Data>, parked: &mut Vec<(u64, u64)>) {
+fn pump(r: &mut Runner<Source>, parked: &mut Vec<(u64, u64)>) {
     for _ in 0..8 {
         let outs = r.take_requests();
         let released = r.release_work();
@@ -173,7 +174,7 @@ fn pump(r: &mut Runner<Data>, parked: &mut Vec<(u64, u64)>) {
     }
 }
 
-fn run(r: &mut Runner<Data>, ticket: u64, dispatch: Dispatch) {
+fn run(r: &mut Runner<Source>, ticket: u64, dispatch: Dispatch) {
     let outcome: Outcome = match dispatch {
         Dispatch::Run(Work::Now(work)) => work(),
         Dispatch::Run(Work::Later(work)) => {
@@ -190,13 +191,13 @@ fn run(r: &mut Runner<Data>, ticket: u64, dispatch: Dispatch) {
     let _ = r.fulfill(ticket, outcome);
 }
 
-fn prefer(r: &mut Runner<Data>, pads: &str) {
+fn prefer(r: &mut Runner<Source>, pads: &str) {
     let request = format!(r#"{{"op":"prefer","extension":{{"gamepad.getGamepads":{pads}}}}}"#);
     let (_, reply) = r.extension_agent(&request).expect("a prefer");
     reply.unwrap();
 }
 
-fn text(r: &Runner<Data>, id: &str) -> String {
+fn text(r: &Runner<Source>, id: &str) -> String {
     let key = r.kernel().find_by_test_id(id)[0];
     let node = r.kernel().node_by_key(key).unwrap();
     (node.props.iter())
@@ -208,15 +209,15 @@ fn text(r: &Runner<Data>, id: &str) -> String {
 }
 
 /// A send's last answer, or its failure's code.
-fn slot(r: &Runner<Data>, name: &str) -> String {
+fn slot(r: &Runner<Source>, name: &str) -> String {
     format!("{}{}", text(r, name), text(r, &format!("{name}-error")))
 }
 
-fn logs(r: &Runner<Data>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     exact_runner::agent::handle(r, r#"{"op":"logs"}"#)
 }
 
-fn extension(r: &Runner<Data>) -> serde_json::Value {
+fn extension(r: &Runner<Source>) -> serde_json::Value {
     let state: serde_json::Value =
         serde_json::from_str(&exact_runner::agent::handle(r, r#"{"op":"state"}"#)).unwrap();
     state["extensions"]["gamepad"].clone()

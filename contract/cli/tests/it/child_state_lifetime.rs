@@ -3,6 +3,7 @@
 //! `match` arm, or the root at the boot render — its initializer evaluated
 //! then, after settlement, in the use site's scope; dropped with it.
 
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, PropId};
 use exact_runner::{
     Answer, DataError, DataSource, Event, Outcome, Request, Response, Runner, Store, Value,
@@ -56,15 +57,15 @@ impl DataSource for Items {
     }
 }
 
-fn boot(src: &str) -> Runner<Items> {
+fn boot(src: &str) -> Runner<Source> {
     boot_with(src, Items::default())
 }
 
-fn boot_with(src: &str, data: Items) -> Runner<Items> {
+fn boot_with(src: &str, data: Items) -> Runner<Source> {
     let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e:?}"));
     Runner::boot(
         plan,
-        data,
+        boxed(data),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -72,7 +73,7 @@ fn boot_with(src: &str, data: Items) -> Runner<Items> {
     .unwrap()
 }
 
-fn texts(r: &Runner<Items>, id: &str) -> Vec<String> {
+fn texts(r: &Runner<Source>, id: &str) -> Vec<String> {
     let k = r.kernel();
     k.find_by_test_id(id)
         .into_iter()
@@ -87,13 +88,13 @@ fn texts(r: &Runner<Items>, id: &str) -> Vec<String> {
         .collect()
 }
 
-fn text(r: &Runner<Items>, id: &str) -> String {
+fn text(r: &Runner<Source>, id: &str) -> String {
     let all = texts(r, id);
     assert_eq!(all.len(), 1, "{id}: {all:?}");
     all[0].clone()
 }
 
-fn press(r: &mut Runner<Items>, id: &str) -> Result<(), exact_runner::RunnerError> {
+fn press(r: &mut Runner<Source>, id: &str) -> Result<(), exact_runner::RunnerError> {
     let key = r.kernel().find_by_test_id(id)[0];
     let view = r.kernel().node_by_key(key).unwrap().id;
     r.dispatch(view, Event::Press).map(|_| ())

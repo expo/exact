@@ -3,19 +3,10 @@
 //! (its block, its band, the first root's `interactive-widget` and the keyboard),
 //! with each column ending where the fixture says it does.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{BlockAxis, HostBlock, Kernel, Keyboard, KeyboardPolicy, Offer, PropId};
-use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Runner};
+use exact_runner::Runner;
 use std::path::Path;
-
-#[derive(Default)]
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
 
 /// The iPhone 18 Pro in portrait: its size, its band, and a docked keyboard's
 /// top, measured on iOS 27.0 (LLP 1123 §"Evidence: measured on expo/exact").
@@ -23,12 +14,12 @@ const SIZE: (f32, f32) = (402.0, 874.0);
 const BAND: [f32; 4] = [62.0, 0.0, 34.0, 0.0];
 const KEYBOARD_TOP: f32 = 546.0;
 
-fn plan(source: &str) -> Runner<NoData> {
+fn plan(source: &str) -> Runner<Source> {
     let plan = contract::compile(source).unwrap();
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
