@@ -284,9 +284,13 @@ extension NavigationHost {
                 let end = c.node.convert(c.node.bounds, to: c.contentMount).maxY + (c.contentViewport?.frame.minY ?? 0)
                 let reached = end - (c.surface.bounds.maxY - safe.bottom)
                 // A transparent bar covers nothing of the route's top, scroller or not: the content starts under it.
-                edges = Self.routeEdges(safe: safe, whole: whole, covered: covered,
-                                        collapses: c.collapseScroll != nil || !topPeers.isEmpty || !c.ridingBars.isEmpty || RouteGeometry.insetsNoTop(c.node),
-                                        reached: reached)
+                let measured = Self.routeEdges(safe: safe, whole: whole, covered: covered,
+                                               collapses: c.collapseScroll != nil || !topPeers.isEmpty || !c.ridingBars.isEmpty || RouteGeometry.insetsNoTop(c.node),
+                                               reached: reached)
+                // Measurements can feed the frame that produced them. Snap before comparing covers.
+                let scale = c.surface.traitCollection.displayScale
+                edges = .init(top: PixelGrid.round(measured.top, scale: scale), right: PixelGrid.round(measured.right, scale: scale),
+                              bottom: PixelGrid.round(measured.bottom, scale: scale), left: PixelGrid.round(measured.left, scale: scale))
                 // Keep the potential cover for discovery: restoring clearance can pad
                 // the route before its bottom scroller is selected again.
                 c.bottomClearance = edges?.bottom ?? 0
