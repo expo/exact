@@ -363,7 +363,8 @@ mod tests {
     fn a_chosen_verbatim_folder_overrides_the_previous_folder() {
         let root = std::env::current_dir()
             .unwrap()
-            .join("target/507-tmp")
+            .join("target")
+            .join("507-tmp")
             .join(format!("start-folder-{}", std::process::id()));
         let a = root.join("A");
         let b = root.join("B");
@@ -393,7 +394,8 @@ mod tests {
         use std::os::windows::ffi::OsStringExt;
         let dir = std::env::current_dir()
             .unwrap()
-            .join("target/507-tmp")
+            .join("target")
+            .join("507-tmp")
             .join(format!("shell-paths-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let chosen = [

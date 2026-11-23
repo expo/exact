@@ -17,6 +17,7 @@ pub fn accepts(prop: PropId) -> Option<&'static str> {
     match prop {
         PropId::NavigationDetent => Some("space-separated large, medium, finite positive point heights, or percentages of the sheet's maximum height above 0% and at most 100%; fit-content alone or as fit-content large; otherwise ascending, point heights and percentages (or medium) not mixed, large last"),
         PropId::Target => Some("empty, _blank, _self, _parent or _top (HTML's keywords, in any case), or a window's name, which does not start with _ and is not window-<n> (the agent's label for a window without a name)"),
+        PropId::Portal => Some("the `id` of the element it is shown in, after that element's own children (LLP 1013.002): the first element with that id in the app root, which must be a plain box (box, view, column, row, main, section, article, aside, nav or footer with no role, navigationKey or popover) that its parent lays out; empty, it stays where it is written. With no such element it is alive and not shown. The same element moves, keeping its state; its press, pointer-button and key events bubble through where it is written"),
         PropId::ParagraphDirs => Some("ltr, rtl or auto, HTML's dir words: written, one word for every line; bound, one per source line in order, separated by white space, a line past the last word taking the last"),
         _ => None,
     }
