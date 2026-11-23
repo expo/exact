@@ -1,6 +1,64 @@
 use super::*;
 
 #[test]
+fn adjacent_links_are_hit_in_an_accepted_region() {
+    let _service = crate::content_region::test_service();
+    let source = r#"component App
+  view
+    view id="owner" width=200 height=100 overflow="hidden"
+      column id="content" width=200 height=100 padding-left=4
+        text font-size=16 testId="inline"
+          text "A" href="/first" testId="first"
+          text "B" href="/second" testId="second"
+        text "[A](/first)" markup="markdown" font-size=16 testId="markdown"
+      text "pending" id="pending" position="absolute"
+"#;
+    let (mut p, error) = Presenter::boot_region_with_fixture_fonts(
+        &crate::test_plan(source),
+        (),
+        (200., 100.),
+        2.625,
+        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/caltrain")),
+        PainterChoice::Cpu,
+        ContentRegionRegistration {
+            activate: None,
+            owner: "owner",
+            content: "content",
+            pending: "pending",
+        },
+    )
+    .unwrap();
+    assert_eq!(error, None);
+    p.frame();
+    ready(&mut p);
+    let frame = p.display_frame().unwrap();
+    assert!(p.display_complete(&frame));
+    assert!(p.host.content_region().unwrap().publication_painted());
+    let glyph = |p: &mut Presenter<()>, name, index: usize| {
+        let paragraph = id(p, name);
+        let rect = p.rect_of(paragraph).unwrap();
+        let text = p.paragraph(paragraph).unwrap();
+        let line = text.layout_runs().next().unwrap();
+        let glyph = &line.glyphs[index];
+        let x = rect.0 + glyph.x;
+        let y = rect.1 + text.baselines()[0] - 4.;
+        (x, y, glyph.w)
+    };
+    let (x, y, _) = glyph(&mut p, "inline", 1);
+    for (dx, target) in [(-0.25, "first"), (0.25, "second")] {
+        let x = x + dx / 2.625;
+        let hit = id(&p, target);
+        assert_eq!(p.hit(x, y), Some(hit));
+        assert_eq!(p.link_at(hit, x, y), Some(format!("/{target}")));
+    }
+    let (x, y, w) = glyph(&mut p, "markdown", 0);
+    assert_eq!(
+        p.link_at(id(&p, "markdown"), x + w / 2., y).as_deref(),
+        Some("/first")
+    );
+}
+
+#[test]
 fn retained_inline_opacity_uses_the_accepted_source() {
     let _service = crate::content_region::test_service();
     let draw = |opacity: f32, paint: &str| {

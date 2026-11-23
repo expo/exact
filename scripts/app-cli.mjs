@@ -92,23 +92,58 @@ export const checkoutLine = (exact2) => {
   return `Exact checkout: ${exact2}${commit ? ` at ${commit}` : ''}`;
 };
 
+/** `lines` with each failed build script Cargo reports said as one entry, which `said` holds: Cargo's line (`error:
+ * failed to run custom build command for …`), then what the script wrote to stdout, less its directives to Cargo, and
+ * to stderr, which is its reason (a bake's refusal, a panic) whatever it says. Cargo indents the script's output two
+ * spaces under `Caused by:`, stdout under `--- stdout` and then stderr under `--- stderr`, to the next line it does not
+ * indent. For a script that wrote no stderr, Cargo's causes (how it ended, or why it never ran) come first. */
+function buildScriptFailures(lines) {
+  // As a terminal shows the line: a progress bar Cargo drew before `\r` is gone, and so are colours.
+  const plain = (l) => l.slice(l.lastIndexOf('\r') + 1).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
+  const out = [], said = new Set();
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^error: failed to run custom build command for /.test(plain(lines[i]))) { out.push(lines[i]); continue; }
+    // Cargo may add a `note:` of its own before the causes.
+    let end = i + 1, caused = false;
+    for (; end < lines.length; end++) {
+      const l = plain(lines[end]);
+      if (/^Caused by:\s*$/.test(l)) caused = true;
+      else if (!/^(?:\s|$)/.test(l) && (caused || !/^note: /.test(l))) break;
+    }
+    // Stderr is last, so a line of the script's own that reads `--- stderr` stays in it.
+    const block = lines.slice(i + 1, end), mark = (name, from = 0) => block.findIndex((l, k) => k >= from && plain(l).trimEnd() === `  --- ${name}`);
+    const atOut = mark('stdout'), atErr = mark('stderr', atOut + 1), first = [atOut, atErr].filter((k) => k >= 0)[0] ?? block.length;
+    const trimmed = (ls) => { const k = ls.findIndex((l) => l.trim()), j = ls.findLastIndex((l) => l.trim()); return k < 0 ? [] : ls.slice(k, j + 1); };
+    const stdout = atOut < 0 ? [] : trimmed(block.slice(atOut + 1, atErr < 0 ? block.length : atErr).filter((l) => !/^ {2}cargo::?[\w-]+=/.test(plain(l))));
+    const stderr = atErr < 0 ? [] : trimmed(block.slice(atErr + 1));
+    const causes = block.slice(0, first).filter((l) => /^ {2}\S/.test(l));
+    const reason = [...(stderr.length ? [] : causes), ...stdout, ...stderr];
+    const entry = [plain(lines[i]), ...reason.map((l) => l.replace(/^ {2}/, ''))].join('\n');
+    said.add(entry); out.push(entry);
+    i = end - 1;
+  }
+  return Object.assign(out, { said });
+}
+
 /** What a failed JS-target web build (`host/web-js/build.mjs`) said that is the app's to act on, from its stderr: the
  * types app.ts imports when rewritten, warnings, the diagnostics, then the compiler's warnings. Every compiler error is
  * kept with its quoted line and caret, as `contract build` prints them. Cargo's progress, a rustc warning's excerpt and
  * Bun's trace are omitted. Without a recognized diagnostic, keep the last three lines of raw stderr. */
 export function webBuildFailure(stderr) {
   const ambientDiagnostic = (l) => /^.+:\d+:\d+: .+ is unavailable in data sources[;:]/.test(l);
-  const all = (stderr ?? '').trim().split('\n').filter((l) => ambientDiagnostic(l) || !/^\s*(Compiling|Finished|Running)/.test(l) && !compilerWarnings(l).length);
-  const warnings = all.filter((l) => !ambientDiagnostic(l) && /^warning: /.test(l)), lines = all.filter((l) => ambientDiagnostic(l) || !/^\s*warning/.test(l));
+  const failed = buildScriptFailures((stderr ?? '').trim().split(/\r?\n/));
+  const all = failed.filter((l) => failed.said.has(l) || ambientDiagnostic(l) || !/^\s*(Compiling|Finished|Running)/.test(l) && !compilerWarnings(l).length);
+  const warnings = all.filter((l) => !ambientDiagnostic(l) && /^warning: /.test(l)), lines = all.filter((l) => failed.said.has(l) || ambientDiagnostic(l) || !/^\s*warning/.test(l));
   // Keep TypeScript's lines (`app.ts(2,8): error TS…`), the shared ambient
   // check's file:line:col diagnostics, including paths with spaces, and its
   // refusals of package code (js/bake/src/typescript.mjs `capturedSources`).
   const packageRefusal = (l) => / (?:requires peer|imports Node's built-in|uses the DOM's|uses Node's|loads a module by a computed name|loads code from a string|uses the page's)|, (?:which is not installed|a native addon|which the checked capture did not resolve)|: not an npm package name and version| must be a constant the build reads without running|^(?:Error: )?(?:package declarations: )?two copies of |^(?:Error: )?package (?:declarations exceed|code exceeds) 64 MiB/.test(l);
   const marker = /^(error|[A-Z]\w*Error|E[A-Z]+)\b:?/;
-  const kept = (l) => marker.test(l.trim()) || /\): error TS\d+:|^(?:Error: )?(?:tsconfig: |module outside captured app: |source links are not captured: )|^note: /.test(l) || ambientDiagnostic(l) || compilerError(l) || packageRefusal(l) || /\bunoptimized$|\bnot on PATH\b|import\.meta\.env/.test(l);
+  const kept = (l) => failed.said.has(l) || marker.test(l.trim()) || /\): error TS\d+:|^(?:Error: )?(?:tsconfig: |module outside captured app: |source links are not captured: )|^note: /.test(l) || ambientDiagnostic(l) || compilerError(l) || packageRefusal(l) || /\bunoptimized$|\bnot on PATH\b|import\.meta\.env/.test(l);
   const message = [];
   let last = -1; // the last line taken
   for (let i = 0; i < lines.length; i++) {
+    if (failed.said.has(lines[i])) { message.push(lines[i]); last = i; continue; }
     if (!kept(lines[i])) continue;
     // The type check says its error above its closing line (host/web-js/build.mjs), in whatever form the checker or
     // its launch failed in: the lines since the last one taken are that error, so a form no pattern here knows is
@@ -179,7 +214,8 @@ export const information = (w) => / warning \[(forma-unreachable|style-undrawn|h
  *  31 in every build). `contract build --json` lists each, with a token's own repair. contract_lower's
  *  `warning_rank::one_scheme_line` is the same. */
 export function oneScheme(warnings) {
-  const said = (w) => /warning \[lower-colour-one-scheme\] /.test(w), closing = (w) => /warning \[lower-colour-one-scheme\] these /.test(w);
+  // A warning is one line: an entry of several (a build script's failure) is not one, whatever it quotes.
+  const said = (w) => /^[^\n]*warning \[lower-colour-one-scheme\] /.test(w), closing = (w) => /^[^\n]*warning \[lower-colour-one-scheme\] these /.test(w);
   const close = warnings.find(closing), sites = warnings.filter((w) => said(w) && !closing(w));
   if (!close || sites.length < 2) return warnings;
   const place = (w) => w.split(' warning [')[0], line = (w) => place(w).replace(/:\d+$/, '');

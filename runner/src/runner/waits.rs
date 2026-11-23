@@ -102,6 +102,7 @@ impl<D: DataSource> Runner<D> {
                 key: None,
                 base: now,
                 k: 1,
+                cause: self.cause(),
             })
             .collect()
     }

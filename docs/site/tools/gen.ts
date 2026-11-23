@@ -1,11 +1,15 @@
 import { marked, type Token, type Tokens } from 'marked';
 import { createHighlighter } from 'shiki';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, normalize, relative, resolve } from 'node:path';
 import { agentRows, sections, tabs, type NavPage } from '../constants/navigation.ts';
 import { redirects } from '../constants/redirects.ts';
 import { site } from '../constants/site.ts';
+import { decode, descriptionOf, plain, sectionDescriptionProblems } from './descriptions.ts';
+import { markdownHeadings, pageMarkdown } from './markdown-headings.ts';
+import { promptOf } from './prompts.ts';
 
 const SITE = resolve(import.meta.dir, '..');
 const DOCS = resolve(SITE, '..');
@@ -21,6 +25,7 @@ const ORIGIN = site.origin;
 const START_URL = 'https://github.com/expo/exact/blob/main/docs/start-here.md';
 const START_PROMPT = `Read ${START_URL} before building an app with Exact. It is the only required reading.`;
 const MARKDOWN = join(SITE, 'assets/markdown');
+const TOOL_MARKDOWN = join(MARKDOWN, 'tools');
 const EDIT = `https://github.com/expo/exact/edit/main/docs`;
 const IMAGES = join(SITE, 'assets/images');
 
@@ -80,14 +85,6 @@ function slugger() {
   };
 }
 
-function plain(tokens: Token[] | undefined): string {
-  return (tokens ?? []).map(t => ('tokens' in t && t.tokens ? plain(t.tokens) : 'text' in t ? decode(String(t.text)) : '')).join('');
-}
-
-function decode(s: string): string {
-  return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
-}
-
 function routeName(path: string): string {
   if (path === '/') return 'home';
   return path.split(/[/-]/).filter(Boolean).map((w, i) => (i ? w[0].toUpperCase() + w.slice(1) : w)).join('');
@@ -97,7 +94,7 @@ const GITHUB_DOCS = 'https://github.com/expo/exact/blob/main/docs/';
 const docsUrlOf = new Map(sections.flatMap(s => s.pages).map(p => [GITHUB_DOCS + p.source, ORIGIN ? `${ORIGIN}${p.path === '/' ? '/index' : p.path}.md` : GITHUB_DOCS + p.source]));
 
 const PROMPTS = join(SITE, 'prompts');
-const promptOf = (source: string) => existsSync(join(PROMPTS, source)) ? `${readFileSync(join(PROMPTS, source), 'utf8').trim()}\n\n` : '';
+const folderPrompted: string[] = [];
 
 function read(nav: NavPage): Doc {
   const text = readFileSync(join(DOCS, nav.source), 'utf8')
@@ -106,7 +103,9 @@ function read(nav: NavPage): Doc {
   const tokens = marked.lexer(text, { gfm: true });
   let afterIntro = tokens[0]?.type === 'heading' && tokens[0].depth === 1 ? 1 : 0;
   while (tokens[afterIntro]?.type === 'space' || tokens[afterIntro]?.type === 'paragraph') afterIntro++;
-  tokens.splice(afterIntro, 0, ...marked.lexer(promptOf(nav.source), { gfm: true }));
+  const prompt = promptOf(PROMPTS, nav.source);
+  if (prompt.fromFolder) folderPrompted.push(nav.source);
+  tokens.splice(afterIntro, 0, ...marked.lexer(prompt.text, { gfm: true }));
   const slug = slugger();
   const anchors = new Map<string, string>();
   const intro: Token[] = [];
@@ -124,10 +123,15 @@ function read(nav: NavPage): Doc {
     }
     (parts.at(-1)?.tokens ?? intro).push(t);
   }
-  return { nav, title, description: nav.description ?? lead(intro, title), intro, sections: parts.filter(s => !SKIPPED_SECTIONS.has(s.anchor)), anchors };
+  return { nav, title, description: nav.description ?? descriptionOf(intro, title), intro, sections: parts.filter(s => !SKIPPED_SECTIONS.has(s.anchor)), anchors };
 }
 
 const docs = sections.flatMap(s => s.pages).map(read);
+const descriptionProblems = sectionDescriptionProblems(docs);
+if (descriptionProblems.length) {
+  console.error(descriptionProblems.join('\n'));
+  process.exit(1);
+}
 const bySource = new Map(docs.map(d => [d.nav.source, d]));
 const links: { from: string; to: string; anchor: string; ok: boolean }[] = [];
 
@@ -339,27 +343,17 @@ function render(page: SitePage): { blocks: Block[]; toc: TocItem[] } {
   return { blocks: out, toc };
 }
 
-function lead(tokens: Token[], fallback: string): string {
-  const sentences = tokens
-    .filter((t): t is Tokens.Paragraph => t.type === 'paragraph')
-    .flatMap(p => plain(p.tokens).replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s+(?=[A-Z])/))
-    .map(x => x.trim());
-  const sentence = sentences.find(x => x.length >= 40 && !x.endsWith(':')) ?? fallback;
-  if (sentence.length <= 180) return sentence;
-  const boundary = Math.max(0, sentence.lastIndexOf(' ', 177));
-  return `${sentence.slice(0, boundary).trimEnd()}…`;
-}
-
 const pages: SitePage[] = docs.flatMap(doc => {
   const base: SitePage = { route: doc.nav.route, path: doc.nav.path, title: doc.title, description: doc.description, source: doc.nav.source, tokens: doc.intro, tocDepth: 2, skipHeading: '', hidden: !!doc.nav.hidden, landing: !!doc.nav.landing };
   if (!doc.nav.split) return [{ ...base, tokens: [...doc.intro, ...doc.sections.flatMap(s => s.tokens)] }];
+  const written = doc.nav.sectionDescriptions ?? {};
   return [
     base,
     ...doc.sections.map(s => ({
       route: routeName(`${doc.nav.path}/${s.anchor}`),
       path: `${doc.nav.path}/${s.anchor}`,
       title: s.title,
-      description: lead(s.tokens, doc.description),
+      description: Object.hasOwn(written, s.anchor) ? written[s.anchor] : descriptionOf(s.tokens, doc.description),
       source: doc.nav.source,
       tokens: s.tokens,
       tocDepth: 3,
@@ -383,19 +377,16 @@ function markdownHref(href: string, from: string, image: boolean): string {
   const [path, anchor] = at.split('#');
   return `${ORIGIN}${path === '/' ? '/index' : path}.md${anchor ? `#${anchor}` : ''}`;
 }
-function markdownOf(tokens: Token[], from: string): string {
-  return tokens.map(t => {
-    if (t.type === 'code') return t.raw;
-    const spans: string[] = [];
-    return t.raw
-      .replace(/(`+)[\s\S]*?\1/g, span => `\u0000${spans.push(span) - 1}\u0000`)
-      .replace(/(!?)\[([^\[\]]*)\]\(([^)\s]+)((?:\s+"[^"]*")?)\)/g, (_, bang: string, text: string, href: string, title: string) => `${bang}[${text}](${markdownHref(href, from, bang === '!')}${title})`)
-      .replace(/\u0000(\d+)\u0000/g, (_, i: string) => spans[Number(i)]);
-  }).join('').trim();
+function rewriteMarkdown(raw: string, from: string): string {
+  const spans: string[] = [];
+  return raw
+    .replace(/(`+)[\s\S]*?\1/g, span => `\u0000${spans.push(span) - 1}\u0000`)
+    .replace(/(!?)\[([^\[\]]*)\]\(([^)\s]+)((?:\s+"[^"]*")?)\)/g, (_, bang: string, text: string, href: string, title: string) => `${bang}[${text}](${markdownHref(href, from, bang === '!')}${title})`)
+    .replace(/\u0000(\d+)\u0000/g, (_, i: string) => spans[Number(i)]);
 }
 
 mkdirSync(OUT, { recursive: true });
-mkdirSync(MARKDOWN, { recursive: true });
+mkdirSync(TOOL_MARKDOWN, { recursive: true });
 const updated = new Map<string, string>();
 const isoDateOf = (source: string) => {
   if (!updated.has(source)) updated.set(source, execFileSync('git', ['log', '-1', '--format=%cs', '--', join('docs', source)], { cwd: REPO, encoding: 'utf8' }).trim());
@@ -452,8 +443,16 @@ pages.forEach(page => {
   const { blocks, toc } = render(page);
   const markdownPath = page.path === '/' ? '/index.md' : `${page.path}.md`;
   const markdownUrl = ORIGIN ? ORIGIN + markdownPath : GITHUB_DOCS + page.source;
-  const markdown = markdownOf(page.tokens, page.source);
-  writeFileSync(join(MARKDOWN, `${page.route}.md`), `${page.tocDepth === 3 ? `# ${page.title}\n\n` : ''}${markdown.replace(/^## .*\n+/, '')}\n${page.route === 'home' ? homeMarkdown() : ''}`);
+  const markdown = pageMarkdown(page.tokens, raw => rewriteMarkdown(raw, page.source), page.tocDepth === 3 ? page.title : undefined);
+  const body = `${markdown}\n${page.route === 'home' ? homeMarkdown() : ''}`;
+  writeFileSync(join(MARKDOWN, `${page.route}.md`), body);
+  if (!page.hidden) {
+    const { route, path, title, description } = page;
+    // The digest ties the section offsets to this Markdown across deployments.
+    const digest = createHash('sha256').update(body).digest('hex');
+    const info = { path, title, description, modificationDate: isoDateOf(page.source), headings: markdownHeadings(body), digest };
+    writeFileSync(join(TOOL_MARKDOWN, `${route}.json`), JSON.stringify(info));
+  }
   const data = {
     slug: page.route,
     path: page.path,
@@ -505,7 +504,7 @@ const badRedirects = Object.entries(redirects).flatMap(([from, to]) => [
   ...(paths.has(to) ? [] : [`redirect ${from} -> ${to}: no page lives at ${to}`]),
 ]);
 for (const e of badRedirects) console.error(e);
-writeFileSync(join(OUT, 'redirects.ts'), `const moved: { redirects: Record<string, string>; pages: { path: string; title: string }[] } = ${JSON.stringify({ redirects, pages: listed.map(p => ({ path: p.path, title: p.title })) })};\nexport default moved;\n`);
+writeFileSync(join(OUT, 'redirects.ts'), `const moved: { origin: string; redirects: Record<string, string>; pages: { path: string; title: string; route: string }[] } = ${JSON.stringify({ origin: ORIGIN, redirects, pages: listed.map(p => ({ path: p.path, title: p.title, route: p.route })) })};\nexport default moved;\n`);
 writeFileSync(join(OUT, 'pages.json'), JSON.stringify(listed.map(p => ({ path: p.path, route: p.route, title: p.title, description: p.description, source: p.source, section: sections.find(x => x.pages.some(n => n.source === p.source))?.title ?? '', updated: isoDateOf(p.source) })), null, 2));
 
 const app = readFileSync(APP, 'utf8');
@@ -517,4 +516,5 @@ writeFileSync(APP, `${app.slice(0, begin + ROUTES_BEGIN.length)}\n${routes}\n${a
 const broken = links.filter(l => !l.ok);
 for (const l of broken) console.error(`broken link: ${l.from} -> ${l.to}`);
 console.log(`${pages.length} pages from ${docs.length} docs at Exact ${SHA.slice(0, 10)}, ${links.length} internal links, ${broken.length} broken`);
+if (folderPrompted.length) console.log(`no prompt of its own, so its folder's is shown: ${folderPrompted.join(', ')}`);
 if (broken.length || badRedirects.length) process.exit(1);

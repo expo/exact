@@ -80,6 +80,9 @@ object Native {
     /** Whether a turn is needed. With [vsyncOnly], whether it needs a Choreographer callback. */
     @JvmStatic external fun animating(vsyncOnly: Boolean = false): Boolean
     @JvmStatic external fun owed(): Boolean
+    /** After the reader's [scrolled]: whether a [frame] now would only move grouped rows the reader moved itself, with
+     * nothing to tell it but those moves. The move is then taken, and there is no frame. */
+    @JvmStatic external fun moved(): Boolean
     /** The collection pass a scroll left; `limit` >= 0 slices it (rows past what shows per list), the scrolled list
      * leading toward `velocity` px/s. Bit 0: a paint is wanted; bit 1: rows are left for another slice. */
     @JvmStatic external fun refine(limit: Int, velocity: Float): Int
@@ -153,6 +156,9 @@ object Native {
     /** A module event, checked against the session and allocation carried by its painted view. */
     @JvmStatic external fun moduleEvent(id: Int, slot: Int, generation: Int, session: Long, kind: String, payload: String)
     @JvmStatic external fun frameLoaded(id: Int, slot: Int, generation: Int, session: Long)
+    /** An iframe's `FrameNavigation` record (LLP 1020.002 D2): [event] by its name, [record] its JSON; checked as
+     * [frameLoaded] is. */
+    @JvmStatic external fun frameEvent(id: Int, slot: Int, generation: Int, session: Long, event: String, record: String)
     /** A media element's event ([event] by HTML's name, [payload] its value), or with an empty [event] its observed
      * [state] for `state.media` (LLP 1042.001 D7); checked as a module event is. */
     @JvmStatic external fun media(id: Int, slot: Int, generation: Int, session: Long, event: String, payload: String, state: String)
@@ -179,8 +185,8 @@ object Native {
     /** A wheel turned [dy] points toward the end with `ctrl` held at ([x], [y]) px: a zoom about the pointer. */
     @JvmStatic external fun zoomWheel(x: Float, y: Float, dy: Float)
     /** What exact2 tells the reader of the scrollers it knows, when that is not what this last returned (else
-     * null): nine numbers each: its id, flags (as [under]'s, for any drag), its revision, then as float bits where
-     * it is (x, y), the offset its rows were last painted at (x, y) and its farthest offset (x, y). The revision
+     * null). The producer's scale as float bits, then nine words each: id, flags, revision, and pairs of float bits
+     * for its current offset in points, recorded offset in pixels, and logical maximum in points. The revision
      * moves on when the app scrolled it (a `scrollTop` write, a reveal): the reader then takes this offset and ends
      * its fling. A scroller the reader knew that is not among them is gone. */
     @JvmStatic external fun scrollers(): IntArray?

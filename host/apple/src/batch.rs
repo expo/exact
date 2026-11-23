@@ -424,7 +424,8 @@ impl Batch {
             s.push(':');
             quote(v, &mut s);
         }
-        s.push_str("}}");
+        // Work that fell due made it: the program's navigation, even in an input's batch.
+        s.push_str(if change.due { "},\"due\":true}" } else { "}}" });
         self.ops.push(s);
     }
 

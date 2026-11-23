@@ -318,11 +318,8 @@ impl<D: DataSource> Runner<D> {
         target: Target,
         why: Failure,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
-        let (origin, id) = (self.ticket_origin(ticket), self.ticket_id(ticket));
-        let causes = self.ticket_causes(ticket);
-        self.as_invocation_caused(origin, id, causes, |r| {
-            r.release_failed(ticket, target, why)
-        })
+        let cause = self.ticket_cause(ticket);
+        self.as_cause(cause, |r| r.release_failed(ticket, target, why))
     }
 
     /// A reply the source failed to take (it threw, ran over its budget, or

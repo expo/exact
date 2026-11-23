@@ -72,6 +72,9 @@ pub(super) struct Clock {
     fixtures: Vec<fixture_replies::Delayed>,
     /// Inputs waiting on the work due by their arrival (`inputs.rs`)
     held: std::collections::VecDeque<inputs::Held>,
+    /// Work that fell due is running, not an input's own action
+    /// (`RouterChange::due`)
+    pub(super) due: bool,
 }
 
 impl<D: DataSource> Runner<D> {
@@ -436,6 +439,13 @@ impl<D: DataSource> Runner<D> {
 
     /// [`Self::advance_within`] with no input held.
     fn advance_due(&mut self, now_ms: f64, until_request: bool, timers: bool) -> Advanced {
+        let outer = std::mem::replace(&mut self.clock.due, true);
+        let a = self.run_due(now_ms, until_request, timers);
+        self.clock.due = outer;
+        a
+    }
+
+    fn run_due(&mut self, now_ms: f64, until_request: bool, timers: bool) -> Advanced {
         if self.poisoned {
             return Advanced {
                 receipts: Vec::new(),
@@ -748,17 +758,15 @@ impl<D: DataSource> Runner<D> {
                 // A child's runs in its instance's frames, with the
                 // arguments read there; a gone instance's does not run
                 // (LLP 1035.005.004 D6).
-                // A `then` runs under its answer's origin (LLP 1133.002 D12),
-                // invocation (LLP 1133.023 D7) and causes (LLP 1133.035 D16
-                // item 6).
-                let (origin, id, causes) = self.then_origin(m);
+                // A `then` runs under its answer's cause (LLP 1133.023 D7a).
+                let cause = self.then_cause(m);
                 let call = match self.then_call(m) {
                     Ok(Some(call)) => Ok(call),
                     Ok(None) => continue,
                     Err(e) => Err(e),
                 };
                 let result = call.and_then(|(args, frames)| {
-                    self.as_invocation_caused(origin, id, causes, |r| {
+                    self.as_cause(cause, |r| {
                         r.scheduled(at, |r| r.traced_action("then", action, args, &frames))
                     })
                 });
@@ -877,12 +885,15 @@ impl<D: DataSource> Runner<D> {
                     self.seek_cutoff(at)
                 };
                 let audio = self.seams.audio;
-                let Some(action) = audio.transport_end(self) else {
+                let Some((action, cause)) = audio.transport_end(self) else {
                     continue;
                 };
                 let was_poisoned = self.poisoned;
                 let ticket = self.next_ticket;
-                match self.scheduled(at, |r| r.run_action(action, Vec::new(), &[])) {
+                // It runs under the cause of the commit that started the
+                // sequence (LLP 1133.023 D7a).
+                let ended = |r: &mut Self| r.run_action(action, Vec::new(), &[]);
+                match self.scheduled(at, |r| r.as_cause(cause, ended)) {
                     Ok(receipt) => receipts.push(Timed {
                         at_ms: self.now_ms,
                         receipt,

@@ -104,7 +104,7 @@ fn boot(name: &str) -> (App, Runner<Source>, Calls) {
 /// A data-code call of `body`, and its answer.
 fn data_call(r: &mut Runner<Source>, body: Json) -> Json {
     let request = exact_runner::Request::native(body.to_string().into_bytes());
-    let Dispatch::Run(work) = r.native_work(&request) else {
+    let Dispatch::Run(work) = r.as_person(|r| r.native_work(&request)) else {
         panic!("a module call is work");
     };
     let outcome = match work {

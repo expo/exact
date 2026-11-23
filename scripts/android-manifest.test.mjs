@@ -5,7 +5,8 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writ
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { fragmentPermissions, manifestFragment } from './android-manifest.mjs';
-import { androidImplementations, appleImplementations, packageConfig, webImplementations } from '../js/bake/src/typescript.mjs';
+import { androidImplementations, appleImplementations, webImplementations } from '../js/bake/src/typescript.mjs';
+import { packageConfig } from '../js/bake/src/package-config.mjs';
 
 test('package implementation filters use the supplied identities and ignore unused source text', () => {
   const app = mkdtempSync(resolve(tmpdir(), 'exact-library-views-'));

@@ -471,7 +471,7 @@ mod tests {
             assert_eq!(m.length, by_name, "{}", m.name);
             marked += usize::from(m.length);
         }
-        assert_eq!(marked, 58);
+        assert_eq!(marked, 60);
         // A `length` row is a length too; a `number` row is not.
         assert!(METRICS
             .iter()
@@ -497,6 +497,7 @@ mod tests {
                 ("the Mac", m.macos()),
                 ("the web", m.web()),
                 ("the neutral look", m.neutral()),
+                ("Material", m.material()),
             ] {
                 for &row in rows {
                     let Some(written) = as_written(row, cell) else {

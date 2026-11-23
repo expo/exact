@@ -72,81 +72,37 @@ pub(crate) struct Filter {
 }
 
 /// The manifest's declared file types, from the Linux binary's compatibility
-/// metadata. A directory declaration is for the directory picker, whose portal
-/// request takes no file filter.
+/// metadata: a type with suffixes matches by them alone, as case-insensitive
+/// globs; one with none, by its MIME types. An unnamed type is named by its
+/// first rule.
 pub(crate) fn filters(compat: &str) -> Result<Vec<Filter>, String> {
-    let json = serde_json::from_str::<serde_json::Value>(compat)
-        .map_err(|error| format!("compatibility metadata is not JSON: {error}"))?;
-    let Some(handlers) = json.pointer("/inputs/fileHandlers") else {
-        return Ok(Vec::new());
-    };
-    let handlers = handlers
-        .as_array()
-        .ok_or_else(|| "compatibility metadata's fileHandlers is not an array".to_owned())?;
-    let mut filters = Vec::new();
-    for (handler_index, handler) in handlers.iter().enumerate() {
-        let accept = handler
-            .get("accept")
-            .and_then(serde_json::Value::as_object)
-            .ok_or_else(|| format!("file handler {handler_index}'s accept is not an object"))?;
-        let mut globs = Vec::new();
-        let mut mimes = Vec::new();
-        for (mime, extensions) in accept {
-            if mime == "inode/directory" {
-                continue;
-            }
-            mimes.push((1, mime.clone()));
-            let extensions = extensions.as_array().ok_or_else(|| {
-                format!("file handler {handler_index}'s extensions for {mime} are not an array")
-            })?;
-            for (extension_index, extension) in extensions.iter().enumerate() {
-                let Some(glob) = extension.as_str().and_then(extension_glob) else {
-                    return Err(format!(
-                        "file handler {handler_index}'s extension {extension_index} is invalid"
-                    ));
-                };
-                globs.push((0, glob));
-            }
-        }
-        let rules = if globs.is_empty() { mimes } else { globs };
-        if rules.is_empty() {
-            continue;
-        }
-        let name = match handler.get("name") {
-            Some(name) => name
-                .as_str()
-                .filter(|name| valid_label(name))
-                .ok_or_else(|| format!("file handler {handler_index}'s name is not a valid label"))?
-                .to_owned(),
-            None => rules[0].1.clone(),
-        };
-        filters.push(Filter { name, rules });
-    }
-    Ok(filters)
-}
-
-fn extension_glob(value: &str) -> Option<String> {
-    let valid = value.starts_with('.')
-        && !value.ends_with('.')
-        && value.len() <= 16
-        && value.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'+' | b'.')
-        });
-    valid.then(|| {
-        let mut glob = String::from("*");
-        for byte in value.bytes() {
-            if byte.is_ascii_lowercase() {
-                glob.extend(['[', byte as char, byte.to_ascii_uppercase() as char, ']']);
+    let types = crate::presenter::file_dialog::declared_types(compat)?;
+    Ok(types
+        .into_iter()
+        .map(|t| {
+            let rules: Vec<_> = if t.suffixes.is_empty() {
+                t.mimes.into_iter().map(|mime| (1, mime)).collect()
             } else {
-                glob.push(byte as char);
-            }
-        }
-        glob
-    })
+                t.suffixes.iter().map(|s| (0, glob(s))).collect()
+            };
+            let name = t.name.unwrap_or_else(|| rules[0].1.clone());
+            Filter { name, rules }
+        })
+        .collect())
 }
 
-fn valid_label(value: &str) -> bool {
-    !value.is_empty() && !value.chars().any(char::is_control)
+/// A canonical suffix as a glob that matches it in either case:
+/// `.md` is `*.[mM][dD]`.
+fn glob(suffix: &str) -> String {
+    let mut glob = String::from("*");
+    for byte in suffix.bytes() {
+        if byte.is_ascii_lowercase() {
+            glob.extend(['[', byte as char, byte.to_ascii_uppercase() as char, ']']);
+        } else {
+            glob.push(byte as char);
+        }
+    }
+    glob
 }
 
 /// A filter as the portal specifies it: `(sa(us))`, a visible name and rules

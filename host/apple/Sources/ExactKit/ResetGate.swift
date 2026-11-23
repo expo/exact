@@ -77,6 +77,7 @@ enum ResetGate {
         "timelineScrolled(_:left:top:)": "an old scroller's timelines as its view goes; the new tree's layout places its own",
         "canvasDrawAsync(done:)": "a draw of the old tree's canvases; the new tree's draw on mount",
         "intrinsics(_:)": "the old views' sizes; the new tree's views measure and report their own",
+        "tableColumnWidths(_:)": "an old table's dragged column widths; the new tree's table restores the window's stored widths and reports them",
         "focus(_:now:)": "focus a teardown gives back (a dismissed sheet's) lands on the old tree",
         "blur(_:now:)": "the old tree's field losing focus as it goes",
         "focusEvent(_:entering:target:related:now:)": "focusin and focusout across the old tree",

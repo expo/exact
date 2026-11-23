@@ -58,6 +58,15 @@ rewrite, and `from` can have a splat. The build writes both lists to `dist/_redi
 applies those rules. `bun start` does not: it answers a moved page's old path with a fallback
 page, and the path of any other rule with a 404.
 
+## Prompts
+
+A page shows the prompt in `prompts/<its source>`, after its introduction: `prompts/recipes/tabs.md`
+is the prompt on `docs/recipes/tabs.md`'s page. A recipe with no file of its own shows
+`prompts/recipes.md`, with `{{SOURCE}}` replaced by the recipe's path, and `bun run build` names
+each recipe that does. To give a new recipe its own prompt, add `prompts/recipes/<name>.md` in the
+form of the others: the task, the questions only the person can answer, the recipe's steps, a
+test, the platform checks, the feedback step and what to report.
+
 ## Search
 
 The search dialog (Cmd+K) asks the Algolia app and index in `constants/search.ts` with its
@@ -65,3 +74,30 @@ search-only key, so it works the same locally and on the deployed site. As on do
 the index is the Algolia Crawler's: it crawls the deployed site from `sitemap.xml` on a schedule
 and writes DocSearch records (`hierarchy.lvl0` to `lvl6`, `content`, `url`), so nothing here
 holds a write key. Its configuration lives in the Algolia dashboard (Data sources, Crawler).
+
+## WebMCP tools
+
+`app.contract` declares six tools for a browser's agent, and `intents.tools` in `app.json` holds
+each one's title and the words for its parameters (`../recipes/tools.md`). `pages/agents.md` lists
+them for readers.
+
+- A tool that reads writes what it asks for to state, and the resource `answered` (`answerTool`
+  in `app.ts`) holds the answer. The call ends when that resource settles. A tool whose action
+  has a `send` is not read-only for the agent (`readOnlyHint`).
+- `app.ts` can fetch only `/assets/` files from the site's own origin. The tools read
+  `/assets/markdown/<route>.md` and `/assets/llms.txt`, a copy of `/llms.txt` that
+  `tools/postbuild.ts` writes.
+- A tool's parameters are all required, each a string, a number or a bool, so an empty string
+  stands for one left out.
+- `tests/browser.test.mjs` gives the page a stand-in `document.modelContext` and calls each tool.
+
+## Descriptions
+
+A page's description is in `llms.txt`, `sitemap.md`, the page's head and the top of its Markdown.
+`constants/navigation.ts` holds a written one: `description` on a page's row, the map given to
+`pagesFromFolder` for a recipe, and `sectionDescriptions`, keyed by the section's anchor, for a
+section of a split guide. A page with none takes its first sentence of 40 characters or more. A
+section with no such sentence takes the first sentence of each item of its list, as many as fit in
+180 characters. A sentence over 180 characters ends at its last full stop that fits, or is cut.
+`bun run build` stops when two pages share a description, or when one is under 40 characters or
+ends with a colon. It names each page whose description is cut and carries on.

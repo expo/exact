@@ -119,6 +119,26 @@ impl<D: DataSource> Presenter<D> {
         true
     }
 
+    /// A record of the iframe for this session and allocation (LLP 1020.002 D2).
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn reader_frame_event(
+        &mut self,
+        id: ViewId,
+        key: exact_kernel::NodeKey,
+        session: u64,
+        event: &str,
+        record: &str,
+    ) -> bool {
+        if session != self.brush.native_session
+            || !(self.host.kernel().node(id))
+                .is_some_and(|node| node.node_type == NodeType::WebView && node.key == key)
+        {
+            return false;
+        }
+        self.frame_event(id, event, record);
+        true
+    }
+
     /// A restart with carried state (a dev reload, a delivered update)
     /// replaces the tree. Focus follows the focused node's place in the
     /// runner's tree — its index among its siblings at each level, and its
@@ -185,6 +205,11 @@ impl<D: DataSource> Presenter<D> {
         // (remote_tests.rs), and where its route hid it too: the route's path
         // below keeps it to restore (`route_focus.inert`).
         if !self.remote() && self.focus_fixup(id) && !self.host.route_visibility(id).1 {
+            return self.blur_disabled_focus(id);
+        }
+        // A hidden `portal` mover is live and shown nowhere: its focus goes as
+        // a disabled control's does, `blur` included (LLP 1013.002 D5).
+        if self.in_hidden_mover(id) {
             return self.blur_disabled_focus(id);
         }
         if self.host.kernel().node(id).is_some() && !self.host.route_visibility(id).1 {
@@ -692,11 +717,8 @@ impl<D: DataSource> Presenter<D> {
         let mut at = target.and_then(|id| self.handler_target(id, kind));
         while let Some(id) = at {
             path.push(id);
-            at = self
-                .host
-                .kernel()
-                .node(id)
-                .and_then(|n| n.parent)
+            at = (self.host.runner().declared_parent(id))
+                .or_else(|| self.host.kernel().node(id).and_then(|n| n.parent))
                 .and_then(|p| self.handler_target(p, kind));
         }
         let mut capture = Vec::new();
@@ -704,11 +726,8 @@ impl<D: DataSource> Presenter<D> {
             let mut at = target.and_then(|id| self.handler_target(id, EventKind::Keycapture));
             while let Some(id) = at {
                 capture.push(id);
-                at = self
-                    .host
-                    .kernel()
-                    .node(id)
-                    .and_then(|n| n.parent)
+                at = (self.host.runner().declared_parent(id))
+                    .or_else(|| self.host.kernel().node(id).and_then(|n| n.parent))
                     .and_then(|p| self.handler_target(p, EventKind::Keycapture));
             }
             capture.reverse();
@@ -1047,3 +1066,6 @@ mod focus_disabled_tests;
 #[cfg(test)]
 #[path = "focus_rendered_tests.rs"]
 mod focus_rendered_tests;
+#[cfg(test)]
+#[path = "portal_tests.rs"]
+mod portal_tests;

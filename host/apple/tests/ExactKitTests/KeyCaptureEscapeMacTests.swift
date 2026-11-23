@@ -3,6 +3,7 @@
 #if os(macOS)
 import AppKit
 import XCTest
+@testable import ExactAnimations
 @testable import ExactKit
 
 final class KeyCaptureEscapeMacTests: XCTestCase {
@@ -86,6 +87,132 @@ final class KeyCaptureEscapeMacTests: XCTestCase {
         try key(40, "k", f)
         XCTAssertEqual(f.status, "escape;k;")
         XCTAssertNotNil(field.currentEditor())
+    }
+
+    func testHandlersThatOnlyCancelKeepTheEditorsText() throws {
+        _ = NSApplication.shared
+        let plan = try TableFixture.plan("""
+        component CancelEdit
+          state caret = -1
+          action moved(e: InputEvent)
+            caret = e.selectionStart
+          action keys(k: string)
+            if k == "x"
+              preventDefault()
+          action editing(e: InputEvent)
+            if e.data == some("y") and caret == 1
+              preventDefault()
+          view
+            textarea testId="editor" value="a" keycapture=keys selectionchange=moved beforeinput=editing rows=3
+        """)
+        let session = ExactApp.shared.makeSession(label: "cancel-edit")
+        let presenter = session.presenter
+        let rect = NSRect(x: 0, y: 0, width: 300, height: 200)
+        let window = NSWindow(contentRect: rect, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { session.destroy(); window.close() }
+        // Mount the editor without starting first-pixel work or its layout diagnostics.
+        let boot = session.runtime.bootPlan(plan, width: rect.width, height: rect.height)
+        XCTAssertNil(boot.error)
+        session.apply(boot)
+        session.followOffset()
+        presenter.viewport.frame = rect
+        window.contentView = presenter.viewport
+        let node = try XCTUnwrap(presenter.views.values.first { $0.props["testId"] == "editor" })
+        let editor = try XCTUnwrap(node.textArea)
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        editor.setSelectedRange(NSRange(location: 0, length: 0))
+        waitForMainQueue()
+        let selectionChanged = expectation(description: "the selection change reaches the runner")
+        let selections = presenter.fieldSelections
+        let onChange = try XCTUnwrap(selections.onChange)
+        selections.onChange = { id, value, range in
+            let applied = session.appliedBatches
+            onChange(id, value, range)
+            XCTAssertEqual(session.appliedBatches, applied, "selection already moved in AppKit")
+            if range.start == 1 { selectionChanged.fulfill() }
+        }
+        editor.setSelectedRange(NSRange(location: 1, length: 0))
+        wait(for: [selectionChanged], timeout: 5)
+        selections.onChange = onChange
+        let applied = session.appliedBatches
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                   windowNumber: window.windowNumber, context: nil, characters: "x",
+                                                   charactersIgnoringModifiers: "x", isARepeat: false, keyCode: 7))
+        XCTAssertTrue(presenter.routeKey(event, focused: true, in: window))
+        XCTAssertEqual(session.appliedBatches, applied, "the canceled key skips presentation")
+        editor.insertText("y", replacementRange: editor.selectedRange())
+        XCTAssertEqual(editor.string, "a")
+        XCTAssertEqual(session.appliedBatches, applied, "the canceled edit skips presentation")
+
+        session.clock = 0
+        let layer = try XCTUnwrap(node.layer)
+        presenter.boxAnimations.animations(node.id, ["specs": [["id": "fade", "k": "opacity", "s": 0.0, "d": 1.0,
+            "n": 1.0, "fill": 3, "t": [0.0, 1.0], "v": [0.0, 1.0]]]], layer: layer, clock: 0)
+        func offset() throws -> Double { try XCTUnwrap(layer.animation(forKey: "fade")).timeOffset }
+        XCTAssertEqual(try offset(), 0)
+        session.clock = 500
+        XCTAssertTrue(presenter.routeKey(event, focused: true, in: window))
+        XCTAssertEqual(try offset(), 0.5, accuracy: 0.001, "a canceled key seeks the animation")
+        session.clock = 750
+        editor.insertText("y", replacementRange: editor.selectedRange())
+        XCTAssertEqual(editor.string, "a")
+        XCTAssertEqual(try offset(), 0.75, accuracy: 0.001, "a canceled edit seeks the animation")
+        editor.insertText("z", replacementRange: editor.selectedRange())
+        XCTAssertEqual(editor.string, "az")
+    }
+
+    func testAnEmptyKeyStillAppliesWhileAPackagePictureIsRefused() throws {
+        let session = ExactApp.shared.makeSession(label: "refused-picture")
+        defer { session.destroy() }
+        XCTAssertNil(session.boot(plan: try fixturePlan("REFUSED_PICTURE"), size: CGSize(width: 300, height: 200)).error)
+        settleViewlessSession(session)
+        XCTAssertEqual(session.rasters?.hasRefusedPictures, true)
+        let editor = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == "editor" })
+        let applied = session.appliedBatches
+        var press = KeyPress("x")
+        press.capture = true
+        session.presenter.onKey?(editor.id, press)
+        XCTAssertTrue(session.presenter.defaultPrevented)
+        XCTAssertEqual(session.appliedBatches, applied + 1, "the full pass rechecks the picture")
+    }
+
+    func testAnEmptyTextInputStillRunsBeforeTheNextEdit() throws {
+        for field in ["input", "textarea"] {
+            let f = try SheetFixture(page: """
+            component PostEdit
+              state body = ""
+              state previous = ""
+              action before(e: InputEvent)
+                if e.data == some("x") and previous == "a"
+                  preventDefault()
+              action edited(value: string)
+                previous = value
+                if value == "ac"
+                  body = "ABC"
+                  setSelectionRange("editor", 1, 2)
+                else if value == "AbC"
+                  setSelectionRange("editor", 0, 2)
+              view
+                \(field) id="editor" testId="editor" value=body input=edited beforeinput=before
+            """)
+            defer { f.close() }
+            let node = try f.node("editor")
+            let responder = try XCTUnwrap((node.textArea as NSResponder?) ?? node.field)
+            XCTAssertTrue(f.window.makeFirstResponder(responder))
+            let editor = try XCTUnwrap(node.textArea ?? node.field?.currentEditor() as? NSTextView)
+            editor.insertText("a", replacementRange: editor.selectedRange())
+            XCTAssertEqual(editor.string, "a")
+            editor.insertText("x", replacementRange: editor.selectedRange())
+            XCTAssertEqual(editor.string, "a", "beforeinput sees the preceding input's state")
+            editor.insertText("c", replacementRange: editor.selectedRange())
+            XCTAssertEqual(editor.string, "ABC")
+            XCTAssertEqual(editor.selectedRange(), NSRange(location: 1, length: 1))
+            editor.insertText("b", replacementRange: editor.selectedRange())
+            XCTAssertEqual(editor.string, "AbC")
+            XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: 2))
+            XCTAssertTrue(f.window.firstResponder === editor)
+        }
     }
 
     /// A batch that changes the placeholder of a focused, empty field: AppKit

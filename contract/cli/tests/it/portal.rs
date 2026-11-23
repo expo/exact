@@ -505,3 +505,57 @@ fn hidden_movers_are_journaled_in_declaration_order() {
         assert!(line.contains(want.as_str()), "{said:#?}");
     }
 }
+
+#[test]
+fn removing_movers_shown_apart_emits_their_ops_in_declaration_order() {
+    // Eight movers, each in its own destination, declared under one `if`.
+    let places: String = (0..8)
+        .map(|i| format!("      box id=\"d{i}\" testId=\"d{i}\"\n"))
+        .collect();
+    let movers: String = (0..8)
+        .map(|i| format!("        box portal=\"d{i}\" testId=\"m{i}\"\n"))
+        .collect();
+    let mut r = boot(&format!(
+        "component App\n  state alive = true\n  action kill\n    alive = false\n  view\n    column\n      button press=kill testId=\"kill\"\n        text \"Kill\"\n{places}      if alive\n       column\n{movers}"
+    ));
+    let movers: Vec<ViewId> = (0..8)
+        .map(|i| view(&r, &format!("m{i}")).unwrap())
+        .collect();
+    let places: Vec<ViewId> = (0..8)
+        .map(|i| view(&r, &format!("d{i}")).unwrap())
+        .collect();
+    for (m, d) in movers.iter().zip(&places) {
+        assert_eq!(parent(&r, *m), Some(*d));
+    }
+    let k = |r: &Runner<Source>, v: ViewId| r.kernel().node(v).unwrap().key;
+    let mover_keys: Vec<_> = movers.iter().map(|&m| k(&r, m)).collect();
+    let place_keys: Vec<_> = places.iter().map(|&d| k(&r, d)).collect();
+    let kill = view(&r, "kill").unwrap();
+    let receipt = r.dispatch(kill, Event::Press).unwrap();
+    let destroyed: Vec<_> = (receipt.destroyed.iter())
+        .filter(|key| mover_keys.contains(key))
+        .copied()
+        .collect();
+    assert_eq!(
+        destroyed, mover_keys,
+        "the movers' destroys in declaration order"
+    );
+    let mut touched: Vec<_> = (receipt.touched.iter())
+        .filter(|key| place_keys.contains(key))
+        .copied()
+        .collect();
+    touched.dedup();
+    assert_eq!(
+        touched, place_keys,
+        "the destinations' lists in declaration order"
+    );
+}
+
+#[test]
+fn a_mover_shown_in_its_own_declaration_parent_names_no_declaration() {
+    let r = boot("component App\n  view\n    column id=\"p\" testId=\"p\"\n      box portal=\"p\" testId=\"m\"\n");
+    let m = view(&r, "m").unwrap();
+    assert_eq!(parent(&r, m), view(&r, "p"));
+    assert_eq!(r.declared_parent(m), None, "it bubbles as any node does");
+    assert!(r.declared_parents().is_empty());
+}

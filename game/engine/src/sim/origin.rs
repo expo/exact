@@ -22,7 +22,9 @@ use super::*;
 pub const ORIGIN_MARK: &str = "\u{1}origin:";
 
 /// The origins a mark names, least privileged last; 0, the app's, is no mark.
-const WORDS: [&str; 4] = ["app", "tool", "wake", "device"];
+/// A background action's work, its invocation over, may do least: no
+/// foreground name and none of the commands a wake may not run.
+const WORDS: [&str; 5] = ["app", "tool", "wake", "device", "action"];
 
 /// `text`'s origin rank and the text after its mark; rank 0 for none.
 pub fn unmark(text: &str) -> (u8, &str) {

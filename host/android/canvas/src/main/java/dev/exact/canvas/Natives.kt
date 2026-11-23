@@ -1,7 +1,6 @@
 package dev.exact.canvas
 
 import android.content.Context
-import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
@@ -14,20 +13,12 @@ import android.view.SurfaceHolder
 import android.view.TextureView
 import android.view.View
 import android.view.ViewGroup
-import android.webkit.RenderProcessGoneDetail
-import android.webkit.WebResourceError
-import android.webkit.WebResourceRequest
 import android.webkit.WebView
-import android.webkit.WebViewClient
 import android.widget.FrameLayout
-import androidx.webkit.Navigation
-import androidx.webkit.NavigationListener
-import androidx.webkit.Page
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import org.json.JSONObject
 import java.io.File
-import java.util.UUID
 import kotlin.math.roundToInt
 
 /**
@@ -92,6 +83,8 @@ interface VideoPlayer {
     fun update(props: JSONObject, width: Int, height: Int, from: MediaRecord.Resume?)
     /** Whether a row of the node is in view, for Chrome's rule for a muted autoplaying video (LLP 1042 §7 B). */
     fun shown(inView: Boolean)
+    /** Its element is shown nowhere (a hidden `portal` mover, LLP 1013.002 D5): it leaves fullscreen. */
+    fun hidden() {}
     /** What the record keeps of this loan. */
     fun snapshot(): MediaRecord.Resume?
     /** The activity stopped or the row was parked: pause as the stop does (D8) and give up the surface. */
@@ -148,6 +141,11 @@ class Natives(
 
     private class Element(val id: Int, val kind: Int, var view: View, val node: RenderNode, val audio: Boolean = false) {
         var props = ""
+        /** An iframe's `partition`, the profile its view was made in ([Partitions.profile]), and what its refusal
+         * was last sent for ([refuseFrame]). */
+        var partition: String? = null
+        var profile: String? = null
+        var refusedFor: String? = null
         var module: String? = null
         var generation = 0
         var session = 0L
@@ -204,6 +202,8 @@ class Natives(
         var wanted = ""
         /** A row of the reader's placing has drawn it: when none of its rows is placed any more, they have left. */
         var placed = false
+        /** A video shown nowhere, in a hidden `portal` mover (LLP 1013.002 D5): kept, its player out of view. */
+        var hidden = false
     }
 
     /** Opaque full-window canvases present beneath the UI through SurfaceView.
@@ -423,7 +423,7 @@ class Natives(
         try {
             for (e in elements.values) {
                 if (e.kind != 0 || e.parked || players[e.view]?.lendable != false) continue
-                val drawn = origins?.transform(e.node, placeMatrix) == true
+                val drawn = !e.hidden && origins?.transform(e.node, placeMatrix) == true
                 val x: Float; val y: Float
                 if (drawn) {
                     placePoint[0] = 0f; placePoint[1] = 0f
@@ -593,10 +593,11 @@ class Natives(
     fun snapshot(): Map<Int, RenderNode> = nodes ?: elements.mapValues { it.value.node }.also { nodes = it }
 
     /** Op 28 seen while ingesting a stream: make or update the element; [row] draws it (0: not in a row). */
-    fun ensure(id: Int, kind: Int, w: Int, h: Int, props: String, row: Int, fullWindow: Boolean = false, layer: Int? = null) {
+    fun ensure(id: Int, kind: Int, w: Int, h: Int, props: String, row: Int, fullWindow: Boolean = false, layer: Int? = null,
+               hidden: Boolean = false) {
         val json = if (kind in 0..2) JSONObject(props) else null
-        // A top-level WebView cannot enforce an iframe's sandbox (LLP 1020 D2).
-        if (kind == 1 && json?.isNull("sandbox") == false) {
+        // A top-level WebView cannot enforce an iframe's sandbox (LLP 1020 D2); a partitioned one is refused by [Partitions].
+        if (kind == 1 && json?.isNull("sandbox") == false && json.partition() == null) {
             elements[id]?.let { release(it, reuse = false) }
             android.util.Log.w("exact", "iframe $id: sandbox is unsupported on Android")
             return
@@ -608,7 +609,8 @@ class Natives(
         val session = json?.optLong("session") ?: 0L
         var e = elements[id]
         if (e == null || e.kind != kind || e.audio != audio || (json != null &&
-                (e.generation != generation || e.slot != slot || e.module != module || e.session != session))) {
+                (e.generation != generation || e.slot != slot || e.module != module || e.session != session ||
+                    kind == 1 && (e.partition != json.partition() || e.profile != Partitions.profile(json))))) {
             e?.let { release(it) }
             val lazyMedia = kind == 0 && videos != null && lazyVideo &&
                 (!audio || w > 0 && h > 0 && !BackgroundAudio.contains(MediaAllocation(id, slot, generation, session)))
@@ -622,6 +624,7 @@ class Natives(
             created.generation = generation
             created.slot = slot
             created.session = session
+            if (kind == 1) { created.partition = json!!.partition(); created.profile = Partitions.profile(json) }
             e = created
             elements[id] = e
             nodes = null
@@ -630,6 +633,7 @@ class Natives(
                 if (kind == 2) bindEvents(e)
             }
         }
+        if (kind == 1) refuseFrame(e, json!!)
         e.fullWindow = fullWindow && row == 0
         if (!e.fullWindow) e.presentation.failed = false
         if (kind == 3) {
@@ -641,6 +645,17 @@ class Natives(
         if (layer == null) e.directRows.add(row) else inLayer(layer, e, row)
         e.rows.add(row)
         e.wanted = props
+        if (hidden) {
+            // Its size and view stay as they were shown, so showing it again only places the same player.
+            if (!e.hidden && !e.parked) players[e.view]?.hidden()
+            e.hidden = true
+            if (!e.parked && e.props != props) apply(e, props)
+            if (!e.parked) play(e, false)
+            return
+        }
+        // Shown again: its props first, so the player is told it is in view with the ones it shows.
+        val returned = e.hidden
+        e.hidden = false
         if (e.w != w || e.h != h) {
             e.w = w; e.h = h
             if (!e.parked) { place(e); askBuffers(e) }
@@ -650,6 +665,7 @@ class Natives(
         if (e.parked && (row == 0 || audio && (w <= 0 || h <= 0))) unpark(e)
         if (e.parked) return
         if (e.props != props) apply(e, props)
+        if (returned && (row == 0 || !lazy || !lazyVideo)) play(e, true)
         if (e.dirty && !e.buffers) record(e)
     }
 
@@ -688,7 +704,7 @@ class Natives(
         // A video plays while a row of its is in the view, as a list's player plays the row on screen: a row near
         // but out of view is prepared and paused on its first frame.
         if (lazyVideo) for (e in elements.values) if (e.kind == 0 && !e.parked) {
-            play(e, !e.placed || e.rows.contains(0) || e.rows.any { seen.contains(it) })
+            play(e, !e.hidden && (!e.placed || e.rows.contains(0) || e.rows.any { seen.contains(it) }))
         }
         // A page runs (its animations, its timers' drawing) while a row of its is in the view, and from when it is
         // made until then, so it loads and paints ahead; once its row has left the view it is paused, as a page in
@@ -738,9 +754,9 @@ class Natives(
     /** The reader cannot tell where rows are: every element has its view. */
     fun everywhere() {
         lazy = false
-        for (e in elements.values) if (e.kind == 0 && !e.parked) play(e, true)
+        for (e in elements.values) if (e.kind == 0 && !e.parked) play(e, !e.hidden)
         if (waiting == 0) return
-        for (e in elements.values) if (e.parked) { unpark(e); if (e.kind == 0) play(e, true) }
+        for (e in elements.values) if (e.parked) { unpark(e); if (e.kind == 0) play(e, !e.hidden) }
         frame()
     }
 
@@ -893,7 +909,9 @@ class Natives(
                 audioLoans[view] = loan
             }
         } else videoPool.removeLastOrNull() ?: videoView(audio = false)
-        1 -> readyWeb().takeIf { it >= 0 }?.let { webPool.removeAt(it) }
+        // A partitioned frame's profile is set before its view does anything (`WebViewCompat.setProfile`): never a lent one.
+        1 -> if (json.partition() != null) webView(Partitions.profile(json), partitioned = true)
+        else readyWeb().takeIf { it >= 0 }?.let { webPool.removeAt(it) }
             ?.apply { settings.javaScriptEnabled = true; onResume() } ?: webView()
         else -> {
             val name = json.optString("module")
@@ -909,190 +927,32 @@ class Natives(
 
     private fun readyWeb(): Int = webPool.indexOfLast { (it.webViewClient as FrameClient).readyToLend }
 
-    private class FrameLoad(var url: String, val silent: Boolean, val failed: Boolean = false)
-
-    private inner class FrameClient(
-        private val view: WebView,
-        private val hasNavigationListener: Boolean,
-    ) : WebViewClient(), NavigationListener {
-        private val documents = if (!hasNavigationListener &&
-            WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
-            FrameDocuments(view, ::reportLoad)
-        } else null
-        private val loading = HashSet<Page>()
-        private var recovery: Navigation? = null
-        private var starting: FrameLoad? = null
-        private var finishing: FrameLoad? = null
-        private var fragmentFinish: String? = null
-        private var cleanupUrl: String? = null
-        private var recoveryRequested = false
-        var recoveryPending = false
-        var readyToLend = false
-            private set
-
-        fun requestLoad(silently: Boolean) {
-            readyToLend = false
-            recoveryPending = false
-            cleanupUrl = null
-            // The old callbacks can be queued even after WebView has committed the recovery page.
-            recoveryRequested = silently || (!hasNavigationListener && recoveryRequested && view.originalUrl != null)
-            if (!recoveryRequested) documents?.observeFromStart()
-        }
-
-        fun beginCleanup(): String {
-            val url = "data:text/html,%3C!--${UUID.randomUUID()}--%3E"
-            readyToLend = false
-            recoveryPending = false
-            loading.clear()
-            documents?.reset()
-            recoveryRequested = false
-            starting = null
-            finishing = null
-            fragmentFinish = null
-            cleanupUrl = url
-            return url
-        }
-
-        // A guest's navigations stay in its frame, as in a browser's; a file only under the asset root.
-        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
-            !Sources.navigable(request.url.scheme, request.url.path, assets)
-
-        override fun onNavigationStarted(navigation: Navigation) {
-            if (recoveryRequested && !navigation.wasInitiatedByPage() && !navigation.isSameDocument) {
-                recoveryRequested = false
-                recovery = navigation
-            }
-        }
-
-        override fun onNavigationCompleted(navigation: Navigation) {
-            if (navigation === recovery) {
-                recovery = null
-                return
-            }
-            if (!navigation.isSameDocument && byView.containsKey(view)) {
-                navigation.page?.let(loading::add)
-            }
-        }
-
-        override fun onPageDeleted(page: Page) {
-            loading.remove(page)
-        }
-
-        override fun onPageLoadEvent(page: Page) {
-            if (!loading.remove(page)) return
-            reportLoad()
-        }
-
-        private fun reportLoad() {
-            val e = byView[view] ?: return
-            reportLoad(e, e.eventBinding)
-        }
-
-        private fun reportLoad(e: Element, binding: Int) {
-            android.os.Handler(context.mainLooper).post {
-                // An accepted load belongs to the element even if its renderer has been replaced.
-                if (elements[e.id] === e && e.eventBinding == binding) {
-                    Exact.frameLoaded(e.id, e.slot, e.generation, e.session)
-                }
-            }
-        }
-
-        override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
-            if (hasNavigationListener || cleanupUrl != null || !byView.containsKey(view)) return
-            starting = FrameLoad(url, recoveryRequested)
-            recoveryRequested = false
-        }
-
-        override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
-            if (hasNavigationListener || cleanupUrl != null) return
-            val start = starting
-            if (start != null) {
-                starting = null
-                start.url = url
-                finishing = start
-                fragmentFinish = null
-            } else {
-                val page = finishing ?: return
-                // Chromium also sends onPageFinished after a change to the current document's fragment.
-                fragmentFinish = url.takeIf { it != page.url && it.substringBefore('#') == page.url.substringBefore('#') }
-                page.url = url
-            }
-            val page = finishing ?: return
-            if (page.silent) {
-                if (start != null) documents?.observeFromStart()
-                return
-            }
-            if (page.failed) {
-                // The error document's URL differs from the failed navigation's URL in WebViewClient.
-                if (start != null) observeError(page)
-            } else {
-                documents?.observe(url)
-            }
-        }
-
-        override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError?) {
-            if (hasNavigationListener || cleanupUrl != null || !request.isForMainFrame || !byView.containsKey(view)) return
-            // The error's onPageFinished can precede the error document's commit.
-            starting = FrameLoad(request.url.toString(), starting?.silent ?: recoveryRequested, failed = true)
-            recoveryRequested = false
-        }
-
-        override fun onPageFinished(view: WebView, url: String) {
-            if (cleanupUrl != null) {
-                if (url == cleanupUrl && view in webPool) readyToLend = true
-                return
-            }
-            if (hasNavigationListener) return
-            if (url == fragmentFinish) {
-                fragmentFinish = null
-                return
-            }
-            // Check readiness because an aborted navigation can finish with the pending document's URL.
-            val page = finishing?.takeIf { it.url == url && starting?.url != url } ?: return
-            if (page.failed) return
-            if (page.silent) {
-                finishing = null
-            } else if (documents != null) {
-                documents.observe(url, atFinish = true)
-            } else {
-                verifyLoad(page, url)
-            }
-        }
-
-        private fun observeError(page: FrameLoad) {
-            val url = "chrome-error://chromewebdata/"
-            if (documents != null) documents.observe(url) else verifyLoad(page, url)
-        }
-
-        private fun verifyLoad(page: FrameLoad, url: String) {
-            if (finishing !== page) return
-            val e = byView[view] ?: return
+    private val frames = object : FrameHost {
+        override val assets get() = this@Natives.assets
+        override fun shows(view: WebView) = byView.containsKey(view)
+        override fun pooled(view: WebView) = view in webPool
+        override fun rendererGone(view: WebView, crashed: Boolean) = this@Natives.rendererGone(view, crashed)
+        override fun loadOf(view: WebView): FrameLoadReport? {
+            val e = byView[view] ?: return null
             val binding = e.eventBinding
-            view.evaluateJavascript(frameDocumentReady(url)) {
-                if (finishing !== page || (!page.failed && page.url != url)) {
-                    return@evaluateJavascript
-                }
-                if (it == "true") {
-                    finishing = null
-                    reportLoad(e, binding)
-                } else if (it == "false" && page.failed && byView[view] === e) {
-                    // Older providers have no document message channel and can omit a second finish callback.
-                    view.postOnAnimation { verifyLoad(page, url) }
-                }
+            return object : FrameLoadReport {
+                override fun current() = byView[view] === e
+                // An accepted load belongs to the element even if its renderer has been replaced.
+                override fun send() { android.os.Handler(context.mainLooper).post {
+                    if (elements[e.id] === e && e.eventBinding == binding) Exact.frameLoaded(e.id, e.slot, e.generation, e.session)
+                } }
             }
-        }
-
-        // Android ends the app with the renderer unless this answers true.
-        override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-            rendererGone(view, detail.didCrash())
-            return true
         }
     }
 
-    private fun webView(): WebView = WebView(context).apply {
+    /** A frame's view; a [partitioned] one, kept or refused, never has a page-world object ([FrameClient]). */
+    private fun webView(profile: String? = null, partitioned: Boolean = profile != null): WebView = WebView(context).apply {
+        profile?.let { Partitions.enter(this, it) }
         settings.javaScriptEnabled = true
+        // A page's `localStorage` and `sessionStorage`, as a browser gives it; WebView's default has none.
+        settings.domStorageEnabled = true
         val hasNavigationListener = WebViewFeature.isFeatureSupported(WebViewFeature.NAVIGATION_LISTENER)
-        val client = FrameClient(this, hasNavigationListener)
+        val client = FrameClient(this, hasNavigationListener, frames, partitioned)
         webViewClient = client
         if (hasNavigationListener) {
             // Take the navigation identity before a new src can supersede a recovery request.
@@ -1116,7 +976,7 @@ class Natives(
         web.destroy()
         if (e == null) return
         android.util.Log.w("exact", "iframe ${e.id}: the page's renderer ${if (crashed) "crashed" else "was ended by Android"}; loading its src again")
-        val fresh = webView()
+        val fresh = webView(e.profile, partitioned = e.partition != null)
         val client = fresh.webViewClient as FrameClient
         client.recoveryPending = true
         addView(fresh, LayoutParams(1, 1))
@@ -1129,7 +989,7 @@ class Natives(
         // `src`, a park or a release in between takes the frame instead.
         android.os.Handler(context.mainLooper).post {
             if (byView[fresh] === e && client.recoveryPending) {
-                loadFrame(e, JSONObject(e.props).optString("src"), silently = true)
+                showFrame(e, JSONObject(e.props), silently = true)
                 if (refresh()) frame()
             }
         }
@@ -1270,6 +1130,29 @@ class Natives(
     private fun moduleProps(json: JSONObject): JSONObject =
         json.optString("props").takeIf { it.isNotEmpty() }?.let { runCatching { JSONObject(it) }.getOrNull() } ?: JSONObject()
 
+    /** [e]'s page, or the `about:blank` of a frame [Partitions] refuses, loaded silently as Apple's is. */
+    private fun showFrame(e: Element, props: JSONObject, silently: Boolean = false) {
+        if (Partitions.refusal(props) == null) return loadFrame(e, props.text("src"), silently)
+        val web = e.view as WebView
+        (web.webViewClient as FrameClient).requestLoad(silently = true)
+        web.settings.allowFileAccess = false
+        web.loadUrl("about:blank")
+    }
+
+    /** A refused frame's `navigateerror`, once for each partition and `src` it is refused with, parked or not. */
+    private fun refuseFrame(e: Element, props: JSONObject) {
+        val refused = Partitions.refusal(props)
+        val key = refused?.let { props.text("src") }
+        if (key == e.refusedFor) return
+        e.refusedFor = key
+        if (refused == null) return
+        android.util.Log.w("exact", "iframe ${e.id}: ${refused.second}")
+        val record = refusalRecord(refused.first, refused.second, partitioned = Partitions.kept)
+        android.os.Handler(context.mainLooper).post {
+            if (elements[e.id] === e && e.refusedFor == key) Exact.frameEvent(e.id, e.slot, e.generation, e.session, "navigateerror", record)
+        }
+    }
+
     private fun loadFrame(e: Element, src: String, silently: Boolean = false) {
         val web = e.view as WebView
         val source = Sources.frame(src, assets)
@@ -1315,13 +1198,10 @@ class Natives(
                 // exact2's focus left the controller: the reader's view takes the window's focus back (D4).
                 if (!json.optBoolean("focused") && view.hasFocus()) reader?.requestFocus()
                 // Until the reader says where its row is, a lazy video waits to be seen ([near] shows it).
-                val shown = e.inView || !lazyVideo || !lazy || e.rows.contains(0)
+                val shown = !e.hidden && (e.inView || !lazyVideo || !lazy || e.rows.contains(0))
                 if (shown != e.playing) { e.playing = shown; p.shown(shown) }
             }
-            1 -> {
-                val src = json.optString("src")
-                if (old?.optString("src") != src) loadFrame(e, src)
-            }
+            1 -> if (old?.text("src") != json.text("src")) showFrame(e, json)
             // A hatch gave the node another view.
             5 -> if (old != null && old.optInt("gen") != json.optInt("gen")) {
                 val view = obtain(5, json, e.id) ?: return
@@ -1433,7 +1313,7 @@ class Natives(
         } else if (e.kind == 2 && module != null && (pool[e.module!!]?.size ?: 0) < modulePool && module.reset(e.view)) {
             lifecycle.unbind(e.view)
             pool.getOrPut(e.module!!) { ArrayList() }.add(e.view)
-        } else if (e.kind == 1 && reuse && webPool.size < WEB_POOL && webs) {
+        } else if (e.kind == 1 && e.partition == null && reuse && webPool.size < WEB_POOL && webs) {
             val web = e.view as WebView
             webPool.add(web)
             web.apply {

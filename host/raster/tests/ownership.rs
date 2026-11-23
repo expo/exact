@@ -1224,3 +1224,93 @@ fn published_images_share_the_budget_and_eviction_falls_back_to_the_file() {
     session.retire_generation(first.key.generation);
     assert_eq!(session.stats().resident_bytes, 0);
 }
+
+/// Published pixels are lent to the readers of their file: once the last
+/// lets go they leave, since only a file that still holds them could serve
+/// them again (expo/exact#1315).
+#[test]
+fn a_published_picture_leaves_when_its_last_reader_lets_go() {
+    let gate = Gate::new();
+    let session = gate.session();
+    let still = demand(1, 1, 8, 0);
+    session.publish(still, |charge| (1u64, charge)).unwrap();
+    // Unread, it waits for its readers, through one that leaves untaken.
+    let left = session.request_cached(demand(3, 1, 8, 0)).unwrap();
+    session.cancel(left);
+    assert_eq!(session.stats().cold_bytes, 8 * MIB);
+    let canvas = session.request_cached(demand(2, 1, 8, 0)).unwrap();
+    let image = session.request_cached(still).unwrap();
+    let held = session.take_ready(canvas).unwrap();
+    let shown = session.take_ready(image).unwrap();
+    session.cancel(canvas);
+    session.cancel(image);
+    drop(held);
+    assert_eq!(session.stats().pinned_bytes, 8 * MIB);
+    drop(shown);
+    assert_eq!(session.stats().resident_bytes, 0);
+    assert_eq!(session.request_cached(still), Err(Refusal::Stale));
+}
+
+/// A canvas's picture is the canvas's: released, it leaves. The same
+/// picture a view asked for stays cold for the next view.
+#[test]
+fn a_held_picture_leaves_unless_a_view_keeps_it() {
+    let gate = Gate::new();
+    let session = gate.session();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let request = session.request_held(demand(1, 1, 4, 0)).unwrap();
+    complete(gate.next_decode().unwrap(), &drops);
+    let lease = session.take_ready(request).unwrap();
+    session.cancel(request);
+    assert_eq!(session.stats().pinned_bytes, 4 * MIB);
+    drop(lease);
+    assert_eq!(
+        (session.stats().resident_bytes, drops.load(Ordering::SeqCst)),
+        (0, 1)
+    );
+
+    let canvas = session.request_held(demand(1, 2, 4, 0)).unwrap();
+    let view = session.request(demand(2, 2, 4, 0)).unwrap();
+    complete(gate.next_decode().unwrap(), &drops);
+    drop(session.take_ready(canvas).unwrap());
+    drop(session.take_ready(view).unwrap());
+    session.cancel(canvas);
+    session.cancel(view);
+    assert_eq!(session.stats().cold_bytes, 4 * MIB);
+
+    // One view that asks again to keep it, too.
+    let held = session.request_held(demand(3, 3, 4, 0)).unwrap();
+    assert_eq!(session.request(demand(3, 3, 4, 0)), Ok(held));
+    complete(gate.next_decode().unwrap(), &drops);
+    drop(session.take_ready(held).unwrap());
+    session.cancel(held);
+    assert_eq!(session.stats().cold_bytes, 8 * MIB);
+}
+
+/// A forgotten source's cold pictures go at once and its held ones at
+/// their release; another source's stay cached.
+#[test]
+fn a_forgotten_sources_pictures_leave_the_cache() {
+    let gate = Gate::new();
+    let session = gate.session();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let mut leases = Vec::new();
+    for source in 1..=3 {
+        let request = session.request(demand(source, source, 2, 0)).unwrap();
+        complete(gate.next_decode().unwrap(), &drops);
+        leases.push(session.take_ready(request).unwrap());
+        session.cancel(request);
+    }
+    let shown = leases.pop().unwrap();
+    leases.clear();
+    assert_eq!(session.stats().cold_bytes, 4 * MIB);
+    session.forget_source(1, 1);
+    session.forget_source(3, 1);
+    assert_eq!(session.stats().cold_bytes, 2 * MIB);
+    assert_eq!(session.stats().pinned_bytes, 2 * MIB);
+    drop(shown);
+    assert_eq!(session.stats().resident_bytes, 2 * MIB);
+    // A source's id in another generation is another source.
+    session.forget_source(2, 9);
+    assert_eq!(session.stats().cold_bytes, 2 * MIB);
+}

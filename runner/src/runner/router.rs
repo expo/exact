@@ -42,6 +42,11 @@ pub struct RouterChange {
     pub pattern: String,
     /// The top's bound parameters, in the table's order.
     pub params: Vec<(String, String)>,
+    /// Whether work that fell due (a timer, a wake) made the commit that put
+    /// the top in place, even inside an input's dispatch, where overdue work
+    /// runs before the input's own action. A host times such a navigation as
+    /// the program's, from its commit (LLP 1132 D1, "Cause").
+    pub due: bool,
 }
 
 impl RouterChange {
@@ -82,8 +87,9 @@ pub trait Routing {
     fn relaunch(&self, value: &Value, location: &str) -> Option<Value>;
     /// What changed since the last commit, for the host (LLP 1038 D7).
     fn change(&self, value: &Value) -> Result<Option<RouterChange>, RunnerError>;
-    /// Remember `value` as committed, and keep `change` for the host.
-    fn commit(&mut self, value: Value, change: Option<RouterChange>);
+    /// Remember `value` as committed, and keep `change` for the host;
+    /// `due`: work that fell due made the commit.
+    fn commit(&mut self, value: Value, change: Option<RouterChange>, due: bool);
     /// Refusals journaled since the last take.
     fn take_refusals(&self) -> Vec<String>;
     /// The pending change, once.
@@ -810,10 +816,11 @@ impl Routing for RouterContext {
                 .collect(),
             pattern,
             params,
+            due: false,
         }))
     }
 
-    fn commit(&mut self, value: Value, change: Option<RouterChange>) {
+    fn commit(&mut self, value: Value, change: Option<RouterChange>, due: bool) {
         // A fresh but equal value can still consume Forward or activate a
         // fragment. Only the already committed object needs no work.
         if change.is_none()
@@ -845,6 +852,7 @@ impl Routing for RouterContext {
                     .collect(),
                 pattern,
                 params,
+                due: false,
             })
         });
         self.navigations.borrow_mut().clear();
@@ -861,6 +869,7 @@ impl Routing for RouterContext {
         }
         self.committed = Some(value);
         if let Some(mut change) = change {
+            change.due = due;
             if let Some(pending) = self.pending.take() {
                 // A clock seek may commit more than once before a host drains
                 // effects. Keep every removed id and the latest selected top,
@@ -1049,7 +1058,7 @@ impl<D: DataSource> Runner<D> {
     pub(super) fn commit_router(&mut self, change: Option<RouterChange>) {
         if let Some(context) = &mut self.router {
             let value = self.slots[context.slot().0 as usize].clone();
-            context.commit(value, change);
+            context.commit(value, change, self.clock.due);
         }
         self.log_router_refusals();
     }
@@ -1332,7 +1341,17 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// One commit of the runner's own that writes the router `next`.
+    /// The platform's own navigation is the person's act (LLP 1133.023 D7a).
     fn host_commit(
+        &mut self,
+        slot: usize,
+        next: Value,
+        what: &str,
+    ) -> Result<Option<CommitReceipt>, RunnerError> {
+        self.as_person(|r| r.host_commit_as(slot, next, what))
+    }
+
+    fn host_commit_as(
         &mut self,
         slot: usize,
         next: Value,

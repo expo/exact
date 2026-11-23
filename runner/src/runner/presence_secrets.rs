@@ -475,7 +475,7 @@ impl<D: DataSource> PresenceSecrets<D> for LinkedPresence {
                 format!("{name} is not a secret.keep name with a presence policy"),
             ));
         };
-        let origin = r.data_origin();
+        let origin = r.data_cause().origin;
         let occupancy = r.store.occupancy(&name).unwrap_or(Occupancy::Absent);
         // Presence is not delegable (D12): refused before anything is asked.
         if matches!(op, "unlock" | "unprotect") && occupancy.locked() && origin != CallOrigin::App {

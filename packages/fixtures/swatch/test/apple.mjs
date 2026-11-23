@@ -6,12 +6,16 @@
 // binding change with the origin of the commit that made each (`app` here:
 // the agent's taps are a person's input; a tool's origin is the runner's,
 // tested in contract/cli/tests/it/module_views.rs, since no Apple host has a
-// tool door yet), and answers what it heard as `swatchReports`.
+// tool door yet), and answers what it heard, with what it read of its
+// configuration (`ExactPackageContext.config`), as `swatchReports`. The key the
+// configuration carries is in no build output, tree, state or log, and a
+// production build without it is refused `swatch-key-missing`.
 //
 // usage: bun packages/fixtures/swatch/test/apple.mjs [macos] [ios] [host] [--sim <name|udid>]
 import { rmSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
-import { checker, makeFixture, root, run } from './fixture.mjs';
+import { spawnSync } from 'node:child_process';
+import { LEAK, checker, makeFixture, reportedConfig, root, run } from './fixture.mjs';
 
 const argv = process.argv.slice(2), sim = argv.includes('--sim') ? argv[argv.indexOf('--sim') + 1] : process.env.EXACT_SIM;
 const hosts = argv.filter((a, i) => ['macos', 'ios', 'host'].includes(a) && argv[i - 1] !== '--sim');
@@ -40,6 +44,10 @@ const count = (lines, line) => lines.filter((l) => l === line).length;
 
 /** One session's drive: shown, rebound, hidden and shown, tapped, removed. */
 async function drive(s, where) {
+  const target = where === 'ios-simulator' ? 'ios' : 'macos';
+  let config = '';
+  for (const end = Date.now() + 10000; Date.now() < end && !config; await s.clock('+100 real')) config = (await texts(s)).config;
+  check(where, "the package's Swift reads its configuration", config === reportedConfig(target), config);
   const none = await heard(s, () => true, 0);
   check(where, 'nothing is reported before the view is placed', none.length === 0, none.join('; '));
   await s.tap('show');
@@ -72,12 +80,21 @@ async function drive(s, where) {
   await s.tap('show');
   const removed = await heard(s, (l) => count(l, `displayed ${id} false app`) === 2);
   check(where, 'a shown view leaving the tree is reported hidden', count(removed, `displayed ${id} false app`) === 2, removed.join('; '));
+  const said = JSON.stringify([await s.tree(), await s.state(), await s.logs({ all: true })]);
+  check(where, 'the key is in no tree, state or log', !said.includes(LEAK), "the key is in the drive's output");
   return id;
 }
 
 for (const host of hosts.length ? hosts : ['macos', 'ios', 'host']) {
   const where = host === 'ios' ? 'ios-simulator' : host === 'host' ? 'sample-host' : 'macos';
-  run('bun', [resolve(root, 'host/apple/build.mjs'), ...(host === 'ios' ? ['--ios', ...(sim ? ['--sim', sim] : [])] : host === 'host' ? ['--host'] : []), `${name}-apple`], root);
+  const platform = host === 'ios' ? ['--ios', ...(sim ? ['--sim', sim] : [])] : host === 'host' ? ['--host'] : [];
+  const said = run('bun', [resolve(root, 'host/apple/build.mjs'), ...platform, `${name}-apple`], root);
+  check(where, 'the build says nothing of the key', !said.includes(LEAK), 'the key is in the build output');
+  if (host !== 'host') {
+    // A production build without the variable is refused before any package compiles.
+    const refused = spawnSync('bun', [resolve(root, 'host/apple/build.mjs'), ...platform, '--release', `${name}-apple`], { cwd: root, env: { ...process.env, SWATCH_KEY: '' }, encoding: 'utf8', maxBuffer: 1 << 28 });
+    check(where, 'without the variable a production build is refused swatch-key-missing', refused.status !== 0 && refused.stderr.includes('swatch-key-missing'), (refused.stdout + refused.stderr).slice(-1500));
+  }
   if (host !== 'host') {
     // A view's recognizers take only a real touch on iOS (`--touch platform`).
     const s = await open({ host, app: name, ...(host === 'ios' ? { touch: 'platform' } : {}) });

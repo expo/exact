@@ -85,7 +85,7 @@ pub(super) fn reach(
     node: &exact_kernel::NodeRef<'_>,
     (x, y, w, h): Rect4,
     ts: Transform,
-    offset: (f32, f32),
+    offset: PaintOffset,
     cap: f32,
 ) -> (Rect4, bool) {
     let mut out = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
@@ -172,7 +172,7 @@ fn spatial_matrix(
     node: &exact_kernel::NodeRef<'_>,
     p: &Presented,
     (x, y, w, h): Rect4,
-    offset: (f32, f32),
+    offset: PaintOffset,
 ) -> M4 {
     let s = node.style;
     let axis = p.rotate_axis.0;
@@ -229,7 +229,7 @@ pub(super) fn mapping_at(
     node: &NodeRef<'_>,
     p: &Presented,
     rect: Rect4,
-    offset: (f32, f32),
+    offset: PaintOffset,
 ) -> [f32; 9] {
     if p.rotate_axis.is_3d() || node.style.translate_z != 0. {
         plane(&spatial_matrix(parent, node, p, rect, offset))
@@ -299,15 +299,15 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         node: &exact_kernel::NodeRef<'_>,
         p: &Presented,
-        (x, y, w, h): Rect4,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip: Option<Rect4>,
     ) -> bool {
         let s = node.style;
         if self.flatten == Some(node.id) || !(p.rotate_axis.is_3d() || s.translate_z != 0.0) {
             return false;
         }
+        let (x, y, w, h) = paint_rect(node.frame, offset);
         if w <= 0.0 || h <= 0.0 {
             self.boxless_audio(walk, node);
             return true;
@@ -331,9 +331,11 @@ impl Painter {
         let cap = (2.0 * w.max(h).max(64.0)).max(self.viewport.0.max(self.viewport.1));
         let ((left, top, right, bottom), clamped) =
             reach(self, walk, node, (x, y, w, h), ts, offset, cap);
-        let (iw, ih) = (w + left + right, h + top + bottom);
-        // The plane z = 0 of the box, from its island (-left..w+right, …).
-        let m = mul(&m, &translate(x - left, y - top, 0.0));
+        let island = (x - left, y - top, w + left + right, h + top + bottom);
+        let (ix, iy, iw, ih) = island;
+        // Both planes map from the origin of the painted island.
+        let island_origin = translate(ix, iy, 0.);
+        let m = mul(&m, &island_origin);
         let plane = plane(&m);
         // Turned away from the viewer: `backface-visibility: hidden` paints
         // nothing (the plane's normal is its z column after the turn).
@@ -343,7 +345,6 @@ impl Painter {
             self.boxless_audio(walk, node);
             return true;
         }
-        let island = (x - left, y - top, iw, ih);
         if let Some(inv) = self.native_plane(walk, node.id, own, island, clamped) {
             if self.backend.plane_begin(own) {
                 // The software pixmap clips even glyph overhang and affine
@@ -354,6 +355,7 @@ impl Painter {
                 let mut child_walk = Walk {
                     scene: walk.scene,
                     scrollbar_cover: walk.scrollbar_cover,
+                    scroll_grids: walk.scroll_grids.clone(),
                     hit_space: None,
                     boxes: Vec::new(),
                     text: BTreeMap::new(),
@@ -366,13 +368,15 @@ impl Painter {
                     alert: walk.alert,
                     dialog: walk.dialog,
                 };
-                self.node_at(
-                    &mut child_walk,
-                    node.id,
-                    Transform::identity(),
-                    offset,
-                    None,
-                );
+                self.without_grid(true, |painter| {
+                    painter.node_at(
+                        &mut child_walk,
+                        node.id,
+                        Transform::identity(),
+                        offset,
+                        None,
+                    );
+                });
                 self.flatten = flatten;
                 self.backend.pop_clip();
                 self.backend.plane_end();
@@ -396,17 +400,28 @@ impl Painter {
         painter.split = self.split.clone();
         painter.placements = self.placements.clone();
         painter.canvases = self.canvases.clone();
+        painter.pixel_grid = self.pixel_grid;
+        painter.grid_suspended = true;
         painter.flatten = Some(node.id);
         painter.capture_boxless_audio(walk.scene.kernel);
         // An offscreen subtree includes the same outgoing drawings as the
         // live walk, under this plane's current placement and compositing.
         painter.stage = std::mem::take(&mut self.stage);
         painter.kept = std::mem::take(&mut self.kept);
-        painter.viewport = (iw, ih);
-        painter.backend.begin(iw, ih, self.scale);
+        // Nested warps can fill the last backing pixel even when the CSS clip
+        // through that pixel is fractional.
+        let backing = |size: f32| {
+            let scale = f64::from(self.scale);
+            ((f64::from(size) * scale).ceil() / scale) as f32
+        };
+        painter.viewport = (backing(iw), backing(ih));
+        painter
+            .backend
+            .begin(painter.viewport.0, painter.viewport.1, self.scale);
         let mut child_walk = Walk {
             scene: walk.scene,
             scrollbar_cover: walk.scrollbar_cover,
+            scroll_grids: walk.scroll_grids.clone(),
             hit_space: None,
             boxes: Vec::new(),
             text: BTreeMap::new(),
@@ -419,12 +434,11 @@ impl Painter {
             alert: walk.alert,
             dialog: walk.dialog,
         };
-        let f = node.frame;
         painter.node_at(
             &mut child_walk,
             node.id,
             Transform::identity(),
-            (f.x - left, f.y - top),
+            (offset.0 + f64::from(ix), offset.1 + f64::from(iy)),
             None,
         );
         self.stage = std::mem::take(&mut painter.stage);
@@ -433,12 +447,12 @@ impl Painter {
         let planes = [[0., 0., 1.]; 2];
         if let Ok(source) = painter.backend.finish() {
             if let Some((pixels, rect)) =
-                crate::placement::warp_soft(&source, device, planes, self.scale, self.viewport)
+                crate::placement::warp_soft(&source, device, planes, self.scale, self.warp_extent())
             {
                 self.backend.surface_image(Arc::new(pixels), rect);
             }
         }
-        let hit_plane = self::plane(&mul(&hit_m, &translate(x - left, y - top, 0.)));
+        let hit_plane = self::plane(&mul(&hit_m, &island_origin));
         let hit_device = crate::placement::compose(hit_plane, hit_ts, 0., 0.);
         let hit_inv = crate::placement::inverse(hit_device).unwrap_or(inv);
         project(walk, child_walk, inv, clip, hit_inv, hit_clip);
@@ -558,7 +572,13 @@ impl PaintedBox {
 /// scroller's scroll: the scroller's own, the page's for a root that does
 /// not scroll itself, none for a box that only clips. Painted there, it is
 /// hit there too.
-pub(super) fn sticky(scene: &Scene<'_>, id: ViewId, offset: (f32, f32)) -> (f32, f32) {
+pub(super) fn sticky(
+    scene: &Scene<'_>,
+    id: ViewId,
+    offset: PaintOffset,
+    grid: Option<f32>,
+    scroll_grids: &[(ViewId, Option<f32>)],
+) -> PaintOffset {
     let kernel = scene.kernel;
     let Some(node) = kernel
         .node(id)
@@ -566,19 +586,70 @@ pub(super) fn sticky(scene: &Scene<'_>, id: ViewId, offset: (f32, f32)) -> (f32,
     else {
         return offset;
     };
-    let Some(c) = kernel.sticky_constraint(node.key) else {
-        return offset;
-    };
-    let Some(scroller) = kernel.node(c.scroller) else {
-        return offset;
-    };
-    let scroll = sticky_scroll(scene, &scroller);
-    let (dx, dy) = c.offset(scroll);
+    let scroll_grid = sticky_owner_grid(scene, &node, scroll_grids).flatten();
+    let (dx, dy) = sticky_displacement(scene, &node, grid, scroll_grid);
     (offset.0 - dx, offset.1 - dy)
 }
 
-pub(super) fn sticky_scroll(scene: &Scene<'_>, scroller: &NodeRef<'_>) -> (f32, f32) {
-    if effective_overflow(scroller) != (Overflow::Visible, Overflow::Visible) {
+pub(super) fn sticky_displacement(
+    scene: &Scene<'_>,
+    node: &NodeRef<'_>,
+    grid: Option<f32>,
+    scroll_grid: Option<f32>,
+) -> PaintOffset {
+    let kernel = scene.kernel;
+    let Some((c, scroller)) = kernel
+        .sticky_constraint(node.key)
+        .and_then(|c| Some((c, kernel.node(c.scroller)?)))
+    else {
+        return (0., 0.);
+    };
+    let scroll = sticky_scroll(scene, &scroller, scroll_grid);
+    let grid = grid.filter(|_| !grid::leaves_grid(node, &(scene.presented)(node.id)));
+    let (dx, dy) = grid::sticky_shift(c, &scroller, scroll, grid);
+    match grid {
+        Some(s) => (
+            grid::device_pixel(dx, s) / f64::from(s),
+            grid::device_pixel(dy, s) / f64::from(s),
+        ),
+        None => (dx.into(), dy.into()),
+    }
+}
+
+pub(super) fn sticky_owner_grid(
+    scene: &Scene<'_>,
+    node: &NodeRef<'_>,
+    scroll_grids: &[(ViewId, Option<f32>)],
+) -> Option<Option<f32>> {
+    let scroller = scene
+        .kernel
+        .node(scene.kernel.sticky_constraint(node.key)?.scroller)?;
+    scroll_grid(&scroller, scroll_grids)
+}
+
+pub(super) fn scroll_grid(
+    scroller: &NodeRef<'_>,
+    scroll_grids: &[(ViewId, Option<f32>)],
+) -> Option<Option<f32>> {
+    let id = if effective_overflow(scroller) == (Overflow::Visible, Overflow::Visible)
+        && scroller.parent.is_none()
+    {
+        crate::presenter::PAGE
+    } else {
+        scroller.id
+    };
+    scroll_grids
+        .iter()
+        .rfind(|(owner, _)| *owner == id)
+        .map(|(_, grid)| *grid)
+}
+
+pub(super) fn sticky_scroll(
+    scene: &Scene<'_>,
+    scroller: &NodeRef<'_>,
+    grid: Option<f32>,
+) -> (f32, f32) {
+    let scroll = if effective_overflow(scroller) != (Overflow::Visible, Overflow::Visible) {
         scene
             .scroll
             .get(&scroller.id)
@@ -588,5 +659,7 @@ pub(super) fn sticky_scroll(scene: &Scene<'_>, scroller: &NodeRef<'_>) -> (f32, 
         scene.page
     } else {
         (0.0, 0.0)
-    }
+    };
+    let (x, y) = grid::scroll_offset(scroll, grid);
+    (x as f32, y as f32)
 }

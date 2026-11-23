@@ -66,6 +66,7 @@ mod field_tests;
 mod file_drop;
 #[cfg(test)]
 pub(crate) mod frame_target_tests;
+mod frames;
 mod group;
 mod hatch;
 mod history;
@@ -147,7 +148,7 @@ struct TestWork;
 impl exact_runner::HostWork for TestWork {}
 mod shortcuts;
 mod status_bar;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 pub(crate) mod still;
 mod swipe;
 mod timeline_scroll;

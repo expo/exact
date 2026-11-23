@@ -75,6 +75,7 @@ impl<D: DataSource> Host<D> {
         for v in gone {
             self.canvas2d.watched.remove(&v);
         }
+        self.runner.reread_canvas_bitmaps();
         self.runner.draw_canvases(&|_| true);
         let lists = self.runner.take_canvas_lists();
         for c in &lists {

@@ -28,17 +28,25 @@ fn boot(platform: Platform, grants: &'static str) -> Runner<Source> {
 }
 
 fn boot_source(src: &str, platform: Platform, grants: &'static str) -> Runner<Source> {
+    boot_on(src, platform, grants, Kernel::with_monospace())
+}
+
+/// A runner with no kernel, as a render on the server boots one (`host/render`).
+fn boot_detached(platform: Platform, grants: &'static str) -> Runner<Source> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../corpus/drag-out.contract");
+    boot_on(
+        &std::fs::read_to_string(path).unwrap(),
+        platform,
+        grants,
+        Kernel::detached(),
+    )
+}
+
+fn boot_on(src: &str, platform: Platform, grants: &'static str, kernel: Kernel) -> Runner<Source> {
     let plan = contract::compile(src).unwrap();
     let plan = contract::bake(plan, boxed(Grants(grants))).unwrap();
     platform.boot(|| {
-        Runner::boot(
-            plan,
-            boxed(Grants(grants)),
-            Kernel::with_monospace(),
-            Default::default(),
-            "/",
-        )
-        .unwrap()
+        Runner::boot(plan, boxed(Grants(grants)), kernel, Default::default(), "/").unwrap()
     })
 }
 
@@ -127,6 +135,17 @@ fn the_runner_admits_files_by_the_grants_and_the_host_reach_and_journals_a_refus
         refusals(&web),
         ["drag: refused: app:/data/export.pdf: an app:/ file cannot be dragged on the web"]
     );
+    // A render with no kernel builds no prop op, so nothing journals the refusal, and its document carries what a commit admits.
+    let mut detached = boot_detached(Platform::Web, "fs.read app:/data\n");
+    let doc = detached.document_tree().unwrap();
+    let export = doc
+        .nodes()
+        .iter()
+        .find(|n| n.props.str(PropId::TestId) == Some("export"))
+        .unwrap();
+    assert_eq!(export.props.str(PropId::DataTransferFiles), None);
+    assert_eq!(export.props.str(PropId::DataTransferText), Some("Export"));
+    assert!(refusals(&detached).is_empty());
     // A host with no drag admits what the rule admits, so `tree` shows the declaration.
     let linux = boot(Platform::Linux, "fs.read app:/data\n");
     assert_eq!(drag(&linux, "export").3, "app:/data/export.pdf");
@@ -137,9 +156,12 @@ fn bound_entries_and_urls_are_refused_by_the_same_rules() {
     // A template of literals is a constant the compiler folds, admitted as a bound value is.
     let src = "component A\n  state files = [\"assets/a.jpg\", \"img/x.jpg\", \"app:/data/../x.pdf\"]\n  state link = \"/card/1\"\n  view\n    column\n      column draggable=true dataTransfer=DataTransfer(files=files, url=link) testId=\"odd\"\n        text \"a\"\n      column draggable=true dataTransfer=DataTransfer(url=`https://${\"example.com\"}/a b`) testId=\"folded\"\n        text \"b\"\n";
     let mut r = boot_source(src, Platform::Ios, "fs.read app:/data\n");
-    // A render with no kernel folds the same admitted URL into its document.
-    let folded = view(&r, "folded");
+    // A render with no kernel folds the same admitted files and URL into its document.
+    let (odd, folded) = (view(&r, "odd"), view(&r, "folded"));
     let doc = r.document_tree().unwrap();
+    let odd = &doc.node(odd).unwrap().props;
+    assert_eq!(odd.str(PropId::DataTransferFiles), Some("assets/a.jpg"));
+    assert_eq!(odd.str(PropId::DataTransferUrl), None);
     assert_eq!(
         doc.node(folded).unwrap().props.str(PropId::DataTransferUrl),
         None

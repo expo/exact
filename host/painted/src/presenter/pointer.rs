@@ -78,7 +78,7 @@ impl<D: DataSource> Presenter<D> {
             if !out && kinds.iter().any(|k| hears.contains(k)) {
                 return Some(n);
             }
-            at = self.display.parent(kernel, n);
+            at = self.listener_parent(kernel, n);
         }
         None
     }
@@ -150,7 +150,7 @@ impl<D: DataSource> Presenter<D> {
             at.and_then(|n| self.pointer_node(n, &[EventKind::Pointerdown, EventKind::Pointerup]))
         {
             path.push(view);
-            at = self.display.parent(self.host.kernel(), view);
+            at = self.listener_parent(self.host.kernel(), view);
         }
         let kernel = self.host.kernel();
         self.pointer_held = kernel.node(held).map(|n| n.key);
@@ -333,7 +333,7 @@ impl<D: DataSource> Presenter<D> {
         let mut at = self.hit(x, y);
         while let Some(hit) = at.and_then(|hit| self.pointer_node(hit, &[EventKind::Wheel])) {
             path.push(hit);
-            at = self.display.parent(self.host.kernel(), hit);
+            at = self.listener_parent(self.host.kernel(), hit);
         }
         let mut prevented = false;
         let outer = std::mem::replace(&mut self.pointer_walking, true);

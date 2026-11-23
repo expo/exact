@@ -136,10 +136,12 @@ extension Presenter {
     }
 
     /// A button's click reaches a handler above it even when the button owns
-    /// its invocation. Invocation ownership stays with the originating button.
+    /// its invocation, through a `portal` mover's declaration (LLP 1013.002
+    /// D1). Invocation ownership stays with the originating button.
     func buttonPressListener(above source: NodeView, at point: CGPoint? = nil) -> NodeView? {
-        var child: KeyPlatformView = source, crossed = false
+        var child: KeyPlatformView = source, crossed = false, declared = false
         func parent(of view: KeyPlatformView) -> KeyPlatformView? {
+            if let parent = declaredParent(of: view) { declared = true; return parent }
             #if os(macOS)
             return eventParent(of: view)
             #else
@@ -150,7 +152,8 @@ extension Presenter {
             crossed = crossed || view !== child.superview
             child = view
             guard let node = view as? NodeView else { continue }
-            guard !node.disabled, !node.authoredInert else { return nil }
+            // Past a declaration, inertness is the shown tree's, which the hit read (LLP 1013.002 D1).
+            guard !node.disabled, declared || !node.authoredInert else { return nil }
             if node.handlers.contains("press") {
                 if let point, !crossed, !node.bounds.contains(node.local(point)) { return nil }
                 return node
@@ -161,26 +164,72 @@ extension Presenter {
 }
 
 extension ExactSession {
+    func wireFieldAndKeyEvents() {
+        presenter.fieldSelections.onChange = { [unowned self] id, value, selection in admit(id) {
+            let batch = runtime.fieldEvent(id, 52, selection.payload(value), now: now())
+            #if os(macOS)
+            if presenter.views[id]?.fieldComposing != true {
+                applyAppKitEvent(batch)
+                return
+            }
+            #endif
+            apply(batch)
+        } }
+        presenter.onInput = { [unowned self] id, value in admit(id) {
+            if let edit = presenter.fieldSelections.input(id), let selection = presenter.fieldSelections.reported(id, value) {
+                #if os(macOS)
+                let unlessEmpty = clock == nil && !ExactEnv.agentFreezes && stage == nil
+                    && !edit.isComposing && presenter.views[id]?.fieldComposing == false
+                #else
+                let unlessEmpty = false
+                #endif
+                applyInput(runtime.fieldEvent(id, 54, edit.payload(value, selection), now: now()), unlessEmpty: unlessEmpty)
+            } else { applyInput(runtime.input(id, value, selection: presenter.fieldSelections.reported(id, value), now: now())) }
+        } }
+        presenter.fieldSelections.onBeforeInput = { [unowned self] id, value, selection, edit in
+            applyInput(runtime.fieldEvent(id, 53, edit.payload(value, selection), now: now()), at: id, unlessEmpty: true)
+        }
+        presenter.onKey = { [unowned self] id, press in
+            applyInput(runtime.key(id, press.payload, up: press.up, capture: press.capture, now: now()), at: id, unlessEmpty: !press.up)
+        }
+    }
+
     /// Applies a batch a person's input caused: a press, an edit, a key, a
-    /// pointer's hover, press or drag. The batch carries when it was marked,
-    /// so on iOS a glass it adds to a group in the window materializes, as
+    /// pointer's hover, press or drag, the platform's Back, a followed link.
+    /// The batch carries when the input happened, so a navigation it makes
+    /// is the person's and timed from then, and on iOS a glass it adds to a
+    /// group in the window materializes, as
     /// UIKit's does when an app sets it in an animation. What `apply` lands
     /// before it (a published reply or tick) and a timer due after it carry
     /// none: their glass is drawn at once. So do events the app's own script
     /// can cause as well as a person: focus, a selection, a scroll, a
     /// dialog's close and a popover's `toggle`. Beside a staged batch the
     /// input on `id` is admitted as `admit` says (LLP 1072 T13).
+    /// A text event can skip presentation when AppKit already reflects the edit
+    /// and the app produced no view changes or commands.
     // Input without a touch hit test still installs ownership before its runner call.
-    package func applyInput(_ input: @autoclosure () -> Batch, at id: UInt32? = nil) {
-        guard admits(id) else { return }
+    package func applyInput(_ input: @autoclosure () -> Batch, at id: UInt32? = nil, unlessEmpty: Bool = false) {
+        applyInput(at: id, unlessEmpty: unlessEmpty) { input() }
+    }
+
+    /// `applyInput` of a runner call that can refuse (`nil`), which applies
+    /// nothing; the batch applied, if any.
+    @discardableResult
+    package func applyInput(at id: UInt32? = nil, unlessEmpty: Bool = false, _ input: () -> Batch?) -> Batch? {
+        guard admits(id) else { return nil }
         showBudgetWarning(nil)
         #if os(iOS)
         presenter.navigation.finishBootOwner()
         #endif
         if clock == nil { followOffset() } // (the input reads the date: after a sleep, a press can come before any frame)
-        var batch = input()
-        batch.input = CACurrentMediaTime()
+        let happened = NavigationMarks.shared.inputHappened(taken: CACurrentMediaTime())
+        guard var batch = input() else { return nil }
+        batch.input = happened
+        #if os(macOS)
+        if unlessEmpty { applyAppKitEvent(batch); return batch }
+        #endif
         apply(batch)
+        return batch
     }
 }
 
@@ -190,16 +239,19 @@ import UIKit
 extension Presenter {
     /// A hatch's act on an authored element, as the DOM's: `click()` presses
     /// it as a tap does, `focus()` and `blur()` follow the focus rules. Each
-    /// is queued (`ElementHatches.later`) and runs on a later turn. False when
-    /// refused.
-    package func hatchAct(_ id: UInt32, _ action: UInt32) -> Bool {
+    /// is queued (`ElementHatches.later`) and runs on a later turn. A click
+    /// is the program's unless a native control passes the person's input
+    /// (`NavigationMarks.personNow`). False when refused.
+    package func hatchAct(_ id: UInt32, _ action: UInt32, _ origin: NavigationMarks.Origin = .program) -> Bool {
         guard let node = views[id] else { return false }
         switch action {
         case 0:
             guard node.handlers.contains("press"), !node.disabled else { return false }
             // Still the node it was when asked: a reload restarts node ids.
             return elements.later(id, "click") { [weak self, weak node] in
-                if let self, let node, self.views[id] === node { self.session?.log("hatch \(node.props["hatch"].map { "element \($0) #\(id)" } ?? "node #\(id)"): click (delivery: hatch)"); self.press(id) }
+                guard let self, let node, self.views[id] === node else { return }
+                self.session?.log("hatch \(node.props["hatch"].map { "element \($0) #\(id)" } ?? "node #\(id)"): click (delivery: hatch)")
+                NavigationMarks.shared.acting(origin) { self.press(id) }
             }
         case 1:
             return elements.later(id, "focus") { [weak self, weak node] in

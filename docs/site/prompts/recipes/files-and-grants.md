@@ -1,0 +1,14 @@
+```prompt Keep my app's data on the device
+Make the Exact app in this folder keep its data in the right place, with the grant that place needs. Use https://github.com/expo/exact/blob/main/docs/recipes/files-and-grants.md as the source for each step. The Exact checkout has the same page at docs/recipes/files-and-grants.md.
+
+1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
+2. If I did not say what the app keeps, ask me. Choose a place for each kind of data from the recipe's table, show me the choice, and ask before you write code.
+3. Follow the table. A setting is a `state` with `persist` and needs no grant (docs/recipes/persisted-setting.md). A small collection with one writer is a file through `storage.fs`. Shared or queried items go in SQLite. A native token goes in `store.get` and `store.set` under `secret.keep`; a web token goes in an HttpOnly cookie (docs/recipes/web-sessions.md). Data the app ships is a JSON file that app.ts imports.
+4. In app.ts, write a grant line for each path: `fs.read` and `fs.write` for a file, `sqlite.open` for a database. A grant covers its path and tree; a path with no grant answers `denied`. Put kept data under `app:/data`, refetchable data under `app:/cache` and scratch files under `app:/tmp`.
+5. For SQLite, follow the recipe's journal: open the database in each source, read with `query`, write with `execute`, and write several rows or none with `transaction([...])`. Close the database in `finally`. An INTEGER is a bigint: convert it before it reaches a shape. Let the mutation name the list in `refreshes`.
+6. For a file, read and write bytes with `readFile` and `atomicWriteFile`. A missing file has the code `ENOENT`: answer the empty collection. Branch on `e.code`, never on the message. At build there is no storage (code `bake`): let that error through.
+7. Add a test in app.test.contract that saves an item, runs `reload`, and expects the item to be there.
+8. Follow the platform checks in docs/start-here.md (`bun exact.mjs docs platform checks`) for the targets in the app's AGENTS.md and app.json until they pass. Read the reports, including counted findings; a zero exit code alone does not mean clean. Fix the app, not the test. If a finding stays after three rounds of fixes, or the app had it before you changed anything, record it (step 9) and report it; do not keep trying.
+9. When a doc was wrong or missing, or a step needed a workaround, read `bun exact.mjs feedback status`. Under `never`, keep no note. Otherwise record it: `bun exact.mjs feedback note "<what happened>"`, which goes to Expo only as that status says. Do not change the policy; tell me how many notes you kept.
+10. Tell me what the app keeps and where, each grant line, what the tests and checks reported, and the launch command for each target platform.
+```

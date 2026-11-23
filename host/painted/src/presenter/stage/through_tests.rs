@@ -1066,6 +1066,39 @@ fn a_removed_sticky_route_keeps_its_position() {
     assert_eq!((red(&mut p, 200, 150), red(&mut p, 200, 350)), (255, 0));
 }
 
+#[test]
+fn a_removed_sticky_route_follows_its_surviving_scrollers_grid() {
+    let source = SWAP
+        .replace(
+            "main navigationKey=",
+            "main testId=\"port\" overflow=\"scroll\" scale=(second ? 2 : 1) transform-origin=\"0 0\" navigationKey=",
+        )
+        .replace("height=\"100%\"", "height=400")
+        .replace("testId=\"swap\" height=40", "testId=\"swap\" width=40 height=40")
+        .replace(
+            "position=\"absolute\" left=40 top=100 right=0 bottom=0",
+            "position=\"sticky\" top=100 height=100",
+        )
+        .replace(
+            "      if second",
+            "      column height=(second ? 700 : 500)\n      if second",
+        );
+    let mut p = phone_source(&source);
+    p.brush.enable_test_pixel_grid();
+    p.dirty = true;
+    let port = id(&p, "port");
+    let original = p.host().kernel().node(id(&p, "original")).unwrap().key;
+    assert_eq!(p.scroll_to(port, (0., 999.)), Some((0., 200.)));
+    assert_eq!(red(&mut p, 200, 150), 255);
+
+    tap(&mut p, "swap");
+    after(&mut p, 0.);
+    assert!(p.host().kernel().node_by_key(original).is_none());
+    assert_eq!(p.scroll_to(port, (0., 230.5)), Some((0., 230.5)));
+    assert_eq!(red(&mut p, 200, 199), 0);
+    assert_eq!(red(&mut p, 200, 200), 255);
+}
+
 /// Compare the complete outgoing branch with the same branch still live.
 /// The surviving context changes after removal, while the crossing's clock
 /// stays at zero so its opacity is one and the incoming page is invisible.

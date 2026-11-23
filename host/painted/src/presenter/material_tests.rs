@@ -6,6 +6,9 @@
 //! child process of their own.
 use super::*;
 
+#[path = "material_grouped_tests.rs"]
+mod grouped_tests;
+
 const APP: &str = r##"component App
   view
     column padding=10 align-items="flex-start"
@@ -808,6 +811,29 @@ fn materials_segmented_group_that_is_a_grouped_row_spans_the_card() {
         p.rect_of(id(&p, "units")).unwrap(),
     );
     assert_eq!((group.0, group.2), (plain.0, plain.2));
+}
+
+/// A grouped list's row is Material's list item: 56 dp high, and no line
+/// under it.
+#[test]
+fn materials_grouped_row_is_a_list_item() {
+    if !material_process() {
+        return;
+    }
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &crate::test_plan(GROUPED),
+        (),
+        (400., 300.),
+        2.4375,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.frame();
+    let row = id(&p, "plain");
+    assert_eq!(p.rect_of(row).unwrap().3, 56.);
+    assert!(p.host().kernel().grouped_separator(row).is_none());
 }
 
 /// A grouped section: a plain row, a `radiogroup` row and another row.

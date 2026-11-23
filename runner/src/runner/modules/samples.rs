@@ -708,7 +708,7 @@ impl<D: DataSource> Runner<D> {
                 .into_iter()
                 .flatten()
             {
-                let origin = self.origin_asked(*i).unwrap_or_default();
+                let origin = self.origin_asked(*i).unwrap_or(CallOrigin::Device);
                 let cursor = self.extensions.samples.cursors.get(&Reader::Resource(*i));
                 readers.push(json!({ "name": self.plan.str(row.declared),
                     "resource": self.plan.str(self.resource_row(*i).name),

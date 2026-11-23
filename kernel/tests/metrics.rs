@@ -3,6 +3,7 @@
 //! kernel reads a metric in the web's. One test, so nothing here reads a
 //! metric while the switch is moving.
 use exact_kernel::style::metrics::{self, Column};
+use exact_kernel::style::relative::{text_style, text_style_size};
 use exact_kernel::style::{roles, Color, StyleValue};
 use exact_kernel::{Appearance, ColorValue, Dimension, StyleId, StyleProps};
 
@@ -140,6 +141,11 @@ fn a_host_that_says_its_platform_reads_that_platforms_column() {
     assert_eq!(neutral.background_color, Some(role("-exact-background")));
     assert_eq!(neutral.border_color_bottom, web.border_color_bottom);
     roles::set_overrides(Vec::new());
+
+    metrics::set_column(Column::Material);
+    let body = text_style("-exact-body").unwrap();
+    let root = 3e37;
+    assert_eq!(text_style_size(body, root), root);
 
     metrics::set_column(Column::Web);
 }

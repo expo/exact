@@ -439,7 +439,7 @@ their own (a group: ops 20 and 21) is translated on the UI thread in the frame t
 far, mounts and retires rows behind it, and its next stream draws the rows where it then has them; the reader places
 the node by the difference. This is what a driver's `scroll` always did, now for the scroller under the finger.
 
-Six calls cross, all in the view's pixels:
+Six calls cross between the reader and exact2.
 
 | Call | Direction | What it says |
 |---|---|---|
@@ -448,7 +448,7 @@ Six calls cross, all in the view's pixels:
 | `Native.scrollDrag(id, ended, vx, vy, rest, restX, restY)` (`CanvasHost::drag_began`, `drag_ended`; `presenter/scroll_drag.rs`) | reader tells | A finger began dragging scroller `id`, at the drag's first move of it (each scroller the drag moves, an outer one the hand-off reaches too); or let go of it, before the fling's first frame, with `VelocityTracker`'s velocity (px/s, positive as the offset grows) and where the scroller will rest (`OverScroller`'s end, or where it is when nothing is thrown). The app hears `scrolldragstart` and `scrolldragend`. From the start the scroller's moves owe no `scrollend` until the lift with nothing thrown, or until the fling stops |
 | `Native.refresh(id)` (`CanvasHost::refresh`, `Presenter::reader_refresh`) | reader tells | A pull to refresh of scroller `id` was let go of past its threshold: the app hears `refresh` |
 | `Native.flingEnded(id)` (`CanvasHost::fling_ended`, `Presenter::reader_fling_ended`) | reader tells | The fling a drag of scroller `id` threw stopped: at rest, caught by a finger, or ended by the app's scroll. Its `scrollend` is due now |
-| `Native.scrollers()` (`CanvasHost::scrollers`, `Presenter::reader_scrollers`) | exact2 tells, with each stream | For every scroller it has told the reader of: its id, its axes, its revision, where it is, the offset its rows were last painted at, and its farthest offset. Null when nothing of it changed; a scroller it leaves out is gone, and the reader forgets it |
+| `Native.scrollers()` (`CanvasHost::scrollers`, `Presenter::reader_scrollers`) | exact2 tells, with each stream | The producer’s scale, then each scroller’s id, flags, revision, current offset in points, recorded offset in pixels, and farthest offset in points. Null when nothing of it changed; a scroller it leaves out is gone, and the reader forgets it |
 
 **Who is the authority.** While a drag or a fling runs, the reader: exact2 takes each move as told. A scroll the app
 makes goes the other way (a `scrollTop` or `scrollLeft` write, `scrollIntoView` of an element, `scrollBy`, a field kept
@@ -1555,7 +1555,12 @@ Not built of D11:
   matches Compose's height, corners, outline, colours and baselines, headless and on an API 36 emulator; a hugging
   group is 2 dp wider (QUEUE). The outline is whole pixels, as `Modifier.border` rounds it. A phone run remains
   owed, as does Compose's motion (the label slides and the check grows; here both change at once).
-- **List items** and their dividers (rows as cells land on every host at once).
+- **List items' slots and type.** A grouped list's rows take `ListItem`'s padding, leading gap and 56 dp
+  minimum height. A statically visible title and subtitle stacked in a column take a 72 dp minimum.
+  Conditional content grows from the 56 dp minimum. The page, list and cards share `ListItem`'s
+  `surface` colour, and rows have no separator (`grouped-*` rows' Material cells).
+  The leading and trailing slots' sizes and colours, the supporting text's style, the three-line item
+  and Material's section headers remain open.
 - **A header's rich title**: the avatar, the subtitle and the tap on the title that iOS shows are not read here.
 - **`onSecondaryContainer`** for the selected symbol, badges, a navigation rail on a wide window, and hiding the
   navigation bar for a route pushed while the tablist is hidden (the bar follows the tablist's own `display`).

@@ -34,8 +34,9 @@ pub(in crate::runner) struct Views {
     /// Each package view node, by id.
     seen: BTreeMap<ViewId, Viewed>,
     /// The origin of the last commit applied: what a change found after it
-    /// (the host's covers set as it lays the commit out) is reported with.
-    pub(in crate::runner) last: CallOrigin,
+    /// (the host's covers set as it lays the commit out) is reported with;
+    /// none before one.
+    pub(in crate::runner) last: Option<CallOrigin>,
 }
 
 struct Viewed {
@@ -65,7 +66,7 @@ impl<D: DataSource> Runner<D> {
         if self.plan.views.is_empty() && !self.fed_any() {
             return;
         }
-        self.extensions.views.last = self.call_origin();
+        self.extensions.views.last = Some(self.call_origin());
         self.report_views();
     }
 
@@ -80,7 +81,7 @@ impl<D: DataSource> Runner<D> {
         if self.plan.views.is_empty() || (none_placed && self.extensions.views.seen.is_empty()) {
             return;
         }
-        let origin = self.extensions.views.last;
+        let origin = (self.extensions.views.last).unwrap_or(CallOrigin::Device);
         let kernel = &self.kernel;
         let plan = &self.plan;
         let found = kernel.preorder_where(&kernel.roots(), |_, props| {

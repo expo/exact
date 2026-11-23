@@ -68,8 +68,8 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
 
     /** A published stream: [ops] (a copy, the reader's), whether it only moves the last paint, the last scroll it
      * includes, and the feed's group (0 before the first scroll). [scrollers]: what exact2 tells the reader of its
-     * scrollers as of this stream ([Native.scrollers]), null when that is what it last told; with no [ops], that
-     * statement alone. [fields]: what exact2 tells of the text fields the reader hosts as of this stream
+     * scrollers as of this stream ([Native.scrollers]). A statement can acknowledge a rejected move without [ops].
+     * [fields]: what exact2 tells of the text fields the reader hosts as of this stream
      * ([Native.fields], LLP 1115.001 D8), null when that is what it last told. [bars]: what it tells of its bars as
      * of this stream ([Native.bars], D11), null likewise. [access]: what it tells of the accessibility tree
      * ([Native.access], D13), null likewise, and always while no accessibility service is on. */
@@ -188,14 +188,13 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     val frameRates = FrameRates()
     private val prefetch = true
 
-    // Scrolls the main thread sent that the exact thread has not taken: summed, so a busy thread catches up at once.
+    // Driver travel and gesture samples the exact thread has not taken.
     private val lock = Any()
     private var owedDy = 0f
     private var owedSeq = 0
     private var stepPosted = false
-    /** A finger's moves the exact thread has not taken, summed by scroller: how far, and the revision known. */
-    private class Moved(var dx: Float, var dy: Float, var rev: Int)
-    private val owedMoves = LinkedHashMap<Int, Moved>()
+    private class Moved(val id: Int, val dx: Float, val dy: Float, val rev: Int)
+    private var owedMoves = ArrayList<Moved>()
     /** lead=1: the velocity the window leads by (px/s, positive toward the end; otherwise none, a viewport each side).
      * Fast travel ([LEAD_ON] dp/s and on, until it slows below [LEAD_OFF]) leads by all exact2 allows (two viewports
      * more): a lead that followed the measured speed moved the window's far edge with each frame's jitter, mounting and
@@ -395,13 +394,10 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     }
 
     /** The reader moved scroller [id] by ([dx], [dy]) px, knowing revision [rev] of it ([Scrolling]); the main
-     * thread's [seq]th scroll. Summed like a driver's, so a busy thread catches up at once. */
+     * thread's [seq]th scroll. exact2 applies each sample in order, as the reader did. */
     fun scrolled(id: Int, dx: Float, dy: Float, rev: Int, seq: Int) {
         synchronized(lock) {
-            val m = owedMoves.getOrPut(id) { Moved(0f, 0f, rev) }
-            // What was sent under an older revision is dropped by exact2 anyway.
-            if (m.rev != rev) { m.dx = 0f; m.dy = 0f; m.rev = rev }
-            m.dx += dx; m.dy += dy
+            owedMoves.add(Moved(id, dx, dy, rev))
             owedSeq = seq
             if (stepPosted) return
             stepPosted = true
@@ -423,18 +419,20 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
 
     private val step = Runnable {
         val dy: Float; val s: Int
-        var ids: IntArray? = null; var moves: Array<Moved>? = null
+        val moves: List<Moved>
         synchronized(lock) {
             dy = owedDy; s = owedSeq; owedDy = 0f; stepPosted = false
-            if (owedMoves.isNotEmpty()) { ids = owedMoves.keys.toIntArray(); moves = owedMoves.values.toTypedArray(); owedMoves.clear() }
+            moves = owedMoves
+            owedMoves = ArrayList()
         }
         android.os.Trace.beginSection("exact scroll")
-        val fingers = moves
-        if (fingers != null) for (k in fingers.indices) Native.scrolled(ids!![k], fingers[k].dx, fingers[k].dy, fingers[k].rev)
-        if (fingers == null || dy != 0f) Native.scroll(dy)
+        for (m in moves) Native.scrolled(m.id, m.dx, m.dy, m.rev)
+        if (moves.isEmpty() || dy != 0f) Native.scroll(dy)
         android.os.Trace.endSection()
         seq = s
-        produce()
+        // A step of the reader's own moves whose frame would only move what it moved itself makes none, unless an
+        // accessibility service is on (each frame tells it the scrollers' offsets). What follows a frame still runs.
+        if (running && !accessible && moves.isNotEmpty() && dy == 0f && Native.moved()) produced() else produce()
         // Every third step: the window's lead mounts, off the main thread.
         if (prefetch && ++steps % 3 == 0) { handler.removeCallbacks(refiner); handler.post(refiner) }
         if (led) { handler.removeCallbacks(settle); handler.postDelayed(settle, SETTLE_MS) }
@@ -607,6 +605,11 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
             Native.timerObservation(readerScrolling, readerSampling, true, false)
             if (!notifying.getAndSet(true)) postMain { notifying.set(false); published() }
         }
+        produced()
+    }
+
+    /** After a turn, with or without a stream: the chrome, the requests, and the next turn and timer. */
+    private fun produced() {
         val c = Native.chrome()
         val cold = coldChrome
         val number = windowRead
@@ -828,6 +831,9 @@ internal object Exact {
 
     fun frameLoaded(id: Int, slot: Int, generation: Int, session: Long) =
         field { Native.frameLoaded(id, slot, generation, session) }
+
+    fun frameEvent(id: Int, slot: Int, generation: Int, session: Long, event: String, record: String) =
+        field { Native.frameEvent(id, slot, generation, session, event, record) }
 
     /** A media element's event (by HTML's name, [payload] its value) or, with no [event], its observed [state]
      * (LLP 1042.001 D7), checked against the allocation and session its painted element carries. */

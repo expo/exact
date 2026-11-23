@@ -29,7 +29,7 @@ impl Painter {
             walk,
             node.id,
             Transform::identity(),
-            alert.offset,
+            (alert.offset.0.into(), alert.offset.1.into()),
             Some((0., 0., self.viewport.0, self.viewport.1)),
         );
         walk.dialog = None;
@@ -39,7 +39,7 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         node: &NodeRef<'_>,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
     ) {
         let Some(alert) = self.alert.as_ref().filter(|a| a.key == node.key).cloned() else {
             return;
@@ -49,7 +49,7 @@ impl Painter {
                 &mut self.text.borrow_mut(),
                 &paragraph,
                 &[ink],
-                (rect.0 - offset.0, rect.1 - offset.1),
+                grid::paint_origin((rect.0, rect.1), offset),
                 ts,
             );
             walk.text.insert(node.key, paragraph);

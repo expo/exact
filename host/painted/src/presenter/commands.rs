@@ -90,9 +90,14 @@ impl<D: DataSource> Presenter<D> {
     /// [`Presenter::run_commands`] but for activating a staged update, which
     /// waits for the next full run: it needs a data source.
     pub(super) fn run_queued_commands(&mut self) {
-        let mut floats = Vec::new();
+        let (mut floats, mut frames) = (Vec::new(), Vec::new());
         for c in std::mem::take(&mut self.commands) {
             match c.name.as_str() {
+                // An iframe's (LLP 1020.002 D3, D7, D11), answered once the commands have run.
+                name if super::frames::is(name, &c.args) => {
+                    let target = self.frame_by_id(super::frames::id(&c.args));
+                    frames.push((c.name, c.args, target));
+                }
                 "deliveryCheck" => {
                     if !self.check_update() {
                         eprintln!("exact update: no store, or a check is already running");
@@ -148,7 +153,8 @@ impl<D: DataSource> Presenter<D> {
                     let arg = |i: usize| c.args.get(i).and_then(exact_plan::Value::as_str);
                     let (text, name) = (arg(0).unwrap_or_default(), arg(1).unwrap_or_default());
                     if arg(2) == Some("iframe") {
-                        self.host.log("postMessage: iframe replies are unavailable on Linux");
+                        let host = if cfg!(target_os = "android") { "Android" } else { "this host" };
+                        self.host.log(format!("postMessage: iframe replies are unavailable on {host}"));
                         continue;
                     }
                     if let Err(refused) = self.post_message(name, text) {
@@ -239,6 +245,9 @@ impl<D: DataSource> Presenter<D> {
         }
         for id in floats {
             self.refuse_picture_in_picture(&id);
+        }
+        for (name, args, target) in frames {
+            self.frame_command(&name, &args, target);
         }
         // Selection events are queued tasks: the input's commands run first.
         self.drain_field_select_tasks();

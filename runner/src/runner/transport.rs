@@ -7,6 +7,7 @@
 //! answers is published by a commit of its own, as an answer's `then` is.
 //! A clock in's deliveries (LLP 1125 D9) come through `midi_input`.
 
+use super::provenance::Cause;
 use super::*;
 use crate::transport::{Answer, Out, Seen, SOURCE};
 
@@ -60,6 +61,9 @@ impl<D: DataSource> Runner<D> {
             seen.push(Seen { on, key, args });
         }
         self.audio.transport.pending = Some(seen);
+        // What the gate read starts under the reading commit's cause, which
+        // has been put back by the time the commit stands.
+        self.audio.staged = self.cause();
         Ok(())
     }
 
@@ -74,6 +78,7 @@ impl<D: DataSource> Runner<D> {
         }
         let before = self.audio.transport.answer();
         let (now, live) = (self.now_ms, self.clock_live());
+        let cause = self.audio.staged;
         let mut lines = Vec::new();
         let a = &mut *self.audio;
         let mut out = Out {
@@ -81,8 +86,12 @@ impl<D: DataSource> Runner<D> {
             midi: &mut a.midi,
         };
         if let Some(seen) = seen {
+            let starts = a.transport.starts;
             a.transport
                 .stood(&self.plan, &mut out, now, live, seen, &mut lines);
+            if a.transport.starts != starts {
+                a.started = cause;
+            }
         }
         if suspend {
             a.transport.suspend(&self.plan, &mut out, now, &mut lines);
@@ -135,15 +144,16 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// The last finite track ended at the clock's time: the `ended=`
-    /// action, if any, to run as a timer's.
-    pub(super) fn transport_end(&mut self) -> Option<ActionsId> {
+    /// action, if any, to run as a timer's, with the cause of the commit
+    /// that started the sequence.
+    pub(super) fn transport_end(&mut self) -> Option<(ActionsId, Cause)> {
         let before = self.audio.transport.answer();
         let mut lines = Vec::new();
         let now = self.now_ms;
         let a = &mut *self.audio;
         let action = a.transport.end(&self.plan, &mut a.midi, now, &mut lines);
         self.transport_said(lines, before);
-        action
+        action.map(|action| (action, self.audio.started))
     }
 
     /// The transport record, for `state.transport` and a test: it panics on a

@@ -152,6 +152,42 @@ fn every_host_arm_refuses_holds_or_presents_by_one_rule() {
     )
     .unwrap();
     assert!(exact_runner::agent::logs(&r, 0).contains("share: dismissed"));
+    // A host that presents a held share and fails settles the hold with its reason: that line alone.
+    // The share outcome lines journaled since `since`, without their times
+    let outcomes = |r: &exact_runner::Runner<_>, since: usize| -> Vec<String> {
+        r.journal()
+            .skip(since)
+            .filter_map(|l| l.split_once(' ').map(|(_, line)| line))
+            .filter(|l| l.starts_with("share: "))
+            .map(String::from)
+            .collect()
+    };
+    let refused_answer = |ticket: u64| {
+        format!(
+            r#"{{"op":"tap","ticket":{ticket},"choice":"cancel","refused":"app:/data/missing.pdf: No such file or directory"}}"#
+        )
+    };
+    press(&mut r, "menu-share");
+    let c = r.take_commands().pop().unwrap();
+    let Arm::Held(ticket) = arm(&mut r, Share::from_args(&c.args), c.source, true, NO_SHEET) else {
+        panic!("held");
+    };
+    let since = r.journal().count();
+    exact_runner::agent::answer_ticket(&mut r, "tap", &refused_answer(ticket));
+    assert_eq!(
+        outcomes(&r, since),
+        ["share: refused: app:/data/missing.pdf: No such file or directory"]
+    );
+    assert!(r.device_holds().is_empty());
+    // An agent's answer is the person's choice: its cancel is a dismissal, whatever else it says.
+    press(&mut r, "menu-share");
+    let c = r.take_commands().pop().unwrap();
+    let Arm::Held(ticket) = arm(&mut r, Share::from_args(&c.args), c.source, true, NO_SHEET) else {
+        panic!("held");
+    };
+    let since = r.journal().count();
+    exact_runner::agent::answer(&mut r, &refused_answer(ticket)).unwrap();
+    assert_eq!(outcomes(&r, since), ["share: dismissed"]);
 }
 
 /// LLP 1125 D12: a granted app file and the card's picture present on

@@ -122,6 +122,25 @@ impl<D: DataSource> Runner<D> {
         Some(id)
     }
 
+    /// Replacing a tail would move its write after newer pending writes.
+    /// An overlay shared with any of them must keep send order (LLP 1161.000 D3).
+    pub(super) fn has_intervening_write(&self, m: usize, tail: Option<u64>) -> bool {
+        let Some(tail) = tail else { return false };
+        let refreshes = self.declared_refreshes(m);
+        self.writes
+            .records
+            .iter()
+            .rev()
+            .take_while(|w| w.id > tail)
+            .any(|w| {
+                w.landed.is_none()
+                    && self
+                        .declared_refreshes(w.mutation)
+                        .iter()
+                        .any(|r| refreshes.contains(r))
+            })
+    }
+
     /// The pending record a reply to `target` belongs to: a parallel send's
     /// own, a queue's oldest (its head), a newest-wins mutation's newest.
     fn in_flight_write(&self, target: Target) -> Option<usize> {

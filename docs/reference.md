@@ -220,6 +220,32 @@ be absent. Animations that do not set `box-shadow` remain on the section. On
 iPad, pointer hover over a grouped section does not activate its `:hover` shadow;
 forwarding from UIKit’s visible cells, header and footer is not implemented yet.
 
+## A `portal` element on each host
+
+`portal="<id>"` shows an element written once inside the plain box with that `id`
+(`contract vocab portal`; [the recipe](recipes/keep-a-playing-video.md); LLP 1013.002).
+Every host keeps the element's state, and its press, pointer-button and key events
+bubble through where it is written; hover, focus on the web and the painted hosts'
+pan, swipe and long press still follow where it is shown. What each does with the
+element itself:
+
+| Host | The element as it moves | A video through the move | Shown nowhere |
+|---|---|---|---|
+| Web (the JS build) | the same DOM element, by `moveBefore()`, or `insertBefore` where the browser lacks it (WebKit) | plays on, no reload or seek (Chrome, Firefox; WebKit on a bare page); an `iframe` reloads under `insertBefore` | in a connected, `display: none`, inert holder: Chrome pauses a muted autoplay video and resumes it, Firefox keeps it playing |
+| Web (the wasm host) | the same DOM element, through the same holder; a reorder within one destination is an `insertBefore`, which reloads an `iframe` | plays on (Chrome) | in the same holder: Chrome pauses and resumes it (other browsers not run) |
+| macOS, iOS | the same view, its `AVPlayer` included; a native flight draws it live | plays on | out of the window: the off-screen rule pauses a muted autoplay video and resumes it |
+| Android | the same node and player | plays on; Material's container transform draws it in the arriving screen | kept with its player: paused and resumed as on Apple |
+| Linux, Windows | the same node | no video decoder: its state and `poster` carry, with no decoded frames; no flights | out of the tree |
+| Terminal | laid out where it is shown | no video | out of the tree |
+
+Not yet: a page rendered ahead (`render=build` or `request`) leaves the element out and
+builds the page afresh in the browser. On the native hosts a design-token colour inside
+the element resolves in its declaration's modes, not its destination's (`color-scheme`
+and plain inheritance follow the destination). tvOS and watchOS have not been run;
+watchOS has no video. On Android a mover placed in a
+box under `display: none` loses its player, which loads again when shown. Windows has
+been compiled, not run.
+
 ## Serve RealWorld
 
 RealWorld's public pages can be served by the native renderer:
@@ -693,9 +719,12 @@ override func destroy() {
 
 An app says what it opens with `file_handlers` in `app.json` — the W3C Web App
 Manifest's own key — and the macOS bake derives `CFBundleDocumentTypes` from
-it. A Linux binary carries the same declarations into the desktop portal's
-Open and Save filters; a directory pick remains a directory pick rather than a
-file-type filter. Each MIME type it accepts must be one the Apple hosts map to
+it. Linux and Windows binaries carry the same declarations into their Open and
+Save dialogs; a directory pick remains a directory pick rather than a file-type
+filter. Each handler is one file type in the document pickers, labelled with its
+`name`, so an app that wants a "Documents" choice showing only PDFs declares
+`{ "action": "/", "name": "Documents", "accept": { "application/pdf": [".pdf"] } }`
+(below, "Documents the person chose"). Each MIME type it accepts must be one the Apple hosts map to
 a system type (`DOCUMENT_UTIS` in `scripts/app.mjs`; `application/octet-stream`
 is `public.data`), which the app views (`Viewer`, rank `Alternate`), or the
 app's own format: a vendor or unregistered type (`application/vnd.studio.board+json`,
@@ -1100,6 +1129,11 @@ tag, so a relaunched process lists it again. If the person dismisses it (Android
 14 and later let them swipe away an ongoing notification the system has not
 promoted), it leaves the list when the app is next in front, and a later send to
 it is refused. A send is answered once the system shows its notification.
+Several activities stay separate notifications where Android would bundle an
+app's notifications into one whose collapsed rows show only titles: each is a
+notification group of its own (LLP 1126 D13). Android 16 still bundles six or
+more activities it has not promoted, and those left stay in that bundle; a
+manufacturer's shade may group differently.
 An `updateActivity` with an alert alerts again, with its text as the
 accessibility ticker; a stale date is listed as `stale` once past.
 `endActivity` with `"immediate"` removes the notification; `"default"` leaves an
@@ -2715,10 +2749,22 @@ driver is connected. **Detach Agent** in the same menu ends it, and so does send
 background. The picture is UIKit's snapshot of the app's window, without the indicator. The
 driver names a simulator that runs the app when the selected one does not.
 
+`bun scripts/agent.mjs web --app <app> --attach tree state logs layout` reads a tab of the app's
+running JS-target dev loop (`bun exact.mjs web`) the same way, in the person's own browser. The
+person presses **⌥⇧A** in the tab, which shows a pairing code that works once, for two minutes; the
+driver asks for it on a terminal, or reads the first line of stdin (`… --attach tree < code.txt`, or
+piped), and presents it on the loop's attach channel; then the tab asks the person to **Allow**. **Agent Attached** shows in the tab's corner
+while the driver is connected; **Detach**, ⌥⇧A again, a reload, loading another page or closing the tab
+ends it, and a code from before a reload is refused. The channel takes only a connection from this
+machine naming the loop by a loopback name, and no browser page. A tab is only read: it cannot take
+its own picture, and nothing a page does is a person's input, so `screenshot`, `tap`, `type` and
+`call` are refused `unsupported`. A tab the driver opened (`?agent`), a game's wasm loop and a
+release build have no attach.
+
 Only a Mac app or an iOS simulator app that `host/apple/build.mjs` builds to run carries the
 listener; a release, archive, embedded, physical-device or Apple TV build has none of it, and the
-driver refuses Android, Windows, Linux, the web, tvOS, watchOS and a physical iPhone before it
-runs any platform tool.
+driver refuses Android, Windows, Linux, tvOS, watchOS and a physical iPhone before it runs any
+platform tool.
 
 ### Inspect work and native presentation
 
@@ -2795,9 +2841,9 @@ export const answer: TypeScriptAnswer = (source, args, store, storage, native) =
 The app's `build_mixed_with` bake derives these types from its `rust_sources`
 argument; no ownership list goes in `app.json` or TypeScript. Every remaining
 provider is required. Run `bun exact.mjs contract build app.contract` to obtain
-the narrowed declaration beside `app.ts`: its TypeScript check runs the app's
-Cargo bake, which writes the declaration before checking `app.ts`, even if
-the check fails. Native bakes use it too, and a development producer keeps
+the narrowed declaration beside `app.ts`: its TypeScript check builds the app's
+Rust module, which carries `RUST_SOURCES`, and writes the declaration before
+checking `app.ts`, even if the check fails. Native bakes use it too, and a development producer keeps
 the roster from the previous bake's `rustSources` receipt. Rebuild after
 changing Rust ownership. `Sources`, `Source`, `Args` and `Result` still
 describe every app-owned source, including Rust's.
@@ -5053,6 +5099,23 @@ is taken or released. Under the agent the picker stays held. Image pixel readbac
 synchronous readback (`getImageData`, `toDataURL`, `toBlob`) remain deferred;
 a canvas's pixels go to a file (below).
 
+### Canvas 2D surfaces (`draw`)
+
+`canvas surface=board(nodes)` is drawn by the data module when no GPU module
+registers `board`: `app.ts` exports `surfaces`, each surface's name and its
+number of arguments, and `draw(surface, args, ctx, frame)`, which draws on `ctx`
+with `CanvasRenderingContext2D`'s names and returns `true` to be asked for
+another frame (LLP 1056).
+
+The context's space is the content box in CSS px, at the device's scale.
+`bitmap-width` and `bitmap-height` give the canvas a fixed bitmap instead, as
+HTML's `width` and `height` attributes do: `frame.width` × `frame.height`
+pixels, stretched to the box, with 300 or 150 for one left unset. Either may be
+computed, as may `color-space` and `color-type`. On every host a change clears
+the bitmap and draws again with `frame.cause` `"size"`, as assigning
+`canvas.width` does on the web. A size is a whole number of pixels: a negative
+one is 0, and a fraction leaves it unset.
+
 ### A 2D canvas's pixels as an image file (`captureCanvas`)
 
 `captureCanvas(surface, path, type, quality)` writes what the host has drawn and
@@ -5702,6 +5765,26 @@ remains a compound suffix. Their Bun and Rust tests read the same cases from
 `scripts/fixtures/document-suffixes.json`. An invalid suffix or an empty or
 control-bearing handler name makes the build fail.
 
+The open picker, and the save picker where the platform's save dialog lists
+types, offer the declared types and nothing else: each handler's `name` labels
+its type where the platform lists types by name (Windows, Linux and the web),
+and macOS and iOS offer their union, as their panels do. The pickers take their
+types from the manifest, never from the call.
+
+| Host | `showOpenFilePicker`, `showSaveFilePicker` |
+| --- | --- |
+| Web (Chromium) | `types`, one `{ description: name, accept }` per handler, and `excludeAcceptAllOption: true` |
+| Windows | one `SetFileTypes` entry per handler, `Documents (*.pdf)`, the first selected; Save starts on the type with the longest suffix ending `suggestedName` and adds that type's extension to a name typed without one |
+| Linux | one portal filter per handler, the first as `current_filter` |
+| macOS | `NSOpenPanel`'s `allowedContentTypes`, the union, with no type menu; the save panel takes no types |
+| iOS | Open: the document picker's content types, the union; Save exports with no types |
+
+On Windows a handler with MIME types and no extension matches the extension the
+system registers for each MIME type. Where there is none, the dialog cannot
+offer that type and the journal names the MIME type; where it can offer none
+of the declared types, the pick is refused. Give such a handler its
+extensions. With no handlers a picker offers every file.
+
 The web passes those suffixes to its picker and matches a drop by the whole
 filename suffix. Apple registers each without its leading dot; its picker offers
 the handler's content types and the complete extension tokens the system resolves,
@@ -5725,8 +5808,8 @@ the app keeps what the person chose (below).
 
 On Windows, the three document pickers, file inputs and `saveFile` use the
 shell's common item dialogs, owned by the app's window. A headless host refuses
-them; under the agent they remain held pickers. Document pickers offer every
-file until the Windows build carries `file_handlers`. File inputs copy the
+them; under the agent they remain held pickers. Open and Save offer the
+`file_handlers` types, as the table above says. File inputs copy the
 chosen files into `app:/tmp/picked/` and leave the originals in place.
 
 **Where a picker opens** (LLP 1173 D2). The three pickers and `saveFile`
@@ -6361,6 +6444,29 @@ installed binary must supply the required runtime and admit the module's app
 identity and grants. An app with both TypeScript and Rust modules sets every
 `deploy.store` entry to `"0"`: delivery of both together is not implemented. See LLP 1027 for the design record.
 
+## Package configuration
+
+A package's interface declares the values it takes from the app in its
+`exact.json`, per target (`web`, `android`, `ios`, `macos`, `tvos`):
+`"config": {"<target>": {"<key>": {"type": "string" | "number" | "boolean" | "env",
+"required": true | "release", "missing": "<code>"}}}`. An `android` key may add
+`"metadata": "<name>"` to also fill a vendor SDK's `<meta-data>`, if the name is
+on `CONFIG_METADATA` in `scripts/android-manifest.mjs`.
+
+The app gives them in `app.json` as `"packages": {"<interface>": {"<target>":
+{"<key>": <value>}}}`. An `env` key's value is `{"env": "<VARIABLE>"}`, which
+the build reads from its environment. The package's code reads the values as
+`context.config` in Kotlin and Swift, and as `config` on the web. A build
+refuses a value of another type (`bake-config-type`), an undeclared key
+(`bake-config-unknown`) and a required key with no value (the declared
+`missing` code). It refuses a `"required": "release"` key only in a release
+build.
+
+`env` keeps a value out of the repository, not out of the app: everything in
+`config` ships in the APK, the IPA or the page. A changed native value needs
+a new binary. See
+[A package's configuration](contract-for-agents.md#a-packages-configuration).
+
 ## Access hatches
 
 An access hatch hands the app's native code the platform object Exact built for
@@ -6558,11 +6664,16 @@ An app outside this checkout names its data crate in app.json (LLP 1153.003 D2):
 `source`, optional, is what every host and the web's module run: the type itself, its `::default()` (the
 default) or its `::new(…)` with literal arguments (`"field_log_data::FieldLog::new(true)"`). A source
 built from anything else (a local, a path read at build time) is exported by a crate of the app's own,
-named in app.json's `rust.module.package` (Update Lab's `logic/`), which supplies the module instead.
+named in app.json's `rust.module.package` (Update Lab's `logic/`), which supplies the module instead. Beside
+`app.ts`, that crate also carries the data crate's `RUST_SOURCES`, which the web reads from the module:
+`exact_logic_abi::export_sources!(field_log_data::RUST_SOURCES);` beside its `export!`.
 
 The crate sits beside app.json and joins the workspace exact2 generates: its `Cargo.toml` sets
 `package.workspace = "../.exact/shells"` and takes exact2's crates as workspace dependencies
-(`exact-runner.workspace = true`; `contract.workspace = true` for a build script). The host crates are
+(`exact-runner.workspace = true`; `contract.workspace = true` for a build script). Any other crate of
+exact2's is taken the same way (`exact-canvas.workspace = true`), never by a path through
+`.exact/checkout`: the workspace names exact2 by its real path, and a second path to the same crate is a
+second package to Cargo, so a build refuses one and `bun exact.mjs update` rewrites it. The host crates are
 generated under `.exact/shells/` and link it; without `app.ts` they link no JavaScript engine. With
 `app.ts` beside it the two compose: Rust answers the sources the crate lists in `pub const RUST_SOURCES:
 &[&str]`, TypeScript the rest. `exact new <path> --rust` writes such an app: `data/`, whose type answers

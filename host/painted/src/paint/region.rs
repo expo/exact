@@ -63,7 +63,11 @@ impl ScrollBounds {
     /// `collection_max` is a collection's range on its main axis: y for a
     /// block list, x for a flex (row) one, the runner's rule at creation
     /// (LLP 1070 H1).
-    fn capture(node: &NodeRef<'_>, kernel: &Kernel, collection_max: Option<f32>) -> Self {
+    pub(super) fn capture(
+        node: &NodeRef<'_>,
+        kernel: &Kernel,
+        collection_max: Option<f32>,
+    ) -> Self {
         let axes = effective_overflow(node);
         // Not a scroll container: nothing to measure; it never moves.
         if axes == (Overflow::Visible, Overflow::Visible) && collection_max.is_none() {
@@ -695,7 +699,9 @@ impl<'a> Replay<'a> {
                     if f.node != n.key || i != nodes.len() {
                         return Err("content recipe identity mismatch".into());
                     }
-                    let geometry = n.paint.geometry(paint_rect(f.frame, offset));
+                    let geometry = n
+                        .paint
+                        .geometry(paint_rect(f.frame, (offset.0.into(), offset.1.into())));
                     let rect = geometry.outer.rect;
                     let c = geometry.content;
                     let parent = transform;
@@ -726,7 +732,8 @@ impl<'a> Replay<'a> {
                             }
                             // EXACT ordinary node composition, including f32
                             // center association. Never translate baked pixels.
-                            let (x, y, w, h) = paint_rect(f.frame, offset);
+                            let (x, y, w, h) =
+                                paint_rect(f.frame, (offset.0.into(), offset.1.into()));
                             let (ox, oy) = node.style.transform_origin.resolve(w, h);
                             let (cx, cy) = (x + ox, y + oy);
                             let (tx, ty) = p.translate_at(w, h);
@@ -827,7 +834,7 @@ impl<'a> Replay<'a> {
         painter: &mut Painter,
         walk: &mut Walk<'_, '_>,
         _parent: Transform,
-        _offset: (f32, f32),
+        _offset: PaintOffset,
         outer_clip: Option<Rect4>,
     ) {
         let mut clip = outer_clip;
@@ -844,8 +851,10 @@ impl<'a> Replay<'a> {
                     // Containing-block transforms were refused before prepare.
                     let parent = r.transform;
                     if r.live_hit {
+                        let (x, y, ..) = g.outer.rect;
                         walk.boxes.push(PaintedBox {
                             baseline: None,
+                            text_origin: matches!(n.payload, Payload::Text(..)).then_some((x, y)),
                             rounded_border: if walk.scrollbar_cover {
                                 g.outer.rounded_outline()
                             } else {
@@ -1003,6 +1012,7 @@ mod hit_tests {
             let rect = (0.0, 0.0, 100.0, 100.0);
             let mut b = PaintedBox {
                 baseline: None,
+                text_origin: None,
                 rounded_border: None,
                 shape_clips: Vec::new(),
                 pointer_hit: true,

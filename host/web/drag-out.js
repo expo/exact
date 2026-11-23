@@ -6,7 +6,7 @@
 // receiver reads the URL. A node that carries nothing begins no drag. The JS target loads it from
 // `drag.js`; the wasm target's glue loads it when a node first turns draggable.
 
-import { DRAG_FIELDS, downForDrag, elementOf, observeDragInput, pressedAt } from './drag-input.js';
+import { DRAG_FIELDS, downForDrag, lightDomDragPath, observeDragInput, pressedAt } from './drag-input.js';
 
 /** Whether `el` is a drag's source by its own `draggable`, HTML's enumerated attribute, read in any case. Firefox ignores
  * it on an SVG element and begins the drag of the draggable node around it; Chromium and WebKit begin the drag at the
@@ -71,30 +71,44 @@ export function start(event, base = globalThis.document?.baseURI, owns = () => t
  * for a mouse's down a press, between the element and the node keeps the node's drag from starting, and leaves the
  * keeper's own drag (a link's, a field's text) to the browser. A detached source or a node that carries nothing
  * begins no drag. */
-function decide(event, owns, down) {
+function decide(event, owns, down, inPage) {
   // A script's `dragstart` is no drag, and a selection's begins at its text, not an element (Firefox). A shadow root's
   // content is its host's, as the document sees it.
   const target = event.isTrusted !== false && event.target?.nodeType === 1 ? event.target : null;
   // Another script's draggable the browser began the drag at is its own, whatever is inside it, an SVG element too where
   // the engine honors its mark.
   if (!target || (target.matches('[draggable="true" i]') && !declared(target))) return;
+  const draggable = (el) => (off.has(el) && declared(el)) || explicit(el);
+  const image = target.localName === 'img', keepers = down?.mouse !== false ? KEEPS_A_MOUSE : DRAG_FIELDS;
+  // An earlier capture listener can take the image out of the page. Its dispatch path still names its card.
+  if (image && inPage && !inPage(target)) {
+    const ancestors = lightDomDragPath(event);
+    if (ancestors.length) {
+      const node = ancestors.find(draggable);
+      if (!node || !declared(node) || !owns(node)) return;
+      const inside = ancestors.slice(0, ancestors.indexOf(node));
+      if (inside.some((el) => el.matches(keepers))) return CANCEL;
+      return inside.some((el) => el.matches('a[href]')) ? undefined : CANCEL;
+    }
+  }
   // The down's target outlasts a pressed look that moves it from under the point.
   const point = pressedAt(down, event, target) ?? target.ownerDocument.elementFromPoint?.(event.clientX, event.clientY);
   const at = point && target.contains(point) ? point : target;
   // The nearest draggable, or a node the app has draggable that a field's down turned off, whose field keeps the drag
   let node = at;
-  while (node && !(off.has(node) && declared(node)) && !explicit(node)) node = node.parentElement;
+  while (node && !draggable(node)) node = node.parentElement;
   if (!node || !declared(node) || !owns(node)) return;
-  const keeper = at.closest(down?.mouse !== false ? KEEPS_A_MOUSE : DRAG_FIELDS);
+  const keeper = at.closest(keepers);
   if (keeper && keeper !== node && node.contains(keeper)) {
     // A picture in a keeper drags no more than one in any press does (LLP 1115.000 D4.14).
-    return !keeper.contains(target) || target.localName === 'img' ? CANCEL : undefined;
+    return !keeper.contains(target) || image ? CANCEL : undefined;
   }
   // The browser began the drag at an element inside the node: an image is the node's drag, but for one in a link
   // there; anything else, a link's, is its own.
   const link = target.closest('a[href]');
-  if (target !== node && node.contains(target) && (target.localName !== 'img' || (link !== node && node.contains(link)))) return;
-  return node.isConnected ? node : CANCEL;
+  if (target !== node && node.contains(target) && (!image || (link !== node && node.contains(link)))) return;
+  const inDocument = inPage ? inPage(node) && inPage(event.composedPath?.()[0] ?? target) : node.isConnected;
+  return inDocument ? node : CANCEL;
 }
 
 /** A drag that begins nothing. */
@@ -189,26 +203,31 @@ export function listen(root = globalThis.document, owns = () => true, { signal, 
   };
   const presses = observeDragInput(root, signal, input, protect);
   if (input) protect(input, waiting);
-  // Heard first, before any listener can stop the drag's event or change what it reads: the drag is decided and given
-  // its data as it begins, while the transfer is writable; a listener after may still cancel it, a swipe's on the
-  // contact among them.
+  // Capture gives the drag its data before the target's listeners run, while the transfer is writable. A later
+  // listener may still cancel it, such as a swipe's listener on the contact.
+  // A form control named `getRootNode` shadows the form's method.
+  const getRootNode = (root.defaultView?.Node ?? globalThis.Node)?.prototype.getRootNode;
+  const inPage = (node) => node != null && (getRootNode ?? node.getRootNode).call(node, { composed: true }) === root;
   const given = new WeakMap();
   root.addEventListener('dragstart', (event) => {
     if (event.isTrusted === false) return;
-    const node = decide(event, owns, downForDrag(presses, event));
+    const node = decide(event, owns, downForDrag(presses, event), inPage);
     const data = readPayload(event, node, root.baseURI ?? globalThis.document?.baseURI);
     give(event, node, data);
     if (data) given.set(event, { node, data });
   }, { capture: true, signal });
   // Given again where the event reaches the document, over what a listener at the node wrote: the drag carries the
-  // data the node declared as it began. A listener that took the node or the browser's source out of the page, or
-  // the node from the app, meanwhile cancels the drag, which already holds the node's data.
+  // data the node declared as it began. A listener that took the node or the browser's source out of the page, into
+  // another document too (a same-origin frame's, where it still reads as connected), or the node from the app,
+  // meanwhile cancels the drag, which already holds the node's data. The source is read inside an open shadow root,
+  // whose host the event's target is; a closed one's is its host.
   root.addEventListener('dragstart', (event) => {
     if (event.isTrusted === false) return;
     const payload = given.get(event);
     given.delete(event);
     if (!payload) return;
-    if (payload.node.isConnected && elementOf(event.target)?.isConnected && owns(payload.node)) give(event, payload.node, payload.data);
+    const source = event.composedPath?.()[0] ?? event.target;
+    if (inPage(payload.node) && inPage(source) && owns(payload.node)) give(event, payload.node, payload.data);
     else event.preventDefault();
   }, { signal });
 }

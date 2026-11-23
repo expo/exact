@@ -4,3 +4,4 @@ exact_logic_abi::export!(
     canvas_gallery_data::Capture,
     stateless
 );
+exact_logic_abi::export_sources!(canvas_gallery_data::RUST_SOURCES);

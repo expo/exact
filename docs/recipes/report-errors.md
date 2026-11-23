@@ -19,13 +19,14 @@ component App
 import type { Answer, Result } from './app.contract.d.ts';
 
 const API = 'https://api.example.com';
-const REPORTS = 'https://errors.example.com/report';
-export const grants = `net.fetch ${API} ${REPORTS}`;
+const REPORTS = 'https://errors.example.com';
+export const grants = `net.fetch ${API}
+net.fetch ${REPORTS}`;
 
 function report(kind: string, reason: unknown): void {
   const text = reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason);
   // In the listener itself, before any await, with its failure caught.
-  fetch(REPORTS, { method: 'POST', body: JSON.stringify({ kind, text }) }).catch(() => {});
+  fetch(`${REPORTS}/report`, { method: 'POST', body: JSON.stringify({ kind, text }) }).catch(() => {});
 }
 
 addEventListener('error', (event) => report('error', event.error));

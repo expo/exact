@@ -587,9 +587,14 @@ fn a_background_action_refuses_foreground_calls_even_in_a_visible_session() {
     let row = r.plan.modules[0].clone();
     for hidden in [false, true] {
         r.page.hidden = hidden;
-        assert!(
-            r.admit(&row, &serde_json::json!({}), super::CallOrigin::Action)
-                .is_err(),
+        // The person's commit with a background action among its causes: the
+        // name held to the app passes, the foreground rule refuses.
+        let action = crate::runner::provenance::Cause::of(super::CallOrigin::Action, 0, false);
+        let cause = crate::runner::provenance::Cause::person().joined(action.causes);
+        let refused = r.admit(&row, &serde_json::json!({}), cause);
+        assert_eq!(
+            refused,
+            Err("not in the foreground".into()),
             "hidden={hidden}"
         );
     }
@@ -1104,7 +1109,10 @@ fn a_call_inside_a_persons_activation_window_says_so() {
         let body =
             json!({"extension": "camera", "send": "capture", "args": {}, "userActivation": true});
         let request = Request::native(body.to_string().into_bytes());
-        match r.as_origin(origin, |r| r.native_work(&request)) {
+        match r.as_cause(
+            crate::runner::provenance::Cause::of(origin, 0, false),
+            |r| r.native_work(&request),
+        ) {
             Dispatch::Run(Work::Later(work)) => work(Reply::new(|_| {})),
             Dispatch::Run(Work::Now(work)) => drop(work()),
             _ => panic!("the module request runs"),
@@ -1215,7 +1223,8 @@ fn a_host_activation_opens_the_activation_window_and_no_other_origin_does() {
     let activated = |r: &mut Runner<Source>| {
         let body = json!({"extension": "camera", "send": "capture", "args": {}});
         let request = Request::native(body.to_string().into_bytes());
-        match r.native_work(&request) {
+        let app = crate::runner::provenance::Cause::person();
+        match r.as_cause(app, |r| r.native_work(&request)) {
             Dispatch::Run(Work::Later(work)) => work(Reply::new(|_| {})),
             Dispatch::Run(Work::Now(work)) => drop(work()),
             _ => panic!("the module request runs"),

@@ -67,9 +67,7 @@ const shot = argv.includes('--shot') ? argv[argv.indexOf('--shot') + 1] : proces
 // --record-canvas rewrites this host's reference picture of the canvas
 // fixture (step 10) after a deliberate change to what it shows.
 const recordCanvas = argv.includes('--record-canvas');
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const failures = [];
-const check = (ok, what) => { if (!ok) failures.push(what); return ok; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms)), failures = [], check = (ok, what) => { if (!ok) failures.push(what); return ok; };
 const t0 = Date.now();
 const byTestId = (t, id) => t.nodes.find((n) => n.props.testId === id);
 const box = (l, id) => l.nodes.find((n) => n.testId === id);
@@ -335,6 +333,10 @@ if (host === 'deploy') {
     const deadRow = streams(retired).find((r) => r.compatibilityId === dead);
     check(deadRow?.action === 'binary' && retired.refused.some((r) => r.compatibilityId === dead) && retired.failed.length === 0 && streams(retired).filter((r) => r.compatibilityId !== dead).every((r) => r.action !== 'binary'), `the retired stream: ${JSON.stringify({ row: deadRow?.action, refused: retired.refused.length, failed: retired.failed, others: streams(retired).filter((r) => r.compatibilityId !== dead).map((r) => r.action) })}`);
     check(retired.notes.some((n) => n.includes(dead) && n.includes('does not verify')), 'the table names the retired stream\'s head as one no binary would take');
+    // 7. A native package configuration value (LLP 1133.021 §9 item 7) is a new binary on each native stream, its key unsaid.
+    const native = [...new Set(streams(pub1).map((r) => r.platform))], key = `smoke-config-${process.pid}-sentinel`, save = () => writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n'); manifest.packages = { '@exact/smoke-config': Object.fromEntries(native.map((p) => [p, { apiKey: { env: 'EXACT_SMOKE_CONFIG_KEY' } }])) }; save(); deployEnv.EXACT_SMOKE_CONFIG_KEY = key;
+    try { const r = deploy([app.name, '--origin', origin, '--json', '--dirty']), said = r.stdout + r.stderr, rows = JSON.parse(r.stdout).rows.filter((row) => row.kind === 'binary' && row.pendingInputs?.includes('packages.@exact/smoke-config')); check(native.length && native.every((p) => rows.some((row) => row.platform === p)) && !said.includes(key), `a configuration value is a binary change on ${native.join(', ')}, unsaid: ${JSON.stringify(rows.map((row) => row.platform))}, printed ${said.includes(key)}`);
+    } finally { delete deployEnv.EXACT_SMOKE_CONFIG_KEY; delete manifest.packages; save(); }
   } catch (e) {
     check(false, `the deploy smoke stopped: ${e.message}`);
   }

@@ -21,6 +21,52 @@
       ]
     }
   },
+  "intents": {
+    "tools": {
+      "search_docs": {
+        "title": "Search Exact docs",
+        "doors": ["web"],
+        "parameters": {
+          "query": { "title": "Query", "description": "What to search for." },
+          "limit": { "title": "Limit", "type": "integer", "description": "How many results to return, from 1 to 20." }
+        }
+      },
+      "get_page_markdown": {
+        "title": "Get Exact docs page as Markdown",
+        "doors": ["web"],
+        "parameters": {
+          "path": { "title": "Path", "description": "A path that starts with \"/\", such as /recipes/website, or a URL of these docs. Empty for the current page." },
+          "section": { "title": "Section", "description": "A heading that get_page_info returns, such as \"A deep link\". The match ignores case and backticks. Empty for the whole page." }
+        }
+      },
+      "get_page_info": {
+        "title": "Get Exact docs page details",
+        "doors": ["web"],
+        "parameters": {
+          "path": { "title": "Path", "description": "A path that starts with \"/\", such as /recipes/website, or a URL of these docs. Empty for the current page." }
+        }
+      },
+      "get_site_overview": {
+        "title": "Get Exact docs overview",
+        "doors": ["web"]
+      },
+      "list_sections": {
+        "title": "List Exact docs sections",
+        "doors": ["web"],
+        "parameters": {
+          "area": { "title": "Area", "description": "A sidebar area: home, learn or reference. Empty for each area with the names of its sections." },
+          "section": { "title": "Section", "description": "A section name that an empty area returns, such as Recipes. Empty for each section of the area." }
+        }
+      },
+      "navigate_page": {
+        "title": "Open an Exact docs page",
+        "doors": ["web"],
+        "parameters": {
+          "path": { "title": "Path", "description": "A path that starts with \"/\", such as /recipes/website, or a URL of these docs. It can end with a fragment. Empty for the current page." }
+        }
+      }
+    }
+  },
   "open_url": {
     "schemes": [
       "claude-cli",

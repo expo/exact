@@ -85,6 +85,7 @@ test('install owns only marked drags and restores the card’s draggable attribu
   field.closest = () => field;
   for (const element of [card, foreign]) {
     element.ownerDocument = document;
+    element.getRootNode = () => document;
     element.matches = (selector) => selector === '[draggable="true" i]' && element.getAttribute('draggable') === 'true';
     element.closest = () => null;
     element.setAttribute('data-datatransfertext', 'card');
@@ -131,8 +132,8 @@ test('the JS agent reports only the app’s draggable declaration after a field 
   const views = new Map([[1, card], [2, field], [3, foreign]]);
   const exact = { views, viewId: (node) => [...views].find(([, el]) => el === node)[0], After: [], clock: { now: 0 } };
   const ctx = vm.createContext({ document, setFaultLog() {}, viewChildren, routeFlags: () => () => 0,
-    unopened: () => false, HTMLIFrameElement: class {}, animationClock: () => ({ register() {}, seek() {} }), pieces() {} });
-  vm.runInContext(declarations('./agent.js', ['PROPS', 'SEMANTIC_TAGS', 'TYPES', 'targetOf', 'install']), ctx);
+    unopened: () => false, HTMLIFrameElement: class {}, animationClock: () => ({ register() {}, seek() {} }), pieces() {}, watchGlides() {} });
+  vm.runInContext(declarations('./agent.js', ['PROPS', 'SEMANTIC_TAGS', 'TYPES', 'gate', 'targetOf', 'install']), ctx);
   ctx.install(exact);
   for (const type of ['pointerdown', 'pointerup']) fire(type, field, { pointerType: 'mouse' });
   expect(card.getAttribute('draggable')).toBe('false');
@@ -143,4 +144,19 @@ test('the JS agent reports only the app’s draggable declaration after a field 
   PropHooks.draggable(card, null);
   expect(card.getAttribute('draggable')).toBe('false');
   expect((await tree()).nodes[0].props).not.toHaveProperty('draggable');
+});
+
+// A plan baked before Contract refused a drag's carrier words as an app's own (`data-datatransferurl`) writes them
+// through the app's dataset, which leaves them to the page, whose hooks write only what they admit.
+test("an app's own data-datatransfer words are not written as attributes", () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(declarations('./dataset.js', ['CARRIERS', 'ds']) + '\nthis.ds = ds;', ctx);
+  const attributes = new Map();
+  const element = {
+    getAttribute: (name) => attributes.get(name) ?? null,
+    setAttribute: (name, value) => attributes.set(name, value),
+    removeAttribute: (name) => attributes.delete(name),
+  };
+  ctx.ds(element, JSON.stringify({ datatransferurl: 'https://:443/', datatransferfiles: 'app:/data/x.pdf', datatransfertext: 'x', 'datatransfer-label': 'Card' }));
+  expect([...attributes]).toEqual([['data-datatransfer-label', 'Card']]);
 });

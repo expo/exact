@@ -12,6 +12,7 @@ use exact_runner::{
 };
 
 pub mod draw;
+pub mod sources;
 
 /// Seam version, independent of the plan format version.
 pub const ABI: u32 = 12;

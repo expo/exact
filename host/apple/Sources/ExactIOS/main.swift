@@ -20,6 +20,9 @@ import UIKit
 import UserNotifications
 #endif
 
+// The session's clock starts with `main` (`ExactEnv.t0`).
+let mainAt = Date().timeIntervalSince1970
+_ = ExactEnv.t0
 AgentLink.install()
 
 // The process's own start (exec), from the kernel: what happened before
@@ -33,7 +36,7 @@ func processStart() -> Double? {
     return Double(t.tv_sec) + Double(t.tv_usec) / 1e6
 }
 ExactLaunch.shared.main()
-let mainAt = Date().timeIntervalSince1970
+ExactEnv.stamp("preloads")
 let execToMainMs = processStart().map { (mainAt - $0) * 1000 }
 
 let environment = ExactEnv.environment
@@ -42,6 +45,7 @@ let agentMode = ExactEnv.agentMode
 setvbuf(stdout, nil, _IOLBF, 0)
 
 let exact = ExactComposition.app
+ExactEnv.stamp("composition")
 final class Adapter: ExactSessionDelegate {
     private let scheme = ExactWindowScheme()
     var window: UIWindow? {
@@ -192,6 +196,7 @@ func printSmoke() {
 
 final class AppDelegate: UIResponder, UIApplicationDelegate {
     override init() {
+        ExactEnv.stamp("delegate init")
         ExactLaunch.shared.delegateInit()
         ExactLaunch.shared.runLaunchParts(ExactLaunchParts.all)
         super.init()
@@ -371,5 +376,5 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 }
 
-ExactEnv.stamp("main")
+ExactEnv.stamp("UIApplicationMain")
 UIApplicationMain(CommandLine.argc, CommandLine.unsafeArgv, nil, NSStringFromClass(AppDelegate.self))

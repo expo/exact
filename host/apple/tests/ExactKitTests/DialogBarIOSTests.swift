@@ -115,6 +115,41 @@ final class DialogBarIOSTests: XCTestCase {
         XCTAssertNil((p.navigation as? NavigationHost)?.dialogBarCovers[30])
     }
 
+    /// An `accent-color` written on a header's button is its item's own tint, a prominent item's
+    /// fill (LLP 1069.011.000 D2), in light and dark. One written on the dialog is its bar's tint,
+    /// and the items under only that one set none. The button carries the dialog's row as a
+    /// control's inherited row, unwritten, which is not its own.
+    func testAnAccentWrittenOnAButtonIsItsItemsTint() throws {
+        guard let scene = Self.scene else { throw missing("scene", "a sheet presents only in a scene's window") }
+        let (p, controller) = try page(in: scene)
+        let pink: [String: Any] = ["sys": "systemPinkColor", "c": [[255, 45, 85, 255], [255, 55, 95, 255]]]
+        let teal: [String: Any] = ["sys": "systemTealColor", "c": [[48, 176, 199, 255], [64, 200, 224, 255]]]
+        p.apply(wireBatch([["op": "style", "id": 2, "style": ["accent_color": teal, "written": ["accent_color"]]],
+                           ["op": "style", "id": 31, "style": ["appearance": "auto", "accent_color": teal]],
+                           ["op": "style", "id": 33, "style": ["appearance": "auto", "accent_color": pink, "written": ["accent_color"]]]]))
+        p.dialogCommand("showModal", "invite")
+        spin { controller.presentedViewController?.viewIfLoaded?.window != nil && !p.menus.inTransition }
+        let nav = try XCTUnwrap(controller.presentedViewController as? UINavigationController)
+        let item = try XCTUnwrap(nav.topViewController?.navigationItem)
+        let invite = try XCTUnwrap(item.rightBarButtonItems?.first), cancel = try XCTUnwrap(item.leftBarButtonItems?.first)
+        if #available(iOS 26.0, *) { XCTAssertEqual(invite.style, .prominent) }
+        for style in [UIUserInterfaceStyle.light, .dark] {
+            let traits = UITraitCollection(userInterfaceStyle: style)
+            let rgba = { (c: UIColor?) -> [Int] in
+                var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+                _ = c?.resolvedColor(with: traits).getRed(&r, green: &g, blue: &b, alpha: &a)
+                return [r, g, b, a].map { Int(($0 * 255).rounded()) }
+            }
+            XCTAssertEqual(rgba(invite.tintColor), rgba(.systemPink), "the prominent item's fill is its accent (\(style.rawValue))")
+            XCTAssertEqual(rgba(nav.navigationBar.tintColor), rgba(.systemTeal), "the bar's tint is the dialog's accent (\(style.rawValue))")
+        }
+        XCTAssertNil(cancel.tintColor, "Cancel, under only the dialog's accent, takes the bar's tint")
+        p.apply(wireBatch([["op": "style", "id": 33, "style": ["appearance": "auto", "accent_color": teal]]]))
+        spin { item.rightBarButtonItems?.first?.tintColor == nil }
+        XCTAssertNotNil(item.rightBarButtonItems?.first, "Invite is still in the bar")
+        XCTAssertNil(item.rightBarButtonItems?.first?.tintColor, "with its own accent gone, the item takes the bar's")
+    }
+
     func testAHeaderTheBarCannotShowWholeStaysInThePage() throws {
         guard let scene = Self.scene else { throw missing("scene", "a sheet presents only in a scene's window") }
         let (p, controller) = try page(extra: true, in: scene)

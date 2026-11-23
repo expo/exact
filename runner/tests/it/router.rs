@@ -1194,3 +1194,68 @@ fn forward_to_the_current_location_consumes_one_destination() {
         assert_eq!(r.location_ahead(), None);
     }
 }
+
+/// LLP 1132 D1, "Cause": work that fell due runs before an input's own
+/// action in its dispatch, and a navigation it makes there is its own, not
+/// the input's.
+#[test]
+fn a_change_says_whether_work_that_fell_due_made_it() {
+    let plan = contract::compile(
+        r#"routes nav
+  home "/"
+  later "/later"
+  now "/now"
+
+component App
+  state armed = false
+  state count = 0
+  task soon when armed
+    after(1000, later)
+  action arm
+    armed = true
+  action later
+    armed = false
+    nav = push(nav, "/later")
+  action bump
+    count = count + 1
+  action now
+    nav = push(nav, "/now")
+  view
+    main navigationKey=`${top(nav).id}` testId="navigation"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}`
+          button "arm" press=arm testId=`arm-${e.id}`
+          button "bump" press=bump testId=`bump-${e.id}`
+          button "now" press=now testId=`now-${e.id}`
+"#,
+    )
+    .unwrap();
+    let mut r = Runner::boot(
+        plan,
+        Data::default(),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let view = |r: &Runner<Data>, id: &str| {
+        let key = r.kernel().find_first_by_test_id(id).unwrap();
+        r.kernel().node_by_key(key).unwrap().id
+    };
+    let home = nav(&r).tabs[0].stack[0].id;
+    let press = |r: &mut Runner<Data>, id: String, at: f64| {
+        let a = r.dispatch_at(view(r, &id), exact_runner::Event::Press, at);
+        assert!(a.error.is_none(), "{:?}", a.error);
+    };
+    press(&mut r, format!("arm-{home}"), 0.0);
+    r.take_router_change();
+    // The timer is overdue when the press arrives: it pushes before `bump` runs
+    press(&mut r, format!("bump-{home}"), 1500.0);
+    let change = r.take_router_change().unwrap();
+    assert_eq!(change.url, "/later");
+    assert!(change.due, "the timer's push");
+    press(&mut r, format!("now-{home}"), 1600.0);
+    let change = r.take_router_change().unwrap();
+    assert_eq!(change.url, "/now");
+    assert!(!change.due, "the press's own push");
+}

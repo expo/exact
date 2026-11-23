@@ -1,6 +1,7 @@
 // @fixture/swatch on the web: a box filled with its `tint`, which sends
 // `message` "tap" when pressed, made by the session's one instance, which
-// keeps what it was told of its views and answers it as `swatchReports`.
+// keeps what it was told of its views and answers it, with what it reads of
+// its configuration, as `swatchReports`.
 
 const say = (heard, line, changed) => { heard.push(line); changed('swatch.swatchReports'); };
 
@@ -19,10 +20,13 @@ class SwatchBox {
 
 export const roster = { 'swatch-box': { view: SwatchBox } };
 
-export function implementation({ changed }) {
+/** What it reads of its configuration: the label, and the key by its length and last four characters only. */
+const read = ({ label, apiKey }) => `label=${label ?? 'none'} apiKey=${apiKey ? `${apiKey.length} chars ending ${apiKey.slice(-4)}` : 'none'}`;
+
+export function implementation({ changed, config = {} }) {
   const heard = [];
   return {
-    swatchReports: () => ({ text: heard.join('; '), count: heard.length }),
+    swatchReports: () => ({ text: heard.join('; '), count: heard.length, config: read(config) }),
     made: (view) => say(heard, `made ${view}`, changed),
     displayed: (view, shown, origin) => say(heard, `displayed ${view} ${shown} ${origin}`, changed),
     bound: (view, prop, origin) => say(heard, `bound ${view} ${prop} ${origin}`, changed),

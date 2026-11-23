@@ -41,14 +41,15 @@ public final class ExactWindow: UIWindow {
             for session in owners.isEmpty ? sessions : owners { session.presenter.supersedePress() }
             HeldState.input(at: touch.view) // a contact on a held node, or in it, lets its hold go (HeldState.swift)
         }
+        // An input a control takes inside this dispatch happened at the event
+        // (NavigationMarks.inputHappened), a native control's included.
+        let marks = NavigationMarks.shared, outer = marks.dispatching
+        if event.type == .touches || event.type == .presses { marks.dispatching = event.timestamp }
+        defer { marks.dispatching = outer }
         super.sendEvent(event)
         #if EXACT_AGENT
         if TouchLog.recording, event.type == .touches { TouchLog.record(event, in: self, gone: gone, dispatched: dispatched) }
         #endif
-        // A navigation is timed from its input: a finger lifting or a press.
-        if event.type == .presses || (event.allTouches ?? []).contains(where: { $0.phase == .ended }) {
-            ExactLaunch.shared.input(at: event.timestamp)
-        }
     }
 }
 

@@ -163,12 +163,11 @@ fn same_role(written: &str, name: &str) -> bool {
 pub fn column_index(column: crate::style::metrics::Column) -> usize {
     use crate::style::metrics::Column;
     match column {
-        // Android's type is the device's reported ramp, never a table's
-        // (LLP 1115.001.001 D2.5): its look reads the web's until that lands.
-        Column::Web | Column::Material | Column::Terminal => 0,
+        Column::Web | Column::Terminal => 0,
         Column::Ios => 1,
         Column::Mac => 2,
         Column::Neutral => 3,
+        Column::Material => 4,
     }
 }
 
@@ -188,14 +187,21 @@ pub fn text_style_leading(id: u8, column: crate::style::metrics::Column) -> crat
         .map_or(crate::LineHeight::Normal, crate::LineHeight::Number)
 }
 
-/// The size of text style `id` where the root font size is `root`: the
-/// schema's ramp read at `root` (LLP 1115 D3). Between two of its body
-/// sizes it interpolates; below the first or above the last, the nearest
-/// row scales with the root.
+/// The size of text style `id` at `root` in the process's metric column.
+/// The schema's ramp interpolates between its body sizes and scales the
+/// nearest row outside them (LLP 1115 D3). Material scales its sp size by
+/// the root over 16 (LLP 1115.001 D4).
 pub fn text_style_size(id: u8, root: f32) -> f32 {
+    use crate::style::metrics::{column, Column};
+    // shortcut: Android scales sp non-linearly above a font scale of 1 since
+    // Android 14; this scales linearly, as the root does, until the host
+    // reports each style's size (LLP 1115.001 D4).
     crate::TEXT_STYLES
         .get(usize::from(id))
-        .map_or(root, |style| ramp(style.sizes, root))
+        .map_or(root, |style| match column() {
+            Column::Material => (style.material_size / MEDIUM) * root,
+            _ => ramp(style.sizes, root),
+        })
 }
 
 /// A ramp of sizes, one per [`crate::TEXT_STYLE_BODIES`] body size, read

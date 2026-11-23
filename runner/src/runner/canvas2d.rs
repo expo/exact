@@ -383,6 +383,8 @@ pub trait CanvasEngine {
     fn views(&mut self, alive: &dyn Fn(ViewId) -> bool) -> Vec<ViewId>;
     /// [`Runner::set_canvas_geometry`].
     fn set_geometry(&mut self, view: ViewId, geometry: Geometry);
+    /// Each canvas's last geometry, for [`Runner::reread_canvas_bitmaps`].
+    fn geometries(&self) -> Vec<(ViewId, Geometry)>;
     /// [`Runner::canvas_frame`], at `now`.
     fn frame(&mut self, now: f64);
     /// [`Runner::canvas_wants_frame`].
@@ -928,6 +930,11 @@ impl CanvasEngine for Canvases {
         self.records.contains_key(&view)
     }
 
+    fn geometries(&self) -> Vec<(ViewId, Geometry)> {
+        let at = |(v, r): (&ViewId, &Record)| r.geometry.map(|g| (*v, g));
+        self.records.iter().filter_map(at).collect()
+    }
+
     fn mounted(&self, view: ViewId, lifetime: u64) -> bool {
         self.records
             .get(&view)
@@ -1236,6 +1243,26 @@ impl<D: DataSource> Runner<D> {
             p3: text(exact_kernel::PropId::ColorSpace).as_deref() == Some("display-p3")
                 && !exact_kernel::style::wide::limited(),
             float16: text(exact_kernel::PropId::ColorType).as_deref() == Some("float16"),
+        }
+    }
+
+    /// A host that reports a canvas's box only as it moves (the web's wasm
+    /// target): each 2D canvas's bitmap size and settings read again at its
+    /// last box, as [`Runner::layout_canvases`] reads them at each layout.
+    pub fn reread_canvas_bitmaps(&mut self) {
+        let Some(c) = self.canvases.as_ref() else {
+            return;
+        };
+        for (view, g) in c.geometries() {
+            let (bitmap, settings) = (self.canvas_bitmap(view), self.canvas_settings(view));
+            self.set_canvas_geometry(
+                view,
+                Geometry {
+                    bitmap,
+                    settings,
+                    ..g
+                },
+            );
         }
     }
 
