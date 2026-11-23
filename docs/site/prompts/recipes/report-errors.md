@@ -1,0 +1,13 @@
+```prompt Send my app's errors to my server
+Make the data module of the Exact app in this folder send its errors and unhandled rejections to my server. Use https://github.com/expo/exact/blob/main/docs/recipes/report-errors.md as the source for each step. The Exact checkout has the same page at docs/recipes/report-errors.md.
+
+1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
+2. If I did not say the URL that takes the reports, ask me. The recipe's report holds a `kind` and a `text` (the error's name and message): ask me before a report holds anything more. The server that takes the `POST` is mine to set up.
+3. In app.ts, add a separate `net.fetch` line for the reporting origin. Use the full reporting endpoint for the `POST`.
+4. Write the `report` function, and listen for `error` and `unhandledrejection` with `addEventListener` on the module's global, as the recipe shows. Call `fetch` in the listener itself, before any `await`, and catch its failure with `.catch(() => {})`. Send a plain HTTP request only. Do not fetch in the reply's `.then`, in a microtask the listener queued, or over a stream or socket: natively, each is refused.
+5. In the `catch` of each answer that can fail, call `reportError(e)`, then throw `e` again. A failed answer is not an `error` event: without this call, the answer only fails and no listener hears it.
+6. Do not report at bake, during the module's evaluation, or from a worker placement. Do not call `event.preventDefault()` unless I ask: without it, a report also reaches the platform's log.
+7. Follow the platform checks in docs/start-here.md (`bun exact.mjs docs platform checks`) for the targets in the app's AGENTS.md and app.json until they pass. Read the reports, including counted findings; a zero exit code alone does not mean clean. Fix the app, not the test. Every report still reaches `logs`, whatever a listener does: read them to see what the module reported. If a finding stays after three rounds of fixes, or the app had it before you changed anything, record it (step 8) and report it; do not keep trying.
+8. When a doc was wrong or missing, or a step needed a workaround, read `bun exact.mjs feedback status`. Under `never`, keep no note. Otherwise record it: `bun exact.mjs feedback note "<what happened>"`, which goes to Expo only as that status says. Do not change the policy; tell me how many notes you kept.
+9. Tell me where the listeners are, which answers call `reportError`, what a report holds, what the tests and checks reported, and what my server must accept. On the web build, the listener is the page's: it hears every error on the page.
+```

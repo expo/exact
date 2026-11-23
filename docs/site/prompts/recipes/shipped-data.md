@@ -1,0 +1,13 @@
+```prompt Ship a data file with my app
+Make the Exact app in this folder ship data that it only reads (a catalogue, a word list, a city table) as a JSON file that app.ts imports. Use https://github.com/expo/exact/blob/main/docs/recipes/shipped-data.md as the source for each step. The Exact checkout has the same page at docs/recipes/shipped-data.md.
+
+1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
+2. If I did not say which data the app ships and where that data is now, ask me before you write code. If the file is large, binary, or opened by a native module, tell me: it is read by path at run time instead (step 5).
+3. Put the data in a JSON file beside app.ts, as the recipe's `cities.json` is, and import it there: `import cities from './cities.json'`. Add no grant and no file path for it: the file is bundled with the data module on every host.
+4. In app.ts, add a source that returns the imported value, as `loadCities: () => cities` does. In app.contract, declare a `shape` for one item and read the source as a `resource` with `else empty()`. Give each row a key from the item's id.
+5. Only for a file read by path at run time: follow the recipe's last note and docs/recipes/files-and-grants.md. Name the file in app.json's `host.ios.resources` (and `.macos`), and read it with `fs.read` from `bundle:/Resources/`. Its `from` is a directory of its own (`data-files/`), never one Exact owns: `assets/`, `data/`, `src/`, `web/`, `modules/` and the others the recipe lists.
+6. Add a test in app.test.contract like the recipe's: run `clock data`, then expect the text of the first and the last shipped row.
+7. Follow the platform checks in docs/start-here.md (`bun exact.mjs docs platform checks`) for the targets in the app's AGENTS.md and app.json until they pass. Read the reports, including counted findings; a zero exit code alone does not mean clean. Fix the app, not the test. If a finding stays after three rounds of fixes, or the app had it before you changed anything, record it (step 8) and report it; do not keep trying.
+8. When a doc was wrong or missing, or a step needed a workaround, read `bun exact.mjs feedback status`. Under `never`, keep no note. Otherwise record it: `bun exact.mjs feedback note "<what happened>"`, which goes to Expo only as that status says. Do not change the policy; tell me how many notes you kept.
+9. Tell me which file the app ships and which source reads it, what the tests and checks reported, and the launch command for each target platform. An edit to the JSON ships as an update, as app.ts does, with nothing to copy at build.
+```

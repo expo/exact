@@ -6,6 +6,7 @@ import { dirname, join, normalize, relative, resolve } from 'node:path';
 import { agentRows, sections, tabs, type NavPage } from '../constants/navigation.ts';
 import { redirects } from '../constants/redirects.ts';
 import { site } from '../constants/site.ts';
+import { promptOf } from './prompts.ts';
 
 const SITE = resolve(import.meta.dir, '..');
 const DOCS = resolve(SITE, '..');
@@ -97,7 +98,7 @@ const GITHUB_DOCS = 'https://github.com/expo/exact/blob/main/docs/';
 const docsUrlOf = new Map(sections.flatMap(s => s.pages).map(p => [GITHUB_DOCS + p.source, ORIGIN ? `${ORIGIN}${p.path === '/' ? '/index' : p.path}.md` : GITHUB_DOCS + p.source]));
 
 const PROMPTS = join(SITE, 'prompts');
-const promptOf = (source: string) => existsSync(join(PROMPTS, source)) ? `${readFileSync(join(PROMPTS, source), 'utf8').trim()}\n\n` : '';
+const folderPrompted: string[] = [];
 
 function read(nav: NavPage): Doc {
   const text = readFileSync(join(DOCS, nav.source), 'utf8')
@@ -106,7 +107,9 @@ function read(nav: NavPage): Doc {
   const tokens = marked.lexer(text, { gfm: true });
   let afterIntro = tokens[0]?.type === 'heading' && tokens[0].depth === 1 ? 1 : 0;
   while (tokens[afterIntro]?.type === 'space' || tokens[afterIntro]?.type === 'paragraph') afterIntro++;
-  tokens.splice(afterIntro, 0, ...marked.lexer(promptOf(nav.source), { gfm: true }));
+  const prompt = promptOf(PROMPTS, nav.source);
+  if (prompt.fromFolder) folderPrompted.push(nav.source);
+  tokens.splice(afterIntro, 0, ...marked.lexer(prompt.text, { gfm: true }));
   const slug = slugger();
   const anchors = new Map<string, string>();
   const intro: Token[] = [];
@@ -517,4 +520,5 @@ writeFileSync(APP, `${app.slice(0, begin + ROUTES_BEGIN.length)}\n${routes}\n${a
 const broken = links.filter(l => !l.ok);
 for (const l of broken) console.error(`broken link: ${l.from} -> ${l.to}`);
 console.log(`${pages.length} pages from ${docs.length} docs at Exact ${SHA.slice(0, 10)}, ${links.length} internal links, ${broken.length} broken`);
+if (folderPrompted.length) console.log(`no prompt of its own, so its folder's is shown: ${folderPrompted.join(', ')}`);
 if (broken.length || badRedirects.length) process.exit(1);
