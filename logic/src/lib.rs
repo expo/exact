@@ -298,6 +298,13 @@ impl<D: DataSource> Swappable<D> {
 }
 
 impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
+    fn queued_send_replacer(
+        &mut self,
+        source: Option<&str>,
+    ) -> Option<exact_runner::QueuedSendReplacer> {
+        self.embedded.as_mut()?.queued_send_replacer(source)
+    }
+
     fn prepare_snapshot(
         &mut self,
         module: Option<exact_runner::SnapshotModule<'_>>,

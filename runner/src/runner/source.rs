@@ -408,6 +408,11 @@ impl Target {
     }
 }
 
+/// A source may combine an unasked queue tail with a newer send to that
+/// same source. Return arguments that preserve the pair's final state and
+/// effects, or `None` to keep both. The merger never reads or writes the store.
+pub type QueuedSendReplacer = fn(&str, &[Value], &[Value]) -> Option<Vec<Value>>;
+
 /// Borrowed bytes of one pinned snapshot cohort (LLP 1126 D8).
 #[derive(Clone, Copy)]
 pub struct SnapshotModule<'a> {
@@ -475,8 +480,8 @@ macro_rules! data_source {
 
         /// A composing or forwarding source handles every data-source method.
         /// Implementations forward, translate, or explicitly refuse each call.
-        /// The request-set methods default to the single-request seam (LLP 1162 D2);
-        /// other defaults are available only to leaves.
+        /// The request-set methods default to the single-request seam (LLP 1162 D2).
+        /// Queue merging is opt-in. The remaining defaults are for leaves.
         ///
         /// ```compile_fail,E0046
         /// use exact_runner::{DataError, DataSourceWrapper, Value};
@@ -1092,6 +1097,17 @@ data_source! {
     }
 
     defaults {
+        /// Optional queue-tail replacement for sources hosted by the embedded
+        /// runner. The browser's queue keeps sends in FIFO order.
+        /// `None` asks for the default rule. Return the same rule for a
+        /// given argument throughout the source instance's lifetime.
+        /// Worker placement reads each rule once per bind and combines
+        /// according to that first read even if the source changes it.
+        fn queued_send_replacer(&mut self, source: Option<&str>) -> Option<QueuedSendReplacer> {
+            let _ = source;
+            None
+        }
+
         /// Requests made by the last `Later` answer for `target`, after its
         /// first request, in order. Taken once per turn (LLP 1162 D2).
         /// A source forwarding request sets forwards this too.
