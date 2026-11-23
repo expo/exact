@@ -19,12 +19,12 @@ Compose is the ordinary way (SwiftUI's bar).
 
 | Spec item | Views | Compose |
 |---|---|---|
-| list | `RecyclerView` + `LinearLayoutManager`, no item animator; RecyclerView's own prefetch | `LazyColumn` with `itemsIndexed(key = id)` over a `SnapshotStateList` |
+| list | `RecyclerView` + `LinearLayoutManager`, no item animator; RecyclerView's own prefetch | `LazyColumn` with `items(key = id)` over a `SnapshotStateList` |
 | row | one `Row` (a `LinearLayout`) whose views are made once and reused; paragraph views and chips grow on demand and hide when unused | composables per item |
 | paragraphs | one `TextView` per paragraph, a `SpannableStringBuilder` of the runs, built at bind | one `BasicText` per paragraph, an `AnnotatedString` remembered per paragraph |
 | photos | a `ViewGroup` placing 1–4 `ImageView`s, rounded by its outline | `Row`/`Column` of fixed-size boxes, clipped |
 | images | `common/Images.kt` for both: `ImageDecoder` at the box's aspect-fill pixel size on two worker threads, hardware bitmaps, an `LruCache` of 300; #E5E5EA until decoded | the same loader through a `LaunchedEffect` |
-| reactions | a wrapping `ViewGroup` of chips; a tap replaces the message and `notifyItemChanged` | `FlowRow`; a tap replaces the list item at the index the row's callback holds (a live insert moves every index, so each row shown gets a new callback) |
+| reactions | a wrapping `ViewGroup` of chips; a tap replaces the message and `notifyItemChanged` | `FlowRow`, with taps finding the current list item by message ID |
 | separator | an `ItemDecoration`, 68 → width − 16 | `drawBehind` on the row |
 | live insert | `notifyItemInserted(0)`; the layout manager's anchor keeps the viewport | the list keeps its first visible key |
 | live times | the visible rows' time labels set once a second | `seconds` state read by every row |
@@ -58,8 +58,8 @@ Every app is driven and read from outside, the same way:
 - **Memory**: `dumpsys meminfo` TOTAL PSS at the end of a stretch.
 - **Cold start**: `am start -W` TotalTime after `am force-stop`, five launches: process start to the activity's
   first frame. For the native apps that frame has rows; for Exact it is the first frame the reader draws.
-- **Blank**: eight 24k px/s flings filmed with `screenrecord`; a frame counts when the list area has a run of
-  white at least a quarter of the screen tall (no row of the feed is that empty).
+- **Blank**: eight 24k px/s flings filmed with `screenrecord`. A frame counts when the measured list viewport,
+  excluding the scrollbar gutter, has a run of white at least a quarter of the screen tall. Each round keeps its video if it found a blank.
 
 Rounds rotate the apps' order. The script records the device, its resolution, refresh rate and font scale.
 

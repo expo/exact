@@ -372,48 +372,54 @@ impl DataSource for Heavy {
 mod tests {
     use super::*;
 
-    fn rows(v: &Value) -> usize {
-        match v {
-            Value::Record(f) => match &f[0] {
-                Value::List(l) => l.len(),
-                _ => 0,
-            },
-            _ => 0,
-        }
+    fn items(v: &Value) -> &[Value] {
+        let Value::List(list) = v else { panic!("expected a list") };
+        list
+    }
+
+    fn rows(v: &Value) -> &[Value] {
+        items(&fields(v)[0])
+    }
+
+    fn changed_ids<'a>(before: &[Value], after: &'a [Value]) -> Vec<&'a str> {
+        assert_eq!(before.len(), after.len());
+        before.iter().zip(after).filter(|(a, b)| !exact_runner::compare::same(a, b))
+            .map(|(_, row)| fields(row)[ID].as_str().unwrap()).collect()
     }
 
     #[test]
     fn feed_live_and_reactions() {
         let mut h = Heavy::default();
         assert_eq!(h.parsed.is_some(), live(), "only live mode parses before the first use");
+        let config = h.query("config", &[]).unwrap();
+        assert_eq!(fields(&config)[0].as_bool(), Some(live()));
+        assert_eq!(h.feed.is_some(), live(), "only live config loads the feed");
         let t = std::time::Instant::now();
         let v = h.query("messages", &[]).unwrap();
         eprintln!("load: {:?}", t.elapsed());
-        assert_eq!(rows(&v), 10_000);
+        assert_eq!(rows(&v).len(), 10_000);
         let t = std::time::Instant::now();
         let v = h.query("tick", &[]).unwrap();
         eprintln!("tick: {:?}", t.elapsed());
-        assert_eq!(rows(&v), 10_001);
+        assert_eq!(rows(&v).len(), 10_001);
         let f = h.feed.as_ref().unwrap();
         assert_eq!(f.live[0].id, "live-1");
         assert_eq!(f.live[0].author, f.messages[37].author);
-        // Every row but the bumped one is the previous answer's allocation.
-        let before = match &v {
-            Value::Record(f) => f[0].clone(),
-            _ => unreachable!(),
-        };
-        let v2 = h.query("tick", &[]).unwrap();
-        let (Value::List(a), Value::Record(f2)) = (&before, &v2) else { unreachable!() };
-        let Value::List(b) = &f2[0] else { unreachable!() };
-        assert_eq!(b.len(), a.len() + 1);
-        let changed = a.iter().zip(&b[1..]).filter(|(x, y)| !exact_runner::compare::same(x, y)).count();
-        assert_eq!(changed, 1, "only the bumped row is rebuilt");
+        let mut before = h.query("tick", &[]).unwrap();
         let f = h.feed.as_ref().unwrap();
-        let m = f.messages.iter().find(|m| !m.reactions.is_empty()).unwrap();
-        let (id, (emoji, before)) = (m.id.clone(), m.reactions[0].clone());
-        h.query("react", &[Value::str(&id), Value::str(&emoji)]).unwrap();
-        let f = h.feed.as_ref().unwrap();
-        let m = f.messages.iter().find(|m| m.id == id).unwrap();
-        assert_eq!(m.reactions[0].1, before + 1.0);
+        let bumped = f.messages[2 * 101..].iter().find(|m| !m.reactions.is_empty()).unwrap();
+        assert_eq!(changed_ids(rows(&v), &rows(&before)[1..]), [bumped.id.as_str()]);
+
+        let original = f.messages.iter().find(|m| !m.reactions.is_empty()).unwrap();
+        let taps = [original, &f.live[0]].map(|m| (m.id.clone(), m.reactions[0].clone()));
+        for (id, (emoji, count)) in taps {
+            let after = h.query("react", &[Value::str(&id), Value::str(&emoji)]).unwrap();
+            assert_eq!(changed_ids(rows(&before), rows(&after)), [id.as_str()]);
+            let shown = rows(&after).iter().find(|row| fields(row)[ID].as_str() == Some(&id)).unwrap();
+            let reaction = &items(&fields(shown)[REACTIONS])[0];
+            assert_eq!(fields(reaction)[0].as_str(), Some(emoji.as_str()));
+            assert_eq!(fields(reaction)[1].as_number(), Some(count + 1.0));
+            before = after;
+        }
     }
 }

@@ -22,6 +22,7 @@ import android.view.ViewOutlineProvider
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.recyclerview.widget.RecyclerView
 import dev.exact.heavybench.Colors
 import dev.exact.heavybench.Images
 import dev.exact.heavybench.Message
@@ -51,6 +52,7 @@ class Row(context: Context, private val contentWidth: Int) : LinearLayout(contex
     private val reactions = Flow(context, px(6f))
 
     init {
+        layoutParams = RecyclerView.LayoutParams(MATCH, WRAP)
         orientation = HORIZONTAL
         setPadding(px(16f), px(12f), px(16f), px(12f))
         addView(avatar, LayoutParams(px(40f), px(40f)))
@@ -81,9 +83,12 @@ class Row(context: Context, private val contentWidth: Int) : LinearLayout(contex
         }
         val p = m.photos
         photos.visibility = if (p.isNullOrEmpty()) GONE else VISIBLE
-        if (!p.isNullOrEmpty()) photos.bind(p.map { it.src }, if (p.size == 1) min(contentWidth * p[0].h / p[0].w, px(320f)) else 0)
-        link.visibility = if (m.link == null) GONE else VISIBLE
-        m.link?.let { link.bind(it.thumb, it.site.uppercase(), it.title, it.description) }
+        if (p.isNullOrEmpty()) photos.clear()
+        else photos.bind(p.map { it.src }, if (p.size == 1) min(contentWidth * p[0].h / p[0].w, px(320f)) else 0)
+        val card = m.link
+        link.visibility = if (card == null) GONE else VISIBLE
+        if (card == null) link.clear()
+        else link.bind(card.thumb, card.site.uppercase(), card.title, card.description)
         val r = m.reactions
         reactions.visibility = if (r.isNullOrEmpty()) GONE else VISIBLE
         if (!r.isNullOrEmpty()) {
@@ -148,6 +153,14 @@ class Row(context: Context, private val contentWidth: Int) : LinearLayout(contex
             setImageBitmap(hit)
             if (hit == null) pending = Images.load(context, name, w, h) { if (key == k) setImageBitmap(it) }
         }
+
+        fun clear() {
+            if (key == null) return
+            key = null
+            pending?.cancel(true)
+            pending = null
+            setImageBitmap(null)
+        }
     }
 
     /** The quote (SPEC 3): a 3 pt #C7C7CC bar over #F2F2F7, radius 8, padding 8; the excerpt at most 2 lines. */
@@ -187,9 +200,14 @@ class Row(context: Context, private val contentWidth: Int) : LinearLayout(contex
             this.names = names; this.single = single
             // The boxes are fixed by the content width, so the decodes start now, before layout.
             frames(contentWidth).forEachIndexed { i, f -> views[i].show(names[i], f[2], f[3]) }
-            views.forEachIndexed { i, v -> v.visibility = if (i < names.size) VISIBLE else GONE }
+            views.forEachIndexed { i, v ->
+                v.visibility = if (i < names.size) VISIBLE else GONE
+                if (i >= names.size) v.clear()
+            }
             requestLayout()
         }
+
+        fun clear() = views.forEach { it.clear() }
 
         /** Each photo's x, y, width and height. */
         private fun frames(w: Int): List<IntArray> = when (names.size) {
@@ -241,6 +259,8 @@ class Row(context: Context, private val contentWidth: Int) : LinearLayout(contex
             thumb.show(image, contentWidth, px(140f))
             this.site.text = site; this.title.text = title; this.description.text = description
         }
+
+        fun clear() = thumb.clear()
     }
 
     /** A reaction chip (SPEC 7): emoji 14 + 4 + count 13 semibold on #F2F2F7, height 28, radius 14. */

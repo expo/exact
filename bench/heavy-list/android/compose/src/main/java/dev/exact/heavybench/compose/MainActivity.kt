@@ -28,7 +28,7 @@ import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -122,8 +122,11 @@ class MainActivity : ComponentActivity() {
                 val contentWidth = LocalConfiguration.current.screenWidthDp.dp - 84.dp
                 val list = rememberLazyListState()
                 LazyColumn(Modifier.fillMaxSize().scrollbar(list), list) {
-                    itemsIndexed(messages, key = { _, m -> m.id }) { i, m ->
-                        MessageRow(m, seconds, contentWidth) { r -> messages[i] = messages[i].bumped(r) }
+                    items(messages, key = { it.id }) { m ->
+                        MessageRow(m, seconds, contentWidth) { r ->
+                            val i = messages.indexOfFirst { it.id == m.id }
+                            if (i >= 0) messages[i] = messages[i].bumped(r)
+                        }
                     }
                 }
             }
