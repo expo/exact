@@ -91,8 +91,14 @@ copy byte for byte, an add, limited access and a revocation), the codec's
 conformance (step 9's checks among it) and MediaStore for real, bound,
 granted by `pm grant` (the list, a copy with its location, an add no longer
 pending) on an arm64 emulator (`ANDROID_SERIAL`) whose adb runs as root. It
-passed on API 29, 33 and 34 emulators on 2026-10-28. The steps below are what
-it cannot do: the platform's dialogs and what a person chooses in them.
+passed on API 29, 33 and 34 emulators on 2026-10-28. Its drive 8 is the
+replacement path (LLP 1133.019.000 D3) from API 30: a `photoChanges` token
+answers `expired`; after a screenshot is added, a photo moved into
+`Screenshots/` and out, trashed, restored or deleted while the app is away,
+the list on return is MediaStore's, with nothing pressed; under a denial the
+list and a token answer `NotAllowedError`; limited access (API 34) lists the
+app's own photo and none of the shell's. The steps below are what it cannot
+do: the platform's dialogs and what a person chooses in them.
 
 Install it outside the agent with `bun scripts/agent-android.mjs build
 photos-fixture --apk`, then `adb install -r
