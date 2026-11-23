@@ -2,6 +2,7 @@
 //! `list`, no payload, heard once a scroll is over; a node with none takes
 //! it as nothing and commits nothing.
 
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, PropId};
 use exact_runner::{DataError, DataSource, Event, Runner, Value};
 
@@ -37,11 +38,11 @@ const APP: &str = r#"component App
       column testId="plain"
 "#;
 
-fn boot() -> Runner<Rows> {
+fn boot() -> Runner<Source> {
     let plan = contract::compile(APP).unwrap_or_else(|e| panic!("{e}"));
     Runner::boot(
         plan,
-        Rows,
+        boxed(Rows),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -49,12 +50,12 @@ fn boot() -> Runner<Rows> {
     .unwrap()
 }
 
-fn id(r: &Runner<Rows>, test: &str) -> exact_kernel::ViewId {
+fn id(r: &Runner<Source>, test: &str) -> exact_kernel::ViewId {
     let key = r.kernel().find_by_test_id(test)[0];
     r.kernel().node_by_key(key).unwrap().id
 }
 
-fn count(r: &Runner<Rows>) -> String {
+fn count(r: &Runner<Source>) -> String {
     let n = id(r, "count");
     r.kernel()
         .node(n)

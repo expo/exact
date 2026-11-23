@@ -7,7 +7,7 @@ workspace whose packages hold the screens (Contract, and a `.forma` of their
 tokens) and the data code (TypeScript, with a `.d.ts`).
 Each brand depends on them as `"workspace:*"`. Its `app.contract`:
 
-```contract
+```text
 use BrandScreen, Greeting from "@fixture/brand-ui"
 
 routes nav

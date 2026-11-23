@@ -1,19 +1,11 @@
 //! LLP 1017 P2: `if`/`else` and `match` as statements in an action, proven
 //! on the runner (LLP 1004 D6: a construct exists at both ends).
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::Kernel;
 use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Event, Runner};
+use exact_runner::{Event, Runner};
 use std::path::Path;
-
-#[derive(Default)]
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
 
 fn corpus(name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -25,10 +17,10 @@ fn corpus(name: &str) -> String {
 #[test]
 fn an_action_branches_on_a_key_and_matches_an_option() {
     let plan = contract::compile(&corpus("branch.contract")).unwrap();
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -58,7 +50,7 @@ fn a_key_action_prevents_its_default_by_a_command_without_arguments() {
     let plan = contract::compile(&src("preventDefault()")).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -85,13 +77,13 @@ fn a_key_action_may_take_the_keyboard_event_with_its_modifiers() {
     let plan = contract::compile(src).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let id = |r: &Runner<NoData>, t: &str| {
+    let id = |r: &Runner<Source>, t: &str| {
         let k = r.kernel();
         k.node_by_key(k.find_by_test_id(t)[0]).unwrap().id
     };
@@ -125,7 +117,7 @@ fn a_branch_may_nest_and_an_omitted_else_is_fine() {
     let plan = contract::compile(src).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -152,7 +144,7 @@ fn else_if_and_else_when_are_the_nested_branch() {
     assert_eq!(contract_syntax::fmt::format(sugar).unwrap(), sugar);
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

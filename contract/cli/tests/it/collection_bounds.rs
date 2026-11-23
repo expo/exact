@@ -1,4 +1,5 @@
 //! Literal refusals and the measured fallback for virtual collection bounds.
+use crate::source::boxed;
 use contract::BakeError;
 use exact_plan::Value;
 use exact_runner::{DataError, DataSource};
@@ -56,7 +57,7 @@ fn expanded_style_bounds_follow_the_same_rule_and_inline_override_wins() {
 fn bake_checks_computed_auto_height_and_zero_flex_on_virtual_lists() {
     for attrs in ["height=bound", "flex=grow"] {
         let plan = contract::compile(&source(&format!("virtualized=true {attrs}"))).unwrap();
-        match contract::bake(plan, Rows).unwrap_err() {
+        match contract::bake(plan, boxed(Rows)).unwrap_err() {
             BakeError::Lint { id, message, .. } => {
                 assert_eq!(id, "bake-scroll-unbounded");
                 assert!(message.contains("testId=\"collection\""), "{message}");
@@ -66,18 +67,18 @@ fn bake_checks_computed_auto_height_and_zero_flex_on_virtual_lists() {
     }
     let bounded = source("virtualized=true height=bound")
         .replace("state bound = \"auto\"", "state bound = 200");
-    contract::bake(contract::compile(&bounded).unwrap(), Rows).unwrap();
+    contract::bake(contract::compile(&bounded).unwrap(), boxed(Rows)).unwrap();
 }
 #[test]
 fn eager_lists_and_actual_parent_stretch_remain_valid() {
     contract::bake(
         contract::compile(&source("virtualized=false height=\"auto\"")).unwrap(),
-        Rows,
+        boxed(Rows),
     )
     .unwrap();
     let stretched =
         source("virtualized=true height=bound").replace("    row\n", "    row height=200\n");
-    contract::bake(contract::compile(&stretched).unwrap(), Rows).unwrap();
+    contract::bake(contract::compile(&stretched).unwrap(), boxed(Rows)).unwrap();
 }
 
 fn nested_source(row: &str) -> String {
@@ -339,7 +340,7 @@ fn a_scroll_bounded_by_its_parent_or_its_own_longhands_compiles() {
     ] {
         let plan = contract::compile(&app(parent, scroll))
             .unwrap_or_else(|e| panic!("{parent} / {scroll}: {e}"));
-        contract::bake(plan, Rows).unwrap_or_else(|e| panic!("{parent} / {scroll}: {e:?}"));
+        contract::bake(plan, boxed(Rows)).unwrap_or_else(|e| panic!("{parent} / {scroll}: {e:?}"));
     }
     for (parent, scroll) in [
         ("view height=300", ""),

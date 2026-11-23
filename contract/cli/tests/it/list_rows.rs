@@ -2,15 +2,9 @@
 //! which lists, once (`contract/lower/src/cells.rs`), and marks each with
 //! `listRows`, the prop every host reads; these hold the rule.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, Offer, PropId};
-use exact_runner::{DataError, DataSource, Runner, Value};
-
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::Runner;
 
 /// Whether the node `testId="it"` of a view holding `body` is marked.
 fn marked(body: &str) -> bool {
@@ -21,7 +15,7 @@ fn marked(body: &str) -> bool {
 }
 
 /// A view holding `body`, booted and laid out at 402 by 874.
-fn boot(body: &str) -> Runner<NoData> {
+fn boot(body: &str) -> Runner<Source> {
     let body = body
         .lines()
         .map(|l| format!("      {l}\n"))
@@ -31,12 +25,12 @@ fn boot(body: &str) -> Runner<NoData> {
     );
     let plan = contract::bake(
         contract::compile(&source).unwrap_or_else(|e| panic!("{e}")),
-        NoData,
+        boxed(NoData),
     )
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -50,7 +44,7 @@ fn boot(body: &str) -> Runner<NoData> {
 }
 
 /// The wire id of the node `test_id` names.
-fn id(r: &Runner<NoData>, test_id: &str) -> u32 {
+fn id(r: &Runner<Source>, test_id: &str) -> u32 {
     let k = r.kernel();
     k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap().id
 }
@@ -214,14 +208,14 @@ list testId=\"leading\"
     row id=\"lead-row\" width=\"100%\" flex-shrink=0 testId=\"lead-row\"
       column flex=1 testId=\"lead-row-in\"",
     );
-    let lay = |r: &mut Runner<NoData>| {
+    let lay = |r: &mut Runner<Source>| {
         let k = r.kernel_mut();
         let root = k.roots()[0];
         k.compute_layout(root, Offer::definite(402.0, 874.0))
             .unwrap();
     };
     // Where the row's content stands in it: its left inset, and what its right leaves.
-    let inset = |r: &Runner<NoData>, t: &str| {
+    let inset = |r: &Runner<Source>, t: &str| {
         let k = r.kernel();
         let (row, inner) = (
             k.node(id(r, t)).unwrap().frame,
@@ -237,7 +231,7 @@ list testId=\"leading\"
         "a form control keeps its own padding"
     );
     // A native button row's face carries the inset its host places and measures the title by.
-    let face_inset = |r: &Runner<NoData>| {
+    let face_inset = |r: &Runner<Source>| {
         let style = r
             .kernel()
             .button_face_style(id(r, "native"))

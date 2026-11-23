@@ -2,6 +2,7 @@
 //! kinds — CSS's (bare), a browser's (its own prefix), or Exact's
 //! (`-exact-`) — and the old spellings are refused with their new ones.
 
+use crate::source::{boxed, Source};
 use contract_lower::style_names::{RENAMED_TOKENS, STYLE_NAMES};
 use exact_kernel::corner::{CornerShape, KEYWORDS};
 use exact_kernel::style::env::ENV_NAMES;
@@ -21,11 +22,11 @@ impl DataSource for NoData {
     }
 }
 
-fn boot(src: &str) -> Runner<NoData> {
-    let plan = contract::bake(contract::compile(src).unwrap(), NoData).unwrap();
+fn boot(src: &str) -> Runner<Source> {
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -33,7 +34,7 @@ fn boot(src: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn style_of(r: &Runner<NoData>, id: &str) -> exact_kernel::StyleProps {
+fn style_of(r: &Runner<Source>, id: &str) -> exact_kernel::StyleProps {
     let k = r.kernel();
     k.node_by_key(k.find_by_test_id(id)[0])
         .unwrap()

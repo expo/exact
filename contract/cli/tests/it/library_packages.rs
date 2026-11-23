@@ -3,18 +3,10 @@
 //! PostButton's `fill`, `dim` and `pressed` sees each on its look, since a
 //! `:disabled` row beats the node's own base row and `:active` is the host's.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, StyleId};
-use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Runner};
+use exact_runner::Runner;
 use std::path::{Path, PathBuf};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
 
 struct Dir(PathBuf);
 impl Drop for Dir {
@@ -57,7 +49,7 @@ fn app_with(name: &str, packages: &[&str], design: &str, contract: &str) -> (Dir
     (dir, app)
 }
 
-fn background(r: &Runner<NoData>, test_id: &str) -> String {
+fn background(r: &Runner<Source>, test_id: &str) -> String {
     let k = r.kernel();
     let key = k.find_by_test_id(test_id)[0];
     format!(
@@ -68,12 +60,12 @@ fn background(r: &Runner<NoData>, test_id: &str) -> String {
     )
 }
 
-fn boot(app: &Path) -> Runner<NoData> {
+fn boot(app: &Path) -> Runner<Source> {
     let plan = contract::compile_path(app).unwrap_or_else(|e| panic!("{e:?}"));
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

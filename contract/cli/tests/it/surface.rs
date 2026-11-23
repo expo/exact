@@ -1,4 +1,5 @@
 use crate::scratch::Scratch;
+use crate::source::boxed;
 use exact_kernel::Kernel;
 use exact_runner::{DataError, DataSource, Runner, Value};
 struct NoData;
@@ -38,10 +39,10 @@ component Readout
         case none
           text "Waiting"
 "#;
-    let plan = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(source).unwrap(), boxed(NoData)).unwrap();
     let mut runner = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -61,14 +62,21 @@ component Readout
 
 #[test]
 fn bake_defaults_are_the_first_frame_and_never_kept_or_typescript() {
-    let p = contract::bake(contract::compile(SOURCE).unwrap(), NoData).unwrap();
+    let p = contract::bake(contract::compile(SOURCE).unwrap(), boxed(NoData)).unwrap();
     assert_eq!(
         Value::from_bytes(p.bytes(p.resources[0].initial)).unwrap(),
         Value::record(vec![Value::Number(0.)])
     );
     assert!(p.resources[0].reader);
     assert!(!contract::typescript(&p).unwrap().contains("exactSurface"));
-    let mut r = Runner::boot(p, NoData, Kernel::with_monospace(), Default::default(), "/").unwrap();
+    let mut r = Runner::boot(
+        p,
+        boxed(NoData),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
     r.set_surface_record("world", Some(r#"{"beacons":1}"#))
         .unwrap();
     assert_eq!(
@@ -114,7 +122,7 @@ fn lint_refuses_arity_nonliteral_nonrecord_and_unknown_surface_by_name() {
     let number = nonrecord.fields[0].ty;
     nonrecord.resources[0].ty = number;
     assert!(matches!(
-        contract::bake(nonrecord, NoData),
+        contract::bake(nonrecord, boxed(NoData)),
         Err(contract::BakeError::Lint {
             id: "bake-surface-record",
             ..
@@ -122,7 +130,7 @@ fn lint_refuses_arity_nonliteral_nonrecord_and_unknown_surface_by_name() {
     ));
     for source in cases {
         let p = contract::compile(&source).unwrap();
-        let error = contract::bake(p, NoData).unwrap_err();
+        let error = contract::bake(p, boxed(NoData)).unwrap_err();
         assert!(
             matches!(
                 error,
@@ -150,7 +158,7 @@ fn viewport_and_delivery_readers_choose_subsets_without_source_unification() {
         let p = contract::compile(&text).unwrap();
         // Named once in the plan's source table (LLP 1030 D7), never unified.
         assert_eq!(p.sources.len(), 1);
-        contract::bake(p, NoData).unwrap();
+        contract::bake(p, boxed(NoData)).unwrap();
     }
 }
 
@@ -160,7 +168,7 @@ fn control_action_is_a_canvas_child_property() {
     let plan = contract::compile(source).unwrap();
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -198,7 +206,7 @@ fn named_surface_arguments_survive_plan_roundtrip_and_live_updates() {
     assert_eq!(compiled.encode(), plan.encode());
     let mut runner = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -243,7 +251,7 @@ fn named_surface_arguments_survive_plan_roundtrip_and_live_updates() {
     let plan = contract::compile(child).unwrap();
     let mut inlined = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -281,7 +289,7 @@ fn view_binders_preserve_surface_names() {
         }
         let mut r = Runner::boot(
             plan,
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -310,7 +318,7 @@ fn d6_empty_v5_surface_call_is_named_and_v4_refuses() {
     let plan = exact_plan::Plan::decode(&plan.encode()).unwrap();
     let mut runner = Runner::boot(
         plan.clone(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -551,7 +559,7 @@ component App
     canvas surface=world()
       text hud.state
 "#;
-    let plan = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(source).unwrap(), boxed(NoData)).unwrap();
     let default = Value::record(vec![
         Value::str("a|b"),
         Value::record(vec![
@@ -562,7 +570,7 @@ component App
     ]);
     let mut runner = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -748,11 +756,18 @@ component App
       canvas surface=world
       text "Metrics"
 "#;
-    let p = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
+    let p = contract::bake(contract::compile(source).unwrap(), boxed(NoData)).unwrap();
     assert!(!contract::typescript(&p)
         .unwrap()
         .contains("exactCanvasPerformance"));
-    let mut r = Runner::boot(p, NoData, Kernel::with_monospace(), Default::default(), "/").unwrap();
+    let mut r = Runner::boot(
+        p,
+        boxed(NoData),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
     let empty = Value::record(vec![Value::NONE, Value::NONE]);
     assert_eq!(r.resource("metrics"), Some(&empty));
     assert!(r.wants_canvas_performance("world"));
@@ -782,7 +797,7 @@ component App
         source.replace("Performance(\"world\")", "Performance(\"missing\")"),
     ] {
         let p = contract::compile(&bad).unwrap();
-        assert!(contract::bake(p, NoData).is_err());
+        assert!(contract::bake(p, boxed(NoData)).is_err());
     }
 }
 
@@ -802,8 +817,15 @@ component App
   view
     canvas surface=world
 "#;
-    let p = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
-    let mut r = Runner::boot(p, NoData, Kernel::with_monospace(), Default::default(), "/").unwrap();
+    let p = contract::bake(contract::compile(source).unwrap(), boxed(NoData)).unwrap();
+    let mut r = Runner::boot(
+        p,
+        boxed(NoData),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
     assert!(
         !r.wants_canvas_performance("world"),
         "idle readers collect nothing"

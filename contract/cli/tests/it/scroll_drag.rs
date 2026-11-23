@@ -4,6 +4,7 @@
 //! leave; and `swipeleft`, the mirror of `swiperight`
 //! (`issues/closed/20261022-no-swipeleft.md`).
 
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, PropId};
 use exact_plan::{EventKind, Plan};
 use exact_runner::{Event, Runner};
@@ -32,18 +33,25 @@ const APP: &str = r#"component App
       column testId="plain"
 "#;
 
-fn boot() -> Runner<()> {
+fn boot() -> Runner<Source> {
     let plan = contract::compile(APP).unwrap_or_else(|e| panic!("{e}"));
     let plan = Plan::decode(&plan.encode()).unwrap();
-    Runner::boot(plan, (), Kernel::with_monospace(), Default::default(), "/").unwrap()
+    Runner::boot(
+        plan,
+        boxed(()),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap()
 }
 
-fn view(r: &Runner<()>, id: &str) -> exact_kernel::ViewId {
+fn view(r: &Runner<Source>, id: &str) -> exact_kernel::ViewId {
     let key = r.kernel().find_by_test_id(id)[0];
     r.kernel().node_by_key(key).unwrap().id
 }
 
-fn seen(r: &Runner<()>) -> String {
+fn seen(r: &Runner<Source>) -> String {
     let id = view(r, "seen");
     r.kernel()
         .node(id)
@@ -116,7 +124,14 @@ fn scroll_snap_compiles_each_axis_strictness_alignment_and_stop() {
     for axis in ["x", "y", "both"] {
         let source = format!("component App\n  view\n    scroll height=100 width=300 scroll-snap-type=\"{axis} mandatory\"\n      view scroll-snap-align=\"center\"\n");
         let plan = contract::compile(&source).unwrap();
-        let r = Runner::boot(plan, (), Kernel::with_monospace(), Default::default(), "/").unwrap();
+        let r = Runner::boot(
+            plan,
+            boxed(()),
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
         let node = r.kernel().node(r.roots()[0]).unwrap();
         assert_eq!(
             node.style.scroll_snap_type.name(),
@@ -135,7 +150,7 @@ fn scroll_snap_compiles_each_axis_strictness_alignment_and_stop() {
     let source = "component App\n  view\n    scroll height=100 width=300 scroll-snap-type=\"x proximity\"\n      view scroll-snap-align=\"start center\" scroll-snap-stop=\"always\"\n";
     let r = Runner::boot(
         contract::compile(source).unwrap(),
-        (),
+        boxed(()),
         Kernel::with_monospace(),
         Default::default(),
         "/",

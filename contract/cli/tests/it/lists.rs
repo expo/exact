@@ -3,6 +3,7 @@
 //! that a row's derived string is formatted again only when what it reads
 //! changes.
 
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, PropValue};
 use exact_plan::{Items, Plan, Value};
 use exact_runner::{DataError, DataSource, Runner, RunnerError};
@@ -84,7 +85,7 @@ impl DataSource for Coins {
     }
 }
 
-fn prop(r: &Runner<Coins>, id: &str, name: &str) -> String {
+fn prop(r: &Runner<Source>, id: &str, name: &str) -> String {
     let k = r.kernel();
     k.node_by_key(k.find_by_test_id(id)[0])
         .unwrap()
@@ -97,12 +98,12 @@ fn prop(r: &Runner<Coins>, id: &str, name: &str) -> String {
         .unwrap_or_default()
 }
 
-fn boot(src: &str) -> Runner<Coins> {
+fn boot(src: &str) -> Runner<Source> {
     let plan = contract::compile(src).unwrap();
-    let plan = contract::bake(plan, Coins::default()).unwrap();
+    let plan = contract::bake(plan, boxed(Coins::default())).unwrap();
     Runner::boot(
         plan,
-        Coins::default(),
+        boxed(Coins::default()),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -202,10 +203,10 @@ component A
             ))
         }
     }
-    let plan = contract::bake(contract::compile(src).unwrap(), Rows).unwrap();
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(Rows)).unwrap();
     let r = Runner::boot(
         plan,
-        Rows,
+        boxed(Rows),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -295,14 +296,14 @@ fn callback_runs_are_bounded_per_evaluation_and_the_trap_is_named() {
     // 255 outer runs, each 255 inner: 255 * 256 = 65,280 runs fit;
     // 256 * 257 = 65,792 do not.
     let plan = contract::compile(src).unwrap();
-    contract::bake(plan.clone(), Xs(255)).unwrap();
-    let error = contract::bake(plan.clone(), Xs(256)).unwrap_err();
+    contract::bake(plan.clone(), boxed(Xs(255))).unwrap();
+    let error = contract::bake(plan.clone(), boxed(Xs(256))).unwrap_err();
     assert!(format!("{error:?}").contains("IterationLimit"), "{error:?}");
     // At run time the binding's row is unset, the journal says why, and the
     // runner goes on (LLP 1017.003 D3).
     let r = Runner::boot(
         plan,
-        Xs(256),
+        boxed(Xs(256)),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -346,8 +347,8 @@ component A
     }
     let plan = contract::compile(src).unwrap();
     let r = Runner::boot(
-        contract::bake(plan.clone(), Xs(65_536)).unwrap(),
-        Xs(65_536),
+        contract::bake(plan.clone(), boxed(Xs(65_536))).unwrap(),
+        boxed(Xs(65_536)),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -378,7 +379,7 @@ component A
         "0 1 1000 -1000 0.8414709848078965 0.5403023058681398"
     );
     // One more item than the bound is refused whole, as `map` is.
-    let error = contract::bake(plan, Xs(65_537)).unwrap_err();
+    let error = contract::bake(plan, boxed(Xs(65_537))).unwrap_err();
     assert!(format!("{error:?}").contains("IterationLimit"), "{error:?}");
     // `sum` takes numbers only.
     let e = contract::compile(
@@ -419,8 +420,8 @@ component A
     }
     let plan = contract::compile(src).unwrap();
     let r = Runner::boot(
-        contract::bake(plan.clone(), Xs(5_000)).unwrap(),
-        Xs(5_000),
+        contract::bake(plan.clone(), boxed(Xs(5_000))).unwrap(),
+        boxed(Xs(5_000)),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -449,8 +450,8 @@ component A
     assert_eq!(text("big"), "5000");
     assert_eq!(text("empty"), "0");
     // 32,768 filtered and sorted is 65,536 steps; one more is refused.
-    contract::bake(plan.clone(), Xs(32_768)).unwrap();
-    let error = contract::bake(plan, Xs(32_769)).unwrap_err();
+    contract::bake(plan.clone(), boxed(Xs(32_768))).unwrap();
+    let error = contract::bake(plan, boxed(Xs(32_769))).unwrap_err();
     assert!(format!("{error:?}").contains("IterationLimit"), "{error:?}");
     for (body, id) in [
         ("sortBy(rows, r => r)", "type-argument"),
@@ -496,13 +497,13 @@ fn range_counts_from_zero_on_the_budget_and_refuses_what_is_no_count() {
     let plan = contract::compile(src).unwrap();
     let mut r = Runner::boot(
         plan,
-        Nothing,
+        boxed(Nothing),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let text = |r: &Runner<Nothing>, id: &str| {
+    let text = |r: &Runner<Source>, id: &str| {
         let k = r.kernel();
         k.node_by_key(k.find_by_test_id(id)[0])
             .unwrap()
@@ -530,7 +531,7 @@ fn range_counts_from_zero_on_the_budget_and_refuses_what_is_no_count() {
         .unwrap();
         let e = Runner::boot(
             plan,
-            Nothing,
+            boxed(Nothing),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -590,8 +591,8 @@ component A
     }
     let plan = contract::compile(src).unwrap();
     let r = Runner::boot(
-        contract::bake(plan.clone(), Xss(32_768)).unwrap(),
-        Xss(32_768),
+        contract::bake(plan.clone(), boxed(Xss(32_768))).unwrap(),
+        boxed(Xss(32_768)),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -613,7 +614,7 @@ component A
     assert_eq!(text("lit"), "abc");
     assert_eq!(text("deep"), "3");
     assert_eq!(text("big"), "32768");
-    let error = contract::bake(plan, Xss(32_769)).unwrap_err();
+    let error = contract::bake(plan, boxed(Xss(32_769))).unwrap_err();
     assert!(format!("{error:?}").contains("IterationLimit"), "{error:?}");
     for (call, id, says) in [
         (
@@ -666,13 +667,13 @@ component A
     let plan = contract::compile(src).unwrap();
     let mut r = Runner::boot(
         plan,
-        Nothing,
+        boxed(Nothing),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let text = |r: &Runner<Nothing>, id: &str| {
+    let text = |r: &Runner<Source>, id: &str| {
         let k = r.kernel();
         k.node_by_key(k.find_by_test_id(id)[0])
             .unwrap()
@@ -738,8 +739,15 @@ component Child
   view
     text xs.map(k => k + n).join(",") testId="captured"
 "#;
-    let plan = contract::bake(contract::compile(src).unwrap(), Ks).unwrap();
-    let r = Runner::boot(plan, Ks, Kernel::with_monospace(), Default::default(), "/").unwrap();
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(Ks)).unwrap();
+    let r = Runner::boot(
+        plan,
+        boxed(Ks),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
     let text = |id: &str| {
         let k = r.kernel();
         k.node_by_key(k.find_by_test_id(id)[0])
@@ -986,18 +994,18 @@ impl DataSource for Tick {
 fn an_empty_list_is_typed_from_its_context_and_runs() {
     let plan = contract::bake(
         contract::compile(&corpus("empty-list.contract")).unwrap(),
-        Tick,
+        boxed(Tick),
     )
     .unwrap();
     let mut r = Runner::boot(
         Plan::decode(&plan.encode()).unwrap(),
-        Tick,
+        boxed(Tick),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let text = |r: &Runner<Tick>, id: &str| {
+    let text = |r: &Runner<Source>, id: &str| {
         let k = r.kernel();
         k.node_by_key(k.find_by_test_id(id)[0])
             .unwrap()
@@ -1158,12 +1166,12 @@ fn shown<D: DataSource>(r: &Runner<D>, id: &str) -> String {
 fn a_list_the_screen_keeps_is_built_in_contract() {
     let plan = contract::bake(
         contract::compile(&corpus("list-construction.contract")).unwrap(),
-        Rows,
+        boxed(Rows),
     )
     .unwrap();
     let mut r = Runner::boot(
         Plan::decode(&plan.encode()).unwrap(),
-        Rows,
+        boxed(Rows),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -1320,7 +1328,7 @@ fn concat_slice_and_includes_take_list_steps_and_build_bounded_lists() {
     let src = "shape Row\n  id: string\n  title: string\ncomponent A\n  state n = 0\n  state c = 0\n  resource rs = rows(n) as shape Row[]\n  resource s = long(c) as shape string\n  derive both = rs.concat(rs).length\n  derive kept = rs.slice(1).length\n  derive found = rs.map(r => r.id).includes(\"none\")\n  derive big = c > 0 ? rs.map(r => s).concat(rs.map(r => s)).length : 0\n  action go(k: number, b: number)\n    n = k\n    c = b\n  view\n    text `${both} ${kept} ${found} ${big}` testId=\"t\"\n";
     let mut r = Runner::boot(
         contract::compile(src).unwrap(),
-        Many,
+        boxed(Many),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -1354,7 +1362,7 @@ fn index_of_and_split_take_list_steps() {
     let src = "shape Row\n  id: string\n  title: string\ncomponent A\n  state n = 0\n  state c = 0\n  resource rs = rows(n) as shape Row[]\n  resource s = long(c) as shape string\n  derive at = rs.map(r => r.id).indexOf(\"none\")\n  derive pieces = s.split(\"\").length\n  derive words = s.split(\"a\").length\n  action go(k: number, b: number)\n    n = k\n    c = b\n  view\n    text `${at} ${pieces} ${words}` testId=\"t\"\n";
     let mut r = Runner::boot(
         contract::compile(src).unwrap(),
-        Many,
+        boxed(Many),
         Kernel::with_monospace(),
         Default::default(),
         "/",

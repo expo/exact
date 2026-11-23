@@ -1,3 +1,4 @@
+use crate::source::{boxed, Source};
 use exact_kernel::Kernel;
 use exact_plan::{Opcode, Value};
 use exact_runner::vm::instructions;
@@ -37,8 +38,16 @@ fn component_form_stays_within_ten_percent_of_its_root_twin_and_edits_identicall
         child.encode().len(),
         root.encode().len()
     );
-    let boot =
-        |p| Runner::boot(p, Empty, Kernel::with_monospace(), Default::default(), "/").unwrap();
+    let boot = |p| {
+        Runner::boot(
+            p,
+            boxed(Empty),
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap()
+    };
     let (mut a, mut b) = (boot(child), boot(root));
     assert_eq!(
         a.kernel().export(None).unwrap(),
@@ -60,7 +69,7 @@ fn component_form_stays_within_ten_percent_of_its_root_twin_and_edits_identicall
                 Event::Input(format!("draft {step}").into()),
             ),
         };
-        let view = |r: &Runner<Empty>| {
+        let view = |r: &Runner<Source>| {
             r.kernel()
                 .node_by_key(r.kernel().find_by_test_id(&id)[0])
                 .unwrap()
@@ -91,7 +100,7 @@ fn derives_in_stateless_arms_keep_their_owner_through_deeper_frames() {
     let plan = plan("stateless.contract");
     let mut runner = Runner::boot(
         plan,
-        Empty,
+        boxed(Empty),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -134,7 +143,7 @@ fn equivalent_sibling_derives_render_without_spending_call_depth() {
     assert_eq!(plan.derives.iter().filter(|row| row.unsettled).count(), 1);
     let runner = Runner::boot(
         plan,
-        Empty,
+        boxed(Empty),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -222,7 +231,7 @@ fn transitive_derives_share_without_a_direct_view_read() {
 fn equivalent_aliases_keep_their_style_on_the_runner() {
     let runner = Runner::boot(
         plan("aliases.contract"),
-        Empty,
+        boxed(Empty),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -271,7 +280,7 @@ fn distinct_derive_dependencies_preserve_valid_call_depth() {
         assert_eq!(depths.into_iter().max(), Some(48));
         let runner = Runner::boot(
             plan,
-            Empty,
+            boxed(Empty),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -306,7 +315,7 @@ fn executable_call_limit_names_the_load_instruction() {
     assert!(pc > 0);
     let runner = Runner::boot(
         plan,
-        Empty,
+        boxed(Empty),
         Kernel::with_monospace(),
         Default::default(),
         "/",

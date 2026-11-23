@@ -1,6 +1,7 @@
 //! LLP 1091 D8/D9: `exact:` built-ins and packages through `node_modules`.
 
 #[cfg(unix)]
+use crate::source::{boxed, NoData, Source};
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -238,17 +239,6 @@ fn a_file_install_of_linked_files_is_the_library_where_its_files_are() {
     }
 }
 
-struct NoData;
-impl exact_runner::DataSource for NoData {
-    fn query(
-        &mut self,
-        source: &str,
-        _: &[exact_runner::Value],
-    ) -> Result<exact_runner::Value, exact_runner::DataError> {
-        Err(exact_runner::DataError::UnknownSource(source.into()))
-    }
-}
-
 /// Every node under `root`, depth first, as the kernel holds them.
 fn under(k: &exact_kernel::Kernel, root: u32) -> Vec<exact_kernel::NodeRef<'_>> {
     let mut out = Vec::new();
@@ -296,10 +286,10 @@ component App
         RowText(title="Tuesday", detail="", value=none)
 "#,
     );
-    let plan = contract::bake(contract::compile_path(&root).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile_path(&root).unwrap(), boxed(NoData)).unwrap();
     let mut r = exact_runner::Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -444,10 +434,10 @@ component App
       SummaryCard(label="Done", value="3", detail="today", progress=none, symbol=some("symbol:checkmark"))
 "#,
     );
-    let plan = contract::bake(contract::compile_path(&root).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile_path(&root).unwrap(), boxed(NoData)).unwrap();
     let mut r = exact_runner::Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -506,10 +496,10 @@ component App
           RowText(title="Row", detail="Heaviest lift", value=some("50 kg"))
 "#,
     );
-    let plan = contract::bake(contract::compile_path(&root).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile_path(&root).unwrap(), boxed(NoData)).unwrap();
     let mut r = exact_runner::Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -635,10 +625,10 @@ component App
         StatBar(label="Wednesday", value="800 ml", fraction=0.5, tint=none)
 "#,
     );
-    let plan = contract::bake(contract::compile_path(&root).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile_path(&root).unwrap(), boxed(NoData)).unwrap();
     let mut r = exact_runner::Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -693,10 +683,10 @@ component App
         RowText(title="Oat milk", detail="2 in stock", value=some("Saturday, October 17, 2026 at 7:30 PM"))
 "#,
     );
-    let plan = contract::bake(contract::compile_path(&root).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile_path(&root).unwrap(), boxed(NoData)).unwrap();
     let mut r = exact_runner::Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -812,10 +802,10 @@ component App
         DoneMark(caption="", done=true)
 "#,
     );
-    let plan = contract::bake(contract::compile_path(&root).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile_path(&root).unwrap(), boxed(NoData)).unwrap();
     let mut r = exact_runner::Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -988,17 +978,17 @@ component App
         AnswerTile(label=a, status=(picked == "" ? (a == "Caracas" ? "selected" : "idle") : a == "Quito" ? "correct" : a == picked ? "wrong" : "dimmed"), press=pick(a), testId=a)
 "#,
     );
-    let plan = contract::bake(contract::compile_path(&root).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile_path(&root).unwrap(), boxed(NoData)).unwrap();
     let mut r = exact_runner::Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
     let at = |k: &exact_kernel::Kernel, t: &str| k.node_by_key(k.find_by_test_id(t)[0]).unwrap().id;
-    let layout = |r: &mut exact_runner::Runner<NoData>| {
+    let layout = |r: &mut exact_runner::Runner<Source>| {
         let k = r.kernel_mut();
         let top = at(k, "root");
         k.compute_layout(top, Offer::definite(400.0, 900.0))
@@ -1146,17 +1136,17 @@ component App
             text "Close Poll"
 "#,
     );
-    let plan = contract::bake(contract::compile_path(&root).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile_path(&root).unwrap(), boxed(NoData)).unwrap();
     let mut r = exact_runner::Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
     let at = |k: &exact_kernel::Kernel, t: &str| k.node_by_key(k.find_by_test_id(t)[0]).unwrap().id;
-    let rows = |r: &mut exact_runner::Runner<NoData>| {
+    let rows = |r: &mut exact_runner::Runner<Source>| {
         let k = r.kernel_mut();
         let top = at(k, "root");
         k.compute_layout(top, Offer::definite(400.0, 900.0))
@@ -1238,10 +1228,10 @@ component App
         Badge(label="Closed", tint=some("-exact-system-red"))
 "#,
     );
-    let plan = contract::bake(contract::compile_path(&root).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile_path(&root).unwrap(), boxed(NoData)).unwrap();
     let mut r = exact_runner::Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -1355,10 +1345,10 @@ component App
         SummaryCard(label="Today", value="1", detail="of 2", progress=none, symbol=none)
 "#,
     );
-    let plan = contract::bake(contract::compile_path(&root).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile_path(&root).unwrap(), boxed(NoData)).unwrap();
     let r = exact_runner::Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",

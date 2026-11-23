@@ -6,17 +6,10 @@
 //! family under a type token and leaves a named one alone.
 
 use crate::scratch::Scratch;
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, StyleId};
-use exact_plan::{Plan, Value};
-use exact_runner::{DataError, DataSource, Runner};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_plan::Plan;
+use exact_runner::Runner;
 
 fn app(name: &str, view: &str) -> Scratch {
     let dir = Scratch::new(format!("exact2-type-{name}-{}", std::process::id()));
@@ -25,11 +18,11 @@ fn app(name: &str, view: &str) -> Scratch {
     dir.at("app.contract")
 }
 
-fn booted(plan: Plan) -> Runner<NoData> {
-    let plan = contract::bake(plan, NoData).unwrap();
+fn booted(plan: Plan) -> Runner<Source> {
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -37,7 +30,7 @@ fn booted(plan: Plan) -> Runner<NoData> {
     .unwrap()
 }
 
-fn node<'a>(r: &'a Runner<NoData>, id: &str) -> exact_kernel::NodeRef<'a> {
+fn node<'a>(r: &'a Runner<Source>, id: &str) -> exact_kernel::NodeRef<'a> {
     let key = r.kernel().find_by_test_id(id)[0];
     r.kernel().node_by_key(key).unwrap()
 }
@@ -167,7 +160,7 @@ fn a_type_token_writes_only_its_longhands() {
     );
     // Bold Text: a system family under a type token steps, an authored
     // weight included; a named family is left alone (D12.3).
-    let weight = |r: &Runner<NoData>, id: &str| node(r, id).text_style().font_weight;
+    let weight = |r: &Runner<Source>, id: &str| node(r, id).text_style().font_weight;
     let (system, title) = (weight(&r, "system"), weight(&r, "title"));
     r.set_bold_text(true).unwrap();
     assert_eq!(weight(&r, "system"), exact_kernel::bolder(system));

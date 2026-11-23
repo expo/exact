@@ -6,6 +6,7 @@
 //! to new keys and released with its last reader; the absent cells; and the
 //! status item and Dock menu the agent reads from the tree.
 
+use crate::source::{boxed, Source};
 use exact_runner::{agent, CallOrigin, Runner};
 use serde_json::{json, Value as Json};
 #[cfg(unix)]
@@ -95,12 +96,12 @@ impl exact_runner::DataSource for Grants {
     }
 }
 
-fn boot(app: &App, target: &str) -> Runner<Grants> {
+fn boot(app: &App, target: &str) -> Runner<Source> {
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Grants,
+        boxed(Grants),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -112,7 +113,7 @@ fn boot(app: &App, target: &str) -> Runner<Grants> {
 }
 
 /// Time to now, and every topic the substitutes announced asked again.
-fn settle(r: &mut Runner<Grants>) {
+fn settle(r: &mut Runner<Source>) {
     for _ in 0..8 {
         let at = r.now_ms();
         r.advance(at).unwrap();
@@ -122,20 +123,20 @@ fn settle(r: &mut Runner<Grants>) {
     }
 }
 
-fn logs(r: &Runner<Grants>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     agent::handle(r, r#"{"op":"logs"}"#)
 }
 
-fn state(r: &Runner<Grants>) -> Json {
+fn state(r: &Runner<Source>) -> Json {
     serde_json::from_str(&agent::handle(r, r#"{"op":"state"}"#)).unwrap()
 }
 
-fn show(r: &Runner<Grants>, name: &str) -> String {
+fn show(r: &Runner<Source>, name: &str) -> String {
     format!("{:?}", r.resource(name).or(r.slot(name)))
 }
 
 /// The text of the node with `test_id`.
-fn text(r: &Runner<Grants>, test_id: &str) -> String {
+fn text(r: &Runner<Source>, test_id: &str) -> String {
     let tree: Json = serde_json::from_str(&agent::handle(r, r#"{"op":"tree"}"#)).unwrap();
     let nodes = tree["nodes"].as_array().unwrap();
     let node = (nodes.iter())
@@ -149,7 +150,7 @@ fn text(r: &Runner<Grants>, test_id: &str) -> String {
         .to_owned()
 }
 
-fn op(r: &mut Runner<Grants>, request: Json) -> Result<String, String> {
+fn op(r: &mut Runner<Source>, request: Json) -> Result<String, String> {
     let reply = agent::answer(r, &request.to_string())
         .expect("an agent op")
         .0;
@@ -161,13 +162,13 @@ fn op(r: &mut Runner<Grants>, request: Json) -> Result<String, String> {
     }
 }
 
-fn act(r: &mut Runner<Grants>, action: &str) {
+fn act(r: &mut Runner<Source>, action: &str) {
     r.act(action, Vec::new()).unwrap();
     settle(r);
 }
 
 /// The registration's entries in `state.globalShortcuts`.
-fn shortcuts(r: &Runner<Grants>) -> Vec<Json> {
+fn shortcuts(r: &Runner<Source>) -> Vec<Json> {
     let all = state(r)["globalShortcuts"].clone();
     all.as_array().cloned().unwrap_or_default()
 }

@@ -2,6 +2,7 @@
 //! recording may open the microphone though the app is not in front; a
 //! press of any other control, and a press asking for the camera, may not.
 
+use crate::source::{boxed, Source};
 use exact_runner::{agent, CallHow, Dispatch, Outcome, Reply, Response, Runner, Value, Work};
 #[cfg(unix)]
 use std::os::unix::fs::symlink as symlink_dir;
@@ -82,13 +83,13 @@ impl exact_runner::DataSource for Granted {
     }
 }
 
-fn state(r: &Runner<Granted>) -> serde_json::Value {
+fn state(r: &Runner<Source>) -> serde_json::Value {
     serde_json::from_str(&agent::handle(r, r#"{"op":"state"}"#)).unwrap()
 }
 
 /// Press `kind` and run it to its end, the host answering each module call:
 /// its tool's journal lines.
-fn press(r: &mut Runner<Granted>, kind: &str) -> String {
+fn press(r: &mut Runner<Source>, kind: &str) -> String {
     let rows = state(r)["controls"].clone();
     let row = rows
         .as_array()
@@ -125,7 +126,7 @@ fn only_a_recording_press_opens_the_microphone_out_of_the_foreground() {
         .unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Granted,
+        boxed(Granted),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
