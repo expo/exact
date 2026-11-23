@@ -730,13 +730,13 @@ extension Agent {
                         if handled { presenter.contextmenu(target.id) }
                         // A node with only a popover that cannot open it is not the target.
                         // One behind a modal hears it, but its popover would open inert.
-                        if target.inert || !presenter.menus.agentContext(target), !handled { next = presenter.listenerParent(of: node); continue }
+                        if target.inert || !presenter.menus.agentContext(target), !handled { next = presenter.pressParent(of: node); continue }
                     } else { presenter.dblclick(target.id) }
                     landed()
                     return ["tapped": Int(target.id), "event": event, "injected": true, "at": at].merging(selection.map { ["selection": $0] } ?? [:]) { a, _ in a }
                 }
                 // What a finger reaches, out of a sheet or a lifted popover too (`MountRelay`)
-                next = presenter.listenerParent(of: node)
+                next = presenter.pressParent(of: node)
             }
             if let selection { landed(); return ["tapped": Int((hit as? NodeView)?.id ?? v.id), "event": event, "delivery": "recognized", "selection": selection, "at": at] }
             return ["error": "no \(event) handler at view \(v.id)"]
@@ -873,16 +873,18 @@ extension Agent {
         if let run = node.inlineActivationTarget(at: local) { return .part(node, "inline run #\(run.id)", run.id) }
         if let href = node.inlineLink(at: local) { return .part(node, "the link \(href)", nil) }
         if session.canvases.wantsInput(node.id), !node.isSurfaceControl { return .canvas(node) }
-        var up: UIView? = node
+        var up: UIView? = node, declared = false
         while let cur = up {
             if let n = cur as? NodeView {
-                if n.disabled || n.authoredInert { return .blocked(n) }
+                // Past a declaration, inertness is the shown tree's (LLP 1013.002 D1).
+                if n.disabled || !declared && n.authoredInert { return .blocked(n) }
                 let box = presenter.pressBox(of: n, from: node)
                 if n.takesPress(bubbled: box !== n) {
                     return box.bounds.contains((box as? NodeView)?.local(p) ?? box.convert(p, from: nil)) ? .node(n) : .nothing
                 }
             }
-            up = presenter.listenerParent(of: cur)
+            declared = declared || presenter.declaredParent(of: cur) != nil
+            up = presenter.pressParent(of: cur)
         }
         return .nothing
     }
