@@ -39,6 +39,8 @@ type Section = { title: string; anchor: string; tokens: Token[] };
 type Doc = { nav: NavPage; title: string; description: string; intro: Token[]; sections: Section[]; anchors: Map<string, string> };
 type SitePage = { route: string; path: string; title: string; description: string; source: string; tokens: Token[]; tocDepth: number; skipHeading: string; hidden: boolean; landing: boolean };
 
+const DESCRIPTION_MIN = 40;
+const DESCRIPTION_MAX = 180;
 const THEMES = { light: 'github-light', dark: 'github-dark' } as const;
 const contractGrammar = JSON.parse(readFileSync(join(REPO, 'editors/vscode/syntaxes/exact-contract.tmLanguage.json'), 'utf8'));
 const highlighter = await createHighlighter({
@@ -339,27 +341,43 @@ function render(page: SitePage): { blocks: Block[]; toc: TocItem[] } {
   return { blocks: out, toc };
 }
 
+function sentencesOf(tokens: Token[] | undefined): string[] {
+  return plain(tokens).replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s+(?=[A-Z])/).map(x => x.trim());
+}
+
+function firstSentencesOfListItems(tokens: Token[]): string | undefined {
+  const list = tokens.find((t): t is Tokens.List => t.type === 'list');
+  const firsts = (list?.items ?? []).map(item => sentencesOf(item.tokens.slice(0, 1))[0]).filter(Boolean);
+  let fitting = 1;
+  while (fitting < firsts.length && firsts.slice(0, fitting + 1).join(' ').length <= DESCRIPTION_MAX) fitting++;
+  return firsts.slice(0, fitting).join(' ') || undefined;
+}
+
 function lead(tokens: Token[], fallback: string): string {
-  const sentences = tokens
+  const sentence = tokens
     .filter((t): t is Tokens.Paragraph => t.type === 'paragraph')
-    .flatMap(p => plain(p.tokens).replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s+(?=[A-Z])/))
-    .map(x => x.trim());
-  const sentence = sentences.find(x => x.length >= 40 && !x.endsWith(':')) ?? fallback;
-  if (sentence.length <= 180) return sentence;
-  const boundary = Math.max(0, sentence.lastIndexOf(' ', 177));
+    .flatMap(p => sentencesOf(p.tokens))
+    .find(x => x.length >= DESCRIPTION_MIN && !x.endsWith(':')) ?? firstSentencesOfListItems(tokens) ?? fallback;
+  if (sentence.length <= DESCRIPTION_MAX) return sentence;
+  const lastFullStop = [...sentence.slice(0, DESCRIPTION_MAX).matchAll(/[.!?](?=\s)/g)].at(-1)?.index ?? -1;
+  if (lastFullStop + 1 >= DESCRIPTION_MIN) return sentence.slice(0, lastFullStop + 1);
+  const boundary = Math.max(0, sentence.lastIndexOf(' ', DESCRIPTION_MAX - 3));
   return `${sentence.slice(0, boundary).trimEnd()}…`;
 }
 
 const pages: SitePage[] = docs.flatMap(doc => {
   const base: SitePage = { route: doc.nav.route, path: doc.nav.path, title: doc.title, description: doc.description, source: doc.nav.source, tokens: doc.intro, tocDepth: 2, skipHeading: '', hidden: !!doc.nav.hidden, landing: !!doc.nav.landing };
   if (!doc.nav.split) return [{ ...base, tokens: [...doc.intro, ...doc.sections.flatMap(s => s.tokens)] }];
+  const written = doc.nav.sectionDescriptions ?? {};
+  const unknown = Object.keys(written).find(anchor => !doc.sections.some(s => s.anchor === anchor));
+  if (unknown) throw new Error(`${doc.nav.source}: sectionDescriptions names "${unknown}", which is not one of its sections`);
   return [
     base,
     ...doc.sections.map(s => ({
       route: routeName(`${doc.nav.path}/${s.anchor}`),
       path: `${doc.nav.path}/${s.anchor}`,
       title: s.title,
-      description: lead(s.tokens, doc.description),
+      description: Object.hasOwn(written, s.anchor) ? written[s.anchor] : lead(s.tokens, doc.description),
       source: doc.nav.source,
       tokens: s.tokens,
       tocDepth: 3,
