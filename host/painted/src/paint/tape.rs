@@ -152,17 +152,21 @@ pub(super) struct Sticky {
     constraint: exact_kernel::StickyConstraint,
     scroller: exact_kernel::NodeKey,
     recorded: (f32, f32),
+    /// The display's scale, where it is drawn on its pixels (`grid.rs`).
+    grid: Option<f32>,
 }
 
 impl Sticky {
-    pub(super) fn capture(scene: &Scene<'_>, id: ViewId) -> Option<Self> {
+    pub(super) fn capture(scene: &Scene<'_>, id: ViewId, grid: Option<f32>) -> Option<Self> {
         let node = scene.kernel.node(id)?;
         let constraint = scene.kernel.sticky_constraint(node.key)?;
         let scroller = scene.kernel.node(constraint.scroller)?;
+        let scroll = space::sticky_scroll(scene, &scroller);
         Some(Self {
             constraint,
             scroller: scroller.key,
-            recorded: constraint.offset(space::sticky_scroll(scene, &scroller)),
+            recorded: super::grid::sticky_shift(constraint, &scroller, scroll, grid),
+            grid,
         })
     }
 
@@ -170,10 +174,13 @@ impl Sticky {
         scene
             .and_then(|scene| {
                 let scroller = scene.kernel.node_by_key(self.scroller)?;
-                Some(
-                    self.constraint
-                        .offset(space::sticky_scroll(scene, &scroller)),
-                )
+                let scroll = space::sticky_scroll(scene, &scroller);
+                Some(super::grid::sticky_shift(
+                    self.constraint,
+                    &scroller,
+                    scroll,
+                    self.grid,
+                ))
             })
             .unwrap_or(self.recorded)
     }

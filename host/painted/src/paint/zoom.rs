@@ -154,7 +154,8 @@ impl Painter {
         let Some(child) = kernel.node(fit.child) else {
             return ts;
         };
-        let at = (child.frame.x - offset.0, child.frame.y - offset.1);
+        let c = self.drawn(&child);
+        let at = (c.x - offset.0, c.y - offset.1);
         let shift = fit.shift(z);
         ts.pre_translate(at.0 + shift.0, at.1 + shift.1)
             .pre_scale(z, z)

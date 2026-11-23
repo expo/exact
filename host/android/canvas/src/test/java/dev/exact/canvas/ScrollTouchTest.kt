@@ -228,6 +228,20 @@ class ScrollTouchTest {
         assertEquals(soon.second, late.second)
     }
 
+    @Test fun aDragMovesAScrollerByWholePixels() {
+        val group = android.graphics.RenderNode("group")
+        org.robolectric.util.ReflectionHelpers.getField<HashMap<Int, android.graphics.RenderNode>>(view, "groups")[1] = group
+        org.robolectric.util.ReflectionHelpers.getField<Scrolling>(view, "scrolling")
+            .told(intArrayOf(1, 6, 0, 0, 100f.toBits(), 0, 100f.toBits(), 0, 500f.toBits()))
+        down(400f)
+        answer(reply(scroller(1, 100f).also { it[1] = 6 }))
+        // 49.4 px less the slop is 49 for the rows, and the 0.4 waits for the next move.
+        move(380.3f); move(350.6f)
+        assertEquals(slop - 49f, group.translationY, 0f)
+        move(350f)
+        assertEquals(slop - 50f, group.translationY, 0f)
+    }
+
     @Test fun theUpsOwnSampleMovesNothing() {
         // The platform's lists take a lift's position into its velocity, never into the drag.
         val (soon, late) = both(reply(scroller(1, 0f))) { move(380f); move(350f); up(320f) }

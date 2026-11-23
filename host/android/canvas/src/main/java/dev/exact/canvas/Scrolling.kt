@@ -249,8 +249,9 @@ internal class Scrolling(private val view: ExactView) {
                 val x = e.getX(i); val y = e.getY(i)
                 if (mode == WATCHING && !disallowIntercept) decide(x, y)
                 if (mode != DRAGGING) return false
-                val d = if (sideways) lastX - x else lastY - y
-                lastX = x; lastY = y
+                // Whole pixels, as the platform's scrollers drag: what is left of one waits for the next move.
+                val d = Math.round(if (sideways) lastX - x else lastY - y).toFloat()
+                if (sideways) { lastX -= d; lastY = y } else { lastX = x; lastY -= d }
                 if (d != 0f) drag(d, x, y)
                 dismissal.moved(y)
                 return true

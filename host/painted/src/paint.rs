@@ -221,7 +221,7 @@ impl BoxPaint {
             content: (
                 x + widths[3] + pad[3],
                 y + widths[0] + pad[0],
-                (w - widths[3] - widths[1] - pad[3] - pad[1]).max(0.0),
+                self.content_width(w),
                 (h - widths[0] - widths[2] - pad[0] - pad[2]).max(0.0),
             ),
         }
@@ -371,6 +371,7 @@ pub struct Scene<'a> {
 }
 
 mod frame;
+pub(crate) mod grid;
 pub use crate::canvas2d::CanvasUpdate;
 pub use backend::{Backend, FrameTarget, WindowLayer, POINTER};
 pub use exact_ink::Rotation;
@@ -391,6 +392,8 @@ pub struct Painter {
     pub text: Shared,
     /// Device pixels per point.
     pub scale: f32,
+    /// The backend draws on a display's pixels ([`Backend::pixel_grid`]).
+    pixel_grid: bool,
     /// Which appearance a `light-dark()` colour resolves to (LLP 1034 D2):
     /// what the app's `setScheme` last said, else the system's, which the
     /// device's shell or an agent tells the presenter; `light` until one does.
@@ -540,6 +543,7 @@ impl Painter {
             markers: HashMap::new(),
             text,
             scale,
+            pixel_grid: backend.pixel_grid(),
             dark: false,
             dates: None,
             backend,
@@ -652,6 +656,7 @@ impl Painter {
 
     /// Another backend from here on (the CPU's, once the GPU's failed a frame).
     pub fn replace_backend(&mut self, backend: Box<dyn Backend>) {
+        self.pixel_grid = backend.pixel_grid();
         self.backend = backend;
     }
 
@@ -831,11 +836,12 @@ impl Painter {
         let old_bars = std::mem::take(&mut self.scrollbars.bars);
         self.rows_begin(&walk);
         let kept = self.kept_places(&walk, None, scene.roots);
-        let space = Transform::from_translate(-scene.page.0, -scene.page.1);
+        let page = self.drawn_offset(scene.page);
+        let space = Transform::from_translate(-page.0, -page.1);
         let last = self.stage_after(scene.roots);
         for (at, root) in scene.roots.iter().enumerate() {
             self.replay_kept(walk.scene, &kept, at, space);
-            self.node(&mut walk, *root, Transform::identity(), scene.page, None);
+            self.node(&mut walk, *root, Transform::identity(), page, None);
             self.paint_stage(&mut walk, *root, Some(*root) == last);
         }
         self.replay_kept(walk.scene, &kept, scene.roots.len(), space);
@@ -908,7 +914,7 @@ impl Painter {
         offset: (f32, f32),
         clip_rect: Option<Rect4>,
     ) {
-        let offset = sticky(walk.scene, id, offset);
+        let offset = sticky(walk.scene, id, offset, self.grid());
         if self.placed(walk, id, ts, offset, clip_rect) {
             self.row_refuse();
             return;
@@ -941,7 +947,7 @@ impl Painter {
         // The roles drawn in the accent read the nearest authored
         // `accent-color`, for this node and, until one authors its own, below.
         let _accent = accent_scope(&node);
-        let f = node.frame;
+        let f = self.drawn(&node);
         let (x, y, w, h) = paint_rect(f, offset);
         let p = (walk.scene.presented)(id);
         self.row_node(walk.scene.kernel, &node, &p);
@@ -1152,7 +1158,7 @@ impl Painter {
                     self.backend.push_clip(clip, ts);
                 }
                 let clips = (clip.as_ref().map(|c| c.rect), clip_rect);
-                let baseline = self.text_node(walk, node, &geometry, rect, clips, ts);
+                let baseline = self.text_node(walk, node, &paint, &geometry, rect, clips, ts);
                 walk.boxes[owner].baseline = baseline;
                 if clip.is_some() {
                     self.backend.pop_clip();
@@ -1315,12 +1321,8 @@ impl Painter {
         let scrolls = !matches!(ox, Overflow::Visible | Overflow::Clip)
             || !matches!(oy, Overflow::Visible | Overflow::Clip);
         let child_offset = if scrolls {
-            let (sx, sy) = walk
-                .scene
-                .scroll
-                .get(&node.id)
-                .copied()
-                .unwrap_or((0.0, 0.0));
+            let scroll = walk.scene.scroll.get(&node.id).copied();
+            let (sx, sy) = self.drawn_offset(scroll.unwrap_or((0.0, 0.0)));
             (offset.0 + sx, offset.1 + sy)
         } else {
             offset

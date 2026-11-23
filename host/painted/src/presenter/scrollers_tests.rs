@@ -296,6 +296,17 @@ fn the_reader_moves_a_scroller_and_is_told_where_it_is() {
 }
 
 #[test]
+fn a_touch_and_a_frame_tell_one_farthest_offset_in_whole_pixels() {
+    let mut p = boot(PAGE_OF_SCROLLERS);
+    let inner = id(&p, "inner");
+    // 300 px of scroll is 787.5 pixels at 2.625 a px.
+    let words = p.reader_under(400. * 2.625 / 2., 480. * 2.625 / 2., 2.625);
+    assert_eq!(f32::from_bits(words[9] as u32), 788.);
+    let all = p.reader_scrollers(&[], 2.625).unwrap();
+    assert_eq!(told(&all, inner).2[5], 788.);
+}
+
+#[test]
 fn a_touch_a_scroll_won_presses_nothing_and_a_tap_after_it_still_does() {
     let mut p = boot(PAGE_OF_SCROLLERS);
     p.set_pointer_kind(PointerKind::Touch);

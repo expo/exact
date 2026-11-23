@@ -834,6 +834,9 @@ impl Backend for Recorder {
     fn rows(&self) -> bool {
         self.planes.is_empty()
     }
+    fn pixel_grid(&self) -> bool {
+        true
+    }
     fn rows_through(&self) -> bool {
         self.rows()
     }
@@ -1013,8 +1016,17 @@ impl Backend for Recorder {
         self.row_shown(id, bounds);
         let s = self.scale;
         self.ops.extend([ROW_DRAW, id]);
-        self.f((origin.0 - ROW_PAD) * s);
-        self.f((origin.1 - ROW_PAD) * s);
+        // The row's origin on a whole pixel, where its frame and the scroll
+        // have it but for a float's last bits: the reader draws a kept row
+        // there, and its text again from Skia's cache only a whole number of
+        // pixels from where it was drawn. One a transform put between pixels
+        // (a centred dialog, a route in flight) stays there with its box.
+        let whole = |v: f32| match (v * s).round() {
+            r if (v * s - r).abs() < 1.0 / 64.0 => r,
+            _ => v * s,
+        };
+        self.f(whole(origin.0) - ROW_PAD * s);
+        self.f(whole(origin.1) - ROW_PAD * s);
     }
 
     fn row_draw_through(&mut self, id: u32, ts: Transform, bounds: Rect4) {
@@ -1365,10 +1377,12 @@ impl<D: DataSource + Default> CanvasHost<D> {
         let mut ops = vec![SHIFT, painted.groups.len() as u32];
         for (id, at) in &painted.groups {
             let to = now.get(id).copied().unwrap_or((0.0, 0.0));
+            // From the pixels the rows were painted at to those a paint
+            // would put them at now.
             ops.extend([
                 *id,
-                ((at.0 - to.0) * s).to_bits(),
-                ((at.1 - to.1) * s).to_bits(),
+                (crate::paint::grid::pixel(at.0, s) - crate::paint::grid::pixel(to.0, s)).to_bits(),
+                (crate::paint::grid::pixel(at.1, s) - crate::paint::grid::pixel(to.1, s)).to_bits(),
             ]);
         }
         self.p.moved_without_paint();

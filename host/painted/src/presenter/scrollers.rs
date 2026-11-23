@@ -27,6 +27,7 @@
 //! ([`Presenter::pointer_cancel`]): no press fires for it.
 use super::contact::Candidate;
 use super::*;
+use crate::paint::grid::pixel;
 use std::collections::BTreeSet;
 
 #[cfg(test)]
@@ -616,8 +617,9 @@ impl<D: DataSource> Presenter<D> {
             let rev = self.reader_revision(s);
             let tap = if tapped == Some(s.id) { DOUBLE_TAP } else { 0 };
             out.extend([s.id as i32, self.reader_flags(s) | tap, rev as i32]);
-            let px = [s.offset.0, s.offset.1, s.max.0, s.max.1];
-            out.extend(px.iter().chain(&s.port).map(|v| bits(v * scale)));
+            // Whole pixels, as `reader_scrollers` says them from now on.
+            let px = [s.offset.0, s.offset.1, s.max.0, s.max.1].map(|v| pixel(v, scale));
+            out.extend(px.into_iter().chain(s.port.map(|v| v * scale)).map(bits));
         }
         if let Some((modal, bounds)) = under.nested_sheet {
             out[0] |= 32;
@@ -658,7 +660,8 @@ impl<D: DataSource> Presenter<D> {
             let at = painted.unwrap_or(s.offset);
             out.extend([id as i32, self.reader_flags(&s), rev as i32]);
             let px = [s.offset.0, s.offset.1, at.0, at.1, s.max.0, s.max.1];
-            out.extend(px.iter().map(|v| bits(v * scale)));
+            // Whole pixels, as the reader scrolls and the painter draws them.
+            out.extend(px.iter().map(|v| bits(pixel(*v, scale))));
         }
         if out == self.reader.last {
             return None;

@@ -558,7 +558,12 @@ impl PaintedBox {
 /// scroller's scroll: the scroller's own, the page's for a root that does
 /// not scroll itself, none for a box that only clips. Painted there, it is
 /// hit there too.
-pub(super) fn sticky(scene: &Scene<'_>, id: ViewId, offset: (f32, f32)) -> (f32, f32) {
+pub(super) fn sticky(
+    scene: &Scene<'_>,
+    id: ViewId,
+    offset: (f32, f32),
+    grid: Option<f32>,
+) -> (f32, f32) {
     let kernel = scene.kernel;
     let Some(node) = kernel
         .node(id)
@@ -573,7 +578,7 @@ pub(super) fn sticky(scene: &Scene<'_>, id: ViewId, offset: (f32, f32)) -> (f32,
         return offset;
     };
     let scroll = sticky_scroll(scene, &scroller);
-    let (dx, dy) = c.offset(scroll);
+    let (dx, dy) = grid::sticky_shift(c, &scroller, scroll, grid);
     (offset.0 - dx, offset.1 - dy)
 }
 

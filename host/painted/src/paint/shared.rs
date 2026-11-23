@@ -151,7 +151,10 @@ impl Painter {
             return;
         }
         let node = walk.scene.kernel.node(id).expect("named live node");
-        let rect = paint_rect(node.frame, sticky(walk.scene, id, offset));
+        let rect = paint_rect(
+            self.drawn(&node),
+            sticky(walk.scene, id, offset, self.grid()),
+        );
         let shown = (walk.scene.presented)(id);
         let paint = BoxPaint::capture(&node, walk.scene.kernel, self.dark);
         let geometry = paint.geometry(rect);

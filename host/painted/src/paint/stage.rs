@@ -394,7 +394,8 @@ impl Painter {
         else {
             return false;
         };
-        let at = ts.pre_translate(node.frame.x - offset.0, node.frame.y - offset.1);
+        let f = self.drawn(&node);
+        let at = ts.pre_translate(f.x - offset.0, f.y - offset.1);
         recorder.nest(kept.tape.clone(), at);
         true
     }
@@ -422,9 +423,10 @@ impl Painter {
             return;
         };
         let cross = self.stage.crossing[cross].clone();
-        let placed = sticky(walk.scene, id, offset);
-        let at = (node.frame.x - placed.0, node.frame.y - placed.1);
-        let size = (node.frame.width, node.frame.height);
+        let placed = sticky(walk.scene, id, offset, self.grid());
+        let f = self.drawn(&node);
+        let at = (f.x - placed.0, f.y - placed.1);
+        let size = (f.width, f.height);
         let hit_space = walk.hit_space;
         self.cross_layer(
             &cross,
@@ -597,8 +599,8 @@ impl Painter {
             for &id in path[..=at].iter().rev() {
                 let node = kernel.node(id)?;
                 if id != root.id {
-                    offset = sticky(walk.scene, id, offset);
-                    let rect = paint_rect(node.frame, offset);
+                    offset = sticky(walk.scene, id, offset, self.grid());
+                    let rect = paint_rect(self.drawn(&node), offset);
                     let p = (walk.scene.presented)(id);
                     space = space::mul3(
                         &space,
@@ -616,18 +618,16 @@ impl Painter {
                     || !matches!(oy, Overflow::Visible | Overflow::Clip)
                 {
                     let d = walk.scene.scroll.get(&id).copied().unwrap_or_default();
+                    let d = self.drawn_offset(d);
                     offset = (offset.0 + d.0, offset.1 + d.1);
                 }
                 let zoom = self.zoom_children(kernel, &node, Transform::identity(), offset);
                 space = space::mul3(&space, &affine(zoom));
             }
-            let node = kernel.node(parent)?;
+            let f = self.drawn(&kernel.node(parent)?);
             let space = space::mul3(
                 &space,
-                &affine(Transform::from_translate(
-                    node.frame.x - offset.0,
-                    node.frame.y - offset.1,
-                )),
+                &affine(Transform::from_translate(f.x - offset.0, f.y - offset.1)),
             );
             let origin = space::mul3(&space, &affine(replay.at));
             let cross = &self.stage.crossing[replay.cross];
@@ -757,7 +757,8 @@ impl Painter {
         let Some(node) = walk.scene.kernel.node(id) else {
             return;
         };
-        let at = (node.frame.x, node.frame.y);
+        let f = self.drawn(&node);
+        let at = (f.x, f.y);
         self.node_at(walk, id, ts, at, None);
         if tape {
             self.keep_route(walk, id, ts, at, None);
@@ -834,7 +835,7 @@ impl Painter {
             .recording
             .as_ref()
             .filter(|_| self.backend.name() == "tape")
-            .and_then(|_| tape::Sticky::capture(walk.scene, id));
+            .and_then(|_| tape::Sticky::capture(walk.scene, id, self.grid()));
         let Some((sticky, inverse)) = sticky.zip(ts.invert()) else {
             draw(self, walk);
             return;
@@ -874,8 +875,9 @@ impl Painter {
         let Some(node) = walk.scene.kernel.node(id) else {
             return;
         };
-        let (key, at) = (node.key, (node.frame.x, node.frame.y));
-        let size = (node.frame.width, node.frame.height);
+        let f = self.drawn(&node);
+        let (key, at) = (node.key, (f.x, f.y));
+        let size = (f.width, f.height);
         let local = ts.pre_translate(at.0 - offset.0, at.1 - offset.1);
         let placement = self.kept.to_page.pre_concat(local);
         let Some(unplace) = local.invert() else {
@@ -897,7 +899,7 @@ impl Painter {
                 tape: Rc::new(normalized.tape()),
                 placement,
                 size,
-                page: walk.scene.page,
+                page: self.drawn_offset(walk.scene.page),
                 path,
                 pane: pane.map(|pane| Pane {
                     ts: self.kept.to_page.pre_concat(pane.ts),

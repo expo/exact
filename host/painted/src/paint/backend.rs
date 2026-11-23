@@ -409,6 +409,12 @@ pub trait Backend {
     fn rows(&self) -> bool {
         false
     }
+    /// Whether what this backend draws is replayed on a display's pixels,
+    /// box by box: the painter then draws each box on whole pixels
+    /// (`Painter::drawn`).
+    fn pixel_grid(&self) -> bool {
+        false
+    }
     /// Whether this geometry walk can read existing row metadata without
     /// recording, drawing or freeing rows on the backend.
     fn geometry_rows(&self) -> bool {

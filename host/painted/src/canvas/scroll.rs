@@ -324,4 +324,161 @@ mod tests {
         hold.poll();
         assert!(!hold.quick() && !hold.take_request_skip() && hold.owed());
     }
+
+    #[test]
+    fn rows_touch_at_a_scroll_offset_between_pixels() {
+        use super::super::{stream, FINISHED, ROW_BEGIN, ROW_DRAW, RRECT};
+        // An offset the app set: 100 px is 262.5 pixels at 2.625 a px. Each
+        // row rounded where it fell, a float's last bits put neighbours a
+        // pixel apart or over each other.
+        let row = "        box height=20.3 width=200 background-color=\"#2468ac\"\n".repeat(40);
+        let source = format!(
+            "component App\n  view\n    scroll width=200 height=200 scrollTop=100\n      column\n{row}"
+        );
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(&source),
+            (),
+            (200., 200.),
+            2.625,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.frame();
+        let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let (mut tops, mut heights, mut at) = (Vec::new(), Vec::new(), 0);
+        while at < ops.len() {
+            at = match ops[at] {
+                ROW_BEGIN => at + 6,
+                RRECT => {
+                    heights.push((f32::from_bits(ops[at + 5]) * 2.625).round());
+                    stream::end(&ops, at).unwrap()
+                }
+                ROW_DRAW => {
+                    tops.push(f32::from_bits(ops[at + 3]));
+                    at + 4
+                }
+                _ => stream::end(&ops, at).unwrap(),
+            };
+        }
+        assert!(
+            tops.len() > 4 && tops.len() == heights.len(),
+            "{tops:?} {heights:?}"
+        );
+        for i in 1..tops.len() {
+            assert_eq!(tops[i] - tops[i - 1], heights[i - 1], "row {i}: {tops:?}");
+        }
+    }
+
+    fn boot(source: &str) -> Presenter<()> {
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
+            &crate::test_plan(source),
+            (),
+            (2000., 400.),
+            2.625,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.frame();
+        p
+    }
+
+    fn id(p: &Presenter<()>, name: &str) -> exact_kernel::ViewId {
+        let k = p.host().kernel();
+        k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id
+    }
+
+    #[test]
+    fn a_label_as_wide_as_its_text_keeps_its_one_line_on_whole_pixels() {
+        // A label's box is its text's width, rounded up to a point. Drawn on
+        // whole pixels the box can be a fraction of one narrower, and lines
+        // broken at that width would put a label's last word on a second line.
+        let words: Vec<String> = (2..40)
+            .map(|n| format!("{} ab", "m".repeat(n % 9 + 1)))
+            .collect();
+        let texts: String = (words.iter().enumerate())
+            .map(|(i, w)| format!("      text testId=\"t{i}\" \"{w}\"\n"))
+            .collect();
+        for lead in [10.0, 10.07, 10.13, 10.19, 10.26, 10.31] {
+            let p = boot(&format!(
+                "component App\n  view\n    row width=2000 flex-wrap=\"wrap\"\n      box width={lead} height=10\n{texts}"
+            ));
+            for (i, word) in words.iter().enumerate() {
+                let lines = p
+                    .paragraph(id(&p, &format!("t{i}")))
+                    .unwrap()
+                    .line_bottoms()
+                    .len();
+                assert_eq!(lines, 1, "{word:?} after {lead} px");
+            }
+        }
+    }
+
+    #[test]
+    fn an_offset_left_on_a_half_pixel_is_told_as_one_pixel_after_every_move() {
+        // The app left the scroller at 100 px, 262.5 pixels: the reader was
+        // told 263, and after each of its moves by whole pixels it is told
+        // that many more, whatever a float sum left of the half.
+        let row = "        box height=20.3 width=200\n".repeat(400);
+        let mut p = boot(&format!(
+            "component App\n  view\n    scroll testId=\"s\" width=200 height=200 scrollTop=100\n      column\n{row}"
+        ));
+        let s = id(&p, "s");
+        let words = p.reader_under(100.0 * 2.625, 100.0 * 2.625, 2.625);
+        assert_eq!(
+            (words[3], f32::from_bits(words[7] as u32)),
+            (s as i32, 263.0)
+        );
+        let mut at = 263.0;
+        for step in 1..400 {
+            let by = (step % 7 + 1) as f32;
+            p.reader_scrolled(s, (0.0, by / 2.625), words[5] as u32);
+            at += by;
+            let all = p.reader_scrollers(&[], 2.625).unwrap();
+            let told = all.chunks(9).find(|w| w[0] == s as i32).unwrap()[4];
+            assert_eq!(f32::from_bits(told as u32), at, "after {step} moves");
+        }
+    }
+
+    #[test]
+    fn kept_rows_are_drawn_on_whole_pixels_and_touch() {
+        use super::super::{stream, FINISHED, ROW_BEGIN, ROW_DRAW, ROW_PAD, RRECT};
+        // Rows 20.3 px tall, 53.29 pixels at 2.625 a px.
+        let row = "        box height=20.3 width=200 background-color=\"#2468ac\"\n".repeat(4);
+        let source =
+            format!("component App\n  view\n    scroll width=200 height=200\n      column\n{row}");
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(&source),
+            (),
+            (200., 200.),
+            2.625,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.frame();
+        let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let (mut tops, mut heights, mut at) = (Vec::new(), Vec::new(), 0);
+        while at < ops.len() {
+            at = match ops[at] {
+                // Into the row, for its background.
+                ROW_BEGIN => at + 6,
+                RRECT => {
+                    heights.push((f32::from_bits(ops[at + 5]) * 2.625).round());
+                    stream::end(&ops, at).unwrap()
+                }
+                ROW_DRAW => {
+                    tops.push(f32::from_bits(ops[at + 3]) + ROW_PAD * 2.625);
+                    at + 4
+                }
+                _ => stream::end(&ops, at).unwrap(),
+            };
+        }
+        assert_eq!(tops, [0., 53., 107., 160.]);
+        assert_eq!(heights, [53., 54., 53., 53.]);
+    }
 }

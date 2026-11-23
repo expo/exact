@@ -597,7 +597,7 @@ impl Painter {
             return;
         }
         let scroll = walk.scene.scroll.get(&id).copied().unwrap_or((0.0, 0.0));
-        self.backend.group_begin(id, scroll);
+        self.backend.group_begin(id, self.drawn_offset(scroll));
         self.rows
             .groups
             .push((id, walk.boxes.len(), walk.boxes.len()));
@@ -938,9 +938,10 @@ impl Painter {
         pictures: bool,
     ) -> bool {
         let kernel = walk.scene.kernel;
+        let drawn = self.drawn(node);
         !row.stale
             && row.scale == scale
-            && row.size == (node.frame.width, node.frame.height)
+            && row.size == (drawn.width, drawn.height)
             && row
                 .scrolls
                 .iter()
@@ -1000,7 +1001,8 @@ impl Painter {
             }
             return;
         }
-        let r = paint_rect(node.frame, offset);
+        let drawn = self.drawn(&node);
+        let r = paint_rect(drawn, offset);
         let origin = (ts.sx * r.0 + ts.tx, ts.sy * r.1 + ts.ty);
         let scale = (ts.sx, ts.sy);
         let frame = self.rows.frame;
@@ -1124,7 +1126,7 @@ impl Painter {
         // keeps its drawing. Its boxes move to the page after.
         let local = self.backend.row_local() && ts == Transform::identity();
         let (walk_offset, content) = if local {
-            ((node.frame.x, node.frame.y), (0.0, 0.0))
+            ((drawn.x, drawn.y), (0.0, 0.0))
         } else {
             (offset, origin)
         };
@@ -1210,8 +1212,8 @@ impl Painter {
             })
             .fold(None, |u, r| Some(union(u, r)))
             .unwrap_or((origin.0, origin.1, 0.0, 0.0));
-        let placed = sticky(walk.scene, id, offset);
-        let rect = paint_rect(node.frame, placed);
+        let placed = sticky(walk.scene, id, offset, self.grid());
+        let rect = paint_rect(drawn, placed);
         let p = (walk.scene.presented)(id);
         let space =
             ts.pre_concat(p.transform(rect, node.style.transform_origin.resolve(rect.2, rect.3)));
@@ -1252,7 +1254,7 @@ impl Painter {
                 drawing: None,
                 origin,
                 scale,
-                size: (node.frame.width, node.frame.height),
+                size: (drawn.width, drawn.height),
                 can_translate_hits: boxes.iter().all(|b| b.hit.is_none()),
                 may_have_hit_slop: capture.may_have_hit_slop,
                 paint_stale: false,
@@ -1332,7 +1334,7 @@ impl Painter {
                 pin
             }
         };
-        let r = paint_rect(node.frame, offset);
+        let r = paint_rect(self.drawn(&node), offset);
         let origin = (ts.sx * r.0 + ts.tx, ts.sy * r.1 + ts.ty);
         let drawing = match self
             .rows

@@ -932,7 +932,9 @@ component App
                 at = end(&ops, at).unwrap();
             }
             let (id, x, y, width, height) = native.expect("the module's op 28");
-            assert_eq!((width, height), (200., 200.));
+            // Its border box ends on a whole pixel, so at 2.75 its content is half a pixel wider.
+            let grown = if scale == 2.75 { 0.5 / 2.75 } else { 0. };
+            assert_eq!((width, height), (200. + grown, 200. + grown));
             let words = p.reader_module(x + 5. * scale, y + 5. * scale, scale);
             assert_eq!(words[0], id as i32);
             let origin = [words[10], words[11]].map(|v| f32::from_bits(v as u32));

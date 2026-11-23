@@ -72,7 +72,8 @@ impl Painter {
         // container (a column of settings) keeps that container's children
         // apart instead, so one of them changing records only itself.
         let ts = self.zoom_children(walk.scene.kernel, node, ts, child_offset);
-        let space = ts.pre_translate(node.frame.x - child_offset.0, node.frame.y - child_offset.1);
+        let f = self.drawn(node);
+        let space = ts.pre_translate(f.x - child_offset.0, f.y - child_offset.1);
         self.kept.push_space(node.id, space);
         let rows = self.has_rows(walk, node);
         let group = rows && !self.rows_wrapper(node.key);
@@ -142,7 +143,8 @@ impl Painter {
             );
         }
         let boxes = walk.boxes.len();
-        let (reveal, page) = (walk.reveal, (node.frame.x - rect.0, node.frame.y - rect.1));
+        let f = self.drawn(&node);
+        let (reveal, page) = (walk.reveal, (f.x - rect.0, f.y - rect.1));
         walk.reveal = Some(node.id);
         // Painted after the walk, out of its ancestors: the row's own scheme
         // (LLP 1034 §8), else the app's.
