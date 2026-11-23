@@ -584,9 +584,20 @@ component App
     }
 
     #[cfg(not(windows))]
+    fn recorded_row_top() -> f32 {
+        use super::super::{stream, FINISHED, ROW_DRAW};
+        let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let mut at = 0;
+        while ops[at] != ROW_DRAW {
+            at = stream::end(&ops, at).unwrap();
+        }
+        f32::from_bits(ops[at + 3])
+    }
+
+    #[cfg(not(windows))]
     #[test]
     fn kept_rows_and_shift_cross_the_readers_fractional_pixel_boundary_together() {
-        use super::super::{stream, FINISHED, GROUPS, ROW_DRAW, SHIFT};
+        use super::super::{GROUPS, SHIFT};
 
         let scale = 2.75;
         let mut p = boot_at(
@@ -603,15 +614,7 @@ component App
         let before = super::BTreeMap::from([(port, p.scroll_of(port))]);
         let groups = GROUPS.with(|g| g.borrow().clone());
         assert_eq!(groups.len(), 1);
-        let row_top = || {
-            let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
-            let mut at = 0;
-            while ops[at] != ROW_DRAW {
-                at = stream::end(&ops, at).unwrap();
-            }
-            f32::from_bits(ops[at + 3])
-        };
-        let top = row_top();
+        let top = recorded_row_top();
         let words = p.reader_under(10., 10., scale);
         let start = before[&port].1;
         assert_eq!(f32::from_bits(words[7] as u32), start * scale);
@@ -626,7 +629,49 @@ component App
         let shift = super::shift_groups(&before, &now, &groups, scale, |_| true).unwrap();
         assert_eq!(shift, [SHIFT, 1, port, 0, (-1_f32).to_bits()]);
         p.frame();
-        assert_eq!(row_top() - top, -1.);
+        assert_eq!(recorded_row_top() - top, -1.);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn skipping_a_reader_frame_places_grouped_rows_on_the_repaint_pixel() {
+        use super::super::{Recorder, SHIFT};
+
+        let scale = 2.625;
+        let start = 0.1875;
+        let mut p = boot_at(
+            r#"component App
+  view
+    scroll width=200 height=100 scrollTop=0.1875 testId="port"
+      box height=30 background-color="red"
+      box height=200 background-color="blue"
+"#,
+            scale,
+        );
+        let port = id(&p, "port");
+        let top = recorded_row_top();
+        let painted = Painted::capture(&p).unwrap();
+
+        p.scroll_to(port, (0., 1.)).unwrap();
+        assert!(painted.shift(&mut p, None, scale, true).is_none());
+        p.scroll_to(port, (0., start)).unwrap();
+
+        let hit = p.reader_under(10., 10., scale);
+        assert_eq!(hit[3] as ViewId, port);
+        let rev = hit[5] as u32;
+        let statement = p.reader_scrollers(&painted.groups, scale).unwrap();
+        assert_eq!(f32::from_bits(statement[6] as u32), 1.);
+        for at in [1., 2.] {
+            p.reader_sample_at(port, (0., 5. / scale), rev, at).unwrap();
+        }
+        // The two samples land just below the boundary a single 10 px sample reaches.
+        let shift = painted.shift(&mut p, None, scale, true).unwrap();
+        assert_eq!(shift, [SHIFT, 1, port, 0, (-9_f32).to_bits()]);
+        assert!(!p.dirty());
+
+        p.reader_replaced(Box::new(Recorder::new()));
+        p.frame();
+        assert_eq!(recorded_row_top() - top, -9.);
     }
 
     #[test]
