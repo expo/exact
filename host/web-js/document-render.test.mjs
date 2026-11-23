@@ -1099,7 +1099,8 @@ component Pages
 }, 240000);
 
 // LLP 1048.007 D4: a rendered page carries only the rules its document can match, and the runtime puts the whole sheet
-// back before its first render, so what it then shows is styled as on the shell.
+// back before its first render, so what it then shows is styled as on the shell. The whole sheet matches no medium
+// until the page's own goes: with both, each declared face is there twice, and the text reflows in the fallback.
 // The sheet the runtime restores is the plan's (LLP 1047.003 D1): the rules its elements can match, so the `select` a
 // press shows is styled, and no rule that needs a `dialog` or a `progress` inside the root, which the plan has none of.
 chromeTest("both document renderers give a page its own rules, and the runtime restores the plan's sheet", async () => {
@@ -1133,11 +1134,15 @@ component Page
     const browser = await suiteBrowser();
     try {
       const tab = await browser.newPage({ viewport: { width: 390, height: 844 } });
+      await tab.addInitScript(() => new MutationObserver(() => {
+        const whole = document.querySelector('style[data-exact-page]')?.previousElementSibling;
+        globalThis.both ||= whole?.rel === 'stylesheet' && whole.media !== 'not all';
+      }).observe(document, { childList: true, subtree: true }));
       await tab.goto(server.url.href);
       await tab.click('[data-testid="show"]');
       await tab.waitForSelector('[data-testid="pick"]');
       expect([how, await tab.evaluate(sheet => [!!document.querySelector('style[data-exact-page]'), !!document.querySelector(`link[rel=stylesheet][href="./${sheet}"]`),
-        getComputedStyle(document.querySelector('[data-testid="pick"]')).appearance], sheet)]).toEqual([how, [false, true, 'none']]);
+        getComputedStyle(document.querySelector('[data-testid="pick"]')).appearance, globalThis.both], sheet)]).toEqual([how, [false, true, 'none', false]]);
     } finally { await browser.close(); server.stop(true); }
   }, {}, {}, how);
 }, 240000);
