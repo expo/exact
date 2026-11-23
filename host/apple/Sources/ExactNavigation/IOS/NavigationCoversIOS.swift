@@ -206,6 +206,9 @@ extension NavigationHost {
         var changes: [(UInt32, HostCover?)] = []
         var wanted: [UInt32: HostCover] = [:]
         if let hiddenSidebarFooter { wanted[hiddenSidebarFooter.id] = .whole }
+        #if os(iOS)
+        wanted.merge(dialogBarCovers) { a, _ in a }
+        #endif
         var extras: [ObjectIdentifier: (UIScrollView, top: CGFloat, bottom: CGFloat)] = [:]
         for c in controllers.values where presenter.views[c.node.id] === c.node {
             // A lifted header takes no room, on a stack yet or not (`coverLifted`).

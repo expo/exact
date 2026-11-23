@@ -205,6 +205,14 @@ extension NavigationHost: NavigationHosting {
             let shown = (c.navigationItem.leftBarButtonItems ?? []) + (c.navigationItem.rightBarButtonItems ?? [])
             if shown.contains(where: { $0 === item }) { return (item, c) }
         }
+        #if os(iOS)
+        // A dialog's sheet bar, while nothing is presented over its sheet.
+        for bar in shownDialogBars {
+            guard let controller = bar.controller, controller.presentedViewController == nil, let item = bar.barItemsMade[node.id]?.bar else { continue }
+            let shown = (controller.navigationItem.leftBarButtonItems ?? []) + (controller.navigationItem.rightBarButtonItems ?? [])
+            if shown.contains(where: { $0 === item }) { return (item, controller) }
+        }
+        #endif
         return nil
     }
 
@@ -222,6 +230,12 @@ extension NavigationHost: NavigationHosting {
             // Nested in a split's list column, the detail's top shows its items in that column's bar (LLP 1127 §1, item 2)
             let bar = split.flatMap { $0.nested && controller === $0.detail ? $0.list.navigationBar : nil } ?? controller.navigationBar
             return (bar, item, route.navigationItem)
+        }
+        // A dialog's sheet bar (DialogBarIOS.swift).
+        for dialog in shownDialogBars {
+            guard let controller = dialog.controller, let nav = dialog.navigationController else { continue }
+            let items = (controller.navigationItem.leftBarButtonItems ?? []) + (controller.navigationItem.rightBarButtonItems ?? [])
+            if let item = items.first(where: { ($0.target as? BarPress)?.id == node.id }) { return (nav.navigationBar, item, controller.navigationItem) }
         }
         return nil
     }

@@ -227,6 +227,13 @@ fn each_native_entry_is_selected_by_the_rows_that_reach_its_family() {
             true,
         ),
         ("row role=\"tablist\"\n      button \"a\" role=\"tab\"", Navigation, false),
+        // A dialog's header is its sheet's bar (LLP 1141.004 D6).
+        (
+            "dialog id=\"d\"\n      header\n        text \"T\" role=\"heading\"",
+            Navigation,
+            true,
+        ),
+        ("dialog id=\"d\"\n      text \"a\"", Navigation, false),
         (plain, Dialogs, false),
         ("dialog id=\"d\"\n      text \"a\"", Dialogs, true),
         // A confirmation by its rows too: the host tells its shape when it

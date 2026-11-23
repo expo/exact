@@ -206,6 +206,8 @@ component App
   state navToggled: string[] = []
   state copied = false
   state linked = false
+  state copiedId = ""
+  state copies = 0
   state voted = ""
   state active = ""
   state visible: string[] = []
@@ -216,6 +218,7 @@ component App
     menu = false
     copied = false
     linked = false
+    copiedId = ""
     voted = ""
     visible = []
     active = ""
@@ -230,6 +233,19 @@ component App
   action revealAtLoad
     if inSidebar(site, top(nav).name)
       scrollIntoView(`nav-${top(nav).name}`, block="center", behavior="instant")
+  task clearing when copied or linked or copiedId != "" key=copies
+    after(2000, clearCopied)
+  action clearCopied
+    copied = false
+    linked = false
+    copiedId = ""
+  // One control shows its tick at a time: a copy clears the others' and restarts the clearing.
+  action copyBlock(id: string, text: string)
+    copyText(text)
+    copiedId = id
+    copied = false
+    linked = false
+    copies = copies + 1
   action vote(answer: string)
     voted = answer
   action retryPage
@@ -247,6 +263,9 @@ component App
       case some(a)
         copyText(a.url)
         linked = true
+        copied = false
+        copiedId = ""
+        copies = copies + 1
       case none
         linked = false
   action seen(id: string, entry: IntersectionObserverEntry)
@@ -262,6 +281,9 @@ component App
       case some(m)
         copyText(m.text)
         copied = true
+        linked = false
+        copiedId = ""
+        copies = copies + 1
       case none
         copied = false
   action chooseTheme(value: string)
@@ -319,7 +341,7 @@ component App
             head title=page.title description=page.description image=site.shareImage
           scroll id=`page-${e.id}` flex=1 min-width=0 -exact-layout-transition="220ms ease" background-color="var(--color-background-default)"
             margin="calc(8px - clamp(0px, (960px - 100vw) * 1000, 9px))" border="1px solid var(--color-border-secondary)" border-radius="var(--radius-xl)"
-            Article(page=page, nav=site, missing=(e.name == "notfound"), failed=failed(page), retry=retryPage, url=top(nav).url, moved=moved.to, suggestions=moved.suggestions, from=from, opened=opened, toggle=toggle, pick=pick, seen=seen, active=active, copyMarkdown=copyMarkdown, copied=copied, copyLink=copyLink, linked=linked, voted=voted, vote=vote, roomy=roomy, year=site.year, theme=theme, chooseTheme=chooseTheme)
+            Article(page=page, nav=site, missing=(e.name == "notfound"), failed=failed(page), retry=retryPage, url=top(nav).url, moved=moved.to, suggestions=moved.suggestions, from=from, opened=opened, toggle=toggle, pick=pick, seen=seen, active=active, copyMarkdown=copyMarkdown, copied=copied, copyLink=copyLink, linked=linked, copiedId=copiedId, copyBlock=copyBlock, voted=voted, vote=vote, roomy=roomy, year=site.year, theme=theme, chooseTheme=chooseTheme)
       header appearance="none" inert=wide display="flex" align-items="center" justify-content="space-between" flex-shrink=0 overflow="hidden" position="absolute" top=0 left=0 right=0
         height="clamp(0px, (960px - 100vw) * 1000, 57px)" padding="0 16px" border-bottom="1px solid var(--color-border-secondary)" background-color="var(--color-background-default)"
         link href="/" class=Hit testId="home-bar"

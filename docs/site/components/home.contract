@@ -48,6 +48,8 @@ component Home
   props
     page: Page
     nav: Nav
+    copiedId: string
+    copyBlock: action
   view
     column testId="home-page"
       column align-items="center" text-align="center" padding="clamp(16px, 6vw, 56px) 0 8px"
@@ -63,14 +65,14 @@ component Home
             Avatar(icon="symbol:icon.cursor", fill="light-dark(#000000, #000000)", ink="light-dark(#FFFFFF, #FFFFFF)", first=false)
           text "Teach your agent how to use Exact:" font-family="var(--font-mono)" font-size="var(--text-xs)" color="var(--color-text-secondary)"
           text nav.startLabel font-family="var(--font-mono)" font-size="var(--text-xs)" color="var(--color-text-default)" white-space="nowrap"
-          CopyButton(source=nav.startPrompt)
+          CopyButton(id="start-prompt", source=nav.startPrompt, copiedId=copiedId, copyBlock=copyBlock)
       column margin-top=56
         h2 class=SectionTitle
           text "Set up Exact"
         text "Install the toolchain once, then make an app and start its dev loop." margin-top=6 font-size="var(--text-sm)" color="var(--color-text-secondary)"
         for b in page.blocks.filter(x => x.kind == "terminal") key=b.id
           view margin-top=16
-            Terminal(title=b.title, source=b.text, lines=b.lines)
+            Terminal(id=b.id, title=b.title, source=b.text, lines=b.lines, copiedId=copiedId, copyBlock=copyBlock)
       column margin-top=48
         h2 class=SectionTitle
           text "Explore the docs"

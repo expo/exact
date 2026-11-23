@@ -12,7 +12,8 @@
 //!   the same machine.
 //! - `clientRect`, `clientX` and `clientY` are not in that space. A window
 //!   has one scale, its DPI's, so each is a physical position less the
-//!   client area's origin, over the window's scale.
+//!   client area's origin, over the window's scale. A hidden window's client
+//!   area and scale are those it will have once shown (`crate::placement`).
 //! - `currentScreen` is `MonitorFromWindow`'s nearest monitor, which holds
 //!   the largest part of the window; the pointer's is `MonitorFromPoint`'s.
 //! - While a session reads the displays, a subclass of the window hears
