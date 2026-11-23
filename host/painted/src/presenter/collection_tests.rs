@@ -1392,6 +1392,31 @@ fn a_lead_sampled_before_a_keyed_request_is_not_reported_while_it_runs() {
     assert_eq!(p.scroll_of(feed).1, 3000.);
 }
 
+/// Android's reader names the list its passes lead: a finger's fling moves
+/// it without a wheel, and the window still leads the travel.
+#[test]
+fn the_list_a_finger_scrolls_leads_its_window() {
+    let (mut p, feed) = keyed_request(100);
+    let b = p.box_of(feed).unwrap();
+    let rev = p.reader_under(b.rect.0 + 10., b.rect.1 + 10., 1.)[5] as u32;
+    p.slice_collections(Some(feed), None, 4000.);
+    assert_eq!(p.reader_scrolled(feed, (0., 50.), rev), Some((0., 50.)));
+    settle(&mut p);
+    let last = p
+        .host
+        .collection(feed)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| r.index)
+        .max();
+    assert_eq!(
+        last,
+        Some(4),
+        "a viewport past the view, and the lead's two"
+    );
+}
+
 /// LLP 1070.000 §2.5: once a request has moved the port, the reader's own
 /// scroll ends it where the reader is, and its corrections do not pull the
 /// port back. Android slices its passes while the port moves fast and holds

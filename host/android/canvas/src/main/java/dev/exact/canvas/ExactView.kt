@@ -1323,6 +1323,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
             streamFrame = false
             if (later.isNotEmpty()) { laterPosted = true; android.view.Choreographer.getInstance().postFrameCallback(laterFrame) }
         } else makeLater(laterNs)
+        if (done.isNotEmpty()) regroupFrame.doFrame(0L) // the groups of rows made here ([makeOne]), for this frame
     }
 
     /** The waiting rows the scroll is about to bring into view (within a quarter of the view, or three frames of
@@ -1379,6 +1380,8 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         val id = l.b.get(l.at + 1)
         laterRows.remove(id)
         makeRow(l.b, l.at, now || l.b.get(l.at + 2) < 0 || near(id, f(l.b, l.at + 4)))
+        // Its groups were recorded without it: they are recorded again once it is made, not with the next stream.
+        if (pending.containsKey(id)) awaited.add(id) else done.add(id)
         val outer = skipDefs
         skipDefs = true
         ingest(l.b, l.sets, l.end)

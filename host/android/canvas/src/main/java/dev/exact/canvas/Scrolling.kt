@@ -625,8 +625,11 @@ internal class Scrolling(private val view: ExactView) {
         for (s in scrollers.values) {
             if (!s.own || !s.node || !s.told) continue
             val g = view.group(s.id) ?: continue
-            g.translationX = s.drawnX - s.nowX - s.pendX
-            g.translationY = s.drawnY - s.nowY - s.pendY
+            // In whole pixels: Skia reuses a text run's glyphs from frame to frame only while its translation moves by
+            // whole pixels, and these offsets are exact2's points times the density (the heavy list's text drawing on
+            // the RenderThread, Galaxy A57: 31 ms/s with fractional translations, 23 with whole).
+            g.translationX = Math.round(s.drawnX - s.nowX - s.pendX).toFloat()
+            g.translationY = Math.round(s.drawnY - s.nowY - s.pendY).toFloat()
         }
     }
 

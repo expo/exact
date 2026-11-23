@@ -531,6 +531,20 @@ impl<D: DataSource> Presenter<D> {
         self.reader.tracked.contains_key(&id)
     }
 
+    /// Whether each scroller the reader knows is where its own moves left
+    /// it: no revision would move on, so a statement would tell it only
+    /// those moves.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn reader_moves_stand(&self) -> bool {
+        self.reader.tracked.iter().all(|(id, (_, at))| {
+            *at == if *id == PAGE {
+                self.page
+            } else {
+                self.scroll.get(id).copied().unwrap_or_default()
+            }
+        })
+    }
+
     /// The scrollers the clamp leaves alone: each a list kept while its route is hidden (a
     /// full-screen route over it), or shown again but not yet painted where it shows. The
     /// picture holds no travel for such a list, so the clamp would put it at its top and it

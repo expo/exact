@@ -1002,12 +1002,12 @@ impl<D: DataSource> Presenter<D> {
         self.dirty
     }
 
-    /// The scrolled list's rows that show where its port now is start what
-    /// waited for that ([`exact_runner::Runner::collection_shown`]), without
-    /// a report: for a pass that waits.
+    /// The scrolled list `view`'s rows that show where its port now is start
+    /// what waited for that ([`exact_runner::Runner::collection_shown`]),
+    /// without a report: for a pass that waits.
     #[cfg(target_os = "android")]
-    pub(crate) fn show_collection(&mut self) {
-        let Some(view) = self.last_wheel else {
+    pub(crate) fn show_collection(&mut self, view: Option<ViewId>) {
+        let Some(view) = view else {
             return;
         };
         let Some(snapshot) = self.host.collection(view) else {
@@ -1033,12 +1033,18 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
-    /// Slice the next passes ([`State::limit`]) with the scrolled list's
-    /// velocity, or build whole windows (`None`).
-    #[cfg(target_os = "android")]
-    pub(crate) fn slice_collections(&mut self, limit: Option<u32>, velocity: f64) {
+    /// Slice the next passes ([`State::limit`]) with the scrolled list
+    /// `view`'s velocity, or build whole windows (`None`). The host names the
+    /// list: a finger's drag or fling moves one no wheel did.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn slice_collections(
+        &mut self,
+        view: Option<ViewId>,
+        limit: Option<u32>,
+        velocity: f64,
+    ) {
         self.collection.limit = limit;
-        self.collection.velocity = self.last_wheel.map(|v| (v, velocity));
+        self.collection.velocity = view.map(|v| (v, velocity));
     }
 
     /// Whether any list owes another report (a slice left rows unbuilt).

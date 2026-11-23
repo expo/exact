@@ -228,4 +228,18 @@ class PlayerTest {
         // The node's 100×50 at half size from (10, 20), not its unscaled box.
         assertTrue("$bounds", bounds.contains(RectF(10f, 20f, 60f, 45f)) && bounds.right < 70f && bounds.bottom < 50f)
     }
+
+    /** A paragraph's lines in one style are one text blob; a run in another colour is its own. */
+    @Test fun runsInOneStyleAreDrawnTogether() {
+        val font = android.graphics.fonts.Font.Builder(java.io.File("../../../apps/canvas-gallery/assets/ExposureSansOriginal03-Regular.ttf")).build()
+        val calls = ArrayList<Int>()
+        val canvas = object : Canvas(Bitmap.createBitmap(80, 80, Bitmap.Config.ARGB_8888)) {
+            override fun drawGlyphs(ids: IntArray, idOffset: Int, positions: FloatArray, posOffset: Int, count: Int,
+                font: android.graphics.fonts.Font, paint: android.graphics.Paint) { calls.add(count) }
+        }
+        fun run(color: Int, y: Int) = intArrayOf(9, 1, f(12), color, 0, 2, 36, f(0), f(y), 37, f(8), f(y))
+        val ops = identity + run(Color.BLACK, 12) + run(Color.BLACK, 28) + run(Color.BLUE, 44)
+        Player(mapOf(1 to font)).apply { width = 80; height = 80 }.replay(canvas, IntBuffer.wrap(ops), 0, ops.size)
+        assertEquals(listOf(4, 2), calls)
+    }
 }

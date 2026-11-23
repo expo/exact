@@ -119,6 +119,36 @@ struct Row {
     /// What its subtree lets escape into its list's painting, while nothing
     /// in it changed ([`Painter::refresh_ranks`]).
     order: Option<exact_kernel::paint_order::Potentials>,
+    /// A list row's wrapper as recorded ([`wrapper`]).
+    wrapper: Option<Wrapper>,
+}
+
+/// What a list row's wrapper (`listItemKey`) draws by: its style, children
+/// and props, but for its place in the list (`aria-posinset`,
+/// `aria-setsize`), which it does not draw. A row inserted or removed above
+/// moves that place for every row below it: an insert at the top, for every
+/// row shown. The wrapper has no presentation of its own (a press, motion or
+/// overlay marks the author's row inside it), so a wrapper equal in these
+/// draws as recorded.
+type Wrapper = (
+    StyleProps,
+    Vec<ViewId>,
+    Vec<(PropId, exact_kernel::PropValue)>,
+);
+
+fn wrapper(node: &NodeRef<'_>) -> Option<Wrapper> {
+    node.props.str(PropId::ListItemKey)?;
+    let props = node.props.iter().filter(|(id, _)| {
+        !matches!(
+            id,
+            PropId::AccessibilityPosInSet | PropId::AccessibilitySetSize
+        )
+    });
+    Some((
+        node.style.clone(),
+        node.children(),
+        props.map(|(id, v)| (id, v.clone())).collect(),
+    ))
 }
 
 impl Row {
@@ -427,7 +457,11 @@ impl Painter {
         let split = self.backend.independent_section_rows();
         for key in dirty.hard {
             if let Some(row) = row_of(&self.rows, key) {
-                self.rows.kept.get_mut(&row).expect("found").stale = true;
+                let kept = self.rows.kept.get_mut(&row).expect("found");
+                let unchanged = key == row
+                    && kept.wrapper.is_some()
+                    && kept.wrapper == kernel.node_by_key(key).and_then(|n| wrapper(&n));
+                kept.stale |= !unchanged;
             } else if let Some(section) = kernel
                 .node_by_key(key)
                 .filter(|n| split && holds_split_rows(n))
@@ -1276,6 +1310,7 @@ impl Painter {
                 bounds,
                 seen: frame,
                 stale: false,
+                wrapper: wrapper(&node),
                 order,
             },
         );

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tiny_skia::Transform;
 
 mod measurement;
+mod place;
 
 #[test]
 fn hidden_resource_updates_bound_retained_work_without_a_paint() {

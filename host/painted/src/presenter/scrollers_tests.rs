@@ -321,6 +321,20 @@ fn a_touch_a_scroll_won_presses_nothing_and_a_tap_after_it_still_does() {
 }
 
 #[test]
+fn the_readers_moves_stand_until_the_app_moves_a_scroller_it_is_not_yet_told_of() {
+    let mut p = boot(PAGE_OF_SCROLLERS);
+    let page = id(&p, "page");
+    p.reader_under(200., 50., 1.);
+    assert_eq!(p.reader_scrolled(page, (0., 120.), 0), Some((0., 120.)));
+    assert!(p.reader_moves_stand());
+    p.tap(id(&p, "jump")).unwrap();
+    settle(&mut p);
+    assert!(!p.reader_moves_stand());
+    p.reader_scrollers(&[], 1.).unwrap();
+    assert!(p.reader_moves_stand());
+}
+
+#[test]
 fn a_scroll_the_app_makes_moves_the_revision_on_and_drops_a_stale_move() {
     let mut p = boot(PAGE_OF_SCROLLERS);
     let page = id(&p, "page");

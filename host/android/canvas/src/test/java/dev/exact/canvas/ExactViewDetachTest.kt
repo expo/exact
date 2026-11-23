@@ -146,6 +146,31 @@ class ExactViewDetachTest {
         assertTrue(fling.isFinished)
     }
 
+    /** A waiting row made between streams is drawn by its group once it is made, not only once the next stream records
+     * the group again: one the scroll brings near, made here in that frame ([ExactView]'s `makeSoon`), and one that
+     * replaces another, made on the worker. */
+    @Test fun aWaitingRowMadeBetweenStreamsIsDrawnByItsGroup() {
+        val f = { v: Float -> v.toRawBits() }
+        for ((top, previous) in listOf(-1f to 0, 10_000f to 5)) {
+            val view = view()
+            // The feed's group 7 places row 21, which the stream left waiting: it was out of view.
+            field("ops").set(view, IntBuffer.wrap(intArrayOf(20, 7, 17, 21, 0, f(top), 21)))
+            view.get<HashMap<Int, RenderNode>>("groups")[7] = RenderNode("group")
+            val row = intArrayOf(15, 21, previous, f(200f), f(80f), 1, 16)
+            val wait = Structure.Later(IntBuffer.wrap(row), 0, row.size).also { it.top = top }
+            view.get<HashMap<Int, Structure.Later>>("laterRows")[21] = wait
+            view.get<java.util.ArrayDeque<Structure.Later>>("later").add(wait)
+            val main = view.get<Player>("main")
+            val rowOf = main.row
+            val drawn = ArrayList<Boolean>()
+            main.row = { id -> rowOf(id).also { if (id == 21) drawn.add(it != null) } }
+            view.get<Choreographer.FrameCallback>("laterFrame").doFrame(0L)
+            view.get<ExecutorService>("worker").submit {}.get()
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(32))
+            assertEquals("top $top", listOf(true), drawn)
+        }
+    }
+
     @Test fun aDetachedViewRecordsNoRows() {
         val view = view()
         view.detach()
