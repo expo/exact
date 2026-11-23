@@ -136,6 +136,7 @@ impl DataSource for Desk {
             // An unknown source refuses the ask. Unavailable from a Rust mutation
             // is an accepted domain failure, so it does not exercise queue rollback.
             "broken" => Err(DataError::UnknownSource(source.into())),
+            "storage" => Ok(Answer::Later(Request::storage(b"load".to_vec()))),
             "two" => Ok(Answer::Later(Request::post_json(
                 "https://desk.test/step1",
                 &op,
@@ -176,6 +177,9 @@ impl DataSource for Desk {
             Outcome::Response(r) if source == "two" && r.body == b"step1" => Ok(Answer::Later(
                 Request::post_json("https://desk.test/step2", op),
             )),
+            Outcome::Response(r) if source == "storage" && r.body == b"load" => {
+                Ok(Answer::Later(Request::storage(b"write".to_vec())))
+            }
             Outcome::Response(_) => Ok(Answer::Now(ack(op, self.asks.len()))),
             Outcome::Failed { message, .. } => Ok(Answer::Now(ack(&message, 0))),
             _ => Err(DataError::Unavailable("unexpected".into())),
@@ -419,6 +423,65 @@ fn replacement_leaves_the_previous_tail_if_the_action_refuses() {
 }
 
 #[test]
+fn a_queued_storage_mutation_holds_quit_from_read_through_write() {
+    let src = APP.replace(
+        "  view\n",
+        concat!(
+            "  action storage\n",
+            "    send rec = storage(\"body\")\n",
+            "  view\n",
+        ),
+    );
+    let mut r = boot_with(&src, Desk::default());
+    r.act("storage", vec![]).unwrap();
+    let load = tickets(&mut r)[0];
+    assert!(!r.must_finish());
+    assert!(
+        r.queued_must_finish(),
+        "the first SQLite read can lead to a write"
+    );
+    r.fulfill(load, reply("load")).unwrap();
+    let write = tickets(&mut r)[0];
+    assert!(!r.must_finish());
+    assert!(r.queued_must_finish(), "the SQLite write is outstanding");
+    r.fulfill(write, reply("done")).unwrap();
+    assert!(!r.queued_must_finish());
+    assert!(!r.must_finish());
+}
+
+#[test]
+fn a_pending_storage_read_does_not_hold_quit() {
+    let src = APP.replace(
+        "  resource probe",
+        "  resource read = storage(\"body\") as shape Ack\n  resource probe",
+    );
+    let mut r = boot_with(&src, Desk::default());
+    assert_eq!(tickets(&mut r).len(), 1);
+    assert!(!r.queued_must_finish());
+    assert!(!r.must_finish());
+}
+
+#[test]
+fn a_queue_holds_quit_between_a_reply_and_its_waiting_write() {
+    let mut r = boot(true);
+    r.act("pair", vec![]).unwrap();
+    let first = tickets(&mut r)[0];
+    r.fulfill(first, reply("ok")).unwrap();
+    assert!(r.pending().is_empty(), "the first request already landed");
+    assert!(!r.must_finish(), "the ordinary effect already landed");
+    assert!(
+        r.queued_must_finish(),
+        "the queued edit must still be saved"
+    );
+    r.advance(0.0).unwrap();
+    let second = tickets(&mut r)[0];
+    r.fulfill(second, reply("ok")).unwrap();
+    r.advance(0.0).unwrap();
+    assert!(!r.queued_must_finish(), "the queue drained");
+    assert!(!r.must_finish(), "the effects drained");
+}
+
+#[test]
 fn a_send_while_one_is_in_flight_waits_and_a_queue_without_then_is_due_alone() {
     let mut r = boot(true);
     r.act("record", vec![Value::str("p")]).unwrap();
@@ -467,6 +530,8 @@ fn a_next_refused_by_settlement_stalls_until_a_commit_changes_state() {
         .any(|l| l.contains("wrote next refused (Data") && l.ends_with("waits for a change")));
     assert_eq!(r.queued(), [("wrote".to_string(), 1)], "the head is kept");
     assert_eq!(r.timer_due_ms(), None, "a stall wakes no host");
+    assert!(!r.queued_must_finish(), "a stalled queue may close");
+    assert!(!r.must_finish());
     assert!(busy(&r));
     // A commit that changes nothing leaves it stalled.
     let checks = r.data().checks;

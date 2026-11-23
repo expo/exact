@@ -18,10 +18,17 @@ import UIKit
 public extension ExactSession {
     /// Whether the app must finish work an answer started, asked of the
     /// runner now: what a quit waits for.
-    var mustFinish: Bool {
+    var mustFinish: Bool { finishPending("mustFinish") }
+
+    #if os(macOS)
+    /// Queued mutation work that keeps a closed window's session alive.
+    package var queuedMutationWork: Bool { finishPending("queuedMutationWork") }
+    #endif
+
+    private func finishPending(_ field: String) -> Bool {
         guard let data = runtime.ask(exact_must_finish, "").data(using: .utf8),
               let reply = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
-        return reply["mustFinish"] as? Bool == true
+        return reply[field] as? Bool == true
     }
 
     /// The quit is decided (macOS): the session's native module starts the

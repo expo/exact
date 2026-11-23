@@ -275,6 +275,7 @@ final class DocumentWindow: NSObject, NSWindowDelegate, NSWindowRestoration {
     let openedMs = ExactEnv.wall()
     let footprintBefore = footprint()
     private var stamped = false
+    private var closeHold: QuitHold?
 
     init(label: String, first: Bool, rooted: Bool = false) {
         self.label = label
@@ -588,7 +589,21 @@ final class DocumentWindow: NSObject, NSWindowDelegate, NSWindowRestoration {
                 closedForQuit.append(self)
                 return
             }
-            session.destroy()
+            let hold = QuitHold(bound: 5, pending: { [session] in session.queuedMutationWork }) { [weak self] in
+                guard let self else { return }
+                closeHold = nil
+                // A quit that started while this window was draining owns
+                // the session through applicationWillTerminate.
+                if delegate.quitting?.holding == true { return }
+                closedForQuit.removeAll { $0 === self }
+                session.destroy()
+            }
+            if hold.hold() {
+                closedForQuit.append(self)
+                closeHold = hold
+            } else {
+                session.destroy()
+            }
         }
     }
 }
@@ -601,7 +616,7 @@ let launchRefusal = ExactEnv.environment["EXACT_PLAN"].flatMap { path in
 let firstWindow = DocumentWindow(label: "main", first: true)
 /// Every open window, oldest first.
 var windows = [firstWindow]
-/// Windows closed whose sessions wait for the quit (`windowWillClose`).
+/// Closed windows with sessions still draining writes or waiting for quit.
 var closedForQuit: [DocumentWindow] = []
 var windowCount = 1
 /// Where each rooted window that closed last stood, by name: Settings…

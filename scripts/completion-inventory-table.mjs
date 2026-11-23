@@ -676,7 +676,7 @@ export const classifications = [
       "Runner::refuse_request Runner::requeue_aborted_answers Runner::take_aborted_answer Runner::take_explicit_aborts Runner::take_request_refusal"],
     ["runner:runner/src/runner/commit.rs", "Runner::dispatch_work Runner::native_slot Runner::native_work Runner::release_work Runner::take_requests"],
     ["runner:runner/src/runner/in_flight.rs",
-      "Runner::effects_in_flight Runner::has_pending Runner::held_replies Runner::held_requests Runner::in_flight Runner::is_open_stream Runner::must_finish " +
+      "Runner::effects_in_flight Runner::has_pending Runner::held_replies Runner::held_requests Runner::in_flight Runner::is_open_stream Runner::must_finish Runner::queued_must_finish " +
       "Runner::one_shot_armed Runner::pending Runner::stream_grant Runner::streams"],
     ["runner:runner/src/runner/outstanding.rs", "Runner::outstanding"],
     ["runner:runner/src/runner/queue.rs", "Runner::mutation_requests Runner::queued Queues::restore#next_due:1"],

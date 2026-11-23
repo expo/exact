@@ -167,6 +167,21 @@ impl<D: DataSource> Runner<D> {
             || self.background_operations() > 0
     }
 
+    /// Runnable queued mutation work or an active queued storage operation or
+    /// continuation. macOS checks this on demand when a window or app closes.
+    pub fn queued_must_finish(&self) -> bool {
+        self.queues.next_due.iter().any(|due| due.is_finite())
+            || self
+                .then_due
+                .iter()
+                .enumerate()
+                .any(|(m, due)| due.is_finite() && self.queues.waits(m))
+            || self
+                .pending
+                .iter()
+                .any(|p| p.queued_storage && p.waited() && p.refusal.is_none() && !p.refused)
+    }
+
     /// Whether a request with effects the host has not refused is in flight
     /// (`PendingReq::admitted_effects`).
     pub fn effects_in_flight(&self) -> bool {

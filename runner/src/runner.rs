@@ -311,6 +311,7 @@ struct PendingReq {
     module_again: Option<u64>,
     /// May change its server ([`crate::Request::has_effects`]): kept when let go (LLP 1146 D2).
     effects: bool,
+    queued_storage: bool, // its next queued turn can write to storage
     /// An earlier round may have changed its server; the answer cannot be replayed.
     replay_unsafe: bool,
     /// The sequence when its answer was first asked; its later rounds keep

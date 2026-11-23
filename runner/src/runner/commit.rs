@@ -1095,6 +1095,10 @@ impl<D: DataSource> Runner<D> {
             ask_again: false,
             module_again: None,
             effects: request.has_effects(),
+            queued_storage: (request.storage.is_some() || request.continuation.is_some())
+                && target
+                    .mutation()
+                    .is_some_and(|m| self.mutation_row(m).mode == MutationMode::Queue),
             replay_unsafe: request.has_effects(),
             origin: self.writes.tick(),
             write: match target {
