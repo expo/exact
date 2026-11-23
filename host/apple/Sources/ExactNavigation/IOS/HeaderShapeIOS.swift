@@ -51,6 +51,11 @@ struct HeaderShape: Equatable {
         let tint: [[Double]]?
         /// Whether that colour is the tint itself: the item's tint then, its node's `ownAccent` or the bar's
         let followsTint: Bool
+        /// The item's own tint (`UIBarButtonItem.tintColor`): an `accent-color` written on the
+        /// button or between it and the header (LLP 1069.011.000 D2), a prominent item's fill and a
+        /// plain one's face where no `color` says otherwise. Nil, the bar's tint. A changed accent
+        /// is a new colour (`applyAccentTint`), so `face` names it by identity.
+        let accent: UIColor?
         /// A native button's title font where its face's rows give a size or
         /// a weight (LLP 1069.011.001 D4), as its in-page control draws it:
         /// the item's title in it, so its glass fits those words. Nil is
@@ -93,13 +98,14 @@ struct HeaderShape: Equatable {
                 walk(button)
             }
             // Up the authored tree: a hosted element the bar lifted keeps its group.
-            var grouped: UInt32?
+            var grouped: UInt32?, header: NodeView?
             if let presenter = button.presenter {
                 for case let node as NodeView in presenter.logicalAncestry(of: button).dropFirst() {
-                    if node.props["semanticTag"] == "header" { break }
-                    if node.props["accessibilityRole"] == "group" { grouped = node.id; break }
+                    if node.props["semanticTag"] == "header" { header = node; break }
+                    if grouped == nil, node.props["accessibilityRole"] == "group" { grouped = node.id }
                 }
             }
+            accent = hosted ? nil : header.flatMap { button.accent(below: $0) }
             toolbarGroup = grouped
             id = button.id
             testId = button.props["testId"]
@@ -181,7 +187,7 @@ struct HeaderShape: Equatable {
             #else
             let paintedFace = badge?.source ?? ""
             #endif
-            return "\(toolbarGroup.map(String.init) ?? ""):\(id):\(title):\(symbol ?? ""):\(label ?? ""):\(prominent):\(ownGlass):\(paintedFace):\(menu):\(menuTitle):\(menuOrder):\(tint ?? []):\(followsTint):\(font.map { "\($0.fontName) \($0.pointSize) \(TextEngine.controlWeight($0))" } ?? ""):\(testId ?? ""):\(activeSignature)"
+            return "\(toolbarGroup.map(String.init) ?? ""):\(id):\(title):\(symbol ?? ""):\(label ?? ""):\(prominent):\(ownGlass):\(paintedFace):\(menu):\(menuTitle):\(menuOrder):\(tint ?? []):\(followsTint):\(accent.map { "\(ObjectIdentifier($0))" } ?? ""):\(font.map { "\($0.fontName) \($0.pointSize) \(TextEngine.controlWeight($0))" } ?? ""):\(testId ?? ""):\(activeSignature)"
         }
         func hasSameImage(as other: Item) -> Bool {
             #if os(tvOS)

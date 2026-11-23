@@ -2,19 +2,11 @@
 //! the kernel after boot; `provide` is a component section (LLP
 //! 1035.005.000 D9).
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Color, Kernel, PropValue};
 use exact_plan::Value;
 use exact_runner::{DataError, DataSource, Runner};
 use std::path::Path;
-
-#[derive(Default)]
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
 
 fn corpus(name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -23,12 +15,12 @@ fn corpus(name: &str) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
-fn boot(name: &str) -> Runner<NoData> {
+fn boot(name: &str) -> Runner<Source> {
     let plan = contract::compile(&corpus(name)).unwrap();
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -115,7 +107,7 @@ fn a_provided_value_may_be_state_and_follows_it() {
     let plan = contract::compile(src).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -148,7 +140,7 @@ component Child
     for prefix in ["", "component App\n  view\n    Child()\n"] {
         let r = Runner::boot(
             contract::compile(&format!("{prefix}{component}")).unwrap(),
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -206,7 +198,7 @@ component Row
     for prefix in ["", "component App\n  view\n    Provider()\n"] {
         let mut r = Runner::boot(
             contract::compile(&format!("{prefix}{source}")).unwrap(),
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -628,10 +620,10 @@ fn nested_enum_parameters_keep_membership_and_enum_keys_and_overrides_work() {
             })
         }
     }
-    let baked = contract::bake(plan, Choices).unwrap();
+    let baked = contract::bake(plan, boxed(Choices)).unwrap();
     let runner = Runner::boot(
         baked,
-        Choices,
+        boxed(Choices),
         Kernel::with_monospace(),
         Default::default(),
         "/",

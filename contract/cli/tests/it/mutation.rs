@@ -3,6 +3,7 @@
 //! `pending(x)` in the view, `refresh` on a resource, and what bake refuses.
 
 use crate::scratch::Scratch;
+use crate::source::{boxed, Read, Source};
 use exact_kernel::{Kernel, PropId};
 use exact_runner::{
     Answer, DataError, DataSource, Event, FailureKind, Outcome, Request, Response, Runner,
@@ -82,7 +83,7 @@ fn resource_context_lowers_types_and_evaluates_in_full_argument_order() {
     )));
     let mut r = Runner::boot(
         plan,
-        ContextData::default(),
+        boxed(ContextData::default()),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -96,7 +97,7 @@ fn resource_context_lowers_types_and_evaluates_in_full_argument_order() {
         ]
     };
     assert_eq!(
-        r.data().0,
+        r.source::<ContextData>().0,
         [
             ("status".into(), expected(11.0, true)),
             ("status".into(), expected(11.0, true)),
@@ -104,10 +105,14 @@ fn resource_context_lowers_types_and_evaluates_in_full_argument_order() {
         ]
     );
     r.act("tick", vec![Value::Number(10.0)]).unwrap();
-    assert_eq!(r.data().0.len(), 3, "equal full arguments reuse the answer");
+    assert_eq!(
+        r.source::<ContextData>().0.len(),
+        3,
+        "equal full arguments reuse the answer"
+    );
     r.act("tick", vec![Value::Number(20.0)]).unwrap();
     assert_eq!(
-        &r.data().0[3..],
+        &r.source::<ContextData>().0[3..],
         [
             ("status".into(), expected(21.0, true)),
             ("status".into(), expected(21.0, true)),
@@ -116,7 +121,7 @@ fn resource_context_lowers_types_and_evaluates_in_full_argument_order() {
     );
     r.act("toggle", vec![]).unwrap();
     assert_eq!(
-        &r.data().0[6..],
+        &r.source::<ContextData>().0[6..],
         [
             ("status".into(), expected(21.0, false)),
             ("status".into(), expected(21.0, false)),
@@ -286,10 +291,10 @@ fn text_of<D: DataSource>(r: &Runner<D>, test_id: &str) -> Option<String> {
         .str(PropId::Text)
         .map(str::to_string)
 }
-fn has(r: &Runner<Castle>, test_id: &str) -> bool {
+fn has(r: &Runner<Source>, test_id: &str) -> bool {
     !r.kernel().find_by_test_id(test_id).is_empty()
 }
-fn view_of(r: &Runner<Castle>, test_id: &str) -> u32 {
+fn view_of(r: &Runner<Source>, test_id: &str) -> u32 {
     let k = r.kernel();
     k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap().id
 }
@@ -301,15 +306,15 @@ fn ok(status: u16) -> Outcome {
     })
 }
 
-fn boot() -> Runner<Castle> {
+fn boot() -> Runner<Source> {
     let plan = contract::compile(SRC).unwrap();
-    let baked = contract::bake(plan, Castle::default()).unwrap();
+    let baked = contract::bake(plan, boxed(Castle::default())).unwrap();
     Runner::boot(
         baked,
-        Castle {
+        boxed(Castle {
             later: true,
             ..Castle::default()
-        },
+        }),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -323,17 +328,17 @@ fn a_mutation_is_none_at_boot_and_bake_never_sends() {
     assert_eq!(plan.mutations.len(), 1);
     // The mutation's slot is a slot like any other, `none` until sent.
     assert!(plan.slots.iter().any(|s| plan.str(s.name) == "session"));
-    let baked = contract::bake(plan, Castle::default()).unwrap();
+    let baked = contract::bake(plan, boxed(Castle::default())).unwrap();
     assert!(
         baked.resources[0].initial.len > 0,
         "balance is compiled data"
     );
     let r = Runner::boot(
         baked,
-        Castle {
+        boxed(Castle {
             later: true,
             ..Castle::default()
-        },
+        }),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -366,7 +371,7 @@ fn send_asks_the_host_and_fulfill_fills_the_slot() {
     assert!(has(&r, "busy") && has(&r, "signed-out"));
     // The reply: the source parses it, the slot fills, the view follows,
     // and the resource that reads the token re-requests by itself.
-    let asks = r.data().balance_asks;
+    let asks = r.source::<Castle>().balance_asks;
     let receipt = r.fulfill(reqs[0].ticket, ok(200)).unwrap();
     assert!(receipt.is_some());
     assert!(!has(&r, "busy"));
@@ -376,7 +381,7 @@ fn send_asks_the_host_and_fulfill_fills_the_slot() {
     );
     assert_eq!(text_of(&r, "bricks").as_deref(), Some("42 bricks"));
     assert_eq!(
-        r.data().balance_asks,
+        r.source::<Castle>().balance_asks,
         asks + 1,
         "balance(token) followed the login"
     );
@@ -405,7 +410,7 @@ fn a_failed_fulfill_ends_the_mutation_without_retry() {
     r.dispatch(view_of(&r, "login"), Event::Press).unwrap();
     let ticket = r.take_requests()[0].ticket;
     assert!(has(&r, "busy"));
-    r.data().fail_parse = true;
+    r.source::<Castle>().fail_parse = true;
 
     assert!(r.fulfill(ticket, ok(200)).unwrap().is_some());
     assert!(r.pending().is_empty());
@@ -426,7 +431,7 @@ fn a_mutation_refused_admission_is_never_retried() {
     r.dispatch(view_of(&r, "login"), Event::Press).unwrap();
     let ticket = r.take_requests()[0].ticket;
     assert!(has(&r, "busy"));
-    r.data().fail_parse = true;
+    r.source::<Castle>().fail_parse = true;
     r.refuse_request(ticket, "native executor admission limit reached", true);
     let (refused, outcome) = r.take_request_refusal(true).unwrap();
     assert_eq!(refused, ticket);
@@ -453,7 +458,7 @@ fn a_refused_mutation_assignment_keeps_the_previous_ticket() {
     // balance's arguments and makes settlement refuse.
     r.dispatch(view_of(&r, "login"), Event::Press).unwrap();
     let wanted = r.take_requests()[0].ticket;
-    r.data().fail_empty_balance = true;
+    r.source::<Castle>().fail_empty_balance = true;
     assert!(matches!(
         r.dispatch(view_of(&r, "logout"), Event::Press),
         Err(RunnerError::Data {
@@ -468,7 +473,7 @@ fn a_refused_mutation_assignment_keeps_the_previous_ticket() {
         "the refused logout sent nothing"
     );
 
-    r.data().fail_empty_balance = false;
+    r.source::<Castle>().fail_empty_balance = false;
     assert!(r.fulfill(wanted, ok(200)).unwrap().is_some());
 }
 
@@ -524,13 +529,13 @@ fn every_reply_is_journaled_with_what_came_back() {
 #[test]
 fn refresh_re_requests_a_resource_whose_arguments_did_not_change() {
     let mut r = boot();
-    let asks = r.data().balance_asks;
+    let asks = r.source::<Castle>().balance_asks;
     r.dispatch(view_of(&r, "paid"), Event::Press).unwrap();
-    assert_eq!(r.data().balance_asks, asks + 1);
+    assert_eq!(r.source::<Castle>().balance_asks, asks + 1);
     // Without `refresh`, the same arguments are not asked again.
     r.dispatch(view_of(&r, "who"), Event::Change("x".into()))
         .unwrap();
-    assert_eq!(r.data().balance_asks, asks + 1);
+    assert_eq!(r.source::<Castle>().balance_asks, asks + 1);
 }
 
 #[test]
@@ -545,10 +550,10 @@ fn a_reload_carries_the_slot_and_never_resends() {
     let plan = contract::compile(SRC).unwrap();
     let mut again = Runner::boot_carrying(
         plan,
-        Castle {
+        boxed(Castle {
             later: true,
             ..Castle::default()
-        },
+        }),
         Kernel::with_monospace(),
         &carried,
         Default::default(),
@@ -584,7 +589,7 @@ fn a_record_that_answers_later_at_the_bake_is_not_compiled_and_shows_its_zero() 
     }
     // @ref LLP 1054.000.002 D1/D4 — where the bake used to refuse: the
     // resource shows its zero, pending, and the zero is not its answer.
-    let plan = contract::bake(contract::compile(&src).unwrap(), Remote).unwrap();
+    let plan = contract::bake(contract::compile(&src).unwrap(), boxed(Remote)).unwrap();
     let row = plan
         .resources
         .iter()
@@ -593,7 +598,7 @@ fn a_record_that_answers_later_at_the_bake_is_not_compiled_and_shows_its_zero() 
     assert_eq!(row.initial.len, 0);
     let mut r = Runner::boot(
         plan,
-        Remote,
+        boxed(Remote),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -704,10 +709,10 @@ impl DataSource for PoisonSource {
 #[test]
 fn poison_leaks_no_effects_from_the_failed_commit() {
     let plan = contract::compile(POISON_SRC).unwrap();
-    let baked = contract::bake(plan, PoisonSource).unwrap();
+    let baked = contract::bake(plan, boxed(PoisonSource)).unwrap();
     let mut r = Runner::boot(
         baked,
-        PoisonSource,
+        boxed(PoisonSource),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -737,7 +742,7 @@ fn store_plan() -> exact_plan::Plan {
     PLAN.get_or_init(|| {
         contract::bake(
             contract::compile(STORE_SRC).unwrap(),
-            StoreSource::default(),
+            boxed(StoreSource::default()),
         )
         .unwrap()
     })
@@ -842,17 +847,17 @@ fn a_parse_store_write_reanswers_store_reading_resources() {
     let baked = store_plan();
     let mut r = Runner::boot_stored(
         baked,
-        StoreSource {
+        boxed(StoreSource {
             login_later: true,
             ..StoreSource::default()
-        },
+        }),
         Kernel::with_monospace(),
         vec![],
         Default::default(),
         "/",
     )
     .unwrap();
-    assert_eq!(r.data().remember_asks, 1);
+    assert_eq!(r.source::<StoreSource>().remember_asks, 1);
     assert_eq!(
         r.resource("remembered"),
         Some(&Value::record(vec![Value::str("")]))
@@ -862,7 +867,7 @@ fn a_parse_store_write_reanswers_store_reading_resources() {
     let ticket = r.take_requests()[0].ticket;
     r.fulfill(ticket, ok(200)).unwrap();
 
-    assert_eq!(r.data().remember_asks, 2);
+    assert_eq!(r.source::<StoreSource>().remember_asks, 2);
     assert_eq!(
         r.resource("remembered"),
         Some(&Value::record(vec![Value::str("ada")]))
@@ -882,10 +887,10 @@ fn a_mutation_answer_store_write_reanswers_store_reading_resources() {
     let baked = store_plan();
     let mut r = Runner::boot_stored(
         baked,
-        StoreSource {
+        boxed(StoreSource {
             login_later: true,
             ..StoreSource::default()
-        },
+        }),
         Kernel::with_monospace(),
         vec![("session".into(), "ada".into())],
         Default::default(),
@@ -899,7 +904,7 @@ fn a_mutation_answer_store_write_reanswers_store_reading_resources() {
 
     r.act("logout", vec![]).unwrap();
 
-    assert_eq!(r.data().remember_asks, 2);
+    assert_eq!(r.source::<StoreSource>().remember_asks, 2);
     assert_eq!(
         r.resource("remembered"),
         Some(&Value::record(vec![Value::str("")]))
@@ -913,10 +918,10 @@ fn a_resource_answer_store_write_reanswers_an_earlier_store_reader() {
     let baked = store_plan();
     let mut r = Runner::boot_stored(
         baked,
-        StoreSource {
+        boxed(StoreSource {
             login_later: true,
             ..StoreSource::default()
-        },
+        }),
         Kernel::with_monospace(),
         vec![("session".into(), "ada".into())],
         Default::default(),
@@ -930,7 +935,7 @@ fn a_resource_answer_store_write_reanswers_an_earlier_store_reader() {
 
     r.act("clearStore", vec![]).unwrap();
 
-    assert_eq!(r.data().remember_asks, 2);
+    assert_eq!(r.source::<StoreSource>().remember_asks, 2);
     assert_eq!(
         r.resource("remembered"),
         Some(&Value::record(vec![Value::str("")]))
@@ -959,7 +964,7 @@ fn a_baked_store_dependency_is_transitive_through_resource_arguments() {
 
     let r = Runner::boot_stored(
         baked,
-        StoreSource::default(),
+        boxed(StoreSource::default()),
         Kernel::with_monospace(),
         vec![("session".into(), "ada".into())],
         Default::default(),
@@ -985,6 +990,7 @@ component App
   state greeted = ""
   state landings = 0
   mutation session as shape Session then signedIn
+  derive why = match failure(session) { case some(f) => `${f.code}: ${f.message}`, case none => "" }
   action submit
     send session = login(who, "pw")
   action quick
@@ -1005,14 +1011,14 @@ component App
       text `${greeted}/${landings}` testId="greeted"
 "#;
 
-fn boot_then(later: bool) -> Runner<Castle> {
-    let baked = contract::bake(contract::compile(THEN).unwrap(), Castle::default()).unwrap();
+fn boot_then(later: bool) -> Runner<Source> {
+    let baked = contract::bake(contract::compile(THEN).unwrap(), boxed(Castle::default())).unwrap();
     Runner::boot(
         baked,
-        Castle {
+        boxed(Castle {
             later,
             ..Castle::default()
-        },
+        }),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -1063,12 +1069,18 @@ fn then_runs_after_an_answer_in_the_sending_commit_and_not_after_a_failure() {
     assert_eq!(r.timer_due_ms(), Some(0.0));
     assert_eq!(r.advance(0.0).unwrap().len(), 1);
     assert_eq!(text_of(&r, "greeted").as_deref(), Some("hello ada/1"));
-    // A refused send (`login` cannot answer now here) arms nothing.
-    assert!(r.dispatch(view_of(&r, "login"), Event::Press).is_err());
-    assert_eq!(r.timer_due_ms(), None, "a refused commit arms nothing");
+    // A send its source cannot answer now (`login` here) commits with its
+    // receipt failed, and a failure arms no `then`.
+    r.dispatch(view_of(&r, "login"), Event::Press).unwrap();
+    assert_eq!(
+        r.derive("why"),
+        Some(&Value::str("error: login answers later"))
+    );
+    assert_eq!(r.timer_due_ms(), None, "a failed send arms nothing");
+    assert_eq!(text_of(&r, "greeted").as_deref(), Some("hello ada/1"));
     // A reply the source cannot parse is let go, not an answer.
     let mut r = boot_then(true);
-    r.data().fail_parse = true;
+    r.source::<Castle>().fail_parse = true;
     r.dispatch(view_of(&r, "login"), Event::Press).unwrap();
     let t = r.take_requests()[0].ticket;
     let _ = r.fulfill(t, ok(200));
@@ -1085,10 +1097,14 @@ fn land_then_runs_the_armed_then_and_no_timer() {
         "  action quick\n",
         "  state ticks = 0\n  action tick\n    ticks = ticks + 1\n  task ticking mount\n    every(100, tick)\n  action quick\n",
     );
-    let baked = contract::bake(contract::compile(&source).unwrap(), Castle::default()).unwrap();
+    let baked = contract::bake(
+        contract::compile(&source).unwrap(),
+        boxed(Castle::default()),
+    )
+    .unwrap();
     let mut r = Runner::boot(
         baked,
-        Castle::default(),
+        boxed(Castle::default()),
         Kernel::with_monospace(),
         Default::default(),
         "/",

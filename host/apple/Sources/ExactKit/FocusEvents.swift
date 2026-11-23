@@ -25,6 +25,10 @@ extension Presenter {
     }
     package func focus(_ id: UInt32) {
         #if os(iOS)
+        if carriesFocus(id) { return }
+        if carriedFocus != nil { releaseCarriedFocus() }
+        #endif
+        #if os(iOS)
         navigation.finishBootOwner()
         #endif
         #if os(macOS)
@@ -39,6 +43,9 @@ extension Presenter {
     package func blur(_ id: UInt32) {
         #if os(iOS) || os(tvOS)
         if menus.preservesFocus(id) { return }
+        #if os(iOS)
+        if carriesFocus(id) { carriedFocus?.resigned = true; return }
+        #endif
         #endif
         focusEvents.blur(id)
         #if os(iOS)
@@ -83,7 +90,7 @@ final class FocusEvents {
                 if node.handlers.contains("focusout") { outbound.append(node.id) }
             }
             // Its authored parent, across a native container's view (LLP 1123 D2)
-            cursor = presenter.eventParent(of: next)
+            cursor = presenter.declaredParent(of: next) ?? presenter.eventParent(of: next)
         }
         return FocusSnapshot(node: id, name: (presenter.inlineText(id)?.props ?? view.props)["id"] ?? "", path: path, inbound: inbound, outbound: outbound)
     }

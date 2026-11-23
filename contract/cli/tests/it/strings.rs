@@ -1,17 +1,11 @@
 //! @ref LLP 1060 — `t("key", name=value)` against `strings/<locale>.json`:
 //! checked at compile, baked into the plan, the locale a slot the host's
 //! place writes, so a switch re-renders exactly the texts `t` produced.
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, PropId};
-use exact_runner::{DataError, DataSource, Runner, Value};
+use exact_runner::{Runner, Value};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
 
 struct AppDir(PathBuf);
 
@@ -65,17 +59,17 @@ fn tables() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-fn text(r: &Runner<NoData>, id: &str) -> String {
+fn text(r: &Runner<Source>, id: &str) -> String {
     let key = r.kernel().find_by_test_id(id)[0];
     let node = r.kernel().node_by_key(key).unwrap();
     node.props.str(PropId::Text).unwrap_or("").to_string()
 }
 
-fn boot(plan: exact_plan::Plan) -> Runner<NoData> {
-    let plan = contract::bake(plan, NoData).unwrap();
+fn boot(plan: exact_plan::Plan) -> Runner<Source> {
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -676,7 +670,7 @@ fn launch(
     plan: &exact_plan::Plan,
     locale: &str,
     snapshot: Vec<(String, Vec<u8>)>,
-) -> Runner<NoData> {
+) -> Runner<Source> {
     let place = exact_runner::time::Place {
         locale: locale.into(),
         ..Default::default()
@@ -687,8 +681,8 @@ fn launch(
     };
     exact_runner::time::launching_with(launch, || {
         Runner::boot_stored(
-            contract::bake(plan.clone(), NoData).unwrap(),
-            NoData,
+            contract::bake(plan.clone(), boxed(NoData)).unwrap(),
+            boxed(NoData),
             Kernel::with_monospace(),
             snapshot,
             Default::default(),
@@ -772,8 +766,8 @@ fn a_chosen_language_stands_over_the_host_and_reads_in_the_first_frame_of_the_ne
     assert_eq!(r.slot("language"), Some(&Value::str("de")));
     // A boot told no place reads the choice too.
     let r = Runner::boot_stored(
-        contract::bake(plan.clone(), NoData).unwrap(),
-        NoData,
+        contract::bake(plan.clone(), boxed(NoData)).unwrap(),
+        boxed(NoData),
         Kernel::with_monospace(),
         snapshot.clone(),
         Default::default(),

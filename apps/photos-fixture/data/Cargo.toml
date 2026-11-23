@@ -1,12 +1,12 @@
 # @exact/photos's fixture (LLP 1133.019 stage 3): the app's data source,
-# which holds its grants and runs the image codec; the library is read from
-# the Contract.
+# which holds its grants, runs the image codec and keeps the app's index of
+# the photo library (LLP 1133.019.000 D1).
 [package]
 name = "photos-fixture-data"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "@exact/photos's fixture: its grants and the image codec's drives"
+description = "@exact/photos's fixture: its grants, the image codec's drives and its photo index"
 publish = false
 
 [lib]
@@ -18,3 +18,10 @@ exact-plan = { path = "../../../plan" }
 exact-runner = { path = "../../../runner" }
 exact-data = { path = "../../../data" }
 serde_json = "1.0"
+
+[build-dependencies]
+contract = { path = "../../../contract/cli" }
+
+[dev-dependencies]
+exact-data-host = { path = "../../../data/host" }
+ibex2-sqlite = { path = "../../../vendor/ibex/crates/ibex2-sqlite" }

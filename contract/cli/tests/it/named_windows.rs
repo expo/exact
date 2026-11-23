@@ -3,6 +3,7 @@
 //! is not a keyword, and `window-<n>`, the agent's label for a window without
 //! a name, are refused. D2: the page's `name` is the window's from the first
 //! settle, and a window opened at a route launches rooted there.
+use crate::source::{boxed, Source};
 use exact_kernel::Kernel;
 use exact_runner::time::{launching_with, Launch};
 use exact_runner::{DataError, DataSource, Runner, Value};
@@ -14,12 +15,12 @@ impl DataSource for NoData {
     }
 }
 
-fn boot(source: &str, launch: Launch, location: &str) -> Runner<NoData> {
-    let plan = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
+fn boot(source: &str, launch: Launch, location: &str) -> Runner<Source> {
+    let plan = contract::bake(contract::compile(source).unwrap(), boxed(NoData)).unwrap();
     launching_with(launch, || {
         Runner::boot(
             plan,
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             location,
@@ -28,7 +29,7 @@ fn boot(source: &str, launch: Launch, location: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn text(r: &Runner<NoData>, id: &str) -> String {
+fn text(r: &Runner<Source>, id: &str) -> String {
     let key = r.kernel().find_by_test_id(id)[0];
     let node = r.kernel().node_by_key(key).unwrap();
     node.props
@@ -139,7 +140,7 @@ fn a_launch_on_a_booted_app_is_a_boot_at_its_location() {
     r.act("pick", vec![Value::str("settings")]).unwrap();
     r.act("follow", vec![Value::str("/settings/general")])
         .unwrap();
-    let ids = |r: &Runner<NoData>| {
+    let ids = |r: &Runner<Source>| {
         let state: serde_json::Value =
             serde_json::from_str(&exact_runner::agent::state(r)).unwrap();
         let nav = &state["slots"]["nav"];
@@ -189,11 +190,11 @@ fn a_rooted_router_survives_a_reload() {
     r.act("follow", vec![Value::str("/m/4")]).unwrap();
     let carried = r.carry();
     let reload = |source: &str, rooted: bool| {
-        let plan = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
+        let plan = contract::bake(contract::compile(source).unwrap(), boxed(NoData)).unwrap();
         launching_with(named(Some("compose"), rooted), || {
             Runner::boot_carrying(
                 plan,
-                NoData,
+                boxed(NoData),
                 Kernel::with_monospace(),
                 &carried,
                 Default::default(),

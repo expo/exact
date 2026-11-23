@@ -22,15 +22,15 @@ fn app(name: &str) -> crate::TempDir {
 }
 
 #[test]
-fn file_handlers_are_linux_binary_metadata() {
-    let dir = app("linux-file-handlers");
+fn file_handlers_are_linux_and_windows_binary_metadata() {
+    let dir = app("desktop-file-handlers");
     let mut manifest = Manifest::read(&dir).unwrap();
     let builds = |manifest: &Manifest| {
         [
             ("linux", "x86_64-unknown-linux-gnu"),
+            ("windows", "x86_64-pc-windows-gnu"),
             ("android", "aarch64-linux-android"),
             ("macos", "aarch64-apple-darwin"),
-            ("windows", "x86_64-pc-windows-gnu"),
             ("web", "wasm32-unknown-unknown"),
         ]
         .map(|(platform, target)| {
@@ -53,23 +53,30 @@ fn file_handlers_are_linux_binary_metadata() {
     ]);
     manifest.json["file_handlers"] = handlers.clone();
     let declared = builds(&manifest);
-    assert_eq!(declared[0].inputs["fileHandlers"], handlers);
-    assert_ne!(bare[0].id, declared[0].id, "Linux embeds the handlers");
-    for (index, platform) in ["Android", "macOS", "Windows", "the web"]
-        .into_iter()
-        .enumerate()
-    {
-        assert_eq!(
-            bare[index + 1].id,
-            declared[index + 1].id,
-            "{platform} does not embed Linux portal filters"
+    for index in 0..2 {
+        assert_eq!(declared[index].inputs["fileHandlers"], handlers);
+        assert_ne!(
+            bare[index].id, declared[index].id,
+            "the binary embeds the handlers"
         );
-        assert!(declared[index + 1].inputs.get("fileHandlers").is_none());
+    }
+    for (index, platform) in ["Android", "macOS", "the web"].into_iter().enumerate() {
+        assert_eq!(
+            bare[index + 2].id,
+            declared[index + 2].id,
+            "{platform} carries its types elsewhere"
+        );
+        assert!(declared[index + 2].inputs.get("fileHandlers").is_none());
     }
 
     manifest.json["file_handlers"] = serde_json::json!([]);
     let empty = builds(&manifest);
-    assert!(empty[0].inputs.get("fileHandlers").is_none());
-    assert_eq!(bare[0].id, empty[0].id, "an empty list adds no identity");
+    for index in 0..2 {
+        assert!(empty[index].inputs.get("fileHandlers").is_none());
+        assert_eq!(
+            bare[index].id, empty[index].id,
+            "an empty list adds no identity"
+        );
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }

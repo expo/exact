@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { sections } from '../constants/navigation.ts';
-import { redirects } from '../constants/redirects.ts';
+import { nonPageRules, redirects } from '../constants/redirects.ts';
 import { site } from '../constants/site.ts';
 
 const SITE = resolve(import.meta.dir, '..');
@@ -37,6 +37,8 @@ const rules = [
   ...Object.entries(redirects).flatMap(([from, to]) => [`${from} ${to} 301`, `${withSlash(from)} ${to} 301`]),
   '# A page reached with a trailing slash goes to its path: the router matches no route that ends in "/".',
   ...pages.filter(p => p.path !== '/').map(p => `${withSlash(p.path)} ${p.path} 301`),
+  '# The paths that are not pages.',
+  ...nonPageRules.map(({ from, to, status }) => `${from} ${to} ${status}`),
 ];
 writeFileSync(join(DIST, '_redirects'), `${rules.join('\n')}\n`);
 
@@ -156,10 +158,11 @@ const TYPES: Record<string, string> = { Home: 'Overview', 'Get started': 'Tutori
 const mdUrl = (p: Page) => `${ORIGIN}${p.path === '/' ? '/index' : p.path}.md`;
 const parentOf = (p: Page) => pages.filter(q => q.path !== '/' && p.path.startsWith(`${q.path}/`)).sort((a, b) => b.path.length - a.path.length)[0];
 const start = pages.find(p => p.path === '/start');
+const startSite = pages.find(p => p.path === '/start-site');
 function prerequisites(p: Page): string {
   const parent = parentOf(p);
   if (parent) return `[${parent.title}](${mdUrl(parent)})`;
-  if (p.path === '/recipes/website') return 'start-here-site.md in the Exact checkout (a website reads it in place of Start here)';
+  if (startSite && (p.path === '/recipes/website' || p.path === '/recipes/website-hosting')) return `[${startSite.title}](${mdUrl(startSite)})`;
   if (!start || ['Home', 'Get started', 'For AI agents'].includes(p.section)) return 'None';
   return `[${start.title}](${mdUrl(start)})`;
 }
@@ -202,5 +205,5 @@ if (ORIGIN) {
   );
 }
 
-console.log(`${DIST}: head (favicon, stored choices, Markdown link, JSON-LD${ORIGIN ? ', canonical' : ''}) on ${prepainted} pages, _redirects (${rules.length - 2} rules), _headers, ${pages.length} .md pages and 404.md, ${Object.keys(redirects).length} moved-page fallbacks, robots.txt, llms.txt, sitemap.md${ORIGIN ? ', sitemap.xml' : ''}`);
+console.log(`${DIST}: head (favicon, stored choices, Markdown link, JSON-LD${ORIGIN ? ', canonical' : ''}) on ${prepainted} pages, _redirects (${rules.filter(rule => !rule.startsWith('#')).length} rules), _headers, ${pages.length} .md pages and 404.md, ${Object.keys(redirects).length} moved-page fallbacks, robots.txt, llms.txt, sitemap.md${ORIGIN ? ', sitemap.xml' : ''}`);
 if (!ORIGIN) console.log('  no origin: set it in constants/site.ts (or SITE_ORIGIN) for sitemap.xml, canonical links and JSON-LD URLs');

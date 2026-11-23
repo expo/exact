@@ -513,12 +513,16 @@ function hearDrags(el, kind, allowed, fire) {
   document.addEventListener('drop', (ev) => { if (fileDrag(ev)) { last = null; over = []; } }, true);
 }
 
-// The manifest's `file_handlers`, the only types a picker offers (D2).
+// The manifest's `file_handlers`, the only types a picker offers (D2), each
+// labelled with the handler's `name`. The build has taken folders out. A
+// manifest that does not load is asked for again at the next use.
 let declared;
 function types() {
-  return declared ??= fetch(new URL('./manifest.json', import.meta.url)).then((r) => r.json()).then((m) =>
-    (m.file_handlers ?? []).filter((h) => !Object.keys(h.accept ?? {}).includes('inode/directory'))
-      .map((h) => ({ description: h.name, accept: h.accept }))).catch(() => []);
+  return declared ??= fetch(new URL('./manifest.json', import.meta.url)).then((r) => {
+    if (!r.ok) throw new Error(`manifest.json: HTTP ${r.status}`);
+    return r.json();
+  }).then((m) => (m.file_handlers ?? []).map((h) => ({ description: h.name, accept: h.accept })))
+    .catch((e) => { declared = undefined; throw e; });
 }
 
 // Whether a dropped file is of a type the manifest declares, which a drop
@@ -527,7 +531,7 @@ function types() {
 async function declaredFile(handle) {
   if (handle?.kind !== 'file') return false;
   const name = handle.name.toLowerCase();
-  return (await types()).some((t) => Object.values(t.accept ?? {}).flat().some((suffix) => name.endsWith(suffix)));
+  return (await types().catch(() => [])).some((t) => Object.values(t.accept ?? {}).flat().some((suffix) => name.endsWith(suffix)));
 }
 
 globalThis.exact.documents = {
@@ -579,7 +583,10 @@ globalThis.exact.documents = {
         if (!r.present) return dispatch(r.view, 27, '');
         if (name === 'showSaveFilePicker' && typeof globalThis.showSaveFilePicker !== 'function') return chosen(dispatch, r.view, name, [downloadFile(r.suggestedName)]);
         const options = name === 'showSaveFilePicker' ? { suggestedName: r.suggestedName } : name === 'showOpenFilePicker' ? { multiple: r.multiple } : {};
-        if (name !== 'showDirectoryPicker') { const t = await types(); if (t.length) options.types = t; }
+        try {
+          // Only the declared types, with no "All files" choice beside them, as the other hosts offer.
+          if (name !== 'showDirectoryPicker') { const t = await types(); if (t.length) Object.assign(options, { types: t, excludeAcceptAllOption: true }); }
+        } catch (e) { host.log(`${name}: refused: ${e?.message ?? e}`); return dispatch(r.view, 27, ''); }
         const at = await startIn(r.startIn, name, host.log);
         if (at) options.startIn = at;
         try { const found = await globalThis[name](options); await chosen(dispatch, r.view, name, [found].flat()); }

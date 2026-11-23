@@ -1,3 +1,4 @@
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, Offer};
 use exact_runner::{DataError, DataSource, Runner, Value};
 struct NoData;
@@ -6,7 +7,7 @@ impl DataSource for NoData {
         Err(DataError::UnknownSource(name.into()))
     }
 }
-fn lay_out(r: &mut Runner<NoData>) {
+fn lay_out(r: &mut Runner<Source>) {
     let root = r.kernel().roots()[0];
     r.kernel_mut()
         .compute_layout(root, Offer::definite(400.0, 800.0))
@@ -35,21 +36,21 @@ fn native_intersect_mount_scroll_margin_clip_and_remount() {
 "#).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
     lay_out(&mut r);
-    let view = |r: &Runner<NoData>, name: &str| {
+    let view = |r: &Runner<Source>, name: &str| {
         r.kernel()
             .arena()
             .local_id(r.kernel().find_by_id(name)[0].index)
     };
     let root = view(&r, "root");
     let target = view(&r, "target");
-    let take = |r: &mut Runner<NoData>| {
+    let take = |r: &mut Runner<Source>| {
         let due = r.intersect_due();
         for entry in &due {
             r.intersect_delivered(entry);
@@ -111,7 +112,7 @@ fn native_intersect_viewport_transforms_clips_and_zero_area() {
         let plan = contract::compile(&source).unwrap();
         let mut r = Runner::boot(
             plan,
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -145,7 +146,7 @@ fn native_intersect_margin_units_are_case_insensitive() {
         );
         let mut r = Runner::boot(
             contract::compile(&source).unwrap(),
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -169,7 +170,7 @@ fn native_intersect_entries_follow_registration_order() {
     }
     let mut r = Runner::boot(
         contract::compile(&source).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -226,7 +227,7 @@ fn native_intersect_sticky_target_and_descendant_follow_scroll() {
         );
         let mut r = Runner::boot(
             contract::compile(&source).unwrap(),
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -261,7 +262,7 @@ fn native_intersect_sticky_page_scroll_uses_root_local_coordinates() {
 "#;
     let mut r = Runner::boot(
         contract::compile(source).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         exact_runner::Viewport {
             width: 400.0,
@@ -307,7 +308,7 @@ fn native_intersect_rotated_root_ratios_match_chrome() {
         );
         let mut r = Runner::boot(
             contract::compile(&source).unwrap(),
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -347,7 +348,7 @@ fn native_intersect_reads_a_block_where_its_host_shows_it() {
     let boot = || {
         let mut r = Runner::boot(
             contract::compile(source).unwrap(),
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -369,12 +370,12 @@ fn native_intersect_reads_a_block_where_its_host_shows_it() {
         lay_out(&mut r);
         (r, route)
     };
-    let id = |r: &Runner<NoData>, name: &str| {
+    let id = |r: &Runner<Source>, name: &str| {
         r.kernel()
             .arena()
             .local_id(r.kernel().find_by_id(name)[0].index)
     };
-    let first = |r: &mut Runner<NoData>| {
+    let first = |r: &mut Runner<Source>| {
         let due = r.intersect_due();
         (due[0].is_intersecting, due[0].intersection_ratio)
     };
@@ -536,7 +537,7 @@ fn native_scrollport_mount_keeps_the_implicit_observation() {
     );
 }
 
-fn native_intersect_fixture(children: &str, overflow: &str) -> (Runner<NoData>, u32, u32) {
+fn native_intersect_fixture(children: &str, overflow: &str) -> (Runner<Source>, u32, u32) {
     let source = format!(
         r#"component App
   action seen(e: IntersectionObserverEntry)
@@ -549,13 +550,13 @@ fn native_intersect_fixture(children: &str, overflow: &str) -> (Runner<NoData>, 
     );
     let mut r = Runner::boot(
         contract::compile(&source).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let view = |r: &Runner<NoData>, name: &str| {
+    let view = |r: &Runner<Source>, name: &str| {
         r.kernel()
             .arena()
             .local_id(r.kernel().find_by_id(name)[0].index)

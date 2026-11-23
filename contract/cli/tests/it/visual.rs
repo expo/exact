@@ -2,6 +2,7 @@
 //! kernel as CSS, in a literal, a `style` and a conditional, and what the
 //! hosts do not draw is refused at compile time, by name.
 
+use crate::source::{boxed, Source};
 use exact_kernel::corner::{Corner, CornerShape};
 use exact_kernel::gradient::BackgroundImage;
 use exact_kernel::style::TextShadow;
@@ -17,11 +18,11 @@ impl DataSource for NoData {
     }
 }
 
-fn boot(src: &str) -> Runner<NoData> {
-    let plan = contract::bake(contract::compile(src).unwrap(), NoData).unwrap();
+fn boot(src: &str) -> Runner<Source> {
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -29,7 +30,7 @@ fn boot(src: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn style_of(r: &Runner<NoData>, id: &str) -> exact_kernel::StyleProps {
+fn style_of(r: &Runner<Source>, id: &str) -> exact_kernel::StyleProps {
     let k = r.kernel();
     k.node_by_key(k.find_by_test_id(id)[0])
         .unwrap()

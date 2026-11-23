@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { resolve } from 'node:path';
+import pages from '../content/pages.json';
 
 // Pages' own rules meet the tree tools/pages.ts makes here: `wrangler pages dev` serves dist.pages as Cloudflare
 // does, with its _redirects, _headers, _routes.json and _worker.js.
@@ -48,12 +49,41 @@ test('a page answers at its path, and every other spelling of it redirects there
   expect(await get('/nope')).toEqual({ status: 404, type: 'text/html', location: null });
 });
 
+test('a path that is not a page redirects by its rule in constants/redirects.ts', async () => {
+  expect(await get('/llms-full.txt')).toMatchObject({ status: 301, location: '/llms.txt' });
+  expect(await get('/llms.txt')).toEqual({ status: 200, type: 'text/plain', location: null });
+});
+
+test('Recipes lists every Markdown recipe in name order', () => {
+  const expected = readdirSync(resolve(site, '../recipes'), { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name.endsWith('.md'))
+    .map(entry => `/recipes/${entry.name.slice(0, -3)}`)
+    .sort();
+  expect(pages.filter(page => page.section === 'Recipes').map(page => page.path)).toEqual(expected);
+});
+
+test('a chat fetcher gets Markdown at a published page path', async () => {
+  const fetcher = { Accept: 'text/html', 'User-Agent': 'Claude-User/1.0' };
+  expect(await get('/learn/contract-for-humans/run-an-app', fetcher)).toEqual({ status: 200, type: 'text/markdown', location: null });
+  expect(await get('/start/', fetcher)).toMatchObject({ status: 301, location: '/start' });
+  expect(await get('/sitemap', fetcher)).toEqual({ status: 404, type: 'text/html', location: null });
+});
+
+test('a JSON HEAD 404 carries the Pages discovery headers', async () => {
+  const response = await fetch(`${origin}/nope`, { method: 'HEAD', headers: { Accept: 'application/json' } });
+  expect([response.status, response.headers.get('Content-Type'), response.headers.get('Vary'), response.headers.get('X-Llms-Txt')])
+    .toEqual([404, 'application/json; charset=utf-8', 'Accept', '/llms.txt']);
+  expect(response.headers.get('Link')).toContain('</llms.txt>; rel="llms-txt"');
+  expect([response.headers.get('Access-Control-Allow-Origin'), response.headers.get('Cache-Control')]).toEqual(['*', 'no-store']);
+  expect(await response.text()).toBe('');
+});
+
 test('Markdown, the worker and the files it does not see', async () => {
   const response = await fetch(`${origin}/start`, { headers: { Accept: 'text/markdown' } });
   // The build writes sitemap.xml only with an origin, and names it only then.
   const link = existsSync(resolve(site, 'dist.pages/sitemap.xml')) ? '</llms.txt>; rel="llms-txt", </sitemap.xml>; rel="sitemap"' : '</llms.txt>; rel="llms-txt"';
   expect([response.status, response.headers.get('Content-Type'), response.headers.get('Vary'), response.headers.get('Link'), response.headers.get('X-Llms-Txt'), response.headers.get('X-Robots-Tag')])
-    .toEqual([200, 'text/markdown; charset=utf-8', 'Accept', link, '/llms.txt', 'noindex']);
+    .toEqual([200, 'text/markdown; charset=utf-8', 'Accept, User-Agent', link, '/llms.txt', 'noindex']);
   expect((await response.text()).startsWith('---\ntitle: ')).toBe(true);
   expect(await get('/start.md')).toEqual({ status: 200, type: 'text/markdown', location: null });
   expect(await get('/nope.md')).toEqual({ status: 404, type: 'text/markdown', location: null });

@@ -2,16 +2,10 @@
 //! the reader's selection reaches an action that takes a `Selection`, by the
 //! one rule for an event's record, or an action that takes nothing more.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::Kernel;
 use exact_plan::{EventKind, Value};
-use exact_runner::{DataError, DataSource, Event, Runner};
-
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::{Event, Runner};
 
 const READER: &str = r#"component App
   state picked = ""
@@ -31,13 +25,13 @@ fn a_selection_reaches_the_action_as_its_record() {
     let plan = contract::compile(READER).unwrap_or_else(|e| panic!("{e}"));
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let id = |r: &Runner<NoData>, t: &str| {
+    let id = |r: &Runner<Source>, t: &str| {
         r.kernel()
             .node_by_key(r.kernel().find_by_test_id(t)[0])
             .unwrap()
@@ -93,7 +87,7 @@ fn selection_rectangles_and_commands_reach_actions() {
     let plan = contract::compile(&source).unwrap_or_else(|e| panic!("{e}"));
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

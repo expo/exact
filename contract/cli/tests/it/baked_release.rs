@@ -4,6 +4,7 @@
 //! baked copy of what it replaced is freed. A later read decodes the
 //! plan's bytes again: the value never changes for a reader.
 
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, PropId};
 use exact_runner::{DataError, DataSource, Items, Runner, Value};
 
@@ -79,7 +80,7 @@ impl DataSource for Feed {
 /// decoded record still holds it (the record is the row's only other
 /// holder once the row is off screen). Holding the row leaves the record's
 /// own count, the one the runner reads before releasing it, alone.
-fn first_row(r: &Runner<Feed>) -> Items {
+fn first_row(r: &Runner<Source>) -> Items {
     let Some(Value::Record(record)) = r.resource("initial") else {
         panic!("a record")
     };
@@ -97,7 +98,7 @@ fn alive(row: &Items) -> bool {
     Items::strong_count(row) > 1
 }
 
-fn text(r: &Runner<Feed>, id: &str) -> String {
+fn text(r: &Runner<Source>, id: &str) -> String {
     let k = r.kernel();
     let key = k.find_by_test_id(id)[0];
     k.node_by_key(key)
@@ -110,11 +111,11 @@ fn text(r: &Runner<Feed>, id: &str) -> String {
 
 #[test]
 fn an_adopted_value_replaced_on_screen_is_released_and_reads_the_same() {
-    let plan = contract::bake(contract::compile(SRC).unwrap(), Feed::default()).unwrap();
+    let plan = contract::bake(contract::compile(SRC).unwrap(), boxed(Feed::default())).unwrap();
     let baked = Value::from_bytes(plan.bytes(plan.resources[0].initial)).unwrap();
     let mut r = Runner::boot(
         plan.clone(),
-        Feed::default(),
+        boxed(Feed::default()),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -145,7 +146,7 @@ fn an_adopted_value_replaced_on_screen_is_released_and_reads_the_same() {
     let carried = r.carry();
     let reloaded = Runner::boot_carrying(
         plan.clone(),
-        Feed::default(),
+        boxed(Feed::default()),
         Kernel::with_monospace(),
         &carried,
         Default::default(),
@@ -166,10 +167,10 @@ fn an_adopted_value_replaced_on_screen_is_released_and_reads_the_same() {
 
 #[test]
 fn a_value_still_on_screen_is_never_released() {
-    let plan = contract::bake(contract::compile(SRC).unwrap(), Feed::default()).unwrap();
+    let plan = contract::bake(contract::compile(SRC).unwrap(), boxed(Feed::default())).unwrap();
     let mut r = Runner::boot(
         plan,
-        Feed::default(),
+        boxed(Feed::default()),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -196,7 +197,7 @@ fn a_source_that_reads_storage_at_bake_is_told_to_catch_it() {
         }
     }
     let src = "shape Task\n  id: string\ncomponent App\n  resource tasks = loadTasks() as shape Task[]\n  view\n    text \"a\"\n";
-    let error = contract::bake(contract::compile(src).unwrap(), NoStorage).unwrap_err();
+    let error = contract::bake(contract::compile(src).unwrap(), boxed(NoStorage)).unwrap_err();
     let message = error.to_string();
     assert!(
         message.starts_with("`tasks` read storage while baking"),

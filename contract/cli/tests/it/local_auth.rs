@@ -5,6 +5,7 @@
 //! delegated: a tool's call fails `person-required` before anything is
 //! asked, in every state. The interface is the package's own `exact.json`.
 
+use crate::source::{boxed, Source};
 use exact_runner::{CallOrigin, Dispatch, HoldAnswer, Outcome, Reply, Runner, Work};
 use std::path::PathBuf;
 
@@ -70,13 +71,13 @@ impl exact_runner::DataSource for Data {
     }
 }
 
-fn boot(name: &str) -> (App, Runner<Data>) {
+fn boot(name: &str) -> (App, Runner<Source>) {
     let app = App::new(name);
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let r = Runner::boot(
         plan,
-        Data,
+        boxed(Data),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -87,7 +88,7 @@ fn boot(name: &str) -> (App, Runner<Data>) {
 
 /// The host's part: each request dispatched (a held one parked), released
 /// work run, each outcome fulfilled, until nothing is left to do.
-fn pump(r: &mut Runner<Data>, parked: &mut Vec<(u64, u64)>) {
+fn pump(r: &mut Runner<Source>, parked: &mut Vec<(u64, u64)>) {
     for _ in 0..8 {
         let outs = r.take_requests();
         let released = r.release_work();
@@ -111,7 +112,7 @@ fn pump(r: &mut Runner<Data>, parked: &mut Vec<(u64, u64)>) {
     }
 }
 
-fn run(r: &mut Runner<Data>, ticket: u64, dispatch: Dispatch) {
+fn run(r: &mut Runner<Source>, ticket: u64, dispatch: Dispatch) {
     let outcome: Outcome = match dispatch {
         Dispatch::Run(Work::Now(work)) => work(),
         Dispatch::Run(Work::Later(work)) => {
@@ -124,13 +125,13 @@ fn run(r: &mut Runner<Data>, ticket: u64, dispatch: Dispatch) {
     let _ = r.fulfill(ticket, outcome);
 }
 
-fn prefer(r: &mut Runner<Data>, request: &str) {
+fn prefer(r: &mut Runner<Source>, request: &str) {
     let (_, reply) = r.extension_agent(request).expect("a prefer");
     reply.unwrap();
 }
 
 /// The one hold of `capability`, its ticket.
-fn held(r: &Runner<Data>, capability: &str) -> u64 {
+fn held(r: &Runner<Source>, capability: &str) -> u64 {
     let holds: Vec<_> = r
         .device_holds()
         .iter()
@@ -140,7 +141,7 @@ fn held(r: &Runner<Data>, capability: &str) -> u64 {
     holds[0].ticket
 }
 
-fn tap(r: &mut Runner<Data>, parked: &mut Vec<(u64, u64)>, capability: &str, choice: &str) {
+fn tap(r: &mut Runner<Source>, parked: &mut Vec<(u64, u64)>, capability: &str, choice: &str) {
     let ticket = held(r, capability);
     r.answer_hold(ticket, &HoldAnswer::Choice(choice.into()))
         .unwrap();

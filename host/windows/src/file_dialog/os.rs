@@ -6,7 +6,7 @@ use exact_painted::presenter::file_dialog::{FileDialog, Outcome, StartFolder};
 use exact_runner::file_pickers::Kind;
 use std::{cell::Cell, path::PathBuf, rc::Rc};
 use windows::{
-    core::{Interface, HSTRING, PWSTR},
+    core::{Interface, HSTRING, PCWSTR, PWSTR},
     Win32::{
         Foundation::{ERROR_CANCELLED, E_INVALIDARG, HWND},
         System::Com::{
@@ -14,9 +14,9 @@ use windows::{
             COINIT_APARTMENTTHREADED,
         },
         UI::Shell::{
-            FileOpenDialog, FileSaveDialog, IFileDialog, IFileOpenDialog, IShellItem,
-            SHCreateItemFromParsingName, SHGetKnownFolderItem, FILEOPENDIALOGOPTIONS,
-            KF_FLAG_DEFAULT, SIGDN_FILESYSPATH,
+            Common::COMDLG_FILTERSPEC, FileOpenDialog, FileSaveDialog, IFileDialog,
+            IFileOpenDialog, IShellItem, SHCreateItemFromParsingName, SHGetKnownFolderItem,
+            FILEOPENDIALOGOPTIONS, KF_FLAG_DEFAULT, SIGDN_FILESYSPATH,
         },
     },
 };
@@ -173,11 +173,27 @@ fn choose(
     if owner.is_null() {
         return Outcome::Refused("no window for the file dialog".into());
     }
+    let mut unmatched = Vec::new();
+    let filters = super::filters(&request.types, mime_extension, &mut unmatched);
+    if !unmatched.is_empty() {
+        // With none of the declared types to offer, the dialog would offer every file.
+        if filters.is_empty() {
+            return Outcome::Refused(format!(
+                "Windows registers no extension for {}, the only types the app declares",
+                unmatched.join(", ")
+            ));
+        }
+        lines.push(format!(
+            "{}: types: Windows registers no extension for {}, so the dialog cannot offer it",
+            request.command,
+            unmatched.join(", ")
+        ));
+    }
     unsafe {
         if let Err(error) = CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok() {
             return Outcome::Refused(format!("COM did not start for the file dialog ({error})"));
         }
-        let result = ask(request, HWND(owner), modal, lines);
+        let result = ask(request, &filters, HWND(owner), modal, lines);
         CoUninitialize();
         match result {
             Ok(paths) => Outcome::Chosen(paths),
@@ -189,6 +205,7 @@ fn choose(
 
 fn ask(
     request: &FileDialog,
+    filters: &[super::Filter],
     owner: HWND,
     modal: &Schedule,
     lines: &mut Vec<String>,
@@ -204,6 +221,7 @@ fn ask(
             picker.multiple,
             dialog.GetOptions()?.0,
         )))?;
+        set_file_types(&dialog, picker, filters)?;
         if picker.kind == Kind::Save {
             dialog.SetFileName(&HSTRING::from(&picker.suggested_name))?;
         }
@@ -220,6 +238,77 @@ fn ask(
         let items = dialog.cast::<IFileOpenDialog>()?.GetResults()?;
         paths((0..items.GetCount()?).map(|i| items.GetItemAt(i)))
     }
+}
+
+fn set_file_types(
+    dialog: &IFileDialog,
+    picker: &exact_runner::file_pickers::Picker,
+    filters: &[super::Filter],
+) -> windows::core::Result<()> {
+    if filters.is_empty() {
+        return Ok(());
+    }
+    let text: Vec<(HSTRING, HSTRING)> = filters
+        .iter()
+        .map(|f| (HSTRING::from(&f.label), HSTRING::from(f.spec())))
+        .collect();
+    let specs: Vec<COMDLG_FILTERSPEC> = text
+        .iter()
+        .map(|(label, spec)| COMDLG_FILTERSPEC {
+            pszName: PCWSTR(label.as_ptr()),
+            pszSpec: PCWSTR(spec.as_ptr()),
+        })
+        .collect();
+    unsafe {
+        dialog.SetFileTypes(&specs)?;
+        if picker.kind == Kind::Save {
+            let (index, extension) = super::save_type(filters, &picker.suggested_name);
+            dialog.SetFileTypeIndex(index)?;
+            // With a default extension set, Windows adds the chosen type's
+            // extension to a name typed without one and follows the type
+            // the person picks.
+            // https://learn.microsoft.com/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifiledialog-setdefaultextension
+            dialog.SetDefaultExtension(&HSTRING::from(extension))?;
+        }
+    }
+    Ok(())
+}
+
+/// The extension Windows registers for a MIME type
+/// (`HKEY_CLASSES_ROOT\MIME\Database\Content Type\<type>`, value `Extension`).
+fn mime_extension(mime: &str) -> Option<String> {
+    if mime.contains('\\') {
+        return None;
+    }
+    use windows_sys::Win32::{
+        Foundation::ERROR_SUCCESS,
+        System::Registry::{RegGetValueW, HKEY_CLASSES_ROOT, RRF_RT_REG_SZ},
+    };
+    let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+    let (key, name) = (
+        wide(&format!(r"MIME\Database\Content Type\{mime}")),
+        wide("Extension"),
+    );
+    let mut buffer = [0u16; 64];
+    let mut size = std::mem::size_of_val(&buffer) as u32;
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CLASSES_ROOT,
+            key.as_ptr(),
+            name.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            buffer.as_mut_ptr().cast(),
+            &mut size,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return None;
+    }
+    let end = buffer.iter().position(|c| *c == 0)?;
+    let extension = String::from_utf16(&buffer[..end]).ok()?.to_lowercase();
+    (extension.len() > 1 && extension.starts_with('.') && !extension.contains(['*', '?', ';']))
+        .then_some(extension)
 }
 
 fn set_folder(dialog: &IFileDialog, folder: &StartFolder) -> windows::core::Result<()> {
@@ -324,5 +413,47 @@ mod tests {
             assert_eq!(result.unwrap(), chosen);
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_save_dialog_takes_the_declared_types_and_starts_on_the_suggested_names() {
+        use exact_painted::presenter::file_dialog::FileType;
+        use exact_runner::file_pickers::Picker;
+        let types = [
+            (Some("Documents"), ".pdf"),
+            (Some("Notes"), ".md"),
+            (None, ".zip"),
+        ]
+        .map(|(name, suffix)| FileType {
+            name: name.map(str::to_owned),
+            suffixes: vec![suffix.into()],
+            mimes: Vec::new(),
+        });
+        let filters = super::super::filters(&types, |_| None, &mut Vec::new());
+        for (suggested, index) in [("Today.MD", 2), ("Bundle.zip", 3), ("Untitled", 1)] {
+            let picker = Picker {
+                kind: Kind::Save,
+                id: "result".into(),
+                multiple: false,
+                suggested_name: suggested.into(),
+                start_in: None,
+            };
+            unsafe {
+                CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap();
+                {
+                    let dialog: IFileDialog =
+                        CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER).unwrap();
+                    set_file_types(&dialog, &picker, &filters).unwrap();
+                    assert_eq!(dialog.GetFileTypeIndex().unwrap(), index, "{suggested}");
+                }
+                CoUninitialize();
+            }
+        }
+    }
+
+    #[test]
+    fn a_registered_mime_type_names_its_extension() {
+        assert_eq!(mime_extension("image/png").as_deref(), Some(".png"));
+        assert_eq!(mime_extension("application/x-exact-unregistered"), None);
     }
 }

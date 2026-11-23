@@ -1,4 +1,5 @@
 //! The compiler's map names authored locations, not generated names or runtime text.
+use crate::source::{boxed, Source};
 use exact_kernel::Kernel;
 use exact_plan::Plan;
 use exact_runner::{DataError, DataSource, Runner, Value};
@@ -52,10 +53,10 @@ impl DataSource for NoData {
         }
     }
 }
-fn boot(plan: Plan) -> Runner<NoData> {
+fn boot(plan: Plan) -> Runner<Source> {
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -96,7 +97,7 @@ fn captured_source_paths_relocate_together_without_reading_newer_contents() {
     );
     assert_eq!(child["chain"][0]["line"], 5);
 }
-fn at<'a>(runner: &Runner<NoData>, map: &'a Json, id: &str) -> &'a Json {
+fn at<'a>(runner: &Runner<Source>, map: &'a Json, id: &str) -> &'a Json {
     let node = runner.kernel().find_by_test_id(id)[0];
     let view = runner.kernel().node_by_key(node).unwrap().id;
     let (site, _) = runner.site_of(view).unwrap();
@@ -341,7 +342,7 @@ fn source_snapshot_and_final_baked_bytes_determine_the_map() {
 "#;
     let (plan, map) = contract::compile_path_source_mapped(&path, source).unwrap();
     let unbaked = plan.encode();
-    let baked = contract::bake(plan, NoData).unwrap();
+    let baked = contract::bake(plan, boxed(NoData)).unwrap();
     assert_ne!(unbaked, baked.encode());
     let json: Json = serde_json::from_str(&map.json(&baked.encode())).unwrap();
     assert_eq!(json["digest"], contract::plan_digest(&baked.encode()));
@@ -403,7 +404,7 @@ fn measured_bake_refusal_names_the_imported_node_and_its_caller() {
     );
     let child = app.write("child.contract", "component Child\n  state width = 0\n  view\n    button width=width height=0\n      text \"hidden\"\n");
     let (plan, map) = contract::compile_path_mapped(&root).unwrap();
-    let error = map.bake_error(&contract::bake(plan, NoData).unwrap_err());
+    let error = map.bake_error(&contract::bake(plan, boxed(NoData)).unwrap_err());
     assert_eq!(error.id, "bake-zero-size");
     assert_eq!(error.file.as_deref(), Some(child.as_path()));
     assert_eq!(error.span.line, 4);

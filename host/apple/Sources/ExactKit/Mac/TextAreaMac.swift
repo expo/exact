@@ -153,6 +153,7 @@ package final class TextArea: NSTextView {
     }
 
     package override func doCommand(by selector: Selector) {
+        owner?.presenter?.flushKeyViewLoop()
         let types = ["deleteBackward:": "deleteContentBackward", "deleteForward:": "deleteContentForward", "deleteWordBackward:": "deleteWordBackward", "deleteWordForward:": "deleteWordForward", "deleteToBeginningOfLine:": "deleteSoftLineBackward", "deleteToEndOfLine:": "deleteSoftLineForward", "deleteToBeginningOfParagraph:": "deleteHardLineBackward", "deleteToEndOfParagraph:": "deleteHardLineForward"]
         let name = NSStringFromSelector(selector)
         crossHidden(backward: Self.backwardSteps.contains(name), forward: Self.forwardSteps.contains(name))
@@ -242,8 +243,14 @@ package final class TextArea: NSTextView {
     /// Tab and Shift-Tab move the focus, the Markdown editor's too, as the
     /// web's textarea does; an app that wants a tab or an indent prevents
     /// the `key` and calls `setRangeText` (LLP 1045 D6).
-    package override func insertTab(_ sender: Any?) { window?.selectNextKeyView(self) }
-    package override func insertBacktab(_ sender: Any?) { window?.selectPreviousKeyView(self) }
+    package override func insertTab(_ sender: Any?) {
+        owner?.presenter?.flushKeyViewLoop()
+        window?.selectNextKeyView(self)
+    }
+    package override func insertBacktab(_ sender: Any?) {
+        owner?.presenter?.flushKeyViewLoop()
+        window?.selectPreviousKeyView(self)
+    }
 
     /// Return: the app's `beforeinput` first, then the Markdown editor's
     /// list continuation, else a line break (LLP 1045 D6).
@@ -695,7 +702,16 @@ final class Field: NSTextField {
 final class FieldEditor: NSTextView {
     override func mouseDown(with event: NSEvent) { pressingField(owner, event, self) { super.mouseDown(with: event) } }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { NodeView.countsFirstMouse(event) || super.acceptsFirstMouse(for: event) }
+    override func insertTab(_ sender: Any?) {
+        owner?.presenter?.flushKeyViewLoop()
+        super.insertTab(sender)
+    }
+    override func insertBacktab(_ sender: Any?) {
+        owner?.presenter?.flushKeyViewLoop()
+        super.insertBacktab(sender)
+    }
     override func doCommand(by selector: Selector) {
+        owner?.presenter?.flushKeyViewLoop()
         let types = ["deleteBackward:": "deleteContentBackward", "deleteForward:": "deleteContentForward", "deleteWordBackward:": "deleteWordBackward", "deleteWordForward:": "deleteWordForward", "deleteToBeginningOfLine:": "deleteSoftLineBackward", "deleteToEndOfLine:": "deleteSoftLineForward", "deleteToBeginningOfParagraph:": "deleteHardLineBackward", "deleteToEndOfParagraph:": "deleteHardLineForward"]
         if let type = types[NSStringFromSelector(selector)], let fields = owner?.presenter?.fieldSelections {
             fields.withIntent(owner, type) { super.doCommand(by: selector) }

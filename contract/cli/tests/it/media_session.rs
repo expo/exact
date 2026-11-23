@@ -3,16 +3,10 @@
 //! optional `MediaSessionActionDetails`, the offsets are checked, and the two
 //! test steps parse and reach the driver.
 
+use crate::source::{boxed, NoData};
 use exact_kernel::{Kernel, PropId, PropValue};
 use exact_plan::EventKind;
-use exact_runner::{DataError, DataSource, Runner, Value};
-
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::Runner;
 
 /// A player component: `decls` after the state, `attrs` on its `tag`.
 fn app(decls: &str, tag: &str, attrs: &str) -> String {
@@ -22,7 +16,7 @@ fn app(decls: &str, tag: &str, attrs: &str) -> String {
 fn props(src: &str) -> Vec<Option<String>> {
     let r = Runner::boot(
         contract::compile(src).unwrap_or_else(|e| panic!("{e}\n{src}")),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
