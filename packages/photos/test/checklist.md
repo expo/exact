@@ -81,6 +81,28 @@ off: on return the strip is gone and the denied line shows.
    updated list. A token kept for months may answer `expired`, which is
    PhotoKit's to decide.
 
+## The photo index, by a person (LLP 1133.019.000 piece 6)
+
+`apps/photos-fixture`'s Import keeps the app's own index of the library in
+step with it, as D1 says an app does (`data/src/index.rs`). `apple.mjs
+importer --sim <udid>` drives it against PhotoKit on a simulator and
+`android.mjs --emulator` (drive 9) against MediaStore: the first import of
+more than 500, a walk stopped and resumed across a relaunch, an add during a
+walk, a replacement stopped mid-list, and a denial. Under Import, "in step"
+says the index holds the ids of the same view listed whole. What they cannot
+do:
+
+1. A screenshot, iPhone: `bun host/apple/build.mjs --device
+   photos-fixture-apple --run`, allow access, then tap Import, Screenshots
+   and Sync: the index and the list agree ("in step"). Take a screenshot with
+   the side and volume-up buttons and return: the index's count is one more,
+   by a walk, and still in step.
+2. A screenshot, Android phone: the same in the fixture's APK. The count
+   grows by a replacement, which every return under a grant makes.
+3. Limited access, iPhone: with "Limit Access…" chosen, Import and Sync
+   replace the index from the selection; add a photo with Manage and return:
+   in step.
+
 ## Android, in the fixture app (stage 3)
 
 `apps/photos-fixture` is the library's consumer on Android (the photo editor

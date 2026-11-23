@@ -23,18 +23,31 @@
 // driven: `simctl addmedia` does not return while the driven app is
 // running, so the change observer is shown by the app's own add.
 //
+// `importer` runs instead the fixture app's photo index against PhotoKit on a simulator (`importer.mjs`).
+//
 // usage: bun packages/photos/test/apple.mjs [ios] [macos] [--sim <udid>] [--fill [<n>]]
+//        bun packages/photos/test/apple.mjs importer --sim <udid>
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { loadedDylibs } from '../../../host/apple/link.mjs';
 import { checker, makeFixture, pkg, root, run, texts, until } from './fixture.mjs';
+import { iosImporter } from './importer.mjs';
 import { photoKitChanges } from './photokit-changes.mjs';
 
 const argv = process.argv.slice(2), sim = argv.includes('--sim') ? argv[argv.indexOf('--sim') + 1] : process.env.EXACT_SIM;
 const hosts = argv.filter((a, i) => ['macos', 'ios'].includes(a) && argv[i - 1] !== '--sim');
 const fill = argv.includes('--fill') ? Number(/^\d+$/.test(argv[argv.indexOf('--fill') + 1] ?? '') ? argv[argv.indexOf('--fill') + 1] : 6) : 0;
+if (argv.includes('importer')) {
+  if (!sim) throw new Error('importer: name a simulator you booted (--sim <udid>); the drive changes its library and its privacy settings');
+  process.env.EXACT_SIM = sim;
+  const { open } = await import(resolve(root, 'scripts/agent.mjs'));
+  const { check, failed } = checker();
+  await iosImporter({ sim, open, check });
+  console.log(failed() ? `${failed()} failed` : 'all passed');
+  process.exit(failed() ? 1 : 0);
+}
 const { app, id, dir } = makeFixture(), name = app.split('/').pop();
 Object.assign(process.env, { EXACT_APP_DIR: app, EXACT: root, HERMES_LEAN_SYS_OFFLINE: '1', EXACT_IDENTITY: process.env.EXACT_IDENTITY ?? '-' });
 if (sim) process.env.EXACT_SIM = sim;

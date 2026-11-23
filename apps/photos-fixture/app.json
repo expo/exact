@@ -11,12 +11,20 @@
   },
   "deploy": {
     "store": {
-      "android": "0"
+      "android": "0",
+      "ios": "0",
+      "macos": "0"
     }
   },
   "host": {
     "android": {
       "minimumOS": "10"
+    },
+    "ios": {
+      "minimumOS": "17.0",
+      "deviceFamily": [
+        "iphone"
+      ]
     }
   },
   "rust": { "data": { "crate": "photos-fixture-data", "type": "photos_fixture_data::Fixture" } }
