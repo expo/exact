@@ -66,6 +66,7 @@ mod field_tests;
 mod file_drop;
 #[cfg(test)]
 pub(crate) mod frame_target_tests;
+mod frames;
 mod group;
 mod hatch;
 mod history;

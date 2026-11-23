@@ -119,6 +119,26 @@ impl<D: DataSource> Presenter<D> {
         true
     }
 
+    /// A record of the iframe for this session and allocation (LLP 1020.002 D2).
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn reader_frame_event(
+        &mut self,
+        id: ViewId,
+        key: exact_kernel::NodeKey,
+        session: u64,
+        event: &str,
+        record: &str,
+    ) -> bool {
+        if session != self.brush.native_session
+            || !(self.host.kernel().node(id))
+                .is_some_and(|node| node.node_type == NodeType::WebView && node.key == key)
+        {
+            return false;
+        }
+        self.frame_event(id, event, record);
+        true
+    }
+
     /// A restart with carried state (a dev reload, a delivered update)
     /// replaces the tree. Focus follows the focused node's place in the
     /// runner's tree — its index among its siblings at each level, and its
