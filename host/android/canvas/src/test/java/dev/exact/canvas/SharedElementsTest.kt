@@ -22,9 +22,9 @@ class SharedElementsTest {
     private fun key(k: Long) = intArrayOf(k.toInt(), (k ushr 32).toInt())
     private fun rect(r: RectF) = intArrayOf(f(r.left), f(r.top), f(r.width()), f(r.height()))
     private fun state(alive: List<Long>, pairs: List<Triple<Long, Long, Float>> = emptyList(), reduced: Boolean = false,
-        ancestorOpacity: Float = 1f): IntBuffer {
+        ancestorOpacity: Float = 1f, dissolve: Boolean = false): IntBuffer {
         val body = arrayListOf(if (reduced) 1 else 0, pairs.size)
-        for ((a, b, p) in pairs) body.addAll((key(a) + key(b) + f(p) + f(ancestorOpacity) + f(1f) + f(0f) + f(0f)).toList())
+        for ((a, b, p) in pairs) body.addAll((key(a) + key(b) + f(p) + f(ancestorOpacity) + f(1f) + f(0f) + f(0f) + (if (dissolve) 1 else 0)).toList())
         body.add(alive.size)
         for (k in alive) body.addAll(key(k).toList())
         return IntBuffer.wrap(intArrayOf(50, body.size) + body.toIntArray())
@@ -378,6 +378,24 @@ class SharedElementsTest {
         val b = SharedElements.rasterRect(loaded)
         assertEquals(a.left, b.left + 0.25f * b.width(), 0.01f)
         assertEquals(a.right, b.left + 0.75f * b.width(), 0.01f)
+    }
+
+    @Test fun aRouteFlightDissolvesAndScalesByHeightAsALabelsFontWould() {
+        // A label's box spans its row at the destination: 100 wide, 40 high, a 20 point glyph at its left.
+        val from = RectF(0f, 0f, 80f, 20f)
+        val to = RectF(0f, 40f, 100f, 80f)
+        val clear = intArrayOf(2, Color.TRANSPARENT) + rect(from) + IntArray(8)
+        val glyph = intArrayOf(1, f(1f), 0, 0, f(1f), f(to.left), f(to.top), 2, Color.RED) + rect(RectF(0f, 0f, 20f, 40f)) + IntArray(8)
+        val t = Fixture()
+        t.shared.begin(state(listOf(1))); t.define(definition(1, from, content = clear)); t.shared.finish()
+        t.shared.begin(state(listOf(2), listOf(Triple(1, 2, 0.5f)), dissolve = true))
+        t.define(definition(2, to, content = glyph)); t.shared.finish()
+        val pixels = t.pixels()
+        // Halfway the box is 90 by 30 at 0, 20: the glyph is 15 wide, not 18 as the width would make it,
+        // and at full strength, as the source is at its own.
+        assertEquals(Color.RED, pixels.getPixel(12, 30))
+        assertEquals(Color.WHITE, pixels.getPixel(16, 30))
+        pixels.recycle()
     }
 
     @Test fun aLiveSubtreeKeepsItsRotationInFlight() {

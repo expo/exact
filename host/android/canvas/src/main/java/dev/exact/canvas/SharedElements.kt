@@ -48,7 +48,9 @@ internal class SharedElements(
         var layers = IntArray(0)
         var parents = LongArray(0)
     }
-    private class Flight(val source: Long, val from: Pose, var progress: Float, var ancestorOpacity: Float) {
+    /** A [route] change's flight dissolves from the source's own drawing, [content] in [box] at [contentBox]. */
+    private class Flight(val source: Long, val from: Pose, var progress: Float, var ancestorOpacity: Float,
+        val route: Boolean, val content: RenderNode?, val box: RectF?, val contentBox: RectF?) {
         var shown: Pose = from
         /** Takes a route crossing's pose off the destination: rest = posed × [0] + ([1], [2]). */
         var unpose = floatArrayOf(1f, 0f, 0f)
@@ -72,17 +74,22 @@ internal class SharedElements(
         reduced = b.get(2) != 0
         val next = LinkedHashMap<Long, Flight>()
         repeat(b.get(3)) { n ->
-            val at = 4 + n * 9
+            val at = 4 + n * 10
             val from = key(b, at); val to = key(b, at + 2); val progress = f(b, at + 4)
             val opacity = f(b, at + 5)
-            val flight = flights[to] ?: capture(from)?.let { Flight(from, it, progress, opacity) }
+            val flight = flights[to] ?: capture(from)?.let {
+                val route = b.get(at + 9) != 0
+                val source = elements[from]?.takeIf { route }
+                Flight(from, it, progress, opacity, route, source?.content, source?.box?.let(::RectF),
+                    source?.contentBox?.let(::RectF))
+            }
             if (flight != null) {
                 flight.progress = progress; flight.ancestorOpacity = opacity; next[to] = flight
                 flight.unpose = floatArrayOf(f(b, at + 6), f(b, at + 7), f(b, at + 8))
             }
         }
         flights.clear(); flights.putAll(next)
-        val live = 4 + b.get(3) * 9
+        val live = 4 + b.get(3) * 10
         alive.clear()
         repeat(b.get(live)) { order ->
             val key = key(b, live + 1 + order * 2)
@@ -152,8 +159,12 @@ internal class SharedElements(
 
     fun finish() {
         val dead = elements.keys.filter { it !in alive }
-        for (key in dead) elements.remove(key)?.let { it.slot.discardDisplayList(); it.content.discardDisplayList() }
         flights.keys.retainAll(alive)
+        val dissolving = flights.values.mapNotNull { it.content }.toSet()
+        for (key in dead) elements.remove(key)?.let {
+            it.slot.discardDisplayList()
+            if (it.content !in dissolving) it.content.discardDisplayList()
+        }
         rows.keys.retainAll(elements.values.map { it.row }.toSet())
     }
 
@@ -231,12 +242,41 @@ internal class SharedElements(
                 // The content already includes its own and its descendants' opacity.
                 if (opacity < 1f) canvas.saveLayerAlpha(pose.box, (opacity * 255f + 0.5f).toInt())
                 canvas.translate(pose.box.left, pose.box.top)
-                val scale = pose.box.width() / element.box.width().coerceAtLeast(0.001f)
-                canvas.scale(scale, scale)
-                canvas.drawRenderNode(element.content)
+                // A route change's source dissolves into the destination, as Compose's
+                // sharedBounds fades (LLP 1013.004 D3 step 4), so neither end jumps. It
+                // dissolves early in the flight, the two laid out differently overlapping
+                // briefly, and each holds full strength half that time, so content alike
+                // at both ends does not dim.
+                val t = ((flight.progress - 0.2f) / 0.4f).coerceIn(0f, 1f)
+                flight.content?.takeIf { t < 1f }?.let { content ->
+                    canvas.saveLayerAlpha(null, (min(1f, 2f * (1f - t)) * 255f + 0.5f).toInt())
+                    drawScaled(canvas, content, flight.box!!, flight.contentBox!!, pose, true)
+                    canvas.restore()
+                    canvas.saveLayerAlpha(null, (min(1f, 2f * t) * 255f + 0.5f).toInt())
+                }
+                drawScaled(canvas, element.content, element.box, element.contentBox, pose, flight.route)
             }
             canvas.restoreToCount(save)
         }
+    }
+
+    /** A route flight scales its content box by height, as a font's size goes: a label's box is
+     * often as wide as its row at one end and its text at the other, and padded differently. The
+     * flight's box clips the rest. */
+    private fun drawScaled(canvas: Canvas, content: RenderNode, box: RectF, contentBox: RectF, pose: Pose,
+        byHeight: Boolean) {
+        val save = canvas.save()
+        if (byHeight) {
+            val scale = pose.contentBox.height() / contentBox.height().coerceAtLeast(0.001f)
+            canvas.translate(pose.contentBox.left - pose.box.left, pose.contentBox.top - pose.box.top)
+            canvas.scale(scale, scale)
+            canvas.translate(box.left - contentBox.left, box.top - contentBox.top)
+        } else {
+            val scale = pose.box.width() / box.width().coerceAtLeast(0.001f)
+            canvas.scale(scale, scale)
+        }
+        canvas.drawRenderNode(content)
+        canvas.restoreToCount(save)
     }
 
     internal fun shown(key: Long): Pose? = flights[key]?.shown

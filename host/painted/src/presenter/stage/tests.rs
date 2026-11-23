@@ -843,6 +843,10 @@ fn a_push_and_a_pop_fly_the_names_both_routes_hold_on_composes_spring() {
         (thumb, hero, 0.0),
         "the authored none is not asked"
     );
+    assert!(
+        p.host().flight_frames()[0].dissolve,
+        "a route's flight dissolves"
+    );
     after(&mut p, 100.0);
     // A critically damped spring of stiffness 400: 1 - (1 + 20t)e^(-20t).
     let progress = flight(&p).2;

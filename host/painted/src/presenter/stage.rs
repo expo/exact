@@ -839,7 +839,7 @@ impl<D: DataSource> Presenter<D> {
                 None => bounds_spring(),
             };
             for (from, to) in pairs {
-                self.host.fly(from, to, &curve);
+                self.host.fly(from, to, &curve, true);
             }
         }
     }
@@ -1358,9 +1358,11 @@ impl<D: DataSource> Presenter<D> {
 
     /// Take the crossing's pose off each flight's destination, so the
     /// reader aims at its rest, as Compose aims at the lookahead bounds
-    /// (LLP 1013.004 D4).
+    /// (LLP 1013.004 D4). A container's elements keep its pose: on its
+    /// clock, they move with the box as one transform.
     pub(crate) fn unpose_flights(&mut self) {
-        let Some(shift) = self.stage.shift.as_ref().filter(|s| !s.through) else {
+        let crossing = |s: &&Shift| !s.through && s.container.is_none();
+        let Some(shift) = self.stage.shift.as_ref().filter(crossing) else {
             return;
         };
         let poses = self.shift_poses(self.host.now(), shift.sheet);

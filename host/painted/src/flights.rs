@@ -20,6 +20,10 @@ pub(crate) struct FlightFrame {
     /// rest = posed × `[0]` + (`[1]`, `[2]`), so the flight aims at its rest
     /// (LLP 1013.004 D4). Set by the stage; identity elsewhere.
     pub unpose: [f32; 3],
+    /// A route change's: the reader dissolves the source's drawing into the
+    /// destination's (LLP 1013.004 D3 step 4), where an in-page flight
+    /// carries the live destination alone (LLP 1013.000 D4).
+    pub dissolve: bool,
 }
 
 struct Flight {
@@ -60,7 +64,7 @@ impl<D: DataSource> Host<D> {
         });
         self.flights.landed |= self.flights.running.len() != before;
         for h in &receipt.handoffs {
-            self.fly(h.from, h.to, &h.transition);
+            self.fly(h.from, h.to, &h.transition, false);
         }
     }
 
@@ -68,7 +72,7 @@ impl<D: DataSource> Host<D> {
     /// `to` from `from` (one a predictive Back seeks) runs on from where it
     /// is; one from another source (an in-commit handoff of a name a route
     /// change pairs, LLP 1013.004 D1) yields, so the name flies once.
-    pub(crate) fn fly(&mut self, from: NodeKey, to: NodeKey, transition: &Transition) {
+    pub(crate) fn fly(&mut self, from: NodeKey, to: NodeKey, transition: &Transition, route: bool) {
         if !self.flights.enabled
             || !self.flights.recorded.contains(&motion_node(from))
             || self.runner.kernel().node_by_key(to).is_none()
@@ -95,6 +99,7 @@ impl<D: DataSource> Host<D> {
                         progress: 0.0,
                         ancestor_opacity: 1.0,
                         unpose: [1.0, 0.0, 0.0],
+                        dissolve: route,
                     },
                     lands_after,
                     seeking: false,
@@ -129,6 +134,7 @@ impl<D: DataSource> Host<D> {
                         progress,
                         ancestor_opacity: 1.0,
                         unpose: [1.0, 0.0, 0.0],
+                        dissolve: true,
                     },
                     lands_after: None,
                     seeking: true,
@@ -879,13 +885,17 @@ component App
         let detail = p.host().kernel().find_by_test_id("detail")[0];
         let handed = p.host().flights.running[0].frame.from;
         assert_ne!(handed, other, "the handoff flies first");
+        assert!(
+            !p.host().flight_frames()[0].dissolve,
+            "an in-page flight carries its destination"
+        );
         let spring = exact_motion::Transition {
             property: exact_motion::TransitionProperty::All,
             duration: 0.0,
             delay: 0.0,
             timing: exact_motion::TimingFunction::Spring(Default::default()),
         };
-        p.host_mut().fly(other, detail, &spring);
+        p.host_mut().fly(other, detail, &spring, true);
         let frames = p.host().flight_frames();
         assert_eq!((frames.len(), frames[0].from), (1, other));
     }
