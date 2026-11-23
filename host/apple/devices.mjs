@@ -371,14 +371,29 @@ export function simulators(set) {
 
 /** The simulator to use — `pick` (a udid or a name; EXACT_SIM by default), else the one booted iPhone, else the iPhone Pro on the newest iOS — booted and waited for. When several are booted, the one `app` (a bundle id) is installed on, and of several so, the one the app in `dir` last used (its `.exact/simulator`, written when a simulator is named or chosen so), said on stderr; refused when that is none or several, naming how to choose: `hint`, the caller's own way. With `tv`, the same choice among Apple TVs on tvOS. An iPhone is one by its device type, not its name: a simulator renamed `work-phone` is still one. */
 const saidSimulator = new Set(); // a verify opens a dozen sessions: the choice is said once
-export function simulator(pick = process.env.EXACT_SIM, options = {}) { return bootSimulator(chooseSimulator(pick, options)); }
+export function simulator(pick = process.env.EXACT_SIM, options = {}) {
+  const dev = chooseSimulator(pick, options), booted = bootSimulator(dev);
+  if (options.cached) dev.state = 'Booted';
+  return { ...booted };
+}
+const driveSimulators = new Map();
+/** A failed launch may mean the device shut down. The next launch must ask simctl again. */
+export function forgetSimulator(udid) {
+  for (const [key, dev] of driveSimulators) if (dev.udid === udid) driveSimulators.delete(key);
+  chosenFrom = null;
+  for (const record of keyboardNotes.keys()) if (basename(record) === `${udid}.json`) keyboardNotes.delete(record);
+  saidKeyboard.delete(udid);
+}
 /** `simulators()` as it was a moment ago in this process: a drive chooses its simulator before it takes the store's
  *  lock and again when it launches, a fraction of a second apart. A boot here forgets it; a shutdown by another process
  *  in between fails the launch, where a fresh list would have booted it. */
 let chosenFrom = null;
 const recentSimulators = () => (chosenFrom && Date.now() - chosenFrom.at < 5000 ? chosenFrom : chosenFrom = { at: Date.now(), all: simulators() }).all;
-/** `simulator`'s choice, booting nothing: what a drive locks before it launches (agent.mjs `resolveDevice`). */
-export function chooseSimulator(pick = process.env.EXACT_SIM, { tv = false, hint = 'EXACT_SIM=<udid|name>', app, dir } = {}) {
+/** `simulator`'s choice, booting nothing: what a drive locks before it launches (agent.mjs `resolveDevice`).
+ * `cached` keeps that choice for the runner's later launches, including a test's reloads. */
+export function chooseSimulator(pick = process.env.EXACT_SIM, { tv = false, hint = 'EXACT_SIM=<udid|name>', app, dir, cached = false } = {}) {
+  const key = pick => JSON.stringify([pick, tv, app, dir]);
+  if (cached && driveSimulators.has(key(pick))) return driveSimulators.get(key(pick));
   const all = recentSimulators();
   const version = (d) => Number(/(?:iOS|tvOS)-(\d+)-(\d+)/.exec(d.runtime)?.slice(1).join('.') ?? 0);
   const kind = (d) => d.type || d.name.replaceAll(' ', '-');
@@ -406,6 +421,7 @@ export function chooseSimulator(pick = process.env.EXACT_SIM, { tv = false, hint
   dev ??= booted[0] ?? iphones.find((d) => /^iPhone-\d+-Pro$/.test(kind(d))) ?? iphones[0];
   if (!dev) throw new Error(`no ${tv ? 'Apple TV' : 'iPhone'} simulator on ${tv ? 'tvOS' : 'iOS'}; add one in Xcode, or name any simulator by udid or name with EXACT_SIM (or --sim)`);
   if (used && chosen && dev.udid !== last) try { mkdirSync(dirname(used), { recursive: true }); writeFileSync(used, `${dev.udid}\n`); } catch { /* remembered next time, if it can be */ }
+  if (cached) { driveSimulators.set(key(pick), dev); driveSimulators.set(key(dev.udid), dev); }
   return dev;
 }
 /** `dev` booted and waited for; `bootedHere` when this call booted it, not when another process had just done so. */
@@ -501,6 +517,7 @@ export function keepInstalledRelease(udid, id, bundle, executable, { records = r
   return { install: true, note: `the simulator had ${id}'s ${what} installed; this drive installed its development build over it (one bundle id). Put it back with: xcrun simctl install ${udid} ${shellQuote(copy)}` };
 }
 
+const keyboardNotes = new Map();
 /** A simulator's software keyboard for a drive: shown for a focused field, as a person's iPhone shows it. Once a Device
  *  Hub has attached the Mac's keyboard, the device keeps `com.apple.keyboard.preferences` `AutomaticMinimizationEnabled
  *  = 1` and minimizes its software keyboard behind it (LLP 1078, "The pushed route's keyboard, found"). Read and
@@ -540,8 +557,10 @@ const saidKeyboard = new Set(); // the hidden keyboard's note, once a process: a
 export async function withSoftwareKeyboard(dev, open, { records = resolve(homedir(), '.cache/exact/simulator-keyboard') } = {}) {
   // On a simulator another booted the setting is only read, for the note: beside the launch, not before it (~0.2 s).
   if (!dev.bootedHere) {
-    keyboardLeft(dev.udid, resolve(records, `${dev.udid}.json`), (verb) => read('xcrun', keyboardArgs(dev.udid, verb), { timeout: 20000 }));
-    const said = saidKeyboard.has(dev.udid) ? null : new Promise((done) => {
+    const record = resolve(records, `${dev.udid}.json`);
+    if (existsSync(record)) keyboardNotes.delete(record);
+    keyboardLeft(dev.udid, record, (verb) => read('xcrun', keyboardArgs(dev.udid, verb), { timeout: 20000 }));
+    const said = keyboardNotes.get(record) ?? new Promise((done) => {
       useXcode();
       let out = '';
       const child = spawn('xcrun', keyboardArgs(dev.udid, 'read'), { stdio: ['ignore', 'pipe', 'ignore'] });
@@ -554,6 +573,7 @@ export async function withSoftwareKeyboard(dev, open, { records = resolve(homedi
         done();
       });
     });
+    keyboardNotes.set(record, said);
     let carrier;
     try { carrier = await open(); } finally { if (!carrier) await said; }
     const close = carrier.close.bind(carrier);

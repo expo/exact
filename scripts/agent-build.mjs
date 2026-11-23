@@ -47,17 +47,20 @@ const shown = file => relative(process.cwd(), file).startsWith('..') ? file : re
  * record: `missing`, or the inputs `changed` since its receipt ([] when fresh,
  * or when a macOS binary has no receipt), and the receipt's `backendOrigin`.
  * `sample` is the sample host's.
- * `checked` is the digest of a receipt whose inputs this drive's own check
- * (`buildFirst`, run first by an app's exact.mjs) has just hashed: the same
- * receipt's are not hashed twice (LLP 1012.001.000 D1: once a drive). `launch` is the environment the drive starts
- * the app with (`pendingBuildInputs`). */
-export function nativeBuild(host, app, { sample = false, checked = null, launch } = {}) {
+ * `checked` keeps the receipt and plan selected by `buildFirst` for this run. Source edits
+ * during the run belong to the next run (LLP 1012.001.000 D1: once a drive).
+ * `hashed` skips only binary input hashes already compared by a caller.
+ * `launch` is the app's launch environment (`pendingBuildInputs`). */
+export function nativeBuild(host, app, { sample = false, checked = null, hashed = null, launch } = {}) {
   const ios = host === 'ios';
   const built = ios ? appleArtifacts(app, { destination: 'ios-simulator', host: sample }).bundle : appleRunBinary(app, sample);
   if (!existsSync(built)) return { built, missing: true, changed: [] };
   const receipt = receiptPath(host, app, { sample });
   const backendOrigin = receipt ? JSON.parse(readFileSync(receipt, 'utf8')).build?.backendOrigin : null;
-  const changed = receiptChanges(receipt, app, { hashed: !!checked && !!receipt && checked === digestOf(receipt), launch });
+  let selected = null;
+  try { selected = checked ? JSON.parse(checked) : null; } catch { /* a malformed check requires a full check */ }
+  const same = !!receipt && selected?.receipt === digestOf(receipt);
+  const changed = same ? [] : receiptChanges(receipt, app, { hashed: !!hashed && !!receipt && hashed === digestOf(receipt), launch });
   if (!ios && !sample && receipt) {
     const bundled = resolve(appleArtifacts(app).bundle, 'Contents/Resources/receipt.json');
     try {
@@ -67,7 +70,7 @@ export function nativeBuild(host, app, { sample = false, checked = null, launch 
       if (actual.build?.trust !== 'development' || JSON.stringify(identity(selected)) !== JSON.stringify(identity(actual))) changed.push(bundled);
     } catch { changed.push(bundled); }
   }
-  return { built, receipt, changed, backendOrigin };
+  return { built, receipt, changed, backendOrigin, ...(same ? { checked: true, plan: selected.plan } : {}) };
 }
 
 /** Whether the macOS build a drive of `app` launches signs the App Sandbox (`mac --sandbox`, LLP 1030.005 D4), as
@@ -257,7 +260,9 @@ export const overrideDir = (host, app) => resolve(appleArtifacts(app, host === '
  * when the build is fresh, missing, or stale in anything but its plan's
  * sources, or the bake kept is for another build (a real build since retires
  * it) or for sources that have changed since it was made. */
-export function planOverride(host, app, state, graph = graphOf(app)) {
+export function planOverride(host, app, state, graph) {
+  if (state.checked && !state.changed.length) return state.plan ? { plan: state.plan, dir: dirname(state.plan) } : null;
+  graph ??= graphOf(app);
   if (state.missing || !state.receipt || !state.changed.length || !state.changed.every(path => planSource(path, app, graph))) return null;
   const dir = overrideDir(host, app);
   let record; try { record = JSON.parse(readFileSync(resolve(dir, 'override.json'), 'utf8')); } catch { return null; }
@@ -417,19 +422,23 @@ export async function buildFirst(host, app, { say = line => console.error(line),
   await reportPrebuild(app, host === 'ios' ? ['--ios'] : [], say);
   const state = nativeBuild(host, app);
   if (!state.missing) refuseBackendOrigin(state, app);
-  // What the drive after this need not hash again: its receipt, when nothing is rebuilt (`nativeBuild`'s `checked`).
-  const hashed = () => { if (process.env.EXACT_BUILD_CHECK_OUT && state.receipt) writeFileSync(process.env.EXACT_BUILD_CHECK_OUT, digestOf(state.receipt)); return 0; };
+  // Every launch in this run uses the checked build and its selected plan.
+  const checked = (plan = null, receipt = state.receipt) => {
+    if (process.env.EXACT_BUILD_CHECK_OUT && receipt) writeFileSync(process.env.EXACT_BUILD_CHECK_OUT, JSON.stringify({ receipt: digestOf(receipt), plan }));
+    return 0;
+  };
   let reason = buildReason(state, app);
-  if (!reason) return hashed();
+  if (!reason) return checked();
   const graph = graphOf(app);
   if (!state.missing && state.changed.every(path => planSource(path, app, graph))) {
-    if (planOverride(host, app, state, graph)) return hashed();
+    const override = planOverride(host, app, state, graph);
+    if (override) return checked(override.plan);
     const log = resolve(app.dir, '.exact', `${host}-plan.log`), made = await makeOverride(host, app, state, { bake, log }), what = named(app, state.changed);
     if (made.made) {
       // The euxy port timed four variants with `simctl launch`, each the installed plan.
       say(`${label(host)}: ${what} changed; running the new plan on the existing build (no native rebuild). Only the agent's drives run it: a launch outside them (\`simctl launch\`, the home screen) runs the installed plan, so \`bun exact.mjs ${host === 'ios' ? 'ios' : 'mac'}\` before timing one`);
       for (const line of warningLines(app.dir, host, compilerWarnings(made.output))) say(line);
-      return hashed();
+      return checked(resolve(overrideDir(host, app), 'app.plan'));
     }
     if (made.failed) {
       say(`${made.failed}\nthe ${label(host)} plan did not bake (${what} changed), so nothing was driven; its whole log: ${shown(log)}`);
@@ -446,7 +455,7 @@ export async function buildFirst(host, app, { say = line => console.error(line),
   if (code) say(failureSummary(output, { host, code, log: shown(log) }));
   // The compiler's warnings, which Cargo said for the bake's build script (LLP 1116.004 D7): the new ones in full.
   else for (const line of warningLines(app.dir, host, compilerWarnings(output))) say(line);
-  return code;
+  return code || checked(null, receiptPath(host, app));
 }
 
 /** What a Windows drive of `app` launches, `dist-windows/<name>.exe`, and its changes since the build that packaged it

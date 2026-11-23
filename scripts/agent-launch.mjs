@@ -220,7 +220,7 @@ export function netOptions(environment = process.env) {
 export function resolveDevice(host, flags, appId) {
   if ((host === 'ios' || host === 'host-ios') && flags.device) { const ph = phone(flags.phone); flags.phone = ph.udid; return `phone ${ph.udid}`; }
   if (host === 'ios' || host === 'host-ios') {
-    const sim = chooseSimulator(undefined, { app: host === 'host-ios' ? `${appId}.host` : appId, dir: resolveApp(flags.app).dir, hint: '--sim <udid|name> (or EXACT_SIM)' });
+    const sim = chooseSimulator(undefined, { app: host === 'host-ios' ? `${appId}.host` : appId, dir: resolveApp(flags.app).dir, cached: true, hint: '--sim <udid|name> (or EXACT_SIM)' });
     process.env.EXACT_SIM = sim.udid;
     return `simulator ${sim.udid}`;
   }

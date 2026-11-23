@@ -655,7 +655,7 @@ export async function scrollKey(app, { udid, server = null } = {}) {
   const [{ nativeBuild, planOverride, planSource }, { appleArtifacts }] = await Promise.all([import('./agent-build.mjs'), import('../host/apple/build.mjs')]);
   const receipt = resolve(appleArtifacts(app, { destination: 'ios-simulator' }).bundle, 'receipt.json'), built = fileDigest(receipt);
   if (!built || !udid) return null;
-  const state = nativeBuild('ios', app, { checked: built });
+  const state = nativeBuild('ios', app, { hashed: built });
   if (state.missing || state.changed.some((path) => !planSource(path, app))) return null;
   const override = state.changed.length ? planOverride('ios', app, state) : null;
   if (state.changed.length && !override) return null;

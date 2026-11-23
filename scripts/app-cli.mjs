@@ -631,8 +631,8 @@ if (verb === 'contract') {
     if (refused != null) return log(refused);
     const prepared = await prepare();
     if (prepared) return log(prepared);
-    // An `agent` drive's check hashes the build's inputs, and the driver need not again (LLP 1012.001.000 D1: once a drive).
-    const checked = verb === 'agent' && drivesNative ? resolve(tmpdir(), `exact-build-check-${process.pid}`) : null;
+    // A native test or agent run checks once, including its reloads (LLP 1012.001.000 D1).
+    const checked = drivesNative ? resolve(tmpdir(), `exact-build-check-${process.pid}`) : null;
     if (checked) process.env.EXACT_BUILD_CHECK_OUT = checked;
     // A web build says every compiler warning each time; the drive says the new ones and a count (`warningLines`).
     const built = drivesWeb ? await webBuildQuiet(spawned, [resolve(exact2, verbs['web-build'][0]), ...verbs['web-build'].slice(1)], dir)
