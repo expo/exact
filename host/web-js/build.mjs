@@ -697,10 +697,9 @@ writeFileSync(resolve(gen, 'main.js'), [
   // animation.
   ...(production ? [] : ["if (fonts) clock.agent = agentMode();"]),
   // A rendered page's sheet holds only what its document can match (LLP 1048.007 D4): the plan's sheet (style.css,
-  // below) takes its place before the first render. If the load fails, the page's sheet stays in use. Switching
-  // the sheets in one task keeps Chrome from drawing fallback text when both declare the same optional faces.
-  // High fetch priority keeps Chrome from delaying the nonmatching sheet. Updating the loaded sheet's media list
-  // avoids a second request in WebKit when the response has Cache-Control: no-store.
+  // below) replaces it before the first render, and a failed load leaves it. One task swaps them, so Chrome never
+  // draws fallback text for optional faces both declare. High priority keeps the nonmatching sheet from loading
+  // last; setting the loaded sheet's media list, not the link's, keeps WebKit from fetching a no-store sheet again.
   "const page = typeof document === 'object' && document.querySelector('style[data-exact-page]');",
   "const sheet = page && new Promise(r => { const l = Object.assign(document.createElement('link'), { rel: 'stylesheet', media: 'not all', fetchPriority: 'high', href: './__EXACT_SHEET__' }); l.onload = () => { l.sheet.media.mediaText = 'all'; page.remove(); r(); }; l.onerror = r; page.before(l); });",
   // A waiting page's answers past 1 KB are named, not held (LLP 1048.007 D10): the capture script fetched them as it
