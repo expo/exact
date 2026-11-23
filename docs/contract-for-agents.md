@@ -7756,10 +7756,10 @@ the platform has no role for is the one place for a literal.
 already (the root font size: Dynamic Type's body on iOS, 13 on the Mac, the
 browser's 16). A `text role="heading"` with no `font-size` or `font-weight` of
 its own is the platform's text style for its `aria-level` (LLP 1115 D3): 1
-`title1`, 2 (the default) `title2`, 3 `title3`, 4 and on `headline`, sized for
-the reader's Dynamic Type by Apple's own ramp (iOS at the default size:
-28/22/20/17 pt; the Mac: 22/17/15/13; the web reads the ramp at its
-16 px root: 27/21/19/16, in `rem`). iOS, macOS and Material keep each style's
+`title1`, 2 (the default) `title2`, 3 `title3`, 4 and on `headline`. Apple's ramp
+gives 28/22/20/17 pt at the iOS default, 22/17/15/13 pt on the Mac and
+27/21/19/16 px at a 16 px web root. Android's Material look uses 28/24/22/16 sp
+at a font scale of 1 (LLP 1115.001 D4). iOS, macOS and Material keep each style's
 weight and leading. The web, neutral and terminal looks use bold for levels 1
 and 2, semibold for 3. Omit heading sizes and weights unless customizing them.
 An authored `font`, `font-size` or `font-weight` wins; an inherited one does not.

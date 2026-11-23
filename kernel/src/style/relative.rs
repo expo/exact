@@ -187,11 +187,10 @@ pub fn text_style_leading(id: u8, column: crate::style::metrics::Column) -> crat
         .map_or(crate::LineHeight::Normal, crate::LineHeight::Number)
 }
 
-/// The size of text style `id` where the root font size is `root`: the
-/// schema's ramp read at `root` (LLP 1115 D3). Between two of its body
-/// sizes it interpolates; below the first or above the last, the nearest
-/// row scales with the root. Material's (LLP 1115.001 D4) is its sp at the
-/// font scale, the root over 16.
+/// The size of text style `id` at `root` in the process's metric column.
+/// The schema's ramp interpolates between its body sizes and scales the
+/// nearest row outside them (LLP 1115 D3). Material scales its sp size by
+/// the root over 16 (LLP 1115.001 D4).
 pub fn text_style_size(id: u8, root: f32) -> f32 {
     use crate::style::metrics::{column, Column};
     // shortcut: Android scales sp non-linearly above a font scale of 1 since
@@ -200,7 +199,7 @@ pub fn text_style_size(id: u8, root: f32) -> f32 {
     crate::TEXT_STYLES
         .get(usize::from(id))
         .map_or(root, |style| match column() {
-            Column::Material => style.material_size * root / MEDIUM,
+            Column::Material => (style.material_size / MEDIUM) * root,
             _ => ramp(style.sizes, root),
         })
 }

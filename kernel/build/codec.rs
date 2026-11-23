@@ -663,7 +663,7 @@ pub fn write_text_styles(w: &mut String, bodies: &[f32], styles: &[TextStyleRow]
         "    /// `UIFont.TextStyle`'s.\n    pub ios: &'static str,\n",
         "    /// `NSFont.TextStyle`'s.\n    pub macos: &'static str,\n",
         "    /// Its weight, CSS's number, in each column of the metric table: the\n",
-        "    /// web, iOS, the Mac, neutral, Material (LLP 1115.000 D12.2).\n    pub weights: [u16; 5],\n",
+        "    /// web, iOS, the Mac, neutral (LLP 1115.000 D12.2) and Material (LLP 1115.001 D4).\n    pub weights: [u16; 5],\n",
         "    /// Its size at each of [`TEXT_STYLE_BODIES`].\n    pub sizes: &'static [f32],\n",
         "    /// Its leading in each column, a line height over its size; `None` is\n",
         "    /// `normal`, the face's own (LLP 1115.000 D12.2).\n    pub leadings: [Option<f32>; 5],\n",
@@ -676,6 +676,7 @@ pub fn write_text_styles(w: &mut String, bodies: &[f32], styles: &[TextStyleRow]
     w.push_str("/// Every text style, by id.\npub const TEXT_STYLES: &[TextStyle] = &[\n");
     for (name, alias, ios, macos, weights, sizes, leadings, (_, size, line, weight)) in styles {
         assert_eq!(sizes.len(), bodies.len(), "schema: text style {name} has a size per body");
+        assert!(*size > 0.0 && *line >= 0.0, "schema: text style {name} has a positive Material size and a nonnegative line height");
         let weights = [weights[0], weights[1], weights[2], weights[3], *weight];
         let leadings = [leadings[0], leadings[1], leadings[2], leadings[3], Some(line / size)];
         w.push_str(&format!(
