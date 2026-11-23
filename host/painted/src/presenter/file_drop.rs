@@ -27,7 +27,7 @@ impl<D: DataSource> Presenter<D> {
                 break;
             };
             entered.push(key);
-            at = self.display.parent(kernel, node);
+            at = self.listener_parent(kernel, node);
         }
         self.file_crossings(entered);
         let hit = self.file_hit(point)?;
