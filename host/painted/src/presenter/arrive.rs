@@ -86,7 +86,13 @@ impl<D: DataSource> Presenter<D> {
         // preorder, not an export row per node of every mounted row.
         let kernel = self.host.kernel();
         if !self.autofocus_processed.is_empty() {
-            self.autofocus_processed.retain(|id| attached(kernel, *id));
+            // A hidden `portal` mover's node keeps its consumed request: shown
+            // again, it is the same node (LLP 1013.002 D5).
+            let parked: Vec<ViewId> = (self.autofocus_processed.iter().copied())
+                .filter(|&id| self.in_hidden_mover(id))
+                .collect();
+            self.autofocus_processed
+                .retain(|id| attached(kernel, *id) || parked.contains(id));
         }
         if !kernel.has_prop(PropId::Autofocus) {
             return None;

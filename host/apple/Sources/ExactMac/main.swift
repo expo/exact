@@ -275,7 +275,6 @@ final class DocumentWindow: NSObject, NSWindowDelegate, NSWindowRestoration {
     let openedMs = ExactEnv.wall()
     let footprintBefore = footprint()
     private var stamped = false
-    private var closeHold: QuitHold?
 
     init(label: String, first: Bool, rooted: Bool = false) {
         self.label = label
@@ -589,21 +588,7 @@ final class DocumentWindow: NSObject, NSWindowDelegate, NSWindowRestoration {
                 closedForQuit.append(self)
                 return
             }
-            let hold = QuitHold(bound: 5, pending: { session.finishOnClose(queuedOnly: true) }) { [weak self] in
-                guard let self else { return }
-                closeHold = nil
-                // A quit that started while this window was draining owns
-                // the session through applicationWillTerminate.
-                if delegate.quitting?.holding == true { return }
-                closedForQuit.removeAll { $0 === self }
-                session.destroy()
-            }
-            if hold.hold() {
-                closedForQuit.append(self)
-                closeHold = hold
-            } else {
-                session.destroy()
-            }
+            session.destroy()
         }
     }
 }
@@ -616,7 +601,7 @@ let launchRefusal = ExactEnv.environment["EXACT_PLAN"].flatMap { path in
 let firstWindow = DocumentWindow(label: "main", first: true)
 /// Every open window, oldest first.
 var windows = [firstWindow]
-/// Closed windows with sessions still draining writes or waiting for quit.
+/// Windows closed whose sessions wait for the quit (`windowWillClose`).
 var closedForQuit: [DocumentWindow] = []
 var windowCount = 1
 /// Where each rooted window that closed last stood, by name: Settings…
@@ -850,9 +835,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
     /// the last window closing ends the app. Nothing is held while the app
     /// asks (LLP 1069.010 D7). Once the quit is decided, each native module
     /// starts its quit work (`ExactModule.willQuit`), and the quit is held
-    /// for that work, storage an answer started, requests with effects,
-    /// and queued mutations. They share a five-second hold (LLP 1097 D10,
-    /// LLP 1146 D2, LLP 1069.010 Q4). AppKit's
+    /// while that work runs, storage an answer started is still landing or
+    /// a request with effects is in flight: one hold, five seconds at most
+    /// for all of it (LLP 1097 D10, LLP 1146 D2, LLP 1069.010 Q4). AppKit's
     /// modal loop keeps the main thread running, so a reply lands meanwhile.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // A repeated quit joins the existing hold: it neither asks the app
@@ -866,9 +851,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
         // The open windows' sessions, and the last window's if its closing started the quit.
         let sessions = (windows + closedForQuit).map(\.session)
         for session in sessions { session.willQuit() }
-        let hold = QuitHold(bound: 5, pending: {
-            sessions.map { $0.finishOnClose() || $0.quitWorkPending }.contains(true)
-        }) { NSApp.reply(toApplicationShouldTerminate: true) }
+        let hold = QuitHold(bound: 5, pending: { sessions.contains { $0.quitWorkPending || $0.mustFinish } },
+                            end: { NSApp.reply(toApplicationShouldTerminate: true) })
         guard hold.hold() else { return .terminateNow }
         quitting = hold
         return .terminateLater

@@ -154,10 +154,6 @@ public final class Agent {
     /// The stream closing ends the process, and says so on stderr: a driver
     /// that saw the hangup reads why there, not a silent exit.
     public static func serve(fd: Int32) {
-        serve(fd: fd, quit: { exit(0) })
-    }
-
-    static func serve(fd: Int32, quit: @escaping () -> Void) {
         var pending = Data()
         var buf = [UInt8](repeating: 0, count: 65536)
         while true {
@@ -176,7 +172,7 @@ public final class Agent {
                 // Still one request at a time, including inside nested run loops.
                 let completed = DispatchSemaphore(value: 0)
                 CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
-                    handle(line, quit: quit, completed: { completed.signal() })
+                    handle(line, completed: { completed.signal() })
                 }
                 CFRunLoopWakeUp(CFRunLoopGetMain())
                 // An asynchronous screenshot or frame capture can take seconds while the UI
@@ -195,33 +191,27 @@ public final class Agent {
                 }
             }
         }
-        DispatchQueue.main.async { exitAfterLanding(quit) }
+        DispatchQueue.main.async { exitAfterLanding() }
     }
 
     /// The drive ended: storage an answer started and requests with effects
     /// land first, as a quit's do (LLP 1097 D10, LLP 1146 D2), within the
     /// driver's patience (it kills at 2 s).
     nonisolated(unsafe) static var exiting: QuitHold?
-    static func exitAfterLanding(_ end: @escaping () -> Void) {
-        let hold = QuitHold(bound: 1.5, pending: {
-            #if os(macOS)
-            return ExactApp.shared.sessions.map { $0.finishOnClose() }.contains(true)
-            #else
-            return routes.contains { $0.1.mustFinish }
-            #endif
-        }, end: end)
-        if hold.hold() { exiting = hold } else { end() }
+    static func exitAfterLanding() {
+        let hold = QuitHold(bound: 1.5, pending: { routes.contains { $0.1.mustFinish } }, end: { exit(0) })
+        if hold.hold() { exiting = hold } else { exit(0) }
     }
 
     /// One line: the session it names (or the default), then its operation.
-    static func handle(_ line: String, quit: @escaping () -> Void = { exit(0) }, completed: @escaping () -> Void = {}) {
+    static func handle(_ line: String, completed: @escaping () -> Void = {}) {
         var forwarded = false
         defer { if !forwarded { completed() } }
         guard let data = line.data(using: .utf8),
               let req = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let op = req["op"] as? String
         else { reply(["malformed": true, "error": "unreadable request: \(line)"]); return }
-        if op == "quit" { exitAfterLanding(quit); return }
+        if op == "quit" { exitAfterLanding(); return }
         // A slice building off main lands before the agent reads or acts
         // (LLP 1072 T9); under the agent slices are synchronous, so this is
         // for a carrier attached to an ordinary run.

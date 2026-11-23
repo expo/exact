@@ -46,7 +46,7 @@ enum ResetGate {
         "titlebarArea(_:)": (.fit, "the title-bar area, told with its size: it fits again"),
         "tickAsync(now:frame:capture:measureFrame:presentOnly:done:)": (.advance, "a frame's tick sent to the owner, as `tick` is"),
         "advanceAsync(now:frame:admitted:capture:measureFrame:done:)": (.advance, "a timer's advance sent to the owner, as `advance` is"),
-        "landThenFirst(queuesOnly:)": (.advance, "the `then`s due when a batch landed: the new runtime's due work advances once its tree is in"),
+        "landThenFirst()": (.advance, "the `then`s due when a batch landed: the new runtime's due work advances once its tree is in"),
         "landThen()": (.advance, "the agent's `then`s of an input, as `landThenFirst`'s"),
         "collectionFeedbackAsync(_:now:done:)": (.collections, "a list's fill sent to the owner: the new list fills its own"),
         "pump(now:)": (.pump, "the replies the network owes, pumped at once, as `pumpAsync`'s"),

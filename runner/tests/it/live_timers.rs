@@ -682,7 +682,7 @@ component App
 #[test]
 fn a_then_that_is_the_earliest_work_due_lands_alone() {
     let mut r = then_and_timer(5000);
-    let a = r.land_then_first(false);
+    let a = r.land_then_first();
     assert!(a.error.is_none(), "{:?}", a.error);
     assert_eq!(number(&r, "followed"), 1.0);
     assert_eq!(number(&r, "snapshot"), -1.0, "no timer fired");
@@ -692,7 +692,7 @@ fn a_then_that_is_the_earliest_work_due_lands_alone() {
 #[test]
 fn a_then_behind_an_earlier_timer_waits_for_the_advance() {
     let mut r = then_and_timer(1500);
-    let a = r.land_then_first(false);
+    let a = r.land_then_first();
     assert!(
         a.receipts.is_empty(),
         "the timer due first is not overtaken"

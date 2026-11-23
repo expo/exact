@@ -4,21 +4,15 @@ use super::*;
 use std::fmt::Write;
 
 impl<D: DataSource> Host<D> {
-    /// Land settled turns without moving the clock. Mode 3 runs them when
-    /// they are the earliest work due. Mode 4 drains only due queue turns.
-    pub fn land_then(&mut self, mode: u32) -> String {
-        let a = match mode {
-            3 => self.runner.land_then_first(false),
-            4 => self.runner.land_then_first(true),
-            _ => self.runner.land_then(),
+    /// The `then`s an agent's input settled, the clock unmoved
+    /// ([`exact_runner::Runner::land_then`]); `first`, only when one is the
+    /// earliest work due ([`exact_runner::Runner::land_then_first`]).
+    pub fn land_then(&mut self, first: bool) -> String {
+        let a = if first {
+            self.runner.land_then_first()
+        } else {
+            self.runner.land_then()
         };
-        if mode == 4 {
-            return if a.receipts.is_empty() && a.error.is_none() {
-                String::new()
-            } else {
-                self.commit_advance(a)
-            };
-        }
         self.advanced(a)
     }
 
@@ -65,7 +59,6 @@ impl<D: DataSource> Host<D> {
             });
         }
         match exact_runner::json::field_str(request, "op").as_deref() {
-            Some("background") => self.background_reply(),
             Some("saveWindow") => exact_data::storage::save_test_window(
                 &self.runner,
                 crate::picker::agent_secret_root(self.runner.data_ref().app_id()),
@@ -75,21 +68,6 @@ impl<D: DataSource> Host<D> {
             Some("state") => self.state_reply(request),
             _ => exact_runner::agent::handle(&self.runner, request),
         }
-    }
-
-    /// What a quit waits for (LLP 1097 D10). macOS also reports the queue
-    /// work that keeps a closing window's session alive (LLP 1092 D3).
-    pub(crate) fn background_reply(&self) -> String {
-        let must = self.runner.must_finish();
-        #[cfg(target_os = "macos")]
-        let reply = {
-            let queued = self.runner.queued_must_finish();
-            let must = must || queued;
-            format!("{{\"mustFinish\":{must},\"queuedMutationWork\":{queued}}}")
-        };
-        #[cfg(not(target_os = "macos"))]
-        let reply = format!("{{\"mustFinish\":{must}}}");
-        exact_runner::agent::tagged(&self.runner, reply)
     }
 
     /// The runner's `node` for `{"id":V}` (`"plan":true` adds the plan's

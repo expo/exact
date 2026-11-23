@@ -100,43 +100,13 @@ impl<D: DataSource> Runner<D> {
         self.data_timer_due(ticket).is_some()
     }
 
-    /// A wake shares its wait with other work (LLP 1027.000 D1).
-    pub(in crate::runner) fn data_has_wake(&self, ticket: u64) -> bool {
-        self.clock.data.wakes.iter().any(|(t, _, _)| *t == ticket)
-            || self.requests.iter().any(|r| {
-                r.ticket == ticket
-                    && r.request.continuation.is_some()
-                    && r.request.wake_ms.is_some()
-            })
-    }
-
-    /// A released continuation is runnable while its outcome is with the host
-    /// (LLP 1027.000 D1). If it waits again, its next round supplies the deadline.
-    pub(in crate::runner) fn data_work_released(&mut self, token: u64) {
-        self.clock.data.wakes.retain(|(_, t, _)| *t != token);
-        if let Some(p) = self
-            .pending
-            .iter_mut()
-            .find(|p| p.continuation == Some(token))
-        {
-            p.parked = false;
-        }
-    }
-
     /// When request `ticket`'s answer's timer is due, while that is ahead.
     fn data_timer_due(&self, ticket: u64) -> Option<f64> {
         let now = self.now_ms;
         let data = &self.clock.data;
         let held = (data.held.iter().chain(&self.requests))
             .filter(|r| r.ticket == ticket)
-            .filter_map(|r| {
-                due(r).or_else(|| {
-                    r.request
-                        .continuation
-                        .and(r.request.wake_ms)
-                        .map(|ms| ms as f64)
-                })
-            });
+            .filter_map(|r| due(r).or(r.request.wake_ms.map(|ms| ms as f64)));
         let wakes = (data.wakes.iter())
             .filter(|(t, _, _)| *t == ticket)
             .map(|(_, _, at)| *at);

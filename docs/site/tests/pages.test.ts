@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { marked } from 'marked';
 import pages from '../content/pages.json';
+import { bySection } from '../tools/page-lists.ts';
 import { promptOf } from '../tools/prompts.ts';
 
 // Pages' own rules meet the tree tools/pages.ts makes here: `wrangler pages dev` serves dist.pages as Cloudflare
@@ -63,6 +64,24 @@ test('Recipes lists every Markdown recipe in name order', () => {
     .map(entry => `/recipes/${entry.name.slice(0, -3)}`)
     .sort();
   expect(pages.filter(page => page.section === 'Recipes').map(page => page.path)).toEqual(expected);
+});
+
+test("llms.txt lists the pages in the sidebar's order, under its sections, with a split guide's pages below it", async () => {
+  const text = await Bun.file(resolve(site, 'dist.pages/llms.txt')).text();
+  const listed = text.split('\n').filter(line => line.startsWith('## ') || /^ *- \[/.test(line))
+    .map(line => line.startsWith('## ') ? line : `${/^ */.exec(line)![0]}${/\]\((?:https?:\/\/[^/)]+)?(\/[^)]*)\.md\)/.exec(line)![1]}`);
+  const expected = [...new Set(pages.map(page => page.section))].flatMap(section => [
+    `## ${section}`,
+    ...pages.filter(page => page.section === section).map(page =>
+      `${pages.find(guide => guide.source === page.source) === page ? '' : '    '}${page.path === '/' ? '/index' : page.path}`),
+  ]);
+  expect(listed).toEqual(expected);
+});
+
+test('a page nests below a guide only when it is one of the pages the guide was split into', () => {
+  const page = (path: string, source: string) => ({ path, title: path, source, section: 'Learn' });
+  const pages = [page('/guide', 'guide.md'), page('/guide/install', 'guide.md'), page('/guide/faq', 'faq.md')];
+  expect(bySection(pages, p => p.path, () => '')).toBe('## Learn\n\n- [/guide](/guide)\n    - [/guide/install](/guide/install)\n- [/guide/faq](/guide/faq)');
 });
 
 test('every recipe has a Markdown prompt that names its source', async () => {

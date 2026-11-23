@@ -152,17 +152,3 @@ fn a_batch_says_the_app_must_finish_until_the_storage_a_reply_started_lands() {
     let stored = host.fulfill_all(vec![(storage, Outcome::Storage(Vec::new()), None)], 0.0);
     assert_eq!(said(&stored), Some(false), "{stored}");
 }
-
-#[cfg(target_os = "macos")]
-#[test]
-fn the_mac_quit_query_reports_nonqueued_effects_separately() {
-    let plan = contract::compile(APP).unwrap().encode();
-    let mut bridge = crate::abi::Bridge::new();
-    bridge.boot(&plan, Posts, crate::abi::Hooks::none(), 390., 844.);
-    bridge.data_ready();
-    let len = bridge.must_finish(0);
-    let reply: serde_json::Value =
-        serde_json::from_slice(bridge.output_bytes(len as usize)).unwrap();
-    assert_eq!(reply["mustFinish"], true);
-    assert_eq!(reply["queuedMutationWork"], false);
-}

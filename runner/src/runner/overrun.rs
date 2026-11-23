@@ -111,7 +111,6 @@ impl<D: DataSource> Runner<D> {
             source,
             args,
             continuation: None,
-            parked: false,
             fetch: None,
             keepable: None,
             stream: None,

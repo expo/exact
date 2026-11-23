@@ -167,54 +167,6 @@ impl<D: DataSource> Runner<D> {
             || self.background_operations() > 0
     }
 
-    /// Queued mutations that can drain on close. A send stays active across
-    /// request rounds and admission refusals release the next send (LLP 1092
-    /// D3). A clock-only wait and a request held for the agent cannot drain
-    /// on their own (LLP 1027.000 D1, LLP 1012's held device requests).
-    pub fn queued_must_finish(&self) -> bool {
-        self.queues.next_due.iter().any(|due| due.is_finite())
-            || self
-                .then_due
-                .iter()
-                .enumerate()
-                .any(|(m, due)| due.is_finite() && self.queues.waits(m))
-            || self.pending.iter().any(|p| {
-                let Target::Mutation(m) = p.target else {
-                    return false;
-                };
-                if self.mutation_row(m).mode != MutationMode::Queue {
-                    return false;
-                }
-                if p.refusal.is_some() || p.refused {
-                    return self.queues.waits(m);
-                }
-                p.waited()
-                    && !self.held_for_agent(p)
-                    && (self.data_reply_can_land(p) || self.reply_can_wake(p))
-            })
-    }
-
-    fn data_reply_can_land(&self, p: &PendingReq) -> bool {
-        !p.parked && !self.data_timer_held(p.ticket)
-    }
-
-    fn reply_can_wake(&self, wait: &PendingReq) -> bool {
-        (wait.parked || self.data_has_wake(wait.ticket))
-            && (self.pending.iter().any(|p| {
-                p.ticket != wait.ticket
-                    && p.module == wait.module
-                    && p.waited()
-                    && !self.held_for_agent(p)
-                    && self.data_reply_can_land(p)
-            }) || self.background_ticket().is_some()
-                || self.module_work_effects()
-                || self
-                    .tool_tickets()
-                    .iter()
-                    .any(|(_, t)| !self.data_timer_held(*t))
-                || !self.mapper_turn_tickets().is_empty())
-    }
-
     /// Whether a request with effects the host has not refused is in flight
     /// (`PendingReq::admitted_effects`).
     pub fn effects_in_flight(&self) -> bool {

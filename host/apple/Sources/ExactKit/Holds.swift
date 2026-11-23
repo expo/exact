@@ -18,27 +18,10 @@ import UIKit
 public extension ExactSession {
     /// Whether the app must finish work an answer started, asked of the
     /// runner now: what a quit waits for.
-    var mustFinish: Bool { finishState()["mustFinish"] as? Bool == true }
-
-    #if os(macOS)
-    /// Queue turns due at the current clock may still land after a reply
-    /// while the agent's clock is frozen (LLP 1092 D3, LLP 1012 §2).
-    package func finishOnClose(queuedOnly: Bool = false) -> Bool {
-        var state = finishState()
-        if state["queuedMutationWork"] as? Bool == true, clock != nil || ExactEnv.agentFreezes {
-            let batch = runtime.landThenFirst(queuesOnly: true)
-            if batch.clock != nil {
-                applyUnlessEmpty(batch)
-                state = finishState()
-            }
-        }
-        return state[queuedOnly ? "queuedMutationWork" : "mustFinish"] as? Bool == true
-    }
-    #endif
-
-    private func finishState() -> [String: Any] {
-        let data = Data(runtime.ask(exact_must_finish, "").utf8)
-        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+    var mustFinish: Bool {
+        guard let data = runtime.ask(exact_must_finish, "").data(using: .utf8),
+              let reply = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        return reply["mustFinish"] as? Bool == true
     }
 
     /// The quit is decided (macOS): the session's native module starts the

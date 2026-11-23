@@ -132,7 +132,7 @@ fn live_delivery_keeps_changes_out_of_native_timers() {
     r.set_live_clock(Some(Box::new(|| 100.0)));
     r.use_native_timers(true);
     assert!(r.native_timers().is_empty());
-    assert_eq!(r.land_then_first(false).receipts.len(), 1);
+    assert_eq!(r.land_then_first().receipts.len(), 1);
     assert_eq!(r.slot("fired"), Some(&Value::Number(1.0)));
     assert_eq!(r.timer_due_ms(), None);
 }

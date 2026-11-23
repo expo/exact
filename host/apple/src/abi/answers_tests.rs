@@ -129,55 +129,6 @@ fn each_production_export_answers_as_the_dispatcher() {
     }
 }
 
-#[cfg(target_os = "macos")]
-#[test]
-fn both_background_answers_hold_quit_for_a_waiting_mutation_alone() {
-    let plan = contract::compile(
-        r#"shape Ack
-  n: number
-source save(n: number) as shape Ack
-  url "https://desk.test/save?n={n}"
-  method "POST"
-  body json
-component App
-  mutation saved as shape Ack queue
-  action savePair
-    send saved = save(1)
-    send saved = save(2)
-  view
-    button press=savePair
-      text "Save"
-"#,
-    )
-    .unwrap()
-    .encode();
-    let mut bridge = Bridge::new();
-    bridge.boot(&plan, NoData, Hooks::none(), 400., 800.);
-    bridge.data_ready();
-    let runner = bridge.host.as_mut().unwrap().runner_mut();
-    runner.act("savePair", vec![]).unwrap();
-    let first = runner.take_requests().pop().unwrap();
-    runner
-        .fulfill(
-            first.ticket,
-            exact_runner::Outcome::Response(exact_runner::Response {
-                status: 200,
-                headers: vec![],
-                body: br#"{"n":1}"#.to_vec(),
-            }),
-        )
-        .unwrap();
-    assert!(runner.pending().is_empty());
-    assert!(!runner.must_finish());
-    let request = r#"{"op":"background"}"#;
-    let production = reply(&mut bridge, request, Bridge::must_finish);
-    let agent = reply(&mut bridge, request, Bridge::agent);
-    assert_eq!(production, agent);
-    let decoded: serde_json::Value = serde_json::from_str(&production).unwrap();
-    assert_eq!(decoded["queuedMutationWork"], true);
-    assert_eq!(decoded["mustFinish"], true);
-}
-
 /// A drag's open through the export's own call (`exact_share_file`'s
 /// `shareOpen`, LLP 1094.000 D3): a booted app's granted file, opened from
 /// the roots its activation pinned, answered as a descriptor the caller then

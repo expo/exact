@@ -5,12 +5,9 @@
 use crate::source::{boxed, Read, Source};
 use exact_kernel::Kernel;
 use exact_runner::{
-    Answer, DataError, DataSource, FailureKind, InFlight, Outcome, Overlaid, Request, Response,
-    Runner, RunnerError, Store, Value, Write,
+    Answer, DataError, DataSource, FailureKind, Outcome, Overlaid, Request, Response, Runner,
+    RunnerError, Value, Write,
 };
-
-struct TimerTurn;
-impl exact_runner::HostWork for TimerTurn {}
 
 const APP: &str = r#"
 shape Ack
@@ -33,8 +30,6 @@ component App
     send wrote = save("b")
   action one(op: string)
     send wrote = save(op)
-  action post(op: string)
-    send wrote = post(op)
   action tap
     send wrote = save(label)
     label = "y"
@@ -172,12 +167,6 @@ impl DataSource for Desk {
             // A source the desk does not answer: the runner refuses the send.
             // (`Unavailable` would commit it with its receipt failed.)
             "broken" => Err(DataError::UnknownSource(source.into())),
-            "storage" => Ok(Answer::Later(Request::storage(b"load".to_vec()))),
-            "read" => Ok(Answer::Later(Request::get("https://desk.test/read"))),
-            "race" => Ok(Answer::Later(
-                Request::get("https://desk.test/race").wake(20),
-            )),
-            "sleep" => Ok(Answer::Later(Request::continuation::<TimerTurn>(1).due(20))),
             "two" => Ok(Answer::Later(Request::post_json(
                 "https://desk.test/step1",
                 &op,
@@ -218,22 +207,10 @@ impl DataSource for Desk {
             Outcome::Response(r) if source == "two" && r.body == b"step1" => Ok(Answer::Later(
                 Request::post_json("https://desk.test/step2", op),
             )),
-            Outcome::Response(r) if source == "storage" && r.body == b"load" => {
-                Ok(Answer::Later(Request::storage(b"write".to_vec())))
-            }
             Outcome::Response(_) => Ok(Answer::Now(ack(op, self.asks.len()))),
             Outcome::Failed { message, .. } => Ok(Answer::Now(ack(&message, 0))),
             _ => Err(DataError::Unavailable("unexpected".into())),
         }
-    }
-
-    fn timer_before_reply(
-        &mut self,
-        _: &Store,
-        flight: InFlight<'_>,
-        _: Option<u64>,
-    ) -> Option<(u64, Request)> {
-        (flight.source == "race").then(|| (1, Request::continuation::<TimerTurn>(2)))
     }
 }
 
@@ -348,7 +325,10 @@ fn two_sends_answered_later_ask_one_at_a_time_with_send_time_arguments() {
 
 #[test]
 fn replaceable_queue_tail_preserves_first_write_and_barriers() {
-    let src = previewing_queue();
+    let src = previewing_queue().replace(
+        "  view\n",
+        "  action post(op: string)\n    send wrote = post(op)\n  view\n",
+    );
     let mut r = boot_with(
         &src,
         Desk {
@@ -484,7 +464,10 @@ fn replacement_leaves_the_previous_tail_if_the_action_refuses() {
     assert_eq!(preview(&r), Some("room:first room:previous"));
     r.fulfill(first, reply("ok")).unwrap();
     r.advance(0.0).unwrap();
-    assert_eq!(r.source::<Desk>().asks.last().unwrap(), "save:room:previous");
+    assert_eq!(
+        r.source::<Desk>().asks.last().unwrap(),
+        "save:room:previous"
+    );
 }
 
 #[test]
@@ -562,172 +545,6 @@ fn a_source_without_a_merger_keeps_waiting_sends_in_fifo_order() {
 }
 
 #[test]
-fn a_queued_storage_mutation_holds_quit_from_read_through_write() {
-    let src = APP.replace(
-        "  view\n",
-        concat!(
-            "  action storage\n",
-            "    send rec = storage(\"body\")\n",
-            "  view\n",
-        ),
-    );
-    let mut r = boot_with(&src, Desk::default());
-    r.act("storage", vec![]).unwrap();
-    let load = tickets(&mut r)[0];
-    assert!(!r.must_finish());
-    assert!(
-        r.queued_must_finish(),
-        "the first SQLite read can lead to a write"
-    );
-    r.fulfill(load, reply("load")).unwrap();
-    let write = tickets(&mut r)[0];
-    assert!(!r.must_finish());
-    assert!(r.queued_must_finish(), "the SQLite write is outstanding");
-    r.fulfill(write, reply("done")).unwrap();
-    assert!(!r.queued_must_finish());
-    assert!(!r.must_finish());
-}
-
-#[test]
-fn a_pending_storage_read_does_not_hold_quit() {
-    let src = APP.replace(
-        "  resource probe",
-        "  resource read = storage(\"body\") as shape Ack\n  resource probe",
-    );
-    let mut r = boot_with(&src, Desk::default());
-    assert_eq!(tickets(&mut r).len(), 1);
-    assert!(!r.queued_must_finish());
-    assert!(!r.must_finish());
-}
-
-#[test]
-fn a_queue_holds_close_while_http_steps_precede_a_storage_save() {
-    let src = APP.replace(
-        "  view\n",
-        concat!(
-            "  action saveAfterHttp\n",
-            "    send rec = read(\"read\")\n",
-            "    send rec = post(\"post\")\n",
-            "    send rec = storage(\"save\")\n",
-            "  view\n",
-        ),
-    );
-    let mut r = boot_with(
-        &src,
-        Desk {
-            later: true,
-            ..Desk::default()
-        },
-    );
-    r.act("saveAfterHttp", vec![]).unwrap();
-    let get = tickets(&mut r)[0];
-    assert!(!r.must_finish());
-    assert!(
-        r.queued_must_finish(),
-        "the GET is active ahead of the saves"
-    );
-    r.fulfill(get, reply("ok")).unwrap();
-    assert!(r.pending().is_empty());
-    assert!(r.queued_must_finish(), "a then-less queue has a send due");
-    r.advance(0.0).unwrap();
-    let post = tickets(&mut r)[0];
-    assert!(
-        r.queued_must_finish(),
-        "the POST is active ahead of the storage save"
-    );
-    r.fulfill(post, reply("ok")).unwrap();
-    r.advance(0.0).unwrap();
-    let load = tickets(&mut r)[0];
-    r.fulfill(load, reply("load")).unwrap();
-    let write = tickets(&mut r)[0];
-    assert!(r.queued_must_finish(), "the last send is still active");
-    r.fulfill(write, reply("done")).unwrap();
-    assert!(!r.queued_must_finish());
-}
-
-#[test]
-fn a_queue_holds_close_after_a_timer_replaces_an_http_request() {
-    let src = APP.replace(
-        "  view\n",
-        "  action race\n    send rec = race(\"body\")\n  view\n",
-    );
-    let mut r = boot_with(&src, Desk::default());
-    r.act("race", vec![]).unwrap();
-    let get = tickets(&mut r)[0];
-    r.advance(20.0).unwrap();
-    let next = r.take_requests().pop().unwrap();
-    assert_ne!(next.ticket, get);
-    assert_eq!(next.request.continuation, Some(2));
-    assert!(
-        r.queued_must_finish(),
-        "the timer's continuation can still write"
-    );
-    r.fulfill(next.ticket, reply("ok")).unwrap();
-    assert!(!r.queued_must_finish());
-}
-
-#[test]
-fn a_queue_waits_for_close_only_after_its_continuation_is_released() {
-    let src = APP.replace(
-        "  view\n",
-        "  action sleep\n    send rec = sleep(\"body\")\n    send rec = storage(\"save\")\n  view\n",
-    );
-    let mut r = boot_with(&src, Desk::default());
-    r.act("sleep", vec![]).unwrap();
-    assert!(tickets(&mut r).is_empty());
-    assert!(
-        !r.queued_must_finish(),
-        "only a future answer timer can resume the queue"
-    );
-    r.advance(20.0).unwrap();
-    let continuation = tickets(&mut r)[0];
-    assert!(r.queued_must_finish(), "the timer's continuation is out");
-    r.hold_request(continuation, "test", "rec", "{}");
-    assert!(!r.queued_must_finish(), "the agent must answer the request");
-}
-
-#[test]
-fn a_queue_holds_quit_between_a_reply_and_its_waiting_write() {
-    let mut r = boot(true);
-    r.act("pair", vec![]).unwrap();
-    let first = tickets(&mut r)[0];
-    r.fulfill(first, reply("ok")).unwrap();
-    assert!(r.pending().is_empty(), "the first request already landed");
-    assert!(!r.must_finish(), "the ordinary effect already landed");
-    assert!(
-        r.queued_must_finish(),
-        "the queued edit must still be saved"
-    );
-    r.advance(0.0).unwrap();
-    let second = tickets(&mut r)[0];
-    r.fulfill(second, reply("ok")).unwrap();
-    r.advance(0.0).unwrap();
-    assert!(!r.queued_must_finish(), "the queue drained");
-    assert!(!r.must_finish(), "the effects drained");
-}
-
-#[test]
-fn an_admission_refused_queue_head_holds_close_while_a_send_waits() {
-    let mut r = boot(true);
-    r.act("record", vec![Value::str("refused")]).unwrap();
-    let first = tickets(&mut r)[0];
-    r.refuse_request(first, "native executor admission limit reached", true);
-    assert!(!r.queued_must_finish(), "a refused head alone may close");
-    r.act("record", vec![Value::str("waiting")]).unwrap();
-    assert!(r.queued_must_finish(), "the pump still owes the refusal");
-    let (ticket, outcome) = r.take_request_refusal(true).unwrap();
-    assert_eq!(ticket, first);
-    assert!(r.queued_must_finish(), "the refusal has yet to land");
-    r.fulfill(ticket, outcome).unwrap();
-    assert!(r.queued_must_finish(), "the waiting send is due");
-    r.advance(0.0).unwrap();
-    let second = tickets(&mut r)[0];
-    r.fulfill(second, reply("ok")).unwrap();
-    assert_eq!(r.derive("recd"), Some(&Value::str("waiting")));
-    assert!(!r.queued_must_finish());
-}
-
-#[test]
 fn a_send_while_one_is_in_flight_waits_and_a_queue_without_then_is_due_alone() {
     let mut r = boot(true);
     r.act("record", vec![Value::str("p")]).unwrap();
@@ -779,8 +596,6 @@ fn a_next_refused_by_settlement_stalls_until_a_commit_changes_state() {
         .any(|l| l.contains("wrote next refused (Data") && l.ends_with("waits for a change")));
     assert_eq!(r.queued(), [("wrote".to_string(), 1)], "the head is kept");
     assert_eq!(r.timer_due_ms(), None, "a stall wakes no host");
-    assert!(!r.queued_must_finish(), "a stalled queue may close");
-    assert!(!r.must_finish());
     assert!(busy(&r));
     // A commit that changes nothing leaves it stalled.
     let checks = r.source::<Desk>().checks;
@@ -1119,7 +934,7 @@ impl DataSource for Shelf {
         args: &[Value],
     ) -> Result<Answer, DataError> {
         match source {
-            "save" | "post" => Ok(Answer::Now(ack(args[0].as_str().unwrap_or(""), 0))),
+            "save" => Ok(Answer::Now(ack(args[0].as_str().unwrap_or(""), 0))),
             "items" => {
                 self.lists += 1;
                 Ok(Answer::Later(Request::post_json(

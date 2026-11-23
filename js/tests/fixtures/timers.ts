@@ -1,5 +1,3 @@
-import type { Storage } from "../../../vendor/ibex/crates/ibex2/src/bindings/storage";
-
 // LLP 1027.000 D1 (amended 2026-10-28): an answer's own timers, due on the
 // runner's clock. `setInterval` and the clock reads stay refused.
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
@@ -13,7 +11,7 @@ let atInit: string;
 try { setTimeout(() => {}, 0); atInit = "UNGUARDED"; }
 catch (e) { atInit = e.message; }
 
-async function answer(source: string, args: any[], _store: unknown, storage: Storage): Promise<unknown> {
+async function answer(source: string, args: any[]): Promise<unknown> {
   switch (source) {
     case "slept": {
       const [label, ms] = args as [string, number];
@@ -93,16 +91,9 @@ async function answer(source: string, args: any[], _store: unknown, storage: Sto
     case "starter":
       shared = fetch("https://fixture.exact.test/shared").then(() => "shared");
       return shared;
-    case "join": return shared;
-    case "held":
-      await fetch("https://fixture.exact.test/held", { exactHeld: true } as RequestInit);
-      return "held reply";
     // Whichever comes first: another answer's fetch, or its own long timer.
     case "racer":
       return Promise.race([shared!, sleep(10000).then(() => "slept")]);
-    case "save":
-      await storage.fs.writeFile(storage.fs.directories.data + "/saved", new Uint8Array([1]));
-      return "saved";
     // Whichever comes first: its own fetch, or its own timer. The loser runs on.
     case "raceFetch":
       return Promise.race([
@@ -151,6 +142,6 @@ async function answer(source: string, args: any[], _store: unknown, storage: Sto
 (globalThis as any).exact = {
   abi: 1,
   appId: "test.timers",
-  grants: "net.fetch https://fixture.exact.test\nsecret.keep shared\nfs.write app:/data\n",
+  grants: "net.fetch https://fixture.exact.test\nsecret.keep shared\n",
   answer,
 };

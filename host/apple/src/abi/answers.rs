@@ -34,10 +34,13 @@ impl<D: DataSource> Bridge<D> {
         })
     }
 
-    /// Whether a quit waits. On macOS, also report queued mutation work
-    /// separately for a non-last window's close hold.
+    /// `{"mustFinish":B}`: whether the app must finish work an answer
+    /// started, which a quit waits for.
     pub fn must_finish(&mut self, len: usize) -> u32 {
-        self.answer(len, |h, _| h.background_reply())
+        self.answer(len, |h, _| {
+            let reply = format!("{{\"mustFinish\":{}}}", h.runner().must_finish());
+            agent::tagged(h.runner(), reply)
+        })
     }
 
     /// The background actions that ended since the last call, delivered.

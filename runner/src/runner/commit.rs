@@ -1075,7 +1075,6 @@ impl<D: DataSource> Runner<D> {
             source,
             args,
             continuation: request.continuation,
-            parked: false,
             fetch: request.fetch,
             keepable: keepable.then(|| request.clone()),
             stream: sockets::stream_count(&request),
@@ -1211,17 +1210,7 @@ impl<D: DataSource> Runner<D> {
             return dispatch;
         }
         self.store.set_clock_ms(self.now_ms);
-        let dispatch = self.data.dispatch(token, &self.store);
-        if matches!(dispatch, Dispatch::Held) {
-            if let Some(p) = self
-                .pending
-                .iter_mut()
-                .find(|p| p.continuation == Some(token))
-            {
-                p.parked = true;
-            }
-        }
-        dispatch
+        self.data.dispatch(token, &self.store)
     }
 
     /// Where this app's long native calls go: the source's own slot, or,
@@ -1270,11 +1259,6 @@ impl<D: DataSource> Runner<D> {
         out.extend(self.module_release());
         // A wait whose answer's timer came due (`data_timers.rs`).
         out.extend(self.take_woken());
-        for (token, dispatch) in &out {
-            if !matches!(dispatch, Dispatch::Held) {
-                self.data_work_released(*token);
-            }
-        }
         out
     }
 

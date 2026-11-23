@@ -287,7 +287,6 @@ struct PendingReq {
     args: Vec<Value>,
     /// The source's continuation token, when the request is one.
     continuation: Option<u64>,
-    parked: bool,
     /// The module's own ticket for the fetch this request is
     /// ([`crate::Request::fetch`]): what an app's abort names it by.
     fetch: Option<u64>,
@@ -1400,6 +1399,7 @@ impl<D: DataSource> Runner<D> {
         self.tree.as_ref().map(Tree::roots).unwrap_or_default()
     }
 
+    /// Commands produced since the last take.
     /// Surface inputs that changed since the last take — a canvas node's
     /// arguments, evaluated — published only from commits that applied
     /// (LLP 1009 D2). The host hands them to the app's GPU module.
