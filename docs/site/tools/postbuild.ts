@@ -161,15 +161,11 @@ function prerequisites(p: Page): string {
   if (!start || ['Home', 'Get started', 'For AI agents'].includes(p.section)) return 'None';
   return `[${start.title}](${mdUrl(start)})`;
 }
-// A page nests only below a guide in its own section; the first line under a heading never starts indented,
-// which Markdown would read as code.
-const depth = (p: Page): number => {
-  const parent = parentOf(p);
-  return parent && parent.section === p.section ? depth(parent) + 1 : 0;
-};
+// As in the sidebar, a guide split into pages lists them one level below itself: they share its source and follow it.
+const splitFrom = (p: Page) => pages.findIndex(q => q.source === p.source) < pages.indexOf(p);
 const bySection = (fields: (p: Page) => string) =>
   [...new Set(pages.map(p => p.section))]
-    .map(section => [`## ${section}`, '', ...pages.filter(p => p.section === section).map(p => `${'    '.repeat(depth(p))}- [${p.title}](${mdUrl(p)})${fields(p)}`)].join('\n'))
+    .map(section => [`## ${section}`, '', ...pages.filter(p => p.section === section).map(p => `${splitFrom(p) ? '    ' : ''}- [${p.title}](${mdUrl(p)})${fields(p)}`)].join('\n'))
     .join('\n\n');
 writeFileSync(
   join(DIST, 'llms.txt'),

@@ -62,25 +62,16 @@ test('Recipes lists every Markdown recipe in name order', () => {
   expect(pages.filter(page => page.section === 'Recipes').map(page => page.path)).toEqual(expected);
 });
 
-test('llms.txt lists each page once, under its section and below its guide', async () => {
+test("llms.txt lists the pages in the sidebar's order, under its sections, with a split guide's pages below it", async () => {
   const text = await Bun.file(resolve(site, 'dist.pages/llms.txt')).text();
-  const headings: string[] = [];
-  const listed = new Map<string, { section: string; indent: number }[]>();
-  for (const line of text.split('\n')) {
-    if (line.startsWith('## ')) headings.push(line.slice(3));
-    const item = /^( *)- \[.*?\]\((?:https?:\/\/[^/)]+)?(\/[^)]*)\.md\)/.exec(line);
-    if (item) {
-      const path = item[2] === '/index' ? '/' : item[2];
-      listed.set(path, [...(listed.get(path) ?? []), { section: headings.at(-1)!, indent: item[1].length }]);
-    }
-  }
-  expect(headings).toEqual([...new Set(pages.map(page => page.section))]);
-  const indent = (path: string): number => {
-    const page = pages.find(p => p.path === path)!;
-    const parent = pages.filter(q => q.path !== '/' && q.section === page.section && path.startsWith(`${q.path}/`)).sort((a, b) => b.path.length - a.path.length)[0];
-    return parent ? indent(parent.path) + 4 : 0;
-  };
-  for (const page of pages) expect([page.path, listed.get(page.path)]).toEqual([page.path, [{ section: page.section, indent: indent(page.path) }]]);
+  const listed = text.split('\n').filter(line => line.startsWith('## ') || /^ *- \[/.test(line))
+    .map(line => line.startsWith('## ') ? line : `${/^ */.exec(line)![0]}${/\]\((?:https?:\/\/[^/)]+)?(\/[^)]*)\.md\)/.exec(line)![1]}`);
+  const expected = [...new Set(pages.map(page => page.section))].flatMap(section => [
+    `## ${section}`,
+    ...pages.filter(page => page.section === section).map(page =>
+      `${pages.find(guide => guide.source === page.source) === page ? '' : '    '}${page.path === '/' ? '/index' : page.path}`),
+  ]);
+  expect(listed).toEqual(expected);
 });
 
 test('a chat fetcher gets Markdown at a published page path', async () => {
