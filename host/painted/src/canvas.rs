@@ -40,9 +40,10 @@
 //! - `42 BACKDROP n (kind amount)×n x y w h radii×8` — filter what this recording drew so far
 //!   inside that rounded rect, in order: kind 0 blur (local units), 1 saturation (multiplier)
 //!   (replaces the radius-only op 27; an older reader must refuse the new op)
-//! - `28 NATIVE view kind|direct<<8 x y w h radii×8 len utf8-json` — a platform element (`paint/native.rs`;
-//!   kind 0 video, 1 web view, 2 module) shown in that rounded rect: the reader draws the
-//!   platform view's own drawing there
+//! - `28 NATIVE view kind|direct<<8|held<<9 x y w h radii×8 len utf8-json` — a platform element
+//!   (`paint/native.rs`; kind 0 video, 1 web view, 2 module) shown in that rounded rect: the reader
+//!   draws the platform view's own drawing there. `held`: a video shown nowhere, in an empty rect;
+//!   the reader keeps it, its player and its size, out of view
 //! - `40 SHADOW color sigma x y w h radii×8 bx by bw bh bradii×8` — an outer
 //!   `box-shadow`: the rounded rect blurred by `sigma` (local units), drawn only
 //!   outside the border box `b…` (`canvas/shadow.rs`)
@@ -729,6 +730,14 @@ impl Backend for Recorder {
         self.transform(Transform::identity());
         let empty = Shape::rect((0., 0., 0., 0.));
         self.record_native(id, crate::paint::NativeKind::Video, &empty, props);
+    }
+
+    fn held_video(&mut self, id: ViewId, props: &str) {
+        self.transform(Transform::identity());
+        let at = self.ops.len();
+        let empty = Shape::rect((0., 0., 0., 0.));
+        self.record_native(id, crate::paint::NativeKind::Video, &empty, props);
+        self.ops[at + 2] |= 1 << 9;
     }
 
     fn canvas(&mut self, pixels: &Arc<Pixmap>, dst: Rect4, clips: &[Shape], ts: Transform) {

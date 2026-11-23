@@ -221,8 +221,10 @@ export function contractCompiler(exactRoot) {
 }
 
 function contractSources(appDir, exactRoot, env = process.env, compiler = contractCompiler(exactRoot)) {
+  // A compiler built into a private CARGO_TARGET_DIR is outside the checkout it reads (LLP 1174 D1), so it is named.
+  const root = existsSync(resolve(exactRoot, 'contract/cli/Cargo.toml')) ? { EXACT_ROOT: canonicalPath(exactRoot) } : {};
   const result = spawnSync(compiler, ['sources', resolve(appDir, 'app.contract')], {
-    cwd: exactRoot, env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+    cwd: exactRoot, env: { ...env, ...root }, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
   });
   let graph;
   try { graph = JSON.parse(result.stdout); }

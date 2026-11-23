@@ -647,6 +647,85 @@ mod tests {
         assert_eq!(video["audio"], false);
     }
 
+    /// LLP 1013.002 D5: a hidden mover's video is named held, so the reader
+    /// keeps its player, whether it hid at boot or when its destination went;
+    /// its audio is a boxless one.
+    #[test]
+    fn a_hidden_movers_video_is_held() {
+        use crate::presenter::{PainterChoice, Presenter};
+
+        let source = r#"component App
+  state tab = "card"
+  action leave
+    tab = "other"
+  view
+    column width=160 height=160
+      button "Leave" press=leave testId="leave"
+      if tab == "card"
+        box id="card" width=80 height=60
+      column portal="nowhere"
+        video "assets/boot.mp4" autoplay=true muted=true width=60 height=40
+        audio "assets/boot.mp3" autoplay=true
+      column portal="card"
+        video "assets/moved.mp4" width=60 height=40
+"#;
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
+            &crate::test_plan(source),
+            (),
+            (200., 200.),
+            1.,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        let players = |p: &mut Presenter<()>| {
+            p.frame();
+            let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+            let mut named = Vec::new();
+            let mut at = 0;
+            while at < ops.len() {
+                if ops[at] == NATIVE && ops[at + 2] & 255 == 0 {
+                    let len = ops[at + 15] as usize;
+                    let bytes: Vec<_> = ops[at + 16..at + 16 + len.div_ceil(4)]
+                        .iter()
+                        .flat_map(|word| word.to_le_bytes())
+                        .take(len)
+                        .collect();
+                    let props = serde_json::from_slice::<serde_json::Value>(&bytes).unwrap();
+                    let src = props["src"].as_str().unwrap().to_owned();
+                    named.push((src, ops[at + 2] >> 9, f32::from_bits(ops[at + 5])));
+                }
+                at = end(&ops, at).expect("valid Canvas stream");
+            }
+            named.sort_by(|a, b| a.0.cmp(&b.0));
+            named
+        };
+        let named = |src: &str, held: u32, w: f32| (src.to_owned(), held, w);
+        assert_eq!(
+            players(&mut p),
+            [
+                named("assets/boot.mp3", 0, 0.),
+                named("assets/boot.mp4", 1, 0.),
+                named("assets/moved.mp4", 0, 60.),
+            ]
+        );
+        let kernel = p.host().kernel();
+        let leave = kernel
+            .node_by_key(kernel.find_by_test_id("leave")[0])
+            .unwrap()
+            .id;
+        p.tap(leave).unwrap();
+        assert_eq!(
+            players(&mut p),
+            [
+                named("assets/boot.mp3", 0, 0.),
+                named("assets/boot.mp4", 1, 0.),
+                named("assets/moved.mp4", 1, 0.),
+            ]
+        );
+    }
+
     #[test]
     fn boxless_audio_plays_from_a_closed_dialog() {
         use crate::presenter::{PainterChoice, Presenter};

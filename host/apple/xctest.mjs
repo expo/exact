@@ -135,6 +135,7 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
   contract([resolve(root, 'host/apple/tests/fixtures/more-tabs.contract'), '-o', env[`${prefix}_MORE_TABS_PLAN`] = resolve(dir, 'more-tabs.plan')]);
   // NotificationActionTests': a post's declared actions and the root's handler.
   contract([resolve(root, 'host/apple/tests/fixtures/notification-actions.contract'), '-o', env[`${prefix}_NOTIFICATION_ACTIONS_PLAN`] = resolve(dir, 'notification-actions.plan')]);
+  if (prefix === 'EXACT') contract([resolve(root, 'host/apple/tests/fixtures/refused-picture.contract'), '-o', env.EXACT_REFUSED_PICTURE_PLAN = resolve(dir, 'refused-picture.plan')]);
   // Written in this checkout, not beside the plan: its `use … from "@exact/notifications"` resolves from a
   // node_modules above it, which a CARGO_TARGET_DIR outside the checkout lacks. Renamed into place whole: runs with
   // other target directories share the name, and a compile must never read it half written.

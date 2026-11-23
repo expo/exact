@@ -243,14 +243,14 @@ function binaryInputEvidence(bytes) {
   return evidence;
 }
 
-export function binaryInputChanges(bytes, app, compat, appleIcons, evidence = binaryInputEvidence(bytes)) {
+export function binaryInputChanges(bytes, app, compat, appleIcons, evidence = binaryInputEvidence(bytes), env = process.env) {
   const platform = compat.inputs.platform, apple = ['ios', 'macos'].includes(platform);
   const assetApp = { ...app, appleIcons, manifest: { host: app.manifest.host } };
   const appleAssetCatalogs = apple ? appleAssetCatalogInventory(assetApp, compat.target.includes('-tvos') ? 'tvos' : platform) : [];
   const launchImage = platform === 'ios' ? launchImageInventory(app) : null;
   const nativeResources = apple ? nativeResourceInventory(app, null, platform) : [];
   const metadata = { ...(appleAssetCatalogs.length ? { appleAssetCatalogs } : {}), ...(launchImage ? { launchImage } : {}), ...(nativeResources.length ? { nativeResources } : {}), ...(apple && evidence.metadata.appleExtensions !== undefined ? { appleExtensions: evidence.metadata.appleExtensions } : {}),
-    ...nativeManifestMetadata(app.manifest, platform), delivery: compat.delivery, store: compat.inputs.store, keys: compat.inputs.keys };
+    ...nativeManifestMetadata(app.manifest, platform, compat.target, env), delivery: compat.delivery, store: compat.inputs.store, keys: compat.inputs.keys };
   const keys = new Set([...Object.keys(metadata), ...Object.keys(evidence.metadata)]);
   const changed = [...keys].filter(key => canonicalJson(metadata[key] ?? null) !== canonicalJson(evidence.metadata[key] ?? null));
   const roots = { app: app.dir, exact: ROOT, workspace: app.workspace ?? app.dir };
@@ -367,7 +367,7 @@ export async function streamCandidates(app, origin, found, env, { baker = null, 
       nativeData = superseded.filter(key => key === 'dataCrate');
       // The native files and manifest metadata the binary's evidence names, which the compatibility id does not all encode.
       const unchecked = evidence === null;
-      const pendingInputs = [...superseded, ...(unchecked ? [] : binaryInputChanges(evidenceBytes, app, compat, graph.appleIcons, evidence))];
+      const pendingInputs = [...superseded, ...(unchecked ? [] : binaryInputChanges(evidenceBytes, app, compat, graph.appleIcons, evidence, env))];
       // The named entries are this bake's, in place of the last generation's whole.
       const entries = [...built.entries].map(([name, bytes]) => ({ name, bytes, sha256: sha256(bytes) }));
       const staticAssets = snapshot

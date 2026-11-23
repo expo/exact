@@ -57,8 +57,6 @@ const gate = { on: false, started: 0, streams: {}, current: null, decoders: new 
     if (d?.decoder.state === 'configured') d.decoder.decode(new EncodedVideoChunk({ type, timestamp, data }));
   },
 };
-(globalThis.exact ??= {}).streamGate = gate;
-globalThis.__exact_gate_decode = (...args) => gate.decode(...args);
 function streamTiming(start) {
   if (start) Object.assign(gate, { on: true, started: performance.now(), streams: {} });
   if (!gate.on) return { measuring: false };
@@ -86,14 +84,13 @@ import { backButton } from './input-glue.js';
 import { guestOutline, guestTap, guestType, viewBox, textBaseline, reveal, selectAll, scrollRange, typeControl, watchGlides, glidesSettled, scrollsSeen } from './agent-input.js';
 // A zoomable scroller's zoom and range (zoom.js, LLP 1057.001.000 §6).
 const zoomOf = e => (e.$zoomRange ? { scrollZoom: e.$zoom, minZoom: e.$zoomRange[0], maxZoom: e.$zoomRange[1] } : {});
-watchGlides();
 // How long `clock settle` waits for a scroller gliding on its own, as a native host waits (agent.mjs reason `scroll`).
 const GLIDE_BOUND_MS = 4000;
 // A runtime value as the runner's typed JSON: records by field name.
 const typed = (v, t) => v == null || typeof t === 'string' ? v : Array.isArray(t) ? (t[0] === '?' ? typed(v, t[1]) : v.map(x => typed(x, t[1]))) : Object.fromEntries(Object.keys(t).map((k, i) => [k, typed(v[i], t[k])]));
 // `state`'s reply with every string a live password field holds as the tree shows the field, `•••`: the slot it writes and
 // a value that copies it are the same secret (LLP 1156.001 D6). `expect state` asks `reveal` to compare; nothing prints that.
-const masked = (req, reply) => { const secrets = req.reveal ? [] : [...document.querySelectorAll('#exact-root input[type=password]')].map(e => e.value).filter(Boolean), hide = v => typeof v === 'string' ? secrets.includes(v) ? '•••' : v : Array.isArray(v) ? v.map(hide) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, hide(x)])) : v; return secrets.length ? { ...reply, slots: hide(reply.slots), derives: hide(reply.derives), resources: hide(reply.resources) } : reply; };
+const masked = (req, reply) => { const secrets = req.reveal ? [] : [...document.querySelectorAll('#exact-root input[type=password]')].map(e => e.value).filter(Boolean), hide = v => typeof v === 'string' ? secrets.includes(v) ? '•••' : v : Array.isArray(v) ? v.map(hide) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, hide(x)])) : v; return secrets.length ? hide(reply) : reply; };
 const PROPS = [['aria-live', 'accessibilityLive'], ['role', 'accessibilityRole'], ['data-alertpart', 'alertPart'], ['aria-controls', 'accessibilityControls'], ['aria-activedescendant', 'accessibilityActiveDescendant'], ['id', 'id'], ['aria-description', 'accessibilityHint'], ['aria-keyshortcuts', 'accessibilityKeyShortcuts'], ['aria-orientation', 'accessibilityOrientation'], ['aria-pressed', 'accessibilityPressed'], ['aria-current', 'accessibilityCurrent'], ['aria-sort', 'accessibilitySort'], ['colspan', 'colSpan', 1], ['rowspan', 'rowSpan', 1], ['scope', 'scope'], ['aria-level', 'accessibilityHeadingLevel', 1], ['aria-posinset', 'accessibilityPosInSet', 1], ['aria-setsize', 'accessibilitySetSize', 1], ['aria-valuenow', 'accessibilityValueNow'], ['aria-valuemin', 'accessibilityValueMin'], ['aria-valuemax', 'accessibilityValueMax'], ['aria-valuetext', 'accessibilityValueText'], ['placeholder', 'placeholder'], ['autocomplete', 'autocomplete'], ['viewportFit', 'viewportFit'], ['interactiveWidget', 'interactiveWidget'], ['data-hatch', 'hatch'], ['data-nativeviewmodulename', 'nativeViewModuleName'], ['data-nativeviewprops', 'nativeViewProps'],
   ['aria-invalid', 'accessibilityInvalid'],
   ['data-datatransfertext', 'dataTransferText'], ['data-datatransferurl', 'dataTransferUrl'], ['data-datatransferfiles', 'dataTransferFiles'],
@@ -106,11 +103,21 @@ const TYPES = { TEMPLATE: 'Head', BUTTON: 'Pressable', INPUT: 'TextInput', TEXTA
 /** The view an operation names: its id, else the first node with that testId on an active screen, a covered
  * screen's or an unselected tab's copy only when no active one carries it, as the runner's `target`. */
 const targetOf = (nodes, t) => { const named = nodes.filter(n => n.props.testId === t); return nodes.find(n => n.id === t) ?? named.find(n => !n.inactive) ?? named[0]; };
-export function install(exact) {
+/** The reads an attached session makes of a page a person has open (LLP 1012.000 D3). */
+const PASSIVE = new Set(['tree', 'layout', 'logs', 'perf', 'state', 'tags']);
+/** The agent's door into this page: `exact.agentSettled`, which takes the page's clock and animations. `passive`
+ * instead returns a reader for an attached session (LLP 1012.000 D2, D3): the page keeps its own clock, animations,
+ * storage and journal; it answers only the reads in PASSIVE, waits for no work and presents nothing. */
+export function install(exact, { passive = false } = {}) {
   const views = exact.views, id = exact.viewId;
   let page;
-  const ownPage = () => page ??= (f => ({ prefer: p => { f.prefer(p); return f.read(); }, read: () => f.read() }))(pageReporter(true));
-  setFaultLog(line => journal.push(`t=${exact.clock.now} ${line}`)); // the runner's journal line for an injected failure (LLP 1103 D2)
+  const ownPage = () => page ??= (f => ({ prefer: p => { f.prefer(p); return f.read(); }, read: () => f.read() }))(pageReporter(!passive));
+  if (!passive) {
+    setFaultLog(line => journal.push(`t=${exact.clock.now} ${line}`)); // the runner's journal line for an injected failure (LLP 1103 D2)
+    exact.streamGate = gate;
+    globalThis.__exact_gate_decode = (...args) => gate.decode(...args);
+    watchGlides();
+  }
   // A Markdown text's pieces are its content, not views.
   // A view leaving with its exit animation (presence-glue.js) is no view: the runner destroyed it.
   // A paragraph text flows around shapes is its fragments on the page; the
@@ -228,7 +235,8 @@ export function install(exact) {
   // load event of the src it has now.
   const loaded = new WeakMap();
   // (A load event does not reach the window: the document hears it.)
-  document.addEventListener('load', e => { if (e.target instanceof HTMLIFrameElement) loaded.set(e.target, e.target.getAttribute('src')); }, true);
+  // (A passive reader adds no listener to the person's page; a frame then reads as loading from its own marks alone.)
+  if (!passive) document.addEventListener('load', e => { if (e.target instanceof HTMLIFrameElement) loaded.set(e.target, e.target.getAttribute('src')); }, true);
   for (const f of document.querySelectorAll('#exact-root iframe')) { try { if (f.contentDocument?.readyState === 'complete' && f.contentWindow.location.href !== 'about:blank') loaded.set(f, f.getAttribute('src')); } catch {} }
   // `layout <node>` (LLP 1035.002 D1), as glue.js `nodeDetail` gives the
   // host's half. The JS target keeps no kernel, so the rows are the page's:
@@ -311,7 +319,7 @@ export function install(exact) {
       browser: Object.fromEntries(Object.entries(INHERITED).map(([row, prop]) => [row, cs.getPropertyValue(prop)])),
       observed: { clock: exact.clock.now, wall: Date.now() },
       // What is held on it (LLP 1122 D8): its state and the rows it shows.
-      ...((h) => { if (h?.held && h.held.node == null && h.held.el) h.held.node = id(h.held.el); return h ?? {}; })(exact.heldOf?.(el)),
+      ...((h) => { if (h?.held && h.held.node == null && h.held.el) { if (passive) return { ...h, held: { ...h.held, node: id(h.held.el) } }; h.held.node = id(h.held.el); } return h ?? {}; })(exact.heldOf?.(el)),
     };
   };
   // presence-glue.js `observation`, by this runtime's view ids (its elements carry no `data-view`).
@@ -344,12 +352,14 @@ export function install(exact) {
   };
   // Whether this clock runs `a` (a refused tap's advice, scripts/agent-aim.mjs `pageOutside`): on the document's timeline,
   // and not held by its author, then or, not yet registered, at its registration.
-  exact.clockRuns = anim.runs;
-  // motion.js owns post-commit reconciliation. The agent registers a
-  // commit's new animations here, and reconciles only when its clock moves.
-  exact.After.push(() => seek(false));
-  // What the page held before this module came (main.js's `holdEarly`) is this clock's from here.
-  { const i = exact.After.indexOf(exact.holdEarly); if (i >= 0) { exact.After.splice(i, 1); seek(false); } }
+  if (!passive) {
+    exact.clockRuns = anim.runs;
+    // motion.js owns post-commit reconciliation. The agent registers a
+    // commit's new animations here, and reconciles only when its clock moves.
+    exact.After.push(() => seek(false));
+    // What the page held before this module came (main.js's `holdEarly`) is this clock's from here.
+    const i = exact.After.indexOf(exact.holdEarly); if (i >= 0) { exact.After.splice(i, 1); seek(false); }
+  }
   // Held device requests (LLP 1069.007 D3): `openAuthSession`'s (auth.js).
   const holds = () => [...exact.auth?.holds() ?? [], ...exact.files?.holds() ?? [], ...exact.extensions?.holds?.() ?? []];
   // What in flight no settle waits on: a held request, which the agent answers, and a send answered after a span,
@@ -364,11 +374,15 @@ export function install(exact) {
       : { error: `GPU is not settled: ${names.join(', ')}`, pending: names };
   };
   const answer = async (req) => {
-    await pieces();
-    const beforeGpu = await settleGpu();
-    if (beforeGpu.length) return gpuPendingReply(req, beforeGpu);
-    // A read presents this clock without standing in for a commit hook.
-    seek(false);
+    if (passive) {
+      if (!PASSIVE.has(req.op) || req.reveal || req.picture || req.frames || req.streams || req.hatches) return { error: `unsupported: ${req.op} is not a read of a page a person has open` };
+    } else {
+      await pieces();
+      const beforeGpu = await settleGpu();
+      if (beforeGpu.length) return gpuPendingReply(req, beforeGpu);
+      // A read presents this clock without standing in for a commit hook.
+      seek(false);
+    }
     // `tap @t <choice>` / `type @t <value>` answer a held request (D4).
     if ((req.op === 'tap' || req.op === 'type') && req.ticket != null) return (await exact.files?.answer(req)) ?? exact.extensions?.answer?.(req) ?? (exact.auth ? exact.auth.answer(req) : { error: `not pending: @${req.ticket}` });
     switch (req.op) {
@@ -658,7 +672,7 @@ export function install(exact) {
         const head = { ...Object.fromEntries(['title', 'description', 'image', 'canonical', 'robots', 'status'].map(k => [k, Head['head' + k[0].toUpperCase() + k.slice(1)] ?? null])), edited: Head.headEdited === 'true' };
         // The drive's app storage (trivia F7): none unless it names a scratch store, as storage-environment.js's `storageKey`.
         const store = new URL(performance.getEntriesByType?.('navigation')[0]?.name ?? location.href).searchParams.get('storage');
-        const storage = store == null ? { available: false, code: 'agent', message: 'storage is unavailable in agent mode unless the drive names a scratch store (--storage <name>)' } : { available: true, store };
+        const storage = passive ? { available: true, store: 'page', message: "the page's own storage, which an attached session neither reads nor writes" } : store == null ? { available: false, code: 'agent', message: 'storage is unavailable in agent mode unless the drive names a scratch store (--storage <name>)' } : { available: true, store };
         // Each queue's waiting sends (LLP 1092 D10), as the runner's `state.queued`.
         const queued = Object.fromEntries((exact.mutations ?? []).filter(m => m.wait?.length).map(m => [m.name, m.wait.length]));
         // Each task's next due time, `null` while idle or spent (LLP 1092 D10), as the runner's `state.tasks`.
@@ -696,6 +710,8 @@ export function install(exact) {
       default: return { error: `${req.op} is not carried by the JS target` };
     }
   };
-  exact.agentSettled = async req => { const reply = await answer(req); return { ...tags(), ...reply }; };
+  const settled = async req => { const reply = await answer(req); return { ...tags(), ...reply }; };
+  if (passive) return settled;
+  exact.agentSettled = settled;
   return true;
 }

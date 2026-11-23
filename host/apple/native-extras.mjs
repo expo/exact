@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, relative, resolve } from 'node:path';
 import { appleImplementations } from '../../js/bake/src/typescript.mjs';
+import { nativePackageConfig } from '../../js/bake/src/package-config.mjs';
 import { experimental } from './toolchain.mjs';
 import { fitLinkedSections, reserveLinkedPlan } from './sections.mjs';
 import { widgetsDigest } from './widgets.mjs';
@@ -40,5 +41,7 @@ export function nativeExtras(app, platform = 'ios', extensions, contractSources 
   const frameworks = (modules.frameworks ?? []).map(file => relative(app.dir, file));
   const composing = packages.length > 0 || own.length > 0;
   const tamber = composing && existsSync(`${app.dir}/app.tamber`) ? sha(readFileSync(`${app.dir}/app.tamber`)) : null;
-  return sha(canonical({ version: 1, packages, own, frameworks, composing, tamber, data: composing ? app.manifest.data ?? null : null, tags: modules.tags ?? [] }));
+  // The packages' configuration, which the composed module carries (compose.mjs `composedModule`).
+  const config = composing ? nativePackageConfig(app.manifest, platform) : {};
+  return sha(canonical({ version: 1, packages, own, frameworks, composing, tamber, data: composing ? app.manifest.data ?? null : null, tags: modules.tags ?? [], ...(Object.keys(config).length ? { config } : {}) }));
 }

@@ -34,7 +34,7 @@
       "maxZoom": { "type": "number" }
     },
     "android": {
-      "apiKey": { "type": "env", "required": "release", "missing": "maps-key-missing" }
+      "apiKey": { "type": "env", "required": "release", "missing": "maps-key-missing", "metadata": "com.google.android.geo.API_KEY" }
     }
   },
   "views": {
