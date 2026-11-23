@@ -645,8 +645,8 @@ impl<D: DataSource> Presenter<D> {
         out
     }
 
-    /// What the reader is told after a frame of the scrollers it knows, when
-    /// that is not what it was last told (`None`): nine words a scroller:
+    /// The scrollers the reader knows, sent when they change or a rejected
+    /// move needs acknowledging. Nine words a scroller:
     /// id, flags (as [`Presenter::reader_under`]'s, for any drag), revision,
     /// then as float bits where it is (x, y), the offset its rows were last
     /// painted at (x, y; `drawn` names them for a scroller that has rows)
@@ -658,10 +658,10 @@ impl<D: DataSource> Presenter<D> {
         drawn: &[(ViewId, (f32, f32))],
         scale: f32,
     ) -> Option<Vec<i32>> {
-        self.reader.missed = false;
+        let missed = std::mem::take(&mut self.reader.missed);
         if self.reader.tracked.is_empty() {
-            // The last scroller it knew went: said once, with nothing in it.
-            return (!std::mem::take(&mut self.reader.last).is_empty()).then(Vec::new);
+            let removed = !std::mem::take(&mut self.reader.last).is_empty();
+            return (removed || missed).then(Vec::new);
         }
         let limits = self.collection_scroll_limits();
         let ids: Vec<ViewId> = self.reader.tracked.keys().copied().collect();
@@ -679,7 +679,7 @@ impl<D: DataSource> Presenter<D> {
             let px = [s.offset.0, s.offset.1, at.0, at.1, s.max.0, s.max.1];
             out.extend(px.iter().map(|v| bits(v * scale)));
         }
-        if out == self.reader.last {
+        if !missed && out == self.reader.last {
             return None;
         }
         self.reader.last.clone_from(&out);

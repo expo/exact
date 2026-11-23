@@ -80,7 +80,7 @@ object Native {
     /** Whether a turn is needed. With [vsyncOnly], whether it needs a Choreographer callback. */
     @JvmStatic external fun animating(vsyncOnly: Boolean = false): Boolean
     @JvmStatic external fun owed(): Boolean
-    /** After the reader's [scrolled]: whether a [frame] now would only move the rows the reader moved itself, with
+    /** After the reader's [scrolled]: whether a [frame] now would only move grouped rows the reader moved itself, with
      * nothing to tell it but those moves. The move is then taken, and there is no frame. */
     @JvmStatic external fun moved(): Boolean
     /** The collection pass a scroll left; `limit` >= 0 slices it (rows past what shows per list), the scrolled list

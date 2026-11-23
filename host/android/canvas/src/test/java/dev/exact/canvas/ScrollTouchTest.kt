@@ -36,6 +36,7 @@ class ScrollTouchTest {
         val touches = ArrayList<Int>()
         /** How far the reader moved each scroller, by id. */
         val moved = HashMap<Int, Float>()
+        var moveSeq = 0
         val answers = ArrayDeque<(IntArray) -> Unit>()
         @Implementation fun __constructor__(hwbuf: Boolean, fast: Boolean, priority: Int, intent: (String) -> String?) {}
         @Implementation fun under(x: Float, y: Float, done: (IntArray) -> Unit) { answers.addLast(done) }
@@ -46,18 +47,22 @@ class ScrollTouchTest {
         @Implementation fun touching(on: Boolean) { touching.add(on) }
         @Implementation fun scrolled(id: Int, dx: Float, dy: Float, rev: Int, seq: Int) {
             moved[id] = (moved[id] ?: 0f) + dx + dy
+            moveSeq = seq
             Host.told.add("move $id")
         }
         @Implementation fun answer(waitMs: Long, f: () -> Unit) = false
         @Implementation fun call(f: () -> Unit) = f()
-        /** What was asked of exact2's thread that publishes nothing (the text selection's geometry). */
-        var tells = 0
-        @Implementation fun tell(f: () -> Unit) { tells++ }
         @Implementation fun input() {}
         @Implementation fun held(on: Boolean) {}
         @Implementation fun running(on: Boolean) {}
         @Implementation fun timerReader(view: Any) {}
         @Implementation fun timerReport(view: Any, scrolling: Boolean, sampling: Boolean, applied: Long, began: Long, ended: Long) {}
+    }
+
+    @Implements(Formas::class, isInAndroidSdk = false)
+    class Placement {
+        companion object { var calls = 0 }
+        @Implementation fun placed() { calls++ }
     }
 
     @Implements(Native::class, isInAndroidSdk = false)
@@ -127,6 +132,7 @@ class ScrollTouchTest {
     private fun move(y: Float) = touch(MotionEvent.ACTION_MOVE, 100f to y)
     private fun up(y: Float) = touch(MotionEvent.ACTION_UP, 100f to y)
 
+    @Config(shadows = [Placement::class])
     @Test fun aReaderMoveBringsAParkedNativeRowIntoViewWithoutAStream() {
         val module = object : NativeModule {
             override fun create(context: android.content.Context, props: org.json.JSONObject) = View(context)
@@ -150,36 +156,38 @@ class ScrollTouchTest {
 
             down(720f)
             answer(reply(scroller(7, 0f, 800f).also { it[1] = 14 }))
+            Placement.calls = 0
             move(100f)
             assertTrue(thread.moved.getValue(7) > 420f)
             assertEquals("the entering row got its native view", 1, natives.childCount)
+            assertEquals("each binding's place is checked once", 1, Placement.calls)
         } finally {
             (view.parent as FrameLayout).removeView(view)
             natives.destroyAll()
         }
     }
 
-    @Test fun aReaderMoveAsksWhereTheSelectedTextWent() {
-        val mode = object : android.view.ActionMode() {
-            override fun setTitle(title: CharSequence?) {}
-            override fun setTitle(resId: Int) {}
-            override fun setSubtitle(subtitle: CharSequence?) {}
-            override fun setSubtitle(resId: Int) {}
-            override fun setCustomView(view: View?) {}
-            override fun invalidate() {}
-            override fun finish() {}
-            override fun getMenu(): android.view.Menu? = null
-            override fun getTitle(): CharSequence? = null
-            override fun getSubtitle(): CharSequence? = null
-            override fun getCustomView(): View? = null
-            override fun getMenuInflater(): android.view.MenuInflater? = null
+    @Test fun aStatementWithoutPaintClearsARejectedMove() {
+        fun field(name: String) = ExactView::class.java.getDeclaredField(name).apply { isAccessible = true }
+        val scrolling = field("scrolling").get(view) as Scrolling
+        val queue = java.util.concurrent.ConcurrentLinkedQueue<Owner.Pub>()
+        Owner::class.java.getDeclaredField("queue").apply { isAccessible = true }.set(view.owner, queue)
+        fun statement(max: Float) = intArrayOf(7, 6, 0, 0, 400f.toBits(), 0, 400f.toBits(), 0, max.toBits())
+        fun publish(seq: Int) {
+            queue.add(Owner.Pub((seq + 1).toLong(), null, true, seq, 0, statement(400f), null, null, null))
+            assertTrue(view.publish())
         }
-        TextSelection::class.java.getDeclaredField("mode").apply { isAccessible = true }.set(view.textSelection, mode)
+        scrolling.told(statement(500f))
         down(400f)
-        answer(reply(scroller(7, 0f)))
+        answer(reply(scroller(7, 400f).also { it[1] = 6 }))
         move(300f)
-        assertTrue(thread.moved.getValue(7) > 0f)
-        assertEquals("its geometry is asked for again", 1, thread.tells)
+        val delta = thread.moved.getValue(7)
+        assertTrue(delta > 0f)
+        assertEquals(-delta, scrolling.shift(7)!!, 0f)
+        publish(0)
+        assertEquals("the earlier statement still leaves the move pending", -delta, scrolling.shift(7)!!, 0f)
+        publish(thread.moveSeq)
+        assertEquals("the repeated statement clears the pending delta", 0f, scrolling.shift(7)!!, 0f)
     }
 
     /** [gesture] from a down at y 400, its answer [words] given at once and then given after it: what each scrolled,

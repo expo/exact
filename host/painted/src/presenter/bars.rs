@@ -264,10 +264,15 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
+    fn reader_bar_scrolled(&self, staged: bool) -> bool {
+        self.bars.top.is_some() && !staged && self.bar_scrolled()
+    }
+
     #[cfg(any(target_os = "android", test))]
     pub(crate) fn bar_scroll_changed(&self) -> bool {
         self.bars.painter.is_some()
-            && self.bars.told.map(|(_, _, scrolled)| scrolled) != Some(self.bar_scrolled())
+            && self.bars.told.map(|(_, _, scrolled)| scrolled)
+                != Some(self.reader_bar_scrolled(self.stage_draws_bars()))
     }
 
     /// The nearest node at or above a bar item's node that hears `press`, as
@@ -545,7 +550,7 @@ impl<D: DataSource> Presenter<D> {
         self.ripple_bars();
         // While the stage draws them in the page, the shell shows none.
         let staged = self.stage_draws_bars();
-        let told = (self.bars.revision, staged, self.bar_scrolled());
+        let told = (self.bars.revision, staged, self.reader_bar_scrolled(staged));
         if self.bars.told == Some(told) {
             return None;
         }

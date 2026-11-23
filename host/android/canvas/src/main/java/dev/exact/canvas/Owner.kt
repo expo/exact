@@ -68,8 +68,8 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
 
     /** A published stream: [ops] (a copy, the reader's), whether it only moves the last paint, the last scroll it
      * includes, and the feed's group (0 before the first scroll). [scrollers]: what exact2 tells the reader of its
-     * scrollers as of this stream ([Native.scrollers]), null when that is what it last told; with no [ops], that
-     * statement alone. [fields]: what exact2 tells of the text fields the reader hosts as of this stream
+     * scrollers as of this stream ([Native.scrollers]). A statement can acknowledge a rejected move without [ops].
+     * [fields]: what exact2 tells of the text fields the reader hosts as of this stream
      * ([Native.fields], LLP 1115.001 D8), null when that is what it last told. [bars]: what it tells of its bars as
      * of this stream ([Native.bars], D11), null likewise. [access]: what it tells of the accessibility tree
      * ([Native.access], D13), null likewise, and always while no accessibility service is on. */

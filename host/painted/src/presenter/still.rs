@@ -35,6 +35,11 @@ impl Still {
 }
 
 impl<D: DataSource> Presenter<D> {
+    /// The reader draws selection geometry from the last paint's paragraphs.
+    pub(crate) fn reader_selection_active(&self) -> bool {
+        self.reader_selection.is_some()
+    }
+
     /// The paint's inputs other than scroll offsets; `None` while anything
     /// moves on its own (motion, a press, a collection's pending correction)
     /// or under a finger on the stage.

@@ -561,7 +561,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
             applyMove(moveOps)
             groups[feed]?.let { feedBaseX = it.translationX; feedBaseY = it.translationY }
         }
-        if (any) placeScrolled()
+        if (any) { placeScrolled(); textSelection.refresh() }
         if (coverTrace && painted) traceNewRows()
         moved = !painted
         quiet = painted && allQuiet && move == null
@@ -596,8 +596,8 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     }
 
     /** After a stream, and each move of the reader's own, which may make none ([Owner]): the feed, the scrollers' rows,
-     * the hosted fields, a view lent to another element (a paint, or [placeFeed]'s native rows) and the selection. */
-    internal fun placeScrolled() { placeFeed(); scrolling.place(); fields?.place(); Formas.placed(); textSelection.refresh() }
+     * the hosted fields and a view lent to another element. */
+    internal fun placeScrolled() { placeFeed(); scrolling.place(); fields?.place(); Formas.placed() }
 
     private fun placeFeed() {
         nearNatives()
@@ -725,8 +725,6 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
             }
         }
         n.near(nearShow, nearKeep, nearKnown, nearSeen)
-        // A pooled view lent to another row as the feed scrolls is asked at its new place.
-        Formas.placed()
     }
 
     /** Where the feed's group is drawn: the last stream's place, less the scrolls the owner has yet to apply; where a
@@ -789,7 +787,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         val s = ++mainSeq
         sent.addLast(s to dy)
         o.scroll(dy, s)
-        if (groups[feed] != null) { placeFeed(); fields?.place(); ticker?.invalidate() }
+        if (groups[feed] != null) { placeFeed(); fields?.place(); Formas.placed(); ticker?.invalidate() }
     }
 
     /** How far the feed's drawn rows reach from the view, down ([reachDown]) and up ([reachUp]), in the group's own
