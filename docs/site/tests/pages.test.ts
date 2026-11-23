@@ -69,6 +69,15 @@ test('a chat fetcher gets Markdown at a published page path', async () => {
   expect(await get('/sitemap', fetcher)).toEqual({ status: 404, type: 'text/html', location: null });
 });
 
+test('a JSON HEAD 404 carries the Pages discovery headers', async () => {
+  const response = await fetch(`${origin}/nope`, { method: 'HEAD', headers: { Accept: 'application/json' } });
+  expect([response.status, response.headers.get('Content-Type'), response.headers.get('Vary'), response.headers.get('X-Llms-Txt')])
+    .toEqual([404, 'application/json; charset=utf-8', 'Accept', '/llms.txt']);
+  expect(response.headers.get('Link')).toContain('</llms.txt>; rel="llms-txt"');
+  expect([response.headers.get('Access-Control-Allow-Origin'), response.headers.get('Cache-Control')]).toEqual(['*', 'no-store']);
+  expect(await response.text()).toBe('');
+});
+
 test('Markdown, the worker and the files it does not see', async () => {
   const response = await fetch(`${origin}/start`, { headers: { Accept: 'text/markdown' } });
   // The build writes sitemap.xml only with an origin, and names it only then.

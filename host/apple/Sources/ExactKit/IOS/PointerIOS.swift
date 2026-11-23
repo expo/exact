@@ -194,6 +194,8 @@ final class PointerRecognizer: UIGestureRecognizer {
         var view = touched
         while let v = view, v !== node {
             if let n = v as? NodeView, n.wantsPointer, !n.disabled { return true }
+            // A `portal` mover's own relay takes it (`syncPortalRelay`).
+            if node?.presenter?.declaredParent(of: v) != nil { return true }
             // A node lifted over the tab container is nearer through its parent (LLP 1083.000 D4)
             view = node?.presenter?.navigation.lifted?.parent(of: v) ?? v.superview
         }
@@ -255,6 +257,7 @@ extension Presenter {
     /// superview. `eventParent` stays inside a dialog's sheet: the walks on
     /// it also read inertness and visibility, which a modal dialog escapes.
     func pointerParent(of view: UIView) -> UIView? {
+        if let parent = declaredParent(of: view) { return parent }
         if let node = view as? NodeView, let parent = dialogs.authoredParent(of: node) { return parent }
         return menus.logicalParent(of: view) ?? eventParent(of: view)
     }

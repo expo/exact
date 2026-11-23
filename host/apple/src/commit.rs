@@ -123,15 +123,27 @@ impl<D: DataSource> Host<D> {
             }
         }
         self.withdraw_flat_hits(&omitted_gone, &mut batch);
+        // The `portal` movers placement moved this batch or before.
+        let mut movers: Vec<ViewId> = self.declared_told.iter().map(|&(m, _)| m).collect();
+        if !receipts.is_empty() {
+            self.tell_declared_parents(&mut batch);
+            movers.extend(self.declared_told.iter().map(|&(m, _)| m));
+        }
         // Receipts share the final kernel tree. A parent touched by an early
         // timer can already name a child created by a later timer in this seek.
         // All surviving views must exist before any final child list is attached.
-        for t in receipts {
-            for key in t.receipt.created.iter().chain(t.receipt.touched.iter()) {
-                if let Some(node) = self.runner.kernel().node_by_key(*key) {
-                    self.emit_children(node.id, &mut batch);
-                }
-            }
+        let mut parents: Vec<ViewId> = (receipts.iter())
+            .flat_map(|t| t.receipt.created.iter().chain(t.receipt.touched.iter()))
+            .filter_map(|key| self.runner.kernel().node_by_key(*key).map(|n| n.id))
+            .collect();
+        // A list that receives a mover goes first, so a presenter moves its
+        // view in one step: AppKit keeps the focus of a view it moves, not of
+        // one removed and then added (LLP 1013.002 D5).
+        if !movers.is_empty() {
+            parents.sort_by_key(|&id| !self.receives(id, &movers));
+        }
+        for id in parents {
+            self.emit_children(id, &mut batch);
         }
         for id in std::mem::take(&mut self.flat.parents) {
             if self.runner.kernel().node(id).is_some() {
